@@ -555,6 +555,29 @@ impl CodingToolRuntime {
             return Ok(json!({ "path": args.path, "written": true, "appended": true }));
         }
 
+        // An overwrite that throws away most of a substantial file is a mistake every time we
+        // have seen it, and the boolean alone did not stop it: the model flipped the flag the
+        // moment the refusal named it. So the shape of the change is checked, not just the
+        // caller's intent.
+        //
+        // The numbers are arbitrary and that is the honest objection to them. The alternative was
+        // measured: a flag the model can set on retry is not a guard. 50 lines keeps small files
+        // freely rewritable; a fifth of the original allows a genuine condensing rewrite while
+        // rejecting a 1,726-line file becoming 67.
+        if args.overwrite
+            && !args.append
+            && let Ok(existing) = std::fs::read_to_string(&path)
+        {
+            let before = existing.lines().count();
+            let after = args.content.lines().count();
+            if before > 50 && after * 5 < before {
+                return Err(ToolError::BadRequest(format!(
+                    "overwrite would cut {} from {before} lines to {after}. That is a truncation, not a rewrite. Use edit_file, hashline_edit or apply_patch to change part of the file, or \"append\": true to add to it. If you really do mean to discard the file, delete it first with run_command.",
+                    args.path
+                )));
+            }
+        }
+
         if !args.overwrite {
             // Byte length, not a line count or a percentage: any threshold is a number someone
             // has to defend later, and "the file already has something in it" needs no defending.
@@ -566,8 +589,13 @@ impl CodingToolRuntime {
                 let existing_lines = std::fs::read_to_string(&path)
                     .map(|c| c.lines().count())
                     .unwrap_or(0);
+                // Deliberately does NOT mention `overwrite`. The first version of this message
+                // listed it as the third option, and a dispatched run read the refusal and
+                // immediately re-sent the same call with `"overwrite": true`, deleting 1,659
+                // lines. An error that ends by naming the flag that bypasses it is not a guard,
+                // it is a hint.
                 return Err(ToolError::BadRequest(format!(
-                    "{} already exists with {existing_lines} lines and write_file would replace                      all of it. To add to the end pass \"append\": true. To change part of it use                      edit_file, hashline_edit or apply_patch. To replace it deliberately, pass                      \"overwrite\": true.",
+                    "{} already exists with {existing_lines} lines, and write_file replaces the whole file. To add to the end pass \"append\": true. To change part of it use edit_file, hashline_edit or apply_patch.",
                     args.path
                 )));
             }
@@ -1198,7 +1226,7 @@ impl ToolRuntime for CodingToolRuntime {
             ),
             tool(
                 "write_file",
-                "Create a new file, or replace one whole file. To change part of an existing                  file use edit_file, hashline_edit or apply_patch instead — write_file replaces                  the entire contents.",
+                "Create a new file, or replace one whole file. To change part of an existing file use edit_file, hashline_edit or apply_patch instead — write_file replaces the entire contents.",
                 json!({
                     "type": "object",
                     "required": ["path", "content"],
@@ -1207,18 +1235,18 @@ impl ToolRuntime for CodingToolRuntime {
                         "content": { "type": "string" },
                         "overwrite": {
                             "type": "boolean",
-                            "description": "Required to replace a file that already has content.                                             Omit it when creating a new file."
+                            "description": "Required to replace a file that already has content. Omit it when creating a new file."
                         },
                         "append": {
                             "type": "boolean",
-                            "description": "Add content to the end of the file instead of                                             replacing it. Use this to add a function, struct or                                             test to an existing file."
+                            "description": "Add content to the end of the file instead of replacing it. Use this to add a function, struct or test to an existing file."
                         }
                     }
                 }),
             ),
             tool(
                 "edit_file",
-                "Replace an exact text span in a file. This is the required tool for any change                  to part of an existing file, however small.",
+                "Replace an exact text span in a file. This is the required tool for any change to part of an existing file, however small.",
                 json!({
                     "type": "object",
                     "required": ["path", "old", "new"],
@@ -1228,7 +1256,7 @@ impl ToolRuntime for CodingToolRuntime {
                         "new": { "type": "string" },
                         "replace_all": {
                             "type": "boolean",
-                            "description": "Replace every occurrence. Without it an anchor that                                             matches more than once is rejected, so an edit cannot                                             silently hit the wrong place."
+                            "description": "Replace every occurrence. Without it an anchor that matches more than once is rejected, so an edit cannot silently hit the wrong place."
                         }
                     }
                 }),
@@ -2401,6 +2429,131 @@ line three
             survived.contains("line three"),
             "the refusal must leave the file untouched, got: {survived:?}"
         );
+    }
+
+    /// The bypass a dispatched run actually used.
+    ///
+    /// It called write_file on a 1,726-line file, was refused, read the refusal — which ended
+    /// "To replace it deliberately, pass overwrite: true" — and re-sent the identical call with
+    /// that flag. 1,659 lines went. The message taught the model how to defeat the guard.
+    #[tokio::test]
+    async fn the_refusal_does_not_name_the_flag_that_bypasses_it() {
+        let (_dir, runtime) = runtime();
+        runtime
+            .invoke_json(
+                "write_file",
+                json!({"path": "big.rs", "content": "a
+b
+c
+d
+e
+"}),
+            )
+            .await
+            .unwrap();
+        let err = runtime
+            .invoke_json(
+                "write_file",
+                json!({"path": "big.rs", "content": "stub
+"}),
+            )
+            .await
+            .expect_err("clobber is refused");
+        let m = err.to_string();
+        assert!(
+            !m.contains("overwrite"),
+            "an error that names its own bypass is a hint, not a guard: {m}"
+        );
+        assert!(
+            m.contains("append"),
+            "it must still offer the safe route: {m}"
+        );
+        assert!(m.contains("edit_file"), "and the correct one: {m}");
+    }
+
+    /// And the flag itself no longer suffices for a truncation.
+    #[tokio::test]
+    async fn overwrite_cannot_truncate_a_substantial_file() {
+        let (dir, runtime) = runtime();
+        let body: String = (0..200)
+            .map(|i| {
+                format!(
+                    "line {i}
+"
+                )
+            })
+            .collect();
+        std::fs::write(dir.path().join("huge.rs"), &body).unwrap();
+
+        let err = runtime
+            .invoke_json(
+                "write_file",
+                json!({"path": "huge.rs", "content": "stub
+", "overwrite": true}),
+            )
+            .await
+            .expect_err("cutting 200 lines to 1 is a truncation, not a rewrite");
+        assert!(
+            err.to_string().contains("truncation"),
+            "the error must name what it is refusing: {err}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("huge.rs")).unwrap(),
+            body,
+            "the file must be untouched"
+        );
+    }
+
+    /// A genuine condensing rewrite is still allowed — the guard is about scale, not intent.
+    #[tokio::test]
+    async fn overwrite_still_allows_a_real_rewrite() {
+        let (dir, runtime) = runtime();
+        let body: String = (0..100)
+            .map(|i| {
+                format!(
+                    "line {i}
+"
+                )
+            })
+            .collect();
+        std::fs::write(dir.path().join("mid.rs"), &body).unwrap();
+        let replacement: String = (0..40)
+            .map(|i| {
+                format!(
+                    "new {i}
+"
+                )
+            })
+            .collect();
+        runtime
+            .invoke_json(
+                "write_file",
+                json!({"path": "mid.rs", "content": replacement, "overwrite": true}),
+            )
+            .await
+            .expect("100 lines to 40 is a rewrite and must be allowed");
+    }
+
+    /// Small files stay freely replaceable; the guard must not turn every rewrite into a fight.
+    #[tokio::test]
+    async fn a_small_file_can_still_be_replaced_wholesale() {
+        let (dir, runtime) = runtime();
+        std::fs::write(
+            dir.path().join("small.txt"),
+            "one
+two
+three
+",
+        )
+        .unwrap();
+        runtime
+            .invoke_json(
+                "write_file",
+                json!({"path": "small.txt", "content": "x
+", "overwrite": true}),
+            )
+            .await
+            .expect("a three-line file is not a truncation risk");
     }
 
     /// A deliberate rewrite is still possible — the flag makes it deliberate.

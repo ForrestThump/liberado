@@ -12,8 +12,10 @@ These are rules, not preferences. Every one of them exists because a run broke o
   for write_file to add a struct replaced a 3,921-line file with 40 lines in a single call.
 - **To add something to the end of an existing file, use write_file with `"append": true`.** That
   is the safe way to add a function, a struct, a test or a module. It cannot delete anything.
-- Use plain write_file only for a file that does not exist yet. To deliberately replace a whole
-  existing file you must pass `"overwrite": true`, and you should have read it first.
+- Use plain write_file only for a file that does not exist yet.
+- **Do not reach for `"overwrite": true` when an edit is refused.** A run did exactly that — read
+  the refusal, re-sent the same call with the flag, and deleted 1,659 lines. If write_file says a
+  file already has content, the answer is edit_file or append, not a bigger hammer.
 - **Read the file before every edit.** Do not build an anchor from memory, from earlier context,
   or from a guess. Take `old` from the most recent read of that file.
 - **Do not issue two edits to the same file without re-reading it in between.** The first edit
