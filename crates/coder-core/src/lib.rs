@@ -188,13 +188,8 @@ impl CommandPolicy {
 ///
 /// Write/mutate tools stay registered in the full catalog but are omitted here so the model is not
 /// invited to call them. Enforcement still lives in [`PathPolicy`] / [`CommandPolicy`].
-pub const EXPLORE_TOOL_NAMES: &[&str] = &[
-    "list_files",
-    "search_text",
-    "read_file",
-    "git_status",
-    "git_diff",
-];
+pub const EXPLORE_TOOL_NAMES: &[&str] =
+    &["list_files", "grep", "read_file", "git_status", "git_diff"];
 
 /// System instructions for a coding explore session.
 pub const EXPLORE_MODE_CODER_PROMPT: &str = "\

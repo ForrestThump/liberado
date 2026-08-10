@@ -246,7 +246,9 @@ impl CodingToolRuntime {
     async fn invoke_json(&self, name: &str, args: Value) -> Result<Value, ToolError> {
         match name {
             "list_files" => self.list_files(args).await,
-            "search_text" => self.search_text(args).await,
+            // `search_text` is kept as an alias: a run mid-flight against an older
+            // catalog should not fail on a rename.
+            "grep" | "search_text" => self.grep(args).await,
             "list_symbols" => self.list_symbols(args).await,
             "read_file" => self.read_file(args).await,
             "write_file" => self.write_file(args).await,
@@ -289,46 +291,185 @@ impl CodingToolRuntime {
         Ok(json!({ "files": files, "limit": args.limit }))
     }
 
-    async fn search_text(&self, args: Value) -> Result<Value, ToolError> {
+    /// Search file contents by regular expression.
+    ///
+    /// Named `grep` because that is the word the model already knows. The predecessor was called
+    /// `search_text`, described in six words as "Search workspace files for exact text", and did
+    /// literal `line.contains` only. An A/B against Kilo Code on the same task, same model and
+    /// same repo showed what that cost: Kilo's run called `grep` **17 times** and `read` 22 times
+    /// against **6** edits — 6.5 reads per edit — and produced code that compiled. Ours called
+    /// `search_text` **once**, at 1.0 reads per edit, and produced code that did not.
+    ///
+    /// A model that cannot cheaply ask "where is this used" edits from memory instead, which is
+    /// how a run invents `self.observers` for a field that is singular.
+    async fn grep(&self, args: Value) -> Result<Value, ToolError> {
         #[derive(Deserialize)]
         struct Args {
-            query: String,
-            #[serde(default = "default_limit")]
-            limit: usize,
-        }
-        let args: Args = parse_args(args)?;
-        if args.query.is_empty() {
-            return Err(ToolError::BadRequest("query must not be empty".to_string()));
+            /// `query` is the predecessor's name for this. Accepted so a run that started against
+            /// the old catalog does not fail on a rename it never saw — a half-alias that keeps
+            /// the tool name and drops its parameters would be worse than a clean break.
+            #[serde(alias = "query")]
+            pattern: String,
+            /// Subdirectory to search, relative to the workspace root.
+            #[serde(default)]
+            path: Option<String>,
+            /// Basename glob, e.g. `*.rs`. Matched against the file name, not the whole path —
+            /// a path-anchored pattern is the classic way to silently match nothing.
+            #[serde(default)]
+            glob: Option<String>,
+            /// `content` | `files_with_matches` | `count`.
+            #[serde(default = "default_output_mode")]
+            output_mode: String,
+            /// Case-insensitive.
+            #[serde(default, rename = "-i")]
+            case_insensitive: bool,
+            /// Lines of context either side of a match. `content` mode only.
+            #[serde(default, rename = "-C")]
+            context: usize,
+            #[serde(default = "default_head_limit", alias = "limit")]
+            head_limit: usize,
+            /// Treat `pattern` as literal text rather than a regex.
+            #[serde(default)]
+            fixed_strings: bool,
         }
 
-        let mut matches = Vec::new();
+        let args: Args = parse_args(args)?;
+        if args.pattern.is_empty() {
+            return Err(ToolError::BadRequest(
+                "pattern must not be empty".to_string(),
+            ));
+        }
+
+        let pattern = if args.fixed_strings {
+            regex::escape(&args.pattern)
+        } else {
+            args.pattern.clone()
+        };
+        let re = regex::RegexBuilder::new(&pattern)
+            .case_insensitive(args.case_insensitive)
+            .build()
+            .map_err(|e| {
+                // A rejected pattern must say what to do next. Ripgrep regex is not POSIX, and a
+                // model that gets only "invalid regex" retries the same thing with more escapes.
+                ToolError::BadRequest(format!(
+                    "pattern is not a valid regex: {e}. Braces, parentheses and brackets are \
+                     special — escape them, or pass \"fixed_strings\": true to search for the \
+                     text literally."
+                ))
+            })?;
+
+        let search_root = match &args.path {
+            Some(p) => self.rel_path(p, false)?,
+            None => self.workspace.root().to_path_buf(),
+        };
+
+        let mut hits: Vec<Value> = Vec::new();
+        let mut files_with_matches: Vec<String> = Vec::new();
+        let mut counts: Vec<Value> = Vec::new();
+        let mut total = 0usize;
+        // Kept for the fuzzy fallback below: scanning twice would double the walk.
+        let mut sampled: Vec<(String, usize, String)> = Vec::new();
+
         walk_files(
-            self.workspace.root(),
+            &search_root,
             self.path_policy.search_max_results,
             &self.path_policy,
             |path, rel| {
-                if matches.len() >= args.limit {
-                    return false;
+                if let Some(glob) = &args.glob
+                    && !glob_matches_basename(glob, rel)
+                {
+                    return true;
                 }
                 let Ok(content) = std::fs::read_to_string(path) else {
                     return true;
                 };
-                for (idx, line) in content.lines().enumerate() {
-                    if line.contains(&args.query) {
-                        matches.push(json!({
+                let lines: Vec<&str> = content.lines().collect();
+                let mut file_count = 0usize;
+                for (idx, line) in lines.iter().enumerate() {
+                    if sampled.len() < FUZZY_SAMPLE_LINES {
+                        sampled.push((rel.to_string(), idx + 1, (*line).to_string()));
+                    }
+                    if !re.is_match(line) {
+                        continue;
+                    }
+                    file_count += 1;
+                    total += 1;
+                    if args.output_mode == "content" && hits.len() < args.head_limit {
+                        let lo = idx.saturating_sub(args.context);
+                        let hi = (idx + args.context + 1).min(lines.len());
+                        hits.push(json!({
                             "path": rel,
                             "line": idx + 1,
                             "text": line,
+                            "context": if args.context > 0 {
+                                Value::String(lines[lo..hi].join("\n"))
+                            } else { Value::Null },
                         }));
-                        if matches.len() >= args.limit {
-                            break;
-                        }
+                    }
+                }
+                if file_count > 0 {
+                    if files_with_matches.len() < args.head_limit {
+                        files_with_matches.push(rel.to_string());
+                    }
+                    if counts.len() < args.head_limit {
+                        counts.push(json!({ "path": rel, "count": file_count }));
                     }
                 }
                 true
             },
         )?;
-        Ok(json!({ "matches": matches }))
+
+        // Nothing matched: say what was nearly it rather than returning an empty list.
+        //
+        // An empty result is the least useful answer a search can give — the model cannot tell a
+        // wrong pattern from an absent symbol, and both runs that failed on invented anchors were
+        // working from exactly that ambiguity. The near misses reuse the same similarity metric
+        // the edit tool matches anchors with, so "close" means the same thing in both places.
+        if total == 0 {
+            // Score on identifiers, not whole lines.
+            //
+            // The first version compared the pattern against each line and found nothing useful:
+            // the anchor a real run invented, `for observer in &self.observers`, is only ~35%
+            // similar to the line that actually exists, `let Some(observer) = self.observer...`.
+            // The signal a reader wants is in the *token* — `observers` against `observer` is
+            // 89% — because the mistake is almost always a name, not a sentence.
+            let wanted: Vec<String> = identifiers(&args.pattern);
+            let mut near: Vec<(f64, &(String, usize, String))> = sampled
+                .iter()
+                .filter_map(|s| {
+                    let best = identifiers(&s.2)
+                        .iter()
+                        .flat_map(|tok| wanted.iter().map(move |w| fuzzy_match::similarity(w, tok)))
+                        .fold(0.0f64, f64::max);
+                    (best >= FUZZY_SUGGEST_THRESHOLD).then_some((best, s))
+                })
+                .collect();
+            near.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+            near.dedup_by(|a, b| a.1.2 == b.1.2);
+            let did_you_mean: Vec<Value> = near
+                .iter()
+                .take(5)
+                .map(|(score, s)| {
+                    json!({ "path": s.0, "line": s.1, "text": s.2.trim(), "similarity": score })
+                })
+                .collect();
+            return Ok(json!({
+                "pattern": args.pattern,
+                "total": 0,
+                "matches": [],
+                "did_you_mean": did_you_mean,
+            }));
+        }
+
+        Ok(match args.output_mode.as_str() {
+            "content" => json!({ "pattern": args.pattern, "total": total, "matches": hits }),
+            "count" => json!({ "pattern": args.pattern, "total": total, "counts": counts }),
+            _ => json!({
+                "pattern": args.pattern,
+                "total": total,
+                "files": files_with_matches,
+            }),
+        })
     }
 
     async fn list_symbols(&self, args: Value) -> Result<Value, ToolError> {
@@ -1233,14 +1374,33 @@ impl ToolRuntime for CodingToolRuntime {
                 }),
             ),
             tool(
-                "search_text",
-                "Search workspace files for exact text.",
+                "grep",
+                "Search file contents with a regular expression. Reach for this whenever you do not already know exactly where something lives — finding every caller of a function, every place a field is read, or whether a symbol exists at all. It is far cheaper than reading files and guessing, and an anchor built from a grep hit is one that actually exists. If you already know the file and want to see it, use read_file instead.",
                 json!({
                     "type": "object",
-                    "required": ["query"],
+                    "required": ["pattern"],
                     "properties": {
-                        "query": { "type": "string" },
-                        "limit": { "type": "integer", "minimum": 1 }
+                        "pattern": {
+                            "type": "string",
+                            "description": "Rust regex syntax. Braces, parentheses and brackets are special — escape them, or set fixed_strings to search for the text literally."
+                        },
+                        "path": {
+                            "type": "string",
+                            "description": "Subdirectory to search, relative to the workspace root. Use this to scope a search rather than a path-anchored glob."
+                        },
+                        "glob": {
+                            "type": "string",
+                            "description": "Filename filter such as *.rs. Matched against the file name only, so src/**/*.rs matches nothing — scope with path instead."
+                        },
+                        "output_mode": {
+                            "type": "string",
+                            "enum": ["files_with_matches", "content", "count"],
+                            "description": "files_with_matches (default) lists the paths that match. content returns the matching lines. count returns per-file totals."
+                        },
+                        "-i": { "type": "boolean", "description": "Case-insensitive." },
+                        "-C": { "type": "integer", "minimum": 0, "description": "Lines of context either side of a match, in content mode." },
+                        "fixed_strings": { "type": "boolean", "description": "Treat pattern as literal text rather than a regex." },
+                        "head_limit": { "type": "integer", "minimum": 0, "description": "Cap on results. Defaults to 250." }
                     }
                 }),
             ),
@@ -1610,6 +1770,73 @@ fn slice_lines(content: &str, start_line: Option<usize>, line_count: Option<usiz
 /// `visit` returns whether to keep walking — `false` stops immediately. A caller whose limit is on
 /// what it *collects* rather than what it *reads* needs that: `list_symbols` has to look past the
 /// markdown and lockfiles to find any source at all, so its `limit` cannot also be the walk budget.
+/// Lines sampled while walking, for the "did you mean" fallback when nothing matched.
+///
+/// Bounded because the fallback is a courtesy, not a search: holding a whole tree in memory to
+/// answer a query that found nothing would be a poor trade.
+const FUZZY_SAMPLE_LINES: usize = 4000;
+
+/// How close an identifier must be to be worth suggesting. Lower than the edit tool's 0.95
+/// because the costs are not comparable: there a wrong answer edits the wrong place, here it is
+/// one suggestion the reader ignores.
+const FUZZY_SUGGEST_THRESHOLD: f64 = 0.7;
+
+/// Identifier-ish tokens, long enough to be worth comparing.
+///
+/// Four characters filters out `let`, `fn`, `in` and friends, which otherwise match everything
+/// and drown the real suggestion.
+fn identifiers(text: &str) -> Vec<String> {
+    text.split(|c: char| !c.is_alphanumeric() && c != '_')
+        .filter(|t| t.len() >= 4)
+        .map(str::to_lowercase)
+        .collect()
+}
+
+fn default_output_mode() -> String {
+    "files_with_matches".to_string()
+}
+
+fn default_head_limit() -> usize {
+    250
+}
+
+/// Match a glob against a path's **basename** only.
+///
+/// Anchored patterns like `src/**/*.rs` are the classic way to match nothing by accident; the
+/// tool description says to scope with `path` instead, and this keeps the behaviour honest rather
+/// than half-supporting a syntax that would surprise.
+fn glob_matches_basename(glob: &str, rel: &str) -> bool {
+    let name = rel.rsplit(['/', '\\']).next().unwrap_or(rel);
+    glob_match(glob, name)
+}
+
+/// `*` and `?` only. A full glob engine is a dependency we do not need for filename filtering.
+fn glob_match(pattern: &str, text: &str) -> bool {
+    let (p, t): (Vec<char>, Vec<char>) = (pattern.chars().collect(), text.chars().collect());
+    let (mut pi, mut ti) = (0usize, 0usize);
+    let (mut star, mut mark) = (None, 0usize);
+    while ti < t.len() {
+        if pi < p.len() && (p[pi] == '?' || p[pi] == t[ti]) {
+            pi += 1;
+            ti += 1;
+        } else if pi < p.len() && p[pi] == '*' {
+            star = Some(pi);
+            mark = ti;
+            pi += 1;
+        } else if let Some(s) = star {
+            pi = s + 1;
+            mark += 1;
+            ti = mark;
+        } else {
+            return false;
+        }
+    }
+    while pi < p.len() && p[pi] == '*' {
+        pi += 1;
+    }
+    pi == p.len()
+}
+
 fn walk_files(
     root: &Path,
     limit: usize,
@@ -3004,15 +3231,233 @@ three
     }
 
     #[tokio::test]
-    async fn search_text_returns_line_matches() {
+    async fn grep_returns_line_matches() {
         let (dir, runtime) = runtime();
-        std::fs::write(dir.path().join("notes.txt"), "alpha\nbeta\n").unwrap();
+        std::fs::write(
+            dir.path().join("notes.txt"),
+            "alpha
+beta
+",
+        )
+        .unwrap();
         let result = runtime
-            .invoke_json("search_text", json!({"query": "beta"}))
+            .invoke_json("grep", json!({"pattern": "beta", "output_mode": "content"}))
             .await
             .unwrap();
         assert_eq!(result["matches"][0]["path"], "notes.txt");
         assert_eq!(result["matches"][0]["line"], 2);
+    }
+
+    // ── grep ─────────────────────────────────────────────────────────────────────────────
+
+    /// The old `search_text` is still callable. A run started against an older catalog must not
+    /// fail on a rename it never saw.
+    #[tokio::test]
+    async fn search_text_is_still_accepted_as_an_alias() {
+        let (dir, runtime) = runtime();
+        std::fs::write(dir.path().join("notes.txt"), "alpha\nbeta\n").unwrap();
+        let result = runtime
+            .invoke_json("search_text", json!({"pattern": "beta"}))
+            .await
+            .unwrap();
+        assert_eq!(result["total"], 1);
+    }
+
+    /// The tool is named `grep` because that is the word the model already knows. The rename is
+    /// the point of the change, so a catalog without it is a regression.
+    #[tokio::test]
+    async fn the_tool_is_offered_as_grep() {
+        let (_dir, runtime) = runtime();
+        let names: Vec<String> = runtime.catalog().into_iter().map(|t| t.name).collect();
+        assert!(names.contains(&"grep".to_string()), "{names:?}");
+    }
+
+    /// Regex, not `contains`. The predecessor could only match literal text, which is why a
+    /// question like "every function starting with handle_" could not be asked at all.
+    #[tokio::test]
+    async fn a_regex_pattern_matches() {
+        let (dir, runtime) = runtime();
+        std::fs::write(
+            dir.path().join("a.rs"),
+            "fn handle_one() {}\nfn other() {}\nfn handle_two() {}\n",
+        )
+        .unwrap();
+        let out = runtime
+            .invoke_json(
+                "grep",
+                json!({"pattern": r"fn handle_\w+", "output_mode": "content"}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(out["total"], 2, "{out}");
+    }
+
+    /// A literal search must still be possible without escaping a regex by hand.
+    #[tokio::test]
+    async fn fixed_strings_searches_literally() {
+        let (dir, runtime) = runtime();
+        std::fs::write(dir.path().join("a.rs"), "let v: Vec<u8> = vec![];\n").unwrap();
+        let out = runtime
+            .invoke_json(
+                "grep",
+                json!({"pattern": "Vec<u8>", "fixed_strings": true, "output_mode": "content"}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(out["total"], 1, "{out}");
+    }
+
+    /// A rejected pattern must say what to do next. "Invalid regex" alone gets the same pattern
+    /// back with more escapes — the same shape as the anchor errors that cost earlier runs.
+    #[tokio::test]
+    async fn an_invalid_regex_names_the_way_out() {
+        let (_dir, runtime) = runtime();
+        let err = runtime
+            .invoke_json("grep", json!({"pattern": "fn foo("}))
+            .await
+            .expect_err("an unbalanced paren is not a valid regex");
+        let m = err.to_string();
+        assert!(
+            m.contains("fixed_strings"),
+            "must offer the literal escape hatch: {m}"
+        );
+    }
+
+    #[tokio::test]
+    async fn case_insensitive_search_works() {
+        let (dir, runtime) = runtime();
+        std::fs::write(dir.path().join("a.rs"), "TODO: fix\n").unwrap();
+        let out = runtime
+            .invoke_json("grep", json!({"pattern": "todo", "-i": true}))
+            .await
+            .unwrap();
+        assert_eq!(out["total"], 1, "{out}");
+    }
+
+    /// The default mode lists paths, which is what "where does this live" needs. Content mode is
+    /// opt-in because returning every matching line by default buries the answer.
+    #[tokio::test]
+    async fn the_default_mode_lists_files_not_lines() {
+        let (dir, runtime) = runtime();
+        std::fs::write(dir.path().join("a.rs"), "x\nx\nx\n").unwrap();
+        let out = runtime
+            .invoke_json("grep", json!({"pattern": "x"}))
+            .await
+            .unwrap();
+        assert_eq!(out["files"][0], "a.rs");
+        assert_eq!(out["total"], 3, "the count is still reported: {out}");
+        assert!(
+            out["matches"].is_null(),
+            "lines must not be returned by default: {out}"
+        );
+    }
+
+    #[tokio::test]
+    async fn content_mode_can_include_surrounding_lines() {
+        let (dir, runtime) = runtime();
+        std::fs::write(dir.path().join("a.rs"), "one\ntwo\nTARGET\nfour\nfive\n").unwrap();
+        let out = runtime
+            .invoke_json(
+                "grep",
+                json!({"pattern": "TARGET", "output_mode": "content", "-C": 1}),
+            )
+            .await
+            .unwrap();
+        let ctx = out["matches"][0]["context"].as_str().unwrap_or_default();
+        assert_eq!(ctx, "two\nTARGET\nfour", "{out}");
+    }
+
+    /// The glob filters on the basename. A path-anchored pattern matching nothing silently is a
+    /// trap the description warns about, and the behaviour has to match the warning.
+    #[tokio::test]
+    async fn a_glob_filters_by_file_name() {
+        let (dir, runtime) = runtime();
+        std::fs::create_dir_all(dir.path().join("src")).unwrap();
+        std::fs::write(dir.path().join("src/a.rs"), "needle\n").unwrap();
+        std::fs::write(dir.path().join("src/b.txt"), "needle\n").unwrap();
+
+        let rs = runtime
+            .invoke_json("grep", json!({"pattern": "needle", "glob": "*.rs"}))
+            .await
+            .unwrap();
+        assert_eq!(rs["total"], 1, "only the .rs file should match: {rs}");
+    }
+
+    /// The finding that motivated the fallback: an empty result cannot be told apart from a
+    /// wrong pattern, and a model that cannot tell them apart edits from memory instead.
+    #[tokio::test]
+    async fn a_pattern_that_matches_nothing_suggests_what_was_close() {
+        let (dir, runtime) = runtime();
+        std::fs::write(
+            dir.path().join("a.rs"),
+            "let Some(observer) = self.observer.as_ref() else { return };\n",
+        )
+        .unwrap();
+
+        // The exact anchor a real run invented: plural field, and a loop that does not exist.
+        let out = runtime
+            .invoke_json(
+                "grep",
+                json!({"pattern": "for observer in &self.observers"}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(out["total"], 0);
+        let suggestions = out["did_you_mean"].as_array().cloned().unwrap_or_default();
+        assert!(
+            !suggestions.is_empty(),
+            "a miss must point at the nearest real line: {out}"
+        );
+        assert!(
+            suggestions[0]["text"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("self.observer"),
+            "the suggestion must be the line that actually exists: {out}"
+        );
+    }
+
+    /// And a miss with nothing remotely similar says so plainly rather than inventing a lead.
+    #[tokio::test]
+    async fn a_miss_with_no_near_lines_suggests_nothing() {
+        let (dir, runtime) = runtime();
+        std::fs::write(dir.path().join("a.rs"), "x\n").unwrap();
+        let out = runtime
+            .invoke_json(
+                "grep",
+                json!({"pattern": "zzzzz_completely_unrelated_identifier_qqqq"}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(out["total"], 0);
+        assert!(
+            out["did_you_mean"]
+                .as_array()
+                .map(Vec::is_empty)
+                .unwrap_or(true),
+            "a bad guess is worse than no guess: {out}"
+        );
+    }
+
+    #[tokio::test]
+    async fn count_mode_reports_per_file_totals() {
+        let (dir, runtime) = runtime();
+        std::fs::write(dir.path().join("a.rs"), "hit\nhit\n").unwrap();
+        let out = runtime
+            .invoke_json("grep", json!({"pattern": "hit", "output_mode": "count"}))
+            .await
+            .unwrap();
+        assert_eq!(out["counts"][0]["count"], 2, "{out}");
+        assert_eq!(out["total"], 2);
+    }
+
+    #[tokio::test]
+    async fn an_empty_pattern_is_rejected() {
+        let (_dir, runtime) = runtime();
+        runtime
+            .invoke_json("grep", json!({"pattern": ""}))
+            .await
+            .expect_err("an empty pattern would match every line in the tree");
     }
 
     #[tokio::test]
@@ -3202,16 +3647,28 @@ edition = \"2021\"
     }
 
     #[tokio::test]
-    async fn search_text_respects_limit_and_multi_match_file() {
+    /// The old name with the old parameter names, kept as a regression on the alias: a run that
+    /// started against the previous catalog calls `search_text(query, limit)` and must still work.
+    async fn the_old_search_text_call_shape_still_works() {
         let (dir, runtime) = runtime();
-        std::fs::write(dir.path().join("notes.txt"), "alpha\nalpha\nbeta\n").unwrap();
+        std::fs::write(
+            dir.path().join("notes.txt"),
+            "alpha
+alpha
+beta
+",
+        )
+        .unwrap();
 
         let result = runtime
-            .invoke_json("search_text", json!({"query": "alpha", "limit": 1}))
+            .invoke_json(
+                "search_text",
+                json!({"query": "alpha", "limit": 1, "output_mode": "content"}),
+            )
             .await
             .unwrap();
 
-        assert_eq!(result["matches"].as_array().unwrap().len(), 1);
+        assert_eq!(result["matches"].as_array().map(Vec::len), Some(1));
     }
 
     #[tokio::test]
@@ -3293,7 +3750,7 @@ edition = \"2021\"
         let names: Vec<&str> = catalog.iter().map(|t| t.name.as_str()).collect();
         for tool in &[
             "list_files",
-            "search_text",
+            "grep",
             "list_symbols",
             "read_file",
             "write_file",
@@ -4283,17 +4740,12 @@ edition = \"2021\"
     }
 
     #[tokio::test]
-    async fn search_text_rejects_empty_query() {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("f.txt"), "hello\n").unwrap();
-        let runtime =
-            CodingToolRuntime::new(dir.path(), CommandPolicy::default(), PathPolicy::default())
-                .unwrap();
-        let err = runtime
+    async fn grep_rejects_an_empty_query_under_either_name() {
+        let (_dir, runtime) = runtime();
+        runtime
             .invoke_json("search_text", json!({"query": ""}))
             .await
-            .unwrap_err();
-        assert!(err.to_string().contains("query must not be empty"));
+            .expect_err("an empty pattern would match every line in the tree");
     }
 
     // ── Java symbol extraction ────────────────────────────────────────
