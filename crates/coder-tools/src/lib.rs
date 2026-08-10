@@ -1161,9 +1161,27 @@ impl CodingToolRuntime {
         }))
     }
 
+    /// Check the workspace, and answer even when nothing was configured.
+    ///
+    /// This used to return `{"configured": false, "passed": null}` — a shrug — whenever
+    /// `[coder] validation_command` was unset, which is the default on the ACP path. The cost of
+    /// that shrug is measurable: a run called `validate` at turn 8, doing exactly what its prompt
+    /// asked, got the empty answer, worked nine more turns on code that did not compile, and only
+    /// found out at turn 17 when it reached for `cargo test --workspace` itself. The instruction
+    /// was followed and the tool had nothing to say.
+    ///
+    /// With no command configured, a cargo workspace gets `cargo check --workspace --all-targets`
+    /// — the same check the acceptance gate runs, so an early `validate` and the final verdict
+    /// cannot disagree about what "compiles" means. A non-cargo workspace still reports
+    /// unconfigured, because inventing a check for a tree we do not understand is worse than
+    /// admitting there is none.
     async fn validate(&self) -> Result<Value, ToolError> {
-        let Some(command) = self.validation_command.clone() else {
-            return Ok(json!({ "configured": false, "passed": null }));
+        let command = match self.validation_command.clone() {
+            Some(command) => command,
+            None => match self.default_check() {
+                Some(command) => command,
+                None => return Ok(json!({ "configured": false, "passed": null })),
+            },
         };
         let output = self.workspace.run_command(command).await?;
         Ok(json!({
@@ -1174,6 +1192,29 @@ impl CodingToolRuntime {
             "stderr": output.stderr,
             "timed_out": output.timed_out,
         }))
+    }
+}
+
+impl CodingToolRuntime {
+    /// The check to run when a deployment configured none.
+    ///
+    /// `None` for a workspace with no `Cargo.toml`: a guessed check for an unknown stack would
+    /// report failures the task is not about, which is worse than reporting nothing.
+    fn default_check(&self) -> Option<CommandRequest> {
+        if !self.workspace.root().join("Cargo.toml").is_file() {
+            return None;
+        }
+        Some(CommandRequest {
+            program: "cargo".to_string(),
+            args: vec![
+                "check".to_string(),
+                "--workspace".to_string(),
+                "--all-targets".to_string(),
+            ],
+            env: Default::default(),
+            timeout_secs: None,
+            output_max_bytes: None,
+        })
     }
 }
 
@@ -2999,6 +3040,84 @@ three
             .await
             .unwrap();
         assert_eq!(result["timed_out"], false);
+    }
+
+    /// A cargo workspace with no configured command still gets a real answer.
+    ///
+    /// The empty answer cost a run nine turns: it called `validate` at turn 8, was told
+    /// `{"configured": false}`, and only discovered its code did not compile at turn 17.
+    #[tokio::test]
+    async fn validate_falls_back_to_a_compile_check_in_a_cargo_workspace() {
+        let (dir, runtime) = runtime();
+        std::fs::write(
+            dir.path().join("Cargo.toml"),
+            "[package]
+name = \"vtest\"
+version = \"0.1.0\"
+edition = \"2021\"
+",
+        )
+        .unwrap();
+        std::fs::create_dir_all(dir.path().join("src")).unwrap();
+        std::fs::write(
+            dir.path().join("src/lib.rs"),
+            "pub fn f( -> u8 { 1 }
+",
+        )
+        .unwrap();
+
+        let out = runtime
+            .invoke_json("validate", json!({}))
+            .await
+            .expect("validate");
+        assert_eq!(
+            out["configured"], true,
+            "an unconfigured cargo workspace must still be checkable: {out}"
+        );
+        assert_eq!(
+            out["passed"], false,
+            "a workspace that does not compile must not pass: {out}"
+        );
+    }
+
+    /// And a workspace that compiles passes, so the model can trust a green answer.
+    #[tokio::test]
+    async fn validate_passes_on_a_compiling_workspace() {
+        let (dir, runtime) = runtime();
+        std::fs::write(
+            dir.path().join("Cargo.toml"),
+            "[package]
+name = \"vok\"
+version = \"0.1.0\"
+edition = \"2021\"
+",
+        )
+        .unwrap();
+        std::fs::create_dir_all(dir.path().join("src")).unwrap();
+        std::fs::write(
+            dir.path().join("src/lib.rs"),
+            "pub fn f() -> u8 { 1 }
+",
+        )
+        .unwrap();
+
+        let out = runtime
+            .invoke_json("validate", json!({}))
+            .await
+            .expect("validate");
+        assert_eq!(out["passed"], true, "{out}");
+    }
+
+    /// A tree we do not understand still reports unconfigured. Guessing a check for an unknown
+    /// stack would fail the run on something the task was never about.
+    #[tokio::test]
+    async fn validate_stays_unconfigured_outside_a_cargo_workspace() {
+        let (_dir, runtime) = runtime();
+        let out = runtime
+            .invoke_json("validate", json!({}))
+            .await
+            .expect("validate");
+        assert_eq!(out["configured"], false, "{out}");
     }
 
     #[tokio::test]
