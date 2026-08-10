@@ -150,9 +150,22 @@ already.
 **Landmine:** `crates/provider/src/latency.rs` was deliberately owned by nobody in the round-2
 parallel work. Changing it is its own PR, not a side effect of another.
 
-## TE3 — order the dispatcher prompt so its stable part can cache
+## TE3 — order the dispatcher prompt so its stable part can cache — ✅ **landed**
 
-Dispatcher cache hit is **22.3%**, against 76.4% (face) and 76.7% (orchestrator).
+**Shipped; verified on `main` 2026-08-10.** `build_request` in
+[`crates/dispatcher/src/lib.rs`](../../crates/dispatcher/src/lib.rs) now assembles stable-first —
+catalog, then writable zones, then the varying goal — with a comment at the site explaining why the
+order is load-bearing so a future edit does not undo it.
+
+**The effect was never re-measured.** The predicted gain is ~1% of total tokens; nobody has
+confirmed the dispatcher's cache-hit rate actually moved. If you want the number, that is a fresh
+`liberado-cost` read, not a code change.
+
+The original finding follows, kept because the reasoning generalises to any prompt we assemble.
+
+---
+
+Dispatcher cache hit was **22.3%**, against 76.4% (face) and 76.7% (orchestrator).
 
 The cause is visible in one line
 ([`crates/dispatcher/src/lib.rs:240`](../../crates/dispatcher/src/lib.rs#L240)):
