@@ -279,6 +279,13 @@ pub fn render_transcript(trace: &CoderTrace) -> String {
                     "== session finished ==\n  outcome: {outcome:?}\n  at: {at}\n\n"
                 ));
             }
+            CoderEvent::SessionAborted { error, at } => {
+                // Loud on purpose. This is the attempt that crashed rather than concluded, and
+                // before the trace recorded it the run had no tail at all.
+                out.push_str(&format!(
+                    "== session ABORTED (unhandled error) ==\n  error: {error}\n  at: {at}\n\n"
+                ));
+            }
         }
     }
 
@@ -453,6 +460,11 @@ fn metrics(trace: &CoderTrace) -> TraceMetrics {
             CoderEvent::SessionFinished { outcome, .. } => {
                 terminal_outcome = Some(format!("{outcome:?}"));
                 terminal_cause = format!("session finished: {outcome:?}");
+            }
+            CoderEvent::SessionAborted { error, .. } => {
+                terminal_outcome = Some("Aborted".to_string());
+                terminal_summary = Some(error.clone());
+                terminal_cause = format!("session aborted: {error}");
             }
             CoderEvent::LoopGuardTriggered { guard, action, .. } => {
                 // Not terminal by itself, but useful if nothing else closed the run.

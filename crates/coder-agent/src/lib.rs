@@ -372,6 +372,19 @@ fn is_retryable(err: &CoderError) -> bool {
 /// so the same match arms don't need to be kept in sync across modules.
 pub(crate) use is_retryable as is_stuck_error;
 
+/// Whether the event log already says how the attempt ended.
+///
+/// Used to avoid stamping `SessionAborted` on top of a body that handled its own failure and said
+/// so — a trace claiming both a decision and a crash describes neither.
+fn ended_in_trace(events: &trace::EventLog) -> bool {
+    trace::snapshot_events(events).iter().any(|e| {
+        matches!(
+            e,
+            CoderEvent::SessionFinished { .. } | CoderEvent::SessionAborted { .. }
+        )
+    })
+}
+
 /// How much untracked file content the critic's diff may carry, across all new files.
 ///
 /// Larger than the tool's budget: a reviewer reads the change once and has the whole context
@@ -455,6 +468,18 @@ pub(crate) async fn workspace_diff(workspace_root: &str) -> Result<String, Coder
 }
 
 impl LiberadoLoopBackend {
+    /// Run one attempt and **write its trace on every exit path**.
+    ///
+    /// The body below returns early through a dozen `?` operators. Each one used to discard the
+    /// entire event log, which meant the attempt that failed in a way nobody had anticipated was
+    /// precisely the attempt that left no trace — the inverse of what a debugger needs.
+    ///
+    /// It was measured: one run put 122 tool calls on the wire and 76 into trace files, and the
+    /// missing 46 were the attempt that ended on `critic returned empty content`. That error
+    /// travels out of [`critic::run_critic`] through a `?` that sits *before* the write.
+    ///
+    /// So the write lives here, wrapped around the body, where no future `?` can route around it.
+    /// Adding one inside [`Self::attempt_body`] is now safe by construction rather than by care.
     async fn run_attempt(&self, request: CoderRunRequest) -> Result<CoderRunResult, CoderError> {
         let session_id = trace::session_id(&request);
         let events = Arc::new(Mutex::new(vec![CoderEvent::SessionStarted {
@@ -463,6 +488,57 @@ impl LiberadoLoopBackend {
             task_id: request.task.id.clone(),
             at: Utc::now(),
         }]));
+
+        let outcome = self
+            .attempt_body(request.clone(), &session_id, &events)
+            .await;
+
+        // An error that reached here was not handled by the body, so nothing has said the attempt
+        // ended. Record what killed it: "the attempt failed" without the reason is the state that
+        // made the last four failures cost a day each.
+        if let Err(e) = &outcome
+            && !ended_in_trace(&events)
+        {
+            trace::push_event(
+                &events,
+                CoderEvent::SessionAborted {
+                    error: e.to_string(),
+                    at: Utc::now(),
+                },
+            );
+        }
+
+        let written = trace::write_trace(
+            &request,
+            &session_id,
+            trace::snapshot_events(&events),
+            outcome.as_ref().ok().cloned(),
+        )
+        .await;
+
+        match (outcome, written) {
+            // A trace is a diagnostic. Failing a completed run because its diagnostic could not be
+            // written repeats #119's mistake — the disk being full is not a verdict on the change.
+            (Ok(mut result), Ok(path)) => {
+                result.trace_path = path;
+                Ok(result)
+            }
+            (Ok(result), Err(e)) => {
+                tracing::warn!(session_id = %session_id, error = %e, "trace write failed; run stands");
+                Ok(result)
+            }
+            (Err(original), _) => Err(original),
+        }
+    }
+
+    async fn attempt_body(
+        &self,
+        request: CoderRunRequest,
+        session_id: &str,
+        events: &trace::EventLog,
+    ) -> Result<CoderRunResult, CoderError> {
+        let events = events.clone();
+        let session_id = session_id.to_string();
 
         // Optional planner (attempt 0 only) — inject plan into task context for the worker.
         let mut request = request;
@@ -621,9 +697,6 @@ impl LiberadoLoopBackend {
                     at: Utc::now(),
                 },
             );
-            let _ =
-                trace::write_trace(&request, &session_id, trace::snapshot_events(&events), None)
-                    .await;
             return Err(CoderError::NoChanges);
         }
         for path in &files_changed {
@@ -675,13 +748,6 @@ impl LiberadoLoopBackend {
                             at: Utc::now(),
                         },
                     );
-                    let _ = trace::write_trace(
-                        &request,
-                        &session_id,
-                        trace::snapshot_events(&events),
-                        None,
-                    )
-                    .await;
                     return Err(CoderError::Validation(feedback));
                 }
                 validation_notes = Some(
@@ -770,7 +836,7 @@ impl LiberadoLoopBackend {
             },
         );
 
-        let mut result = CoderRunResult {
+        let result = CoderRunResult {
             backend: self.name().to_string(),
             outcome,
             summary,
@@ -789,13 +855,6 @@ impl LiberadoLoopBackend {
                 "worker_role": worker_role_name,
             }),
         };
-        result.trace_path = trace::write_trace(
-            &request,
-            &session_id,
-            trace::snapshot_events(&events),
-            Some(result.clone()),
-        )
-        .await?;
         Ok(result)
     }
 }
@@ -1232,6 +1291,169 @@ mod tests {
                 CoderEvent::FileChanged { path, .. } if path == "hello.txt"
             )
         }));
+    }
+
+    /// The trace gap, reproduced.
+    ///
+    /// A real run (`lib-18ca8ea9645d75d0-15412`) put 122 tool calls on the wire and 76 into trace
+    /// files. The missing 46 belonged to the attempt that ended on `critic returned empty content`
+    /// — an error that leaves [`critic::run_critic`] through a `?` sitting before the write, so the
+    /// whole event log went out with it.
+    ///
+    /// The attempt that fails unexpectedly is the one whose trace is worth reading, and it was the
+    /// one guaranteed not to have one.
+    #[tokio::test]
+    async fn an_unhandled_error_still_writes_its_trace() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path());
+
+        // write, report, then a critic turn with no content at all — exactly what production saw.
+        let script = [
+            write_then_report()[0].clone(),
+            write_then_report()[1].clone(),
+            CompletionResponse {
+                content: None,
+                tool_calls: Vec::new(),
+                finish_reason: liberado_provider::FinishReason::Stop,
+                usage: None,
+            },
+        ];
+        let provider = Arc::new(MockProvider::with_script("mock", script));
+        let backend = LiberadoLoopBackend::new(provider);
+        let mut request = request(dir.path(), "HEAD");
+        let traces = dir.path().join("traces");
+        request.config.trace_dir = Some(traces.to_string_lossy().into_owned());
+        // Enable the critic: a prompt is what turns the role on.
+        request.config.critic.prompt = Some("Review the diff.".to_string());
+
+        let err = backend
+            .run(request)
+            .await
+            .expect_err("an empty critic response must still fail the run");
+        assert!(
+            err.to_string().contains("empty content"),
+            "wrong failure reproduced: {err}"
+        );
+
+        let written: Vec<_> = std::fs::read_dir(&traces)
+            .expect("trace dir must exist even though the attempt died")
+            .filter_map(|e| e.ok())
+            .filter(|e| e.path().extension().is_some_and(|x| x == "json"))
+            .collect();
+        assert!(
+            !written.is_empty(),
+            "the attempt that crashed is the one whose trace matters most"
+        );
+
+        let trace: CoderTrace =
+            serde_json::from_str(&std::fs::read_to_string(written[0].path()).unwrap()).unwrap();
+
+        // The tool calls that were being lost.
+        assert!(
+            trace
+                .events
+                .iter()
+                .any(|e| matches!(e, CoderEvent::ToolFinished { .. })),
+            "the work the attempt did must survive its failure: {:?}",
+            trace.events
+        );
+        // And why it died, which is the whole point of keeping it.
+        let aborted = trace.events.iter().find_map(|e| match e {
+            CoderEvent::SessionAborted { error, .. } => Some(error.clone()),
+            _ => None,
+        });
+        assert!(
+            aborted.is_some_and(|e| e.contains("empty content")),
+            "the trace must say what killed the attempt: {:?}",
+            trace.events
+        );
+    }
+
+    /// A trace is a diagnostic, so failing to write one must not fail a run that succeeded.
+    ///
+    /// The write used to sit behind a `?`. On the machine where the disk filled, that would have
+    /// discarded a completed run because its *diagnostic* could not be saved — the same mistake
+    /// #119 fixed for `cargo`: the disk being full is not a verdict on the change.
+    #[tokio::test]
+    async fn a_run_survives_a_trace_it_cannot_write() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path());
+        let provider = Arc::new(MockProvider::with_script("mock", write_then_report()));
+        let backend = LiberadoLoopBackend::new(provider);
+        let mut request = request(dir.path(), "HEAD");
+
+        // A *file* where the trace directory should be, so `create_dir_all` cannot succeed.
+        // Kept outside the workspace: a blocker written inside it is an untracked change, and the
+        // run would then legitimately report it as one.
+        let elsewhere = tempfile::tempdir().unwrap();
+        let blocker = elsewhere.path().join("not-a-dir");
+        std::fs::write(&blocker, "in the way").unwrap();
+        request.config.trace_dir = Some(blocker.join("traces").to_string_lossy().into_owned());
+
+        let result = backend
+            .run(request)
+            .await
+            .expect("an unwritable trace directory must not fail the run");
+        assert_eq!(result.files_changed, vec!["hello.txt"]);
+        assert!(
+            result.trace_path.is_none(),
+            "no trace was written, so the result must not claim one"
+        );
+    }
+
+    /// A body that handles its own failure must not also be reported as a crash. A trace claiming
+    /// both a decision and an unhandled error describes neither.
+    #[tokio::test]
+    async fn a_handled_failure_is_not_relabelled_as_an_abort() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path());
+        // Report success while changing nothing: the body detects this and fails it deliberately.
+        let script = [CompletionResponse::tool_calls(vec![ToolInvocation::new(
+            "report-1",
+            liberado_executor::SUBMIT_REPORT_TOOL,
+            json!({
+                "outcome": "succeeded",
+                "summary": "did nothing",
+                "artifacts": [],
+                "new_high_signal_facts": [],
+                "follow_up": null
+            }),
+        )])];
+        let provider = Arc::new(MockProvider::with_script("mock", script));
+        let backend = LiberadoLoopBackend::new(provider);
+        let mut request = request(dir.path(), "HEAD");
+        let traces = dir.path().join("traces");
+        request.config.trace_dir = Some(traces.to_string_lossy().into_owned());
+
+        let _ = backend.run(request).await;
+
+        // Attempt 0 only. `run_attempts` retries a `NoChanges` failure, and the retry exhausts the
+        // mock script — a genuine unhandled error, correctly recorded as an abort. Asserting over
+        // every file would be asserting that the fix does not work.
+        let attempt_zero = std::fs::read_dir(&traces)
+            .expect("trace dir")
+            .filter_map(|e| e.ok())
+            .find(|e| e.file_name().to_string_lossy().contains("-attempt-0-"))
+            .expect("a handled failure still writes a trace");
+
+        let trace: CoderTrace =
+            serde_json::from_str(&std::fs::read_to_string(attempt_zero.path()).unwrap()).unwrap();
+        assert!(
+            trace
+                .events
+                .iter()
+                .any(|e| matches!(e, CoderEvent::SessionFinished { .. })),
+            "the body's own verdict must be what the trace records: {:?}",
+            trace.events
+        );
+        assert!(
+            !trace
+                .events
+                .iter()
+                .any(|e| matches!(e, CoderEvent::SessionAborted { .. })),
+            "a deliberate failure is not an abort: {:?}",
+            trace.events
+        );
     }
 
     #[tokio::test]
