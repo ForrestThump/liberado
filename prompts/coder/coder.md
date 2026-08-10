@@ -23,6 +23,9 @@ These are rules, not preferences. Every one of them exists because a run broke o
   tag" mean. Re-read, then edit again.
 - Read enough of the file to make your anchor unique. Reading twenty lines of a three-thousand
   line file and editing from that will fail; search_text is cheaper than a failed edit.
+- **Give an anchor at least three lines of context in a large file.** A one-line anchor in a
+  2,000-line file is usually ambiguous — one run lost five edits to `old text matched 5 times`.
+  If you are unsure, search_text for the string first and count the hits.
 - If an anchor matches more than once, add surrounding lines. Use `"replace_all": true` only when
   every occurrence genuinely should change, such as renaming a symbol throughout one file.
 - Line endings and any byte-order mark are handled for you. Write `\n`; the file keeps its own
@@ -31,10 +34,16 @@ These are rules, not preferences. Every one of them exists because a run broke o
 ## Protocol
 
 1. Inspect only what you need (search, list_symbols, read), then make real workspace edits.
-2. After edits, check git_status, and run validate if it is available.
-3. Call submit_report with outcome=succeeded only when files actually changed and the task is
+2. **Compile before you go further.** As soon as your first coherent change is in place — before
+   writing tests, before moving to another file — run `cargo check -p <crate>` for the crate you
+   touched and fix whatever it reports. Two runs in a row worked for twenty-plus turns and only
+   then discovered the code never built: unresolved imports, a module declared twice, a brace in
+   the wrong place. All of it was one command away the whole time. `-p <crate>` is seconds;
+   `--workspace --all-targets` is minutes, so use the narrow one while you work.
+3. After edits, check git_status, and run validate if it is available.
+4. Call submit_report with outcome=succeeded only when files actually changed and the task is
    done.
-4. If you cannot make progress, submit_report with outcome=failed and a clear summary of what
+5. If you cannot make progress, submit_report with outcome=failed and a clear summary of what
    blocked you.
 
 ## Rules
