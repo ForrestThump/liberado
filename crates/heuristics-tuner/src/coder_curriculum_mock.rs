@@ -23,8 +23,20 @@ pub fn mock_script_for(scenario_name: &str) -> Option<Vec<CompletionResponse>> {
             write_file("hello.txt", "hello from liberado\n"),
             report_ok("wrote hello.txt", &["hello.txt"]),
         ]),
+        // Appends rather than rewriting the file whole. The scenario is named
+        // `edit-existing-readme` and its seed is a file that already exists; the mock used to
+        // "solve" it by replacing all of it with `write_file` — the exact mistake a real run
+        // then made on a 3,921-line source file. A curriculum used for tuning must not model
+        // that.
         "edit-existing-readme" => Some(vec![
-            write_file("README.md", "# Project\n\nSome text.\n## Liberado\n"),
+            edit_file(
+                "README.md",
+                "Some text.
+",
+                "Some text.
+## Liberado
+",
+            ),
             report_ok("appended Liberado heading", &["README.md"]),
         ]),
         "multi-file-feature" => Some(vec![
@@ -46,12 +58,13 @@ pub fn mock_script_for(scenario_name: &str) -> Option<Vec<CompletionResponse>> {
             "no real work requested; honest failure",
         )]),
         // Stress (optional mock coverage for CI depth without live models)
+        // Both files are seeded, so replacing them whole is a real overwrite and says so.
         "rename-across-modules" => Some(vec![
-            write_file(
+            overwrite_file(
                 "src/lib.rs",
                 "pub fn hello_world() -> &'static str { \"hi\" }\npub fn unused_helper() {}\n",
             ),
-            write_file(
+            overwrite_file(
                 "src/main.rs",
                 "fn main() { println!(\"{}\", demo::hello_world()); }\n",
             ),
@@ -60,8 +73,10 @@ pub fn mock_script_for(scenario_name: &str) -> Option<Vec<CompletionResponse>> {
                 &["src/lib.rs", "src/main.rs"],
             ),
         ]),
+        // The broken test file is seeded, so repairing it by rewriting the whole file is an
+        // overwrite and must say so.
         "repair-broken-unit-test" => Some(vec![
-            write_file(
+            overwrite_file(
                 "src/lib.rs",
                 "pub fn double(x: i32) -> i32 { x + x }\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n    #[test]\n    fn d() { assert_eq!(double(2), 4); }\n}\n",
             ),
@@ -76,6 +91,27 @@ fn write_file(path: &str, content: &str) -> CompletionResponse {
         format!("w-{path}"),
         "write_file",
         json!({"path": path, "content": content}),
+    )])
+}
+
+/// Replace a file that already exists, saying so.
+///
+/// `write_file` refuses a silent clobber since a run destroyed 3,921 lines with one call. A
+/// mock that deliberately rewrites a seeded file must be as explicit as a real agent would be.
+fn overwrite_file(path: &str, content: &str) -> CompletionResponse {
+    CompletionResponse::tool_calls(vec![ToolInvocation::new(
+        format!("w-{path}"),
+        "write_file",
+        json!({"path": path, "content": content, "overwrite": true}),
+    )])
+}
+
+/// Change part of an existing file, which is what an edit scenario is asking for.
+fn edit_file(path: &str, old: &str, new: &str) -> CompletionResponse {
+    CompletionResponse::tool_calls(vec![ToolInvocation::new(
+        format!("e-{path}"),
+        "edit_file",
+        json!({"path": path, "old": old, "new": new}),
     )])
 }
 
