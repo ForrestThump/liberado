@@ -223,6 +223,7 @@ pub async fn run_coding_round(
             session_critic: Default::default(),
             prompt_dir: tuning.prompt_dir.clone(),
             edit: tuning.edit.clone(),
+            workspace_build: tuning.workspace_build.clone(),
         },
         attempt: state.rounds,
         prior_feedback: state.prior_feedback.clone(),
@@ -237,6 +238,44 @@ pub async fn run_coding_round(
         round = state.rounds,
         "coding pack run starting"
     );
+
+    // Build the workspace BEFORE the first token goes out.
+    //
+    // Two things this buys. It proves the tree the model is about to edit compiles, so a run that
+    // fails is the model's doing and not a question a trace has to answer. And it keeps the
+    // provider's prompt cache warm: send the system prompt, then make the model wait through a
+    // cold multi-minute build, and the cached prefix has expired by the next message — the same
+    // tokens billed twice. Doing the slow part first means every request in the run lands close
+    // together.
+    //
+    // Affordable only because of the shared target dir; see `WorkspaceBuildConfig`.
+    if tuning.workspace_build.warmup {
+        let outcome = liberado_coder_sandbox::warmup::warm_workspace(
+            &workspace,
+            &workspace_env(tuning),
+            std::time::Duration::from_secs(tuning.workspace_build.warmup_timeout_secs),
+        )
+        .await;
+        match &outcome {
+            liberado_coder_sandbox::warmup::Warmup::Ready { seconds } => {
+                tracing::info!(seconds, "workspace warm; starting the run")
+            }
+            liberado_coder_sandbox::warmup::Warmup::TimedOut { seconds } => tracing::warn!(
+                seconds,
+                "warm-up build did not finish in time; starting the run anyway"
+            ),
+            liberado_coder_sandbox::warmup::Warmup::Skipped => {}
+            liberado_coder_sandbox::warmup::Warmup::BaselineBroken { detail } => {
+                // Refuse before spending anything. A broken baseline is not the model's problem
+                // to solve, and letting it try produces a report about errors it did not cause.
+                return Err(format!(
+                    "the workspace does not compile before any change was made, so no coding run                      was started. Fix the baseline first.
+
+{detail}"
+                ));
+            }
+        }
+    }
 
     let backend = LiberadoLoopBackend::with_provider_factory(factory);
     // Scope the live tap around the *whole* run. The pack's emitters are task-locals several
@@ -510,6 +549,20 @@ pub async fn prepare_workspace(cwd: &Path, session_id: &str) -> Result<PathBuf, 
 
 fn is_git_repo(path: &Path) -> bool {
     path.join(".git").exists()
+}
+
+/// Environment every command in a coding worktree runs with.
+///
+/// One function so the warm-up build and the run's own commands cannot end up pointed at
+/// different caches — which would make the warm-up warm a directory nobody then uses.
+fn workspace_env(tuning: &CoderTuning) -> std::collections::BTreeMap<String, String> {
+    let mut env = std::collections::BTreeMap::new();
+    if let Some(dir) = &tuning.workspace_build.shared_target_dir
+        && !dir.trim().is_empty()
+    {
+        env.insert("CARGO_TARGET_DIR".to_string(), dir.clone());
+    }
+    env
 }
 
 /// The cold diff reviewer the completion gate consults.

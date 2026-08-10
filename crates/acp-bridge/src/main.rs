@@ -268,6 +268,28 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let default_mode = AgentMode::from_env_or_default();
     let config_dir = std::env::var_os("LIBERADO_CONFIG_DIR").map(PathBuf::from);
     let coder_tuning = coding_run::load_coder_tuning(config_dir.as_deref());
+    // Point every child process at the shared build cache, once, before anything runs.
+    //
+    // Set on this process rather than threaded through each command builder because it has to
+    // reach three places that construct their own runners — the model's `run_command`, the
+    // verifier pipeline, and the warm-up build — and a cache that two of the three use is a cache
+    // that warms a directory the third ignores. Inheritance makes them agree by construction.
+    //
+    // Correct here specifically because tuning is loaded once, above, and every session this
+    // bridge serves shares it. A daemon serving sessions with *different* coder configs could not
+    // do this and would have to thread the value.
+    //
+    // SAFETY: single-threaded startup, before any session or task exists.
+    if let Some(dir) = coder_tuning
+        .workspace_build
+        .shared_target_dir
+        .as_deref()
+        .map(str::trim)
+        .filter(|d| !d.is_empty())
+    {
+        unsafe { std::env::set_var("CARGO_TARGET_DIR", dir) };
+        tracing::info!(target_dir = %dir, "coding worktrees share one cargo build cache");
+    }
     // `[acp]` from the same config the coding pack reads, so the prompt and the turn budget are
     // versioned prose in a file rather than JSON strings pasted into another tool's config.
     let acp_config = coding_run::load_acp_config(config_dir.as_deref());

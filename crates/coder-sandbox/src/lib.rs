@@ -9,6 +9,7 @@ mod merge;
 mod path_deps;
 mod preflight;
 mod preflight_baseline;
+pub mod warmup;
 pub use checkpoint::{Checkpoint, CheckpointError, ShadowGit};
 pub use merge::{
     ConflictSides, MergeAttempt, MergeError, add_worktree_on_branch, branch_tip, commit_merge,

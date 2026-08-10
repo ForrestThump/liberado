@@ -253,6 +253,7 @@ async fn run_headless(args: HeadlessArgs) -> Result<(), String> {
             session_critic: tuning.session_critic.clone(),
             prompt_dir: tuning.prompt_dir.clone(),
             edit: tuning.edit.clone(),
+            workspace_build: Default::default(),
         },
         attempt: 0,
         prior_feedback: Vec::new(),
