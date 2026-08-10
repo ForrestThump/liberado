@@ -147,8 +147,13 @@ the one written below, so read the code before trusting the row.
 P0.2 chose honesty (`loadSession: false`), so this phase is unblocked and **is the next real work in
 this roadmap**.
 
-**Attempted twice by the coding pack (2026-08-10), not landed.** Split P3.1 into a storage-only
-slice first — call it **P3.1a** — because it is safe to build and safe to review:
+**P3.1a landed 2026-08-10** as [#121](https://github.com/ForrestThump/liberado/pull/121) —
+`crates/acp-bridge/src/session_store.rs`, written by the coding pack on its second attempt and
+finished by hand. Records persist under `<LIBERADO_DATA_DIR>/acp-sessions/`; `session/new`, a
+completed `session/prompt`, `set_mode` and `set_model` all write. **P3.2 (replay) and P3.3
+(re-enable the capability) remain open**, and the storage they need now exists.
+
+The original slice brief is kept below because it is a good template for a dispatchable task:
 
 > Add `crates/acp-bridge/src/session_store.rs` with a serialisable record (id, mode, cwd, model,
 > messages, `updated_at`) under `<LIBERADO_DATA_DIR>/acp-sessions/`. Atomic writes (temp + rename).
@@ -160,8 +165,8 @@ slice first — call it **P3.1a** — because it is safe to build and safe to re
 > P3.2/P3.3 and a wire-behaviour change here would break a live editor integration.
 
 The first attempt died on a full disk plus the `git_diff` blindness fixed in
-[#118](https://github.com/ForrestThump/liberado/pull/118); its partial output is preserved on branch
-`lib-18ca8a53fbbd54f4-20612`. Prefer re-running to salvaging. Background:
+[#118](https://github.com/ForrestThump/liberado/pull/118). The second produced the module that
+landed. Background, including what the second run still got wrong:
 [`coder-harness-reliability-2026-08.md`](coder-harness-reliability-2026-08.md).
 
 | # | Slice | Why | Acceptance |
