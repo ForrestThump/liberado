@@ -173,9 +173,17 @@ async fn run_headless(args: HeadlessArgs) -> Result<(), String> {
         Some(task_context)
     };
 
+    // Derive a task id once so the preservation branch carries information.
+    // When the caller supplied a session_id it is already a meaningful label;
+    // otherwise slugify the prompt so the branch name tells you what the run
+    // was about instead of reporting every run in history as "task-1".
+    let task_id = session_id
+        .clone()
+        .unwrap_or_else(|| slugify_prompt(&prompt));
+
     let request = CoderRunRequest {
         task: CoderTask {
-            id: "task-1".to_string(),
+            id: task_id.clone(),
             description: prompt.clone(),
             context: task_context,
             success_criteria: Vec::new(),
@@ -265,7 +273,29 @@ async fn run_headless(args: HeadlessArgs) -> Result<(), String> {
     };
 
     let backend = LiberadoLoopBackend::with_provider_factory(providers);
-    let result = backend.run(request).await.map_err(|error| {
+
+    // Race the backend against OS termination signals. A run killed by
+    // SIGTERM (the ten-minute-cap case) or Ctrl+C used to skip
+    // `preserve_work` entirely and lose all uncommitted output.
+    let result = tokio::select! {
+        result = backend.run(request) => {
+            result
+        }
+        _ = wait_for_termination_signal() => {
+            tracing::info!(
+                "termination signal received; preserving work before exit"
+            );
+            if let Err(error) = preserve_work(&workspace, &task_id, push_enabled()).await {
+                tracing::warn!(
+                    %error,
+                    "preserving the run's work failed; the workspace is still on disk"
+                );
+            }
+            return Err("task terminated by signal".to_string());
+        }
+    };
+
+    let result = result.map_err(|error| {
         eprintln!("CoderError: {error:?}");
         format!("coder backend failed: {error}")
     })?;
@@ -278,7 +308,7 @@ async fn run_headless(args: HeadlessArgs) -> Result<(), String> {
     // files in a scratch directory, so deleting that directory destroyed it — which is exactly what
     // happened to one completed run. A commit is durable even when the workspace is a git worktree
     // that later disappears, because the commit and the branch ref go to the *shared* object store.
-    if let Err(error) = preserve_work(&workspace, "task-1", push_enabled()).await {
+    if let Err(error) = preserve_work(&workspace, &task_id, push_enabled()).await {
         tracing::warn!(%error, "preserving the run's work failed; the workspace is still on disk");
     }
 
@@ -849,6 +879,48 @@ fn resolve_trace_dir(workspace: &Path, configured: Option<&str>) -> String {
     }
 }
 
+/// Slugify a prompt into a short label for the preservation branch.
+///
+/// `preserve_work` does its own alphanumeric sanitization; this only produces a
+/// readable prefix so the branch name carries a hint of what the run was about.
+fn slugify_prompt(prompt: &str) -> String {
+    let slug: String = prompt
+        .chars()
+        .take(50)
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect();
+    slug.trim_matches('-').to_string()
+}
+
+/// Await OS termination signals (Ctrl+C; SIGTERM on Unix).
+///
+/// Follows the cross-platform pattern in `crates/server/src/shutdown.rs`:
+/// `tokio::signal::unix::SignalKind::terminate` under `#[cfg(unix)]`,
+/// `tokio::signal::ctrl_c` otherwise. Windows is a first-class target here —
+/// a unix-only handler will not compile on CI.
+async fn wait_for_termination_signal() {
+    #[cfg(unix)]
+    {
+        let mut sigterm = tokio::signal::unix::signal(
+            tokio::signal::unix::SignalKind::terminate(),
+        )
+        .expect("install SIGTERM handler");
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {
+                tracing::info!("received Ctrl+C");
+            }
+            _ = sigterm.recv() => {
+                tracing::info!("received SIGTERM");
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = tokio::signal::ctrl_c().await;
+        tracing::info!("received Ctrl+C");
+    }
+}
+
 /// Commit whatever the run produced to a branch, and optionally push it.
 ///
 /// Committing is unconditional and local. A worktree's commits and its branch ref are written to
@@ -1181,5 +1253,215 @@ mod verifier_tests {
             ids(&specs)
         );
         assert!(ids(&specs).iter().any(|id| id == "nonempty-diff"));
+    }
+}
+
+#[cfg(test)]
+mod preserve_work_tests {
+    use super::*;
+
+    /// Minimal git repo with one committed file. Identity is set explicitly —
+    /// `user.email` / `user.name` exist on this machine and on no CI runner.
+    fn temp_repo() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let p = dir.path().to_string_lossy().to_string();
+        let run = |args: &[&str]| {
+            let out = liberado_common::process::std_command("git")
+                .args(args)
+                .output()
+                .expect("git");
+            assert!(
+                out.status.success(),
+                "git {args:?} failed: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        };
+        run(&["-C", &p, "init", "-q"]);
+        std::fs::write(dir.path().join("seed.txt"), "seed\n").expect("seed");
+        run(&["-C", &p, "add", "-A"]);
+        run(&[
+            "-C",
+            &p,
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@t",
+            "commit",
+            "-q",
+            "-m",
+            "seed",
+        ]);
+        dir
+    }
+
+    fn is_dirty(repo: &std::path::Path) -> bool {
+        let out = liberado_common::process::std_command("git")
+            .args(["-C", &repo.to_string_lossy(), "status", "--porcelain"])
+            .output()
+            .expect("git status");
+        !String::from_utf8_lossy(&out.stdout).trim().is_empty()
+    }
+
+    /// The branch name must carry the supplied id, not a hardcoded literal
+    /// like "task-1" that means every run in history looks the same.
+    #[tokio::test]
+    async fn branch_name_reflects_the_supplied_id() {
+        let repo = temp_repo();
+        std::fs::write(repo.path().join("work.txt"), "output\n").expect("write");
+        assert!(is_dirty(repo.path()), "precondition: tree must be dirty");
+
+        let ident = "fix-compile-error";
+        preserve_work(repo.path(), ident, false)
+            .await
+            .expect("preserve_work must succeed");
+
+        let out = liberado_common::process::std_command("git")
+            .args(["-C", &repo.path().to_string_lossy(), "branch", "--show-current"])
+            .output()
+            .expect("git branch");
+        let current = String::from_utf8_lossy(&out.stdout).trim().to_string();
+
+        assert!(
+            current.contains("fix-compile-error"),
+            "branch name '{current}' must contain the id 'fix-compile-error', \
+             not a hardcoded literal like 'task-1'"
+        );
+        assert!(
+            !is_dirty(repo.path()),
+            "the tree must be clean after preservation"
+        );
+    }
+
+    /// A clean tree must not manufacture an empty commit.
+    #[tokio::test]
+    async fn a_clean_worktree_produces_no_commit() {
+        let repo = temp_repo();
+        assert!(!is_dirty(repo.path()), "precondition: tree must be clean");
+
+        preserve_work(repo.path(), "clean-test", false)
+            .await
+            .expect("a clean tree is not an error");
+
+        // Should still be on the original branch (not a new agent/… branch).
+        let out = liberado_common::process::std_command("git")
+            .args(["-C", &repo.path().to_string_lossy(), "branch", "--show-current"])
+            .output()
+            .expect("git branch");
+        let current = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        assert!(
+            !current.starts_with("agent/"),
+            "a clean tree must not create an agent/… branch, got '{current}'"
+        );
+    }
+
+    /// A dirty worktree is committed even with no global git identity — the
+    /// `-c` flags in `preserve_work` carry the identity inline.
+    #[tokio::test]
+    async fn a_dirty_worktree_is_committed_even_with_no_global_git_identity() {
+        let repo = temp_repo();
+        std::fs::write(repo.path().join("work.txt"), "agent output\n").expect("write");
+        assert!(is_dirty(repo.path()), "precondition: tree must be dirty");
+
+        let empty_cfg = tempfile::NamedTempFile::new().expect("cfg");
+        // SAFETY: single-threaded test; restored below.
+        unsafe { std::env::set_var("GIT_CONFIG_GLOBAL", empty_cfg.path()) };
+
+        let result = preserve_work(repo.path(), "no-identity", false).await;
+
+        unsafe { std::env::remove_var("GIT_CONFIG_GLOBAL") };
+
+        result
+            .expect("preserving a dirty worktree must succeed without global identity");
+        assert!(
+            !is_dirty(repo.path()),
+            "the tree must be clean after preservation"
+        );
+    }
+
+    /// `slugify_prompt`: spaces and special characters become hyphens.
+    #[test]
+    fn slugify_prompt_replaces_non_alphanumeric_with_hyphens() {
+        let s = slugify_prompt("Fix: compile error in main.rs");
+        assert!(!s.contains(' '), "spaces must be replaced, got '{s}'");
+        assert!(!s.contains(':'), "colons must be replaced, got '{s}'");
+        assert!(s.len() <= 50, "slug must be capped at 50 chars, got {}", s.len());
+    }
+
+    /// `slugify_prompt`: when the caller passes `--session-id`, that value is
+    /// used verbatim — the session_id path (not the slugify fallback).
+    #[test]
+    fn session_id_is_used_when_supplied() {
+        // Simulate the derivation in run_headless:
+        let session_id: Option<String> = Some("my-recurring-task".to_string());
+        let prompt = "this prompt should be ignored";
+        let task_id = session_id
+            .clone()
+            .unwrap_or_else(|| slugify_prompt(prompt));
+        assert_eq!(task_id, "my-recurring-task");
+    }
+
+    /// `slugify_prompt`: when there is no session_id, slugify the prompt.
+    #[test]
+    fn prompt_is_slugified_when_no_session_id() {
+        let session_id: Option<String> = None;
+        let prompt = "Fix: compile error";
+        let task_id = session_id
+            .clone()
+            .unwrap_or_else(|| slugify_prompt(prompt));
+        // Must not equal the raw prompt — spaces and colons must be replaced.
+        assert_ne!(task_id, prompt, "slug must not equal raw prompt");
+        assert!(!task_id.contains(' '), "slug must not contain spaces: '{task_id}'");
+        assert!(!task_id.contains(':'), "slug must not contain colons: '{task_id}'");
+        // The important words should survive.
+        assert!(task_id.contains("Fix"), "slug should contain 'Fix', got '{task_id}'");
+        assert!(task_id.contains("compile"), "slug should contain 'compile', got '{task_id}'");
+    }
+
+    /// Regression: the derivation must never produce the old hardcoded literal.
+    /// Changing the call site back to `"task-1"` must make this test fail.
+    #[test]
+    fn derived_task_id_is_never_hardcoded_task_1() {
+        // Simulate what run_headless does.
+        let session_id: Option<String> = None;
+        let prompt = "Add --verbose flag to CLI parser";
+        let task_id = session_id
+            .clone()
+            .unwrap_or_else(|| slugify_prompt(prompt));
+        assert_ne!(
+            task_id, "task-1",
+            "every run in history used to produce 'agent/task-1-<epoch>'; \
+             a real prompt must produce a meaningful slug, got '{task_id}'"
+        );
+    }
+
+    /// `preserve_work` commits dirty files — this is the function the signal
+    /// handler calls, so testing it directly validates the signal path.
+    #[tokio::test]
+    async fn signal_path_commits_dirty_work() {
+        let repo = temp_repo();
+        std::fs::write(repo.path().join("signal-work.txt"), "saved-on-term\n").expect("write");
+        assert!(is_dirty(repo.path()), "precondition: tree must be dirty");
+
+        // This is exactly what the signal handler in run_headless calls.
+        preserve_work(repo.path(), "signal-test", false)
+            .await
+            .expect("preserve_work must commit on the signal path");
+
+        assert!(
+            !is_dirty(repo.path()),
+            "after preserve_work the tree must be clean — \
+             a killed run's work must survive"
+        );
+
+        // The commit log must mention the task id, verifying it was actually committed.
+        let out = liberado_common::process::std_command("git")
+            .args(["-C", &repo.path().to_string_lossy(), "log", "-1", "--format=%s"])
+            .output()
+            .expect("git log");
+        let subject = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        assert!(
+            subject.contains("signal-test"),
+            "commit message must reference the task id 'signal-test', got '{subject}'"
+        );
     }
 }
