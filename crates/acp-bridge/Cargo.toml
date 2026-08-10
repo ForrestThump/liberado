@@ -26,6 +26,7 @@ name = "liberado-acp"
 path = "src/main.rs"
 
 [dependencies]
+liberado-session.workspace = true
 async-trait.workspace = true
 chat-client-contract = { workspace = true }
 futures.workspace = true

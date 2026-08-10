@@ -157,6 +157,24 @@ impl TurnTracer {
 
 impl liberado_executor::TurnObserver for TurnTracer {
     fn on_turn(&self, record: liberado_executor::TurnRecord) {
+        // Mirror the model's own words onto the live bus as well as into the trace.
+        //
+        // Nothing in the coding pack emitted `Token` before this: every `SessionEventKind::Token`
+        // in the workspace was a *consumer* (TUI, CLI, face client) and there was no producer, so
+        // a watcher saw tools fire with nothing explaining why. The text is already here and
+        // already verbatim; it simply never reached the surface.
+        //
+        // Sent whole rather than as deltas. The executor hands back a finished turn, so there are
+        // no incremental chunks to forward — pretending otherwise would mean fabricating a
+        // streaming cadence the pack does not have.
+        if let Some(text) = record.content.as_deref()
+            && !text.trim().is_empty()
+        {
+            crate::live::emit(liberado_session::SessionEventKind::Token {
+                text: text.to_string(),
+            });
+        }
+
         push_event(
             &self.events,
             CoderEvent::ModelTurnFinished {

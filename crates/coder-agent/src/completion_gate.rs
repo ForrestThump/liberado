@@ -29,10 +29,7 @@ use serde_json::json;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
-tokio::task_local! {
-    /// When set before `CoderBackend::run()`, gate votes stream live to the session bus.
-    pub(crate) static LIVE_GATE: (mpsc::Sender<SessionEvent>, String);
-}
+use crate::live::LIVE_GATE;
 
 use crate::CoderProviderFactory;
 use crate::critic::parse_critic_verdict;

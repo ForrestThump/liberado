@@ -13,9 +13,8 @@ use liberado_coder_core::CoderEvent;
 use liberado_coder_tools::CodingToolRuntime;
 use liberado_executor::ToolRuntime;
 use liberado_provider::{ToolDef, ToolInvocation};
-use liberado_session::{SessionEvent, SessionEventKind};
+use liberado_session::SessionEventKind;
 
-use crate::completion_gate::LIVE_GATE;
 use crate::progress::{ProgressAction, ProgressGuard};
 use crate::trace::{self, EventLog};
 
@@ -42,14 +41,7 @@ impl GuardedTracingRuntime {
     }
 }
 
-/// Best-effort mirror onto the goal session bus when LIVE_GATE is scoped (coding pack build phase).
-fn emit_live(kind: SessionEventKind) {
-    let Ok((tx, session_id)) = LIVE_GATE.try_with(|(tx, id)| (tx.clone(), id.clone())) else {
-        return;
-    };
-    // try_send: never block the tool loop on a slow UI consumer.
-    let _ = tx.try_send(SessionEvent::new(session_id, kind));
-}
+use crate::live::emit as emit_live;
 
 #[async_trait]
 impl ToolRuntime for GuardedTracingRuntime {
