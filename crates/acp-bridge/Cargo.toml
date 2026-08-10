@@ -29,6 +29,7 @@ path = "src/main.rs"
 liberado-session.workspace = true
 async-trait.workspace = true
 chat-client-contract = { workspace = true }
+chrono.workspace = true
 futures.workspace = true
 liberado-bootstrap.workspace = true
 liberado-coder-agent.workspace = true

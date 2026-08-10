@@ -39,6 +39,7 @@ use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
 mod coding_run;
 mod provider;
+mod session_store;
 mod stdin_guard;
 mod wire;
 
@@ -615,6 +616,7 @@ async fn handle_request(bridge: Arc<Bridge>, method: &str, params: Value) -> Res
             } else {
                 None
             };
+            let model = bridge.current_model.lock().await.clone();
             bridge.acp_sessions.lock().await.insert(
                 sid.clone(),
                 AcpSession {
@@ -633,6 +635,18 @@ async fn handle_request(bridge: Arc<Bridge>, method: &str, params: Value) -> Res
                     cancel_rx,
                 },
             );
+
+            // Persist an initial session record (soft — failure never fails the turn).
+            if let Err(e) = session_store::save(&session_store::SessionRecord {
+                id: sid.clone(),
+                mode: mode.id().to_string(),
+                cwd: cwd.clone(),
+                model: model.clone(),
+                messages: Vec::new(),
+                updated_at: session_store::new_timestamp(),
+            }) {
+                tracing::warn!(session_id = %sid, error = %e, "session/new: failed to persist initial record");
+            }
 
             tracing::info!(
                 session_id = %sid,
@@ -692,6 +706,10 @@ async fn handle_request(bridge: Arc<Bridge>, method: &str, params: Value) -> Res
                     .ok()
                     .map(Arc::new);
                 }
+                // Persist the mode change (soft - failure never fails the turn).
+                if let Err(e) = session_store::update_mode(sid, mode.id()) {
+                    tracing::warn!(session_id = %sid, error = %e, "session/set_mode: failed to update persisted mode");
+                }
             }
             Ok(json!({}))
         }
@@ -735,6 +753,20 @@ async fn handle_request(bridge: Arc<Bridge>, method: &str, params: Value) -> Res
             bridge.provider.set_model(model_id.clone());
             *bridge.current_model.lock().await = model_id.clone();
             tracing::info!(%model_id, backend = %bridge.backend, "session/set_model");
+
+            // Persist the model change (soft — failure never fails the turn).
+            // Only when a valid session id is present — an empty id means this
+            // was a global model switch not tied to a specific session.
+            let sid = params
+                .get("sessionId")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty());
+            if let Some(sid) = sid
+                && let Err(e) = session_store::update_model(sid, &model_id)
+            {
+                tracing::warn!(%model_id, error = %e, "session/set_model: failed to update persisted model");
+            }
+
             Ok(json!({}))
         }
 
@@ -754,6 +786,35 @@ async fn bridge_model_snapshot(bridge: &Bridge) -> (Vec<CatalogModel>, String) {
     let catalog = bridge.catalog.lock().await.clone();
     let current = bridge.current_model.lock().await.clone();
     (catalog, current)
+}
+
+/// Sink wrapper that delegates every emit to the real sink while capturing
+/// every `agent_message_chunk` text for session record persistence.
+struct CapturingSink {
+    inner: Arc<dyn WireSink>,
+    captured: std::sync::Mutex<String>,
+}
+
+impl WireSink for CapturingSink {
+    fn emit(&self, method: &str, params: Value) -> Result<(), String> {
+        if method == "session/update"
+            && let Some(text) = params
+                .get("update")
+                .and_then(|u| u.get("content"))
+                .and_then(|c| c.get("text"))
+                .and_then(|t| t.as_str())
+        {
+            match self.captured.lock() {
+                Ok(mut buf) => buf.push_str(text),
+                Err(e) => {
+                    // A poisoned mutex in a single-threaded capture path is always a bug.
+                    // Log it so persistence failures are never silently ignored.
+                    tracing::warn!("CapturingSink: failed to lock captured buffer: {}", e);
+                }
+            }
+        }
+        self.inner.emit(method, params)
+    }
 }
 
 /// Dispatch one `session/prompt` (runs on a spawned task; cancel stays live on stdin).
@@ -782,13 +843,25 @@ async fn run_session_prompt(
         sess.mode
     };
 
-    match mode {
-        AgentMode::Coding => {
-            run_coding_prompt(Arc::clone(&bridge), sink.as_ref(), &sid, &text).await
-        }
-        AgentMode::Chat => run_chat_prompt(Arc::clone(&bridge), sink.as_ref(), &sid, &text).await,
-        AgentMode::Face => run_face_prompt(Arc::clone(&bridge), sink.as_ref(), &sid, &text).await,
+    // Wrap the real sink so we can capture assistant text for persistence.
+    let capturing = CapturingSink {
+        inner: sink,
+        captured: std::sync::Mutex::new(String::new()),
+    };
+
+    let result = match mode {
+        AgentMode::Coding => run_coding_prompt(Arc::clone(&bridge), &capturing, &sid, &text).await,
+        AgentMode::Chat => run_chat_prompt(Arc::clone(&bridge), &capturing, &sid, &text).await,
+        AgentMode::Face => run_face_prompt(Arc::clone(&bridge), &capturing, &sid, &text).await,
+    };
+
+    // Persist the user message and the agent reply (soft — failure never fails the turn).
+    let assistant_text = capturing.captured.into_inner().unwrap_or_default();
+    if let Err(e) = session_store::append_messages(&sid, &text, &assistant_text) {
+        tracing::warn!(session_id = %sid, error = %e, "session/prompt: failed to persist messages");
     }
+
+    result
 }
 
 /// Full coding pack path: LiberadoLoopBackend + durable worktree (same engine as goals).
