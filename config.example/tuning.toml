@@ -88,6 +88,10 @@
 # anyway. Off by default; findings are advisory and appear in the run report.
 # [coder.session_critic]
 # enabled = true
+# Reviewer model. Unset falls back to [coder.critic], which defaults to deepseek-v4-flash.
+# Reviewing is cheaper work than coding — pro is usually not worth its price here.
+# [coder.session_critic.role]
+# model = "deepseek-v4-flash"
 # include_tool_names = true   # measured: dropping these cost 2 of 4 labelled traces
 # remediation = false         # spawn a cold agent to fix findings on its own branch. See below.
 #
