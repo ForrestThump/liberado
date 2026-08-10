@@ -1172,6 +1172,19 @@ pub enum CoderEvent {
         outcome: Outcome,
         at: DateTime<Utc>,
     },
+    /// The attempt ended on an error nothing along the way expected.
+    ///
+    /// Distinct from `SessionFinished { outcome: Failed }`, which is a *decision* — a verifier
+    /// refused, a critic asked for revision, nothing changed. This is the absence of a decision:
+    /// something returned `Err` and unwound. The two look identical in a summary and could not be
+    /// less alike to debug, so they are not the same event.
+    ///
+    /// Carries the error text because "the attempt failed" without the reason is exactly the state
+    /// that made four consecutive failures cost a day each.
+    SessionAborted {
+        error: String,
+        at: DateTime<Utc>,
+    },
 }
 
 /// Durable replay artifact for a coder session.
