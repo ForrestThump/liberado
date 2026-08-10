@@ -23,16 +23,34 @@ unattended task end to end.
 An A/B against **Kilo Code**, chosen because it is built on OpenCode and can be pointed at the same
 model we use. Task F11, `deepseek/deepseek-v4-pro`, same repo, same commit, same prompt text.
 
-| | Kilo Code | Liberado (before) | Liberado (2026-08-10) |
-|---|---|---|---|
-| Produced compiling code | yes | **no**, across 5 runs | n/a — different task |
-| Reads per successful edit | 6.5 | 1.0 | 2.7 |
-| Edit failure rate | — | 66–70% | **8%** (2 of 26) |
+| | Kilo Code | Liberado (before) | P3.1a run 1 | P3.1a run 2 |
+|---|---|---|---|---|
+| Produced compiling code | yes | **no**, across 5 runs | no | **yes** |
+| Reads per successful edit | 6.5 | 1.0 | 2.7 | 2.3 |
+| Edit failure rate | — | 66–70% | 8% (2 of 26) | **0%** (0 of 18) |
 
-**The caveat that matters.** The last column is from a *different task* (P3.1a, ACP session store),
-because F11 had been implemented by then and was no longer a fair test. A drop from 66% to 8% is
-larger than task variation comfortably explains, but it is **not a controlled comparison** and
-should not be reported as one. Re-running F11-equivalent work on a fresh harness is still open.
+**Run 2 produced a real, mergeable module** — 492 lines with thirteen tests, landed as
+[#121](https://github.com/ForrestThump/liberado/pull/121) after two hand fixes (below). That is the
+first time the pack has produced a substantial new module that survived review.
+
+**The caveat that matters.** The last two columns are from a *different task* (P3.1a, ACP session
+store) than the baseline, because F11 had been implemented by hand by then and was no longer a fair
+test. The drop from 66% to 0% is larger than task variation comfortably explains, but it is **not a
+controlled comparison** and should not be reported as one. Re-running F11-equivalent work is open.
+
+### What run 2 still got wrong
+
+Both are more interesting than the metrics, because neither shows up in a reads-per-edit number.
+
+**It never ran the tests.** It ran `cargo check` and `validate`, saw green, and reported success.
+**Seven of its own thirteen tests failed.** `validate` compiles; it does not test. A model that
+believes "compiles" means "works" will keep filing successful-looking failures, and no edit metric
+will catch it.
+
+**It reintroduced the exact race it had just avoided.** It built a `#[cfg(test)]` global to redirect
+the sessions directory *specifically* to dodge the `LIBERADO_DATA_DIR` env-var race that `CLAUDE.md`
+warns about — and then let every test overwrite that global concurrently. The tests passed alone and
+failed as a suite. It had internalised the rule and missed the principle.
 
 **Do not blame the model.** This was tried and was wrong. The same model, in another harness, on the
 same task, did good work. Every failure since has had a harness cause.
@@ -140,6 +158,19 @@ Counting reads per successful edit from a trace is a dozen lines of Python over 
 Treat `read_file | grep | list_files | list_symbols | git_diff | git_status` as reads and
 `edit_file | write_file | apply_patch` as edits.
 
+> ### ⚠️ The trace is incomplete for multi-attempt runs — known bug, unfixed
+>
+> Measured on session `lib-18ca8ea9645d75d0-15412` (2026-08-10): the ACP stream reported **122 tool
+> calls**; the trace files contain **76**. Two attempt files were written, both ending at 21:47:22,
+> while the run continued for a further ~17 minutes and returned at ~22:04. `run_command_background`
+> and `check_background` appear in the stream and in **no** trace at all.
+>
+> So: later attempts are not written, or a role's calls are not recorded — the cause is not yet
+> known, and nobody should guess it from this paragraph. **Consequences for anyone measuring:** a
+> per-run tool count read from traces is a *lower bound*, and the final failure of a run may not
+> appear in any trace. Cross-check against the dispatch stream before quoting a number. Fixing this
+> is a prerequisite for trusting any future measurement, and is the highest-value open harness bug.
+
 `[coder] trace_formats` can also emit `openai-messages` — the flat shape Kilo Code and OpenHands
 persist — for comparing a run against another harness on the same task. Note that **Kilo's export
 drops the system message**, which is exactly why #117 exists on our side.
@@ -178,16 +209,28 @@ change whose value is unmeasured.
 
 ---
 
+## Open harness bugs, in priority order
+
+1. **The trace is incomplete** (see the box above). Everything else on this list is measured with an
+   instrument known to under-report. Fix this first.
+2. **`validate` passing is being read as "done".** A model that runs `cargo check` and stops will
+   file a successful report over seven failing tests, and did. Either `validate` should run the
+   test suite, or the report step should refuse a success claim that no test run supports.
+   Deterministic; no prompt engineering required.
+3. **`critic returned empty content` fails an entire run.** Run 2 finished its work, passed
+   `validate`, and was then filed as `Failed` because a reviewer call came back empty. An empty
+   provider response is a transient fault in the *reviewer*, not a verdict on the change; it should
+   retry or abstain, never discard completed work.
+
 ## What is actually next
 
-1. **Re-run a benchmark task on the fixed harness and measure.** The 8% number needs a second data
-   point on a task nobody has implemented by hand. F8 and F11 are both contaminated now.
-2. **P3.1a (durable ACP session records)** is a real open item and a decent benchmark: exploration-
-   heavy, one new module plus wiring into a 1,700-line `main.rs`, compile-checkable, and it cannot
-   break live Paseo because `loadSession` stays false. Brief shape: build the store only; do **not**
-   flip the capability or make `session/load` succeed.
-3. **Decide `exp/tuning-scratch`'s fate** with a measurement, not a preference.
-4. **The completion gate (S1) is still default OFF** and unmeasured. It costs `1 + fresh_reviewers`
+1. **Fix the trace gap**, then re-measure. Every number in this document is a lower bound until
+   then.
+2. **P3.2 / P3.3** — history replay and re-enabling `loadSession`. P3.1a landed in
+   [#121](https://github.com/ForrestThump/liberado/pull/121); the storage layer it needs now exists.
+3. **A benchmark task nobody has implemented by hand.** F8, F11 and P3.1a are all contaminated now.
+4. **Decide `exp/tuning-scratch`'s fate** with a measurement, not a preference.
+5. **The completion gate (S1) is still default OFF** and unmeasured. It costs `1 + fresh_reviewers`
    model calls per attempt. S7 was supposed to measure it and has not.
 
 ---

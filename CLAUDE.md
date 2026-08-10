@@ -126,7 +126,12 @@ The file is `{ session_id, request, events: [...] }` — one flat list, each eve
 The ones worth reading: `model_request_sent` (tools offered *and the system prompt*, once per
 distinct hash), `model_turn_finished`, `tool_started` / `tool_finished`, `loop_guard_triggered`,
 `critic_verdict`. Reads-per-successful-edit is a dozen lines of Python over `tool_finished` and is
-the metric that has tracked real progress; the measurement history is in
+the metric that has tracked real progress.
+
+**But the trace is incomplete for multi-attempt runs** — one measured run put 122 tool calls on the
+wire and 76 in its traces, and stopped recording 17 minutes before the run ended. Treat a count from
+traces as a *lower bound* and cross-check against the dispatch stream. This is a known open bug; the
+measurement history and its caveats are in
 [`docs/future-work/coder-harness-reliability-2026-08.md`](docs/future-work/coder-harness-reliability-2026-08.md),
 **including three reasonable hypotheses that were tried and did not work.** Read it before
 proposing a fix to the coding pack.
