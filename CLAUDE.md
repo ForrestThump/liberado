@@ -128,10 +128,11 @@ distinct hash), `model_turn_finished`, `tool_started` / `tool_finished`, `loop_g
 `critic_verdict`. Reads-per-successful-edit is a dozen lines of Python over `tool_finished` and is
 the metric that has tracked real progress.
 
-**But the trace is incomplete for multi-attempt runs** — one measured run put 122 tool calls on the
-wire and 76 in its traces, and stopped recording 17 minutes before the run ended. Treat a count from
-traces as a *lower bound* and cross-check against the dispatch stream. This is a known open bug; the
-measurement history and its caveats are in
+Traces written **before 2026-08-10 are incomplete** — until PR #124, an attempt that ended on an
+unhandled error discarded its whole event log, so one run put 122 tool calls on the wire and 76 in
+its traces. Counts from older traces are lower bounds. `CoderEvent::SessionAborted` is the event
+that now records a crash and its reason; a trace ending without it ended by decision, not by
+accident. The measurement history and its caveats are in
 [`docs/future-work/coder-harness-reliability-2026-08.md`](docs/future-work/coder-harness-reliability-2026-08.md),
 **including three reasonable hypotheses that were tried and did not work.** Read it before
 proposing a fix to the coding pack.

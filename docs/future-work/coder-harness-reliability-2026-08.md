@@ -158,18 +158,24 @@ Counting reads per successful edit from a trace is a dozen lines of Python over 
 Treat `read_file | grep | list_files | list_symbols | git_diff | git_status` as reads and
 `edit_file | write_file | apply_patch` as edits.
 
-> ### ⚠️ The trace is incomplete for multi-attempt runs — known bug, unfixed
+> ### The trace gap — found, diagnosed, fixed (PR #124)
 >
-> Measured on session `lib-18ca8ea9645d75d0-15412` (2026-08-10): the ACP stream reported **122 tool
-> calls**; the trace files contain **76**. Two attempt files were written, both ending at 21:47:22,
-> while the run continued for a further ~17 minutes and returned at ~22:04. `run_command_background`
-> and `check_background` appear in the stream and in **no** trace at all.
+> **Symptom.** Session `lib-18ca8ea9645d75d0-15412`: the ACP stream reported **122 tool calls**, the
+> trace files contained **76**. Recording stopped ~17 minutes before the run ended.
 >
-> So: later attempts are not written, or a role's calls are not recorded — the cause is not yet
-> known, and nobody should guess it from this paragraph. **Consequences for anyone measuring:** a
-> per-run tool count read from traces is a *lower bound*, and the final failure of a run may not
-> appear in any trace. Cross-check against the dispatch stream before quoting a number. Fixing this
-> is a prerequisite for trusting any future measurement, and is the highest-value open harness bug.
+> **Cause.** `run_attempt` wrote its trace at four explicit return points, and returned through a
+> dozen `?` operators that were not among them. Every one discarded the whole event log. The attempt
+> that ended in an anticipated way left a complete record; the attempt that ended in a way nobody
+> had anticipated left nothing — **the exact inverse of what a debugger needs.** The specific `?`
+> that cost the 46 calls was `critic::run_critic(...).await?`.
+>
+> **Fix.** The body moved into `attempt_body`; `run_attempt` wraps it and writes the trace on every
+> exit path, so a future `?` cannot route around it. `CoderEvent::SessionAborted` now records the
+> error text — deliberately distinct from `SessionFinished { outcome: Failed }`, which is a
+> *decision* rather than the absence of one.
+>
+> **Measurements taken before 2026-08-10 remain lower bounds**, because they were read from traces
+> written by the old code. Anything measured after PR #124 does not carry this caveat.
 
 `[coder] trace_formats` can also emit `openai-messages` — the flat shape Kilo Code and OpenHands
 persist — for comparing a run against another harness on the same task. Note that **Kilo's export
@@ -211,26 +217,28 @@ change whose value is unmeasured.
 
 ## Open harness bugs, in priority order
 
-1. **The trace is incomplete** (see the box above). Everything else on this list is measured with an
-   instrument known to under-report. Fix this first.
-2. **`validate` passing is being read as "done".** A model that runs `cargo check` and stops will
+1. **`validate` passing is being read as "done".** A model that runs `cargo check` and stops will
    file a successful report over seven failing tests, and did. Either `validate` should run the
    test suite, or the report step should refuse a success claim that no test run supports.
-   Deterministic; no prompt engineering required.
-3. **`critic returned empty content` fails an entire run.** Run 2 finished its work, passed
+   Deterministic; no prompt engineering required. **This is now the top item.**
+2. **`critic returned empty content` fails an entire run.** Run 2 finished its work, passed
    `validate`, and was then filed as `Failed` because a reviewer call came back empty. An empty
    provider response is a transient fault in the *reviewer*, not a verdict on the change; it should
-   retry or abstain, never discard completed work.
+   retry or abstain, never discard completed work. PR #124 makes this *legible* — the trace now
+   records it — but the run is still thrown away.
+
+**Closed:** the trace gap (PR #124, see the box above).
 
 ## What is actually next
 
-1. **Fix the trace gap**, then re-measure. Every number in this document is a lower bound until
-   then.
-2. **P3.2 / P3.3** — history replay and re-enabling `loadSession`. P3.1a landed in
+1. **Re-measure on a fresh run.** The instrument is fixed (#124) but every number above was read
+   through the broken one.
+2. **Close the two open harness bugs above**, in that order.
+3. **P3.2 / P3.3** — history replay and re-enabling `loadSession`. P3.1a landed in
    [#121](https://github.com/ForrestThump/liberado/pull/121); the storage layer it needs now exists.
-3. **A benchmark task nobody has implemented by hand.** F8, F11 and P3.1a are all contaminated now.
-4. **Decide `exp/tuning-scratch`'s fate** with a measurement, not a preference.
-5. **The completion gate (S1) is still default OFF** and unmeasured. It costs `1 + fresh_reviewers`
+4. **A benchmark task nobody has implemented by hand.** F8, F11 and P3.1a are all contaminated now.
+5. **Decide `exp/tuning-scratch`'s fate** with a measurement, not a preference.
+6. **The completion gate (S1) is still default OFF** and unmeasured. It costs `1 + fresh_reviewers`
    model calls per attempt. S7 was supposed to measure it and has not.
 
 ---
