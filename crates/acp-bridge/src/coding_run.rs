@@ -177,7 +177,15 @@ pub async fn run_coding_round(
             sandbox: SandboxSpec::HostLocal,
             command_policy: tuning.command_policy.clone(),
             validation_command: tuning.validation_command.clone(),
-            verifiers: tuning.verifiers.clone(),
+            // An unconfigured deployment gets real acceptance checks rather than none. This
+            // line used to pass `tuning.verifiers` straight through, which is empty by default,
+            // so the only thing standing between a run and `succeeded` was the model's own say-so
+            // — and a run whose `cargo check` failed three times filed success on exactly that.
+            verifiers: if tuning.verifiers.is_empty() {
+                liberado_coder_core::default_verifiers(&workspace)
+            } else {
+                tuning.verifiers.clone()
+            },
             verify_policy: tuning.verify_policy.clone(),
             path_policy: if tuning.path_policy.allow_write_globs.is_empty() {
                 PathPolicy::default()
