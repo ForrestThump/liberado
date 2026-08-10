@@ -361,6 +361,12 @@ fn is_retryable(err: &CoderError) -> bool {
 /// so the same match arms don't need to be kept in sync across modules.
 pub(crate) use is_retryable as is_stuck_error;
 
+/// How much untracked file content the critic's diff may carry, across all new files.
+///
+/// Larger than the tool's budget: a reviewer reads the change once and has the whole context
+/// window for it, where the tool's output competes with everything else in a working turn.
+const UNTRACKED_REVIEW_BUDGET: usize = 60_000;
+
 /// Shared git workspace diff for the critic and completion gate.
 ///
 /// Assembles tracked diff against HEAD plus untracked file names, falling back to
@@ -390,12 +396,45 @@ pub(crate) async fn workspace_diff(workspace_root: &str) -> Result<String, Coder
         .map_err(|e| CoderError::Backend(format!("git ls-files: {e}")))?;
     if untracked.status.success() {
         let names = String::from_utf8_lossy(&untracked.stdout);
-        if !names.trim().is_empty() {
+        let paths: Vec<&str> = names
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty())
+            .collect();
+        if !paths.is_empty() {
             if !diff.is_empty() {
                 diff.push('\n');
             }
-            diff.push_str("# untracked files\n");
-            diff.push_str(&names);
+            diff.push_str("# untracked files (new, not yet added)\n");
+            // Names alone were not enough. A reviewer handed "session_store.rs" and no content
+            // can only report that it cannot see the file, which is what happened: the critic
+            // raised the file's absence as a finding while 334 lines of it sat on disk. The main
+            // artifact of a task is often a file that did not exist before, and a review of a
+            // change that omits its largest part is not a review.
+            let mut budget = UNTRACKED_REVIEW_BUDGET;
+            for path in paths {
+                diff.push_str(&format!("--- new file {path}\n"));
+                let Ok(body) = tokio::fs::read(Path::new(workspace_root).join(path)).await else {
+                    diff.push_str("(unreadable)\n");
+                    continue;
+                };
+                if body.contains(&0) {
+                    diff.push_str("(binary)\n");
+                    continue;
+                }
+                let text = String::from_utf8_lossy(&body);
+                let shown = liberado_coder_tools::truncate_on_char(&text, budget);
+                budget = budget.saturating_sub(shown.len());
+                diff.push_str(shown);
+                if shown.len() < text.len() {
+                    if !shown.ends_with('\n') {
+                        diff.push('\n');
+                    }
+                    diff.push_str("… truncated\n");
+                } else if !shown.ends_with('\n') {
+                    diff.push('\n');
+                }
+            }
         }
     }
     if diff.trim().is_empty() {
@@ -809,6 +848,84 @@ mod tests {
     };
     use liberado_provider::{CompletionResponse, MockProvider, ToolInvocation};
     use serde_json::json;
+
+    /// A git repo with one committed file. Identity is set explicitly because `user.email` /
+    /// `user.name` exist on every dev machine and on no CI runner.
+    fn reviewable_repo() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        let run = |args: &[&str]| {
+            let out = std::process::Command::new("git")
+                .args(args)
+                .current_dir(dir.path())
+                .output()
+                .expect("git available");
+            assert!(
+                out.status.success(),
+                "git {args:?}: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        };
+        run(&["init", "--quiet"]);
+        run(&["config", "user.email", "test@liberado.local"]);
+        run(&["config", "user.name", "Test"]);
+        run(&["config", "commit.gpgsign", "false"]);
+        std::fs::write(dir.path().join("tracked.rs"), "fn old() {}\n").unwrap();
+        run(&["add", "tracked.rs"]);
+        run(&["commit", "--quiet", "-m", "base"]);
+        dir
+    }
+
+    /// The critic used to be handed untracked file *names* and no content, so it reported that it
+    /// could not see the file — while 334 lines of it sat on disk. A review of a change that omits
+    /// its largest part is not a review.
+    #[tokio::test]
+    async fn the_critic_sees_the_content_of_a_new_file() {
+        let dir = reviewable_repo();
+        std::fs::write(dir.path().join("added.rs"), "fn brand_new() -> u8 { 7 }\n").unwrap();
+
+        let diff = workspace_diff(&dir.path().to_string_lossy()).await.unwrap();
+        assert!(diff.contains("added.rs"), "{diff}");
+        assert!(
+            diff.contains("fn brand_new() -> u8 { 7 }"),
+            "the new file's content must reach the reviewer, not only its name: {diff}"
+        );
+    }
+
+    /// Tracked edits must not be displaced by the untracked section.
+    #[tokio::test]
+    async fn the_critic_still_sees_tracked_edits() {
+        let dir = reviewable_repo();
+        std::fs::write(dir.path().join("tracked.rs"), "fn changed() {}\n").unwrap();
+        std::fs::write(dir.path().join("added.rs"), "fn brand_new() {}\n").unwrap();
+
+        let diff = workspace_diff(&dir.path().to_string_lossy()).await.unwrap();
+        assert!(
+            diff.contains("fn changed()"),
+            "tracked edit missing: {diff}"
+        );
+        assert!(diff.contains("fn brand_new()"), "new file missing: {diff}");
+    }
+
+    /// A binary file must be named but not inlined — a stray NUL would corrupt the transcript the
+    /// reviewer reads.
+    #[tokio::test]
+    async fn a_binary_new_file_is_named_but_not_inlined() {
+        let dir = reviewable_repo();
+        std::fs::write(dir.path().join("blob.bin"), [0u8, 159, 146, 150]).unwrap();
+
+        let diff = workspace_diff(&dir.path().to_string_lossy()).await.unwrap();
+        assert!(diff.contains("blob.bin"), "{diff}");
+        assert!(diff.contains("(binary)"), "{diff}");
+        assert!(!diff.contains('\0'), "no NUL may reach the transcript");
+    }
+
+    /// A clean tree must still read as clean.
+    #[tokio::test]
+    async fn a_clean_tree_is_reported_as_an_empty_diff() {
+        let dir = reviewable_repo();
+        let diff = workspace_diff(&dir.path().to_string_lossy()).await.unwrap();
+        assert_eq!(diff, "(empty diff)", "{diff}");
+    }
 
     fn role() -> CoderRoleConfig {
         CoderRoleConfig {
