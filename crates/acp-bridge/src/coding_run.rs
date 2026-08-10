@@ -187,6 +187,7 @@ pub async fn run_coding_round(
             // model is called while `gate.enabled` is false; making it conditional would put the
             // trap back one `if` away.
             critic: reviewer_role(
+                &tuning.critic,
                 &model,
                 Some(&liberado_coder_core::prompts::dir_for(
                     tuning.prompt_dir.as_deref(),
@@ -516,9 +517,25 @@ fn is_git_repo(path: &Path) -> bool {
 /// Its prompt is [`liberado_coder_agent::COLD_DIFF_REVIEWER_PROMPT`], shared rather than written
 /// here so the reviewer that is measured offline and the reviewer that runs in a session are the
 /// same text.
-fn reviewer_role(model: &str, prompt_dir: Option<&Path>) -> CoderRoleConfig {
+fn reviewer_role(
+    configured: &CoderRoleConfig,
+    fallback_model: &str,
+    prompt_dir: Option<&Path>,
+) -> CoderRoleConfig {
+    // The *configured* critic model, not the coder's.
+    //
+    // This took the session's model, so both reviewers ran on whatever the coding run was using
+    // — `deepseek-v4-pro` by default — while `[coder.critic] model` said `deepseek-v4-flash` and
+    // reached nobody. Reviewing is a cheaper job than coding: the diff reviewer answers one
+    // question about a diff, the session critic reads a transcript. Paying pro rates for both,
+    // silently, is the kind of thing you only notice on a bill.
+    let model = if configured.model.trim().is_empty() {
+        fallback_model.to_string()
+    } else {
+        configured.model.clone()
+    };
     CoderRoleConfig {
-        model: model.to_string(),
+        model,
         prompt_path: None,
         prompt: Some(liberado_coder_core::prompts::load(
             prompt_dir,
@@ -527,8 +544,8 @@ fn reviewer_role(model: &str, prompt_dir: Option<&Path>) -> CoderRoleConfig {
         )),
         // Deterministic on purpose: a reviewer that returns a different verdict on a re-run
         // cannot be argued with, and a gate you cannot argue with gets switched off.
-        temperature: Some(0.0),
-        max_tokens: Some(4000),
+        temperature: configured.temperature.or(Some(0.0)),
+        max_tokens: configured.max_tokens.or(Some(4000)),
         max_turns: Some(1),
     }
 }
@@ -560,6 +577,39 @@ pub fn workspace_payload(cwd: &Path) -> serde_json::Value {
 #[cfg(test)]
 mod reviewer_role_tests {
     use super::*;
+
+    fn critic_config(model: &str) -> CoderRoleConfig {
+        CoderRoleConfig {
+            model: model.to_string(),
+            prompt_path: None,
+            prompt: None,
+            temperature: None,
+            max_tokens: None,
+            max_turns: None,
+        }
+    }
+
+    /// The reviewer must run on the model `[coder.critic]` names, not the coder's.
+    ///
+    /// It took the session model, so both reviewers ran on `deepseek-v4-pro` while the config
+    /// said `deepseek-v4-flash`. Reviewing a diff is a cheaper job than writing one, and paying
+    /// the difference silently is exactly the shape of the other shadowed settings.
+    #[test]
+    fn the_reviewer_uses_the_configured_model_not_the_coders() {
+        let role = reviewer_role(&critic_config("deepseek-v4-flash"), "deepseek-v4-pro", None);
+        assert_eq!(
+            role.model, "deepseek-v4-flash",
+            "the configured critic model must win over the session's"
+        );
+    }
+
+    /// With no critic model configured, fall back to the session's rather than dispatching to an
+    /// empty model id, which fails at the provider with a worse message.
+    #[test]
+    fn an_unset_critic_model_falls_back_to_the_session_model() {
+        let role = reviewer_role(&critic_config("  "), "deepseek-v4-pro", None);
+        assert_eq!(role.model, "deepseek-v4-pro");
+    }
 
     /// An open finding must sit above the workspace path and the file list.
     ///
@@ -616,7 +666,7 @@ mod reviewer_role_tests {
     /// must fail this test rather than wait to be discovered by a user who enabled a setting.
     #[test]
     fn the_gate_reviewer_role_can_actually_be_instructed() {
-        let role = reviewer_role("some/model", None);
+        let role = reviewer_role(&critic_config("cfg/model"), "session/model", None);
         let prompt = role
             .prompt
             .as_deref()
@@ -637,7 +687,9 @@ mod reviewer_role_tests {
     #[test]
     fn the_reviewer_uses_the_shared_prompt() {
         assert_eq!(
-            reviewer_role("m", None).prompt.as_deref(),
+            reviewer_role(&critic_config("m"), "m", None)
+                .prompt
+                .as_deref(),
             Some(liberado_coder_agent::COLD_DIFF_REVIEWER_PROMPT),
         );
     }
