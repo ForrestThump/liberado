@@ -36,7 +36,7 @@ use async_trait::async_trait;
 use liberado_coder_core::{CommandPolicy, DockerSandboxSpec, SandboxVolume};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use tokio::{process::Command, time::timeout};
+use tokio::time::timeout;
 
 #[derive(Debug, Error)]
 pub enum SandboxError {
@@ -213,7 +213,7 @@ impl Workspace for DockerWorkspace {
 impl CommandRunner for DockerWorkspace {
     async fn run_command(&self, request: CommandRequest) -> Result<CommandOutput, SandboxError> {
         let docker_args = self.docker_run_args(&request)?;
-        let mut command = Command::new("docker");
+        let mut command = liberado_common::process::command("docker");
         command.args(&docker_args);
         command.kill_on_drop(true);
 
@@ -337,7 +337,7 @@ pub const GIT: &str = "git";
 /// Errors map to [`SandboxError::Spawn`] so callers can keep their own error wrapping.
 pub async fn run_git(current_dir: &Path, args: &[&str]) -> Result<String, SandboxError> {
     let dir = path_for_cli(current_dir);
-    let output = Command::new(GIT)
+    let output = liberado_common::process::command(GIT)
         .args(args)
         .current_dir(&dir)
         .output()
@@ -363,7 +363,7 @@ impl CommandRunner for HostWorkspace {
     async fn run_command(&self, request: CommandRequest) -> Result<CommandOutput, SandboxError> {
         ensure_command_allowed(&self.command_policy, &request)?;
 
-        let mut command = Command::new(&request.program);
+        let mut command = liberado_common::process::command(&request.program);
         command.args(&request.args).current_dir(&self.root);
         command.kill_on_drop(true);
         for (key, value) in &request.env {
@@ -511,22 +511,37 @@ pub async fn ensure_session_worktree(
     )?))
 }
 
+/// Ceiling for the git plumbing that sets up a worktree.
+///
+/// These are local, near-instant operations — a healthy `worktree prune` is ~15ms. The bound
+/// exists to convert a wedged subprocess into a reported error, not to police slow disks, so it
+/// is set far above any legitimate duration.
+const GIT_TIMEOUT: Duration = liberado_common::process::DEFAULT_COMMAND_TIMEOUT;
+
 /// Create a linked worktree at `dest` from `parent_root` (must not already exist).
 async fn create_linked_worktree(parent_root: &Path, dest: &Path) -> Result<(), SandboxError> {
     let parent_cli = path_for_cli(parent_root);
     let dest_cli = path_for_cli(dest);
 
-    // Prune stale registration from a prior crashed run before `worktree add`.
-    let _ = tokio::process::Command::new("git")
-        .args(["-C", &parent_cli])
-        .args(["worktree", "prune"])
-        .output()
-        .await;
+    // Bounded, because this is the path that hung. `process::command` nulls the child's stdin
+    // so it can no longer inherit the ACP bridge's JSON-RPC wire — the actual bug, which cost a
+    // Paseo prompt 19 silent minutes — and `output_within` makes sure that if some *other*
+    // external call ever wedges here, it surfaces as an error in 30s rather than as a spinner
+    // with no end. The two are separate properties: one prevents the hang, the other keeps the
+    // next unknown hang diagnosable.
+    let mut prune = liberado_common::process::command("git");
+    prune.args(["-C", &parent_cli]).args(["worktree", "prune"]);
+    // Stale registrations are advisory; a prune that fails or times out must not block the add.
+    if let Err(e) =
+        liberado_common::process::output_within(&mut prune, "git worktree prune", GIT_TIMEOUT).await
+    {
+        tracing::warn!(%e, "git worktree prune did not complete; continuing to worktree add");
+    }
 
-    let output = tokio::process::Command::new("git")
-        .args(["-C", &parent_cli])
-        .args(["worktree", "add", "--no-checkout", &dest_cli])
-        .output()
+    let mut add = liberado_common::process::command("git");
+    add.args(["-C", &parent_cli])
+        .args(["worktree", "add", "--no-checkout", &dest_cli]);
+    let output = liberado_common::process::output_within(&mut add, "git worktree add", GIT_TIMEOUT)
         .await
         .map_err(|e| SandboxError::Spawn(format!("git worktree add: {e}")))?;
     if !output.status.success() {
@@ -536,12 +551,14 @@ async fn create_linked_worktree(parent_root: &Path, dest: &Path) -> Result<(), S
         )));
     }
 
-    let output = tokio::process::Command::new("git")
+    let mut checkout = liberado_common::process::command("git");
+    checkout
         .args(["-C", &dest_cli])
-        .args(["checkout", "HEAD", "--"])
-        .output()
-        .await
-        .map_err(|e| SandboxError::Spawn(format!("git checkout in worktree: {e}")))?;
+        .args(["checkout", "HEAD", "--"]);
+    let output =
+        liberado_common::process::output_within(&mut checkout, "git checkout", GIT_TIMEOUT)
+            .await
+            .map_err(|e| SandboxError::Spawn(format!("git checkout in worktree: {e}")))?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         let _ = std::fs::remove_dir_all(dest);
@@ -618,7 +635,7 @@ impl WorktreeWorkspace {
         // Prune the registration before removing the directory — git needs the
         // worktree metadata to know which registration to clean up.
         if let Some(repo) = _repo {
-            let _ = tokio::process::Command::new("git")
+            let _ = liberado_common::process::command("git")
                 .args(["-C", &repo.to_string_lossy()])
                 .args(["worktree", "prune"])
                 .output()

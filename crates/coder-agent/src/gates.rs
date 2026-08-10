@@ -8,7 +8,6 @@ use chrono::Utc;
 use liberado_coder_core::{CoderCommandConfig, CoderError, CoderEvent, CoderRunRequest};
 use liberado_coder_sandbox::CommandRequest;
 use liberado_common::Outcome;
-use tokio::process::Command;
 
 use crate::progress::ProgressFatal;
 use crate::trace::{self, EventLog};
@@ -66,7 +65,7 @@ pub async fn changed_files(workspace_root: &str) -> Result<Vec<String>, CoderErr
     // claim it changed files elsewhere in the user's checkout that it never touched. Scoping to the
     // current directory subtree means the answer can never name a file outside the workspace,
     // whatever repo happens to enclose it.
-    let output = Command::new("git")
+    let output = liberado_common::process::command("git")
         .args(["status", "--porcelain", "-uall", "--", "."])
         .current_dir(workspace_root)
         .output()
@@ -88,7 +87,7 @@ pub async fn changed_files(workspace_root: &str) -> Result<Vec<String>, CoderErr
 pub async fn changed_files_detailed(
     workspace_root: &str,
 ) -> Result<Vec<(String, &'static str)>, CoderError> {
-    let output = Command::new("git")
+    let output = liberado_common::process::command("git")
         .args(["status", "--porcelain", "-uall", "--", "."])
         .current_dir(workspace_root)
         .output()
@@ -141,7 +140,7 @@ pub fn parse_status_path(line: &str) -> Option<String> {
 
 /// Resolve `rev` to a full SHA in `workspace_root` (e.g. `"HEAD"`).
 pub async fn rev_parse(workspace_root: &str, rev: &str) -> Result<String, CoderError> {
-    let output = Command::new("git")
+    let output = liberado_common::process::command("git")
         .args(["rev-parse", rev])
         .current_dir(workspace_root)
         .output()
@@ -171,7 +170,7 @@ pub async fn committed_files_since(
         return Ok(Vec::new());
     }
     // Two-arg form: tree of baseline vs tree of HEAD (works when baseline is an ancestor).
-    let output = Command::new("git")
+    let output = liberado_common::process::command("git")
         .args(["diff", "--name-status", baseline_sha, &head])
         .current_dir(workspace_root)
         .output()

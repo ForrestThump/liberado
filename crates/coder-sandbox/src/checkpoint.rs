@@ -9,7 +9,6 @@ use std::process::Stdio;
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use tokio::process::Command;
 
 use crate::{path_for_cli, strip_extended_path_prefix};
 
@@ -214,7 +213,7 @@ impl ShadowGit {
     fn run_git(&self, args: &[&str]) -> Result<(), CheckpointError> {
         let git_dir = path_for_cli(&self.git_dir);
         let work = path_for_cli(&self.work_tree);
-        let output = std::process::Command::new("git")
+        let output = liberado_common::process::std_command("git")
             .args(["--git-dir", &git_dir, "--work-tree", &work])
             .args(args)
             .stdout(Stdio::piped())
@@ -233,7 +232,7 @@ impl ShadowGit {
     async fn run_git_async(&self, args: &[&str]) -> Result<(), CheckpointError> {
         let git_dir = path_for_cli(&self.git_dir);
         let work = path_for_cli(&self.work_tree);
-        let output = Command::new("git")
+        let output = liberado_common::process::command("git")
             .args(["--git-dir", &git_dir, "--work-tree", &work])
             .args(args)
             .stdout(Stdio::piped())
@@ -253,7 +252,7 @@ impl ShadowGit {
     async fn run_git_async_stdout(&self, args: &[&str]) -> Result<String, CheckpointError> {
         let git_dir = path_for_cli(&self.git_dir);
         let work = path_for_cli(&self.work_tree);
-        let output = Command::new("git")
+        let output = liberado_common::process::command("git")
             .args(["--git-dir", &git_dir, "--work-tree", &work])
             .args(args)
             .stdout(Stdio::piped())

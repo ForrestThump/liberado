@@ -107,7 +107,7 @@ fn preflight_gh_pr_create(program: &str, args: &[String]) -> Option<String> {
         ));
     }
     let refspec = format!("refs/heads/{base}");
-    let output = std::process::Command::new("git")
+    let output = liberado_common::process::std_command("git")
         .args(["ls-remote", "--exit-code", "origin", &refspec])
         .output();
     match output {

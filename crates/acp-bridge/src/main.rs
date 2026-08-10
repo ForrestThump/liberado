@@ -39,6 +39,7 @@ use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
 mod coding_run;
 mod provider;
+mod stdin_guard;
 mod wire;
 
 use wire::{
@@ -299,8 +300,51 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     // Required once prompts run concurrent with stdin (cancel mid-turn).
     let wire = Arc::new(StdoutWire);
 
-    let stdin = BufReader::new(tokio::io::stdin());
-    let mut lines = stdin.lines();
+    // Take a private handle on the JSON-RPC wire and point the process-level stdin at the null
+    // device, so no child can inherit the wire even if some future spawn site forgets to null
+    // its stdin. See `stdin_guard` for why the order matters.
+    //
+    // Lines then arrive over a channel regardless of source, so the select! below does not care
+    // which of the two readers is running.
+    let (stdin_tx, mut stdin_rx) = mpsc::channel::<std::io::Result<Option<String>>>(64);
+    match stdin_guard::take_wire_stdin() {
+        Some(wire_stdin) => {
+            tracing::info!("stdin detached from children; reading the wire on a private handle");
+            // A dedicated OS thread, because the handle is a plain `File` over a pipe and
+            // Windows cannot register that with tokio's reactor for async reads.
+            std::thread::spawn(move || {
+                use std::io::BufRead;
+                let mut reader = std::io::BufReader::new(wire_stdin);
+                loop {
+                    let mut buf = String::new();
+                    let msg = match reader.read_line(&mut buf) {
+                        Ok(0) => Ok(None),
+                        Ok(_) => Ok(Some(buf.trim_end_matches(['\r', '\n']).to_string())),
+                        Err(e) => Err(e),
+                    };
+                    let done = matches!(msg, Ok(None) | Err(_));
+                    if stdin_tx.blocking_send(msg).is_err() || done {
+                        break;
+                    }
+                }
+            });
+        }
+        None => {
+            // Non-Windows, or the swap failed. Children are still protected per-spawn by
+            // `liberado_common::process::command`; this is the belt, not the braces.
+            tracing::info!("stdin not detached; per-spawn nulling is the only guard");
+            tokio::spawn(async move {
+                let mut lines = BufReader::new(tokio::io::stdin()).lines();
+                loop {
+                    let msg = lines.next_line().await;
+                    let done = matches!(msg, Ok(None) | Err(_));
+                    if stdin_tx.send(msg).await.is_err() || done {
+                        break;
+                    }
+                }
+            });
+        }
+    }
     let mut in_flight: Option<InFlightPrompt> = None;
 
     loop {
@@ -335,7 +379,9 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                     wire.write_rpc_response(id, outcome)?;
                 }
             }
-            line = lines.next_line() => {
+            line = stdin_rx.recv() => {
+                // A closed channel means the reader ended — same as EOF on stdin.
+                let Some(line) = line else { break };
                 let Some(line) = line? else {
                     break;
                 };
@@ -574,6 +620,7 @@ async fn handle_request(bridge: Arc<Bridge>, method: &str, params: Value) -> Res
                 "session/new"
             );
             let (catalog, current) = bridge_model_snapshot(&bridge).await;
+
             Ok(session_state_payload(
                 &sid,
                 &catalog,

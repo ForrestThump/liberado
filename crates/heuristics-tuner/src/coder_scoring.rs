@@ -446,7 +446,7 @@ fn init_repo(root: &Path, seed_files: &[(&str, &str)]) -> Result<(), String> {
 }
 
 fn run(root: &Path, cmd: &[&str]) -> Result<(), String> {
-    let status = std::process::Command::new(cmd[0])
+    let status = liberado_common::process::std_command(cmd[0])
         .args(&cmd[1..])
         .current_dir(root)
         .status()

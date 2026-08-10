@@ -49,3 +49,5 @@ docs/future-work/session-profiles-next-actions.md
 mutants-core.txt
 mutants-output.txt
 mutants.out*/
+.tmp/
+coder-traces/

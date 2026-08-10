@@ -611,7 +611,7 @@ async fn merge_one_branch(merger: &dyn Provider, parent_root: &Path, branch: &st
                 Err(e) => {
                     warn!(branch = %branch, error = %e, "coding fan-out: conflict resolution failed");
                     // Leave repo mid-merge? Abort to leave parent clean for next attempt.
-                    let _ = tokio::process::Command::new("git")
+                    let _ = liberado_common::process::command("git")
                         .args(["-C", &parent_root.to_string_lossy(), "merge", "--abort"])
                         .output()
                         .await;
