@@ -79,7 +79,13 @@ pub struct CoderTuning {
     #[serde(default)]
     pub edit: EditConfig,
     /// `[coder.workspace]` — build cache and pre-run warm-up.
-    #[serde(default)]
+    ///
+    /// `rename` because the field is `workspace_build` and the documented key is `workspace`.
+    /// Without it serde looked for `[coder.workspace_build]`, so the section every doc and the
+    /// example config told an operator to write parsed into defaults and changed nothing —
+    /// measured: a run configured with a shared cache filled its own worktree with 17.6 GB while
+    /// the shared directory stayed empty.
+    #[serde(default, rename = "workspace")]
     pub workspace_build: WorkspaceBuildConfig,
     /// `[tuning.coder.repo_map]` — Aider-style repository map for cold-start context.
     #[serde(default)]
@@ -778,5 +784,83 @@ mod tests {
         });
         let err = tuning.validate().unwrap_err();
         assert!(err.to_string().contains("tuning.coder.gate.fresh.model"));
+    }
+}
+
+#[cfg(test)]
+mod documented_key_tests {
+    use super::*;
+
+    /// Every section `config.example/tuning.toml` documents must actually parse.
+    ///
+    /// This is the ninth-and-a-half shadowed setting: `[coder.workspace]` was documented in the
+    /// example, in the struct's own doc comment, and in a merged PR description — while serde
+    /// looked for `[coder.workspace_build]`. It parsed, defaulted, and changed nothing. A run
+    /// configured with a shared build cache filled its own worktree with 17.6 GB and left the
+    /// shared directory at zero.
+    ///
+    /// `CoderTuning` already has a test proving each field survives the conversion to
+    /// `CoderRunConfig`. That cannot see this: the value never entered the struct in the first
+    /// place. The gap between "the code reads it" and "the operator can write it" needs its own
+    /// check, and the only honest source for the operator's half is the file they are told to
+    /// copy.
+    #[test]
+    fn the_documented_workspace_section_reaches_the_config() {
+        let toml = r#"
+[coder.workspace]
+shared_target_dir = "/tmp/shared"
+warmup = false
+warmup_timeout_secs = 42
+"#;
+        let value: toml::Value = toml.parse().expect("valid toml");
+        let coder = value.get("coder").expect("[coder] table");
+        let tuning = CoderTuning::from_value(Some(coder)).expect("tuning parses");
+
+        assert_eq!(
+            tuning.workspace_build.shared_target_dir.as_deref(),
+            Some("/tmp/shared"),
+            "the key an operator is told to write must reach the field"
+        );
+        assert!(!tuning.workspace_build.warmup);
+        assert_eq!(tuning.workspace_build.warmup_timeout_secs, 42);
+    }
+
+    /// And the same for the other sections added this week, since each one was documented before
+    /// anyone tried writing it.
+    #[test]
+    fn the_documented_edit_and_hashline_sections_reach_the_config() {
+        let toml = r#"
+[coder.edit]
+fuzzy_match = false
+fuzzy_threshold = 0.8
+
+[coder.hashline]
+enabled = true
+hash_length = 5
+"#;
+        let value: toml::Value = toml.parse().expect("valid toml");
+        let coder = value.get("coder").expect("[coder] table");
+        let tuning = CoderTuning::from_value(Some(coder)).expect("tuning parses");
+
+        assert!(
+            !tuning.edit.fuzzy_match,
+            "[coder.edit] did not reach the field"
+        );
+        assert_eq!(tuning.edit.fuzzy_threshold, 0.8);
+        assert!(
+            tuning.hashline.enabled,
+            "[coder.hashline] did not reach the field"
+        );
+        assert_eq!(tuning.hashline.hash_length, 5);
+    }
+
+    /// `[coder] prompt_dir` is a bare key rather than a section, and was never exercised either.
+    #[test]
+    fn the_documented_prompt_dir_reaches_the_config() {
+        let value: toml::Value = "prompt_dir = \"/etc/liberado/prompts\"\n"
+            .parse()
+            .expect("valid toml");
+        let tuning = CoderTuning::from_value(Some(&value)).expect("tuning parses");
+        assert_eq!(tuning.prompt_dir.as_deref(), Some("/etc/liberado/prompts"));
     }
 }
