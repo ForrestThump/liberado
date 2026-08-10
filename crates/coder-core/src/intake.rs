@@ -1043,6 +1043,7 @@ mod tests {
                 progress: Default::default(),
                 hashline: Default::default(),
                 session_critic: crate::SessionCriticConfig::default(),
+                prompt_dir: None,
             },
             attempt: 0,
             prior_feedback: vec![],

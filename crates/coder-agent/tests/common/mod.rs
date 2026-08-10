@@ -129,6 +129,7 @@ pub fn base_request(root: &Path) -> CoderRunRequest {
             },
             hashline: liberado_coder_core::HashlineConfig::default(),
             session_critic: Default::default(),
+            prompt_dir: None,
         },
         attempt: 0,
         prior_feedback: Vec::new(),

@@ -419,6 +419,7 @@ fn build_request(
             },
             hashline: liberado_coder_core::HashlineConfig::default(),
             session_critic: Default::default(),
+            prompt_dir: None,
         },
         attempt: 0,
         prior_feedback: Vec::new(),

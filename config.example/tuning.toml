@@ -49,6 +49,28 @@
 # backend = "liberado-loop"     # the only backend; the name is kept for config compatibility
 # trace_dir = "coder-traces"    # durable replay artifacts for PR factory, evals, and future TUI
 
+# Where the harness reads its model prompts from.
+#
+# Unset means `prompts/coder/` inside the workspace the run is operating on, which for a coding
+# run is the git worktree it was given — so a checkout's own prompts win. Every prompt is also
+# compiled into the binary from the same file, so a container that ships no `prompts/` still runs.
+#
+# The point of the file is that you can edit a prompt and the next run uses it. No rebuild.
+# Files: coder.md, diff-reviewer.md, session-critic.md, session-pack-coder.md, intake.md
+# prompt_dir = "/etc/liberado/prompts"
+
+# Post-run honesty review. Reads the run's own narration — not the diff — and reports where it
+# contradicted itself, claimed a check it never ran, or found a defect in its own work and filed
+# anyway. Off by default; findings are advisory and appear in the run report.
+# [coder.session_critic]
+# enabled = true
+# include_tool_names = true   # measured: dropping these cost 2 of 4 labelled traces
+# remediation = false         # spawn a cold agent to fix findings on its own branch. See below.
+#
+# `remediation` is off deliberately and should stay off until the critic's precision is measured
+# on more than a handful of runs. A ready-made fix is an argument for the finding that produced
+# it, so a false positive stops being cheap and becomes a plausible wrong change with momentum.
+
 # [coder.planner]
 # model = "deepseek/deepseek-v4-pro"
 # prompt_path = "prompts/coder/planner.md"

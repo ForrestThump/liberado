@@ -296,15 +296,17 @@ impl CodingSessionPack {
             WorkspacePolicies::resolve(ctx.overrides(), &goal.payload, self.hashline.clone());
         let prompt = policies.coder_prompt(
             &goal.payload,
-            "You are Liberado's coding worker. Inspect, edit with tools, then submit_report.\n\
-             \n\
-             Git / PR rules (self-host):\n\
-             - Prefer git_branch, git_commit, git_push tools over shelling out to git.\n\
-             - Committing your edits is progress; do not leave a dirty tree just to satisfy gates.\n\
-             - When opening a PR with `gh pr create --base <branch>`, first verify origin has that \
-             branch: `git ls-remote --exit-code origin refs/heads/<branch>`. If it fails, stop and \
-             report that the base branch is missing on the remote — do not open a PR against main \
-             as a silent fallback.",
+            // Loaded from prompts/coder/session-pack-coder.md, not a literal: the daemon path's
+            // prompt was a second copy of coder instructions that nobody could diff against the
+            // other two, and retuning it cost a rebuild.
+            &liberado_coder_core::prompts::load(
+                Some(&liberado_coder_core::prompts::dir_for(
+                    None,
+                    &workspace.to_string_lossy(),
+                )),
+                liberado_coder_core::prompts::SESSION_PACK_CODER_FILE,
+                liberado_coder_core::prompts::SESSION_PACK_CODER,
+            ),
         );
 
         let max_turns = if policies.explore_mode() {
@@ -443,6 +445,7 @@ impl CodingSessionPack {
                 },
                 hashline: policies.hashline.clone(),
                 session_critic: Default::default(),
+                prompt_dir: None,
             },
             attempt: 0,
             prior_feedback: Vec::new(),

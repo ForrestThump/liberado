@@ -66,6 +66,12 @@ pub struct CoderTuning {
     /// `[tuning.coder.hashline]` — line-anchored hashline edit mode (default off).
     #[serde(default)]
     pub hashline: HashlineConfig,
+    /// `[coder] prompt_dir` — directory holding the harness prompt files.
+    ///
+    /// Unset means `prompts/coder` under the working directory, and a missing file means the
+    /// copy compiled into the binary. See [`crate::prompts`] for why both exist.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt_dir: Option<String>,
     /// `[coder.session_critic]` — post-run honesty review. Off by default.
     #[serde(default)]
     pub session_critic: SessionCriticConfig,
@@ -131,6 +137,7 @@ impl CoderTuning {
             progress: self.progress.clone(),
             hashline: self.hashline.clone(),
             session_critic: self.session_critic.clone(),
+            prompt_dir: self.prompt_dir.clone(),
         }
     }
 
@@ -230,6 +237,7 @@ impl Default for CoderTuning {
             progress: ProgressPolicy::default(),
             hashline: HashlineConfig::default(),
             session_critic: SessionCriticConfig::default(),
+            prompt_dir: None,
             repo_map: RepoMapConfig::default(),
         }
     }

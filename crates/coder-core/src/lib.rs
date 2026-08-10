@@ -32,6 +32,7 @@ pub use intake::{
     validate_draft,
 };
 mod acceptance;
+pub mod prompts;
 pub use acceptance::{VERIFY_CMD_ENV, default_verifiers};
 pub use verify::{
     Finding, FindingKind, NamedVerdict, PipelinePolicy, PipelineResult, Verdict, VerdictStatus,
@@ -602,6 +603,9 @@ pub struct CoderRunConfig {
     /// Post-run honesty review (`[coder.session_critic]`). Default off.
     #[serde(default)]
     pub session_critic: SessionCriticConfig,
+    /// Where to look for harness prompt files. See [`prompts`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt_dir: Option<String>,
 }
 
 // ── review findings ───────────────────────────────────────────────────────────────────────────
@@ -1098,6 +1102,7 @@ mod tests {
                 progress: ProgressPolicy::default(),
                 hashline: HashlineConfig::default(),
                 session_critic: SessionCriticConfig::default(),
+                prompt_dir: None,
             },
             attempt: 0,
             prior_feedback: Vec::new(),
@@ -1296,6 +1301,7 @@ mod tests {
 #[cfg(test)]
 mod findings_tests {
     use super::*;
+    use std::path::Path;
 
     fn result_with(diff: Vec<DiffFinding>, session: Vec<SessionFinding>) -> CoderRunResult {
         CoderRunResult {
@@ -1455,6 +1461,48 @@ mod findings_tests {
         assert_eq!(
             config.session_critic, tuning.session_critic,
             "the setting parsed and then reached nobody"
+        );
+    }
+
+    /// `prompt_dir` must survive the conversion, or `[coder] prompt_dir` becomes the ninth
+    /// setting that parses and reaches nobody.
+    #[test]
+    fn tuning_carries_prompt_dir_into_the_run_config() {
+        let tuning = CoderTuning {
+            prompt_dir: Some("/etc/liberado/prompts".to_string()),
+            ..CoderTuning::default()
+        };
+        assert_eq!(tuning.run_config().prompt_dir, tuning.prompt_dir);
+    }
+
+    /// Unconfigured must mean "the checkout the run is working in", not "the process's cwd".
+    ///
+    /// The first version of this resolved against cwd and this test caught it: `cargo test` runs
+    /// with cwd at the crate directory, so the override silently fell back to the baked copy —
+    /// and would have done the same inside every coding worktree, which is the one place a run
+    /// most wants the checkout's own prompts.
+    #[test]
+    fn an_unconfigured_prompt_dir_resolves_inside_the_workspace() {
+        assert!(CoderTuning::default().prompt_dir.is_none());
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(|p| p.parent())
+            .expect("repo root")
+            .to_string_lossy()
+            .to_string();
+        let dir = prompts::dir_for(None, &root);
+        let from_disk = prompts::load(Some(&dir), prompts::CODER_FILE, "BAKED-FALLBACK");
+        assert_ne!(
+            from_disk, "BAKED-FALLBACK",
+            "a run inside a checkout must read prompts/coder/coder.md from it, not the binary"
+        );
+    }
+
+    #[test]
+    fn a_configured_prompt_dir_is_used_verbatim() {
+        assert_eq!(
+            prompts::dir_for(Some("/etc/liberado/prompts"), "/some/workspace"),
+            Path::new("/etc/liberado/prompts")
         );
     }
 

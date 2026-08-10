@@ -22,38 +22,26 @@ pub fn worker_role_config(request: &CoderRunRequest) -> &CoderRoleConfig {
     }
     &request.config.coder
 }
-
-/// Instructions for a cold reviewer that has the diff and nothing else.
+/// The cold diff reviewer's instructions now live in `prompts/coder/diff-reviewer.md`.
 ///
-/// Cold is the point. A reviewer that has read the run's narration adopts it — it arrives already
-/// persuaded, and a second opinion that agrees by construction is not a second opinion. This one
-/// sees the change and the task, and is asked the question a human reviewer asks first.
+/// It was a `const` here, which meant retuning a reviewer prompt cost a full workspace rebuild
+/// — minutes, on the loop that most wants to be fast. `liberado_coder_core::prompts` bakes the
+/// same file in as a fallback, so nothing breaks in a container that ships only the binary.
+pub use liberado_coder_core::prompts::DIFF_REVIEWER as COLD_DIFF_REVIEWER_PROMPT;
+
+/// The built-in prompt for a role whose `prompt_path` is absent.
 ///
-/// The mutation question is here because it is the check this repo keeps failing. Two runs in a
-/// row shipped tests that passed with the fix reverted; both were caught by hand, afterwards. It
-/// is also a question answerable *from a diff*, which most correctness questions are not: you can
-/// see whether an assertion could distinguish the new behaviour from the old one.
-///
-/// Lives beside the role machinery rather than at a call site so the reviewer being scored and
-/// the reviewer that runs are the same text. A measurement against a copy of the prompt measures
-/// the copy.
-pub const COLD_DIFF_REVIEWER_PROMPT: &str = r#"You review a code change. You have the diff and the
-task it was meant to accomplish. You did not see the work happen and you should not assume it was
-done well or badly.
-
-Judge these, in order:
-
-1. Does the change do what the task asked?
-2. For every test added or modified: what mutation of the production code would make it fail? If
-   you cannot name one, the test does not cover the change and you must say so. A test that
-   exercises a function the diff does not touch is the common case - check which code each test
-   actually reaches.
-3. Does anything here contradict a stated convention, or a comment elsewhere in the diff?
-
-Do not ask for more tests, more docs, or style changes. Report defects, not preferences.
-
-Respond with JSON only:
-{"quality":"acceptable"} or {"quality":"needs_revision","issues":["...","..."]}"#;
+/// Repair is the coder under another name, and every gate reviewer reads a diff, so they share
+/// the reviewer text rather than each carrying a near-copy that drifts.
+fn baked_prompt_for(role_name: &str) -> Option<&'static str> {
+    match role_name {
+        "coder" | "repair" => Some(liberado_coder_core::prompts::CODER),
+        "critic" | "fresh" | "gatekeeper" | "session-critic" => {
+            Some(liberado_coder_core::prompts::DIFF_REVIEWER)
+        }
+        _ => None,
+    }
+}
 
 pub fn critic_enabled(request: &CoderRunRequest) -> bool {
     request.config.critic.prompt.is_some() || request.config.critic.prompt_path.is_some()
@@ -64,6 +52,19 @@ pub fn planner_enabled(request: &CoderRunRequest) -> bool {
     request.config.planner.prompt.is_some() || request.config.planner.prompt_path.is_some()
 }
 
+/// Resolve a role's system prompt.
+///
+/// Order: an inline `prompt`, then `prompt_path`, then the copy compiled in from
+/// `prompts/coder/` (see [`liberado_coder_core::prompts`]).
+///
+/// **A missing `prompt_path` is no longer fatal.** It used to return `Err`, which failed the whole
+/// run — so a container that shipped the binary without `prompts/` could not code at all, and
+/// enabling the completion gate failed at its first reviewer for the same reason. Falling back to
+/// the baked copy of the same file keeps a deployment working while still letting a checkout
+/// override it by editing the file.
+///
+/// A read error that is *not* "missing" still fails: a prompt file that exists and cannot be read
+/// means the deployment is broken in a way silence would hide.
 pub async fn role_instructions(
     role: &CoderRoleConfig,
     role_name: &str,
@@ -72,13 +73,31 @@ pub async fn role_instructions(
         return Ok(prompt);
     }
     if let Some(path) = &role.prompt_path {
-        return tokio::fs::read_to_string(path)
-            .await
-            .map_err(|e| CoderError::Setup(format!("read {role_name} prompt_path {path}: {e}")));
+        match tokio::fs::read_to_string(path).await {
+            Ok(text) if !text.trim().is_empty() => return Ok(text),
+            Ok(_) => tracing::warn!(
+                %path,
+                %role_name,
+                "prompt_path is empty; falling back to the built-in prompt"
+            ),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => tracing::warn!(
+                %path,
+                %role_name,
+                "prompt_path does not exist; falling back to the built-in prompt"
+            ),
+            Err(e) => {
+                return Err(CoderError::Setup(format!(
+                    "read {role_name} prompt_path {path}: {e}"
+                )));
+            }
+        }
     }
-    Err(CoderError::Setup(format!(
-        "{role_name} role requires prompt or prompt_path"
-    )))
+    match baked_prompt_for(role_name) {
+        Some(text) => Ok(text.to_string()),
+        None => Err(CoderError::Setup(format!(
+            "{role_name} role requires prompt or prompt_path"
+        ))),
+    }
 }
 
 pub fn coder_goal(request: &CoderRunRequest) -> String {
@@ -134,4 +153,96 @@ pub fn truncate_chars(value: &str, max_chars: usize) -> String {
     let mut out: String = value.chars().take(max_chars).collect();
     out.push_str("\n…[truncated]");
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn role(prompt: Option<&str>, prompt_path: Option<&str>) -> CoderRoleConfig {
+        CoderRoleConfig {
+            model: "m".to_string(),
+            prompt: prompt.map(str::to_string),
+            prompt_path: prompt_path.map(str::to_string),
+            temperature: None,
+            max_tokens: None,
+            max_turns: None,
+        }
+    }
+
+    /// A missing prompt file must not fail the run.
+    ///
+    /// It used to return `Err`, which meant a container shipping the binary without `prompts/`
+    /// could not code at all, and switching the completion gate on failed at its first reviewer
+    /// for the same reason. The built-in copy comes from the same file, so falling back changes
+    /// what can be *tuned*, not what the model is told.
+    #[tokio::test]
+    async fn a_missing_prompt_file_falls_back_instead_of_failing_the_run() {
+        let resolved = role_instructions(&role(None, Some("prompts/nope/absent.md")), "coder")
+            .await
+            .expect("a missing override must not end the run");
+        assert_eq!(resolved, liberado_coder_core::prompts::CODER);
+    }
+
+    /// Every role the harness dispatches must resolve to something. A role with no built-in and
+    /// no file is the failure that took the gate down; if a new role name appears without an
+    /// entry in `baked_prompt_for`, this is where it surfaces.
+    #[tokio::test]
+    async fn every_dispatched_role_has_a_prompt_of_last_resort() {
+        for name in [
+            "coder",
+            "repair",
+            "critic",
+            "fresh",
+            "gatekeeper",
+            "session-critic",
+        ] {
+            let resolved = role_instructions(&role(None, None), name)
+                .await
+                .unwrap_or_else(|e| panic!("role `{name}` has no fallback prompt: {e}"));
+            assert!(
+                resolved.trim().len() > 200,
+                "role `{name}` fell back to something too short to be a prompt"
+            );
+        }
+    }
+
+    /// A `prompt_path` that exists but cannot be read must still fail.
+    ///
+    /// "Missing" means unconfigured and is fine. "Present and unreadable" means the deployment is
+    /// broken — a bad mount, wrong permissions, a path pointing at a directory — and silently
+    /// substituting the built-in copy would hide it behind a run that looks normal.
+    #[tokio::test]
+    async fn an_unreadable_prompt_path_is_an_error_not_a_fallback() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        // A directory is the portable way to get a read error that is not NotFound.
+        let err = role_instructions(&role(None, Some(&dir.path().to_string_lossy())), "coder")
+            .await
+            .expect_err("an unreadable prompt file must not be papered over");
+        assert!(
+            err.to_string().contains("prompt_path"),
+            "the error must name what failed: {err}"
+        );
+    }
+
+    /// An unknown role is still an error. Silently handing a stranger the coder's instructions
+    /// would be worse than refusing.
+    #[tokio::test]
+    async fn an_unknown_role_without_a_prompt_is_still_an_error() {
+        role_instructions(&role(None, None), "invented-role")
+            .await
+            .expect_err("an unrecognised role must not inherit someone else's prompt");
+    }
+
+    /// An inline prompt still wins. That is how a deployment overrides one role.
+    #[tokio::test]
+    async fn an_inline_prompt_outranks_everything() {
+        let resolved = role_instructions(
+            &role(Some("INLINE"), Some("prompts/coder/coder.md")),
+            "coder",
+        )
+        .await
+        .expect("inline");
+        assert_eq!(resolved, "INLINE");
+    }
 }

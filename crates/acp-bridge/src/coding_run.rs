@@ -180,7 +180,13 @@ pub async fn run_coding_round(
             // The role is built whether or not the gate is on. Building it costs nothing and no
             // model is called while `gate.enabled` is false; making it conditional would put the
             // trap back one `if` away.
-            critic: reviewer_role(&model),
+            critic: reviewer_role(
+                &model,
+                Some(&liberado_coder_core::prompts::dir_for(
+                    tuning.prompt_dir.as_deref(),
+                    &workspace.to_string_lossy(),
+                )),
+            ),
             gate: tuning.gate.clone(),
             repair,
             // Durable worktree already materialised; HostLocal on that tree (same as pack build).
@@ -208,6 +214,7 @@ pub async fn run_coding_round(
             },
             hashline: tuning.hashline.clone(),
             session_critic: Default::default(),
+            prompt_dir: tuning.prompt_dir.clone(),
         },
         attempt: state.rounds,
         prior_feedback: state.prior_feedback.clone(),
@@ -502,11 +509,15 @@ fn is_git_repo(path: &Path) -> bool {
 /// Its prompt is [`liberado_coder_agent::COLD_DIFF_REVIEWER_PROMPT`], shared rather than written
 /// here so the reviewer that is measured offline and the reviewer that runs in a session are the
 /// same text.
-fn reviewer_role(model: &str) -> CoderRoleConfig {
+fn reviewer_role(model: &str, prompt_dir: Option<&Path>) -> CoderRoleConfig {
     CoderRoleConfig {
         model: model.to_string(),
         prompt_path: None,
-        prompt: Some(liberado_coder_agent::COLD_DIFF_REVIEWER_PROMPT.to_string()),
+        prompt: Some(liberado_coder_core::prompts::load(
+            prompt_dir,
+            liberado_coder_core::prompts::DIFF_REVIEWER_FILE,
+            liberado_coder_core::prompts::DIFF_REVIEWER,
+        )),
         // Deterministic on purpose: a reviewer that returns a different verdict on a re-run
         // cannot be argued with, and a gate you cannot argue with gets switched off.
         temperature: Some(0.0),
@@ -598,7 +609,7 @@ mod reviewer_role_tests {
     /// must fail this test rather than wait to be discovered by a user who enabled a setting.
     #[test]
     fn the_gate_reviewer_role_can_actually_be_instructed() {
-        let role = reviewer_role("some/model");
+        let role = reviewer_role("some/model", None);
         let prompt = role
             .prompt
             .as_deref()
@@ -619,7 +630,7 @@ mod reviewer_role_tests {
     #[test]
     fn the_reviewer_uses_the_shared_prompt() {
         assert_eq!(
-            reviewer_role("m").prompt.as_deref(),
+            reviewer_role("m", None).prompt.as_deref(),
             Some(liberado_coder_agent::COLD_DIFF_REVIEWER_PROMPT),
         );
     }
