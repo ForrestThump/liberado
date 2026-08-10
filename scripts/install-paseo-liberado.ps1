@@ -96,11 +96,31 @@ Write-Host "Wrote provider 'liberado' to $configPath"
 
 Write-Host "==> Smoke test (initialize)"
 $init = '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":1,"clientInfo":{"name":"install-script","version":"0"},"clientCapabilities":{}}}'
-$out = $init | & liberado-acp 2>$null
-if ($out -notmatch 'Liberado') {
-    Write-Warning "Smoke output unexpected: $out"
+# Feed the request via a file and cmd's `<` redirect, not PowerShell's `|`.
+#
+# Two separate problems were hiding here. First, `$init | & liberado-acp` delivers nothing to
+# this binary -- it reads EOF and exits 0 -- while cmd, bash and Node all feed it fine, and the
+# same is true of the pre-fix build, so it is neither new nor on the path Paseo uses (Node,
+# verified by scripts/repro-acp-prompt.js). Unexplained, and worth its own look; not worth a
+# smoke test that cannot run.
+#
+# Second, and worse: `$out` came back as an *array* of lines, and `-match` against an array
+# filters instead of returning a bool. So an empty response took the success branch and printed
+# a bare "OK:" with nothing behind it. This script has been reporting a passing smoke test
+# against no response at all. Hence the explicit parse below -- a check that can announce
+# success without evidence is not a check.
+$smokeExe = if ($acp) { $acp.Source } else { Join-Path $env:USERPROFILE ".cargo\bin\liberado-acp.exe" }
+$tmpReq = Join-Path $env:TEMP "liberado-acp-smoke.json"
+Set-Content -Path $tmpReq -Value $init -Encoding ascii
+$out = (cmd /c "`"$smokeExe`" < `"$tmpReq`"" 2>$null) -join "`n"
+Remove-Item $tmpReq -ErrorAction SilentlyContinue
+$parsed = $null
+if ($out) { try { $parsed = $out | ConvertFrom-Json } catch { $parsed = $null } }
+if (-not $parsed -or -not $parsed.result -or -not $parsed.result.protocolVersion) {
+    Write-Warning "Smoke test did not return a usable initialize result."
+    if ($out) { Write-Warning "Raw response: $out" } else { Write-Warning "No response at all." }
 } else {
-    Write-Host "OK: $out"
+    Write-Host ("OK: protocolVersion={0}, agent={1}" -f $parsed.result.protocolVersion, $parsed.result.agentInfo.name)
 }
 
 Write-Host ""
