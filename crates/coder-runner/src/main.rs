@@ -952,40 +952,10 @@ async fn git_output(workspace: &Path, args: &[&str]) -> Result<String, String> {
 /// always fails is indistinguishable from one that is broken, and this runner is not Rust-only by
 /// contract. `LIBERADO_CODER_VERIFY_CMD` overrides the whole thing for another stack.
 fn verifiers_for(workspace: &Path) -> Vec<VerifierSpec> {
-    let mut specs = vec![VerifierSpec::GitNonemptyDiff {
-        id: "nonempty-diff".into(),
-    }];
-
-    if let Ok(custom) = env::var("LIBERADO_CODER_VERIFY_CMD") {
-        let mut parts = custom.split_whitespace().map(str::to_string);
-        if let Some(program) = parts.next() {
-            specs.push(VerifierSpec::Command {
-                id: "verify-cmd".into(),
-                program,
-                args: parts.collect(),
-                env: Default::default(),
-                timeout_secs: Some(900),
-                output_max_bytes: None,
-                network: false,
-            });
-            return specs;
-        }
-    }
-
-    if workspace.join("Cargo.toml").exists() {
-        specs.push(VerifierSpec::Command {
-            id: "cargo-check".into(),
-            program: "cargo".into(),
-            args: vec!["check".into(), "--workspace".into(), "--all-targets".into()],
-            env: Default::default(),
-            // A cold workspace check on this repo takes minutes; the default would time it out and
-            // report a failure that is really a stopwatch.
-            timeout_secs: Some(900),
-            output_max_bytes: None,
-            network: false,
-        });
-    }
-    specs
+    // Delegates to the shared default so the headless runner and the ACP bridge cannot drift.
+    // They already did: F10 added `cargo check` here and the editor path kept accepting work
+    // that had never been compiled.
+    liberado_coder_core::default_verifiers(workspace)
 }
 
 #[cfg(test)]

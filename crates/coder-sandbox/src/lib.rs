@@ -6,6 +6,7 @@
 
 mod checkpoint;
 mod merge;
+mod path_deps;
 mod preflight;
 mod preflight_baseline;
 pub use checkpoint::{Checkpoint, CheckpointError, ShadowGit};
@@ -566,6 +567,12 @@ async fn create_linked_worktree(parent_root: &Path, dest: &Path) -> Result<(), S
             "git checkout in worktree failed: {stderr}"
         )));
     }
+
+    // The workspace's path dependencies are gitignored, so `git worktree add` leaves them out
+    // and cargo cannot resolve the manifest — meaning a coding run in here could not compile or
+    // test a single line of its own work. Provision them before handing the worktree over.
+    crate::path_deps::provision_path_deps(parent_root, dest).await;
+
     Ok(())
 }
 

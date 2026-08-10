@@ -31,6 +31,8 @@ pub use intake::{
     expand_verify_profile_into, intake_outcome_schema, profile_verifiers, sanitize_draft,
     validate_draft,
 };
+mod acceptance;
+pub use acceptance::{VERIFY_CMD_ENV, default_verifiers};
 pub use verify::{
     Finding, FindingKind, NamedVerdict, PipelinePolicy, PipelineResult, Verdict, VerdictStatus,
     VerifierSpec, resolve_verifier_specs,
