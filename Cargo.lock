@@ -3383,6 +3383,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "chat-client-contract",
+ "chrono",
  "futures",
  "liberado-bootstrap",
  "liberado-coder-agent",
