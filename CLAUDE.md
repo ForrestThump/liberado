@@ -65,6 +65,12 @@ because it cannot drift from the code as easily.
 test that passes both ways reports coverage it does not have. This has caught fake tests in review
 more than once, including ones written with care.
 
+**And confirm the mutation applied.** A search-and-replace whose needle does not match leaves the
+code intact, the suite green, and looks exactly like an escaped mutation. Assert on the substitution
+(`assert old in source`) before running the tests. This has happened twice. Restore from a copy in a
+scratch directory — **never `git checkout <file>` in a mutation loop**, which has twice destroyed
+uncommitted work.
+
 **`cargo test` stops at the first failing test binary.** Use `--no-fail-fast` whenever you need the
 complete failure set — comparing a branch against its base is meaningless with a truncated list.
 
@@ -116,11 +122,34 @@ model's own explanation of the problem sat unrecorded. `[coder] trace_formats` c
 `openai-messages` — the flat message shape Kilo Code and OpenHands persist — for comparing a run
 against another harness on the same task.
 
-**A config value that parses is not a config value that is read.** Seven settings have shipped
-green while a consumer hardcoded a literal instead of reading them — `[coder.gate]`,
-`[coder.coder]`, `[coder.progress]`, `trace_dir`, the coder role model, and two in
-`coder-runner/src/main.rs`. Symptom: changing the setting does nothing, silently. When you add a
-field to `CoderTuning`, grep every `CoderRunConfig {` initializer and make sure yours arrives.
+The file is `{ session_id, request, events: [...] }` — one flat list, each event tagged by `type`.
+The ones worth reading: `model_request_sent` (tools offered *and the system prompt*, once per
+distinct hash), `model_turn_finished`, `tool_started` / `tool_finished`, `loop_guard_triggered`,
+`critic_verdict`. Reads-per-successful-edit is a dozen lines of Python over `tool_finished` and is
+the metric that has tracked real progress; the measurement history is in
+[`docs/future-work/coder-harness-reliability-2026-08.md`](docs/future-work/coder-harness-reliability-2026-08.md),
+**including three reasonable hypotheses that were tried and did not work.** Read it before
+proposing a fix to the coding pack.
+
+**A config value that parses is not a config value that is read.** Ten settings have shipped green
+while a consumer hardcoded a literal instead of reading them — `[coder.gate]`, `[coder.coder]`,
+`[coder.progress]`, `trace_dir`, the coder role model, two in `coder-runner/src/main.rs`, the
+critic model, and `[coder.workspace]`, which was a documented TOML key serde did not have. Symptom:
+changing the setting does nothing, silently. When you add a field to `CoderTuning`, grep every
+`CoderRunConfig {` initializer and make sure yours arrives.
+`crates/test-support/tests/config_literal_rules.rs` is the mechanical guard — extend it rather than
+relying on care.
+
+**Disk exhaustion is a real failure mode here, not a hypothetical.** A coding run died at 0.1 GB
+free. `target/` reached 71.6 GB in one checkout, and `cargo-mutants` copies the whole workspace into
+`%TEMP%` per run and leaves it there when killed (~23 GB in leaked clones). Check free space before
+a long dispatch and sweep `%TEMP%\cargo-mutants-*`. The harness now reports this honestly instead of
+telling the model to fix it (PR #119), but it cannot prevent it.
+
+**Reinstall `liberado-acp` after merging anything the bridge links.** A dispatched run tests the
+installed binary, not your working tree. A run once silently tested a stale build; it was caught
+only by an error string in the trace that no longer existed in the source. Verify with a string
+only the new build contains.
 
 When responding to the user, write in ASD-STE100, or Simplified Technical English
 

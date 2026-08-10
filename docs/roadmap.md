@@ -89,10 +89,20 @@ step that would have caught its one mistake. None of these were model failures.
 
 **Runs are now replayable.** Every coding run writes a trace (`[coder] trace_dir`,
 `[coder] trace_formats`) recording what was sent, what the model said verbatim, which tools it was
-*offered* each turn, and why each turn ended. Before this, none of that existed anywhere, and four
-consecutive failures were each diagnosed by reading Rust and guessing. **Start a review of an agent
-run by reading its trace.** An `openai-messages` export is also available for comparing a run
-against another harness on the same task and model.
+*offered* each turn, and why each turn ended. Since PR #117 it also records **what the model was
+sent** — tools offered at request time, and the system prompt itself, once per distinct hash. Before
+this, none of that existed anywhere, and four consecutive failures were each diagnosed by reading
+Rust and guessing. **Start a review of an agent run by reading its trace.** An `openai-messages`
+export is also available for comparing a run against another harness on the same task and model.
+
+**Reliability push, 2026-08-09/10 — read this before touching the pack.**
+[`coder-harness-reliability-2026-08.md`](future-work/coder-harness-reliability-2026-08.md) is the
+current record: an A/B against Kilo Code on the same model and task, the fourteen defects it exposed
+(PRs #106–#119), and — most valuable — **three plausible hypotheses that were tried and did not
+work**. Edit failure fell from ~66% to 8%. The pack still has not been shown to complete an
+unattended task end to end, and the 8% figure comes from a different task than the baseline, so it
+is a signal rather than a controlled result. Do not repeat "the model is not good enough": the same
+model in another harness did the work.
 
 **Slice status** (plan: [`coding-tui-plan.md`](future-work/coding-tui-plan.md) §Slices):
 
@@ -161,6 +171,8 @@ Two carried-forward limitations worth knowing before building on this:
 
 | When | What |
 |------|------|
+| **2026-08-10** | **Coding-harness reliability, PRs #106–#119** — fourteen defects, every one found by reading a failed run's trace rather than by review. Highlights: `write_file` silently destroying a file (#106); view-normalized edits + prompts moved out of the binary into `prompts/` (#107); hashline offered alongside raw-text edit tools, contaminating 14 of 41 anchors (#108); an error message that advertised its own bypass (#109); reviewers running on the coder's model instead of the configured critic (#110); warm-up so the worktree builds *before the first token* is spent, plus a shared build cache (#112); a documented TOML key serde never read (#113); `validate` answering `{"configured": false}` to a model asking the right question (#114); **`grep`** — regex, `output_mode`, context, glob, identifier-scored "did you mean" (#115); a Windows worktree-registry race (#116); **`model_request_sent`** so a trace records what the model was *sent*, system prompt included (#117); **untracked files are changes** — `git diff` shows tracked files only, so a model's own new module was invisible to it *and* to the critic (#118); and **infrastructure failures are not repairs** — a full disk was being classified as a code failure and retried (#119). Full record incl. failed hypotheses: [`coder-harness-reliability-2026-08.md`](future-work/coder-harness-reliability-2026-08.md). |
+| **2026-08-09** | **ACP bridge Phase 0 + Phase 2 complete.** Tool-call id correlation (LIFO pairing so Paseo's tool UI attaches), `loadSession: false` chosen over a lying resume, `--version`/`--help` handled before stdin so probes cannot hang; coding/chat/face modes on one provider via `session/set_mode`, live OpenRouter catalog and `session/set_model`, cancel mid-turn. **TE3** (dispatcher prompt ordered stable-first) also verified landed. Roadmap rows corrected 2026-08-10 — several had sat open after the work shipped. |
 | **2026-08-06** | **Hashline edit mode** (PR #76): configurable hashline edit mode for the coding harness. **Coverage gap analysis** (PR #75): mutant-test coverage across coder-* crates, test additions, clippy fixes for Rust 1.94. **Generic ship preflight gate** (PR #74): `PreflightRunner` + preflight block before `Succeeded` + self-PR quality ladder design. **Checkpoints + mid-build resume** (PR #73): shadow-git checkpoints per attempt + per write-flush, durable worktree park/resume, rewind — S4 landed. **Fan-out merge** (PR #72): hub-spawned coding children on worktree branches, parent LLM merge-back, max concurrent 3 — S6 v1 landed. **Self-host dogfood reliability** (PR #70/#71): no-changes-after-commit fix, live tool events, intake flexible decode, data-dir worktrees, `gh pr create --base` preflight. **Plan + explore PathPolicy presets** (PR #67/#68). **Project-root authorization** (PR #66). |
 | **2026-08-03** | **Zone identity fix** (PR #38): a zone is identified by its *name*, not by which `Zone` variant spelled it. `Policy::write_class` always keyed on the name; `CapabilitySet` used derived structural equality, so a `Named` grant could never satisfy the write gate's `Zone::vault(..)` check — latent because nothing constructs `Named` yet, and waiting for the first non-vault CRUD surface. Serialization deliberately untouched (`Capability` is in `policy.toml` **and** the proposal HMAC). `tuning.md` gained the non-vault zone guide. **Seam boundary tests** (PR #39) and two read-only analysis tools: `delegation_cost.rs` and `provenance_ratio.rs` (examples then; promoted to `liberado-cost delegation-cost` / `provenance-ratio` in PR #63), which ranked the known seam conversation first at 29.4x against a median of 0.9x. **Evals decision** recorded in [`evals_implementation.md`](future-work/research/evals_implementation.md): no harness until there is a free oracle. |
 | **2026-08-02** | **Round 2's five deliverables** (PRs #33–#37): **correlation coverage** (the cost instrument's own 8% blind spot, incl. the approval path); **turn-aware cost** + `token_usage_total` corrected from a lifetime sum to context occupancy; **Telegram parity** — `/model` scopes to the sticky chat, `/stop`, turn-lifecycle replies; **goal sessions in the shutdown drain**, parked durably on disk rather than left `Running`; and **Tier 3 P7 restart survival**, passing live. Every branch shipped a test claiming more than it checked — the four mechanisms and rules R6–R8 are in [round 3](future-work/parallel-deliverables-2026-08-round-3.md). |
@@ -177,4 +189,10 @@ Two carried-forward limitations worth knowing before building on this:
 
 See [`spec/architecture/sessions.md`](spec/architecture/sessions.md) for the session model history pointers.
 
-**Last updated:** 2026-08-06.
+**Last updated:** 2026-08-10.
+
+> **A note on trusting this file.** On 2026-08-10 four items listed as open were found already
+> shipped (ACP P0.1, P0.2/P0.3, P4.2, and TE3) — some for weeks. Items move to *Recently landed*
+> only when someone remembers, and picking a task from a roadmap row without checking the code
+> wastes a dispatch. **Verify against the code before you start.** If you find another stale row,
+> correct it in the same pass; that is cheaper than the next person rediscovering it.
