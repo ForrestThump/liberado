@@ -131,6 +131,15 @@ Two carried-forward limitations worth knowing before building on this:
 
 ### Cross-cutting
 
+- **Cadence-triggered maintenance agents** (idea, 2026-08-10) — dispatch an agent automatically
+  after N commits or N merged PRs, bound to a named skill (doc updates, test-coverage sweeps,
+  mutation runs, architecture critique), so periodic work reaches the PR pipeline without anyone
+  remembering to ask. **Most of the spine already exists** — `EventSource`, the `Event` envelope,
+  `GoalSessionHub::start_background`, `DomainHint::Coding`, `Skills/`, the fan-out cap — so the gap
+  is a `RepoEventSource`, a trigger→skill binding, and durable counter state. Audit, the
+  self-triggering hazard, and the reason **not to build it yet**:
+  [`cadence-triggered-maintenance-agents.md`](future-work/cadence-triggered-maintenance-agents.md).
+
 - **External dependency audit** — audit all `Cargo.toml` entries across crates for unnecessary duplication, unused deps, version drift, and opportunities to share/slim. Goal: reduce compile wall-clock without breaking anything.
 - **Modularity** remains the enabler: [`spec/architecture/modularity.md`](spec/architecture/modularity.md). Hot-path **module splits** landed (server API, daemon, config-loader model, executor budget).
 - **A4 dual-store hub tests** (2026-07-23): list / cancel / park→resume / rehydrate via real `GoalSessionHub` on production `SessionStore` — `crates/session-store/tests/hub_dual_store.rs` (see [`spec/architecture/failure-modes.md`](spec/architecture/failure-modes.md) §1).
