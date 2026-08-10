@@ -13,9 +13,11 @@ mod intake_session;
 mod live;
 mod planner;
 mod progress;
+pub mod remediation;
 mod repair_feedback;
 mod roles;
 mod runtime;
+pub mod session_critic;
 mod session_pack;
 mod trace;
 mod verify_pipeline;
@@ -32,6 +34,7 @@ pub use liberado_coder_sandbox::{Checkpoint, CheckpointError, ShadowGit};
 /// Durable coding session workspace path (`coding-worktrees/<session_id>`).
 pub use liberado_coder_tools::durable_session_workspace;
 pub use live::with_live_events;
+pub use roles::COLD_DIFF_REVIEWER_PROMPT;
 pub use session_pack::CodingSessionPack;
 
 use std::path::Path;
@@ -103,6 +106,20 @@ impl CoderBackend for LiberadoLoopBackend {
     }
 
     async fn run(&self, request: CoderRunRequest) -> Result<CoderRunResult, CoderError> {
+        // The attempt loop is separated from what comes after it so the session critic reads the
+        // *whole* run — including every repair attempt. The repair turns are the ones worth
+        // reading: an agent answering review feedback is under the most pressure to say "good
+        // catch, fixed" and move on, which is exactly the shape of the failure this looks for.
+        let config = request.config.clone();
+        let mut result = self.run_attempts(request).await?;
+        self.review_session_after_run(&config, &mut result).await;
+        Ok(result)
+    }
+}
+
+impl LiberadoLoopBackend {
+    /// Everything the run does before any post-run review: plan, work, verify, gate, repair.
+    async fn run_attempts(&self, request: CoderRunRequest) -> Result<CoderRunResult, CoderError> {
         let max_attempts = request.config.progress.max_attempts.max(1);
         let mut feedback = request.prior_feedback.clone();
         let mut last_retryable: Option<CoderError> = None;
@@ -119,6 +136,10 @@ impl CoderBackend for LiberadoLoopBackend {
         // exists to break.
         let mut consecutive_refutations: u32 = 0;
         let mut strategist_directive = request.strategist_directive.clone();
+        // Every diff-critic issue raised across every attempt, with the attempt that raised it.
+        // What became of each is derived at the end by `derive_dispositions`; the loop only
+        // records, because "was this fixed" is not answerable until the run stops.
+        let mut raised: Vec<(u32, String)> = Vec::new();
 
         for attempt_offset in 0..max_attempts {
             let mut attempt_request = request.clone();
@@ -143,6 +164,7 @@ impl CoderBackend for LiberadoLoopBackend {
                             ));
                             feedback.push(repair_feedback::format_error_feedback(&err));
                             last_retryable = Some(err);
+                            raised.extend(issues.iter().map(|i| (attempt_offset, i.clone())));
 
                             // Non-convergence check. Consult the strategist only once the same
                             // kind of refusal has repeated `strategist_after` times — a run that
@@ -187,6 +209,8 @@ impl CoderBackend for LiberadoLoopBackend {
                         }
                         Some(issues) => {
                             let mut failed = result;
+                            raised.extend(issues.iter().map(|i| (attempt_offset, i.clone())));
+                            failed.diff_findings = derive_dispositions(&raised, &issues);
                             failed.outcome = Outcome::Failed;
                             if !failed.summary.contains("critic") {
                                 failed.summary = format!(
@@ -197,7 +221,15 @@ impl CoderBackend for LiberadoLoopBackend {
                             }
                             return Ok(failed);
                         }
-                        None => return Ok(result),
+                        None => {
+                            // The final attempt was approved, so every issue ever raised was
+                            // answered. Recording them as fixed is not bookkeeping: it is what
+                            // lets the report say "four raised, four resolved" instead of
+                            // silently discarding a reviewer's work.
+                            let mut result = result;
+                            result.diff_findings = derive_dispositions(&raised, &[]);
+                            return Ok(result);
+                        }
                     }
                 }
                 Err(err) if is_retryable(&err) && attempt_offset + 1 < max_attempts => {
@@ -213,6 +245,112 @@ impl CoderBackend for LiberadoLoopBackend {
             CoderError::Backend("coding attempts exhausted without a result".to_string())
         }))
     }
+
+    /// Read the run's narration and attach any findings to the result.
+    ///
+    /// Deliberately swallows its own errors. This is a post-hoc review of finished work: a
+    /// reviewer that failed to answer must not turn a completed run into a failed one, and it
+    /// must not report a clean review either — a failed call leaves `session_findings` empty and
+    /// logs, which reads as "not reviewed", not as "reviewed and fine".
+    async fn review_session_after_run(
+        &self,
+        config: &liberado_coder_core::CoderRunConfig,
+        result: &mut CoderRunResult,
+    ) {
+        if !config.session_critic.enabled {
+            return;
+        }
+        let Some(trace) = result.trace_path.clone() else {
+            tracing::warn!("session critic is enabled but the run wrote no trace; skipping");
+            return;
+        };
+        let events = match tokio::fs::read_to_string(&trace).await {
+            Ok(raw) => match serde_json::from_str::<liberado_coder_core::CoderTrace>(&raw) {
+                Ok(t) => t.events,
+                Err(e) => {
+                    tracing::warn!(error = %e, "session critic: unreadable trace");
+                    return;
+                }
+            },
+            Err(e) => {
+                tracing::warn!(error = %e, path = %trace, "session critic: cannot read trace");
+                return;
+            }
+        };
+        let role = config
+            .session_critic
+            .role
+            .clone()
+            .unwrap_or_else(|| config.critic.clone());
+        let visibility = if config.session_critic.include_tool_names {
+            session_critic::ToolVisibility::NamesOnly
+        } else {
+            session_critic::ToolVisibility::TextOnly
+        };
+        // The reviewer needs a request to name the task; the trace's own copy is the right one.
+        let request = liberado_coder_core::CoderRunRequest {
+            task: liberado_coder_core::CoderTask::new("session-review", result.summary.clone()),
+            workspace: liberado_coder_core::WorkspaceRef::new("", "HEAD"),
+            config: config.clone(),
+            attempt: 0,
+            prior_feedback: Vec::new(),
+            strategist_directive: None,
+        };
+        match session_critic::review_session(
+            self.providers.as_ref(),
+            &request,
+            &role,
+            &events,
+            Some(result.summary.as_str()),
+            visibility,
+        )
+        .await
+        {
+            Ok(review) => {
+                if !review.is_clean() {
+                    tracing::info!(
+                        count = review.findings.len(),
+                        "session critic raised findings"
+                    );
+                }
+                result.session_findings = review.findings;
+            }
+            Err(e) => tracing::warn!(error = %e, "session critic failed; run left unreviewed"),
+        }
+    }
+}
+
+/// Work out what happened to each diff-critic issue over the life of a run.
+///
+/// An issue raised on one attempt and absent from the final verdict was answered; an issue in the
+/// final verdict is still standing. Deduplicated by text, keeping the earliest attempt that
+/// raised it, because the same complaint restated three times is one complaint.
+///
+/// String equality is the matching rule, and it is imperfect: a reviewer that rewords the same
+/// objection produces a second entry. That errs toward showing a reader *more* than happened,
+/// which is the right direction for a mechanism whose whole purpose is that findings do not get
+/// buried.
+pub(crate) fn derive_dispositions(
+    raised: &[(u32, String)],
+    final_issues: &[String],
+) -> Vec<liberado_coder_core::DiffFinding> {
+    use liberado_coder_core::{DiffFinding, Disposition};
+    let mut out: Vec<DiffFinding> = Vec::new();
+    for (attempt, issue) in raised {
+        if out.iter().any(|f| &f.issue == issue) {
+            continue;
+        }
+        out.push(DiffFinding {
+            issue: issue.clone(),
+            disposition: if final_issues.contains(issue) {
+                Disposition::Outstanding
+            } else {
+                Disposition::Fixed
+            },
+            first_seen_attempt: *attempt,
+        });
+    }
+    out
 }
 
 fn is_retryable(err: &CoderError) -> bool {
@@ -592,6 +730,9 @@ impl LiberadoLoopBackend {
             critic_verdict,
             gate_votes,
             trace_path: None,
+            diff_findings: Vec::new(),
+            session_findings: Vec::new(),
+            remediation: None,
             diagnostics: json!({
                 "artifacts_reported": report.artifacts,
                 "attempt": request.attempt,
@@ -712,6 +853,7 @@ mod tests {
                 path_policy: PathPolicy::default(),
                 progress: ProgressPolicy::default(),
                 hashline: liberado_coder_core::HashlineConfig::default(),
+                session_critic: Default::default(),
             },
             attempt: 0,
             prior_feedback: Vec::new(),
@@ -1770,5 +1912,72 @@ __main__) intact.\n"
                 output_max_bytes: None,
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod disposition_tests {
+    use super::derive_dispositions;
+    use liberado_coder_core::Disposition;
+
+    fn raised(pairs: &[(u32, &str)]) -> Vec<(u32, String)> {
+        pairs.iter().map(|(a, s)| (*a, s.to_string())).collect()
+    }
+
+    /// An issue raised early and gone by the end was answered. Reporting it as open would train
+    /// a reader to skip the section, which is the only way this mechanism can actually fail.
+    #[test]
+    fn an_issue_absent_from_the_final_verdict_is_fixed() {
+        let findings = derive_dispositions(&raised(&[(0, "the test does not bind")]), &[]);
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].disposition, Disposition::Fixed);
+        assert_eq!(findings[0].first_seen_attempt, 0);
+    }
+
+    /// The case the whole feature exists for: a finding still standing when the run filed.
+    #[test]
+    fn an_issue_in_the_final_verdict_is_outstanding() {
+        let findings = derive_dispositions(
+            &raised(&[(0, "still broken")]),
+            &["still broken".to_string()],
+        );
+        assert_eq!(findings[0].disposition, Disposition::Outstanding);
+    }
+
+    /// A run that answered two of three complaints must show exactly that, not "clean" and not
+    /// "three problems".
+    #[test]
+    fn a_mixed_run_reports_both_kinds() {
+        let findings =
+            derive_dispositions(&raised(&[(0, "a"), (0, "b"), (1, "c")]), &["c".to_string()]);
+        let outstanding: Vec<&str> = findings
+            .iter()
+            .filter(|f| f.disposition == Disposition::Outstanding)
+            .map(|f| f.issue.as_str())
+            .collect();
+        assert_eq!(outstanding, vec!["c"]);
+        assert_eq!(findings.len(), 3);
+    }
+
+    /// The same complaint restated across attempts is one complaint, dated to when it first
+    /// appeared — otherwise a stubborn issue inflates into a list and looks like several.
+    #[test]
+    fn a_repeated_issue_is_one_finding_dated_to_its_first_appearance() {
+        let findings = derive_dispositions(
+            &raised(&[
+                (0, "same complaint"),
+                (1, "same complaint"),
+                (2, "same complaint"),
+            ]),
+            &["same complaint".to_string()],
+        );
+        assert_eq!(findings.len(), 1, "got {findings:?}");
+        assert_eq!(findings[0].first_seen_attempt, 0);
+        assert_eq!(findings[0].disposition, Disposition::Outstanding);
+    }
+
+    #[test]
+    fn a_run_with_no_findings_produces_none() {
+        assert!(derive_dispositions(&[], &[]).is_empty());
     }
 }

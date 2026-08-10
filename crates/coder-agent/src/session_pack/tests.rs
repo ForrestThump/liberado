@@ -159,6 +159,9 @@ impl CoderBackend for ScriptedBackend {
             critic_verdict: None,
             gate_votes: Vec::new(),
             trace_path: None,
+            diff_findings: Vec::new(),
+            session_findings: Vec::new(),
+            remediation: None,
             diagnostics: serde_json::json!({}),
         })
     }
@@ -270,6 +273,9 @@ impl CoderBackend for StuckBackend {
             critic_verdict: None,
             gate_votes: Vec::new(),
             trace_path: None,
+            diff_findings: Vec::new(),
+            session_findings: Vec::new(),
+            remediation: None,
             diagnostics: serde_json::json!({}),
         })
     }

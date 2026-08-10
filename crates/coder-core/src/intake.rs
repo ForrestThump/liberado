@@ -1042,6 +1042,7 @@ mod tests {
                 path_policy: Default::default(),
                 progress: Default::default(),
                 hashline: Default::default(),
+                session_critic: crate::SessionCriticConfig::default(),
             },
             attempt: 0,
             prior_feedback: vec![],

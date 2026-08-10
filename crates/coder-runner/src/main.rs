@@ -173,9 +173,13 @@ async fn run_headless(args: HeadlessArgs) -> Result<(), String> {
         Some(task_context)
     };
 
+    // Derive a task id once so the preservation branch carries information. Both consumers
+    // below take this value; see `derive_task_id` for why neither may hold a literal.
+    let task_id = derive_task_id(session_id.as_deref(), &prompt);
+
     let request = CoderRunRequest {
         task: CoderTask {
-            id: "task-1".to_string(),
+            id: task_id.clone(),
             description: prompt.clone(),
             context: task_context,
             success_criteria: Vec::new(),
@@ -250,6 +254,7 @@ async fn run_headless(args: HeadlessArgs) -> Result<(), String> {
                 enabled: true,
                 hash_length: 7,
             },
+            session_critic: tuning.session_critic.clone(),
         },
         attempt: 0,
         prior_feedback: Vec::new(),
@@ -265,7 +270,24 @@ async fn run_headless(args: HeadlessArgs) -> Result<(), String> {
     };
 
     let backend = LiberadoLoopBackend::with_provider_factory(providers);
-    let result = backend.run(request).await.map_err(|error| {
+
+    // Race the backend against a termination signal so an interrupted run still commits what it
+    // produced. The race lives in `run_or_preserve` rather than inline, so it can be tested with
+    // a signal the test controls; see that function for what this does and does not catch.
+    let result = match run_or_preserve(
+        backend.run(request),
+        wait_for_termination_signal(),
+        &workspace,
+        &task_id,
+        push_enabled(),
+    )
+    .await
+    {
+        RunEnd::Finished(result) => result,
+        RunEnd::Terminated => return Err("task terminated by signal".to_string()),
+    };
+
+    let result = result.map_err(|error| {
         eprintln!("CoderError: {error:?}");
         format!("coder backend failed: {error}")
     })?;
@@ -278,7 +300,7 @@ async fn run_headless(args: HeadlessArgs) -> Result<(), String> {
     // files in a scratch directory, so deleting that directory destroyed it — which is exactly what
     // happened to one completed run. A commit is durable even when the workspace is a git worktree
     // that later disappears, because the commit and the branch ref go to the *shared* object store.
-    if let Err(error) = preserve_work(&workspace, "task-1", push_enabled()).await {
+    if let Err(error) = preserve_work(&workspace, &task_id, push_enabled()).await {
         tracing::warn!(%error, "preserving the run's work failed; the workspace is still on disk");
     }
 
@@ -849,6 +871,118 @@ fn resolve_trace_dir(workspace: &Path, configured: Option<&str>) -> String {
     }
 }
 
+/// Slugify a prompt into a short label for the preservation branch.
+///
+/// `preserve_work` does its own alphanumeric sanitization; this only produces a
+/// readable prefix so the branch name carries a hint of what the run was about.
+fn slugify_prompt(prompt: &str) -> String {
+    let slug: String = prompt
+        .chars()
+        .take(50)
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect();
+    slug.trim_matches('-').to_string()
+}
+
+/// The label a run's preservation branch is built from.
+///
+/// A caller-supplied `--session-id` is already a meaningful name and is used verbatim; otherwise
+/// the prompt is slugified, so `agent/Fix-the-parser-1786332331` says what the run was about.
+/// Both call sites previously held the same three-character literal, which made every branch in
+/// the repo's history indistinguishable from every other.
+///
+/// A prompt with no ASCII alphanumerics slugifies to the empty string. That is left as-is rather
+/// than substituted: `preserve_work` still produces a valid timestamped branch, and a silent
+/// fallback label would recreate the "this branch says nothing" problem in a new disguise.
+///
+/// Extracted rather than written inline because a derivation buried in a 200-line `async fn` can
+/// only be tested by copying it into the test — and a test that re-implements its subject passes
+/// whatever the subject does. `no_task_id_literal_survives_in_production_code` is what holds the
+/// *call sites*; this function is what makes the rule testable at all.
+fn derive_task_id(session_id: Option<&str>, prompt: &str) -> String {
+    match session_id {
+        Some(id) => id.to_string(),
+        None => slugify_prompt(prompt),
+    }
+}
+
+/// Which of the two racers in [`run_or_preserve`] finished first.
+enum RunEnd<T> {
+    /// The run completed on its own; `preserve_work` has *not* been called.
+    Finished(T),
+    /// A termination signal arrived first and the work was preserved.
+    Terminated,
+}
+
+/// Run `run` to completion, but if `signal` fires first, commit the workspace and give up.
+///
+/// The point is the ordering: an interrupted run's output lives only as dirty files in a
+/// directory that is about to be deleted, so the commit has to happen before the process exits.
+///
+/// `signal` is a parameter rather than a direct call to [`wait_for_termination_signal`] purely so
+/// this can be tested — passing a future the test fires itself is the only way to observe the
+/// preserve-then-give-up branch without sending a real signal to the test runner.
+///
+/// **What this catches, and what it does not.** It catches a signal the process can actually
+/// receive: Ctrl+C at a terminal, or `SIGTERM` from a supervisor on Unix. It does **not** catch
+/// `SIGKILL`, and on Windows it does not catch `TerminateProcess` — which is what `taskkill /F`,
+/// Python's `subprocess` timeout handling, and our own `Child::start_kill` all use. Nothing in
+/// this repo currently sends the runner a catchable signal, so on Windows this is insurance
+/// rather than an active code path. Surviving a hard kill needs the workspace committed *during*
+/// the run rather than at the end of it, which is a different fix.
+async fn run_or_preserve<T, R, S>(
+    run: R,
+    signal: S,
+    workspace: &Path,
+    task_id: &str,
+    push: bool,
+) -> RunEnd<T>
+where
+    R: std::future::Future<Output = T>,
+    S: std::future::Future<Output = ()>,
+{
+    tokio::select! {
+        value = run => RunEnd::Finished(value),
+        _ = signal => {
+            tracing::info!("termination signal received; preserving work before exit");
+            if let Err(error) = preserve_work(workspace, task_id, push).await {
+                tracing::warn!(
+                    %error,
+                    "preserving the run's work failed; the workspace is still on disk"
+                );
+            }
+            RunEnd::Terminated
+        }
+    }
+}
+
+/// Await OS termination signals (Ctrl+C; SIGTERM on Unix).
+///
+/// Follows the cross-platform pattern in `crates/server/src/shutdown.rs`:
+/// `tokio::signal::unix::SignalKind::terminate` under `#[cfg(unix)]`,
+/// `tokio::signal::ctrl_c` otherwise. Windows is a first-class target here —
+/// a unix-only handler will not compile on CI.
+async fn wait_for_termination_signal() {
+    #[cfg(unix)]
+    {
+        let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("install SIGTERM handler");
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {
+                tracing::info!("received Ctrl+C");
+            }
+            _ = sigterm.recv() => {
+                tracing::info!("received SIGTERM");
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = tokio::signal::ctrl_c().await;
+        tracing::info!("received Ctrl+C");
+    }
+}
+
 /// Commit whatever the run produced to a branch, and optionally push it.
 ///
 /// Committing is unconditional and local. A worktree's commits and its branch ref are written to
@@ -1181,5 +1315,266 @@ mod verifier_tests {
             ids(&specs)
         );
         assert!(ids(&specs).iter().any(|id| id == "nonempty-diff"));
+    }
+}
+
+#[cfg(test)]
+mod preserve_work_tests {
+    use super::*;
+    use std::time::Duration;
+
+    /// `GIT_CONFIG_GLOBAL` is process-global and `cargo test` runs this binary's tests
+    /// concurrently, so a test that sets it must exclude every other test that shells out to git.
+    /// Same purpose as `ENV_LOCK` in `coder-sandbox/src/checkpoint.rs`, but `tokio::sync` rather
+    /// than `std::sync`: the guard has to be held across an `await`, and a blocking guard there
+    /// stalls the whole runtime thread — `clippy::await_holding_lock` rejects it outright.
+    /// `coder-agent`'s `DATA_DIR_ENV_LOCK` is the same choice for the same reason.
+    static ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+    /// Minimal git repo with one committed file. Identity is passed with `-c` rather than
+    /// configured — `user.email`/`user.name` exist on every dev machine and on no CI runner.
+    fn temp_repo() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let p = dir.path().to_string_lossy().to_string();
+        let run = |args: &[&str]| {
+            let out = liberado_common::process::std_command("git")
+                .args(args)
+                .output()
+                .expect("git");
+            assert!(
+                out.status.success(),
+                "git {args:?} failed: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        };
+        run(&["-C", &p, "init", "-q"]);
+        std::fs::write(dir.path().join("seed.txt"), "seed\n").expect("seed");
+        run(&["-C", &p, "add", "-A"]);
+        run(&[
+            "-C",
+            &p,
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@t",
+            "commit",
+            "-q",
+            "-m",
+            "seed",
+        ]);
+        dir
+    }
+
+    fn git(repo: &Path, args: &[&str]) -> String {
+        let repo_s = repo.to_string_lossy().to_string();
+        let mut argv: Vec<&str> = vec!["-C", &repo_s];
+        argv.extend_from_slice(args);
+        let out = liberado_common::process::std_command("git")
+            .args(&argv)
+            .output()
+            .expect("git");
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    }
+
+    fn is_dirty(repo: &Path) -> bool {
+        !git(repo, &["status", "--porcelain"]).is_empty()
+    }
+
+    // ── derive_task_id ────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn a_session_id_is_used_verbatim() {
+        assert_eq!(
+            derive_task_id(Some("my-recurring-task"), "this prompt is ignored"),
+            "my-recurring-task"
+        );
+    }
+
+    #[test]
+    fn without_a_session_id_the_prompt_becomes_the_label() {
+        let id = derive_task_id(None, "Fix: compile error in main.rs");
+        assert_eq!(
+            id, "Fix--compile-error-in-main-rs",
+            "the label must be a slug of the prompt, not a constant"
+        );
+    }
+
+    #[test]
+    fn a_long_prompt_is_capped_and_never_ends_in_a_separator() {
+        let id = derive_task_id(None, &"word ".repeat(40));
+        assert!(id.len() <= 50, "must be capped, got {} chars", id.len());
+        assert!(
+            !id.ends_with('-') && !id.starts_with('-'),
+            "a trailing separator produces branches like `agent/word--1786332331`: {id:?}"
+        );
+    }
+
+    /// Two different prompts must not collide on one label — the whole point of the change.
+    #[test]
+    fn different_prompts_produce_different_labels() {
+        assert_ne!(
+            derive_task_id(None, "add a --verbose flag"),
+            derive_task_id(None, "remove the --verbose flag"),
+        );
+    }
+
+    /// The literal this change exists to delete must not come back at either call site.
+    ///
+    /// A unit test on `derive_task_id` cannot catch that: reverting `CoderTask { id }` to
+    /// `"task-1"` leaves the helper correct and every other test in this file green. That exact
+    /// mutation was run against the first version of this module and survived it. Scanning the
+    /// source is crude, and it is the only check here that binds the call sites.
+    ///
+    /// Comment lines are exempt so the surrounding prose can name the literal it forbids.
+    #[test]
+    fn no_task_id_literal_survives_in_production_code() {
+        let source = include_str!("main.rs");
+        let cut = source
+            .lines()
+            .position(|l| l.contains("#[cfg(test)]"))
+            .unwrap_or(usize::MAX);
+        let offenders: Vec<String> = source
+            .lines()
+            .take(cut)
+            .enumerate()
+            .filter(|(_, l)| !l.trim_start().starts_with("//"))
+            .filter(|(_, l)| l.contains("\"task-1\""))
+            .map(|(i, l)| format!("main.rs:{}: {}", i + 1, l.trim()))
+            .collect();
+        assert!(
+            offenders.is_empty(),
+            "every run's branch was `agent/task-1-<epoch>` because of this literal; \
+             derive the id instead:\n{}",
+            offenders.join("\n")
+        );
+    }
+
+    // ── run_or_preserve ───────────────────────────────────────────────────────────────────
+
+    /// A signal mid-run must commit the workspace before giving up.
+    ///
+    /// The run future never completes, so a version that simply awaits the backend hangs here;
+    /// the outer timeout turns that into a named failure instead of a stalled suite.
+    #[tokio::test]
+    async fn a_signal_commits_the_work_and_ends_the_run() {
+        let repo = temp_repo();
+        std::fs::write(repo.path().join("work.txt"), "saved-on-term\n").expect("write");
+
+        let end = tokio::time::timeout(
+            Duration::from_secs(30),
+            run_or_preserve(
+                std::future::pending::<u8>(),
+                std::future::ready(()),
+                repo.path(),
+                "signal-test",
+                false,
+            ),
+        )
+        .await
+        .expect("the signal must end the run; it waited for a run that never finishes");
+
+        assert!(
+            matches!(end, RunEnd::Terminated),
+            "a signal must report termination, not a completed run"
+        );
+        assert!(
+            !is_dirty(repo.path()),
+            "a killed run's work must be committed, not left dirty in a doomed directory"
+        );
+        assert!(
+            git(repo.path(), &["branch", "--show-current"]).contains("signal-test"),
+            "the preserved branch must carry the task id"
+        );
+    }
+
+    /// The ordinary path must not preserve anything here — the caller does that afterwards, and
+    /// committing twice would strand the run's output on a branch it never returns to.
+    #[tokio::test]
+    async fn a_run_that_finishes_first_is_left_alone() {
+        let repo = temp_repo();
+        std::fs::write(repo.path().join("work.txt"), "still working\n").expect("write");
+
+        let end = run_or_preserve(
+            std::future::ready(7u8),
+            std::future::pending::<()>(),
+            repo.path(),
+            "finished-test",
+            false,
+        )
+        .await;
+
+        assert!(
+            matches!(end, RunEnd::Finished(7)),
+            "the run's own value must be returned untouched"
+        );
+        assert!(
+            is_dirty(repo.path()),
+            "the signal branch must not run when the backend wins the race"
+        );
+        assert!(
+            !git(repo.path(), &["branch", "--show-current"]).starts_with("agent/"),
+            "no preservation branch may be created on the ordinary path"
+        );
+    }
+
+    // ── preserve_work ─────────────────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn the_branch_name_carries_the_supplied_id() {
+        let repo = temp_repo();
+        std::fs::write(repo.path().join("work.txt"), "output\n").expect("write");
+
+        preserve_work(repo.path(), "fix-compile-error", false)
+            .await
+            .expect("preserve_work must succeed");
+
+        let current = git(repo.path(), &["branch", "--show-current"]);
+        assert!(
+            current.contains("fix-compile-error"),
+            "branch '{current}' must name the task, not a constant"
+        );
+        assert!(!is_dirty(repo.path()), "the tree must be clean afterwards");
+    }
+
+    #[tokio::test]
+    async fn a_clean_worktree_produces_no_commit() {
+        let repo = temp_repo();
+        assert!(!is_dirty(repo.path()), "precondition: tree must be clean");
+
+        preserve_work(repo.path(), "clean-test", false)
+            .await
+            .expect("a clean tree is not an error");
+
+        assert!(
+            !git(repo.path(), &["branch", "--show-current"]).starts_with("agent/"),
+            "an empty commit on a throwaway branch is noise, not preservation"
+        );
+    }
+
+    /// The unattended case: no global git identity, which is every CI runner.
+    #[tokio::test]
+    async fn a_dirty_worktree_is_committed_with_no_global_git_identity() {
+        let _guard = ENV_LOCK.lock().await;
+        let repo = temp_repo();
+        std::fs::write(repo.path().join("work.txt"), "agent output\n").expect("write");
+
+        let empty_cfg = tempfile::NamedTempFile::new().expect("cfg");
+        let prior = std::env::var_os("GIT_CONFIG_GLOBAL");
+        // SAFETY: ENV_LOCK excludes every other git-touching test in this binary, and the
+        // previous value is restored below rather than blindly removed.
+        unsafe { std::env::set_var("GIT_CONFIG_GLOBAL", empty_cfg.path()) };
+
+        let result = preserve_work(repo.path(), "no-identity", false).await;
+
+        // SAFETY: same lock; restores exactly what was there before.
+        unsafe {
+            match prior {
+                Some(v) => std::env::set_var("GIT_CONFIG_GLOBAL", v),
+                None => std::env::remove_var("GIT_CONFIG_GLOBAL"),
+            }
+        }
+
+        result.expect("an unattended run must commit without ambient git identity");
+        assert!(!is_dirty(repo.path()), "the tree must be clean afterwards");
     }
 }
