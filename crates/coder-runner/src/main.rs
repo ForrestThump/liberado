@@ -196,22 +196,18 @@ async fn run_headless(args: HeadlessArgs) -> Result<(), String> {
             coder: CoderRoleConfig {
                 model,
                 prompt_path: None,
-                prompt: Some(
-                    "You are Liberado's coding agent. Edit files in the workspace to complete \
-                     the task. Use these tools: \
-                     read_file, write_file (auto-creates parent directories), edit_file, \
-                     apply_patch, hashline_edit (line-anchored edits — use read_file first \
-                     to get [path#TAG] headers, then hashline_edit with PUT/CUT/REM ops), \
-                     search_text, list_files, list_symbols, \
-                     git_status, git_diff, git_log, git_branch, git_commit, git_push, \
-                     git_fetch, git_merge, run_command, run_command_background (start long \
-                     builds/tests without blocking; use check_background to poll for results), \
-                     validate. \
-                     Git safe.directory is configured automatically. write_file creates \
-                     missing directories. You have TWO attempts — if the first fails, \
-                     you will see feedback and can retry. When done, call submit_report."
-                        .to_string(),
-                ),
+                // Was a 900-character literal duplicating `prompts/coder/coder.md`, which already
+                // existed and already claimed to be the coder's prompt. Two texts, no way to tell which
+                // a run used, and retuning either cost a rebuild. One source now, read from disk when it
+                // is there and baked in when it is not.
+                prompt: Some(liberado_coder_core::prompts::load(
+                    Some(&liberado_coder_core::prompts::dir_for(
+                        tuning.prompt_dir.as_deref(),
+                        &workspace.to_string_lossy(),
+                    )),
+                    liberado_coder_core::prompts::CODER_FILE,
+                    liberado_coder_core::prompts::CODER,
+                )),
                 temperature: None,
                 max_tokens: None,
                 max_turns: Some(max_turns),
@@ -255,6 +251,7 @@ async fn run_headless(args: HeadlessArgs) -> Result<(), String> {
             // the same tuning now, and those values are the default.
             hashline: tuning.hashline.clone(),
             session_critic: tuning.session_critic.clone(),
+            prompt_dir: tuning.prompt_dir.clone(),
         },
         attempt: 0,
         prior_feedback: Vec::new(),

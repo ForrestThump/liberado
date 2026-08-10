@@ -2,6 +2,7 @@
 
 mod hashline;
 pub mod repo_map;
+mod text_view;
 
 use std::{
     collections::{HashMap, VecDeque},
@@ -515,9 +516,35 @@ impl CodingToolRuntime {
             /// Required to replace a file that already has content.
             #[serde(default)]
             overwrite: bool,
+            /// Add to the end of the file instead of replacing it.
+            #[serde(default)]
+            append: bool,
         }
         let args: Args = parse_args(args)?;
         let path = self.rel_path(&args.path, true)?;
+
+        if args.append {
+            // The move both failed runs were actually trying to make. "Add a struct to this file"
+            // is an append, and with no way to express it the model reached for a whole-file
+            // write and destroyed 3,921 lines. An append cannot delete anything.
+            if args.overwrite {
+                return Err(ToolError::BadRequest(
+                    "append and overwrite are opposites; pass only one.".to_string(),
+                ));
+            }
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent).map_err(fs_err)?;
+            }
+            // The file's own shape is preserved: appending LF text to a CRLF file would leave it
+            // mixed, and a mixed file is one the edit tools then refuse to normalize.
+            let existing = std::fs::read_to_string(&path).unwrap_or_default();
+            let view = text_view::to_model_view(&existing);
+            let addition = text_view::normalize_anchor(&args.content, view.ending);
+            let combined = format!("{}{addition}", view.text);
+            let restored = text_view::materialize(&combined, view.ending, view.bom);
+            std::fs::write(&path, restored.as_bytes()).map_err(fs_err)?;
+            return Ok(json!({ "path": args.path, "written": true, "appended": true }));
+        }
 
         if !args.overwrite {
             // Byte length, not a line count or a percentage: any threshold is a number someone
@@ -531,7 +558,7 @@ impl CodingToolRuntime {
                     .map(|c| c.lines().count())
                     .unwrap_or(0);
                 return Err(ToolError::BadRequest(format!(
-                    "{} already exists with {existing_lines} lines and write_file would replace                      all of it. To change part of a file use edit_file, hashline_edit or                      apply_patch. To replace it deliberately, pass \"overwrite\": true.",
+                    "{} already exists with {existing_lines} lines and write_file would replace                      all of it. To add to the end pass \"append\": true. To change part of it use                      edit_file, hashline_edit or apply_patch. To replace it deliberately, pass                      \"overwrite\": true.",
                     args.path
                 )));
             }
@@ -544,31 +571,68 @@ impl CodingToolRuntime {
         Ok(json!({ "path": args.path, "written": true }))
     }
 
+    /// Replace an exact span of text in one file.
+    ///
+    /// Matching happens in the model view ([`text_view`]), not against raw bytes, so an LF
+    /// anchor matches a CRLF file and a BOM does not shift line one. Both sides are normalized;
+    /// the file's own shape is restored on write.
+    ///
+    /// Every error names the next action. "old text was not found" is correct and useless: the
+    /// model's remaining move is to re-read, and a run that cannot infer that spends its turns
+    /// guessing variants of the same anchor. That is measured, not supposed — a dispatched run
+    /// burned 15 of 25 edit calls on it.
     async fn edit_file(&self, args: Value) -> Result<Value, ToolError> {
         #[derive(Deserialize)]
         struct Args {
             path: String,
             old: String,
             new: String,
+            /// Replace every occurrence instead of failing when the anchor is ambiguous.
+            #[serde(default)]
+            replace_all: bool,
         }
         let args: Args = parse_args(args)?;
         if args.old.is_empty() {
-            return Err(ToolError::BadRequest("old must not be empty".to_string()));
+            return Err(ToolError::BadRequest(
+                "old must not be empty. To create a file or replace one whole, use write_file."
+                    .to_string(),
+            ));
+        }
+        if args.old == args.new {
+            // Silently succeeding here reports an edit that changed nothing, which is how a run
+            // convinces itself it has made progress.
+            return Err(ToolError::BadRequest(
+                "old and new are identical, so this edit would change nothing.".to_string(),
+            ));
         }
         let path = self.rel_path(&args.path, true)?;
-        let content = std::fs::read_to_string(&path).map_err(fs_err)?;
-        let count = content.matches(&args.old).count();
+        let raw = std::fs::read_to_string(&path).map_err(fs_err)?;
+        let view = text_view::to_model_view(&raw);
+        let old = text_view::normalize_anchor(&args.old, view.ending);
+        let new = text_view::normalize_anchor(&args.new, view.ending);
+
+        let count = view.text.matches(&old).count();
         if count == 0 {
-            return Err(ToolError::BadRequest("old text was not found".to_string()));
-        }
-        if count > 1 {
             return Err(ToolError::BadRequest(format!(
-                "old text matched {count} times; provide more context"
+                "old text was not found in {}. It must match the file exactly, including                  whitespace and indentation. The file may have changed since you last read it —                  read it again and take the anchor from that output.",
+                args.path
             )));
         }
-        let updated = content.replacen(&args.old, &args.new, 1);
-        std::fs::write(&path, updated.as_bytes()).map_err(fs_err)?;
-        Ok(json!({ "path": args.path, "replacements": 1 }))
+        if count > 1 && !args.replace_all {
+            return Err(ToolError::BadRequest(format!(
+                "old text matched {count} times in {}. Include more surrounding lines to make it                  unique, or pass \"replace_all\": true to change every occurrence.",
+                args.path
+            )));
+        }
+
+        let updated = if args.replace_all {
+            view.text.replace(&old, &new)
+        } else {
+            view.text.replacen(&old, &new, 1)
+        };
+        let restored = text_view::materialize(&updated, view.ending, view.bom);
+        std::fs::write(&path, restored.as_bytes()).map_err(fs_err)?;
+        Ok(json!({ "path": args.path, "replacements": count }))
     }
 
     async fn apply_patch(&self, args: Value) -> Result<Value, ToolError> {
@@ -1095,20 +1159,28 @@ impl ToolRuntime for CodingToolRuntime {
                         "overwrite": {
                             "type": "boolean",
                             "description": "Required to replace a file that already has content.                                             Omit it when creating a new file."
+                        },
+                        "append": {
+                            "type": "boolean",
+                            "description": "Add content to the end of the file instead of                                             replacing it. Use this to add a function, struct or                                             test to an existing file."
                         }
                     }
                 }),
             ),
             tool(
                 "edit_file",
-                "Replace one exact text span in a file.",
+                "Replace an exact text span in a file. This is the required tool for any change                  to part of an existing file, however small.",
                 json!({
                     "type": "object",
                     "required": ["path", "old", "new"],
                     "properties": {
                         "path": { "type": "string" },
                         "old": { "type": "string" },
-                        "new": { "type": "string" }
+                        "new": { "type": "string" },
+                        "replace_all": {
+                            "type": "boolean",
+                            "description": "Replace every occurrence. Without it an anchor that                                             matches more than once is rejected, so an edit cannot                                             silently hit the wrong place."
+                        }
                     }
                 }),
             ),
@@ -1830,6 +1902,217 @@ mod tests {
                     hash_length: HashlineConfig::HASH_LENGTH_MIN,
                 });
         (dir, runtime)
+    }
+
+    // ── edit reliability: the failure modes two dispatched runs actually hit ──────────────
+
+    /// The Windows case. `core.autocrlf` is on by default there, so a checkout holds `\r\n`
+    /// while every model emits `\n`. Matching raw bytes fails with "not found" and no error
+    /// message can explain why. The file must still be CRLF afterwards.
+    #[tokio::test]
+    async fn an_lf_anchor_edits_a_crlf_file_and_leaves_it_crlf() {
+        let (dir, runtime) = runtime();
+        std::fs::write(dir.path().join("crlf.rs"), "fn a() {}\r\nfn b() {}\r\n").unwrap();
+
+        runtime
+            .invoke_json(
+                "edit_file",
+                json!({"path": "crlf.rs", "old": "fn b() {}\n", "new": "fn c() {}\n"}),
+            )
+            .await
+            .expect("an LF anchor must match a CRLF file");
+
+        let after = std::fs::read_to_string(dir.path().join("crlf.rs")).unwrap();
+        assert_eq!(
+            after, "fn a() {}\r\nfn c() {}\r\n",
+            "the file's own line endings must survive the edit"
+        );
+    }
+
+    /// A BOM shifts every line-one anchor, and dropping it rewrites a file the edit never
+    /// intended to touch.
+    #[tokio::test]
+    async fn a_bom_neither_blocks_the_anchor_nor_disappears() {
+        let (dir, runtime) = runtime();
+        std::fs::write(dir.path().join("bom.rs"), "\u{feff}fn a() {}\n").unwrap();
+
+        runtime
+            .invoke_json(
+                "edit_file",
+                json!({"path": "bom.rs", "old": "fn a() {}", "new": "fn z() {}"}),
+            )
+            .await
+            .expect("a leading BOM must not hide line one from the model");
+
+        let after = std::fs::read_to_string(dir.path().join("bom.rs")).unwrap();
+        assert_eq!(after, "\u{feff}fn z() {}\n");
+    }
+
+    /// An ambiguous anchor is still rejected by default — that is the guard against editing the
+    /// wrong occurrence — but `replace_all` gives the model a way forward other than guessing.
+    #[tokio::test]
+    async fn replace_all_resolves_an_ambiguous_anchor() {
+        let (dir, runtime) = runtime();
+        std::fs::write(dir.path().join("d.rs"), "let x = old;\nlet y = old;\n").unwrap();
+
+        let err = runtime
+            .invoke_json(
+                "edit_file",
+                json!({"path": "d.rs", "old": "old", "new": "new"}),
+            )
+            .await
+            .expect_err("two matches must not be edited silently");
+        assert!(
+            err.to_string().contains("replace_all"),
+            "the error must name the way out, not just the problem: {err}"
+        );
+
+        let out = runtime
+            .invoke_json(
+                "edit_file",
+                json!({"path": "d.rs", "old": "old", "new": "new", "replace_all": true}),
+            )
+            .await
+            .expect("replace_all must be honoured");
+        assert_eq!(out["replacements"], 2);
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("d.rs")).unwrap(),
+            "let x = new;\nlet y = new;\n"
+        );
+    }
+
+    /// "old text was not found" is correct and useless. The model's only remaining move is to
+    /// re-read the file, and a run that cannot infer that spends its turns on variants of the
+    /// same wrong anchor — 15 of 25 edit calls in one dispatched run.
+    #[tokio::test]
+    async fn a_missing_anchor_tells_the_model_to_re_read() {
+        let (dir, runtime) = runtime();
+        std::fs::write(dir.path().join("e.rs"), "fn a() {}\n").unwrap();
+
+        let err = runtime
+            .invoke_json(
+                "edit_file",
+                json!({"path": "e.rs", "old": "fn nowhere() {}", "new": "x"}),
+            )
+            .await
+            .expect_err("a missing anchor is an error");
+        let message = err.to_string();
+        assert!(
+            message.contains("read it again"),
+            "the error must name the recovery action: {message}"
+        );
+        assert!(
+            message.contains("e.rs"),
+            "the error must name the file: {message}"
+        );
+    }
+
+    /// An edit that changes nothing must not report success. A run that believes it has made
+    /// progress stops looking for the reason it has not.
+    #[tokio::test]
+    async fn an_edit_that_changes_nothing_is_rejected() {
+        let (dir, runtime) = runtime();
+        std::fs::write(dir.path().join("f.rs"), "same\n").unwrap();
+        runtime
+            .invoke_json(
+                "edit_file",
+                json!({"path": "f.rs", "old": "same", "new": "same"}),
+            )
+            .await
+            .expect_err("a no-op edit must not read as an edit");
+    }
+
+    /// The move both failed runs were trying to make. "Add a struct to this file" is an append;
+    /// with no way to say so, the model reached for `write_file` and destroyed 3,921 lines.
+    #[tokio::test]
+    async fn append_adds_to_a_file_without_destroying_it() {
+        let (dir, runtime) = runtime();
+        std::fs::write(dir.path().join("g.rs"), "fn existing() {}\n").unwrap();
+
+        runtime
+            .invoke_json(
+                "write_file",
+                json!({"path": "g.rs", "content": "fn added() {}\n", "append": true}),
+            )
+            .await
+            .expect("append must not need the overwrite flag");
+
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("g.rs")).unwrap(),
+            "fn existing() {}\nfn added() {}\n",
+            "append must keep every existing line"
+        );
+    }
+
+    /// Appending LF text to a CRLF file would leave it mixed — and a mixed file is one the edit
+    /// tools then refuse to normalize, so the damage compounds silently.
+    #[tokio::test]
+    async fn append_keeps_the_files_own_line_endings() {
+        let (dir, runtime) = runtime();
+        std::fs::write(dir.path().join("h.rs"), "fn a() {}\r\n").unwrap();
+
+        runtime
+            .invoke_json(
+                "write_file",
+                json!({"path": "h.rs", "content": "fn b() {}\n", "append": true}),
+            )
+            .await
+            .expect("append");
+
+        let after = std::fs::read_to_string(dir.path().join("h.rs")).unwrap();
+        assert_eq!(after, "fn a() {}\r\nfn b() {}\r\n", "got {after:?}");
+    }
+
+    #[tokio::test]
+    async fn append_creates_a_file_that_does_not_exist_yet() {
+        let (dir, runtime) = runtime();
+        runtime
+            .invoke_json(
+                "write_file",
+                json!({"path": "new/deep.rs", "content": "first\n", "append": true}),
+            )
+            .await
+            .expect("appending to nothing is a create");
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("new/deep.rs")).unwrap(),
+            "first\n"
+        );
+    }
+
+    #[tokio::test]
+    async fn append_and_overwrite_together_are_rejected() {
+        let (_dir, runtime) = runtime();
+        runtime
+            .invoke_json(
+                "write_file",
+                json!({"path": "i.txt", "content": "x", "append": true, "overwrite": true}),
+            )
+            .await
+            .expect_err("opposite intents must not be guessed at");
+    }
+
+    /// The refusal has to point at the alternative that would have worked. Both failed runs
+    /// wanted to add to a file, and neither was told there was a way to.
+    #[tokio::test]
+    async fn the_clobber_refusal_offers_append() {
+        let (_dir, runtime) = runtime();
+        runtime
+            .invoke_json(
+                "write_file",
+                json!({"path": "j.txt", "content": "one\ntwo\n"}),
+            )
+            .await
+            .unwrap();
+        let err = runtime
+            .invoke_json("write_file", json!({"path": "j.txt", "content": "stub"}))
+            .await
+            .expect_err("clobber must be refused");
+        let message = err.to_string();
+        assert!(message.contains("append"), "must offer append: {message}");
+        assert!(
+            message.contains("edit_file"),
+            "must offer edit_file: {message}"
+        );
     }
 
     /// The failure this guard exists for.
