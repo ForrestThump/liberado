@@ -144,6 +144,12 @@ fn trace_file_path(trace_dir: &str, session_id: &str) -> PathBuf {
 pub struct TurnTracer {
     events: EventLog,
     role: String,
+    /// Hashes whose full prompt text has already been written.
+    ///
+    /// The policy the executor deliberately does not own: record the text once per distinct
+    /// prompt and the hash every turn. A 5 KB system prompt over forty turns would otherwise be
+    /// 200 KB of the same paragraph.
+    seen_prompts: std::sync::Mutex<std::collections::HashSet<String>>,
 }
 
 impl TurnTracer {
@@ -151,11 +157,37 @@ impl TurnTracer {
         Self {
             events,
             role: role.into(),
+            seen_prompts: std::sync::Mutex::new(std::collections::HashSet::new()),
         }
     }
 }
 
 impl liberado_executor::TurnObserver for TurnTracer {
+    /// Record what the model was sent, with the prompt text once per distinct hash.
+    ///
+    /// A poisoned lock is recovered rather than propagated: losing the "already written" set
+    /// would repeat a prompt in the trace, which is untidy. Panicking inside an observer to avoid
+    /// untidiness would take the run with it.
+    fn on_request(&self, record: liberado_executor::RequestRecord) {
+        let first_time = self
+            .seen_prompts
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(record.system_prompt_sha256.clone());
+        push_event(
+            &self.events,
+            CoderEvent::ModelRequestSent {
+                role: self.role.clone(),
+                turn: record.turn,
+                tools_offered: record.tools_offered,
+                message_count: record.message_count,
+                system_prompt_sha256: record.system_prompt_sha256,
+                system_prompt: first_time.then_some(record.system_prompt).flatten(),
+                at: chrono::Utc::now(),
+            },
+        );
+    }
+
     fn on_turn(&self, record: liberado_executor::TurnRecord) {
         // Mirror the model's own words onto the live bus as well as into the trace.
         //
@@ -389,5 +421,133 @@ mod tests {
             !rendered.contains("tools_offered") && !rendered.contains("write_file"),
             "offered-tool state must not leak into the message export: {rendered}"
         );
+    }
+}
+
+#[cfg(test)]
+mod request_record_tests {
+    use super::*;
+    use liberado_coder_core::CoderEvent;
+    use liberado_executor::{RequestRecord, TurnObserver};
+
+    fn record(turn: u32, prompt: &str) -> RequestRecord {
+        let digest = <sha2::Sha256 as sha2::Digest>::digest(prompt.as_bytes());
+        RequestRecord {
+            turn,
+            tools_offered: vec!["grep".into(), "edit_file".into()],
+            message_count: turn as usize + 1,
+            system_prompt_sha256: format!("{digest:x}"),
+            system_prompt: Some(prompt.to_string()),
+        }
+    }
+
+    fn prompts_in(events: &[CoderEvent]) -> Vec<Option<String>> {
+        events
+            .iter()
+            .filter_map(|e| match e {
+                CoderEvent::ModelRequestSent { system_prompt, .. } => Some(system_prompt.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The gap this closes: a trace recorded what the model *returned* and nothing about what it
+    /// was told. Comparing this harness against another came down to exactly that, and neither
+    /// side could answer it.
+    #[test]
+    fn the_system_prompt_reaches_the_trace() {
+        let events: EventLog = Arc::new(Mutex::new(Vec::new()));
+        let tracer = TurnTracer::new(events.clone(), "coder");
+        tracer.on_request(record(1, "You are Liberado's coding worker."));
+
+        let recorded = snapshot_events(&events);
+        let prompts = prompts_in(&recorded);
+        assert_eq!(prompts.len(), 1, "one request, one event: {recorded:?}");
+        assert_eq!(
+            prompts[0].as_deref(),
+            Some("You are Liberado's coding worker."),
+            "the text must be readable, not only hashed"
+        );
+    }
+
+    /// Text once per distinct prompt, hash every turn. Forty turns of a 5 KB prompt would
+    /// otherwise be 200 KB of the same paragraph.
+    #[test]
+    fn an_unchanged_prompt_is_written_once() {
+        let events: EventLog = Arc::new(Mutex::new(Vec::new()));
+        let tracer = TurnTracer::new(events.clone(), "coder");
+        for turn in 1..=4 {
+            tracer.on_request(record(turn, "same prompt every turn"));
+        }
+
+        let recorded = snapshot_events(&events);
+        let prompts = prompts_in(&recorded);
+        assert_eq!(prompts.len(), 4, "every request is still recorded");
+        assert_eq!(
+            prompts.iter().filter(|p| p.is_some()).count(),
+            1,
+            "the text belongs in the trace once: {prompts:?}"
+        );
+    }
+
+    /// A prompt that changes mid-run must be visible, or the hash is decoration.
+    #[test]
+    fn a_changed_prompt_is_written_again() {
+        let events: EventLog = Arc::new(Mutex::new(Vec::new()));
+        let tracer = TurnTracer::new(events.clone(), "coder");
+        tracer.on_request(record(1, "first wording"));
+        tracer.on_request(record(2, "first wording"));
+        tracer.on_request(record(3, "second wording"));
+
+        let prompts = prompts_in(&snapshot_events(&events));
+        let texts: Vec<&str> = prompts.iter().filter_map(|p| p.as_deref()).collect();
+        assert_eq!(
+            texts,
+            vec!["first wording", "second wording"],
+            "each distinct prompt must appear exactly once"
+        );
+    }
+
+    /// The hash is on every request even when the text is not, so "is it still that prompt" is
+    /// answerable at any turn.
+    #[test]
+    fn every_request_carries_a_hash() {
+        let events: EventLog = Arc::new(Mutex::new(Vec::new()));
+        let tracer = TurnTracer::new(events.clone(), "coder");
+        tracer.on_request(record(1, "p"));
+        tracer.on_request(record(2, "p"));
+
+        let hashes: Vec<String> = snapshot_events(&events)
+            .iter()
+            .filter_map(|e| match e {
+                CoderEvent::ModelRequestSent {
+                    system_prompt_sha256,
+                    ..
+                } => Some(system_prompt_sha256.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(hashes.len(), 2);
+        assert_eq!(hashes[0], hashes[1]);
+        assert!(!hashes[0].is_empty());
+    }
+
+    /// The tools offered are recorded at *request* time. `ModelTurnFinished` records them after
+    /// the response, and guards withdraw tools mid-run — so the two can legitimately differ, and
+    /// only this one says what the model could actually reach when it chose.
+    #[test]
+    fn the_offered_tools_are_recorded_with_the_request() {
+        let events: EventLog = Arc::new(Mutex::new(Vec::new()));
+        let tracer = TurnTracer::new(events.clone(), "coder");
+        tracer.on_request(record(1, "p"));
+
+        let offered = snapshot_events(&events)
+            .iter()
+            .find_map(|e| match e {
+                CoderEvent::ModelRequestSent { tools_offered, .. } => Some(tools_offered.clone()),
+                _ => None,
+            })
+            .expect("a request event");
+        assert_eq!(offered, vec!["grep".to_string(), "edit_file".to_string()]);
     }
 }

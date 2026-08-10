@@ -1076,6 +1076,31 @@ pub enum CoderEvent {
         turn: u32,
         at: DateTime<Utc>,
     },
+    /// What the model was sent, recorded **before** the call.
+    ///
+    /// [`CoderEvent::ModelTurnFinished`] describes the response. This describes the request, and
+    /// exists because the difference between two harnesses on the same task came down to what
+    /// each told the model — which neither trace recorded.
+    ModelRequestSent {
+        role: String,
+        turn: u32,
+        /// Tools offered on this request, in catalog order.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        tools_offered: Vec<String>,
+        #[serde(default)]
+        message_count: usize,
+        /// Lowercase hex SHA-256 of the system message as sent. Present every turn, so a prompt
+        /// that changes mid-run is visible as a changed hash.
+        system_prompt_sha256: String,
+        /// The system message verbatim, recorded the first time each distinct hash is seen.
+        ///
+        /// Not every turn: a 5 KB prompt across forty turns is 200 KB of the same text. Once per
+        /// distinct hash is the same information — the hash on every turn says whether it is
+        /// still that text.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        system_prompt: Option<String>,
+        at: DateTime<Utc>,
+    },
     ModelTurnFinished {
         role: String,
         turn: u32,
