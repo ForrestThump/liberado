@@ -69,8 +69,14 @@ pub fn load_coder_tuning(config_dir: Option<&Path>) -> CoderTuning {
     let Some(dir) = config_dir else {
         return CoderTuning::default();
     };
-    match liberado_config::load_config(Some(dir)) {
-        Ok((config, _)) => match CoderTuning::from_value(config.tuning.coder.as_ref()) {
+    // `load_tuning_only`, not `load_config`: tuning is per-run behaviour and has no business
+    // being blocked by a missing `vault_path`. With the full loader, a directory holding one
+    // `tuning.toml` failed validation and this fell back to defaults *with a warning nobody
+    // reads* — so `[coder]` settings could not be changed without standing up a whole
+    // deployment config, which is most of why the "tweak without recompiling" story did not
+    // survive contact with an experiment.
+    match liberado_config::load_tuning_only(Some(dir)) {
+        Ok(tuning) => match CoderTuning::from_value(tuning.coder.as_ref()) {
             Ok(t) => t,
             Err(e) => {
                 tracing::warn!(error = %e, "invalid [coder] tuning; using defaults");
@@ -78,7 +84,7 @@ pub fn load_coder_tuning(config_dir: Option<&Path>) -> CoderTuning {
             }
         },
         Err(e) => {
-            tracing::warn!(error = %e, "config load failed for coding pack; using defaults");
+            tracing::warn!(error = %e, "reading tuning.toml failed; using defaults");
             CoderTuning::default()
         }
     }
@@ -215,6 +221,7 @@ pub async fn run_coding_round(
             hashline: tuning.hashline.clone(),
             session_critic: Default::default(),
             prompt_dir: tuning.prompt_dir.clone(),
+            edit: tuning.edit.clone(),
         },
         attempt: state.rounds,
         prior_feedback: state.prior_feedback.clone(),
@@ -805,6 +812,19 @@ pub fn resolve_local_grant(
         );
         return Ok(liberado_common::CapabilitySet::empty());
     };
+    // A config dir with no `policy.toml` is not a broken deployment — it is someone overriding
+    // one setting. Treating it as fatal meant `LIBERADO_CONFIG_DIR` was all-or-nothing: point it
+    // at a directory holding a single `tuning.toml` and the bridge exited before answering
+    // `initialize`, which an ACP client shows as an agent that never responds.
+    //
+    // A policy file that *exists* and is wrong is still fatal. That is a real misconfiguration
+    // and silently granting nothing would hide it.
+    if !dir.join("policy.toml").exists() {
+        tracing::info!(
+            "no policy.toml in LIBERADO_CONFIG_DIR; coding mode runs without a declared grant              (standalone)"
+        );
+        return Ok(liberado_common::CapabilitySet::empty());
+    }
     let (config, _) = liberado_config::load_config(Some(dir))
         .map_err(|e| format!("loading policy for `{COMPONENT}`: {e}"))?;
     let caps = config.policy.capabilities_for(COMPONENT);

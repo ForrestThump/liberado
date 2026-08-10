@@ -252,6 +252,7 @@ async fn run_headless(args: HeadlessArgs) -> Result<(), String> {
             hashline: tuning.hashline.clone(),
             session_critic: tuning.session_critic.clone(),
             prompt_dir: tuning.prompt_dir.clone(),
+            edit: tuning.edit.clone(),
         },
         attempt: 0,
         prior_feedback: Vec::new(),

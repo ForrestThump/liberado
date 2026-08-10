@@ -522,8 +522,68 @@ pub struct HashlineConfig {
     pub hash_length: u8,
 }
 
+/// How `edit_file` decides an anchor matches.
+///
+/// Separate from [`HashlineConfig`] because it governs a different tool: hashline anchors on a
+/// line number and cannot be "nearly right", while `edit_file` anchors on text and routinely is.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct EditConfig {
+    /// Accept an anchor that is close enough when no exact match exists.
+    ///
+    /// On by default, following `oh-my-pi`, which ships `edit.fuzzyMatch: true`. Four dispatched
+    /// runs here never got the anchor failure rate below 42%, and one failure was an anchor
+    /// correct in every character except four leading spaces the file did not have.
+    #[serde(default = "default_fuzzy_match")]
+    pub fuzzy_match: bool,
+    /// Similarity a candidate must reach, 0.0 to 1.0.
+    ///
+    /// 0.95 is `oh-my-pi`'s default and is reproduced rather than re-derived — their number is
+    /// tuned against far more traffic than we have. Lowering it trades wrong-place edits for
+    /// fewer rejections, which is the wrong direction: a rejected edit costs a turn, an edit in
+    /// the wrong place is reported as success.
+    #[serde(default = "default_fuzzy_threshold")]
+    pub fuzzy_threshold: f64,
+}
+
+fn default_fuzzy_match() -> bool {
+    true
+}
+
+fn default_fuzzy_threshold() -> f64 {
+    EditConfig::DEFAULT_FUZZY_THRESHOLD
+}
+
+impl EditConfig {
+    /// `oh-my-pi`'s default, and the single source for it.
+    ///
+    /// The matcher in `coder-tools` had its own copy of this number. Two constants meaning the
+    /// same thing in two crates is the divergence that produced the hashline split, at a smaller
+    /// scale — so the matcher reads this one.
+    pub const DEFAULT_FUZZY_THRESHOLD: f64 = 0.95;
+}
+
+impl Default for EditConfig {
+    fn default() -> Self {
+        Self {
+            fuzzy_match: default_fuzzy_match(),
+            fuzzy_threshold: default_fuzzy_threshold(),
+        }
+    }
+}
+
 impl Default for HashlineConfig {
-    /// On, at length 7 — the values `coder-runner` had already hardcoded for itself.
+    /// **Off**, at length 7.
+    ///
+    /// It was flipped on in #105 to end a divergence between the two coding paths, on the
+    /// reasoning that line anchors cannot be ambiguous. A four-run series then measured it: with
+    /// hashline on, `read_file` returns `[path#TAG]` + `LINE:content` while `edit_file` matches
+    /// raw text, and the model pasted the numbered view into the text tool in **14 of 41** calls.
+    /// That run had the worst anchor failure rate of the four (72%); the same task with hashline
+    /// off had the best (42%) and produced 159 insertions with no deletions.
+    ///
+    /// `oh-my-pi` has the same feature and does not have this problem, because its `edit.mode` is
+    /// an enum: exactly one edit tool exists at a time. The catalog is now exclusive here too, so
+    /// hashline is usable again — but off stays the default until a run measures it winning.
     ///
     /// It was off here, and the ACP path took the default while `coder-runner` opted in, so the
     /// tool built to make line-anchored edits unambiguous was missing from the path we dogfood
@@ -538,7 +598,7 @@ impl Default for HashlineConfig {
     /// paths and not the other; adding a third literal would have set up the fourth.
     fn default() -> Self {
         Self {
-            enabled: true,
+            enabled: false,
             hash_length: 7,
         }
     }
@@ -606,6 +666,9 @@ pub struct CoderRunConfig {
     /// Where to look for harness prompt files. See [`prompts`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prompt_dir: Option<String>,
+    /// Anchor matching for `edit_file` (`[coder.edit]`).
+    #[serde(default)]
+    pub edit: EditConfig,
 }
 
 // ── review findings ───────────────────────────────────────────────────────────────────────────
@@ -1103,6 +1166,7 @@ mod tests {
                 hashline: HashlineConfig::default(),
                 session_critic: SessionCriticConfig::default(),
                 prompt_dir: None,
+                edit: Default::default(),
             },
             attempt: 0,
             prior_feedback: Vec::new(),
@@ -1525,26 +1589,77 @@ mod findings_tests {
 #[cfg(test)]
 mod hashline_default_tests {
     use super::*;
+    use std::path::Path;
 
-    /// `hashline_edit` must be offered by default.
+    /// Hashline is **off** by default, and that is a measured position rather than a taste.
     ///
-    /// It was not, and only `coder-runner` opted in — so the ACP path, which is the one a Paseo
-    /// user and a dispatched run both take, never had it. A run then died on exactly the failure
-    /// the tool prevents: 15 of 25 `edit_file` calls came back "old text was not found" or "old
-    /// text matched 2 times", and it filed `failed` without landing a line.
+    /// #105 turned it on to end a divergence between the two coding paths. A four-run series on
+    /// one task then measured it: with hashline on, `read_file` returns a line-numbered view
+    /// while `edit_file` matches raw text, and the model pasted one into the other in 14 of 41
+    /// calls — the worst anchor failure rate of the four (72%). The same task with hashline off
+    /// scored best (42%) and produced 159 insertions with no deletions.
     ///
-    /// Flipping this back to `false` must fail here rather than be discovered by a wasted run.
+    /// The catalog is exclusive now, so hashline is no longer *broken*; it is simply not the
+    /// default until a run measures it winning. Flipping this without that measurement should
+    /// fail here.
     #[test]
-    fn line_anchored_editing_is_available_out_of_the_box() {
+    fn hashline_is_off_until_a_run_measures_it_winning() {
         let config = HashlineConfig::default();
         assert!(
-            config.enabled,
-            "without hashline_edit the model must anchor edits on strings that may not be unique"
+            !config.enabled,
+            "turning hashline on is a measured decision; the last measurement said off"
         );
         assert!(
             config.validate().is_ok(),
-            "the default must satisfy its own validator: {:?}",
+            "whatever the default is, it must satisfy its own validator: {:?}",
             config.validate()
+        );
+    }
+
+    /// The number in `config.example/tuning.toml` must be the number the code uses.
+    ///
+    /// This replaced a test comparing `EditConfig::DEFAULT_FUZZY_THRESHOLD` against
+    /// `EditConfig::default().fuzzy_threshold` — both read the same constant, so it passed
+    /// whatever the constant was. A test that cannot fail is worse than no test; the drift that
+    /// can actually happen is between the code and the file an operator reads.
+    #[test]
+    fn the_documented_threshold_matches_the_code() {
+        let example = std::fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .parent()
+                .and_then(std::path::Path::parent)
+                .expect("repo root")
+                .join("config.example/tuning.toml"),
+        )
+        .expect("read config.example/tuning.toml");
+        let documented = example
+            .lines()
+            .find_map(|l| l.trim().strip_prefix("# fuzzy_threshold = "))
+            .expect("config.example must document fuzzy_threshold")
+            .trim()
+            .parse::<f64>()
+            .expect("documented threshold must be a number");
+        assert_eq!(
+            documented,
+            EditConfig::DEFAULT_FUZZY_THRESHOLD,
+            "config.example says {documented} and the code uses {}",
+            EditConfig::DEFAULT_FUZZY_THRESHOLD
+        );
+    }
+
+    /// Fuzzy anchor matching is on by default, following `oh-my-pi`. Turning it off would
+    /// reinstate the failure mode that accounted for a large share of four runs' rejected edits.
+    #[test]
+    fn fuzzy_anchor_matching_is_on_by_default() {
+        let edit = EditConfig::default();
+        assert!(
+            edit.fuzzy_match,
+            "exact-only matching was measured as worse"
+        );
+        assert!(
+            (0.9..=1.0).contains(&edit.fuzzy_threshold),
+            "a threshold outside 0.9..=1.0 either rejects everything or edits the wrong place: {}",
+            edit.fuzzy_threshold
         );
     }
 

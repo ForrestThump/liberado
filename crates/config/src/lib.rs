@@ -170,6 +170,23 @@ fn has_any_config_file(dir: &Path) -> bool {
 /// validated config alongside a [`ConfigProvenance`] that records which source file contributed
 /// each section. `dir = None` => an all-defaults `Config` (still validated, so e.g. a missing
 /// `vault_path` is reported rather than silently accepted).
+/// Load only `tuning.toml`, with no cross-section validation.
+///
+/// [`load_config`] validates the whole deployment — vault path, policy grants, dangling MCP
+/// references. That is right for a daemon and wrong for a tuning override: setting
+/// `LIBERADO_CONFIG_DIR` to a directory holding one `tuning.toml` failed with
+/// `topology.vault_path is required`, and the caller then *silently fell back to defaults*, so
+/// the setting the operator had just written did nothing and said nothing.
+///
+/// Tuning is per-run behaviour — turn counts, prompts, edit matching. None of it needs to know
+/// where the vault is, so none of it should be blocked by not knowing.
+///
+/// An absent file is [`Tuning::default`]; a malformed one is still an error, because a
+/// `tuning.toml` that does not parse is a mistake the operator wants told about.
+pub fn load_tuning_only(dir: Option<&Path>) -> Result<Tuning, ConfigError> {
+    load_section(dir, TUNING_FILE)
+}
+
 pub fn load_config(dir: Option<&Path>) -> Result<(Config, ConfigProvenance), ConfigError> {
     let provenance = ConfigProvenance {
         topology: dir
@@ -1250,5 +1267,63 @@ mod overlay_proptest {
                 );
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tuning_only_tests {
+    use super::*;
+
+    /// The failure this exists for: a directory holding one `tuning.toml` and nothing else.
+    ///
+    /// `load_config` rejected it with `topology.vault_path is required`, the caller swallowed
+    /// that and used defaults, and the setting the operator had just written did nothing while
+    /// saying nothing. Tuning is per-run behaviour — it has no business knowing where the vault
+    /// is.
+    #[test]
+    fn a_directory_with_only_tuning_loads() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            dir.path().join("tuning.toml"),
+            "[coder.hashline]\nenabled = false\n",
+        )
+        .expect("write");
+
+        assert!(
+            load_config(Some(dir.path())).is_err(),
+            "precondition: the full loader still demands a complete deployment"
+        );
+
+        let tuning = load_tuning_only(Some(dir.path())).expect("a tuning override must load");
+        assert!(
+            tuning.coder.is_some(),
+            "the [coder] section must survive to the caller"
+        );
+    }
+
+    #[test]
+    fn an_absent_tuning_file_is_defaults_not_an_error() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let tuning = load_tuning_only(Some(dir.path())).expect("absent is not broken");
+        assert!(tuning.coder.is_none());
+    }
+
+    /// A `tuning.toml` that does not parse is still an error. Falling back silently would be the
+    /// same defect one layer down: the operator edits a file and nothing changes.
+    #[test]
+    fn a_malformed_tuning_file_is_reported() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(dir.path().join("tuning.toml"), "[coder\nbroken = ").expect("write");
+        load_tuning_only(Some(dir.path())).expect_err("a broken override must not be ignored");
+    }
+
+    #[test]
+    fn no_directory_is_defaults() {
+        assert!(
+            load_tuning_only(None)
+                .expect("no dir is fine")
+                .coder
+                .is_none()
+        );
     }
 }
