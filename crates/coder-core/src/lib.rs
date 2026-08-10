@@ -154,7 +154,15 @@ impl Default for CommandPolicy {
         Self {
             allow: Vec::new(),
             deny: Vec::new(),
-            timeout_secs: 120,
+            // 120s axed every workspace-wide cargo command on a cold worktree. One run opened
+            // with `cargo test --workspace`, hit the ceiling, got back nothing at all, and
+            // retried the same command three more times — most of a five-minute run spent on a
+            // build that was never allowed to finish. A model cannot learn from a timeout that
+            // reports no output.
+            //
+            // Turn limits and the run budget are the real bound on a wasteful command; this
+            // ceiling only needs to be longer than an honest build.
+            timeout_secs: 900,
             output_max_bytes: 64 * 1024,
         }
     }
@@ -522,6 +530,65 @@ pub struct HashlineConfig {
     pub hash_length: u8,
 }
 
+/// Where a coding run builds, and whether the harness warms it first.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct WorkspaceBuildConfig {
+    /// One `CARGO_TARGET_DIR` shared by every coding worktree.
+    ///
+    /// A worktree starts with no build cache, so the run's first compile rebuilds the whole
+    /// dependency graph — 706 of this workspace's 770 packages are registry crates, and those are
+    /// keyed by registry/name/version rather than by path, so every worktree can reuse them.
+    /// Workspace-member crates live at different paths and get their own artifacts, which coexist
+    /// rather than collide.
+    ///
+    /// **One run at a time.** Cargo takes an exclusive lock on a target directory; concurrent
+    /// builds do not corrupt each other, they queue. Measured: a second `cargo build` printed
+    /// "Blocking waiting for file lock on artifact directory" and waited out the first. With a
+    /// command timeout in play, a run queued behind a cold build times out having done nothing,
+    /// which is worse than giving it its own cache. Sharing safely across concurrent runs needs
+    /// a lock-free compiler cache such as `sccache`, not this.
+    ///
+    /// Unset means each worktree keeps its own `target/`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shared_target_dir: Option<String>,
+    /// Build the workspace once, before the model is given anything.
+    ///
+    /// Two reasons, and the second is the expensive one.
+    ///
+    /// It proves the baseline compiles. Two runs were diagnosed as the model writing broken code
+    /// when nobody had checked whether the worktree built to begin with; it did, but the question
+    /// should not have needed a trace to answer.
+    ///
+    /// And it keeps the provider's prompt cache warm. Send the system prompt, then make the model
+    /// wait minutes for a cold build, and the cached prefix has expired by the time the next
+    /// message goes out — so those tokens are paid for twice. Building first means every token
+    /// the run sends is sent close together.
+    #[serde(default = "default_warmup")]
+    pub warmup: bool,
+    /// Ceiling for the warm-up build. Generous on purpose: a cold build of this workspace is
+    /// minutes, and the whole point is to pay that cost once, before the model is listening.
+    #[serde(default = "default_warmup_timeout")]
+    pub warmup_timeout_secs: u64,
+}
+
+fn default_warmup() -> bool {
+    true
+}
+
+fn default_warmup_timeout() -> u64 {
+    1800
+}
+
+impl Default for WorkspaceBuildConfig {
+    fn default() -> Self {
+        Self {
+            shared_target_dir: None,
+            warmup: default_warmup(),
+            warmup_timeout_secs: default_warmup_timeout(),
+        }
+    }
+}
+
 /// How `edit_file` decides an anchor matches.
 ///
 /// Separate from [`HashlineConfig`] because it governs a different tool: hashline anchors on a
@@ -669,6 +736,9 @@ pub struct CoderRunConfig {
     /// Anchor matching for `edit_file` (`[coder.edit]`).
     #[serde(default)]
     pub edit: EditConfig,
+    /// Build cache and warm-up (`[coder.workspace]`).
+    #[serde(default)]
+    pub workspace_build: WorkspaceBuildConfig,
 }
 
 // ── review findings ───────────────────────────────────────────────────────────────────────────
@@ -1167,6 +1237,7 @@ mod tests {
                 session_critic: SessionCriticConfig::default(),
                 prompt_dir: None,
                 edit: Default::default(),
+                workspace_build: Default::default(),
             },
             attempt: 0,
             prior_feedback: Vec::new(),
@@ -1614,6 +1685,43 @@ mod hashline_default_tests {
             "whatever the default is, it must satisfy its own validator: {:?}",
             config.validate()
         );
+    }
+
+    /// The warm-up is on by default, and the timeout must be longer than an honest cold build.
+    ///
+    /// A ceiling shorter than a real build turns "slow" into "the tree looks broken", which is
+    /// the failure this replaced: a 120-second command timeout axed every workspace-wide cargo
+    /// invocation and returned no output at all.
+    #[test]
+    fn the_warmup_is_on_and_its_ceiling_is_generous() {
+        let config = WorkspaceBuildConfig::default();
+        assert!(
+            config.warmup,
+            "a run should not discover a broken baseline from the model"
+        );
+        assert!(
+            config.warmup_timeout_secs >= 600,
+            "a cold build of this workspace is minutes; {}s would report a slow machine as a              broken tree",
+            config.warmup_timeout_secs
+        );
+    }
+
+    /// The command ceiling must clear a workspace build too, or the model's own checks die the
+    /// way the warm-up used to.
+    #[test]
+    fn the_command_timeout_clears_a_workspace_build() {
+        assert!(
+            CommandPolicy::default().timeout_secs >= 600,
+            "120s returned nothing from every cargo command a run tried"
+        );
+    }
+
+    /// No shared cache by default. Cargo locks a target directory, so two concurrent runs queue
+    /// rather than corrupt — measured — and a run queued behind a cold build times out having
+    /// done nothing. Sharing is opt-in for the one-run-at-a-time case it is safe for.
+    #[test]
+    fn the_shared_cache_is_opt_in() {
+        assert!(WorkspaceBuildConfig::default().shared_target_dir.is_none());
     }
 
     /// The number in `config.example/tuning.toml` must be the number the code uses.

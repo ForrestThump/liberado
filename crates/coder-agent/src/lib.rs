@@ -856,6 +856,7 @@ mod tests {
                 session_critic: Default::default(),
                 prompt_dir: None,
                 edit: Default::default(),
+                workspace_build: Default::default(),
             },
             attempt: 0,
             prior_feedback: Vec::new(),

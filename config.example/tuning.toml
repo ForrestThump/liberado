@@ -83,6 +83,29 @@
 # enabled = false
 # hash_length = 7
 
+# Build cache and pre-run warm-up.
+#
+# `shared_target_dir` points every coding worktree at one CARGO_TARGET_DIR. A worktree starts with
+# no cache, so its first compile rebuilds the whole dependency graph — 706 of this workspace's 770
+# packages are registry crates, which are keyed by name/version rather than by path and so are
+# reusable across worktrees. Workspace crates live at different paths and get their own artifacts;
+# they coexist rather than collide.
+#
+# ONE RUN AT A TIME. Cargo takes an exclusive lock on a target directory. Concurrent builds do not
+# corrupt each other, they queue — measured: the second prints "Blocking waiting for file lock" and
+# waits out the first. With a command timeout in play, a run queued behind a cold build times out
+# having done nothing. Sharing across concurrent runs needs a lock-free compiler cache (sccache),
+# not this setting.
+#
+# `warmup` builds the workspace before the model is sent anything. It proves the baseline compiles
+# — so a failure is the model's doing, not a question for a trace — and it keeps the provider's
+# prompt cache warm, since a cold build between the system prompt and the first reply expires the
+# cached prefix and bills those tokens twice.
+# [coder.workspace]
+# shared_target_dir = "C:/Users/you/.liberado/shared-target"
+# warmup = true
+# warmup_timeout_secs = 1800
+
 # Post-run honesty review. Reads the run's own narration — not the diff — and reports where it
 # contradicted itself, claimed a check it never ran, or found a defect in its own work and filed
 # anyway. Off by default; findings are advisory and appear in the run report.
