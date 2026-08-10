@@ -27,6 +27,31 @@ pub enum MergeAttempt {
     Conflicts { paths: Vec<String> },
 }
 
+/// Serializes every mutation of a repository's worktree registry.
+///
+/// `git worktree prune`, `git branch -D` and `git worktree add` all rewrite `.git/worktrees/`,
+/// and git does not write that metadata atomically. Two children setting up at the same moment
+/// produced this on a Windows CI runner:
+///
+/// ```text
+/// fatal: failed to read .git/worktrees/fanout-api-0/commondir: No error
+/// ```
+///
+/// One child's `prune` was rewriting the directory another child's `add` was reading. It passed
+/// on Linux and locally, and failed roughly one run in ten on Windows — twice, and the first time
+/// I recorded it as an unexplained flake because I could not reproduce it in five local runs.
+///
+/// A single global lock rather than one per repository: creating a worktree takes milliseconds,
+/// the concurrency that matters is the coding work that follows, and two unrelated repositories
+/// contending for a few milliseconds is not worth a keyed map to avoid.
+static WORKTREE_REGISTRY: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+/// Number of tasks inside the guarded section. Test-only, and the only way to assert the lock is
+/// doing its job — a race fix whose test is "run it a lot and hope" proves nothing.
+#[cfg(test)]
+pub(crate) static CONCURRENT_IN_REGISTRY: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
 /// Create a linked worktree on a **named branch** at `parent` HEAD.
 ///
 /// `branch` must be a safe ref name (no path separators / `..`). The branch is created if missing
@@ -51,6 +76,12 @@ pub async fn add_worktree_on_branch(
 
     let parent_cli = path_for_cli(&parent_root);
     let dest_cli = path_for_cli(&dest);
+
+    // Everything below rewrites `.git/worktrees/`. Held across all three git calls, not just the
+    // add: the failure was a sibling's `prune` running mid-`add`.
+    let _registry = WORKTREE_REGISTRY.lock().await;
+    #[cfg(test)]
+    let _depth = ConcurrencyProbe::enter();
 
     let _ = liberado_common::process::command("git")
         .args(["-C", &parent_cli, "worktree", "prune"])
@@ -597,5 +628,106 @@ mod validation_tests {
     fn branch_name_accepts_slash_delimited_paths() {
         assert!(validate_branch_name("fanout/child").is_ok());
         assert!(validate_branch_name("fanout/child/api").is_ok());
+    }
+}
+
+/// Increments [`CONCURRENT_IN_REGISTRY`] on construction and decrements on drop, so a test can
+/// assert the guarded section is never entered twice at once.
+#[cfg(test)]
+struct ConcurrencyProbe;
+
+#[cfg(test)]
+impl ConcurrencyProbe {
+    fn enter() -> Self {
+        CONCURRENT_IN_REGISTRY.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Self
+    }
+}
+
+#[cfg(test)]
+impl Drop for ConcurrencyProbe {
+    fn drop(&mut self) {
+        CONCURRENT_IN_REGISTRY.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+#[cfg(test)]
+mod registry_lock_tests {
+    use super::*;
+    use std::sync::atomic::Ordering;
+
+    fn seed_repo() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let p = dir.path().to_string_lossy().to_string();
+        let git = |args: &[&str]| {
+            let out = liberado_common::process::std_command("git")
+                .args(args)
+                .output()
+                .expect("git");
+            assert!(
+                out.status.success(),
+                "git {args:?}: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        };
+        git(&["-C", &p, "init", "-q"]);
+        std::fs::write(
+            dir.path().join("seed.txt"),
+            "seed
+",
+        )
+        .expect("seed");
+        git(&["-C", &p, "add", "-A"]);
+        git(&[
+            "-C",
+            &p,
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@t",
+            "commit",
+            "-q",
+            "-m",
+            "seed",
+        ]);
+        dir
+    }
+
+    /// Four children setting up at once must all succeed, and must never be inside the registry
+    /// section together.
+    ///
+    /// The count is the real assertion. "Run it concurrently and see if it passes" is how this
+    /// race survived two encounters: it passes on Linux, passes locally on Windows, and fails
+    /// about one run in ten on a Windows runner.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn concurrent_worktree_creation_is_serialized_and_succeeds() {
+        let repo = seed_repo();
+        let base = repo.path().join("wt");
+        let peak = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+
+        let mut handles = Vec::new();
+        for i in 0..4 {
+            let root = repo.path().to_path_buf();
+            let base = base.clone();
+            let peak = std::sync::Arc::clone(&peak);
+            handles.push(tokio::spawn(async move {
+                let name = format!("child-{i}");
+                let branch = format!("fanout/child-{i}");
+                let result = add_worktree_on_branch(&root, &base, &name, &branch).await;
+                let seen = CONCURRENT_IN_REGISTRY.load(Ordering::SeqCst);
+                peak.fetch_max(seen, Ordering::SeqCst);
+                result
+            }));
+        }
+
+        for h in handles {
+            h.await
+                .expect("task")
+                .expect("every child must get a worktree");
+        }
+        assert!(
+            peak.load(Ordering::SeqCst) <= 1,
+            "two tasks were inside the worktree registry at once; the lock is not held"
+        );
     }
 }
