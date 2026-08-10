@@ -493,14 +493,50 @@ impl CodingToolRuntime {
         }))
     }
 
+    /// Write a whole file. Refuses to silently replace one that already has content.
+    ///
+    /// `std::fs::write` truncates, and nothing here checked whether the target existed. A coding
+    /// run used `write_file` on `crates/executor/src/lib.rs` believing it was adding a struct and
+    /// replaced 3,921 lines with 40 — `5,825` deletions against `54` insertions across three
+    /// files, in one turn, with no error and no warning.
+    ///
+    /// The coder prompt already says "prefer edit_file/apply_patch for existing files". That is a
+    /// preference, and a preference is not a guard; this is the same lesson as every other config
+    /// that parsed and reached nobody. `overwrite` makes a deliberate rewrite say so.
+    ///
+    /// **The verifier is not a substitute for this.** `cargo check` did catch that run, because
+    /// what was destroyed happened to be Rust that other crates compile against. Deleting a
+    /// fixture, a doc, a prompt file or a `.toml` passes every verifier we have.
     async fn write_file(&self, args: Value) -> Result<Value, ToolError> {
         #[derive(Deserialize)]
         struct Args {
             path: String,
             content: String,
+            /// Required to replace a file that already has content.
+            #[serde(default)]
+            overwrite: bool,
         }
         let args: Args = parse_args(args)?;
         let path = self.rel_path(&args.path, true)?;
+
+        if !args.overwrite {
+            // Byte length, not a line count or a percentage: any threshold is a number someone
+            // has to defend later, and "the file already has something in it" needs no defending.
+            // An empty existing file is not content, so re-writing one is not a clobber.
+            if let Ok(meta) = std::fs::metadata(&path)
+                && meta.is_file()
+                && meta.len() > 0
+            {
+                let existing_lines = std::fs::read_to_string(&path)
+                    .map(|c| c.lines().count())
+                    .unwrap_or(0);
+                return Err(ToolError::BadRequest(format!(
+                    "{} already exists with {existing_lines} lines and write_file would replace                      all of it. To change part of a file use edit_file, hashline_edit or                      apply_patch. To replace it deliberately, pass \"overwrite\": true.",
+                    args.path
+                )));
+            }
+        }
+
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).map_err(fs_err)?;
         }
@@ -1049,13 +1085,17 @@ impl ToolRuntime for CodingToolRuntime {
             ),
             tool(
                 "write_file",
-                "Write a complete file under the workspace.",
+                "Create a new file, or replace one whole file. To change part of an existing                  file use edit_file, hashline_edit or apply_patch instead — write_file replaces                  the entire contents.",
                 json!({
                     "type": "object",
                     "required": ["path", "content"],
                     "properties": {
                         "path": { "type": "string" },
-                        "content": { "type": "string" }
+                        "content": { "type": "string" },
+                        "overwrite": {
+                            "type": "boolean",
+                            "description": "Required to replace a file that already has content.                                             Omit it when creating a new file."
+                        }
                     }
                 }),
             ),
@@ -1790,6 +1830,95 @@ mod tests {
                     hash_length: HashlineConfig::HASH_LENGTH_MIN,
                 });
         (dir, runtime)
+    }
+
+    /// The failure this guard exists for.
+    ///
+    /// A run called `write_file` on a 3,921-line source file believing it was adding a struct.
+    /// `std::fs::write` truncated it to 40 lines, no error, and the same turn did it to two more
+    /// files: 5,825 deletions against 54 insertions. Nothing in the tool looked at what was
+    /// already there.
+    #[tokio::test]
+    async fn write_file_refuses_to_silently_replace_an_existing_file() {
+        let (_dir, runtime) = runtime();
+        runtime
+            .invoke_json(
+                "write_file",
+                json!({"path": "src/big.rs", "content": "line one
+line two
+line three
+"}),
+            )
+            .await
+            .expect("creating a new file is allowed");
+
+        let err = runtime
+            .invoke_json(
+                "write_file",
+                json!({"path": "src/big.rs", "content": "stub
+"}),
+            )
+            .await
+            .expect_err("replacing existing content must not be silent");
+
+        let message = err.to_string();
+        assert!(
+            message.contains("3 lines"),
+            "the error must say how much would be lost: {message}"
+        );
+        assert!(
+            message.contains("edit_file"),
+            "the error must name the tool the model should have used: {message}"
+        );
+
+        let survived = std::fs::read_to_string(_dir.path().join("src/big.rs")).expect("read");
+        assert!(
+            survived.contains("line three"),
+            "the refusal must leave the file untouched, got: {survived:?}"
+        );
+    }
+
+    /// A deliberate rewrite is still possible — the flag makes it deliberate.
+    #[tokio::test]
+    async fn write_file_replaces_when_overwrite_is_asked_for() {
+        let (_dir, runtime) = runtime();
+        runtime
+            .invoke_json(
+                "write_file",
+                json!({"path": "a.txt", "content": "old
+"}),
+            )
+            .await
+            .unwrap();
+        runtime
+            .invoke_json(
+                "write_file",
+                json!({"path": "a.txt", "content": "new
+", "overwrite": true}),
+            )
+            .await
+            .expect("an explicit overwrite must be honoured");
+        assert_eq!(
+            std::fs::read_to_string(_dir.path().join("a.txt")).unwrap(),
+            "new
+"
+        );
+    }
+
+    /// An empty file is not content. Refusing here would block the ordinary
+    /// create-then-fill sequence for no gain.
+    #[tokio::test]
+    async fn an_empty_existing_file_is_not_a_clobber() {
+        let (_dir, runtime) = runtime();
+        std::fs::write(_dir.path().join("empty.txt"), "").unwrap();
+        runtime
+            .invoke_json(
+                "write_file",
+                json!({"path": "empty.txt", "content": "now filled
+"}),
+            )
+            .await
+            .expect("writing over an empty file must be allowed");
     }
 
     #[tokio::test]
