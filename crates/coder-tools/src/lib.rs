@@ -1774,11 +1774,21 @@ mod tests {
     use super::*;
     use liberado_coder_core::DockerSandboxSpec;
 
+    /// A runtime with hashline **explicitly off**.
+    ///
+    /// These tests predate hashline mode and assert `read_file`'s plain output. They used to
+    /// inherit that from `HashlineConfig::default()`, which then flipped to enabled — so five of
+    /// them broke at once for a reason none of them mentioned. Pinning it here makes each test
+    /// state the mode it is testing instead of borrowing a global decision that can move.
     fn runtime() -> (tempfile::TempDir, CodingToolRuntime) {
         let dir = tempfile::tempdir().unwrap();
         let runtime =
             CodingToolRuntime::new(dir.path(), CommandPolicy::default(), PathPolicy::default())
-                .unwrap();
+                .unwrap()
+                .with_hashline(HashlineConfig {
+                    enabled: false,
+                    hash_length: HashlineConfig::HASH_LENGTH_MIN,
+                });
         (dir, runtime)
     }
 
@@ -2208,7 +2218,13 @@ mod tests {
             PathPolicy::default(),
         )
         .await
-        .unwrap();
+        .unwrap()
+        // Plain `read_file` output is what this test checks, so the mode is stated rather than
+        // inherited from a default that has already moved once.
+        .with_hashline(HashlineConfig {
+            enabled: false,
+            hash_length: HashlineConfig::HASH_LENGTH_MIN,
+        });
 
         runtime
             .invoke_json(
