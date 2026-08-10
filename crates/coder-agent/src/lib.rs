@@ -10,6 +10,7 @@ mod critic;
 mod fanout;
 mod gates;
 mod intake_session;
+mod live;
 mod planner;
 mod progress;
 mod repair_feedback;
@@ -30,6 +31,7 @@ pub use intake_session::{
 pub use liberado_coder_sandbox::{Checkpoint, CheckpointError, ShadowGit};
 /// Durable coding session workspace path (`coding-worktrees/<session_id>`).
 pub use liberado_coder_tools::durable_session_workspace;
+pub use live::with_live_events;
 pub use session_pack::CodingSessionPack;
 
 use std::path::Path;
@@ -616,18 +618,11 @@ async fn take_workspace_checkpoint(workspace_root: &Path, session_key: &str, lab
     };
     match sg.snapshot(label).await {
         Ok(cp) => {
-            if let Ok((tx, sid)) =
-                completion_gate::LIVE_GATE.try_with(|(tx, id)| (tx.clone(), id.clone()))
-            {
-                let _ = tx.try_send(liberado_session::SessionEvent::new(
-                    sid,
-                    liberado_session::SessionEventKind::Checkpoint {
-                        id: cp.id.clone(),
-                        label: cp.label.clone(),
-                        tree_hash: cp.tree_hash.clone(),
-                    },
-                ));
-            }
+            live::emit(liberado_session::SessionEventKind::Checkpoint {
+                id: cp.id.clone(),
+                label: cp.label.clone(),
+                tree_hash: cp.tree_hash.clone(),
+            });
             tracing::debug!(
                 session = %session_key,
                 checkpoint = %cp.id,

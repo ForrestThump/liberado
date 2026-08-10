@@ -88,20 +88,43 @@ pub fn load_coder_tuning(config_dir: Option<&Path>) -> CoderTuning {
 ///
 /// Creates/reuses a durable worktree under `coding-worktrees/<coding_session_id>` when `cwd` is a
 /// git repo (same as `CodingSessionPack` build phase).
+/// Everything one coding round needs that is not the mutable session state.
+///
+/// A struct rather than a parameter list: this grew to nine positional arguments, four of them
+/// `Option`/`String`, which is both a clippy failure and an easy place to transpose two values
+/// the compiler would happily accept.
+pub struct CodingRound<'a> {
+    pub provider: Arc<dyn Provider>,
+    pub factory: Arc<dyn CoderProviderFactory>,
+    pub tuning: &'a CoderTuning,
+    pub description: &'a str,
+    pub model_override: Option<&'a str>,
+    pub max_turns: u32,
+    /// Receives tool calls, file changes, guard trips and the model's own text *as they happen*.
+    /// `None` reproduces the old behaviour: the run is silent until it returns.
+    pub events: Option<tokio::sync::mpsc::Sender<liberado_session::SessionEvent>>,
+    /// Resolved by the caller via [`prepare_workspace`], so the path is still known if the run
+    /// is cancelled and its output needs preserving.
+    pub workspace: PathBuf,
+}
+
 pub async fn run_coding_round(
-    provider: Arc<dyn Provider>,
-    factory: Arc<dyn CoderProviderFactory>,
-    tuning: &CoderTuning,
+    round: CodingRound<'_>,
     state: &mut CodingSessionState,
-    description: &str,
-    model_override: Option<&str>,
-    max_turns: u32,
 ) -> Result<CodingRoundOutcome, String> {
+    let CodingRound {
+        provider,
+        factory,
+        tuning,
+        description,
+        model_override,
+        max_turns,
+        events,
+        workspace,
+    } = round;
     let model = model_override
         .map(str::to_string)
         .unwrap_or_else(|| provider.model());
-
-    let workspace = prepare_workspace(&state.cwd, &state.coding_session_id).await?;
 
     let mut coder_role = tuning.coder.clone();
     if !model.is_empty() {
@@ -182,10 +205,17 @@ pub async fn run_coding_round(
     );
 
     let backend = LiberadoLoopBackend::with_provider_factory(factory);
-    let result = backend
-        .run(request)
-        .await
-        .map_err(|e| format!("coding pack failed: {e}"))?;
+    // Scope the live tap around the *whole* run. The pack's emitters are task-locals several
+    // layers down; anything left outside this scope emits into nothing and says so nowhere,
+    // which is precisely how this path shipped completely silent.
+    let run = backend.run(request);
+    let result = match events {
+        Some(tx) => {
+            liberado_coder_agent::with_live_events(tx, state.coding_session_id.clone(), run).await
+        }
+        None => run.await,
+    }
+    .map_err(|e| format!("coding pack failed: {e}"))?;
 
     state.rounds = state.rounds.saturating_add(1);
     state.last_summary = Some(result.summary.clone());
@@ -242,7 +272,90 @@ impl CodingRoundOutcome {
     }
 }
 
-async fn prepare_workspace(cwd: &Path, session_id: &str) -> Result<PathBuf, String> {
+/// Commit whatever the run left in `workspace`, if anything.
+///
+/// **Why this is code and not a prompt instruction.** The ACP path leaves its output as dirty
+/// files in a scratch worktree; nothing commits them. That is the same defect as F6 — where the
+/// headless runner's `preserve_work` ran only on a normal return, so a killed run lost seven
+/// modified files — reproduced on a second path. Asking the model to "remember to commit" would
+/// make preservation depend on the least reliable component in the system. A run either ends
+/// with its work committed or it does not, and that should not be a matter of persuasion.
+///
+/// Called on **every** exit, including failure and cancel. A failed run's diff is evidence, and
+/// a cancelled run is exactly the case F6 was written for.
+///
+/// Identity is passed with `-c` rather than assumed. `user.email` / `user.name` exist on every
+/// dev machine and on no CI runner, so a commit that relies on global config is a commit that
+/// works here and fails there.
+///
+/// Returns the new commit's short SHA, or `None` when the tree was already clean.
+pub async fn preserve_worktree(workspace: &Path, label: &str) -> Result<Option<String>, String> {
+    let cli = workspace.to_string_lossy().to_string();
+
+    let mut status = liberado_common::process::command("git");
+    status.args(["-C", &cli, "status", "--porcelain"]);
+    let out = liberado_common::process::output_within(&mut status, "git status", GIT_TIMEOUT)
+        .await
+        .map_err(|e| format!("git status in worktree: {e}"))?;
+    if !out.status.success() {
+        return Err(format!(
+            "git status failed: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        ));
+    }
+    if String::from_utf8_lossy(&out.stdout).trim().is_empty() {
+        return Ok(None);
+    }
+
+    let mut add = liberado_common::process::command("git");
+    add.args(["-C", &cli, "add", "-A"]);
+    let out = liberado_common::process::output_within(&mut add, "git add", GIT_TIMEOUT)
+        .await
+        .map_err(|e| format!("git add in worktree: {e}"))?;
+    if !out.status.success() {
+        return Err(format!(
+            "git add failed: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        ));
+    }
+
+    let message = format!("wip({label}): liberado coding session output");
+    let mut commit = liberado_common::process::command("git");
+    commit.args([
+        "-C",
+        &cli,
+        "-c",
+        "user.name=Liberado Coding Pack",
+        "-c",
+        "user.email=coding-pack@liberado.local",
+        "commit",
+        "-m",
+        &message,
+    ]);
+    let out = liberado_common::process::output_within(&mut commit, "git commit", GIT_TIMEOUT)
+        .await
+        .map_err(|e| format!("git commit in worktree: {e}"))?;
+    if !out.status.success() {
+        return Err(format!(
+            "git commit failed: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        ));
+    }
+
+    let mut rev = liberado_common::process::command("git");
+    rev.args(["-C", &cli, "rev-parse", "--short", "HEAD"]);
+    let out = liberado_common::process::output_within(&mut rev, "git rev-parse", GIT_TIMEOUT)
+        .await
+        .map_err(|e| format!("git rev-parse in worktree: {e}"))?;
+    Ok(Some(
+        String::from_utf8_lossy(&out.stdout).trim().to_string(),
+    ))
+}
+
+/// Ceiling for the git plumbing around a session worktree — local operations, milliseconds.
+const GIT_TIMEOUT: std::time::Duration = liberado_common::process::DEFAULT_COMMAND_TIMEOUT;
+
+pub async fn prepare_workspace(cwd: &Path, session_id: &str) -> Result<PathBuf, String> {
     if !cwd.is_dir() {
         return Err(format!("workspace is not a directory: {}", cwd.display()));
     }
@@ -308,6 +421,98 @@ mod tests {
     /// same reason. (Test binaries are per-crate, so this cannot be the *same* lock, only the same
     /// shape.)
     static ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+    /// A git repo with one commit, built without relying on any global git identity.
+    ///
+    /// The identity is passed with `-c` here for the same reason `preserve_worktree` does it:
+    /// `user.email` / `user.name` exist on every dev machine and on no CI runner, so a fixture
+    /// that leans on global config passes locally and fails in CI.
+    fn temp_repo() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let p = dir.path().to_string_lossy().to_string();
+        let run = |args: &[&str]| {
+            let out = liberado_common::process::std_command("git")
+                .args(args)
+                .output()
+                .expect("git");
+            assert!(
+                out.status.success(),
+                "git {args:?} failed: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        };
+        run(&["-C", &p, "init", "-q"]);
+        std::fs::write(dir.path().join("seed.txt"), "seed\n").expect("seed");
+        run(&["-C", &p, "add", "-A"]);
+        run(&[
+            "-C",
+            &p,
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@t",
+            "commit",
+            "-q",
+            "-m",
+            "seed",
+        ]);
+        dir
+    }
+
+    fn is_dirty(repo: &std::path::Path) -> bool {
+        let out = liberado_common::process::std_command("git")
+            .args(["-C", &repo.to_string_lossy(), "status", "--porcelain"])
+            .output()
+            .expect("git status");
+        !String::from_utf8_lossy(&out.stdout).trim().is_empty()
+    }
+
+    /// The whole point: a run's output must survive without anyone remembering to commit it.
+    ///
+    /// Runs with `GIT_CONFIG_GLOBAL` pointed at an empty file, which is the CI condition — no
+    /// `user.name`, no `user.email`. Without the `-c` flags in `preserve_worktree` this fails
+    /// with "Please tell me who you are", which is precisely the failure that passes on a
+    /// developer box and breaks on a runner.
+    #[tokio::test]
+    async fn a_dirty_worktree_is_committed_even_with_no_global_git_identity() {
+        let _guard = ENV_LOCK.lock().await;
+        let repo = temp_repo();
+        std::fs::write(repo.path().join("work.txt"), "agent output\n").expect("write");
+        assert!(is_dirty(repo.path()), "precondition: tree must be dirty");
+
+        let empty_cfg = tempfile::NamedTempFile::new().expect("cfg");
+        // SAFETY: single-threaded under ENV_LOCK; removed below.
+        unsafe { std::env::set_var("GIT_CONFIG_GLOBAL", empty_cfg.path()) };
+
+        let result = preserve_worktree(repo.path(), "done").await;
+
+        unsafe { std::env::remove_var("GIT_CONFIG_GLOBAL") };
+
+        let sha = result
+            .expect("preserving a dirty worktree must succeed without global identity")
+            .expect("a dirty tree must produce a commit");
+        assert!(!sha.is_empty(), "commit sha must be reported");
+        assert!(
+            !is_dirty(repo.path()),
+            "the tree must be clean after preservation - nothing left to lose"
+        );
+    }
+
+    /// A clean tree must not manufacture an empty commit, or every prompt adds noise to history.
+    #[tokio::test]
+    async fn a_clean_worktree_produces_no_commit() {
+        let _guard = ENV_LOCK.lock().await;
+        let repo = temp_repo();
+        assert!(!is_dirty(repo.path()), "precondition: tree must be clean");
+
+        let preserved = preserve_worktree(repo.path(), "done")
+            .await
+            .expect("a clean tree is not an error");
+        assert!(
+            preserved.is_none(),
+            "a clean tree must report nothing preserved, got {preserved:?}"
+        );
+    }
 
     #[tokio::test]
     async fn prepare_workspace_fails_hard_when_worktree_setup_fails() {

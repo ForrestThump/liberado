@@ -3395,6 +3395,7 @@ dependencies = [
  "liberado-main-agent",
  "liberado-provider",
  "liberado-provider-openai-compat",
+ "liberado-session",
  "reqwest 0.12.28",
  "serde",
  "serde_json",

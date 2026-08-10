@@ -527,7 +527,7 @@ impl CodingSessionPack {
                 .await;
 
             // Race coding run against cancel (best-effort; LiberadoLoopBackend is not cancel-aware).
-            use crate::completion_gate::LIVE_GATE;
+            use crate::live::LIVE_GATE;
             let run_fut = LIVE_GATE.scope(
                 (events.clone(), session_id.to_string()),
                 self.backend.run(request.clone()),

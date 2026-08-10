@@ -796,42 +796,208 @@ async fn run_coding_prompt(
         ),
     )?;
 
-    // Drop the coding future on cancel so pack work stops at the next await point.
-    let outcome = tokio::select! {
-        biased;
-        _ = wait_until_cancelled(&mut cancel_rx) => None,
-        outcome = coding_run::run_coding_round(
-            Arc::clone(&bridge.provider),
-            factory,
-            &bridge.coder_tuning,
+    // The run streams into this channel while it works; the loop below turns each event into an
+    // ACP `session/update`. Bounded and lossy by design — `live::emit` uses `try_send`, so a
+    // wedged UI drops frames instead of stalling the coding loop. 256 is far more than a turn
+    // produces, so in practice nothing is dropped.
+    let (ev_tx, mut ev_rx) = mpsc::channel::<liberado_session::SessionEvent>(256);
+
+    // Resolve the worktree here rather than inside the run, so the path is still known if the
+    // run is cancelled or panics — those are exactly the cases whose output would otherwise be
+    // stranded, and a preservation step that cannot name the directory preserves nothing.
+    let workspace = coding_run::prepare_workspace(&state.cwd, &state.coding_session_id).await?;
+
+    // Owned by the task so the run can proceed while we render; handed back on completion,
+    // because `prior_feedback` and the round counter must survive into the next prompt.
+    let provider = Arc::clone(&bridge.provider);
+    let tuning = bridge.coder_tuning.clone();
+    let model_for_run = model.clone();
+    let text_for_run = text.to_string();
+    let max_turns = bridge.max_turns;
+    let workspace_for_run = workspace.clone();
+    let mut task = tokio::spawn(async move {
+        let outcome = coding_run::run_coding_round(
+            coding_run::CodingRound {
+                provider,
+                factory,
+                tuning: &tuning,
+                description: &text_for_run,
+                model_override: Some(&model_for_run),
+                max_turns,
+                events: Some(ev_tx),
+                workspace: workspace_for_run,
+            },
             &mut state,
-            text,
-            Some(&model),
-            bridge.max_turns,
-        ) => Some(outcome),
+        )
+        .await;
+        (state, outcome)
+    });
+
+    // Paseo pairs tool_call -> tool_call_update by id; keep a LIFO of in-flight ids.
+    let mut pending_tool_ids: Vec<(String, String)> = Vec::new();
+    let mut events_open = true;
+    let joined = loop {
+        tokio::select! {
+            biased;
+            _ = wait_until_cancelled(&mut cancel_rx) => {
+                task.abort();
+                break None;
+            }
+            // The guard matters: once the sender is dropped `recv()` returns `None`
+            // immediately and forever, which without it spins this loop at full tilt.
+            ev = ev_rx.recv(), if events_open => match ev {
+                Some(event) => render_coding_event(sink, sid, &event, &mut pending_tool_ids)?,
+                None => events_open = false,
+            },
+            done = &mut task => break Some(done),
+        }
     };
 
-    let Some(outcome) = outcome else {
-        let _ = emit_agent_text_chunk(sink, sid, "\n*(cancelled)*\n");
+    let Some(joined) = joined else {
+        // Cancel is the case F6 exists for: the tree is dirty and nothing else will save it.
+        let note = match coding_run::preserve_worktree(&workspace, "cancelled").await {
+            Ok(Some(sha)) => format!("\n*(cancelled — work committed as `{sha}`)*\n"),
+            Ok(None) => "\n*(cancelled)*\n".to_string(),
+            Err(e) => format!("\n*(cancelled — could not preserve work: {e})*\n"),
+        };
+        let _ = emit_agent_text_chunk(sink, sid, &note);
         return Ok(json!({ "stopReason": "cancelled" }));
     };
+
+    // Events buffered between the task finishing and the join landing would otherwise be lost —
+    // typically the last tool result, which is the one a reader most wants.
+    while let Ok(event) = ev_rx.try_recv() {
+        render_coding_event(sink, sid, &event, &mut pending_tool_ids)?;
+    }
+
+    let (state, outcome) = joined.map_err(|e| format!("coding task panicked: {e}"))?;
 
     // Persist coding state only when the pack finished (not mid-cancel).
     if let Some(sess) = bridge.acp_sessions.lock().await.get_mut(sid) {
         sess.coding = state;
     }
 
+    // Preserve before reporting, and on the failure path too: a failed run's diff is the
+    // evidence for why it failed, and it is just as lost if nobody commits it.
+    let label = if outcome.is_ok() { "done" } else { "failed" };
+    let preserved = match coding_run::preserve_worktree(&workspace, label).await {
+        Ok(Some(sha)) => format!(
+            "\n**Committed:** `{sha}` on `{}`\n",
+            state_branch(&workspace)
+        ),
+        Ok(None) => String::new(),
+        Err(e) => format!("\n**Could not preserve work:** {e}\n"),
+    };
+
     match outcome {
         Ok(result) => {
             let report = result.render();
             emit_agent_text_chunk(sink, sid, &report)?;
+            emit_agent_text_chunk(sink, sid, &preserved)?;
             Ok(json!({ "stopReason": "end_turn" }))
         }
         Err(e) => {
             emit_agent_text_chunk(sink, sid, &format!("\n**Coding pack error:** {e}\n"))?;
+            emit_agent_text_chunk(sink, sid, &preserved)?;
             Ok(json!({ "stopReason": "end_turn" }))
         }
     }
+}
+
+/// Best-effort branch name for the report line. Cosmetic only — never fails the run.
+fn state_branch(workspace: &std::path::Path) -> String {
+    // `std_command`, not `std::process::Command::new` — this is the ACP bridge, whose stdin is
+    // the JSON-RPC wire, and a child inheriting it is the bug this branch exists to fix. The
+    // first draft of this helper used the raw constructor; `subprocess_rules.rs` is what makes
+    // that a build failure rather than a rediscovery in six months.
+    liberado_common::process::std_command("git")
+        .args([
+            "-C",
+            &workspace.to_string_lossy(),
+            "branch",
+            "--show-current",
+        ])
+        .output()
+        .ok()
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "(detached)".into())
+}
+
+/// Turn one live pack event into the ACP updates Paseo renders.
+///
+/// The mapping is deliberately narrow. Tool activity becomes real `tool_call` /
+/// `tool_call_update` entries so the editor can render them as tool cards; everything else
+/// becomes text, because inventing richer ACP shapes for guard trips and validation results
+/// would be guessing at a UI nobody has asked for yet. What matters is that a watcher can tell
+/// the difference between working, stuck, and finished — which previously they could not, at all.
+fn render_coding_event(
+    sink: &dyn WireSink,
+    sid: &str,
+    event: &liberado_session::SessionEvent,
+    pending_tool_ids: &mut Vec<(String, String)>,
+) -> Result<(), String> {
+    use liberado_session::SessionEventKind as K;
+    match &event.kind {
+        K::Token { text } => emit_agent_text_chunk(sink, sid, text)?,
+        K::ToolStarted { name, args_preview } => {
+            let id = push_tool_call_id(pending_tool_ids, name);
+            emit_tool_call(sink, sid, &id, name, args_preview, "pending")?;
+        }
+        K::ToolFinished {
+            name,
+            ok,
+            result_preview,
+        } => {
+            let id = pop_tool_call_id(pending_tool_ids, name);
+            let status = if *ok { "completed" } else { "failed" };
+            emit_tool_call_update(sink, sid, &id, name, status, result_preview)?;
+        }
+        K::FileChanged { path, change } => {
+            emit_agent_text_chunk(sink, sid, &format!("\n`{change}` {path}\n"))?;
+        }
+        K::Progress { message } => {
+            emit_agent_text_chunk(sink, sid, &format!("\n_{message}_\n"))?;
+        }
+        // A guard trip is the single most useful thing to surface: it is the run telling you it
+        // is going in circles, and it was previously invisible until the final summary.
+        K::LoopGuard { guard, action } => {
+            emit_agent_text_chunk(sink, sid, &format!("\n**guard** {guard} -> {action}\n"))?;
+        }
+        K::ValidationFinished { ok, summary } => {
+            let mark = if *ok { "passed" } else { "FAILED" };
+            emit_agent_text_chunk(sink, sid, &format!("\n**validation {mark}:** {summary}\n"))?;
+        }
+        K::CriticVerdict {
+            reviewer,
+            approved,
+            issues,
+            ..
+        } => {
+            let verdict = if *approved { "approved" } else { "rejected" };
+            let detail = if issues.is_empty() {
+                String::new()
+            } else {
+                format!(" ({})", issues.join("; "))
+            };
+            emit_agent_text_chunk(sink, sid, &format!("\n**{reviewer}** {verdict}{detail}\n"))?;
+        }
+        K::RoleStarted { role, model } => {
+            emit_agent_text_chunk(sink, sid, &format!("\n_{role} ({model})_\n"))?;
+        }
+        // Deliberately silent. Checkpoints fire often and mean nothing to a reader; role-finished
+        // is implied by whatever comes next; the terminal events are already covered by the
+        // rendered result the caller emits when the run returns. Adding them would be noise
+        // competing with the events above, which are the ones that carry information.
+        K::Checkpoint { .. }
+        | K::RoleFinished { .. }
+        | K::SessionStarted { .. }
+        | K::SessionFinished { .. }
+        | K::Failed { .. }
+        | K::AwaitingInput { .. }
+        | K::HumanInput { .. } => {}
+    }
+    Ok(())
 }
 
 /// In-process chat: Conversation + Executor, no coding tools.
