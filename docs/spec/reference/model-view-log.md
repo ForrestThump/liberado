@@ -58,12 +58,25 @@ treated as errors: a v1 reader has to survive a v1.1 producer.
 `config` is the **resolved** knob values in force, not a profile name. A profile edited later must
 not silently rewrite what this run ran with.
 
+### `tool_catalog` — the definitions offered to the model
+
+```json
+{"v":1,"type":"tool_catalog","sha256":"…",
+ "tools":[{"name":"grep","description":"Search files", "input_schema":{"type":"object","properties":{"pattern":{"type":"string"}},"required":["pattern"]}}]}
+```
+
+`tools` is the ordered list of complete definitions sent to the provider: name, description and
+input schema. The digest is over canonical JSON for that list. Emit the body once per distinct
+digest and refer to the digest from every `prompt`. A list of names is not enough: description and
+schema changes can change model behaviour even when the names stay fixed.
+
 ### `prompt` — what the model sees
 
 ```json
 {"v":1,"type":"prompt","turn":7,
  "messages":{"mode":"delta","items":[{"role":"tool","content":"…"}]},
  "system":{"sha256":"…","text":null},
+ "tool_catalog_sha256":"…",
  "tools_offered":["read_file","grep","edit_file"],
  "params":{"temperature":0.0,"max_tokens":8192}}
 ```
@@ -74,6 +87,7 @@ not silently rewrite what this run ran with.
   O(n²) and reproduces in the log the exact cost problem the log exists to study.
 - `system.text` appears **once per distinct `sha256`**, `null` thereafter. The hash appears every
   time, so "did the prompt change mid-run" is always answerable.
+- `tool_catalog_sha256` identifies the complete ordered definitions on this request.
 - `tools_offered` is what the model could reach **on this request**. Recording it after the response
   is a different fact: guards withdraw tools mid-run, and only the request-time list explains the
   choice the model then made.
@@ -146,6 +160,19 @@ non-conforming.
 
 ---
 
+## Boundary with execution telemetry
+
+The MVL stays limited to the request/response view. A companion execution log uses the same
+`run`, `turn` and `call_id` values and records harness state that did not enter the model request:
+attempt boundaries, tool start/finish, retries, context-transform work, gates, resource use and
+worker-graph edges. This second stream is where concurrency and scheduler policy are measured.
+
+The streams must join without time-order guesses. Do not add scheduler fields to the MVL to avoid
+writing the execution log, and do not reconstruct the model view from execution events. This split
+keeps the MVL portable while preserving enough detail to compare graph and loop implementations.
+
+---
+
 ## Large payloads and secrets
 
 **Content references** replace any payload over a producer-chosen threshold:
@@ -154,6 +181,8 @@ that read the same file produce the same ref, which makes cross-run comparison c
 
 **Never log:** API keys, `Authorization` headers, or the process environment. A producer that strips
 anything must record `"redacted":["env"]` on the event, so a reader can tell "absent" from "removed".
+A sanitized export that removes message or tool content does not satisfy exact reconstruction. Keep
+the raw log access-controlled and retention-bounded; mark derived exports as sanitized.
 
 ---
 
@@ -161,16 +190,21 @@ anything must record `"redacted":["env"]` on the event, so a reader can tell "ab
 
 An adapter conforms when it satisfies all of:
 
-1. **Reconstruction.** From the log alone, a reader can rebuild the exact message list sent at any
-   turn N. This is the test that matters — if it fails, the log is not "what the model sees", it is
-   a summary of it. `full`/`delta` correctness falls out of this.
+1. **Reconstruction.** From the log alone, a reader can rebuild the exact message list, system text,
+   ordered tool definitions and sampling parameters sent at any turn N. This is the test that
+   matters — if it fails, the log is not "what the model sees", it is a summary of it.
+   `full`/`delta` correctness falls out of this.
 2. **Crash survival.** Kill the process mid-run; the log up to that point is valid JSONL and every
    line parses.
 3. **Ordering.** `seq` is gap-free and monotonic.
 4. **System prompt recoverable.** Every distinct system prompt appears in full exactly once, and
    every `prompt` carries its hash.
-5. **Tool honesty.** `content_shown` byte-equals what the tool layer handed the model.
-6. **Withdrawal visible.** Any change to the offered tool set appears as `tools_changed`.
+5. **Tool catalogue recoverable.** Every distinct ordered tool catalogue appears in full exactly
+   once, and every `prompt` carries its hash.
+6. **Tool honesty.** `content_shown` byte-equals what the tool layer handed the model.
+7. **Withdrawal visible.** Any change to the offered tool set appears as `tools_changed`.
+8. **Join integrity.** Every execution event that refers to a turn or call joins to one MVL event by
+   id; no sequence or timestamp inference is needed.
 
 A shared conformance suite should own these, so an adapter is verified rather than asserted — pi's
 telemetry package does exactly this and it is the right pattern.
@@ -198,11 +232,13 @@ If any of these are missing or contradictory, the log fails reconstruction.
 
 ## Mapping from what we have
 
-Liberado's `CoderEvent` stream is close and needs renaming plus two additions:
+Liberado's `CoderEvent` stream is a useful source, but the common emitter belongs at the executor /
+provider boundary so every agent pack gets the same request record:
 
 | MVL | Liberado today | Gap |
 |---|---|---|
-| `prompt` | `ModelRequestSent` (#117) | add the message delta and sampling params |
+| `tool_catalog` | tool names inside `ModelRequestSent` | add complete ordered definitions and hash |
+| `prompt` | `ModelRequestSent` (#117) | add the message delta, catalogue hash and sampling params |
 | `completion` | `ModelTurnFinished` | add `usage.cached_input` |
 | `tool_result` | `ToolFinished` | add `offloaded` / `full_content` |
 | `tools_changed` | *(inferred by diffing `tools_offered`)* | make it explicit |

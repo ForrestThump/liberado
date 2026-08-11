@@ -128,13 +128,17 @@ The A/B against Kilo Code produced real findings, but comparing two harnesses re
 translation layer for their event formats, and the metric was only trustworthy because one script
 categorised both sides. That does not scale to four.
 
-**Proposal: fork pi, Hermes and Deep Agents, and add one common trace emitter to each.** MIT
-licences make this clean. Each fork emits the same event envelope we already write —
-`model_request_sent`, `tool_started`/`tool_finished` with an `ok` flag, `session_finished` /
-`session_aborted` — so a single parser scores all four.
+**Proposal: fork pi, Hermes and Deep Agents, and add the same two joined emitters to each.** MIT
+licences make this clean. The Model View Log records exact messages, system text, tool definitions,
+responses and usage. A companion execution log records attempts, tool start/finish, context
+transforms, retries, gates, resources and worker-graph edges. Both use stable run, turn and call ids,
+so one parser can score all four without forcing their internal schedulers into one event model.
 
-Then run **A/B/C/D**: one task suite, one model, four harnesses, identical prompts. What to record
-per run:
+Then run **A/B/C/D**: one task suite, one repository commit, one model/provider pair and fixed
+sampling and resource caps. Keep each harness's native system prompt and tool schemas: those are
+part of the harness being measured. A normalized system prompt is a later ablation, not the main
+comparison. Pin every harness commit and run at least three repeats where cost permits. What to
+record per run:
 
 | Field | Why |
 |---|---|
@@ -143,12 +147,19 @@ per run:
 | edits, edit failures | the reliability number we already track |
 | reads per successful edit | task-shape indicator, **not** a quality score — see below |
 | tools withdrawn | the failure that cost us the last A/B |
-| terminal outcome + gates | the only bar that matters: does it compile and pass |
+| terminal outcome + gates | ship-gate and merge-ready rate under the fixed budget |
+| total cost per accepted result | includes failed attempts, retries and reviewers |
+| human repair time or diff | separates plausible output from a merge-minimal result |
+| failure class + trace ids | turns a score into the next testable mechanism |
 
 **A caution earned the hard way.** Reads-per-edit looked like the discriminator after the first
 Kilo A/B (6.5 versus our 1.0). On the next task Kilo scored 1.0 and still shipped a clean pass. The
 metric tracks *task shape*, not harness quality. Any dashboard built on it will mislead. Score on
 the gates; use the rest to explain, never to rank.
+
+Change one mechanism at a time after the baseline. The earlier 10-task dogfood changed several
+settings together. It validates that combined configuration, but it cannot attribute the gain to
+one setting.
 
 ---
 
@@ -165,14 +176,20 @@ the gates; use the rest to explain, never to rank.
 
 ## Order of work
 
-1. **Tool-output offload to disk** (#1). Largest measured payoff, self-contained, and it fixes a
-   truncation problem we already have.
-2. **Mutation landed check** (#6) and **side-effect classification** (#5). Both small; #6 closes a
-   class we shipped a bug in.
-3. **Cache directives plus cache-hit read-back** (#3). Cheap, and it makes TE3 verifiable.
-4. **The event contract** (#8) — prerequisite for the ledger and for A/B/C/D.
-5. **Fork the three and instrument them.** Only after #4, so there is one schema to target.
-6. **Script-over-RPC** (#2). Biggest lever, biggest blast radius. Last.
+1. ~~**One production coding-run assembly path.**~~ Landed in PR #141.
+2. ~~**The MVL and companion execution-log contracts** (#8), with shared conformance fixtures.~~
+   Landed in PR #140.
+3. **Emit both streams from Liberado's common executor/provider boundary.** Do not make them a
+   second coding-pack-only source of truth. This is backlog 0.6.
+4. **Instrument the three pinned forks and establish the repeated baseline.** Only after #3, so
+   every adapter targets one schema. This is one item shared by backlog 0.7 and C3.
+5. **Measure the completion gate against that baseline.** Do not change its default from one or two
+   anecdotes.
+6. **Implement one evidence-selected lever.** Tool-output offload (#1) is the strongest current
+   hypothesis. Retain it only if the controlled rerun improves accepted-result cost or quality.
+7. **Mutation landed check** (#6), **side-effect classification** (#5), cache work (#3) and
+   compaction file-op lists (#4) follow when evidence supports them or a correctness task touches
+   that area.
+8. **Script-over-RPC** (#2). Biggest lever, biggest blast radius. Last.
 
-Compaction file-op lists (#4) and middleware decomposition (#7) are opportunistic — do them when
-touching those areas anyway.
+Middleware decomposition (#7) is opportunistic — do it when touching that area anyway.
