@@ -4107,6 +4107,7 @@ dependencies = [
  "liberado-executor",
  "liberado-notify",
  "liberado-provider",
+ "serde",
  "serde_json",
  "tokio",
  "toml 0.8.23",

@@ -175,6 +175,25 @@ An adapter conforms when it satisfies all of:
 A shared conformance suite should own these, so an adapter is verified rather than asserted — pi's
 telemetry package does exactly this and it is the right pattern.
 
+**Fixture location (Liberado):** sample JSONL and reconstruction tests live under
+`crates/test-support` (`trace_contracts` module + `tests/mvl_conformance.rs`). They prove a reader
+can rebuild messages, system text, ordered tool definitions and sampling params for any turn from
+the log alone. They do **not** emit production logs — emission is a separate backlog item.
+
+### Reconstruction checklist (normative for fixtures)
+
+For any turn `N` present in the log, a conforming reader must recover:
+
+| Artifact | How |
+|---|---|
+| System text | Latest non-null `prompt.system.text` whose `prompt.system.sha256` matches the hash on turn `N`'s `prompt` (or the text embedded when first seen). |
+| Ordered tool definitions | Full `tool_catalog.tools` for the digest in `prompt.tool_catalog_sha256`. |
+| Message list | Apply every `prompt` with `messages.mode=full` as a reset, then append each subsequent `delta` until turn `N` inclusive. |
+| Sampling parameters | `prompt.params` on turn `N` (temperature, max_tokens, and any other keys the producer set). |
+| Tools offered on the request | `prompt.tools_offered` on turn `N`. |
+
+If any of these are missing or contradictory, the log fails reconstruction.
+
 ---
 
 ## Mapping from what we have
