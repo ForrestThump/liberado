@@ -21,7 +21,17 @@
   - `liberado-acp --mode chat`
   - `LIBERADO_ACP_MODE=face`
 - Coding mode: durable worktree under `coding-worktrees/<session>` when `cwd` is a git repo;
-  respects `[coder]` tuning from `LIBERADO_CONFIG_DIR`.
+  respects `[coder]` tuning from the resolved config dir, and runs the project's **ship preflight**
+  before a round may report success (PR #134).
+
+> **Set `LIBERADO_CONFIG_DIR` in the Paseo provider entry.** The bridge resolves through
+> `liberado_config::config_dir()`, but `liberado-acp` is installed to `~/.cargo/bin`, so the
+> walk-up-from-the-binary tier finds no repo `config/`, and the platform config dir usually holds no
+> `topology.toml`. Without an explicit value the agent runs on defaults: **no declared project, so no
+> ship bar, and an empty capability grant.** That was the state for the whole dogfood period and
+> nothing reported it. `scripts/install-paseo-liberado.ps1` now writes the variable; check the
+> `config directory resolved` line the bridge logs at startup to confirm which directory it picked
+> and which of the three files it found.
 - Face mode is the **only** path that tunnels into a running daemon. Coding and chat are
   self-contained agent processes (same pattern as Claude Code / Gemini / Grok on Paseo).
 
