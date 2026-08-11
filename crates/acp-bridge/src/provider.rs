@@ -306,13 +306,18 @@ mod tests {
             .filter(|l| !l.trim_start().starts_with("//"))
             .collect::<Vec<_>>()
             .join("\n");
+        let build_provider = code_only
+            .split_once("pub(crate) fn build_provider()")
+            .and_then(|(_, tail)| tail.split_once("pub(crate) async fn load_model_catalog"))
+            .map(|(body, _)| body)
+            .expect("provider source must contain the build_provider body");
         assert!(
-            !code_only.contains("var_os(\"LIBERADO_CONFIG_DIR\")")
-                && !code_only.contains("var(\"LIBERADO_CONFIG_DIR\")"),
+            !build_provider.contains("var_os(\"LIBERADO_CONFIG_DIR\")")
+                && !build_provider.contains("var(\"LIBERADO_CONFIG_DIR\")"),
             "build_provider must not read LIBERADO_CONFIG_DIR via env; use provider_config_dir()"
         );
         assert!(
-            code_only.contains("provider_config_dir()"),
+            build_provider.contains("provider_config_dir()"),
             "build_provider must call provider_config_dir()"
         );
         assert!(
