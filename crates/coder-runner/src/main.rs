@@ -14,10 +14,9 @@ use std::{
     sync::Arc,
 };
 
-use liberado_coder_agent::{CoderProviderFactory, LiberadoLoopBackend};
+use liberado_coder_agent::{CoderProviderFactory, LiberadoLoopBackend, assemble_production_run};
 use liberado_coder_core::{
-    CoderBackend, CoderError, CoderGateConfig, CoderRoleConfig, CoderRunConfig, CoderRunRequest,
-    CoderTask, CoderTuning, CommandPolicy, ProgressPolicy, SandboxSpec, VerifierSpec, WorkspaceRef,
+    CoderBackend, CoderError, CoderRoleConfig, CoderRunRequest, CoderTask, CoderTuning,
 };
 use liberado_coder_tools::repo_map::{self, RepoMapOptions};
 use liberado_common::Outcome;
@@ -176,89 +175,35 @@ async fn run_headless(args: HeadlessArgs) -> Result<(), String> {
     // below take this value; see `derive_task_id` for why neither may hold a literal.
     let task_id = derive_task_id(session_id.as_deref(), &prompt);
 
-    let request = CoderRunRequest {
-        task: CoderTask {
-            id: task_id.clone(),
-            description: prompt.clone(),
-            context: task_context,
-            success_criteria: Vec::new(),
-        },
-        workspace: WorkspaceRef::new(workspace.to_string_lossy().to_string(), "HEAD"),
-        config: CoderRunConfig {
-            backend: "liberado-loop".to_string(),
-            // Was `None`, which silently disabled the only durable record of a run. The headless
-            // runner is the unattended path, so it is the one that most needs a trace. Resolved
-            // relative to the workspace so a run's trace lands with the run, not in the cwd of
-            // whatever launched it.
-            trace_dir: Some(resolve_trace_dir(&workspace, tuning.trace_dir.as_deref())),
-            trace_formats: tuning.trace_formats.clone(),
-            planner: disabled_role(),
-            coder: CoderRoleConfig {
-                model,
-                prompt_path: None,
-                // Was a 900-character literal duplicating `prompts/coder/coder.md`, which already
-                // existed and already claimed to be the coder's prompt. Two texts, no way to tell which
-                // a run used, and retuning either cost a rebuild. One source now, read from disk when it
-                // is there and baked in when it is not.
-                prompt: Some(liberado_coder_core::prompts::load(
-                    Some(&liberado_coder_core::prompts::dir_for(
-                        tuning.prompt_dir.as_deref(),
-                        &workspace.to_string_lossy(),
-                    )),
-                    liberado_coder_core::prompts::CODER_FILE,
-                    liberado_coder_core::prompts::CODER,
-                )),
-                temperature: None,
-                max_tokens: None,
-                max_turns: Some(max_turns),
-            },
-            critic: disabled_role(),
-            gate: CoderGateConfig {
-                enabled: false,
-                ..Default::default()
-            },
-            repair: None,
-            sandbox: SandboxSpec::HostLocal,
-            command_policy: CommandPolicy::default(),
-            validation_command: None,
-            // "The diff is non-empty" was the *only* acceptance test on this path, so an
-            // unattended run could report `outcome: succeeded` while shipping code that does not
-            // compile — and one did (PR #92: `cargo fmt --check` red on both platforms, plus a
-            // test module that failed to build). `validation_command` is None and the completion
-            // gate is off here, so nothing else was checking either.
-            //
-            // `cargo check` rather than `cargo build`: it catches the type and syntax errors these
-            // runs actually produce, at a fraction of the time and disk — and disk is finite, as a
-            // run that filled 476 GB with nine concurrent `cargo build`s demonstrated.
-            //
-            // Both are advisory in the sense that a run still *files*; they change what
-            // "succeeded" is allowed to mean.
-            verifiers: verifiers_for(&workspace),
-            verify_policy: Default::default(),
-            path_policy: Default::default(),
-            progress: ProgressPolicy {
-                max_attempts: 2,
-                // `read_only_turn_limit` was pinned to 6 here (fatal at 12), which silently
-                // overrode the shared default and starved exploration on anything spanning more
-                // than a couple of files — the headless runner is the path used for harness-bench
-                // and unattended runs, so it was the one place the tighter number hurt most.
-                // Take the shared default instead; it is tuned in one place, `ProgressPolicy`.
-                ..Default::default()
-            },
-            // Was a literal `HashlineConfig { enabled: true, hash_length: 7 }` while the ACP
-            // path passed `tuning.hashline` — so the two coding paths disagreed about whether the
-            // model had `hashline_edit` at all, and only one of them was configurable. Both read
-            // the same tuning now, and those values are the default.
-            hashline: tuning.hashline.clone(),
-            session_critic: tuning.session_critic.clone(),
-            prompt_dir: tuning.prompt_dir.clone(),
-            edit: tuning.edit.clone(),
-            workspace_build: Default::default(),
-        },
-        attempt: 0,
-        prior_feedback: Vec::new(),
-        strategist_directive: None,
+    let task = CoderTask {
+        id: task_id.clone(),
+        description: prompt.clone(),
+        context: task_context,
+        success_criteria: Vec::new(),
     };
+
+    // Shared production assembly (same path as CodingSessionPack and ACP). Gate, progress,
+    // command/path policy, edit, workspace_build, etc. come from tuning — not surface hardcodes.
+    // Was: gate.enabled hardcoded false (Band F residue); command_policy/path_policy Default.
+    let surface = liberado_coder_agent::assemble::entry::runner_surface(
+        task,
+        workspace.clone(),
+        Some(model),
+        Some(max_turns),
+    );
+    // Headless still pre-loads the coder prompt so a bare checkout without prompt_path files
+    // works the same way as before; the assembler would leave prompt_path from tuning alone.
+    let mut assembled = assemble_production_run(&tuning, surface);
+    assembled.request.config.coder.prompt = Some(liberado_coder_core::prompts::load(
+        Some(&liberado_coder_core::prompts::dir_for(
+            tuning.prompt_dir.as_deref(),
+            &workspace.to_string_lossy(),
+        )),
+        liberado_coder_core::prompts::CODER_FILE,
+        liberado_coder_core::prompts::CODER,
+    ));
+    assembled.request.config.coder.prompt_path = None;
+    let request = assembled.request;
 
     let providers: Arc<dyn CoderProviderFactory> = match config_dir {
         Some(ref dir) => {
@@ -312,17 +257,6 @@ async fn run_headless(args: HeadlessArgs) -> Result<(), String> {
     match result.outcome {
         Outcome::Succeeded => Ok(()),
         _ => Err(format!("task completed with outcome: {:?}", result.outcome)),
-    }
-}
-
-fn disabled_role() -> CoderRoleConfig {
-    CoderRoleConfig {
-        model: "mock".to_string(),
-        prompt_path: None,
-        prompt: None,
-        temperature: None,
-        max_tokens: None,
-        max_turns: Some(4),
     }
 }
 
@@ -853,23 +787,6 @@ fn task_usage() -> String {
 
 // --- tests -----------------------------------------------------------------
 
-/// Where this run's trace file goes.
-///
-/// A bare `coder-traces` (the `[coder] trace_dir` default) is relative, and the headless runner is
-/// launched from arbitrary working directories — CI, a shepherd kickback, a shell in some other
-/// checkout — so honouring it literally scatters traces wherever the process happened to start.
-/// Anchoring a relative setting to the workspace keeps a run's evidence next to the run. An
-/// absolute setting is respected as given, which is what someone collecting traces centrally wants.
-fn resolve_trace_dir(workspace: &Path, configured: Option<&str>) -> String {
-    let configured = configured.unwrap_or("coder-traces");
-    let path = Path::new(configured);
-    if path.is_absolute() {
-        configured.to_string()
-    } else {
-        workspace.join(path).to_string_lossy().to_string()
-    }
-}
-
 /// Slugify a prompt into a short label for the preservation branch.
 ///
 /// `preserve_work` does its own alphanumeric sanitization; this only produces a
@@ -1079,15 +996,13 @@ async fn git_output(workspace: &Path, args: &[&str]) -> Result<String, String> {
 /// The acceptance gates for a headless run.
 ///
 /// A non-empty diff proves the agent did *something*; it says nothing about whether the something
-/// compiles. Both matter, and only the first was ever checked here.
+/// Default verifiers for the headless path (same as the shared assembler / ACP).
 ///
-/// The build check is skipped when the workspace has no `Cargo.toml`, because a verifier that
-/// always fails is indistinguishable from one that is broken, and this runner is not Rust-only by
-/// contract. `LIBERADO_CODER_VERIFY_CMD` overrides the whole thing for another stack.
-fn verifiers_for(workspace: &Path) -> Vec<VerifierSpec> {
-    // Delegates to the shared default so the headless runner and the ACP bridge cannot drift.
-    // They already did: F10 added `cargo check` here and the editor path kept accepting work
-    // that had never been compiled.
+/// Kept as a thin alias so the runner's own tests keep naming the production function, not a
+/// reimplementation. Production assembly goes through `assemble_production_run`, which calls
+/// `default_verifiers` when tuning leaves the list empty.
+#[cfg(test)]
+fn verifiers_for(workspace: &Path) -> Vec<liberado_coder_core::VerifierSpec> {
     liberado_coder_core::default_verifiers(workspace)
 }
 
@@ -1258,6 +1173,7 @@ mod tests {
 #[cfg(test)]
 mod verifier_tests {
     use super::*;
+    use liberado_coder_core::VerifierSpec;
 
     fn ids(specs: &[VerifierSpec]) -> Vec<String> {
         specs

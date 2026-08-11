@@ -5,10 +5,7 @@
 //! someone), or the environment BROKE (fail fast; no answer you can type fixes a dead sandbox).
 //! Conflating those is what made the ask seam unreachable from the case that most needed it.
 
-use liberado_coder_core::{
-    CoderRoleConfig, CoderRunConfig, CoderRunRequest, CoderTask, CodingMode, GoalContract,
-    LIBERADO_LOOP_BACKEND, ProgressPolicy, SandboxSpec, WorkspaceRef,
-};
+use liberado_coder_core::{CoderRoleConfig, CoderTask, CodingMode, GoalContract, SandboxSpec};
 use liberado_common::Outcome;
 use liberado_session::{
     GoalResult, GoalSpec, InputChannel, PackContext, PackError, SessionEvent, SessionEventKind,
@@ -341,14 +338,6 @@ impl CodingSessionPack {
             max_tokens: None,
             max_turns: Some(max_turns),
         };
-        let disabled = CoderRoleConfig {
-            model: model.clone(),
-            prompt_path: None,
-            prompt: None,
-            temperature: None,
-            max_tokens: None,
-            max_turns: Some(2),
-        };
 
         let mut task = CoderTask::new(session_id, &goal.description);
         task.success_criteria = goal.success_criteria.clone();
@@ -397,62 +386,33 @@ impl CodingSessionPack {
             (workspace.clone(), SandboxSpec::HostLocal)
         };
 
-        let mut request = CoderRunRequest {
-            task,
-            workspace: WorkspaceRef::new(attempt_workspace.to_string_lossy(), "HEAD"),
-            config: CoderRunConfig {
-                backend: LIBERADO_LOOP_BACKEND.into(),
-                trace_dir: self.trace_dir.clone(),
-                trace_formats: self.trace_formats.clone(),
-                planner: disabled.clone(),
-                coder: role.clone(),
-                critic: disabled,
-                // The pack's configured gate, not a hardcoded default: `[tuning.coder.gate]` was
-                // otherwise unreachable through the daemon at any setting.
-                gate: self.gate.clone(),
-                // Neither restricted tier gets a repair loop: explore must not mutate the tree at
-                // all, and plan mode is one pass to the plan file.
-                repair: if policies.mode.is_restricted() {
-                    None
-                } else {
-                    Some(role)
-                },
+        // One production assembly path shared with ACP and the headless runner. Surface-only
+        // inputs (mode policies, pack coder role, leave verifiers empty for the contract) stay
+        // here; shared knobs come from `self.tuning` so they cannot silently diverge again.
+        let mut tuning = self.tuning.clone();
+        // Keep mirror fields (with_gate / with_progress / …) authoritative when tests set them
+        // without going through with_tuning.
+        tuning.gate = self.gate.clone();
+        tuning.progress = self.progress.clone();
+        tuning.trace_dir = self.trace_dir.clone();
+        tuning.trace_formats = self.trace_formats.clone();
+        tuning.hashline = self.hashline.clone();
+        tuning.coder = self.coder_role.clone();
+
+        let assembled = crate::assemble_production_run(
+            &tuning,
+            crate::assemble::entry::pack_surface(crate::assemble::entry::PackSurfaceArgs {
+                task,
+                workspace_path: attempt_workspace.clone(),
                 sandbox,
+                coder_role: role,
+                mode: policies.mode,
                 command_policy: policies.command_policy.clone(),
-                validation_command: None,
-                verifiers: Vec::new(),
-                verify_policy: Default::default(),
                 path_policy: policies.path_policy.clone(),
-                progress: ProgressPolicy {
-                    max_attempts: if policies.mode.is_restricted() { 1 } else { 2 },
-                    // Explore mode is exclusively read-only tools — the progress guard's
-                    // read_only_turn_limit and same_tool_limit would trigger false
-                    // ReadOnlyStall / SameToolChurn fatals because every explore tool is
-                    // classified as non-mutating. Disable the guard so max_turns is the
-                    // only bound. Plan mode keeps the guard: it is expected to *write* the
-                    // plan file, so a run that never writes really has stalled.
-                    read_only_turn_limit: if policies.explore_mode() {
-                        u32::MAX
-                    } else {
-                        self.progress.read_only_turn_limit
-                    },
-                    same_tool_limit: if policies.explore_mode() {
-                        u32::MAX
-                    } else {
-                        self.progress.same_tool_limit
-                    },
-                    ..self.progress.clone()
-                },
                 hashline: policies.hashline.clone(),
-                session_critic: Default::default(),
-                prompt_dir: None,
-                edit: Default::default(),
-                workspace_build: Default::default(),
-            },
-            attempt: 0,
-            prior_feedback: Vec::new(),
-            strategist_directive: None,
-        };
+            }),
+        );
+        let mut request = assembled.request;
 
         // Announce a restricted tier so the human sees why the session cannot write or shell out.
         let mode_notice = match policies.mode {

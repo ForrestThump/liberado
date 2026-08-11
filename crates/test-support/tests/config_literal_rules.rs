@@ -1,6 +1,6 @@
-//! One rule: **the coding surfaces may not build their own `HashlineConfig`.**
+//! Rules that keep coding production surfaces on the shared assembly path.
 //!
-//! ## Why a scanner, and why this narrow
+//! ## Why a scanner
 //!
 //! `CoderTuning::run_config` has a serde-driven test (`every_shared_field_survives_the_conversion_to_run_config`)
 //! that proves each tuning field *arrives* in `CoderRunConfig`. It cannot prove the consumer then
@@ -10,31 +10,36 @@
 //! `hashline` is the instance that cost a run. `coder-runner` hardcoded
 //! `HashlineConfig { enabled: true, hash_length: 7 }`; the ACP path passed `tuning.hashline`,
 //! whose default was `enabled: false`. So the two coding paths disagreed about whether the model
-//! had `hashline_edit` at all, and the path we dogfood through was the one without it. A dispatched
-//! run then failed on exactly that: 15 of 25 `edit_file` calls returned `old text was not found`
-//! or `old text matched 2 times; provide more context`, and it filed `failed` having landed
-//! nothing. The tool that makes those two errors impossible was built, worked, and was off.
+//! had `hashline_edit` at all, and the path we dogfood through was the one without it.
 //!
-//! A unit test cannot catch this. Re-hardcoding the literal in `coder-runner` compiles and leaves
-//! every test in `coder-core` green — measured, not assumed. Only reading the source catches it.
+//! Backlog **0.4** generalises that: the three production entry points must not hand-build a
+//! full `CoderRunConfig { … }` tree. Shared knobs go through `assemble_production_run`. A fourth
+//! site reintroducing a literal must fail this gate.
 //!
-//! **Deliberately one type, not all of them.** Several config structs are legitimately built at
-//! call sites — `disabled_role` returns a `CoderRoleConfig`, and `ProgressPolicy { ..Default }`
-//! is a reasonable spread. A blanket ban would be wrong on its face and would be disabled within
-//! a month, which is worse than no rule. Add a type here when its divergence has actually caused
-//! harm; the list is evidence, not taste.
+//! **Deliberately narrow.** Fan-out children and in-crate unit fixtures still construct configs
+//! for isolation. The ban is production code in the three surfaces (and pack build), not every
+//! `CoderRunConfig` in the workspace.
 //!
-//! Same shape as `subprocess_rules.rs` and `layer_rules.rs`: the first instance was found by hand
-//! and cost a run, the next should be found by CI in seconds.
+//! Same shape as `subprocess_rules.rs` and `layer_rules.rs`.
 
 use std::path::{Path, PathBuf};
 
-/// Config types no surface may construct directly, and the field they must read instead.
-const BANNED: &[(&str, &str)] = &[("HashlineConfig {", "tuning.hashline")];
+/// Config constructions no production surface may introduce, and what they must use instead.
+///
+/// `HashlineConfig` is only banned on the two outer surfaces (where the original divergence
+/// lived). The pack may construct it when resolving mode policy (explore forces hashline off).
+/// `CoderRunConfig` is banned on all three production assembly sites.
+const BANNED_OUTER: &[(&str, &str)] = &[("HashlineConfig {", "tuning.hashline")];
+const BANNED_ALL: &[(&str, &str)] = &[(
+    "CoderRunConfig {",
+    "liberado_coder_agent::assemble_production_run",
+)];
 
-/// Crates whose production code is checked. These are the two coding entry points whose
-/// divergence is the failure being prevented.
-const SURFACES: &[&str] = &["coder-runner", "acp-bridge"];
+/// Crates whose production code is checked.
+///
+/// `coder-agent` is scanned only under `session_pack/` (the pack build entry). Fan-out and other
+/// pack-internal fixtures are outside this gate by path.
+const SURFACES: &[&str] = &["coder-runner", "acp-bridge", "coder-agent"];
 
 fn crates_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -75,6 +80,18 @@ fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
+/// Whether this file is in scope for the production-construction ban.
+///
+/// For `coder-agent`, only the session-pack build path is a production assembly site.
+/// `assemble.rs` is the shared constructor itself and must be free to build the config once.
+fn production_surface_file(surface: &str, file: &Path) -> bool {
+    if surface != "coder-agent" {
+        return true;
+    }
+    let s = file.to_string_lossy().replace('\\', "/");
+    s.contains("/session_pack/") && !s.contains("/assemble.rs")
+}
+
 fn violations() -> Vec<String> {
     let mut found = Vec::new();
     for surface in SURFACES {
@@ -82,12 +99,24 @@ fn violations() -> Vec<String> {
         let mut files = Vec::new();
         rust_files(&src, &mut files);
         for file in files {
+            if !production_surface_file(surface, &file) {
+                continue;
+            }
             let Ok(source) = std::fs::read_to_string(&file) else {
                 continue;
             };
+            let banned: Vec<(&str, &str)> = if *surface == "coder-agent" {
+                BANNED_ALL.to_vec()
+            } else {
+                BANNED_OUTER
+                    .iter()
+                    .chain(BANNED_ALL.iter())
+                    .copied()
+                    .collect()
+            };
             for (number, line) in production_lines(&source) {
                 let code = line.split("//").next().unwrap_or(line);
-                for (needle, replacement) in BANNED {
+                for (needle, replacement) in &banned {
                     if code.contains(needle) {
                         found.push(format!(
                             "{}:{number}: builds `{needle}` directly; read `{replacement}` instead",
@@ -119,29 +148,37 @@ fn coding_surfaces_read_their_config_instead_of_building_it() {
 /// success, and this file's whole value is that it fails when someone reintroduces a literal.
 #[test]
 fn the_scanner_actually_detects_a_violation() {
-    let sample = "fn build() {\n    hashline: HashlineConfig { enabled: true },\n}\n";
-    let hits: Vec<usize> = production_lines(sample)
+    let sample = "fn build() {\n    hashline: HashlineConfig { enabled: true },\n    config: CoderRunConfig {\n}\n";
+    let needles: Vec<&str> = BANNED_OUTER
+        .iter()
+        .chain(BANNED_ALL.iter())
+        .map(|(n, _)| *n)
+        .collect();
+    let hits: Vec<(usize, &str)> = production_lines(sample)
         .into_iter()
-        .filter(|(_, l)| {
+        .filter_map(|(n, l)| {
             let code = l.split("//").next().unwrap_or(l);
-            BANNED.iter().any(|(needle, _)| code.contains(needle))
+            needles
+                .iter()
+                .find(|needle| code.contains(*needle))
+                .map(|needle| (n, *needle))
         })
-        .map(|(n, _)| n)
         .collect();
     assert_eq!(
         hits,
-        vec![2],
+        vec![(2, "HashlineConfig {"), (3, "CoderRunConfig {")],
         "the matcher does not see a literal it must reject"
     );
 
     // And a mention inside a comment must not trip it, or the rule cannot be documented in the
     // files it governs.
-    let commented = "    // was HashlineConfig { enabled: true } before the fix\n";
+    let commented =
+        "    // was HashlineConfig { enabled: true } / CoderRunConfig { before the fix\n";
     let commented_hits = production_lines(commented)
         .into_iter()
         .filter(|(_, l)| {
             let code = l.split("//").next().unwrap_or(l);
-            BANNED.iter().any(|(needle, _)| code.contains(needle))
+            needles.iter().any(|needle| code.contains(needle))
         })
         .count();
     assert_eq!(

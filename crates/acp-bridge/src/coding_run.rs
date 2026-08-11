@@ -10,11 +10,9 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use liberado_coder_agent::assemble_production_run;
 use liberado_coder_agent::{CoderProviderFactory, LiberadoLoopBackend, SingleProviderFactory};
-use liberado_coder_core::{
-    CoderBackend, CoderRoleConfig, CoderRunConfig, CoderRunRequest, CoderTask, CoderTuning,
-    LIBERADO_LOOP_BACKEND, PathPolicy, ProgressPolicy, SandboxSpec, TraceFormat, WorkspaceRef,
-};
+use liberado_coder_core::{CoderBackend, CoderTask, CoderTuning};
 use liberado_coder_sandbox::ensure_session_worktree;
 use liberado_coder_tools::coding_worktrees_base;
 use liberado_provider::Provider;
@@ -198,20 +196,6 @@ pub async fn run_coding_round(
         .map(str::to_string)
         .unwrap_or_else(|| provider.model());
 
-    let mut coder_role = tuning.coder.clone();
-    if !model.is_empty() {
-        coder_role.model = model.clone();
-    }
-    coder_role.max_turns = Some(max_turns);
-    // Repair mirrors coder when present.
-    let repair = tuning.repair.clone().map(|mut r| {
-        if !model.is_empty() {
-            r.model = model.clone();
-        }
-        r.max_turns = Some(max_turns);
-        r
-    });
-
     let mut task = CoderTask::new(&state.coding_session_id, description);
     if let Some(prev) = &state.last_summary {
         task = task.with_context(format!(
@@ -220,81 +204,28 @@ pub async fn run_coding_round(
         ));
     }
 
-    let request = CoderRunRequest {
-        task,
-        workspace: WorkspaceRef::new(workspace.to_string_lossy(), "HEAD"),
-        config: CoderRunConfig {
-            backend: LIBERADO_LOOP_BACKEND.into(),
-            trace_dir: tuning.trace_dir.clone().or_else(|| {
-                Some(
-                    PathBuf::from(
-                        std::env::var("LIBERADO_DATA_DIR").unwrap_or_else(|_| ".liberado".into()),
-                    )
-                    .join("coder-traces")
-                    .to_string_lossy()
-                    .into_owned(),
-                )
-            }),
-            trace_formats: if tuning.trace_formats.is_empty() {
-                vec![TraceFormat::Native]
+    // Shared production assembly (same path as CodingSessionPack and liberado-coder-run).
+    // Critic gets the loaded reviewer prompt so an enabled gate cannot fail on an empty role.
+    let assembled = assemble_production_run(
+        tuning,
+        liberado_coder_agent::assemble::entry::acp_surface(
+            task,
+            workspace.clone(),
+            if model.is_empty() {
+                None
             } else {
-                tuning.trace_formats.clone()
+                Some(model.clone())
             },
-            planner: disabled_role(&model),
-            coder: coder_role,
-            // A real reviewer, not `disabled_role`. `[coder.gate]` is honoured below, and the
-            // gate's reviewers fall back to this role — but `role_instructions` *errors* when a
-            // role carries no prompt, and `disabled_role` carries none. So `enabled = true`
-            // parsed, reached the gate, and failed the entire run at the first reviewer. The
-            // setting was reachable and unusable, which is worse than unreachable: it looks like
-            // the feature is broken rather than unconfigured.
-            //
-            // The role is built whether or not the gate is on. Building it costs nothing and no
-            // model is called while `gate.enabled` is false; making it conditional would put the
-            // trap back one `if` away.
-            critic: reviewer_role(
-                &tuning.critic,
-                &model,
-                Some(&liberado_coder_core::prompts::dir_for(
-                    tuning.prompt_dir.as_deref(),
-                    &workspace.to_string_lossy(),
-                )),
-            ),
-            gate: tuning.gate.clone(),
-            repair,
-            // Durable worktree already materialised; HostLocal on that tree (same as pack build).
-            sandbox: SandboxSpec::HostLocal,
-            command_policy: tuning.command_policy.clone(),
-            validation_command: tuning.validation_command.clone(),
-            // An unconfigured deployment gets real acceptance checks rather than none. This
-            // line used to pass `tuning.verifiers` straight through, which is empty by default,
-            // so the only thing standing between a run and `succeeded` was the model's own say-so
-            // — and a run whose `cargo check` failed three times filed success on exactly that.
-            verifiers: if tuning.verifiers.is_empty() {
-                liberado_coder_core::default_verifiers(&workspace)
-            } else {
-                tuning.verifiers.clone()
-            },
-            verify_policy: tuning.verify_policy.clone(),
-            path_policy: if tuning.path_policy.allow_write_globs.is_empty() {
-                PathPolicy::default()
-            } else {
-                tuning.path_policy.clone()
-            },
-            progress: ProgressPolicy {
-                // Prefer pack progress knobs; never use executor DEFAULT_MAX_TURNS (8).
-                ..tuning.progress.clone()
-            },
-            hashline: tuning.hashline.clone(),
-            session_critic: Default::default(),
-            prompt_dir: tuning.prompt_dir.clone(),
-            edit: tuning.edit.clone(),
-            workspace_build: tuning.workspace_build.clone(),
-        },
-        attempt: state.rounds,
-        prior_feedback: state.prior_feedback.clone(),
-        strategist_directive: None,
-    };
+            Some(max_turns),
+            state.rounds,
+            state.prior_feedback.clone(),
+        ),
+    );
+    let request = assembled.request;
+    tracing::debug!(
+        ?assembled.provenance.fields,
+        "coding run assembled (shared production path)"
+    );
 
     tracing::info!(
         session = %state.coding_session_id,
@@ -712,55 +643,6 @@ fn workspace_env(tuning: &CoderTuning) -> std::collections::BTreeMap<String, Str
     env
 }
 
-/// The cold diff reviewer the completion gate consults.
-///
-/// Its prompt is [`liberado_coder_agent::COLD_DIFF_REVIEWER_PROMPT`], shared rather than written
-/// here so the reviewer that is measured offline and the reviewer that runs in a session are the
-/// same text.
-fn reviewer_role(
-    configured: &CoderRoleConfig,
-    fallback_model: &str,
-    prompt_dir: Option<&Path>,
-) -> CoderRoleConfig {
-    // The *configured* critic model, not the coder's.
-    //
-    // This took the session's model, so both reviewers ran on whatever the coding run was using
-    // — `deepseek-v4-pro` by default — while `[coder.critic] model` said `deepseek-v4-flash` and
-    // reached nobody. Reviewing is a cheaper job than coding: the diff reviewer answers one
-    // question about a diff, the session critic reads a transcript. Paying pro rates for both,
-    // silently, is the kind of thing you only notice on a bill.
-    let model = if configured.model.trim().is_empty() {
-        fallback_model.to_string()
-    } else {
-        configured.model.clone()
-    };
-    CoderRoleConfig {
-        model,
-        prompt_path: None,
-        prompt: Some(liberado_coder_core::prompts::load(
-            prompt_dir,
-            liberado_coder_core::prompts::DIFF_REVIEWER_FILE,
-            liberado_coder_core::prompts::DIFF_REVIEWER,
-        )),
-        // Deterministic on purpose: a reviewer that returns a different verdict on a re-run
-        // cannot be argued with, and a gate you cannot argue with gets switched off.
-        temperature: configured.temperature.or(Some(0.0)),
-        max_tokens: configured.max_tokens.or(Some(4000)),
-        max_turns: Some(1),
-    }
-}
-
-fn disabled_role(model: &str) -> CoderRoleConfig {
-    CoderRoleConfig {
-        model: model.to_string(),
-        prompt_path: None,
-        prompt: None,
-        temperature: None,
-        max_tokens: None,
-        max_turns: Some(0),
-    }
-}
-
 /// Factory that honours per-role model ids via `set_model` on a clone... actually
 /// [`SingleProviderFactory`] shares one provider. Prefer it when one model is enough;
 /// for multi-model, the bridge should install a factory that builds providers per model.
@@ -777,16 +659,38 @@ pub fn workspace_payload(cwd: &Path) -> serde_json::Value {
 #[cfg(test)]
 mod reviewer_role_tests {
     use super::*;
+    use liberado_coder_agent::assemble::entry;
+    use liberado_coder_core::CoderRoleConfig;
 
-    fn critic_config(model: &str) -> CoderRoleConfig {
-        CoderRoleConfig {
-            model: model.to_string(),
-            prompt_path: None,
-            prompt: None,
-            temperature: None,
-            max_tokens: None,
-            max_turns: None,
+    fn tuning_with_critic(model: &str) -> CoderTuning {
+        CoderTuning {
+            critic: CoderRoleConfig {
+                model: model.to_string(),
+                prompt_path: None,
+                prompt: Some("placeholder".into()),
+                temperature: None,
+                max_tokens: None,
+                max_turns: Some(1),
+            },
+            ..CoderTuning::default()
         }
+    }
+
+    /// Critic role resolved through the shared ACP assembly path (not a local copy).
+    fn acp_critic_role(critic_model: &str, session_model: &str) -> CoderRoleConfig {
+        let tuning = tuning_with_critic(critic_model);
+        let assembled = assemble_production_run(
+            &tuning,
+            entry::acp_surface(
+                CoderTask::new("t", "goal"),
+                PathBuf::from("."),
+                Some(session_model.into()),
+                Some(10),
+                0,
+                Vec::new(),
+            ),
+        );
+        assembled.request.config.critic
     }
 
     /// The reviewer must run on the model `[coder.critic]` names, not the coder's.
@@ -796,7 +700,7 @@ mod reviewer_role_tests {
     /// the difference silently is exactly the shape of the other shadowed settings.
     #[test]
     fn the_reviewer_uses_the_configured_model_not_the_coders() {
-        let role = reviewer_role(&critic_config("deepseek-v4-flash"), "deepseek-v4-pro", None);
+        let role = acp_critic_role("deepseek-v4-flash", "deepseek-v4-pro");
         assert_eq!(
             role.model, "deepseek-v4-flash",
             "the configured critic model must win over the session's"
@@ -807,7 +711,7 @@ mod reviewer_role_tests {
     /// empty model id, which fails at the provider with a worse message.
     #[test]
     fn an_unset_critic_model_falls_back_to_the_session_model() {
-        let role = reviewer_role(&critic_config("  "), "deepseek-v4-pro", None);
+        let role = acp_critic_role("  ", "deepseek-v4-pro");
         assert_eq!(role.model, "deepseek-v4-pro");
     }
 
@@ -861,12 +765,13 @@ mod reviewer_role_tests {
     ///
     /// `[coder.gate] enabled = true` parses, reaches `run_gate`, and asks `role_instructions` for
     /// the reviewer's prompt. That call returns `Err` for a role with neither `prompt` nor
-    /// `prompt_path`, and `run_attempt` propagates it — so with `disabled_role` here, turning the
-    /// gate on failed the whole run at the first reviewer. Reverting `critic` to a promptless role
-    /// must fail this test rather than wait to be discovered by a user who enabled a setting.
+    /// `prompt_path`, and `run_attempt` propagates it — so with a promptless role here, turning the
+    /// gate on failed the whole run at the first reviewer. Reverting the shared assembler to a
+    /// promptless critic must fail this test rather than wait to be discovered by a user who
+    /// enabled a setting.
     #[test]
     fn the_gate_reviewer_role_can_actually_be_instructed() {
-        let role = reviewer_role(&critic_config("cfg/model"), "session/model", None);
+        let role = acp_critic_role("cfg/model", "session/model");
         let prompt = role
             .prompt
             .as_deref()
@@ -887,9 +792,7 @@ mod reviewer_role_tests {
     #[test]
     fn the_reviewer_uses_the_shared_prompt() {
         assert_eq!(
-            reviewer_role(&critic_config("m"), "m", None)
-                .prompt
-                .as_deref(),
+            acp_critic_role("m", "m").prompt.as_deref(),
             Some(liberado_coder_agent::COLD_DIFF_REVIEWER_PROMPT),
         );
     }

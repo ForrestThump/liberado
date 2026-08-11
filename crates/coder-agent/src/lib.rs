@@ -5,6 +5,7 @@
 //! specialization — not the center of Liberado. See
 //! `docs/architecture/agentic-loops.md` and `docs/roadmap/agentic-mesh-hygiene-audit-2026-07-10.md`.
 
+pub mod assemble;
 mod completion_gate;
 mod critic;
 mod fanout;
@@ -21,6 +22,11 @@ pub mod session_critic;
 mod session_pack;
 mod trace;
 mod verify_pipeline;
+
+pub use assemble::{
+    AssembledRun, AssemblyProvenance, CriticPolicy, EmptyVerifiersPolicy, FieldSource,
+    ProductionSurface, RepairPolicy, TraceDirPolicy, assemble_production_run,
+};
 
 pub use fanout::{
     ChildOutcome, CodingSubtask, DEFAULT_MAX_CONCURRENT_CODING_SUBAGENTS, FanoutReport, MergeStep,
