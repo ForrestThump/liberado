@@ -1079,14 +1079,22 @@ mod goal_message_tests {
         );
     }
 
-    /// Ignoring the flag reintroduces F11: this test fails if apply_interactive is a no-op.
+    /// Ignoring the flag reintroduces F11: this test fails if the call site is removed.
+    ///
+    /// The helper definition, its docs, or a call from another handler is not enough. The grant
+    /// passed to `start_with_grant` must be the value narrowed inside `goals_start`.
     #[test]
     fn apply_interactive_is_invoked_from_goals_start() {
         let src = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/api/goals.rs"));
         let production = src.split("#[cfg(test)]").next().expect("production");
+        let goals_start = production
+            .split_once("pub async fn goals_start(")
+            .and_then(|(_, tail)| tail.split_once("pub async fn goals_get("))
+            .map(|(body, _)| body)
+            .expect("production source must contain the goals_start body");
         assert!(
-            production.contains("apply_interactive_to_grant"),
-            "goals_start must call apply_interactive_to_grant"
+            goals_start.contains("let grant = apply_interactive_to_grant(&goal, grant);"),
+            "goals_start must narrow and rebind the grant before start_with_grant"
         );
     }
 
