@@ -37,6 +37,20 @@ pub use live::with_live_events;
 pub use roles::COLD_DIFF_REVIEWER_PROMPT;
 pub use session_pack::CodingSessionPack;
 
+/// The ship bar: the CI-equivalent gate a coding run must clear before it may report success.
+///
+/// Public because more than one entry point dispatches coding runs. The daemon path reaches this
+/// through [`CodingSessionPack`]; the ACP bridge builds its own request and, until the gate was
+/// exported, had no way to reach the same decision — so every run dispatched from an ACP client
+/// skipped the bar entirely and nothing said so. Re-exported rather than duplicated: two copies
+/// of a merge bar drift, and the one that drifts is the one nobody is watching.
+pub mod ship_preflight {
+    pub use crate::session_pack::preflight_hook::{
+        run_ship_preflight, ship_preflight_required, ship_preflight_required_for, ship_spec_for,
+        ship_spec_from_goal,
+    };
+}
+
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 

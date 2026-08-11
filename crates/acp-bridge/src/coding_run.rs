@@ -64,6 +64,62 @@ pub fn load_acp_config(config_dir: Option<&Path>) -> liberado_config::AcpConfig 
     }
 }
 
+/// The `payload` shape the ship bar reads, for a run rooted at `project_root`.
+///
+/// The HTTP API builds this from the goal's `project` name. An ACP client sends a prompt and a
+/// working directory and never names a project, so the identity is recovered from the path: the
+/// declared `[[projects]]` entry whose root contains this run's root. Same payload, same decision
+/// function, so a run dispatched from Paseo is held to the bar its project declares.
+///
+/// An empty object when nothing matches — no config dir, an undeclared directory, a project with
+/// no ship profile. That is the honest answer, and [`ship_preflight_required_for`] reads it as
+/// "no bar" rather than inventing steps for a repo whose build nobody described.
+///
+/// [`ship_preflight_required_for`]: liberado_coder_agent::ship_preflight::ship_preflight_required_for
+pub fn ship_preflight_payload(config_dir: Option<&Path>, project_root: &Path) -> serde_json::Value {
+    let Some(dir) = config_dir else {
+        return serde_json::json!({});
+    };
+    let config = match liberado_config::load_config(Some(dir)) {
+        Ok((config, _)) => config,
+        Err(e) => {
+            tracing::warn!(error = %e, "loading topology for the ship bar failed; no preflight");
+            return serde_json::json!({});
+        }
+    };
+    // Canonicalized on both sides before comparing. A declared root and a client's cwd routinely
+    // name the same directory in different spellings — a trailing separator, a symlink, or on
+    // Windows the 8.3 short form — and a literal comparison then finds no project and silently
+    // drops the bar, which is the failure this whole change exists to end.
+    let root = canonical(project_root);
+    let Some(project) = config
+        .enabled_projects()
+        .into_iter()
+        .find(|p| root.starts_with(canonical(&p.root)))
+    else {
+        tracing::info!(
+            root = %project_root.display(),
+            "no declared project covers this workspace; no ship preflight will run"
+        );
+        return serde_json::json!({});
+    };
+
+    let mut payload = serde_json::Map::new();
+    payload.insert("project".into(), serde_json::json!(project.name));
+    // Absent for a project that declares no steps. `liberado` then still gets the built-in
+    // defaults, because the pack resolves those from the project name.
+    if let Some(preflight) = project.ship_preflight_payload() {
+        payload.insert("preflight".into(), preflight);
+    }
+    serde_json::Value::Object(payload)
+}
+
+fn canonical(path: &Path) -> PathBuf {
+    path.canonicalize()
+        .map(|p| liberado_coder_sandbox::strip_extended_path_prefix(&p))
+        .unwrap_or_else(|_| path.to_path_buf())
+}
+
 /// Build coding pack tunables from Liberado config when available.
 pub fn load_coder_tuning(config_dir: Option<&Path>) -> CoderTuning {
     let Some(dir) = config_dir else {
@@ -112,6 +168,14 @@ pub struct CodingRound<'a> {
     /// Resolved by the caller via [`prepare_workspace`], so the path is still known if the run
     /// is cancelled and its output needs preserving.
     pub workspace: PathBuf,
+    /// The client's own directory — the repo this run is *of*, not the worktree it happens in.
+    ///
+    /// The worktree lives under the data dir and matches no declared project root, so the ship
+    /// bar has to be resolved from this. Carried separately rather than derived from `workspace`
+    /// by walking git links, because the caller already has it.
+    pub project_root: PathBuf,
+    /// Where `topology.toml` is, for resolving that project. `None` runs without a ship bar.
+    pub config_dir: Option<PathBuf>,
 }
 
 pub async fn run_coding_round(
@@ -127,6 +191,8 @@ pub async fn run_coding_round(
         max_turns,
         events,
         workspace,
+        project_root,
+        config_dir,
     } = round;
     let model = model_override
         .map(str::to_string)
@@ -284,6 +350,9 @@ pub async fn run_coding_round(
     // Cloned before the run consumes it: the remediation path below needs the same workspace,
     // verifiers and policies, and rebuilding them by hand is how the two drift apart.
     let base_request = request.clone();
+    // Cloned before the run consumes it: the ship bar below reports through the same channel, and
+    // its progress and verdict are the part of a round a watching client most needs to see.
+    let preflight_events = events.clone();
     let run = backend.run(request);
     let result = match events {
         Some(tx) => {
@@ -321,20 +390,36 @@ pub async fn run_coding_round(
         }
     }
 
-    state.rounds = state.rounds.saturating_add(1);
-    state.last_summary = Some(result.summary.clone());
-    if !matches!(
+    // The ship bar, before this round may be called a success.
+    //
+    // Everything above answers "did the model finish". This answers "would the project take it",
+    // and the two are not the same question — the in-loop verifiers run a subset of CI against a
+    // subset of the tree. Landed in PR #74 and reached only through `CodingSessionPack`, which
+    // this path does not use, so every ACP-dispatched run since Paseo shipped skipped it.
+    let (outcome, summary) = apply_ship_bar(
         result.outcome,
+        result.summary,
+        &workspace,
+        &project_root,
+        config_dir.as_deref(),
+        preflight_events,
+    )
+    .await;
+
+    state.rounds = state.rounds.saturating_add(1);
+    state.last_summary = Some(summary.clone());
+    if !matches!(
+        outcome,
         liberado_common::Outcome::Succeeded | liberado_common::Outcome::PartiallySucceeded
     ) {
         state
             .prior_feedback
-            .push(format!("Previous attempt: {}", result.summary));
+            .push(format!("Previous attempt: {summary}"));
     }
 
     Ok(CodingRoundOutcome {
-        summary: result.summary,
-        outcome: format!("{:?}", result.outcome),
+        summary,
+        outcome: format!("{outcome:?}"),
         files_changed: result.files_changed,
         workspace: workspace.display().to_string(),
         trace_path: result.trace_path,
@@ -350,6 +435,68 @@ pub async fn run_coding_round(
             },
         ),
     })
+}
+
+/// Run the ship bar over a finished round and return the outcome it earns.
+///
+/// Only a round that already claims success is gated. A failed round has nothing to demote, and
+/// running a full CI-equivalent suite to confirm a failure spends minutes to learn nothing.
+///
+/// A preflight that cannot run is **not** a pass. It downgrades with the error in the summary, on
+/// the same reasoning as the baseline logic it wraps: the bar exists to stop unverified work being
+/// called finished, and "the check broke" is not evidence the work is sound. The failure is loud
+/// in the summary rather than silent in a log, because a silent skip is the exact defect here.
+async fn apply_ship_bar(
+    outcome: liberado_common::Outcome,
+    summary: String,
+    workspace: &Path,
+    project_root: &Path,
+    config_dir: Option<&Path>,
+    events: Option<tokio::sync::mpsc::Sender<liberado_session::SessionEvent>>,
+) -> (liberado_common::Outcome, String) {
+    use liberado_coder_agent::ship_preflight as bar;
+
+    if !matches!(
+        outcome,
+        liberado_common::Outcome::Succeeded | liberado_common::Outcome::PartiallySucceeded
+    ) {
+        return (outcome, summary);
+    }
+    let payload = ship_preflight_payload(config_dir, project_root);
+    if !bar::ship_preflight_required_for(&payload) {
+        return (outcome, summary);
+    }
+    let Some(spec) = bar::ship_spec_for(&payload) else {
+        tracing::info!("ship preflight required but no spec resolved; round not gated");
+        return (outcome, summary);
+    };
+
+    // A live channel when the client is watching, a closed one when it is not. `run_ship_preflight`
+    // ignores send failures, so a closed channel costs one allocation and keeps the gate from
+    // having two shapes.
+    //
+    // The receiver is dropped, deliberately and explicitly. Held instead — which `let (tx, _rx)`
+    // does, since a leading underscore names a binding rather than discarding it — the first send
+    // fills the buffer and the second blocks forever on a channel nobody will ever read.
+    let (tx, rx) = tokio::sync::mpsc::channel(1);
+    drop(rx);
+    let sink = events.unwrap_or(tx);
+
+    let session = workspace
+        .file_name()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "coding".to_string());
+    match bar::run_ship_preflight(&session, workspace, &spec, &sink).await {
+        Ok(report) if report.ok => (outcome, format!("{summary}\n\n{}", report.summary)),
+        Ok(report) => (
+            liberado_common::Outcome::Failed,
+            format!("{summary}\n\nship preflight failed: {}", report.summary),
+        ),
+        Err(e) => (
+            liberado_common::Outcome::Failed,
+            format!("{summary}\n\nship preflight could not run: {e}"),
+        ),
+    }
 }
 
 /// A `CoderRunResult` with nothing in it, for reusing `render_findings_markdown` on the three
@@ -998,5 +1145,167 @@ mod grant_tests {
             resolve_local_grant(None).is_ok(),
             "no config dir means no deployment, not a refusal"
         );
+    }
+}
+
+#[cfg(test)]
+mod ship_bar_tests {
+    use super::*;
+    use liberado_common::Outcome;
+
+    /// A deployment declaring one project rooted at `root`, with `steps` as its ship bar.
+    fn config_dir_for(root: &Path, steps: &str) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            dir.path().join("topology.toml"),
+            format!(
+                "vault_path = \"/tmp/vault\"\n\n\
+                 [[projects]]\n\
+                 name = \"fixture\"\n\
+                 root = {root}\n\n\
+                 [projects.preflight.ship]\n\
+                 steps = [{steps}]\n",
+                root = toml_path(root),
+            ),
+        )
+        .expect("write topology");
+        dir
+    }
+
+    /// TOML basic-string escaping. Windows roots are full of backslashes, and an unescaped one
+    /// makes the fixture fail to parse — which reads as "no project matched" and would pass the
+    /// tests below for entirely the wrong reason.
+    fn toml_path(p: &Path) -> String {
+        let escaped = p.display().to_string().replace('\\', "\\\\");
+        format!("\"{escaped}\"")
+    }
+
+    #[test]
+    fn a_declared_project_supplies_the_payload_the_gate_reads() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let cfg = config_dir_for(root.path(), "{ name = \"ok\", run = \"exit 0\" }");
+
+        let payload = ship_preflight_payload(Some(cfg.path()), root.path());
+        assert_eq!(payload["project"], "fixture");
+        assert_eq!(payload["preflight"]["steps"][0]["name"], "ok");
+        assert!(
+            liberado_coder_agent::ship_preflight::ship_preflight_required_for(&payload),
+            "a declared project with ship steps must require the bar"
+        );
+    }
+
+    /// A subdirectory of a declared root is still that project — the client's cwd is routinely
+    /// deeper than the root someone wrote in topology.toml.
+    #[test]
+    fn a_subdirectory_of_a_declared_root_resolves_to_that_project() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let nested = root.path().join("crates").join("thing");
+        std::fs::create_dir_all(&nested).expect("nested");
+        let cfg = config_dir_for(root.path(), "{ name = \"ok\", run = \"exit 0\" }");
+
+        let payload = ship_preflight_payload(Some(cfg.path()), &nested);
+        assert_eq!(payload["project"], "fixture");
+    }
+
+    /// An undeclared directory gets no bar rather than an invented one. Running someone else's
+    /// repo through liberado's cargo steps would fail for reasons that say nothing about it.
+    #[test]
+    fn an_undeclared_directory_has_no_ship_bar() {
+        let declared = tempfile::tempdir().expect("tempdir");
+        let elsewhere = tempfile::tempdir().expect("tempdir");
+        let cfg = config_dir_for(declared.path(), "{ name = \"ok\", run = \"exit 0\" }");
+
+        let payload = ship_preflight_payload(Some(cfg.path()), elsewhere.path());
+        assert!(
+            !liberado_coder_agent::ship_preflight::ship_preflight_required_for(&payload),
+            "an undeclared root must not acquire a bar: {payload}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_failing_ship_bar_takes_the_success_away() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let cfg = config_dir_for(root.path(), "{ name = \"bar\", run = \"exit 3\" }");
+
+        let (outcome, summary) = apply_ship_bar(
+            Outcome::Succeeded,
+            "the model says it is done".into(),
+            root.path(),
+            root.path(),
+            Some(cfg.path()),
+            None,
+        )
+        .await;
+
+        assert_eq!(
+            outcome,
+            Outcome::Failed,
+            "a round that cannot clear the ship bar is not a success: {summary}"
+        );
+        assert!(
+            summary.contains("ship preflight"),
+            "the reason must reach the summary, which is what the next round is told: {summary}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_passing_ship_bar_leaves_the_success_alone() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let cfg = config_dir_for(root.path(), "{ name = \"bar\", run = \"exit 0\" }");
+
+        let (outcome, _) = apply_ship_bar(
+            Outcome::Succeeded,
+            "done".into(),
+            root.path(),
+            root.path(),
+            Some(cfg.path()),
+            None,
+        )
+        .await;
+
+        assert_eq!(outcome, Outcome::Succeeded);
+    }
+
+    /// A round that already failed is returned untouched. Gating it would spend a full CI run to
+    /// confirm what is already known, on the path where the agent has the least budget left.
+    #[tokio::test]
+    async fn a_failed_round_is_not_put_through_the_bar() {
+        let root = tempfile::tempdir().expect("tempdir");
+        // A step that would fail if it ran at all.
+        let cfg = config_dir_for(root.path(), "{ name = \"bar\", run = \"exit 3\" }");
+
+        let (outcome, summary) = apply_ship_bar(
+            Outcome::Failed,
+            "already failed".into(),
+            root.path(),
+            root.path(),
+            Some(cfg.path()),
+            None,
+        )
+        .await;
+
+        assert_eq!(outcome, Outcome::Failed);
+        assert_eq!(
+            summary, "already failed",
+            "the bar must not rewrite a summary it never ran against"
+        );
+    }
+
+    /// Standalone: no config dir, so no topology, so no bar — and the round stands as the pack
+    /// reported it rather than being failed for the absence of a deployment.
+    #[tokio::test]
+    async fn a_standalone_run_keeps_its_outcome() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let (outcome, summary) = apply_ship_bar(
+            Outcome::Succeeded,
+            "done".into(),
+            root.path(),
+            root.path(),
+            None,
+            None,
+        )
+        .await;
+        assert_eq!(outcome, Outcome::Succeeded);
+        assert_eq!(summary, "done");
     }
 }

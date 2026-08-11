@@ -106,6 +106,9 @@ struct Bridge {
     /// Coder-role max_turns for the full coding pack (not face Budget::default()=8).
     max_turns: u32,
     coder_tuning: liberado_coder_core::CoderTuning,
+    /// `LIBERADO_CONFIG_DIR`, kept so a coding round can resolve which declared project it is in
+    /// and therefore which ship bar it must clear. `None` is standalone: no topology, no bar.
+    config_dir: Option<PathBuf>,
     /// Declared authority for coding mode (`policy.toml` `coding-local`), empty when standalone.
     ///
     /// Surfaced in `session/new` so the editor can show what this agent may do. Deeper enforcement
@@ -267,8 +270,30 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     )
     .await;
     let default_mode = AgentMode::from_env_or_default();
-    let config_dir = std::env::var_os("LIBERADO_CONFIG_DIR").map(PathBuf::from);
+    // `config_dir()`, not a bare read of `LIBERADO_CONFIG_DIR`.
+    //
+    // The env var is only the first of four tiers the rest of Liberado resolves through — platform
+    // config dir, then a walk up from the running binary for a `config/`, then the platform dir as
+    // a last resort. Reading the variable alone opted this surface out of all of them, so an
+    // unset variable meant no topology, no policy, and no `[coder]` tuning, silently and with
+    // every setting at a compiled-in default.
+    let config_dir = liberado_config::config_dir();
     let coder_tuning = coding_run::load_coder_tuning(config_dir.as_deref());
+    // Say which config this run is using, before anything depends on it. The failure this
+    // replaces was invisible precisely because nothing was ever printed about it.
+    match &config_dir {
+        Some(dir) => tracing::info!(
+            config_dir = %dir.display(),
+            topology = dir.join("topology.toml").exists(),
+            policy = dir.join("policy.toml").exists(),
+            tuning = dir.join("tuning.toml").exists(),
+            "config directory resolved"
+        ),
+        None => tracing::warn!(
+            "no config directory resolved; running on defaults with no declared project, no ship \
+             bar and no policy grant"
+        ),
+    }
     // Point every child process at the shared build cache, once, before anything runs.
     //
     // Set on this process rather than threaded through each command builder because it has to
@@ -315,6 +340,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         default_mode,
         max_turns,
         coder_tuning,
+        config_dir,
         local_grant,
         system_prompt,
         acp_sessions: Mutex::new(HashMap::new()),
@@ -1009,6 +1035,10 @@ async fn run_coding_prompt(
     let text_for_run = text.to_string();
     let max_turns = bridge.max_turns;
     let workspace_for_run = workspace.clone();
+    // The client's directory, not the worktree: the ship bar is resolved from the declared project
+    // that contains it, and the worktree lives under the data dir where no project reaches.
+    let project_root_for_run = state.cwd.clone();
+    let config_dir_for_run = bridge.config_dir.clone();
     let mut task = tokio::spawn(async move {
         let outcome = coding_run::run_coding_round(
             coding_run::CodingRound {
@@ -1020,6 +1050,8 @@ async fn run_coding_prompt(
                 max_turns,
                 events: Some(ev_tx),
                 workspace: workspace_for_run,
+                project_root: project_root_for_run,
+                config_dir: config_dir_for_run,
             },
             &mut state,
         )
@@ -1604,6 +1636,7 @@ mod tests {
             default_mode: AgentMode::Coding,
             max_turns: 8,
             coder_tuning: liberado_coder_core::CoderTuning::default(),
+            config_dir: None,
             local_grant: liberado_common::CapabilitySet::empty(),
             system_prompt: None,
             acp_sessions: Mutex::new(HashMap::new()),

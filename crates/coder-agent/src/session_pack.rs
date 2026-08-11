@@ -23,7 +23,7 @@
 mod build;
 mod intake;
 mod policies;
-mod preflight_hook;
+pub(crate) mod preflight_hook;
 #[cfg(test)]
 mod tests;
 

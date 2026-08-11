@@ -26,7 +26,7 @@
  * Usage:
  *   node scripts/dispatch-acp-run.js --cwd <repo> --prompt "..." [--mode coding]
  *                                    [--timeout-min 45] [--no-shell] [--handshake-only]
- *                                    [--bin <path>] [--json]
+ *                                    [--bin <path>] [--config-dir <dir>] [--json]
  *
  * Exit: 0 = the run returned, 1 = it timed out or failed, 2 = handshake failed.
  */
@@ -60,9 +60,24 @@ const log = (...a) => {
   if (!AS_JSON) console.log(...a);
 };
 
+// Point the bridge at a config directory, the way Paseo's provider entry does.
+//
+// This script inherited the environment and nothing set LIBERADO_CONFIG_DIR, so every run
+// dispatched through it read no topology at all: no declared project, therefore no ship bar, and
+// no policy grant. The bridge is installed to ~/.cargo/bin, so its own discovery — walk up from
+// the binary for a `config/`, or look in the platform config dir — finds nothing either. A
+// dogfood run that does not load the deployment's config is not testing the deployment.
+//
+// `--config-dir` overrides; an existing environment value still wins, so this cannot quietly
+// redirect a caller who set one deliberately.
+const CONFIG_DIR = opt('--config-dir', path.join(CWD, 'config'));
+const childEnv = { ...process.env };
+if (!childEnv.LIBERADO_CONFIG_DIR) childEnv.LIBERADO_CONFIG_DIR = CONFIG_DIR;
+
 const child = spawn(USE_SHELL ? `"${BIN}"` : BIN, [], {
   cwd: CWD,
   shell: USE_SHELL,
+  env: childEnv,
   stdio: ['pipe', 'pipe', 'pipe'],
   windowsHide: true,
 });

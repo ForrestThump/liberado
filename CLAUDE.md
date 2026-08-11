@@ -146,6 +146,16 @@ accident. The measurement history and its caveats are in
 **including three reasonable hypotheses that were tried and did not work.** Read it before
 proposing a fix to the coding pack.
 
+**Check that the config file was loaded at all before blaming a setting.** `liberado-acp` read
+`LIBERADO_CONFIG_DIR` directly instead of calling `liberado_config::config_dir()`, so it opted out
+of the other three resolution tiers. Nothing set the variable — not Paseo's provider entry, not
+`scripts/dispatch-acp-run.js` — so every dogfood run since Paseo landed read **no** `topology.toml`,
+`policy.toml`, or `tuning.toml`: no declared project (hence no ship bar), and an empty capability
+grant. The bridge now logs the resolved directory and which of the three files exist at startup;
+read that line before concluding a setting does not work. Note the installed binary lives in
+`~/.cargo/bin`, so the walk-up-from-the-binary tier finds no repo `config/` — an explicit
+`LIBERADO_CONFIG_DIR` is the only reliable answer for an installed bridge.
+
 **A config value that parses is not a config value that is read.** Ten settings have shipped green
 while a consumer hardcoded a literal instead of reading them — `[coder.gate]`, `[coder.coder]`,
 `[coder.progress]`, `trace_dir`, the coder role model, two in `coder-runner/src/main.rs`, the

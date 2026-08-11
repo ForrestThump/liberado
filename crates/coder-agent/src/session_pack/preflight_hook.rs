@@ -18,22 +18,30 @@ use tokio::sync::mpsc::Sender;
 /// - `payload.skip_preflight` is not true, and
 /// - (`payload.preflight.required` is true, or project is set / steps present, or profile ship)
 pub fn ship_preflight_required(goal: &GoalSpec) -> bool {
-    if goal.payload.get("skip_preflight").and_then(|v| v.as_bool()) == Some(true) {
+    ship_preflight_required_for(&goal.payload)
+}
+
+/// [`ship_preflight_required`] against a bare payload.
+///
+/// Split out because the ACP bridge dispatches coding runs without ever building a [`GoalSpec`],
+/// and for its whole life that meant it skipped this decision entirely rather than answering it
+/// differently. One function, so a run started from Paseo and a run started from the HTTP API
+/// cannot end up held to different bars.
+pub fn ship_preflight_required_for(payload: &Value) -> bool {
+    if payload.get("skip_preflight").and_then(|v| v.as_bool()) == Some(true) {
         return false;
     }
     // Explore / plan are research or planning — not ship/PR outcomes by default.
-    if goal.payload.get("explore_mode").and_then(|v| v.as_bool()) == Some(true)
-        || goal.payload.get("plan_mode").and_then(|v| v.as_bool()) == Some(true)
-        || goal
-            .payload
+    if payload.get("explore_mode").and_then(|v| v.as_bool()) == Some(true)
+        || payload.get("plan_mode").and_then(|v| v.as_bool()) == Some(true)
+        || payload
             .get("mode")
             .and_then(|v| v.as_str())
             .is_some_and(|m| m.eq_ignore_ascii_case("explore") || m.eq_ignore_ascii_case("plan"))
     {
         return false;
     }
-    if goal
-        .payload
+    if payload
         .get("preflight")
         .and_then(|v| v.get("required"))
         .and_then(|v| v.as_bool())
@@ -42,8 +50,7 @@ pub fn ship_preflight_required(goal: &GoalSpec) -> bool {
         return false;
     }
     // Explicit required, or any steps, or a coding project name (liberado defaults apply).
-    if goal
-        .payload
+    if payload
         .get("preflight")
         .and_then(|v| v.get("required"))
         .and_then(|v| v.as_bool())
@@ -51,16 +58,14 @@ pub fn ship_preflight_required(goal: &GoalSpec) -> bool {
     {
         return true;
     }
-    if goal
-        .payload
+    if payload
         .get("preflight")
         .and_then(|v| v.get("steps"))
         .is_some()
     {
         return true;
     }
-    if goal
-        .payload
+    if payload
         .get("project")
         .and_then(|v| v.as_str())
         .is_some_and(|p| !p.is_empty())
@@ -72,18 +77,21 @@ pub fn ship_preflight_required(goal: &GoalSpec) -> bool {
 
 /// Build a ship [`PreflightSpec`] from payload, or liberado defaults, or `None` if nothing applies.
 pub fn ship_spec_from_goal(goal: &GoalSpec) -> Option<PreflightSpec> {
-    let project = goal
-        .payload
+    ship_spec_for(&goal.payload)
+}
+
+/// [`ship_spec_from_goal`] against a bare payload — see [`ship_preflight_required_for`].
+pub fn ship_spec_for(payload: &Value) -> Option<PreflightSpec> {
+    let project = payload
         .get("project")
         .and_then(|v| v.as_str())
         .map(str::trim)
         .filter(|s| !s.is_empty());
 
-    if let Some(steps) = steps_from_payload(&goal.payload)
+    if let Some(steps) = steps_from_payload(payload)
         && !steps.is_empty()
     {
-        let id = goal
-            .payload
+        let id = payload
             .get("preflight")
             .and_then(|v| v.get("profile"))
             .and_then(|v| v.as_str())
@@ -94,8 +102,7 @@ pub fn ship_spec_from_goal(goal: &GoalSpec) -> Option<PreflightSpec> {
 
     // profile: "ship" with no steps → liberado defaults when project is liberado
     resolve_ship_spec(project, None).or_else(|| {
-        if goal
-            .payload
+        if payload
             .get("preflight")
             .and_then(|v| v.get("profile"))
             .and_then(|v| v.as_str())
