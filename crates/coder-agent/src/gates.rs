@@ -229,6 +229,114 @@ pub async fn resolve_attempt_changes(
     committed_files_since(workspace_root, baseline).await
 }
 
+/// Run `cargo test` against the baseline commit to learn which failures already existed.
+///
+/// Uses `git stash` to restore the working tree to `baseline_sha`, runs the test suite, then
+/// restores the tree. Returns the set of failing test names on the baseline — an empty set means
+/// either the suite passed or there were no tests. Callers compare this against the current
+/// run's failures to decide which ones are new.
+///
+/// This is called only on the failure path, so the cost of a second `cargo test` run is paid
+/// only when the first one already failed. A second full workspace build is not cheap, but the
+/// alternative — failing an attempt for a pre-existing broken test — blocks whole classes of
+/// repair work.
+pub async fn baseline_test_failures(
+    workspace_root: &str,
+    baseline_sha: &str,
+) -> Result<std::collections::BTreeSet<String>, CoderError> {
+    if baseline_sha.is_empty() {
+        return Ok(std::collections::BTreeSet::new());
+    }
+    // Stash any pending changes. `--include-untracked` is load-bearing: the agent may have
+    // created new files that are not tracked, and `cargo test` on the baseline would fail if a
+    // new module is referenced from a tracked file but not on disk.
+    let stash_result = liberado_common::process::command("git")
+        .args([
+            "stash",
+            "push",
+            "--include-untracked",
+            "--message",
+            "liberado-verifier-baseline",
+        ])
+        .current_dir(workspace_root)
+        .output()
+        .await;
+    let stashed_something = match &stash_result {
+        Ok(o) => {
+            let msg = String::from_utf8_lossy(&o.stdout);
+            !msg.contains("No local changes to save")
+        }
+        Err(_) => false,
+    };
+
+    // Switch to the baseline commit.
+    let checkout = liberado_common::process::command("git")
+        .args(["checkout", baseline_sha])
+        .current_dir(workspace_root)
+        .output()
+        .await
+        .map_err(|e| CoderError::Backend(format!("git checkout baseline: {e}")))?;
+    if !checkout.status.success() {
+        // Restore before returning (if we stashed).
+        if stashed_something {
+            let _ = liberado_common::process::command("git")
+                .args(["stash", "pop"])
+                .current_dir(workspace_root)
+                .output()
+                .await;
+        }
+        return Err(CoderError::Backend(format!(
+            "git checkout to baseline {baseline_sha} failed: {}",
+            String::from_utf8_lossy(&checkout.stderr)
+        )));
+    }
+
+    // Run the test suite exactly as the verifier does.
+    let test_result = liberado_common::process::command("cargo")
+        .args(["test", "--workspace", "--no-fail-fast"])
+        .current_dir(workspace_root)
+        .output()
+        .await;
+
+    // Restore the working tree regardless of what happened.
+    // `git checkout -` goes back to the previous HEAD.
+    let restore = liberado_common::process::command("git")
+        .args(["checkout", "-"])
+        .current_dir(workspace_root)
+        .output()
+        .await;
+    if !restore.map(|o| o.status.success()).unwrap_or(false) {
+        tracing::warn!(
+            baseline = %baseline_sha,
+            "failed to restore working tree after baseline test run; manual recovery may be needed"
+        );
+    }
+    if stashed_something {
+        let _ = liberado_common::process::command("git")
+            .args(["stash", "pop"])
+            .current_dir(workspace_root)
+            .output()
+            .await;
+    }
+
+    let stdout = match &test_result {
+        Ok(o) => {
+            String::from_utf8_lossy(&o.stdout).to_string() + &String::from_utf8_lossy(&o.stderr)
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "baseline cargo test spawn failed");
+            return Ok(std::collections::BTreeSet::new());
+        }
+    };
+
+    let failures: std::collections::BTreeSet<String> =
+        liberado_coder_sandbox::failure_identities(&stdout)
+            .into_iter()
+            .filter(|f| f != liberado_coder_sandbox::OPAQUE_FAILURE)
+            .collect();
+    Ok(failures)
+}
+
 #[cfg(test)]
 mod changed_files_tests {
     use super::changed_files;
