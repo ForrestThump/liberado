@@ -120,6 +120,15 @@ defect fixes. No knob has yet produced a measured gain. Knobs come after the ins
 | **0.5** | **Productize cold review + one fix round.** The half that makes a PR merge-minimal rather than plausible, and the place a particular person's taste actually lives — the reviewer's standards are the reviewer's prompt. | medium | `Skills/cold-review-pr.md`, `crates/coder-agent/` |
 | **0.6** | **Offload oversized tool results to disk.** Biggest cost lever in the harness study: we truncate, which costs the same context as offload while losing the data. Worst case is `run_command` — a failing `cargo test` is tens of kilobytes that lands in the window and stays there every later turn. | medium | `crates/coder-tools/`, [`harness-study-2026-08.md`](harness-study-2026-08.md) |
 
+**Two small follow-ups from 0.1, both open.** `crates/acp-bridge/src/provider.rs` still reads
+`LIBERADO_CONFIG_DIR` directly rather than through `liberado_config::config_dir()` — the same defect
+fixed in `main.rs`, in a second place. Harmless while every launch path sets the variable, and left
+open deliberately: changing it makes provider resolution start finding configs where it previously
+found none. Separately, `run_preflight` is fail-fast on the first failing **required** step, so a
+`fmt` slip stops the bar before `test` runs and the model hears only about formatting. That is the
+existing preflight contract, and it is the thing the staged-gate item (fmt-as-action, then compile,
+then test+clippy together) is meant to replace.
+
 **The bar only runs if the config is loaded.** 0.1 gates on the declared `[[projects]]` entry that
 contains the run's root, so a bridge that resolved no config dir has no project and no bar. That was
 the state for the whole dogfood period — see the config-dir note in `CLAUDE.md`. The bridge now logs

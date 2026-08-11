@@ -362,24 +362,31 @@ must not depend on an outer CLI skill forever.
 | PR is usually *merge-minimal* | **Not yet** — missing default ship package + productized cold review + fix pass |
 | Self-improving with light oversight | **Architecture exists** (skills, gates, dream); **loop not closed** |
 
-> ### ⚠️ The ship gate is built and the dispatch path never calls it (found 2026-08-11)
+> ### ✅ The ship gate reached the dispatch path (found 2026-08-11, fixed in PR #134)
 >
-> Investment **#1** below — `PreflightRunner` plus the ship profile — **landed in PR #74**. It is
-> reached through `session_pack::build`, which calls `preflight_hook::run_ship_preflight`.
+> Investment **#1** below — `PreflightRunner` plus the ship profile — **landed in PR #74**, reached
+> through `session_pack::build` → `preflight_hook::run_ship_preflight`.
 >
-> **`crates/acp-bridge/src/coding_run.rs` does not use `session_pack`.** It mentions
-> `CodingSessionPack` twice, both times in comments describing what it mirrors. So every run
-> dispatched over ACP — which is every dogfood run since the Paseo integration landed, including all
-> of the 2026-08-10/11 A/B work — **skipped the ship bar entirely.**
+> **`crates/acp-bridge/src/coding_run.rs` did not use `session_pack`.** It mentioned
+> `CodingSessionPack` twice, both times in comments describing what it mirrored. So every run
+> dispatched over ACP — every dogfood run since the Paseo integration landed, including all of the
+> 2026-08-10/11 A/B work — **skipped the ship bar entirely.** That is the config-shadow failure class
+> at the level of a subsystem rather than a setting: built, tested, green, unreachable from the path
+> in use, and the most likely single explanation for why every dispatched run needed hand-finishing.
 >
-> This is the config-shadow failure class at the level of a subsystem rather than a setting: built,
-> tested, green, and unreachable from the path in use. It is also the most likely single explanation
-> for why every dispatched run so far has needed hand-finishing before it could be merged —
-> the runs were never measured against the ship bar, so nothing asked them to clear it.
+> **Two lessons survive the fix, and the second is the transferable one.**
 >
-> **Wiring it is the cheapest large win available** and should precede any further tuning work.
-> Rank #1 below is therefore not "build it" but "connect it, then verify a dispatched run actually
-> runs it."
+> First: `ship_preflight_required_for` / `ship_spec_for` now take a bare payload and the `GoalSpec`
+> versions delegate to them, so the two entry points cannot be held to different bars.
+> `ProjectConfig::ship_preflight_payload()` is the one builder both use.
+>
+> Second, and larger: **wiring the gate was not enough, because the bridge was loading no
+> configuration at all.** It read `LIBERADO_CONFIG_DIR` directly instead of calling
+> `liberado_config::config_dir()`, so it opted out of the other three resolution tiers, and nothing
+> in any launch path set the variable. No topology meant no declared project, which means the gate
+> would have been wired and *still* inert. Ask "was the config loaded" before asking "is the feature
+> reachable" — the bridge now logs its resolved config dir and which files it found, precisely
+> because this failure was silent.
 
 The feeling of "almost there" is correct for the *substrate*. The remaining work is closing the
 loop so that substrate becomes a repeatable, review-cheap path.

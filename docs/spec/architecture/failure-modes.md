@@ -4,7 +4,8 @@
 [`../../future-work/archive/`](../../future-work/archive/), plus the live runs of 2026-07-13/14. Class 6 added
 2026-07-26 from a dogfooding session that produced five instances of it in one sitting. Class 7
 added 2026-08-09 after eight instances surfaced in one day of changing settings and checking whether
-anything happened.
+anything happened. Class 7b added 2026-08-11: the same class one level up, where the config file was
+never loaded at all.
 
 Twelve separate audits, spread over two weeks, kept finding **the same handful of bugs wearing
 different clothes**. Reading all twelve teaches you the incidents. Reading this teaches you the pattern, which
@@ -188,7 +189,8 @@ disagree. This entry is the general case, and it is usually silent rather than w
 ## 7. The setting that parses, validates, and is never read
 
 Eight instances, found in a single day (2026-08-09) once someone started changing settings and
-checking whether anything happened.
+checking whether anything happened. Ten by 2026-08-10 — and see **7b** below for the variant where
+the config file was never loaded at all, which no amount of per-setting care would have caught.
 
 A value is declared in config. It parses. It validates. It has a default, a doc comment, and often a
 test proving the *loader* handles it. Then the consumer builds its own struct by hand and writes a
@@ -242,6 +244,38 @@ In order of strength:
 4. **An effective-config dump** (`liberado doctor`, or a startup log with provenance). The only one
    that catches a value copied correctly and then overridden downstream, and the only one available
    to an operator mid-incident.
+
+### 7b. The whole config file that was never loaded (2026-08-11)
+
+Every instance above assumes the file was read and one value went missing. The worse case is that
+**nothing was read at all**, and it looks identical from inside: every setting sits at its default,
+and no setting is individually wrong.
+
+`liberado-acp` resolved its config directory as `std::env::var_os("LIBERADO_CONFIG_DIR")` instead of
+calling `liberado_config::config_dir()`, which is the four-tier resolver everything else uses — env
+var, then the platform dir, then a walk up from the running binary for a `config/`, then the platform
+dir as fallback. Reading the variable alone opted the surface out of the other three tiers, and no
+launch path set it: not Paseo's provider entry, not `scripts/dispatch-acp-run.js`. So every ACP run
+for the whole dogfood period read no `topology.toml`, no `policy.toml`, no `tuning.toml` — **no
+declared project (hence no ship bar, even after PR #134 wired the gate) and an empty capability
+grant.**
+
+Three things make this class its own entry:
+
+- **It defeats fix 1 and fix 3 above.** A `from_tuning` constructor and a field-equality test both
+  operate on a `Tuning` that was loaded. Here the loader returned `Default` and every field agreed
+  with itself perfectly.
+- **The blast radius is every setting at once**, so the usual symptom — "I changed X and nothing
+  happened" — never appears for any particular X.
+- **Only fix 4 catches it.** The bridge now logs the directory it resolved and which of the three
+  files exist. That one line is the difference between a silent subsystem and a checkable one.
+
+An installed binary makes the discovery tiers useless — `~/.cargo/bin` has no repo `config/` above
+it — so an explicit `LIBERADO_CONFIG_DIR` is the only reliable answer wherever the binary is
+installed rather than run from `target/`.
+
+**The rule:** before asking whether a setting is read, ask whether the file was loaded, and make
+every process say which config it resolved at startup.
 
 ---
 
