@@ -71,11 +71,16 @@ also the one that matters least.
 
 *Not a substitute:* boot-time `[roles.main_agent] model = "…"` in `topology.toml` (edit + restart). That is fixed wiring, not mid-session.
 
-### Priority 3 — coding pack (integration parity, not best-in-class)
+### Priority 3 — coding pack (best accepted result per dollar)
 
 > **Pulled forward by owner decision (2026-07-24):** the agentic coding TUI track is now active
 > alongside P1/P2 — plan: [`coding-tui-plan.md`](future-work/coding-tui-plan.md) (goal-driven TUI surface +
 > kernel completion gate, Grok Build-style disputed-claim completion, slices S1–S7).
+
+**Performance target (set 2026-08-11):** best-in-class accepted-result-per-dollar on DeepSeek v4
+Flash for scoped PR work, while preserving the general kernel, capability model and domain-pack
+boundary. “Comparable” means a merge-ready result under the same task, repository commit, model,
+provider and resource caps — not matching another harness's TUI or copying its framework.
 
 **Self-hosting status (2026-08-09).** The bar in the backlog is "run these PRs on our own coder
 instead of OpenCode". It is now cleared once: [PR #90](https://github.com/ForrestThump/liberado/pull/90)
@@ -137,10 +142,11 @@ Two carried-forward limitations worth knowing before building on this:
 
 - **Model View Log (MVL)** — [`spec/reference/model-view-log.md`](spec/reference/model-view-log.md).
   A cross-harness contract for *what the model actually saw and did*: JSONL, flushed per event,
-  with a reconstruction requirement (rebuild the exact prompt for any turn from the log alone).
-  Written so Liberado, Kilo Code, pi, Hermes and Deep Agents can all be scored by one parser
-  instead of a translation layer per harness. Our `CoderEvent` stream is close; the gaps are listed
-  at the end of the spec.
+  with a reconstruction requirement (rebuild the exact messages **and tool catalogue** for any turn
+  from the log alone). It is paired, not conflated, with an execution log for tool timing,
+  concurrency, attempts, gates and worker-graph edges. Written so Liberado, Kilo Code, pi, Hermes
+  and Deep Agents can all be scored by one parser instead of a translation layer per harness. Our
+  `CoderEvent` stream is close; the gaps are listed at the end of the spec.
 - **What to take from pi, Hermes and Deep Agents** (research, 2026-08-11) —
   [`harness-study-2026-08.md`](future-work/harness-study-2026-08.md). Their cost advantage is
   structural, not prompt wording: they keep tokens **out** of the window (offload oversized tool
@@ -189,22 +195,53 @@ improvement so far came from fixing a defect, not from tuning a value.** Edit fa
 |---|---|---|
 | ~~**1**~~ | ~~**Wire the ship preflight into the ACP dispatch path**~~ **Landed, PR #134.** | Built in PR #74 and `coding_run.rs` never called it, so every dogfood run to date skipped the ship bar. The wiring was the small half: the bridge also loaded **no config at all** — it read `LIBERADO_CONFIG_DIR` directly rather than through `liberado_config::config_dir()`, and nothing set the variable, so there was no declared project to have a bar. It now logs the config dir it resolved. |
 | ~~**2**~~ | ~~**Close the two open harness bugs**~~ **Landed, PRs #131 / #132.** | `validate` passing read as "done" (a run shipped seven failing tests as success), and an empty critic response discarding a completed run. [`coder-harness-reliability-2026-08.md`](future-work/coder-harness-reliability-2026-08.md) |
-| **3** | **Emit the Model View Log** ([spec](spec/reference/model-view-log.md)) — **next, and larger than "medium"**: conformance point 1 (rebuild the exact message list at turn N) needs `liberado_executor::RequestRecord` to carry the message delta and sampling params, and `TurnRecord` to carry `usage.cached_input`. That is a change in `executor`, the layer every agent shares, not only in the coding pack. | The instrument. Every claim after this point — knob, prompt, or harness — is unmeasurable without it, and it is the precondition for A/B/C/D against Kilo, pi, Hermes and Deep Agents. |
-| **4** | **Productize cold review + one fix round** | The half that makes a PR *merge-minimal* rather than merely plausible. This is where taste is encoded: the reviewer's standards are the reviewer's prompt. |
-| **5** | **Extract knobs where a measurement says the constant is wrong** | Not "as many knobs as plausible". See the note below. |
-| **6** | **Tool-output offload to disk** | Biggest cost lever found in the harness study; independent of the above, do it when convenient. |
-| **7** | **Per-model profiles, then the SQL tuning ledger** | Correct to defer while we run only DeepSeek v4 pro/flash. [`model-knob-profiles.md`](future-work/model-knob-profiles.md) |
+| **3** | **Make one production coding-run assembly path.** `CodingSessionPack`, ACP and the headless runner still construct runs separately. Introduce one pack-owned resolved-run constructor, make raw cross-crate `CoderRunConfig` literals impossible where practical, and drive all three real entry points in conformance tests. Emit the resolved values and their provenance. | The recurring defect is not one bad default; it is a feature that exists and is absent from the path we dogfood. A comparative trace over three different assemblies would measure surface drift as harness behaviour. [`failure-modes.md`](spec/architecture/failure-modes.md#7-the-setting-that-parses-validates-and-is-never-read) |
+| **4** | **Finish the trace contract, then emit it.** Extend the [MVL](spec/reference/model-view-log.md) with complete tool-catalogue reconstruction and pair it with a joined execution log for attempts, tool start/finish, context transforms, gates, resources and worker-graph edges. Implement append-and-flush at the `executor` / provider boundary, not only in `coder-agent`. | The instrument. Every claim after this point — knob, prompt, cache, graph or harness — is unmeasurable without it. Keeping model view separate from scheduler state preserves a useful cross-harness waist. |
+| **5** | **Run a controlled cross-harness baseline.** Add minimal emitters to the pinned pi, Hermes and Deep Agents forks; then run Liberado and the references on the same user task, repository commit, model, provider, sampling settings and resource caps. Keep each harness's native system prompt and tool schemas. | Source reading gives hypotheses. Repeated A/B/C/D runs say which mechanisms improve the accepted result, cost and latency. This comes before copying another architecture. |
+| **6** | **Productize cold review + one fix round.** | The half that makes a PR *merge-minimal* rather than merely plausible. This is where taste is encoded: the reviewer's standards are the reviewer's prompt. |
+| **7** | **Implement the first evidence-selected cost lever.** Tool-output offload is the strongest current hypothesis; cache policy, context selection and structured compaction follow only where the baseline supports them. | Change one mechanism at a time. The previous benchmark changed several settings together and cannot attribute the gain. |
+| **8** | **Extract knobs where a measurement says the constant is wrong.** | Not "as many knobs as plausible". See the note below. |
+| **9** | **Per-model profiles, then the SQL tuning ledger.** | Correct to defer while we run only DeepSeek v4 pro/flash. [`model-knob-profiles.md`](future-work/model-knob-profiles.md) |
 
 **On knobs, a caution.** A knob is only an asset once something has been tuned with it; until then it
 is surface area. Ten settings have shipped that parsed, validated and reached nobody, and
-`config_literal_rules.rs` currently guards exactly one config type. Adding knobs ahead of #1–#3
+`config_literal_rules.rs` currently guards exactly one config type. Adding knobs ahead of #3–#5
 means adding untested configuration to a harness whose defects are still being found, and measuring
 the result with an instrument that does not exist yet. The cheap discipline: when a measurement
 shows a constant is wrong — as #128 showed for per-tool argument matching — extract *that* constant
 and add it to the mechanical guard in the same PR.
 
 **On taste.** The thing that makes a PR match a particular person's preferences is the review layer
-and the prompts in `prompts/`, not the knobs. #4 is the taste lever; #5 is the performance lever.
+and the prompts in `prompts/`, not the knobs. #6 is the taste lever; #7–#8 are performance levers.
+
+### How this track is scored
+
+The primary measure is **accepted result under a fixed budget**, not tool-call style. Report:
+
+1. task/ship-gate pass rate and merge-ready rate;
+2. total cost per accepted result, including retries and reviewers;
+3. wall-clock p50/p95 and turns used;
+4. human repair time or repair diff after the run; and
+5. classified failure mode with trace pointers.
+
+Reads per successful edit, tool counts and tools withdrawn explain a result; they do not rank
+harnesses. Run one-variable mechanism experiments. The first 10-task dogfood changed turns,
+attempts, verifiers, hashline, prompt and context together, so it established a useful combined
+configuration and did **not** establish which one caused the gain. Use repeated runs; one sample is
+not a model ceiling.
+
+### Graph, goal, loop and surface order
+
+- **`/goal` quality first:** `Succeeded` stays verifier/ship-backed; finish cold review + one fix
+  round, restart reconciliation, non-interactive honesty and headless terminal exit codes.
+- **Prove S6 before making it smart:** live-dogfood fan-out through the real build path, including a
+  parent verifier after merge, conflict handling and partial-child failure. Then accept a typed work
+  graph proposed by a model and validated/scheduled by code. Nodes declare dependencies, effects,
+  isolation, outputs, verifiers and budgets. No general swarm or nested fan-out yet.
+- **`/loop` remains a product lane, not a coding-performance lever:** it is a durable scheduler over
+  ordinary goals. Build it after goal completion is repeatably trustworthy.
+- **Surfaces remain clients:** track kernel economics/reliability, coding-pack performance and chat
+  UX on three separate scoreboards. A LibreChat-quality WebUI must not own agent control flow.
 
 ## What's next (one screen)
 
@@ -221,6 +258,12 @@ and the prompts in `prompts/`, not the knobs. #4 is the taste lever; #5 is the p
   Round 3 (delegated) ──► 1. delegated findings reach the face  (correctness)
                       ├── 2. subagent vs direct in the journal  (= TE2)
                       └── 3. executor accumulation term         (37.4%)
+
+  P3 autonomous PR ──► 3. one production run assembly
+                    ├── 4. MVL + joined execution log
+                    ├── 5. controlled cross-harness baseline
+                    ├── 6. cold review + one fix round
+                    └── 7. first evidence-selected lever
 
   Later ──► W1 mobile WebUI session view
   TurboVault (parallel) ──► vault_events · upstream land
@@ -251,7 +294,7 @@ and the prompts in `prompts/`, not the knobs. #4 is the taste lever; #5 is the p
 
 See [`spec/architecture/sessions.md`](spec/architecture/sessions.md) for the session model history pointers.
 
-**Last updated:** 2026-08-10.
+**Last updated:** 2026-08-11.
 
 > **A note on trusting this file.** On 2026-08-10 four items listed as open were found already
 > shipped (ACP P0.1, P0.2/P0.3, P4.2, and TE3) — some for weeks. Items move to *Recently landed*
