@@ -162,13 +162,9 @@ pub async fn run(vault_path: String) -> Result<(), Box<dyn std::error::Error>> {
                 // ignored"; say it out loud instead.
                 match liberado_coder_core::CoderTuning::from_value(config.tuning.coder.as_ref()) {
                     Ok(coder_tuning) => {
-                        pack = pack
-                            .with_hashline(coder_tuning.hashline)
-                            .with_gate(coder_tuning.gate)
-                            .with_progress(coder_tuning.progress)
-                            .with_trace_dir(coder_tuning.trace_dir)
-                            .with_trace_formats(coder_tuning.trace_formats)
-                            .with_coder_role(coder_tuning.coder);
+                        // One call: keeps pack fields and the shared production assembly path
+                        // on the same CoderTuning (backlog 0.4).
+                        pack = pack.with_tuning(coder_tuning);
                     }
                     Err(e) => {
                         tracing::error!(

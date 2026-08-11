@@ -92,6 +92,11 @@ pub struct CodingSessionPack {
     trace_dir: Option<String>,
     /// Trace formats to write (`[coder] trace_formats`). Empty = native only.
     trace_formats: Vec<liberado_coder_core::TraceFormat>,
+    /// Full `[coder]` tuning used by the shared production assembly path.
+    ///
+    /// Individual fields above remain for existing `with_*` call sites and tests; `with_tuning`
+    /// keeps this mirror in sync so pack build does not re-hardcode shared knobs.
+    tuning: liberado_coder_core::CoderTuning,
 }
 
 impl CodingSessionPack {
@@ -109,6 +114,7 @@ impl CodingSessionPack {
             progress: liberado_coder_core::ProgressPolicy::default(),
             trace_dir: None,
             trace_formats: Vec::new(),
+            tuning: liberado_coder_core::CoderTuning::default(),
         }
     }
 
@@ -130,6 +136,7 @@ impl CodingSessionPack {
             progress: liberado_coder_core::ProgressPolicy::default(),
             trace_dir: None,
             trace_formats: Vec::new(),
+            tuning: liberado_coder_core::CoderTuning::default(),
         }
     }
 
@@ -139,10 +146,26 @@ impl CodingSessionPack {
         self
     }
 
+    /// Apply the full `[coder]` tuning section to this pack.
+    ///
+    /// Preferred over piecemeal `with_*` for production wiring: one call keeps the shared assembly
+    /// path and the convenience fields in lockstep.
+    pub fn with_tuning(mut self, tuning: liberado_coder_core::CoderTuning) -> Self {
+        self.hashline = tuning.hashline.clone();
+        self.coder_role = tuning.coder.clone();
+        self.gate = tuning.gate.clone();
+        self.progress = tuning.progress.clone();
+        self.trace_dir = tuning.trace_dir.clone();
+        self.trace_formats = tuning.trace_formats.clone();
+        self.tuning = tuning;
+        self
+    }
+
     /// Seed hashline edit mode from `[coder.hashline]` (payload/overrides can still override).
     /// Seed the coder role (model + turn ceiling) from `[coder.coder]`.
     pub fn with_coder_role(mut self, role: liberado_coder_core::CoderRoleConfig) -> Self {
-        self.coder_role = role;
+        self.coder_role = role.clone();
+        self.tuning.coder = role;
         self
     }
 
@@ -166,30 +189,35 @@ impl CodingSessionPack {
     /// Off by default and left that way: the gate costs `1 + fresh_reviewers` extra model calls
     /// per attempt, so it stays opt-in. This only makes the opt-in possible.
     pub fn with_gate(mut self, config: liberado_coder_core::CoderGateConfig) -> Self {
-        self.gate = config;
+        self.gate = config.clone();
+        self.tuning.gate = config;
         self
     }
 
     /// Progress-guard thresholds for sessions this pack runs (`[coder.progress]`).
     /// Where run traces are written for sessions this pack runs (`[coder] trace_dir`).
     pub fn with_trace_dir(mut self, dir: Option<String>) -> Self {
-        self.trace_dir = dir;
+        self.trace_dir = dir.clone();
+        self.tuning.trace_dir = dir;
         self
     }
 
     /// Which trace formats sessions this pack runs should write (`[coder] trace_formats`).
     pub fn with_trace_formats(mut self, formats: Vec<liberado_coder_core::TraceFormat>) -> Self {
-        self.trace_formats = formats;
+        self.trace_formats = formats.clone();
+        self.tuning.trace_formats = formats;
         self
     }
 
     pub fn with_progress(mut self, policy: liberado_coder_core::ProgressPolicy) -> Self {
-        self.progress = policy;
+        self.progress = policy.clone();
+        self.tuning.progress = policy;
         self
     }
 
     pub fn with_hashline(mut self, config: liberado_coder_core::HashlineConfig) -> Self {
-        self.hashline = config;
+        self.hashline = config.clone();
+        self.tuning.hashline = config;
         self
     }
 
