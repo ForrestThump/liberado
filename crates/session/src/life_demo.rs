@@ -834,6 +834,169 @@ mod tests {
         assert_eq!(still_parked, 0, "cancelled session must not list as parked");
     }
 
+    /// F7: at daemon startup, parked sessions with no resume path are finished so they do not
+    /// sit forever. Keep only sessions a human can still resume (AskHuman + pack.can_resume).
+    #[tokio::test]
+    async fn reconcile_parked_at_startup_cancels_orphans_keeps_resumable() {
+        use liberado_common::CapabilitySet;
+
+        use crate::goal::{GoalSessionRecord, SessionGrant, SessionStatus};
+        use crate::runner::{DomainPackRunner, PackContext, PackError};
+        use crate::store::GoalSessionStore;
+
+        /// Pack that always allows resume (the life-demo default).
+        struct AlwaysResume;
+        #[async_trait::async_trait]
+        impl DomainPackRunner for AlwaysResume {
+            fn domain_id(&self) -> &str {
+                "life"
+            }
+            async fn can_resume(&self, _ctx: &PackContext<'_>) -> bool {
+                true
+            }
+            async fn run(
+                &self,
+                _id: &str,
+                _goal: &GoalSpec,
+                _ctx: &PackContext<'_>,
+                _events: tokio::sync::mpsc::Sender<crate::SessionEvent>,
+                _inputs: crate::runner::InputChannel,
+                _cancel: tokio::sync::watch::Receiver<bool>,
+            ) -> Result<crate::GoalResult, PackError> {
+                unreachable!("reconcile must not start the pack")
+            }
+        }
+
+        /// Pack that refuses mid-build resume.
+        struct NeverResume;
+        #[async_trait::async_trait]
+        impl DomainPackRunner for NeverResume {
+            fn domain_id(&self) -> &str {
+                "coding"
+            }
+            async fn can_resume(&self, _ctx: &PackContext<'_>) -> bool {
+                false
+            }
+            async fn run(
+                &self,
+                _id: &str,
+                _goal: &GoalSpec,
+                _ctx: &PackContext<'_>,
+                _events: tokio::sync::mpsc::Sender<crate::SessionEvent>,
+                _inputs: crate::runner::InputChannel,
+                _cancel: tokio::sync::watch::Receiver<bool>,
+            ) -> Result<crate::GoalResult, PackError> {
+                unreachable!("reconcile must not start the pack")
+            }
+        }
+
+        let store = GoalSessionStore::new();
+
+        // Orphan A: parked, no AskHuman — unattended intake that can never be answered.
+        let mut no_ask = GoalSessionRecord::new(GoalSpec {
+            id: Some("orphan-no-ask".into()),
+            description: "unattended parked".into(),
+            success_criteria: vec![],
+            domain: DomainHint::Life,
+            max_turns: 0,
+            max_idle_secs: None,
+            origin: None,
+            profile: None,
+            payload: serde_json::Value::Null,
+        });
+        no_ask.status = SessionStatus::Parked;
+        no_ask.awaiting_input = true;
+        crate::record_store::SessionRecordStore::insert(&store, no_ask).await;
+
+        // Orphan B: AskHuman but pack refuses resume (mid-build without checkpoint).
+        let mut no_resume = GoalSessionRecord::new(GoalSpec {
+            id: Some("orphan-no-resume".into()),
+            description: "mid-build park".into(),
+            success_criteria: vec![],
+            domain: DomainHint::Coding,
+            max_turns: 0,
+            max_idle_secs: None,
+            origin: None,
+            profile: None,
+            payload: serde_json::Value::Null,
+        });
+        no_resume.grant = SessionGrant {
+            capabilities: CapabilitySet::from_iter([liberado_common::Capability::AskHuman]),
+            ..Default::default()
+        };
+        no_resume.status = SessionStatus::Parked;
+        no_resume.awaiting_input = false;
+        crate::record_store::SessionRecordStore::insert(&store, no_resume).await;
+
+        // Keep: AskHuman + pack can resume (human still has a path).
+        let mut keep = GoalSessionRecord::new(GoalSpec {
+            id: Some("keep-resumable".into()),
+            description: "awaiting human after restart".into(),
+            success_criteria: vec![],
+            domain: DomainHint::Life,
+            max_turns: 0,
+            max_idle_secs: None,
+            origin: None,
+            profile: None,
+            payload: serde_json::Value::Null,
+        });
+        keep.grant = SessionGrant {
+            capabilities: CapabilitySet::from_iter([liberado_common::Capability::AskHuman]),
+            ..Default::default()
+        };
+        keep.status = SessionStatus::Parked;
+        keep.awaiting_input = true;
+        crate::record_store::SessionRecordStore::insert(&store, keep).await;
+
+        let mut hub = GoalSessionHub::new(store.clone());
+        hub.register_pack(std::sync::Arc::new(AlwaysResume));
+        hub.register_pack(std::sync::Arc::new(NeverResume));
+
+        let n = hub.reconcile_parked_at_startup().await;
+        assert_eq!(n, 2, "two orphans must be finished; one resumable kept");
+
+        let no_ask_after = store.get("orphan-no-ask").await.expect("row");
+        assert_eq!(
+            no_ask_after.status,
+            SessionStatus::Cancelled,
+            "no-AskHuman parked must be cancelled at startup"
+        );
+        assert_eq!(
+            no_ask_after
+                .result
+                .as_ref()
+                .and_then(|r| r.diagnostics.get("source"))
+                .and_then(|v| v.as_str()),
+            Some("reconcile_parked_startup"),
+            "diagnostics must name the reconcile path"
+        );
+
+        let no_resume_after = store.get("orphan-no-resume").await.expect("row");
+        assert_eq!(
+            no_resume_after.status,
+            SessionStatus::Cancelled,
+            "non-resumable parked must be cancelled at startup"
+        );
+
+        let keep_after = store.get("keep-resumable").await.expect("row");
+        assert_eq!(
+            keep_after.status,
+            SessionStatus::Parked,
+            "resumable parked with AskHuman must survive for the human"
+        );
+        assert!(
+            keep_after.awaiting_input,
+            "kept session must still show its open question"
+        );
+
+        // Idempotent: a second pass finds nothing left to finish.
+        assert_eq!(
+            hub.reconcile_parked_at_startup().await,
+            0,
+            "second reconcile must be a no-op"
+        );
+    }
+
     /// Cancelling a parked orphan must be *observable*, not just durable. `store.finish` mutates
     /// the row and publishes nothing, so without an explicit event the cancel is invisible to
     /// every event consumer: an SSE client watching the session sees it stay parked, and

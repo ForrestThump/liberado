@@ -347,6 +347,11 @@ def active_goal_count() -> int:
 
     `parked` is deliberately excluded. A parked session is blocked on a human answer and is
     running nothing, so counting it against a compute cap reserves capacity nobody is using.
+    History: parked used to count here, and after a daemon restart those rows were neither
+    resumable nor cancellable — four orphans against MAX_CONCURRENT=2 blocked every pass with
+    a silent `deferred: at concurrency cap`. The daemon now cancels non-resumable parks at
+    startup (F7) and accepts cancel on store-only parks (F4); this exclusion remains so a
+    legitimate human-wait does not reserve a compute slot.
     """
     try:
         with urllib.request.urlopen(f"{DAEMON}/api/goals", timeout=15) as resp:

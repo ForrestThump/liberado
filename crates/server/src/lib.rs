@@ -207,6 +207,16 @@ pub async fn run(vault_path: String) -> Result<(), Box<dyn std::error::Error>> {
         goals_hub = goals_hub.with_alert(Arc::new(NotifySessionAlert(Arc::new(n))));
         info!("session alerts: telegram notifier attached");
     }
+    // F7: parked rows survive restart; the hub does not. Finish orphans that cannot be resumed
+    // (no AskHuman, no pack, or pack refuses) so they do not sit forever. Human-resumable parks
+    // stay for the stuck panel / answer path.
+    let reconciled = goals_hub.reconcile_parked_at_startup().await;
+    if reconciled > 0 {
+        info!(
+            reconciled,
+            "startup: cancelled orphaned parked sessions with no resume path"
+        );
+    }
     let goals = Arc::new(goals_hub);
     // S6: coding fan-out spawns child goal sessions on this same hub.
     if let Some(pack) = coding_pack.as_ref() {
