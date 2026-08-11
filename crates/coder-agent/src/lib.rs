@@ -809,23 +809,30 @@ impl LiberadoLoopBackend {
             };
             critic_verdict = Some(verdict);
         } else if reviewable && roles::critic_enabled(&request) {
-            let verdict: CriticVerdict =
-                critic::run_critic(self.providers.as_ref(), &request, &events).await?;
-            trace::push_event(
-                &events,
-                CoderEvent::CriticVerdict {
-                    verdict: verdict.clone(),
-                    at: Utc::now(),
-                },
-            );
-            if let CriticVerdict::NeedsRevision { issues } = &verdict {
-                outcome = Outcome::Failed;
-                summary = format!(
-                    "{summary}; critic requested revision: {}",
-                    issues.join("; ")
+            // `None` is an abstention — the reviewer returned nothing usable. The run keeps the
+            // verdict the deterministic verifiers already gave it; `critic_verdict` stays `None`
+            // so no consumer can mistake silence for approval.
+            if let Some(verdict) =
+                critic::run_critic(self.providers.as_ref(), &request, &events).await?
+            {
+                trace::push_event(
+                    &events,
+                    CoderEvent::CriticVerdict {
+                        verdict: verdict.clone(),
+                        at: Utc::now(),
+                    },
                 );
+                if let CriticVerdict::NeedsRevision { issues } = &verdict {
+                    outcome = Outcome::Failed;
+                    summary = format!(
+                        "{summary}; critic requested revision: {}",
+                        issues.join("; ")
+                    );
+                }
+                critic_verdict = Some(verdict);
+            } else {
+                summary = format!("{summary}; critic abstained (no usable response)");
             }
-            critic_verdict = Some(verdict);
         }
 
         trace::push_event(
@@ -1307,17 +1314,15 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         init_repo(dir.path());
 
-        // write, report, then a critic turn with no content at all — exactly what production saw.
-        let script = [
-            write_then_report()[0].clone(),
-            write_then_report()[1].clone(),
-            CompletionResponse {
-                content: None,
-                tool_calls: Vec::new(),
-                finish_reason: liberado_provider::FinishReason::Stop,
-                usage: None,
-            },
-        ];
+        // Write, then run out of script. Provider exhaustion is an unhandled error: nothing in
+        // the attempt path expects it, so it unwinds through the `?` operators this test exists
+        // to cover.
+        //
+        // This test originally reproduced the *empty critic response*, which was the real
+        // production failure at the time. That path now abstains rather than erroring
+        // (an absent reviewer is not a verdict), so it no longer produces an unhandled error and
+        // could not carry this test's claim any more.
+        let script = [write_then_report()[0].clone()];
         let provider = Arc::new(MockProvider::with_script("mock", script));
         let backend = LiberadoLoopBackend::new(provider);
         let mut request = request(dir.path(), "HEAD");
@@ -1329,9 +1334,9 @@ mod tests {
         let err = backend
             .run(request)
             .await
-            .expect_err("an empty critic response must still fail the run");
+            .expect_err("an unhandled provider error must still fail the run");
         assert!(
-            err.to_string().contains("empty content"),
+            err.to_string().contains("exhausted"),
             "wrong failure reproduced: {err}"
         );
 
@@ -1363,7 +1368,7 @@ mod tests {
             _ => None,
         });
         assert!(
-            aborted.is_some_and(|e| e.contains("empty content")),
+            aborted.is_some_and(|e| e.contains("exhausted")),
             "the trace must say what killed the attempt: {:?}",
             trace.events
         );
@@ -1740,6 +1745,84 @@ mod tests {
         let result = backend.run(request).await.unwrap();
         assert_eq!(result.outcome, Outcome::Succeeded);
         assert_eq!(result.critic_verdict, Some(CriticVerdict::Acceptable));
+    }
+
+    /// A reviewer that says nothing has not judged the change.
+    ///
+    /// This destroyed two completed runs. Both had finished their work and passed the
+    /// deterministic verifiers; both were filed `Failed` because the provider returned an empty
+    /// body. `critic returned empty content` is a fault in the reviewer, not a verdict on the diff.
+    #[tokio::test]
+    async fn an_empty_critic_response_does_not_discard_the_run() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path());
+        let mut script = write_then_report().to_vec();
+        script.push(CompletionResponse {
+            content: None,
+            tool_calls: Vec::new(),
+            finish_reason: liberado_provider::FinishReason::Stop,
+            usage: None,
+        });
+        let provider = Arc::new(MockProvider::with_script("mock", script));
+        let backend = LiberadoLoopBackend::new(provider);
+        let mut request = request(dir.path(), "HEAD");
+        request.config.critic.prompt = Some("Review the diff strictly.".to_string());
+
+        let result = backend
+            .run(request)
+            .await
+            .expect("an absent reviewer must not fail a finished run");
+        assert_eq!(result.outcome, Outcome::Succeeded);
+        assert_eq!(
+            result.critic_verdict, None,
+            "silence must not be recorded as a verdict"
+        );
+        assert!(
+            result.summary.contains("abstained"),
+            "the abstention must be visible in the summary: {}",
+            result.summary
+        );
+    }
+
+    /// Same rule for a response that arrives but cannot be parsed. A reviewer that answers in
+    /// prose has also not produced a verdict.
+    #[tokio::test]
+    async fn an_unparseable_critic_response_abstains_rather_than_failing() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path());
+        let mut script = write_then_report().to_vec();
+        script.push(CompletionResponse::text("Looks fine to me, ship it!"));
+        let provider = Arc::new(MockProvider::with_script("mock", script));
+        let backend = LiberadoLoopBackend::new(provider);
+        let mut request = request(dir.path(), "HEAD");
+        request.config.critic.prompt = Some("Review the diff strictly.".to_string());
+
+        let result = backend.run(request).await.expect("must not fail the run");
+        assert_eq!(result.outcome, Outcome::Succeeded);
+        assert_eq!(result.critic_verdict, None);
+    }
+
+    /// The guard must stay narrow: a reviewer that *does* answer still gates the run.
+    #[tokio::test]
+    async fn a_real_revision_request_still_fails_the_attempt() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path());
+        let mut script = write_then_report().to_vec();
+        script.push(CompletionResponse::text(
+            r#"{"quality":"needs_revision","issues":["no tests"]}"#,
+        ));
+        let provider = Arc::new(MockProvider::with_script("mock", script));
+        let backend = LiberadoLoopBackend::new(provider);
+        let mut request = request(dir.path(), "HEAD");
+        request.config.critic.prompt = Some("Review the diff strictly.".to_string());
+        request.config.progress.max_attempts = 1;
+
+        let result = backend.run(request).await.unwrap();
+        assert_eq!(result.outcome, Outcome::Failed);
+        assert!(matches!(
+            result.critic_verdict,
+            Some(CriticVerdict::NeedsRevision { .. })
+        ));
     }
 
     #[tokio::test]

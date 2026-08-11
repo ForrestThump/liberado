@@ -15,7 +15,7 @@ pub async fn run_critic(
     providers: &dyn CoderProviderFactory,
     request: &CoderRunRequest,
     events: &EventLog,
-) -> Result<CriticVerdict, CoderError> {
+) -> Result<Option<CriticVerdict>, CoderError> {
     trace::push_event(
         events,
         CoderEvent::RoleStarted {
@@ -79,12 +79,28 @@ pub async fn run_critic(
         .complete(completion.with_json_schema(schema))
         .await
         .map_err(|e| CoderError::Provider(e.to_string()))?;
-    let content = response
-        .content
-        .as_deref()
-        .ok_or_else(|| CoderError::Provider("critic returned empty content".to_string()))?;
-    let verdict = parse_critic_verdict(content)
-        .map_err(|e| CoderError::Provider(format!("critic verdict parse failed: {e}")))?;
+    // A reviewer that fails to answer has not judged the change.
+    //
+    // This returned `Err` and destroyed two completed runs: the work was done, the deterministic
+    // verifiers had passed, and the attempt was filed `Failed` because a provider handed back an
+    // empty body. An empty or unparseable response is a fault in the *reviewer*, not a verdict on
+    // the diff, and the deterministic gates — which since backlog 0.2 include the test suite — are
+    // the authoritative bar. So the critic abstains and the run stands on them.
+    //
+    // Abstention is `None`, never `Acceptable`. Silently approving would fabricate a review that
+    // nobody performed, which is worse than the bug being fixed: a discarded run is visibly wrong,
+    // an invented approval is not.
+    let Some(content) = response.content.as_deref().filter(|c| !c.trim().is_empty()) else {
+        tracing::warn!("critic returned empty content; abstaining");
+        return Ok(None);
+    };
+    let verdict = match parse_critic_verdict(content) {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!(error = %e, "critic verdict did not parse; abstaining");
+            return Ok(None);
+        }
+    };
 
     trace::push_event(
         events,
@@ -93,7 +109,7 @@ pub async fn run_critic(
             at: Utc::now(),
         },
     );
-    Ok(verdict)
+    Ok(Some(verdict))
 }
 
 pub fn parse_critic_verdict(raw: &str) -> Result<CriticVerdict, String> {
