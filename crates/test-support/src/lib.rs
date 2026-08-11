@@ -14,6 +14,11 @@
 //!   default result via [`Self::with_default_result`].
 //! - [`FailingFactory`] always returns a [`RuntimeSetupError`] — for testing the orchestrator's
 //!   pool-creation failure path.
+//!
+//! Trace contracts (backlog 0.5): [`trace_contracts`] reconstructs MVL turns and checks joins
+//! against the execution-log companion. No production emitter lives here.
+
+pub mod trace_contracts;
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};

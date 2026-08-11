@@ -14,9 +14,10 @@ liberado-common = { workspace = true }
 liberado-executor = { workspace = true }
 liberado-provider = { workspace = true }
 liberado-notify = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
 
 [dev-dependencies]
-serde_json = { workspace = true }
 tokio = { workspace = true, features = ["macros"] }
 toml = { workspace = true }
 
