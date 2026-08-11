@@ -176,9 +176,9 @@ A shared conformance suite should own these, so an adapter is verified rather th
 telemetry package does exactly this and it is the right pattern.
 
 **Fixture location (Liberado):** sample JSONL and reconstruction tests live under
-`crates/test-support` (`mvl` module + `tests/mvl_conformance.rs`). They prove a reader can rebuild
-messages, system text, ordered tool definitions and sampling params for any turn from the log
-alone. They do **not** emit production logs — emission is a separate backlog item.
+`crates/test-support` (`trace_contracts` module + `tests/mvl_conformance.rs`). They prove a reader
+can rebuild messages, system text, ordered tool definitions and sampling params for any turn from
+the log alone. They do **not** emit production logs — emission is a separate backlog item.
 
 ### Reconstruction checklist (normative for fixtures)
 

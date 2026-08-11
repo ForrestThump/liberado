@@ -76,7 +76,15 @@ pub fn parse_jsonl(text: &str) -> Result<Vec<JsonlEvent>, String> {
 
 /// `seq` must be 0..n-1 with no gaps.
 pub fn assert_seq_gap_free(events: &[JsonlEvent]) -> Result<(), String> {
+    let run = events.first().map(|event| event.run.as_str());
     for (i, ev) in events.iter().enumerate() {
+        if Some(ev.run.as_str()) != run {
+            return Err(format!(
+                "run changed within stream at index {i}: expected {}, got {}",
+                run.unwrap_or_default(),
+                ev.run
+            ));
+        }
         if ev.seq != i as i64 {
             return Err(format!(
                 "seq gap: expected {i} at index {i}, got {} (type={})",
@@ -116,6 +124,8 @@ pub fn reconstruct_turn(events: &[JsonlEvent], turn: i64) -> Result<Reconstructe
     let mut last_system_sha = String::new();
     let mut last_catalog_sha = String::new();
     let mut found = false;
+    let mut prompt_seen = false;
+    let mut full_prompt_required = true;
 
     for ev in events {
         match ev.type_name.as_str() {
@@ -129,10 +139,12 @@ pub fn reconstruct_turn(events: &[JsonlEvent], turn: i64) -> Result<Reconstructe
                 let tools = ev
                     .body
                     .get("tools")
-                    .cloned()
-                    .ok_or_else(|| "tool_catalog missing tools".to_string())?;
-                catalogs.insert(sha, tools);
+                    .and_then(|value| value.as_array())
+                    .ok_or_else(|| "tool_catalog tools must be an array".to_string())?
+                    .clone();
+                catalogs.insert(sha, Value::Array(tools));
             }
+            "context_changed" => full_prompt_required = true,
             "prompt" => {
                 let t = ev
                     .body
@@ -143,33 +155,60 @@ pub fn reconstruct_turn(events: &[JsonlEvent], turn: i64) -> Result<Reconstructe
                     break;
                 }
 
-                // System: record text when present; always take the hash for this prompt.
-                if let Some(system) = ev.body.get("system") {
-                    let sha = system
-                        .get("sha256")
-                        .and_then(|x| x.as_str())
-                        .ok_or_else(|| "prompt.system missing sha256".to_string())?
-                        .to_string();
-                    if let Some(text) = system.get("text").and_then(|x| x.as_str()) {
-                        systems.insert(sha.clone(), text.to_string());
+                // Each prompt carries the complete request-time metadata. Do not inherit a
+                // missing field from an earlier prompt: that would make an incomplete log look
+                // reconstructable.
+                let system = ev
+                    .body
+                    .get("system")
+                    .and_then(|value| value.as_object())
+                    .ok_or_else(|| "prompt missing system object".to_string())?;
+                let sha = system
+                    .get("sha256")
+                    .and_then(|x| x.as_str())
+                    .ok_or_else(|| "prompt.system missing sha256".to_string())?
+                    .to_string();
+                match system.get("text") {
+                    Some(Value::String(text)) => {
+                        if systems.contains_key(&sha) {
+                            return Err(format!(
+                                "system text for sha {sha} appears more than once"
+                            ));
+                        }
+                        systems.insert(sha.clone(), text.clone());
                     }
-                    last_system_sha = sha;
+                    Some(Value::Null) => {}
+                    _ => return Err("prompt.system text must be a string or null".to_string()),
                 }
+                last_system_sha = sha;
 
-                if let Some(cat) = ev.body.get("tool_catalog_sha256").and_then(|x| x.as_str()) {
-                    last_catalog_sha = cat.to_string();
-                }
+                last_catalog_sha = ev
+                    .body
+                    .get("tool_catalog_sha256")
+                    .and_then(|x| x.as_str())
+                    .ok_or_else(|| "prompt missing tool_catalog_sha256".to_string())?
+                    .to_string();
 
-                if let Some(params) = ev.body.get("params").and_then(|x| x.as_object()) {
-                    last_params = params.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
-                }
+                let params = ev
+                    .body
+                    .get("params")
+                    .and_then(|x| x.as_object())
+                    .ok_or_else(|| "prompt params must be an object".to_string())?;
+                last_params = params.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
 
-                if let Some(offered) = ev.body.get("tools_offered").and_then(|x| x.as_array()) {
-                    last_tools_offered = offered
-                        .iter()
-                        .filter_map(|x| x.as_str().map(str::to_string))
-                        .collect();
-                }
+                let offered = ev
+                    .body
+                    .get("tools_offered")
+                    .and_then(|x| x.as_array())
+                    .ok_or_else(|| "prompt tools_offered must be an array".to_string())?;
+                last_tools_offered = offered
+                    .iter()
+                    .map(|value| {
+                        value.as_str().map(str::to_string).ok_or_else(|| {
+                            "prompt tools_offered entries must be strings".to_string()
+                        })
+                    })
+                    .collect::<Result<_, _>>()?;
 
                 let messages_obj = ev
                     .body
@@ -183,11 +222,21 @@ pub fn reconstruct_turn(events: &[JsonlEvent], turn: i64) -> Result<Reconstructe
                     .get("items")
                     .and_then(|x| x.as_array())
                     .ok_or_else(|| "messages missing items".to_string())?;
+                if full_prompt_required && mode != "full" {
+                    let reason = if prompt_seen {
+                        "prompt after context_changed"
+                    } else {
+                        "first prompt"
+                    };
+                    return Err(format!("{reason} must use messages.mode=full"));
+                }
                 match mode {
                     "full" => messages = items.clone(),
                     "delta" => messages.extend(items.iter().cloned()),
                     other => return Err(format!("unknown messages.mode: {other}")),
                 }
+                prompt_seen = true;
+                full_prompt_required = false;
 
                 if t == turn {
                     found = true;
@@ -223,23 +272,41 @@ pub fn reconstruct_turn(events: &[JsonlEvent], turn: i64) -> Result<Reconstructe
     })
 }
 
-/// Every execution `call_id` for tools must appear in the MVL completion/tool_result stream.
+/// Every execution `call_id` for tools must match exactly one MVL completion tool call.
+/// Every execution `context_transform` with a `turn` must join an MVL `context_changed` (or a
+/// following full `prompt`) for that turn — see execution-log.md conformance item 1.
 pub fn assert_join_integrity(mvl: &[JsonlEvent], execution: &[JsonlEvent]) -> Result<(), String> {
-    let mut mvl_calls: BTreeSet<(String, String)> = BTreeSet::new();
+    let mut mvl_calls: BTreeMap<(String, String), usize> = BTreeMap::new();
+    let mut mvl_context_turns: BTreeSet<(String, i64)> = BTreeSet::new();
+    let mut mvl_full_prompt_turns: BTreeSet<(String, i64)> = BTreeSet::new();
     for ev in mvl {
         match ev.type_name.as_str() {
             "completion" => {
                 if let Some(calls) = ev.body.get("tool_calls").and_then(|x| x.as_array()) {
                     for c in calls {
                         if let Some(id) = c.get("id").and_then(|x| x.as_str()) {
-                            mvl_calls.insert((ev.run.clone(), id.to_string()));
+                            *mvl_calls
+                                .entry((ev.run.clone(), id.to_string()))
+                                .or_default() += 1;
                         }
                     }
                 }
             }
-            "tool_result" => {
-                if let Some(id) = ev.body.get("call_id").and_then(|x| x.as_str()) {
-                    mvl_calls.insert((ev.run.clone(), id.to_string()));
+            "context_changed" => {
+                if let Some(t) = ev.body.get("turn").and_then(|x| x.as_i64()) {
+                    mvl_context_turns.insert((ev.run.clone(), t));
+                }
+            }
+            "prompt" => {
+                let mode = ev
+                    .body
+                    .get("messages")
+                    .and_then(|m| m.get("mode"))
+                    .and_then(|x| x.as_str());
+                if mode == Some("full")
+                    && let Some(t) = ev.body.get("turn").and_then(|x| x.as_i64())
+                {
+                    mvl_full_prompt_turns.insert((ev.run.clone(), t));
                 }
             }
             _ => {}
@@ -250,13 +317,39 @@ pub fn assert_join_integrity(mvl: &[JsonlEvent], execution: &[JsonlEvent]) -> Re
         if matches!(
             ev.type_name.as_str(),
             "tool_started" | "tool_finished" | "retry"
-        ) && let Some(id) = ev.body.get("call_id").and_then(|x| x.as_str())
-            && !mvl_calls.contains(&(ev.run.clone(), id.to_string()))
+        ) {
+            let id = ev
+                .body
+                .get("call_id")
+                .and_then(|x| x.as_str())
+                .ok_or_else(|| format!("execution {} missing call_id", ev.type_name))?;
+            let matches = mvl_calls
+                .get(&(ev.run.clone(), id.to_string()))
+                .copied()
+                .unwrap_or_default();
+            if matches != 1 {
+                return Err(format!(
+                    "execution {} call_id={id} has {matches} MVL tool-call joins for run={} (expected exactly one)",
+                    ev.type_name, ev.run,
+                ));
+            }
+        }
+        if ev.type_name == "context_transform"
+            && let Some(t) = ev.body.get("turn").and_then(|x| x.as_i64())
         {
-            return Err(format!(
-                "execution {} call_id={id} has no MVL join for run={}",
-                ev.type_name, ev.run
-            ));
+            let key = (ev.run.clone(), t);
+            let has_changed = mvl_context_turns.contains(&key);
+            // "Following full prompt" = a full reset at this turn or a later one on the same run.
+            let has_following_full = mvl_full_prompt_turns
+                .iter()
+                .any(|(run, pt)| run == &ev.run && *pt >= t);
+            if !has_changed && !has_following_full {
+                return Err(format!(
+                    "execution context_transform turn={t} has no MVL context_changed \
+                     (or following full prompt) for run={}",
+                    ev.run
+                ));
+            }
         }
     }
     Ok(())
@@ -264,7 +357,7 @@ pub fn assert_join_integrity(mvl: &[JsonlEvent], execution: &[JsonlEvent]) -> Re
 
 /// Every attempt_ended has a prior attempt_started with the same attempt index.
 pub fn assert_attempt_brackets(execution: &[JsonlEvent]) -> Result<(), String> {
-    let mut open: BTreeSet<i64> = BTreeSet::new();
+    let mut open: BTreeSet<(String, i64)> = BTreeSet::new();
     for ev in execution {
         match ev.type_name.as_str() {
             "attempt_started" => {
@@ -273,7 +366,12 @@ pub fn assert_attempt_brackets(execution: &[JsonlEvent]) -> Result<(), String> {
                     .get("attempt")
                     .and_then(|x| x.as_i64())
                     .ok_or_else(|| "attempt_started missing attempt".to_string())?;
-                open.insert(a);
+                if !open.insert((ev.run.clone(), a)) {
+                    return Err(format!(
+                        "attempt_started {a} appears twice for run={}",
+                        ev.run
+                    ));
+                }
             }
             "attempt_ended" => {
                 let a = ev
@@ -281,8 +379,11 @@ pub fn assert_attempt_brackets(execution: &[JsonlEvent]) -> Result<(), String> {
                     .get("attempt")
                     .and_then(|x| x.as_i64())
                     .ok_or_else(|| "attempt_ended missing attempt".to_string())?;
-                if !open.contains(&a) {
-                    return Err(format!("attempt_ended {a} without attempt_started"));
+                if !open.remove(&(ev.run.clone(), a)) {
+                    return Err(format!(
+                        "attempt_ended {a} without unmatched attempt_started for run={}",
+                        ev.run
+                    ));
                 }
             }
             _ => {}
@@ -406,6 +507,34 @@ mod tests {
     }
 
     #[test]
+    fn target_prompt_must_carry_its_request_metadata() {
+        let text = r#"
+{"v":1,"type":"tool_catalog","ts":"t","run":"r","seq":0,"sha256":"c","tools":[]}
+{"v":1,"type":"prompt","ts":"t","run":"r","seq":1,"turn":0,"messages":{"mode":"full","items":[]},"system":{"sha256":"s","text":"S"},"tool_catalog_sha256":"c","tools_offered":[],"params":{"temperature":0.0}}
+{"v":1,"type":"prompt","ts":"t","run":"r","seq":2,"turn":1,"messages":{"mode":"delta","items":[]},"system":{"sha256":"s","text":null},"tool_catalog_sha256":"c","tools_offered":[]}
+"#;
+        let events = parse_jsonl(text).unwrap();
+        let err = reconstruct_turn(&events, 1).unwrap_err();
+        assert!(err.contains("params"), "{err}");
+    }
+
+    #[test]
+    fn prompt_after_context_change_must_be_full() {
+        let text = r#"
+{"v":1,"type":"tool_catalog","ts":"t","run":"r","seq":0,"sha256":"c","tools":[]}
+{"v":1,"type":"prompt","ts":"t","run":"r","seq":1,"turn":0,"messages":{"mode":"full","items":[]},"system":{"sha256":"s","text":"S"},"tool_catalog_sha256":"c","tools_offered":[],"params":{}}
+{"v":1,"type":"context_changed","ts":"t","run":"r","seq":2,"turn":1,"kind":"offload","removed_messages":1}
+{"v":1,"type":"prompt","ts":"t","run":"r","seq":3,"turn":1,"messages":{"mode":"delta","items":[]},"system":{"sha256":"s","text":null},"tool_catalog_sha256":"c","tools_offered":[],"params":{}}
+"#;
+        let events = parse_jsonl(text).unwrap();
+        let err = reconstruct_turn(&events, 1).unwrap_err();
+        assert!(
+            err.contains("context_changed") && err.contains("full"),
+            "{err}"
+        );
+    }
+
+    #[test]
     fn execution_joins_mvl_by_call_id() {
         let mvl = parse_jsonl(SAMPLE_MVL).unwrap();
         let ex = parse_jsonl(SAMPLE_EXEC).unwrap();
@@ -427,6 +556,73 @@ mod tests {
     }
 
     #[test]
+    fn execution_call_does_not_join_an_orphan_tool_result() {
+        let mvl = parse_jsonl(
+            r#"{"v":1,"type":"tool_result","ts":"t","run":"r","seq":0,"turn":0,"call_id":"c1","name":"x","ok":true,"content_shown":"x"}"#,
+        )
+        .unwrap();
+        let ex = parse_jsonl(
+            r#"{"v":1,"type":"tool_started","ts":"t","run":"r","seq":0,"turn":0,"call_id":"c1","name":"x"}"#,
+        )
+        .unwrap();
+        let err = assert_join_integrity(&mvl, &ex).unwrap_err();
+        assert!(err.contains("0 MVL tool-call joins"), "{err}");
+    }
+
+    #[test]
+    fn execution_call_rejects_ambiguous_mvl_tool_calls() {
+        let mvl = parse_jsonl(
+            r#"
+{"v":1,"type":"completion","ts":"t","run":"r","seq":0,"turn":0,"text":"","tool_calls":[{"id":"c1","name":"x","arguments":{}}],"finish_reason":"tool_calls"}
+{"v":1,"type":"completion","ts":"t","run":"r","seq":1,"turn":1,"text":"","tool_calls":[{"id":"c1","name":"x","arguments":{}}],"finish_reason":"tool_calls"}
+"#,
+        )
+        .unwrap();
+        let ex = parse_jsonl(
+            r#"{"v":1,"type":"tool_started","ts":"t","run":"r","seq":0,"turn":0,"call_id":"c1","name":"x"}"#,
+        )
+        .unwrap();
+        let err = assert_join_integrity(&mvl, &ex).unwrap_err();
+        assert!(err.contains("2 MVL tool-call joins"), "{err}");
+    }
+
+    /// Spec conformance item 1: context_transform + turn must join MVL context_changed (or a
+    /// following full prompt). Mutation: drop this check — a green suite would accept the old
+    /// non-conforming sample pair that had execution offload without an MVL counterpart.
+    #[test]
+    fn join_fails_when_context_transform_has_no_mvl_match() {
+        let mvl = parse_jsonl(SAMPLE_MVL).unwrap();
+        let bad = r#"
+{"v":1,"type":"context_transform","ts":"t","run":"r1","seq":0,"turn":1,"kind":"offload","duration_ms":1,"removed_messages":0,"summary_bytes":0}
+"#;
+        let ex = parse_jsonl(bad).unwrap();
+        let err = assert_join_integrity(&mvl, &ex).unwrap_err();
+        assert!(
+            err.contains("context_transform") && err.contains("context_changed"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn context_transform_joins_via_context_changed() {
+        let mvl = parse_jsonl(
+            r#"
+{"v":1,"type":"run_started","ts":"t","run":"r1","seq":0,"harness":{"name":"x","version":"0"}}
+{"v":1,"type":"context_changed","ts":"t","run":"r1","seq":1,"turn":1,"kind":"offload","removed_messages":0}
+{"v":1,"type":"prompt","ts":"t","run":"r1","seq":2,"turn":2,"messages":{"mode":"full","items":[]},"system":{"sha256":"s","text":"S"},"tool_catalog_sha256":"c","tools_offered":[],"params":{}}
+"#,
+        )
+        .unwrap();
+        let ex = parse_jsonl(
+            r#"
+{"v":1,"type":"context_transform","ts":"t","run":"r1","seq":0,"turn":1,"kind":"offload","duration_ms":1,"removed_messages":0,"summary_bytes":0}
+"#,
+        )
+        .unwrap();
+        assert_join_integrity(&mvl, &ex).expect("context_changed joins transform");
+    }
+
+    #[test]
     fn mvl_rejects_execution_types() {
         let bad = r#"
 {"v":1,"type":"tool_started","ts":"t","run":"r","seq":0,"turn":0,"call_id":"c","name":"x"}
@@ -442,5 +638,28 @@ mod tests {
 "#;
         let ex = parse_jsonl(bad).unwrap();
         assert!(assert_attempt_brackets(&ex).is_err());
+    }
+
+    #[test]
+    fn attempt_start_matches_only_one_end() {
+        let bad = r#"
+{"v":1,"type":"attempt_started","ts":"t","run":"r","seq":0,"attempt":0,"workspace":"/ws"}
+{"v":1,"type":"attempt_ended","ts":"t","run":"r","seq":1,"attempt":0,"outcome":"x","reason":"y"}
+{"v":1,"type":"attempt_ended","ts":"t","run":"r","seq":2,"attempt":0,"outcome":"x","reason":"y"}
+"#;
+        let ex = parse_jsonl(bad).unwrap();
+        let err = assert_attempt_brackets(&ex).unwrap_err();
+        assert!(err.contains("without unmatched"), "{err}");
+    }
+
+    #[test]
+    fn sequence_check_rejects_mixed_runs() {
+        let text = r#"
+{"v":1,"type":"run_started","ts":"t","run":"r1","seq":0}
+{"v":1,"type":"run_ended","ts":"t","run":"r2","seq":1}
+"#;
+        let events = parse_jsonl(text).unwrap();
+        let err = assert_seq_gap_free(&events).unwrap_err();
+        assert!(err.contains("run changed"), "{err}");
     }
 }
