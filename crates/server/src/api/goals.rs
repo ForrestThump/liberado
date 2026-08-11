@@ -185,35 +185,9 @@ pub async fn goals_start(
                     .and_then(|v| v.get("steps"))
                     .is_none()
                     && let Some(proj) = state.config.project_by_name(&name)
-                    && let Some(ship) = &proj.preflight.ship
+                    && let Some(preflight) = proj.ship_preflight_payload()
                 {
-                    let mut steps = Vec::new();
-                    if let Some(script) = &ship.script
-                        && !script.is_empty()
-                    {
-                        steps.push(serde_json::json!({
-                            "name": "script",
-                            "run": script,
-                        }));
-                    }
-                    for s in &ship.steps {
-                        steps.push(serde_json::json!({
-                            "name": s.name,
-                            "run": s.run,
-                            "timeout_secs": s.timeout_secs,
-                            "required": s.required,
-                        }));
-                    }
-                    if !steps.is_empty() {
-                        payload.insert(
-                            "preflight".into(),
-                            serde_json::json!({
-                                "required": true,
-                                "profile": "ship",
-                                "steps": steps,
-                            }),
-                        );
-                    }
+                    payload.insert("preflight".into(), preflight);
                 }
             }
             Err(e) => {

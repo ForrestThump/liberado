@@ -42,13 +42,25 @@ $configPath = Join-Path $paseoHome "config.json"
 
 # Do NOT embed API keys in config.json -- Paseo inherits the launching process env for
 # spawned agents. Keep only non-secret model selection here.
+#
+# LIBERADO_CONFIG_DIR is written explicitly rather than left to be discovered. The bridge is
+# installed to ~/.cargo/bin, so walking up from the binary finds no repo `config/`, and the
+# platform dir holds no topology.toml -- both discovery tiers miss. Without this line the agent
+# runs on compiled-in defaults: no declared project, so no ship bar, and no policy grant. It ran
+# that way for the whole dogfood period and nothing reported it.
+$configDirForAgent = if ($env:LIBERADO_CONFIG_DIR) {
+    $env:LIBERADO_CONFIG_DIR
+} else {
+    Join-Path (Split-Path -Parent $PSScriptRoot) "config"
+}
 $provider = [ordered]@{
     extends      = "acp"
     label        = "Liberado"
     description  = "Liberado multi-mode agent (coding | chat | face) over ACP"
     command      = $command
     env          = [ordered]@{
-        LIBERADO_ACP_MODEL = if ($env:LIBERADO_ACP_MODEL) { $env:LIBERADO_ACP_MODEL } else { "deepseek/deepseek-v4-pro" }
+        LIBERADO_ACP_MODEL  = if ($env:LIBERADO_ACP_MODEL) { $env:LIBERADO_ACP_MODEL } else { "deepseek/deepseek-v4-pro" }
+        LIBERADO_CONFIG_DIR = $configDirForAgent
     }
     params       = [ordered]@{
         supportsMcpServers = $false

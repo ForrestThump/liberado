@@ -7,7 +7,8 @@
         "description": "Liberado multi-mode agent (coding · chat · face) over ACP",
         "command": ["liberado-acp"],
         "env": {
-          "LIBERADO_ACP_MODEL": "deepseek/deepseek-v4-pro"
+          "LIBERADO_ACP_MODEL": "deepseek/deepseek-v4-pro",
+          "LIBERADO_CONFIG_DIR": "C:\\path\\to\\life-os\\config"
         },
         "params": {
           "supportsMcpServers": false

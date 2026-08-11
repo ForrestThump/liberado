@@ -536,6 +536,45 @@ pub struct ProjectConfig {
     pub preflight: ProjectPreflightConfig,
 }
 
+impl ProjectConfig {
+    /// This project's ship steps in the `payload.preflight` shape the coding pack reads.
+    ///
+    /// `None` when the project declares no ship profile, which the pack then answers with its
+    /// built-in defaults for `liberado` and with no bar at all for anything else.
+    ///
+    /// Lives here rather than at a call site because two entry points need it and they must not
+    /// disagree: the HTTP API injects it into a goal payload, and the ACP bridge builds the same
+    /// payload for a dispatched run. A second hand-rolled copy is how one path silently acquires
+    /// a different bar from the other.
+    pub fn ship_preflight_payload(&self) -> Option<serde_json::Value> {
+        let ship = self.preflight.ship.as_ref()?;
+        let mut steps = Vec::new();
+        // A shared script first, when declared: it is the entrypoint CI is meant to call too, so
+        // running it is the closest thing to running CI itself.
+        if let Some(script) = &ship.script
+            && !script.is_empty()
+        {
+            steps.push(serde_json::json!({ "name": "script", "run": script }));
+        }
+        for s in &ship.steps {
+            steps.push(serde_json::json!({
+                "name": s.name,
+                "run": s.run,
+                "timeout_secs": s.timeout_secs,
+                "required": s.required,
+            }));
+        }
+        if steps.is_empty() {
+            return None;
+        }
+        Some(serde_json::json!({
+            "required": true,
+            "profile": "ship",
+            "steps": steps,
+        }))
+    }
+}
+
 /// Project-level preflight profiles (`ship` is the merge bar).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct ProjectPreflightConfig {
