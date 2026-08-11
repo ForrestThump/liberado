@@ -1,6 +1,6 @@
 # Backlog — pick from here, scope it yourself
 
-Maintained 2026-08-09. **This is the direction; you choose the shape.** Take the highest item you
+Maintained 2026-08-11. **This is the direction; you choose the shape.** Take the highest item you
 can do well, scope it, open a PR. One item per PR.
 
 Items are ordered within each band. Bands matter more than positions inside them.
@@ -98,6 +98,33 @@ cargo clippy --workspace --exclude liberado-webui --all-targets -- -D warnings
 
 Where an item asks for a number, the number goes in the PR body — not a promise to measure later.
 If it genuinely cannot be measured yet, say why. Two recent PRs did exactly that and were right to.
+
+---
+
+## Band 0 — the autonomous PR machine (active focus, set 2026-08-11)
+
+**Take from this band first.** The goal is a dispatched task coming back as a PR whose review is
+taste and scope, not repair. Rationale and full ordering:
+[roadmap → fastest path](../roadmap.md#the-autonomous-pr-machine--fastest-path-set-2026-08-11).
+
+The ordering principle, from evidence: **every measured improvement so far came from fixing a
+defect, not from tuning a value.** Edit failure went 66–70% → 8% → 0% across PRs #106–#128, all
+defect fixes. No knob has yet produced a measured gain. Knobs come after the instrument exists.
+
+| # | What | Size | Where |
+|---|---|---|---|
+| **0.1** | **Wire the ship preflight into the ACP dispatch path.** `PreflightRunner` + the ship profile landed in PR #74 and are reached via `session_pack::build` → `preflight_hook::run_ship_preflight`. `crates/acp-bridge/src/coding_run.rs` **does not use `session_pack`** — it names `CodingSessionPack` only in comments. Every ACP-dispatched run, which is every dogfood run since Paseo landed, skipped the ship bar. Most likely single reason each run needed hand-finishing. Acceptance: a dispatched run's trace shows preflight executing, and a run that fails it does not report success. | small–medium | `crates/acp-bridge/src/coding_run.rs` |
+| **0.2** | **A success report must be backed by a test run.** A run filed `succeeded` over seven failing tests because `cargo check` and `validate` both passed. Either the pipeline requires a test verifier, or the report step refuses a success claim no test run supports. Traps: a workspace with no tests must still pass; do not run the suite per tool call; pre-existing failures are not the agent's fault (see `preflight.rs`). | medium | `crates/coder-agent/src/verify_pipeline.rs` |
+| **0.3** | **An empty critic response must not discard a completed run.** A run finished its work, passed `validate`, and was filed `Failed` because a reviewer call returned empty content. An empty provider response is a transient fault in the *reviewer*, not a verdict on the change — retry or abstain, never throw the work away. | small | `crates/coder-agent/src/critic.rs` |
+| **0.4** | **Emit the Model View Log.** Implement [`spec/reference/model-view-log.md`](../spec/reference/model-view-log.md) — JSONL flushed per event, deltas with a `full` after each context change, and the reconstruction conformance test. This is the instrument: every claim after it, knob or prompt or harness, is unmeasurable without it, and it is the precondition for A/B/C/D. | medium | `crates/coder-agent/src/trace.rs` |
+| **0.5** | **Productize cold review + one fix round.** The half that makes a PR merge-minimal rather than plausible, and the place a particular person's taste actually lives — the reviewer's standards are the reviewer's prompt. | medium | `Skills/cold-review-pr.md`, `crates/coder-agent/` |
+| **0.6** | **Offload oversized tool results to disk.** Biggest cost lever in the harness study: we truncate, which costs the same context as offload while losing the data. Worst case is `run_command` — a failing `cargo test` is tens of kilobytes that lands in the window and stays there every later turn. | medium | `crates/coder-tools/`, [`harness-study-2026-08.md`](harness-study-2026-08.md) |
+
+**Not in this band, deliberately:** per-model knob profiles and the SQL tuning ledger
+([`model-knob-profiles.md`](model-knob-profiles.md)). Correct to defer while we run only DeepSeek v4
+pro/flash. Extract a knob when a measurement shows the constant is wrong — as PR #128 did for
+per-tool argument matching — and add it to `config_literal_rules.rs` in the same PR. That guard
+covers exactly one config type today, so nine of the ten known config shadows are invisible to it.
 
 ---
 

@@ -10,6 +10,10 @@ Before starting anything, read [`spec/architecture/failure-modes.md`](spec/archi
 
 ## Open now — in priority order
 
+> **Active focus (2026-08-11):** the autonomous PR machine. See
+> [The autonomous PR machine — fastest path](#the-autonomous-pr-machine--fastest-path-set-2026-08-11)
+> for the ordered list; it cuts across P1–P3 and takes precedence while it runs.
+
 The order is deliberate: **automation daemon → chat → coding.** Why: [`spec/architecture/positioning.md`](spec/architecture/positioning.md).
 
 ### Priority 1 — the autonomous life-OS daemon
@@ -173,6 +177,34 @@ Two carried-forward limitations worth knowing before building on this:
   the executor's tool loop is next touched — the guard should stay, but it should be catching
   pathology, not routine duplication.
 - **Move-on bar:** leave P1 when you daily-drive without wincing — not when polished.
+
+## The autonomous PR machine — fastest path (set 2026-08-11)
+
+**Goal:** dispatch a scoped task and get back a PR whose review is taste and scope, not repair.
+Everything below is ordered by evidence, and the evidence says something specific: **every measured
+improvement so far came from fixing a defect, not from tuning a value.** Edit failure went 66–70% →
+8% → 0% across PRs #106–#128, all defect fixes. No knob has yet been tuned to a measured gain.
+
+| # | Do | Why it is here |
+|---|---|---|
+| **1** | **Wire the ship preflight into the ACP dispatch path** | Built in PR #74, and `coding_run.rs` never calls it — see the box in [`self-pr-quality-roadmap.md`](future-work/self-pr-quality-roadmap.md#honest-proximity). Every dogfood run to date skipped the ship bar. Cheapest large win, and the most likely reason each run needed hand-finishing. |
+| **2** | **Close the two open harness bugs** | `validate` passing read as "done" (a run shipped seven failing tests as success), and an empty critic response discarding a completed run. Both defects, both cheap. [`coder-harness-reliability-2026-08.md`](future-work/coder-harness-reliability-2026-08.md) |
+| **3** | **Emit the Model View Log** ([spec](spec/reference/model-view-log.md)) | The instrument. Every claim after this point — knob, prompt, or harness — is unmeasurable without it, and it is the precondition for A/B/C/D against Kilo, pi, Hermes and Deep Agents. |
+| **4** | **Productize cold review + one fix round** | The half that makes a PR *merge-minimal* rather than merely plausible. This is where taste is encoded: the reviewer's standards are the reviewer's prompt. |
+| **5** | **Extract knobs where a measurement says the constant is wrong** | Not "as many knobs as plausible". See the note below. |
+| **6** | **Tool-output offload to disk** | Biggest cost lever found in the harness study; independent of the above, do it when convenient. |
+| **7** | **Per-model profiles, then the SQL tuning ledger** | Correct to defer while we run only DeepSeek v4 pro/flash. [`model-knob-profiles.md`](future-work/model-knob-profiles.md) |
+
+**On knobs, a caution.** A knob is only an asset once something has been tuned with it; until then it
+is surface area. Ten settings have shipped that parsed, validated and reached nobody, and
+`config_literal_rules.rs` currently guards exactly one config type. Adding knobs ahead of #1–#3
+means adding untested configuration to a harness whose defects are still being found, and measuring
+the result with an instrument that does not exist yet. The cheap discipline: when a measurement
+shows a constant is wrong — as #128 showed for per-tool argument matching — extract *that* constant
+and add it to the mechanical guard in the same PR.
+
+**On taste.** The thing that makes a PR match a particular person's preferences is the review layer
+and the prompts in `prompts/`, not the knobs. #4 is the taste lever; #5 is the performance lever.
 
 ## What's next (one screen)
 
