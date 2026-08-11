@@ -9,6 +9,8 @@
 //! Surfaces call [`build_cold_review_request`] then a provider; they must not inject author goal
 //! text or tool traces into that request.
 
+use std::collections::BTreeSet;
+
 use liberado_coder_core::prompts::{
     COLD_PR_REVIEWER, COLD_PR_REVIEWER_FILE, DIFF_REVIEWER, dir_for, load,
 };
@@ -74,6 +76,8 @@ pub enum DropReason {
     MissingCitation,
     /// Low severity: residual human taste, not an automatic fix pass.
     LowSeverity,
+    /// The cited path is not part of the reviewed diff.
+    OutsideChangeSurface,
     /// Explicit human or filter drop with free-text reason.
     Explicit { reason: String },
 }
@@ -114,6 +118,57 @@ pub struct ChangeSurface {
     pub file_excerpts: Vec<(String, String)>,
 }
 
+impl ChangeSurface {
+    /// Paths named by the diff's old/new file headers.
+    pub fn changed_paths(&self) -> BTreeSet<String> {
+        let mut paths = BTreeSet::new();
+        let mut in_file_header = false;
+        for line in self.diff.lines() {
+            if let Some(header) = line.strip_prefix("diff --git ") {
+                for raw in header.split_whitespace().take(2) {
+                    if let Some(path) = normalize_diff_path(raw) {
+                        paths.insert(path);
+                    }
+                }
+                in_file_header = true;
+                continue;
+            }
+            if line.starts_with("@@") {
+                in_file_header = false;
+                continue;
+            }
+            if in_file_header
+                && let Some(raw) = line
+                    .strip_prefix("--- ")
+                    .or_else(|| line.strip_prefix("+++ "))
+                && let Some(path) = normalize_diff_path(raw)
+            {
+                paths.insert(path);
+            }
+        }
+        paths
+    }
+}
+
+fn normalize_diff_path(raw: &str) -> Option<String> {
+    let raw = raw.trim();
+    if raw == "/dev/null" {
+        return None;
+    }
+    let decoded = if raw.starts_with('"') {
+        serde_json::from_str::<String>(raw).ok()?
+    } else {
+        raw.to_string()
+    };
+    Some(
+        decoded
+            .strip_prefix("a/")
+            .or_else(|| decoded.strip_prefix("b/"))
+            .unwrap_or(&decoded)
+            .replace('\\', "/"),
+    )
+}
+
 /// Fully assembled cold-review model request (system + user). No provider I/O.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ColdReviewRequest {
@@ -127,10 +182,12 @@ pub struct ColdReviewRequest {
 pub fn cold_pr_reviewer_prompt(prompt_dir: Option<&str>, workspace_root: &str) -> (String, String) {
     let dir = dir_for(prompt_dir, workspace_root);
     let text = load(Some(&dir), COLD_PR_REVIEWER_FILE, COLD_PR_REVIEWER);
-    let source = dir
-        .join(COLD_PR_REVIEWER_FILE)
-        .to_string_lossy()
-        .into_owned();
+    let path = dir.join(COLD_PR_REVIEWER_FILE);
+    let source = if path.is_file() {
+        path.to_string_lossy().into_owned()
+    } else {
+        format!("baked:{COLD_PR_REVIEWER_FILE}")
+    };
     (text, source)
 }
 
@@ -151,6 +208,18 @@ pub fn build_cold_review_request(
     reject_author_context(forbidden)?;
     if surface.diff.trim().is_empty() {
         return Err("cold review requires a non-empty diff".into());
+    }
+    let changed_paths = surface.changed_paths();
+    if changed_paths.is_empty() {
+        return Err("cold review diff contains no file headers".into());
+    }
+    for (path, _) in &surface.file_excerpts {
+        let normalized = path.replace('\\', "/");
+        if !changed_paths.contains(&normalized) {
+            return Err(format!(
+                "cold-review excerpt path `{path}` is outside the change surface"
+            ));
+        }
     }
 
     let (system_prompt, prompt_source) = cold_pr_reviewer_prompt(prompt_dir, workspace_root);
@@ -212,13 +281,19 @@ fn reject_author_context(forbidden: &ForbiddenAuthorContext) -> Result<(), Strin
     Ok(())
 }
 
-/// Cite-to-keep filter: uncited findings are dropped; low severity is not auto-fixed.
-pub fn filter_findings(findings: &[ColdFinding]) -> FilterResult {
+/// Cite-to-keep filter: uncited or out-of-diff findings are dropped; low severity is not auto-fixed.
+pub fn filter_findings(surface: &ChangeSurface, findings: &[ColdFinding]) -> FilterResult {
+    let changed_paths = surface.changed_paths();
     let mut retained = Vec::new();
     let mut dropped = Vec::new();
     for f in findings {
         if !f.has_code_citation() {
             dropped.push((f.clone(), DropReason::MissingCitation));
+            continue;
+        }
+        let path = f.path.as_deref().unwrap_or_default().replace('\\', "/");
+        if !changed_paths.contains(&path) {
+            dropped.push((f.clone(), DropReason::OutsideChangeSurface));
             continue;
         }
         if !f.severity.auto_fix() {
@@ -254,6 +329,11 @@ pub fn decide_after_fix_round(
     reverify_passed: bool,
     outstanding_retained: usize,
 ) -> StageDecision {
+    if fix_rounds_completed == 0 {
+        return StageDecision::EscalateToHuman {
+            reason: "post-fix decision called before a fix round was recorded".into(),
+        };
+    }
     if reverify_passed && outstanding_retained == 0 {
         return StageDecision::NoFixNeeded;
     }
@@ -395,13 +475,17 @@ mod tests {
 
     #[test]
     fn filter_drops_uncited_and_low_severity() {
+        let changed = surface(
+            "diff --git a/a.rs b/a.rs\n--- a/a.rs\n+++ b/a.rs\n@@\n+x\n\
+             diff --git a/c.rs b/c.rs\n--- a/c.rs\n+++ b/c.rs\n@@\n+y\n",
+        );
         let findings = vec![
             finding(Severity::High, Some("a.rs"), Some("L10")),
             finding(Severity::High, None, Some("L10")),
             finding(Severity::Medium, Some("b.rs"), None),
             finding(Severity::Low, Some("c.rs"), Some("L1")),
         ];
-        let r = filter_findings(&findings);
+        let r = filter_findings(&changed, &findings);
         assert_eq!(r.retained.len(), 1);
         assert_eq!(r.retained[0].path.as_deref(), Some("a.rs"));
         assert_eq!(r.dropped.len(), 3);
@@ -415,6 +499,34 @@ mod tests {
                 .iter()
                 .any(|(_, d)| matches!(d, DropReason::LowSeverity))
         );
+    }
+
+    #[test]
+    fn filter_drops_citations_outside_the_reviewed_diff() {
+        let changed = surface("diff --git a/a.rs b/a.rs\n--- a/a.rs\n+++ b/a.rs\n@@\n+x\n");
+        let findings = vec![
+            finding(Severity::High, Some("a.rs"), Some("hunk-1")),
+            finding(Severity::High, Some("unseen.rs"), Some("L1")),
+        ];
+        let result = filter_findings(&changed, &findings);
+        assert_eq!(result.retained.len(), 1);
+        assert_eq!(result.retained[0].path.as_deref(), Some("a.rs"));
+        assert!(result.dropped.iter().any(|(finding, reason)| {
+            finding.path.as_deref() == Some("unseen.rs")
+                && matches!(reason, DropReason::OutsideChangeSurface)
+        }));
+    }
+
+    #[test]
+    fn request_rejects_excerpts_outside_the_diff() {
+        let changed = ChangeSurface {
+            diff: "diff --git a/a.rs b/a.rs\n--- a/a.rs\n+++ b/a.rs\n@@\n+x\n".into(),
+            file_excerpts: vec![("secret.rs".into(), "author-only context".into())],
+        };
+        let err =
+            build_cold_review_request(&changed, &ForbiddenAuthorContext::default(), None, ".")
+                .unwrap_err();
+        assert!(err.contains("outside the change surface"), "{err}");
     }
 
     #[test]
@@ -446,6 +558,12 @@ mod tests {
                 );
             }
             other => panic!("expected escalate after failed re-verify, got {other:?}"),
+        }
+        match decide_after_fix_round(0, true, 0) {
+            StageDecision::EscalateToHuman { reason } => {
+                assert!(reason.contains("before a fix round"), "{reason}");
+            }
+            other => panic!("zero completed rounds is invalid, got {other:?}"),
         }
     }
 
@@ -485,5 +603,9 @@ mod tests {
             COLD_PR_REVIEWER.contains("citation") || COLD_PR_REVIEWER.contains("path"),
             "baked cold-pr prompt must require citations"
         );
+        let temp = tempfile::tempdir().unwrap();
+        let missing = temp.path().join("missing-prompts");
+        let (_, source) = cold_pr_reviewer_prompt(missing.to_str(), ".");
+        assert_eq!(source, "baked:cold-pr-reviewer.md");
     }
 }
