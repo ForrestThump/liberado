@@ -1364,6 +1364,51 @@ mod preserve_work_tests {
         );
     }
 
+    /// F6 production wiring: the headless path must race the backend against a termination
+    /// signal and pass the derived task id into both the race and the post-run preserve.
+    ///
+    /// Removing `run_or_preserve` or `wait_for_termination_signal` from production leaves every
+    /// helper test green and loses SIGTERM/Ctrl+C preservation again — the original F6 failure.
+    #[test]
+    fn production_headless_path_races_run_against_termination() {
+        let source = include_str!("main.rs");
+        let cut = source
+            .lines()
+            .position(|l| l.contains("#[cfg(test)]"))
+            .unwrap_or(usize::MAX);
+        let production_lines: Vec<&str> = source
+            .lines()
+            .take(cut)
+            .filter(|l| !l.trim_start().starts_with("//") && !l.trim_start().starts_with("///"))
+            .collect();
+        let production = production_lines.join("\n");
+        assert!(
+            production.contains("run_or_preserve("),
+            "headless path must call run_or_preserve so a catchable signal preserves work"
+        );
+        let run_call = production
+            .split_once("let result = match run_or_preserve(")
+            .and_then(|(_, tail)| tail.split_once(")\n    .await"))
+            .map(|(call, _)| call)
+            .expect("production headless path must await run_or_preserve");
+        assert!(
+            run_call.contains("wait_for_termination_signal()"),
+            "headless path must pass wait_for_termination_signal() into run_or_preserve"
+        );
+        assert!(
+            production.contains("derive_task_id("),
+            "task id for preserve branches must be derived, not a constant"
+        );
+        assert!(
+            run_call.contains("&task_id"),
+            "run_or_preserve must receive the derived task_id"
+        );
+        assert!(
+            production.contains("preserve_work(&workspace, &task_id, push_enabled())"),
+            "post-run preserve_work must receive the derived task_id"
+        );
+    }
+
     // ── run_or_preserve ───────────────────────────────────────────────────────────────────
 
     /// A signal mid-run must commit the workspace before giving up.
