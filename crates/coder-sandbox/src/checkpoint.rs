@@ -42,6 +42,21 @@ pub struct ShadowGit {
 impl ShadowGit {
     /// Side repo at `<data>/checkpoints/<session_id>/` (or `LIBERADO_DATA_DIR`).
     pub fn open_or_init(workspace_root: &Path, session_id: &str) -> Result<Self, CheckpointError> {
+        let data = std::env::var("LIBERADO_DATA_DIR").unwrap_or_else(|_| ".liberado".into());
+        Self::open_or_init_at(Path::new(&data), workspace_root, session_id)
+    }
+
+    /// `open_or_init` with the data root supplied instead of read from the environment.
+    ///
+    /// The env var is process-global, so tests that set it must serialize against every other
+    /// test in the binary — a lock that has to be held across `await` points and therefore gets
+    /// dropped early, which is how it leaks. Taking the directory as an argument removes the
+    /// shared mutable state instead of guarding it.
+    fn open_or_init_at(
+        data: &Path,
+        workspace_root: &Path,
+        session_id: &str,
+    ) -> Result<Self, CheckpointError> {
         if session_id.is_empty()
             || session_id.contains("..")
             || session_id.contains('/')
@@ -56,8 +71,7 @@ impl ShadowGit {
                 .canonicalize()
                 .map_err(|e| CheckpointError::Io(e.to_string()))?,
         );
-        let data = std::env::var("LIBERADO_DATA_DIR").unwrap_or_else(|_| ".liberado".into());
-        let git_dir = PathBuf::from(data).join("checkpoints").join(session_id);
+        let git_dir = data.join("checkpoints").join(session_id);
         std::fs::create_dir_all(&git_dir).map_err(|e| CheckpointError::Io(e.to_string()))?;
         // Canonicalized the same way as `work_tree`, because `restore` decides whether the shadow
         // repo sits inside the work tree by `strip_prefix`-ing one against the other — a literal
@@ -75,13 +89,6 @@ impl ShadowGit {
             // Identity for commit-tree.
             sg.run_git(&["config", "user.email", "checkpoint@liberado.local"])?;
             sg.run_git(&["config", "user.name", "liberado-checkpoint"])?;
-            // A checkpoint promises the workspace comes back byte-identical, so the shadow repo
-            // must not translate anything on the way in or out. With `core.autocrlf=true` — the
-            // default for Git for Windows, and set in this machine's *system* config — restore
-            // rewrites every LF to CRLF, quietly corrupting the tree it was meant to preserve.
-            // Pinned here rather than inherited, because the host's setting is not ours to trust.
-            sg.run_git(&["config", "core.autocrlf", "false"])?;
-            sg.run_git(&["config", "core.safecrlf", "false"])?;
         }
         Ok(sg)
     }
@@ -210,11 +217,34 @@ impl ShadowGit {
         Ok(out)
     }
 
+    /// Global options every invocation carries.
+    ///
+    /// A checkpoint promises the workspace comes back byte-identical, so the shadow repo must not
+    /// translate anything on the way in or out. With `core.autocrlf=true` — the default for Git
+    /// for Windows, and set in this machine's *system* config — restore rewrites every LF to
+    /// CRLF, quietly corrupting the tree it exists to preserve.
+    ///
+    /// Passed per command rather than written into the repo config at creation, for two reasons.
+    /// A config write only reached repos this build created: `open_or_init` skips the write when
+    /// `HEAD` already exists, so a session resumed against a repo made by an older build restored
+    /// with the host's setting and no code path noticed. And `-c` outranks every config file, so
+    /// a value inherited from the system, the global, or the repo itself cannot win.
+    fn base_args(&self) -> Vec<String> {
+        vec![
+            "--git-dir".into(),
+            path_for_cli(&self.git_dir),
+            "--work-tree".into(),
+            path_for_cli(&self.work_tree),
+            "-c".into(),
+            "core.autocrlf=false".into(),
+            "-c".into(),
+            "core.safecrlf=false".into(),
+        ]
+    }
+
     fn run_git(&self, args: &[&str]) -> Result<(), CheckpointError> {
-        let git_dir = path_for_cli(&self.git_dir);
-        let work = path_for_cli(&self.work_tree);
         let output = liberado_common::process::std_command("git")
-            .args(["--git-dir", &git_dir, "--work-tree", &work])
+            .args(self.base_args())
             .args(args)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -230,10 +260,8 @@ impl ShadowGit {
     }
 
     async fn run_git_async(&self, args: &[&str]) -> Result<(), CheckpointError> {
-        let git_dir = path_for_cli(&self.git_dir);
-        let work = path_for_cli(&self.work_tree);
         let output = liberado_common::process::command("git")
-            .args(["--git-dir", &git_dir, "--work-tree", &work])
+            .args(self.base_args())
             .args(args)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -250,10 +278,8 @@ impl ShadowGit {
     }
 
     async fn run_git_async_stdout(&self, args: &[&str]) -> Result<String, CheckpointError> {
-        let git_dir = path_for_cli(&self.git_dir);
-        let work = path_for_cli(&self.work_tree);
         let output = liberado_common::process::command("git")
-            .args(["--git-dir", &git_dir, "--work-tree", &work])
+            .args(self.base_args())
             .args(args)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -276,7 +302,22 @@ mod tests {
     use std::sync::Mutex;
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    /// `LIBERADO_DATA_DIR` is process-global — serialize tests that mutate it.
+    /// `LIBERADO_DATA_DIR` is process-global. Exactly one test below reads it, through
+    /// `open_or_init`; every other test names its data directory with `open_or_init_at` and
+    /// touches no environment at all.
+    ///
+    /// The previous arrangement had all seven setting it, which forced a lock, and the lock had
+    /// to be released before the first `await` (clippy `await_holding_lock`) — so it covered the
+    /// set but not the clearing. `GIT_CONFIG_GLOBAL`, leaked the same way by the autocrlf test,
+    /// is what actually broke CI: it named a temp file that the leaking test then deleted, and a
+    /// concurrent `git init` inheriting the path died with `fatal: unknown error occurred while
+    /// reading the configuration files` — a failure in an unrelated test, on Windows only, green
+    /// on re-run.
+    ///
+    /// Note that git tolerates a `GIT_CONFIG_GLOBAL` naming a file that simply does not exist; it
+    /// reports that `fatal` when it cannot *access* the path for any other reason, which on
+    /// Windows includes the sharing violation raised while the file is being deleted. Pointing
+    /// the variable at a directory reproduces the message exactly. No test sets it now.
     static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     fn unique() -> u128 {
@@ -288,7 +329,6 @@ mod tests {
 
     #[tokio::test]
     async fn snapshot_then_restore_is_byte_identical() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let base = std::env::temp_dir().join(format!("lib-ckpt-{}", unique()));
         let root = base.join("ws");
         let data = base.join("data");
@@ -296,11 +336,7 @@ mod tests {
         std::fs::write(root.join("a.txt"), "hello\n").unwrap();
         std::fs::write(root.join("b.txt"), "world\n").unwrap();
 
-        unsafe {
-            std::env::set_var("LIBERADO_DATA_DIR", &data);
-        }
-        let sg = ShadowGit::open_or_init(&root, "sess1").unwrap();
-        drop(_guard); // drop before .await for clippy await_holding_lock
+        let sg = ShadowGit::open_or_init_at(&data, &root, "sess1").unwrap();
 
         let cp = sg.snapshot("base").await.unwrap();
         assert!(!cp.id.is_empty());
@@ -328,25 +364,17 @@ mod tests {
         );
         assert_eq!(list[0].id, cp.id);
 
-        unsafe {
-            std::env::remove_var("LIBERADO_DATA_DIR");
-        }
         let _ = std::fs::remove_dir_all(&base);
     }
 
     #[tokio::test]
     async fn second_snapshot_chains_and_rewind_to_first() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let base = std::env::temp_dir().join(format!("lib-ckpt2-{}", unique()));
         let root = base.join("ws");
         let data = base.join("data");
         std::fs::create_dir_all(&root).unwrap();
         std::fs::write(root.join("f.txt"), "v1\n").unwrap();
-        unsafe {
-            std::env::set_var("LIBERADO_DATA_DIR", &data);
-        }
-        let sg = ShadowGit::open_or_init(&root, "sess2").unwrap();
-        drop(_guard);
+        let sg = ShadowGit::open_or_init_at(&data, &root, "sess2").unwrap();
 
         let c1 = sg.snapshot("v1").await.unwrap();
         std::fs::write(root.join("f.txt"), "v2\n").unwrap();
@@ -356,24 +384,16 @@ mod tests {
         sg.restore(&c1.id).await.unwrap();
         assert_eq!(std::fs::read_to_string(root.join("f.txt")).unwrap(), "v1\n");
 
-        unsafe {
-            std::env::remove_var("LIBERADO_DATA_DIR");
-        }
         let _ = std::fs::remove_dir_all(&base);
     }
 
     #[tokio::test]
     async fn restore_survives_when_side_repo_is_under_work_tree() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let root = std::env::temp_dir().join(format!("lib-ckpt-nested-{}", unique()));
         std::fs::create_dir_all(&root).unwrap();
         std::fs::write(root.join("f.txt"), "keep\n").unwrap();
         let data = root.join("data");
-        unsafe {
-            std::env::set_var("LIBERADO_DATA_DIR", &data);
-        }
-        let sg = ShadowGit::open_or_init(&root, "nested").unwrap();
-        drop(_guard);
+        let sg = ShadowGit::open_or_init_at(&data, &root, "nested").unwrap();
 
         let cp = sg.snapshot("base").await.unwrap();
         std::fs::write(root.join("f.txt"), "mut\n").unwrap();
@@ -386,9 +406,6 @@ mod tests {
         assert!(!root.join("extra.txt").exists());
         let list = sg.list(5).await.unwrap();
         assert_eq!(list[0].id, cp.id);
-        unsafe {
-            std::env::remove_var("LIBERADO_DATA_DIR");
-        }
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -407,17 +424,13 @@ mod tests {
     /// *do* break it (8.3, case-insensitivity) exist only on some platforms.
     #[test]
     fn git_dir_is_stored_canonicalized_so_the_clean_guard_can_match() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let root = std::env::temp_dir().join(format!("lib-ckpt-canon-{}", unique()));
         std::fs::create_dir_all(root.join("sub")).unwrap();
         // A `..` segment: names `root/data`, but is not the canonical spelling of it. Unlike `.`,
         // which `Path::components()` quietly drops, `..` survives into the literal comparison —
         // so this stands in for the runner's 8.3 `TEMP` without needing a Windows-only fixture.
         let data = root.join("sub").join("..").join("data");
-        unsafe {
-            std::env::set_var("LIBERADO_DATA_DIR", &data);
-        }
-        let sg = ShadowGit::open_or_init(&root, "canon").unwrap();
+        let sg = ShadowGit::open_or_init_at(&data, &root, "canon").unwrap();
 
         let canonical = strip_extended_path_prefix(&sg.git_dir().canonicalize().unwrap());
         assert_eq!(
@@ -433,9 +446,6 @@ mod tests {
             sg.work_tree()
         );
 
-        unsafe {
-            std::env::remove_var("LIBERADO_DATA_DIR");
-        }
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -450,36 +460,64 @@ mod tests {
 
     #[test]
     fn git_dir_and_work_tree_accessors() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let base = std::env::temp_dir().join(format!("lib-ckpt-getters-{}", unique()));
         let root = base.join("ws");
         let data = base.join("data");
         std::fs::create_dir_all(&root).unwrap();
-        unsafe {
-            std::env::set_var("LIBERADO_DATA_DIR", &data);
-        }
-        let sg = ShadowGit::open_or_init(&root, "g1").unwrap();
+        let sg = ShadowGit::open_or_init_at(&data, &root, "g1").unwrap();
         assert!(sg.git_dir().to_string_lossy().contains("checkpoints"));
         assert!(sg.git_dir().to_string_lossy().contains("g1"));
         assert!(sg.work_tree().ends_with("ws"));
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// `open_or_init` must actually consult `LIBERADO_DATA_DIR`.
+    ///
+    /// The only test that touches the environment, and the reason the lock still exists: every
+    /// other test names its directory outright, so the delegation from the public constructor to
+    /// `open_or_init_at` is the one thing left that nothing else would notice breaking.
+    /// Synchronous, so the guard is held for the whole body and released on panic — no `await`
+    /// to force an early drop.
+    #[test]
+    fn open_or_init_reads_the_data_dir_from_the_environment() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let base = std::env::temp_dir().join(format!("lib-ckpt-env-{}", unique()));
+        let root = base.join("ws");
+        let data = base.join("data");
+        std::fs::create_dir_all(&root).unwrap();
+        // Created up front so that a build ignoring the variable fails the assertion below rather
+        // than an `unwrap` on canonicalizing a directory that was never made.
+        std::fs::create_dir_all(&data).unwrap();
+
+        let prior = std::env::var("LIBERADO_DATA_DIR").ok();
         unsafe {
-            std::env::remove_var("LIBERADO_DATA_DIR");
+            std::env::set_var("LIBERADO_DATA_DIR", &data);
         }
+        let sg = ShadowGit::open_or_init(&root, "env1");
+        unsafe {
+            match &prior {
+                Some(v) => std::env::set_var("LIBERADO_DATA_DIR", v),
+                None => std::env::remove_var("LIBERADO_DATA_DIR"),
+            }
+        }
+
+        let sg = sg.unwrap();
+        assert!(
+            sg.git_dir()
+                .starts_with(strip_extended_path_prefix(&data.canonicalize().unwrap())),
+            "git_dir {:?} must sit under the data dir named by the environment",
+            sg.git_dir()
+        );
         let _ = std::fs::remove_dir_all(&base);
     }
 
     #[tokio::test]
     async fn list_clamps_limit_to_valid_range() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let base = std::env::temp_dir().join(format!("lib-ckpt-list-{}", unique()));
         let root = base.join("ws");
         let data = base.join("data");
         std::fs::create_dir_all(&root).unwrap();
-        unsafe {
-            std::env::set_var("LIBERADO_DATA_DIR", &data);
-        }
-        let sg = ShadowGit::open_or_init(&root, "sess-list").unwrap();
-        drop(_guard);
+        let sg = ShadowGit::open_or_init_at(&data, &root, "sess-list").unwrap();
 
         for i in 1..=3 {
             std::fs::write(root.join("f.txt"), format!("v{i}\n")).unwrap();
@@ -490,40 +528,33 @@ mod tests {
         let items = sg.list(500).await.unwrap();
         assert!(!items.is_empty());
         assert!(items.len() <= 100);
-        unsafe {
-            std::env::remove_var("LIBERADO_DATA_DIR");
-        }
         let _ = std::fs::remove_dir_all(&base);
     }
 
-    /// Restore stays byte-exact even when the host turns line-ending translation on.
+    /// Restore stays byte-exact even when the configuration says to translate.
     ///
     /// `core.autocrlf=true` is the Git for Windows default and is set in this machine's *system*
     /// config; a developer-level `false` was the only thing hiding it locally, so the three
-    /// round-trip tests passed here and failed on every CI runner. Left inherited, restore
+    /// round-trip tests passed here and failed on every CI runner. Left in force, restore
     /// rewrites every LF to CRLF — silent corruption in the one operation whose entire promise is
     /// that the bytes come back unchanged.
     ///
-    /// The other tests would catch this only on a host that happens to enable autocrlf. This one
-    /// forces it on regardless, so the guarantee is pinned rather than left to the environment.
+    /// The hostile setting goes in the shadow repo's *own* config, which is a strictly harder
+    /// case than the inherited system value it stands in for: local config outranks system and
+    /// global, so only the `-c` in `base_args` can beat it. It also stays inside the test's own
+    /// directory. The earlier version pointed `GIT_CONFIG_GLOBAL` at a temp file and cleared the
+    /// variable outside the lock, which leaked a path to a file it then deleted — that, not
+    /// anything about line endings, is what broke an unrelated test on Windows CI.
     #[tokio::test]
-    async fn restore_is_byte_exact_even_when_the_host_enables_autocrlf() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    async fn restore_is_byte_exact_even_when_the_config_says_to_translate() {
         let base = std::env::temp_dir().join(format!("lib-ckpt-crlf-{}", unique()));
         let root = base.join("ws");
         let data = base.join("data");
         std::fs::create_dir_all(&root).unwrap();
         std::fs::write(root.join("a.txt"), "one\ntwo\nthree\n").unwrap();
 
-        let cfg = base.join("gitconfig");
-        std::fs::write(&cfg, "[core]\n\tautocrlf = true\n").unwrap();
-
-        unsafe {
-            std::env::set_var("LIBERADO_DATA_DIR", &data);
-            std::env::set_var("GIT_CONFIG_GLOBAL", &cfg);
-        }
-        let sg = ShadowGit::open_or_init(&root, "sess-crlf").unwrap();
-        drop(_guard);
+        let sg = ShadowGit::open_or_init_at(&data, &root, "sess-crlf").unwrap();
+        sg.run_git(&["config", "core.autocrlf", "true"]).unwrap();
 
         let cp = sg.snapshot("base").await.unwrap();
         std::fs::write(root.join("a.txt"), "MUTATED\n").unwrap();
@@ -536,10 +567,44 @@ mod tests {
             "restore must not translate line endings"
         );
 
-        unsafe {
-            std::env::remove_var("LIBERADO_DATA_DIR");
-            std::env::remove_var("GIT_CONFIG_GLOBAL");
-        }
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// The no-translation setting must survive reopening a repo this build did not create.
+    ///
+    /// It used to be written into the repo config, and only on the branch that runs when `HEAD`
+    /// is absent. A resumed session takes the other branch, so a shadow repo created before that
+    /// fix — or by any other means — restored with whatever the host had configured, and nothing
+    /// in the code path could observe it.
+    ///
+    /// Now that the setting rides on every command, no mutation breaks resume without also
+    /// breaking creation, so the test above fails alongside this one on both. Kept anyway: it
+    /// pins the `HEAD`-exists branch, which is the branch a return to config-at-init would leave
+    /// uncovered.
+    #[tokio::test]
+    async fn restore_is_byte_exact_for_a_repo_reopened_rather_than_created() {
+        let base = std::env::temp_dir().join(format!("lib-ckpt-reopen-{}", unique()));
+        let root = base.join("ws");
+        let data = base.join("data");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("a.txt"), "one\ntwo\n").unwrap();
+
+        let first = ShadowGit::open_or_init_at(&data, &root, "sess-reopen").unwrap();
+        first.run_git(&["config", "core.autocrlf", "true"]).unwrap();
+        let cp = first.snapshot("base").await.unwrap();
+        drop(first);
+
+        // Second open takes the `HEAD` exists branch: no init, no config written.
+        let resumed = ShadowGit::open_or_init_at(&data, &root, "sess-reopen").unwrap();
+        std::fs::write(root.join("a.txt"), "MUTATED\n").unwrap();
+        resumed.restore(&cp.id).await.unwrap();
+
+        assert_eq!(
+            std::fs::read(root.join("a.txt")).unwrap(),
+            b"one\ntwo\n",
+            "a resumed session must restore bytes as exactly as a fresh one"
+        );
+
         let _ = std::fs::remove_dir_all(&base);
     }
 }

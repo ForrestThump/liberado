@@ -101,9 +101,18 @@ regenerates `Cargo.lock` in place, so adding a dependency and forgetting the loc
 and lands a `main` that fails `--locked` builds. `cargo metadata --locked` is the check that catches
 it, and it takes a second.
 
-**Process-global state in tests needs a lock.** `LIBERADO_DATA_DIR` and friends are set by several
-tests; `cargo test` runs a crate's tests concurrently in one binary, so unguarded `set_var` /
-`remove_var` produces flakes that always pass when re-run alone.
+**Process-global state in tests wants removing, not locking.** `LIBERADO_DATA_DIR` and friends are
+read by production code; `cargo test` runs a crate's tests concurrently in one binary, so unguarded
+`set_var` / `remove_var` produces flakes that always pass when re-run alone. A lock is the obvious
+fix and it is not enough: clippy's `await_holding_lock` forces the guard to drop before the first
+`await`, so it covers the *set* and not the clearing, and the window it leaves is real. That window
+cost a Windows-only CI failure in `coder-sandbox::checkpoint` — a test cleared `GIT_CONFIG_GLOBAL`
+and deleted the file it named, and a concurrent `git init` in an unrelated test died with `fatal:
+unknown error occurred while reading the configuration files`. (Git tolerates that variable naming
+a file that does not exist; it fails that way when it cannot *access* the path, which on Windows
+includes a file mid-deletion.) Prefer an argument the caller
+supplies (see `ShadowGit::open_or_init_at`), leaving one test on the env var to pin that the
+production entry point still reads it.
 
 ## Where the agent-facing machinery lives
 
