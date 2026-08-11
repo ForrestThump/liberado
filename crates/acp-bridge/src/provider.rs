@@ -5,9 +5,8 @@
 //! about ACP sessions or JSON-RPC — it answers "which backend, which model, what can the picker
 //! show", and `main` composes it.
 
+use std::path::PathBuf;
 use std::sync::Arc;
-
-use std::path::Path;
 
 use liberado_provider::{
     CompletionRequest, CompletionResponse, Provider, ProviderError, ProviderResult,
@@ -41,13 +40,21 @@ pub(crate) struct ResolvedProvider {
     pub(crate) model_id: String,
 }
 
+/// Config directory for ACP provider topology — same multi-tier resolution as `main.rs`.
+///
+/// Do **not** read `LIBERADO_CONFIG_DIR` alone: that opts out of platform dir and binary-walk
+/// tiers, so an unset variable silently means no topology (the dogfood-period defect).
+pub(crate) fn provider_config_dir() -> Option<PathBuf> {
+    liberado_config::config_dir()
+}
+
 pub(crate) fn build_provider() -> Result<ResolvedProvider, String> {
     let model_override = std::env::var("LIBERADO_ACP_MODEL")
         .ok()
         .filter(|s| !s.is_empty());
 
-    if let Some(config_dir) = std::env::var_os("LIBERADO_CONFIG_DIR") {
-        match liberado_config::load_config(Some(Path::new(&config_dir))) {
+    if let Some(config_dir) = provider_config_dir() {
+        match liberado_config::load_config(Some(config_dir.as_path())) {
             Ok((config, _)) => {
                 if let Some(provider) = liberado_bootstrap::provider_from_config(&config) {
                     let backend = config.topology.provider.clone();
@@ -68,7 +75,8 @@ pub(crate) fn build_provider() -> Result<ResolvedProvider, String> {
                         tracing::info!(
                             provider = %profile.name,
                             %model,
-                            "acp provider from LIBERADO_CONFIG_DIR"
+                            config_dir = %config_dir.display(),
+                            "acp provider from resolved Liberado config"
                         );
                         return Ok(ResolvedProvider {
                             provider: Arc::new(p),
@@ -85,7 +93,11 @@ pub(crate) fn build_provider() -> Result<ResolvedProvider, String> {
                 }
             }
             Err(e) => {
-                tracing::warn!(error = %e, "LIBERADO_CONFIG_DIR load failed; falling back to env")
+                tracing::warn!(
+                    error = %e,
+                    config_dir = %config_dir.display(),
+                    "resolved Liberado config load failed; falling back to env keys"
+                )
             }
         }
     }
@@ -269,9 +281,55 @@ impl Provider for MissingKeyProvider {
     async fn complete(&self, _request: CompletionRequest) -> ProviderResult<CompletionResponse> {
         Err(ProviderError::InvalidRequest(
             "liberado-acp: no API key configured. Set OPENROUTER_API_KEY (preferred), \
-             DEEPSEEK_API_KEY, or OPENAI_API_KEY — or point LIBERADO_CONFIG_DIR at a Liberado \
-             config with a topology provider."
+             DEEPSEEK_API_KEY, or OPENAI_API_KEY — or place a Liberado config directory where \
+             liberado_config::config_dir resolves (LIBERADO_CONFIG_DIR is only the first tier)."
                 .into(),
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Production must call the shared resolver, not a bare env read.
+    ///
+    /// Restoring `std::env::var_os("LIBERADO_CONFIG_DIR")` in `build_provider` compiles and
+    /// reintroduces silent empty-config when the variable is unset — the dogfood failure mode.
+    #[test]
+    fn build_provider_does_not_read_config_dir_env_directly() {
+        let src = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/provider.rs"));
+        let production = src.split("#[cfg(test)]").next().expect("production half");
+        // Allow the error string / comments to mention the env name; ban the call site.
+        let code_only: String = production
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            !code_only.contains("var_os(\"LIBERADO_CONFIG_DIR\")")
+                && !code_only.contains("var(\"LIBERADO_CONFIG_DIR\")"),
+            "build_provider must not read LIBERADO_CONFIG_DIR via env; use provider_config_dir()"
+        );
+        assert!(
+            code_only.contains("provider_config_dir()"),
+            "build_provider must call provider_config_dir()"
+        );
+        assert!(
+            code_only.contains("liberado_config::config_dir()"),
+            "provider_config_dir must be liberado_config::config_dir"
+        );
+    }
+
+    #[test]
+    fn provider_config_dir_is_the_shared_resolver() {
+        // Same function the rest of the bridge uses — identity of resolution, not of result
+        // (env races under parallel tests).
+        let a = provider_config_dir();
+        let b = liberado_config::config_dir();
+        assert_eq!(
+            a, b,
+            "ACP provider config dir must match liberado_config::config_dir()"
+        );
     }
 }
