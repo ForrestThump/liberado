@@ -362,6 +362,25 @@ must not depend on an outer CLI skill forever.
 | PR is usually *merge-minimal* | **Not yet** — missing default ship package + productized cold review + fix pass |
 | Self-improving with light oversight | **Architecture exists** (skills, gates, dream); **loop not closed** |
 
+> ### ⚠️ The ship gate is built and the dispatch path never calls it (found 2026-08-11)
+>
+> Investment **#1** below — `PreflightRunner` plus the ship profile — **landed in PR #74**. It is
+> reached through `session_pack::build`, which calls `preflight_hook::run_ship_preflight`.
+>
+> **`crates/acp-bridge/src/coding_run.rs` does not use `session_pack`.** It mentions
+> `CodingSessionPack` twice, both times in comments describing what it mirrors. So every run
+> dispatched over ACP — which is every dogfood run since the Paseo integration landed, including all
+> of the 2026-08-10/11 A/B work — **skipped the ship bar entirely.**
+>
+> This is the config-shadow failure class at the level of a subsystem rather than a setting: built,
+> tested, green, and unreachable from the path in use. It is also the most likely single explanation
+> for why every dispatched run so far has needed hand-finishing before it could be merged —
+> the runs were never measured against the ship bar, so nothing asked them to clear it.
+>
+> **Wiring it is the cheapest large win available** and should precede any further tuning work.
+> Rank #1 below is therefore not "build it" but "connect it, then verify a dispatched run actually
+> runs it."
+
 The feeling of "almost there" is correct for the *substrate*. The remaining work is closing the
 loop so that substrate becomes a repeatable, review-cheap path.
 
