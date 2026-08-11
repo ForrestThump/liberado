@@ -1,12 +1,33 @@
 # Cold Review PR Flow
 
 ## When to use
-- Reviewing an open PR before merge
-- A cold-start (no context) subagent reviews the diff, then you verify findings against the actual code and fix real issues
 
-## Flow
+- Reviewing an open PR before merge (outer agent / human)
+- Understanding the **in-product** cold-review stage (backlog 0.8 / Layer B)
+
+## Product stage (in Liberado)
+
+The coding pack owns the policy in `liberado_coder_agent::cold_review`:
+
+```text
+build → verify → cold review (diff only) → filter (cite-to-keep)
+      → at most one fix round → re-verify → ready for human | escalate
+```
+
+| Hard rule | Entry |
+|---|---|
+| Cold reviewer sees **diff (+ optional file excerpts)** only — not goal narrative or tool trace | `build_cold_review_request` |
+| Taste / standards | `prompts/coder/cold-pr-reviewer.md` (disk override + baked) |
+| Cite path+location to retain a finding | `filter_findings` |
+| At most **one** automatic fix round | `MAX_FIX_ROUNDS`, `decide_after_filter` / `decide_after_fix_round` |
+| Ready for human only after **post-review re-verify** | `ready_for_human` |
+
+Do **not** invent a second ad-hoc review script: retune `cold-pr-reviewer.md`.
+
+## Operator / outer-agent flow
 
 ### 1. Checkout and diff
+
 ```bash
 gh pr view <N> --json title,headRefName,additions,deletions,files
 git fetch origin <branch>
@@ -15,38 +36,36 @@ git diff main..HEAD
 ```
 
 ### 2. Cold-start review
-Launch a subagent with the full diff. Tell it:
-- It is a cold reviewer with NO project context
+
+Launch a subagent with the **diff only**. Tell it:
+
+- It is a cold reviewer with NO authoring-run context
 - Identify real issues: bugs, security holes, missing edge cases, design flaws
 - Ignore style pedantry
-- Return issues with severity (high/medium/low) and clear explanation
+- Return issues with severity (high/medium/low), **path**, and **location**
 - Do NOT fix anything — just report
 
-### 3. Verify findings against code
-For each issue the reviewer found:
+Prefer the same standards as `prompts/coder/cold-pr-reviewer.md`.
+
+### 3. Filter (cite-to-keep)
+
+For each issue:
+
 1. Read the actual code at the cited locations
-2. Determine if the claim is:
-   - **Real** — the code actually has this bug/gap
-   - **Exaggerated** — technically possible but vanishingly unlikely
-   - **Hallucinated** — the reviewer misunderstood the code or read it wrong
+2. Keep only findings that are **real** and **code-grounded**
+3. Drop uncited or hallucinated claims with a reason
 
-### 4. Fix real issues
-Make followup commits on the PR branch for issues that are REAL and WORTH FIXING:
-- High-severity issues: always fix
-- Medium issues: fix if the fix is clean and low-risk
-- Low issues: fix only if trivial (doc comments, test additions)
+### 4. One fix round
 
-Skip issues that are:
-- Theoretical but un-exploitable (TOCTOU with local-only attacker)
-- Already correct code that the reviewer misread
-- Design choices the author clearly made intentionally
+- High/medium retained findings: one fix pass on the same branch
+- If still red after re-verify: **stop** and leave residual for a human — no thrash
 
-### 5. Commit and push
-```bash
-git add <files>
-git commit -m "fix: address cold review findings in <PR area>"
-git push origin <branch>
-```
+### 5. Ready for human
 
-### Key principle
-The cold reviewer has zero context — it will find both real bugs and false positives. Your job is to be the filter that separates them by reading the actual code.
+Mark ready only after machine re-check passes post-review (not when the review goal *starts*).
+
+## Key principle
+
+The cold reviewer has zero authoring context — it will find both real bugs and false positives.
+The filter that requires a code citation is what separates them; the one-fix-round cap is what
+prevents unbounded auto-fix loops.
