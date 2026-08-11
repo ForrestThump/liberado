@@ -66,6 +66,11 @@ BASELINE_DIR = STATE_DIR / "baselines"
 # alone and failed under parallel execution; without this, one flake eats every kickback.
 MAX_KICKBACKS = int(os.environ.get("SHEPHERD_MAX_KICKBACKS", "2"))
 COLD_REVIEWS = int(os.environ.get("SHEPHERD_COLD_REVIEWS", "2"))
+# Cold review needs fetch → diff → classify; 30 turns died mid-review on a 10-file PR (F13).
+COLD_REVIEW_DEFAULT_TURNS = 60
+COLD_REVIEW_MAX_TURNS = int(
+    os.environ.get("SHEPHERD_COLD_REVIEW_MAX_TURNS", str(COLD_REVIEW_DEFAULT_TURNS))
+)
 
 # Each goal's preflight runs the workspace suite (~20 min here) plus clippy, in its own
 # worktree with its own target/. Eight at once is eight full builds fighting for CPU and disk.
@@ -77,6 +82,10 @@ L_BLOCKED = "shepherd:blocked"
 L_READY = "shepherd:ready"
 L_KICKBACK = "shepherd:kickback-{}"
 L_REVIEW = "shepherd:review-{}"
+
+# Durable map of cold-review goals started but not yet labeled (F13). Label only on success.
+PENDING_REVIEW_DIR = STATE_DIR / "pending_reviews"
+_LIVE_GOAL_STATUSES = frozenset({"running", "pending", "starting", "active", "parked"})
 
 # `test (ubuntu-latest)\tTests (…)\t2026-…Z test some::name ... FAILED`
 _TEST_FAILED = re.compile(r"\btest\s+(\S+)\s+\.\.\.\s+FAILED\b")
@@ -310,12 +319,14 @@ def ci_status(pr: Pr) -> str:
 PROFILE = os.environ.get("SHEPHERD_PROFILE", "coding-unattended")
 
 
-def start_goal(description: str, *, mode: str | None = None) -> str | None:
+def start_goal(
+    description: str, *, mode: str | None = None, max_turns: int = 0
+) -> str | None:
     payload = {"project": PROJECT, "interactive": False}
     if mode:
         payload["mode"] = mode
     body = json.dumps({
-        "description": description, "domain": "coding", "max_turns": 0,
+        "description": description, "domain": "coding", "max_turns": max_turns,
         "profile": PROFILE, "payload": payload,
     }).encode()
     req = urllib.request.Request(f"{DAEMON}/api/goals", data=body,
@@ -336,14 +347,6 @@ def active_goal_count() -> int:
 
     `parked` is deliberately excluded. A parked session is blocked on a human answer and is
     running nothing, so counting it against a compute cap reserves capacity nobody is using.
-    Worse, parked survives a daemon restart while the live hub does not: the session is then
-    unresumable AND uncancellable (`/cancel` answers "not found or already finished"), so it
-    occupies a slot permanently. Four such orphans against MAX_CONCURRENT=2 had blocked this
-    shepherd from starting any work at all — two of them for days — and the symptom was a
-    silent `deferred: at concurrency cap` on every pass.
-
-    The orphans themselves are a daemon-side bug (startup should reconcile a parked session
-    with no hub entry); this only stops them from taking the whole pipeline down with them.
     """
     try:
         with urllib.request.urlopen(f"{DAEMON}/api/goals", timeout=15) as resp:
@@ -352,6 +355,125 @@ def active_goal_count() -> int:
         return 0
     live = {"running", "pending", "starting", "active"}
     return sum(1 for r in rows if str(r.get("status", "")).lower() in live)
+
+
+def parse_goal_status(payload: dict) -> str | None:
+    """Pull a lowercased status from a GET /api/goals/{id} snapshot (or a bare session row)."""
+    session = payload.get("session") if isinstance(payload.get("session"), dict) else payload
+    if not isinstance(session, dict):
+        return None
+    status = str(session.get("status", "")).lower().strip()
+    return status or None
+
+
+def goal_status(session_id: str) -> str | None:
+    """Session status, `"missing"` on 404, or None when the daemon is unreachable."""
+    try:
+        with urllib.request.urlopen(f"{DAEMON}/api/goals/{session_id}", timeout=15) as resp:
+            data = json.loads(resp.read().decode() or "{}")
+        return parse_goal_status(data) or "missing"
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            return "missing"
+        return None
+    except Exception:
+        return None
+
+
+def pending_review_path(pr_number: int) -> Path:
+    return PENDING_REVIEW_DIR / f"{pr_number}.json"
+
+
+def load_pending_review(pr_number: int) -> dict | None:
+    path = pending_review_path(pr_number)
+    if not path.exists():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def save_pending_review(pr_number: int, session_id: str, round_n: int) -> None:
+    PENDING_REVIEW_DIR.mkdir(parents=True, exist_ok=True)
+    pending_review_path(pr_number).write_text(
+        json.dumps({"session_id": session_id, "round": round_n}),
+        encoding="utf-8",
+    )
+
+
+def clear_pending_review(pr_number: int) -> None:
+    path = pending_review_path(pr_number)
+    if path.exists():
+        path.unlink()
+
+
+def settle_pending_cold_review(
+    pr: "Pr",
+    *,
+    dry_run: bool,
+    status_lookup=goal_status,
+    labeler=add_label,
+    event_log=log,
+) -> str:
+    """Resolve a cold-review goal started on a prior tick (F13).
+
+    Labels assert completed reviews. Applying `shepherd:review-N` when a goal *starts* made
+    ready_for_human fire after failed sessions. Label only on `succeeded`.
+
+    Returns: `none` | `running` | `labeled` | `failed`.
+    """
+    pending = load_pending_review(pr.number)
+    if not pending:
+        return "none"
+    sid = pending.get("session_id")
+    round_n = pending.get("round")
+    if not sid or not isinstance(round_n, int) or round_n < 1:
+        event_log("cold_review_pending_corrupt", pr=pr.number, pending=pending)
+        if not dry_run:
+            clear_pending_review(pr.number)
+        return "none"
+
+    status = status_lookup(str(sid))
+    if status is None:
+        # Fail closed: do not start another review while we cannot see the current one.
+        event_log("cold_review_status_unknown", pr=pr.number, session=sid, round=round_n)
+        return "running"
+    if status in _LIVE_GOAL_STATUSES:
+        event_log(
+            "cold_review_in_flight",
+            pr=pr.number,
+            session=sid,
+            status=status,
+            round=round_n,
+        )
+        return "running"
+
+    if status == "succeeded":
+        label = L_REVIEW.format(round_n)
+        event_log(
+            "cold_review_succeeded",
+            pr=pr.number,
+            session=sid,
+            round=round_n,
+            label=label,
+        )
+        if not dry_run:
+            labeler(pr, label)
+            clear_pending_review(pr.number)
+        return "labeled"
+
+    event_log(
+        "cold_review_failed",
+        pr=pr.number,
+        session=sid,
+        status=status,
+        round=round_n,
+    )
+    if not dry_run:
+        clear_pending_review(pr.number)
+    return "failed"
 
 
 KICKBACK_PROMPT = """\
@@ -416,6 +538,12 @@ def tick(pr: Pr, *, dry_run: bool) -> None:
         log("ci_missing", pr=pr.number, note="no checks reported; leaving alone")
         return
 
+    # F13: label only after a prior cold-review goal succeeds. If one is still running, wait.
+    pending_state = settle_pending_cold_review(pr, dry_run=dry_run)
+    if pending_state == "running":
+        log("deferred", pr=pr.number, reason="cold review in flight")
+        return
+
     kickbacks = pr.count(L_KICKBACK)
     reviews = pr.count(L_REVIEW)
 
@@ -475,15 +603,21 @@ def tick(pr: Pr, *, dry_run: bool) -> None:
         log("deferred", pr=pr.number, reason="at concurrency cap")
         return
 
-    log("cold_review", pr=pr.number, round=reviews + 1)
+    round_n = reviews + 1
+    log("cold_review", pr=pr.number, round=round_n, max_turns=COLD_REVIEW_MAX_TURNS)
     if not dry_run:
-        sid = start_goal(COLD_REVIEW_PROMPT.format(
-            pr=pr.number, branch=pr.branch, title=pr.title, base=BASE_BRANCH,
-            round=reviews + 1, total=COLD_REVIEWS,
-            preexisting_note=_preexisting_note(preexisting)))
+        sid = start_goal(
+            COLD_REVIEW_PROMPT.format(
+                pr=pr.number, branch=pr.branch, title=pr.title, base=BASE_BRANCH,
+                round=round_n, total=COLD_REVIEWS,
+                preexisting_note=_preexisting_note(preexisting),
+            ),
+            max_turns=COLD_REVIEW_MAX_TURNS,
+        )
         if sid:
-            add_label(pr, L_REVIEW.format(reviews + 1))
-            log("cold_review_started", pr=pr.number, session=sid)
+            # F13: do not label yet — ready_for_human must require a *succeeded* review.
+            save_pending_review(pr.number, sid, round_n)
+            log("cold_review_started", pr=pr.number, session=sid, round=round_n)
 
 
 def seed_backlog(path: Path, *, dry_run: bool) -> None:
@@ -524,6 +658,8 @@ _FIXTURE = (
 
 
 def self_test() -> int:
+    global PENDING_REVIEW_DIR
+
     got = parse_failure_set(_FIXTURE)
     expected = {
         "test (ubuntu-latest)|tests::background_job_roundtrip_running_then_completed",
@@ -564,7 +700,111 @@ def self_test() -> int:
     platform_ok = len(cross) == 2
     print(f"platform-separation: {'ok' if platform_ok else 'FAILED'} ({len(cross)} keys)")
 
-    return 0 if (ok and regression and platform_ok) else 1
+    # F13: snapshot status parsing (label on success needs the right terminal string).
+    snap_ok = (
+        parse_goal_status({"session": {"status": "Succeeded"}}) == "succeeded"
+        and parse_goal_status({"session": {"status": "budget_exhausted"}})
+        == "budget_exhausted"
+        and parse_goal_status({"status": "running"}) == "running"
+        and parse_goal_status({}) is None
+    )
+    print(f"goal-status-parse: {'ok' if snap_ok else 'FAILED'}")
+
+    # F13: review labels are only asserted after success — start path must not call add_label.
+    import inspect
+    src = inspect.getsource(tick)
+    # The cold-review start arm saves pending state; labeling happens in settle_pending_cold_review.
+    label_on_start = "add_label(pr, L_REVIEW" in src
+    cold_review_start = src.rsplit("sid = start_goal(", 1)[-1].split("if sid:", 1)[0]
+    budget_passed = "max_turns=COLD_REVIEW_MAX_TURNS" in cold_review_start
+    f13_ok = (
+        (not label_on_start)
+        and ("save_pending_review" in src)
+        and ("settle_pending_cold_review" in src)
+        and budget_passed
+    )
+    print(
+        f"review-label-on-success: {'ok' if f13_ok else 'FAILED'} "
+        f"(label_on_start={label_on_start})"
+    )
+    budget_ok = COLD_REVIEW_DEFAULT_TURNS == 60 and budget_passed
+    print(
+        f"cold-review-budget: {'ok' if budget_ok else 'FAILED'} "
+        f"(default={COLD_REVIEW_DEFAULT_TURNS}, passed={budget_passed})"
+    )
+    f13_ok = f13_ok and budget_ok
+
+    # Exercise the durable transition itself. Source inspection cannot prove that a failed goal
+    # stays unlabeled, or that dry-run does not consume the pending record.
+    import tempfile
+
+    original_pending_dir = PENDING_REVIEW_DIR
+    labels: list[str] = []
+    transition_ok = False
+    try:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            PENDING_REVIEW_DIR = Path(temp_dir)
+            candidate = Pr(9001, "self-test", "self-test", "base")
+            quiet_log = lambda *_args, **_kwargs: None
+            record_label = lambda _pr, label: labels.append(label)
+
+            save_pending_review(candidate.number, "session-1", 1)
+            live = settle_pending_cold_review(
+                candidate,
+                dry_run=False,
+                status_lookup=lambda _sid: "running",
+                labeler=record_label,
+                event_log=quiet_log,
+            )
+            live_kept = load_pending_review(candidate.number) is not None
+
+            failed = settle_pending_cold_review(
+                candidate,
+                dry_run=False,
+                status_lookup=lambda _sid: "failed",
+                labeler=record_label,
+                event_log=quiet_log,
+            )
+            failed_cleared = load_pending_review(candidate.number) is None
+
+            save_pending_review(candidate.number, "session-2", 1)
+            succeeded = settle_pending_cold_review(
+                candidate,
+                dry_run=False,
+                status_lookup=lambda _sid: "succeeded",
+                labeler=record_label,
+                event_log=quiet_log,
+            )
+            success_cleared = load_pending_review(candidate.number) is None
+
+            save_pending_review(candidate.number, "session-3", 2)
+            labels_before_dry_run = list(labels)
+            dry = settle_pending_cold_review(
+                candidate,
+                dry_run=True,
+                status_lookup=lambda _sid: "succeeded",
+                labeler=record_label,
+                event_log=quiet_log,
+            )
+            dry_kept = load_pending_review(candidate.number) is not None
+            transition_ok = (
+                live == "running"
+                and live_kept
+                and failed == "failed"
+                and failed_cleared
+                and succeeded == "labeled"
+                and success_cleared
+                and labels == [L_REVIEW.format(1)]
+                and dry == "labeled"
+                and dry_kept
+                and labels == labels_before_dry_run
+            )
+    finally:
+        PENDING_REVIEW_DIR = original_pending_dir
+    print(f"review-state-transitions: {'ok' if transition_ok else 'FAILED'}")
+    f13_ok = f13_ok and transition_ok
+
+    return 0 if (ok and regression and platform_ok and snap_ok and f13_ok) else 1
 
 
 def main() -> int:
