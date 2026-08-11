@@ -4,6 +4,10 @@
 //! until project preflight passes. This module is the runner only; project config supplies steps
 //! (not hard-coded cargo). Do **not** re-execute GitHub Actions YAML here — share the same
 //! commands/scripts CI uses.
+//!
+//! Steps always run to completion of the profile (no fail-fast on the first required failure). A
+//! required failure sets overall `ok` false but later steps still execute so the report carries the
+//! complete actionable failure set (format, compile, test, and clippy can all show up together).
 
 use std::path::Path;
 use std::process::Stdio;
@@ -109,8 +113,11 @@ pub enum PreflightError {
     Spawn(String),
 }
 
-/// Liberado project **ship** steps matching `.github/workflows/ci.yml` on the agent host
-/// (fmt, clippy with the same exclude/`-D warnings`, workspace test, cargo-deny).
+/// Liberado project **ship** steps for the agent host bar.
+///
+/// Staging (0.1b): **format** first (action), then **compile**, then **test** and **clippy** as
+/// co-staged diagnostics, then **deny**. The runner does not stop after the first required
+/// failure, so the model sees the full failure set in one report.
 ///
 /// Not multi-OS; remote CI still owns the matrix. Prefer project config / shared script when
 /// present; this is the built-in default for project `liberado` when config omits steps.
@@ -122,11 +129,12 @@ pub enum PreflightError {
 pub fn liberado_ship_preflight_steps() -> Vec<PreflightStep> {
     vec![
         PreflightStep::new("fmt", "cargo fmt --check"),
+        PreflightStep::new("compile", "cargo check --workspace --all-targets"),
+        PreflightStep::new("test", "cargo test --workspace --no-fail-fast"),
         PreflightStep::new(
             "clippy",
             "cargo clippy --workspace --exclude liberado-webui --all-targets -- -D warnings",
         ),
-        PreflightStep::new("test", "cargo test --workspace --no-fail-fast"),
         PreflightStep::new("deny", "cargo deny check"),
     ]
 }
@@ -227,7 +235,11 @@ pub fn liberado_ship_preflight_spec() -> PreflightSpec {
     PreflightSpec::new("ship", liberado_ship_preflight_steps())
 }
 
-/// Run `spec` fail-fast (stop after first failing **required** step) under `workspace_root`.
+/// Run every step in `spec` under `workspace_root` (staged reporting: no fail-fast).
+///
+/// A failing **required** step sets overall `ok` to false but does **not** stop later steps, so
+/// the report can carry format, compile, test, and clippy failures together. Optional failures
+/// never fail the profile. Ship success stays fail-closed when any required step failed.
 pub async fn run_preflight(
     workspace_root: &Path,
     spec: &PreflightSpec,
@@ -271,20 +283,15 @@ pub async fn run_preflight_with_options(
             ok,
             log_excerpt,
         });
+        // Continue after failures so the report carries the full failure set (0.1b).
         if !ok && step.required {
             overall_ok = false;
-            break;
-        }
-        if !ok {
-            // optional step failed — continue
-            overall_ok = overall_ok && !step.required;
         }
     }
 
-    // If we only ran optional failures, overall_ok may still be true.
+    // Recompute from required steps only (guards optional-only failures).
     for r in &results {
         if !r.ok {
-            // recompute from required steps only — use original step flags
             let required = spec
                 .steps
                 .iter()
@@ -306,14 +313,15 @@ pub async fn run_preflight_with_options(
             duration_ms
         )
     } else {
-        let failed = results
+        let failed: Vec<&str> = results
             .iter()
-            .find(|r| !r.ok)
+            .filter(|r| !r.ok)
             .map(|r| r.name.as_str())
-            .unwrap_or("?");
+            .collect();
         format!(
-            "preflight '{}': failed at step '{failed}' ({} step result(s), {}ms)",
+            "preflight '{}': failed at step(s) '{}' ({} step result(s), {}ms)",
             spec.id,
+            failed.join(", "),
             results.len(),
             duration_ms
         )
@@ -559,7 +567,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn fail_fast_on_first_required_failure() {
+    async fn continues_after_required_failure_for_complete_report() {
         let dir = tempfile::tempdir().unwrap();
         let fail = if cfg!(windows) { "exit /B 1" } else { "exit 1" };
         let spec = PreflightSpec::new(
@@ -567,15 +575,109 @@ mod tests {
             vec![
                 PreflightStep::new("pass", "echo hi"),
                 PreflightStep::new("boom", fail),
-                PreflightStep::new("never", "echo should-not-run"),
+                PreflightStep::new("later", "echo still-runs"),
+            ],
+        );
+        let report = run_preflight(dir.path(), &spec).await.unwrap();
+        assert!(
+            !report.ok,
+            "overall must stay fail-closed: {:?}",
+            report.summary
+        );
+        assert_eq!(
+            report.steps.len(),
+            3,
+            "must run later steps after a required failure"
+        );
+        assert!(report.steps[0].ok);
+        assert!(!report.steps[1].ok);
+        assert!(
+            report.steps[2].ok,
+            "later diagnostic/action step must still execute"
+        );
+        assert!(report.summary.contains("boom"));
+        assert!(
+            report.summary.contains("failed at step(s)"),
+            "summary should list failed steps: {}",
+            report.summary
+        );
+    }
+
+    /// Staged ship bar: early format failure must not hide later test/clippy-style failures.
+    #[tokio::test]
+    async fn multi_required_failures_all_appear_in_report() {
+        let dir = tempfile::tempdir().unwrap();
+        let fail = if cfg!(windows) { "exit /B 1" } else { "exit 1" };
+        let spec = PreflightSpec::new(
+            "ship",
+            vec![
+                PreflightStep::new("fmt", fail),
+                PreflightStep::new("compile", "echo ok"),
+                PreflightStep::new("test", fail),
+                PreflightStep::new("clippy", fail),
             ],
         );
         let report = run_preflight(dir.path(), &spec).await.unwrap();
         assert!(!report.ok);
-        assert_eq!(report.steps.len(), 2, "must stop after first required fail");
-        assert!(report.steps[0].ok);
-        assert!(!report.steps[1].ok);
-        assert!(report.summary.contains("boom"));
+        assert_eq!(report.steps.len(), 4, "all staged steps must run");
+        let names: Vec<_> = report.steps.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, ["fmt", "compile", "test", "clippy"]);
+        assert!(!report.steps[0].ok);
+        assert!(report.steps[1].ok);
+        assert!(!report.steps[2].ok);
+        assert!(!report.steps[3].ok);
+        let failed = report_failures(&report);
+        assert!(failed.contains_key("fmt"), "{failed:?}");
+        assert!(failed.contains_key("test"), "{failed:?}");
+        assert!(failed.contains_key("clippy"), "{failed:?}");
+        assert!(
+            !failed.contains_key("compile"),
+            "green compile must not appear in failures: {failed:?}"
+        );
+        assert!(
+            report.summary.contains("fmt")
+                && report.summary.contains("test")
+                && report.summary.contains("clippy"),
+            "summary should name every failed step: {}",
+            report.summary
+        );
+    }
+
+    /// Baseline differential still works when multiple staged steps fail.
+    #[test]
+    fn staged_multi_step_failures_preserve_baseline_diff() {
+        let mut current = FailureSet::new();
+        current.insert(
+            "fmt".into(),
+            [OPAQUE_FAILURE.to_string()].into_iter().collect(),
+        );
+        current.insert(
+            "test".into(),
+            ["gates::new_break".to_string()].into_iter().collect(),
+        );
+        current.insert(
+            "clippy".into(),
+            [OPAQUE_FAILURE.to_string()].into_iter().collect(),
+        );
+
+        let mut baseline = FailureSet::new();
+        baseline.insert(
+            "fmt".into(),
+            [OPAQUE_FAILURE.to_string()].into_iter().collect(),
+        );
+        // clippy was already failing on base; test was green
+        baseline.insert(
+            "clippy".into(),
+            [OPAQUE_FAILURE.to_string()].into_iter().collect(),
+        );
+
+        let new = diff_against_baseline(&current, &baseline);
+        let described = describe_failures(&new);
+        assert_eq!(
+            described,
+            vec!["test: gates::new_break".to_string()],
+            "pre-existing fmt/clippy must be ignored; new test failure remains: {described:?}"
+        );
     }
 
     #[tokio::test]
@@ -610,7 +712,7 @@ mod tests {
         let spec = resolve_ship_spec(Some("liberado"), None).unwrap();
         assert_eq!(spec.id, "ship");
         let names: Vec<_> = spec.steps.iter().map(|s| s.name.as_str()).collect();
-        assert_eq!(names, ["fmt", "clippy", "test", "deny"]);
+        assert_eq!(names, ["fmt", "compile", "test", "clippy", "deny"]);
         assert!(
             spec.steps
                 .iter()
@@ -620,6 +722,11 @@ mod tests {
             spec.steps
                 .iter()
                 .any(|s| s.run.contains("exclude liberado-webui") && s.run.contains("-D warnings"))
+        );
+        assert!(
+            spec.steps
+                .iter()
+                .any(|s| s.name == "compile" && s.run.contains("cargo check"))
         );
     }
 
@@ -723,15 +830,18 @@ mod tests {
     fn liberado_ship_preflight_steps_structure() {
         let steps = liberado_ship_preflight_steps();
         let names: Vec<_> = steps.iter().map(|s| s.name.as_str()).collect();
-        assert_eq!(names, ["fmt", "clippy", "test", "deny"]);
+        // Stage order: format action → compile → test+clippy diagnostics → deny.
+        assert_eq!(names, ["fmt", "compile", "test", "clippy", "deny"]);
         for s in &steps {
             assert!(s.required, "{} must be required", s.name);
             assert!(!s.run.is_empty(), "{} must have a run command", s.name);
         }
+        assert!(steps[1].run.contains("cargo check"));
+        assert!(steps[2].run.contains("--no-fail-fast"));
     }
 
     #[tokio::test]
-    async fn required_failure_breaks_before_optional_runs() {
+    async fn required_failure_still_runs_following_optional() {
         let dir = tempfile::tempdir().unwrap();
         let fail = if cfg!(windows) { "exit /B 1" } else { "exit 1" };
         let mut optional = PreflightStep::new("soft", fail);
@@ -741,15 +851,14 @@ mod tests {
             vec![PreflightStep::new("hard-fail", fail), optional],
         );
         let report = run_preflight(dir.path(), &spec).await.unwrap();
-        assert!(
-            !report.ok,
-            "required step failed first, overall must be false"
-        );
+        assert!(!report.ok, "required step failed, overall must be false");
         assert_eq!(
             report.steps.len(),
-            1,
-            "break after required failure; optional never runs"
+            2,
+            "optional after a required failure must still run for a complete report"
         );
+        assert!(!report.steps[0].ok);
+        assert!(!report.steps[1].ok);
     }
 
     #[tokio::test]
