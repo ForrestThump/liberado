@@ -81,8 +81,8 @@ fn initialize_and_session_new_over_stdio() {
     assert_eq!(result["protocolVersion"], 1);
     assert_eq!(result["agentInfo"]["name"], "Liberado");
     assert_eq!(
-        result["agentCapabilities"]["loadSession"], false,
-        "must not advertise loadSession without durable history"
+        result["agentCapabilities"]["loadSession"], true,
+        "must advertise loadSession now that durable resume is implemented"
     );
 
     // ── session/new ─────────────────────────────────────────────────

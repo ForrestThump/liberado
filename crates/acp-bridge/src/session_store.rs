@@ -9,6 +9,9 @@ use serde::{Deserialize, Serialize};
 use std::io;
 use std::path::{Path, PathBuf};
 
+#[cfg(test)]
+use tempfile::TempDir;
+
 // ── Types ───────────────────────────────────────────────────────────────────
 
 /// One message in a session transcript.
@@ -54,8 +57,28 @@ pub fn sessions_dir() -> PathBuf {
 #[cfg(test)]
 static TEST_SESSIONS_DIR: std::sync::Mutex<Option<PathBuf>> = std::sync::Mutex::new(None);
 
-/// Override [`sessions_dir`] for the lifetime of the caller's test. Returns a
-/// guard that restores the previous directory on drop.
+#[cfg(test)]
+/// Point `sessions_dir()` at a temp directory for the duration of this test.
+///
+/// The returned guard holds the lock and restores the default on drop, so the redirection and
+/// the exclusion have exactly the same lifetime — a caller cannot hold one without the other.
+///
+/// Serializes every test that redirects `sessions_dir()`. `TEST_SESSIONS_DIR` is process-global,
+/// and `cargo test` runs a binary's tests concurrently on one process. Without this lock each
+/// test overwrites the directory the others are using.
+pub(crate) fn set_sessions_dir(
+    dir: &TempDir,
+) -> (std::sync::MutexGuard<'static, ()>, TestDirGuard) {
+    // A poisoned lock here means another test panicked while holding it. The directory is
+    // restored by `TestDirGuard`'s Drop during that unwind, so the state is still sound and
+    // failing every subsequent test on it would hide the one real failure.
+    let lock = DIR_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    (lock, set_test_sessions_dir(dir.path().to_path_buf()))
+}
+
+#[cfg(test)]
+static DIR_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 #[cfg(test)]
 fn set_test_sessions_dir(dir: PathBuf) -> TestDirGuard {
     *TEST_SESSIONS_DIR.lock().expect("lock") = Some(dir);
@@ -63,7 +86,7 @@ fn set_test_sessions_dir(dir: PathBuf) -> TestDirGuard {
 }
 
 #[cfg(test)]
-struct TestDirGuard;
+pub(crate) struct TestDirGuard;
 
 #[cfg(test)]
 impl Drop for TestDirGuard {
@@ -228,26 +251,6 @@ pub(crate) fn new_timestamp() -> String {
 mod tests {
     use super::*;
     use tempfile::TempDir;
-
-    /// Serializes every test that redirects `sessions_dir()`.
-    ///
-    /// `TEST_SESSIONS_DIR` is process-global, and `cargo test` runs a binary's tests concurrently
-    /// on one process. Without this lock each test overwrites the directory the others are using:
-    /// they pass individually and fail as a suite, which is the most expensive kind of flake
-    /// because re-running the failure alone makes it disappear.
-    static DIR_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-    /// Point `sessions_dir()` at a temp directory for the duration of this test.
-    ///
-    /// The returned guard holds the lock and restores the default on drop, so the redirection and
-    /// the exclusion have exactly the same lifetime — a caller cannot hold one without the other.
-    fn set_sessions_dir(dir: &TempDir) -> (std::sync::MutexGuard<'static, ()>, TestDirGuard) {
-        // A poisoned lock here means another test panicked while holding it. The directory is
-        // restored by `TestDirGuard`'s Drop during that unwind, so the state is still sound and
-        // failing every subsequent test on it would hide the one real failure.
-        let lock = DIR_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        (lock, set_test_sessions_dir(dir.path().to_path_buf()))
-    }
 
     fn sample_record(id: &str) -> SessionRecord {
         SessionRecord {
@@ -502,5 +505,42 @@ mod tests {
         update_model("lib-model", "gpt-4o").expect("update_model");
         let loaded = load("lib-model").expect("load").expect("present");
         assert_eq!(loaded.model, "gpt-4o");
+    }
+
+    // ── Append preserves existing transcript ────────────────────────────
+
+    #[test]
+    fn append_messages_preserves_existing_transcript() {
+        let dir = TempDir::new().unwrap();
+        let _guards = set_sessions_dir(&dir);
+        let mut record = sample_record("lib-append-preserve");
+        record.messages = vec![
+            StoredMessage {
+                role: "user".into(),
+                content: "first question".into(),
+            },
+            StoredMessage {
+                role: "assistant".into(),
+                content: "first answer".into(),
+            },
+        ];
+        save(&record).expect("save");
+
+        append_messages("lib-append-preserve", "second question", "second answer").expect("append");
+
+        let loaded = load("lib-append-preserve").expect("load").expect("present");
+        assert_eq!(
+            loaded.messages.len(),
+            4,
+            "must preserve prior messages and append new ones"
+        );
+        assert_eq!(loaded.messages[0].role, "user");
+        assert_eq!(loaded.messages[0].content, "first question");
+        assert_eq!(loaded.messages[1].role, "assistant");
+        assert_eq!(loaded.messages[1].content, "first answer");
+        assert_eq!(loaded.messages[2].role, "user");
+        assert_eq!(loaded.messages[2].content, "second question");
+        assert_eq!(loaded.messages[3].role, "assistant");
+        assert_eq!(loaded.messages[3].content, "second answer");
     }
 }
