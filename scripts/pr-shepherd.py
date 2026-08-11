@@ -67,7 +67,10 @@ BASELINE_DIR = STATE_DIR / "baselines"
 MAX_KICKBACKS = int(os.environ.get("SHEPHERD_MAX_KICKBACKS", "2"))
 COLD_REVIEWS = int(os.environ.get("SHEPHERD_COLD_REVIEWS", "2"))
 # Cold review needs fetch → diff → classify; 30 turns died mid-review on a 10-file PR (F13).
-COLD_REVIEW_MAX_TURNS = int(os.environ.get("SHEPHERD_COLD_REVIEW_MAX_TURNS", "60"))
+COLD_REVIEW_DEFAULT_TURNS = 60
+COLD_REVIEW_MAX_TURNS = int(
+    os.environ.get("SHEPHERD_COLD_REVIEW_MAX_TURNS", str(COLD_REVIEW_DEFAULT_TURNS))
+)
 
 # Each goal's preflight runs the workspace suite (~20 min here) plus clippy, in its own
 # worktree with its own target/. Eight at once is eight full builds fighting for CPU and disk.
@@ -406,7 +409,14 @@ def clear_pending_review(pr_number: int) -> None:
         path.unlink()
 
 
-def settle_pending_cold_review(pr: "Pr", *, dry_run: bool) -> str:
+def settle_pending_cold_review(
+    pr: "Pr",
+    *,
+    dry_run: bool,
+    status_lookup=goal_status,
+    labeler=add_label,
+    event_log=log,
+) -> str:
     """Resolve a cold-review goal started on a prior tick (F13).
 
     Labels assert completed reviews. Applying `shepherd:review-N` when a goal *starts* made
@@ -420,18 +430,18 @@ def settle_pending_cold_review(pr: "Pr", *, dry_run: bool) -> str:
     sid = pending.get("session_id")
     round_n = pending.get("round")
     if not sid or not isinstance(round_n, int) or round_n < 1:
-        log("cold_review_pending_corrupt", pr=pr.number, pending=pending)
+        event_log("cold_review_pending_corrupt", pr=pr.number, pending=pending)
         if not dry_run:
             clear_pending_review(pr.number)
         return "none"
 
-    status = goal_status(str(sid))
+    status = status_lookup(str(sid))
     if status is None:
         # Fail closed: do not start another review while we cannot see the current one.
-        log("cold_review_status_unknown", pr=pr.number, session=sid, round=round_n)
+        event_log("cold_review_status_unknown", pr=pr.number, session=sid, round=round_n)
         return "running"
     if status in _LIVE_GOAL_STATUSES:
-        log(
+        event_log(
             "cold_review_in_flight",
             pr=pr.number,
             session=sid,
@@ -442,7 +452,7 @@ def settle_pending_cold_review(pr: "Pr", *, dry_run: bool) -> str:
 
     if status == "succeeded":
         label = L_REVIEW.format(round_n)
-        log(
+        event_log(
             "cold_review_succeeded",
             pr=pr.number,
             session=sid,
@@ -450,11 +460,11 @@ def settle_pending_cold_review(pr: "Pr", *, dry_run: bool) -> str:
             label=label,
         )
         if not dry_run:
-            add_label(pr, label)
+            labeler(pr, label)
             clear_pending_review(pr.number)
         return "labeled"
 
-    log(
+    event_log(
         "cold_review_failed",
         pr=pr.number,
         session=sid,
@@ -648,6 +658,8 @@ _FIXTURE = (
 
 
 def self_test() -> int:
+    global PENDING_REVIEW_DIR
+
     got = parse_failure_set(_FIXTURE)
     expected = {
         "test (ubuntu-latest)|tests::background_job_roundtrip_running_then_completed",
@@ -703,13 +715,94 @@ def self_test() -> int:
     src = inspect.getsource(tick)
     # The cold-review start arm saves pending state; labeling happens in settle_pending_cold_review.
     label_on_start = "add_label(pr, L_REVIEW" in src
-    f13_ok = (not label_on_start) and ("save_pending_review" in src) and (
-        "settle_pending_cold_review" in src
+    cold_review_start = src.rsplit("sid = start_goal(", 1)[-1].split("if sid:", 1)[0]
+    budget_passed = "max_turns=COLD_REVIEW_MAX_TURNS" in cold_review_start
+    f13_ok = (
+        (not label_on_start)
+        and ("save_pending_review" in src)
+        and ("settle_pending_cold_review" in src)
+        and budget_passed
     )
     print(
         f"review-label-on-success: {'ok' if f13_ok else 'FAILED'} "
         f"(label_on_start={label_on_start})"
     )
+    budget_ok = COLD_REVIEW_DEFAULT_TURNS == 60 and budget_passed
+    print(
+        f"cold-review-budget: {'ok' if budget_ok else 'FAILED'} "
+        f"(default={COLD_REVIEW_DEFAULT_TURNS}, passed={budget_passed})"
+    )
+    f13_ok = f13_ok and budget_ok
+
+    # Exercise the durable transition itself. Source inspection cannot prove that a failed goal
+    # stays unlabeled, or that dry-run does not consume the pending record.
+    import tempfile
+
+    original_pending_dir = PENDING_REVIEW_DIR
+    labels: list[str] = []
+    transition_ok = False
+    try:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            PENDING_REVIEW_DIR = Path(temp_dir)
+            candidate = Pr(9001, "self-test", "self-test", "base")
+            quiet_log = lambda *_args, **_kwargs: None
+            record_label = lambda _pr, label: labels.append(label)
+
+            save_pending_review(candidate.number, "session-1", 1)
+            live = settle_pending_cold_review(
+                candidate,
+                dry_run=False,
+                status_lookup=lambda _sid: "running",
+                labeler=record_label,
+                event_log=quiet_log,
+            )
+            live_kept = load_pending_review(candidate.number) is not None
+
+            failed = settle_pending_cold_review(
+                candidate,
+                dry_run=False,
+                status_lookup=lambda _sid: "failed",
+                labeler=record_label,
+                event_log=quiet_log,
+            )
+            failed_cleared = load_pending_review(candidate.number) is None
+
+            save_pending_review(candidate.number, "session-2", 1)
+            succeeded = settle_pending_cold_review(
+                candidate,
+                dry_run=False,
+                status_lookup=lambda _sid: "succeeded",
+                labeler=record_label,
+                event_log=quiet_log,
+            )
+            success_cleared = load_pending_review(candidate.number) is None
+
+            save_pending_review(candidate.number, "session-3", 2)
+            labels_before_dry_run = list(labels)
+            dry = settle_pending_cold_review(
+                candidate,
+                dry_run=True,
+                status_lookup=lambda _sid: "succeeded",
+                labeler=record_label,
+                event_log=quiet_log,
+            )
+            dry_kept = load_pending_review(candidate.number) is not None
+            transition_ok = (
+                live == "running"
+                and live_kept
+                and failed == "failed"
+                and failed_cleared
+                and succeeded == "labeled"
+                and success_cleared
+                and labels == [L_REVIEW.format(1)]
+                and dry == "labeled"
+                and dry_kept
+                and labels == labels_before_dry_run
+            )
+    finally:
+        PENDING_REVIEW_DIR = original_pending_dir
+    print(f"review-state-transitions: {'ok' if transition_ok else 'FAILED'}")
+    f13_ok = f13_ok and transition_ok
 
     return 0 if (ok and regression and platform_ok and snap_ok and f13_ok) else 1
 
