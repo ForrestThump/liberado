@@ -303,34 +303,12 @@ impl GoalSessionHub {
             .await
             .ok_or_else(|| format!("session '{id}' not found or already finished"))?;
         if record.status == SessionStatus::Parked {
-            let summary = "cancelled while parked (no live host)".to_string();
-            // Durable terminal state **before** the event, for the same reason `run_session` does
-            // it in that order: anything woken by `SessionFinished` must find `result` already set.
-            self.store
-                .finish(
-                    id,
-                    SessionStatus::Cancelled,
-                    GoalResult {
-                        terminal: TerminalKind::Cancelled,
-                        summary: summary.clone(),
-                        artifacts: Vec::new(),
-                        diagnostics: serde_json::json!({ "source": "cancel_parked" }),
-                    },
-                )
-                .await;
-            // `store.finish` mutates the row but publishes nothing. Without this event the cancel
-            // is invisible to every event consumer: an SSE client watching the session sees it
-            // stay parked forever, and `await_terminal` — which blocks on `recv()` between its
-            // status checks — never wakes, so a `delegate` parented to this session hangs.
-            self.store
-                .push_event(SessionEvent::new(
-                    id,
-                    SessionEventKind::SessionFinished {
-                        status: "cancelled".into(),
-                        summary,
-                    },
-                ))
-                .await;
+            self.finish_parked_as_cancelled(
+                id,
+                "cancelled while parked (no live host)",
+                "cancel_parked",
+            )
+            .await;
             return Ok(());
         }
         if record.status.is_terminal() {
@@ -338,6 +316,109 @@ impl GoalSessionHub {
         }
         // Pending/Running without a cancel handle is a torn state; refuse rather than invent a host.
         Err(format!("session '{id}' not found or already finished"))
+    }
+
+    /// Finish a store-only parked session as Cancelled and publish `SessionFinished`.
+    ///
+    /// Durable terminal state **before** the event, for the same reason `run_session` does it in
+    /// that order: anything woken by `SessionFinished` must find `result` already set.
+    /// `store.finish` mutates the row but publishes nothing — without the event an SSE client
+    /// sees the session stay parked, and `await_terminal` never wakes.
+    async fn finish_parked_as_cancelled(&self, id: &str, summary: &str, source: &str) {
+        let summary = summary.to_string();
+        self.store
+            .finish(
+                id,
+                SessionStatus::Cancelled,
+                GoalResult {
+                    terminal: TerminalKind::Cancelled,
+                    summary: summary.clone(),
+                    artifacts: Vec::new(),
+                    diagnostics: serde_json::json!({ "source": source }),
+                },
+            )
+            .await;
+        self.store
+            .push_event(SessionEvent::new(
+                id,
+                SessionEventKind::SessionFinished {
+                    status: "cancelled".into(),
+                    summary,
+                },
+            ))
+            .await;
+    }
+
+    /// Reconcile parked sessions after a process start (F7).
+    ///
+    /// `Parked` survives in the durable store; the hub's cancel map does not. A session left
+    /// Parked with no live host is human-actionable only when a person can still resume it: the
+    /// grant holds AskHuman and the pack can rebuild from the transcript. Everything else is an
+    /// orphan — finish it as Cancelled so it does not sit forever, and so surfaces and capacity
+    /// counts stay honest.
+    ///
+    /// Call **after** packs are registered (resumeability is pack-defined). Returns how many
+    /// sessions were finished.
+    pub async fn reconcile_parked_at_startup(&self) -> usize {
+        let parked: Vec<GoalSessionRecord> = self
+            .list()
+            .await
+            .into_iter()
+            .filter(|r| r.status == SessionStatus::Parked)
+            .collect();
+
+        let mut finished = 0usize;
+        for rec in parked {
+            // A live host owns the session; do not steal it (defensive — cold start has none).
+            {
+                let map = self.cancels.lock().await;
+                if map.contains_key(&rec.id) {
+                    continue;
+                }
+            }
+
+            if self.parked_is_resumable(&rec).await {
+                debug!(
+                    session_id = %rec.id,
+                    "startup reconcile: parked session kept (resumable by a human)"
+                );
+                continue;
+            }
+
+            self.finish_parked_as_cancelled(
+                &rec.id,
+                "cancelled at startup: parked with no resume path (orphaned after restart)",
+                "reconcile_parked_startup",
+            )
+            .await;
+            info!(
+                session_id = %rec.id,
+                domain = %rec.goal.domain.as_str(),
+                "startup reconcile: cancelled orphaned parked session"
+            );
+            finished += 1;
+        }
+        if finished > 0 {
+            info!(
+                finished,
+                "startup reconcile: finished orphaned parked sessions"
+            );
+        }
+        finished
+    }
+
+    /// Whether a human can still productively continue this parked session via [`resume`].
+    async fn parked_is_resumable(&self, rec: &GoalSessionRecord) -> bool {
+        // Resume refuses without AskHuman; a parked session that cannot receive an answer is dead.
+        if !rec.grant.grants_ask_human() {
+            return false;
+        }
+        let Some(pack) = self.packs.get(rec.goal.domain.as_str()) else {
+            // No pack for this domain → nothing can resume it.
+            return false;
+        };
+        let ctx = PackContext::new(&rec.grant, self.store.clone(), &rec.id);
+        pack.can_resume(&ctx).await
     }
 
     /// Ask a running session to **park**: wind down gracefully and land in
