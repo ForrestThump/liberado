@@ -131,6 +131,24 @@ Two carried-forward limitations worth knowing before building on this:
 
 ### Cross-cutting
 
+- **Model View Log (MVL)** — [`spec/reference/model-view-log.md`](spec/reference/model-view-log.md).
+  A cross-harness contract for *what the model actually saw and did*: JSONL, flushed per event,
+  with a reconstruction requirement (rebuild the exact prompt for any turn from the log alone).
+  Written so Liberado, Kilo Code, pi, Hermes and Deep Agents can all be scored by one parser
+  instead of a translation layer per harness. Our `CoderEvent` stream is close; the gaps are listed
+  at the end of the spec.
+- **What to take from pi, Hermes and Deep Agents** (research, 2026-08-11) —
+  [`harness-study-2026-08.md`](future-work/harness-study-2026-08.md). Their cost advantage is
+  structural, not prompt wording: they keep tokens **out** of the window (offload oversized tool
+  results to disk; batch many tool calls into one scripted turn) rather than shortening them.
+  Ranked by leverage for us, with an explicit "do not copy" list. All three are MIT.
+- **Per-model knob profiles and a tuning ledger** (design, 2026-08-11) —
+  [`model-knob-profiles.md`](future-work/model-knob-profiles.md). The harness–model *pairing*
+  matters more than either alone, and we already have per-model findings hardcoded as shared
+  constants. Profiles applied automatically per model, `extends` so a new release starts from its
+  nearest relative, and a SQLite ledger recording resolved knob values with each run's outcome.
+  **Deliberately not scheduled** — the prerequisites are listed, and the first is that
+  `config_literal_rules.rs` currently guards exactly one config type.
 - **Cadence-triggered maintenance agents** (idea, 2026-08-10) — dispatch an agent automatically
   after N commits or N merged PRs, bound to a named skill (doc updates, test-coverage sweeps,
   mutation runs, architecture critique), so periodic work reaches the PR pipeline without anyone
