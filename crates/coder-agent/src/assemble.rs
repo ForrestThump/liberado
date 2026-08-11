@@ -23,7 +23,8 @@ use serde::{Deserialize, Serialize};
 pub enum CriticPolicy {
     /// Keep `tuning.critic` as-is.
     FromTuning,
-    /// No prompt → critic loop and gate reviewers that fall back to this role stay off.
+    /// Standalone critic loop off (no prompt, `max_turns = 0`), but keep
+    /// `[coder.critic].model` so gate and session-critic fallbacks do not use the coder model.
     Disabled,
     /// Load the cold-diff-reviewer prompt (ACP). Gate reviewers need a real prompt, not an empty
     /// disabled role — empty prompts error when the gate is enabled.
@@ -210,8 +211,21 @@ pub fn assemble_production_run(tuning: &CoderTuning, surface: ProductionSurface)
     match surface.critic {
         CriticPolicy::FromTuning => {}
         CriticPolicy::Disabled => {
-            config.critic = disabled_role(&model_for_disabled);
+            let model = if tuning.critic.model.trim().is_empty() {
+                model_for_disabled.as_str()
+            } else {
+                tuning.critic.model.as_str()
+            };
+            config.critic = disabled_role(model);
             provenance.record("critic", "surface.disabled");
+            provenance.record(
+                "critic.model",
+                if tuning.critic.model.trim().is_empty() {
+                    "surface.coder_fallback"
+                } else {
+                    "tuning"
+                },
+            );
         }
         CriticPolicy::ReviewerWithLoadedPrompt => {
             config.critic = reviewer_role(
@@ -396,6 +410,7 @@ fn resolve_trace_dir(
             Some(resolved)
         }
         TraceDirPolicy::DataDirFallback => {
+            let from_tuning = configured.is_some();
             let resolved = configured.or_else(|| {
                 Some(
                     PathBuf::from(
@@ -408,10 +423,10 @@ fn resolve_trace_dir(
             });
             provenance.record(
                 "trace_dir",
-                if resolved.is_some() {
-                    "tuning_or_data_dir_fallback"
+                if from_tuning {
+                    "tuning"
                 } else {
-                    "none"
+                    "surface.data_dir_fallback"
                 },
             );
             resolved
@@ -775,6 +790,14 @@ mod tests {
                 && runner.request.config.critic.prompt_path.is_none(),
             "runner critic disabled"
         );
+        assert_eq!(
+            pack.request.config.critic.model, "fixture-critic",
+            "pack Disabled critic keeps tuning.critic.model"
+        );
+        assert_eq!(
+            runner.request.config.critic.model, "fixture-critic",
+            "runner Disabled critic keeps tuning.critic.model"
+        );
         // Planner disabled on all three production paths.
         assert!(
             pack.request.config.planner.prompt.is_none()
@@ -886,6 +909,83 @@ mod tests {
         );
         assert!(assembled.request.config.gate.enabled);
         assert_eq!(assembled.provenance.source_of("gate"), Some("tuning"));
+    }
+
+    #[test]
+    fn disabled_critic_keeps_configured_critic_model() {
+        let tuning = CoderTuning {
+            coder: CoderRoleConfig {
+                model: "fixture-coder".into(),
+                ..CoderTuning::default().coder
+            },
+            critic: CoderRoleConfig {
+                model: "fixture-critic".into(),
+                ..CoderTuning::default().critic
+            },
+            gate: CoderGateConfig {
+                enabled: true,
+                fresh_reviewers: 1,
+                ..Default::default()
+            },
+            ..CoderTuning::default()
+        };
+        let assembled = assemble_production_run(
+            &tuning,
+            entry::runner_surface(
+                CoderTask::new("g", "goal"),
+                PathBuf::from("."),
+                Some("fixture-coder".into()),
+                Some(10),
+            ),
+        );
+        assert_eq!(assembled.request.config.critic.model, "fixture-critic");
+        assert!(
+            assembled.request.config.critic.prompt.is_none()
+                && assembled.request.config.critic.prompt_path.is_none()
+        );
+        assert_eq!(assembled.request.config.critic.max_turns, Some(0));
+        assert_eq!(
+            assembled.provenance.source_of("critic.model"),
+            Some("tuning")
+        );
+    }
+
+    #[test]
+    fn acp_trace_provenance_distinguishes_tuning_from_fallback() {
+        let configured = assemble_production_run(
+            &CoderTuning {
+                trace_dir: Some("chosen".into()),
+                ..CoderTuning::default()
+            },
+            entry::acp_surface(
+                CoderTask::new("t", "goal"),
+                PathBuf::from("."),
+                None,
+                None,
+                0,
+                Vec::new(),
+            ),
+        );
+        assert_eq!(configured.provenance.source_of("trace_dir"), Some("tuning"));
+
+        let fallback = assemble_production_run(
+            &CoderTuning {
+                trace_dir: None,
+                ..CoderTuning::default()
+            },
+            entry::acp_surface(
+                CoderTask::new("t", "goal"),
+                PathBuf::from("."),
+                None,
+                None,
+                0,
+                Vec::new(),
+            ),
+        );
+        assert_eq!(
+            fallback.provenance.source_of("trace_dir"),
+            Some("surface.data_dir_fallback")
+        );
     }
 
     #[test]

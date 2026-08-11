@@ -199,3 +199,71 @@ fn every_named_surface_exists() {
         );
     }
 }
+
+fn production_section(relative: &str, start: &str, end: &str) -> String {
+    let path = crates_dir().join(relative);
+    let source = std::fs::read_to_string(&path)
+        .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+    let after_start = source
+        .split_once(start)
+        .unwrap_or_else(|| {
+            panic!(
+                "{} missing production section start `{start}`",
+                path.display()
+            )
+        })
+        .1;
+    let body = after_start
+        .split_once(end)
+        .unwrap_or_else(|| panic!("{} missing production section end `{end}`", path.display()))
+        .0;
+    body.to_string()
+}
+
+/// The literal ban prevents a second config tree, but it does not prove the real callers still
+/// reach the shared constructor. Bind the contract to each production function that 0.4 migrates.
+#[test]
+fn production_entry_points_call_the_shared_assembler() {
+    let pack = production_section(
+        "coder-agent/src/session_pack/build.rs",
+        "pub(super) async fn run_build_phase(",
+        "#[cfg(test)]",
+    );
+    assert!(
+        pack.contains("let assembled = crate::assemble_production_run(")
+            && pack.contains("crate::assemble::entry::pack_surface("),
+        "CodingSessionPack::run_build_phase must use the pack-owned assembly path"
+    );
+
+    let acp = production_section(
+        "acp-bridge/src/coding_run.rs",
+        "pub async fn run_coding_round(",
+        "async fn apply_ship_bar(",
+    );
+    assert!(
+        acp.contains("let assembled = assemble_production_run(")
+            && acp.contains("liberado_coder_agent::assemble::entry::acp_surface("),
+        "ACP run_coding_round must use the shared assembly path"
+    );
+
+    let runner = production_section(
+        "coder-runner/src/main.rs",
+        "async fn run_headless(args: HeadlessArgs)",
+        "fn build_workspace_summary(",
+    );
+    assert!(
+        runner.contains("let mut assembled = assemble_production_run(&tuning, surface);")
+            && runner.contains("liberado_coder_agent::assemble::entry::runner_surface("),
+        "coder-runner run_headless must use the shared assembly path"
+    );
+
+    let server = production_section(
+        "server/src/lib.rs",
+        "pub async fn run(vault_path: String)",
+        "pub fn config_check(",
+    );
+    assert!(
+        server.contains("pack = pack.with_tuning(coder_tuning);"),
+        "server::run must pass resolved coder tuning into CodingSessionPack"
+    );
+}
