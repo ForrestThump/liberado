@@ -1557,9 +1557,39 @@ fn budget_failed_report_with_progress(
 /// Whether the last [`DOOM_LOOP_THRESHOLD`] invocations are consecutively the same tool, called
 /// with near-duplicate arguments (see `args_similarity`) — see [`DOOM_LOOP_THRESHOLD`]'s doc
 /// comment for why near-duplicate, not just byte-identical, is the right bar.
+/// Tools whose arguments *are* file content, and which therefore cannot be judged by similarity.
+///
+/// Two different edits to the same file are always textually alike: same `path`, same language,
+/// overlapping identifiers, often overlapping lines. [`args_similarity`] scores that pair high and
+/// is not wrong to — it is measuring "same file", which for a search tool is a good proxy for "same
+/// action" and for an edit tool is no proxy at all. Editing one file repeatedly is what applying a
+/// change looks like.
+///
+/// Measured, not assumed. In an A/B on 2026-08-11 the coding pack made four consecutive `edit_file`
+/// calls — one moving a test helper, one fixing an assertion, two adding tests, across two files —
+/// and the guard withdrew `edit_file` on the next turn. It lost `apply_patch` and `run_command`
+/// later the same way, and the run ended with the model saying it knew which two call sites were
+/// broken and had no tool left to fix them. Kilo Code made 36 edits on the same task, was never
+/// disarmed, and shipped a clean pass.
+///
+/// For these tools only an identical call counts as a repeat. That still catches the real
+/// pathology — replaying the byte-identical edit achieves nothing however many times you send it —
+/// while a different edit is progress by definition.
+fn arguments_are_file_content(tool: &str) -> bool {
+    matches!(
+        tool,
+        "edit_file" | "write_file" | "apply_patch" | "edit" | "write" | "patch" | "multiedit"
+    )
+}
+
 fn is_doom_loop(history: &[(String, serde_json::Value, String)], profile: LoopProfile) -> bool {
     let Some((last_name, ..)) = history.last() else {
         return false;
+    };
+    let profile = if arguments_are_file_content(last_name) {
+        LoopProfile::exact()
+    } else {
+        profile
     };
     // Most-recent-first, stopping at the first call that isn't consecutively the same tool.
     let streak: Vec<&serde_json::Value> = history
@@ -2233,6 +2263,75 @@ mod tests {
         // The run completed (no abort) and the tool was still invoked.
         assert_eq!(report.outcome, Outcome::Succeeded);
         assert_eq!(runtime.invoked().len(), 1);
+    }
+
+    const REAL_EDIT_1: &str = r#"{"path":"crates/acp-bridge/src/main.rs","old":"        assert_eq!(result[\\\"protocolVersion\\\"], PROTOCOL_VERSION);\n        assert_eq!(result[\\\"agentInfo\\\"][\\\"name\\\"], \\\"Liberado\\\");\n        // Must stay false until durable load+replay (P3); true lied to Paseo's resume path.\n        assert_eq!(result[\\\"agentCapabilities\\\"][\\\"loadSession\\\"], false);","new":"        assert_eq!(result[\\\"protocolVersion\\\"], PROTOCOL_VERSION);\n        assert_eq!(result[\\\"agentInfo\\\"][\\\"name\\\"], \\\"Liberado\\\");\n        assert_eq!(\n            result[\\\"agentCapabilities\\\"][\\\"loadSession\\\"],\n            LOAD_SESSION_CAPABILITY,\n            \\\"initialize must reflect LOAD_SESSION_CAPABILITY exactly\\\"\n        );"}"#;
+    const REAL_EDIT_2: &str = r#"{"path":"crates/acp-bridge/src/main.rs","new":"    #[tokio::test]\n    async fn load_then_prompt_appends_to_existing_transcript() {\n        let dir = tempfile::TempDir::new().unwrap();\n        let _guards = with_session_dir(&dir);\n\n        let sid = \"lib-append-after-load\";\n        session_store::save(&session_store::SessionRecord {\n            id: sid.to_string(),\n            mode: \"coding\".to_string(),\n            cwd: std::path::PathBuf::from(\"/tmp/proj\"),\n            model: \"m1\".to_string(),\n            messages: vec![\n                session_store::StoredMessage {\n                    role: \"user\".into(),\n                    content: \"initial question\".into(),\n                },\n                session_store::StoredMessage {\n                    role: \"assistant\".into(),\n                    content: \"initial answer\".into(),\n                },\n            ],\n            updated_at: \"2025-01-01T00:00:00Z\".into(),\n        })\n        .expect(\"save\");\n\n        let bridge = test_bridge();\n        let sink = CaptureSink {\n            lines: std::sync::Mutex::new(Vec::new()),\n        };\n        let _result = handle_request(\n            bridge.clone(),\n            &sink,\n            \"session/load\",\n            json!({ \"sessionId\": sid }),\n        )\n        .await\n        .expect(\"load must succeed\");\n\n        // Verify the session is registered in-memory with the right mode/cwd.\n        {\n            let sessions = bridge.acp_sessions.lock().await;\n            let sess = sessions\n                .get(sid)\n                .expect(\"session must be registered after load\");\n            assert_eq!(sess.mode, AgentMode::Coding);\n            assert_eq!(sess.cwd, std::path::PathBuf::from(\"/tmp/proj\"));\n        }\n\n        // Simulate what run_session_prompt does after a turn: persist new messages.\n        session_store::append_messages(sid, \"new question\", \"new answer\")\n            .expect(\"append must succeed\");\n\n        let loaded = session_store::load(sid)\n            .expect(\"load\")\n            .expect(\"record must be present\");\n\n        assert_eq!(loaded.messages.len(), 4);\n        assert_eq!(loaded.messages[0].content, \"initial question\");\n        assert_eq!(loaded.messages[1].content, \"initial answer\");\n        assert_eq!(loaded.messages[2].content, \"new question\");\n        assert_eq!(loaded.messages[3].content, \"new answer\");\n    }","old":"    #[tokio::test]\n    async fn load_then_prompt_appends_to_existing_transcript() {\n        let dir = tempfile::TempDir::new().unwrap();\n        let _guards = with_session_dir(&dir);\n\n        let sid = \"lib-append-after-load\";\n        session_store::save(&session_store::SessionRecord {\n            id: sid.to_string(),\n            mode: \"coding\".to_string(),\n            cwd: std::path::PathBuf::from(\"/tmp/proj\"),\n            model: \"m1\".to_string(),\n            messages: vec![\n                session_store::StoredMessage {\n                    role: \"user\".into(),\n                    content: \"initial question\".into(),\n                },\n                session_store::StoredMessage {\n                    role: \"assistant\".into(),\n                    content: \"initial answer\".into(),\n                },\n            ],\n            updated_at: \"2025-01-01T00:00:00Z\".into(),\n        })\n        .expect(\"save\");\n\n        let bridge = test_bridge();\n        let sink = CaptureSink {\n            lines: std::sync::Mutex::new(Vec::new()),\n        };\n        let _result = handle_request(\n            bridge,\n            &sink,\n            \"session/load\",\n            json!({ \"sessionId\": sid }),\n        )\n        .await\n        .expect(\"load must succeed\");\n\n        // Now append messages (simulating what run_session_prompt does after a prompt).\n        session_store::append_messages(sid, \"new question\", \"new answer\")\n            .expect(\"append must succeed\");\n\n        let loaded = session_store::load(sid)\n            .expect(\"load\")\n            .expect(\"record must be present\");\n\n        assert_eq!(loaded.messages.len(), 4);\n        assert_eq!(loaded.messages[0].content, \"initial question\");\n        assert_eq!(loaded.messages[1].content, \"initial answer\");\n        assert_eq!(loaded.messages[2].content, \"new question\");\n        assert_eq!(loaded.messages[3].content, \"new answer\");\n    }"}"#;
+    const REAL_EDIT_3: &str = r#"{"new":"    }\n}","old":"    }\n\n    #[test]\n    fn initialize_advertises_load_session_capability() {\n        // Must be true once load is implemented.\n        assert!(\n            LOAD_SESSION_CAPABILITY,\n            \"initialize must advertise loadSession:true now that session/load restores history\"\n        );\n    }\n}","path":"crates/acp-bridge/src/main.rs"}"#;
+
+    /// The three consecutive `edit_file` calls that actually got the tool withdrawn, verbatim from
+    /// `coder-traces/lib-18ca9815159fee44-22288-attempt-2`. Recorded arguments, not a reconstruction:
+    /// a synthetic pair I wrote by hand did *not* reproduce the failure, which is how I learned the
+    /// hand-written version was testing nothing.
+    #[test]
+    fn the_real_recorded_edits_are_not_a_doom_loop() {
+        let hist: Vec<(String, serde_json::Value, String)> =
+            [REAL_EDIT_1, REAL_EDIT_2, REAL_EDIT_3]
+                .iter()
+                .map(|a| {
+                    (
+                        "edit_file".to_string(),
+                        serde_json::from_str(a).expect("recorded args must parse"),
+                        "ok".to_string(),
+                    )
+                })
+                .collect();
+        assert!(
+            !is_doom_loop(&hist, LoopProfile::semantic()),
+            "three real, different edits must not read as thrash"
+        );
+    }
+
+    /// An edit tool used repeatedly on one file is a change being applied, not a loop.
+    ///
+    /// Measured on 2026-08-11: four consecutive `edit_file` calls — different anchors, two files —
+    /// got `edit_file` withdrawn on the next turn, and the run ended with the model naming two
+    /// broken call sites it no longer had a tool to fix. The arguments of an edit *are* file
+    /// content, so two different edits to one file always score as near-duplicates.
+    /// The guard must still fire on the pathology it exists for: the *same* edit, resent.
+    /// Replaying a byte-identical edit accomplishes nothing however many times it is sent.
+    #[tokio::test]
+    async fn the_identical_edit_repeated_is_still_a_doom_loop() {
+        let same = || {
+            call_tool_with(
+                "edit_file",
+                serde_json::json!({"path": "src/main.rs", "old": "a", "new": "b"}),
+            )
+        };
+        let (provider, exec) = executor(
+            vec![
+                same(),
+                same(),
+                same(),
+                call_tool("read_file"),
+                submit(valid_report_args()),
+            ],
+            Budget::default(),
+        );
+        let runtime = MockToolRuntime::new(&["edit_file", "read_file"], Ok("done".into()));
+
+        let _ = exec
+            .execute(&runtime, Task::new("worker", "apply the change"))
+            .await
+            .unwrap();
+
+        assert!(
+            provider
+                .received_requests()
+                .iter()
+                .any(|r| r.messages.iter().any(|m| m.content == DOOM_LOOP_NUDGE)),
+            "an identical edit resent three times must still trip the guard"
+        );
     }
 
     #[tokio::test]
