@@ -71,7 +71,27 @@ pub async fn goals_list(State(state): State<Arc<AppState>>) -> impl IntoResponse
     Json(state.goals.list().await)
 }
 
-/// `POST /api/goals` â€” start a goal session. Body: [`liberado_session::GoalSpec`]. When the spec
+/// Apply `payload.interactive` to a session grant (F11).
+///
+/// - `interactive: false` → strip [`Capability::AskHuman`] so unattended/shepherd goals cannot park
+///   on intake questions. The pack already skips intake when AskHuman is absent.
+/// - `interactive: true` or absent → leave the profile grant unchanged (profiles may still omit
+///   AskHuman; this function never *adds* it).
+pub(crate) fn apply_interactive_to_grant(
+    goal: &liberado_session::GoalSpec,
+    mut grant: liberado_session::SessionGrant,
+) -> liberado_session::SessionGrant {
+    let interactive = goal.payload.get("interactive").and_then(|v| v.as_bool());
+    if interactive == Some(false) {
+        grant
+            .capabilities
+            .capabilities
+            .retain(|c| *c != liberado_common::Capability::AskHuman);
+    }
+    grant
+}
+
+/// `POST /api/goals` — start a goal session. Body: [`liberado_session::GoalSpec`]. When the spec
 /// carries an `origin` (a chat turn spawned it, e.g. via `/spawn`), a **return-handoff** watcher is
 /// spawned so the session's terminal summary folds back into the parent conversation (S4/D2).
 ///
@@ -202,7 +222,7 @@ pub async fn goals_start(
         }
     }
 
-    // Per-goal idle wins; otherwise the profile default (E5 â€” hours for interactive coding).
+    // Per-goal idle wins; otherwise the profile default (E5 — hours for interactive coding).
     if goal.max_idle_secs.is_none() {
         goal.max_idle_secs = resolved.max_idle_secs;
     }
@@ -215,6 +235,10 @@ pub async fn goals_start(
         model: parts.model.map(str::to_string),
         prompt_append: parts.prompt_append.map(str::to_string),
     };
+    // F11: map `payload.interactive: false` onto the grant. The pack already skips intake when
+    // AskHuman is absent; the shepherd already sends the flag. Without this strip the flag is an
+    // eighth shadowed setting — sent, parsed into JSON, and never read.
+    let grant = apply_interactive_to_grant(&goal, grant);
 
     match state.goals.start_with_grant(goal, grant).await {
         Ok(id) => {
@@ -977,7 +1001,7 @@ mod goal_message_tests {
     }
 
     /// The grant an attended `/spawn` of the life pack resolves to: it may interrupt the human, and
-    /// it may write the note it was asked for. Interactivity is a capability (S6) â€” a session
+    /// it may write the note it was asked for. Interactivity is a capability (S6) — a session
     /// started without `AskHuman` cannot receive input at all, so these tests must grant it
     /// explicitly rather than relying on an ambient "interactive" payload flag.
     fn attended_life_grant() -> liberado_session::SessionGrant {
@@ -987,6 +1011,91 @@ mod goal_message_tests {
             overrides: serde_json::Value::Null,
             ..Default::default()
         }
+    }
+
+    fn grant_with_ask_human() -> liberado_session::SessionGrant {
+        use liberado_common::{Capability, CapabilitySet, Zone};
+        let mut capabilities = CapabilitySet::empty();
+        capabilities.grant(Capability::AskHuman);
+        capabilities.grant(Capability::Write(Zone::vault("tasks")));
+        liberado_session::SessionGrant {
+            capabilities,
+            profile: None,
+            overrides: serde_json::Value::Null,
+            ..Default::default()
+        }
+    }
+
+    fn goal_with_interactive(interactive: Option<bool>) -> liberado_session::GoalSpec {
+        let payload = match interactive {
+            Some(flag) => serde_json::json!({ "interactive": flag }),
+            None => serde_json::json!({}),
+        };
+        GoalSpec {
+            id: None,
+            description: "shepherd kickback".into(),
+            success_criteria: vec![],
+            domain: DomainHint::Coding,
+            max_turns: 0,
+            max_idle_secs: None,
+            origin: None,
+            profile: None,
+            payload,
+        }
+    }
+
+    /// F11: shepherd sends `interactive: false`; the grant must drop AskHuman.
+    #[test]
+    fn interactive_false_strips_ask_human_from_the_grant() {
+        use liberado_common::{Capability, Zone};
+        let grant =
+            apply_interactive_to_grant(&goal_with_interactive(Some(false)), grant_with_ask_human());
+        assert!(
+            !grant.capabilities.grants_ask_human(),
+            "unattended goals must not receive AskHuman"
+        );
+        assert!(
+            grant
+                .capabilities
+                .contains(&Capability::Write(Zone::vault("tasks"))),
+            "non-AskHuman capabilities must survive"
+        );
+    }
+
+    #[test]
+    fn interactive_true_keeps_ask_human() {
+        let grant =
+            apply_interactive_to_grant(&goal_with_interactive(Some(true)), grant_with_ask_human());
+        assert!(grant.capabilities.grants_ask_human());
+    }
+
+    #[test]
+    fn interactive_absent_keeps_profile_grant() {
+        let grant =
+            apply_interactive_to_grant(&goal_with_interactive(None), grant_with_ask_human());
+        assert!(
+            grant.capabilities.grants_ask_human(),
+            "absent flag must not silently strip AskHuman"
+        );
+    }
+
+    /// Ignoring the flag reintroduces F11: this test fails if the call site is removed.
+    ///
+    /// The helper definition, its docs, or a call from another handler is not enough. The grant
+    /// passed to `start_with_grant` must be the value narrowed inside `goals_start`.
+    #[test]
+    fn apply_interactive_is_invoked_from_goals_start() {
+        let src = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/api/goals.rs"));
+        let production = src.split("#[cfg(test)]").next().expect("production");
+        let goals_start = production
+            .split_once("pub async fn goals_start(")
+            .and_then(|(_, tail)| tail.split_once("pub async fn goals_get("))
+            .map(|(body, _)| body)
+            .expect("production source must contain the goals_start body");
+        assert!(
+            goals_start.contains("let grant = apply_interactive_to_grant(&goal, grant);"),
+            "goals_start must narrow and rebind the grant before start_with_grant"
+        );
     }
 
     fn life_capabilities() -> liberado_common::CapabilitySet {
