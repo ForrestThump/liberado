@@ -9,14 +9,18 @@
 ## Rules (read first)
 
 1. **One item per branch.** Confirm the backlog row is still open (not struck through / not marked Landed) before you start.
-2. **Do not edit** `docs/future-work/backlog.md` status rows in the PR or feature branch.
-3. **`current_unmerged_work.md` is local only.** It lives at the repo root, is listed in `.git/info/exclude`, and is **never committed**. Update it when you finish or abandon a branch.
-4. **CI-equivalent gates must pass** on the feature branch before you call the item done:
+2. **Follow the total order.** Take the first open, unblocked item in the backlog implementation
+   order. Do not select by convenience. Skip only an external wait or access blocker, and record it.
+3. **Declare the integration shape before branching.** Record the base SHA, predecessor, shared
+   files, and merge order in `current_unmerged_work.md`.
+4. **Do not edit** `docs/future-work/backlog.md` status rows in the PR or feature branch.
+5. **`current_unmerged_work.md` is local only.** It lives at the repo root, is listed in `.git/info/exclude`, and is **never committed**. Update it when you finish or abandon a branch.
+6. **CI-equivalent gates must pass** on the feature branch before you call the item done:
    - `cargo fmt --all --check`
    - `cargo test --workspace --no-fail-fast`
    - `cargo clippy --workspace --exclude liberado-webui --all-targets -- -D warnings`
-5. **No test theatre.** Tests must drive the real shipped entry point. Break the production path once per claimed behaviour, watch a real test fail, restore, and keep the failure output.
-6. Prefer **scoped** `cargo mutants` (or manual per-behaviour mutation) over unscoped workspace mutants.
+7. **No test theatre.** Tests must drive the real shipped entry point. Break the production path once per claimed behaviour, watch a real test fail, restore, and keep the failure output.
+8. Prefer **scoped** `cargo mutants` (or manual per-behaviour mutation) over unscoped workspace mutants.
 
 ## Flow
 
@@ -29,14 +33,21 @@ docs/future-work/backlog.md → what next (one row per PR)
 
 Check dependencies: do not start an item that needs an unmerged prerequisite (e.g. 0.6 needs 0.5).
 
-### 2. Branch from up-to-date `main`
+### 2. Choose the base and branch
+
+If the item depends on an unmerged predecessor or changes the same integration points, branch from
+that predecessor. Otherwise, branch from current `main`. Do not stack unrelated work.
 
 ```bash
 git fetch origin
-git checkout main
-git pull --ff-only   # if remote is ahead
+git checkout <main-or-predecessor>
+git pull --ff-only   # only for a tracked remote branch
 git checkout -b feat/<short-item-name>
 ```
+
+For a stacked branch, either open the PR against its predecessor or wait for the predecessor to
+merge, then rebase onto `main` before opening. Put the base SHA, predecessor, shared files, and merge
+order in the PR body.
 
 ### 3. Implement and test
 
@@ -63,7 +74,7 @@ Edit `current_unmerged_work.md` at the repo root:
 
 | Backlog | Branch | Status |
 |---|---|---|
-| **N.N** short title | `feat/...` | Implemented; not merged |
+| **N.N** short title | `feat/...` | Base `<sha>`; predecessor `<item-or-none>`; overlaps `<paths-or-none>`; merge after `<item-or-main>`; implemented, not merged |
 
 Confirm ignore:
 
@@ -76,11 +87,13 @@ Do **not** `git add` this file.
 
 ### 6. Leave the branch for review / later merge
 
-Push only if asked. Rebase onto `main` when `main` moves:
+Push only if asked. After a predecessor merges, rebase its dependent branches onto the new `main`,
+rerun all gates, and require fresh GitHub CI:
 
 ```bash
 git checkout feat/<branch>
 git rebase main
+git push --force-with-lease
 ```
 
 When the branch merges, remove its row from `current_unmerged_work.md` locally.

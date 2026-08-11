@@ -176,17 +176,20 @@ one setting.
 
 ## Order of work
 
-1. **One production coding-run assembly path.** Remove surface drift before measuring the harness.
-2. **The MVL and companion execution-log contracts** (#8), with shared conformance fixtures.
+1. ~~**One production coding-run assembly path.**~~ Landed in PR #141.
+2. ~~**The MVL and companion execution-log contracts** (#8), with shared conformance fixtures.~~
+   Landed in PR #140.
 3. **Emit both streams from Liberado's common executor/provider boundary.** Do not make them a
-   second coding-pack-only source of truth.
-4. **Instrument the three pinned forks and establish the repeated baseline.** Only after #2, so
-   every adapter targets one schema.
-5. **Implement one evidence-selected lever.** Tool-output offload (#1) is the strongest current
+   second coding-pack-only source of truth. This is backlog 0.6.
+4. **Instrument the three pinned forks and establish the repeated baseline.** Only after #3, so
+   every adapter targets one schema. This is one item shared by backlog 0.7 and C3.
+5. **Measure the completion gate against that baseline.** Do not change its default from one or two
+   anecdotes.
+6. **Implement one evidence-selected lever.** Tool-output offload (#1) is the strongest current
    hypothesis. Retain it only if the controlled rerun improves accepted-result cost or quality.
-6. **Mutation landed check** (#6), **side-effect classification** (#5), cache work (#3) and
+7. **Mutation landed check** (#6), **side-effect classification** (#5), cache work (#3) and
    compaction file-op lists (#4) follow when evidence supports them or a correctness task touches
    that area.
-7. **Script-over-RPC** (#2). Biggest lever, biggest blast radius. Last.
+8. **Script-over-RPC** (#2). Biggest lever, biggest blast radius. Last.
 
 Middleware decomposition (#7) is opportunistic — do it when touching that area anyway.

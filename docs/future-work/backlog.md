@@ -1,9 +1,52 @@
-# Backlog — pick from here, scope it yourself
+# Backlog — implement in this order
 
-Maintained 2026-08-11. **This is the direction; you choose the shape.** Take the highest item you
-can do well, scope it, open a PR. One item per PR.
+Maintained 2026-08-11. This file is an ordered work queue. Take the first open, unblocked item in
+the implementation order below. Do not choose a later item because it is easier or has fewer
+dependencies. One item per PR.
 
-Items are ordered within each band. Bands matter more than positions inside them.
+If an item is blocked only by elapsed time, access to another repository, or an external service,
+record the exact blocker in `current_unmerged_work.md` and take the next item. Do not skip a hard
+code dependency.
+
+## Implementation order
+
+This list is authoritative. The bands below contain the full acceptance context; they do not define
+a second priority order.
+
+| Order | Item | Why now / dependency |
+|---:|---|---|
+| **1** | **F9 — cap concurrent background commands** | Safety first. PR #92 closed without merge; another unbounded build burst can exhaust the disk and invalidate every later run. |
+| **2** | **0.1b — stage ship preflight output** | Fix the remaining deterministic gate defect before measuring the harness: format as an action, then compile, then report test and clippy failures together. |
+| **3** | **D2 — configure model prices** | The baseline and later A1 report need real cost, not `unpriced`. |
+| **4** | **0.6 — emit the joined MVL and execution logs** | The assembly path and contracts landed in PRs #141 and #140. This instrument is the prerequisite for controlled comparisons. |
+| **5** | **0.7 / C3 — publish the controlled cross-harness baseline** | One item, not two: instrument the pinned forks and compare fixed tasks only after 0.6. |
+| **6** | **C5 — measure the completion gate** | Use the same baseline method to compare gate off/on before changing the default. |
+| **7** | **0.9 — implement one evidence-selected cost lever** | Select from trace evidence. Tool-output offload is a hypothesis, not permission to skip measurement. |
+| **8** | **A1 — read one day of deployed token-economics data** | Measure the existing production system before narrowing its catalogue. |
+| **9** | **A2 — narrow the tool catalogue** | Blocked on A1. Change only what A1 supports. |
+| **10** | **B1 — give `ExecuteDirect` an explicit delivery destination** | Close the remaining output-contract correctness gap before adding more delegation paths. |
+| **11** | **C1 — replace unrestricted shell git with a capability-visible library path** | Close the residual authority hole before expanding parallel coding. |
+| **12** | **E4 — add directory enumeration in turbovault** | External prerequisite for the inbox layer. Record the upstream commit before continuing. |
+| **13** | **E5 — stop the turbomcp SSE reconnect storm** | Restore useful homelab diagnostics before dogfooding the inbox path. |
+| **14** | **F12 — give the vault watcher a positive scope** | Prevent unrelated note edits from dispatching work; this must precede E2. |
+| **15** | **E2 — implement the inbox layer** | E3 is landed; start only after E4 and F12. |
+| **16** | **C6 — add repo-map and context selection at the kernel/pack seam** | Large context lever; do it after the measured harness work so its effect can be isolated. |
+| **17** | **C7 — expose one isolated parallel execution path** | Build on the proven worktree boundary and C1's safer git path. Do not expose both fan-out APIs at once. |
+| **18** | **C4 — finish dedicated goal-view panes** | Useful surface work, but it does not block correctness, measurement, or unattended shipping. |
+
+### Branch and integration rule
+
+Do not branch every item from `main` by habit. Before creating a branch, write these four fields in
+`current_unmerged_work.md`: **base commit**, **predecessor**, **shared files**, and **merge order**.
+
+- If the item depends on or edits the same integration points as an unmerged predecessor, branch
+  from that predecessor. Open it as a stacked PR against the predecessor, or wait for the
+  predecessor to merge and rebase it onto `main` before opening.
+- If the item is independent, branch from current `main`. Do not stack unrelated work.
+- When a predecessor merges, rebase each dependent branch onto the new `main`, rerun its local
+  gates, force-push with lease, and require fresh GitHub CI before merge.
+- The PR body must name the base SHA, predecessor, shared files, and intended merge order. A branch
+  with an undeclared overlap is not ready for review.
 
 > ## Enforced — a PR missing any of these is closed without review
 >
@@ -61,11 +104,17 @@ Items are ordered within each band. Bands matter more than positions inside them
 > ## Where it goes
 > kernel | pack — because a second pack would / would not need this.
 >
+> ## Integration
+> Base SHA: <sha>
+> Predecessor: <item or none>
+> Shared files: <paths or none>
+> Merge order: <after item or directly after main>
+>
 > ## Not done
 > <any acceptance item you could not satisfy, and why — this is a pass, not a failure>
 > ````
 
-## The two rules, in full
+## Why the review rules exist
 
 **1. Verify the item is still open before you start.** `git log` the area and read the code. Every
 item below was checked on 2026-08-03, but this file goes stale the moment someone lands something.
@@ -92,7 +141,7 @@ Write down the wrong version you are excluding, then check your fixture would ac
 
 ```
 cargo fmt --all --check
-cargo test --workspace
+cargo test --workspace --no-fail-fast
 cargo clippy --workspace --exclude liberado-webui --all-targets -- -D warnings
 ```
 
@@ -103,9 +152,9 @@ If it genuinely cannot be measured yet, say why. Two recent PRs did exactly that
 
 ## Band 0 — the autonomous PR machine (active focus, set 2026-08-11)
 
-**Take from this band first.** The goal is a dispatched task coming back as a PR whose review is
-taste and scope, not repair. Rationale and full ordering:
-[roadmap → fastest path](../roadmap.md#the-autonomous-pr-machine--fastest-path-set-2026-08-11).
+The goal is a dispatched task coming back as a PR whose review is taste and scope, not repair.
+This band gives the harness-specific rationale. The repo-wide implementation order at the top of
+this file is authoritative and includes safety and measurement prerequisites from other bands.
 
 The ordering principle, from evidence: **every measured improvement so far came from fixing a
 defect, not from tuning a value.** Edit failure went 66–70% → 8% → 0% across PRs #106–#128, all
@@ -114,23 +163,20 @@ defect fixes. No knob has yet produced a measured gain. Knobs come after the ins
 | # | What | Size | Where |
 |---|---|---|---|
 | **0.1** | ~~**Wire the ship preflight into the ACP dispatch path.**~~ **Landed (PR #134).** `PreflightRunner` + the ship profile landed in PR #74 and are reached via `session_pack::build` → `preflight_hook::run_ship_preflight`. `crates/acp-bridge/src/coding_run.rs` **does not use `session_pack`** — it names `CodingSessionPack` only in comments. Every ACP-dispatched run, which is every dogfood run since Paseo landed, skipped the ship bar. Most likely single reason each run needed hand-finishing. Acceptance: a dispatched run's trace shows preflight executing, and a run that fails it does not report success. | small–medium | `crates/acp-bridge/src/coding_run.rs` |
+| **0.1b** | **Stage ship-preflight output.** Format as an action, then compile, then run test and clippy so the model receives the complete actionable failure set instead of stopping at the first required step. Preserve differential comparison against the base. | small–medium | `crates/coder-sandbox/src/preflight.rs`, `crates/coder-agent/` |
 | **0.2** | ~~**A success report must be backed by a test run.**~~ **Landed (PR #131).** A run filed `succeeded` over seven failing tests because `cargo check` and `validate` both passed. Either the pipeline requires a test verifier, or the report step refuses a success claim no test run supports. Traps: a workspace with no tests must still pass; do not run the suite per tool call; pre-existing failures are not the agent's fault (see `preflight.rs`). | medium | `crates/coder-agent/src/verify_pipeline.rs` |
 | **0.3** | ~~**An empty critic response must not discard a completed run.**~~ **Landed (PR #132).** A run finished its work, passed `validate`, and was filed `Failed` because a reviewer call returned empty content. An empty provider response is a transient fault in the *reviewer*, not a verdict on the change — retry or abstain, never throw the work away. | small | `crates/coder-agent/src/critic.rs` |
-| **0.4** | **Make one production coding-run assembly path.** Add one pack-owned constructor for a resolved run and use it from `CodingSessionPack`, ACP and the headless runner. Make raw cross-crate `CoderRunConfig` literals impossible where practical. Test the three real entry points against the same fixture, and record each resolved value with its source. | medium | `crates/coder-core/`, `crates/coder-agent/`, `crates/acp-bridge/`, `crates/coder-runner/` |
-| **0.5** | **Finish the two joined trace contracts and their conformance fixtures.** The [MVL](../spec/reference/model-view-log.md) must reconstruct exact messages, system text, tool definitions and sampling parameters. Its companion execution log must correlate attempts, tool start/finish, context transforms, retries, gates, resources and worker-graph edges without putting scheduler internals into the MVL. No production emitter in this PR. | small–medium | `docs/spec/reference/`, `crates/test-support/` |
+| **0.4** | ~~**Make one production coding-run assembly path.**~~ **Landed (PR #141).** `assemble_production_run` is the shared pack-owned path for `CodingSessionPack`, ACP and the headless runner. Mechanical rules bind all production entry points to it, while surface-owned trace provenance remains distinct. | medium | `crates/coder-agent/`, `crates/acp-bridge/`, `crates/coder-runner/` |
+| **0.5** | ~~**Finish the two joined trace contracts and their conformance fixtures.**~~ **Landed (PR #140).** MVL reconstruction now requires exact request metadata, unambiguous call-ID joins, full snapshots after context changes, and paired attempt boundaries in the joined execution log. Production emission remains 0.6. | small–medium | `docs/spec/reference/`, `crates/test-support/` |
 | **0.6** | **Emit the joined logs from the common boundary.** Write append-and-flush JSONL from `executor` / provider request handling, then adapt coding outcomes to it. Pass the shared crash-survival and reconstruction fixtures. Do not add a second coding-only source of truth. | medium–large | `crates/executor/`, provider adapters, `crates/coder-agent/` |
 | **0.7** | **Instrument pinned pi, Hermes and Deep Agents forks and publish the baseline.** Use the same user task, repository commit, model, provider, sampling settings and resource caps; keep each harness's native system prompt and tool schemas. Run repeats where cost permits. Report ship-gate/merge-ready rate, cost per accepted result, p50/p95, human repair and trace-linked failure classes. | large, external patch series + one report | forks, [`harness-study-2026-08.md`](harness-study-2026-08.md) |
-| **0.8** | **Productize cold review + one fix round.** The half that makes a PR merge-minimal rather than plausible, and the place a particular person's taste actually lives — the reviewer's standards are the reviewer's prompt. | medium | `Skills/cold-review-pr.md`, `crates/coder-agent/` |
+| **0.8** | ~~**Productize cold review + one fix round.**~~ **Landed (PR #142).** Review requests are fresh, path- and excerpt-bound to the actual diff, retained findings get one fix round, and readiness requires post-fix verification. | medium | `Skills/cold-review-pr.md`, `crates/coder-agent/` |
 | **0.9** | **Implement one evidence-selected cost lever.** Tool-output offload is the leading hypothesis because truncation spends context and loses data. Change only that mechanism, rerun the baseline, and retain it only if accepted-result cost or quality improves. | medium | `crates/coder-tools/`, [`harness-study-2026-08.md`](harness-study-2026-08.md) |
 
-**Two small follow-ups from 0.1, both open.** `crates/acp-bridge/src/provider.rs` still reads
-`LIBERADO_CONFIG_DIR` directly rather than through `liberado_config::config_dir()` — the same defect
-fixed in `main.rs`, in a second place. Harmless while every launch path sets the variable, and left
-open deliberately: changing it makes provider resolution start finding configs where it previously
-found none. Separately, `run_preflight` is fail-fast on the first failing **required** step, so a
-`fmt` slip stops the bar before `test` runs and the model hears only about formatting. That is the
-existing preflight contract, and it is the thing the staged-gate item (fmt-as-action, then compile,
-then test+clippy together) is meant to replace.
+**One follow-up from 0.1 remains.** Provider construction now uses the same multi-tier
+`liberado_config::config_dir()` resolution as bridge startup (PR #137). `run_preflight` is still
+fail-fast on the first failing **required** step, so a `fmt` slip stops the bar before `test` runs
+and the model hears only about formatting. Item 0.1b replaces that contract with staged reporting.
 
 **The bar only runs if the config is loaded.** 0.1 gates on the declared `[[projects]]` entry that
 contains the run's root, so a bridge that resolved no config dir has no project and no bar. That was
@@ -156,7 +202,7 @@ measurement is in [`token-economics-findings-2026-08.md`](token-economics-findin
 |---|---|---|
 | **A1** | **Deploy, wait a day, and report what the instruments say.** Still nothing read. Offered-vs-surviving MCP counts; dispatcher cache hit (should rise from 22.3%); subagent-vs-direct split of the 92.8%; total `repeat_calls`. `--json` makes it scriptable. **Measurement only.** | `liberado-cost --json`, `docker logs` |
 | **A2** | **Narrow the tool catalog.** Blocked on A1. | blocked |
-| **A3** | **Check the face agent's prompt for the ordering shape** #43 and #46 fixed. Two of three builders are done; nobody has looked at the third. | `crates/main-agent/` |
+| **A3** | ~~**Check the face agent's prompt for the ordering shape.**~~ **Landed (PR #64).** | `crates/main-agent/` |
 
 ## Band B — correctness gaps
 
@@ -178,9 +224,9 @@ report was **not** reproducible and is recorded at the bottom so nobody re-opens
 
 | # | What | Size | Pointer |
 |---|---|---|---|
-| **E1** | **Per-schedule turn budget.** `DIRECT_MAX_TURNS` (4) and the subagent default (8) are compile-time; a schedule can neither raise them nor choose which path it lands on — the dispatcher picks `ExecuteDirect` vs `DispatchSubagent` from goal phrasing. Observed live: an inbox goal spent all 4 turns on vault reads and filed nothing. Wants `max_turns: Option<u32>` on `Schedule`, plumbed through `budget_for(depth)`. | medium | `crates/orchestrator/src/lib.rs` (`budget_for`) |
-| **E2** | **Implement the inbox layer.** Design settled 2026-08-08 (`inbox-spec.md` §14): two capture surfaces (pinned widget file + folder), compare-and-swap clearing, and a hybrid trigger where the flag routes ownership — unflagged notes belong to the schedule, `#now` notes to the watcher. Human-vs-agent attribution and content-hash idempotency already exist and the design leans on both. **Was blocked on E3**, which is implemented in PR #90 — unblocked once that merges. | large | [`../spec/inbox-spec.md`](../spec/inbox-spec.md) §14 |
-| **E3** | ~~**Watcher ignore list.**~~ **PR #90 — agent-authored, CI green, awaiting review.** `inbox_ignore_globs` has no wired equivalent, so the generic vault-watch reaction fires on `Inbox/` writes *alongside* any ingestion schedule — the same capture is processed twice. **Prerequisite for E2**: without it you debug double-processing and the new pipeline simultaneously. Small and independent — do it first. | small | `crates/daemon/src/vault_source.rs` |
+| **E1** | ~~**Per-schedule turn budget.**~~ **Landed (PR #86).** A schedule can set `max_turns`, which is carried through `budget_for(depth)`. | medium | `crates/orchestrator/src/lib.rs` (`budget_for`) |
+| **E2** | **Implement the inbox layer.** Design settled 2026-08-08 (`inbox-spec.md` §14): two capture surfaces (pinned widget file + folder), compare-and-swap clearing, and a hybrid trigger where the flag routes ownership — unflagged notes belong to the schedule, `#now` notes to the watcher. Human-vs-agent attribution and content-hash idempotency already exist. E3 landed in PR #90; E4 and F12 must land first. | large | [`../spec/inbox-spec.md`](../spec/inbox-spec.md) §14 |
+| **E3** | ~~**Watcher ignore list.**~~ **Landed (PR #90).** `inbox_ignore_globs` prevents the generic watcher from processing configured capture paths twice. It is a denylist, not the positive scope required by F12. | small | `crates/daemon/src/vault_source.rs` |
 | **E4** | **turbovault cannot enumerate a directory** (turbovault repo, not this one). `query_frontmatter_sql` needs the `sql` feature compiled in; `advanced_search` takes `exclude_paths` but no positive path scope; `get_notes_info` needs paths you already have. So "process everything in this folder" is not expressible. Any one of: enable `sql` in the homelab image, add `path_prefix` to `advanced_search`, or add `list_notes(path)`. | medium | turbovault `crates/turbovault-tools/src/search_engine.rs` |
 | **E5** | **SSE reconnect storm.** `turbomcp_http::transport` logs read-error → stream-ended → reconnect in a tight loop: ~93.5k occurrences in 24h, ~50/min while idle. Survivable, but it evicts real diagnostics under log rotation. Likely a turbomcp keepalive/EOF issue. | medium | turbomcp |
 
@@ -235,8 +281,8 @@ Crates in there that map onto items below, so nobody reads the whole 94 MB:
 | # | What | Pointer |
 |---|---|---|
 | **C1** | **The coder cannot commit.** ~~No branch/commit/push tool…~~ **Tools landed (#59) and exercised live** in the 2026-08-05 self-host dogfood (`git_branch` / `git_commit` / `git_push`, author `liberado@local`). Residual: empty `CommandPolicy` allow-list still means shell `git` is unrestricted when used via `run_command` — prefer library/`gix` long-term. | `crates/coder-tools/`, `crates/coder-core/` |
-| **C2** | **Run one real PR end to end and write up where it fell over.** **Done 2026-08-05** — session `01KZAJN9NMRR1THMWZM8ZSBV5P`, [PR #69](https://github.com/ForrestThump/liberado/pull/69). Full write-up: [`self-host-coding-dogfood-2026-08.md`](self-host-coding-dogfood-2026-08.md). **Still open from that run:** (P0) committed work graded as "no real workspace changes"; (P1) intake/DeepSeek schema failure; (P1) tool events not on the goal stream; (P2) PR base when remote branch missing. Fix those before declaring self-host unattended. | [`self-host-coding-dogfood-2026-08.md`](self-host-coding-dogfood-2026-08.md) |
-| **C3** | **Benchmark against the three.** Same task, same model, four harnesses (ours, OpenCode, Grok Build, Kimicode). Report turns, tokens, wall-clock, and whether the result passed. Cheap to run, and it turns "are we close?" into a number. | new |
+| **C2** | ~~**Run one real PR end to end and write up where it fell over.**~~ **Landed.** Session `01KZAJN9NMRR1THMWZM8ZSBV5P` produced [PR #69](https://github.com/ForrestThump/liberado/pull/69); PRs #70 and #71 closed its recorded production-path findings. | [`self-host-coding-dogfood-2026-08.md`](self-host-coding-dogfood-2026-08.md) |
+| **C3** | **Controlled cross-harness baseline.** This is the same work as 0.7, not a second item. Follow 0.7's fixed-task, fixed-model, fixed-resource acceptance criteria and land one report. | 0.7 |
 | **C4** | **Dedicated goal-view panes** — role timeline, gate panel, verifier panel. Gate votes stream live (#53) but render inline in the joined pane, so the streaming has nowhere good to land. | `crates/tui/` |
 | **C5** | **Turn on the completion gate and measure it.** S1 is default-off pending S7 because it costs `1 + fresh_reviewers` model calls per attempt. With `liberado-cost --json` that price is now measurable — run a handful of tasks with it on and off. | `[coder.gate] enabled` |
 | **C6** | **Repo map / context selection** — the biggest context lever, and we have nothing equivalent. **Split the seam on the way in**: "rank and select the relevant context for a goal" is general and belongs in the kernel — a research or vault pack wants exactly that — while "walk a source tree and build a symbol graph" is coding and belongs in `coder-*`. Build it whole inside the pack and the next pack rebuilds the ranking half. Read `xai-codebase-graph` first. **This item is both the highest-leverage coding work and the most likely duplication source**; get the seam right rather than fixing it later. | kernel + `crates/coder-*` |
@@ -305,22 +351,18 @@ model in the PR body and append each round to the failure-modes doc.
 id ambiguous), `a4f7b7b`, `a899eee`. F5 (`every_shared_field_survives_the_conversion_to_run_config`,
 `coder-core/src/tuning.rs`) and F10 (`verifiers_for` now runs `cargo check`) are also on main.
 
-F11 is **partially** mitigated and still open: the shepherd now starts goals under the
-`coding-unattended` profile, whose grant omits `AskHuman`, so its own goals no longer park. The
-underlying bug is untouched — the `{"interactive": false}` payload flag still maps to nothing
-(`server/src/api/goals.rs`), so any *other* non-interactive caller still gets `AskHuman` by default.
-
-Still open below. **F9 is in flight — do not take it.**
+F6, F7, F8, F11 and F13 are landed. F9's earlier PR #92 closed without merge, so F9 is open and is
+first in the implementation order. F12 remains open.
 
 | # | What | Size | → |
 |---|---|---|---|
-| **F6** | **Preserve work on signal.** `preserve_work` (coder-runner) commits the run's output to `agent/<slug>-<stamp>` after a normal return, so a SIGTERM'd run preserves nothing — exactly the case it was written for. A run killed at a 10-minute cap left seven modified files uncommitted. Wants a signal handler, or a periodic checkpoint. **Also fix the branch name**: it commits to `agent/<task-id>-<stamp>`, and the headless path hardcodes the task id to `task-1`, so every run produces `agent/task-1-<epoch>` — carrying no information about what the run did. | small | DeepSeek |
-| **F7** | **Reconcile orphaned parked sessions at daemon startup.** `parked` persists in the store; the live hub does not survive a restart. The session is then unresumable *and* uncancellable — `/cancel` answers `"not found or already finished"` — and holds a concurrency slot forever. Shepherd-side mitigation landed (`57bfc1a`); the daemon-side bug is untouched. | medium | DeepSeek |
-| **F8** | **`ModelRequestSent` event.** `TurnRecord` records the tool catalog at *response* time. Recording it at request time, with a hash of the system prompt actually sent, closes the last "what did the model see" gap — prompt-vs-`prompt_path` resolution is still invisible. | small | DeepSeek |
-| **F11** | **Intake parks an unattended goal to ask a question.** A shepherd kickback goal reached `awaiting_input` **5 seconds in**, asking *"do you want me to fix both failures, or focus on one first?"* — after a prompt that already said "these appeared with your change and are yours to fix" and listed both. No human is attached to a shepherd goal, so it parks forever and holds a `MAX_CONCURRENT` slot. **Both** shepherd paths do it: the cold-review goal parked the same way, asking whether its contract should cover the review process — from a prompt that specified it. **This is the cause of the four orphaned parked sessions** that silently blocked every shepherd pass; `57bfc1a` only stopped them from consuming capacity. Every autonomous goal this system has started has ended here, which makes this the top item in the band: F10 makes an unattended run trustworthy, but F11 is why unattended runs do not happen at all. Note the questions were answerable from the prompt already — intake wants confirmation, not information — so withholding the capability costs nothing. **Answering does not help.** Both sessions were answered by hand and both immediately asked a second question, each one quoting the very instruction it was asking about: *"The goal says 'Do not delete, skip, or #[ignore] a test to get green' … is it acceptable to modify test code"*, and *"The writeup says 'If you found nothing Real, push nothing' … should the agent be allowed to push if it finds and fixes Real issues?"*. With `max_clarify_rounds: 3` that is up to three human round-trips before any work begins, which is why the shepherd was never going to run overnight however correct its gate logic was. **The mechanism already exists and is correct** — do not build a second one. `CodingSessionPack::run` computes `may_ask = ctx.can(&Capability::AskHuman)` and, when it is absent, *skips intake entirely* and builds from the goal description (`session_pack.rs:349`, and the Progress event at :409 says so). The pack is right. The bug is one layer up: `goals_start` grants `AskHuman` to a goal that declared itself non-interactive. **The shepherd already sends `{"interactive": false}` in its payload** (`start_goal`, `pr-shepherd.py:304`) and nothing maps it onto the capability set — an eighth shadowed setting, sent and ignored. Fix it at the grant, in `crates/server/src/api/goals.rs`, not in the pack. An attempt to add an `intake.ask_human` knob was written and reverted: it duplicated a capability the architecture already owns, which is the exact failure `CLAUDE.md` warns about. Same principle as the progress-guard fix: do not stop the run, note it and continue. A timeout-then-auto-answer is the wrong shape — it pays the latency and still picks an answer. | medium | DeepSeek |
-| **F13** | **The shepherd's review labels assert reviews that did not happen.** `shepherd:review-N` is applied when a cold-review goal *starts*, not when it succeeds, and `ready_for_human` gates on `pr.count(L_REVIEW) >= COLD_REVIEWS`. PR #90 carries `review-1` and `review-2` while the session that ran **failed**: `Execution exceeded its 30-turn budget before filing a report`, after 107 events. So the label meaning "two independent reviews found nothing" can equally mean "two reviews were attempted and died". Same shape as the CI blind spot fixed in #93 — a gate reporting a pass it never earned — in the one place a human is meant to trust it. Label on the filed report, not on the start. **Also raise the cold-review budget**: 30 turns did not cover fetch → diff → classify on a 10-file PR, so the review may be under-resourced rather than wrong. | small | DeepSeek |
+| **F6** | ~~**Preserve work on signal and use meaningful branch labels.**~~ **Landed (PR #143).** The headless runner races execution against termination, preserves dirty work, and derives the task label from the session or prompt. | small | `crates/coder-runner/` |
+| **F7** | ~~**Reconcile orphaned parked sessions at daemon startup.**~~ **Landed (PR #144).** Startup keeps parks that a registered pack can resume and cancels store-only orphans after all packs register. | medium | `crates/session/`, `crates/server/` |
+| **F8** | ~~**`ModelRequestSent` event.**~~ **Landed (PR #117).** Request-time events record the offered tools and the resolved system-prompt hash. The common joined-log emitter remains 0.6. | small | `crates/executor/` |
+| **F11** | ~~**An unattended goal must not receive `AskHuman`.**~~ **Landed (PR #138).** `interactive: false` now narrows the effective grant at `goals_start`; accepted-payload tests bind the real call site. | medium | `crates/server/src/api/goals.rs` |
+| **F13** | ~~**Apply shepherd review labels only after success.**~~ **Landed (PR #139).** Pending review state settles from the goal's terminal result, and the default cold-review budget is 60 turns. | small | `scripts/pr-shepherd.py` |
 | **F12** | **The vault watcher reacts to every note you touch.** `react()` special-cases `proposals/` and its archive, then dispatches **every other vault change** to the default pool — so editing any note anywhere makes an agent decide what to do about it. `inbox_ignore_globs` (PR #90) does not fix this and is misleadingly named: it sits under `[tuning.capture]` but is applied on the *global* watch path, so it is a vault-wide denylist, not an Inbox scope. Approximating a scope with it means enumerating everything you do not want reacted to — unbounded, and it fails open on a typo'd pattern. What is wanted is a **positive** scope, which is already the design in [`inbox-spec.md`](../spec/inbox-spec.md) §14: the flag routes ownership, unflagged notes belong to the schedule and `#now` notes to the watcher. Until that lands, the watcher's remaining job after E3 excludes `Inbox/` is "everything else in the vault", which is the opposite of what anyone wants. | medium | DeepSeek |
-| **F9** | **Cap concurrent background commands.** One build-like program at a time, two background jobs total, refused in band. A run launched nine concurrent `cargo` builds and filled a 476 GB disk. **In flight** — do not take. | medium | DeepSeek |
+| **F9** | **Cap concurrent background commands.** One build-like program at a time, two background jobs total, refused in band. A run launched nine concurrent `cargo` builds and filled a 476 GB disk. PR #92 closed without merge; verify the current command runner before reusing any of that branch. | medium | DeepSeek |
 
 ## Band D — breadth, low risk
 
@@ -328,7 +370,7 @@ Still open below. **F9 is in flight — do not take it.**
 
 | # | What | Pointer |
 |---|---|---|
-| **D1** | **Promote `provenance_ratio` / `delegation_cost` from examples to subcommands** if they earn it. Both now have a `--json` sibling to match. | `crates/cost/examples/` |
+| **D1** | ~~**Promote `provenance_ratio` / `delegation_cost` from examples to subcommands.**~~ **Landed (PR #63).** | `crates/cost/` |
 | **D2** | **`liberado-cost` prices nothing** — the box declares no `[[models]]` rates, so every report reads `unpriced`. Config-only; schema and doc already exist. | [`tuning.md`](../spec/reference/tuning.md) |
 
 ## Not available
