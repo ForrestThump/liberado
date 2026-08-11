@@ -45,7 +45,7 @@ mod wire;
 
 use wire::{
     JsonRpcErrorBody, JsonRpcIncoming, StdoutWire, WireSink, emit_agent_text_chunk, emit_tool_call,
-    emit_tool_call_update, pop_tool_call_id, push_tool_call_id,
+    emit_tool_call_update, emit_user_message_chunk, pop_tool_call_id, push_tool_call_id,
 };
 
 use provider::{
@@ -65,9 +65,9 @@ use tokio::sync::{Mutex, mpsc, watch};
 /// ACP protocol version negotiated with current `@agentclientprotocol/sdk`.
 const PROTOCOL_VERSION: u32 = 1;
 
-/// Whether `initialize` advertises `loadSession`. Must stay false until durable history +
-/// replay exist (integration roadmap P3); true made Paseo resume into an empty transcript.
-const LOAD_SESSION_CAPABILITY: bool = false;
+/// Whether `initialize` advertises `loadSession`. Now true — durable history and replay
+/// are implemented in `session/load`.
+const LOAD_SESSION_CAPABILITY: bool = true;
 
 /// JSON-RPC 2.0 error codes. Named because "-32602" at a call site says nothing about which of the
 /// spec's four failure kinds it is, and every one of these used to be -32603.
@@ -497,7 +497,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                     continue;
                 }
 
-                match handle_request(Arc::clone(&bridge), &method, msg.params).await {
+                match handle_request(Arc::clone(&bridge), &method, msg.params, &*wire).await {
                     Ok(result) => wire.write_rpc_response(id, Ok(result))?,
                     Err(message) => wire.write_rpc_response(
                         id,
@@ -558,7 +558,12 @@ async fn handle_notification(method: &str, _params: Value) {
     tracing::debug!(method = %method, "acp notification ignored");
 }
 
-async fn handle_request(bridge: Arc<Bridge>, method: &str, params: Value) -> Result<Value, String> {
+async fn handle_request(
+    bridge: Arc<Bridge>,
+    method: &str,
+    params: Value,
+    sink: &dyn WireSink,
+) -> Result<Value, String> {
     match method {
         "initialize" => {
             let client_version = params
@@ -610,6 +615,7 @@ async fn handle_request(bridge: Arc<Bridge>, method: &str, params: Value) -> Res
                     Arc::clone(&bridge.provider),
                     bridge.max_turns,
                     bridge.system_prompt.clone(),
+                    &[],
                 )
                 .ok()
                 .map(Arc::new)
@@ -667,12 +673,104 @@ async fn handle_request(bridge: Arc<Bridge>, method: &str, params: Value) -> Res
         }
 
         "session/load" => {
-            // Capability loadSession is false; reject rather than silently wipe history.
-            Err(
-                "session/load is not supported yet (no durable session history). \
-                 Start a new session with session/new."
-                    .into(),
-            )
+            let sid = params
+                .get("sessionId")
+                .and_then(|v| v.as_str())
+                .ok_or("missing sessionId")?;
+
+            // When the id is already live, return current state without re-emitting history.
+            {
+                let sessions = bridge.acp_sessions.lock().await;
+                if let Some(existing) = sessions.get(sid) {
+                    let (catalog, current) = bridge_model_snapshot(&bridge).await;
+                    return Ok(session_state_payload(
+                        sid,
+                        &catalog,
+                        &current,
+                        existing.mode,
+                        &bridge.local_grant,
+                    ));
+                }
+            }
+
+            let record = match session_store::load(sid) {
+                Ok(Some(r)) => r,
+                Ok(None) => {
+                    return Err(format!(
+                        "no saved session found for id '{sid}' — start a new session with session/new"
+                    ));
+                }
+                Err(e) => return Err(format!("failed to load session '{sid}': {e}")),
+            };
+
+            let mode = AgentMode::parse(&record.mode).unwrap_or(bridge.default_mode);
+
+            // Set the model from the stored record.
+            bridge.provider.set_model(record.model.clone());
+            *bridge.current_model.lock().await = record.model.clone();
+
+            let (cancel_tx, cancel_rx) = watch::channel(false);
+            let chat = if mode == AgentMode::Chat {
+                open_chat_session(
+                    sid,
+                    record.cwd.clone(),
+                    Arc::clone(&bridge.provider),
+                    bridge.max_turns,
+                    bridge.system_prompt.clone(),
+                    // The one call site where history is not empty. Everything else about a load
+                    // is cosmetic if this argument is.
+                    &record.messages,
+                )
+                .ok()
+                .map(Arc::new)
+            } else {
+                None
+            };
+
+            let cwd = record.cwd.clone();
+            bridge.acp_sessions.lock().await.insert(
+                sid.to_string(),
+                AcpSession {
+                    mode,
+                    cwd: cwd.clone(),
+                    coding: coding_run::CodingSessionState {
+                        cwd: cwd.clone(),
+                        coding_session_id: sid.to_string(),
+                        prior_feedback: Vec::new(),
+                        last_summary: None,
+                        rounds: 0,
+                    },
+                    chat,
+                    face_daemon_session: None,
+                    cancel_tx,
+                    cancel_rx,
+                },
+            );
+
+            // Replay the stored transcript so the editor shows the conversation.
+            for msg in &record.messages {
+                match msg.role.as_str() {
+                    "user" => emit_user_message_chunk(sink, sid, &msg.content)?,
+                    "assistant" => emit_agent_text_chunk(sink, sid, &msg.content)?,
+                    _ => {}
+                }
+            }
+
+            tracing::info!(
+                session_id = %sid,
+                mode = %mode.id(),
+                messages = record.messages.len(),
+                "session/load restored from disk"
+            );
+
+            let (catalog, current) = bridge_model_snapshot(&bridge).await;
+            Ok(session_state_payload(
+                sid,
+                &catalog,
+                &current,
+                mode,
+                &bridge.local_grant,
+            ))
         }
 
         // session/prompt is handled by the main loop (spawned so cancel can interleave).
@@ -702,6 +800,7 @@ async fn handle_request(bridge: Arc<Bridge>, method: &str, params: Value) -> Res
                         Arc::clone(&bridge.provider),
                         bridge.max_turns,
                         bridge.system_prompt.clone(),
+                        &[],
                     )
                     .ok()
                     .map(Arc::new);
@@ -1114,6 +1213,7 @@ async fn run_chat_prompt(
                 Arc::clone(&bridge.provider),
                 bridge.max_turns,
                 bridge.system_prompt.clone(),
+                &[],
             )
             .ok()
             .map(Arc::new);
@@ -1173,12 +1273,20 @@ async fn run_face_prompt(
 }
 
 /// Pure chat session: conversation + executor, no coding tools.
+/// Open a chat session, optionally seeded with a stored transcript.
+///
+/// `history` is what makes a resume a resume. Replaying the transcript to the *client* only
+/// repaints the editor; if the conversation the model sees starts empty, the user is looking at
+/// their own history while the agent has none of it. That is the exact failure `loadSession:
+/// false` was chosen to avoid — and it is worse once the flag says `true`, because the interface
+/// now claims the memory is there.
 fn open_chat_session(
     session_id: &str,
     cwd: PathBuf,
     provider: Arc<dyn Provider>,
     max_turns: u32,
     system_prompt: Option<String>,
+    history: &[session_store::StoredMessage],
 ) -> Result<SessionHandle, String> {
     let system = system_prompt.unwrap_or_else(|| {
         format!(
@@ -1192,7 +1300,22 @@ fn open_chat_session(
     let (cancel_tx, cancel_rx) = watch::channel(false);
     Ok(SessionHandle {
         id: session_id.to_string(),
-        conversation: Mutex::new(Conversation::new(system)),
+        conversation: Mutex::new(if history.is_empty() {
+            Conversation::new(system)
+        } else {
+            // System prompt first, then the stored turns in order. A role the store does not
+            // recognise is dropped rather than guessed at: inventing a speaker is how a resumed
+            // conversation starts arguing with itself.
+            let mut messages = vec![liberado_provider::Message::system(system)];
+            for m in history {
+                match m.role.as_str() {
+                    "user" => messages.push(liberado_provider::Message::user(&m.content)),
+                    "assistant" => messages.push(liberado_provider::Message::assistant(&m.content)),
+                    _ => {}
+                }
+            }
+            Conversation::from_history(messages)
+        }),
         // Chat uses executor budget = max_turns (not the hardcoded default of 8).
         executor: Executor::new(provider, Budget::new(max_turns)),
         tools: Arc::new(NoTools),
@@ -1390,6 +1513,7 @@ fn new_session_id() -> String {
 mod tests {
     use super::*;
     use crate::provider::catalog_model_ids;
+    use tempfile::TempDir;
 
     #[test]
     fn extract_prompt_joins_text_blocks() {
@@ -1493,7 +1617,10 @@ mod tests {
     #[tokio::test]
     async fn an_unknown_method_is_method_not_found() {
         let bridge = test_bridge();
-        let err = handle_request(bridge, "session/does_not_exist", json!({}))
+        let sink = CaptureSink {
+            lines: std::sync::Mutex::new(Vec::new()),
+        };
+        let err = handle_request(bridge, "session/does_not_exist", json!({}), &sink)
             .await
             .expect_err("an unimplemented method must be an error");
         assert!(
@@ -1508,14 +1635,16 @@ mod tests {
         // that — it "mirrored the handle_request arm" by its own comment, so deleting the arm, or
         // dropping any field from the real response, left it green.
         let bridge = test_bridge();
-        let result = handle_request(bridge, "initialize", json!({}))
+        let sink = CaptureSink {
+            lines: std::sync::Mutex::new(Vec::new()),
+        };
+        let result = handle_request(bridge, "initialize", json!({}), &sink)
             .await
             .expect("initialize must succeed");
 
         assert_eq!(result["protocolVersion"], PROTOCOL_VERSION);
         assert_eq!(result["agentInfo"]["name"], "Liberado");
-        // Must stay false until durable load+replay (P3); true lied to Paseo's resume path.
-        assert_eq!(result["agentCapabilities"]["loadSession"], false);
+        assert_eq!(result["agentCapabilities"]["loadSession"], true);
         assert_eq!(
             result["agentCapabilities"]["promptCapabilities"]["embeddedContext"],
             true
@@ -1524,12 +1653,11 @@ mod tests {
 
     #[test]
     fn load_session_capability_is_honest() {
-        // Mutation guard: initialize must not advertise loadSession until history is durable.
-        // const block: clippy::assertions_on_constants rejects a runtime assert! on a const.
         const {
             assert!(
-                !LOAD_SESSION_CAPABILITY,
-                "advertising loadSession:true without durable history wipes Paseo resume"
+                LOAD_SESSION_CAPABILITY,
+                "loadSession must be true now that durable resume is implemented; \
+                 false would make Paseo think resume is unsupported"
             );
         }
     }
@@ -1792,6 +1920,331 @@ mod tests {
         assert!(
             text.contains("all done"),
             "expected assistant text chunks, got {text:?} from {lines:?}"
+        );
+    }
+
+    // ── session/load tests ───────────────────────────────────────────────
+
+    /// Serializes tests in this module that redirect `sessions_dir()` so they do not race with
+    /// `session_store` tests or each other.
+    static SESSION_LOAD_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn lock_sessions_dir(
+        dir: &TempDir,
+    ) -> (
+        std::sync::MutexGuard<'static, ()>,
+        std::sync::MutexGuard<'static, ()>,
+        session_store::TestDirGuard,
+    ) {
+        let lock = SESSION_LOAD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (dir_lock, guard) = session_store::set_sessions_dir(dir);
+        (lock, dir_lock, guard)
+    }
+
+    #[tokio::test]
+    async fn load_saved_session_restores_mode_and_model() {
+        let dir = TempDir::new().unwrap();
+        let _guards = lock_sessions_dir(&dir);
+
+        let record = session_store::SessionRecord {
+            id: "lib-load-test".into(),
+            mode: "chat".into(),
+            cwd: PathBuf::from("/tmp/test-project"),
+            model: "gpt-4o".into(),
+            messages: vec![],
+            updated_at: session_store::new_timestamp(),
+        };
+        session_store::save(&record).expect("save");
+
+        let bridge = test_bridge();
+        let sink = CaptureSink {
+            lines: std::sync::Mutex::new(Vec::new()),
+        };
+        let result = handle_request(
+            bridge,
+            "session/load",
+            json!({"sessionId": "lib-load-test"}),
+            &sink,
+        )
+        .await
+        .expect("session/load must succeed");
+
+        assert_eq!(result["sessionId"], "lib-load-test");
+        assert_eq!(result["modes"]["currentModeId"], "chat");
+        assert_eq!(result["models"]["currentModelId"], "gpt-4o");
+    }
+
+    #[tokio::test]
+    async fn load_saved_session_registers_in_memory_with_correct_cwd() {
+        let dir = TempDir::new().unwrap();
+        let _guards = lock_sessions_dir(&dir);
+
+        let cwd = PathBuf::from("/tmp/load-cwd-test");
+        let record = session_store::SessionRecord {
+            id: "lib-cwd".into(),
+            mode: "coding".into(),
+            cwd: cwd.clone(),
+            model: "mock-model".into(),
+            messages: vec![],
+            updated_at: session_store::new_timestamp(),
+        };
+        session_store::save(&record).expect("save");
+
+        let bridge = test_bridge();
+        let sink = CaptureSink {
+            lines: std::sync::Mutex::new(Vec::new()),
+        };
+        let result = handle_request(
+            Arc::clone(&bridge),
+            "session/load",
+            json!({"sessionId": "lib-cwd"}),
+            &sink,
+        )
+        .await
+        .expect("session/load must succeed");
+
+        assert_eq!(result["sessionId"], "lib-cwd");
+
+        let sessions = bridge.acp_sessions.lock().await;
+        let sess = sessions.get("lib-cwd").expect("session must be registered");
+        assert_eq!(sess.cwd, cwd, "cwd must match loaded record");
+    }
+
+    #[tokio::test]
+    async fn load_unsaved_id_is_clear_error_not_empty_session() {
+        let dir = TempDir::new().unwrap();
+        let _guards = lock_sessions_dir(&dir);
+
+        let bridge = test_bridge();
+        let sink = CaptureSink {
+            lines: std::sync::Mutex::new(Vec::new()),
+        };
+        let err = handle_request(
+            bridge,
+            "session/load",
+            json!({"sessionId": "no-such-id"}),
+            &sink,
+        )
+        .await
+        .expect_err("loading an unsaved id must be an error");
+
+        assert!(
+            err.contains("no saved session found"),
+            "error must say no session was found, got: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn load_replays_stored_messages_in_stored_order() {
+        let dir = TempDir::new().unwrap();
+        let _guards = lock_sessions_dir(&dir);
+
+        let record = session_store::SessionRecord {
+            id: "lib-replay".into(),
+            mode: "coding".into(),
+            cwd: PathBuf::from("/tmp/replay"),
+            model: "mock-model".into(),
+            messages: vec![
+                session_store::StoredMessage {
+                    role: "user".into(),
+                    content: "hello".into(),
+                },
+                session_store::StoredMessage {
+                    role: "assistant".into(),
+                    content: "hi there".into(),
+                },
+                session_store::StoredMessage {
+                    role: "user".into(),
+                    content: "second".into(),
+                },
+                session_store::StoredMessage {
+                    role: "assistant".into(),
+                    content: "answer".into(),
+                },
+            ],
+            updated_at: session_store::new_timestamp(),
+        };
+        session_store::save(&record).expect("save");
+
+        let bridge = test_bridge();
+        let sink = CaptureSink {
+            lines: std::sync::Mutex::new(Vec::new()),
+        };
+        let result = handle_request(
+            bridge,
+            "session/load",
+            json!({"sessionId": "lib-replay"}),
+            &sink,
+        )
+        .await
+        .expect("session/load must succeed");
+
+        assert_eq!(result["sessionId"], "lib-replay");
+
+        let lines = sink.lines.lock().unwrap();
+        let updates: Vec<_> = lines
+            .iter()
+            .filter(|(m, _)| m == "session/update")
+            .collect();
+        assert_eq!(
+            updates.len(),
+            4,
+            "must emit exactly 4 message chunks, got {:?}",
+            updates
+        );
+
+        assert_eq!(
+            updates[0].1["update"]["sessionUpdate"], "user_message_chunk",
+            "first message must be user"
+        );
+        assert_eq!(updates[0].1["update"]["content"]["text"], "hello");
+        assert_eq!(
+            updates[1].1["update"]["sessionUpdate"], "agent_message_chunk",
+            "second message must be assistant"
+        );
+        assert_eq!(updates[1].1["update"]["content"]["text"], "hi there");
+        assert_eq!(
+            updates[2].1["update"]["sessionUpdate"], "user_message_chunk",
+            "third message must be user"
+        );
+        assert_eq!(updates[2].1["update"]["content"]["text"], "second");
+        assert_eq!(
+            updates[3].1["update"]["sessionUpdate"], "agent_message_chunk",
+            "fourth message must be assistant"
+        );
+        assert_eq!(updates[3].1["update"]["content"]["text"], "answer");
+    }
+
+    /// A resume the *model* can see, not just the editor.
+    ///
+    /// Replaying the transcript to the client repaints the UI. If the conversation behind it starts
+    /// empty, the user reads their own history while the agent has none of it — the precise failure
+    /// `loadSession: false` existed to prevent, and worse once the flag says `true`, because the
+    /// interface now asserts the memory is there.
+    ///
+    /// This is the requirement the original implementation skipped, and it skipped the test with
+    /// it: five tests covered the replay and none covered the restore, so everything looked green.
+    #[tokio::test]
+    async fn load_restores_history_into_the_conversation_not_only_the_client() {
+        let dir = TempDir::new().unwrap();
+        let _guards = lock_sessions_dir(&dir);
+
+        let record = session_store::SessionRecord {
+            id: "lib-memory".into(),
+            mode: "chat".into(),
+            cwd: PathBuf::from("/tmp/memory"),
+            model: "mock-model".into(),
+            messages: vec![
+                session_store::StoredMessage {
+                    role: "user".into(),
+                    content: "my name is Ada".into(),
+                },
+                session_store::StoredMessage {
+                    role: "assistant".into(),
+                    content: "noted, Ada".into(),
+                },
+            ],
+            updated_at: session_store::new_timestamp(),
+        };
+        session_store::save(&record).expect("save");
+
+        let bridge = test_bridge();
+        let sink = CaptureSink {
+            lines: std::sync::Mutex::new(Vec::new()),
+        };
+        handle_request(
+            bridge.clone(),
+            "session/load",
+            json!({"sessionId": "lib-memory"}),
+            &sink,
+        )
+        .await
+        .expect("session/load must succeed");
+
+        let sessions = bridge.acp_sessions.lock().await;
+        let chat = sessions
+            .get("lib-memory")
+            .and_then(|s| s.chat.clone())
+            .expect("chat mode must have a live chat session after load");
+        let convo = chat.conversation.lock().await;
+        // `transient` is 0 on a freshly built conversation, so this is every message it holds.
+        let messages = convo.turn_tail(0);
+        let text: String = messages
+            .iter()
+            .map(|m| format!("{:?}:{}\n", m.role, m.content))
+            .collect();
+
+        assert!(
+            text.contains("my name is Ada"),
+            "the user's prior turn must be in the model's conversation: {text}"
+        );
+        assert!(
+            text.contains("noted, Ada"),
+            "the assistant's prior turn must be in the model's conversation: {text}"
+        );
+        assert!(
+            messages
+                .iter()
+                .any(|m| matches!(m.role, liberado_provider::Role::System)),
+            "the system prompt must survive the restore: {text}"
+        );
+    }
+
+    #[tokio::test]
+    async fn load_reloads_already_loaded_session_without_duplicate_emit() {
+        let dir = TempDir::new().unwrap();
+        let _guards = lock_sessions_dir(&dir);
+
+        let record = session_store::SessionRecord {
+            id: "lib-reload".into(),
+            mode: "coding".into(),
+            cwd: PathBuf::from("/tmp/reload"),
+            model: "mock-model".into(),
+            messages: vec![session_store::StoredMessage {
+                role: "user".into(),
+                content: "ping".into(),
+            }],
+            updated_at: session_store::new_timestamp(),
+        };
+        session_store::save(&record).expect("save");
+
+        let bridge = test_bridge();
+        let sink = CaptureSink {
+            lines: std::sync::Mutex::new(Vec::new()),
+        };
+        // First load emits messages.
+        handle_request(
+            Arc::clone(&bridge),
+            "session/load",
+            json!({"sessionId": "lib-reload"}),
+            &sink,
+        )
+        .await
+        .expect("first load");
+
+        assert_eq!(
+            sink.lines.lock().unwrap().len(),
+            1,
+            "first load emits 1 message"
+        );
+
+        let sink2 = CaptureSink {
+            lines: std::sync::Mutex::new(Vec::new()),
+        };
+        // Second load must succeed without re-emitting history for the already-loaded session.
+        let result = handle_request(
+            bridge,
+            "session/load",
+            json!({"sessionId": "lib-reload"}),
+            &sink2,
+        )
+        .await
+        .expect("second load");
+
+        assert_eq!(result["sessionId"], "lib-reload");
+        assert!(
+            sink2.lines.lock().unwrap().is_empty(),
+            "re-loading an already-loaded session must not re-emit messages"
         );
     }
 }

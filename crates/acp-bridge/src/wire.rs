@@ -133,6 +133,29 @@ pub(crate) fn emit_agent_text_chunk(
     )
 }
 
+pub(crate) fn emit_user_message_chunk(
+    sink: &dyn WireSink,
+    session_id: &str,
+    text: &str,
+) -> Result<(), String> {
+    if text.is_empty() {
+        return Ok(());
+    }
+    sink.emit(
+        "session/update",
+        json!({
+            "sessionId": session_id,
+            "update": {
+                "sessionUpdate": "user_message_chunk",
+                "content": {
+                    "type": "text",
+                    "text": text
+                }
+            }
+        }),
+    )
+}
+
 pub(crate) fn emit_tool_call(
     sink: &dyn WireSink,
     session_id: &str,
