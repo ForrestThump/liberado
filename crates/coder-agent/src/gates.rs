@@ -229,6 +229,52 @@ pub async fn resolve_attempt_changes(
     committed_files_since(workspace_root, baseline).await
 }
 
+/// Failing test identities at `baseline_sha`, when they can be learned safely and cheaply.
+///
+/// Returns an empty set when the answer is unknown. An empty set means "assume every failure is
+/// new", which is the conservative direction: it can make an agent look at a test it did not
+/// break, and it can never hide one it did.
+///
+/// **This deliberately does not run the suite at the baseline.** The obvious implementation —
+/// stash the agent's work, `git checkout` the base commit, run `cargo test`, restore — was
+/// written and rejected. It puts the agent's uncommitted work in a stash and its worktree at
+/// another commit, so any failure between those two points leaves the work stashed and the tree
+/// detached. `preflight_baseline` says the same thing in its own words: the baseline "runs in a
+/// throwaway worktree at the base commit, so the agent's tree is never touched — no stashing its
+/// work to peek underneath."
+///
+/// The throwaway-worktree approach is the right one and is already built
+/// (`liberado_coder_sandbox::compute_baseline`, cached per commit and lazy). It is **not** wired
+/// up here because it is unverified for this repository: a fresh worktree does not contain the
+/// gitignored `turbovault/` and `turbomcp/` path dependencies, so `cargo` may fail at manifest
+/// resolution before running a single test — and a baseline that fails opaquely would soften
+/// *real* failures, which is the one direction this must never fail in.
+///
+/// So: use a cached baseline if some other part of the system has already computed one, and
+/// otherwise decline to guess. Resolving the worktree question is its own task.
+pub async fn baseline_test_failures(
+    workspace_root: &str,
+    baseline_sha: &str,
+) -> Result<std::collections::BTreeSet<String>, CoderError> {
+    if baseline_sha.is_empty() {
+        return Ok(std::collections::BTreeSet::new());
+    }
+    let cache_dir = std::path::Path::new(workspace_root).join(".liberado/preflight-baselines");
+    let Some(cached) = liberado_coder_sandbox::load_baseline(&cache_dir, baseline_sha) else {
+        tracing::info!(
+            baseline = %baseline_sha,
+            "no cached baseline; treating every test failure as new"
+        );
+        return Ok(std::collections::BTreeSet::new());
+    };
+    Ok(cached
+        .values()
+        .flatten()
+        .filter(|f| *f != liberado_coder_sandbox::OPAQUE_FAILURE)
+        .cloned()
+        .collect())
+}
+
 #[cfg(test)]
 mod changed_files_tests {
     use super::changed_files;

@@ -723,13 +723,33 @@ impl LiberadoLoopBackend {
                 request.config.validation_command.as_ref(),
             );
             if !specs.is_empty() {
-                let pipeline = verify_pipeline::run_pipeline(
+                let mut pipeline = verify_pipeline::run_pipeline(
                     &effective_root,
                     &specs,
                     &request.config.verify_policy,
                     Some(&events),
                 )
                 .await?;
+                // A test failure that already existed on the base commit is not the agent's
+                // fault. When the only failing verifier is cargo-test, compare the reported
+                // failures against a fresh run of the same suite on the baseline SHA. If every
+                // failure is pre-existing, the test verifier is treated as passing — the agent
+                // did not break anything new.
+                if !pipeline.is_pass() && baseline_sha.is_some() {
+                    let baseline_failures = gates::baseline_test_failures(
+                        &effective_root,
+                        baseline_sha.as_deref().unwrap(),
+                    )
+                    .await
+                    .unwrap_or_else(|e| {
+                        tracing::warn!(
+                            error = %e,
+                            "baseline test comparison failed; treating all cargo-test failures as new"
+                        );
+                        std::collections::BTreeSet::new()
+                    });
+                    pipeline = soften_pre_existing_test_failures(&pipeline, &baseline_failures);
+                }
                 if !pipeline.is_pass() {
                     // Signature-aware feedback for repair routing (scratchpad C).
                     let feedback = repair_feedback::format_pipeline_repair(&pipeline);
@@ -857,6 +877,86 @@ impl LiberadoLoopBackend {
         };
         Ok(result)
     }
+}
+
+/// When the pipeline fails and a cargo-test verifier is among the failures, check whether every
+/// failing test already exists in `baseline_failures`. If they do, the test verifier is treated as
+/// passing — the agent did not introduce the failure.
+///
+/// `baseline_failures` must be computed externally (e.g. by running `cargo test` against the
+/// base commit); this function is the comparison step. Separated so the comparison logic is
+/// testable without a live Rust workspace.
+///
+/// Failures are parsed from the verifier's `log_excerpt` with
+/// [`liberado_coder_sandbox::failure_identities`], the same parsing the preflight gate uses, so
+/// the two cannot disagree about what counts as a test name.
+pub(crate) fn soften_pre_existing_test_failures(
+    pipeline: &liberado_coder_core::PipelineResult,
+    baseline_failures: &std::collections::BTreeSet<String>,
+) -> liberado_coder_core::PipelineResult {
+    use liberado_coder_core::{Verdict, VerdictStatus};
+    use liberado_coder_sandbox::{OPAQUE_FAILURE, failure_identities};
+
+    // Only look at cargo-test; a failed cargo-check or nonempty-diff is always the agent's fault.
+    let test_idx = pipeline
+        .results
+        .iter()
+        .position(|r| r.id == "cargo-test" && !r.verdict.is_pass());
+    let Some(idx) = test_idx else {
+        return pipeline.clone();
+    };
+
+    let current_log = pipeline.results[idx]
+        .verdict
+        .log_excerpt
+        .as_deref()
+        .unwrap_or("");
+    let current_failures: std::collections::BTreeSet<String> = failure_identities(current_log)
+        .into_iter()
+        .filter(|f| f != OPAQUE_FAILURE)
+        .collect();
+
+    if current_failures.is_empty() {
+        return pipeline.clone();
+    }
+
+    let all_pre_existing = current_failures
+        .iter()
+        .all(|f| baseline_failures.contains(f));
+    if !all_pre_existing {
+        return pipeline.clone();
+    }
+
+    tracing::info!(
+        count = current_failures.len(),
+        "all cargo-test failures are pre-existing; treating test verifier as passing"
+    );
+
+    let mut adjusted = pipeline.clone();
+    adjusted.results[idx].verdict = Verdict::pass(format!(
+        "cargo test: {} pre-existing failure(s) (not new)",
+        current_failures.len()
+    ));
+
+    // Recompute overall: still fail if any other verifier failed.
+    let new_overall = adjusted.results.iter().fold(VerdictStatus::Pass, |acc, r| {
+        if acc == VerdictStatus::Fail {
+            acc
+        } else if r.verdict.status == VerdictStatus::Fail {
+            VerdictStatus::Fail
+        } else if r.verdict.status == VerdictStatus::Error {
+            VerdictStatus::Error
+        } else {
+            acc
+        }
+    });
+    adjusted.overall = new_overall;
+    if new_overall == VerdictStatus::Pass {
+        adjusted.combined_signature = None;
+        adjusted.combined_findings.clear();
+    }
+
+    adjusted
 }
 
 /// Best-effort shadow-git snapshot of `workspace_root`, keyed by `session_key`.
@@ -2289,7 +2389,10 @@ __main__) intact.\n"
 #[cfg(test)]
 mod disposition_tests {
     use super::derive_dispositions;
-    use liberado_coder_core::Disposition;
+    use crate::soften_pre_existing_test_failures;
+    use liberado_coder_core::{
+        Disposition, Finding, FindingKind, NamedVerdict, PipelineResult, Verdict, VerdictStatus,
+    };
 
     fn raised(pairs: &[(u32, &str)]) -> Vec<(u32, String)> {
         pairs.iter().map(|(a, s)| (*a, s.to_string())).collect()
@@ -2350,5 +2453,189 @@ mod disposition_tests {
     #[test]
     fn a_run_with_no_findings_produces_none() {
         assert!(derive_dispositions(&[], &[]).is_empty());
+    }
+
+    // ── soften_pre_existing_test_failures ─────────────────────────────────
+
+    fn test_failure_log(test_names: &[&str]) -> String {
+        let mut log = String::from("running 3 tests\n");
+        for name in test_names {
+            log.push_str(&format!("test {name} ... FAILED\n"));
+        }
+        log.push_str("test result: FAILED. 0 passed; 3 failed; 0 ignored\n");
+        log
+    }
+
+    fn pipeline_with_test_verdict(
+        test_status: VerdictStatus,
+        test_log: Option<&str>,
+    ) -> PipelineResult {
+        PipelineResult {
+            overall: if test_status == VerdictStatus::Pass {
+                VerdictStatus::Pass
+            } else {
+                VerdictStatus::Fail
+            },
+            results: vec![
+                NamedVerdict {
+                    id: "nonempty-diff".into(),
+                    kind: "git_nonempty_diff".into(),
+                    verdict: Verdict::pass("non-empty diff"),
+                },
+                NamedVerdict {
+                    id: "cargo-check".into(),
+                    kind: "command".into(),
+                    verdict: Verdict::pass("cargo exited 0"),
+                },
+                NamedVerdict {
+                    id: "cargo-test".into(),
+                    kind: "command".into(),
+                    verdict: if test_status == VerdictStatus::Pass {
+                        Verdict::pass("cargo exited 0")
+                    } else {
+                        Verdict::fail(
+                            "cargo exited 101",
+                            vec![Finding {
+                                check_id: "cargo-test".into(),
+                                kind: FindingKind::CommandFailed,
+                                message: "cargo test exited 101".into(),
+                                detail: None,
+                            }],
+                            test_log.map(|s| s.to_string()),
+                        )
+                    },
+                },
+            ],
+            combined_findings: if test_status == VerdictStatus::Pass {
+                vec![]
+            } else {
+                vec![Finding {
+                    check_id: "cargo-test".into(),
+                    kind: FindingKind::CommandFailed,
+                    message: "cargo test exited 101".into(),
+                    detail: None,
+                }]
+            },
+            combined_signature: None,
+        }
+    }
+
+    fn bset(items: &[&str]) -> std::collections::BTreeSet<String> {
+        items.iter().map(|s| s.to_string()).collect()
+    }
+
+    /// A failing cargo-test verifier whose failures all exist in the baseline is softened.
+    #[test]
+    fn pre_existing_test_failures_are_treated_as_passing() {
+        let log = test_failure_log(&["foo::test_bar", "foo::test_baz"]);
+        let pipeline = pipeline_with_test_verdict(VerdictStatus::Fail, Some(&log));
+        assert!(!pipeline.is_pass(), "pipeline starts as failing");
+
+        let baseline = bset(&["foo::test_bar", "foo::test_baz"]);
+        let adjusted = soften_pre_existing_test_failures(&pipeline, &baseline);
+
+        assert!(
+            adjusted.is_pass(),
+            "all failures are pre-existing; pipeline must pass"
+        );
+        assert_eq!(
+            adjusted.results[2].verdict.status,
+            VerdictStatus::Pass,
+            "cargo-test verifier must be softened to Pass"
+        );
+    }
+
+    /// New failures that do not appear in the baseline keep the pipeline failing.
+    #[test]
+    fn new_test_failures_are_not_softened() {
+        let log = test_failure_log(&["foo::test_new_failure"]);
+        let pipeline = pipeline_with_test_verdict(VerdictStatus::Fail, Some(&log));
+        assert!(!pipeline.is_pass());
+
+        let baseline = bset(&["foo::test_old_failure"]);
+        let adjusted = soften_pre_existing_test_failures(&pipeline, &baseline);
+
+        assert!(
+            !adjusted.is_pass(),
+            "only pre-existing failures should be softened"
+        );
+        assert_eq!(
+            adjusted.results[2].verdict.status,
+            VerdictStatus::Fail,
+            "new failure must stay failing"
+        );
+    }
+
+    /// A mix where some failures are pre-existing and some are new keeps the pipeline failing.
+    #[test]
+    fn mixed_pre_existing_and_new_failures_stay_failing() {
+        let log = test_failure_log(&["foo::old", "foo::new"]);
+        let pipeline = pipeline_with_test_verdict(VerdictStatus::Fail, Some(&log));
+
+        let baseline = bset(&["foo::old"]);
+        let adjusted = soften_pre_existing_test_failures(&pipeline, &baseline);
+
+        assert!(
+            !adjusted.is_pass(),
+            "new failures with pre-existing ones must stay failing"
+        );
+    }
+
+    /// An empty log excerpt with no parseable failures leaves the pipeline unchanged.
+    #[test]
+    fn a_test_failure_with_no_parseable_test_names_is_unchanged() {
+        let pipeline =
+            pipeline_with_test_verdict(VerdictStatus::Fail, Some("error: could not compile\n"));
+        let baseline = bset(&["anything"]);
+        let adjusted = soften_pre_existing_test_failures(&pipeline, &baseline);
+        assert!(!adjusted.is_pass(), "opaque failure must not be forgiven");
+        assert_eq!(adjusted.results[2].verdict.status, VerdictStatus::Fail,);
+    }
+
+    /// A pipeline with no cargo-test verifier is a no-op.
+    #[test]
+    fn absence_of_cargo_test_verifier_is_a_noop() {
+        let pipeline = PipelineResult {
+            overall: VerdictStatus::Fail,
+            results: vec![NamedVerdict {
+                id: "cargo-check".into(),
+                kind: "command".into(),
+                verdict: Verdict::fail("failed", vec![], None),
+            }],
+            combined_findings: vec![],
+            combined_signature: None,
+        };
+        let baseline = bset(&["anything"]);
+        let adjusted = soften_pre_existing_test_failures(&pipeline, &baseline);
+        assert!(!adjusted.is_pass());
+        assert_eq!(adjusted.results.len(), 1, "pipeline must be unchanged");
+    }
+
+    /// When a non-cargo-test verifier also fails, the overall stays failing even if test failures
+    /// are all pre-existing.
+    #[test]
+    fn another_verifier_failing_keeps_overall_failing() {
+        let log = test_failure_log(&["foo::test_bar"]);
+        let mut pipeline = pipeline_with_test_verdict(VerdictStatus::Fail, Some(&log));
+        // Add a failed cargo-check too.
+        pipeline.results[1] = NamedVerdict {
+            id: "cargo-check".into(),
+            kind: "command".into(),
+            verdict: Verdict::fail("cargo check exited 1", vec![], None),
+        };
+        pipeline.overall = VerdictStatus::Fail;
+
+        let baseline = bset(&["foo::test_bar"]);
+        let adjusted = soften_pre_existing_test_failures(&pipeline, &baseline);
+
+        assert!(
+            !adjusted.is_pass(),
+            "cargo-check still fails, so overall must be Fail"
+        );
+        assert_eq!(
+            adjusted.results[2].verdict.status,
+            VerdictStatus::Pass,
+            "cargo-test was softened, but cargo-check was not"
+        );
     }
 }

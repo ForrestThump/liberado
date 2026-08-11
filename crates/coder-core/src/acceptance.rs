@@ -13,6 +13,12 @@
 //! (`preserve_work`, inherited stdin, and now this). Hence one function, in the crate both
 //! consumers already depend on, rather than a second copy.
 //!
+//! In 2026-08 another gap was discovered: `cargo check` compiles but does not run tests. An agent
+//! finished its task, ran `cargo check`, saw it pass, and reported success — seven of its thirteen
+//! new tests were failing. The verifier pipeline now also requires `cargo test` when a Rust
+//! workspace is present, so a compile-only pass is not mistaken for evidence that the work is
+//! correct.
+//!
 //! Deliberately not in `verify.rs`: that module states it avoids git and cargo so it can graduate
 //! to `liberado-common` when a second domain needs it. This one is coding-specific on purpose.
 
@@ -29,9 +35,15 @@ const CHECK_TIMEOUT_SECS: u64 = 900;
 
 /// The acceptance checks a coding run must pass when the deployment configured none.
 ///
-/// `cargo check` rather than `cargo build`: it catches the type and syntax errors these runs
-/// actually produce, at a fraction of the time and disk — and disk is finite, as a run that
-/// filled 476 GB with nine concurrent builds demonstrated.
+/// For a Rust workspace this adds three verifiers after the non-empty-diff gate:
+///
+/// 1. `cargo-check` — the compilation gate (type and syntax errors).
+/// 2. `cargo-test`  — the test gate (runtime failures). Added separately rather than replacing
+///    `cargo-check` so the faster check still fails quickly when the code does not compile, and
+///    the test gate covers the class of error — wrong logic — that compilation cannot see.
+///
+/// A workspace with no test suite produces "running 0 tests" and exits zero, so absence of tests
+/// is not evidence of failure.
 pub fn default_verifiers(workspace: &Path) -> Vec<VerifierSpec> {
     let mut specs = vec![VerifierSpec::GitNonemptyDiff {
         id: "nonempty-diff".into(),
@@ -65,6 +77,15 @@ pub fn default_verifiers(workspace: &Path) -> Vec<VerifierSpec> {
             output_max_bytes: None,
             network: false,
         });
+        specs.push(VerifierSpec::Command {
+            id: "cargo-test".into(),
+            program: "cargo".into(),
+            args: vec!["test".into(), "--workspace".into(), "--no-fail-fast".into()],
+            env: Default::default(),
+            timeout_secs: Some(CHECK_TIMEOUT_SECS),
+            output_max_bytes: None,
+            network: false,
+        });
     }
     specs
 }
@@ -88,35 +109,46 @@ mod tests {
     static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     #[test]
-    fn a_rust_workspace_must_compile_to_count_as_succeeded() {
+    fn a_rust_workspace_must_compile_and_pass_tests_to_count_as_succeeded() {
         let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         unsafe { std::env::remove_var(VERIFY_CMD_ENV) };
         let dir = tempfile::tempdir().expect("tempdir");
         std::fs::write(dir.path().join("Cargo.toml"), "[workspace]\n").expect("manifest");
 
         let specs = default_verifiers(dir.path());
+        let names = ids(&specs);
         assert!(
-            ids(&specs).contains(&"cargo-check".to_string()),
+            names.contains(&"cargo-check".to_string()),
             "a non-empty diff alone must not mean success: {:?}",
-            ids(&specs)
+            names
+        );
+        assert!(
+            names.contains(&"cargo-test".to_string()),
+            "cargo check alone must not be sufficient evidence; tests must run too: {:?}",
+            names
         );
     }
 
     #[test]
-    fn a_non_rust_workspace_gets_no_cargo_check() {
+    fn a_non_rust_workspace_gets_no_cargo_checks() {
         let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         unsafe { std::env::remove_var(VERIFY_CMD_ENV) };
         let dir = tempfile::tempdir().expect("tempdir");
 
         let specs = default_verifiers(dir.path());
+        let names = ids(&specs);
         assert!(
-            !ids(&specs).contains(&"cargo-check".to_string()),
+            !names.contains(&"cargo-check".to_string()),
             "cargo check on a directory with no Cargo.toml is a guaranteed false failure"
+        );
+        assert!(
+            !names.contains(&"cargo-test".to_string()),
+            "cargo test on a directory with no Cargo.toml is a guaranteed false failure"
         );
     }
 
     #[test]
-    fn an_explicit_command_replaces_the_default() {
+    fn an_explicit_command_replaces_the_defaults() {
         let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let dir = tempfile::tempdir().expect("tempdir");
         std::fs::write(dir.path().join("Cargo.toml"), "[workspace]\n").expect("manifest");
@@ -130,6 +162,10 @@ mod tests {
         assert!(
             !names.contains(&"cargo-check".to_string()),
             "an explicit command must replace the default, not run alongside it: {names:?}"
+        );
+        assert!(
+            !names.contains(&"cargo-test".to_string()),
+            "an explicit command must replace the cargo-test default too: {names:?}"
         );
     }
 }
