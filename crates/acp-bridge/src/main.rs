@@ -615,6 +615,7 @@ async fn handle_request(
                     Arc::clone(&bridge.provider),
                     bridge.max_turns,
                     bridge.system_prompt.clone(),
+                    &[],
                 )
                 .ok()
                 .map(Arc::new)
@@ -716,6 +717,9 @@ async fn handle_request(
                     Arc::clone(&bridge.provider),
                     bridge.max_turns,
                     bridge.system_prompt.clone(),
+                    // The one call site where history is not empty. Everything else about a load
+                    // is cosmetic if this argument is.
+                    &record.messages,
                 )
                 .ok()
                 .map(Arc::new)
@@ -796,6 +800,7 @@ async fn handle_request(
                         Arc::clone(&bridge.provider),
                         bridge.max_turns,
                         bridge.system_prompt.clone(),
+                        &[],
                     )
                     .ok()
                     .map(Arc::new);
@@ -1208,6 +1213,7 @@ async fn run_chat_prompt(
                 Arc::clone(&bridge.provider),
                 bridge.max_turns,
                 bridge.system_prompt.clone(),
+                &[],
             )
             .ok()
             .map(Arc::new);
@@ -1267,12 +1273,20 @@ async fn run_face_prompt(
 }
 
 /// Pure chat session: conversation + executor, no coding tools.
+/// Open a chat session, optionally seeded with a stored transcript.
+///
+/// `history` is what makes a resume a resume. Replaying the transcript to the *client* only
+/// repaints the editor; if the conversation the model sees starts empty, the user is looking at
+/// their own history while the agent has none of it. That is the exact failure `loadSession:
+/// false` was chosen to avoid — and it is worse once the flag says `true`, because the interface
+/// now claims the memory is there.
 fn open_chat_session(
     session_id: &str,
     cwd: PathBuf,
     provider: Arc<dyn Provider>,
     max_turns: u32,
     system_prompt: Option<String>,
+    history: &[session_store::StoredMessage],
 ) -> Result<SessionHandle, String> {
     let system = system_prompt.unwrap_or_else(|| {
         format!(
@@ -1286,7 +1300,22 @@ fn open_chat_session(
     let (cancel_tx, cancel_rx) = watch::channel(false);
     Ok(SessionHandle {
         id: session_id.to_string(),
-        conversation: Mutex::new(Conversation::new(system)),
+        conversation: Mutex::new(if history.is_empty() {
+            Conversation::new(system)
+        } else {
+            // System prompt first, then the stored turns in order. A role the store does not
+            // recognise is dropped rather than guessed at: inventing a speaker is how a resumed
+            // conversation starts arguing with itself.
+            let mut messages = vec![liberado_provider::Message::system(system)];
+            for m in history {
+                match m.role.as_str() {
+                    "user" => messages.push(liberado_provider::Message::user(&m.content)),
+                    "assistant" => messages.push(liberado_provider::Message::assistant(&m.content)),
+                    _ => {}
+                }
+            }
+            Conversation::from_history(messages)
+        }),
         // Chat uses executor budget = max_turns (not the hardcoded default of 8).
         executor: Executor::new(provider, Budget::new(max_turns)),
         tools: Arc::new(NoTools),
@@ -2084,6 +2113,81 @@ mod tests {
             "fourth message must be assistant"
         );
         assert_eq!(updates[3].1["update"]["content"]["text"], "answer");
+    }
+
+    /// A resume the *model* can see, not just the editor.
+    ///
+    /// Replaying the transcript to the client repaints the UI. If the conversation behind it starts
+    /// empty, the user reads their own history while the agent has none of it — the precise failure
+    /// `loadSession: false` existed to prevent, and worse once the flag says `true`, because the
+    /// interface now asserts the memory is there.
+    ///
+    /// This is the requirement the original implementation skipped, and it skipped the test with
+    /// it: five tests covered the replay and none covered the restore, so everything looked green.
+    #[tokio::test]
+    async fn load_restores_history_into_the_conversation_not_only_the_client() {
+        let dir = TempDir::new().unwrap();
+        let _guards = lock_sessions_dir(&dir);
+
+        let record = session_store::SessionRecord {
+            id: "lib-memory".into(),
+            mode: "chat".into(),
+            cwd: PathBuf::from("/tmp/memory"),
+            model: "mock-model".into(),
+            messages: vec![
+                session_store::StoredMessage {
+                    role: "user".into(),
+                    content: "my name is Ada".into(),
+                },
+                session_store::StoredMessage {
+                    role: "assistant".into(),
+                    content: "noted, Ada".into(),
+                },
+            ],
+            updated_at: session_store::new_timestamp(),
+        };
+        session_store::save(&record).expect("save");
+
+        let bridge = test_bridge();
+        let sink = CaptureSink {
+            lines: std::sync::Mutex::new(Vec::new()),
+        };
+        handle_request(
+            bridge.clone(),
+            "session/load",
+            json!({"sessionId": "lib-memory"}),
+            &sink,
+        )
+        .await
+        .expect("session/load must succeed");
+
+        let sessions = bridge.acp_sessions.lock().await;
+        let chat = sessions
+            .get("lib-memory")
+            .and_then(|s| s.chat.clone())
+            .expect("chat mode must have a live chat session after load");
+        let convo = chat.conversation.lock().await;
+        // `transient` is 0 on a freshly built conversation, so this is every message it holds.
+        let messages = convo.turn_tail(0);
+        let text: String = messages
+            .iter()
+            .map(|m| format!("{:?}:{}\n", m.role, m.content))
+            .collect();
+
+        assert!(
+            text.contains("my name is Ada"),
+            "the user's prior turn must be in the model's conversation: {text}"
+        );
+        assert!(
+            text.contains("noted, Ada"),
+            "the assistant's prior turn must be in the model's conversation: {text}"
+        );
+        assert!(
+            messages
+                .iter()
+                .any(|m| matches!(m.role, liberado_provider::Role::System)),
+            "the system prompt must survive the restore: {text}"
+        );
     }
 
     #[tokio::test]
