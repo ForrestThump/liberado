@@ -6,6 +6,7 @@
 //! `docs/architecture/agentic-loops.md` and `docs/roadmap/agentic-mesh-hygiene-audit-2026-07-10.md`.
 
 pub mod assemble;
+pub mod cold_review;
 mod completion_gate;
 mod critic;
 mod fanout;
@@ -28,6 +29,12 @@ pub use assemble::{
     ProductionSurface, RepairPolicy, TraceDirPolicy, assemble_production_run,
 };
 
+pub use cold_review::{
+    ChangeSurface, ColdFinding, ColdReviewRequest, DropReason, FilterResult,
+    ForbiddenAuthorContext, MAX_FIX_ROUNDS, ReadyInputs, Severity, StageDecision,
+    build_cold_review_request, cold_pr_reviewer_prompt, decide_after_filter,
+    decide_after_fix_round, filter_findings, fix_round_task, ready_for_human,
+};
 pub use fanout::{
     ChildOutcome, CodingSubtask, DEFAULT_MAX_CONCURRENT_CODING_SUBAGENTS, FanoutReport, MergeStep,
     child_session_grant, run_coding_fanout, run_coding_fanout_via_hub, subtasks_from_payload,

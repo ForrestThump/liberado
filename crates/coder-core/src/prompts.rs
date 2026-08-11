@@ -33,8 +33,10 @@ use std::path::{Path, PathBuf};
 
 /// The coding worker's instructions.
 pub const CODER: &str = include_str!("../../../prompts/coder/coder.md");
-/// The cold reviewer that sees the diff and nothing else.
+/// The cold reviewer that sees the diff and nothing else (completion-gate / attempt critic).
 pub const DIFF_REVIEWER: &str = include_str!("../../../prompts/coder/diff-reviewer.md");
+/// Product cold-PR stage (backlog 0.8): severity findings with code citations; no author context.
+pub const COLD_PR_REVIEWER: &str = include_str!("../../../prompts/coder/cold-pr-reviewer.md");
 /// The reviewer that reads a finished run's own narration.
 pub const SESSION_CRITIC: &str = include_str!("../../../prompts/coder/session-critic.md");
 /// The coding worker as the daemon session pack configures it, with self-host git rules.
@@ -48,6 +50,7 @@ pub const PROMPT_DIR: &str = "prompts/coder";
 /// File name for each prompt, so the on-disk copy and the baked copy stay paired.
 pub const CODER_FILE: &str = "coder.md";
 pub const DIFF_REVIEWER_FILE: &str = "diff-reviewer.md";
+pub const COLD_PR_REVIEWER_FILE: &str = "cold-pr-reviewer.md";
 pub const SESSION_CRITIC_FILE: &str = "session-critic.md";
 pub const SESSION_PACK_CODER_FILE: &str = "session-pack-coder.md";
 pub const INTAKE_FILE: &str = "intake.md";
@@ -123,6 +126,7 @@ mod tests {
         for (name, text) in [
             ("coder", CODER),
             ("diff-reviewer", DIFF_REVIEWER),
+            ("cold-pr-reviewer", COLD_PR_REVIEWER),
             ("session-critic", SESSION_CRITIC),
             ("session-pack-coder", SESSION_PACK_CODER),
             ("intake", INTAKE),
@@ -146,6 +150,7 @@ mod tests {
         for file in [
             CODER_FILE,
             DIFF_REVIEWER_FILE,
+            COLD_PR_REVIEWER_FILE,
             SESSION_CRITIC_FILE,
             SESSION_PACK_CODER_FILE,
             INTAKE_FILE,
