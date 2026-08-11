@@ -1386,15 +1386,13 @@ mod preserve_work_tests {
             production.contains("run_or_preserve("),
             "headless path must call run_or_preserve so a catchable signal preserves work"
         );
-        // A bare function *definition* is not enough — the headless path must *call* it.
-        let call_site = production_lines.iter().any(|l| {
-            let t = l.trim();
-            t.contains("wait_for_termination_signal()")
-                && !t.starts_with("async fn")
-                && !t.starts_with("fn ")
-        });
+        let run_call = production
+            .split_once("let result = match run_or_preserve(")
+            .and_then(|(_, tail)| tail.split_once(")\n    .await"))
+            .map(|(call, _)| call)
+            .expect("production headless path must await run_or_preserve");
         assert!(
-            call_site,
+            run_call.contains("wait_for_termination_signal()"),
             "headless path must pass wait_for_termination_signal() into run_or_preserve"
         );
         assert!(
@@ -1402,8 +1400,12 @@ mod preserve_work_tests {
             "task id for preserve branches must be derived, not a constant"
         );
         assert!(
-            production.contains("&task_id"),
-            "preserve_work / run_or_preserve must receive the derived task_id"
+            run_call.contains("&task_id"),
+            "run_or_preserve must receive the derived task_id"
+        );
+        assert!(
+            production.contains("preserve_work(&workspace, &task_id, push_enabled())"),
+            "post-run preserve_work must receive the derived task_id"
         );
     }
 
