@@ -214,6 +214,11 @@ telemetry package does exactly this and it is the right pattern.
 can rebuild messages, system text, ordered tool definitions and sampling params for any turn from
 the log alone. They do **not** emit production logs — emission is a separate backlog item.
 
+**End-to-end conformance plan:** producer-driven integration tests (mock provider, multi-harness
+oracle over on-disk JSONL, all eight Conformance rules) are specified in
+[`docs/future-work/mvl-e2e-integration-test-plan.md`](../../future-work/mvl-e2e-integration-test-plan.md).
+That plan is implementation guidance, not part of this normative contract.
+
 ### Reconstruction checklist (normative for fixtures)
 
 For any turn `N` present in the log, a conforming reader must recover:

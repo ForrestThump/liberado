@@ -62,6 +62,7 @@ Authority model: [doc-authority.md](spec/reference/doc-authority.md).
 | [docs/future-work/mcp-forge-backlog.md](future-work/mcp-forge-backlog.md) | plan | active | implementation | mcp | mcp-forge-backlog |
 | [docs/future-work/mcp-suite-standardization.md](future-work/mcp-suite-standardization.md) | plan | active | implementation | mcp | mcp-suite-standardization |
 | [docs/future-work/model-knob-profiles.md](future-work/model-knob-profiles.md) | plan | draft | advisory | tuning | model-knob-profiles |
+| [docs/future-work/mvl-e2e-integration-test-plan.md](future-work/mvl-e2e-integration-test-plan.md) | plan | active | implementation | coding-harness | mvl-e2e-integration-test |
 | [docs/future-work/parallel-deliverables-2026-08-round-3.md](future-work/parallel-deliverables-2026-08-round-3.md) | plan | active | implementation | process | parallel-deliverables-r3 |
 | [docs/future-work/paseo-liberado-integration-roadmap.md](future-work/paseo-liberado-integration-roadmap.md) | plan | active | implementation | acp | paseo-liberado-integration |
 | [docs/future-work/pr-dispatch-vtcode-no-write-finding.md](future-work/pr-dispatch-vtcode-no-write-finding.md) | finding | active | evidence | coding-harness | vtcode-no-write |
