@@ -11,11 +11,13 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use liberado_coder_agent::assemble_production_run;
-use liberado_coder_agent::{CoderProviderFactory, LiberadoLoopBackend, SingleProviderFactory};
-use liberado_coder_core::{CoderBackend, CoderTask, CoderTuning};
+use liberado_coder_agent::{CoderProviderFactory, LiberadoLoopBackend};
+use liberado_coder_core::{CoderBackend, CoderRoleConfig, CoderTask, CoderTuning};
 use liberado_coder_sandbox::ensure_session_worktree;
 use liberado_coder_tools::coding_worktrees_base;
-use liberado_provider::Provider;
+use liberado_provider::{
+    CompletionRequest, CompletionResponse, CompletionStream, Provider, ProviderResult,
+};
 use serde_json::json;
 
 /// Per-ACP-session memory of prior coding rounds (for repair-style feedback continuity).
@@ -643,11 +645,65 @@ fn workspace_env(tuning: &CoderTuning) -> std::collections::BTreeMap<String, Str
     env
 }
 
-/// Factory that honours per-role model ids via `set_model` on a clone... actually
-/// [`SingleProviderFactory`] shares one provider. Prefer it when one model is enough;
-/// for multi-model, the bridge should install a factory that builds providers per model.
-pub fn single_factory(provider: Arc<dyn Provider>) -> Arc<dyn CoderProviderFactory> {
-    Arc::new(SingleProviderFactory::new(provider))
+/// A per-role view of one connection profile.
+///
+/// ACP selects the provider profile once for a session. The coding pack then selects the model
+/// for each role. Binding the model to the request keeps the provider credentials and endpoint
+/// shared while making the model sent on the wire match the role recorded in the trace. The wrapper
+/// also preserves streaming; a coding turn must not degrade to a buffered response.
+#[derive(Clone)]
+struct RoleBoundProvider {
+    inner: Arc<dyn Provider>,
+    model: String,
+}
+
+#[async_trait::async_trait]
+impl Provider for RoleBoundProvider {
+    fn model(&self) -> String {
+        self.model.clone()
+    }
+
+    async fn complete(&self, request: CompletionRequest) -> ProviderResult<CompletionResponse> {
+        self.inner
+            .complete(request.with_model(Some(self.model.clone())))
+            .await
+    }
+
+    async fn complete_stream(
+        &self,
+        request: CompletionRequest,
+    ) -> ProviderResult<CompletionStream> {
+        self.inner
+            .complete_stream(request.with_model(Some(self.model.clone())))
+            .await
+    }
+
+    async fn list_models(&self) -> ProviderResult<Vec<String>> {
+        self.inner.list_models().await
+    }
+}
+
+#[derive(Clone)]
+struct RoleProviderFactory {
+    provider: Arc<dyn Provider>,
+}
+
+impl CoderProviderFactory for RoleProviderFactory {
+    fn provider_for(
+        &self,
+        _role: &str,
+        config: &CoderRoleConfig,
+    ) -> Result<Arc<dyn Provider>, liberado_coder_core::CoderError> {
+        Ok(Arc::new(RoleBoundProvider {
+            inner: Arc::clone(&self.provider),
+            model: config.model.clone(),
+        }))
+    }
+}
+
+/// Build providers that share the ACP connection profile but honour each coding role's model.
+pub fn role_factory(provider: Arc<dyn Provider>) -> Arc<dyn CoderProviderFactory> {
+    Arc::new(RoleProviderFactory { provider })
 }
 
 /// Payload fragment for logging / diagnostics (not a GoalSpec — ACP owns the wire session).
@@ -660,7 +716,7 @@ pub fn workspace_payload(cwd: &Path) -> serde_json::Value {
 mod reviewer_role_tests {
     use super::*;
     use liberado_coder_agent::assemble::entry;
-    use liberado_coder_core::CoderRoleConfig;
+    use liberado_provider::{CompletionResponse, Message, MockProvider};
 
     fn tuning_with_critic(model: &str) -> CoderTuning {
         CoderTuning {
@@ -704,6 +760,32 @@ mod reviewer_role_tests {
         assert_eq!(
             role.model, "deepseek-v4-flash",
             "the configured critic model must win over the session's"
+        );
+    }
+
+    /// The trace is only useful when its role model is the id on the wire. ACP used one mutable
+    /// provider for the whole run, so the critic label said flash while the request still named
+    /// the session's pro model.
+    #[tokio::test]
+    async fn the_role_provider_sends_the_configured_model() {
+        let inner = Arc::new(MockProvider::with_script(
+            "session-model",
+            [CompletionResponse::text("ok")],
+        ));
+        let factory = role_factory(Arc::clone(&inner) as Arc<dyn Provider>);
+        let critic = tuning_with_critic("critic-model").critic;
+        let provider = factory.provider_for("critic", &critic).unwrap();
+
+        provider
+            .complete(CompletionRequest::new(vec![Message::user("review")]))
+            .await
+            .unwrap();
+
+        assert_eq!(provider.model(), "critic-model");
+        assert_eq!(
+            inner.last_request().and_then(|request| request.model),
+            Some("critic-model".to_string()),
+            "the configured role model must override the session provider model on the wire"
         );
     }
 

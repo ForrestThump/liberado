@@ -1005,7 +1005,7 @@ async fn run_coding_prompt(
     };
 
     let model = bridge.current_model.lock().await.clone();
-    let factory = coding_run::single_factory(Arc::clone(&bridge.provider));
+    let factory = coding_run::role_factory(Arc::clone(&bridge.provider));
 
     emit_agent_text_chunk(
         sink,

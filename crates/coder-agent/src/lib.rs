@@ -1050,7 +1050,7 @@ mod tests {
         CoderRoleConfig, CoderRunConfig, CoderTask, CoderTrace, CommandPolicy, PathPolicy,
         ProgressPolicy, SandboxSpec, WorkspaceRef,
     };
-    use liberado_provider::{CompletionResponse, MockProvider, ToolInvocation};
+    use liberado_provider::{CompletionResponse, MockProvider, ProviderError, ToolInvocation};
     use serde_json::json;
 
     /// Retrying a full disk reproduces the full disk. The budget is better spent saying so.
@@ -1908,6 +1908,44 @@ mod tests {
             result.summary.contains("abstained"),
             "the abstention must be visible in the summary: {}",
             result.summary
+        );
+    }
+
+    /// Some OpenRouter routes reject `json_schema` even though they accept `json_object`. The
+    /// critic must retry without the shape constraint, then keep the completed run and its verdict.
+    #[tokio::test]
+    async fn a_schema_rejecting_critic_falls_back_to_plain_json() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path());
+        let provider = Arc::new(MockProvider::with_script("mock", write_then_report()));
+        provider.push_error(ProviderError::InvalidRequest(
+            "This response_format type is unavailable now".to_string(),
+        ));
+        provider.push(CompletionResponse::text(r#"{"quality":"acceptable"}"#));
+        let backend = LiberadoLoopBackend::new(Arc::clone(&provider) as Arc<dyn Provider>);
+        let mut request = request(dir.path(), "HEAD");
+        request.config.critic.prompt = Some("Review the diff strictly.".to_string());
+
+        let result = backend
+            .run(request)
+            .await
+            .expect("a critic format fallback must not discard a completed run");
+        assert_eq!(result.outcome, Outcome::Succeeded);
+        assert_eq!(result.critic_verdict, Some(CriticVerdict::Acceptable));
+
+        let requests = provider.received_requests();
+        assert_eq!(
+            requests.len(),
+            4,
+            "two coder turns plus two critic attempts"
+        );
+        assert!(
+            requests[2].has_json_schema(),
+            "first critic request keeps the schema"
+        );
+        assert!(
+            !requests[3].has_json_schema(),
+            "fallback must request plain JSON after a schema rejection"
         );
     }
 

@@ -3,7 +3,7 @@
 
 use chrono::Utc;
 use liberado_coder_core::{CoderError, CoderEvent, CoderRunRequest, CriticVerdict};
-use liberado_provider::{CompletionRequest, Message};
+use liberado_provider::{CompletionRequest, Message, complete_json};
 use serde_json::json;
 
 use crate::CoderProviderFactory;
@@ -75,10 +75,16 @@ pub async fn run_critic(
         "required": ["quality"]
     });
 
-    let response = provider
-        .complete(completion.with_json_schema(schema))
-        .await
-        .map_err(|e| CoderError::Provider(e.to_string()))?;
+    // A critic is advisory after deterministic checks pass. A provider failure, including a
+    // backend that rejects `json_schema` after the helper's plain-JSON retry is an abstention.
+    let verdict: CriticVerdict = match complete_json(provider.as_ref(), completion, schema).await {
+        Ok(verdict) => verdict,
+        Err(e) => {
+            tracing::warn!(error = %e, "critic structured completion failed; abstaining");
+            return Ok(None);
+        }
+    };
+
     // A reviewer that fails to answer has not judged the change.
     //
     // This returned `Err` and destroyed two completed runs: the work was done, the deterministic
@@ -90,18 +96,6 @@ pub async fn run_critic(
     // Abstention is `None`, never `Acceptable`. Silently approving would fabricate a review that
     // nobody performed, which is worse than the bug being fixed: a discarded run is visibly wrong,
     // an invented approval is not.
-    let Some(content) = response.content.as_deref().filter(|c| !c.trim().is_empty()) else {
-        tracing::warn!("critic returned empty content; abstaining");
-        return Ok(None);
-    };
-    let verdict = match parse_critic_verdict(content) {
-        Ok(v) => v,
-        Err(e) => {
-            tracing::warn!(error = %e, "critic verdict did not parse; abstaining");
-            return Ok(None);
-        }
-    };
-
     trace::push_event(
         events,
         CoderEvent::RoleFinished {
