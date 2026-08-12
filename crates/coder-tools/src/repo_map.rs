@@ -759,7 +759,9 @@ mod tests {
 
     #[test]
     fn test_detect_lang_unknown() {
-        assert!(detect_lang("docs/readme.md").is_none());
+        // Use a non-docs/ path: docs_meta check-stale-rs scans crates for
+        // docs/**/*.md strings and requires the target to exist with exact case.
+        assert!(detect_lang("notes/readme.md").is_none());
     }
 
     #[test]

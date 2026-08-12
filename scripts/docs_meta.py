@@ -513,6 +513,29 @@ def load_docs_from_tree(root: Path) -> list[DocRecord]:
     return docs
 
 
+def path_exists_exact_case(root: Path, rel: str) -> bool:
+    """True only if every path component matches on-disk casing (Linux-CI parity).
+
+    On Windows, Path.is_file() is case-insensitive, so docs/readme.md would pass
+    when only docs/README.md exists. Walk with exact name matches instead.
+    """
+    rel = rel.replace("\\", "/").strip("/")
+    if not rel:
+        return False
+    current = root
+    for part in rel.split("/"):
+        if not current.is_dir():
+            return False
+        try:
+            names = {child.name for child in current.iterdir()}
+        except OSError:
+            return False
+        if part not in names:
+            return False
+        current = current / part
+    return current.is_file()
+
+
 def scan_stale_rs_paths(root: Path) -> list[tuple[str, int, str]]:
     """Find obsolete prefixes and docs/*.md references that do not resolve on disk."""
     hits: list[tuple[str, int, str]] = []
@@ -531,7 +554,7 @@ def scan_stale_rs_paths(root: Path) -> list[tuple[str, int, str]]:
                     hits.append((rel_rs, i, f"obsolete prefix {prefix}: {line.strip()}"))
             for m in DOCS_MD_REF_RE.finditer(line):
                 doc_rel = m.group(1)
-                if not (root / doc_rel).is_file():
+                if not path_exists_exact_case(root, doc_rel):
                     hits.append(
                         (
                             rel_rs,
@@ -577,10 +600,11 @@ def resolve_docs_md_path(
     """Return a path that exists for doc_rel, or None if unresolvable.
 
     Tries the path as written, known layout migrations, then basename lookup
-    under docs/ (preferring non-archive paths).
+    under docs/ (preferring non-archive paths). Existence uses exact-case
+    matching so Windows repair cannot accept Linux-invalid casing.
     """
     doc_rel = doc_rel.replace("\\", "/")
-    if (root / doc_rel).is_file():
+    if path_exists_exact_case(root, doc_rel):
         return doc_rel
 
     # Known layout migrations (prefix rewrites that keep the tail).
@@ -594,7 +618,7 @@ def resolve_docs_md_path(
     for old, new in prefix_migrations:
         if doc_rel.startswith(old):
             candidate = new + doc_rel[len(old) :]
-            if (root / candidate).is_file():
+            if path_exists_exact_case(root, candidate):
                 return candidate
 
     # liberado-*.md under docs/specs/ often dropped the liberado- prefix.
@@ -602,32 +626,33 @@ def resolve_docs_md_path(
     if doc_rel.startswith("docs/specs/") or doc_rel.startswith("docs/spec/"):
         if base.startswith("liberado-"):
             stripped = "docs/spec/" + base[len("liberado-") :]
-            if (root / stripped).is_file():
+            if path_exists_exact_case(root, stripped):
                 return stripped
 
     amap = archive_map if archive_map is not None else _archive_basename_map(root)
-    if base in amap and (root / amap[base]).is_file():
+    if base in amap and path_exists_exact_case(root, amap[base]):
         return amap[base]
 
     # After docs/roadmap/X → docs/future-work/X, recover archive.
     if doc_rel.startswith("docs/future-work/") and "/archive/" not in doc_rel:
         candidate = f"docs/future-work/archive/{base}"
-        if (root / candidate).is_file():
+        if path_exists_exact_case(root, candidate):
             return candidate
     if doc_rel.startswith("docs/future-work/ideas/") and "/archive/" not in doc_rel:
         candidate = f"docs/future-work/ideas/archive/{base}"
-        if (root / candidate).is_file():
+        if path_exists_exact_case(root, candidate):
             return candidate
 
     bmap = basename_map if basename_map is not None else _basename_docs_map(root)
     candidates = bmap.get(base, [])
-    if candidates:
-        return candidates[0]
+    for cand in candidates:
+        if path_exists_exact_case(root, cand):
+            return cand
     # liberado-foo.md → foo.md basename fallback
     if base.startswith("liberado-"):
-        alt = bmap.get(base[len("liberado-") :], [])
-        if alt:
-            return alt[0]
+        for cand in bmap.get(base[len("liberado-") :], []):
+            if path_exists_exact_case(root, cand):
+                return cand
     return None
 
 
@@ -1322,6 +1347,28 @@ def cmd_self_test() -> int:
         check(
             "scan reports missing docs path under crates",
             any("missing docs path" in h[2] for h in hits),
+        )
+
+        # Case-sensitive existence: wrong-case basename must fail even if
+        # Path.is_file would succeed on Windows.
+        wrong_case = "docs/spec/reference/API.md"
+        check(
+            "exact-case rejects wrong-case basename",
+            not path_exists_exact_case(tmp_root, wrong_case),
+        )
+        check(
+            "exact-case accepts correct-case path",
+            path_exists_exact_case(tmp_root, "docs/spec/reference/api.md"),
+        )
+        # Fixture that previously green-passed on Windows: docs/readme.md vs README.md
+        (tmp_root / "docs" / "README.md").write_text("# root\n", encoding="utf-8")
+        check(
+            "exact-case rejects docs/readme.md when only README.md exists",
+            not path_exists_exact_case(tmp_root, "docs/readme.md"),
+        )
+        check(
+            "exact-case accepts docs/README.md",
+            path_exists_exact_case(tmp_root, "docs/README.md"),
         )
 
     if failures:
