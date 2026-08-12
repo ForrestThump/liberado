@@ -1,7 +1,7 @@
 //! # liberado-config-loader
 //!
 //! A config-loading foundation: [`ConfigSource`] trait and [`ChainLoader`] that merges multiple
-//! sources in precedence order (see `docs/specs/liberado-config-spec.md`), plus the typed
+//! sources in precedence order (see `docs/spec/config-spec.md`), plus the typed
 //! [`model`] the whole system configures itself with.
 //!
 //! The trait is generic — any source of TOML content (file, env var, compiled-in default)
@@ -14,7 +14,7 @@
 //! `liberado-config` already depends on this crate — putting the model in `liberado-config`
 //! instead would create a cycle. `liberado-config` re-exports everything in [`model`], so external
 //! consumers still reach it as `liberado_config::Config` et al. (moved from `liberado-common`
-//! 2026-07-04, `docs/roadmap/hygiene-audit-2026-07-04.md`).
+//! 2026-07-04, `docs/future-work/archive/hygiene-audit-2026-07-04.md`).
 //!
 //! ## Usage
 //!

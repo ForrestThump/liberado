@@ -1,3 +1,12 @@
+---
+kind: plan
+status: active
+authority: implementation
+domain: tui
+canonical_for: tui-maturity
+open_items: true
+---
+
 # Liberado TUI — Maturity Audit & Revamped Roadmap
 
 **Status**: audit 2026-07-10 · living roadmap  

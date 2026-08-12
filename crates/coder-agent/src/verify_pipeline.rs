@@ -1,6 +1,6 @@
 //! Coding-pack verifier pipeline: structural + command + git checks on a real workspace.
 //!
-//! Implements the harness half of `docs/architecture/verifiers.md`. Specs are DTOs from
+//! Implements the harness half of `docs/spec/architecture/verifiers.md`. Specs are DTOs from
 //! `liberado-coder-core`; this module executes them and never trusts the model report alone.
 
 use std::path::{Path, PathBuf};

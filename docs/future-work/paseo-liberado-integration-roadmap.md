@@ -1,3 +1,12 @@
+---
+kind: plan
+status: active
+authority: implementation
+domain: acp
+canonical_for: paseo-liberado-integration
+open_items: true
+---
+
 # Paseo ↔ Liberado integration — ordered gap plan
 
 **Status:** Living plan (2026-08-09). Core ACP path **shipped** on
@@ -11,7 +20,7 @@ reliably usable through the [ForrestThump/paseo](https://github.com/ForrestThump
 **Related:**
 
 - Dogfood / install: [`../impl/paseo-integration.md`](../impl/paseo-integration.md)
-- Prior residual list (folded into this plan): [`acp-bridge-completion-roadmap.md`](acp-bridge-completion-roadmap.md)
+- Prior residual list (folded into this plan): [`acp-bridge-completion-roadmap.md`](archive/acp-bridge-completion-roadmap.md)
 - Install script: `scripts/install-paseo-liberado.ps1`
 - Config example: `config.example/paseo-liberado.json`
 - Bridge source: `crates/acp-bridge/`

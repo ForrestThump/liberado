@@ -1,3 +1,14 @@
+---
+kind: plan
+status: implemented
+authority: advisory
+domain: process
+canonical_for: parallel-deliverables-r2
+open_items: false
+---
+
+> **Archived.** This plan is not current truth. Open work lives in [backlog.md](../backlog.md) and [roadmap.md](../../roadmap.md). See [doc-authority.md](../../spec/reference/doc-authority.md).
+
 # Five parallel deliverables — round 2
 
 **Written** 2026-08-02, for execution by a separate agent against `main`.
@@ -5,7 +16,7 @@
 **Predecessor**: [`parallel-deliverables-2026-08.md`](parallel-deliverables-2026-08.md) — all five landed
 as PRs #28–#32. Read the lessons below before reading the specs; they are the most useful thing here.
 
-Read [`failure-modes.md`](../spec/architecture/failure-modes.md) first. §1 (*a check that cannot fail
+Read [`failure-modes.md`](../../spec/architecture/failure-modes.md) first. §1 (*a check that cannot fail
 is not a check*) and §6 (*two things that should agree, and nothing checks that they do*) still govern
 every item.
 
@@ -97,12 +108,12 @@ growing 930 → 29,904 prompt tokens turn over turn — a real chat whose entire
 per-conversation rollup that #28 exists to provide.
 
 **Root cause, already found — do not re-diagnose it.** `ChatSessions::spawn_turn` wraps its work in
-`with_correlation(session)` ([`sessions.rs:1176`](../../crates/main-agent/src/sessions.rs#L1176)).
-`ChatSessions::turn` ([`sessions.rs:723`](../../crates/main-agent/src/sessions.rs#L723)) — the
+`with_correlation(session)` ([`sessions.rs:1176`](../../../crates/main-agent/src/sessions.rs#L1176)).
+`ChatSessions::turn` ([`sessions.rs:723`](../../../crates/main-agent/src/sessions.rs#L723)) — the
 non-streaming path — does not. Its two production callers are:
 
-- `POST /api/chat` ([`api/chat.rs:462`](../../crates/server/src/api/chat.rs#L462))
-- the Telegram bridge ([`telegram.rs:57`](../../crates/server/src/telegram.rs#L57))
+- `POST /api/chat` ([`api/chat.rs:462`](../../../crates/server/src/api/chat.rs#L462))
+- the Telegram bridge ([`telegram.rs:57`](../../../crates/server/src/telegram.rs#L57))
 
 So **every Telegram turn and every non-streaming HTTP turn is unattributed**. That is the bulk of it.
 
@@ -178,7 +189,7 @@ that is a different PR by the ownership rule above.
 
 **Landmine.** Do not add a second journal, and do not write money into the existing one. Pricing stays
 a read-time operation — that decision is load-bearing for historical comparison and is already
-documented in [`token-cost-accounting-plan.md`](token-cost-accounting-plan.md).
+documented in [`token-cost-accounting-plan.md`](../token-cost-accounting-plan.md).
 
 ---
 
@@ -188,7 +199,7 @@ documented in [`token-cost-accounting-plan.md`](token-cost-accounting-plan.md).
 TUI got stop/scope/reattach in #30; Telegram got nothing.
 
 **The headline bug is that `/model` lies, and round 1 is what made it a lie.**
-[`telegram.rs:153`](../../crates/server/src/telegram.rs#L153) calls `provider.set_model(...)` — the
+[`telegram.rs:153`](../../../crates/server/src/telegram.rs#L153) calls `provider.set_model(...)` — the
 **process-wide** default — and replies `"Model switched: X → Y"`. But since per-conversation models
 landed, `resolve_turn_model`'s precedence is *pending pick → profile model → what this conversation
 last ran on*. The sticky Telegram conversation has history, so it resolves via `model_last_used` and
@@ -272,7 +283,7 @@ has ever sent SIGTERM to the deployed daemon mid-turn**. Tier 3 exists precisely
 tests could not see the defects that mattered, and this is the newest unexercised guarantee in the
 system. P6 (durable turn outlives its connection) landed in #31 and is the template.
 
-Spec and envelope: [`live-conformance-tier3-build-spec.md`](live-conformance-tier3-build-spec.md).
+Spec and envelope: [`live-conformance-tier3-build-spec.md`](../live-conformance-tier3-build-spec.md).
 
 **New path P7 — a turn survives, or is honestly reported, across a restart.**
 

@@ -6,7 +6,7 @@
 //! [`SessionEvent`] streams, and cancel — they never own tools, sandbox, or the loop.
 //! Domain packs implement [`DomainPackRunner`] (coding, life-ops demo, …).
 //!
-//! See `docs/architecture/agentic-loops.md` and `docs/architecture/modularity.md`.
+//! See `docs/spec/architecture/agentic-loops.md` and `docs/spec/architecture/modularity.md`.
 
 mod completion_gate;
 mod event;

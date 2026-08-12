@@ -1,4 +1,4 @@
-//! The completion gate over the real coding backend (S1 proof, `docs/roadmap/coding-tui-plan.md`).
+//! The completion gate over the real coding backend (S1 proof, `docs/future-work/coding-tui-plan.md`).
 //!
 //! `completion_gate.rs`'s unit tests prove the kernel's quorum math in isolation. These prove the
 //! part that isolation cannot: that the gate is actually *wired into the pipeline* — that a refusing

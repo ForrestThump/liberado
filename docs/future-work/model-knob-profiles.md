@@ -1,3 +1,12 @@
+---
+kind: plan
+status: draft
+authority: advisory
+domain: tuning
+canonical_for: model-knob-profiles
+open_items: false
+---
+
 # Per-model knob profiles and the tuning ledger
 
 **Status**: Design, recorded 2026-08-11. Not scheduled, deliberately. We are tuning against

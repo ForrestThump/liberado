@@ -1,4 +1,4 @@
-//! The kernel's own [`SessionRecordStore`] — an **in-memory double**, not the production store.
+//! The kernel's own `SessionRecordStore` — an **in-memory double**, not the production store.
 //!
 //! Production runs on `liberado-session-store::SessionStore` (the converged store, D7). This exists
 //! so the kernel's own tests — the hub, the life pack, background runs — can exercise a store
@@ -12,7 +12,7 @@
 //!
 //! When [`opened`](GoalSessionStore::open) with a directory it is also **durable**: each session is an append-only JSONL log
 //! (`<dir>/<id>.jsonl`) — one `start` line (the initial record), one `event` line per session
-//! event, and `status`/`finish` lines as the lifecycle advances. On boot, [`open`] replays every
+//! event, and `status`/`finish` lines as the lifecycle advances. On boot, `open` replays every
 //! log to rehydrate the list/snapshot views (session-focus S5). This mirrors the conversation
 //! store's append-only-JSONL posture (Decision 12/17: operational data, outside the vault) rather
 //! than introducing a database.

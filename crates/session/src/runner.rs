@@ -100,7 +100,7 @@ impl InputChannel {
 ///
 ///   The zone-write-class guard would be the other half of that defence, but it is **inert in
 ///   practice**: no MCP in `topology.toml` declares zones, so `resolve_zone` returns `None` for
-///   every tool and the guard never fires. See `docs/roadmap/one-execution-engine-live-test.md`
+///   every tool and the guard never fires. See `docs/future-work/archive/one-execution-engine-live-test.md`
 ///   § "Control F".
 /// * `grant.overrides` — the pack's own **opaque** config (role, model, prompt path). The kernel
 ///   never interprets it; only this pack does.

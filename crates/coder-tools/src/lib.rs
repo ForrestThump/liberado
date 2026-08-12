@@ -190,7 +190,7 @@ impl CodingToolRuntime {
         Self::from_sandbox_with_session(root, sandbox, command_policy, path_policy, None).await
     }
 
-    /// Like [`from_sandbox`], but uses `session_id` as the worktree directory name when
+    /// Like `from_sandbox`, but uses `session_id` as the worktree directory name when
     /// `SandboxSpec::Worktree` is active. Prefer a unique goal/task id over the project folder
     /// name so two coding sessions on the same repo do not collide, and so self-host dogfood
     /// (workspace root = `…/life-os`) does not create `…/worktrees/life-os`.

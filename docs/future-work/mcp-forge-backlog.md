@@ -1,3 +1,12 @@
+---
+kind: plan
+status: active
+authority: implementation
+domain: mcp
+canonical_for: mcp-forge-backlog
+open_items: true
+---
+
 # mcp-forge backlog — what gets wired in as an independent project vs. built core
 
 **Status**: Living backlog, not a committed schedule. Purpose: as capability gaps get identified

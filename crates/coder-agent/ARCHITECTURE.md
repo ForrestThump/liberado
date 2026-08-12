@@ -64,13 +64,7 @@ When a coding goal carries `payload.subtasks` (array of `{label, description, su
 Helpers: `coder-sandbox` `merge` module; orchestration in `fanout.rs`. Pack gets hub via
 `CodingSessionPack::attach_hub` after server `Arc`s the hub.
 
-## Not done yet
-
-- Face `delegate` → coding domain (still dispatch-only)
-- Nested fan-out / TUI multi-child chrome
-- Live Docker smoke
-- Model-turn events / streaming session API
-- Config-dir-relative prompt resolution
+Open product work for this crate lives in [`docs/future-work/backlog.md`](../../docs/future-work/backlog.md), not here.
 
 ## Tests (escalation ladder)
 

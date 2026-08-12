@@ -135,7 +135,7 @@ fn trace_file_path(trace_dir: &str, session_id: &str) -> PathBuf {
     Path::new(trace_dir).join(format!("{session_id}.json"))
 }
 
-/// Adapts the executor's domain-neutral [`TurnRecord`] into this pack's event vocabulary.
+/// Adapts the executor's domain-neutral `TurnRecord` into this pack's event vocabulary.
 ///
 /// The executor knows nothing about coding sessions, so it hands back a neutral record and the
 /// pack decides what to store. This is the only path by which the model's own words reach the

@@ -1,7 +1,7 @@
 //! The authority conformance suite: **withholding a capability must refuse the action.**
 //!
 //! Every capability in a grant is a claim that the system will *stop* something. Failure class §2 in
-//! `docs/architecture/failure-modes.md` is that such a claim can be entirely decorative and nobody
+//! `docs/spec/architecture/failure-modes.md` is that such a claim can be entirely decorative and nobody
 //! notices, because the tests all *grant* the capability and check the happy path. `Capability::Write`
 //! was never consulted at the MCP boundary for months: a dispatch profile granted `Read`, explicitly
 //! denied `Write`, and wrote to the vault. Every test passed. The guard was not weak — it was absent.

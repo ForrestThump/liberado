@@ -1,4 +1,4 @@
-//! The completion gate — **completion is a disputed claim** (S1 of `docs/roadmap/coding-tui-plan.md`).
+//! The completion gate — **completion is a disputed claim** (S1 of `docs/future-work/coding-tui-plan.md`).
 //!
 //! An agent finishing its work and saying "done" is not evidence that it is done. The narrative is
 //! written by the same party whose work is in question, and a model that has just spent four

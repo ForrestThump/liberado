@@ -1,3 +1,12 @@
+---
+kind: plan
+status: draft
+authority: advisory
+domain: ops
+canonical_for: cadence-maintenance-agents
+open_items: false
+---
+
 # Cadence-triggered maintenance agents
 
 **Status**: Idea, recorded 2026-08-10. Not scheduled. No code. The architecture audit below is

@@ -24,7 +24,7 @@
 //! It ships the schema and the trait. **`liberado-session-store::SessionStore` is the
 //! implementation** — the converged store (D7), where a chat and a goal session are one `Session`
 //! and one JSONL log holds both message nodes and pack events. See
-//! `docs/architecture/sessions.md`.
+//! `docs/spec/architecture/sessions.md`.
 //!
 //! The original `JsonlStore` lived here and was deleted on 2026-07-13. It had had **no production
 //! caller** since the convergence, yet fourteen storage invariants were still tested against it —

@@ -36,7 +36,7 @@
 //!
 //! # Dispatch routing
 //!
-//! When [`with_dispatch`](Self::with_dispatch) is attached, every turn is classified by a
+//! When `with_dispatch` is attached, every turn is classified by a
 //! [`Dispatcher`] *before* any execution happens — closing the gap where chat used to drive the
 //! executor directly, bypassing the guard pipeline and sub-delegation entirely. The four
 //! `DispatchAction` outcomes are handled asymmetrically, deliberately: `ExecuteDirect` (the common
@@ -166,7 +166,7 @@ pub type SessionResult<T> = Result<T, SessionError>;
 /// `Arc`. Holds no conversation state — each turn rehydrates from the store and persists its tail on
 /// success.
 ///
-/// When guard configuration is attached (via [`with_guards`](Self::with_guards)), each turn applies
+/// When guard configuration is attached (via `with_guards`), each turn applies
 /// the tool-advisor to select relevant MCPs and wraps the runtime in safety guards.
 /// One in-flight chat turn, and everything a client needs to watch it — including a client that was
 /// not there when it started.
@@ -284,7 +284,7 @@ pub struct ChatSessions {
 
 /// The moving parts of automatic compaction: the tunables, plus the provider used for the one
 /// summarization completion per compaction (the chat face's own provider in production — see
-/// `docs/roadmap/context-compaction-plan.md` for why no dedicated summarizer model yet).
+/// `docs/future-work/context-compaction-plan.md` for why no dedicated summarizer model yet).
 ///
 /// Thresholds live in [`CompactionTriggerTable`] under a mutex: the **default** entry is updated
 /// on daemon-wide face-model hot-swap ([`ChatSessions::set_compaction_trigger_tokens`]); per-model
@@ -1748,7 +1748,7 @@ impl ChatSessions {
     /// parent the turn's first new message hangs off of. Unchanged inputs pass through untouched.
     ///
     /// The full sequence (estimation, boundary selection, summarization, persistence) is described
-    /// in `docs/roadmap/context-compaction-plan.md`. Every failure mode degrades to *running
+    /// in `docs/future-work/context-compaction-plan.md`. Every failure mode degrades to *running
     /// uncompacted* — a missing summary must never cost the human their turn.
     async fn maybe_compact(
         &self,

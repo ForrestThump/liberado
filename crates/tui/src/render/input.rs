@@ -1,6 +1,6 @@
 //! Renders the text-input area at the bottom of the TUI.
 //!
-//! Public entry point: [`draw`]. Internals are split into small, focused helpers:
+//! Public entry point: `draw`. Internals are split into small, focused helpers:
 //! * `build_block` — the bordered widget frame
 //! * `draw_empty_placeholder` — rendered when the input buffer is empty
 //! * `draw_content` — wraps + renders the actual text

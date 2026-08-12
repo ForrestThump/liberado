@@ -1,3 +1,12 @@
+---
+kind: plan
+status: active
+authority: implementation
+domain: chat
+canonical_for: context-compaction
+open_items: true
+---
+
 # Context Compaction — Design & Roadmap (CH3)
 
 **Status**: Tier 1 (automatic turn-boundary compaction, persisted markers) shipped 2026-07-23.
@@ -27,7 +36,7 @@ Surveyed how peer open-source agentic-chat systems solve this, via DeepWiki:
 | **OpenCode** (`sst/opencode`, `SessionCompaction`) | Pre-turn estimate > context − 20k buffer; one overflow-error retry | Last 2 user turns verbatim (2k–8k token bound) | Rolling structured Markdown template (objective / state / next moves / files); *updates* previous summary | Tool outputs > 2k chars pruned |
 | **Kilo Code** (`Kilo-Org/kilocode`) | Configurable `threshold_percent` of window; reserve = min(output cap, 20k–32k) | Last 2 user turns, 25% of usable context clamped 2k–8k | Dedicated (cheaper) compaction model optional; anchored-summarization prompt | **Between-turn prune**: tool results older than a 40k-token recency window → `"[Old tool result content cleared]"`; token estimate × **1.3 safety factor** for code/JSON undercounting |
 | **OpenClaw** (`openclaw/openclaw`) | Post-turn `contextTokens > window − reserve`; overflow recovery; preflight byte-size; mid-turn precheck after tool results | Last 3 user turns; **tool calls kept paired with their results** (boundary shifted to avoid orphans) | Compaction entry *in the transcript*; transcript rotates to summary + tail after compaction | `/compact` manual; memory-flush turn before compacting; `toolResultMaxChars` head+tail truncation |
-| **LibreChat** (`danny-avila/LibreChat`) | `summaryBaseline` marker — tokens before the marker stop counting | n/a (branch-summing token counter) | Summary marker in history | Meilisearch for history search (validates our Tier-1-first, defer-Tier-2/3 call in [`chat-search-plan.md`](chat-search-plan.md) — a much heavier stack for the same job) |
+| **LibreChat** (`danny-avila/LibreChat`) | `summaryBaseline` marker — tokens before the marker stop counting | n/a (branch-summing token counter) | Summary marker in history | Meilisearch for history search (validates our Tier-1-first, defer-Tier-2/3 call in [`chat-search-plan.md`](archive/chat-search-plan.md) — a much heavier stack for the same job) |
 
 **Convergent practice across all four:**
 1. **Estimate, don't tokenize.** Chars/4 × safety factor (Kilo's 1.3) is what everyone ships; no

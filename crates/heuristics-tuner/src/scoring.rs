@@ -1,10 +1,10 @@
 //! Score a candidate system prompt against `liberado-eval`'s existing scenario set — the
-//! dispatcher-layer v1 scope (`docs/roadmap/heuristics-tuning-engine-plan.md`). No tool execution
+//! dispatcher-layer v1 scope (`docs/future-work/heuristics-tuning-engine-plan.md`). No tool execution
 //! happens anywhere in this module: scoring is purely "did `Dispatcher::dispatch` pick the right
 //! action," reusing `liberado_eval::score`'s classification rules rather than re-deriving them.
 //!
 //! Each scenario is sampled `samples_per_scenario` times against each configured scoring model
-//! (`docs/roadmap/heuristics-tuning-engine-plan.md`'s "Real-model verification" findings: real
+//! (`docs/future-work/heuristics-tuning-engine-plan.md`'s "Real-model verification" findings: real
 //! model APIs aren't perfectly deterministic run-to-run even at `temperature: 0.0`, so a single
 //! sample per scenario isn't a trustworthy signal on its own). The resulting trials are aggregated
 //! with an intentional asymmetry: `unsafe_acts` is a worst-case count (any unsafe trial counts,

@@ -1,12 +1,12 @@
 # Liberado: Rust-Native Personal AI Life Operating System
 
 **Version**: v0.3 (June 2026)  
-**Status**: Historical vision document — **superseded as the cold-start reference** by
+**Status**: Historical vision document â€” **superseded as the cold-start reference** by
 [`architecture/overview.md`](architecture/overview.md). This v0.3 draft predates the actual
 crate layout: names like `liberado-dispatcher`, `liberado-memory-mcp`, and `liberado-tool-helper-mcp`
-below are the *proposed* names, not what shipped (the real crates are `dispatcher`, `mcp`, etc. — see
+below are the *proposed* names, not what shipped (the real crates are `dispatcher`, `mcp`, etc. â€” see
 `overview.md`'s crate table). Kept for the rationale and vision behind decisions that did land
-(cross-referenced in [`architecture-decisions.md`](architecture-decisions.md)); do
+(cross-referenced in [`architecture-decisions.md`](../decisions/README.md)); do
 not treat the crate/module names or file layout below as current.  
 **Owner**: Shiloh Mangus  
 **Goal**: A minimal, security-first, token-efficient, fully auditable personal AI Life OS in Rust. It replaces heavier plugin-marketplace systems (e.g. OpenClaw) with curated, hand-audited components while enabling real background autonomy and loose coupling. Built directly on existing Turbovault + liberado-tool-helper-mcp work.
@@ -18,17 +18,17 @@ not treat the crate/module names or file layout below as current.
 Liberado is a personal Life OS that:
 
 - Uses a structured **Obsidian Markdown vault** (via Turbovault) as the single source of truth for memory, tasks, calendar, decisions, goals, reviews, and knowledge.
-- Keeps the **main agent thin** — focused on high-level reasoning, your current life context, and orchestration. It never receives massive tool schemas or full plugin lists.
+- Keeps the **main agent thin** â€” focused on high-level reasoning, your current life context, and orchestration. It never receives massive tool schemas or full plugin lists.
 - Uses **`liberado-dispatcher`** as an intelligent **goal-understanding dispatcher** (not just a surfacer). It understands the main agent's intent and decides the most efficient execution strategy, grounded in the procedural memory held by **`liberado-memory-mcp`** (the renamed `liberado-tool-helper-mcp`).
 - Exposes capabilities through two complementary types of small, audited Rust components:
   - **MCPs** (Model Context Protocol servers): For doing work (tools and actions).
-  - **Hooks** — thin receivers for background triggers and events.
-- Enables **true background autonomy** — work happens on schedules or vault changes without the user initiating or thinking about it.
-- Maintains **very loose coupling and modularity** — components can live in separate repos or a clean workspace; extensions are additive.
+  - **Hooks** â€” thin receivers for background triggers and events.
+- Enables **true background autonomy** â€” work happens on schedules or vault changes without the user initiating or thinking about it.
+- Maintains **very loose coupling and modularity** â€” components can live in separate repos or a clean workspace; extensions are additive.
 - Prioritizes **token efficiency** via high-signal context only + smart dispatching + summarized subagent reports.
 - Stays **Rust-native, compiled, and auditable** with strong containment (path/zone guards, capability gates, secret isolation, hash-protected writes).
-- Presents a **low mental-load interface** via two peer interaction modes, both suitable for daily use alongside a full-time job, family, ADHD management, and homelab: (1) a **ratatui TUI** for live conversation, and (2) an **async Obsidian inbox** — drop a note in `inbox/` from any device (Syncthing-synced), and the system processes/files it and reports back in the vault, no running conversation required (see `liberado-inbox-spec.md`).
-- Is fully **provider-agnostic** — the scaffolding is custom; any inference provider (DeepSeek to start, others, or local models) can be used, including different models for main agent vs. subagents.
+- Presents a **low mental-load interface** via two peer interaction modes, both suitable for daily use alongside a full-time job, family, ADHD management, and homelab: (1) a **ratatui TUI** for live conversation, and (2) an **async Obsidian inbox** â€” drop a note in `inbox/` from any device (Syncthing-synced), and the system processes/files it and reports back in the vault, no running conversation required (see `liberado-inbox-spec.md`).
+- Is fully **provider-agnostic** â€” the scaffolding is custom; any inference provider (DeepSeek to start, others, or local models) can be used, including different models for main agent vs. subagents.
 
 The system compounds over time: the same vault works for the human in Obsidian and for the agent. Background behaviors are added by creating or extending narrow hooks + pointing minimal external triggers at them.
 
@@ -36,27 +36,27 @@ The system compounds over time: the same vault works for the human in Obsidian a
 
 ## Core Principles
 
-1. **Filesystem (vault) as the brain** — Structured Markdown + frontmatter and folder hierarchies (`calendar/2026/06/`, `tasks/`, `decisions/`, `goals/`, `reviews/`, `knowledge/`). Turbovault provides search, graph, frontmatter queries, and atomic edits. No mandatory vector DB for core memory.
+1. **Filesystem (vault) as the brain** â€” Structured Markdown + frontmatter and folder hierarchies (`calendar/2026/06/`, `tasks/`, `decisions/`, `goals/`, `reviews/`, `knowledge/`). Turbovault provides search, graph, frontmatter queries, and atomic edits. No mandatory vector DB for core memory.
 
-2. **Thin main agent + intelligent dispatcher** — The main loop stays small. `liberado-dispatcher` understands goals and chooses execution strategy (direct MCP invoke for simple cases, or subagent dispatch for complex ones), backed by `liberado-memory-mcp` for learned guidance. This keeps main context clean and token usage low.
+2. **Thin main agent + intelligent dispatcher** â€” The main loop stays small. `liberado-dispatcher` understands goals and chooses execution strategy (direct MCP invoke for simple cases, or subagent dispatch for complex ones), backed by `liberado-memory-mcp` for learned guidance. This keeps main context clean and token usage low.
 
-3. **MCPs for work, hooks for events** — Clear separation:
+3. **MCPs for work, hooks for events** â€” Clear separation:
    - MCPs = curated, focused capabilities (tools/actions).
    - Hooks = thin event receivers that enable background autonomy.
 
-4. **Loose coupling & modularity by design** — Hooks and MCPs are narrow. They can be developed, versioned, enabled/disabled, or replaced independently (separate repos or workspace crates). Shared concerns live in common libraries.
+4. **Loose coupling & modularity by design** â€” Hooks and MCPs are narrow. They can be developed, versioned, enabled/disabled, or replaced independently (separate repos or workspace crates). Shared concerns live in common libraries.
 
-5. **Thin protocol layer for hooks (no integrated event systems)** — Hooks are lightweight HTTP webhook receivers. They do **not** contain cron, file watchers, or polling. Triggering comes from two sources: (a) **vault changes** via the daemon's single subscription to Turbovault's native change stream — the daemon does loop-breaking/attribution centrally (see `liberado-vault-concurrency-spec.md`) and routes already-attributed events to hooks; (b) **non-vault triggers** (systemd timers, git/docker/homelab hooks) that POST the standardized event payload directly to a hook webhook. There is **no hand-built `vault-change-emitter`** — that role is filled by Turbovault's subscription + the daemon's central attribution layer. This maximizes compatibility with existing hook systems and keeps hooks small.
+5. **Thin protocol layer for hooks (no integrated event systems)** â€” Hooks are lightweight HTTP webhook receivers. They do **not** contain cron, file watchers, or polling. Triggering comes from two sources: (a) **vault changes** via the daemon's single subscription to Turbovault's native change stream â€” the daemon does loop-breaking/attribution centrally (see `liberado-vault-concurrency-spec.md`) and routes already-attributed events to hooks; (b) **non-vault triggers** (systemd timers, git/docker/homelab hooks) that POST the standardized event payload directly to a hook webhook. There is **no hand-built `vault-change-emitter`** â€” that role is filled by Turbovault's subscription + the daemon's central attribution layer. This maximizes compatibility with existing hook systems and keeps hooks small.
 
-6. **One hook per major event class/domain** — Group related events (e.g., all decision-related events in `decisions-hook`). Aim for 6–10 total hooks rather than 20 tiny ones or one monolith. Use a shared `liberado-hook-common` crate so individual binaries stay tiny and low-overhead.
+6. **One hook per major event class/domain** â€” Group related events (e.g., all decision-related events in `decisions-hook`). Aim for 6â€“10 total hooks rather than 20 tiny ones or one monolith. Use a shared `liberado-hook-common` crate so individual binaries stay tiny and low-overhead.
 
-7. **Capability containment & secret isolation everywhere** — Every MCP and hook enforces path/zone rules, capability gates, hash-protected writes, and ensures raw secrets/credentials never reach the LLM. Guards are implemented in Rust inside the components.
+7. **Capability containment & secret isolation everywhere** â€” Every MCP and hook enforces path/zone rules, capability gates, hash-protected writes, and ensures raw secrets/credentials never reach the LLM. Guards are implemented in Rust inside the components.
 
-8. **High-signal context + token hygiene** — Explicit `ContextPolicy` in the main agent loads only goals/outcomes summaries, recent high-signal decisions, today's context, and liberado guidance. Vault details and subagent reports are fetched/summarized on demand.
+8. **High-signal context + token hygiene** â€” Explicit `ContextPolicy` in the main agent loads only goals/outcomes summaries, recent high-signal decisions, today's context, and liberado guidance. Vault details and subagent reports are fetched/summarized on demand.
 
-9. **Provider-agnostic scaffolding** — Custom Rust agent loop (Rig preferred for speed on tool calling/memory policies, or thin custom tokio + reqwest). Easy to switch models/providers. Subagents can use different models.
+9. **Provider-agnostic scaffolding** â€” Custom Rust agent loop (Rig preferred for speed on tool calling/memory policies, or thin custom tokio + reqwest). Easy to switch models/providers. Subagents can use different models.
 
-10. **Low mental load & real-life fit** — ratatui TUI primary. Background work reduces routine load. System is maintainable alongside full-time work, family, and homelab. Everything local-first and auditable.
+10. **Low mental load & real-life fit** â€” ratatui TUI primary. Background work reduces routine load. System is maintainable alongside full-time work, family, and homelab. Everything local-first and auditable.
 
 ---
 
@@ -64,44 +64,44 @@ The system compounds over time: the same vault works for the human in Obsidian a
 
 ```
 +-----------------------------------------------------------------------------+
-¦                          Main Agent Loop (Thin)                             ¦
-¦  - Rig (preferred) or thin custom tokio loop                                ¦
-¦  - Explicit ContextPolicy (high-signal only)                                ¦
-¦  - Calls liberado first for goal understanding + dispatch decision          ¦
-¦  - Receives user chat + (optionally) hook messages / vault updates           ¦
-¦  - Streams responses via ratatui TUI (primary) + optional axum API          ¦
+Â¦                          Main Agent Loop (Thin)                             Â¦
+Â¦  - Rig (preferred) or thin custom tokio loop                                Â¦
+Â¦  - Explicit ContextPolicy (high-signal only)                                Â¦
+Â¦  - Calls liberado first for goal understanding + dispatch decision          Â¦
+Â¦  - Receives user chat + (optionally) hook messages / vault updates           Â¦
+Â¦  - Streams responses via ratatui TUI (primary) + optional axum API          Â¦
 +-----------------------------------------------------------------------------+
-                                ¦
+                                Â¦
           +---------------------+---------------------+
           ?                     ?                     ?
 +------------------+  +------------------+  +------------------------------+
-¦  liberado        ¦  ¦  Curated MCPs    ¦  ¦  Thin hooks (per event class) ¦
-¦  -dispatcher     ¦  ¦  (4–6 in v1)     ¦  ¦  (6–10 total, grouped)        ¦
-¦                  ¦  ¦                  ¦  ¦                               ¦
-¦  Intelligent     ¦  ¦  • tasks (hardened)¦  ¦  • decisions-hook             ¦
-¦  Goal Dispatcher ¦  ¦  • calendar/rollup¦  ¦  • tasks-hook                 ¦
-¦  + Tool Surfacer ¦  ¦  • decisions      ¦  ¦  • reviews-hook               ¦
-¦                  ¦  ¦  • 1–2 more       ¦  ¦  • calendar-hook              ¦
-¦  - Understands   ¦  ¦                  ¦  ¦  • ...                        ¦
-¦    main goal     ¦  ¦  All with:       ¦  ¦  All are thin HTTP webhook    ¦
-¦  - Simple ?      ¦  ¦  - Path/zone     ¦  ¦  receivers + reaction logic   ¦
-¦    direct MCP    ¦  ¦    guards        ¦  ¦  (no cron/watcher inside)     ¦
-¦    invoke +      ¦  ¦  - Hash writes   ¦  ¦                               ¦
-¦    clean report  ¦  ¦  - Capability    ¦  ¦  Use shared                   ¦
-¦  - Complex ?     ¦  ¦    gates         ¦  ¦  liberado-hook-common crate   ¦
-¦    subagent      ¦  ¦  - Secret        ¦  ¦  for low overhead             ¦
-¦    dispatch      ¦  ¦    isolation     ¦  ¦                              ¦
+Â¦  liberado        Â¦  Â¦  Curated MCPs    Â¦  Â¦  Thin hooks (per event class) Â¦
+Â¦  -dispatcher     Â¦  Â¦  (4â€“6 in v1)     Â¦  Â¦  (6â€“10 total, grouped)        Â¦
+Â¦                  Â¦  Â¦                  Â¦  Â¦                               Â¦
+Â¦  Intelligent     Â¦  Â¦  â€¢ tasks (hardened)Â¦  Â¦  â€¢ decisions-hook             Â¦
+Â¦  Goal Dispatcher Â¦  Â¦  â€¢ calendar/rollupÂ¦  Â¦  â€¢ tasks-hook                 Â¦
+Â¦  + Tool Surfacer Â¦  Â¦  â€¢ decisions      Â¦  Â¦  â€¢ reviews-hook               Â¦
+Â¦                  Â¦  Â¦  â€¢ 1â€“2 more       Â¦  Â¦  â€¢ calendar-hook              Â¦
+Â¦  - Understands   Â¦  Â¦                  Â¦  Â¦  â€¢ ...                        Â¦
+Â¦    main goal     Â¦  Â¦  All with:       Â¦  Â¦  All are thin HTTP webhook    Â¦
+Â¦  - Simple ?      Â¦  Â¦  - Path/zone     Â¦  Â¦  receivers + reaction logic   Â¦
+Â¦    direct MCP    Â¦  Â¦    guards        Â¦  Â¦  (no cron/watcher inside)     Â¦
+Â¦    invoke +      Â¦  Â¦  - Hash writes   Â¦  Â¦                               Â¦
+Â¦    clean report  Â¦  Â¦  - Capability    Â¦  Â¦  Use shared                   Â¦
+Â¦  - Complex ?     Â¦  Â¦    gates         Â¦  Â¦  liberado-hook-common crate   Â¦
+Â¦    subagent      Â¦  Â¦  - Secret        Â¦  Â¦  for low overhead             Â¦
+Â¦    dispatch      Â¦  Â¦    isolation     Â¦  Â¦                              Â¦
 +------------------+  +------------------+  +------------------------------+
-          ¦                     ¦                     ¦
-          ¦                     ¦                     ¦ HTTP webhook (standard)
-          ¦                     ¦                     ¦ (from external triggers)
+          Â¦                     Â¦                     Â¦
+          Â¦                     Â¦                     Â¦ HTTP webhook (standard)
+          Â¦                     Â¦                     Â¦ (from external triggers)
           ?                     ?                     ?
    Obsidian Vault (Markdown + frontmatter + folders)     Trigger Sources
-   calendar/2026/06/...                                   • Turbovault change stream
+   calendar/2026/06/...                                   â€¢ Turbovault change stream
    tasks/                                                   ? daemon subscription
    decisions/                                               ? central attribution/de-loop
-   goals/                                                 • systemd timers ? webhook
-   reviews/ (LEARN-style outcomes & patterns)             • git/docker/homelab ? webhook
+   goals/                                                 â€¢ systemd timers ? webhook
+   reviews/ (LEARN-style outcomes & patterns)             â€¢ git/docker/homelab ? webhook
    knowledge/ (wikilinks + graph)
 ```
 
@@ -117,15 +117,15 @@ The system compounds over time: the same vault works for the human in Obsidian a
 
 - **Implementation**: Rig (recommended starting point for tool calling, streaming, provider abstraction, and memory policy foundations) or minimal custom `tokio` + `reqwest`/`async-openai` loop for maximum control.
 - **Core responsibility**: Maintain conversation, load high-signal context via `ContextPolicy`, call liberado for dispatch decisions, execute recommended actions, stream responses.
-- **ContextPolicy** — a **deliberately dumb, inference-free life header** (full spec:
-  `liberado-context-policy-spec.md`). The always-loaded context is tiny — **under two short
-  paragraphs** — and everything else is pulled on demand. The architecture is built around this
+- **ContextPolicy** â€” a **deliberately dumb, inference-free life header** (full spec:
+  `liberado-context-policy-spec.md`). The always-loaded context is tiny â€” **under two short
+  paragraphs** â€” and everything else is pulled on demand. The architecture is built around this
   minimal "system prompt" as the steady state, not a stripped-down mode. Two jobs:
   - **Session-start header** (deterministic Turbovault queries + template): today + one-line rollup,
     active goals (titles + status, capped), recent high-signal decisions (capped), an inbox line, and
     an "ask to load more" availability pointer. Nothing else.
   - **Per-turn background surfacing**: completed Detached subagent Reports, hook outputs, and pending
-    proposals — the inbound channel that re-enters background autonomy into the main loop.
+    proposals â€” the inbound channel that re-enters background autonomy into the main loop.
   - **On-demand expansion**: read-a-known-thing ? a tiny curated read-only toolset (Turbovault
     `search` / `read_note`); figure-out-or-do-something ? the dispatcher. **Never auto-loaded**: full
     tool/MCP schemas, note bodies, history, raw subagent traces.
@@ -140,27 +140,27 @@ surfacing path above (vault-mediated; Decision 9).
 **Naming note**: The original draft called this single component `liberado-tool-helper-mcp` and
 spoke of "elevating" it into the dispatcher. We split it into two cleaner pieces:
 
-- **`liberado-dispatcher`** — a **new** out-of-band routing agent (runs inside the daemon, with its
+- **`liberado-dispatcher`** â€” a **new** out-of-band routing agent (runs inside the daemon, with its
   own small/fast inference). This is the "intelligent dispatcher." It is the most important
   component in the work-execution path.
-- **`liberado-memory-mcp`** — the existing `liberado-tool-helper-mcp`, renamed. It remains a thin
+- **`liberado-memory-mcp`** â€” the existing `liberado-tool-helper-mcp`, renamed. It remains a thin
   mem0-backed MCP exposing two isolated stores: **general** memory (user facts/preferences/history)
-  and **procedural** memory (`search_tool_guidance` / `save_tool_guidance` — learned "use tool X for
+  and **procedural** memory (`search_tool_guidance` / `save_tool_guidance` â€” learned "use tool X for
   task Y" directives). The dispatcher **consumes** it as a backend; it is not itself the dispatcher.
 
 The dispatcher's job is to take a goal + minimal context from the main agent and choose exactly one
-of four actions — **execute directly**, **dispatch a subagent**, **report back**, or **ask the main
-agent a follow-up** — using procedural memory to ground the choice and recording outcomes back to
+of four actions â€” **execute directly**, **dispatch a subagent**, **report back**, or **ask the main
+agent a follow-up** â€” using procedural memory to ground the choice and recording outcomes back to
 procedural memory to improve over time.
 
-> The full decision policy — classification criteria, the structured `DispatchDecision` output,
-> safe-by-default thresholds, deterministic guardrails, and the learning loop — is specified in
+> The full decision policy â€” classification criteria, the structured `DispatchDecision` output,
+> safe-by-default thresholds, deterministic guardrails, and the learning loop â€” is specified in
 > **`liberado-dispatch-logic-spec.md`** (resolves the remaining detail of Decision 1).
 
 In short: a powerful router that keeps main-agent context free of tool schemas and low-level traces,
 far beyond a simple tool recommender, while preserving token efficiency.
 
-### 3. MCPs — Curated Work / Capability Servers (4–6 in v1)
+### 3. MCPs â€” Curated Work / Capability Servers (4â€“6 in v1)
 
 Small, hand-audited Rust binaries exposing capabilities via MCP (stdio or SSE).
 
@@ -168,7 +168,7 @@ Small, hand-audited Rust binaries exposing capabilities via MCP (stdio or SSE).
 - `tasks-mcp` (harden existing PR #19 with zone guards + hash checks).
 - `calendar-rollup-mcp` or combined with tasks.
 - `decisions-mcp` (logging + basic outcome tracking).
-- 1–2 high-ROI external (e.g., secure notifications or read-only email with strict capability limits).
+- 1â€“2 high-ROI external (e.g., secure notifications or read-only email with strict capability limits).
 
 **Every MCP must implement**:
 - Path/zone containment checks.
@@ -178,12 +178,12 @@ Small, hand-audited Rust binaries exposing capabilities via MCP (stdio or SSE).
 
 MCPs are the "doers." They are narrow and composable.
 
-### 4. Hooks — Thin Event Receivers (6–10 Total, Grouped by Class)
+### 4. Hooks â€” Thin Event Receivers (6â€“10 Total, Grouped by Class)
 
 **Design rules** (critical):
 - Hooks are **thin protocol layers only**. They contain **no integrated cron, file watcher, or polling logic**.
 - They expose a **standard HTTP webhook endpoint** (`POST /webhook` with JSON payload) for maximum compatibility with existing hook systems (systemd, git, Docker, automation tools, etc.).
-- One hook per **major event class/domain** (group related events). Target 6–10 total rather than 20 tiny processes or one monolith.
+- One hook per **major event class/domain** (group related events). Target 6â€“10 total rather than 20 tiny processes or one monolith.
 - Use a shared `liberado-hook-common` crate containing:
   - Webhook server skeleton (axum or lighter).
   - Auth/validation.
@@ -199,30 +199,30 @@ MCPs are the "doers." They are narrow and composable.
   - Trigger other hooks (carefully).
 
 **Example hooks** (adjust based on highest-ROI needs):
-- `inbox-hook` — **async capture + ambient analysis** (see `liberado-inbox-spec.md`): resolves an intent tier from override flags (`#ready-now` / `#hold-off`) + location, settle-debounces Syncthing-synced notes (~15 min default; whole-vault ambient analysis runs as a nightly sweep), dispatches at the tier's intensity, moves inbox items to `processed/` with a breadcrumb. The thinnest hook — all judgment is the dispatcher's.
-- `maintenance-hook` — **vault hygiene + git backstop** (see `liberado-vault-maintenance-and-git-spec.md`): scheduled Syncthing-conflict lossless-merge, broken-link repair, health checks. Relies on the git-backed vault (homelab-authoritative; `.git/` excluded from Syncthing) so in-vault fixes are recoverable.
+- `inbox-hook` â€” **async capture + ambient analysis** (see `liberado-inbox-spec.md`): resolves an intent tier from override flags (`#ready-now` / `#hold-off`) + location, settle-debounces Syncthing-synced notes (~15 min default; whole-vault ambient analysis runs as a nightly sweep), dispatches at the tier's intensity, moves inbox items to `processed/` with a breadcrumb. The thinnest hook â€” all judgment is the dispatcher's.
+- `maintenance-hook` â€” **vault hygiene + git backstop** (see `liberado-vault-maintenance-and-git-spec.md`): scheduled Syncthing-conflict lossless-merge, broken-link repair, health checks. Relies on the git-backed vault (homelab-authoritative; `.git/` excluded from Syncthing) so in-vault fixes are recoverable.
 - `decisions-hook`
 - `tasks-hook`
 - `reviews-hook`
 - `calendar-hook`
 - `family-schedule-hook` (with strict containment)
 
-**Overhead**: With the shared common crate + grouping, 6–10 small Rust hooks have very low idle memory/CPU (well under 200 MB total on typical hardware). Most are idle the vast majority of the time.
+**Overhead**: With the shared common crate + grouping, 6â€“10 small Rust hooks have very low idle memory/CPU (well under 200 MB total on typical hardware). Most are idle the vast majority of the time.
 
 ### 5. Triggering Layer
 
-Triggering has two paths. Hooks themselves stay thin — they never watch the filesystem or poll.
+Triggering has two paths. Hooks themselves stay thin â€” they never watch the filesystem or poll.
 
-**(a) Vault-driven reactivity — Turbovault subscription + daemon attribution (no custom emitter).**
+**(a) Vault-driven reactivity â€” Turbovault subscription + daemon attribution (no custom emitter).**
 The earlier "hand-built `vault-change-emitter`" is **superseded**. Turbovault already owns the
 filesystem watcher and exposes a native change subscription (`subscribe_vault_events` /
 `fetch_vault_events`, with a monotonic `seq` / `since_seq` resume cursor). The **daemon** holds a
 **single** subscription and performs loop-breaking and provenance attribution **once, centrally**
-(consumer-side hash join against the Turbovault audit log — see `liberado-vault-concurrency-spec.md`),
+(consumer-side hash join against the Turbovault audit log â€” see `liberado-vault-concurrency-spec.md`),
 then routes the resulting **already-attributed, already-de-looped** events to the relevant hook. This
 keeps the per-consumer join cost out of the hooks and gives one place to reason about cascades.
 
-**(b) Non-vault triggers — direct webhook POST.**
+**(b) Non-vault triggers â€” direct webhook POST.**
 - **systemd timers** (or a single small scheduler binary): POST a standardized event to the relevant hook's webhook on schedule.
 - **Other homelab sources** (git hooks, Docker events, scripts): POST directly to the appropriate hook webhook.
 
@@ -284,19 +284,19 @@ Unchanged core strength:
 liberado/
 +-- Cargo.toml (workspace)
 +-- crates/
-¦   +-- common/                    # Shared types, guards, error handling
-¦   +-- hook-common/               # liberado-hook-common (webhook skeleton, helpers)
-¦   +-- main-agent/                # Thin orchestrator + ContextPolicy + TUI
-¦   +-- liberado-dispatcher/       # Out-of-band routing agent (new component)
-¦   +-- liberado-memory-mcp/       # Renamed liberado-tool-helper-mcp: mem0-backed
-¦   ¦                              #   general + procedural memory; consumed BY the dispatcher
-¦   +-- mcp-tasks/                 # Example hardened MCP
-¦   +-- mcp-decisions/
-¦   +-- hook-decisions/            # Example thin hook
-¦   +-- hook-reviews/
-¦   +-- tui/                       # ratatui interface
-¦   # NOTE: no vault-emitter crate — vault reactivity is the daemon's Turbovault
-¦   #        subscription + central attribution (see §5 and the concurrency spec).
+Â¦   +-- common/                    # Shared types, guards, error handling
+Â¦   +-- hook-common/               # liberado-hook-common (webhook skeleton, helpers)
+Â¦   +-- main-agent/                # Thin orchestrator + ContextPolicy + TUI
+Â¦   +-- liberado-dispatcher/       # Out-of-band routing agent (new component)
+Â¦   +-- liberado-memory-mcp/       # Renamed liberado-tool-helper-mcp: mem0-backed
+Â¦   Â¦                              #   general + procedural memory; consumed BY the dispatcher
+Â¦   +-- mcp-tasks/                 # Example hardened MCP
+Â¦   +-- mcp-decisions/
+Â¦   +-- hook-decisions/            # Example thin hook
+Â¦   +-- hook-reviews/
+Â¦   +-- tui/                       # ratatui interface
+Â¦   # NOTE: no vault-emitter crate â€” vault reactivity is the daemon's Turbovault
+Â¦   #        subscription + central attribution (see Â§5 and the concurrency spec).
 ```
 
 **Low-overhead hook pattern**:
@@ -310,7 +310,7 @@ liberado/
 
 **Containment enforcement**:
 - Implement inside each MCP and hook (and in common guards crate).
-- Never trust input — validate zones, capabilities, and secrets at the boundary.
+- Never trust input â€” validate zones, capabilities, and secrets at the boundary.
 
 ---
 
@@ -319,8 +319,8 @@ liberado/
 **In scope for first working version**:
 - Thin main agent loop (Rig or custom) with explicit ContextPolicy.
 - Enhanced liberado as goal-understanding dispatcher (simple invoke vs. subagent dispatch).
-- 2–4 MCPs (tasks hardened with guards, decisions, calendar/rollup basics).
-- 3–5 hooks using the thin HTTP webhook + shared common pattern (start with decisions-hook, tasks-hook, reviews-hook).
+- 2â€“4 MCPs (tasks hardened with guards, decisions, calendar/rollup basics).
+- 3â€“5 hooks using the thin HTTP webhook + shared common pattern (start with decisions-hook, tasks-hook, reviews-hook).
 - Triggering layer: daemon subscription to Turbovault's change stream + central attribution; systemd timer example for non-vault triggers.
 - ratatui TUI (chat + simple activity view).
 - Git-backed vault + lightweight ISA-inspired templates in `goals/` and `decisions/` (success criteria, verification, outcomes).
@@ -349,7 +349,7 @@ This v1 already delivers token-efficient reasoning, real background autonomy for
 
 ## Resource & Operational Considerations
 
-- **Hook overhead**: With grouping (6–10 total) + shared `liberado-hook-common` crate, total idle memory stays low (well under 200 MB). Most hooks are idle the vast majority of the time. Suitable for mini-PC homelab hardware.
+- **Hook overhead**: With grouping (6â€“10 total) + shared `liberado-hook-common` crate, total idle memory stays low (well under 200 MB). Most hooks are idle the vast majority of the time. Suitable for mini-PC homelab hardware.
 - **Management**: Systemd templated units + simple TUI status command. Easy to start/stop/restart individual behaviors.
 - **Extensibility**: Add a new background behavior by creating/extending a hook (or small group) + configuring a trigger source to call its webhook. Minimal impact on existing system.
 
@@ -357,20 +357,20 @@ This v1 already delivers token-efficient reasoning, real background autonomy for
 
 ## Next Steps (Implementation Roadmap)
 
-> **For current implementation status, see `ARCHITECTURE.md` § "Current status".** Several
+> **For current implementation status, see `ARCHITECTURE.md` Â§ "Current status".** Several
 > steps below are realized: the workspace exists (step 1), the reactive pipeline with
 > dispatcher+orchestrator+executor is end-to-end wired (steps 3, 6, 7), and tests are in place (step 9).
 
-1. **Set up workspace** — Create Cargo workspace with `common`, `hook-common`, `main-agent`, `liberado-dispatcher` crates.
-2. **Implement ContextPolicy** — Define the struct and loading logic (always high-signal + on-demand Turbovault).
-3. **Enhance liberado** — Add goal-understanding + simple vs. subagent dispatch logic + clean report formatting.
-4. **Build first MCPs** — Harden tasks with guards; add decisions basics.
-5. **Build first hooks + common crate** — Thin HTTP webhook receiver pattern using shared library. Start with 2–3 (decisions, tasks, reviews).
-6. **Wire the trigger layer** — daemon subscription to Turbovault's change stream + central attribution/de-loop that routes events to hooks; add a systemd timer example for non-vault triggers.
-7. **Wire main agent loop** — Integrate liberado calls, ContextPolicy, and optional hook message handling (vault-mediated or direct).
-8. **Add ratatui TUI skeleton** — Chat + tool/activity view.
-9. **Test end-to-end** — Realistic user prompt + one background autonomous flow.
-10. **Document & iterate** — Update this design doc from real usage. Add more hooks/MCPs only when daily value is proven.
+1. **Set up workspace** â€” Create Cargo workspace with `common`, `hook-common`, `main-agent`, `liberado-dispatcher` crates.
+2. **Implement ContextPolicy** â€” Define the struct and loading logic (always high-signal + on-demand Turbovault).
+3. **Enhance liberado** â€” Add goal-understanding + simple vs. subagent dispatch logic + clean report formatting.
+4. **Build first MCPs** â€” Harden tasks with guards; add decisions basics.
+5. **Build first hooks + common crate** â€” Thin HTTP webhook receiver pattern using shared library. Start with 2â€“3 (decisions, tasks, reviews).
+6. **Wire the trigger layer** â€” daemon subscription to Turbovault's change stream + central attribution/de-loop that routes events to hooks; add a systemd timer example for non-vault triggers.
+7. **Wire main agent loop** â€” Integrate liberado calls, ContextPolicy, and optional hook message handling (vault-mediated or direct).
+8. **Add ratatui TUI skeleton** â€” Chat + tool/activity view.
+9. **Test end-to-end** â€” Realistic user prompt + one background autonomous flow.
+10. **Document & iterate** â€” Update this design doc from real usage. Add more hooks/MCPs only when daily value is proven.
 
 ---
 
@@ -384,7 +384,7 @@ Read this document end-to-end. The system is:
 - Same Obsidian vault as source of truth.
 - Rust-native, provider-agnostic, containment-enforced, token-efficient, loosely coupled, and designed for low overhead and real daily use.
 
-Start with the workspace layout, ContextPolicy, enhanced liberado, and 2–3 hooks + triggers. Everything else follows from the principles above.
+Start with the workspace layout, ContextPolicy, enhanced liberado, and 2â€“3 hooks + triggers. Everything else follows from the principles above.
 
 This design delivers background autonomy and modularity without the ceremony or lock-in of heavier systems, while staying maintainable alongside real life.
 

@@ -1,7 +1,7 @@
 //! # liberado-heuristics-tuner
 //!
 //! Automates the manual "run eval → read the misses → tweak a role's system prompt → rerun" loop
-//! (`docs/roadmap/heuristics-tuning-engine-plan.md`). Started dispatcher-only: generate and score
+//! (`docs/future-work/heuristics-tuning-engine-plan.md`). Started dispatcher-only: generate and score
 //! candidate system prompts against `liberado-eval`'s existing scenario set via a
 //! beam-search-with-restarts loop, then propose the best candidate as a diff + rubric for a human
 //! to review — nothing here ever writes to the real `DEFAULT_SYSTEM_PROMPT`. Extended to the

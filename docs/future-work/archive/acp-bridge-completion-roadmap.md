@@ -1,7 +1,19 @@
+---
+kind: plan
+status: superseded
+authority: advisory
+domain: acp
+canonical_for: acp-bridge-completion
+superseded_by: paseo-liberado-integration-roadmap.md
+open_items: false
+---
+
+> **Archived.** This plan is not current truth. Open work lives in [backlog.md](../backlog.md) and [roadmap.md](../../roadmap.md). See [doc-authority.md](../../spec/reference/doc-authority.md).
+
 # ACP Bridge — Completion Roadmap
 
 **Status (2026-08-09):** **Superseded as the living backlog** by
-[`paseo-liberado-integration-roadmap.md`](paseo-liberado-integration-roadmap.md).
+[`paseo-liberado-integration-roadmap.md`](../paseo-liberado-integration-roadmap.md).
 
 Core path remains **shipped**: `liberado-acp` speaks real ACP JSON-RPC 2.0, runs
 `Conversation` + `CodingToolRuntime` per session, streams `session/update`, and is registered
@@ -11,7 +23,7 @@ in Paseo via generic `extends: "acp"`.
 tests, modes, durable load, fork polish, remote track). This file is kept so older links still
 resolve; do not extend the residual list here.
 
-**Install / dogfood:** [`docs/impl/paseo-integration.md`](../impl/paseo-integration.md) ·
+**Install / dogfood:** [`docs/impl/paseo-integration.md`](../../impl/paseo-integration.md) ·
 `scripts/install-paseo-liberado.ps1` · `config.example/paseo-liberado.json`.
 
 **Paseo side:** no dedicated `liberado-acp-agent.ts` required — stock Generic ACP provider

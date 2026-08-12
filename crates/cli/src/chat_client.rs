@@ -1,7 +1,7 @@
 //! The `liberado chat` terminal client — a thin REPL over a running daemon server's chat API.
 //!
 //! This module embeds **no** agent logic: no `ChatSessions`, no provider, no store. It is purely an
-//! HTTP/SSE client of `POST /api/chat/stream` (the shared client contract — see `docs/reference/api.md`),
+//! HTTP/SSE client of `POST /api/chat/stream` (the shared client contract — see `docs/spec/reference/api.md`),
 //! streaming the answer back token-by-token and printing tool activity as it happens. It is the first
 //! *native* (`reqwest`/SSE) client of that API, seeding the future TUI: same bytes, same parser.
 //!

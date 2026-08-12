@@ -3,7 +3,7 @@
 //! This crate composes the shared inner loop (`liberado-executor`) with coding tools, sandbox,
 //! deterministic verifiers, progress guards, optional critic, and attempt/repair. It is a domain
 //! specialization — not the center of Liberado. See
-//! `docs/architecture/agentic-loops.md` and `docs/roadmap/agentic-mesh-hygiene-audit-2026-07-10.md`.
+//! `docs/spec/architecture/agentic-loops.md` and `docs/future-work/archive/agentic-mesh-hygiene-audit-2026-07-10.md`.
 
 pub mod assemble;
 pub mod cold_review;

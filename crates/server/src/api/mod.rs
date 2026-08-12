@@ -1,4 +1,4 @@
-//! HTTP/SSE surface handlers, partitioned by route group (see `docs/reference/api.md`).
+//! HTTP/SSE surface handlers, partitioned by route group (see `docs/spec/reference/api.md`).
 
 mod chat;
 mod goals;

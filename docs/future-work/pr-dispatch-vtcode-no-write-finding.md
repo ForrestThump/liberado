@@ -1,3 +1,12 @@
+---
+kind: finding
+status: active
+authority: evidence
+domain: coding-harness
+canonical_for: vtcode-no-write
+open_items: true
+---
+
 > 🐛 Open bug finding — tracked pending write-guard completion. See [`docs/roadmap.md`](../roadmap.md) for status.
 
 # PR-dispatch pipeline reliability — vtcode never writes files (in progress)

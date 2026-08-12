@@ -1,3 +1,12 @@
+---
+kind: plan
+status: active
+authority: implementation
+domain: coding-harness
+canonical_for: coding-tui
+open_items: true
+---
+
 # Agentic Coding TUI — Plan (goal-driven session surface + kernel completion gate)
 
 **Status**: plan, 2026-07-31; **updated 2026-08-06**. **S1 (completion gate) landed; S2 (wire events + goal surface) partial; S3 (project auth) landed (#66); S4 (checkpoints + mid-build resume + rewind) landed (#73); S5 (/loop) still unbuilt; S6 (coding fan-out + merge-back) landed (#72); S7 (strategist evals + gate default-on) still open.** (Slice tracking in [`roadmap.md`](../roadmap.md) §Priority 3). Pulled forward from

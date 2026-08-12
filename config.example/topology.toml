@@ -227,7 +227,7 @@ transport = { kind = "stdio", command = "riggers-mcp", args = ["--config", "rigg
 # `command` at its own built binary). Build first with `cargo build --bin liberado-chat-search-mcp`
 # (dev) or `--release` (prod), then point `command` at the resulting path. Exposes one tool,
 # `search_conversations`, backed by the same search `GET /api/conversations/search` uses — see
-# docs/roadmap/chat-search-plan.md.
+# docs/future-work/archive/chat-search-plan.md.
 # [[mcps]]
 # name = "chat-search"
 # description = "Search conversation history by keyword or regex"

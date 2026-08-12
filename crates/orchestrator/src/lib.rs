@@ -291,8 +291,8 @@ pub struct Orchestrator {
 /// configures (Decision 18 checkpoint #3) — everything except a pool's own [`RuntimeFactory`]
 /// (registries aren't `Clone`/shareable across orchestrators), its `CapabilitySet` ceiling, and its
 /// name. `crates/bootstrap/src/lib.rs`'s `configure_daemon` used to build these 6 values once via
-/// [`liberado_config::guard_context`] and then re-clone all of them into `Orchestrator::new` at
-/// every pool's call site (`docs/roadmap/hygiene-audit-2026-07-05.md`) — building one
+/// `liberado_config::guard_context` and then re-clone all of them into `Orchestrator::new` at
+/// every pool's call site (`docs/future-work/archive/hygiene-audit-2026-07-05.md`) — building one
 /// `OrchestratorInfra` and calling [`for_pool`](Self::for_pool) per pool collapses that back down to
 /// naming only what actually differs.
 ///
@@ -1426,7 +1426,7 @@ impl Orchestrator {
     /// spawned tasks can call it too: they run past this call's own borrow of `self` (moved into a
     /// `tokio::spawn`ed future), so they need an owned clone of the provider, not a method that
     /// borrows `&self`. Before this, `dispatch_parallel` built its own `Executor::new(...)` inline,
-    /// duplicating exactly this line rather than sharing it (`docs/roadmap/hygiene-audit-2026-07-05.md`).
+    /// duplicating exactly this line rather than sharing it (`docs/future-work/archive/hygiene-audit-2026-07-05.md`).
     async fn execute_with(
         provider: Arc<dyn Provider>,
         budget: &Budget,

@@ -1,8 +1,34 @@
+---
+kind: validation
+status: active
+authority: evidence
+domain: correctness
+open_items: false
+---
+
 # Validation
 
 Correctness artifacts for the Liberado workspace: mutation-testing reports, coverage analysis, and test-infrastructure design.
 
 **Summary document — start here:** [`mutation-testing-plan.md`](mutation-testing-plan.md). It holds the master plan and Phase 1–5 results across all 13 hardened crates (run order, methodology, catch rates, survivor triage, Phase 5 roadmap). The per-crate reports below are supporting detail.
+
+## Evidence provenance (required fields)
+
+Each result record should carry:
+
+| Field | Meaning |
+|-------|---------|
+| `commit` | Exact git commit of the tree under test |
+| `date` | When the run finished (ISO date) |
+| `command` | Exact command line |
+| `os_env` | OS and important environment facts |
+| `tool_version` | Tool and model version (e.g. cargo-mutants, rustc) |
+| `mutation` | Mutation applied, if any |
+| `artifact` | Path or digest of raw output |
+| `conclusion` | What was proved |
+| `currency` | `current` (still a guarantee) or `historical` (true at that revision) |
+
+Tests are **current** executable evidence. A mutation report is **historical** evidence that a test caught a defect at a particular revision.
 
 ## Layout
 

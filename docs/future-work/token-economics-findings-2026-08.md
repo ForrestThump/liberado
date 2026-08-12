@@ -1,3 +1,12 @@
+---
+kind: finding
+status: active
+authority: evidence
+domain: token-economics
+canonical_for: token-economics-findings
+open_items: true
+---
+
 # Token economics — where the tokens actually go (measured 2026-08-02)
 
 **Status:** findings + three work items. Nothing here is built yet.

@@ -12,7 +12,7 @@
 //! | [`MessagingChannel`] | duplex transport | send text/actions, receive inbound events |
 //! | [`ChatSurface`] | inbound free-form → Liberado | one chat turn (slash commands + face agent) |
 //!
-//! [`liberado_notify::Notifier`] remains the *one-way unattended* notify seam (cron/proposal
+//! `liberado_notify::Notifier` remains the *one-way unattended* notify seam (cron/proposal
 //! pings). A channel can implement both, or a thin adapter can wrap any [`MessagingChannel`] as a
 //! `Notifier` (see `liberado_notify::ChannelNotifier`).
 

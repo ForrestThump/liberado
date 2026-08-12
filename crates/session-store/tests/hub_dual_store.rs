@@ -1,6 +1,6 @@
 //! A4 — load-bearing `GoalSessionHub` behaviors on the **production** store type.
 //!
-//! `docs/architecture/failure-modes.md` §1: tests that only exercise
+//! `docs/spec/architecture/failure-modes.md` §1: tests that only exercise
 //! `GoalSessionStore` (in-memory) while production boots `SessionStore` create false confidence.
 //!
 //! This suite runs the **real hub** (`GoalSessionHub` API) against:

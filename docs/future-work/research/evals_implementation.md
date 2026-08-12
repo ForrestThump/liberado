@@ -36,7 +36,7 @@ instead, are below the quote.
 ## What applies here, and what does not
 
 **Step 3 is the strongest, and this repo has already proved it.** *"Right answer, wrong path = breaks
-next week"* is exactly [the delegate seam bug](../delegated-work-is-discarded-at-the-seam.md): an
+next week"* is exactly [the delegate seam bug](../archive/delegated-work-is-discarded-at-the-seam.md): an
 accurate, well-structured answer produced by a path that discarded the research and reconstructed the
 specifics from the model's priors. **Any output-quality grader would have scored that a pass.** What
 was false was the provenance, not the content.

@@ -1,3 +1,12 @@
+---
+kind: plan
+status: active
+authority: implementation
+domain: chat
+canonical_for: context-compaction-viewport
+open_items: true
+---
+
 # Context compaction re-architecture — viewport / side-summary model (CH3.1)
 
 **Status**: Proposed — not shipped.  

@@ -1,8 +1,32 @@
+---
+kind: index
+status: active
+authority: advisory
+domain: docs
+---
+
 # Liberado documentation
 
 **Single source of truth** for humans and agents. Liberado is a Rust-native **agentic orchestration** system: one daemon, capability-bounded tools (MCP), domain packs (life-ops, coding), and thin surfaces (TUI, WebUI, CLI, Telegram).
 
 If you are an agent: start at the [roadmap](roadmap.md) → [architecture overview](spec/architecture/overview.md) → [failure modes](spec/architecture/failure-modes.md). Read the failure modes document before changing safety or tests.
+
+**Authority model:** [doc-authority.md](spec/reference/doc-authority.md). **Catalog:** [CATALOG.md](CATALOG.md). **ADRs:** [decisions/](decisions/README.md).
+
+---
+
+## Authority table
+
+| Question | Authority |
+|---|---|
+| What does the program do now? | Code, tests, and crate Rustdoc |
+| What must remain true across crates? | `docs/spec/reference` and `docs/spec/architecture/contracts.md` |
+| Why was this design selected? | Accepted ADR under [decisions/](decisions/README.md) |
+| What should an agent implement next? | [future-work/backlog.md](future-work/backlog.md) only |
+| What is the broader direction? | [roadmap.md](roadmap.md) |
+| What did an experiment prove? | Dated record under [validation/](validation/README.md) |
+| What might we do later? | Proposed plan under [future-work/](future-work/README.md) |
+| What happened before? | [future-work/archive/](future-work/archive/README.md) and git history |
 
 ---
 
@@ -11,10 +35,12 @@ If you are an agent: start at the [roadmap](roadmap.md) → [architecture overvi
 | Folder | Contents |
 |--------|----------|
 | **`spec/`** | Design specs, living architecture narrative, reference docs — the truth about how the system works |
+| **`decisions/`** | Architecture Decision Records (mostly immutable; supersede rather than edit) |
 | **`impl/`** | Developer guides, setup, contribution workflow — how to build and work here |
 | **`future-work/`** | Forward-looking: plans, ideas, research, historical archives — what might happen next |
 | **`validation/`** | Correctness: mutation testing reports, coverage analysis |
 | **`project/`** | Meta: handoffs, design questions |
+| **`CATALOG.md`** | Generated repository-wide document catalog |
 
 ---
 
@@ -38,8 +64,10 @@ Per-crate detail: generated [crate map](spec/reference/crate-map.md) + each crat
 | Document | Path | Purpose |
 |----------|------|---------|
 | **Roadmap** | [roadmap.md](roadmap.md) | Living single-page roadmap |
+| **Backlog** | [future-work/backlog.md](future-work/backlog.md) | Next implementation items only |
+| **Doc authority** | [spec/reference/doc-authority.md](spec/reference/doc-authority.md) | What each document may claim |
 | **Failure modes** | [spec/architecture/failure-modes.md](spec/architecture/failure-modes.md) | Six recurring bug classes |
-| **Architecture decisions** | [spec/architecture-decisions.md](spec/architecture-decisions.md) | Frozen design decisions (ADRs) |
+| **Architecture decisions** | [decisions/README.md](decisions/README.md) | ADRs (why this design) |
 | **Config spec** | [spec/config-spec.md](spec/config-spec.md) | TOML config file contract |
 | **Dispatch logic** | [spec/dispatch-logic-spec.md](spec/dispatch-logic-spec.md) | Dispatcher design |
 | **API reference** | [spec/reference/api.md](spec/reference/api.md) | HTTP/SSE surface |

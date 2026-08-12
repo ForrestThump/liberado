@@ -1,7 +1,7 @@
 //! # liberado-server
 //!
 //! The Liberado daemon process, as a library: it assembles the provider/chat/daemon (via
-//! `liberado_bootstrap`), spawns the vault watch loop, and serves the HTTP/SSE API (`docs/reference/api.md`)
+//! `liberado_bootstrap`), spawns the vault watch loop, and serves the HTTP/SSE API (`docs/spec/reference/api.md`)
 //! plus the built web frontend. The `liberado serve` subcommand calls [`run`]; this crate ships no
 //! binary and does not init the global tracing subscriber (the CLI owns that, so a library embedding
 //! us doesn't fight over it).
@@ -254,7 +254,7 @@ pub async fn run(vault_path: String) -> Result<(), Box<dyn std::error::Error>> {
     // Every reaction is a hosted background session on the hub (E3) — joinable, cancellable.
     .with_goal_hub(goals.clone());
 
-    // Shared state for chat-aware cron delivery (`docs/ideas/cron-delivery-timing-idea.md`): the
+    // Shared state for chat-aware cron delivery (`docs/future-work/ideas/cron-delivery-timing-idea.md`): the
     // sticky Telegram session id (also owned by the chat bridge) and the "last human message" clock
     // (also stamped by the approval bot). Built here so the daemon's delivery notifier and the
     // bot/bridge below all point at the same instances.
@@ -888,7 +888,7 @@ async fn build_chat(
 
     // CH3 context compaction: config-tier knobs → kernel runtime type (per-model absolute
     // triggers + daemon default). See `state::compaction_config_for_face`. Summaries use the face
-    // provider (docs/roadmap/context-compaction-plan.md §Summary generation).
+    // provider (docs/future-work/context-compaction-plan.md §Summary generation).
     let face_model = provider.model();
     let compact_cfg = crate::state::compaction_config_for_face(config, face_model.as_str());
     let compact_enabled = compact_cfg.enabled;

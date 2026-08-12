@@ -192,7 +192,7 @@ impl Daemon {
         self
     }
 
-    /// Attach a dispatcher so reactable changes are routed to a [`DispatchDecision`]. Without one,
+    /// Attach a dispatcher so reactable changes are routed to a `DispatchDecision`. Without one,
     /// the daemon runs in watch-only mode ([`ReactionOutcome::Observed`]). The `catalog` +
     /// `capabilities` form the disjoint context the dispatcher reasons over. `catalog` is the same
     /// shared, live `CapabilityCatalog` the server's API and (when attached) chat's own dispatch
@@ -202,7 +202,7 @@ impl Daemon {
     /// setter, so there is no call-order hazard: an earlier `with_zone_write_classes` builder method
     /// silently did nothing if called before this one (no `DispatcherContext` yet to attach to);
     /// folding it into this call's own parameters makes that ordering mistake impossible
-    /// (`docs/roadmap/hygiene-audit-2026-07-05.md`).
+    /// (`docs/future-work/archive/hygiene-audit-2026-07-05.md`).
     ///
     /// Attaches to the always-present `"default"` pool — every event that doesn't name a different
     /// pool (`EventPayload.pool`) routes here, exactly as if pools didn't exist. See

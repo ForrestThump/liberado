@@ -1,4 +1,27 @@
+---
+kind: validation
+status: historical
+authority: evidence
+domain: correctness
+open_items: false
+last_verified: 2026-07-29
+---
+
 # Mutation Testing Plan — Crate Run Order & Results
+
+## Provenance
+
+| Field | Value |
+|-------|-------|
+| **commit** | Aggregate of Phase 1–4 campaigns (2026-07); see per-crate reports |
+| **date** | 2026-07-29 (Phase 4 summary window) |
+| **command** | `cargo mutants --package liberado-<name> --cap-lints true` |
+| **os_env** | Local mutation runs; CI does not re-run full mutant campaigns |
+| **tool_version** | cargo-mutants (see per-crate reports, e.g. 27.1.0) |
+| **mutation** | Full viable-mutant campaigns per crate |
+| **artifact** | This plan + `docs/validation/mutation-testing/*` |
+| **conclusion** | Primary crates hardened; Phase 4 catch rates vary by crate; survivors triaged |
+| **currency** | historical — executable guarantee is the test suite on current `main` |
 
 ## Summary — All Phases Complete
 

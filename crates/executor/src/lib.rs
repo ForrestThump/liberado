@@ -20,7 +20,7 @@
 //! a single nudge if the model answers without filing, after which its prose is wrapped as a
 //! `Report` rather than lost. The actual MCP wiring (a turbomcp-backed [`ToolRuntime`]) and
 //! threading write-provenance through it are deliberately *out* of this crate — the engine only
-//! depends on the trait, so it is testable with a mock runtime and a [`MockProvider`].
+//! depends on the trait, so it is testable with a mock runtime and a `MockProvider`.
 
 mod budget;
 mod risk_gated;
@@ -109,7 +109,7 @@ pub const WRAP_UP_TURNS: u32 = 3;
 /// real live finding from `liberado-heuristics-tuner`'s executor-layer tuning (a scenario needing
 /// two distinct tool calls scored 0/6 across two independent runs, even under system prompts that
 /// explicitly instructed both calls — the nudge's own wording was working against the prompt at
-/// exactly the moment it mattered, docs/roadmap/heuristics-tuning-engine-plan.md).
+/// exactly the moment it mattered, docs/future-work/heuristics-tuning-engine-plan.md).
 /// How many times a run will hand a malformed `submit_report` back to the model before giving up.
 ///
 /// Two, because the failure it guards is a schema slip the model corrects on being told (a missing
@@ -127,7 +127,7 @@ genuinely cannot proceed), call `submit_report` with your final result. Do not r
 /// it could react to. Matches the threshold comparable harnesses use for the same failure mode
 /// (opencode/kilocode's `DOOM_LOOP_THRESHOLD`, VTCode's `LoopDetector`) — evidence this needs an
 /// engine-level guard, not just prompt wording, came from a live reproduction of
-/// `docs/roadmap/multi-step-execution-reliability-finding.md`: DeepSeek and Gemini both got stuck
+/// `docs/future-work/archive/multi-step-execution-reliability-finding.md`: DeepSeek and Gemini both got stuck
 /// calling `deepwiki` 3-6 times in a row (every call succeeded; the result was just an unhelpful,
 /// repeatable answer) and never reached the second required tool, burning the whole turn budget. A
 /// tool call *succeeding* every time denies the model the one signal ("that failed") it reliably
@@ -3159,7 +3159,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_doom_loop_gets_its_own_nudge_even_after_the_cycle_guard_already_struck_once() {
-        // Regression for the shared-counter bug (`docs/roadmap/hygiene-audit-2026-07-05.md` P2.1):
+        // Regression for the shared-counter bug (`docs/future-work/archive/hygiene-audit-2026-07-05.md` P2.1):
         // the short-cycle guard strikes first (tool-a/tool-b alternating), then, entirely
         // unrelated, `search` repeats 3x in a row for the FIRST time. With one counter shared
         // between both mechanisms, doom-loop's first-ever detection would have inherited the

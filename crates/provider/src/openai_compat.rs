@@ -8,7 +8,7 @@
 //!
 //! Before this was extracted, `liberado-provider-deepseek` and `liberado-provider-openrouter` had
 //! byte-for-byte identical copies of everything in this module (found via `cargo dupes`,
-//! `docs/roadmap/hygiene-audit-2026-07-04.md`) — a bug in this translation logic needed fixing
+//! `docs/future-work/archive/hygiene-audit-2026-07-04.md`) — a bug in this translation logic needed fixing
 //! twice, and a third OpenAI-compatible backend would have been a third copy.
 
 use std::collections::{HashMap, HashSet};
@@ -130,7 +130,7 @@ pub fn accumulate_tool_deltas(acc: &mut Vec<ToolAcc>, deltas: &[Value]) {
 /// assembled response as the final [`StreamItem::Done`].
 ///
 /// Extracted from `liberado-provider-deepseek`/`liberado-provider-openrouter`, which had this loop
-/// duplicated verbatim (`docs/roadmap/hygiene-audit-2026-07-05.md`) — unlike the request/response
+/// duplicated verbatim (`docs/future-work/archive/hygiene-audit-2026-07-05.md`) — unlike the request/response
 /// mapping functions above (already shared before this), the streaming loop is where chunk-boundary
 /// bugs actually hide, so it's the part most worth not maintaining twice. Callers own the HTTP POST,
 /// status-code check, and building `name_map` (via [`build_tool_name_map`]) — this only owns turning
@@ -400,7 +400,7 @@ fn parse_usage(u: &Value) -> Option<Usage> {
 /// (e.g. OpenRouter's `402` for insufficient account credits) into the same `InvalidRequest`
 /// bucket — the last per-backend difference between what used to be two separate `map_status`
 /// copies in `liberado-provider-deepseek`/`liberado-provider-openrouter`
-/// (`docs/roadmap/hygiene-audit-2026-07-05.md`), now just a data parameter.
+/// (`docs/future-work/archive/hygiene-audit-2026-07-05.md`), now just a data parameter.
 pub fn map_status(status: u16, body: String, extra_client_error_status: &[u16]) -> ProviderError {
     match status {
         429 => ProviderError::RateLimited,

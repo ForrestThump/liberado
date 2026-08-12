@@ -1,3 +1,12 @@
+---
+kind: plan
+status: active
+authority: implementation
+domain: ops
+canonical_for: local-build-ship
+open_items: true
+---
+
 # Build on the dev machine, ship the artifact
 
 **Status**: wanted, blocked on disk. Written 2026-08-02 after measuring why a deploy takes so long.

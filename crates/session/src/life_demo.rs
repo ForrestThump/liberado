@@ -29,7 +29,7 @@ impl LifeOpsDemoRunner {
     /// through the [`InputChannel`], echo it, and succeed. Exercises the session-focus S1 kernel
     /// primitive (input channel + `AwaitingInput` + idle budget) without any coding dependency.
     ///
-    /// Only reached when the session's grant permits [`Capability::AskHuman`] — see [`run`].
+    /// Only reached when the session's grant permits [`Capability::AskHuman`] — see `run`.
     async fn run_interactive(
         &self,
         session_id: &str,

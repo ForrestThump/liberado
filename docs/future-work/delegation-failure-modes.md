@@ -1,3 +1,12 @@
+---
+kind: finding
+status: historical
+authority: evidence
+domain: delegation
+canonical_for: delegation-failure-modes
+open_items: false
+---
+
 # How delegated PRs go wrong
 
 Observed over 15 PRs across three rounds (2026-08-01 → 08-03), written by **Grok** (#33–#37, #39)

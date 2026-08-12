@@ -1,3 +1,12 @@
+---
+kind: plan
+status: active
+authority: implementation
+domain: coding-harness
+canonical_for: agentic-mesh-coding-pack
+open_items: true
+---
+
 # Rust-Native Agentic Orchestration Plan
 
 > **Filename note:** path still says `coder` for link stability. The plan is for a **general agentic

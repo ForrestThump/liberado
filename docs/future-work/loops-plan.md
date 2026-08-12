@@ -1,3 +1,12 @@
+---
+kind: plan
+status: active
+authority: implementation
+domain: loops
+canonical_for: loops
+open_items: true
+---
+
 # Loops — plan (scheduled recurrence over goals)
 
 **Status**: plan, 2026-07-12 — no code yet.  

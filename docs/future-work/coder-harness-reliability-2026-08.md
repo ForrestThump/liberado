@@ -1,3 +1,12 @@
+---
+kind: finding
+status: active
+authority: evidence
+domain: coding-harness
+canonical_for: coder-harness-reliability-2026-08
+open_items: true
+---
+
 # Coding harness reliability — measurement and fixes, 2026-08
 
 **Status**: Active. Fixes through PR #119 are on `main`. The measurement is real but incomplete —

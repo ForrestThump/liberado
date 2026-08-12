@@ -1,3 +1,14 @@
+---
+kind: finding
+status: implemented
+authority: evidence
+domain: delegation
+canonical_for: delegated-work-seam
+open_items: false
+---
+
+> **Archived.** This plan is not current truth. Open work lives in [backlog.md](../backlog.md) and [roadmap.md](../../roadmap.md). See [doc-authority.md](../../spec/reference/doc-authority.md).
+
 # A delegated subagent's work is discarded at the seam
 
 **Status**: **payload fixed 2026-08-02 in `e0fde79`** for the `DispatchSubagent` path, with the
@@ -9,7 +20,7 @@ researched.
 > **has landed**. `Orchestrator::output_contract` now picks the contract from where the report is
 > going, and a research dispatch whose delivery is `Summarize` — a chat `delegate` — is given
 > `relay_directive()`: its summary *is* the material. The call site is on the `DispatchSubagent`
-> path ([`orchestrator/src/lib.rs:943`](../../crates/orchestrator/src/lib.rs#L943)).
+> path ([`orchestrator/src/lib.rs:943`](../../../crates/orchestrator/src/lib.rs#L943)).
 >
 > This header said "not yet fixed" for a day after it was fixed, and that cost a round of planning:
 > round 3 §1 was specced against it. **Diagnosis pages need their status checked against the code,
@@ -24,7 +35,7 @@ researched.
 
 A chat `delegate` goes through the dispatch pack to `dispatcher.dispatch()`, which may classify it
 as **`ExecuteDirect`** rather than `DispatchSubagent`. That branch builds its task from
-[`DIRECT_INSTRUCTIONS`](../../crates/orchestrator/src/lib.rs#L107) alone and appends **no output
+[`DIRECT_INSTRUCTIONS`](../../../crates/orchestrator/src/lib.rs#L107) alone and appends **no output
 contract** — and those instructions ask for a *"concise, high-signal result"*, which is the same
 "short" contract that caused the original bug.
 
@@ -37,7 +48,7 @@ So the gap is structurally real. It is left open on purpose, for two reasons:
 2. **A blanket fix would be a token regression on the largest bucket.** Appending `relay_directive`
    to every read-only `ExecuteDirect` tells cron and vault-triggered runs to write full documents
    too. Those are `orchestrator`-role work, which is 92.8% of all token spend
-   ([`token-economics-findings-2026-08.md`](token-economics-findings-2026-08.md)) — paying document
+   ([`token-economics-findings-2026-08.md`](../token-economics-findings-2026-08.md)) — paying document
    output on every reactive lookup to fix a chat-only provenance problem.
 
 **Practical severity is low**, which is why this is a note and not a deliverable. The classifier picks
@@ -49,7 +60,7 @@ stays a decision rather than an accident.
 
 ## What happens
 
-`delegate` hands the face agent **only `result.summary`** ([`face.rs:124`](../../crates/main-agent/src/face.rs#L124)). The subagent's actual findings are never passed on. The face agent then writes the user-facing answer from that summary alone.
+`delegate` hands the face agent **only `result.summary`** ([`face.rs:124`](../../../crates/main-agent/src/face.rs#L124)). The subagent's actual findings are never passed on. The face agent then writes the user-facing answer from that summary alone.
 
 Measured on a real turn (conversation `01KZ0JQJ5V359744Y3Q2M5RGXC`, 2026-08-02):
 
@@ -87,7 +98,7 @@ Fix routing alone and a thin answer is delivered more efficiently. Fix payload a
 
 ## Routing: decided, and the decision is "leave it"
 
-There is existing machinery for direct delivery. **S4's return handoff** (landed 2026-07-12) has a server-side watcher, `spawn_return_handoff`, that calls [`ChatSessions::append_note`](../../crates/main-agent/src/sessions.rs) on terminal and writes the result into the parent conversation as an `Author::Named("goal-session")` node — no face agent, no dispatcher, no tokens. It is used by `/spawn`. `delegate` does not use it.
+There is existing machinery for direct delivery. **S4's return handoff** (landed 2026-07-12) has a server-side watcher, `spawn_return_handoff`, that calls [`ChatSessions::append_note`](../../../crates/main-agent/src/sessions.rs) on terminal and writes the result into the parent conversation as an `Author::Named("goal-session")` node — no face agent, no dispatcher, no tokens. It is used by `/spawn`. `delegate` does not use it.
 
 Pointing `delegate` at it was considered and **rejected** (Shiloh, 2026-08-02):
 
@@ -169,7 +180,7 @@ instead of a status line — which is what makes that choice possible at all.
 
 This was the open trade-off: a full research report inline in a tool result occupies the face agent's
 history on every later turn. It is now measured over the deployed journal
-([`token-economics-findings-2026-08.md`](token-economics-findings-2026-08.md)), and the numbers argue
+([`token-economics-findings-2026-08.md`](../token-economics-findings-2026-08.md)), and the numbers argue
 for relaying the material.
 
 Paired within-conversation and controlled for turn position (delegating and non-delegating turns sit

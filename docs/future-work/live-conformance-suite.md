@@ -1,3 +1,12 @@
+---
+kind: plan
+status: active
+authority: implementation
+domain: conformance
+canonical_for: live-conformance
+open_items: true
+---
+
 # The live conformance suite
 
 **Status**: Tier-1 **complete** (levels L1–L11); **Tier 3 open** (live, per-path, against the

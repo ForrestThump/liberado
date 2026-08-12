@@ -16,7 +16,7 @@
 //! [`Config::validate`] live in `liberado-config-loader`, not here — that crate's own cross-cutting
 //! validation needs the model, and this crate already depends on it, so putting the model here
 //! instead would create a cycle (moved from `liberado-common` 2026-07-04,
-//! `docs/roadmap/hygiene-audit-2026-07-04.md`). Re-exported below so callers still reach it as
+//! `docs/future-work/archive/hygiene-audit-2026-07-04.md`). Re-exported below so callers still reach it as
 //! `liberado_config::Config` et al. — "the config crate" stays the natural place to import it from.
 //!
 //! Deliberately dependency-light: only `liberado-common` + `liberado-config-loader`, no
@@ -44,7 +44,7 @@ pub use liberado_config_loader::{
 /// or `None` if that section fell back to its built-in [`Default`].
 ///
 /// Returned alongside [`Config`] by [`load_config`] so callers can report
-/// per-value provenance in diagnostics (Decision 14; see `docs/specs/liberado-config-spec.md`).
+/// per-value provenance in diagnostics (Decision 14; see `docs/spec/config-spec.md`).
 #[derive(Debug, Clone)]
 pub struct ConfigProvenance {
     /// The source file for `[topology]` values, or `None` if the file was absent.
@@ -339,7 +339,7 @@ fn merge_overlay_into(policy: &mut Policy, overlay: Policy) {
 
 /// Persist a human-approved **"everywhere"** grant to the machine-owned overlay
 /// ([`grants_overlay_path`]): append `capability` to `component`'s grant (creating the grant if
-/// absent). So the merged config stays valid ([`validate_merged_config`] requires every granted zone
+/// absent). So the merged config stays valid (`validate_merged_config` requires every granted zone
 /// be declared in `policy.zones`), it also ensures the overlay declares any vault/named zone the
 /// capability references, as [`WriteClass::AgentWritable`]. Because base zones merge first and win on
 /// write-class, this can only fill a genuinely-undeclared zone — it can never downgrade a protected

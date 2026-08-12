@@ -1,3 +1,12 @@
+---
+kind: finding
+status: active
+authority: advisory
+domain: coding-harness
+canonical_for: harness-bench-gaps
+open_items: true
+---
+
 # Harness-Bench — Task Gaps & Performance Levers
 
 **Status:** analysis, 2026-08-07. Based on live dogfood of 10 harness-bench tasks across deepseek-chat, v4-flash, and v4-pro.

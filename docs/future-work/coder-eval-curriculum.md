@@ -1,3 +1,12 @@
+---
+kind: plan
+status: active
+authority: implementation
+domain: coding-harness
+canonical_for: coder-eval-curriculum
+open_items: true
+---
+
 # Coder eval curriculum — progressive stress
 
 **Purpose**: score and improve Liberado's coding-worker system prompt with **increasingly hard**

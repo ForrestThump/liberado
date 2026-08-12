@@ -117,7 +117,7 @@ fn build_provider_from_profile(
     Some(Arc::new(provider))
 }
 
-/// A [`CoderProviderFactory`] that honours the model each coding role asks for.
+/// A `CoderProviderFactory` that honours the model each coding role asks for.
 ///
 /// The pack's own `SingleProviderFactory` returns the one daemon provider for every role,
 /// whatever `CoderRoleConfig::model` says — so `[coder.coder].model` selected nothing, and the
@@ -605,7 +605,7 @@ pub fn configure_daemon(
 ///
 /// Parallel construction to [`configure_daemon`]: same pools, same capability ceilings, and the
 /// **same** shared [`McpRegistry`] (clone) so hot-reload stays consistent. Register the returned pack
-/// on the [`liberado_session::GoalSessionHub`] and hand that hub to the daemon via
+/// on the `liberado_session::GoalSessionHub` and hand that hub to the daemon via
 /// [`Daemon::with_goal_hub`](liberado_daemon::Daemon::with_goal_hub).
 ///
 /// Returns `None` when there is no provider (watch-only) — without inference there is nothing to

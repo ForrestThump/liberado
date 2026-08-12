@@ -1,6 +1,6 @@
 //! The dispatcher-tuning generation loop: beam selection with Monte-Carlo-restart candidates, and
 //! the shared call [`Budget`] that bounds a tuning session
-//! (`docs/roadmap/heuristics-tuning-engine-plan.md`'s search strategy). A human sets the budget per
+//! (`docs/future-work/heuristics-tuning-engine-plan.md`'s search strategy). A human sets the budget per
 //! session — this module just enforces it.
 //!
 //! The executor/subagent-layer analog of everything here (`select_beam_executor`/
@@ -117,7 +117,7 @@ pub fn select_beam(scored: &[(Candidate, CandidateFitness)], beam_width: usize) 
 /// real run surfaced why this matters: without it, `select_beam` only ever compared a generation's
 /// new candidates against *each other*, so an independent cold start that happened to be merely
 /// "safe" (0 unsafe acts) could permanently evict a much more accurate incumbent it was never
-/// actually compared against, with no way back (`docs/roadmap/heuristics-tuning-engine-plan.md`'s
+/// actually compared against, with no way back (`docs/future-work/heuristics-tuning-engine-plan.md`'s
 /// "comprehensive run" findings, 2026-07-06 — accuracy regressed 0.77 to 0.33 this way).
 ///
 /// Falls back to the unchanged incumbent `beam` only if every candidate in the combined pool

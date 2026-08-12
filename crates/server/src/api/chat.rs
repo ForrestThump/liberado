@@ -75,7 +75,7 @@ pub struct ChatRequest {
     pub model: Option<String>,
 }
 
-/// Streaming chat â€” the shared client contract (see `docs/reference/api.md`). Returns
+/// Streaming chat â€” the shared client contract (see `docs/spec/reference/api.md`). Returns
 /// `text/event-stream`; events use the converged session-event vocabulary: `token` (answer
 /// delta), `tool_started` (`{name,args_preview}`), `tool_finished` (`{name,ok,result_preview}`),
 /// `session_finished` (`{status,summary}`), `failed` (`{message}`). Available as both `POST`
@@ -636,7 +636,7 @@ pub struct ProfileRequest {
 /// re-authorise itself" a structural property rather than a convention.
 ///
 /// `POST` rather than `GET` is load-bearing for the same reason. A granted web-fetching MCP can
-/// reach the daemon's own API over loopback (see `docs/reference/api.md`), and a fetcher that only
+/// reach the daemon's own API over loopback (see `docs/spec/reference/api.md`), and a fetcher that only
 /// issues `GET`s cannot reach this. That is an incidental defence, not the guarantee — the guarantee
 /// is the tool catalog — but it is the reason not to make this a convenience `GET`.
 pub async fn set_conversation_profile(
@@ -816,7 +816,7 @@ pub async fn get_conversation(
 /// that keeps `GET /api/conversations/{id}` honoring `chat-client-contract` instead of leaking an
 /// internal type through a hand-rolled `serde_json::json!` literal.
 ///
-/// Carries [`MessageNode::model`] so clients (and the Tier 3 suite) can cross-check which model
+/// Carries `MessageNode::model` so clients (and the Tier 3 suite) can cross-check which model
 /// actually ran a turn without a second API.
 fn chat_message_from_node(n: liberado_conversation_store::MessageNode) -> ChatMessage {
     let m = n.message;

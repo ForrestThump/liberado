@@ -1,3 +1,12 @@
+---
+kind: plan
+status: active
+authority: implementation
+domain: product
+canonical_for: implementation-backlog
+open_items: true
+---
+
 # Backlog — implement in this order
 
 Maintained 2026-08-11. This file is an ordered work queue. Take the first open, unblocked item in
@@ -210,7 +219,7 @@ measurement is in [`token-economics-findings-2026-08.md`](token-economics-findin
 
 | # | What | Pointer |
 |---|---|---|
-| **B1** | **`ExecuteDirect` gets no output contract**, and `DIRECT_INSTRUCTIONS` asks for a *"concise, high-signal result"* — the shape of the seam bug. **Do not blanket-fix**: it carries no `Delivery`, so this would tell every cron and vault run to write documents. Needs a destination first. | [`delegated-work-is-discarded-at-the-seam.md`](delegated-work-is-discarded-at-the-seam.md) |
+| **B1** | **`ExecuteDirect` gets no output contract**, and `DIRECT_INSTRUCTIONS` asks for a *"concise, high-signal result"* — the shape of the seam bug. **Do not blanket-fix**: it carries no `Delivery`, so this would tell every cron and vault run to write documents. Needs a destination first. | [`delegated-work-is-discarded-at-the-seam.md`](archive/delegated-work-is-discarded-at-the-seam.md) |
 
 ## Band E — homelab dogfood asks (2026-08-08)
 

@@ -1,3 +1,12 @@
+---
+kind: finding
+status: active
+authority: advisory
+domain: coding-harness
+canonical_for: harness-study-2026-08
+open_items: true
+---
+
 # What to take from pi, Hermes and Deep Agents
 
 **Status**: Research + proposal, 2026-08-11. No code. Read alongside

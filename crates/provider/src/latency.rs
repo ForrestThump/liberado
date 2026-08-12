@@ -1,6 +1,6 @@
 //! Latency instrumentation at the inference chokepoint.
 //!
-//! Every LLM roundtrip in Liberado goes through [`Provider::complete`] / [`complete_stream`], so
+//! Every LLM roundtrip in Liberado goes through [`Provider::complete`] / `complete_stream`, so
 //! wrapping the shared provider in [`MeteredProvider`] captures the whole face → dispatcher →
 //! orchestrator → face hop chain from one place — one [`LatencyEvent`] per call: role, model, wall
 //! time, time-to-first-token (streaming), and token usage.
@@ -10,7 +10,7 @@
 //! at the hop seams ([`with_correlation`]) — the chat turn keys the session id, the dispatch pack
 //! keys the dispatch `correlation_id` — so face turns and the work they trigger can be joined.
 //!
-//! See `docs/roadmap/latency-and-routing-observability-plan.md` (§4).
+//! See `docs/future-work/latency-and-routing-observability-plan.md` (§4).
 
 use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};

@@ -9,7 +9,7 @@
 //! **intake** (`verifiers.md` §3.4): a thinking model turns the human's rough writeup into either
 //! clarifying questions or a **draft contract** (description + success criteria + machine
 //! verifiers), the human answers/accepts through the session's human-input channel, and the
-//! accepted draft is **frozen** into a [`GoalContract`] before a single line is written.
+//! accepted draft is **frozen** into a `GoalContract` before a single line is written.
 //!
 //! This matters for a reason beyond convenience: the frozen contract supplies the **verifiers** —
 //! the machine gates the work is judged against. Before S7 this pack ran with `verifiers: []`, so

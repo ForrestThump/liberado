@@ -324,7 +324,7 @@ impl ApprovalBot {
     }
 
     /// Handle a permission-request scope tap. `scope = None` denies (Rejected); otherwise stamp the
-    /// chosen [`GrantScope`] and approve. Same pending/expired guards as [`set_status`]; the daemon's
+    /// chosen [`GrantScope`] and approve. Same pending/expired guards as `set_status`; the daemon's
     /// proposal reactor does the privileged work (apply the grant, execute the carried call).
     async fn set_permission_scope(
         &self,

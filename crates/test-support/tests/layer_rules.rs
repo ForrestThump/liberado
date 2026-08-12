@@ -2,7 +2,7 @@
 //!
 //! Every crate declares its layer in `[package.metadata.liberado] role = "..."`; this test parses
 //! every `crates/*/Cargo.toml` and asserts the dependency rules that used to live only in prose
-//! (`docs/architecture/modularity.md`, `docs/architecture/agentic-loops.md` "Dependency rules").
+//! (`docs/spec/architecture/modularity.md`, `docs/spec/architecture/agentic-loops.md` "Dependency rules").
 //! The `config-loader → coder-core` leak this replaces was found by a hand audit; the next one
 //! should be found here.
 //!
@@ -115,7 +115,7 @@ fn every_crate_declares_a_known_role() {
         assert!(
             !c.role.is_empty(),
             "{}: missing [package.metadata.liberado] role — new crates must pick a layer \
-             (see docs/architecture/contracts.md)",
+             (see docs/spec/architecture/contracts.md)",
             c.name
         );
         assert!(

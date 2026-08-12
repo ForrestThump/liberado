@@ -1,3 +1,12 @@
+---
+kind: finding
+status: active
+authority: evidence
+domain: coding-harness
+canonical_for: self-host-dogfood-2026-08
+open_items: true
+---
+
 > 🐛 Live dogfood finding — first self-host of the coding pack on the liberado repo itself
 > (backlog **C2**). Partially fixed; remaining bugs still open. Linked from
 > [`backlog.md`](backlog.md) Band C and [`roadmap.md`](../roadmap.md).
