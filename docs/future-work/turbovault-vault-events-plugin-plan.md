@@ -9,10 +9,10 @@ open_items: true
 
 # TurboVault vault-events plugin — integration plan
 
-**Status**: plan, 2026-07-18 (cold-start brief for implementers).  
-**Primary vertical**: reimplement PR [#24](https://github.com/Epistates/turbovault/pull/24) subscription behavior as a **default-off compiled-in plugin** on the Phase 2 plugin boundary ([#39](https://github.com/Epistates/turbovault/pull/39)).  
-**Umbrella**: [#34](https://github.com/Epistates/turbovault/issues/34) plugin & extensibility architecture.  
-**Attribution contract**: [#33](https://github.com/Epistates/turbovault/issues/33) (partially satisfied by #39; vault-events closes the rest).  
+**Status**: plan, 2026-07-18 (cold-start brief for implementers).
+**Primary vertical**: reimplement PR [#24](https://github.com/Epistates/turbovault/pull/24) subscription behavior as a **default-off compiled-in plugin** on the Phase 2 plugin boundary ([#39](https://github.com/Epistates/turbovault/pull/39)).
+**Umbrella**: [#34](https://github.com/Epistates/turbovault/issues/34) plugin & extensibility architecture.
+**Attribution contract**: [#33](https://github.com/Epistates/turbovault/issues/33) (partially satisfied by #39; vault-events closes the rest).
 **Liberado companion**: Decision 5 + `liberado-vault` / `VaultEventSource` (fallback already shipping).
 
 This doc is the single place for another agent to understand **what to build, where it lives, what not to reinvent, and which forks need a deliberate choice.** It is not a line-by-line design; open the linked PRs/issues when you need code shape.
@@ -173,14 +173,14 @@ High-signal behaviors to preserve:
 
 **Do not** put a second parallel event type system next to `HookBus`. Either:
 
-- **Fork A (preferred by Nick):** plugin translates watcher → `HookBus`; pull tools drain a **plugin-local** filtered view of the bus (or of a thin registry fed by the bus); or  
+- **Fork A (preferred by Nick):** plugin translates watcher → `HookBus`; pull tools drain a **plugin-local** filtered view of the bus (or of a thin registry fed by the bus); or
 - **Fork B:** plugin owns a private registry only (like #24) and *also* publishes a summary into `HookBus` for in-process plugins — risk of dual pipelines; only if pull semantics cannot map cleanly onto broadcast.
 
 Default recommendation: **Fork A** — one producer path into `HookBus`, filters/cursors as consumer-side state inside the vault-events provider.
 
 ### Known upstream watcher bug (do not paper over forever)
 
-`VaultEvent::FileRenamed` is often **dead** in practice: `notify` rename kinds collapse into `FileModified`. Cross-platform fix needs a correlation buffer (Linux Both vs macOS/Windows From/To).  
+`VaultEvent::FileRenamed` is often **dead** in practice: `notify` rename kinds collapse into `FileModified`. Cross-platform fix needs a correlation buffer (Linux Both vs macOS/Windows From/To).
 
 **Fork:**
 
@@ -231,24 +231,24 @@ Tool schemas should mirror #24’s intent (filter globs/kinds, timeout, max even
 
 ### Runtime responsibilities
 
-1. **Produce events**  
-   - Start / stop watcher for the **active vault** (lifecycle must track vault switch — #24 pinned first vault; modern host is active-vault aware; **do not regress**).  
-   - Map watcher events → `HookEvent` + best-effort `content_hash` / `attribution`.  
-   - `hooks.publish(...)`.  
+1. **Produce events**
+   - Start / stop watcher for the **active vault** (lifecycle must track vault switch — #24 pinned first vault; modern host is active-vault aware; **do not regress**).
+   - Map watcher events → `HookEvent` + best-effort `content_hash` / `attribution`.
+   - `hooks.publish(...)`.
    - On producer reset / unrecoverable lag internal state → `HookEvent::ResyncRequired`.
 
-2. **Serve models (MCP pull)**  
-   - Maintain optional per-session subscription state (filter, cursor, queue).  
-   - `subscribe` → handle; `fetch` long-poll → envelopes + next cursor + dropped/lag signal; `unsubscribe` / idle reaper.  
+2. **Serve models (MCP pull)**
+   - Maintain optional per-session subscription state (filter, cursor, queue).
+   - `subscribe` → handle; `fetch` long-poll → envelopes + next cursor + dropped/lag signal; `unsubscribe` / idle reaper.
    - On lag: surface explicitly so the model resyncs (list/read via core tools or `VaultApi` if co-process).
 
-3. **Stay behind the facade**  
-   - Prefer `VaultApi` for reads used in attribution.  
+3. **Stay behind the facade**
+   - Prefer `VaultApi` for reads used in attribution.
    - If the host must expose a watcher capability later, that is a **host PR**, not a plugin reaching into `VaultManager` privately (violates #39 safety story). If v1 truly cannot watch without a host extension, land a minimal **curated** host hook (e.g. “give plugin a watcher factory”) rather than leaking managers—document that as a dependency of the vertical.
 
-> **Implementation fork (host capability):**  
-> - **H1:** Host adds a small, documented “filesystem observation” capability to `PluginContext` (watcher stream or callback). Cleanest long-term.  
-> - **H2:** Plugin uses only public crates already allowed (if any) without managers — only if still true after #39; verify before assuming.  
+> **Implementation fork (host capability):**
+> - **H1:** Host adds a small, documented “filesystem observation” capability to `PluginContext` (watcher stream or callback). Cleanest long-term.
+> - **H2:** Plugin uses only public crates already allowed (if any) without managers — only if still true after #39; verify before assuming.
 > - **H3:** Temporary feature-gated host glue inside `turbovault` that constructs the provider with a watcher handle (not ideal, but unblocks Phase 3). Prefer graduating H3 → H1.
 
 ### Attribution design for envelopes (closes the open half of #33)
@@ -277,10 +277,10 @@ on FileModified(path):
 
 **Hard rules (non-negotiable):**
 
-1. Attribution is **never** an auth boundary.  
-2. Missing / ambiguous / lag → treat as external or `ResyncRequired`, never “trusted suppress.”  
-3. **No frontmatter provenance** (false suppress on human edit; pollutes the event stream).  
-4. Match on **content identity**, not “latest write to path by time” alone (handles coalesce + human-after-agent).  
+1. Attribution is **never** an auth boundary.
+2. Missing / ambiguous / lag → treat as external or `ResyncRequired`, never “trusted suppress.”
+3. **No frontmatter provenance** (false suppress on human edit; pollutes the event stream).
+4. Match on **content identity**, not “latest write to path by time” alone (handles coalesce + human-after-agent).
 5. Move/rename: attribute against the **resulting** path’s content; do not suppress a later recreation of the old path because a move entry still mentions it (Liberado regression; keep it).
 
 #### Approach A vs B (from #33) — how it maps now
@@ -297,8 +297,8 @@ on FileModified(path):
 
 When several agents share one TurboVault daemon:
 
-- Prefer provenance `source` + `correlation_id` from the **write path** (plugin write or core tool `_meta` / audit metadata once wired).  
-- Use `PluginRequestContext` / session fields for **tool-call identity**, not for FS events (FS has no session).  
+- Prefer provenance `source` + `correlation_id` from the **write path** (plugin write or core tool `_meta` / audit metadata once wired).
+- Use `PluginRequestContext` / session fields for **tool-call identity**, not for FS events (FS has no session).
 - Git author = optional history breadcrumb, not the loop-break key.
 
 Closing full core-tool → envelope correlation may require a small host change (publish on core writes, or expose audit query through a curated API). Track that as a **sub-deliverable of #33**, not a blocker for a first vault-events MVP that only attributes what it can and fail-opens otherwise.
@@ -339,7 +339,7 @@ Code anchors: `crates/vault/`, `crates/daemon/src/vault_source.rs`, `docs/spec/v
 
 ### Doc drift to fix when shipping
 
-- Specs saying “consume PR #24 natively” → “consume `vault_events` plugin / HookBus; rebuild of #24 on #39.”  
+- Specs saying “consume PR #24 natively” → “consume `vault_events` plugin / HookBus; rebuild of #24 on #39.”
 - `liberado-vault` comments citing “not-yet-merged PR #24” → point at this plan + plugin feature flag.
 
 ### Provenance field alignment
@@ -358,28 +358,28 @@ Use this section for **any** new vertical (tasks, vector, future Liberado-adjace
 
 ### Rules of the road
 
-1. **Compiled-in, feature-gated, PR-reviewed.** No dynamic load, no FFI, no marketplace install in v1.  
-2. **Depend on `turbovault-plugin-api` only** for host capabilities. Broader plugin-owned Rust APIs for non-MCP callers are allowed but reviewed as normal public API surface (documented in #39).  
-3. **Local tool names only**; host namespaces with `id`.  
-4. **Vertical feature defaults off** and must enable `plugin-api`.  
-5. **CAS writes only** through `VaultApi` — no blind overwrite escape hatch.  
-6. **Hooks are advisory** — lag, close, ExternalOrUnknown are first-class; never invent reliability the bus doesn’t have.  
-7. **Core tools stay flat and stable** when your feature is off.  
+1. **Compiled-in, feature-gated, PR-reviewed.** No dynamic load, no FFI, no marketplace install in v1.
+2. **Depend on `turbovault-plugin-api` only** for host capabilities. Broader plugin-owned Rust APIs for non-MCP callers are allowed but reviewed as normal public API surface (documented in #39).
+3. **Local tool names only**; host namespaces with `id`.
+4. **Vertical feature defaults off** and must enable `plugin-api`.
+5. **CAS writes only** through `VaultApi` — no blind overwrite escape hatch.
+6. **Hooks are advisory** — lag, close, ExternalOrUnknown are first-class; never invent reliability the bus doesn’t have.
+7. **Core tools stay flat and stable** when your feature is off.
 8. **Helpers shared across plugins** wait until 2–3 plugins show real overlap (#34).
 
 ### Minimal skeleton
 
-1. Crate under `crates/plugins/…` with `Plugin` + `PluginProvider` impls.  
-2. Descriptor with stable `id`.  
-3. `build`: store `VaultApi` + `HookBus` in the provider.  
-4. `tools` / `call_tool`: pure local names; validate args; map errors to `PluginError` codes.  
-5. Host: feature flag + register factory in `new_with_plugins` list.  
-6. Tests:  
-   - feature-off: core tool list unchanged;  
-   - feature-on: namespaced tools appear;  
-   - namespace / duplicate rejection;  
-   - write precondition conflict;  
-   - hook lag/resync if you use the bus;  
+1. Crate under `crates/plugins/…` with `Plugin` + `PluginProvider` impls.
+2. Descriptor with stable `id`.
+3. `build`: store `VaultApi` + `HookBus` in the provider.
+4. `tools` / `call_tool`: pure local names; validate args; map errors to `PluginError` codes.
+5. Host: feature flag + register factory in `new_with_plugins` list.
+6. Tests:
+   - feature-off: core tool list unchanged;
+   - feature-on: namespaced tools appear;
+   - namespace / duplicate rejection;
+   - write precondition conflict;
+   - hook lag/resync if you use the bus;
    - no access to forbidden internals (review-level).
 
 ### What belongs in a plugin vs core
@@ -392,12 +392,12 @@ Use this section for **any** new vertical (tasks, vector, future Liberado-adjace
 
 ### Safety checklist (every PR)
 
-- [ ] Blind overwrite impossible via plugin API  
-- [ ] No raw manager/server/session leakage  
-- [ ] Duplicate plugin id / tool rejected at boot  
-- [ ] Attribution / hooks fail open  
-- [ ] Default features do not pull the vertical  
-- [ ] Docs: enable instructions + non-goals  
+- [ ] Blind overwrite impossible via plugin API
+- [ ] No raw manager/server/session leakage
+- [ ] Duplicate plugin id / tool rejected at boot
+- [ ] Attribution / hooks fail open
+- [ ] Default features do not pull the vertical
+- [ ] Docs: enable instructions + non-goals
 
 ---
 
@@ -405,52 +405,52 @@ Use this section for **any** new vertical (tasks, vector, future Liberado-adjace
 
 ### Phase 0 — Prerequisites
 
-- [ ] Merge or track `feat/plugin-api-phase-2` (#39) on the fork used by Liberado/homelab.  
-- [ ] Confirm local `turbovault/` has `turbovault-plugin-api` and host mount path.  
-- [ ] Read #39 `docs/development/plugins.md` + this plan + #24 behavior notes.  
+- [ ] Merge or track `feat/plugin-api-phase-2` (#39) on the fork used by Liberado/homelab.
+- [ ] Confirm local `turbovault/` has `turbovault-plugin-api` and host mount path.
+- [ ] Read #39 `docs/development/plugins.md` + this plan + #24 behavior notes.
 - [ ] Decide H1/H2/H3 for watcher capability (§5).
 
 ### Phase 1 — Skeleton (no real watcher yet)
 
-- [ ] Scaffold `turbovault-plugin-vault-events`.  
-- [ ] Wire `plugin-vault-events` feature.  
-- [ ] Empty or stub tools; boot tests for namespace + feature-off parity.  
+- [ ] Scaffold `turbovault-plugin-vault-events`.
+- [ ] Wire `plugin-vault-events` feature.
+- [ ] Empty or stub tools; boot tests for namespace + feature-off parity.
 - [ ] Subscribe to `HookBus` in-process and assert host plugin-write envelopes are visible (proves context plumbing).
 
 ### Phase 2 — Watcher → HookBus
 
-- [ ] Active-vault-aware observation pipeline.  
-- [ ] Publish `HookEvent`s with fail-open attribution (MVP may start as always `ExternalOrUnknown` for FS).  
-- [ ] `ResyncRequired` on internal failure.  
-- [ ] Tests: create/modify/delete (and rename if fixed).  
+- [ ] Active-vault-aware observation pipeline.
+- [ ] Publish `HookEvent`s with fail-open attribution (MVP may start as always `ExternalOrUnknown` for FS).
+- [ ] `ResyncRequired` on internal failure.
+- [ ] Tests: create/modify/delete (and rename if fixed).
 - [ ] Document rename limitation if not fixed yet.
 
 ### Phase 3 — Model-facing pull tools (reimplement #24 UX)
 
-- [ ] Subscription registry **inside** the plugin (filters, long-poll fetch, reaper, drop counters).  
-- [ ] Tools: subscribe / fetch / unsubscribe (+ status if useful).  
-- [ ] Lag / dropped surfaced in fetch results.  
+- [ ] Subscription registry **inside** the plugin (filters, long-poll fetch, reaper, drop counters).
+- [ ] Tools: subscribe / fetch / unsubscribe (+ status if useful).
+- [ ] Lag / dropped surfaced in fetch results.
 - [ ] Stdio or HTTP MCP e2e: model-shaped client can long-poll changes.
 
 ### Phase 4 — Attribution quality (#33 remainder)
 
-- [ ] Content-identity join for watcher events (Approach A algorithm, B-shaped envelopes).  
-- [ ] Correlation for core MCP writes (host publish and/or audit metadata join).  
-- [ ] Multi-agent provenance via write path + request context; document Git author as non-sufficient.  
+- [ ] Content-identity join for watcher events (Approach A algorithm, B-shaped envelopes).
+- [ ] Correlation for core MCP writes (host publish and/or audit metadata join).
+- [ ] Multi-agent provenance via write path + request context; document Git author as non-sufficient.
 - [ ] Adversarial cases: human-after-agent, move then recreate source, coalesce bursts, lag mid-join.
 
 ### Phase 5 — Liberado optional consume
 
-- [ ] Keep L0 fallback green.  
-- [ ] Optional L1 adapter behind a Liberado config flag (HTTP subscribe/fetch).  
-- [ ] Parity tests: same external edit produces one reaction under L0 and L1.  
+- [ ] Keep L0 fallback green.
+- [ ] Optional L1 adapter behind a Liberado config flag (HTTP subscribe/fetch).
+- [ ] Parity tests: same external edit produces one reaction under L0 and L1.
 - [ ] Update Decision 5 / architecture docs.
 
 ### Phase 6 — Upstream hygiene
 
-- [ ] Separate rename-correlation PR if not done.  
-- [ ] PR to Epistates with default-off feature, tests, plugins.md update.  
-- [ ] Homelab image: opt-in feature flag for TV container.  
+- [ ] Separate rename-correlation PR if not done.
+- [ ] PR to Epistates with default-off feature, tests, plugins.md update.
+- [ ] Homelab image: opt-in feature flag for TV container.
 - [ ] Do not force Liberado binary change on TV default builds.
 
 ---
@@ -497,21 +497,21 @@ Mutation / property ideas (optional): drop counter monotonicity; never attribute
 
 **MVP (Phase 1–3):**
 
-- Default-off feature; core catalog unchanged when off.  
-- With feature on, models can subscribe/fetch vault changes via `vault_events_*`.  
-- Envelopes use shared types from `turbovault-plugin-api`.  
-- Lag/resync documented and tested.  
+- Default-off feature; core catalog unchanged when off.
+- With feature on, models can subscribe/fetch vault changes via `vault_events_*`.
+- Envelopes use shared types from `turbovault-plugin-api`.
+- Lag/resync documented and tested.
 - No manager/server leakage in the plugin crate.
 
 **Done for #33 (Phase 4):**
 
-- Watcher-origin events can be attributed when content matches a known write; otherwise ExternalOrUnknown.  
-- Multi-agent identity story documented (write provenance + request context, not static Git author).  
+- Watcher-origin events can be attributed when content matches a known write; otherwise ExternalOrUnknown.
+- Multi-agent identity story documented (write provenance + request context, not static Git author).
 - Explicit statement: attribution is not authz.
 
 **Done for Liberado (Phase 5, optional):**
 
-- Fallback still works.  
+- Fallback still works.
 - Optional path to consume TV plugin without dual semantics drift.
 
 ---
@@ -520,35 +520,35 @@ Mutation / property ideas (optional): drop counter monotonicity; never attribute
 
 ### Upstream
 
-- PR [#39](https://github.com/Epistates/turbovault/pull/39) — plugin API + host (implementation target).  
-- PR [#24](https://github.com/Epistates/turbovault/pull/24) — subscription behavior reference (closed).  
-- Issue [#33](https://github.com/Epistates/turbovault/issues/33) — provenance discussion; [Nick’s status comment](https://github.com/Epistates/turbovault/issues/33#issuecomment-5013573731).  
-- Issue [#34](https://github.com/Epistates/turbovault/issues/34) — umbrella phases & conventions.  
+- PR [#39](https://github.com/Epistates/turbovault/pull/39) — plugin API + host (implementation target).
+- PR [#24](https://github.com/Epistates/turbovault/pull/24) — subscription behavior reference (closed).
+- Issue [#33](https://github.com/Epistates/turbovault/issues/33) — provenance discussion; [Nick’s status comment](https://github.com/Epistates/turbovault/issues/33#issuecomment-5013573731).
+- Issue [#34](https://github.com/Epistates/turbovault/issues/34) — umbrella phases & conventions.
 - #39 doc: `docs/development/plugins.md` (once branch is checked out).
 
 ### Liberado
 
-- `docs/spec/vault-concurrency-spec.md` — Decision 5, Approach A, zones, idempotency.  
-- `docs/decisions/` — ADRs 5, 6, 18, 19.  
-- `docs/spec/life-os-architecture.md` §5 — triggering layer (update when plugin lands).  
-- `crates/vault/` — attribution + write adapter.  
+- `docs/spec/vault-concurrency-spec.md` — Decision 5, Approach A, zones, idempotency.
+- `docs/decisions/` — ADRs 5, 6, 18, 19.
+- `docs/spec/life-os-architecture.md` §5 — triggering layer (update when plugin lands).
+- `crates/vault/` — attribution + write adapter.
 - `crates/daemon/src/vault_source.rs` — production EventSource fallback.
 
 ### Local repo notes
 
-- Sibling `turbovault/` path dep may lag upstream; do not assume `plugin-api` exists until Phase 0.  
+- Sibling `turbovault/` path dep may lag upstream; do not assume `plugin-api` exists until Phase 0.
 - Homelab currently builds TV from fork branches (`develop` etc.) — feature flags must be set in that Dockerfile/build when enabling the vertical.
 
 ---
 
 ## 13. Suggested first PR sequence (for the implementing agent)
 
-1. **Upstream (or fork):** merge/track #39.  
-2. **Skeleton PR:** empty `vault_events` plugin + feature flag + feature-off parity tests.  
-3. **Watcher→bus PR:** produce envelopes; MVP attribution ExternalOrUnknown.  
-4. **Tools PR:** pull subscribe/fetch/unsubscribe + e2e.  
-5. **Attribution PR:** content join + core-write correlation design (may split host changes).  
-6. **Rename PR:** independent watcher correctness.  
+1. **Upstream (or fork):** merge/track #39.
+2. **Skeleton PR:** empty `vault_events` plugin + feature flag + feature-off parity tests.
+3. **Watcher→bus PR:** produce envelopes; MVP attribution ExternalOrUnknown.
+4. **Tools PR:** pull subscribe/fetch/unsubscribe + e2e.
+5. **Attribution PR:** content join + core-write correlation design (may split host changes).
+6. **Rename PR:** independent watcher correctness.
 7. **Liberado docs/adapter PR:** optional; only after 3–4 are stable.
 
 Each PR should stay reviewable; do not bundle rename correlation + pull registry + Liberado L1 in one change.

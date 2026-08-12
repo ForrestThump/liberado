@@ -9,25 +9,27 @@ open_items: false
 
 # ADR-0007: Monorepo vs. Separate Repos Strategy
 
-**Status:** accepted  
-**Date:** 2026-07-02 (last update of the consolidated decision log; see git history for earlier revisions)  
-**ID:** ADR-0007 (`monorepo-workspace`)
+| Field | Value |
+|-------|-------|
+| Status | accepted |
+| Date | 2026-07-02 (from consolidated decision log; see git history) |
+| ID | ADR-0007 |
 
 ## Context
 
-"Loose coupling via separate repos" conflicts with heavy use of shared crates (`hook-common`, guards, types).
+See **Full historical body** for the original framing, open questions, and design discussion.
 
 ## Decision
 
-**One Cargo workspace (monorepo)** for the Liberado system — `common`, `hook-common`, `main-agent` (daemon), `liberado-dispatcher`, `liberado-memory-mcp`, the MCP crates, the hook crates, and `tui`. Crate boundaries are kept clean so any crate can be extracted to its own repo later with low friction. **External dependencies** (`turbovault`, `turbomcp` and its crates) are *not* vendored into the workspace — they are consumed as **path dependencies during co-development** (the repos are checked out as siblings and Shiloh actively contributes to both) and **pinned to crates.io versions for release builds**. The existing `liberado-tool-helper-mcp` repo is folded in as the `liberado-memory-mcp` crate at implementation time. This resolves the original "loose coupling via separate repos vs. shared crates" tension in favor of shared crates now, extraction later if ever needed.
+One Cargo workspace (monorepo) for Liberado crates with clean boundaries for later extraction. External deps (turbovault, turbomcp) stay out of the workspace as path deps during co-development and crates.io pins for release. Fold prior tool-helper MCP work into the workspace as named crates at implementation time.
 
 ## Consequences
 
-See the full decision body below for implications, trade-offs, and interactions with other ADRs.
+Shared types and versioning stay coherent. Separate-repos-from-day-one is deferred to avoid version skew without enough benefit.
 
 ## Rejected alternatives
 
-Where the original log listed open options and a recommended path, the recommended path is the accepted decision. Alternatives discussed in the body were not adopted as the primary design.
+Separate repos for every crate from day one. Vendoring turbovault/turbomcp into this workspace.
 
 ## Implementation and tests
 
@@ -35,7 +37,7 @@ Where the original log listed open options and a recommended path, the recommend
 
 ## Supersedes / superseded by
 
-- **Supersedes:** (none — original decision number from the consolidated log)
+- **Supersedes:** (none — original decision number from the consolidated decision log)
 - **Superseded by:** (none)
 
 ## Full historical body

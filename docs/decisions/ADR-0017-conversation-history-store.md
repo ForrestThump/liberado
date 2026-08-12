@@ -9,34 +9,27 @@ open_items: false
 
 # ADR-0017: Conversation History Store
 
-**Status:** accepted  
-**Date:** 2026-07-02 (last update of the consolidated decision log; see git history for earlier revisions)  
-**ID:** ADR-0017 (`conversation-history-store`)
+| Field | Value |
+|-------|-------|
+| Status | accepted |
+| Date | 2026-07-02 (from consolidated decision log; see git history) |
+| ID | ADR-0017 |
 
 ## Context
 
-The chat agent (`main-agent`) holds conversation history in memory only — it is
-lost on restart and exists as a single session. How we persist it is load-bearing *not* for v1 chat
-but for everything the vision wants next: conversation **branching**, **parallel subagent dispatch**,
+See **Full historical body** for the original framing, open questions, and design discussion.
 
 ## Decision
 
-**An append-only log of message *nodes*, JSONL outside the vault, behind a
-`ConversationStore` trait.** Key points:
-- **Operational data, not vault knowledge.** Conversation history is the **same category as the
-  Decision 12 runtime trace** — append-only JSONL *outside* the vault Markdown, for the identical
-  reason: high-volume chat writes would pollute the change-stream the daemon reacts to. Pillar 1
-  ("vault is source of truth") is about *knowledge*; it is not a claim that chat logs are notes. The
-  vault bridge is a **one-way derived Markdown export** (a view, git-tracked, human/vector-friendly),
-  never the system of record and never on the live write path.
+Conversation history is an append-only log of message nodes (DAG: id + parent_id), JSONL outside the vault, behind a ConversationStore trait. Node ids are time-sortable (ULID/UUIDv7) assigned at append. One writer actor per conversation. Search is secondary; projections (Markdown/vector/recency) are rebuildable. Daemonless default (JSONL; SQLite/Postgres later).
 
 ## Consequences
 
-See the full decision body below for implications, trade-offs, and interactions with other ADRs.
+Branching, fan-out, and debate become additive without rewriting the executor's leaf-path view. High-volume chat does not pollute the vault reaction stream. Sortable ids cannot be retrofitted later.
 
 ## Rejected alternatives
 
-Where the original log listed open options and a recommended path, the recommended path is the accepted decision. Alternatives discussed in the body were not adopted as the primary design.
+Vault Markdown as system of record for chat. Flat Vec history as the only shape. Random UUIDv4 requiring a mandatory secondary index. Background DB daemon as the default.
 
 ## Implementation and tests
 
@@ -48,7 +41,7 @@ Where the original log listed open options and a recommended path, the recommend
 
 ## Supersedes / superseded by
 
-- **Supersedes:** (none — original decision number from the consolidated log)
+- **Supersedes:** (none — original decision number from the consolidated decision log)
 - **Superseded by:** (none)
 
 ## Full historical body

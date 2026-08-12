@@ -9,25 +9,27 @@ open_items: false
 
 # ADR-0015: Frontmatter Schema Validation + Migration
 
-**Status:** accepted  
-**Date:** 2026-07-02 (last update of the consolidated decision log; see git history for earlier revisions)  
-**ID:** ADR-0015 (`frontmatter-schema-validation`)
+| Field | Value |
+|-------|-------|
+| Status | accepted |
+| Date | 2026-07-02 (from consolidated decision log; see git history) |
+| ID | ADR-0015 |
 
 ## Context
 
-Recorded as Decision 15 in the historical architecture decision log.
+See **Full historical body** for the original framing, open questions, and design discussion.
 
 ## Decision
 
-**Open, per-zone schemas, tiered by writer** — designed so schema never fights zero-friction capture.
+Open, per-zone frontmatter schemas enforced on agent writes and normalized lazily for humans. Universal baseline on agent writes includes type and created; provenance stays out of frontmatter (audit log owns it). Schemas declared in config; migration is lazy with optional batch tooling.
 
 ## Consequences
 
-See the full decision body below for implications, trade-offs, and interactions with other ADRs.
+Humans keep zero-friction capture in inbox. Agents get reject-and-retry on schema violations. Extra keys remain allowed for Dataview/Bases.
 
 ## Rejected alternatives
 
-Where the original log listed open options and a recommended path, the recommended path is the accepted decision. Alternatives discussed in the body were not adopted as the primary design.
+Closed schemas that reject unknown keys. Blocking human writes on missing frontmatter. Storing provenance history in frontmatter.
 
 ## Implementation and tests
 
@@ -35,7 +37,7 @@ Where the original log listed open options and a recommended path, the recommend
 
 ## Supersedes / superseded by
 
-- **Supersedes:** (none — original decision number from the consolidated log)
+- **Supersedes:** (none — original decision number from the consolidated decision log)
 - **Superseded by:** (none)
 
 ## Full historical body

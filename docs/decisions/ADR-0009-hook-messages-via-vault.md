@@ -9,25 +9,27 @@ open_items: false
 
 # ADR-0009: How Hook Messages Reach the Main Agent
 
-**Status:** accepted  
-**Date:** 2026-07-02 (last update of the consolidated decision log; see git history for earlier revisions)  
-**ID:** ADR-0009 (`hook-messages-via-vault`)
+| Field | Value |
+|-------|-------|
+| Status | accepted |
+| Date | 2026-07-02 (from consolidated decision log; see git history) |
+| ID | ADR-0009 |
 
 ## Context
 
-Affects coupling between hooks and the core loop.
+See **Full historical body** for the original framing, open questions, and design discussion.
 
 ## Decision
 
-**Vault-mediated only** for v1. Hooks and detached subagents **write structured artifacts** (with provenance + `correlation_id`) to agent-writable surfacing zones (`reviews/`, `proposals/`, hook output locations); they do **not** push into the daemon or know anything about the main loop. ContextPolicy's **per-turn Job B** surfaces unseen items (queried by a since-last-seen cursor / `surfaced: false` frontmatter, marked surfaced after showing). This keeps hooks maximally decoupled — a hook's only outbound contract is "write a vault artifact." A direct high-priority push channel is **deferred** until a real need (e.g. an urgent interrupt that can't wait for the next turn) is proven.
+Hook and detached-subagent results reach the main agent only via vault-mediated artifacts (provenance + correlation_id) into agent-writable surfacing zones. ContextPolicy Job B surfaces unseen items; hooks never push into the daemon or know the main loop.
 
 ## Consequences
 
-See the full decision body below for implications, trade-offs, and interactions with other ADRs.
+Maximum decoupling: a hook's only outbound contract is writing a vault artifact. Direct high-priority push channels stay deferred until a proven need.
 
 ## Rejected alternatives
 
-Where the original log listed open options and a recommended path, the recommended path is the accepted decision. Alternatives discussed in the body were not adopted as the primary design.
+Direct push from hooks into the daemon event loop as the v1 primary path.
 
 ## Implementation and tests
 
@@ -35,7 +37,7 @@ Where the original log listed open options and a recommended path, the recommend
 
 ## Supersedes / superseded by
 
-- **Supersedes:** (none — original decision number from the consolidated log)
+- **Supersedes:** (none — original decision number from the consolidated decision log)
 - **Superseded by:** (none)
 
 ## Full historical body

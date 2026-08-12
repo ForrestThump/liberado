@@ -9,29 +9,27 @@ open_items: false
 
 # ADR-0005: Vault Concurrency, Write Provenance, and Loop-Breaking
 
-**Status:** accepted  
-**Date:** 2026-07-02 (last update of the consolidated decision log; see git history for earlier revisions)  
-**ID:** ADR-0005 (`vault-concurrency-and-provenance`)
+| Field | Value |
+|-------|-------|
+| Status | accepted |
+| Date | 2026-07-02 (from consolidated decision log; see git history) |
+| ID | ADR-0005 |
 
 ## Context
 
-The vault is the shared database with many writers (human in Obsidian, main agent, subagents, hooks). Without clear rules, we risk write races, data loss, and infinite reaction loops.
+See **Full historical body** for the original framing, open questions, and design discussion.
 
 ## Decision
 
-Resolved in `liberado-vault-concurrency-spec.md`. Summary:
-- **Provenance lives on the Turbovault audit log, not frontmatter** (frontmatter is last-writer-only state and goes stale on direct Obsidian edits). Rides on `AuditEntry.metadata._liberado_provenance` today; migrates to a typed field if the upstream proposal lands. `source` + `correlation_id` are mandatory on every agent write.
-- **Loop-breaking via Approach A (consumer-side hash join)**: attribute an observed change by matching `sha256(nfc(content))` against the `after_hash` of the latest audit entry for that path. Match + non-human + recent ? suppress; no match ? external/human edit ? react. Robust to races, coalescing, and human-edits-after-agent. A bounded seen-correlation set + child correlation IDs break cross-hook A?B?A chains; `MAX_REACTION_DEPTH` halts cascades.
-- **Consume Turbovault's native subscription (PR #24), not a custom emitter.** The daemon holds one subscription and does the hash-join + de-loop **centrally**, then routes already-attributed events to thin hooks. This supersedes the hand-built `vault-change-emitter` in `life-os-architecture.md` §5 (non-vault triggers still POST webhooks directly).
-- **Conc…
+Vault concurrency and loop-breaking follow the vault-concurrency spec: provenance lives on the Turbovault audit log (not frontmatter); consumer-side hash join attributes changes; the daemon consumes Turbovault's native subscription centrally; concurrency is optimistic with structured ConcurrentModification; per-zone write classes default unlisted zones to proposal_only; correlation IDs are idempotency keys. Attribution is best-effort, never the security boundary (Decision 4 remains security).
 
 ## Consequences
 
-See the full decision body below for implications, trade-offs, and interactions with other ADRs.
+Agents re-read and retry on conflict rather than overwrite. Reaction loops are suppressed when hashes match recent agent writes. Upstream Turbovault features are preferred over a custom emitter, with thin adapters for fallbacks.
 
 ## Rejected alternatives
 
-Where the original log listed open options and a recommended path, the recommended path is the accepted decision. Alternatives discussed in the body were not adopted as the primary design.
+Provenance only in note frontmatter (stales on Obsidian edits). Custom vault-change-emitter as the long-term design. Coarse locking or last-writer-wins without optimistic concurrency.
 
 ## Implementation and tests
 
@@ -40,7 +38,7 @@ Where the original log listed open options and a recommended path, the recommend
 
 ## Supersedes / superseded by
 
-- **Supersedes:** (none — original decision number from the consolidated log)
+- **Supersedes:** (none — original decision number from the consolidated decision log)
 - **Superseded by:** (none)
 
 ## Full historical body

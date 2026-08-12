@@ -58,4 +58,3 @@ coder-traces/
 # Python bytecode
 scripts/__pycache__/
 **/__pycache__/
-

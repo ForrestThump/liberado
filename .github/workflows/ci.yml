@@ -135,8 +135,12 @@ jobs:
         run: cargo deny check
 
   doc-links:
-    name: Docs link check
-    runs-on: ubuntu-latest
+    name: Docs link check (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
 
@@ -148,6 +152,10 @@ jobs:
 
       # Authority metadata, generated indexes, and obsolete path guards.
       # See docs/spec/reference/doc-authority.md and scripts/docs_meta.py.
+      # Runs on Windows too: scripts must not require PYTHONIOENCODING workarounds.
+      - name: Document metadata self-test
+        run: python scripts/docs_meta.py self-test
+
       - name: Document metadata and index lint
         run: python scripts/docs_meta.py lint
 

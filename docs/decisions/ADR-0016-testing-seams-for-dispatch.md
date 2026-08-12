@@ -9,25 +9,27 @@ open_items: false
 
 # ADR-0016: Testing Seams for Nondeterministic Dispatch
 
-**Status:** accepted  
-**Date:** 2026-07-02 (last update of the consolidated decision log; see git history for earlier revisions)  
-**ID:** ADR-0016 (`testing-seams-for-dispatch`)
+| Field | Value |
+|-------|-------|
+| Status | accepted |
+| Date | 2026-07-02 (from consolidated decision log; see git history) |
+| ID | ADR-0016 |
 
 ## Context
 
-Recorded as Decision 16 in the historical architecture decision log.
+See **Full historical body** for the original framing, open questions, and design discussion.
 
 ## Decision
 
-**Integration tests injected at the two ingress points** — a simulated **user prompt** or a simulated **vault event** — run through the live pipeline with externals mocked (mock provider behind the provider trait, mock MCP servers, a real temp vault, injected clock + correlation-ID source), asserting on observable outcomes (vault writes, proposals, the `Report`, which tool calls fired or were suppressed). The key enabler: safety lives in **deterministic guards that run *after* the model**, so most of the system is exactly assertable and only classification *quality* (never safety) is probabilistic. Two verification methods inside scenarios: **mock-provider replay** (deterministic CI regression) and a **real-model eval suite** reporting routing accuracy + safe-default rate + a **safety-regression metric that must never increase**. **Logging is the fixture pipeline**: the Decision 12 trace ? `record` mode ? golden scenario ? permanent regression test.
+Deterministic integration tests inject at user-prompt and vault-event ingress with mocked externals, asserting observable outcomes. Safety lives in post-model deterministic guards so most behavior is assertable; classification quality is separate eval. Logging/trace is the fixture pipeline (record mode to golden scenarios).
 
 ## Consequences
 
-See the full decision body below for implications, trade-offs, and interactions with other ADRs.
+CI can regress dispatch safety without live models. Real-model evals track routing accuracy and a non-increasing safety-regression metric.
 
 ## Rejected alternatives
 
-Where the original log listed open options and a recommended path, the recommended path is the accepted decision. Alternatives discussed in the body were not adopted as the primary design.
+Only end-to-end live-model tests for core safety. Safety encoded solely in the model prompt.
 
 ## Implementation and tests
 
@@ -35,7 +37,7 @@ Where the original log listed open options and a recommended path, the recommend
 
 ## Supersedes / superseded by
 
-- **Supersedes:** (none — original decision number from the consolidated log)
+- **Supersedes:** (none — original decision number from the consolidated decision log)
 - **Superseded by:** (none)
 
 ## Full historical body

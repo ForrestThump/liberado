@@ -9,25 +9,35 @@ open_items: false
 
 # ADR-0001: Liberado Invocation Model + Inference Responsibility
 
-**Status:** accepted  
-**Date:** 2026-07-02 (last update of the consolidated decision log; see git history for earlier revisions)  
-**ID:** ADR-0001 (`invocation-model-and-inference`)
+| Field | Value |
+|-------|-------|
+| Status | accepted |
+| Date | 2026-07-02 (from consolidated decision log; see git history) |
+| ID | ADR-0001 |
 
 ## Context
 
-This is the central architectural question. It determines whether liberado is a simple tool, an out-of-band orchestrator, or a full agent with its own inference. It directly affects token accounting, latency, framework fit (Rig vs custom loop), and how we realize quadratic prefill savings.
+See **Full historical body** for the original framing, open questions, and design discussion.
 
 ## Decision
 
-Liberado operates as an out-of-band intelligent dispatcher agent. It has access to the full MCP catalog (names + short descriptions) and receives minimal, goal-specific context from the main agent. It can:
+Liberado is an out-of-band intelligent dispatcher agent, not an in-loop tool call.
+
+It holds the full MCP catalog (names + short descriptions) and receives minimal, goal-specific context from the main agent. It may:
+
+- execute simple, high-confidence tool calls directly;
+- spawn narrowly-scoped subagents with disjoint context; or
+- escalate back to the main agent with structured uncertainty (Clarify) when needed.
+
+The main agent context stays free of tool definitions, internal dispatch reasoning, and low-level execution traces. Routing is safe-by-default (uncertainty degrades toward Clarify/proposal, never toward irreversible action); guards may only downgrade risk.
 
 ## Consequences
 
-See the full decision body below for implications, trade-offs, and interactions with other ADRs.
+Dispatch requires its own lightweight inference path and typed decision artifact. Token savings depend on keeping dispatcher and subagent contexts disjoint. Main-agent UX remains protected from tool catalog bloat, at the cost of an extra hop for classification and dispatch.
 
 ## Rejected alternatives
 
-Where the original log listed open options and a recommended path, the recommended path is the accepted decision. Alternatives discussed in the body were not adopted as the primary design.
+Pure in-loop tool-call invocation of liberado (no separate inference). Passing large overlapping main-agent context into the dispatcher (defeats quadratic prefill savings). Always escalating complex work without a direct-execute path.
 
 ## Implementation and tests
 
@@ -36,7 +46,7 @@ Where the original log listed open options and a recommended path, the recommend
 
 ## Supersedes / superseded by
 
-- **Supersedes:** (none — original decision number from the consolidated log)
+- **Supersedes:** (none — original decision number from the consolidated decision log)
 - **Superseded by:** (none)
 
 ## Full historical body

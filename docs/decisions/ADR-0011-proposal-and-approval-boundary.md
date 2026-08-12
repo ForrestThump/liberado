@@ -9,25 +9,27 @@ open_items: false
 
 # ADR-0011: Human-in-the-Loop / Proposal & Approval Boundary
 
-**Status:** accepted  
-**Date:** 2026-07-02 (last update of the consolidated decision log; see git history for earlier revisions)  
-**ID:** ADR-0011 (`proposal-and-approval-boundary`)
+| Field | Value |
+|-------|-------|
+| Status | accepted |
+| Date | 2026-07-02 (from consolidated decision log; see git history) |
+| ID | ADR-0011 |
 
 ## Context
 
-Some background actions (especially involving family, schedule, or external communication) should not be fully autonomous.
+See **Full historical body** for the original framing, open questions, and design discussion.
 
 ## Decision
 
-A **Proposal** is a structured vault artifact — the typed output already referenced by the dispatch guards (`liberado-dispatch-logic-spec.md` §6) and concurrency write-classes (`liberado-vault-concurrency-spec.md` §3).
+A Proposal is a structured vault artifact (typed output of dispatch guards and write classes). High-consequence or proposal_only actions write proposals rather than acting. Approval is a human vault edit (or TUI) that the daemon executes with the proposal's correlation_id; terminal proposals archive out of the active proposals directory. Default posture is conservative (propose, don't act).
 
 ## Consequences
 
-See the full decision body below for implications, trade-offs, and interactions with other ADRs.
+Full propose/approve/execute loop is closed for concrete high-consequence tool paths. Fuzzier cases may still Clarify. Active proposals/ stays reviewable.
 
 ## Rejected alternatives
 
-Where the original log listed open options and a recommended path, the recommended path is the accepted decision. Alternatives discussed in the body were not adopted as the primary design.
+Fully autonomous high-consequence external actions without a proposal. Classifier-judged approval instead of zone/consequence/guard rules.
 
 ## Implementation and tests
 
@@ -37,7 +39,7 @@ Where the original log listed open options and a recommended path, the recommend
 
 ## Supersedes / superseded by
 
-- **Supersedes:** (none — original decision number from the consolidated log)
+- **Supersedes:** (none — original decision number from the consolidated decision log)
 - **Superseded by:** (none)
 
 ## Full historical body

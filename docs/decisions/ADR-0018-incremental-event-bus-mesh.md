@@ -9,28 +9,27 @@ open_items: false
 
 # ADR-0018: Incremental Event-Bus Mesh (with checkpoints)
 
-**Status:** accepted  
-**Date:** 2026-07-02 (last update of the consolidated decision log; see git history for earlier revisions)  
-**ID:** ADR-0018 (`incremental-event-bus-mesh`)
+| Field | Value |
+|-------|-------|
+| Status | accepted |
+| Date | 2026-07-02 (from consolidated decision log; see git history) |
+| ID | ADR-0018 |
 
 ## Context
 
-The single enabler for the whole modularity vision — vault-optional, multiple
-dispatchers/executors, cron, partial deploys, self-improvement-as-a-service — is that components
-publish/subscribe events rather than calling each other directly. *How* we get there determines
-whether the substrate ships at all.
+See **Full historical body** for the original framing, open questions, and design discussion.
 
 ## Decision
 
-See body for full decision text.
+Adopt an incremental event-bus mesh: components publish/subscribe rather than calling each other directly, but migrate seams as touched—new components bus-native from day one. Safety (narrowing, zones, provenance, magnitude) stays in the bus layer. Concrete checkpoints (live catalog, coding-agent as bus service, interchangeable event sources including cron/vault-watch/webhooks) prevent silent stall.
 
 ## Consequences
 
-See the full decision body below for implications, trade-offs, and interactions with other ADRs.
+Vault-optional and multi-source reaction become feasible without a big-bang rewrite. Checkpoints make progress measurable against product features.
 
 ## Rejected alternatives
 
-Where the original log listed open options and a recommended path, the recommended path is the accepted decision. Alternatives discussed in the body were not adopted as the primary design.
+Big-bang mesh refactor before feature delivery. Leaving event wiring ad hoc with no checkpoints.
 
 ## Implementation and tests
 
@@ -39,7 +38,7 @@ Where the original log listed open options and a recommended path, the recommend
 
 ## Supersedes / superseded by
 
-- **Supersedes:** (none — original decision number from the consolidated log)
+- **Supersedes:** (none — original decision number from the consolidated decision log)
 - **Superseded by:** (none)
 
 ## Full historical body

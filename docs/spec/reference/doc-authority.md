@@ -49,7 +49,8 @@ open_items: true
 
 | Field | Allowed values |
 |---|---|
-| `status` | `draft`, `active`, `implemented`, `superseded`, `historical` |
+| `status` (plans, findings, indexes, policy, validation, architecture, reference, runbook) | `draft`, `active`, `implemented`, `superseded`, `historical` |
+| `status` (kind `decision` / ADRs) | `draft`, `proposed`, `accepted`, `superseded`, `historical` |
 | `kind` | `architecture`, `reference`, `decision`, `plan`, `finding`, `validation`, `runbook`, `index`, `policy` |
 | `authority` | `normative`, `implementation`, `advisory`, `evidence` |
 
@@ -57,16 +58,21 @@ Other fields (`domain`, `canonical_for`, `supersedes`, `superseded_by`,
 `open_items`, `last_verified`, `verified_against`, `generated`) are optional
 except where the lint rules require them.
 
+**Managed documents** are every `docs/**/*.md` file that carries YAML frontmatter,
+plus every root `docs/future-work/*.md` plan (which must have frontmatter). Vocabulary
+and required fields are enforced on **all** managed documents, not only root plans.
+
 ## CI rejection rules
 
 `python scripts/docs_meta.py lint` rejects:
 
 1. A root `docs/future-work/*.md` document without metadata.
-2. Two **active** documents with the same `canonical_for`.
-3. An `implemented` or `superseded` plan listed in the active future-work index.
-4. An **active** plan with `open_items` not set to `true`.
-5. A **normative** document that links into `archive/` as content authority.
-6. A generated index (`docs/future-work/README.md`, `docs/CATALOG.md`) that differs from the generator output.
+2. A managed document missing `kind` / `status` / `authority`, or using a value outside the kind-aware vocabulary (e.g. `status: banana` on an ADR).
+3. Two **active** (or decision `accepted`/`proposed`) documents with the same `canonical_for`.
+4. An `implemented` or `superseded` plan listed in the active future-work index.
+5. An **active** plan with `open_items` not set to `true`.
+6. A **normative** document that links into `archive/` as content authority.
+7. A generated index (`docs/future-work/README.md`, `docs/CATALOG.md`) that differs from the generator output.
 
 ## Plan completion rule
 

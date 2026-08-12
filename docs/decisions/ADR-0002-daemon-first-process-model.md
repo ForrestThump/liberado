@@ -9,28 +9,27 @@ open_items: false
 
 # ADR-0002: Daemon-First vs. TUI-First Process Model
 
-**Status:** accepted  
-**Date:** 2026-07-02 (last update of the consolidated decision log; see git history for earlier revisions)  
-**ID:** ADR-0002 (`daemon-first-process-model`)
+| Field | Value |
+|-------|-------|
+| Status | accepted |
+| Date | 2026-07-02 (from consolidated decision log; see git history) |
+| ID | ADR-0002 |
 
 ## Context
 
-Background autonomy requires long-running processes. If the main agent loop lives inside the TUI process, adding real background work (hooks firing while TUI is closed) will require a significant rewrite.
+See **Full historical body** for the original framing, open questions, and design discussion.
 
 ## Decision
 
-Daemon-first vs. TUI-first Process Model (Finalized)
-Decision: Daemon-first architecture.
-The core agent loop, liberado dispatcher, MCP/hook clients, and background work ownership live in a long-running daemon process. The ratatui TUI and optional webserver (axum) are clients that attach to the daemon.
-Rationale
+Daemon-first process model: the core agent loop, liberado dispatcher, MCP/hook clients, and background work live in a long-running daemon. The ratatui TUI and optional web API are thin clients that attach (socket/TCP/stdio). Closing the TUI must not stop background autonomy.
 
 ## Consequences
 
-See the full decision body below for implications, trade-offs, and interactions with other ADRs.
+Requires a client-daemon protocol and slightly higher always-on resource use. Enables hooks/schedules while the UI is closed and cleanly separates orchestration from presentation. Early UX can still auto-start the daemon under `liberado tui`.
 
 ## Rejected alternatives
 
-Where the original log listed open options and a recommended path, the recommended path is the accepted decision. Alternatives discussed in the body were not adopted as the primary design.
+TUI-first ownership of the main agent loop (would force a rewrite for headless background work). Embedding the only long-running loop inside the UI process.
 
 ## Implementation and tests
 
@@ -38,7 +37,7 @@ Where the original log listed open options and a recommended path, the recommend
 
 ## Supersedes / superseded by
 
-- **Supersedes:** (none — original decision number from the consolidated log)
+- **Supersedes:** (none — original decision number from the consolidated decision log)
 - **Superseded by:** (none)
 
 ## Full historical body

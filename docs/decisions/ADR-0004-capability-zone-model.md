@@ -9,25 +9,27 @@ open_items: false
 
 # ADR-0004: Capability / Zone Model — Concrete Data Structures and Semantics
 
-**Status:** accepted  
-**Date:** 2026-07-02 (last update of the consolidated decision log; see git history for earlier revisions)  
-**ID:** ADR-0004 (`capability-zone-model`)
+| Field | Value |
+|-------|-------|
+| Status | accepted |
+| Date | 2026-07-02 (from consolidated decision log; see git history) |
+| ID | ADR-0004 |
 
 ## Context
 
-This is the foundation of the entire security and containment story. "Path/zone guards" and "capability gates" are mentioned throughout but never defined. Retrofits here are extremely expensive.
+See **Full historical body** for the original framing, open questions, and design discussion.
 
 ## Decision
 
-See body for full decision text.
+Capability and zone model is first-class shared infrastructure (common crate types): Zone (path prefix/glob), Capability, CapabilitySet/Policy, and a check function at every MCP/hook boundary. Permissions are defined simply (YAML-style grants); zones cover vault areas. Capability may be narrowed at dispatch but never expanded. Enforcement is at each MCP/hook entry, not ambient authority.
 
 ## Consequences
 
-See the full decision body below for implications, trade-offs, and interactions with other ADRs.
+Security retrofits are avoided by defining types before MCP/hook code proliferates. Every boundary must call the guard. Static per-component grants plus dispatch-time narrowing are the initial authority path.
 
 ## Rejected alternatives
 
-Where the original log listed open options and a recommended path, the recommended path is the accepted decision. Alternatives discussed in the body were not adopted as the primary design.
+Leaving path/zone guards as prose without concrete types. Expanding capabilities after dispatch. Relying on ambient process authority instead of per-call checks.
 
 ## Implementation and tests
 
@@ -35,7 +37,7 @@ Where the original log listed open options and a recommended path, the recommend
 
 ## Supersedes / superseded by
 
-- **Supersedes:** (none — original decision number from the consolidated log)
+- **Supersedes:** (none — original decision number from the consolidated decision log)
 - **Superseded by:** (none)
 
 ## Full historical body

@@ -9,25 +9,27 @@ open_items: false
 
 # ADR-0012: Runtime Audit / Tracing Substrate
 
-**Status:** accepted  
-**Date:** 2026-07-02 (last update of the consolidated decision log; see git history for earlier revisions)  
-**ID:** ADR-0012 (`runtime-audit-tracing`)
+| Field | Value |
+|-------|-------|
+| Status | accepted |
+| Date | 2026-07-02 (from consolidated decision log; see git history) |
+| ID | ADR-0012 |
 
 ## Context
 
-"Fully auditable" currently only covers code + git state. Runtime behavior (dispatch decisions, tool calls, hook reactions) is invisible.
+See **Full historical body** for the original framing, open questions, and design discussion.
 
 ## Decision
 
-**`tracing` with structured spans** across the daemon, dispatcher, MCPs, and hooks from day one. **Dispatch decisions are instrumented specifically** (goal hash, retrieved guidance ids, action, confidence, rationale, guard downgrades, await/detach, outcome — `liberado-dispatch-logic-spec.md` §9) — this is the data that validates the routing and quadratic-savings theses.
+Use tracing with structured spans across daemon, dispatcher, MCPs, and hooks. Keep two trails distinct: Turbovault audit log (write provenance) vs Liberado runtime trace (dispatch, tools, hooks, errors) as append-only JSONL outside vault markdown.
 
 ## Consequences
 
-See the full decision body below for implications, trade-offs, and interactions with other ADRs.
+Dispatch quality and quadratic-savings theses become measurable. High-volume traces do not pollute the vault change stream the system reacts to.
 
 ## Rejected alternatives
 
-Where the original log listed open options and a recommended path, the recommended path is the accepted decision. Alternatives discussed in the body were not adopted as the primary design.
+Writing runtime traces into vault notes. Conflating write provenance with behavioral audit.
 
 ## Implementation and tests
 
@@ -35,7 +37,7 @@ Where the original log listed open options and a recommended path, the recommend
 
 ## Supersedes / superseded by
 
-- **Supersedes:** (none — original decision number from the consolidated log)
+- **Supersedes:** (none — original decision number from the consolidated decision log)
 - **Superseded by:** (none)
 
 ## Full historical body

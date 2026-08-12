@@ -9,25 +9,27 @@ open_items: false
 
 # ADR-0008: Subagent Execution Model (Isolation Level)
 
-**Status:** accepted  
-**Date:** 2026-07-02 (last update of the consolidated decision log; see git history for earlier revisions)  
-**ID:** ADR-0008 (`subagent-execution-model`)
+| Field | Value |
+|-------|-------|
+| Status | accepted |
+| Date | 2026-07-02 (from consolidated decision log; see git history) |
+| ID | ADR-0008 |
 
 ## Context
 
-Affects security isolation, complexity, resource usage, and KV-cache pressure on local inference.
+See **Full historical body** for the original framing, open questions, and design discussion.
 
 ## Decision
 
-**In-process subagents** (tokio tasks in the daemon) for v1, capped at `MAX_CONCURRENT_SUBAGENTS` (default 2) for KV-cache/homelab bounds. They are spawned through a `Subagent` boundary that takes `(goal, CapabilitySet, allowed_mcps, success_criteria, model, correlation_id)` and returns a `Report` — **the dispatcher never knows whether a subagent ran in-process or out-of-process**, so moving heavy/experimental subagents to separate processes later requires no dispatch-logic change. **Isolation model, stated honestly**: in-process subagents share the daemon's memory space, so their *only* containment is **capability narrowing enforced at the MCP boundary** (no ambient authority — a subagent holds only a narrowed MCP client) plus secret isolation (raw secrets never reach any subagent; inference via the daemon). This is "trust-the-hand-audited-code" isolation, adequate for v1 because all subagent code and prompts are ours; it is **not** adversarial isolation. Out-of-process subagents (OS sandbox) are the upgrade path if/when subagents ever run less-trusted prompts. Context slices are kept disjoint (goal + narrowed schemas + work context only) for KV-cache control and the quadratic-pre…
+In-process subagents (tokio tasks) for v1, capped by MAX_CONCURRENT_SUBAGENTS, spawned through a Subagent boundary the dispatcher does not specialize by isolation mode. Containment is capability narrowing at the MCP boundary plus secret isolation—not OS sandboxing. Isolation remains configurable for a later out-of-process upgrade.
 
 ## Consequences
 
-See the full decision body below for implications, trade-offs, and interactions with other ADRs.
+Adequate for trusted in-house prompts; not adversarial isolation. Context slices stay disjoint for KV-cache control. Process isolation is a config/path change, not a dispatch rewrite.
 
 ## Rejected alternatives
 
-Where the original log listed open options and a recommended path, the recommended path is the accepted decision. Alternatives discussed in the body were not adopted as the primary design.
+Out-of-process sandbox for every subagent in v1. Letting the dispatcher branch on in-process vs out-of-process. Ambient authority inside the daemon for subagent tools.
 
 ## Implementation and tests
 
@@ -35,7 +37,7 @@ Where the original log listed open options and a recommended path, the recommend
 
 ## Supersedes / superseded by
 
-- **Supersedes:** (none — original decision number from the consolidated log)
+- **Supersedes:** (none — original decision number from the consolidated decision log)
 - **Superseded by:** (none)
 
 ## Full historical body

@@ -9,30 +9,27 @@ open_items: false
 
 # ADR-0013: Provider Capability Floor / Minimum Contract
 
-**Status:** accepted  
-**Date:** 2026-07-02 (last update of the consolidated decision log; see git history for earlier revisions)  
-**ID:** ADR-0013 (`provider-capability-floor`)
+| Field | Value |
+|-------|-------|
+| Status | accepted |
+| Date | 2026-07-02 (from consolidated decision log; see git history) |
+| ID | ADR-0013 |
 
 ## Context
 
-Recorded as Decision 13 in the historical architecture decision log.
+See **Full historical body** for the original framing, open questions, and design discussion.
 
 ## Decision
 
-**Role-tiered, not a single floor.**
-- **Hard floor (every role)**: native **tool-calling** OR a reliable **JSON mode**. Text-only models are out of scope for v1 (constrained-decoding shim is the deferred escape hatch).
-- **Control plane (main agent + dispatcher)** — the capable models. The **dispatcher's hard requirement is reliable structured output** (the typed `DispatchDecision`); the main agent needs solid tool-calling + instruction-following + conversational quality.
-- **Work plane (subagents)** — floor is tool-calling; the **dispatcher picks the model per-dispatch by task complexity** (cheap ~8B for easy tasks, larger for hard ones — `DispatchDecision` already carries `model: Option<ModelChoice>`). This is where cheap models earn their keep.
-- **Mechanism (feeds the config validator, Decision 14)**: a `ModelProfile` declares each model's capabilities (`tool_calling`, `structured_output`, `context_window`, tier/cost). Config assigns models?roles; the loader **fail-fast rejects** any model that doesn't meet its role's required caps (this is what keeps dispatch from breaking on a model swap). Optional startup **canary smoke-test** verifies tool-calling/JSON actually work.
-- **R…
+Provider capability is role-tiered, not a single floor: hard floor is native tool-calling or reliable JSON mode; control plane (main + dispatcher) needs strong structured output / tool-calling; work plane models are chosen per task. ModelProfile + config validation fail-fast rejects unfit role assignments; runtime degrades malformed structured output toward Clarify, never crash.
 
 ## Consequences
 
-See the full decision body below for implications, trade-offs, and interactions with other ADRs.
+Model swaps cannot silently break dispatch. Cheap models remain usable for subagents. Dispatcher runs at temperature 0.
 
 ## Rejected alternatives
 
-Where the original log listed open options and a recommended path, the recommended path is the accepted decision. Alternatives discussed in the body were not adopted as the primary design.
+A single global minimum model for all roles. Text-only models as first-class v1 providers without tool/JSON capability.
 
 ## Implementation and tests
 
@@ -40,7 +37,7 @@ Where the original log listed open options and a recommended path, the recommend
 
 ## Supersedes / superseded by
 
-- **Supersedes:** (none — original decision number from the consolidated log)
+- **Supersedes:** (none — original decision number from the consolidated decision log)
 - **Superseded by:** (none)
 
 ## Full historical body

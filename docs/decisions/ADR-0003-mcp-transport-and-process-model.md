@@ -9,31 +9,27 @@ open_items: false
 
 # ADR-0003: MCP Transport and Process Model (Multiple Consumers)
 
-**Status:** accepted  
-**Date:** 2026-07-02 (last update of the consolidated decision log; see git history for earlier revisions)  
-**ID:** ADR-0003 (`mcp-transport-and-process-model`)
+| Field | Value |
+|-------|-------|
+| Status | accepted |
+| Date | 2026-07-02 (from consolidated decision log; see git history) |
+| ID | ADR-0003 |
 
 ## Context
 
-The main agent (via liberado), subagents, and hooks may all need to invoke the same MCPs (e.g., tasks-mcp). Stdio is simple but couples lifecycle and makes sharing difficult.
+See **Full historical body** for the original framing, open questions, and design discussion.
 
 ## Decision
 
-MCP Transport and Process Model (Finalized)
-Decision:
-Support both HTTP/SSE and stdio transports, with a strong preference for long-running HTTP/SSE MCP services. Stateless MCPs are preferred. Stateful MCPs are allowed when necessary, but must use narrow resource-level locking rather than broad MCP-level locks.
-Rationale
-Multiple consumers (main agent via liberado, subagents, and hooks) will eventually need to interact with MCPs concurrently. A pure stdio model creates lifecycle and sharing problems in this scenario. Long-running HTTP/SSE services make concurrent access more natural while still allowing capability narrowing.
-Stateless (or narrowly stateful) MCPs are dramatically easier to reason about, test, and scale. However, some capabilities genuinely require state (e.g., sessionful connections or complex in-memory coordination), so we should not ban stateful MCPs outright.
-When state is required, broad locks on the entire MCP would severely limit concurrency. Narrow locking at the resource or zone level is a better fit with the capability-based model developed in Decision 4.
+Support both HTTP/SSE and stdio MCP transports, with preference for long-running HTTP/SSE services. Prefer stateless MCPs; allow stateful ones only with narrow resource-level locking (not whole-MCP locks). Multiple consumers (main agent, subagents, hooks) share services safely under capability filtering at dispatch.
 
 ## Consequences
 
-See the full decision body below for implications, trade-offs, and interactions with other ADRs.
+HTTP/SSE services are slightly more complex than pure stdio, but concurrent subagents and shared MCP access scale cleanly. Every MCP must document stateless vs stateful behavior.
 
 ## Rejected alternatives
 
-Where the original log listed open options and a recommended path, the recommended path is the accepted decision. Alternatives discussed in the body were not adopted as the primary design.
+Stdio-only per-caller spawn for all MCPs (lifecycle and sharing fail with concurrent consumers). Broad MCP-level locks for all stateful work.
 
 ## Implementation and tests
 
@@ -41,7 +37,7 @@ Where the original log listed open options and a recommended path, the recommend
 
 ## Supersedes / superseded by
 
-- **Supersedes:** (none — original decision number from the consolidated log)
+- **Supersedes:** (none — original decision number from the consolidated decision log)
 - **Superseded by:** (none)
 
 ## Full historical body

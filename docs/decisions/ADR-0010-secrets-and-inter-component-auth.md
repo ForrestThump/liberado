@@ -9,29 +9,27 @@ open_items: false
 
 # ADR-0010: Secrets Backend and Inter-Component Auth
 
-**Status:** accepted  
-**Date:** 2026-07-02 (last update of the consolidated decision log; see git history for earlier revisions)  
-**ID:** ADR-0010 (`secrets-and-inter-component-auth`)
+| Field | Value |
+|-------|-------|
+| Status | accepted |
+| Date | 2026-07-02 (from consolidated decision log; see git history) |
+| ID | ADR-0010 |
 
 ## Context
 
-Critical for any MCP or hook that touches credentials (email, finance, notifications).
+See **Full historical body** for the original framing, open questions, and design discussion.
 
 ## Decision
 
-Layered, leveraging what turbomcp already provides (API-key/JWT auth, secret zeroization, SSRF/path-traversal guards in `turbomcp-server`/`turbomcp-proxy`):
-- **Secrets at rest**: environment variables + **systemd credentials** (`LoadCredential=`) for v1. Each MCP/hook process receives only the secrets it needs, injected at the process boundary.
-- **Secret isolation (IronClaw pattern, per `liberado-permissions-idea.md`)**: raw secrets **never enter LLM context** — they are injected at the MCP boundary for the specific authorized operation only. The model sees results, not credentials.
-- **Provider/inference keys live only in the daemon.** The main agent, dispatcher, and subagents run inference through the daemon's provider abstraction. MCPs/hooks that need reasoning use **MCP sampling** (`turbomcp-client`) so they never hold provider keys.
-- **Inter-component auth**: local MCPs are reached over **Unix domain sockets** (filesystem permissions are the boundary; no network, no token needed). **Hook webhooks** (which accept input from external triggers) require a **shared-secret bearer header** and bind **Tailscale/localhost only**. Start with API-key/shared-secret; **JWT or mTLS** is…
+Layered secrets and auth: env + systemd credentials for secrets at rest; raw secrets never enter LLM context (injected only at MCP boundary); provider keys only in the daemon; local MCPs over Unix sockets with filesystem permissions; hook webhooks require shared-secret bearer and bind Tailscale/localhost only. JWT/mTLS documented as upgrade for network exposure.
 
 ## Consequences
 
-See the full decision body below for implications, trade-offs, and interactions with other ADRs.
+Aligns with turbomcp auth/SSRF guards. MCPs/hooks that need reasoning use sampling through the daemon rather than holding provider keys.
 
 ## Rejected alternatives
 
-Where the original log listed open options and a recommended path, the recommended path is the accepted decision. Alternatives discussed in the body were not adopted as the primary design.
+Passing raw secrets through liberado or main-agent context. Network-exposed hooks without shared-secret auth.
 
 ## Implementation and tests
 
@@ -39,7 +37,7 @@ Where the original log listed open options and a recommended path, the recommend
 
 ## Supersedes / superseded by
 
-- **Supersedes:** (none — original decision number from the consolidated log)
+- **Supersedes:** (none — original decision number from the consolidated decision log)
 - **Superseded by:** (none)
 
 ## Full historical body

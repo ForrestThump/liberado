@@ -25,12 +25,20 @@ from pathlib import Path
 from typing import Any
 
 # ---------------------------------------------------------------------------
-# Fixed vocabulary (docs_fixup.md)
+# Fixed vocabulary (docs_fixup.md + kind-aware decision statuses)
 # ---------------------------------------------------------------------------
 
-STATUS_VOCAB = frozenset(
+# Base statuses for plans/findings/indexes/etc.
+STATUS_VOCAB_BASE = frozenset(
     {"draft", "active", "implemented", "superseded", "historical"}
 )
+# Decisions (ADRs) use proposed/accepted in addition to draft/superseded/historical.
+STATUS_VOCAB_DECISION = frozenset(
+    {"draft", "proposed", "accepted", "superseded", "historical"}
+)
+# Union used in docs; enforcement is kind-aware via allowed_statuses_for_kind().
+STATUS_VOCAB = STATUS_VOCAB_BASE | STATUS_VOCAB_DECISION
+
 KIND_VOCAB = frozenset(
     {
         "architecture",
@@ -49,6 +57,45 @@ AUTHORITY_VOCAB = frozenset(
 )
 
 REQUIRED_FIELDS = ("kind", "status", "authority")
+
+
+def allowed_statuses_for_kind(kind: str) -> frozenset[str]:
+    """Return statuses allowed for a document kind."""
+    if kind == "decision":
+        return STATUS_VOCAB_DECISION
+    return STATUS_VOCAB_BASE
+
+
+def configure_stdio() -> None:
+    """Make console output safe on Windows CP-1252 without requiring env vars."""
+    for stream in (sys.stdout, sys.stderr):
+        reconf = getattr(stream, "reconfigure", None)
+        if callable(reconf):
+            try:
+                reconf(encoding="utf-8", errors="replace")
+            except Exception:
+                try:
+                    reconf(errors="replace")
+                except Exception:
+                    pass
+
+
+def safe_print(*args: object, file=None, **kwargs: object) -> None:
+    """print() that never raises UnicodeEncodeError on narrow consoles."""
+    configure_stdio()
+    out = file if file is not None else sys.stdout
+    try:
+        print(*args, file=out, **kwargs)  # type: ignore[arg-type]
+    except UnicodeEncodeError:
+        text = " ".join(str(a) for a in args)
+        enc = getattr(out, "encoding", None) or "ascii"
+        raw = (text + "\n").encode(enc, errors="replace")
+        buffer = getattr(out, "buffer", None)
+        if buffer is not None:
+            buffer.write(raw)
+            buffer.flush()
+        else:
+            print(text.encode("ascii", errors="replace").decode("ascii"), file=out)
 
 # Paths under crates that must not appear in .rs sources.
 OBSOLETE_RS_PREFIXES = (
@@ -226,6 +273,20 @@ def is_root_future_work(rel: str) -> bool:
     )
 
 
+def is_managed_document(rel: str, meta: dict[str, Any] | None) -> bool:
+    """True if this path is subject to metadata vocabulary rules.
+
+    Managed = any docs/** file that already carries YAML frontmatter, plus every
+    root future-work plan (which must gain frontmatter if missing).
+    """
+    rel = rel.replace("\\", "/")
+    if not rel.startswith("docs/") or not rel.endswith(".md"):
+        return False
+    if is_root_future_work(rel):
+        return True
+    return meta is not None
+
+
 def lint_documents(
     docs: list[DocRecord],
     *,
@@ -237,7 +298,8 @@ def lint_documents(
 
     Rules:
     - root future-work doc without metadata
-    - two active docs with same canonical_for
+    - every managed document: required fields + kind/status/authority vocabulary
+    - two active docs with same canonical_for (any managed docs)
     - implemented/superseded plan listed as active (in active_index_paths)
     - active plan with no open items
     - normative doc that points at archive as authority
@@ -248,55 +310,74 @@ def lint_documents(
 
     for doc in docs:
         rel = doc.path.replace("\\", "/")
-        if is_root_future_work(rel):
-            if doc.meta is None:
-                result.add(rel, "root future-work document missing YAML frontmatter metadata")
-                continue
-            for field_name in REQUIRED_FIELDS:
-                if field_name not in doc.meta:
-                    result.add(rel, f"missing required metadata field: {field_name}")
-            status = str(doc.meta.get("status", ""))
-            kind = str(doc.meta.get("kind", ""))
-            authority = str(doc.meta.get("authority", ""))
-            if status and status not in STATUS_VOCAB:
-                result.add(rel, f"invalid status '{status}' (want one of {sorted(STATUS_VOCAB)})")
-            if kind and kind not in KIND_VOCAB:
-                result.add(rel, f"invalid kind '{kind}' (want one of {sorted(KIND_VOCAB)})")
-            if authority and authority not in AUTHORITY_VOCAB:
+
+        if is_root_future_work(rel) and doc.meta is None:
+            result.add(rel, "root future-work document missing YAML frontmatter metadata")
+            continue
+
+        if not is_managed_document(rel, doc.meta):
+            continue
+
+        assert doc.meta is not None
+        for field_name in REQUIRED_FIELDS:
+            if field_name not in doc.meta:
+                result.add(rel, f"missing required metadata field: {field_name}")
+
+        status = str(doc.meta.get("status", ""))
+        kind = str(doc.meta.get("kind", ""))
+        authority = str(doc.meta.get("authority", ""))
+
+        if kind and kind not in KIND_VOCAB:
+            result.add(rel, f"invalid kind '{kind}' (want one of {sorted(KIND_VOCAB)})")
+        if authority and authority not in AUTHORITY_VOCAB:
+            result.add(
+                rel,
+                f"invalid authority '{authority}' (want one of {sorted(AUTHORITY_VOCAB)})",
+            )
+        if status:
+            allowed = allowed_statuses_for_kind(kind) if kind in KIND_VOCAB else STATUS_VOCAB
+            if status not in allowed:
                 result.add(
                     rel,
-                    f"invalid authority '{authority}' (want one of {sorted(AUTHORITY_VOCAB)})",
+                    f"invalid status '{status}' for kind '{kind or '?'}' "
+                    f"(want one of {sorted(allowed)})",
                 )
 
-            if status == "active" and kind == "plan":
-                open_items = doc.meta.get("open_items")
-                if open_items is not True:
-                    result.add(
-                        rel,
-                        "active plan must set open_items: true (completed slices belong elsewhere)",
-                    )
+        if status == "active" and kind == "plan":
+            open_items = doc.meta.get("open_items")
+            if open_items is not True:
+                result.add(
+                    rel,
+                    "active plan must set open_items: true (completed slices belong elsewhere)",
+                )
 
-            if status in ("implemented", "superseded") and active_index_paths is not None:
-                leaf = Path(rel).name
-                if rel in active_index_paths or leaf in active_index_paths:
-                    result.add(
-                        rel,
-                        f"{status} plan must not appear in the active future-work index",
-                    )
+        if (
+            kind == "plan"
+            and status in ("implemented", "superseded")
+            and active_index_paths is not None
+        ):
+            leaf = Path(rel).name
+            if rel in active_index_paths or leaf in active_index_paths:
+                result.add(
+                    rel,
+                    f"{status} plan must not appear in the active future-work index",
+                )
 
-            canon = doc.meta.get("canonical_for")
-            if canon and status == "active":
-                if canon in active_canonical:
-                    result.add(
-                        rel,
-                        f"duplicate active canonical_for '{canon}' "
-                        f"(also claimed by {active_canonical[canon]})",
-                    )
-                else:
-                    active_canonical[canon] = rel
+        # Active (or accepted decision) canonical_for uniqueness across managed docs
+        canon = doc.meta.get("canonical_for")
+        active_for_canon = status in ("active", "accepted", "proposed")
+        if canon and active_for_canon:
+            if canon in active_canonical:
+                result.add(
+                    rel,
+                    f"duplicate active canonical_for '{canon}' "
+                    f"(also claimed by {active_canonical[canon]})",
+                )
+            else:
+                active_canonical[canon] = rel
 
         # Normative must not treat archive as authority
-        if doc.meta and str(doc.meta.get("authority")) == "normative":
+        if str(doc.meta.get("authority")) == "normative":
             for m in CANONICAL_LINK_RE.finditer(doc.body):
                 target = m.group(1)
                 result.add(
@@ -1111,11 +1192,11 @@ def cmd_lint(root: Path) -> int:
                 result.add(rel, "unreadable root future-work document")
 
     if result.ok:
-        print("docs_meta lint: OK")
+        safe_print("docs_meta lint: OK")
         return 0
-    print("docs_meta lint: FAILED", file=sys.stderr)
+    safe_print("docs_meta lint: FAILED", file=sys.stderr)
     for issue in result.issues:
-        print(f"  {issue.path}: {issue.message}", file=sys.stderr)
+        safe_print(f"  {issue.path}: {issue.message}", file=sys.stderr)
     return 1
 
 
@@ -1129,45 +1210,45 @@ def cmd_generate(root: Path) -> int:
         catalog = generate_catalog(docs)
         readme_path.write_text(readme, encoding="utf-8", newline="\n")
         catalog_path.write_text(catalog, encoding="utf-8", newline="\n")
-    print(f"wrote {readme_path.relative_to(root).as_posix()}")
-    print(f"wrote {catalog_path.relative_to(root).as_posix()}")
+    safe_print(f"wrote {readme_path.relative_to(root).as_posix()}")
+    safe_print(f"wrote {catalog_path.relative_to(root).as_posix()}")
     return 0
 
 
 def cmd_check_stale_rs(root: Path) -> int:
     hits = scan_stale_rs_paths(root)
     if not hits:
-        print(
+        safe_print(
             "stale-rs-paths: OK "
             "(no obsolete prefixes; all docs/*.md references in crates resolve on disk)"
         )
         return 0
-    print("stale-rs-paths: FAILED", file=sys.stderr)
+    safe_print("stale-rs-paths: FAILED", file=sys.stderr)
     for path, line, text in hits[:50]:
-        print(f"  {path}:{line}: {text}", file=sys.stderr)
+        safe_print(f"  {path}:{line}: {text}", file=sys.stderr)
     if len(hits) > 50:
-        print(f"  ... and {len(hits) - 50} more", file=sys.stderr)
+        safe_print(f"  ... and {len(hits) - 50} more", file=sys.stderr)
     return 1
 
 
 def cmd_apply_metadata(root: Path) -> int:
     n = apply_root_metadata(root)
-    print(f"updated frontmatter on {n} root future-work documents")
+    safe_print(f"updated frontmatter on {n} root future-work documents")
     return 0
 
 
 def cmd_archive(root: Path) -> int:
     moved = archive_completed_plans(root)
     for name in moved:
-        print(f"archived {name}")
+        safe_print(f"archived {name}")
     if not moved:
-        print("no candidates to archive (already moved or missing)")
+        safe_print("no candidates to archive (already moved or missing)")
     return 0
 
 
 def cmd_repair_rs(root: Path) -> int:
     n = repair_stale_rs_paths(root)
-    print(f"rewrote obsolete doc paths in {n} .rs files")
+    safe_print(f"rewrote obsolete doc paths in {n} .rs files")
     return 0
 
 
@@ -1178,9 +1259,9 @@ def cmd_self_test() -> int:
     def check(name: str, cond: bool) -> None:
         nonlocal failures
         if cond:
-            print(f"  ok  {name}")
+            safe_print(f"  ok  {name}")
         else:
-            print(f"  FAIL {name}")
+            safe_print(f"  FAIL {name}")
             failures += 1
 
     # Missing metadata on root future-work
@@ -1252,7 +1333,7 @@ def cmd_self_test() -> int:
         )
     ]
     r = lint_documents(docs)
-    check("rejects normative→archive link", any("archive" in i.message for i in r.issues))
+    check("rejects normative->archive link", any("archive" in i.message for i in r.issues))
 
     # generated differs
     docs = [
@@ -1310,6 +1391,61 @@ def cmd_self_test() -> int:
     )
     check("accepts valid active plan + matching generated", r.ok)
 
+    # Managed ADR vocabulary: accepted is allowed; banana is not.
+    docs = [
+        DocRecord(
+            "docs/decisions/ADR-0001-x.md",
+            {
+                "kind": "decision",
+                "status": "accepted",
+                "authority": "normative",
+                "canonical_for": "adr-0001",
+                "open_items": False,
+            },
+            "# ADR\n",
+        )
+    ]
+    r = lint_documents(docs)
+    check("accepts decision status accepted", r.ok)
+
+    docs = [
+        DocRecord(
+            "docs/decisions/ADR-0001-x.md",
+            {
+                "kind": "decision",
+                "status": "banana",
+                "authority": "normative",
+                "canonical_for": "adr-0001",
+                "open_items": False,
+            },
+            "# ADR\n",
+        )
+    ]
+    r = lint_documents(docs)
+    check(
+        "rejects decision status banana on managed ADR",
+        any("invalid status 'banana'" in i.message for i in r.issues),
+    )
+
+    # plan must not use accepted
+    docs = [
+        DocRecord(
+            "docs/future-work/foo.md",
+            {
+                "kind": "plan",
+                "status": "accepted",
+                "authority": "implementation",
+                "open_items": True,
+            },
+            "",
+        )
+    ]
+    r = lint_documents(docs)
+    check(
+        "rejects plan status accepted",
+        any("invalid status 'accepted'" in i.message for i in r.issues),
+    )
+
     # frontmatter round-trip
     meta = {"kind": "plan", "status": "active", "authority": "implementation", "open_items": True}
     text = dump_frontmatter(meta) + "\n# Title\n"
@@ -1334,9 +1470,9 @@ def cmd_self_test() -> int:
             r1 == "docs/future-work/archive/hygiene-audit-2026-07-05.md",
         )
         r2 = resolve_docs_md_path(tmp_root, "docs/reference/api.md")
-        check("resolves docs/reference → docs/spec/reference", r2 == "docs/spec/reference/api.md")
+        check("resolves docs/reference -> docs/spec/reference", r2 == "docs/spec/reference/api.md")
         r3 = resolve_docs_md_path(tmp_root, "docs/specs/liberado-config-spec.md")
-        check("resolves liberado-config-spec → config-spec", r3 == "docs/spec/config-spec.md")
+        check("resolves liberado-config-spec -> config-spec", r3 == "docs/spec/config-spec.md")
         # scan catches missing docs path
         crates = tmp_root / "crates" / "foo" / "src"
         crates.mkdir(parents=True)
@@ -1372,13 +1508,14 @@ def cmd_self_test() -> int:
         )
 
     if failures:
-        print(f"self-test: {failures} failure(s)")
+        safe_print(f"self-test: {failures} failure(s)")
         return 1
-    print("self-test: all passed")
+    safe_print("self-test: all passed")
     return 0
 
 
 def main(argv: list[str] | None = None) -> int:
+    configure_stdio()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "command",

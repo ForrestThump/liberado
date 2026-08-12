@@ -9,27 +9,27 @@ open_items: false
 
 # ADR-0019: TurboVault as Privileged Plugin, not Hard Dependency
 
-**Status:** accepted  
-**Date:** 2026-07-02 (last update of the consolidated decision log; see git history for earlier revisions)  
-**ID:** ADR-0019 (`turbovault-as-privileged-plugin`)
+| Field | Value |
+|-------|-------|
+| Status | accepted |
+| Date | 2026-07-02 (from consolidated decision log; see git history) |
+| ID | ADR-0019 |
 
 ## Context
 
-The original Pillar 1 ("the vault is the source of truth") read as a system-wide
-invariant. The matured pillars demote it: the core must be usable without TurboVault, or the
-"modular MCP/hook substrate" pillar and the general-MCP-agent milestone are not real.
+See **Full historical body** for the original framing, open questions, and design discussion.
 
 ## Decision
 
-See body for full decision text.
+TurboVault is a privileged default perception/storage plugin, not a hard dependency of the core dispatch/execute/MCP/chat path. Vault coupling is isolated to the reactive subsystem (watch + provenance loop-breaking) behind event-source traits. Mature pillars demote "vault is the only source of truth" to "vault is the default privileged plugin."
 
 ## Consequences
 
-See the full decision body below for implications, trade-offs, and interactions with other ADRs.
+Core can compose without a vault. Reactive life-ops features still privilege TurboVault. Earlier decisions that said "vault is source of truth" are read through this clarification.
 
 ## Rejected alternatives
 
-Where the original log listed open options and a recommended path, the recommended path is the accepted decision. Alternatives discussed in the body were not adopted as the primary design.
+Hard-wiring every crate to TurboVault types. Treating vault absence as unsupported for the whole product surface.
 
 ## Implementation and tests
 
@@ -48,7 +48,7 @@ Where the original log listed open options and a recommended path, the recommend
 
 ## Supersedes / superseded by
 
-- **Supersedes:** (none — original decision number from the consolidated log)
+- **Supersedes:** (none — original decision number from the consolidated decision log)
 - **Superseded by:** (none)
 
 ## Full historical body

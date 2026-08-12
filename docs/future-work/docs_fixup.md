@@ -221,4 +221,3 @@ I would improve the system in this order:
 9. Add the generated searchable documentation site.
 
 The goal should not be fewer documents at all costs. It should be a much smaller active surface, with rich history still available behind explicit evidence, decision, and archive boundaries.
-
