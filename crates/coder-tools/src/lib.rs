@@ -43,6 +43,44 @@ pub enum ToolError {
     Sandbox(#[from] SandboxError),
 }
 
+/// Caps on concurrent `run_command_background` jobs for one coding tool runtime.
+///
+/// Unattended runs have launched nine concurrent `cargo` builds and filled the disk; a prompt
+/// asking the model to be careful is not a resource bound. These limits refuse the start in band
+/// (`ToolError::BadRequest`) so the model can read the error and call `check_background` first.
+///
+/// Pack-local (not kernel): a second pack would not need "how many cargo builds may run at once".
+/// Defaults match the F9 acceptance bar; tests may override via [`CodingToolRuntime::with_background_limits`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BackgroundLimits {
+    /// Programs treated as build-like (matched on executable stem, case-insensitive).
+    pub build_like_programs: Vec<String>,
+    /// Maximum total background jobs in flight (including completed-but-unpolled).
+    pub max_background: usize,
+    /// Maximum build-like jobs among those in flight.
+    pub max_build_like: usize,
+}
+
+impl Default for BackgroundLimits {
+    fn default() -> Self {
+        Self {
+            build_like_programs: vec![
+                "cargo".into(),
+                "npm".into(),
+                "pnpm".into(),
+                "yarn".into(),
+                "make".into(),
+                "go".into(),
+                "gradle".into(),
+                "mvn".into(),
+                "tsc".into(),
+            ],
+            max_background: 2,
+            max_build_like: 1,
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct CodingToolRuntime {
     workspace: Arc<dyn Workspace>,
@@ -51,10 +89,13 @@ pub struct CodingToolRuntime {
     hashline: HashlineConfig,
     edit: liberado_coder_core::EditConfig,
     background_jobs: Arc<Mutex<HashMap<String, BackgroundJob>>>,
+    background_limits: BackgroundLimits,
 }
 
 struct BackgroundJob {
     receiver: oneshot::Receiver<Result<CommandOutput, SandboxError>>,
+    /// Program name as passed to `run_command_background` (for build-like detection of in-flight jobs).
+    program_name: String,
 }
 
 /// Base directory for coding worktrees (`LIBERADO_DATA_DIR/coding-worktrees`, else
@@ -197,7 +238,14 @@ impl CodingToolRuntime {
             hashline: HashlineConfig::default(),
             edit: liberado_coder_core::EditConfig::default(),
             background_jobs: Arc::new(Mutex::new(HashMap::new())),
+            background_limits: BackgroundLimits::default(),
         }
+    }
+
+    /// Override background concurrency caps (defaults match F9: two total, one build-like).
+    pub fn with_background_limits(mut self, limits: BackgroundLimits) -> Self {
+        self.background_limits = limits;
+        self
     }
 
     pub fn with_validation_command(mut self, command: CommandRequest) -> Self {
@@ -1298,8 +1346,55 @@ impl CodingToolRuntime {
             args: Vec<String>,
         }
         let args: Args = parse_args(args)?;
+        let limits = &self.background_limits;
+        let build_like = is_build_like(&args.program, &limits.build_like_programs);
+
+        // Lock early and check limits *before* spawning. The lock is held only long enough to
+        // count and maybe insert — command execution holds no lock.
+        //
+        // A completed-but-unpolled job still occupies a slot: the model must call
+        // `check_background` to reap it. That is intentional — a finished cargo build still
+        // consumed disk, and silently stacking completed builds re-opens the exhaustion path.
+        let mut jobs = self
+            .background_jobs
+            .lock()
+            .map_err(|e| ToolError::BadRequest(format!("background job lock: {e}")))?;
+
+        let total_count = jobs.len();
+        let build_like_count = jobs
+            .values()
+            .filter(|j| is_build_like(&j.program_name, &limits.build_like_programs))
+            .count();
+
+        if build_like && build_like_count >= limits.max_build_like {
+            let existing = jobs
+                .iter()
+                .find(|(_, j)| is_build_like(&j.program_name, &limits.build_like_programs))
+                .map(|(id, _)| id.as_str())
+                .unwrap_or("(unknown)");
+            return Err(ToolError::BadRequest(format!(
+                "at most {} build-like background job(s) may run at once (got {build_like_count}); \
+                 job {existing} is still running — call check_background on it first",
+                limits.max_build_like,
+            )));
+        }
+
+        if total_count >= limits.max_background {
+            let existing = jobs
+                .keys()
+                .next()
+                .map(|s| s.as_str())
+                .unwrap_or("(unknown)");
+            return Err(ToolError::BadRequest(format!(
+                "at most {} background job(s) may run at once (got {total_count}); \
+                 job {existing} is still running — call check_background on it first",
+                limits.max_background,
+            )));
+        }
+
         let mut request = CommandRequest::new(args.program.clone());
         request.args = args.args;
+        let program_name = args.program.clone();
 
         let (tx, rx) = oneshot::channel();
         let workspace = Arc::clone(&self.workspace);
@@ -1317,11 +1412,13 @@ impl CodingToolRuntime {
                 .as_nanos()
         );
 
-        let mut jobs = self
-            .background_jobs
-            .lock()
-            .map_err(|e| ToolError::BadRequest(format!("background job lock: {e}")))?;
-        jobs.insert(job_id.clone(), BackgroundJob { receiver: rx });
+        jobs.insert(
+            job_id.clone(),
+            BackgroundJob {
+                receiver: rx,
+                program_name,
+            },
+        );
 
         Ok(json!({
             "job_id": job_id,
@@ -1791,6 +1888,20 @@ impl ToolRuntime for CodingToolRuntime {
 
 fn tool(name: &str, description: &str, parameters: Value) -> ToolDef {
     ToolDef::new(name, description, parameters)
+}
+
+/// Whether `program` is build-like for background concurrency limits.
+///
+/// Matches case-insensitively on the executable stem only, so `/usr/bin/cargo`, `cargo`, and
+/// `cargo.exe` all match `cargo`.
+fn is_build_like(program: &str, build_like_programs: &[String]) -> bool {
+    let stem = Path::new(program)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or(program);
+    build_like_programs
+        .iter()
+        .any(|p| p.eq_ignore_ascii_case(stem))
 }
 
 fn parse_args<T: for<'de> Deserialize<'de>>(args: Value) -> Result<T, ToolError> {
@@ -4937,6 +5048,274 @@ beta
             .await
             .unwrap();
         assert_eq!(result["status"], "unknown");
+    }
+
+    // ── background job concurrency limits (F9) ────────────────────────
+
+    #[tokio::test]
+    async fn third_background_job_is_refused_with_running_job_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let runtime =
+            CodingToolRuntime::new(dir.path(), CommandPolicy::default(), PathPolicy::default())
+                .unwrap();
+
+        let (program, args) = echo_command("job1");
+        let first = runtime
+            .invoke_json(
+                "run_command_background",
+                json!({"program": program, "args": args}),
+            )
+            .await
+            .unwrap();
+        let first_id = first["job_id"].as_str().unwrap().to_string();
+
+        let (program, args) = echo_command("job2");
+        runtime
+            .invoke_json(
+                "run_command_background",
+                json!({"program": program, "args": args}),
+            )
+            .await
+            .unwrap();
+
+        // Completed-but-unpolled jobs still occupy slots — third start must refuse.
+        let (program, args) = echo_command("job3");
+        let err = runtime
+            .invoke_json(
+                "run_command_background",
+                json!({"program": program, "args": args}),
+            )
+            .await
+            .unwrap_err();
+
+        assert!(
+            matches!(err, ToolError::BadRequest(_)),
+            "refusal must be BadRequest-class: {err:?}"
+        );
+        let msg = err.to_string();
+        assert!(
+            msg.contains("at most 2 background job"),
+            "error should name the total cap: {msg}"
+        );
+        assert!(
+            msg.contains("call check_background"),
+            "error should tell the model how to react: {msg}"
+        );
+        assert!(
+            msg.contains("job-"),
+            "error should name a running job id: {msg}"
+        );
+        // Either of the two in-flight ids is fine; first is enough to prove identity is present.
+        let _ = first_id;
+    }
+
+    #[tokio::test]
+    async fn two_non_build_background_jobs_are_allowed() {
+        let dir = tempfile::tempdir().unwrap();
+        let runtime =
+            CodingToolRuntime::new(dir.path(), CommandPolicy::default(), PathPolicy::default())
+                .unwrap();
+
+        let (program, args) = echo_command("job1");
+        let r1 = runtime
+            .invoke_json(
+                "run_command_background",
+                json!({"program": program, "args": args}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(r1["status"], "running");
+
+        let (program, args) = echo_command("job2");
+        let r2 = runtime
+            .invoke_json(
+                "run_command_background",
+                json!({"program": program, "args": args}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(r2["status"], "running");
+    }
+
+    #[tokio::test]
+    async fn second_build_like_while_first_unreaped_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let runtime =
+            CodingToolRuntime::new(dir.path(), CommandPolicy::default(), PathPolicy::default())
+                .unwrap();
+
+        // Start a build-like job. `cargo` may finish or fail quickly in an empty tree; the slot
+        // stays occupied until check_background reaps it.
+        let first = runtime
+            .invoke_json(
+                "run_command_background",
+                json!({"program": "cargo", "args": ["--version"]}),
+            )
+            .await
+            .unwrap();
+        let first_id = first["job_id"].as_str().unwrap().to_string();
+        assert_eq!(first["status"], "running");
+
+        let err = runtime
+            .invoke_json(
+                "run_command_background",
+                json!({"program": "cargo", "args": ["build"]}),
+            )
+            .await
+            .unwrap_err();
+
+        assert!(
+            matches!(err, ToolError::BadRequest(_)),
+            "refusal must be BadRequest-class: {err:?}"
+        );
+        let msg = err.to_string();
+        assert!(
+            msg.contains("build-like"),
+            "error should mention the build-like cap: {msg}"
+        );
+        assert!(
+            msg.contains(&first_id),
+            "error should name the running build job id {first_id}: {msg}"
+        );
+        assert!(
+            msg.contains("call check_background"),
+            "error should tell the model how to react: {msg}"
+        );
+    }
+
+    #[tokio::test]
+    async fn non_build_job_does_not_count_as_build_like() {
+        let dir = tempfile::tempdir().unwrap();
+        let runtime =
+            CodingToolRuntime::new(dir.path(), CommandPolicy::default(), PathPolicy::default())
+                .unwrap();
+
+        // One non-build-like job in flight must not serialize a first build-like start.
+        let (program, args) = echo_command("non-build");
+        runtime
+            .invoke_json(
+                "run_command_background",
+                json!({"program": program, "args": args}),
+            )
+            .await
+            .unwrap();
+
+        let result = runtime
+            .invoke_json(
+                "run_command_background",
+                json!({"program": "cargo", "args": ["--version"]}),
+            )
+            .await;
+        assert!(
+            result.is_ok(),
+            "a non-build job must not block the first build-like call: {:?}",
+            result.err()
+        );
+    }
+
+    #[tokio::test]
+    async fn build_like_allowed_again_after_check_background_reaps() {
+        let dir = tempfile::tempdir().unwrap();
+        let runtime =
+            CodingToolRuntime::new(dir.path(), CommandPolicy::default(), PathPolicy::default())
+                .unwrap();
+
+        let started = runtime
+            .invoke_json(
+                "run_command_background",
+                json!({"program": "cargo", "args": ["--version"]}),
+            )
+            .await
+            .unwrap();
+        let job_id = started["job_id"].as_str().unwrap().to_string();
+
+        for _ in 0..50 {
+            let poll = runtime
+                .invoke_json("check_background", json!({"job_id": job_id}))
+                .await
+                .unwrap();
+            if poll["status"] != "running" {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+
+        let started2 = runtime
+            .invoke_json(
+                "run_command_background",
+                json!({"program": "cargo", "args": ["--version"]}),
+            )
+            .await;
+        assert!(
+            started2.is_ok(),
+            "after reaping, a new build-like job should be allowed: {:?}",
+            started2.err()
+        );
+    }
+
+    #[tokio::test]
+    async fn configured_background_limits_are_honoured() {
+        let dir = tempfile::tempdir().unwrap();
+        let custom = BackgroundLimits {
+            max_background: 1,
+            max_build_like: 1,
+            // Empty list → nothing is build-like; only the total cap matters here.
+            build_like_programs: vec![],
+        };
+        let runtime =
+            CodingToolRuntime::new(dir.path(), CommandPolicy::default(), PathPolicy::default())
+                .unwrap()
+                .with_background_limits(custom);
+
+        let (program, args) = echo_command("only-one");
+        let started = runtime
+            .invoke_json(
+                "run_command_background",
+                json!({"program": program, "args": args}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(started["status"], "running");
+
+        let (program, args) = echo_command("second");
+        let err = runtime
+            .invoke_json(
+                "run_command_background",
+                json!({"program": program, "args": args}),
+            )
+            .await
+            .unwrap_err();
+
+        let msg = err.to_string();
+        assert!(
+            msg.contains("at most 1 background job"),
+            "custom max_background=1 should be enforced: {msg}"
+        );
+    }
+
+    #[test]
+    fn is_build_like_matches_by_stem_case_insensitive() {
+        let progs: Vec<String> = vec![
+            "cargo".into(),
+            "npm".into(),
+            "pnpm".into(),
+            "yarn".into(),
+            "make".into(),
+            "go".into(),
+            "gradle".into(),
+            "mvn".into(),
+            "tsc".into(),
+        ];
+
+        assert!(is_build_like("cargo", &progs));
+        assert!(is_build_like("/usr/bin/cargo", &progs));
+        assert!(is_build_like("cargo.exe", &progs));
+        assert!(is_build_like("Cargo", &progs));
+        assert!(is_build_like("NPM", &progs));
+        assert!(!is_build_like("sh", &progs));
+        assert!(!is_build_like("echo", &progs));
+        assert!(!is_build_like("git", &progs));
+        assert!(!is_build_like("cmd", &progs));
     }
 
     // ── validate with configured command ──────────────────────────────
