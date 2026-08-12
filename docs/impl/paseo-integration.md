@@ -32,6 +32,13 @@
 > nothing reported it. `scripts/install-paseo-liberado.ps1` now writes the variable; check the
 > `config directory resolved` line the bridge logs at startup to confirm which directory it picked
 > and which of the three files it found.
+>
+> **Keep `provider = "openrouter"` at the top level of `topology.toml`.** TOML table scope is
+> positional. If the key appears after `[main_agent]`, it is `main_agent.provider`, not the global
+> provider selection. Before the config guard was added, that unknown field was ignored, the global
+> provider stayed at its `deepseek` default, and Paseo diagnostics reported only three models even
+> though the file appeared to select OpenRouter. Current builds reject the misplaced key during
+> config load. `liberado config check` catches it without starting Paseo.
 - Face mode is the **only** path that tunnels into a running daemon. Coding and chat are
   self-contained agent processes (same pattern as Claude Code / Gemini / Grok on Paseo).
 

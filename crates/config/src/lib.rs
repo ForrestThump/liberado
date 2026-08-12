@@ -871,6 +871,34 @@ writes_vault = false   # sends email; writes no vault zone
         assert!(prov.tuning.is_none());
     }
 
+    /// A TOML table owns every key after its header. An operator put the global provider below
+    /// `[main_agent]`, so serde silently discarded it as an unknown main-agent field and the
+    /// topology kept its default `deepseek` provider. Paseo then showed only DeepSeek's three
+    /// models even though the file visibly said `provider = "openrouter"`.
+    #[test]
+    fn rejects_global_provider_misplaced_under_main_agent() {
+        let dir = TempDir::new().unwrap();
+        write_file(
+            dir.path(),
+            "topology.toml",
+            r#"
+vault_path = "/home/shiloh/vault"
+
+[main_agent]
+delegation_mode = true
+provider = "openrouter"
+"#,
+        );
+
+        let err = load_config(Some(dir.path())).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("topology.toml"),
+            "error should name the file: {msg}"
+        );
+        assert!(msg.contains("unknown field `provider`"), "got: {msg}");
+    }
+
     #[test]
     fn rejects_mcp_missing_consequence() {
         let dir = TempDir::new().unwrap();
