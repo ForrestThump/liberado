@@ -93,7 +93,7 @@ impl Dispatcher {
     }
 
     /// Override the system prompt used during classification. Defaults to
-    /// [`DEFAULT_SYSTEM_PROMPT`]. The heuristics tuner (`docs/roadmap/heuristics-tuning-engine-plan.md`)
+    /// [`DEFAULT_SYSTEM_PROMPT`]. The heuristics tuner (`docs/future-work/heuristics-tuning-engine-plan.md`)
     /// uses this to test candidate prompts against the real dispatch code path without
     /// reimplementing it.
     pub fn with_system_prompt(mut self, prompt: impl Into<String>) -> Self {

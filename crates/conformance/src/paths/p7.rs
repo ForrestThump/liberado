@@ -10,7 +10,7 @@
 //! 5. assert lifecycle flags: **`turn_running` is false**, and either an assistant reply is on
 //!    the transcript **or** `turn_unanswered` is true — never a silent lost turn.
 //!
-//! Unconfigured restart hook → [`PathStatus::Skipped`] with a reason (never Pass).
+//! Unconfigured restart hook → `PathStatus::Skipped` with a reason (never Pass).
 //!
 //! Envelope: opt-in only (not in `all_default()`); only the session this run creates.
 

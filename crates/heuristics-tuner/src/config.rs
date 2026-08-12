@@ -9,10 +9,10 @@
 //! (`config.example/tuner.toml` is the template) — nothing here searches a second location, so a
 //! deployment that's already configured the daemon has one config directory to know about, not
 //! two. The call budget and generation count are deliberately a human's per-session decision, not
-//! a fixed global default (`docs/roadmap/heuristics-tuning-engine-plan.md`) — the values here are
+//! a fixed global default (`docs/future-work/heuristics-tuning-engine-plan.md`) — the values here are
 //! cheap-to-run starting points, not a target to converge on.
 //!
-//! **Scoring model(s) and sample count** (`docs/roadmap/heuristics-tuning-engine-plan.md`'s
+//! **Scoring model(s) and sample count** (`docs/future-work/heuristics-tuning-engine-plan.md`'s
 //! "Real-model verification" findings): real model APIs aren't perfectly deterministic run-to-run
 //! even at temperature 0, so a single sample against a single model isn't a fully trustworthy
 //! signal. `scoring_models` can list several OpenRouter model slugs and `samples_per_scenario` can

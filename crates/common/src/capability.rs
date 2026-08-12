@@ -331,7 +331,7 @@ pub enum Capability {
     /// Permission to invoke one named tool, as `"<mcp>:<tool>"` — e.g.
     /// `ExecuteTool("turbovault:read_note")`.
     ///
-    /// The finer half of [`ExecuteMcp`], for a profile that wants a handful of an MCP's tools rather
+    /// The finer half of `ExecuteMcp`, for a profile that wants a handful of an MCP's tools rather
     /// than the whole server. `ExecuteMcp(m)` **subsumes** every `ExecuteTool("m:…")`, which is what
     /// keeps the two from being separate authority systems: see
     /// [`Capability::subsumes`] and [`CapabilitySet::narrow`].
@@ -341,7 +341,7 @@ pub enum Capability {
     /// hopeful prompt is not a boundary.
     ExecuteTool(String),
     /// Permission to **interrupt a human for guidance** — the human-input channel
-    /// (`docs/architecture/channels-and-interactivity.md`, Decision A: interactivity is a
+    /// (`docs/spec/architecture/channels-and-interactivity.md`, Decision A: interactivity is a
     /// capability, not a session subtype).
     ///
     /// A session whose grant omits this may not await human input: the kernel hands its pack a
@@ -375,7 +375,7 @@ impl Capability {
         }
     }
 
-    /// The MCP this capability concerns, if any — the server for [`ExecuteMcp`](Capability::ExecuteMcp),
+    /// The MCP this capability concerns, if any — the server for `ExecuteMcp`(Capability::ExecuteMcp),
     /// the owning server for [`ExecuteTool`](Capability::ExecuteTool).
     pub fn mcp_name(&self) -> Option<&str> {
         match self {

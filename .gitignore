@@ -51,3 +51,11 @@ mutants-output.txt
 mutants.out*/
 .tmp/
 coder-traces/
+
+# Generated wiki-like docs site (scripts/gen-docs-site.py)
+/docs-site/
+
+# Python bytecode
+scripts/__pycache__/
+**/__pycache__/
+

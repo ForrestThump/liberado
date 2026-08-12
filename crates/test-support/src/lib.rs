@@ -10,8 +10,8 @@
 //!   invocations actually *reached* the runtime (e.g. proving a gated call never got there).
 //!
 //! Error simulation:
-//! - [`InvocationRecordingRuntime`] accepts per-tool error overrides via [`Self::with_error`] and a
-//!   default result via [`Self::with_default_result`].
+//! - [`InvocationRecordingRuntime`] accepts per-tool error overrides via `with_error` and a
+//!   default result via `with_default_result`.
 //! - [`FailingFactory`] always returns a [`RuntimeSetupError`] — for testing the orchestrator's
 //!   pool-creation failure path.
 //!
@@ -94,8 +94,8 @@ impl RuntimeFactory for CallRecordingFactory {
 /// A runtime that records every `invoke` call — for tests asserting exactly which calls actually ran
 /// (e.g. approved-proposal execution, or that a gated call never reached the real tool).
 ///
-/// By default every invocation succeeds with `"ok"`. Call [`Self::with_default_result`] to change
-/// the default, or [`Self::with_error`] to make a specific tool name fail.
+/// By default every invocation succeeds with `"ok"`. Call `with_default_result` to change
+/// the default, or `with_error` to make a specific tool name fail.
 #[derive(Clone)]
 pub struct InvocationRecordingRuntime {
     pub invoked: Arc<Mutex<Vec<ToolInvocation>>>,

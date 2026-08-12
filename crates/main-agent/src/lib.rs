@@ -247,7 +247,7 @@ impl Conversation {
     /// Only the *built-in* face prompt is swapped. An operator who set `main_agent.system_prompt`
     /// chose that text deliberately for every session, and silently discarding it would be the same
     /// class of drift in the other direction — the same conservatism
-    /// [`ChatSessions::with_delegation`] already applies when it upgrades the default prompt.
+    /// `ChatSessions::with_delegation` already applies when it upgrades the default prompt.
     ///
     /// In memory only: the stored root node is never rewritten, so nothing on disk becomes wrong
     /// about which prompt was in force when it was written. Call before

@@ -1,3 +1,12 @@
+---
+kind: plan
+status: active
+authority: implementation
+domain: docs
+canonical_for: docs-lifecycle
+open_items: true
+---
+
 I’ll audit the documentation as an information system: volume and status distribution, entry points, duplicate subjects, archives, generated references, and where decisions or validation evidence currently live. Then I’ll propose a retention and navigation model that improves agent retrieval without losing useful history.
 
 ---
@@ -15,7 +24,7 @@ My rough assessment:
 | Validation evidence | 7/10 | Good mutation and test evidence is retained, but historical evidence is not always clearly separated from current guarantees. |
 | Overall | about 5/10 | High signal, but too much stale authority around it. |
 
-The repository currently has 168 Markdown files and about 27,800 lines. Of those, 105 are under `future-work`, 47 are already archived, and 38 remain at the `future-work` root. Nine of those root files have no structured status. The [future-work index](C:/Users/Shiloh/Code/life-os/docs/future-work/README.md:13) still calls landed work “active,” including two completed parallel-deliverable rounds.
+The repository currently has 168 Markdown files and about 27,800 lines. Of those, 105 are under `future-work`, 47 are already archived, and 38 remain at the `future-work` root. Nine of those root files have no structured status. The [future-work index](README.md) still calls landed work “active,” including two completed parallel-deliverable rounds.
 
 That is the central issue: the repository retains useful information well, but does not consistently tell an agent whether a document is an instruction, evidence, a proposal, or history.
 
@@ -67,7 +76,7 @@ I would define this table as repository policy:
 | What might we do later? | Proposed plan or idea |
 | What happened before? | Archive and git history |
 
-This resolves an existing ambiguity. The [docs index](C:/Users/Shiloh/Code/life-os/docs/README.md:43) calls the decision log “frozen,” while the [decision log](C:/Users/Shiloh/Code/life-os/docs/spec/architecture-decisions.md:3) describes itself as living and mixes completed decisions, open questions, and recommendations. The project questions file even still asks which source should win.
+This resolves an existing ambiguity. The [docs index](../README.md) calls the decision log “frozen,” while the [decision log](../spec/architecture-decisions.md) describes itself as living and mixes completed decisions, open questions, and recommendations. The project questions file even still asks which source should win.
 
 ## Use machine-readable document metadata
 
@@ -111,7 +120,7 @@ This would improve agent performance more than another folder move.
 
 Yes. Rustdoc is the best home for current crate behavior because it stays close to the code. This repository already has a strong base: all 40 top-level `lib.rs` files have `//!` crate documentation, and many public items are well documented.
 
-However, more Rustdoc without checks will create another stale layer. I found 72 source comments that still refer to old paths such as `docs/architecture/...` and `docs/roadmap/...`. One example is the header of [coder-agent/lib.rs](C:/Users/Shiloh/Code/life-os/crates/coder-agent/src/lib.rs:1). The Markdown link checker does not scan those raw Rust source references.
+However, more Rustdoc without checks will create another stale layer. I found 72 source comments that still refer to old paths such as `docs/architecture/...` and `docs/roadmap/...`. One example is the header of `crates/coder-agent/src/lib.rs`. The Markdown link checker does not scan those raw Rust source references.
 
 I would:
 
@@ -163,7 +172,7 @@ ADRs should be mostly immutable. A later change creates a new ADR that supersede
 
 ## Preserve evidence as evidence
 
-The [validation index](C:/Users/Shiloh/Code/life-os/docs/validation/README.md:1) is already a good pattern: one summary document with supporting per-crate reports.
+The [validation index](../validation/README.md) is already a good pattern: one summary document with supporting per-crate reports.
 
 Strengthen each result record with:
 

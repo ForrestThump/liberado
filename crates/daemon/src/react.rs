@@ -17,7 +17,7 @@ impl Daemon {
     /// The pure reactive decision: given an observed change to `rel_path`, return a reactable
     /// [`Event`], or `None` if the change was one of our own writes (suppressed by the hash-join)
     /// or the path is gone. No filesystem watching here — this is the unit-testable core. A thin
-    /// wrapper over [`vault_source::attribute_and_build_event`], which [`VaultEventSource`]'s watch
+    /// wrapper over [`vault_source::attribute_and_build_event`], which `VaultEventSource`'s watch
     /// loop also calls — kept as its own public method so this stays directly testable without a
     /// filesystem, as before this crate had an `EventSource` seam.
     pub async fn process_change(&self, rel_path: &Path) -> Result<Option<Event>, DaemonError> {

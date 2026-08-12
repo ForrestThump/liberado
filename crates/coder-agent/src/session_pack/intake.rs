@@ -3,7 +3,7 @@
 //! Split out of `session_pack.rs` (2026-07-14), which had grown a ~400-line `run` holding both
 //! phases, the ask seam, the retry loop and the workspace setup. The two phases answer different
 //! questions and fail in different ways: intake *reasons about the goal and touches nothing*; the
-//! build *edits files*. That is the same line [`super::CodingSessionPack::can_resume`] draws, so it
+//! build *edits files*. That is the same line `CodingSessionPack::can_resume` draws, so it
 //! is the right place to cut.
 //!
 //! `ask` deliberately stays in the parent: it is the one choke point through which every question
@@ -53,7 +53,7 @@ const MAX_COHERENCE_REDRAFTS: u32 = 2;
 /// is acceptable **only** because intake ends at a draft contract the human must accept: an
 /// approximate reconstruction that lands in front of a human for approval is safe. The same
 /// approximation applied to a build loop — which edits files — would not be, and that is exactly why
-/// [`CodingSessionPack::can_resume`] says no once the build has started.
+/// `CodingSessionPack::can_resume` says no once the build has started.
 pub(super) fn answers_from_transcript(turns: &[(TurnAuthor, String)]) -> Vec<IntakeAnswer> {
     let mut answers = Vec::new();
     let mut last_question: Option<&str> = None;

@@ -1,6 +1,6 @@
 //! Domain-agnostic verifier DTOs (coding pack is the first consumer).
 //!
-//! See `docs/architecture/verifiers.md`. Types intentionally avoid git/cargo so they can graduate
+//! See `docs/spec/architecture/verifiers.md`. Types intentionally avoid git/cargo so they can graduate
 //! to `liberado-common` when a second domain needs them.
 
 use std::collections::BTreeMap;

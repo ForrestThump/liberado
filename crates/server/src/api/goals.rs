@@ -73,7 +73,7 @@ pub async fn goals_list(State(state): State<Arc<AppState>>) -> impl IntoResponse
 
 /// Apply `payload.interactive` to a session grant (F11).
 ///
-/// - `interactive: false` → strip [`Capability::AskHuman`] so unattended/shepherd goals cannot park
+/// - `interactive: false` → strip `Capability::AskHuman` so unattended/shepherd goals cannot park
 ///   on intake questions. The pack already skips intake when AskHuman is absent.
 /// - `interactive: true` or absent → leave the profile grant unchanged (profiles may still omit
 ///   AskHuman; this function never *adds* it).

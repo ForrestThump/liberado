@@ -1,8 +1,17 @@
+---
+kind: plan
+status: active
+authority: implementation
+domain: token-economics
+canonical_for: token-cost-accounting
+open_items: true
+---
+
 # Token cost accounting
 
 **Status**: scoped, not built. Written 2026-08-02.
 **Purpose**: answer design questions with measurements instead of guesses. The immediate one is
-open in [`delegated-work-is-discarded-at-the-seam.md`](delegated-work-is-discarded-at-the-seam.md) —
+open in [`delegated-work-is-discarded-at-the-seam.md`](archive/delegated-work-is-discarded-at-the-seam.md) —
 *what does carrying a research report inline actually cost?* — and it is currently unanswerable.
 
 **Do not re-instrument.** Most of the substrate exists and is live. This is about the four things

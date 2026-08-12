@@ -1,3 +1,12 @@
+---
+kind: plan
+status: active
+authority: implementation
+domain: conformance
+canonical_for: live-conformance-tier3
+open_items: true
+---
+
 # Tier 3 live conformance — build spec
 
 **Audience**: whoever implements Tier 3 on a branch based on `feat/webui-fixes` (or

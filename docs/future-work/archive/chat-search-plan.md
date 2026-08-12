@@ -1,3 +1,14 @@
+---
+kind: plan
+status: implemented
+authority: advisory
+domain: chat
+canonical_for: chat-search
+open_items: false
+---
+
+> **Archived.** This plan is not current truth. Open work lives in [backlog.md](../backlog.md) and [roadmap.md](../../roadmap.md). See [doc-authority.md](../../spec/reference/doc-authority.md).
+
 # Chat Search — Design & Roadmap
 
 **Status**: Tier 1 done (2026-07-05) — see "Tier 1" below for what actually shipped, which
@@ -136,7 +147,7 @@ Rust regex pattern. OR/boolean-expression support was **not** built — noted in
     for a real vector database or an ANN library (`hnsw`, `usearch`, etc.) preemptively** — that's
     solving a scale problem that doesn't exist yet, the same "don't build what you don't need"
     call this project has made elsewhere (see the deferred pub/sub idea in
-    [`a2a-protocol-idea.md`](./ideas/a2a-protocol-idea.md)).
+    [`a2a-protocol-idea.md`](../ideas/a2a-protocol-idea.md)).
 - **Recommendation**: do not build this until Tier 1 (and maybe Tier 2) are live *and* a concrete,
   real "I searched for X and lexical/BM25 genuinely couldn't find it" case actually shows up.
   Captured here as a deferred idea, not a commitment.

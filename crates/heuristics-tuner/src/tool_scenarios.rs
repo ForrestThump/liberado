@@ -1,5 +1,5 @@
 //! Hand-written tool-loop scenarios for tuning the executor/subagent role prompts
-//! (`docs/roadmap/heuristics-tuning-engine-plan.md`'s executor/subagent tuning extension). Unlike
+//! (`docs/future-work/heuristics-tuning-engine-plan.md`'s executor/subagent tuning extension). Unlike
 //! `liberado_eval::Scenario` (a fixed classification label the dispatcher must return, no
 //! execution needed), a tool-loop scenario needs a small tool catalog with canned results and an
 //! expectation about which tools actually get *called* and what the final `Report::outcome` is —

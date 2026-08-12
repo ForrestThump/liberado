@@ -10,7 +10,7 @@
 //! between them, and **every hub and pack test in the codebase runs against the in-memory one**.
 //!
 //! That is the exact shape of the most expensive bug class in this repo
-//! (`docs/architecture/failure-modes.md` §1): a suite of load-bearing invariants pointed at an
+//! (`docs/spec/architecture/failure-modes.md` §1): a suite of load-bearing invariants pointed at an
 //! implementation production never reaches, while the one doing the real work goes unverified. It
 //! cost three separate defects last time. This suite is the check that the two agree — so a hub test
 //! passing on the in-memory store means something about the daemon.

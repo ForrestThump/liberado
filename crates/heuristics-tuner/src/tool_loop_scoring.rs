@@ -3,7 +3,7 @@
 //! classification call, no execution), scoring here drives a real (mocked) `Executor::execute` tool
 //! loop per trial and judges the outcome: which tools were actually called, and what the final
 //! `Report::outcome` was. Deliberately a separate module/type set from `scoring.rs` rather than a
-//! generalization of it — see `docs/roadmap/heuristics-tuning-engine-plan.md`'s executor/subagent
+//! generalization of it — see `docs/future-work/heuristics-tuning-engine-plan.md`'s executor/subagent
 //! tuning extension for why duplication is the accepted tradeoff for now.
 
 use std::collections::HashMap;

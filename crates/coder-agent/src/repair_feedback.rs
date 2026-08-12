@@ -18,7 +18,7 @@ pub enum FailureClass {
     ValidationOther,
     /// The machine failed, not the change. Disk exhaustion, a killed linker, a read-only tree.
     ///
-    /// Kept apart from [`CommandFailed`] because the remedy is not the model's to apply. A real
+    /// Kept apart from `CommandFailed` because the remedy is not the model's to apply. A real
     /// run ended this way: the disk filled mid-session, `cargo` exited 101 with "no space on
     /// device", and the harness answered "reproduce the failing command locally, fix the root
     /// cause, re-run until green". The model spent its remaining turns on a fault it could not

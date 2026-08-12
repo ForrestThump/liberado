@@ -55,7 +55,7 @@ pub struct CoderTuning {
     pub command_policy: CommandPolicy,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub validation_command: Option<CoderCommandConfig>,
-    /// Ordered harness checks (`docs/architecture/verifiers.md`). Empty + `validation_command`
+    /// Ordered harness checks (`docs/spec/architecture/verifiers.md`). Empty + `validation_command`
     /// still works via legacy single-command resolution.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub verifiers: Vec<VerifierSpec>,

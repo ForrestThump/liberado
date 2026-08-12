@@ -82,7 +82,7 @@ pub fn draw(frame: &mut Frame, app: &mut App, spinner_tick: u8) {
     slash_palette::draw(frame, layout.input, app, &th);
 }
 
-/// Distinct color per [`SessionKind`] for the at-a-glance chip — theme-driven, so it tracks
+/// Distinct color per `SessionKind` for the at-a-glance chip — theme-driven, so it tracks
 /// `/theme` changes. Shared by the status bar, the switcher, and the joined view.
 pub(crate) fn kind_color(
     kind: chat_client_contract::SessionKind,

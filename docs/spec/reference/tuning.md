@@ -396,7 +396,7 @@ the bare `liberado-cost …` form still runs the cost report.
 
 `provenance-ratio` compares what the face agent *received* from a delegation against what it then
 *wrote*. It flags rather than judges — a short lookup expanded into a readable sentence is fine — but
-it independently ranked the known [seam bug](../../future-work/delegated-work-is-discarded-at-the-seam.md)
+it independently ranked the known [seam bug](../../future-work/archive/delegated-work-is-discarded-at-the-seam.md)
 first at 29x against a median of 0.9x. Why this rather than an eval harness:
 [`evals_implementation.md`](../../future-work/research/evals_implementation.md).
 

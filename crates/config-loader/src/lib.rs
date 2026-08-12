@@ -14,7 +14,7 @@
 //! `liberado-config` already depends on this crate — putting the model in `liberado-config`
 //! instead would create a cycle. `liberado-config` re-exports everything in [`model`], so external
 //! consumers still reach it as `liberado_config::Config` et al. (moved from `liberado-common`
-//! 2026-07-04, `docs/roadmap/hygiene-audit-2026-07-04.md`).
+//! 2026-07-04, `docs/future-work/hygiene-audit-2026-07-04.md`).
 //!
 //! ## Usage
 //!

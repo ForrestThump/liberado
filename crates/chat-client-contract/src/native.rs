@@ -9,7 +9,7 @@
 //! `crates/tui/src/effects.rs`), because their actual needs diverge past the point a `send`/`stream`
 //! trait usefully captures: the CLI drives a blocking terminal REPL, the TUI feeds a non-blocking
 //! render loop via its own action/effect channels. Removed 2026-07-05
-//! (`docs/roadmap/hygiene-audit-2026-07-05.md`) rather than force an implementation neither client
+//! (`docs/future-work/hygiene-audit-2026-07-05.md`) rather than force an implementation neither client
 //! actually wanted. [`SseDecoder`] below (SSE framing) is the real shared boundary both clients use
 //! today. [`crate::wire::SessionEvent::from_sse_data`] (typed payload decoding — the converged
 //! chat + goal-session vocabulary, 2026-07-11) is used on top of it by the TUI

@@ -1,3 +1,12 @@
+---
+kind: plan
+status: active
+authority: implementation
+domain: coding-harness
+canonical_for: self-pr-quality
+open_items: true
+---
+
 # Self-PR quality — roadmap toward light-oversight merges
 
 **Status:** Living product roadmap (2026-08-06). Not a build-spec for a single PR; the *why* and

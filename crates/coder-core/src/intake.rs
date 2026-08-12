@@ -1,6 +1,6 @@
 //! Criteria intake DTOs — thinking model turns a human writeup into a draft contract.
 //!
-//! See `docs/architecture/verifiers.md` §3. Freeze is a product/UI step; these types are the
+//! See `docs/spec/architecture/verifiers.md` §3. Freeze is a product/UI step; these types are the
 //! structured output surface for `complete_json`.
 
 use chrono::{DateTime, Utc};

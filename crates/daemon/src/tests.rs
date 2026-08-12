@@ -1332,7 +1332,7 @@ async fn daemon_downgrades_a_zone_restricted_seed_call_to_a_proposal() {
     // (they share `liberado_common::zone_write_restriction` so they can't drift on the
     // determination logic itself), but nothing previously proved the daemon actually threads a
     // configured `zone_write_classes` through `with_dispatcher` into a real reaction
-    // (`docs/roadmap/hygiene-audit-2026-07-05.md` P3.4). The MCP's own `consequence` is
+    // (`docs/future-work/hygiene-audit-2026-07-05.md` P3.4). The MCP's own `consequence` is
     // `Reversible` — below the consequence gate — so if a proposal is emitted here, the zone
     // restriction is provably what caused it, not the (separately already-tested) consequence
     // check.
@@ -2622,7 +2622,7 @@ async fn known_session_profile_still_dispatches() {
 
 // ── L9 — cron/webhook-class event → joinable Dispatched session (T1 suite) ──
 
-/// L9 (docs/roadmap/live-conformance-suite.md): a cron/webhook-class event on the **shipped**
+/// L9 (docs/future-work/live-conformance-suite.md): a cron/webhook-class event on the **shipped**
 /// daemon reaction path becomes `ReactionOutcome::Dispatched { session_id }` with a **joinable**
 /// hosted session on the hub (snapshot succeeds; domain is the reaction/dispatch pack), not an
 /// unrecorded inline-only reaction.

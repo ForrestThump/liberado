@@ -1,7 +1,7 @@
 //! Reusable scoring for a labeled [`Scenario`] against a real dispatch decision — extracted from
 //! `liberado-eval`'s own run loop (testing-and-eval-spec §4.2) so both the eval binary and any
 //! future consumer (the planned heuristics tuning engine,
-//! `docs/roadmap/heuristics-tuning-engine-plan.md`) classify a decision the same way instead of
+//! `docs/future-work/heuristics-tuning-engine-plan.md`) classify a decision the same way instead of
 //! duplicating the rules.
 
 use liberado_common::DispatchDecision;

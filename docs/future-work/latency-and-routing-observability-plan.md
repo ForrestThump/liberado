@@ -1,3 +1,12 @@
+---
+kind: plan
+status: active
+authority: implementation
+domain: observability
+canonical_for: latency-routing-observability
+open_items: true
+---
+
 # Chat latency + routing observability plan
 
 **Status:** proposal (2026-07-20). Prompted by dogfooding the homelab daemon: interactive chat feels

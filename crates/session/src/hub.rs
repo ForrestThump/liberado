@@ -35,7 +35,7 @@ pub enum SendInputError {
     Unknown,
     /// The session exists but has already reached a terminal state, so it accepts no more input.
     Terminal,
-    /// The session's grant omits [`Capability::AskHuman`], so it may never receive human input —
+    /// The session's grant omits `Capability::AskHuman`, so it may never receive human input —
     /// not a timing problem but an authority one (S6).
     NotPermitted,
     /// The daemon restarted while the session was waiting on a human, so it replayed as
@@ -107,7 +107,7 @@ pub struct GoalSessionHub {
 }
 
 impl GoalSessionHub {
-    /// Build a hub over any [`SessionRecordStore`] — the in-memory/JSONL [`GoalSessionStore`], or
+    /// Build a hub over any [`SessionRecordStore`] — the in-memory/JSONL `GoalSessionStore`, or
     /// (S5′) the converged `Session` store.
     pub fn new(store: impl SessionRecordStore + 'static) -> Self {
         Self {
@@ -154,8 +154,8 @@ impl GoalSessionHub {
     /// config. It is recorded on the session and never widened afterwards.
     ///
     /// **Interactivity is a capability**, not a session subtype
-    /// (`docs/architecture/channels-and-interactivity.md`, Decision A): a grant without
-    /// [`Capability::AskHuman`] gets no inbound input sender at all, so its pack receives an
+    /// (`docs/spec/architecture/channels-and-interactivity.md`, Decision A): a grant without
+    /// `Capability::AskHuman` gets no inbound input sender at all, so its pack receives an
     /// already-closed [`InputChannel`] and *cannot* block on a human who may not be there. This is
     /// the structural difference between an attended `/spawn` and an unattended cron.
     pub async fn start_with_grant(
@@ -407,7 +407,7 @@ impl GoalSessionHub {
         finished
     }
 
-    /// Whether a human can still productively continue this parked session via [`resume`].
+    /// Whether a human can still productively continue this parked session via `resume`.
     async fn parked_is_resumable(&self, rec: &GoalSessionRecord) -> bool {
         // Resume refuses without AskHuman; a parked session that cannot receive an answer is dead.
         if !rec.grant.grants_ask_human() {
@@ -433,7 +433,7 @@ impl GoalSessionHub {
     /// when you come back to it.
     ///
     /// Parking is a claim that the work is worth continuing. Whether it actually *can* continue is
-    /// [`resume`](Self::resume)'s call, via [`DomainPackRunner::can_resume`]: the coding pack
+    /// `resume`(Self::resume)'s call, via [`DomainPackRunner::can_resume`]: the coding pack
     /// allows mid-build resume when a workspace checkpoint exists (S4), and refuses without one
     /// so it does not redo filesystem work against an unknown state. That refusal happens at
     /// resume time rather than here because "can this be rebuilt" depends on where the pack

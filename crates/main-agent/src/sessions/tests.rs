@@ -1140,7 +1140,7 @@ async fn live_catalog_without_grants_does_not_pass_through_all_registry_tools() 
 //
 // Every test here runs against the **real** `SessionStore` (the store production constructs) and
 // asserts on what the *provider actually received* — the two doctrine points of
-// `docs/architecture/failure-modes.md` §1. The load-bearing assertion of the first test (raw
+// `docs/spec/architecture/failure-modes.md` §1. The load-bearing assertion of the first test (raw
 // elided content ABSENT from the post-compaction request) fails if compaction is neutered to a
 // no-op — break the code, watch the test fail.
 

@@ -2,7 +2,7 @@
 //!
 //! Domain-agnostic idea: wrap any ToolRuntime with session events + progress policy.
 //! Implementation is still coding-event typed (`CoderEvent`) until a neutral session event exists.
-//! When the coding pack scopes [`crate::completion_gate::LIVE_GATE`], tool start/finish also
+//! When the coding pack scopes `crate::completion_gate::LIVE_GATE`, tool start/finish also
 //! mirror onto the goal session stream (dogfood finding #4).
 
 use std::sync::{Arc, Mutex};

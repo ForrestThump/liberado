@@ -6,7 +6,7 @@
 //! be `liberado-provider-deepseek` and `liberado-provider-openrouter`: two crates that were ~90%
 //! byte-for-byte identical scaffolding around the shared `liberado_provider::openai_compat` module,
 //! differing only in base URL, default model, env var names, and one status-code quirk
-//! (OpenRouter's extra `402` for insufficient credits). See `docs/roadmap/hygiene-audit-2026-07-05.md`
+//! (OpenRouter's extra `402` for insufficient credits). See `docs/future-work/hygiene-audit-2026-07-05.md`
 //! for the audit finding that named this, and `crates/config-loader/src/model.rs`'s
 //! `ProviderProfile`/`Topology.providers` for how a *new* backend gets added from here on — a TOML
 //! entry, not a new crate.

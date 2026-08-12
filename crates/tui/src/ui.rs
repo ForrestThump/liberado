@@ -3,7 +3,7 @@
 //! Pure functions that read `App` and draw into a `Frame`. Never mutate state — all
 //! mutation goes through `App::update()` and `App::handle_key()` in `app.rs`.
 //!
-//! Color resolution: every color comes from `app.theme` via [`resolve_colors`]. This
+//! Color resolution: every color comes from `app.theme` via `resolve_colors`. This
 //! means `/theme dark` or `/theme light` instantly changes every rendered element
 //! without a restart.
 //!

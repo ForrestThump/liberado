@@ -1,9 +1,20 @@
+---
+kind: plan
+status: implemented
+authority: advisory
+domain: process
+canonical_for: parallel-deliverables-r1
+open_items: false
+---
+
+> **Archived.** This plan is not current truth. Open work lives in [backlog.md](../backlog.md) and [roadmap.md](../../roadmap.md). See [doc-authority.md](../../spec/reference/doc-authority.md).
+
 # Five parallel deliverables
 
 **Written** 2026-08-02, for execution by a separate agent against `main`.
 **Shape**: five independent PRs, non-overlapping file sets, each mergeable alone and in any order.
 
-Read [`failure-modes.md`](../spec/architecture/failure-modes.md) first. Two rules from it govern every
+Read [`failure-modes.md`](../../spec/architecture/failure-modes.md) first. Two rules from it govern every
 item here:
 
 - **§1 — a check that cannot fail is not a check.** Before landing a test, break the thing it covers
@@ -32,7 +43,7 @@ so in the PR rather than reaching in — that file is the seam three of these de
 
 ## 1. Token cost accounting (D1 + D2)
 
-Full context: [`token-cost-accounting-plan.md`](token-cost-accounting-plan.md). Build **D1 and D2
+Full context: [`token-cost-accounting-plan.md`](../token-cost-accounting-plan.md). Build **D1 and D2
 only**. D3 (pre-flight estimate) and D4 (surfacing) are explicitly out.
 
 **Why it is first.** Every performance and design argument in this project is currently a guess,
@@ -187,7 +198,7 @@ stopped; this is about finishing what can finish, not reviving what cannot.
 Tier 3 coverage, and Tier 3 exists precisely because in-process tests could not see the defects that
 mattered. This is the newest, least-exercised surface in the daemon.
 
-Spec and envelope: [`live-conformance-tier3-build-spec.md`](live-conformance-tier3-build-spec.md).
+Spec and envelope: [`live-conformance-tier3-build-spec.md`](../live-conformance-tier3-build-spec.md).
 Every rule there still applies — background sessions only, conformance zone only, touch only what
 the run created.
 

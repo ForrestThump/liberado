@@ -246,7 +246,7 @@ impl RiskGatedToolRuntime {
     }
 
     /// Share the flag this runtime raises when it defers a call to the human out-of-band, so the
-    /// owning `Orchestrator` can read it back after the run (see [`notified_deferral`] and
+    /// owning `Orchestrator` can read it back after the run (see `notified_deferral` and
     /// [`took_deferral_to_human`](Self::took_deferral_to_human)). Without this, the runtime still
     /// tracks the flag on its own private handle — it just has no one to report it to.
     pub fn with_deferral_flag(mut self, flag: Arc<AtomicBool>) -> Self {
@@ -255,7 +255,7 @@ impl RiskGatedToolRuntime {
     }
 
     /// Whether this runtime raised a proposal / permission-request during its run **and** surfaced
-    /// it to the human out-of-band. See [`notified_deferral`].
+    /// it to the human out-of-band. See `notified_deferral`.
     pub fn took_deferral_to_human(&self) -> bool {
         self.notified_deferral.load(Ordering::Relaxed)
     }
@@ -766,7 +766,7 @@ fn proposal_message(path: &std::path::Path) -> String {
     )
 }
 
-/// A compact rendering of the authority actually in force, for [`authority_decision`]'s `held`.
+/// A compact rendering of the authority actually in force, for `authority_decision`'s `held`.
 ///
 /// Deliberately terse and deliberately complete on the two axes that get denied in practice: which
 /// MCPs may be called, and which zones may be written. "You hold X, you needed Y" is the whole

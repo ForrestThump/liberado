@@ -5,7 +5,7 @@
 
 use liberado_common::Consequence;
 
-/// The action a scenario should route to. Labels match [`DispatchAction::label`].
+/// The action a scenario should route to. Labels match `DispatchAction::label`.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum ExpectKind {
     Execute,

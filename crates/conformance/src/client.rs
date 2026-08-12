@@ -292,7 +292,7 @@ impl DaemonClient {
     ///
     /// Real attach always frames with a `session` event first; that alone is **not** proof of
     /// replay/live turn content. P6 requires at least one token (or other non-session agent event
-    /// counted as turn content via [`parse_sse_block`]'s `saw_token`). Empty attach, session-only
+    /// counted as turn content via `parse_sse_block`'s `saw_token`). Empty attach, session-only
     /// framing, or 409 are fails.
     pub async fn attach_and_collect(
         &self,

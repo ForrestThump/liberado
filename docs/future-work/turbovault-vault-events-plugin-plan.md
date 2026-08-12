@@ -1,3 +1,12 @@
+---
+kind: plan
+status: active
+authority: implementation
+domain: turbovault
+canonical_for: turbovault-vault-events
+open_items: true
+---
+
 # TurboVault vault-events plugin — integration plan
 
 **Status**: plan, 2026-07-18 (cold-start brief for implementers).  
@@ -520,7 +529,7 @@ Mutation / property ideas (optional): drop counter monotonicity; never attribute
 ### Liberado
 
 - `docs/spec/vault-concurrency-spec.md` — Decision 5, Approach A, zones, idempotency.  
-- `docs/spec/architecture-decisions.md` — Decisions 5, 6, 18, 19.  
+- `docs/decisions/` — ADRs 5, 6, 18, 19.  
 - `docs/spec/life-os-architecture.md` §5 — triggering layer (update when plugin lands).  
 - `crates/vault/` — attribution + write adapter.  
 - `crates/daemon/src/vault_source.rs` — production EventSource fallback.

@@ -1,4 +1,4 @@
-//! Tier-1 live conformance suite (docs/roadmap/live-conformance-suite.md).
+//! Tier-1 live conformance suite (docs/future-work/live-conformance-suite.md).
 //!
 //! In-process, production-shaped goals HTTP surface over a **durable** `SessionStore`
 //! (the same store type production boots) + `MockProvider` where a model is required.

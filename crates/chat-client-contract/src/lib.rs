@@ -12,7 +12,7 @@
 //!   for both the chat stream and the goal-session stream, so one decoder serves every surface.
 //!   (The old chat-only `ChatEvent` was folded into it; a prior `ChatClient` trait in `native`
 //!   promised a fuller shared client abstraction but was never implemented by either real client
-//!   and was removed — see `docs/roadmap/hygiene-audit-2026-07-05.md`.)
+//!   and was removed — see `docs/future-work/hygiene-audit-2026-07-05.md`.)
 //! - **`native`** — `SseDecoder`/`SseEvent` (gated: `#[cfg(not(target_arch = "wasm32"))]`).
 //!   Pulls in `async-trait`, `tokio`, `futures`, `ulid` — not available on WASM. The incremental
 //!   SSE framing parser, shared by the TUI and the `liberado chat` CLI client (each used to carry

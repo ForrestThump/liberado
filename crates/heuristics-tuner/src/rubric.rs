@@ -1,7 +1,7 @@
 //! Format the tuning session's result into the artifact a human reads before deciding whether to
 //! hand-copy the winning prompt into `liberado_dispatcher::DEFAULT_SYSTEM_PROMPT`. Nothing in this
 //! crate ever writes to the real dispatcher — this is the "propose a diff + rubric, never
-//! auto-merge" half of `docs/roadmap/heuristics-tuning-engine-plan.md`'s design.
+//! auto-merge" half of `docs/future-work/heuristics-tuning-engine-plan.md`'s design.
 
 use std::fmt::Write as _;
 

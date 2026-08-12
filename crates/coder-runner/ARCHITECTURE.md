@@ -26,10 +26,4 @@ it to the root loop crates would create type and package-shape friction before w
 from live loop runs. A JSON subprocess boundary is more stable: dispatch can swap `vtcode exec` for
 `liberado-coder-run` while the loop backend keeps maturing behind the core contracts.
 
-## Not Done Yet
-
-- Streaming events over stdout/stderr or a sidecar trace channel.
-- Config-dir-relative prompt path resolution before the request reaches `liberado-coder-agent`.
-- Executing planner/critic/repair roles. The runner can construct providers for role configs, but
-  the current backend still only asks for the coder role.
-- A first-class CLI UX. This binary is a machine contract, not the future human-facing coding TUI.
+Open product work for this binary lives in [`docs/future-work/backlog.md`](../../docs/future-work/backlog.md). This document covers the process boundary and role wiring only.

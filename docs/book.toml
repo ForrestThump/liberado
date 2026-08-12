@@ -1,0 +1,20 @@
+# Optional mdBook config. The repo-generated wiki view is produced by
+# `python scripts/gen-docs-site.py` (SUMMARY.md + searchable index.html).
+# Point mdBook at the docs tree if you want a static book render:
+#
+#   mdbook build docs
+#
+# Source of truth remains the Markdown under docs/; this file is not a second wiki.
+
+[book]
+title = "Liberado"
+description = "Generated view of Liberado repository documentation"
+src = "."
+language = "en"
+
+[build]
+build-dir = "../docs-site/mdbook"
+
+[output.html]
+site-url = "/liberado/"
+git-repository-url = "https://github.com/ForrestThump/liberado"

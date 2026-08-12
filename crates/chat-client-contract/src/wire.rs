@@ -346,7 +346,7 @@ pub struct ChatMessage {
     pub tool_calls: Option<serde_json::Value>,
     #[serde(default)]
     pub tool_call_id: Option<String>,
-    /// Model stamp from the store's [`MessageNode`](liberado_conversation_store is not linked here —
+    /// Model stamp from the store's `MessageNode`(liberado_conversation_store is not linked here —
     /// see server `get_conversation`): which model a user turn was dispatched to, or which model
     /// produced an assistant turn. Absent on system/tool nodes and on pre-stamp history.
     ///

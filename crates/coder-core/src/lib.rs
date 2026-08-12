@@ -6,7 +6,7 @@
 //! Liberado loop backend.
 //!
 //! Also hosts **verifier** and **criteria-intake** DTOs (`verify`, `intake`) — domain-agnostic shapes
-//! first consumed by the coding pack; see `docs/architecture/verifiers.md`.
+//! first consumed by the coding pack; see `docs/spec/architecture/verifiers.md`.
 
 mod coherence;
 mod intake;
@@ -48,7 +48,7 @@ use thiserror::Error;
 /// Stable name for the first-party Rust coding backend.
 ///
 /// Naming note (2026-07-12): the string predates the goal/loop vocabulary split
-/// (`docs/architecture/agentic-loops.md` §Vocabulary — this backend runs *goals*, not *loops*).
+/// (`docs/spec/architecture/agentic-loops.md` §Vocabulary — this backend runs *goals*, not *loops*).
 /// The value is config-visible (`dispatch.yaml`, task DB, `CODING_BACKEND`), so it is kept
 /// unchanged as a legacy identifier rather than breaking deployments over a word.
 pub const LIBERADO_LOOP_BACKEND: &str = "liberado-loop";
@@ -420,7 +420,7 @@ pub struct CoderRoleConfig {
     pub max_turns: Option<u32>,
 }
 
-/// Completion-gate settings for a coder run (S1 of `docs/roadmap/coding-tui-plan.md`).
+/// Completion-gate settings for a coder run (S1 of `docs/future-work/coding-tui-plan.md`).
 ///
 /// The gate replaces the single-critic check with a remembered gatekeeper plus a quorum of cold
 /// reviewers, adjudicated by `liberado_session::CompletionGate`. Every reviewer reuses the
@@ -709,7 +709,7 @@ pub struct CoderRunConfig {
     pub command_policy: CommandPolicy,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub validation_command: Option<CoderCommandConfig>,
-    /// Ordered harness checks (see `docs/architecture/verifiers.md`). When empty, a single
+    /// Ordered harness checks (see `docs/spec/architecture/verifiers.md`). When empty, a single
     /// `validation_command` is still honored as a legacy one-entry pipeline.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub verifiers: Vec<VerifierSpec>,

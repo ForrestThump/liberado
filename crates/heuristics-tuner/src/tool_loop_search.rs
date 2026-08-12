@@ -1,10 +1,10 @@
 //! The executor/subagent-layer generation loop — deliberately parallel to [`crate::search`]'s
 //! dispatcher-tuning loop rather than a generalization of it: see
-//! `docs/roadmap/heuristics-tuning-engine-plan.md`'s executor/subagent tuning extension for why
+//! `docs/future-work/heuristics-tuning-engine-plan.md`'s executor/subagent tuning extension for why
 //! duplicating `select_beam`/`advance_beam`'s ~40 lines was the accepted tradeoff when this was
 //! added (kept the addition fully additive, with zero risk of destabilizing the dispatcher path's
 //! already-fixed elitism logic while this one was still new and unproven). Split into its own
-//! module (2026-07-07, `docs/roadmap/hygiene-audit-2026-07-04.md`'s Priority 2 recommendation) once
+//! module (2026-07-07, `docs/future-work/hygiene-audit-2026-07-04.md`'s Priority 2 recommendation) once
 //! both paths were proven live, so a reader no longer has to tell dispatcher-tuning and
 //! executor-tuning code apart within one flat file.
 
@@ -47,7 +47,7 @@ pub fn select_beam_executor(
     qualified
 }
 
-/// The executor-layer analog of [`crate::search::advance_beam`] — same elitism (the incumbent beam
+/// The executor-layer analog of `crate::search::advance_beam` — same elitism (the incumbent beam
 /// is included in the same selection as the new pool, so a generation can never regress it).
 fn advance_beam_executor(
     beam: &[(Candidate, ToolLoopFitness)],

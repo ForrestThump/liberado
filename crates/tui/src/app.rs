@@ -1210,7 +1210,7 @@ pub enum Action {
     Tick,
 }
 
-/// Commands returned by [`App`] for the main loop / [`EffectRunner`] to execute.
+/// Commands returned by [`App`] for the main loop / `EffectRunner` to execute.
 ///
 /// These are side-effect descriptions — the App never performs I/O. The caller
 /// (main loop or `effects::EffectRunner`) maps each variant to async work.

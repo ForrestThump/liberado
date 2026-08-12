@@ -1,3 +1,12 @@
+---
+kind: plan
+status: active
+authority: implementation
+domain: mcp
+canonical_for: mcp-suite-standardization
+open_items: true
+---
+
 # MCP suite standardization — one brand, one library, one source of truth
 
 **Status**: plan, 2026-07-16. Inventory is live-verified from `homelab-node-ai` (docker ps, compose

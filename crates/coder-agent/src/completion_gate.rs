@@ -1,5 +1,5 @@
 //! The coding pack's adapter onto the kernel completion gate
-//! (`liberado_session::completion_gate`, S1 of `docs/roadmap/coding-tui-plan.md`).
+//! (`liberado_session::completion_gate`, S1 of `docs/future-work/coding-tui-plan.md`).
 //!
 //! Division of labour, and the reason this file is thin: the kernel owns *when the gate runs and
 //! what a verdict means* — quorum math, the gatekeeper veto, fail-closed coercion. This module owns

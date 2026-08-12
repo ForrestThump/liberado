@@ -1,6 +1,26 @@
+---
+kind: validation
+status: historical
+authority: evidence
+domain: correctness
+open_items: false
+---
+
 # Mutation Testing Report — `liberado-common`
 
-Generated 2026-07-29 using `cargo-mutants 27.1.0`.
+## Provenance
+
+| Field | Value |
+|-------|-------|
+| **commit** | See git history around 2026-07-29 on `main` (report pre-dates mandatory commit stamps) |
+| **date** | 2026-07-29 |
+| **command** | `cargo mutants --package liberado-common --cap-lints true` |
+| **os_env** | Developer workstation (Windows-capable workspace); CI also runs on Ubuntu |
+| **tool_version** | cargo-mutants 27.1.0 |
+| **mutation** | Full crate mutant campaign (240 mutants tested) |
+| **artifact** | This report under `docs/validation/mutation-testing/` |
+| **conclusion** | Catch rate of viable mutants improved to 94.1% after +15 tests; no production bugs found in triage |
+| **currency** | historical — re-run mutants to re-verify on a later commit |
 
 ## Summary
 

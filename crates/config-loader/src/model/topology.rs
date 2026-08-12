@@ -29,12 +29,12 @@ pub struct Topology {
     /// Unix domain socket the daemon listens on for TUI/client attach (Decision 2).
     pub daemon_socket: PathBuf,
     /// Which declared `providers` entry (by `name`) supplies inference. Provider-agnostic
-    /// scaffolding (Decision 9/13) — validated against `providers` in [`Config::validate`].
+    /// scaffolding (Decision 9/13) — validated against `providers` in `Config::validate`.
     pub provider: String,
     /// Declared inference backends — base URL, default model, and env var names for each. Adding
     /// a new OpenAI-compatible backend (OpenAI direct, Groq, Together, ...) is a new entry here,
     /// not a new crate: every backend is built by the single, generic
-    /// `liberado-provider-openai-compat` (`docs/roadmap/hygiene-audit-2026-07-05.md`'s follow-up).
+    /// `liberado-provider-openai-compat` (`docs/future-work/hygiene-audit-2026-07-05.md`'s follow-up).
     /// Seeded with `deepseek`/`openrouter` by default so an empty/absent config still boots exactly
     /// as before this field existed.
     pub providers: Vec<ProviderProfile>,
@@ -84,12 +84,12 @@ pub struct Topology {
     /// worker). Each field is optional and falls back to [`Self::provider`] + that provider's
     /// model/defaults, so an empty table is exactly today's single-model behavior. Lets the operator
     /// tier models (fast/cheap router, strong worker) and dial thinking/temperature per role from
-    /// config — no rebuild. See `docs/roadmap/latency-and-routing-observability-plan.md` §3.
+    /// config — no rebuild. See `docs/future-work/latency-and-routing-observability-plan.md` §3.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub roles: HashMap<ModelRole, RoleOverride>,
 
     /// Turn ceiling for a **read-only** subagent — research, review, summarisation. `None` →
-    /// [`liberado_orchestrator::RESEARCH_MAX_TURNS`].
+    /// `liberado_orchestrator::RESEARCH_MAX_TURNS`.
     ///
     /// Gathering work is turn-hungry in a way acting work is not: a live deep-research run spent
     /// all 8 of the general subagent turns on ~28 searches and never reached its write-up. A
@@ -143,7 +143,7 @@ fn default_content_arg() -> String {
 #[serde(default)]
 pub struct RoleOverride {
     /// Which declared `[[topology.providers]]` entry (by `name`) serves this role. `None` → the
-    /// global [`Topology::provider`]. Validated against `providers` in [`Config::validate`].
+    /// global [`Topology::provider`]. Validated against `providers` in `Config::validate`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub provider: Option<String>,
     /// Model slug to send for this role (e.g. `"deepseek/deepseek-v3-flash"`). `None` → the
@@ -176,7 +176,7 @@ pub struct MainAgentConfig {
     /// human-interfacer prompt (if `delegation_mode`) or the short legacy prompt otherwise.
     pub system_prompt: Option<String>,
     /// Automatic context compaction for long conversations (CH3 — see
-    /// `docs/roadmap/context-compaction-plan.md`). All fields defaulted; an absent table is the
+    /// `docs/future-work/context-compaction-plan.md`). All fields defaulted; an absent table is the
     /// shipped behavior (compaction on).
     pub compaction: CompactionSettings,
 }
@@ -417,7 +417,7 @@ impl Topology {
     /// Resolve [`Self::timezone`] to a validated [`UserTimezone`].
     ///
     /// Prefer this (or the clock on the running daemon) over re-parsing the string at call sites.
-    /// Load-time [`Config::validate`] already rejects unknown names, so in a booted daemon this
+    /// Load-time `Config::validate` already rejects unknown names, so in a booted daemon this
     /// is infallible unless the string was mutated after load.
     pub fn user_timezone(
         &self,
@@ -524,7 +524,7 @@ pub struct ProjectConfig {
     /// Absolute filesystem root the coding pack may use as `workspace_root` (or a subdirectory of).
     pub root: PathBuf,
     /// Whether agents may write directly under this root. Coding sessions require
-    /// [`WriteClass::AgentWritable`] (or [`WriteClass::Shared`]); [`WriteClass::ProposalOnly`]
+    /// `WriteClass::AgentWritable` (or `WriteClass::Shared`); `WriteClass::ProposalOnly`
     /// (and human-only) refuse the session at start — a coding loop that cannot write is useless.
     #[serde(default = "default_project_write_class")]
     pub write_class: liberado_common::WriteClass,

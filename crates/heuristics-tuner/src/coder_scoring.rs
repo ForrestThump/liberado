@@ -1,4 +1,4 @@
-//! Score a candidate **coder role** system prompt against [`coder_scenarios`].
+//! Score a candidate **coder role** system prompt against `coder_scenarios`.
 //!
 //! Each trial builds a temp git workspace, runs [`liberado_coder_agent::LiberadoLoopBackend`] with
 //! the candidate prompt, and judges real diffs + path hygiene. Complements executor tool-loop

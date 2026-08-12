@@ -816,7 +816,7 @@ pub async fn get_conversation(
 /// that keeps `GET /api/conversations/{id}` honoring `chat-client-contract` instead of leaking an
 /// internal type through a hand-rolled `serde_json::json!` literal.
 ///
-/// Carries [`MessageNode::model`] so clients (and the Tier 3 suite) can cross-check which model
+/// Carries `MessageNode::model` so clients (and the Tier 3 suite) can cross-check which model
 /// actually ran a turn without a second API.
 fn chat_message_from_node(n: liberado_conversation_store::MessageNode) -> ChatMessage {
     let m = n.message;

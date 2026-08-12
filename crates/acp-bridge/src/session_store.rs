@@ -41,7 +41,7 @@ pub struct SessionRecord {
 /// fallback `crates/config/src/lib.rs::data_dir()` and
 /// `crates/acp-bridge/src/coding_run.rs` use.
 ///
-/// Tests may call [`set_test_sessions_dir`] to override the directory globally
+/// Tests may call `set_test_sessions_dir` to override the directory globally
 /// (avoids env-var races under parallel `cargo test`).
 pub fn sessions_dir() -> PathBuf {
     #[cfg(test)]

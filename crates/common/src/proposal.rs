@@ -22,7 +22,7 @@ use crate::dispatch::ToolCall;
 /// The directory (relative to a vault root) proposal notes live under. Every consumer that reads,
 /// writes, or watches proposal files agrees on this one name — `liberado-daemon`,
 /// `liberado-telegram-approvals`, and `liberado-executor`'s `RiskGatedToolRuntime` each used to
-/// declare their own private copy of the same literal (`docs/roadmap/hygiene-audit-2026-07-05.md`),
+/// declare their own private copy of the same literal (`docs/future-work/hygiene-audit-2026-07-05.md`),
 /// with only a doc comment (not the compiler) keeping them in agreement.
 pub const PROPOSALS_DIR: &str = "proposals";
 
@@ -148,7 +148,7 @@ pub struct Proposal {
     /// action between propose and approve (a bug, an accidental overwrite, an opportunistic script
     /// that doesn't go looking for the signing key) — it is **not** a defense against a co-resident
     /// process with the same filesystem access as the daemon, since the signing key lives in a
-    /// plain file that process could also read (see `docs/roadmap/hardening-audit-2026-07-02.md`
+    /// plain file that process could also read (see `docs/future-work/hardening-audit-2026-07-02.md`
     /// item 1 for why that requires a different, larger fix). `#[serde(default)]` so a proposal
     /// note written before this field existed still parses — and then correctly fails verification,
     /// since an empty value never matches a real signature.
@@ -231,7 +231,7 @@ impl Proposal {
 /// `RiskGatedToolRuntime::write_proposal`) takes a `&SignedProposal`, not a `&Proposal`, so a future
 /// call site that forgot to sign is a compile error instead of a proposal that silently fails
 /// verification later, discovered only at approval time
-/// (`docs/roadmap/hygiene-audit-2026-07-05.md`).
+/// (`docs/future-work/hygiene-audit-2026-07-05.md`).
 ///
 /// Deliberately exposes only immutable access ([`Deref`](std::ops::Deref)) plus a narrow
 /// [`set_status`](Self::set_status) — not a general `DerefMut`, which would let a caller mutate a

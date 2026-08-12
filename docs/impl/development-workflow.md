@@ -30,7 +30,7 @@ internalizing before anything else:
    Decision 4). Any new code that hands authority to a subagent, a tool call, or a spawned process should
    be checked against this invariant on sight.
 3. **Numbered "Decision N" ledger.** Load-bearing architectural choices are tracked in
-   `docs/spec/architecture-decisions.md`, referenced by number throughout the codebase's doc
+   `docs/decisions/` (ADRs), referenced by number throughout the codebase's doc
    comments (e.g. "Decision 4 narrowing," "Decision 11 proposal loop," "Decision 18 incremental mesh").
    When you make a comparably load-bearing choice, add it to that ledger rather than letting the
    reasoning live only in a commit message or a chat transcript that will eventually compact away.
@@ -204,7 +204,7 @@ Don't duplicate what already exists elsewhere — this doc is process, not archi
 | The seam/modularity plan | `docs/spec/architecture/modularity.md` |
 | How do I build/run/configure it? | `docs/impl/AGENTS.md` |
 | What's the phased roadmap, what's landed, what's next? | `docs/roadmap.md` |
-| Why was decision N made? | `docs/spec/architecture-decisions.md` |
+| Why was decision N made? | `docs/decisions/ADR-NNNN-*.md` |
 | Per-crate design detail | `crates/<name>/ARCHITECTURE.md` (each crate has one) |
 | The chat/SSE API contract | `docs/spec/reference/api.md` |
 | Past hygiene/hardening audit findings (including deferred items) | `docs/future-work/archive/*-audit-*.md` |

@@ -155,7 +155,7 @@ impl Default for ConcurrencyTuning {
 /// as any other note.
 ///
 /// Kept rather than deleted because the spec it implements is still the intended design and the
-/// shape is agreed. [`Config::validate`] warns when an operator sets unimplemented fields, so config
+/// shape is agreed. `Config::validate` warns when an operator sets unimplemented fields, so config
 /// that looks live but is inert says so out loud instead of being discovered on a running box.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]

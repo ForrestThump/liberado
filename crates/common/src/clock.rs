@@ -14,7 +14,7 @@
 //!   budget exhaustion are precisely the things that must not be freezable at runtime.
 //! * A mutex on every time read is a real cost paid solely for test control.
 //!
-//! Freezing returns a [`FrozenClock`] guard that thaws on drop, and there is no unguarded way to
+//! Freezing returns a `FrozenClock` guard that thaws on drop, and there is no unguarded way to
 //! freeze. That is not tidiness. The clock is process-global and Rust's harness keeps running the
 //! remaining tests in the same process after one fails, so a bare `freeze(); …; thaw();` leaks a
 //! frozen clock to every later test the moment an assertion between the two fails. Demonstrated
@@ -95,7 +95,7 @@ pub use controllable::{FrozenClock, test_advance, test_freeze_at};
 /// A deterministic source of the current time.
 ///
 /// Under `cfg(test)` or the `test-clock` feature this returns the frozen instant while a
-/// [`FrozenClock`] is held, and the wall clock otherwise.
+/// `FrozenClock` is held, and the wall clock otherwise.
 #[cfg(any(test, feature = "test-clock"))]
 pub fn now() -> Instant {
     controllable::frozen_now().unwrap_or_else(Instant::now)

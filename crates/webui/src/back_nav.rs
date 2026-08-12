@@ -17,7 +17,7 @@
 //! leave a stale entry behind, and the user's next Back press would visibly do nothing.
 //!
 //! Our own `history.back()` calls also fire `popstate`, indistinguishable from a real one — the
-//! event carries no hint of who caused it. Hence [`SELF_INFLICTED`], a count of pops we owe
+//! event carries no hint of who caused it. Hence `SELF_INFLICTED`, a count of pops we owe
 //! ourselves. If it ever drifts the cost is one dead Back press, not a lost page.
 //!
 //! # Not handled: Forward

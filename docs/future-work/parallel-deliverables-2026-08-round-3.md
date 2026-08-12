@@ -1,3 +1,12 @@
+---
+kind: plan
+status: active
+authority: implementation
+domain: process
+canonical_for: parallel-deliverables-r3
+open_items: true
+---
+
 # Round 3 — status and remaining work
 
 Written 2026-08-02. **Rewritten 2026-08-03** after §1 closed, to be executable by someone who has
@@ -16,7 +25,7 @@ not read the rest of this repo.
 *"concise, high-signal result"*. Pinned by `execute_direct_gets_no_output_contract_today` and left
 unfixed on purpose — `ExecuteDirect` carries no `Delivery`, so a blanket fix would tell every cron
 and vault-triggered run to write documents, and that is 92.8% of token spend. Reasoning in
-[`delegated-work-is-discarded-at-the-seam.md`](delegated-work-is-discarded-at-the-seam.md). **Do not
+[`delegated-work-is-discarded-at-the-seam.md`](archive/delegated-work-is-discarded-at-the-seam.md). **Do not
 "fix" this without reading that section.**
 
 ---

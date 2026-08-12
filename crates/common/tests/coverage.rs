@@ -23,7 +23,7 @@ where
 fn capability_set_serde_round_trip_all_variants() {
     // "All variants" now means all of them. It previously omitted `AskHuman`, and `ExecuteTool` would
     // have made two of six unproven under a name promising otherwise — the failure class
-    // `docs/architecture/failure-modes.md` §1 is about.
+    // `docs/spec/architecture/failure-modes.md` §1 is about.
     //
     // Serde is load-bearing for these in two places: `policy.toml` grants, and the `SessionGrant`
     // written into a session log's header line. A variant that fails to round-trip is a grant that

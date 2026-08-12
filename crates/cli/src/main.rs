@@ -8,7 +8,7 @@
 //!   LIBERADO_VAULT=<vault> liberado  same, taking the vault from the environment
 //!   liberado chat [session-id]       the streaming terminal client of a running daemon
 //!   liberado config check            load + validate config, print a summary (or an error)
-//!   liberado prompt [profile]        print the system prompt a chat under <profile> would get
+//!   liberado prompt \[profile\]        print the system prompt a chat under <profile> would get
 //!   liberado coder trace <id>        render a durable coding trace as a human transcript
 //!   liberado coder compare <a> <b>   side-by-side harness metrics for two native traces
 //!   liberado coder import <file>     foreign (Kilo / OpenHands) → `.messages.json`

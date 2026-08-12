@@ -1,3 +1,12 @@
+---
+kind: plan
+status: active
+authority: implementation
+domain: tuning
+canonical_for: heuristics-tuning-engine
+open_items: true
+---
+
 # Heuristics Tuning Engine — Plan
 
 **Status**: v1 built and used for a real tuning run 2026-07-03 (dispatcher layer; see the build

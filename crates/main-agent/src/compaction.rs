@@ -1,5 +1,5 @@
 //! Context compaction for long conversations (CH3 — see
-//! `docs/roadmap/context-compaction-plan.md` for the design and the four-project research it
+//! `docs/future-work/context-compaction-plan.md` for the design and the four-project research it
 //! distills).
 //!
 //! The problem: [`ChatSessions`](crate::ChatSessions) rehydrates the *entire* conversation from
@@ -46,7 +46,7 @@ pub const SUMMARY_HEADER: &str = "[context compacted — summary of earlier conv
 /// Tunables for [`ChatSessions`](crate::ChatSessions)' automatic compaction. Defaults are sized
 /// for a 64k-context chat model: trigger at 48k estimated tokens leaves ~16k of reserve for tool
 /// schemas, the reply, and estimation slack. All fields have defaults; see
-/// `docs/roadmap/context-compaction-plan.md` §Configuration.
+/// `docs/future-work/context-compaction-plan.md` §Configuration.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CompactionConfig {
     /// Master switch. Default **on**: a reliability guard that is opt-in is off in practice
@@ -56,7 +56,7 @@ pub struct CompactionConfig {
     /// Absolute trigger for conversations with **no** model of their own (daemon face default).
     /// Config-tier resolution (`trigger_pct` / per-model overrides × `[[models]]` windows) happens
     /// in `liberado-server` before `ChatSessions::with_compaction`. Live-updated by
-    /// [`ChatSessions::set_compaction_trigger_tokens`] when the daemon-wide face model changes —
+    /// `ChatSessions::set_compaction_trigger_tokens` when the daemon-wide face model changes —
     /// that path must **not** retune conversations that already pinned a model (see
     /// [`CompactionTriggerTable`]).
     pub trigger_tokens: u32,

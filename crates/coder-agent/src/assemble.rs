@@ -1,7 +1,7 @@
 //! One production coding-run assembly path.
 //!
 //! `CodingSessionPack`, ACP, and the headless runner used to each hand-build a
-//! [`CoderRunConfig`]. Shared knobs then drifted: gate enablement, progress limits, traces,
+//! `CoderRunConfig`. Shared knobs then drifted: gate enablement, progress limits, traces,
 //! verifiers. This module is the single place that turns [`CoderTuning`] plus surface-only inputs
 //! into a resolved [`CoderRunRequest`], and records **where each critical field came from**.
 //!

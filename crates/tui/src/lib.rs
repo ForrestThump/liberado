@@ -42,7 +42,7 @@
 //! All state lives in [`App`] behind a single `Arc<Mutex<>>`. The draw loop reads it
 //! immutably; background tasks send [`Action`]s through a bounded `mpsc::channel`
 //! (capacity `tuning::ACTION_CHANNEL_CAPACITY`); `App::update()` processes each action
-//! and returns [`Effect`] instructions that [`EffectRunner`] executes (spawn HTTP, cancel
+//! and returns [`Effect`] instructions that `EffectRunner` executes (spawn HTTP, cancel
 //! SSE, quit, etc.).
 //!
 //!
