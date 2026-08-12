@@ -56,11 +56,14 @@ OBSOLETE_RS_PREFIXES = (
     "docs/roadmap/",
 )
 
-# Remap table for bulk path repair in .rs files.
+# Remap table for bulk path repair in .rs files (prefix only; archive resolution is separate).
 RS_PATH_REWRITES = (
-    (r"docs/architecture/", "docs/spec/architecture/"),
-    (r"docs/roadmap/", "docs/future-work/"),
+    ("docs/architecture/", "docs/spec/architecture/"),
+    ("docs/roadmap/", "docs/future-work/"),
 )
+
+# Any docs/**/*.md path string referenced from crates/**/*.rs must resolve on disk.
+DOCS_MD_REF_RE = re.compile(r"(?<![\w./-])(docs/(?:[\w.-]+/)*[\w.-]+\.md)")
 
 FRONTMATTER_RE = re.compile(
     r"\A---\r?\n(.*?)\r?\n---\r?\n?", re.DOTALL
@@ -511,6 +514,7 @@ def load_docs_from_tree(root: Path) -> list[DocRecord]:
 
 
 def scan_stale_rs_paths(root: Path) -> list[tuple[str, int, str]]:
+    """Find obsolete prefixes and docs/*.md references that do not resolve on disk."""
     hits: list[tuple[str, int, str]] = []
     crates = root / "crates"
     if not crates.is_dir():
@@ -520,17 +524,122 @@ def scan_stale_rs_paths(root: Path) -> list[tuple[str, int, str]]:
             text = path.read_text(encoding="utf-8")
         except UnicodeDecodeError:
             continue
+        rel_rs = path.relative_to(root).as_posix()
         for i, line in enumerate(text.splitlines(), 1):
             for prefix in OBSOLETE_RS_PREFIXES:
                 if prefix in line:
-                    hits.append((path.relative_to(root).as_posix(), i, line.strip()))
+                    hits.append((rel_rs, i, f"obsolete prefix {prefix}: {line.strip()}"))
+            for m in DOCS_MD_REF_RE.finditer(line):
+                doc_rel = m.group(1)
+                if not (root / doc_rel).is_file():
+                    hits.append(
+                        (
+                            rel_rs,
+                            i,
+                            f"missing docs path {doc_rel}: {line.strip()}",
+                        )
+                    )
     return hits
 
 
+def _archive_basename_map(root: Path) -> dict[str, str]:
+    """Map basename → repo-relative archive path for docs under future-work/archive/."""
+    archive = root / "docs" / "future-work" / "archive"
+    out: dict[str, str] = {}
+    if not archive.is_dir():
+        return out
+    for p in archive.rglob("*.md"):
+        out[p.name] = p.relative_to(root).as_posix()
+    return out
+
+
+def _basename_docs_map(root: Path) -> dict[str, list[str]]:
+    """Map basename → list of repo-relative docs paths (prefer non-archive)."""
+    docs_dir = root / "docs"
+    out: dict[str, list[str]] = {}
+    if not docs_dir.is_dir():
+        return out
+    for p in docs_dir.rglob("*.md"):
+        rel = p.relative_to(root).as_posix()
+        out.setdefault(p.name, []).append(rel)
+    for name, paths in out.items():
+        # Prefer live paths over archive/
+        paths.sort(key=lambda s: ("/archive/" in s, s))
+    return out
+
+
+def resolve_docs_md_path(
+    root: Path,
+    doc_rel: str,
+    archive_map: dict[str, str] | None = None,
+    basename_map: dict[str, list[str]] | None = None,
+) -> str | None:
+    """Return a path that exists for doc_rel, or None if unresolvable.
+
+    Tries the path as written, known layout migrations, then basename lookup
+    under docs/ (preferring non-archive paths).
+    """
+    doc_rel = doc_rel.replace("\\", "/")
+    if (root / doc_rel).is_file():
+        return doc_rel
+
+    # Known layout migrations (prefix rewrites that keep the tail).
+    prefix_migrations = (
+        ("docs/architecture/", "docs/spec/architecture/"),
+        ("docs/roadmap/", "docs/future-work/"),
+        ("docs/reference/", "docs/spec/reference/"),
+        ("docs/ideas/", "docs/future-work/ideas/"),
+        ("docs/specs/", "docs/spec/"),
+    )
+    for old, new in prefix_migrations:
+        if doc_rel.startswith(old):
+            candidate = new + doc_rel[len(old) :]
+            if (root / candidate).is_file():
+                return candidate
+
+    # liberado-*.md under docs/specs/ often dropped the liberado- prefix.
+    base = Path(doc_rel).name
+    if doc_rel.startswith("docs/specs/") or doc_rel.startswith("docs/spec/"):
+        if base.startswith("liberado-"):
+            stripped = "docs/spec/" + base[len("liberado-") :]
+            if (root / stripped).is_file():
+                return stripped
+
+    amap = archive_map if archive_map is not None else _archive_basename_map(root)
+    if base in amap and (root / amap[base]).is_file():
+        return amap[base]
+
+    # After docs/roadmap/X → docs/future-work/X, recover archive.
+    if doc_rel.startswith("docs/future-work/") and "/archive/" not in doc_rel:
+        candidate = f"docs/future-work/archive/{base}"
+        if (root / candidate).is_file():
+            return candidate
+    if doc_rel.startswith("docs/future-work/ideas/") and "/archive/" not in doc_rel:
+        candidate = f"docs/future-work/ideas/archive/{base}"
+        if (root / candidate).is_file():
+            return candidate
+
+    bmap = basename_map if basename_map is not None else _basename_docs_map(root)
+    candidates = bmap.get(base, [])
+    if candidates:
+        return candidates[0]
+    # liberado-foo.md → foo.md basename fallback
+    if base.startswith("liberado-"):
+        alt = bmap.get(base[len("liberado-") :], [])
+        if alt:
+            return alt[0]
+    return None
+
+
 def repair_stale_rs_paths(root: Path) -> int:
-    """Rewrite obsolete doc path prefixes in crates/**/*.rs. Returns files changed."""
+    """Rewrite obsolete doc path prefixes and resolve missing targets to real paths.
+
+    Returns the number of files changed.
+    """
     changed = 0
     crates = root / "crates"
+    archive_map = _archive_basename_map(root)
+    basename_map = _basename_docs_map(root)
     for path in crates.rglob("*.rs"):
         try:
             text = path.read_text(encoding="utf-8")
@@ -539,6 +648,20 @@ def repair_stale_rs_paths(root: Path) -> int:
         new = text
         for old, new_pref in RS_PATH_REWRITES:
             new = new.replace(old, new_pref)
+        # Also rewrite other known obsolete prefixes before basename resolution.
+        for old, new_pref in (
+            ("docs/reference/", "docs/spec/reference/"),
+            ("docs/ideas/", "docs/future-work/ideas/"),
+            ("docs/specs/", "docs/spec/"),
+        ):
+            new = new.replace(old, new_pref)
+
+        def _repl(m: re.Match[str]) -> str:
+            doc_rel = m.group(1)
+            resolved = resolve_docs_md_path(root, doc_rel, archive_map, basename_map)
+            return resolved if resolved else doc_rel
+
+        new = DOCS_MD_REF_RE.sub(_repl, new)
         if new != text:
             path.write_text(new, encoding="utf-8", newline="\n")
             changed += 1
@@ -989,7 +1112,10 @@ def cmd_generate(root: Path) -> int:
 def cmd_check_stale_rs(root: Path) -> int:
     hits = scan_stale_rs_paths(root)
     if not hits:
-        print("stale-rs-paths: OK (no obsolete docs/architecture or docs/roadmap refs)")
+        print(
+            "stale-rs-paths: OK "
+            "(no obsolete prefixes; all docs/*.md references in crates resolve on disk)"
+        )
         return 0
     print("stale-rs-paths: FAILED", file=sys.stderr)
     for path, line, text in hits[:50]:
@@ -1166,6 +1292,37 @@ def cmd_self_test() -> int:
     check("frontmatter round-trip kind", parsed is not None and parsed.get("kind") == "plan")
     check("frontmatter round-trip open_items", parsed is not None and parsed.get("open_items") is True)
     check("body preserved", body.strip().startswith("# Title"))
+
+    # resolve_docs_md_path: prefix migrations + archive basename (temp tree)
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_root = Path(tmp)
+        arch = tmp_root / "docs" / "future-work" / "archive"
+        arch.mkdir(parents=True)
+        (arch / "hygiene-audit-2026-07-05.md").write_text("# a\n", encoding="utf-8")
+        (tmp_root / "docs" / "spec" / "reference").mkdir(parents=True)
+        (tmp_root / "docs" / "spec" / "reference" / "api.md").write_text("# api\n", encoding="utf-8")
+        (tmp_root / "docs" / "spec").mkdir(parents=True, exist_ok=True)
+        (tmp_root / "docs" / "spec" / "config-spec.md").write_text("# c\n", encoding="utf-8")
+        r1 = resolve_docs_md_path(tmp_root, "docs/future-work/hygiene-audit-2026-07-05.md")
+        check(
+            "resolves future-work root miss to archive",
+            r1 == "docs/future-work/archive/hygiene-audit-2026-07-05.md",
+        )
+        r2 = resolve_docs_md_path(tmp_root, "docs/reference/api.md")
+        check("resolves docs/reference → docs/spec/reference", r2 == "docs/spec/reference/api.md")
+        r3 = resolve_docs_md_path(tmp_root, "docs/specs/liberado-config-spec.md")
+        check("resolves liberado-config-spec → config-spec", r3 == "docs/spec/config-spec.md")
+        # scan catches missing docs path
+        crates = tmp_root / "crates" / "foo" / "src"
+        crates.mkdir(parents=True)
+        (crates / "lib.rs").write_text(
+            "//! see docs/future-work/missing-plan.md\n", encoding="utf-8"
+        )
+        hits = scan_stale_rs_paths(tmp_root)
+        check(
+            "scan reports missing docs path under crates",
+            any("missing docs path" in h[2] for h in hits),
+        )
 
     if failures:
         print(f"self-test: {failures} failure(s)")

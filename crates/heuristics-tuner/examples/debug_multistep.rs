@@ -1,4 +1,4 @@
-//! Ad-hoc live reproduction for `docs/future-work/multi-step-execution-reliability-finding.md`.
+//! Ad-hoc live reproduction for `docs/future-work/archive/multi-step-execution-reliability-finding.md`.
 //!
 //! Not part of the tuner proper — a throwaway diagnostic to see *why*, not just *whether*,
 //! `multi-step-research` fails, across a few real models. Prints the full transcript signal the

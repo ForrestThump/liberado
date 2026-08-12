@@ -4,7 +4,7 @@
 //! (cron, webhooks, `delegate`) runs through the **same** `GoalSessionHub` as `/spawn`.
 //!
 //! This is not a third engine — it is the second one folded into the first
-//! (`docs/future-work/one-execution-engine-plan.md` E2). Pools stay: each [`Orchestrator`] owns an
+//! (`docs/future-work/archive/one-execution-engine-plan.md` E2). Pools stay: each [`Orchestrator`] owns an
 //! `McpRegistry` that is not shareable across instances, so the pack holds one
 //! (dispatcher, orchestrator) pair per pool name.
 

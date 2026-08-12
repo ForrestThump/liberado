@@ -263,7 +263,7 @@ impl Default for TelegramApprovalsTuning {
 
 /// Timing for folding a finished cron brief into the sticky Telegram conversation, deferred around
 /// the human's activity so a brief never barges into an active chat — see
-/// `docs/ideas/cron-delivery-timing-idea.md`. The cron itself still runs on time; only the delivery
+/// `docs/future-work/ideas/cron-delivery-timing-idea.md`. The cron itself still runs on time; only the delivery
 /// to the phone defers.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]

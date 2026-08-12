@@ -1,6 +1,6 @@
 //! Chat-aware cron delivery: fold a finished cron brief into the sticky Telegram conversation, held
 //! until the human is between messages, so a reply carries the brief in context and a brief never
-//! barges into an active chat. Design: `docs/ideas/cron-delivery-timing-idea.md`.
+//! barges into an active chat. Design: `docs/future-work/ideas/cron-delivery-timing-idea.md`.
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};

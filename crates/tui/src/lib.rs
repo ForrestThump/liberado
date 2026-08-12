@@ -1,7 +1,7 @@
 //! # liberado-tui — ratatui terminal client for Liberado
 //!
 //! A native terminal UI that attaches to a running daemon server over the
-//! **same shared HTTP/SSE contract** (`docs/reference/api.md`) as the web UI and the
+//! **same shared HTTP/SSE contract** (`docs/spec/reference/api.md`) as the web UI and the
 //! `liberado chat` REPL. Embeds **no** agent logic — it is purely a renderer and an
 //! input box.
 //!

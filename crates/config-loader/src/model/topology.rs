@@ -34,7 +34,7 @@ pub struct Topology {
     /// Declared inference backends — base URL, default model, and env var names for each. Adding
     /// a new OpenAI-compatible backend (OpenAI direct, Groq, Together, ...) is a new entry here,
     /// not a new crate: every backend is built by the single, generic
-    /// `liberado-provider-openai-compat` (`docs/future-work/hygiene-audit-2026-07-05.md`'s follow-up).
+    /// `liberado-provider-openai-compat` (`docs/future-work/archive/hygiene-audit-2026-07-05.md`'s follow-up).
     /// Seeded with `deepseek`/`openrouter` by default so an empty/absent config still boots exactly
     /// as before this field existed.
     pub providers: Vec<ProviderProfile>,
@@ -500,7 +500,7 @@ pub struct ProviderProfile {
 
 /// A named dispatcher/executor pool (Decision 18 checkpoint #3): authority segregation only, not
 /// coordination — pools never communicate with each other (see
-/// `docs/ideas/a2a-protocol-idea.md`'s research note on why cross-pool/agent coordination is
+/// `docs/future-work/ideas/a2a-protocol-idea.md`'s research note on why cross-pool/agent coordination is
 /// explicitly out of scope). A pool's authority is just `Policy::capabilities_for(name)` — no new
 /// capability mechanism, the name *is* the component. v1 shares the same provider/tuning as every
 /// other pool; only the capability grant differs (see this crate's `CronSchedule`/`HookConfig`

@@ -202,7 +202,7 @@ impl Daemon {
     /// setter, so there is no call-order hazard: an earlier `with_zone_write_classes` builder method
     /// silently did nothing if called before this one (no `DispatcherContext` yet to attach to);
     /// folding it into this call's own parameters makes that ordering mistake impossible
-    /// (`docs/future-work/hygiene-audit-2026-07-05.md`).
+    /// (`docs/future-work/archive/hygiene-audit-2026-07-05.md`).
     ///
     /// Attaches to the always-present `"default"` pool — every event that doesn't name a different
     /// pool (`EventPayload.pool`) routes here, exactly as if pools didn't exist. See

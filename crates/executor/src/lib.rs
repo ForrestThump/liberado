@@ -127,7 +127,7 @@ genuinely cannot proceed), call `submit_report` with your final result. Do not r
 /// it could react to. Matches the threshold comparable harnesses use for the same failure mode
 /// (opencode/kilocode's `DOOM_LOOP_THRESHOLD`, VTCode's `LoopDetector`) — evidence this needs an
 /// engine-level guard, not just prompt wording, came from a live reproduction of
-/// `docs/future-work/multi-step-execution-reliability-finding.md`: DeepSeek and Gemini both got stuck
+/// `docs/future-work/archive/multi-step-execution-reliability-finding.md`: DeepSeek and Gemini both got stuck
 /// calling `deepwiki` 3-6 times in a row (every call succeeded; the result was just an unhelpful,
 /// repeatable answer) and never reached the second required tool, burning the whole turn budget. A
 /// tool call *succeeding* every time denies the model the one signal ("that failed") it reliably
@@ -3159,7 +3159,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_doom_loop_gets_its_own_nudge_even_after_the_cycle_guard_already_struck_once() {
-        // Regression for the shared-counter bug (`docs/future-work/hygiene-audit-2026-07-05.md` P2.1):
+        // Regression for the shared-counter bug (`docs/future-work/archive/hygiene-audit-2026-07-05.md` P2.1):
         // the short-cycle guard strikes first (tool-a/tool-b alternating), then, entirely
         // unrelated, `search` repeats 3x in a row for the FIRST time. With one counter shared
         // between both mechanisms, doom-loop's first-ever detection would have inherited the

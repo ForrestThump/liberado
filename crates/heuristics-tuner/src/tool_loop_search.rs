@@ -4,7 +4,7 @@
 //! duplicating `select_beam`/`advance_beam`'s ~40 lines was the accepted tradeoff when this was
 //! added (kept the addition fully additive, with zero risk of destabilizing the dispatcher path's
 //! already-fixed elitism logic while this one was still new and unproven). Split into its own
-//! module (2026-07-07, `docs/future-work/hygiene-audit-2026-07-04.md`'s Priority 2 recommendation) once
+//! module (2026-07-07, `docs/future-work/archive/hygiene-audit-2026-07-04.md`'s Priority 2 recommendation) once
 //! both paths were proven live, so a reader no longer has to tell dispatcher-tuning and
 //! executor-tuning code apart within one flat file.
 

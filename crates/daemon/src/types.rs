@@ -137,7 +137,7 @@ pub enum DaemonError {
 
 /// A named dispatcher/executor pool (Decision 18 checkpoint #3): authority segregation only —
 /// pools never communicate with each other (research-confirmed scope, see
-/// `docs/ideas/a2a-protocol-idea.md`). Both halves stay independently optional, exactly mirroring
+/// `docs/future-work/ideas/a2a-protocol-idea.md`). Both halves stay independently optional, exactly mirroring
 /// `Daemon`'s pre-pool fields, so `with_dispatcher`/`with_orchestrator` keep working regardless of
 /// call order.
 #[derive(Default)]

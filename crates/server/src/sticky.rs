@@ -1,7 +1,7 @@
 //! The persisted sticky Telegram session id: the one conversation a cron brief folds into and a
 //! typed reply continues. It lived only in memory, so every container restart reset it — an implicit
 //! `/new` that dropped the running thread. Persisting the id to a small file on the data volume lets
-//! the same conversation survive a restart. Design: `docs/ideas/cron-delivery-timing-idea.md`.
+//! the same conversation survive a restart. Design: `docs/future-work/ideas/cron-delivery-timing-idea.md`.
 //!
 //! One type owns both the in-memory cell and its write-through to disk, so the two cannot drift: the
 //! chat bridge, the approval bot, and the cron-delivery notifier all hold clones of the *same*

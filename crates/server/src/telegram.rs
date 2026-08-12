@@ -18,7 +18,7 @@ use crate::sticky::StickySession;
 ///
 /// `session_id` is shared (`Arc`) with the chat-delivering notifier so a cron brief appends into the
 /// *same* conversation a reply continues — that shared sticky id is the whole mechanism behind
-/// "replying to a brief has the brief in context" (see `docs/ideas/cron-delivery-timing-idea.md`).
+/// "replying to a brief has the brief in context" (see `docs/future-work/ideas/cron-delivery-timing-idea.md`).
 pub struct TelegramChatBridge {
     pub state: Arc<AppState>,
     pub session_id: StickySession,

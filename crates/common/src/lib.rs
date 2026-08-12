@@ -29,7 +29,7 @@
 //! - [`error`] — the crate's error type.
 //!
 //! The typed config model (Decision 14) used to live here as a `config` module — moved to
-//! `liberado-config-loader` 2026-07-04 (`docs/future-work/hygiene-audit-2026-07-04.md`), re-exported
+//! `liberado-config-loader` 2026-07-04 (`docs/future-work/archive/hygiene-audit-2026-07-04.md`), re-exported
 //! from `liberado-config`. Nothing here reaches for it, so it doesn't belong in the shared
 //! vocabulary every crate compiles against regardless of whether it touches config.
 

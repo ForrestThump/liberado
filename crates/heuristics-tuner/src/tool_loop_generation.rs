@@ -1,7 +1,7 @@
 //! The executor/subagent-layer analogs of [`crate::generation`]'s `cold_start`/`mutate`:
 //! [`cold_start_executor`] and [`mutate_executor`], describing an executor's job (bounded tool-use
 //! loop, finish via `submit_report`) instead of a dispatcher's. Split into its own module
-//! (2026-07-07, `docs/future-work/hygiene-audit-2026-07-04.md`'s Priority 2 recommendation) alongside
+//! (2026-07-07, `docs/future-work/archive/hygiene-audit-2026-07-04.md`'s Priority 2 recommendation) alongside
 //! `crate::tool_loop_search`, for the same reason — dispatcher- and executor-tuning code no longer
 //! interleaved in one flat file. `request_justification` stays in `crate::generation`: it's
 //! genuinely shared, used by both layers' search loops.

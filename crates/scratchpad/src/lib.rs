@@ -1,7 +1,7 @@
 //! # liberado-scratchpad
 //!
 //! A per-execution todo-list tool for `liberado-executor`'s report-mode loop — "external working
-//! memory" (`docs/ideas/doomloop_research.md`), one of the highest-ROI doom-loop mitigations,
+//! memory" (`docs/future-work/ideas/archive/doomloop_research.md`), one of the highest-ROI doom-loop mitigations,
 //! implemented as core engine state rather than a standalone MCP.
 //!
 //! Deliberately **not** an MCP: it follows the same shape as `liberado-executor`'s
