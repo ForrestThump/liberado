@@ -13,7 +13,8 @@ last_verified: 2026-08-12
 This is repository policy for what each kind of document may claim, and the
 machine-readable metadata every managed document must carry.
 
-Source analysis and lifecycle rules: [`docs/future-work/docs_fixup.md`](../../future-work/docs_fixup.md).
+This policy is the current authority. The source audit that led to it is retained
+as historical analysis in the future-work archive.
 
 ## Authority table
 

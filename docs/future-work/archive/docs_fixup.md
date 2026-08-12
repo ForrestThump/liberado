@@ -1,11 +1,15 @@
 ---
 kind: plan
-status: active
-authority: implementation
+status: implemented
+authority: advisory
 domain: docs
 canonical_for: docs-lifecycle
-open_items: true
+open_items: false
 ---
+
+> **Archived.** This plan is implemented and is not current authority. The current
+> lifecycle rules are in [doc-authority.md](../../spec/reference/doc-authority.md).
+> Open work lives in [backlog.md](../backlog.md) and [roadmap.md](../../roadmap.md).
 
 I’ll audit the documentation as an information system: volume and status distribution, entry points, duplicate subjects, archives, generated references, and where decisions or validation evidence currently live. Then I’ll propose a retention and navigation model that improves agent retrieval without losing useful history.
 
@@ -24,7 +28,7 @@ My rough assessment:
 | Validation evidence | 7/10 | Good mutation and test evidence is retained, but historical evidence is not always clearly separated from current guarantees. |
 | Overall | about 5/10 | High signal, but too much stale authority around it. |
 
-The repository currently has 168 Markdown files and about 27,800 lines. Of those, 105 are under `future-work`, 47 are already archived, and 38 remain at the `future-work` root. Nine of those root files have no structured status. The [future-work index](README.md) still calls landed work “active,” including two completed parallel-deliverable rounds.
+The repository currently has 168 Markdown files and about 27,800 lines. Of those, 105 are under `future-work`, 47 are already archived, and 38 remain at the `future-work` root. Nine of those root files have no structured status. The [future-work index](../README.md) still calls landed work “active,” including two completed parallel-deliverable rounds.
 
 That is the central issue: the repository retains useful information well, but does not consistently tell an agent whether a document is an instruction, evidence, a proposal, or history.
 
@@ -76,7 +80,7 @@ I would define this table as repository policy:
 | What might we do later? | Proposed plan or idea |
 | What happened before? | Archive and git history |
 
-This resolves an existing ambiguity. The [docs index](../README.md) calls the decision log “frozen,” while the [decision log](../spec/architecture-decisions.md) describes itself as living and mixes completed decisions, open questions, and recommendations. The project questions file even still asks which source should win.
+This resolves an existing ambiguity. The [docs index](../../README.md) calls the decision log “frozen,” while the [decision log](../../spec/architecture-decisions.md) describes itself as living and mixes completed decisions, open questions, and recommendations. The project questions file even still asks which source should win.
 
 ## Use machine-readable document metadata
 
@@ -172,7 +176,7 @@ ADRs should be mostly immutable. A later change creates a new ADR that supersede
 
 ## Preserve evidence as evidence
 
-The [validation index](../validation/README.md) is already a good pattern: one summary document with supporting per-crate reports.
+The [validation index](../../validation/README.md) is already a good pattern: one summary document with supporting per-crate reports.
 
 Strengthen each result record with:
 

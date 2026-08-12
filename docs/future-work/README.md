@@ -17,11 +17,12 @@ Do not edit the tables by hand — update document frontmatter and re-run genera
 | [archive/](archive/README.md) | Finished plans, closed audits — **not current truth** |
 | [CATALOG.md](../CATALOG.md) | Repository-wide document catalog |
 
-## Active plans
+## Active documents
 
-Only documents with `status: active` appear here. Implemented and superseded plans are archived.
+Only root documents with `status: active` appear here. This includes active plans,
+ongoing findings, and current evidence. Implemented and superseded plans are archived.
 
-| Plan | Kind | Domain | Authority |
+| Document | Kind | Domain | Authority |
 |------|------|--------|-----------|
 | [backlog.md](backlog.md) | plan | product | implementation |
 | [build-locally-and-ship-the-artifact.md](build-locally-and-ship-the-artifact.md) | plan | ops | implementation |
@@ -30,7 +31,6 @@ Only documents with `status: active` appear here. Implemented and superseded pla
 | [coding-tui-plan.md](coding-tui-plan.md) | plan | coding-harness | implementation |
 | [context-compaction-plan.md](context-compaction-plan.md) | plan | chat | implementation |
 | [context-compaction-viewport-rearchitecture.md](context-compaction-viewport-rearchitecture.md) | plan | chat | implementation |
-| [docs_fixup.md](docs_fixup.md) | plan | docs | implementation |
 | [harness-bench-gaps-and-levers.md](harness-bench-gaps-and-levers.md) | finding | coding-harness | advisory |
 | [harness-study-2026-08.md](harness-study-2026-08.md) | finding | coding-harness | advisory |
 | [heuristics-tuning-engine-plan.md](heuristics-tuning-engine-plan.md) | plan | tuning | implementation |

@@ -2,7 +2,8 @@
 """Document metadata lint, index generation, and docs lifecycle helpers.
 
 Implements the authority model and machine-readable metadata rules from
-docs/future-work/docs_fixup.md (and docs/spec/reference/doc-authority.md).
+docs/spec/reference/doc-authority.md. The source audit is retained at
+docs/future-work/archive/docs_fixup.md.
 
 Subcommands:
   lint          Validate root future-work metadata and generated indexes.
@@ -25,7 +26,7 @@ from pathlib import Path
 from typing import Any
 
 # ---------------------------------------------------------------------------
-# Fixed vocabulary (docs_fixup.md + kind-aware decision statuses)
+# Fixed vocabulary (doc-authority.md + kind-aware decision statuses)
 # ---------------------------------------------------------------------------
 
 # Base statuses for plans/findings/indexes/etc.
@@ -294,7 +295,7 @@ def lint_documents(
     committed_generated: dict[str, str] | None = None,
     generated_now: dict[str, str] | None = None,
 ) -> LintResult:
-    """Apply the docs_fixup CI rejection rules to an in-memory document set.
+    """Apply the document-authority CI rules to an in-memory document set.
 
     Rules:
     - root future-work doc without metadata
@@ -404,10 +405,11 @@ def _normalize_newlines(s: str) -> str:
 
 
 def parse_active_index_links(readme_text: str) -> set[str]:
-    """Paths listed under the Active plans section of future-work/README.md."""
-    # Between "## Active plans" and the next ## heading (or end)
+    """Paths listed under the active section of future-work/README.md."""
+    # Between "## Active documents" and the next ## heading (or end).
+    # Accept the old heading so stale generated files still produce useful lint.
     m = re.search(
-        r"## Active plans.*?\n(.*?)(?:\n## |\Z)",
+        r"## Active (?:documents|plans).*?\n(.*?)(?:\n## |\Z)",
         readme_text,
         re.DOTALL | re.IGNORECASE,
     )
@@ -469,11 +471,12 @@ def generate_future_work_readme(docs: list[DocRecord]) -> str:
         "| [archive/](archive/README.md) | Finished plans, closed audits — **not current truth** |",
         "| [CATALOG.md](../CATALOG.md) | Repository-wide document catalog |",
         "",
-        "## Active plans",
+        "## Active documents",
         "",
-        "Only documents with `status: active` appear here. Implemented and superseded plans are archived.",
+        "Only root documents with `status: active` appear here. This includes active plans,",
+        "ongoing findings, and current evidence. Implemented and superseded plans are archived.",
         "",
-        "| Plan | Kind | Domain | Authority |",
+        "| Document | Kind | Domain | Authority |",
         "|------|------|--------|-----------|",
     ]
     for name, meta in active:
@@ -541,9 +544,11 @@ def generate_catalog(docs: list[DocRecord]) -> str:
         "|------|------|--------|-----------|--------|---------------|",
     ]
     for path, meta in rows:
+        href = path.removeprefix("docs/")
         lines.append(
-            "| {path} | {kind} | {status} | {authority} | {domain} | {canon} |".format(
+            "| [{path}]({href}) | {kind} | {status} | {authority} | {domain} | {canon} |".format(
                 path=path,
+                href=href,
                 kind=meta.get("kind", "—"),
                 status=meta.get("status", "—"),
                 authority=meta.get("authority", "—"),
@@ -790,10 +795,10 @@ ROOT_CLASSIFICATION: dict[str, dict[str, Any]] = {
     },
     "docs_fixup.md": {
         "kind": "plan",
-        "status": "active",
-        "authority": "implementation",
+        "status": "implemented",
+        "authority": "advisory",
         "domain": "docs",
-        "open_items": True,
+        "open_items": False,
         "canonical_for": "docs-lifecycle",
     },
     "loops-plan.md": {
@@ -1377,6 +1382,12 @@ def cmd_self_test() -> int:
     ]
     gen = generate_future_work_readme(docs)
     cat = generate_catalog(docs)
+    check("future-work index names active documents honestly", "## Active documents" in gen)
+    check("parses generated active-document links", "x.md" in parse_active_index_links(gen))
+    check(
+        "catalog paths are navigable links",
+        "[docs/future-work/x.md](future-work/x.md)" in cat,
+    )
     r = lint_documents(
         docs,
         active_index_paths={"x.md"},
