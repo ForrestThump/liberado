@@ -2,7 +2,7 @@
 
 **Status**: Resolves Tier-3 Decision 14 (single source of truth for config / topology). Actionable.
 **Owner**: Shiloh Mangus
-**Last Updated**: June 21, 2026
+**Last Updated**: August 11, 2026
 **Related**:
 - `liberado-architecture-decisions.md` (Decision 14; Decision 10 secrets; Decision 4 policy)
 - Every companion spec contributes tunables (their "Tunables — single source of truth" tables)
@@ -53,6 +53,18 @@ Split by **concern**, not per-module (avoids file proliferation):
 
 - **Format**: TOML (Rust-idiomatic, unambiguous typing — avoids YAML's coercion surprises). Not in
   the vault, so consistency with Obsidian's YAML frontmatter is not a concern.
+- **Table scope is positional.** A header such as `[main_agent]` owns every key after it until the
+  next table header. Keep top-level keys such as `vault_path`, `daemon_socket`, and `provider`
+  before the first table. This is wrong:
+
+  ```toml
+  [main_agent]
+  delegation_mode = true
+  provider = "openrouter" # main_agent.provider, not the global provider
+  ```
+
+  Liberado rejects unknown keys in `[main_agent]` so this mistake fails during config load instead
+  of silently leaving the global provider at its `deepseek` default.
 - **Merge precedence (lowest → highest):**
   1. **Code defaults** (the `Default` impls).
   2. **Config files** (`topology` / `policy` / `tuning`).
@@ -72,6 +84,7 @@ before anything starts. Examples of what it rejects:
 - An enabled hook with **no trigger** (neither subscription routing nor a webhook/timer).
 - A **secret reference** with no corresponding env/systemd credential present.
 - **Duplicate ownership** of a setting across files.
+- Unknown keys in `[main_agent]`, including top-level keys placed below that table header.
 - Out-of-range tunables (e.g. `MAX_CONCURRENT_SUBAGENTS = 0`).
 
 Surfaced two ways:

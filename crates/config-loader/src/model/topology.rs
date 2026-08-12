@@ -162,7 +162,7 @@ pub struct RoleOverride {
 
 /// Chat main-agent surface: human interface first, optional extra MCP tools via `policy.toml`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct MainAgentConfig {
     /// When `true` (default), the main agent is a **human interfacer**: it gets the built-in
     /// `delegate` tool (dispatcher/orchestrator behind the scenes) instead of a pre-turn dispatch

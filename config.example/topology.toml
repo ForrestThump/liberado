@@ -99,8 +99,8 @@ enabled = true
 #
 # Everything from here down is inside a table. `vault_path`, `timezone`, `daemon_socket`, and
 # `provider` are TOP-LEVEL keys and must stay above this line — a TOML table owns every key that
-# follows it, so a top-level key written below would silently become `main_agent.<key>` and be
-# ignored. Compaction settings live in [main_agent.compaction] at the end of this file.
+# follows it, so a top-level key written below becomes `main_agent.<key>`. Liberado rejects unknown
+# main-agent keys at load time. Compaction settings live in [main_agent.compaction] at the end.
 [main_agent]
 delegation_mode = true
 # system_prompt = """optional full override of the human-interface system prompt"""
