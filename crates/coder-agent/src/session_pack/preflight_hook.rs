@@ -194,7 +194,10 @@ pub async fn run_ship_preflight(
     // this gate sits before terminal `Succeeded`, the second case traps the agent: it spends its
     // whole attempt budget on a failure it did not cause and cannot fix. Compare instead.
     if !report.ok {
-        let current = liberado_coder_sandbox::report_failures(&report);
+        // Optional steps are diagnostics, not admission requirements. Staged execution means an
+        // optional step after a required failure now runs; it must not turn a pre-existing
+        // required failure into a newly blocking one.
+        let current = required_failures(&report, spec);
         let failing_steps: std::collections::BTreeSet<String> = current.keys().cloned().collect();
 
         match base_commit(workspace).await {
@@ -286,9 +289,28 @@ pub async fn run_ship_preflight(
     Ok(report)
 }
 
+/// Failures that can block a ship result. Optional-step failures stay in the full report. They do
+/// not enter the baseline comparison or the fail-closed decision.
+fn required_failures(
+    report: &PreflightReport,
+    spec: &PreflightSpec,
+) -> liberado_coder_sandbox::FailureSet {
+    let required_steps: std::collections::BTreeSet<&str> = spec
+        .steps
+        .iter()
+        .filter(|step| step.required)
+        .map(|step| step.name.as_str())
+        .collect();
+    liberado_coder_sandbox::report_failures(report)
+        .into_iter()
+        .filter(|(name, _)| required_steps.contains(name.as_str()))
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use liberado_coder_sandbox::PreflightStepResult;
     use serde_json::json;
 
     fn goal_with(payload: Value) -> GoalSpec {
@@ -303,6 +325,41 @@ mod tests {
             profile: None,
             payload,
         }
+    }
+
+    /// After staged execution, optional diagnostics can appear after a required failure. They
+    /// must not make a pre-existing required failure look newly blocking.
+    #[test]
+    fn optional_failure_is_excluded_from_the_baseline_gate() {
+        let mut optional = PreflightStep::new("advisory", "exit 1");
+        optional.required = false;
+        let spec = PreflightSpec::new("ship", vec![PreflightStep::new("fmt", "exit 1"), optional]);
+        let failed = |name: &str| PreflightStepResult {
+            name: name.to_string(),
+            exit_code: Some(1),
+            duration_ms: 0,
+            timed_out: false,
+            ok: false,
+            log_excerpt: String::new(),
+        };
+        let report = PreflightReport {
+            profile_id: "ship".to_string(),
+            ok: false,
+            steps: vec![failed("fmt"), failed("advisory")],
+            summary: String::new(),
+            duration_ms: 0,
+        };
+
+        let current = required_failures(&report, &spec);
+        assert_eq!(
+            liberado_coder_sandbox::describe_failures(&current),
+            vec!["fmt: <step failed>"],
+            "the optional failure remains visible in the report but cannot block shipping"
+        );
+        assert!(
+            liberado_coder_sandbox::diff_against_baseline(&current, &current).is_empty(),
+            "a pre-existing required failure must remain non-blocking"
+        );
     }
 
     #[test]
