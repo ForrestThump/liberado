@@ -39,10 +39,46 @@ fn write_err(e: impl std::fmt::Display) -> GitError {
 }
 
 fn open_repo(root: &Path) -> Result<gix::Repository, GitError> {
-    gix::open(root).map_err(|e| GitError {
+    open_repo_with(root, gix::open::Options::default())
+}
+
+fn open_repo_with(root: &Path, options: gix::open::Options) -> Result<gix::Repository, GitError> {
+    let mut repo = gix::open_opts(root, options).map_err(|e| GitError {
         exit_code: 128,
         message: format!("fatal: not a git repository: {e}"),
-    })
+    })?;
+    ensure_agent_identity(&mut repo)?;
+    Ok(repo)
+}
+
+/// gix refuses to write a reflog without a committer. Dev machines have
+/// `user.name` in the global config; CI runners do not. Install the same
+/// agent identity [`commit`] already uses, but only when nothing else is set.
+fn ensure_agent_identity(repo: &mut gix::Repository) -> Result<(), GitError> {
+    if repo.committer().is_some() {
+        return Ok(());
+    }
+    {
+        let mut snap = repo.config_snapshot_mut();
+        snap.set_value(
+            &gix::config::tree::User::NAME,
+            gix::bstr::BStr::new(b"liberado"),
+        )
+        .map_err(write_err)?;
+        snap.set_value(
+            &gix::config::tree::User::EMAIL,
+            gix::bstr::BStr::new(b"liberado@local"),
+        )
+        .map_err(write_err)?;
+        snap.commit().map_err(write_err)?;
+    }
+    if repo.committer().is_none() {
+        return Err(GitError {
+            exit_code: 1,
+            message: "could not install agent committer identity".to_string(),
+        });
+    }
+    Ok(())
 }
 
 /// The signature used for agent-authored commits — the identity the shell tools previously
@@ -66,9 +102,13 @@ fn bs_display(b: &BStr) -> String {
 /// which denies git for `run_command`). The argv is constructed in this module only, from
 /// inputs validated by the calling tool; it is not a shell.
 fn run_git_tool(root: &Path, args: &[&str]) -> Result<String, GitError> {
-    let out = std::process::Command::new("git")
+    let out = liberado_common::process::std_command("git")
         .args(args)
         .current_dir(root)
+        .env("GIT_AUTHOR_NAME", "liberado")
+        .env("GIT_AUTHOR_EMAIL", "liberado@local")
+        .env("GIT_COMMITTER_NAME", "liberado")
+        .env("GIT_COMMITTER_EMAIL", "liberado@local")
         .output()
         .map_err(|e| GitError {
             exit_code: 1,
@@ -151,6 +191,10 @@ pub fn untracked_files(root: &Path) -> Result<Vec<String>, GitError> {
 /// `git checkout -b <name>` — create a branch at HEAD and switch to it.
 pub fn branch_create(root: &Path, name: &str) -> Result<(), GitError> {
     let repo = open_repo(root)?;
+    branch_create_in(&repo, name)
+}
+
+fn branch_create_in(repo: &gix::Repository, name: &str) -> Result<(), GitError> {
     let head_id = repo.head_id().map_err(write_err)?;
 
     let full_name: gix::refs::FullName = format!("refs/heads/{name}").try_into().map_err(
@@ -369,4 +413,57 @@ pub fn diff_stat(root: &Path) -> Result<String, GitError> {
 /// `git diff` (patch mode, tracked changes).
 pub fn diff_patch(root: &Path) -> Result<String, GitError> {
     run_git_tool(root, &["diff"])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Seed a repo with env identity only — no `user.name` in the repo config.
+    /// Isolated open must then see no committer; that is the CI runner's world.
+    fn repo_without_user_config() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        let run = |args: &[&str]| {
+            let out = std::process::Command::new("git")
+                .args(args)
+                .current_dir(dir.path())
+                .env("GIT_AUTHOR_NAME", "test")
+                .env("GIT_AUTHOR_EMAIL", "test@test")
+                .env("GIT_COMMITTER_NAME", "test")
+                .env("GIT_COMMITTER_EMAIL", "test@test")
+                .output()
+                .unwrap();
+            assert!(
+                out.status.success(),
+                "git {args:?}: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        };
+        run(&["init", "--quiet"]);
+        std::fs::write(dir.path().join("seed.txt"), "initial\n").unwrap();
+        run(&["add", "seed.txt"]);
+        run(&["commit", "-m", "initial"]);
+        dir
+    }
+
+    #[test]
+    fn isolated_open_has_no_committer_without_fallbacks() {
+        let dir = repo_without_user_config();
+        let repo = gix::open_opts(dir.path(), gix::open::Options::isolated()).unwrap();
+        assert!(
+            repo.committer().is_none(),
+            "fixture must not carry a committer or the identity fallback is untested"
+        );
+    }
+
+    #[test]
+    fn branch_create_works_without_host_identity() {
+        let dir = repo_without_user_config();
+        let repo = open_repo_with(dir.path(), gix::open::Options::isolated()).unwrap();
+        assert!(
+            repo.committer().is_some(),
+            "open_repo_with must install the agent identity when the host has none"
+        );
+        branch_create_in(&repo, "feature-x").expect("branch create without host identity");
+    }
 }

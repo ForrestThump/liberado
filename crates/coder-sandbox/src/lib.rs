@@ -427,6 +427,25 @@ fn command_matches(rule: &str, command_line: &str) -> bool {
     !rule.is_empty() && (command_line == rule || command_line.starts_with(&format!("{rule} ")))
 }
 
+/// Last path component of an argv program, treating both `/` and `\` as separators
+/// and dropping a trailing `.exe` of any case.
+///
+/// [`Path::file_stem`] is host-OS-dependent: on Unix a Windows path is one
+/// filename, so `C:\Program Files\Git\bin\git.exe` stems to
+/// `C:\Program Files\Git\bin\git`, not `git`. The deny rule has to refuse
+/// that spelling on every runner.
+fn program_file_stem(program: &str) -> &str {
+    let name = program
+        .rsplit(['/', '\\'])
+        .find(|s| !s.is_empty())
+        .unwrap_or(program);
+    if name.len() >= 4 && name[name.len() - 4..].eq_ignore_ascii_case(".exe") {
+        &name[..name.len() - 4]
+    } else {
+        name
+    }
+}
+
 /// Does a deny `rule` (a bare program name, no arguments) name this program by file-stem?
 ///
 /// Case-insensitive everywhere: on Windows `GIT.EXE` and `git` are the same program, and being
@@ -436,11 +455,7 @@ fn deny_matches_program_stem(rule: &str, program: &str) -> bool {
     if rule.is_empty() || rule.contains(' ') {
         return false;
     }
-    let stem = Path::new(program)
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or(program);
-    stem.eq_ignore_ascii_case(rule)
+    program_file_stem(program).eq_ignore_ascii_case(rule)
 }
 
 fn decode_command_bytes(buf: &[u8]) -> String {
@@ -887,9 +902,27 @@ mod tests {
             "C:\\Program Files\\Git\\bin\\git.exe"
         ));
         assert!(deny_matches_program_stem("git", "GIT.EXE"));
+        assert!(deny_matches_program_stem("git", "/usr/bin/git"));
+        assert!(deny_matches_program_stem(
+            "git",
+            "C:/Program Files/Git/cmd/git.exe"
+        ));
         assert!(!deny_matches_program_stem("git", "gitty"));
         assert!(!deny_matches_program_stem("git status", "git"));
         assert!(!deny_matches_program_stem("", "git"));
+    }
+
+    /// `Path::file_stem` on Unix treats a Windows path as one filename. The helper
+    /// must not.
+    #[test]
+    fn program_stem_splits_on_backslash_even_on_unix() {
+        assert_eq!(
+            program_file_stem(r"C:\Program Files\Git\bin\git.exe"),
+            "git"
+        );
+        assert_eq!(program_file_stem("/usr/bin/git"), "git");
+        assert_eq!(program_file_stem("GIT.EXE"), "GIT");
+        assert_eq!(program_file_stem("gitty"), "gitty");
     }
 
     #[test]

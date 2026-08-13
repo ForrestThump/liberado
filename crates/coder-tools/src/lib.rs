@@ -4693,7 +4693,7 @@ beta
 
     fn init_temp_git_repo(dir: &std::path::Path) {
         let run = |args: &[&str]| {
-            std::process::Command::new("git")
+            let out = std::process::Command::new("git")
                 .args(args)
                 .current_dir(dir)
                 .env("GIT_AUTHOR_NAME", "test")
@@ -4701,9 +4701,19 @@ beta
                 .env("GIT_COMMITTER_NAME", "test")
                 .env("GIT_COMMITTER_EMAIL", "test@test")
                 .output()
-                .unwrap()
+                .unwrap();
+            assert!(
+                out.status.success(),
+                "git {args:?}: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
         };
         run(&["init", "--quiet"]);
+        // Repo-local identity: exists on every dev machine and on no CI runner
+        // unless we write it. `commit.gpgsign=false` for the reverse case.
+        run(&["config", "user.email", "test@liberado.local"]);
+        run(&["config", "user.name", "Test"]);
+        run(&["config", "commit.gpgsign", "false"]);
         std::fs::write(dir.join("seed.txt"), "initial\n").unwrap();
         run(&["add", "seed.txt"]);
         run(&["commit", "-m", "initial commit"]);
