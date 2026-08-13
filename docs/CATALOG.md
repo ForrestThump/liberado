@@ -52,6 +52,7 @@ Authority model: [doc-authority.md](spec/reference/doc-authority.md).
 | [docs/future-work/context-compaction-plan.md](future-work/context-compaction-plan.md) | plan | active | implementation | chat | context-compaction |
 | [docs/future-work/context-compaction-viewport-rearchitecture.md](future-work/context-compaction-viewport-rearchitecture.md) | plan | active | implementation | chat | context-compaction-viewport |
 | [docs/future-work/delegation-failure-modes.md](future-work/delegation-failure-modes.md) | finding | historical | evidence | delegation | delegation-failure-modes |
+| [docs/future-work/f12-compare3-harness-failures-2026-08.md](future-work/f12-compare3-harness-failures-2026-08.md) | finding | active | evidence | coding-harness | f12-compare3-harness-failures |
 | [docs/future-work/harness-bench-gaps-and-levers.md](future-work/harness-bench-gaps-and-levers.md) | finding | active | advisory | coding-harness | harness-bench-gaps |
 | [docs/future-work/harness-study-2026-08.md](future-work/harness-study-2026-08.md) | finding | active | advisory | coding-harness | harness-study-2026-08 |
 | [docs/future-work/heuristics-tuning-engine-plan.md](future-work/heuristics-tuning-engine-plan.md) | plan | active | implementation | tuning | heuristics-tuning-engine |
@@ -63,6 +64,7 @@ Authority model: [doc-authority.md](spec/reference/doc-authority.md).
 | [docs/future-work/mcp-suite-standardization.md](future-work/mcp-suite-standardization.md) | plan | active | implementation | mcp | mcp-suite-standardization |
 | [docs/future-work/model-knob-profiles.md](future-work/model-knob-profiles.md) | plan | draft | advisory | tuning | model-knob-profiles |
 | [docs/future-work/mvl-e2e-integration-test-plan.md](future-work/mvl-e2e-integration-test-plan.md) | plan | active | implementation | coding-harness | mvl-e2e-integration-test |
+| [docs/future-work/mvl-live-comparison-prep.md](future-work/mvl-live-comparison-prep.md) | plan | active | implementation | coding-harness | mvl-live-comparison-prep |
 | [docs/future-work/parallel-deliverables-2026-08-round-3.md](future-work/parallel-deliverables-2026-08-round-3.md) | plan | active | implementation | process | parallel-deliverables-r3 |
 | [docs/future-work/paseo-liberado-integration-roadmap.md](future-work/paseo-liberado-integration-roadmap.md) | plan | active | implementation | acp | paseo-liberado-integration |
 | [docs/future-work/pr-dispatch-vtcode-no-write-finding.md](future-work/pr-dispatch-vtcode-no-write-finding.md) | finding | active | evidence | coding-harness | vtcode-no-write |
