@@ -271,8 +271,8 @@ mod tests {
     use super::*;
     use liberado_common::WriteProvenance;
     use liberado_common::{
-        Capability, CapabilitySet, DispatchAction, DispatchDecision, Outcome, ProposalSigner,
-        Report,
+        Capability, CapabilitySet, Delivery, DispatchAction, DispatchDecision, Outcome,
+        ProposalSigner, Report,
     };
     use liberado_config_loader::DispatchTuning;
     use liberado_executor::{RuntimeFactory, RuntimeSetupError, SUBMIT_REPORT_TOOL, ToolRuntime};
@@ -346,6 +346,7 @@ mod tests {
             action: DispatchAction::ExecuteDirect {
                 seed_calls: Vec::new(),
                 relevant_mcps: Vec::new(),
+                delivery: Delivery::Summarize,
             },
             confidence: 0.95,
             rationale: "routine work".into(),
@@ -413,6 +414,7 @@ mod tests {
             action: DispatchAction::ExecuteDirect {
                 seed_calls: Vec::new(),
                 relevant_mcps: Vec::new(),
+                delivery: Delivery::Summarize,
             },
             confidence: 0.9,
             rationale: "would write if allowed".into(),

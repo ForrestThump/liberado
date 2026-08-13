@@ -22,8 +22,8 @@ use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 use liberado_common::{
-    BlockReason, CapabilitySet, DispatchAction, DispatchDecision, GuidanceHit, ProposedAction,
-    ToolCall, ToolGuidanceSource, mcp_of,
+    BlockReason, CapabilitySet, Delivery, DispatchAction, DispatchDecision, GuidanceHit,
+    ProposedAction, ToolCall, ToolGuidanceSource, mcp_of,
 };
 use liberado_config_loader::DispatchTuning;
 use liberado_provider::{CompletionRequest, Message, Provider, ProviderError, complete_json};
@@ -322,6 +322,7 @@ Goal:
             action: DispatchAction::ExecuteDirect {
                 seed_calls: Vec::new(),
                 relevant_mcps: top.tools_used.clone(),
+                delivery: Delivery::Summarize,
             },
             confidence: top.score,
             rationale: format!("procedural memory guidance: {}", top.content),
@@ -341,6 +342,7 @@ Goal:
             DispatchAction::ExecuteDirect {
                 relevant_mcps,
                 seed_calls,
+                ..
             } if !relevant_mcps.is_empty() || !seed_calls.is_empty() => {
                 let tools = if !relevant_mcps.is_empty() {
                     relevant_mcps.clone()
@@ -416,20 +418,23 @@ goals need the vault MCP name as it appears in the catalog, e.g. turbovault). Pr
 empty allowed_mcps means the full dispatcher grant (broad — avoid unless truly necessary). Do not \
 invent MCP names or capability objects. `seed_calls` may be omitted (empty).
 
-DispatchSubagent may also set `delivery` to say where the finished result should GO. Omit it \
+Either action may also set `delivery` to say where the finished result should GO. Omit it \
 (the default) and the result comes back to the main agent, which tells the human about it in its \
 own words — right for anything the human will want to discuss, and for anything that ACTS on the \
 world. Set \
 {\"Vault\":{\"path\":\"<zone>/<name>.md\"}} instead when the result is a document the human asked \
 to have written down — research write-ups, deep-dive summaries, reports they said to save. The \
-system then files the subagent's report at that path verbatim and tells the human where it is.
+system then files the report at that path verbatim and tells the human where it is. This applies \
+just as much to a simple `ExecuteDirect` as to a subagent: \"read today's notes and save me a \
+summary to research/\" is a direct execution with `delivery` set, and the direct executor is told \
+its report IS the saved document.
 
 Set `depth` to \"deep\" for open-ended gathering — deep research, multi-source synthesis, review \
 across many notes — which needs far more turns than the default. Leave it unset otherwise. Depth is \
 about how much work the goal is, never about which MCPs it uses.
 
-The SYSTEM performs that write, not the subagent — so `delivery` does not need, and is not helped \
-by, a writing tool in `allowed_mcps`. Scope `allowed_mcps` purely by what the subagent must READ \
+The SYSTEM performs that write, not the executor or subagent — so `delivery` does not need, and is not helped \
+by, a writing tool in `allowed_mcps`. Scope `allowed_mcps` purely by what the subagent or executor must READ \
 to do the work, exactly as you would without `delivery`: a goal that reads notes or tasks still \
 lists the vault MCP, because reading is what it is there for. Just don't add an MCP whose only \
 purpose would be saving the report — there is nothing for it to do. The path must start with one \
@@ -503,6 +508,12 @@ fn decision_schema() -> serde_json::Value {
                                     "MCP names relevant to this goal. Empty means no narrowing.",
                             },
                         },
+                        // Deliberately a subset of the Rust type's fields: `seed_calls` and
+                        // `delivery` are omitted for the same reason DispatchSubagent omits them —
+                        // `delivery` is optional (defaults to `Summarize`) and the prompt already
+                        // describes it; strict mode cannot express an optional property, so listing
+                        // it would force the model to emit it every time. Serde still accepts the
+                        // field, so a backend that ignores the schema is no worse off.
                         "required": ["relevant_mcps"],
                         "additionalProperties": false,
                     })),
@@ -789,6 +800,7 @@ fn log_classified_decision(decision: &DispatchDecision, model: &str) {
         DispatchAction::ExecuteDirect {
             seed_calls,
             relevant_mcps,
+            ..
         } => {
             let seeds: Vec<&str> = seed_calls.iter().map(|c| c.tool.as_str()).collect();
             tracing::info!(
@@ -851,6 +863,7 @@ pub(crate) fn sanitize_decision_mcps(decision: &mut DispatchDecision, catalog: &
         DispatchAction::ExecuteDirect {
             seed_calls,
             relevant_mcps,
+            ..
         } => {
             *relevant_mcps =
                 normalize_mcp_list(std::mem::take(relevant_mcps), &known, "relevant_mcps");
@@ -1001,6 +1014,7 @@ mod tests {
                     args: serde_json::json!({}),
                 }],
                 relevant_mcps: Vec::new(),
+                delivery: Delivery::Summarize,
             },
             confidence,
             rationale: "test".into(),
@@ -1034,6 +1048,7 @@ mod tests {
             action: DispatchAction::ExecuteDirect {
                 seed_calls: Vec::new(),
                 relevant_mcps: vec!["tasks-mcp".into()],
+                delivery: Delivery::Summarize,
             },
             confidence: 0.95,
             rationale: "test".into(),
@@ -1059,6 +1074,7 @@ mod tests {
             action: DispatchAction::ExecuteDirect {
                 seed_calls: Vec::new(),
                 relevant_mcps: vec!["tasks-mcp".into()],
+                delivery: Delivery::Summarize,
             },
             confidence: 0.95,
             rationale: "test".into(),
@@ -1346,6 +1362,7 @@ mod tests {
             action: DispatchAction::ExecuteDirect {
                 seed_calls: Vec::new(),
                 relevant_mcps: Vec::new(),
+                delivery: Delivery::Summarize,
             },
             confidence: 0.95,
             rationale: "test".into(),
@@ -1616,6 +1633,7 @@ mod tests {
             DispatchAction::ExecuteDirect {
                 seed_calls,
                 relevant_mcps,
+                ..
             } => {
                 assert!(seed_calls.is_empty(), "short-circuit must not invent args");
                 assert_eq!(relevant_mcps, vec!["tasks-mcp".to_string()]);
@@ -1801,6 +1819,7 @@ mod tests {
                     "list_tasks".into(),
                     "turbovault".into(),
                 ],
+                delivery: Delivery::Summarize,
             },
             confidence: 0.9,
             rationale: "test".into(),
@@ -1810,6 +1829,7 @@ mod tests {
             DispatchAction::ExecuteDirect {
                 seed_calls,
                 relevant_mcps,
+                ..
             } => {
                 assert_eq!(relevant_mcps, vec!["turbovault".to_string()]);
                 assert_eq!(seed_calls.len(), 1);
@@ -1837,6 +1857,7 @@ mod tests {
             action: DispatchAction::ExecuteDirect {
                 seed_calls: Vec::new(),
                 relevant_mcps: vec!["list_tasks".into()],
+                delivery: Delivery::Summarize,
             },
             confidence: 0.9,
             rationale: "test".into(),
@@ -1973,6 +1994,7 @@ mod tests {
             action: DispatchAction::ExecuteDirect {
                 seed_calls: Vec::new(),
                 relevant_mcps: Vec::new(),
+                delivery: Delivery::Summarize,
             },
             confidence: 0.9,
             rationale: "test".into(),
@@ -1996,6 +2018,7 @@ mod tests {
             action: DispatchAction::ExecuteDirect {
                 seed_calls: Vec::new(),
                 relevant_mcps: vec!["tasks-mcp".into()],
+                delivery: Delivery::Summarize,
             },
             confidence: 0.9,
             rationale: "test".into(),

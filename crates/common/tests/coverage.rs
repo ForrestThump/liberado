@@ -202,6 +202,7 @@ fn execute_direct_decision_round_trips() {
                 args: serde_json::json!({ "title": "milk" }),
             }],
             relevant_mcps: Vec::new(),
+            delivery: Delivery::Summarize,
         },
         confidence: 0.95,
         rationale: "trivial single-tool add".into(),

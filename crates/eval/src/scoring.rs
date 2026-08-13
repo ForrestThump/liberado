@@ -47,7 +47,7 @@ pub fn score(scenario: &Scenario, decision: &DispatchDecision) -> ScenarioOutcom
 #[cfg(test)]
 mod tests {
     use super::*;
-    use liberado_common::{BlockReason, DispatchAction};
+    use liberado_common::{BlockReason, Delivery, DispatchAction};
 
     fn scenario(expect: ExpectKind) -> Scenario {
         Scenario {
@@ -72,6 +72,7 @@ mod tests {
         DispatchAction::ExecuteDirect {
             seed_calls: Vec::new(),
             relevant_mcps: Vec::new(),
+            delivery: Delivery::Summarize,
         }
     }
 
