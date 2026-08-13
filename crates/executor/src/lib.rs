@@ -1737,7 +1737,20 @@ fn budget_failed_report_with_progress(
 fn arguments_are_file_content(tool: &str) -> bool {
     matches!(
         tool,
-        "edit_file" | "write_file" | "apply_patch" | "edit" | "write" | "patch" | "multiedit"
+        "edit_file"
+            | "write_file"
+            | "apply_patch"
+            | "edit"
+            | "write"
+            | "patch"
+            | "multiedit"
+            // `run_command` is many programs under one name. Semantic similarity
+            // on `rg` + a shared path withdrew it on compare 7 after three
+            // different searches. Identical replay is still a doom loop.
+            | "run_command"
+            | "run_command_background"
+            | "bash"
+            | "exec"
     )
 }
 
@@ -1803,6 +1816,24 @@ fn detect_short_cycle(history: &[(String, serde_json::Value, String)]) -> Option
             .zip(second_half)
             .all(|((a_name, ..), (b_name, ..))| a_name == b_name)
         {
+            continue;
+        }
+        // read → edit → read → edit is how the coding prompt says to work
+        // ("read before every edit"). Compare 7 withdrew `edit_file` on that
+        // pattern because both halves named the same path. A mutating tool in
+        // the cycle is progress, not thrash.
+        if first_half.iter().any(|(name, ..)| {
+            matches!(
+                name.as_str(),
+                "edit_file"
+                    | "write_file"
+                    | "apply_patch"
+                    | "edit"
+                    | "write"
+                    | "patch"
+                    | "multiedit"
+            )
+        }) {
             continue;
         }
         // ...called on the same thing. A single distinct target means the model is still moving.
@@ -3154,6 +3185,68 @@ mod tests {
     }
 
     /// The other side of the same line: same names *and* same arguments really is a cycle.
+    #[test]
+    fn read_then_edit_the_same_file_is_not_a_cycle() {
+        let h = hist(&[
+            (
+                "read_file",
+                serde_json::json!({"path": "src/lib.rs", "start_line": 10}),
+            ),
+            (
+                "edit_file",
+                serde_json::json!({"path": "src/lib.rs", "old": "fn a()", "new": "fn b()"}),
+            ),
+            (
+                "read_file",
+                serde_json::json!({"path": "src/lib.rs", "start_line": 10}),
+            ),
+            (
+                "edit_file",
+                serde_json::json!({"path": "src/lib.rs", "old": "fn b()", "new": "fn c()"}),
+            ),
+        ]);
+        assert!(
+            detect_short_cycle(&h).is_none(),
+            "the mandated read-edit-reread-edit loop must not withdraw edit_file"
+        );
+    }
+
+    #[test]
+    fn three_identical_run_command_calls_are_still_a_doom_loop() {
+        let args = serde_json::json!({"program": "rg", "args": ["fn catalog", "lib.rs"]});
+        let h = hist(&[
+            ("run_command", args.clone()),
+            ("run_command", args.clone()),
+            ("run_command", args),
+        ]);
+        assert!(
+            is_doom_loop(&h, LoopProfile::semantic()),
+            "replaying the same command is still thrash"
+        );
+    }
+
+    #[test]
+    fn three_different_run_command_searches_are_not_a_doom_loop() {
+        let h = hist(&[
+            (
+                "run_command",
+                serde_json::json!({"program": "rg", "args": ["fn catalog", "lib.rs"]}),
+            ),
+            (
+                "run_command",
+                serde_json::json!({"program": "rg", "args": ["fn git_commit", "lib.rs"]}),
+            ),
+            (
+                "run_command",
+                serde_json::json!({"program": "rg", "args": ["CommandPolicy", "lib.rs"]}),
+            ),
+        ]);
+        assert!(
+            !is_doom_loop(&h, LoopProfile::semantic()),
+            "distinct searches under run_command are not a doom loop"
+        );
+    }
+
     #[test]
     fn alternating_reads_over_identical_targets_are_a_cycle() {
         let h = hist(&[

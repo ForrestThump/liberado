@@ -719,9 +719,16 @@ impl LiberadoLoopBackend {
             .lock()
             .expect("progress mutex poisoned")
             .take_fatal();
+        // The executor already filed a report. Compare 7 C1: the model submitted
+        // `succeeded` after a compiling change set; `same_tool_churn` had latched
+        // on twenty `run_command` searches, and this site turned that into
+        // `NoChanges` (not retried). The ship bar still runs below. A latched
+        // inspect stall must not outrank a report the model was told to file.
         if let Some(fatal) = fatal {
-            return Err(
-                gates::fail_with_progress_fatal(&request, &session_id, &events, fatal).await,
+            tracing::warn!(
+                guard = fatal.guard_name(),
+                outcome = ?report.outcome,
+                "progress fatal ignored; a report was filed"
             );
         }
 

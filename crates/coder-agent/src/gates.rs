@@ -22,6 +22,10 @@ pub fn command_request(command: &CoderCommandConfig) -> CommandRequest {
     }
 }
 
+/// Maps a latched progress fatal to a terminal error. Compare 7 stopped applying this
+/// after a filed report — the ship bar is the scorekeeper. Kept so a future in-loop
+/// terminal has one place for the mapping.
+#[allow(dead_code)]
 pub async fn fail_with_progress_fatal(
     request: &CoderRunRequest,
     session_id: &str,
