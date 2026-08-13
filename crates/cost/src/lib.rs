@@ -1178,6 +1178,41 @@ mod tests {
         assert!((p.cost_usd.unwrap() - 0.55).abs() < 1e-9);
     }
 
+    /// The box journals these two slugs. The files a deploy copies must price them.
+    #[test]
+    fn shipped_topology_files_price_the_models_this_repo_runs() {
+        use std::path::PathBuf;
+
+        let slugs = ["deepseek/deepseek-v4-pro", "deepseek/deepseek-v4-flash"];
+        let files: [&[&str]; 2] = [
+            &["config.example", "topology.toml"],
+            &["deploy", "homelab", "config", "topology.toml"],
+        ];
+        for rel in files {
+            let mut parts = vec![env!("CARGO_MANIFEST_DIR"), "..", ".."];
+            parts.extend(rel.iter().copied());
+            let path: PathBuf = parts.iter().collect();
+            let table = price_table_from_topology_path(&path)
+                .unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+            for slug in slugs {
+                let event = event("c", "face", slug, Some(1_000), Some(100), None, 1);
+                let priced = price_event(&event, &table);
+                assert!(
+                    priced.cost_usd.is_some() && !priced.cost_unknown,
+                    "{}: {slug} must not be unpriced",
+                    path.display()
+                );
+                let report = report_from_parts(&[event], &Default::default(), &table);
+                assert!(
+                    !report.unpriced.iter().any(|u| u.model == slug),
+                    "{}: {slug} must not appear on the unpriced line: {:?}",
+                    path.display(),
+                    report.unpriced
+                );
+            }
+        }
+    }
+
     /// Topology TOML flat keys feed the price table.
     #[test]
     fn prices_load_from_topology_toml() {
