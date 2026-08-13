@@ -118,9 +118,7 @@ pub fn durable_session_workspace(session_id: &str) -> Option<PathBuf> {
 /// 101, and that looked identical to the ship-bar test failure.
 fn preflight_shell_tokens(program: &str, args: &[String]) -> Option<String> {
     const TOKENS: &[&str] = &["2>&1", ">&2", "|", "||", "&&", ">", ">>", "<"];
-    let hit = args
-        .iter()
-        .find(|a| TOKENS.iter().any(|t| a.as_str() == *t))?;
+    let hit = args.iter().find(|a| TOKENS.contains(&a.as_str()))?;
     Some(format!(
         "`run_command` is not a shell — {program:?} received {hit:?} as an argument. \
          Drop the token; stdout and stderr are already captured separately."
