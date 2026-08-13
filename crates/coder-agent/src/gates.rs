@@ -229,29 +229,16 @@ pub async fn resolve_attempt_changes(
     committed_files_since(workspace_root, baseline).await
 }
 
-/// Failing test identities at `baseline_sha`, when they can be learned safely and cheaply.
+/// Failing test identities at `baseline_sha`.
 ///
-/// Returns an empty set when the answer is unknown. An empty set means "assume every failure is
-/// new", which is the conservative direction: it can make an agent look at a test it did not
-/// break, and it can never hide one it did.
+/// Empty set means "unknown" and every current failure is treated as new — never as green.
+/// A compute error (missing git, worktree add failed) takes that same path. Softening only
+/// happens when we have named identities that match.
 ///
-/// **This deliberately does not run the suite at the baseline.** The obvious implementation —
-/// stash the agent's work, `git checkout` the base commit, run `cargo test`, restore — was
-/// written and rejected. It puts the agent's uncommitted work in a stash and its worktree at
-/// another commit, so any failure between those two points leaves the work stashed and the tree
-/// detached. `preflight_baseline` says the same thing in its own words: the baseline "runs in a
-/// throwaway worktree at the base commit, so the agent's tree is never touched — no stashing its
-/// work to peek underneath."
-///
-/// The throwaway-worktree approach is the right one and is already built
-/// (`liberado_coder_sandbox::compute_baseline`, cached per commit and lazy). It is **not** wired
-/// up here because it is unverified for this repository: a fresh worktree does not contain the
-/// gitignored `turbovault/` and `turbomcp/` path dependencies, so `cargo` may fail at manifest
-/// resolution before running a single test — and a baseline that fails opaquely would soften
-/// *real* failures, which is the one direction this must never fail in.
-///
-/// So: use a cached baseline if some other part of the system has already computed one, and
-/// otherwise decline to guess. Resolving the worktree question is its own task.
+/// On a cache miss this runs the ship-bar **test** step in a throwaway worktree at the base
+/// commit (`compute_baseline`). Path-deps are copied in, not junctioned. The agent's tree is
+/// not stashed or checked out. Compare 5's `stdio_smoke` was already red on the base; without
+/// this compute the headless bar treated it as new and burned two repair attempts.
 pub async fn baseline_test_failures(
     workspace_root: &str,
     baseline_sha: &str,
@@ -259,15 +246,32 @@ pub async fn baseline_test_failures(
     if baseline_sha.is_empty() {
         return Ok(std::collections::BTreeSet::new());
     }
-    let cache_dir = std::path::Path::new(workspace_root).join(".liberado/preflight-baselines");
-    let Some(cached) = liberado_coder_sandbox::load_baseline(&cache_dir, baseline_sha) else {
-        tracing::info!(
-            baseline = %baseline_sha,
-            "no cached baseline; treating every test failure as new"
-        );
-        return Ok(std::collections::BTreeSet::new());
+    let workspace = std::path::Path::new(workspace_root);
+    let cache_dir = workspace.join(".liberado/preflight-baselines");
+    let spec = liberado_coder_sandbox::liberado_ship_preflight_spec();
+    let mut steps = std::collections::BTreeSet::new();
+    steps.insert("test".to_string());
+    let target_owned = std::env::var_os("CARGO_TARGET_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| workspace.join("target"));
+    let opts = liberado_coder_sandbox::BaselineOptions {
+        project_root: workspace,
+        base_sha: baseline_sha,
+        cache_dir: &cache_dir,
+        target_dir: Some(target_owned.as_path()),
     };
-    Ok(cached
+    let set = match liberado_coder_sandbox::compute_baseline(&opts, &spec, &steps).await {
+        Ok(set) => set,
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                baseline = %baseline_sha,
+                "baseline compute failed; treating every test failure as new"
+            );
+            return Ok(std::collections::BTreeSet::new());
+        }
+    };
+    Ok(set
         .values()
         .flatten()
         .filter(|f| *f != liberado_coder_sandbox::OPAQUE_FAILURE)
@@ -422,6 +426,97 @@ mod changed_files_tests {
             .await
             .unwrap();
         assert!(resolved.is_empty());
+        let _ = std::fs::remove_dir_all(&ws);
+    }
+}
+
+#[cfg(test)]
+mod baseline_test_failures_tests {
+    use super::baseline_test_failures;
+
+    fn unique() -> u128 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    }
+
+    #[tokio::test]
+    async fn an_empty_sha_returns_no_identities() {
+        let got = baseline_test_failures("/tmp/unused", "")
+            .await
+            .expect("empty sha is not an error");
+        assert!(got.is_empty());
+    }
+
+    /// Cache hit: do not need git or cargo. Compare 5 would have used this after the first
+    /// compute paid for `stdio_smoke`.
+    #[tokio::test]
+    async fn a_cached_baseline_yields_named_failures() {
+        let ws = std::env::temp_dir().join(format!("lib-gates-bl-cache-{}", unique()));
+        std::fs::create_dir_all(ws.join(".liberado/preflight-baselines")).unwrap();
+        let mut set = liberado_coder_sandbox::FailureSet::new();
+        set.insert(
+            "test".into(),
+            ["initialize_and_session_new_over_stdio".to_string()]
+                .into_iter()
+                .collect(),
+        );
+        liberado_coder_sandbox::store_baseline(
+            &ws.join(".liberado/preflight-baselines"),
+            "deadbeefcafe00",
+            &set,
+        );
+
+        let got = baseline_test_failures(ws.to_str().unwrap(), "deadbeefcafe00")
+            .await
+            .expect("cache hit");
+        assert!(
+            got.contains("initialize_and_session_new_over_stdio"),
+            "got {got:?}"
+        );
+        let _ = std::fs::remove_dir_all(&ws);
+    }
+
+    /// Opaque identities are not softening keys — a red baseline that did not name a test
+    /// must not forgive every cargo-test 101.
+    #[tokio::test]
+    async fn an_opaque_cached_failure_is_not_a_named_identity() {
+        let ws = std::env::temp_dir().join(format!("lib-gates-bl-opaque-{}", unique()));
+        std::fs::create_dir_all(ws.join(".liberado/preflight-baselines")).unwrap();
+        let mut set = liberado_coder_sandbox::FailureSet::new();
+        set.insert(
+            "test".into(),
+            [liberado_coder_sandbox::OPAQUE_FAILURE.to_string()]
+                .into_iter()
+                .collect(),
+        );
+        liberado_coder_sandbox::store_baseline(
+            &ws.join(".liberado/preflight-baselines"),
+            "cafebabedead00",
+            &set,
+        );
+
+        let got = baseline_test_failures(ws.to_str().unwrap(), "cafebabedead00")
+            .await
+            .expect("opaque cache");
+        assert!(
+            got.is_empty(),
+            "opaque must not soften named tests, got {got:?}"
+        );
+        let _ = std::fs::remove_dir_all(&ws);
+    }
+
+    /// Compute cannot run here (not a git repo). Fail closed: empty set, not an error that
+    /// a caller could mistake for "base is green".
+    #[tokio::test]
+    async fn a_failed_compute_treats_every_failure_as_new() {
+        let ws = std::env::temp_dir().join(format!("lib-gates-bl-nocompute-{}", unique()));
+        std::fs::create_dir_all(&ws).unwrap();
+        let got = baseline_test_failures(ws.to_str().unwrap(), "abc123abc123")
+            .await
+            .expect("compute error is not a CoderError");
+        assert!(got.is_empty(), "fail-closed, got {got:?}");
         let _ = std::fs::remove_dir_all(&ws);
     }
 }

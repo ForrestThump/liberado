@@ -779,10 +779,9 @@ impl LiberadoLoopBackend {
                 )
                 .await?;
                 // A test failure that already existed on the base commit is not the agent's
-                // fault. When the only failing verifier is cargo-test, compare the reported
-                // failures against a fresh run of the same suite on the baseline SHA. If every
-                // failure is pre-existing, the test verifier is treated as passing — the agent
-                // did not break anything new.
+                // fault. Compare named cargo-test failures against `compute_baseline` (throwaway
+                // worktree at HEAD-before-edits, cached per commit). If every failure is
+                // pre-existing, the test verifier is treated as passing.
                 if !pipeline.is_pass() && baseline_sha.is_some() {
                     let baseline_failures = gates::baseline_test_failures(
                         &effective_root,
