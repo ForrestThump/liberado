@@ -1754,14 +1754,32 @@ fn arguments_are_file_content(tool: &str) -> bool {
     )
 }
 
+/// Whether two calls of `tool` count as the same action.
+///
+/// Inspect tools follow `profile`: same path is the same look. File-content
+/// tools ([`arguments_are_file_content`]) require byte-identical arguments —
+/// two edits of the same file with different `old`/`new` are progress;
+/// replaying the same edit is not.
+fn arguments_repeat(
+    tool: &str,
+    a: &serde_json::Value,
+    b: &serde_json::Value,
+    profile: LoopProfile,
+) -> bool {
+    let kind = if arguments_are_file_content(tool) {
+        ArgMatch::Exact
+    } else {
+        profile.arg_match
+    };
+    match kind {
+        ArgMatch::Exact => a == b,
+        ArgMatch::Semantic => args_similarity(a, b) >= ARG_SIMILARITY_THRESHOLD,
+    }
+}
+
 fn is_doom_loop(history: &[(String, serde_json::Value, String)], profile: LoopProfile) -> bool {
     let Some((last_name, ..)) = history.last() else {
         return false;
-    };
-    let profile = if arguments_are_file_content(last_name) {
-        LoopProfile::exact()
-    } else {
-        profile
     };
     // Most-recent-first, stopping at the first call that isn't consecutively the same tool.
     let streak: Vec<&serde_json::Value> = history
@@ -1775,10 +1793,7 @@ fn is_doom_loop(history: &[(String, serde_json::Value, String)], profile: LoopPr
     }
     streak[..DOOM_LOOP_THRESHOLD]
         .windows(2)
-        .all(|pair| match profile.arg_match {
-            ArgMatch::Exact => pair[0] == pair[1],
-            ArgMatch::Semantic => args_similarity(pair[0], pair[1]) >= ARG_SIMILARITY_THRESHOLD,
-        })
+        .all(|pair| arguments_repeat(last_name, pair[0], pair[1], profile))
 }
 
 /// Whether the tail of `history` is a short repeating cycle (period 2 or 3 — e.g. A,B,A,B or
@@ -1788,9 +1803,11 @@ fn is_doom_loop(history: &[(String, serde_json::Value, String)], profile: LoopPr
 /// Matching tool names is necessary but **not** sufficient. `read_file(a)`, `search_text(x)`,
 /// `read_file(b)`, `search_text(y)` is what reading an unfamiliar codebase looks like: the names
 /// alternate, but every call names a different resource and every call makes progress. Requiring
-/// the positionally-corresponding arguments to be near-duplicates too — the same bar
-/// [`is_doom_loop`] already applies, via [`args_similarity`] and [`IDENTITY_ARG_KEYS`] — separates
-/// that from genuine thrash.
+/// the positionally-corresponding arguments to repeat — inspect slots via [`args_similarity`]
+/// and [`IDENTITY_ARG_KEYS`], file-content slots via exact args (see
+/// [`arguments_repeat`]) — separates that from genuine thrash. Same-file
+/// `read`/`edit` with a different `old`/`new` is the mandated coding loop, not
+/// a cycle; replaying the same edit is.
 ///
 /// This was not academic: with names-only matching the guard fired on turn 4 of a 60-turn coding
 /// run, removed `read_file`/`search_text` for the rest of the task, and the model filed a complete
@@ -1818,30 +1835,15 @@ fn detect_short_cycle(history: &[(String, serde_json::Value, String)]) -> Option
         {
             continue;
         }
-        // read → edit → read → edit is how the coding prompt says to work
-        // ("read before every edit"). Compare 7 withdrew `edit_file` on that
-        // pattern because both halves named the same path. A mutating tool in
-        // the cycle is progress, not thrash.
-        if first_half.iter().any(|(name, ..)| {
-            matches!(
-                name.as_str(),
-                "edit_file"
-                    | "write_file"
-                    | "apply_patch"
-                    | "edit"
-                    | "write"
-                    | "patch"
-                    | "multiedit"
-            )
-        }) {
-            continue;
-        }
-        // ...called on the same thing. A single distinct target means the model is still moving.
+        // ...called on the same thing. Inspect slots use path identity;
+        // file-content slots (edit/write/`run_command`) require identical
+        // arguments. Same-file read → edit → read → edit is the mandated
+        // loop when the edits differ; replaying the same edit is a cycle.
         if !first_half
             .iter()
             .zip(second_half)
-            .all(|((_, a_args, _), (_, b_args, _))| {
-                args_similarity(a_args, b_args) >= ARG_SIMILARITY_THRESHOLD
+            .all(|((a_name, a_args, _), (_, b_args, _))| {
+                arguments_repeat(a_name, a_args, b_args, LoopProfile::semantic())
             })
         {
             continue;
@@ -3184,7 +3186,9 @@ mod tests {
         assert!(!is_doom_loop(&h, LoopProfile::semantic()));
     }
 
-    /// The other side of the same line: same names *and* same arguments really is a cycle.
+    /// Same-file read → edit → reread → edit is the mandated coding loop.
+    /// Semantic path-identity would treat both edits as the same action;
+    /// Exact args do not, because `old`/`new` changed.
     #[test]
     fn read_then_edit_the_same_file_is_not_a_cycle() {
         let h = hist(&[
@@ -3208,6 +3212,68 @@ mod tests {
         assert!(
             detect_short_cycle(&h).is_none(),
             "the mandated read-edit-reread-edit loop must not withdraw edit_file"
+        );
+    }
+
+    /// Replaying the same edit is a cycle. A blanket skip of any cycle that
+    /// contains a mutating tool would miss this.
+    #[test]
+    fn identical_read_then_edit_replay_is_a_cycle() {
+        let read = serde_json::json!({"path": "src/lib.rs", "start_line": 10});
+        let edit = serde_json::json!({"path": "src/lib.rs", "old": "fn a()", "new": "fn b()"});
+        let h = hist(&[
+            ("read_file", read.clone()),
+            ("edit_file", edit.clone()),
+            ("read_file", read),
+            ("edit_file", edit),
+        ]);
+        let cycling = detect_short_cycle(&h).expect("replaying the same edit is a cycle");
+        assert_eq!(
+            cycling,
+            vec!["edit_file".to_string(), "read_file".to_string()]
+        );
+    }
+
+    #[test]
+    fn edit_write_with_changing_content_is_not_a_cycle() {
+        let h = hist(&[
+            (
+                "edit_file",
+                serde_json::json!({"path": "a.rs", "old": "fn a()", "new": "fn b()"}),
+            ),
+            (
+                "write_file",
+                serde_json::json!({"path": "b.rs", "contents": "one"}),
+            ),
+            (
+                "edit_file",
+                serde_json::json!({"path": "a.rs", "old": "fn b()", "new": "fn c()"}),
+            ),
+            (
+                "write_file",
+                serde_json::json!({"path": "b.rs", "contents": "two"}),
+            ),
+        ]);
+        assert!(
+            detect_short_cycle(&h).is_none(),
+            "different edit/write bodies are progress"
+        );
+    }
+
+    #[test]
+    fn edit_write_with_identical_content_is_a_cycle() {
+        let edit = serde_json::json!({"path": "a.rs", "old": "fn a()", "new": "fn b()"});
+        let write = serde_json::json!({"path": "b.rs", "contents": "one"});
+        let h = hist(&[
+            ("edit_file", edit.clone()),
+            ("write_file", write.clone()),
+            ("edit_file", edit),
+            ("write_file", write),
+        ]);
+        let cycling = detect_short_cycle(&h).expect("identical edit/write replay is a cycle");
+        assert_eq!(
+            cycling,
+            vec!["edit_file".to_string(), "write_file".to_string()]
         );
     }
 
