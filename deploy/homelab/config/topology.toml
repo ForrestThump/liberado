@@ -60,6 +60,28 @@ reasoning = "off"
 # model = "deepseek/deepseek-v4-flash"
 # reasoning = "off"
 
+# Face/worker journal `deepseek/deepseek-v4-pro`; dispatcher journals flash. Without rates here,
+# every `liberado-cost` report is unpriced. List prices go stale.
+[[models]]
+name = "deepseek/deepseek-v4-pro"
+tool_calling = true
+structured_output = true
+context_window = 128000
+tier = "control_plane"
+input = 0.435
+output = 0.87
+cached_input = 0.003625
+
+[[models]]
+name = "deepseek/deepseek-v4-flash"
+tool_calling = true
+structured_output = true
+context_window = 128000
+tier = "work_plane"
+input = 0.14
+output = 0.28
+cached_input = 0.0028
+
 # =============================================================================
 # MCPs — container DNS names on the `homelab` network.
 # `url` is BASE origin only (client appends /mcp). F1: every non-read_only MCP
