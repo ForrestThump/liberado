@@ -127,7 +127,7 @@ async fn run_headless(args: HeadlessArgs) -> Result<(), String> {
 
     let workspace_summary = build_workspace_summary(&workspace).unwrap_or_default();
 
-    let tuning = read_tuning(config_dir.as_deref());
+    let tuning = read_tuning(config_dir.as_deref())?;
     let repo_map = if tuning.repo_map.enabled {
         repo_map::generate_repo_map(
             &workspace,
@@ -652,7 +652,8 @@ impl CoderProviderFactory for DirectProviderFactory {
         config: &CoderRoleConfig,
     ) -> Result<Arc<dyn Provider>, CoderError> {
         let provider = OpenAiCompatibleProvider::new(&self.api_key, &config.model, &self.base_url)
-            .with_extra_client_error_status(vec![429]);
+            .with_extra_client_error_status(vec![429])
+            .with_reasoning_effort(config.reasoning.clone());
         Ok(Arc::new(provider))
     }
 }
@@ -702,22 +703,22 @@ fn read_topology(config_dir: &Path) -> Result<Topology, String> {
     toml::from_str(&raw).map_err(|error| format!("parse topology {}: {error}", path.display()))
 }
 
-fn read_tuning(config_dir: Option<&Path>) -> CoderTuning {
+fn read_tuning(config_dir: Option<&Path>) -> Result<CoderTuning, String> {
     let Some(dir) = config_dir else {
-        return CoderTuning::default();
+        return Ok(CoderTuning::default());
     };
     let path = dir.join("tuning.toml");
     if !path.exists() {
-        return CoderTuning::default();
+        return Ok(CoderTuning::default());
     }
-    let Ok(raw) = std::fs::read_to_string(&path) else {
-        return CoderTuning::default();
-    };
-    let Ok(value) = toml::from_str::<toml::Value>(&raw) else {
-        return CoderTuning::default();
-    };
-    let coder_section = value.get("coder");
-    CoderTuning::from_value(coder_section).unwrap_or_default()
+    let raw = std::fs::read_to_string(&path)
+        .map_err(|error| format!("read {}: {error}", path.display()))?;
+    let value: toml::Value =
+        toml::from_str(&raw).map_err(|error| format!("parse {}: {error}", path.display()))?;
+    // Invalid `[coder]` must fail the run. `unwrap_or_default()` here dropped
+    // `offered_tools` and `reasoning` on a live compare and offered 21 tools.
+    CoderTuning::from_value(value.get("coder"))
+        .map_err(|error| format!("invalid [coder] in {}: {error}", path.display()))
 }
 
 // --- provider factory from profile (unchanged from original) ---------------
@@ -748,7 +749,8 @@ impl CoderProviderFactory for OpenAiProfileProviderFactory {
     ) -> Result<Arc<dyn Provider>, CoderError> {
         let provider =
             OpenAiCompatibleProvider::new(&self.api_key, &config.model, &self.profile.base_url)
-                .with_extra_client_error_status(self.profile.extra_client_error_status.clone());
+                .with_extra_client_error_status(self.profile.extra_client_error_status.clone())
+                .with_reasoning_effort(config.reasoning.clone());
         Ok(Arc::new(provider))
     }
 }
@@ -1167,6 +1169,86 @@ mod tests {
         let err =
             Args::parse(["task", "run", "--help"].into_iter().map(str::to_string)).unwrap_err();
         assert!(err.contains("--prompt"));
+    }
+
+    const FOUR_TOOL_THINKING: &str = r#"
+[coder]
+offered_tools = ["read_file", "write_file", "edit_file", "run_command"]
+
+[coder.coder]
+model = "deepseek/deepseek-v4-flash"
+temperature = 0.1
+max_turns = 30
+reasoning = "high"
+"#;
+
+    #[test]
+    fn read_tuning_loads_offered_tools_and_reasoning_from_a_partial_role() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("tuning.toml"), FOUR_TOOL_THINKING).unwrap();
+
+        let tuning = read_tuning(Some(dir.path())).expect("compare-2-shaped tuning must load");
+        assert_eq!(
+            tuning.offered_tools.as_deref(),
+            Some(
+                [
+                    "read_file".to_string(),
+                    "write_file".to_string(),
+                    "edit_file".to_string(),
+                    "run_command".to_string()
+                ]
+                .as_slice()
+            )
+        );
+        assert_eq!(tuning.coder.reasoning.as_deref(), Some("high"));
+
+        let assembled = assemble_production_run(
+            &tuning,
+            liberado_coder_agent::assemble::entry::runner_surface(
+                CoderTask::new("d2", "price the models"),
+                dir.path().to_path_buf(),
+                None,
+                Some(30),
+            ),
+        );
+        assert_eq!(
+            assembled.request.config.offered_tools, tuning.offered_tools,
+            "headless assembly must keep the configured catalog"
+        );
+        assert_eq!(
+            assembled.request.config.coder.reasoning.as_deref(),
+            Some("high"),
+            "headless assembly must keep the configured reasoning effort"
+        );
+    }
+
+    #[test]
+    fn read_tuning_rejects_an_invalid_coder_section_instead_of_defaulting() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("tuning.toml"),
+            "[coder.coder]\nmodel = \"x\"\nprompt = \"p\"\nmax_turns = 0\n",
+        )
+        .unwrap();
+
+        let err =
+            read_tuning(Some(dir.path())).expect_err("max_turns = 0 must not become defaults");
+        assert!(
+            err.contains("invalid [coder]"),
+            "the operator must see a load error, got: {err}"
+        );
+        assert!(
+            err.contains("max_turns"),
+            "the error must name the bad field, got: {err}"
+        );
+    }
+
+    #[test]
+    fn read_tuning_absent_file_is_defaults() {
+        let dir = tempfile::tempdir().unwrap();
+        let tuning = read_tuning(Some(dir.path())).expect("missing tuning.toml is defaults");
+        assert!(tuning.offered_tools.is_none());
+        assert!(tuning.coder.reasoning.is_none());
     }
 }
 
