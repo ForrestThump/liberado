@@ -34,7 +34,7 @@ a second priority order.
 | **8** | **A1 — read one day of deployed token-economics data** | Measure the existing production system before narrowing its catalogue. |
 | **9** | **A2 — narrow the tool catalogue** | Blocked on A1. Change only what A1 supports. |
 | **10** | ~~**B1 — give `ExecuteDirect` an explicit delivery destination**~~ **Landed.** | `ExecuteDirect` now carries `Delivery`; the orchestrator attaches the matching output contract. |
-| **11** | **C1 — replace unrestricted shell git with a capability-visible library path** | Close the residual authority hole before expanding parallel coding. |
+| **11** | ~~**C1 — replace unrestricted shell git with a capability-visible library path**~~ **Landed.** | Default `CommandPolicy` denies `git`; dedicated tools go through `coder-tools::git`. |
 | **12** | **E4 — add directory enumeration in turbovault** | External prerequisite for the inbox layer. Record the upstream commit before continuing. |
 | **13** | **E5 — stop the turbomcp SSE reconnect storm** | Restore useful homelab diagnostics before dogfooding the inbox path. |
 | **14** | ~~**F12 — give the vault watcher a positive scope**~~ **Landed (PR #156).** | Capture paths + `#now` / `#hold-off`. |
@@ -291,7 +291,7 @@ Crates in there that map onto items below, so nobody reads the whole 94 MB:
 
 | # | What | Pointer |
 |---|---|---|
-| **C1** | **The coder cannot commit.** ~~No branch/commit/push tool…~~ **Tools landed (#59) and exercised live** in the 2026-08-05 self-host dogfood (`git_branch` / `git_commit` / `git_push`, author `liberado@local`). Residual: empty `CommandPolicy` allow-list still means shell `git` is unrestricted when used via `run_command` — prefer library/`gix` long-term. | `crates/coder-tools/`, `crates/coder-core/` |
+| **C1** | ~~**The coder cannot commit.**~~ **Tools landed (#59). Residual closed.** Default `CommandPolicy` denies `git` (and `git.exe` by stem). Dedicated git tools run through `coder-tools::git` (gix where the API covers it; a fixed argv for add/push/fetch/merge). | `crates/coder-tools/`, `crates/coder-core/`, `crates/coder-sandbox/` |
 | **C2** | ~~**Run one real PR end to end and write up where it fell over.**~~ **Landed.** Session `01KZAJN9NMRR1THMWZM8ZSBV5P` produced [PR #69](https://github.com/ForrestThump/liberado/pull/69); PRs #70 and #71 closed its recorded production-path findings. | [`self-host-coding-dogfood-2026-08.md`](self-host-coding-dogfood-2026-08.md) |
 | **C3** | **Controlled cross-harness baseline.** This is the same work as 0.7, not a second item. Follow 0.7's fixed-task, fixed-model, fixed-resource acceptance criteria and land one report. | 0.7 |
 | **C4** | **Dedicated goal-view panes** — role timeline, gate panel, verifier panel. Gate votes stream live (#53) but render inline in the joined pane, so the streaming has nowhere good to land. | `crates/tui/` |

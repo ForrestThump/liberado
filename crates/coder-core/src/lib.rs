@@ -153,7 +153,14 @@ impl Default for CommandPolicy {
     fn default() -> Self {
         Self {
             allow: Vec::new(),
-            deny: Vec::new(),
+            deny: vec!["git".to_string()],
+            // `git` is denied because the dedicated git tools (git_branch / git_commit / git_push
+            // / git_status / git_diff / git_log / git_fetch / git_merge) are the only sanctioned
+            // path to git, and they run through the gix library, not a shell. An empty `allow`
+            // list means "allow all", so without this deny entry `run_command` could invoke git
+            // with no capability check at all — backlog item C1. A library call is something the
+            // capability model can see; an allow-listed shell is a hole in it.
+            //
             // 120s axed every workspace-wide cargo command on a cold worktree. One run opened
             // with `cargo test --workspace`, hit the ceiling, got back nothing at all, and
             // retried the same command three more times — most of a five-minute run spent on a
