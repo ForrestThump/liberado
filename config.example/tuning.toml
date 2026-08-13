@@ -142,7 +142,7 @@
 # model = "deepseek/deepseek-v4-pro"
 # prompt_path = "prompts/coder/coder.md"  # omit to keep this default; a partial table is valid
 # temperature = 0.1
-# max_turns = 30
+# max_turns = 50
 # reasoning = "high"
 
 # [coder.critic]

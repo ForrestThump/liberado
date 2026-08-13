@@ -36,6 +36,15 @@ These are rules, not preferences. Every one of them exists because a run broke o
 - Line endings and any byte-order mark are handled for you. Write `\n`; the file keeps its own
   shape.
 
+## Verifiers
+
+The ship bar runs `cargo check`, then `cargo test --workspace`. A green
+`cargo test -p one-crate` is not the bar. `run_command` is argv, not a shell —
+do not pass `2>&1`, `|`, or `&&` as cargo arguments; stdout and stderr are
+already captured. If you add a filter to a live path (`process_change`, a
+watcher, a gate), existing tests that write at the vault root will fail under
+the new rule — move them.
+
 ## Protocol
 
 1. Inspect only what you need (read, `run_command` to search), then make real workspace edits.

@@ -303,7 +303,7 @@ fn default_coder_planner() -> CoderRoleConfig {
 }
 
 fn default_coder_role() -> CoderRoleConfig {
-    coder_role("deepseek-v4-pro", "prompts/coder/coder.md", Some(30))
+    coder_role("deepseek-v4-pro", "prompts/coder/coder.md", Some(50))
 }
 
 fn default_coder_critic() -> CoderRoleConfig {
