@@ -72,6 +72,7 @@ Authority model: [doc-authority.md](spec/reference/doc-authority.md).
 | [docs/future-work/self-pr-quality-roadmap.md](future-work/self-pr-quality-roadmap.md) | plan | active | implementation | coding-harness | self-pr-quality |
 | [docs/future-work/token-cost-accounting-plan.md](future-work/token-cost-accounting-plan.md) | plan | active | implementation | token-economics | token-cost-accounting |
 | [docs/future-work/token-economics-findings-2026-08.md](future-work/token-economics-findings-2026-08.md) | finding | active | evidence | token-economics | token-economics-findings |
+| [docs/future-work/tool-result-hint-hooks.md](future-work/tool-result-hint-hooks.md) | finding | active | advisory | coding-harness | tool-result-hint-hooks |
 | [docs/future-work/tui-maturity-roadmap.md](future-work/tui-maturity-roadmap.md) | plan | active | implementation | tui | tui-maturity |
 | [docs/future-work/turbovault-modules-integration-roadmap.md](future-work/turbovault-modules-integration-roadmap.md) | plan | active | implementation | turbovault | turbovault-modules |
 | [docs/future-work/turbovault-vault-events-plugin-plan.md](future-work/turbovault-vault-events-plugin-plan.md) | plan | active | implementation | turbovault | turbovault-vault-events |

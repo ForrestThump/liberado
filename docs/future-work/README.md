@@ -50,6 +50,7 @@ ongoing findings, and current evidence. Implemented and superseded plans are arc
 | [self-pr-quality-roadmap.md](self-pr-quality-roadmap.md) | plan | coding-harness | implementation |
 | [token-cost-accounting-plan.md](token-cost-accounting-plan.md) | plan | token-economics | implementation |
 | [token-economics-findings-2026-08.md](token-economics-findings-2026-08.md) | finding | token-economics | evidence |
+| [tool-result-hint-hooks.md](tool-result-hint-hooks.md) | finding | coding-harness | advisory |
 | [tui-maturity-roadmap.md](tui-maturity-roadmap.md) | plan | tui | implementation |
 | [turbovault-modules-integration-roadmap.md](turbovault-modules-integration-roadmap.md) | plan | turbovault | implementation |
 | [turbovault-vault-events-plugin-plan.md](turbovault-vault-events-plugin-plan.md) | plan | turbovault | implementation |
