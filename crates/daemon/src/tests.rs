@@ -178,6 +178,10 @@ fn format_cron_delivery_flags_non_success() {
 
 async fn temp_daemon() -> (Daemon, TempDir) {
     let dir = TempDir::new().unwrap();
+    // F12 scopes the watcher to `inbox/`. Create it before any test starts the
+    // watch: Linux inotify does not reliably deliver events for a directory
+    // created after the watch is armed. Windows CI still passed without this.
+    std::fs::create_dir_all(dir.path().join("inbox")).unwrap();
     let daemon = Daemon::open("test", dir.path())
         .await
         .unwrap()
