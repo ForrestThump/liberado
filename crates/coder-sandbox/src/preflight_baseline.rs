@@ -103,16 +103,19 @@ pub async fn compute_baseline(
     .await
     .map_err(|e| format!("baseline worktree at {}: {e}", &short))?;
 
-    // Warm build, and the agent's tree is untouched throughout.
-    if let Some(target) = opts.target_dir {
-        // SAFETY: process-wide, but preflight steps are spawned sequentially from here and the
-        // variable is restored below before anything else runs.
-        unsafe { std::env::set_var("CARGO_TARGET_DIR", target) };
-    }
-    let report = run_preflight(&worktree, &subset).await;
-    if opts.target_dir.is_some() {
-        unsafe { std::env::remove_var("CARGO_TARGET_DIR") };
-    }
+    // `git worktree add` does not bring gitignored path-deps (`turbovault/`, `turbomcp/`).
+    // Without them `cargo` dies at manifest resolution and the baseline is an opaque fail
+    // that would hide real regressions if we treated it as "already broken". Copy, never
+    // junction — `worktree remove --force` followed a junction once and emptied the originals.
+    let _ = crate::provision_path_deps(opts.project_root, &worktree).await;
+
+    // Warm build, and the agent's tree is untouched throughout. Restore whatever
+    // `CARGO_TARGET_DIR` the caller had — compare runs share a host cache, and a
+    // blanket `remove_var` used to wipe that for the rest of the process.
+    let report = {
+        let _target = opts.target_dir.map(CargoTargetDirGuard::set);
+        run_preflight(&worktree, &subset).await
+    };
 
     // `remove` rather than `remove --force`, and never a recursive delete of the parent: a
     // force-remove follows directory links out of the worktree and can take real checkouts with
@@ -135,6 +138,29 @@ pub async fn compute_baseline(
 
     store_baseline(opts.cache_dir, opts.base_sha, &failures);
     Ok(failures)
+}
+
+/// Sets `CARGO_TARGET_DIR` for the baseline run and puts the previous value back on drop.
+struct CargoTargetDirGuard {
+    previous: Option<std::ffi::OsString>,
+}
+
+impl CargoTargetDirGuard {
+    fn set(target: &Path) -> Self {
+        let previous = std::env::var_os("CARGO_TARGET_DIR");
+        // SAFETY: only held around `run_preflight` below; Drop restores.
+        unsafe { std::env::set_var("CARGO_TARGET_DIR", target) };
+        Self { previous }
+    }
+}
+
+impl Drop for CargoTargetDirGuard {
+    fn drop(&mut self) {
+        match &self.previous {
+            Some(v) => unsafe { std::env::set_var("CARGO_TARGET_DIR", v) },
+            None => unsafe { std::env::remove_var("CARGO_TARGET_DIR") },
+        }
+    }
 }
 
 #[cfg(test)]
@@ -170,5 +196,73 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(baseline_cache_path(dir.path(), "beefbeefbeef"), "{not json").unwrap();
         assert_eq!(load_baseline(dir.path(), "beefbeefbeef"), None);
+    }
+
+    fn git(dir: &std::path::Path, args: &[&str]) {
+        let out = std::process::Command::new("git")
+            .args(args)
+            .current_dir(dir)
+            .output()
+            .expect("git");
+        assert!(
+            out.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    /// A cheap failing step (no cargo) so we can prove compute records named identities
+    /// without a workspace build.
+    #[tokio::test]
+    async fn compute_baseline_records_named_test_failures() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        git(root, &["init", "--quiet"]);
+        git(root, &["config", "user.email", "test@liberado.local"]);
+        git(root, &["config", "user.name", "liberado-test"]);
+        std::fs::write(root.join("README"), "base\n").unwrap();
+        git(root, &["add", "README"]);
+        git(root, &["commit", "-q", "-m", "seed"]);
+        let sha = String::from_utf8(
+            std::process::Command::new("git")
+                .args(["rev-parse", "HEAD"])
+                .current_dir(root)
+                .output()
+                .unwrap()
+                .stdout,
+        )
+        .unwrap()
+        .trim()
+        .to_string();
+
+        // cmd.exe: echo the cargo-test FAILED line, then fail. Unix: same via sh -c.
+        let run = if cfg!(windows) {
+            "echo test initialize_and_session_new_over_stdio ... FAILED& exit /b 1".to_string()
+        } else {
+            "echo 'test initialize_and_session_new_over_stdio ... FAILED'; exit 1".to_string()
+        };
+        let spec = crate::PreflightSpec::new("ship", vec![crate::PreflightStep::new("test", run)]);
+        let cache = root.join("cache");
+        let opts = BaselineOptions {
+            project_root: root,
+            base_sha: &sha,
+            cache_dir: &cache,
+            target_dir: None,
+        };
+        let mut steps = BTreeSet::new();
+        steps.insert("test".to_string());
+        let set = compute_baseline(&opts, &spec, &steps)
+            .await
+            .expect("compute");
+        let names: BTreeSet<_> = set.values().flatten().cloned().collect();
+        assert!(
+            names.contains("initialize_and_session_new_over_stdio"),
+            "got {names:?}"
+        );
+        assert_eq!(
+            load_baseline(&cache, &sha).as_ref(),
+            Some(&set),
+            "second call must be a cache hit"
+        );
     }
 }
