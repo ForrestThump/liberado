@@ -10,6 +10,7 @@ pub mod cold_review;
 mod completion_gate;
 mod critic;
 mod fanout;
+mod finish_gate;
 mod gates;
 mod intake_session;
 mod live;
@@ -665,9 +666,14 @@ impl LiberadoLoopBackend {
             ));
         }
         let task = Task::new(instructions, roles::coder_goal(&request));
-        let mut executor = Executor::new(provider, Budget::new(max_turns)).with_observer(Arc::new(
-            trace::TurnTracer::new(events.clone(), worker_role_name),
-        ));
+        let mut executor = Executor::new(provider, Budget::new(max_turns))
+            .with_observer(Arc::new(trace::TurnTracer::new(
+                events.clone(),
+                worker_role_name,
+            )))
+            .with_report_gate(Arc::new(finish_gate::WorkspaceCompileGate::new(
+                effective_root.clone(),
+            )));
         if let Some(dir) = request.config.trace_dir.as_deref() {
             let mvl_path = Path::new(dir).join(format!("{session_id}.mvl.jsonl"));
             let exec_path = Path::new(dir).join(format!("{session_id}.execution.jsonl"));
