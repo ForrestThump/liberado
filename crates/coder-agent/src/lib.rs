@@ -1579,7 +1579,13 @@ mod tests {
         let attempt_zero = std::fs::read_dir(&traces)
             .expect("trace dir")
             .filter_map(|e| e.ok())
-            .find(|e| e.file_name().to_string_lossy().contains("-attempt-0-"))
+            .find(|e| {
+                let file_name = e.file_name();
+                let name = file_name.to_string_lossy();
+                // MVL / execution siblings are `{session}.mvl.jsonl` and share the attempt
+                // infix. The CoderEvent document is the `.json` file.
+                name.contains("-attempt-0-") && name.ends_with(".json")
+            })
             .expect("a handled failure still writes a trace");
 
         let trace: CoderTrace =
