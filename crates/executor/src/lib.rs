@@ -23,9 +23,11 @@
 //! depends on the trait, so it is testable with a mock runtime and a `MockProvider`.
 
 mod budget;
+mod mvl;
 mod risk_gated;
 
 pub use budget::{Budget, ResourceLimit, ResourceUsage, TokenLimit, WallClockLimit};
+pub use mvl::MvlSession;
 pub use risk_gated::RiskGatedToolRuntime;
 
 use std::sync::Arc;
@@ -538,6 +540,8 @@ pub struct Executor {
     budget: Budget,
     /// Optional per-turn observer. `None` costs nothing and keeps every existing caller unchanged.
     observer: Option<Arc<dyn TurnObserver>>,
+    /// Production MVL / execution JSONL (backlog 0.6). `None` writes nothing.
+    mvl: Option<Arc<MvlSession>>,
     /// Model for the calls this executor makes. `None` = the provider's own.
     ///
     /// Held here rather than on the provider because a provider is shared by every session, and a
@@ -553,7 +557,15 @@ impl Executor {
             budget,
             model: None,
             observer: None,
+            mvl: None,
         }
+    }
+
+    /// Attach a production MVL session. Events are append-flushed at the request/tool boundary.
+    #[must_use]
+    pub fn with_mvl(mut self, mvl: Arc<MvlSession>) -> Self {
+        self.mvl = Some(mvl);
+        self
     }
 
     /// Hand the observer what is about to be sent. No-op when unobserved.
@@ -617,6 +629,48 @@ impl Executor {
     pub fn with_observer(mut self, observer: Arc<dyn TurnObserver>) -> Self {
         self.observer = Some(observer);
         self
+    }
+
+    fn mvl_start(&self, task: Option<&str>) {
+        if let Some(mvl) = &self.mvl {
+            mvl.start_run(&self.active_model(), "liberado", task);
+        }
+    }
+
+    fn mvl_end(&self, outcome: &str, reason: &str) {
+        if let Some(mvl) = &self.mvl {
+            mvl.end_run(outcome, reason);
+        }
+    }
+
+    fn mvl_request(&self, turn: u32, request: &CompletionRequest) {
+        if let Some(mvl) = &self.mvl {
+            mvl.on_request(i64::from(turn.saturating_sub(1)), request);
+        }
+    }
+
+    fn mvl_completion(&self, turn: u32, response: &CompletionResponse) {
+        if let Some(mvl) = &self.mvl {
+            mvl.on_completion(i64::from(turn.saturating_sub(1)), response);
+        }
+    }
+
+    fn mvl_tool_started(&self, turn: u32, call: &liberado_provider::ToolInvocation) {
+        if let Some(mvl) = &self.mvl {
+            mvl.on_tool_started(i64::from(turn.saturating_sub(1)), call);
+        }
+    }
+
+    fn mvl_tool_result(
+        &self,
+        turn: u32,
+        call: &liberado_provider::ToolInvocation,
+        ok: bool,
+        content: &str,
+    ) {
+        if let Some(mvl) = &self.mvl {
+            mvl.on_tool_result(i64::from(turn.saturating_sub(1)), call, ok, content);
+        }
     }
 
     /// A copy of this executor that runs its calls on `model`. `None` returns an equivalent
@@ -734,6 +788,7 @@ impl Executor {
         task: Task,
         mode: Mode,
     ) -> Result<Terminal, ExecError> {
+        self.mvl_start(Some(&task.goal));
         let mut messages = vec![Message::system(task.instructions), Message::user(task.goal)];
 
         let mut tools = runtime.catalog();
@@ -747,18 +802,33 @@ impl Executor {
         self.run_seed(runtime, &mut messages, &task.seed_calls)
             .await;
 
-        self.run_loop(
-            runtime,
-            &mut messages,
-            &mut tools,
-            mode,
-            &mut scratchpad,
-            RunPolicy {
-                salvageable: task.salvageable,
-                loop_profile: task.loop_profile,
-            },
-        )
-        .await
+        let result = self
+            .run_loop(
+                runtime,
+                &mut messages,
+                &mut tools,
+                mode,
+                &mut scratchpad,
+                RunPolicy {
+                    salvageable: task.salvageable,
+                    loop_profile: task.loop_profile,
+                },
+            )
+            .await;
+        match &result {
+            Ok(Terminal::Filed(report)) => {
+                let outcome = match report.outcome {
+                    Outcome::Succeeded => "succeeded",
+                    Outcome::PartiallySucceeded => "succeeded",
+                    Outcome::Failed => "failed",
+                    Outcome::Proposed => "succeeded",
+                };
+                self.mvl_end(outcome, &report.summary);
+            }
+            Ok(Terminal::Spoke(_)) => self.mvl_end("succeeded", "model finished"),
+            Err(error) => self.mvl_end("aborted", &error.to_string()),
+        }
+        result
     }
 
     /// Run a conversational turn over an existing message history (multi-turn chat). The caller owns
@@ -783,7 +853,8 @@ impl Executor {
             // Conversational mode gets no scratchpad this pass (see liberado-scratchpad's module
             // docs) — the call site is ready for it, just not enabled yet.
             let mut scratchpad: Option<Scratchpad> = None;
-            match self
+            self.mvl_start(None);
+            let result = self
                 .run_loop(
                     runtime,
                     messages,
@@ -794,8 +865,15 @@ impl Executor {
                     // other end gets whatever prose the loop produced either way.
                     RunPolicy::default(),
                 )
-                .await?
-            {
+                .await;
+            match &result {
+                Ok(Terminal::Spoke(_)) => self.mvl_end("succeeded", "model finished"),
+                Ok(Terminal::Filed(_)) => {
+                    self.mvl_end("aborted", "conversational mode filed a report")
+                }
+                Err(error) => self.mvl_end("aborted", &error.to_string()),
+            }
+            match result? {
                 Terminal::Spoke(text) => Ok(text),
                 Terminal::Filed(_) => {
                     Err(ExecError::Internal("conversational mode filed a report"))
@@ -826,62 +904,78 @@ impl Executor {
         let _enter = span.enter();
         tracing::debug!(model = %self.active_model(), "starting conversational stream turn");
         let tools = runtime.catalog();
-        for turn in 1..=self.budget.max_turns {
-            let request = CompletionRequest::new(messages.clone())
-                .with_tools(tools.clone())
-                .with_model(self.model.clone());
-            let mut stream = self.provider.complete_stream(request).await?;
+        self.mvl_start(None);
+        let result = async {
+            for turn in 1..=self.budget.max_turns {
+                let request = CompletionRequest::new(messages.clone())
+                    .with_tools(tools.clone())
+                    .with_model(self.model.clone());
+                self.mvl_request(turn, &request);
+                let mut stream = self.provider.complete_stream(request).await?;
 
-            let mut response = None;
-            while let Some(item) = stream.next().await {
-                match item? {
-                    StreamItem::Token(text) => {
-                        // A dropped receiver (client disconnected) just means no one is listening.
-                        let _ = events.send(AgentEvent::Token(text)).await;
+                let mut response = None;
+                while let Some(item) = stream.next().await {
+                    match item? {
+                        StreamItem::Token(text) => {
+                            // A dropped receiver (client disconnected) just means no one is listening.
+                            let _ = events.send(AgentEvent::Token(text)).await;
+                        }
+                        StreamItem::Done(resp) => response = Some(resp),
                     }
-                    StreamItem::Done(resp) => response = Some(resp),
                 }
-            }
-            let response =
-                response.ok_or(ExecError::Internal("stream ended without a final response"))?;
+                let response =
+                    response.ok_or(ExecError::Internal("stream ended without a final response"))?;
+                self.mvl_completion(turn, &response);
 
-            messages.push(assistant_turn(&response));
-            if response.tool_calls.is_empty() {
-                return Ok(()); // the prose answer was streamed as tokens
+                messages.push(assistant_turn(&response));
+                if response.tool_calls.is_empty() {
+                    self.mvl_end("succeeded", "model finished");
+                    return Ok(()); // the prose answer was streamed as tokens
+                }
+
+                for call in &response.tool_calls {
+                    // A dropped receiver (client disconnected) just means no one is listening.
+                    let _ = events
+                        .send(AgentEvent::ToolStarted {
+                            name: call.name.clone(),
+                            args: preview(&call.arguments.to_string()),
+                        })
+                        .await;
+                    // Invoke directly (not via `run_tool`) so the outcome's ok/err is legible as its own
+                    // event; the history still gets the same string `run_tool` would have produced.
+                    self.mvl_tool_started(turn, call);
+                    let (ok, result) = match runtime.invoke(call).await {
+                        Ok(content) => (true, content),
+                        Err(message) => (false, format!("tool error: {message}")),
+                    };
+                    self.mvl_tool_result(turn, call, ok, &result);
+                    let _ = events
+                        .send(AgentEvent::ToolFinished {
+                            name: call.name.clone(),
+                            ok,
+                            preview: preview(&result),
+                        })
+                        .await;
+                    messages.push(Message::tool_result(&call.id, result));
+                }
+                tracing::info!(turn, tools = response.tool_calls.len(), "turn used tools");
             }
 
-            for call in &response.tool_calls {
-                // A dropped receiver (client disconnected) just means no one is listening.
-                let _ = events
-                    .send(AgentEvent::ToolStarted {
-                        name: call.name.clone(),
-                        args: preview(&call.arguments.to_string()),
-                    })
-                    .await;
-                // Invoke directly (not via `run_tool`) so the outcome's ok/err is legible as its own
-                // event; the history still gets the same string `run_tool` would have produced.
-                let (ok, result) = match runtime.invoke(call).await {
-                    Ok(content) => (true, content),
-                    Err(message) => (false, format!("tool error: {message}")),
-                };
-                let _ = events
-                    .send(AgentEvent::ToolFinished {
-                        name: call.name.clone(),
-                        ok,
-                        preview: preview(&result),
-                    })
-                    .await;
-                messages.push(Message::tool_result(&call.id, result));
-            }
-            tracing::info!(turn, tools = response.tool_calls.len(), "turn used tools");
+            // This loop ends only by running out of turns; the extra limits are checked in
+            // `run_loop`, which names whichever of them fired.
+            self.mvl_end("failed", "budget exceeded");
+            Err(ExecError::BudgetExceeded {
+                resource: "turns",
+                turns: self.budget.max_turns,
+            })
         }
-
-        // This loop ends only by running out of turns; the extra limits are checked in
-        // `run_loop`, which names whichever of them fired.
-        Err(ExecError::BudgetExceeded {
-            resource: "turns",
-            turns: self.budget.max_turns,
-        })
+        .await;
+        if let Err(error) = &result
+            && !matches!(error, ExecError::BudgetExceeded { .. })
+        {
+            self.mvl_end("aborted", &error.to_string());
+        }
+        result
     }
 
     /// The turn loop shared by [`drive`](Self::drive) and
@@ -990,10 +1084,11 @@ impl Executor {
                 .unwrap_or_default();
             let sent_messages = messages.len();
             self.observe_request(turn, &offered, sent_messages, &messages[..]);
+            let request = CompletionRequest::new(messages.clone())
+                .with_tools(tools.clone())
+                .with_model(self.model.clone());
+            self.mvl_request(turn, &request);
             let response = async {
-                let request = CompletionRequest::new(messages.clone())
-                    .with_tools(tools.clone())
-                    .with_model(self.model.clone());
                 // The **delta** since the previous completion, not the running total. Every
                 // numeric field on a `LatencyEvent` is additive — the cost rollup sums them — so
                 // journaling a monotonically rising counter makes a run with N repeats roll up as
@@ -1009,6 +1104,7 @@ impl Executor {
             }
             .instrument(tracing::debug_span!("provider_complete", turn))
             .await?;
+            self.mvl_completion(turn, &response);
 
             let usage_delta = response
                 .usage
@@ -1103,6 +1199,8 @@ impl Executor {
                     match serde_json::from_value::<Report>(call.arguments.clone()) {
                         Ok(report) => {
                             tracing::info!(turn, "subagent filed report");
+                            self.mvl_tool_started(turn, call);
+                            self.mvl_tool_result(turn, call, true, "report accepted");
                             messages.push(Message::tool_result(
                                 &call.id,
                                 "report accepted".to_string(),
@@ -1124,16 +1222,16 @@ impl Executor {
                                 error = %e,
                                 "submit_report arguments did not match the Report schema; asking the model to correct them"
                             );
-                            messages.push(Message::tool_result(
-                                &call.id,
-                                format!(
-                                    "`{SUBMIT_REPORT_TOOL}` was NOT accepted — your arguments did \
-                                     not match the required schema: {e}. Call it again with the \
-                                     full object: `outcome` (one of succeeded/partially_succeeded/\
-                                     failed) and `summary` are both required. Nothing else about \
-                                     your work is lost; only this call needs redoing."
-                                ),
-                            ));
+                            let shown = format!(
+                                "`{SUBMIT_REPORT_TOOL}` was NOT accepted — your arguments did \
+                                 not match the required schema: {e}. Call it again with the \
+                                 full object: `outcome` (one of succeeded/partially_succeeded/\
+                                 failed) and `summary` are both required. Nothing else about \
+                                 your work is lost; only this call needs redoing."
+                            );
+                            self.mvl_tool_started(turn, call);
+                            self.mvl_tool_result(turn, call, false, &shown);
+                            messages.push(Message::tool_result(&call.id, shown));
                         }
                         Err(e) => return Err(ExecError::Decode(e.to_string())),
                     }
@@ -1143,14 +1241,14 @@ impl Executor {
                     // turns. During the reserve that distinction matters — the whole point is that
                     // the extra turns cannot buy more work — so refuse outright and say why.
                     tracing::debug!(turn, tool = %call.name, "refused a tool call during wrap-up");
-                    messages.push(Message::tool_result(
-                        &call.id,
-                        format!(
-                            "`{}` is no longer available — you are out of budget. Call `{}` with \
-                             what you have.",
-                            call.name, SUBMIT_REPORT_TOOL
-                        ),
-                    ));
+                    let shown = format!(
+                        "`{}` is no longer available — you are out of budget. Call `{}` with \
+                         what you have.",
+                        call.name, SUBMIT_REPORT_TOOL
+                    );
+                    self.mvl_tool_started(turn, call);
+                    self.mvl_tool_result(turn, call, false, &shown);
+                    messages.push(Message::tool_result(&call.id, shown));
                 } else if let Some(pad) = scratchpad
                     && call.name == SCRATCHPAD_TOOL
                 {
@@ -1158,6 +1256,8 @@ impl Executor {
                     // `ToolRuntime`, and — deliberately — never enters doom-loop/cycle tracking.
                     // Legitimate scratchpad usage would otherwise misfire both guards.
                     let result = pad.apply(&call.arguments);
+                    self.mvl_tool_started(turn, call);
+                    self.mvl_tool_result(turn, call, true, &result);
                     messages.push(Message::tool_result(&call.id, result));
                 }
             }
@@ -1200,6 +1300,9 @@ impl Executor {
                     .collect();
                 let read_results = futures::future::join_all(futures).await;
                 for (call, result) in reads.iter().zip(read_results) {
+                    self.mvl_tool_started(turn, call);
+                    let ok = !result.starts_with("tool error:");
+                    self.mvl_tool_result(turn, call, ok, &result);
                     call_history.push((call.name.clone(), call.arguments.clone(), result.clone()));
                     if call_history[..call_history.len() - 1]
                         .iter()
@@ -1222,9 +1325,12 @@ impl Executor {
             // Run write tools serially.
             for call in writes {
                 let tool_span = tracing::debug_span!("tool_call", name = %call.name, id = %call.id);
+                self.mvl_tool_started(turn, call);
                 let result = async { run_tool(runtime, call).await }
                     .instrument(tool_span)
                     .await;
+                let ok = !result.starts_with("tool error:");
+                self.mvl_tool_result(turn, call, ok, &result);
                 call_history.push((call.name.clone(), call.arguments.clone(), result.clone()));
                 if call_history[..call_history.len() - 1]
                     .iter()

@@ -10,6 +10,7 @@ repository.workspace = true
 
 [dependencies]
 sha2.workspace = true
+chrono = { workspace = true }
 liberado-common = { workspace = true }
 liberado-notify = { workspace = true }
 liberado-provider = { workspace = true }

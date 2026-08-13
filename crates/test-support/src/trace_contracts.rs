@@ -434,6 +434,234 @@ pub fn assert_mvl_has_no_scheduler_leakage(mvl: &[JsonlEvent]) -> Result<(), Str
     Ok(())
 }
 
+/// Crash survival: every non-empty line is a complete JSON object.
+///
+/// A trailing partial line fails this rule. Producers must append-and-flush complete
+/// lines, so a reader must not need to drop a suffix to parse the prefix.
+pub fn assert_crash_survival(text: &str) -> Result<Vec<JsonlEvent>, String> {
+    let mut complete = String::new();
+    for (line_no, line) in text.lines().enumerate() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if serde_json::from_str::<Value>(trimmed).is_err() {
+            return Err(format!(
+                "crash survival: trailing incomplete or invalid JSONL at line {}",
+                line_no + 1
+            ));
+        }
+        complete.push_str(trimmed);
+        complete.push('\n');
+    }
+    parse_jsonl(&complete).map_err(|e| format!("crash survival: {e}"))
+}
+
+/// Every distinct system prompt appears in full exactly once; every `prompt` carries its hash.
+pub fn assert_system_prompt_once(events: &[JsonlEvent]) -> Result<(), String> {
+    let mut full_text: HashMap<String, String> = HashMap::new();
+    let mut used: BTreeSet<String> = BTreeSet::new();
+    for ev in events {
+        if ev.type_name != "prompt" {
+            continue;
+        }
+        let system = ev
+            .body
+            .get("system")
+            .and_then(|value| value.as_object())
+            .ok_or_else(|| "system prompt: prompt missing system object".to_string())?;
+        let sha = system
+            .get("sha256")
+            .and_then(|x| x.as_str())
+            .ok_or_else(|| "system prompt: prompt.system missing sha256".to_string())?
+            .to_string();
+        used.insert(sha.clone());
+        match system.get("text") {
+            Some(Value::String(text)) => {
+                if full_text.contains_key(&sha) {
+                    return Err(format!(
+                        "system prompt: text for sha {sha} appears more than once"
+                    ));
+                }
+                full_text.insert(sha, text.clone());
+            }
+            Some(Value::Null) => {}
+            _ => {
+                return Err("system prompt: prompt.system text must be a string or null".into());
+            }
+        }
+    }
+    for sha in &used {
+        if !full_text.contains_key(sha) {
+            return Err(format!("system prompt: text not recoverable for sha {sha}"));
+        }
+    }
+    Ok(())
+}
+
+/// Every distinct ordered tool catalogue appears in full exactly once; every `prompt` carries its hash.
+pub fn assert_tool_catalog_once(events: &[JsonlEvent]) -> Result<(), String> {
+    let mut catalogs: HashMap<String, Value> = HashMap::new();
+    for ev in events {
+        if ev.type_name != "tool_catalog" {
+            continue;
+        }
+        let sha = ev
+            .body
+            .get("sha256")
+            .and_then(|x| x.as_str())
+            .ok_or_else(|| "tool catalog: missing sha256".to_string())?
+            .to_string();
+        let tools = ev
+            .body
+            .get("tools")
+            .cloned()
+            .ok_or_else(|| "tool catalog: missing tools".to_string())?;
+        if catalogs.contains_key(&sha) {
+            return Err(format!("tool catalog: sha {sha} appears more than once"));
+        }
+        catalogs.insert(sha, tools);
+    }
+    for ev in events {
+        if ev.type_name != "prompt" {
+            continue;
+        }
+        let sha = ev
+            .body
+            .get("tool_catalog_sha256")
+            .and_then(|x| x.as_str())
+            .ok_or_else(|| "tool catalog: prompt missing tool_catalog_sha256".to_string())?;
+        if !catalogs.contains_key(sha) {
+            return Err(format!("tool catalog: digest {sha} is not recoverable"));
+        }
+    }
+    Ok(())
+}
+
+fn string_set(value: Option<&Value>, field: &str) -> Result<BTreeSet<String>, String> {
+    let arr = value
+        .and_then(|x| x.as_array())
+        .ok_or_else(|| format!("{field} must be an array"))?;
+    arr.iter()
+        .map(|v| {
+            v.as_str()
+                .map(str::to_string)
+                .ok_or_else(|| format!("{field} entries must be strings"))
+        })
+        .collect()
+}
+
+/// Whenever consecutive prompts differ in `tools_offered`, an intervening `tools_changed`
+/// must list the removal and addition. A narrowed offered list alone is not enough.
+pub fn assert_tools_changed_covers_offered_diff(events: &[JsonlEvent]) -> Result<(), String> {
+    let mut last_offered: Option<BTreeSet<String>> = None;
+    let mut pending_removed = BTreeSet::new();
+    let mut pending_added = BTreeSet::new();
+    let mut saw_change_event = false;
+
+    for ev in events {
+        match ev.type_name.as_str() {
+            "tools_changed" => {
+                let removed = string_set(ev.body.get("removed"), "tools_changed.removed")?;
+                let added = string_set(ev.body.get("added"), "tools_changed.added")?;
+                pending_removed.extend(removed);
+                pending_added.extend(added);
+                saw_change_event = true;
+            }
+            "prompt" => {
+                let offered = string_set(ev.body.get("tools_offered"), "prompt.tools_offered")?;
+                if let Some(prev) = &last_offered
+                    && offered != *prev
+                {
+                    if !saw_change_event {
+                        return Err(
+                            "withdrawal: tools_offered changed without intervening tools_changed"
+                                .into(),
+                        );
+                    }
+                    let expected_removed: BTreeSet<_> =
+                        prev.difference(&offered).cloned().collect();
+                    let expected_added: BTreeSet<_> = offered.difference(prev).cloned().collect();
+                    if pending_removed != expected_removed || pending_added != expected_added {
+                        return Err(format!(
+                            "withdrawal: tools_changed does not cover offered-set diff \
+                             (removed={pending_removed:?} expected {expected_removed:?}; \
+                             added={pending_added:?} expected {expected_added:?})"
+                        ));
+                    }
+                }
+                last_offered = Some(offered);
+                pending_removed.clear();
+                pending_added.clear();
+                saw_change_event = false;
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+/// `content_shown` on each supplied `call_id` must byte-equal the caller-provided ground truth.
+pub fn assert_tool_honesty(
+    events: &[JsonlEvent],
+    expected: &BTreeMap<String, String>,
+) -> Result<(), String> {
+    let mut seen: BTreeSet<String> = BTreeSet::new();
+    for ev in events {
+        if ev.type_name != "tool_result" {
+            continue;
+        }
+        let call_id = ev
+            .body
+            .get("call_id")
+            .and_then(|x| x.as_str())
+            .ok_or_else(|| "tool honesty: tool_result missing call_id".to_string())?;
+        let Some(want) = expected.get(call_id) else {
+            continue;
+        };
+        let shown = ev
+            .body
+            .get("content_shown")
+            .and_then(|x| x.as_str())
+            .ok_or_else(|| format!("tool honesty: tool_result {call_id} missing content_shown"))?;
+        if shown.as_bytes() != want.as_bytes() {
+            return Err(format!(
+                "tool honesty: content_shown != ground truth for call_id={call_id} \
+                 shown_len={} want_len={} shown_prefix={:02x?} want_prefix={:02x?}",
+                shown.len(),
+                want.len(),
+                &shown.as_bytes()[..shown.len().min(12)],
+                &want.as_bytes()[..want.len().min(12)],
+            ));
+        }
+        seen.insert(call_id.to_string());
+    }
+    for id in expected.keys() {
+        if !seen.contains(id) {
+            return Err(format!(
+                "tool honesty: no tool_result for expected call_id={id}"
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Reconstruct every turn that has a `prompt` event.
+pub fn reconstruct_all_turns(events: &[JsonlEvent]) -> Result<Vec<ReconstructedTurn>, String> {
+    let mut turns: BTreeSet<i64> = BTreeSet::new();
+    for ev in events {
+        if ev.type_name == "prompt"
+            && let Some(t) = ev.body.get("turn").and_then(|x| x.as_i64())
+        {
+            turns.insert(t);
+        }
+    }
+    turns
+        .into_iter()
+        .map(|t| reconstruct_turn(events, t))
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -661,5 +889,138 @@ mod tests {
         let events = parse_jsonl(text).unwrap();
         let err = assert_seq_gap_free(&events).unwrap_err();
         assert!(err.contains("run changed"), "{err}");
+    }
+
+    #[test]
+    fn crash_survival_accepts_complete_prefix() {
+        let prefix = SAMPLE_MVL
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+            .take(4)
+            .collect::<Vec<_>>()
+            .join("\n");
+        let events = assert_crash_survival(&prefix).expect("complete prefix");
+        assert_eq!(events.len(), 4);
+        assert_seq_gap_free(&events).expect("prefix seq");
+    }
+
+    #[test]
+    fn crash_survival_rejects_trailing_partial() {
+        let text = format!(
+            "{}\n{{\"v\":1,\"type\":\"prompt\",\"ts\":\"t\",\"run\":\"r1\",\"seq\":",
+            SAMPLE_MVL.trim()
+        );
+        let err = assert_crash_survival(&text).unwrap_err();
+        assert!(
+            err.contains("crash survival") && err.contains("incomplete"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn system_prompt_once_accepts_sample() {
+        let events = parse_jsonl(SAMPLE_MVL).unwrap();
+        assert_system_prompt_once(&events).expect("sample system");
+    }
+
+    #[test]
+    fn system_prompt_once_rejects_duplicate_full_text() {
+        let text = r#"
+{"v":1,"type":"prompt","ts":"t","run":"r","seq":0,"turn":0,"messages":{"mode":"full","items":[]},"system":{"sha256":"s","text":"S"},"tool_catalog_sha256":"c","tools_offered":[],"params":{}}
+{"v":1,"type":"prompt","ts":"t","run":"r","seq":1,"turn":1,"messages":{"mode":"delta","items":[]},"system":{"sha256":"s","text":"S"},"tool_catalog_sha256":"c","tools_offered":[],"params":{}}
+"#;
+        let events = parse_jsonl(text).unwrap();
+        let err = assert_system_prompt_once(&events).unwrap_err();
+        assert!(err.contains("more than once"), "{err}");
+    }
+
+    #[test]
+    fn system_prompt_once_rejects_unrecoverable_hash() {
+        let text = r#"
+{"v":1,"type":"prompt","ts":"t","run":"r","seq":0,"turn":0,"messages":{"mode":"full","items":[]},"system":{"sha256":"missing","text":null},"tool_catalog_sha256":"c","tools_offered":[],"params":{}}
+"#;
+        let events = parse_jsonl(text).unwrap();
+        let err = assert_system_prompt_once(&events).unwrap_err();
+        assert!(err.contains("not recoverable"), "{err}");
+    }
+
+    #[test]
+    fn tool_catalog_once_accepts_sample() {
+        let events = parse_jsonl(SAMPLE_MVL).unwrap();
+        assert_tool_catalog_once(&events).expect("sample catalog");
+    }
+
+    #[test]
+    fn tool_catalog_once_rejects_duplicate_sha() {
+        let text = r#"
+{"v":1,"type":"tool_catalog","ts":"t","run":"r","seq":0,"sha256":"c","tools":[]}
+{"v":1,"type":"tool_catalog","ts":"t","run":"r","seq":1,"sha256":"c","tools":[]}
+{"v":1,"type":"prompt","ts":"t","run":"r","seq":2,"turn":0,"messages":{"mode":"full","items":[]},"system":{"sha256":"s","text":"S"},"tool_catalog_sha256":"c","tools_offered":[],"params":{}}
+"#;
+        let events = parse_jsonl(text).unwrap();
+        let err = assert_tool_catalog_once(&events).unwrap_err();
+        assert!(err.contains("more than once"), "{err}");
+    }
+
+    #[test]
+    fn tool_catalog_once_rejects_unresolvable_hash() {
+        let text = r#"
+{"v":1,"type":"prompt","ts":"t","run":"r","seq":0,"turn":0,"messages":{"mode":"full","items":[]},"system":{"sha256":"s","text":"S"},"tool_catalog_sha256":"missing","tools_offered":[],"params":{}}
+"#;
+        let events = parse_jsonl(text).unwrap();
+        let err = assert_tool_catalog_once(&events).unwrap_err();
+        assert!(err.contains("not recoverable"), "{err}");
+    }
+
+    #[test]
+    fn withdrawal_accepts_explicit_tools_changed() {
+        let text = r#"
+{"v":1,"type":"prompt","ts":"t","run":"r","seq":0,"turn":0,"messages":{"mode":"full","items":[]},"system":{"sha256":"s","text":"S"},"tool_catalog_sha256":"c","tools_offered":["a","b"],"params":{}}
+{"v":1,"type":"tools_changed","ts":"t","run":"r","seq":1,"turn":0,"removed":["b"],"added":[]}
+{"v":1,"type":"prompt","ts":"t","run":"r","seq":2,"turn":1,"messages":{"mode":"delta","items":[]},"system":{"sha256":"s","text":null},"tool_catalog_sha256":"c","tools_offered":["a"],"params":{}}
+"#;
+        let events = parse_jsonl(text).unwrap();
+        assert_tools_changed_covers_offered_diff(&events).expect("covered");
+    }
+
+    #[test]
+    fn withdrawal_rejects_offered_shrink_without_tools_changed() {
+        let text = r#"
+{"v":1,"type":"prompt","ts":"t","run":"r","seq":0,"turn":0,"messages":{"mode":"full","items":[]},"system":{"sha256":"s","text":"S"},"tool_catalog_sha256":"c","tools_offered":["a","b"],"params":{}}
+{"v":1,"type":"prompt","ts":"t","run":"r","seq":1,"turn":1,"messages":{"mode":"delta","items":[]},"system":{"sha256":"s","text":null},"tool_catalog_sha256":"c","tools_offered":["a"],"params":{}}
+"#;
+        let events = parse_jsonl(text).unwrap();
+        let err = assert_tools_changed_covers_offered_diff(&events).unwrap_err();
+        assert!(err.contains("without intervening tools_changed"), "{err}");
+    }
+
+    #[test]
+    fn honesty_accepts_matching_bytes() {
+        let events = parse_jsonl(SAMPLE_MVL).unwrap();
+        let mut expected = BTreeMap::new();
+        expected.insert("c1".into(), "hit".into());
+        assert_tool_honesty(&events, &expected).expect("honest");
+    }
+
+    #[test]
+    fn honesty_rejects_mismatched_content_shown() {
+        let events = parse_jsonl(SAMPLE_MVL).unwrap();
+        let mut expected = BTreeMap::new();
+        expected.insert("c1".into(), "DIFFERENT".into());
+        let err = assert_tool_honesty(&events, &expected).unwrap_err();
+        assert!(
+            err.contains("content_shown != ground truth") && err.contains("c1"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn reconstruct_all_turns_covers_sample() {
+        let events = parse_jsonl(SAMPLE_MVL).unwrap();
+        let turns = reconstruct_all_turns(&events).expect("all turns");
+        assert_eq!(turns.len(), 2);
+        assert_eq!(turns[0].turn, 0);
+        assert_eq!(turns[1].turn, 1);
+        assert_eq!(turns[0].system_text, "You are the coder.");
     }
 }
