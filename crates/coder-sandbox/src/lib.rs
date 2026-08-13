@@ -16,6 +16,7 @@ pub use merge::{
     list_unmerged_paths, merge_branch, read_conflict_sides, remove_worktree,
     rev_parse as git_rev_parse, stage_resolution,
 };
+pub use path_deps::{declared_path_dep_roots, main_worktree_root, provision_path_deps};
 pub use preflight::{
     DEFAULT_LOG_CAP_BYTES, DEFAULT_STEP_TIMEOUT_SECS, FailureSet, OPAQUE_FAILURE, PreflightError,
     PreflightReport, PreflightSpec, PreflightStep, PreflightStepResult, describe_failures,

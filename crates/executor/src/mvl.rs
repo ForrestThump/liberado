@@ -364,7 +364,7 @@ impl MvlSession {
                 "input": u.prompt_tokens,
                 "cached_input": u.cached_prompt_tokens.unwrap_or(0),
                 "output": u.completion_tokens,
-                "reasoning": 0,
+                "reasoning": u.reasoning_tokens.unwrap_or(0),
             })
         });
         if let Err(e) = self.mvl.emit(
@@ -489,6 +489,32 @@ mod tests {
         assert!(
             !text.contains("\"id\":\"0.6\""),
             "must not stamp a backlog number onto every coding run: {text}"
+        );
+    }
+
+    #[test]
+    fn on_completion_records_reported_reasoning_tokens() {
+        let path = scratch("reason.mvl.jsonl");
+        let session = MvlSession::open(&path, None, "run-r").unwrap();
+        session.on_completion(
+            0,
+            &CompletionResponse {
+                content: Some("ok".into()),
+                tool_calls: Vec::new(),
+                finish_reason: FinishReason::Stop,
+                usage: Some(liberado_provider::Usage {
+                    prompt_tokens: 10,
+                    completion_tokens: 4,
+                    total_tokens: 14,
+                    cached_prompt_tokens: None,
+                    reasoning_tokens: Some(33),
+                }),
+            },
+        );
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            text.contains("\"reasoning\":33"),
+            "MVL must not hardcode reasoning 0 when the provider reported tokens: {text}"
         );
     }
 }
