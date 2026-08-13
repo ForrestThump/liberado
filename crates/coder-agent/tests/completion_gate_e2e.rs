@@ -34,6 +34,7 @@ fn reviewer_role() -> CoderRoleConfig {
         temperature: None,
         max_tokens: None,
         max_turns: None,
+        reasoning: None,
     }
 }
 

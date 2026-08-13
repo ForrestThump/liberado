@@ -642,6 +642,7 @@ mod tests {
                 temperature: None,
                 max_tokens: None,
                 max_turns: None,
+                reasoning: None,
             },
             instructions: "you are a reviewer".to_string(),
         }

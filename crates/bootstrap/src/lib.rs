@@ -157,6 +157,7 @@ impl liberado_coder_agent::CoderProviderFactory for CoderRoleProviderFactory {
         )
         .map_err(|e| liberado_coder_core::CoderError::Backend(e.to_string()))?;
         provider.set_model(config.model.clone());
+        let provider = provider.with_reasoning_effort(config.reasoning.clone());
         if let Some(t) = config.temperature {
             return Ok(Arc::new(provider.with_temperature(Some(t))));
         }

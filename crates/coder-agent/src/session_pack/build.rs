@@ -337,6 +337,7 @@ impl CodingSessionPack {
             temperature: Some(0.1),
             max_tokens: None,
             max_turns: Some(max_turns),
+            reasoning: None,
         };
 
         let mut task = CoderTask::new(session_id, &goal.description);

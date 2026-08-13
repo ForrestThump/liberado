@@ -416,11 +416,46 @@ fn command_matches(rule: &str, command_line: &str) -> bool {
     !rule.is_empty() && (command_line == rule || command_line.starts_with(&format!("{rule} ")))
 }
 
-fn capped_utf8(mut buf: Vec<u8>, max_bytes: usize) -> String {
-    if buf.len() > max_bytes {
-        buf.truncate(max_bytes);
+fn decode_command_bytes(buf: &[u8]) -> String {
+    if buf.starts_with(&[0xFF, 0xFE]) {
+        return decode_utf16_units(&buf[2..], u16::from_le_bytes);
     }
-    String::from_utf8_lossy(&buf).into_owned()
+    if buf.starts_with(&[0xFE, 0xFF]) {
+        return decode_utf16_units(&buf[2..], u16::from_be_bytes);
+    }
+    if looks_like_utf16_le(buf) {
+        return decode_utf16_units(buf, u16::from_le_bytes);
+    }
+    String::from_utf8_lossy(buf).into_owned()
+}
+
+fn looks_like_utf16_le(buf: &[u8]) -> bool {
+    if buf.len() < 4 || !buf.len().is_multiple_of(2) {
+        return false;
+    }
+    let pairs = buf.len() / 2;
+    let high_nul = buf.chunks_exact(2).filter(|c| c[1] == 0).count();
+    high_nul * 2 >= pairs
+}
+
+fn decode_utf16_units(buf: &[u8], from_bytes: fn([u8; 2]) -> u16) -> String {
+    let units: Vec<u16> = buf
+        .chunks_exact(2)
+        .map(|c| from_bytes([c[0], c[1]]))
+        .collect();
+    String::from_utf16_lossy(&units)
+}
+
+fn capped_utf8(buf: Vec<u8>, max_bytes: usize) -> String {
+    let text = decode_command_bytes(&buf);
+    if text.len() <= max_bytes {
+        return text;
+    }
+    let mut end = max_bytes;
+    while end > 0 && !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    text[..end].to_string()
 }
 
 // ── WorktreeWorkspace — git-worktree isolation ──────────────────────────────
@@ -792,6 +827,36 @@ mod tests {
     fn capped_utf8_passes_through_below_boundary() {
         let text = capped_utf8(b"ab".to_vec(), 3);
         assert_eq!(text, "ab");
+    }
+
+    #[test]
+    fn capped_utf8_decodes_utf16_le_without_nuls() {
+        // PowerShell / some cmd builtins emit UTF-16 LE. `from_utf8_lossy` keeps the NULs
+        // (`W\0i\0n\0d\0o\0w\0s`) and the model cannot read the tool result.
+        let mut utf16 = Vec::new();
+        for unit in "Windows PowerShell".encode_utf16() {
+            utf16.extend_from_slice(&unit.to_le_bytes());
+        }
+        let text = capped_utf8(utf16, 1024);
+        assert_eq!(text, "Windows PowerShell");
+        assert!(
+            !text.contains('\0'),
+            "decoded command output must not keep UTF-16 NULs: {text:?}"
+        );
+    }
+
+    #[test]
+    fn capped_utf8_decodes_utf16_le_bom() {
+        let mut utf16 = vec![0xFF, 0xFE];
+        for unit in "hi".encode_utf16() {
+            utf16.extend_from_slice(&unit.to_le_bytes());
+        }
+        assert_eq!(capped_utf8(utf16, 1024), "hi");
+    }
+
+    #[test]
+    fn capped_utf8_keeps_utf8() {
+        assert_eq!(capped_utf8("café".as_bytes().to_vec(), 1024), "café");
     }
 
     #[test]

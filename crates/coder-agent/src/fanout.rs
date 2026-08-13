@@ -539,6 +539,7 @@ fn child_request(worktree_root: &Path, task: &CodingSubtask, model: &str) -> Cod
         temperature: Some(0.1),
         max_tokens: None,
         max_turns: Some(12),
+        reasoning: None,
     };
     let disabled = CoderRoleConfig {
         model: model.into(),
@@ -547,6 +548,7 @@ fn child_request(worktree_root: &Path, task: &CodingSubtask, model: &str) -> Cod
         temperature: None,
         max_tokens: None,
         max_turns: Some(2),
+        reasoning: None,
     };
     let mut task_dto = CoderTask::new(
         format!("fanout-{}", sanitize_label(&task.label)),
@@ -582,6 +584,7 @@ fn child_request(worktree_root: &Path, task: &CodingSubtask, model: &str) -> Cod
             prompt_dir: None,
             edit: Default::default(),
             workspace_build: Default::default(),
+            offered_tools: None,
         },
         attempt: 0,
         prior_feedback: Vec::new(),

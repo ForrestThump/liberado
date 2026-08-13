@@ -87,6 +87,9 @@ pub struct CoderTuning {
     /// the shared directory stayed empty.
     #[serde(default, rename = "workspace")]
     pub workspace_build: WorkspaceBuildConfig,
+    /// `[coder] offered_tools` — names the model may call. `None` = the full pack catalog.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub offered_tools: Option<Vec<String>>,
     /// `[tuning.coder.repo_map]` — Aider-style repository map for cold-start context.
     #[serde(default)]
     pub repo_map: RepoMapConfig,
@@ -152,6 +155,7 @@ impl CoderTuning {
             prompt_dir: self.prompt_dir.clone(),
             edit: self.edit.clone(),
             workspace_build: self.workspace_build.clone(),
+            offered_tools: self.offered_tools.clone(),
         }
     }
 
@@ -254,6 +258,7 @@ impl Default for CoderTuning {
             edit: EditConfig::default(),
             workspace_build: WorkspaceBuildConfig::default(),
             prompt_dir: None,
+            offered_tools: None,
             repo_map: RepoMapConfig::default(),
         }
     }
@@ -308,6 +313,7 @@ fn coder_role(model: &str, prompt_path: &str, max_turns: Option<u32>) -> CoderRo
         temperature: Some(0.1),
         max_tokens: None,
         max_turns,
+        reasoning: None,
     }
 }
 
@@ -584,6 +590,7 @@ mod tests {
             temperature: None,
             max_tokens: None,
             max_turns: None,
+            reasoning: None,
         });
         assert!(tuning.validate().is_ok());
     }
@@ -625,6 +632,7 @@ mod tests {
             temperature: None,
             max_tokens: None,
             max_turns: None,
+            reasoning: None,
         };
         assert!(validate_role_identity("test", &role).is_err());
     }
@@ -638,6 +646,7 @@ mod tests {
             temperature: None,
             max_tokens: None,
             max_turns: None,
+            reasoning: None,
         };
         assert!(validate_role_identity("test", &role).is_err());
     }
@@ -651,6 +660,7 @@ mod tests {
             temperature: None,
             max_tokens: None,
             max_turns: None,
+            reasoning: None,
         };
         assert!(validate_role_identity("test", &role).is_ok());
     }
@@ -664,6 +674,7 @@ mod tests {
             temperature: None,
             max_tokens: None,
             max_turns: None,
+            reasoning: None,
         };
         assert!(validate_single_shot_role("x", &bad).is_err());
     }
@@ -762,6 +773,7 @@ mod tests {
                 temperature: None,
                 max_tokens: None,
                 max_turns: None,
+                reasoning: None,
             }),
             ..CoderTuning::default()
         };
@@ -781,6 +793,7 @@ mod tests {
             temperature: None,
             max_tokens: None,
             max_turns: None,
+            reasoning: None,
         });
         let err = tuning.validate().unwrap_err();
         assert!(err.to_string().contains("tuning.coder.gate.fresh.model"));

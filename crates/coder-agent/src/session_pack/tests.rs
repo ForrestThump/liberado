@@ -1257,6 +1257,7 @@ async fn the_configured_coder_role_reaches_the_backends_run_config() {
             temperature: None,
             max_tokens: None,
             max_turns: Some(30),
+            reasoning: None,
         });
 
     let (ev_tx, _ev_rx) = mpsc::channel::<SessionEvent>(64);
