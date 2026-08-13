@@ -218,4 +218,9 @@ pub struct Daemon {
     /// `Ok(None)` as an agent-authored write. An empty list is a no-op (every path is checked).
     /// Populated from `[tuning.capture].inbox_ignore_globs`.
     pub(crate) inbox_ignore_globs: Vec<String>,
+    /// Positive-scope configuration for the vault watcher (F12): only notes matching
+    /// `capture_paths`, or containing `ready_flag`, or under `proposals/` produce events.
+    /// `hold_flag` parks a note for both the watcher and the schedule.
+    /// Populated from `[tuning.capture]`.
+    pub(crate) capture_scope: crate::vault_source::CaptureScope,
 }

@@ -315,7 +315,7 @@ All optional, all defaulted. The ones worth knowing:
 | `cron_delivery` | `quiet_delay_secs`, `deliver_by_secs` | holds a brief until you are between messages |
 | `telegram_approvals` | `getupdate_timeout_secs`, `poll_retry_backoff_secs` | long-poll behaviour |
 | `proposals` | `reap_interval_secs` | how often expired proposals are swept |
-| `capture` | `inbox_path`, settle windows, ignore globs | inbox capture behaviour |
+| `capture` | `inbox_path`, `capture_paths`, `ready_flag`, `hold_flag`, settle windows, ignore globs | inbox capture + watcher scope (F12) |
 | `maintenance` | git commit + maintenance schedules, `prune_requires_proposal` | vault housekeeping |
 
 ---

@@ -360,18 +360,25 @@ impl Config {
                 "tuning.concurrency.max_reaction_depth must be >= 1".into(),
             ));
         }
-        // `[tuning.capture]` parses and validates. `inbox_ignore_globs` is live — the vault
-        // watcher skips matching paths. Every other field (settle windows, flags, ambient sweep)
-        // has no code reading it yet — see `CaptureTuning` doc. Warn rather than reject: rejecting
-        // would break configs that already carry the section (including `config.example/tuning.toml`),
-        // and the section is not wrong, just partially inert. An operator who tuned a settle window
-        // deserves to hear that it does nothing *now*, rather than concluding their capture pipeline
-        // is broken.
-        if self.tuning.capture != super::tuning::CaptureTuning::default() {
+        // `[tuning.capture]` parses and validates. `inbox_ignore_globs`, `inbox_path`,
+        // `capture_paths`, `ready_flag`, and `hold_flag` are live — the F12 positive scope.
+        // The remaining fields (settle windows, `processed_path`, `ambient_sweep_schedule`)
+        // have no code reading them yet — see `CaptureTuning` doc. Warn rather than reject:
+        // rejecting would break configs that already carry the section (including
+        // `config.example/tuning.toml`), and the section is not wrong, just partially inert.
+        let c = &self.tuning.capture;
+        let default = super::tuning::CaptureTuning::default();
+        let unimplemented_fields_differ = c.inbox_settle_window_secs
+            != default.inbox_settle_window_secs
+            || c.ready_now_settle_secs != default.ready_now_settle_secs
+            || c.processed_path != default.processed_path
+            || c.ambient_sweep_schedule != default.ambient_sweep_schedule;
+        if unimplemented_fields_differ {
             tracing::warn!(
-                "[tuning.capture] contains unimplemented settings — inbox_ignore_globs is live, \
-                 but settle windows, #ready-now/#hold-off flags, and the ambient sweep all do \
-                 nothing. The vault watcher runs; the inbox layer above it is not built."
+                "[tuning.capture] contains unimplemented settings — inbox_ignore_globs, \
+                 inbox_path, capture_paths, ready_flag, and hold_flag are live, but settle \
+                 windows, processed_path, and the ambient sweep all do nothing. \
+                 The vault watcher runs; the inbox layer above it is not built."
             );
         }
         // These three are free text, not yet parsed by anything (see their own doc comments) — but

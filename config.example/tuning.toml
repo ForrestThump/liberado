@@ -25,13 +25,19 @@
 # max_reaction_depth = 4           # cascade depth cap (shared with dispatch); halts runaway chains
 # retry_max = 3                    # optimistic-write retries before escalating
 
-# PARTIALLY IMPLEMENTED. `inbox_ignore_globs` is live and wired into the vault watcher — paths
-# matching any ignore glob are skipped. Everything else — settle windows, #ready-now/#hold-off
-# handling, ambient sweep — still parses and validates but nothing reads it. Setting those fields
-# changes nothing today and the loader will warn if you do. Kept because the design
-# (docs/spec/inbox-spec.md) still stands; the vault watcher runs, the inbox layer above it does
-# not exist yet.
+# PARTIALLY IMPLEMENTED. `inbox_ignore_globs`, `inbox_path`, `capture_paths`, `ready_flag`,
+# and `hold_flag` are live — the vault watcher's positive scope (F12): only notes under
+# `inbox_path` (plus extra `capture_paths`), notes carrying `ready_flag`, and proposals/ are
+# reacted to. Unflagged notes elsewhere are left for the scheduled sweep. `#hold-off` parks
+# a note for watcher and schedule. Settle windows, `processed_path`, and the ambient sweep
+# still parse and validate but nothing reads them — the loader warns if you set those.
+# Kept because the design (docs/spec/inbox-spec.md) still stands; the inbox layer above it
+# does not exist yet.
 [capture]
+# inbox_path = "inbox/"           # capture folder the watcher reacts to (no flag required)
+# capture_paths = ["Inbox/Capture.md"]  # extra whitelist: pinned file, folders, or globs
+# ready_flag = "#ready-now"       # this flag anywhere promotes a note to watcher ownership
+# hold_flag = "#hold-off"         # this flag parks a note for watcher AND schedule
 # inbox_settle_window_secs = 900   # quiescence before an actionable note is processed
 # ready_now_settle_secs = 120      # shorter quiescence for #ready-now notes
 

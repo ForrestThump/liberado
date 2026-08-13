@@ -178,6 +178,10 @@ fn format_cron_delivery_flags_non_success() {
 
 async fn temp_daemon() -> (Daemon, TempDir) {
     let dir = TempDir::new().unwrap();
+    // F12 scopes the watcher to `inbox/`. Create it before any test starts the
+    // watch: Linux inotify does not reliably deliver events for a directory
+    // created after the watch is armed. Windows CI still passed without this.
+    std::fs::create_dir_all(dir.path().join("inbox")).unwrap();
     let daemon = Daemon::open("test", dir.path())
         .await
         .unwrap()
@@ -210,17 +214,19 @@ async fn approve_in(dir: &TempDir, proposal_id: &str) {
 #[tokio::test]
 async fn external_change_produces_reaction() {
     let (daemon, dir) = temp_daemon().await;
-    // A human writes a note directly (not through the adapter) — no matching audit entry.
-    std::fs::write(dir.path().join("note.md"), "a human wrote this").unwrap();
+    // A human writes a note directly into the capture path (not through the adapter) —
+    // no matching audit entry.
+    std::fs::create_dir_all(dir.path().join("inbox")).unwrap();
+    std::fs::write(dir.path().join("inbox/note.md"), "a human wrote this").unwrap();
 
     let event = daemon
-        .process_change(Path::new("note.md"))
+        .process_change(Path::new("inbox/note.md"))
         .await
         .unwrap()
         .expect("external change should produce a reaction");
     assert_eq!(event.event_type, VAULT_NOTE_CHANGED);
     assert_eq!(event.source, event_source::TURBOVAULT_SUBSCRIPTION);
-    assert_eq!(event.payload.path.as_deref(), Some("note.md"));
+    assert_eq!(event.payload.path.as_deref(), Some("inbox/note.md"));
     assert!(event.is_reactable());
 }
 
@@ -264,16 +270,24 @@ async fn watcher_coalesces_burst_into_single_reaction() {
     let (tx, mut rx) = unbounded_channel();
     let handle = tokio::spawn(daemon.run(tx));
 
-    // Give the watcher a moment to establish before writing.
+    // Give the watcher a moment to establish before writing into the capture path.
     tokio::time::sleep(Duration::from_millis(300)).await;
-    std::fs::write(vault_dir.join("captured.md"), "dropped in from Obsidian").unwrap();
+    std::fs::create_dir_all(vault_dir.join("inbox")).unwrap();
+    std::fs::write(
+        vault_dir.join("inbox/captured.md"),
+        "dropped in from Obsidian",
+    )
+    .unwrap();
 
     // Exactly one reaction, despite notify firing Create + Modify + ... for one write.
     let reaction = tokio::time::timeout(Duration::from_secs(5), rx.recv())
         .await
         .expect("timed out waiting for reaction")
         .expect("reaction channel closed");
-    assert_eq!(reaction.event.payload.path.as_deref(), Some("captured.md"));
+    assert_eq!(
+        reaction.event.payload.path.as_deref(),
+        Some("inbox/captured.md")
+    );
     assert!(
         matches!(reaction.outcome, ReactionOutcome::Observed),
         "watch-only: no dispatcher attached"
@@ -329,14 +343,18 @@ async fn daemon_routes_reaction_through_dispatcher() {
     let handle = tokio::spawn(daemon.run(tx));
 
     tokio::time::sleep(Duration::from_millis(300)).await;
-    std::fs::write(vault_dir.join("idea.md"), "a captured thought").unwrap();
+    std::fs::create_dir_all(vault_dir.join("inbox")).unwrap();
+    std::fs::write(vault_dir.join("inbox/idea.md"), "a captured thought").unwrap();
 
     let reaction = tokio::time::timeout(Duration::from_secs(5), rx.recv())
         .await
         .expect("timed out waiting for reaction")
         .expect("reaction channel closed");
 
-    assert_eq!(reaction.event.payload.path.as_deref(), Some("idea.md"));
+    assert_eq!(
+        reaction.event.payload.path.as_deref(),
+        Some("inbox/idea.md")
+    );
     // Dispatcher attached, but no orchestrator → decided, not acted.
     let ReactionOutcome::Decided(decision) = reaction.outcome else {
         panic!("expected Decided, got {}", reaction.outcome.label());
@@ -406,7 +424,8 @@ async fn cron_and_vault_watch_are_interchangeable_event_sources() {
     let handle = tokio::spawn(daemon.run(tx));
 
     tokio::time::sleep(Duration::from_millis(300)).await;
-    std::fs::write(vault_dir.join("idea.md"), "a captured thought").unwrap();
+    std::fs::create_dir_all(vault_dir.join("inbox")).unwrap();
+    std::fs::write(vault_dir.join("inbox/idea.md"), "a captured thought").unwrap();
 
     let mut sources = HashSet::new();
     for _ in 0..2 {
@@ -1185,7 +1204,8 @@ async fn daemon_acts_on_a_decision_via_the_orchestrator() {
     let handle = tokio::spawn(daemon.run(tx));
 
     tokio::time::sleep(Duration::from_millis(300)).await;
-    std::fs::write(vault_dir.join("act.md"), "do something").unwrap();
+    std::fs::create_dir_all(vault_dir.join("inbox")).unwrap();
+    std::fs::write(vault_dir.join("inbox/act.md"), "do something").unwrap();
 
     let reaction = tokio::time::timeout(Duration::from_secs(5), rx.recv())
         .await
@@ -1290,7 +1310,8 @@ async fn daemon_emits_a_proposal_for_a_high_consequence_action() {
     let handle = tokio::spawn(daemon.run(tx));
 
     tokio::time::sleep(Duration::from_millis(300)).await;
-    std::fs::write(vault_dir.join("email-me.md"), "please email the boss").unwrap();
+    std::fs::create_dir_all(vault_dir.join("inbox")).unwrap();
+    std::fs::write(vault_dir.join("inbox/email-me.md"), "please email the boss").unwrap();
 
     let reaction = tokio::time::timeout(Duration::from_secs(5), rx.recv())
         .await
@@ -1432,7 +1453,12 @@ async fn daemon_downgrades_a_zone_restricted_seed_call_to_a_proposal() {
     let handle = tokio::spawn(daemon.run(tx));
 
     tokio::time::sleep(Duration::from_millis(300)).await;
-    std::fs::write(vault_dir.join("review-me.md"), "please file this review").unwrap();
+    std::fs::create_dir_all(vault_dir.join("inbox")).unwrap();
+    std::fs::write(
+        vault_dir.join("inbox/review-me.md"),
+        "please file this review",
+    )
+    .unwrap();
 
     let reaction = tokio::time::timeout(Duration::from_secs(5), rx.recv())
         .await
