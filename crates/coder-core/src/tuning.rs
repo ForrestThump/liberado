@@ -129,11 +129,15 @@ impl CoderTuning {
                 .map_err(|e| Error::Config(format!("tuning.coder: {e}")))?,
             None => Self::default(),
         };
-        // A present `[coder.coder]` table replaces the whole role. Serde then fills
-        // missing prompt fields with `None`, and validate rejects the section — so
-        // `reasoning = "high"` plus `offered_tools` never reached the run. Restore
-        // the default prompt path only when the operator set neither prompt source.
+        // A present `[coder.coder]` / `[coder.critic]` table replaces the whole role.
+        // Serde then fills omitted fields with `None`, and validate treats
+        // `max_turns: None` as 0 — so a file that only pins the critic model (the
+        // documented "uncomment what you want to change" shape) killed every
+        // process that loads tuning, including `stdio_smoke` via walk-up from
+        // `target/debug/liberado-acp.exe`. Restore prompt path and turn budget
+        // only when the operator did not set them.
         apply_role_prompt_defaults(&mut tuning);
+        apply_role_turn_defaults(&mut tuning);
         tuning.validate()?;
         Ok(tuning)
     }
@@ -364,6 +368,22 @@ fn apply_role_prompt_defaults(tuning: &mut CoderTuning) {
     }
     if role_has_no_prompt(&tuning.critic) {
         tuning.critic.prompt_path = default_coder_critic().prompt_path;
+    }
+}
+
+/// Restore each role's default turn budget when a partial table omitted it.
+///
+/// `validate_coder_role` rejects `None` (`unwrap_or(0) == 0`). An explicit
+/// `max_turns = 0` stays `Some(0)` and still fails validation.
+fn apply_role_turn_defaults(tuning: &mut CoderTuning) {
+    if tuning.planner.max_turns.is_none() {
+        tuning.planner.max_turns = default_coder_planner().max_turns;
+    }
+    if tuning.coder.max_turns.is_none() {
+        tuning.coder.max_turns = default_coder_role().max_turns;
+    }
+    if tuning.critic.max_turns.is_none() {
+        tuning.critic.max_turns = default_coder_critic().max_turns;
     }
 }
 
@@ -937,6 +957,31 @@ reasoning = "high"
             tuning.coder.prompt_path.as_deref(),
             default_coder_role().prompt_path.as_deref(),
             "omitting prompt_path must keep the default coder prompt, not fail validation"
+        );
+    }
+
+    /// The live operator file that only pins the critic model. Compare 5's
+    /// `stdio_smoke` died on walk-up into this shape: `max_turns` became `None`,
+    /// validate reported "must be >= 1".
+    #[test]
+    fn a_partial_critic_role_keeps_default_max_turns() {
+        let value: toml::Value = r#"
+[critic]
+model = "deepseek/deepseek-v4-flash"
+"#
+        .parse()
+        .expect("valid toml");
+        let tuning =
+            CoderTuning::from_value(Some(&value)).expect("partial [coder.critic] must parse");
+        assert_eq!(tuning.critic.model, "deepseek/deepseek-v4-flash");
+        assert_eq!(
+            tuning.critic.max_turns,
+            default_coder_critic().max_turns,
+            "omitting critic max_turns must keep the default, not fail validation"
+        );
+        assert_eq!(
+            tuning.critic.prompt_path.as_deref(),
+            default_coder_critic().prompt_path.as_deref()
         );
     }
 
