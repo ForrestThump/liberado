@@ -278,7 +278,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     // unset variable meant no topology, no policy, and no `[coder]` tuning, silently and with
     // every setting at a compiled-in default.
     let config_dir = liberado_config::config_dir();
-    let coder_tuning = coding_run::load_coder_tuning(config_dir.as_deref());
+    let coder_tuning = coding_run::load_coder_tuning(config_dir.as_deref())?;
     // Say which config this run is using, before anything depends on it. The failure this
     // replaces was invisible precisely because nothing was ever printed about it.
     match &config_dir {

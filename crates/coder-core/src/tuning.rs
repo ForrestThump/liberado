@@ -122,13 +122,18 @@ impl CoderTuning {
     /// Parse and validate the opaque `[coder]` section the config loader carries
     /// (`Tuning::coder`). `None` (section absent) yields validated defaults.
     pub fn from_value(value: Option<&toml::Value>) -> Result<Self> {
-        let tuning: Self = match value {
+        let mut tuning: Self = match value {
             Some(v) => v
                 .clone()
                 .try_into()
                 .map_err(|e| Error::Config(format!("tuning.coder: {e}")))?,
             None => Self::default(),
         };
+        // A present `[coder.coder]` table replaces the whole role. Serde then fills
+        // missing prompt fields with `None`, and validate rejects the section — so
+        // `reasoning = "high"` plus `offered_tools` never reached the run. Restore
+        // the default prompt path only when the operator set neither prompt source.
+        apply_role_prompt_defaults(&mut tuning);
         tuning.validate()?;
         Ok(tuning)
     }
@@ -336,13 +341,8 @@ fn validate_coder_role(name: &str, role: &CoderRoleConfig) -> Result<()> {
 }
 
 /// Model + prompt requirements shared by every role.
-fn validate_role_identity(name: &str, role: &CoderRoleConfig) -> Result<()> {
-    if role.model.trim().is_empty() {
-        return Err(Error::Config(format!(
-            "tuning.coder.{name}.model must not be empty"
-        )));
-    }
-    let prompt_path_empty = role
+fn role_has_no_prompt(role: &CoderRoleConfig) -> bool {
+    let path_empty = role
         .prompt_path
         .as_deref()
         .map(|path| path.trim().is_empty())
@@ -352,7 +352,28 @@ fn validate_role_identity(name: &str, role: &CoderRoleConfig) -> Result<()> {
         .as_deref()
         .map(|prompt| prompt.trim().is_empty())
         .unwrap_or(true);
-    if prompt_path_empty && prompt_empty {
+    path_empty && prompt_empty
+}
+
+fn apply_role_prompt_defaults(tuning: &mut CoderTuning) {
+    if role_has_no_prompt(&tuning.planner) {
+        tuning.planner.prompt_path = default_coder_planner().prompt_path;
+    }
+    if role_has_no_prompt(&tuning.coder) {
+        tuning.coder.prompt_path = default_coder_role().prompt_path;
+    }
+    if role_has_no_prompt(&tuning.critic) {
+        tuning.critic.prompt_path = default_coder_critic().prompt_path;
+    }
+}
+
+fn validate_role_identity(name: &str, role: &CoderRoleConfig) -> Result<()> {
+    if role.model.trim().is_empty() {
+        return Err(Error::Config(format!(
+            "tuning.coder.{name}.model must not be empty"
+        )));
+    }
+    if role_has_no_prompt(role) {
         return Err(Error::Config(format!(
             "tuning.coder.{name} requires prompt_path or prompt"
         )));
@@ -875,5 +896,65 @@ hash_length = 5
             .expect("valid toml");
         let tuning = CoderTuning::from_value(Some(&value)).expect("tuning parses");
         assert_eq!(tuning.prompt_dir.as_deref(), Some("/etc/liberado/prompts"));
+    }
+
+    /// The compare-2 operator file: four tools and Flash thinking, no restated prompt path.
+    ///
+    /// Serde replaces the whole `[coder.coder]` role, so `prompt_path` became `None` and
+    /// `validate` rejected the section. Loaders then defaulted and the model saw 21 tools
+    /// with no reasoning. A table that only names the knobs the operator wants to change
+    /// must still parse.
+    #[test]
+    fn a_partial_coder_role_keeps_offered_tools_and_reasoning() {
+        let value: toml::Value = r#"
+offered_tools = ["read_file", "write_file", "edit_file", "run_command"]
+
+[coder]
+model = "deepseek/deepseek-v4-flash"
+temperature = 0.1
+max_turns = 30
+reasoning = "high"
+"#
+        .parse()
+        .expect("valid toml");
+        let tuning =
+            CoderTuning::from_value(Some(&value)).expect("partial [coder.coder] must parse");
+        assert_eq!(
+            tuning.offered_tools.as_deref(),
+            Some(
+                [
+                    "read_file".to_string(),
+                    "write_file".to_string(),
+                    "edit_file".to_string(),
+                    "run_command".to_string()
+                ]
+                .as_slice()
+            )
+        );
+        assert_eq!(tuning.coder.model, "deepseek/deepseek-v4-flash");
+        assert_eq!(tuning.coder.reasoning.as_deref(), Some("high"));
+        assert_eq!(
+            tuning.coder.prompt_path.as_deref(),
+            default_coder_role().prompt_path.as_deref(),
+            "omitting prompt_path must keep the default coder prompt, not fail validation"
+        );
+    }
+
+    #[test]
+    fn an_explicit_coder_prompt_is_not_replaced_by_the_default_path() {
+        let value: toml::Value = r#"
+[coder]
+model = "deepseek-v4-flash"
+prompt = "you are a fixture"
+max_turns = 8
+"#
+        .parse()
+        .expect("valid toml");
+        let tuning = CoderTuning::from_value(Some(&value)).expect("inline prompt must parse");
+        assert_eq!(tuning.coder.prompt.as_deref(), Some("you are a fixture"));
+        assert!(
+            tuning.coder.prompt_path.is_none(),
+            "an inline prompt must not grow a default prompt_path"
+        );
     }
 }
