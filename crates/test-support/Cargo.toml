@@ -1,12 +1,16 @@
 [package]
 name = "liberado-test-support"
 version = "0.1.0"
-description = "Shared ToolRuntime/RuntimeFactory test doubles, consolidating what used to be duplicated across liberado-orchestrator's and liberado-daemon's own test modules. Test-only: consumed exclusively as a dev-dependency."
+description = "Shared ToolRuntime/RuntimeFactory test doubles, consolidating what used to be duplicated across liberado-orchestrator's and liberado-daemon's own test modules. Test-only: consumed exclusively as a dev-dependency. Also hosts the path-based MVL conformance oracle (`mvl-conformance`)."
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 repository.workspace = true
+
+[[bin]]
+name = "mvl-conformance"
+path = "src/bin/mvl_conformance.rs"
 
 [dependencies]
 async-trait = { workspace = true }

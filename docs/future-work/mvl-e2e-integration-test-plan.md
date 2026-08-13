@@ -4,15 +4,15 @@ status: active
 authority: implementation
 domain: coding-harness
 canonical_for: mvl-e2e-integration-test
-open_items: true
-last_verified: 2026-08-12
+open_items: false
+last_verified: 2026-08-13
 ---
 
 # Plan: Model View Log end-to-end integration tests
 
-**Status**: Plan, 2026-08-12. Implementation not started. Depends on production MVL
-append-and-flush emission for the Liberado producer path (roadmap **4b** / backlog **0.6**);
-the shared oracle does not.
+**Status**: Implemented, 2026-08-13. Path-based oracle, fixture-path e2e, and Liberado
+producer cases are live. Production MVL append-and-flush emission lives at the
+executor / provider boundary (roadmap **4b** / backlog **0.6**).
 
 **Purpose**: Design an **end-to-end integration** suite that verifies a harness implements
 [`docs/spec/reference/model-view-log.md`](../spec/reference/model-view-log.md) correctly — by

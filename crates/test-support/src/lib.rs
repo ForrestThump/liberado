@@ -16,8 +16,10 @@
 //!   pool-creation failure path.
 //!
 //! Trace contracts (backlog 0.5): [`trace_contracts`] reconstructs MVL turns and checks joins
-//! against the execution-log companion. No production emitter lives here.
+//! against the execution-log companion. The path-based suite oracle is [`mvl_oracle`].
+//! Production emission lives in `liberado-executor` (`MvlSession`); this crate only judges files.
 
+pub mod mvl_oracle;
 pub mod trace_contracts;
 
 use std::collections::HashMap;

@@ -75,7 +75,7 @@ use liberado_coder_core::{
 };
 use liberado_coder_tools::CodingToolRuntime;
 use liberado_common::Outcome;
-use liberado_executor::{Budget, Executor, Task};
+use liberado_executor::{Budget, Executor, MvlSession, Task};
 use liberado_provider::Provider;
 use progress::ProgressGuard;
 use serde_json::json;
@@ -658,9 +658,23 @@ impl LiberadoLoopBackend {
             ));
         }
         let task = Task::new(instructions, roles::coder_goal(&request));
-        let executor = Executor::new(provider, Budget::new(max_turns)).with_observer(Arc::new(
+        let mut executor = Executor::new(provider, Budget::new(max_turns)).with_observer(Arc::new(
             trace::TurnTracer::new(events.clone(), worker_role_name),
         ));
+        if let Some(dir) = request.config.trace_dir.as_deref() {
+            let mvl_path = Path::new(dir).join(format!("{session_id}.mvl.jsonl"));
+            let exec_path = Path::new(dir).join(format!("{session_id}.execution.jsonl"));
+            match MvlSession::open(&mvl_path, Some(&exec_path), session_id.clone()) {
+                Ok(session) => executor = executor.with_mvl(Arc::new(session)),
+                Err(error) => {
+                    tracing::warn!(
+                        session_id = %session_id,
+                        error = %error,
+                        "MVL session failed to open; coding run continues without it"
+                    );
+                }
+            }
+        }
         let report = executor
             .execute(&runtime, task)
             .await
