@@ -57,7 +57,10 @@ impl FailureClass {
                 "Edit the named files so they contain the required strings/symbols."
             }
             Self::CommandFailed => {
-                "Reproduce the failing command locally with tools, fix the root cause, re-run until green."
+                "The ship bar ran the command named in FINDINGS (usually `cargo check` then \
+                 `cargo test --workspace`). Reproduce *that* command — a green \
+                 `cargo test -p <one-crate>` is not the bar. Do not pass shell tokens \
+                 (`2>&1`, `|`, `&&`) as cargo arguments. Fix the root cause, re-run until green."
             }
             Self::CommandTimeout => {
                 "Speed up or simplify the failing command; avoid infinite loops in scripts."
@@ -125,8 +128,43 @@ pub fn format_pipeline_repair(pipeline: &PipelineResult) -> String {
             lines.push(format!("- [{:?}] {}: {}", f.kind, f.check_id, f.message));
         }
     }
+    for r in &pipeline.results {
+        if r.verdict.is_pass() {
+            continue;
+        }
+        let Some(excerpt) = r.verdict.log_excerpt.as_deref() else {
+            continue;
+        };
+        let clipped = clip_log_excerpt(excerpt, 40);
+        if clipped.is_empty() {
+            continue;
+        }
+        lines.push(format!("OUTPUT ({}):", r.id));
+        lines.push(clipped);
+    }
     lines.push("Fix these before claiming success. Prefer a different approach if this signature already failed.".into());
     lines.join("\n")
+}
+
+/// Last `max_lines` of a verifier log. Compare 3's repair role only saw
+/// `cargo exited 101`; the rustc / FAILED lines were already on the verdict.
+fn clip_log_excerpt(excerpt: &str, max_lines: usize) -> String {
+    let lines: Vec<&str> = excerpt.lines().collect();
+    if lines.len() <= max_lines {
+        return excerpt.trim().to_string();
+    }
+    lines[lines.len() - max_lines..].join("\n")
+}
+
+/// Drop prior-attempt verifier blocks that a later attempt already cleared.
+///
+/// Compare 3 attempt 2 still carried attempt 0's `cargo-check` 101 after check
+/// was green. The model went back to a compile problem that was gone.
+pub fn prune_resolved_verifier_feedback(prior: &mut Vec<String>, latest: &str) {
+    let latest_fails_check = latest.contains("cargo-check:");
+    if !latest_fails_check {
+        prior.retain(|old| !old.contains("cargo-check:"));
+    }
 }
 
 pub fn classify_pipeline(pipeline: &PipelineResult) -> FailureClass {
@@ -504,6 +542,47 @@ mod tests {
 
     /// The other side of the same coin. A genuine compile error exits 101 too, and must still be
     /// routed to a repair — otherwise this change trades one wrong answer for another.
+    #[test]
+    fn repair_feedback_includes_the_cargo_excerpt() {
+        let pipeline = cargo_failure_with_log(
+            "stdout:\nstderr:\nerror[E0425]: cannot find value `foo` in this scope\n\
+             test vault_source::tests::hold_flag_parks ... FAILED",
+        );
+        let fb = format_pipeline_repair(&pipeline);
+        assert!(
+            fb.contains("error[E0425]"),
+            "repair role must see rustc lines, not only 101: {fb}"
+        );
+        assert!(
+            fb.contains("hold_flag_parks"),
+            "repair role must see the failing test name: {fb}"
+        );
+        assert!(fb.contains("OUTPUT (cargo-check):"), "{fb}");
+    }
+
+    #[test]
+    fn prune_drops_stale_cargo_check_when_only_tests_fail() {
+        let mut prior = vec![
+            "FAILURE_CLASS: command_failed\nFINDINGS:\n- [CommandFailed] cargo-check: cargo exited 101"
+                .into(),
+        ];
+        let latest = "FAILURE_CLASS: command_failed\nFINDINGS:\n- [CommandFailed] cargo-test: cargo exited 101";
+        prune_resolved_verifier_feedback(&mut prior, latest);
+        assert!(
+            prior.is_empty(),
+            "stale cargo-check 101 must not ride into the next attempt: {prior:?}"
+        );
+    }
+
+    #[test]
+    fn prune_keeps_cargo_check_when_it_still_fails() {
+        let old = "FAILURE_CLASS: command_failed\nFINDINGS:\n- [CommandFailed] cargo-check: cargo exited 101"
+            .to_string();
+        let mut prior = vec![old.clone()];
+        prune_resolved_verifier_feedback(&mut prior, &old);
+        assert_eq!(prior.len(), 1);
+    }
+
     #[test]
     fn a_real_compile_error_is_still_the_models_to_fix() {
         let pipeline = cargo_failure_with_log(

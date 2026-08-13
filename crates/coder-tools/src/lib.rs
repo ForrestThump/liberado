@@ -113,6 +113,20 @@ pub fn durable_session_workspace(session_id: &str) -> Option<PathBuf> {
     session_worktree_path(&coding_worktrees_base(), session_id).ok()
 }
 
+/// `run_command` is argv, not a shell. Compare 3 burned a repair attempt on
+/// `cargo test --workspace 2>&1` — cargo treated `2>&1` as an argument, exited
+/// 101, and that looked identical to the ship-bar test failure.
+fn preflight_shell_tokens(program: &str, args: &[String]) -> Option<String> {
+    const TOKENS: &[&str] = &["2>&1", ">&2", "|", "||", "&&", ">", ">>", "<"];
+    let hit = args
+        .iter()
+        .find(|a| TOKENS.iter().any(|t| a.as_str() == *t))?;
+    Some(format!(
+        "`run_command` is not a shell — {program:?} received {hit:?} as an argument. \
+         Drop the token; stdout and stderr are already captured separately."
+    ))
+}
+
 /// If this is `gh pr create … --base <name>`, ensure `origin` has that branch. Returns an error
 /// message when the base is missing or cannot be checked.
 fn preflight_gh_pr_create(program: &str, args: &[String]) -> Option<String> {
@@ -1361,6 +1375,9 @@ impl CodingToolRuntime {
             args: Vec<String>,
         }
         let args: Args = parse_args(args)?;
+        if let Some(err) = preflight_shell_tokens(&args.program, &args.args) {
+            return Err(ToolError::BadRequest(err));
+        }
         let limits = &self.background_limits;
         let build_like = is_build_like(&args.program, &limits.build_like_programs);
 
@@ -1500,6 +1517,9 @@ impl CodingToolRuntime {
             args: Vec<String>,
         }
         let args: Args = parse_args(args)?;
+        if let Some(err) = preflight_shell_tokens(&args.program, &args.args) {
+            return Err(ToolError::BadRequest(err));
+        }
         // Dogfood finding #5: refuse `gh pr create --base X` when origin has no X, so we never
         // silently land a PR on main with a multi-PR stack.
         if let Some(err) = preflight_gh_pr_create(&args.program, &args.args) {
@@ -3746,6 +3766,24 @@ beta
             .invoke_json("grep", json!({"pattern": ""}))
             .await
             .expect_err("an empty pattern would match every line in the tree");
+    }
+
+    #[tokio::test]
+    async fn run_command_refuses_shell_redirect_tokens() {
+        let (_dir, runtime) = runtime();
+        let err = runtime
+            .invoke_json(
+                "run_command",
+                json!({"program": "cargo", "args": ["test", "--workspace", "2>&1"]}),
+            )
+            .await
+            .expect_err("2>&1 must not be passed through to cargo");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("not a shell"),
+            "refuse must name the argv/shell distinction: {msg}"
+        );
+        assert!(msg.contains("2>&1"), "{msg}");
     }
 
     #[tokio::test]

@@ -260,7 +260,9 @@ impl LiberadoLoopBackend {
                     }
                 }
                 Err(err) if is_retryable(&err) && attempt_offset + 1 < max_attempts => {
-                    feedback.push(repair_feedback::format_error_feedback(&err));
+                    let latest = repair_feedback::format_error_feedback(&err);
+                    repair_feedback::prune_resolved_verifier_feedback(&mut feedback, &latest);
+                    feedback.push(latest);
                     last_retryable = Some(err);
                     continue;
                 }
