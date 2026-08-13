@@ -518,6 +518,22 @@ pub struct RequestRecord {
     pub system_prompt: Option<String>,
 }
 
+/// Optional last look at a well-formed [`Report`] before the loop ends.
+///
+/// The engine already accepts Partial / Failed / wrap-up without asking, and it never reverts
+/// disk work when a report is refused or the turn budget runs out. A gate may only refuse
+/// `outcome=succeeded` while the model still has tools: the refusal is a tool result, the
+/// conversation continues, and the worktree stays as the model left it.
+///
+/// Domain packs supply the check (a compile gate, a schema check). The executor stays
+/// domain-neutral and does not call this when the report is already honest-and-terminal.
+#[async_trait]
+pub trait ReportGate: Send + Sync {
+    /// `Ok(())` ends the loop with this report. `Err(message)` is handed back as the
+    /// `submit_report` tool result; the model keeps the same conversation.
+    async fn accept(&self, report: &Report, wrapping_up: bool) -> Result<(), String>;
+}
+
 /// Receives a [`TurnRecord`] per completed turn.
 ///
 /// Deliberately domain-neutral: the executor knows nothing about coding sessions, and the coding
@@ -540,6 +556,8 @@ pub struct Executor {
     budget: Budget,
     /// Optional per-turn observer. `None` costs nothing and keeps every existing caller unchanged.
     observer: Option<Arc<dyn TurnObserver>>,
+    /// Optional same-session check on `outcome=succeeded`. `None` accepts every well-formed report.
+    report_gate: Option<Arc<dyn ReportGate>>,
     /// Production MVL / execution JSONL (backlog 0.6). `None` writes nothing.
     mvl: Option<Arc<MvlSession>>,
     /// Model for the calls this executor makes. `None` = the provider's own.
@@ -557,6 +575,7 @@ impl Executor {
             budget,
             model: None,
             observer: None,
+            report_gate: None,
             mvl: None,
         }
     }
@@ -629,6 +648,22 @@ impl Executor {
     pub fn with_observer(mut self, observer: Arc<dyn TurnObserver>) -> Self {
         self.observer = Some(observer);
         self
+    }
+
+    /// Attach a same-session check on `outcome=succeeded`. See [`ReportGate`].
+    #[must_use]
+    pub fn with_report_gate(mut self, gate: Arc<dyn ReportGate>) -> Self {
+        self.report_gate = Some(gate);
+        self
+    }
+
+    /// Whether a well-formed report may end the loop without asking [`ReportGate`].
+    ///
+    /// Partial, Failed, Proposed, and wrap-up are already honest-and-terminal: the files stay,
+    /// and refusing them would either trap a model that can no longer edit or throw away the
+    /// only record of half-finished work. Only a live `succeeded` can be a lie.
+    pub fn report_ends_without_gate(outcome: Outcome, wrapping_up: bool) -> bool {
+        wrapping_up || !matches!(outcome, Outcome::Succeeded)
     }
 
     fn mvl_start(&self, task: Option<&str>) {
@@ -1198,14 +1233,32 @@ impl Executor {
                 if call.name == SUBMIT_REPORT_TOOL {
                     match serde_json::from_value::<Report>(call.arguments.clone()) {
                         Ok(report) => {
-                            tracing::info!(turn, "subagent filed report");
-                            self.mvl_tool_started(turn, call);
-                            self.mvl_tool_result(turn, call, true, "report accepted");
-                            messages.push(Message::tool_result(
-                                &call.id,
-                                "report accepted".to_string(),
-                            ));
-                            submitted_report = Some(report);
+                            // Partial / Failed / wrap-up end the loop as-is. The worktree is not
+                            // reverted: half-finished files stay for the next attempt or a human.
+                            // Only a live `succeeded` may be a lie, and only then do we ask the
+                            // gate — a refusal is a tool result, not a reset.
+                            if !Self::report_ends_without_gate(report.outcome, wrapping_up)
+                                && let Some(gate) = &self.report_gate
+                                && let Err(shown) = gate.accept(&report, wrapping_up).await
+                            {
+                                tracing::info!(
+                                    turn,
+                                    outcome = ?report.outcome,
+                                    "submit_report succeeded was not accepted; handing the check back"
+                                );
+                                self.mvl_tool_started(turn, call);
+                                self.mvl_tool_result(turn, call, false, &shown);
+                                messages.push(Message::tool_result(&call.id, shown));
+                            } else {
+                                tracing::info!(turn, "subagent filed report");
+                                self.mvl_tool_started(turn, call);
+                                self.mvl_tool_result(turn, call, true, "report accepted");
+                                messages.push(Message::tool_result(
+                                    &call.id,
+                                    "report accepted".to_string(),
+                                ));
+                                submitted_report = Some(report);
+                            }
                         }
                         // A malformed argument object is the model getting a schema slightly wrong,
                         // which is exactly the class of mistake it can fix when told. Every *other*
@@ -2261,6 +2314,128 @@ mod tests {
         assert!(report.summary.contains("budget"), "{}", report.summary);
         assert!(report.summary.contains("search"), "{}", report.summary);
         assert!(report.summary.contains("3 hits"), "{}", report.summary);
+    }
+
+    struct RefuseAll;
+
+    #[async_trait]
+    impl ReportGate for RefuseAll {
+        async fn accept(&self, _report: &Report, _wrapping_up: bool) -> Result<(), String> {
+            Err("NOT accepted — check is red".into())
+        }
+    }
+
+    struct RefuseFirstSucceeded {
+        remaining: std::sync::Mutex<u32>,
+    }
+
+    impl RefuseFirstSucceeded {
+        fn once() -> Self {
+            Self {
+                remaining: std::sync::Mutex::new(1),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl ReportGate for RefuseFirstSucceeded {
+        async fn accept(&self, _report: &Report, _wrapping_up: bool) -> Result<(), String> {
+            let mut left = self.remaining.lock().expect("gate mutex");
+            if *left > 0 {
+                *left -= 1;
+                return Err("NOT accepted — check is red".into());
+            }
+            Ok(())
+        }
+    }
+
+    /// A red same-session check refuses `succeeded` and keeps the conversation. The next
+    /// `succeeded` (once the check would pass) is accepted. Nothing about the work is reverted —
+    /// the gate only talks; it does not touch the worktree.
+    #[tokio::test]
+    async fn a_red_report_gate_refuses_succeeded_and_the_retry_is_accepted() {
+        let (provider, exec) = executor(
+            vec![submit(valid_report_args()), submit(valid_report_args())],
+            Budget::default(),
+        );
+        let exec = exec.with_report_gate(Arc::new(RefuseFirstSucceeded::once()));
+        let runtime = MockToolRuntime::new(&["search"], Ok("data".into()));
+
+        let report = exec
+            .execute(&runtime, Task::new("worker", "do it"))
+            .await
+            .expect("the second succeeded must be accepted");
+
+        assert_eq!(report.outcome, Outcome::Succeeded);
+        assert_eq!(report.summary, "found it");
+        assert_eq!(
+            provider.received_requests().len(),
+            2,
+            "the first succeeded must be refused so the model gets another turn; a skipped gate would accept on turn 1"
+        );
+    }
+
+    /// Partial is already honest. A gate that would refuse everything must not be asked, or a
+    /// turn-budget wrap-up would trap the model with no tools and throw away the only report of
+    /// the work it did keep.
+    #[tokio::test]
+    async fn a_refuse_all_gate_still_accepts_partial() {
+        let (_provider, exec) = executor(
+            vec![submit(serde_json::json!({
+                "outcome": "partially_succeeded",
+                "summary": "half done, files stay",
+            }))],
+            Budget::default(),
+        );
+        let exec = exec.with_report_gate(Arc::new(RefuseAll));
+        let runtime = MockToolRuntime::new(&["search"], Ok("data".into()));
+
+        let report = exec
+            .execute(&runtime, Task::new("worker", "do it"))
+            .await
+            .expect("partial must end the loop even when the gate would refuse succeeded");
+
+        assert_eq!(report.outcome, Outcome::PartiallySucceeded);
+        assert_eq!(report.summary, "half done, files stay");
+    }
+
+    /// Wrap-up has already withdrawn every tool but `submit_report`. Refusing `succeeded` then
+    /// would leave the model unable to fix the check and unable to leave. The files stay either
+    /// way; we accept the report so the half-finished work is not reported as nothing.
+    #[tokio::test]
+    async fn wrap_up_succeeded_is_accepted_even_when_the_gate_would_refuse() {
+        let (_provider, exec) = executor(
+            vec![call_tool("search"), submit(valid_report_args())],
+            Budget::new(1),
+        );
+        let exec = exec.with_report_gate(Arc::new(RefuseAll));
+        let runtime = MockToolRuntime::new(&["search"], Ok("3 hits".into()));
+
+        let report = exec
+            .execute(
+                &runtime,
+                Task::new("worker", "research everything").salvageable(true),
+            )
+            .await
+            .expect("wrap-up must accept the report so the work is not thrown away");
+
+        assert_eq!(report.outcome, Outcome::Succeeded);
+        assert_eq!(report.summary, "found it");
+    }
+
+    #[test]
+    fn report_ends_without_gate_keeps_honest_terminals() {
+        assert!(Executor::report_ends_without_gate(
+            Outcome::PartiallySucceeded,
+            false
+        ));
+        assert!(Executor::report_ends_without_gate(Outcome::Failed, false));
+        assert!(Executor::report_ends_without_gate(Outcome::Proposed, false));
+        assert!(Executor::report_ends_without_gate(Outcome::Succeeded, true));
+        assert!(!Executor::report_ends_without_gate(
+            Outcome::Succeeded,
+            false
+        ));
     }
 
     /// A schema slip is correctable, so the run continues instead of throwing the work away.
