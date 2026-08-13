@@ -32,8 +32,9 @@ a substring in a blob. `git commit` appears in help text and log lines.
 
 ## Do not start with `git commit` → “run CI”
 
-Liberado already runs `cargo check` then `cargo test --workspace` after
-`submit_report`. A commit reminder is late, and on this path it often
+Liberado refuses `submit_report outcome=succeeded` while `cargo check` is
+red (same conversation, PR #163), then still runs `cargo test --workspace`
+after a green compile. A commit reminder is late, and on this path it often
 never happens.
 
 The B1 misses were earlier:

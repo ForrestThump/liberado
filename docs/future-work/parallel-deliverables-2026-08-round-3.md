@@ -16,17 +16,15 @@ not read the rest of this repo.
 
 | # | Deliverable | State |
 |---|---|---|
-| 1 | Delegated findings reach the face | ✅ **Done.** Payload fix landed `e0fde79` (2026-08-02); boundary tests PR #39 (2026-08-03). One residual, pinned and deliberately unfixed — see below. |
+| 1 | Delegated findings reach the face | ✅ **Done.** Payload fix landed `e0fde79` (2026-08-02); boundary tests PR #39 (2026-08-03). The `ExecuteDirect` residual closed as B1 (PR #162). |
 | 2 | Subagent vs direct execution in the journal | 🔴 **Open — do this first.** Spelled out below. |
 | 3a | Measure redundant tool calls | 🟡 **Open, delegable.** |
 | 3b | Stop paying for redundant tool calls | 🔒 **Reserved** — safety judgement, not delegated. |
 
-**§1's residual:** `ExecuteDirect` gets no output contract, and its `DIRECT_INSTRUCTIONS` ask for a
-*"concise, high-signal result"*. Pinned by `execute_direct_gets_no_output_contract_today` and left
-unfixed on purpose — `ExecuteDirect` carries no `Delivery`, so a blanket fix would tell every cron
-and vault-triggered run to write documents, and that is 92.8% of token spend. Reasoning in
-[`delegated-work-is-discarded-at-the-seam.md`](archive/delegated-work-is-discarded-at-the-seam.md). **Do not
-"fix" this without reading that section.**
+**§1's residual is closed (B1, PR #162).** `ExecuteDirect` now carries `Delivery`. A research chat
+relay gets `relay_directive`; acting work stays short; vault delivery files the report. A blanket
+`relay_directive` on every direct run is still wrong — that is the 92.8% token bucket. Reasoning in
+[`delegated-work-is-discarded-at-the-seam.md`](archive/delegated-work-is-discarded-at-the-seam.md).
 
 ---
 

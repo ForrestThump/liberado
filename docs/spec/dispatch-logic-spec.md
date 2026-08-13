@@ -104,6 +104,7 @@ pub enum DispatchAction {
     /// Run these tool calls myself, then Report. Only for simple/low-consequence goals.
     ExecuteDirect {
         calls: Vec<ToolCall>,                 // tool name + args; ≤ SMALL_FANOUT calls
+        delivery: Delivery,                   // same field as DispatchSubagent — see §7.1
     },
     /// Hand off to a subagent with a narrowed grant + disjoint context.
     DispatchSubagent {
@@ -234,6 +235,8 @@ pub struct Report {
 ```
 
 - **ExecuteDirect → Report**: the result, summarized. Never the raw tool JSON.
+  `ExecuteDirect` carries `Delivery` (B1). Research + `Summarize` gets the relay contract;
+  acting work stays short; `Vault` files the report the same way a subagent does.
 - **DispatchSubagent → Report**: a pointer to the artifact + a short summary. The subagent's full
   trace stays out of main context (Decision 8); it lives in tracing/audit, not the conversation.
 - **Proposed outcome**: tells main "I prepared X for your approval at path Y" rather than "done."
@@ -266,9 +269,9 @@ The last two rows exist because `deliver_to_vault` deliberately skips the risk-g
 would turn a restricted zone into a *proposal*, and filing a note should be one silent write or
 nothing — so the rules that runtime would have applied are applied statically instead.
 
-A subagent whose report will be filed is **told so before it starts** (`delivery_directive`),
-because `Report::summary` is contractually "short" everywhere else; without that it writes a status
-line and waits to author the document with a tool it was never given.
+A run whose report will be filed — subagent **or** `ExecuteDirect` — is **told so before it starts**
+(`delivery_directive`), because `Report::summary` is contractually "short" everywhere else; without
+that it writes a status line and waits to author the document with a tool it was never given.
 
 ### 7.2 Depth — how much room the subagent gets
 

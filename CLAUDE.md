@@ -123,6 +123,10 @@ production entry point still reads it.
 - `Skills/` — task playbooks (e.g. `cold-review-pr.md`).
 - `scripts/pr-shepherd.py` — drives agent PRs to ready-or-blocked on the same differential rule.
 
+**A `succeeded` report is not accepted while `cargo check` is red.** The coding pack refuses it
+in the same executor conversation (`WorkspaceCompileGate`, PR #163). Partial, Failed, wrap-up
+and turn exhaustion keep the dirty tree. The post-execute ship bar still runs `cargo test`.
+
 **Debugging an agent run: read its trace, do not re-derive it.** Every coding run writes
 `<workspace>/coder-traces/<session>.json` recording, per turn, the tools the model was *offered*
 (guards withdraw them mid-run, so this changes), its text verbatim, what it called, and why the turn

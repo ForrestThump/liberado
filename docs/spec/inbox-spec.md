@@ -1,20 +1,15 @@
 ﻿# Liberado Capture & Ambient Analysis Spec — Inbox + Whole-Vault Awareness
 
 > [!WARNING]
-> **PARTIALLY IMPLEMENTED as of 2026-08-08.** This spec describes the intended design; only the
-> watcher ignore list (`inbox_ignore_globs`) is live as of this writing. The remaining fields parse
-> and validate but no code reads them: there are no settle windows, no `#ready-now` / `#hold-off`
-> handling, and no ambient sweep.
+> **PARTIALLY IMPLEMENTED.** F12 (PR #156) is live: the watcher only emits for configured
+> `capture_paths` and notes that carry the ready flag (`#now` by default); `#hold-off` parks.
+> `inbox_ignore_globs` (PR #90) is also live.
 >
-> What *is* live: the vault watcher fires on changes under the vault, and a change gets the generic
-> "a note changed, decide how to react" reaction. The inbox layer above that — tiers, quiescence,
-> flags — is the part this spec still only specifies.
+> What is **not** built is the rest of the inbox layer (E2): settle windows, compare-and-swap
+> clearing of the pinned widget, the schedule half of the split, and ambient sweep. Those fields
+> may parse. Do not treat a parse as a live pipeline.
 >
-> Found by dogfooding on 2026-08-08, after config that reads as live sent someone debugging a
-> capture pipeline that had never been built.
->
-> **The design is settled** as of 2026-08-08 — see §14, which decides the two capture surfaces,
-> compare-and-swap clearing, and the schedule/watcher split. What remains is building it.
+> **The design is settled** as of 2026-08-08 — see §14.
 
 **Status**: Specifies the async-capture interaction mode and the lighter ambient analysis of all
 human notes. A peer to the TUI. Actionable.

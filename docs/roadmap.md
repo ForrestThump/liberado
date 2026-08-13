@@ -188,8 +188,8 @@ Two carried-forward limitations worth knowing before building on this:
 
 **Goal:** dispatch a scoped task and get back a PR whose review is taste and scope, not repair.
 This table is the harness track. The repo-wide total order is the
-[backlog implementation order](future-work/backlog.md#implementation-order); its F9 safety fix,
-0.1b gate fix and D2 cost prerequisite come before the next open harness row. The evidence says
+[backlog implementation order](future-work/backlog.md#implementation-order); F9 and 0.1b have
+landed, so D2 is the next open prerequisite before the next harness row. The evidence says
 something specific: **every measured improvement so far came from fixing a defect, not from tuning
 a value.** Edit failure went 66–70% → 8% → 0% across PRs #106–#128, all defect fixes. No knob has
 yet been tuned to a measured gain.
@@ -265,10 +265,12 @@ not a model ceiling.
                       ├── 2. subagent vs direct in the journal  (= TE2)
                       └── 3. executor accumulation term         (37.4%)
 
-  P3 autonomous PR ──► F9 background-command cap       (safety)
-                    ├── 0.1b staged preflight output   (deterministic feedback)
+  P3 autonomous PR ──► F9 landed (#146)                (safety)
+                    ├── 0.1b landed (#147)             (staged preflight)
                     ├── D2 model prices                (cost prerequisite)
-                    ├── 0.6 joined-log emitter         (instrument)
+                    ├── 0.6 landed (#151)              (instrument)
+                    ├── B1 landed (#162)               (ExecuteDirect delivery)
+                    ├── same-session check (#163)      (refuse red succeeded)
                     ├── 0.7/C3 controlled baseline     (measurement)
                     ├── C5 completion-gate comparison  (decision)
                     └── 0.9 first evidence-selected lever
@@ -283,6 +285,7 @@ not a model ceiling.
 
 | When | What |
 |------|------|
+| **2026-08-13** | **B1 + same-session compile.** `ExecuteDirect` now carries `Delivery` ([#162](https://github.com/ForrestThump/liberado/pull/162)): a research chat relay gets the relay contract, acting work stays short, vault delivery files the report. `submit_report outcome=succeeded` is refused while `cargo check` is red ([#163](https://github.com/ForrestThump/liberado/pull/163)); the files stay. F9 (#146), 0.1b (#147) and F12 (#156) were already on `main` and are now marked landed in the backlog. |
 | **2026-08-11** | **Eight reviewed slices landed with green Ubuntu, Windows, dependency and docs checks.** ACP provider config now uses multi-tier resolution ([#137](https://github.com/ForrestThump/liberado/pull/137)); unattended goals lose `AskHuman` at the real grant boundary ([#138](https://github.com/ForrestThump/liberado/pull/138)); shepherd review labels now follow successful completion and use a 60-turn default ([#139](https://github.com/ForrestThump/liberado/pull/139)); exact MVL/execution-log contracts and conformance fixtures landed ([#140](https://github.com/ForrestThump/liberado/pull/140)); all three production coding surfaces use one assembler ([#141](https://github.com/ForrestThump/liberado/pull/141)); cold review is diff-bound and gets one reverified fix round ([#142](https://github.com/ForrestThump/liberado/pull/142)); termination preserves dirty headless work under meaningful task labels ([#143](https://github.com/ForrestThump/liberado/pull/143)); and daemon startup reconciles parked rows only after pack registration ([#144](https://github.com/ForrestThump/liberado/pull/144)). |
 | **2026-08-11** | **Band 0, half of it.** **The ship bar now runs on the path that dispatches** ([#134](https://github.com/ForrestThump/liberado/pull/134), backlog 0.1): the preflight gate from #74 was reachable only through `CodingSessionPack`, which the ACP bridge does not use, so every dogfood run since Paseo landed skipped it. One decision now serves both paths — `ship_preflight_required_for` / `ship_spec_for` take a bare payload, and `ProjectConfig::ship_preflight_payload()` is the single builder the HTTP API and the bridge share. **The larger half of that PR was that the bridge loaded no config at all**: it read `LIBERADO_CONFIG_DIR` directly instead of `liberado_config::config_dir()`, and nothing set the variable, so every run read no topology, no policy and no tuning — no declared project, therefore no bar even with the gate wired, and an empty capability grant. The bridge now logs its resolved config dir and which files it found. **A success report requires a test run** ([#131](https://github.com/ForrestThump/liberado/pull/131), 0.2) — a run filed `succeeded` over seven failing tests because `cargo check` passed; the dangerous `git stash` + `git checkout` baseline in that contribution was replaced with a cached lookup. **An absent reviewer is not a verdict** ([#132](https://github.com/ForrestThump/liberado/pull/132), 0.3) — an empty critic response destroyed two finished runs; abstention is now `None`, never `Acceptable`. **A leaked env var is not a flake** ([#133](https://github.com/ForrestThump/liberado/pull/133)) — a Windows-only CI failure in an *unrelated* checkpoint test, caused by a sibling test clearing `GIT_CONFIG_GLOBAL` and deleting the file it named while a concurrent `git init` read it; fixing it exposed a real bug, since the no-translation setting was written only when creating a shadow repo and a **resumed** session restored with whatever the host had configured. |
 | **2026-08-10** | **The trace gap, closed** ([#124](https://github.com/ForrestThump/liberado/pull/124)). `run_attempt` wrote its trace at four explicit return points and returned through a dozen `?` operators that were not among them — so an attempt ending in an *anticipated* way left a full record, and one ending in a way nobody anticipated left nothing at all. The write now wraps the body and happens on every exit path; `CoderEvent::SessionAborted` records the error text, distinct from `SessionFinished { outcome: Failed }` because a decision and the absence of one debug very differently. A failed trace write also no longer fails a completed run. Alongside it, [#125](https://github.com/ForrestThump/liberado/pull/125) fixed a genuinely flaky `narrow` property that compared element *order* for a set operation — `narrow_never_widens`, the property that would catch a real authority bug, passed throughout. |
