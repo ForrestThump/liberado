@@ -41,6 +41,12 @@ fn initialize_and_session_new_over_stdio() {
         bin.display()
     );
 
+    // Pin config to an empty temp dir. Clearing `LIBERADO_CONFIG_DIR` is not
+    // enough: walk-up from `target/debug/liberado-acp.exe` still finds the
+    // repo `config/` (gitignored). A partial `[coder.critic]` there used to
+    // kill the bridge before `initialize`, which this test reports as an
+    // empty JSON-RPC line.
+    let isolated_config = tempfile::tempdir().expect("temp config dir");
     let mut child = Command::new(&bin)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -48,7 +54,7 @@ fn initialize_and_session_new_over_stdio() {
         .env_remove("DEEPSEEK_API_KEY")
         .env_remove("OPENROUTER_API_KEY")
         .env_remove("OPENAI_API_KEY")
-        .env_remove("LIBERADO_CONFIG_DIR")
+        .env("LIBERADO_CONFIG_DIR", isolated_config.path())
         .spawn()
         .unwrap_or_else(|e| panic!("spawn {}: {e}", bin.display()));
 
