@@ -69,6 +69,7 @@ impl Daemon {
             goals: None,
             user_timezone: None,
             inbox_ignore_globs: Vec::new(),
+            capture_scope: vault_source::CaptureScope::production_default(),
         })
     }
 
@@ -85,6 +86,20 @@ impl Daemon {
     /// `[tuning.capture].inbox_ignore_globs`.
     pub fn with_inbox_ignore_globs(mut self, globs: Vec<String>) -> Self {
         self.inbox_ignore_globs = globs;
+        self
+    }
+
+    /// Set the watcher's positive scope (F12): only notes matching `capture_paths`, or containing
+    /// `ready_flag`, or under `proposals/` produce events. `hold_flag` parks a note for both the
+    /// watcher and the schedule. Populated from `[tuning.capture]` (`inbox_path` plus optional
+    /// extra `capture_paths`, `ready_flag`, `hold_flag`).
+    pub fn with_capture_scope(
+        mut self,
+        capture_paths: impl IntoIterator<Item = impl Into<String>>,
+        ready_flag: impl Into<String>,
+        hold_flag: impl Into<String>,
+    ) -> Self {
+        self.capture_scope = vault_source::CaptureScope::new(capture_paths, ready_flag, hold_flag);
         self
     }
 
@@ -309,6 +324,7 @@ impl Daemon {
             self.vault.clone(),
             self.debounce,
             self.inbox_ignore_globs.clone(),
+            self.capture_scope.clone(),
         );
         // Supervised rather than fire-and-forget: the handle was previously dropped on the floor,
         // so a watch task that died took the daemon's only vault input with it and nothing

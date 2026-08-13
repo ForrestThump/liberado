@@ -434,6 +434,29 @@ pub fn cron_source_from_config(
 /// parameter existed. The caller (`liberado-server`'s `run`) constructs it, if at all, since
 /// building one means opening a vault-backed store and loading an embedding model — this crate
 /// stays free of that dependency weight and decision.
+/// Inbox folder always belongs in the watcher's whitelist. Extra `capture_paths` (pinned
+/// widget file, additional folders, globs) are appended without duplicating `inbox_path`.
+fn watcher_capture_paths(inbox_path: &str, extra: &[String]) -> Vec<String> {
+    let mut paths = Vec::new();
+    let inbox = inbox_path.trim();
+    if !inbox.is_empty() {
+        paths.push(inbox_path.to_string());
+    }
+    for p in extra {
+        let trimmed = p.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let already = paths.iter().any(|existing| {
+            existing == p || existing.trim_end_matches('/') == trimmed.trim_end_matches('/')
+        });
+        if !already {
+            paths.push(p.clone());
+        }
+    }
+    paths
+}
+
 pub fn configure_daemon(
     daemon: Daemon,
     providers: &RoleProviders,
@@ -463,7 +486,15 @@ pub fn configure_daemon(
     let daemon = daemon
         .with_proposal_reap_interval(config.tuning.proposals.reap_interval_secs)
         .with_session_profile_caps(session_profile_caps(config))
-        .with_inbox_ignore_globs(config.tuning.capture.inbox_ignore_globs.clone());
+        .with_inbox_ignore_globs(config.tuning.capture.inbox_ignore_globs.clone())
+        .with_capture_scope(
+            watcher_capture_paths(
+                &config.tuning.capture.inbox_path,
+                &config.tuning.capture.capture_paths,
+            ),
+            config.tuning.capture.ready_flag.clone(),
+            config.tuning.capture.hold_flag.clone(),
+        );
 
     let (Some(dispatcher_provider), Some(subagent_providers)) =
         (providers.dispatcher.as_ref(), providers.subagent.as_ref())
@@ -1025,5 +1056,92 @@ mod tests {
             None,
         );
         assert_eq!(configured.proposal_reap_interval(), Duration::from_secs(42));
+    }
+
+    #[test]
+    fn watcher_capture_paths_unions_inbox_and_extras() {
+        let paths = watcher_capture_paths(
+            "inbox/",
+            &["inbox/".into(), "Inbox/Capture.md".into(), "".into()],
+        );
+        assert_eq!(
+            paths,
+            vec!["inbox/".to_string(), "Inbox/Capture.md".to_string()]
+        );
+    }
+
+    #[tokio::test]
+    async fn configure_daemon_applies_positive_scope_from_tuning() {
+        use liberado_common::CapabilityCatalog;
+        use liberado_daemon::Daemon;
+        use liberado_mcp::McpRegistry;
+        use std::sync::Arc;
+        use tempfile::TempDir;
+
+        let dir = TempDir::new().unwrap();
+        std::fs::create_dir_all(dir.path().join("inbox")).unwrap();
+        std::fs::write(dir.path().join("inbox/in.md"), "captured").unwrap();
+        std::fs::create_dir_all(dir.path().join("knowledge")).unwrap();
+        std::fs::write(dir.path().join("knowledge/out.md"), "unflagged").unwrap();
+        std::fs::write(dir.path().join("knowledge/now.md"), "go #ready-now").unwrap();
+        std::fs::write(dir.path().join("inbox/held.md"), "park #hold-off").unwrap();
+        std::fs::create_dir_all(dir.path().join("Inbox")).unwrap();
+        std::fs::write(dir.path().join("Inbox/Capture.md"), "widget jot").unwrap();
+
+        let daemon = Daemon::open("test", dir.path()).await.unwrap();
+        let mut config = Config::default();
+        config.topology.vault_path = dir.path().to_path_buf();
+        config.tuning.capture.capture_paths = vec!["Inbox/Capture.md".into()];
+
+        let configured = configure_daemon(
+            daemon,
+            &RoleProviders::none(),
+            &config,
+            Arc::new(CapabilityCatalog::new()),
+            McpRegistry::new(),
+            dir.path(),
+            None,
+        );
+
+        assert!(
+            configured
+                .process_change(std::path::Path::new("inbox/in.md"))
+                .await
+                .unwrap()
+                .is_some(),
+            "inbox_path must be in scope after configure_daemon"
+        );
+        assert!(
+            configured
+                .process_change(std::path::Path::new("knowledge/out.md"))
+                .await
+                .unwrap()
+                .is_none(),
+            "unflagged note outside capture paths must be dropped"
+        );
+        assert!(
+            configured
+                .process_change(std::path::Path::new("knowledge/now.md"))
+                .await
+                .unwrap()
+                .is_some(),
+            "ready_flag must promote a note anywhere"
+        );
+        assert!(
+            configured
+                .process_change(std::path::Path::new("inbox/held.md"))
+                .await
+                .unwrap()
+                .is_none(),
+            "hold_flag must park even inside inbox/"
+        );
+        assert!(
+            configured
+                .process_change(std::path::Path::new("Inbox/Capture.md"))
+                .await
+                .unwrap()
+                .is_some(),
+            "extra capture_paths entry must reach the daemon"
+        );
     }
 }

@@ -145,14 +145,14 @@ impl Default for ConcurrencyTuning {
 ///
 /// # PARTIALLY IMPLEMENTED
 ///
-/// `inbox_ignore_globs` is live — the vault watcher skips paths matching any configured glob
-/// (Syncthing conflict files, editor temp files, `Inbox/` when a dedicated schedule already
-/// processes it). No other field on this struct is read by production code yet: there are no settle
-/// windows, no `#ready-now` / `#hold-off` handling, and no ambient sweep.
+/// Live: `inbox_ignore_globs` (watcher denylist), `inbox_path` (the watcher's capture folder),
+/// `capture_paths` (extra whitelist entries — pinned file, extra folders, globs), `ready_flag`
+/// (`#now` promotion), and `hold_flag` (`#hold-off` parking) — the F12 positive scope. No other
+/// field on this struct is read by production code yet: there are no settle windows and no
+/// ambient sweep.
 ///
-/// The vault watcher itself *is* live and does fire; what is missing is the inbox layer above it.
-/// A change under `inbox_path` gets the same generic "a note changed, decide how to react" handling
-/// as any other note.
+/// The vault watcher itself *is* live and does fire; what is missing is the inbox layer above it
+/// (E2) — the settle windows, the `processed/` move, and the ambient sweep.
 ///
 /// Kept rather than deleted because the spec it implements is still the intended design and the
 /// shape is agreed. `Config::validate` warns when an operator sets unimplemented fields, so config
@@ -168,6 +168,10 @@ pub struct CaptureTuning {
     pub ready_now_settle_secs: u64,
     pub ready_flag: String,
     pub hold_flag: String,
+    /// Extra whitelist entries beyond [`inbox_path`](Self::inbox_path): pinned widget files,
+    /// additional folders, or globs (`*.md`). Empty by default — the watcher still scopes to
+    /// `inbox_path`. An empty list is *not* "react to everything".
+    pub capture_paths: Vec<String>,
     /// When the low-intensity whole-vault ambient sweep runs (`liberado-inbox-spec.md` §11, e.g.
     /// `"nightly"`). Free text, not yet a cron expression or any other parsed format — nothing
     /// consumes this field yet (the ambient sweep itself isn't built), so no concrete schedule
@@ -188,6 +192,7 @@ impl Default for CaptureTuning {
             ready_now_settle_secs: 2 * 60,
             ready_flag: "#ready-now".to_string(),
             hold_flag: "#hold-off".to_string(),
+            capture_paths: Vec::new(),
             ambient_sweep_schedule: "nightly".to_string(),
             inbox_ignore_globs: vec![
                 "*.sync-conflict-*".to_string(),
