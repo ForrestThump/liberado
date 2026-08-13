@@ -128,11 +128,16 @@
 # temperature = 0.1
 # max_turns = 8
 
+# Names the model may call. Unset = the full pack catalog. Executor finish
+# tools (submit_report, scratchpad) are not this list.
+# offered_tools = ["read_file", "write_file", "edit_file", "run_command"]
+
 # [coder.coder]
 # model = "deepseek/deepseek-v4-pro"
 # prompt_path = "prompts/coder/coder.md"
 # temperature = 0.1
 # max_turns = 30
+# reasoning = "high"
 
 # [coder.critic]
 # model = "deepseek/deepseek-v4-flash"

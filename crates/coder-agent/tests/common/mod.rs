@@ -85,6 +85,7 @@ pub fn role(prompt: &str, max_turns: u32) -> CoderRoleConfig {
         temperature: None,
         max_tokens: None,
         max_turns: Some(max_turns),
+        reasoning: None,
     }
 }
 
@@ -96,6 +97,7 @@ pub fn disabled_role() -> CoderRoleConfig {
         temperature: None,
         max_tokens: None,
         max_turns: Some(4),
+        reasoning: None,
     }
 }
 
@@ -132,6 +134,7 @@ pub fn base_request(root: &Path) -> CoderRunRequest {
             prompt_dir: None,
             edit: Default::default(),
             workspace_build: Default::default(),
+            offered_tools: None,
         },
         attempt: 0,
         prior_feedback: Vec::new(),

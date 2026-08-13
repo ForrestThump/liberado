@@ -1021,6 +1021,7 @@ mod tests {
             temperature: None,
             max_tokens: None,
             max_turns: None,
+            reasoning: None,
         };
         let mut request = crate::CoderRunRequest {
             task: crate::CoderTask::new("x", "old"),
@@ -1046,6 +1047,7 @@ mod tests {
                 prompt_dir: None,
                 edit: Default::default(),
                 workspace_build: Default::default(),
+                offered_tools: None,
             },
             attempt: 0,
             prior_feedback: vec![],

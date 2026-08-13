@@ -382,7 +382,9 @@ pub(crate) fn derive_dispositions(
 
 fn is_retryable(err: &CoderError) -> bool {
     match err {
-        CoderError::NoChanges => true,
+        // NoChanges is a stall, not a new strategy. Retrying it identical
+        // burned three 30-turn Flash attempts in the sequential compare.
+        CoderError::NoChanges => false,
         // A validation failure normally means the change is wrong, and another attempt is the
         // right answer. It does not mean that when the machine is what failed: a full disk
         // reproduces on every attempt, so retrying spends the budget to reach the same place.
@@ -395,9 +397,11 @@ fn is_retryable(err: &CoderError) -> bool {
     }
 }
 
-/// A single source of truth for retryable/stuck errors. `session_pack::build` calls this
-/// so the same match arms don't need to be kept in sync across modules.
-pub(crate) use is_retryable as is_stuck_error;
+/// Stuck enough to ask a human. Broader than [`is_retryable`]: a read-only
+/// exhausted attempt is stuck, but another identical attempt will not help.
+pub(crate) fn is_stuck_error(err: &CoderError) -> bool {
+    matches!(err, CoderError::NoChanges) || is_retryable(err)
+}
 
 /// Whether the event log already says how the attempt ended.
 ///
@@ -602,7 +606,8 @@ impl LiberadoLoopBackend {
         )
         .await
         .map_err(|e| CoderError::Tool(e.to_string()))?
-        .with_hashline(request.config.hashline.clone());
+        .with_hashline(request.config.hashline.clone())
+        .with_offered_tools(request.config.offered_tools.clone());
 
         // The sandbox may have created a separate workspace (e.g. Worktree).
         // Use the actual workspace root for change detection, verification,
@@ -1082,7 +1087,14 @@ mod tests {
         assert!(is_retryable(&CoderError::Validation(
             "FAILURE_CLASS: command_failed\nFINDINGS:\n- cargo exited 101".to_string()
         )));
-        assert!(is_retryable(&CoderError::NoChanges));
+        assert!(
+            !is_retryable(&CoderError::NoChanges),
+            "a read-only exhausted attempt must not start another identical NoChanges retry"
+        );
+        assert!(
+            is_stuck_error(&CoderError::NoChanges),
+            "NoChanges is still stuck: the pack must ask a human, not treat it as a crash"
+        );
     }
 
     /// A git repo with one committed file. Identity is set explicitly because `user.email` /
@@ -1171,6 +1183,7 @@ mod tests {
             temperature: None,
             max_tokens: None,
             max_turns: Some(6),
+            reasoning: None,
         }
     }
 
@@ -1182,6 +1195,7 @@ mod tests {
             temperature: None,
             max_tokens: None,
             max_turns: Some(4),
+            reasoning: None,
         }
     }
 
@@ -1210,6 +1224,7 @@ mod tests {
                 prompt_dir: None,
                 edit: Default::default(),
                 workspace_build: Default::default(),
+                offered_tools: None,
             },
             attempt: 0,
             prior_feedback: Vec::new(),
@@ -1887,6 +1902,7 @@ mod tests {
             temperature: Some(0.0),
             max_tokens: Some(512),
             max_turns: None,
+            reasoning: None,
         };
 
         let result = backend.run(request).await.unwrap();
@@ -2048,6 +2064,7 @@ mod tests {
             temperature: None,
             max_tokens: None,
             max_turns: None,
+            reasoning: None,
         };
 
         let result = backend.run(request).await.unwrap();
@@ -2100,6 +2117,7 @@ mod tests {
             temperature: Some(0.0),
             max_tokens: Some(512),
             max_turns: None,
+            reasoning: None,
         };
 
         let result = backend.run(request).await.unwrap();
@@ -2188,6 +2206,7 @@ mod tests {
             temperature: None,
             max_tokens: None,
             max_turns: Some(6),
+            reasoning: None,
         });
 
         let result = backend.run(request).await.unwrap();
@@ -2217,7 +2236,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn retries_no_changes_then_succeeds() {
+    async fn a_no_changes_attempt_is_not_retried() {
         let dir = tempfile::tempdir().unwrap();
         init_repo(dir.path());
         let provider = Arc::new(MockProvider::with_script(
@@ -2267,18 +2286,25 @@ mod tests {
             temperature: None,
             max_tokens: None,
             max_turns: Some(6),
+            reasoning: None,
         });
 
-        let result = backend.run(request).await.unwrap();
-        assert_eq!(result.outcome, Outcome::Succeeded);
-        assert_eq!(result.files_changed, vec!["hello.txt"]);
+        let err = backend.run(request).await.expect_err("NoChanges must stop");
+        assert!(
+            matches!(err, CoderError::NoChanges),
+            "a read-only exhausted attempt must not start another identical retry: {err}"
+        );
         let roles: Vec<String> = calls
             .lock()
             .unwrap()
             .iter()
             .map(|(role, _)| role.clone())
             .collect();
-        assert_eq!(roles, vec!["coder".to_string(), "repair".to_string()]);
+        assert_eq!(
+            roles,
+            vec!["coder".to_string()],
+            "repair must not run after a NoChanges stall"
+        );
     }
 
     #[tokio::test]

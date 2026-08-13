@@ -372,6 +372,7 @@ fn build_request(
         temperature: Some(0.1),
         max_tokens: None,
         max_turns: Some(max_turns),
+        reasoning: None,
     };
     let disabled = CoderRoleConfig {
         model: "scoring".to_string(),
@@ -380,6 +381,7 @@ fn build_request(
         temperature: None,
         max_tokens: None,
         max_turns: Some(2),
+        reasoning: None,
     };
     let mut task = CoderTask::new(scenario.name, scenario.task);
     task.success_criteria = scenario
@@ -422,6 +424,7 @@ fn build_request(
             prompt_dir: None,
             edit: Default::default(),
             workspace_build: Default::default(),
+            offered_tools: None,
         },
         attempt: 0,
         prior_feedback: Vec::new(),

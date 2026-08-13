@@ -94,14 +94,18 @@ impl OpenAiCompatibleProvider {
 
     /// Inject the per-role sampling overrides into an already-built request body. Applied on both
     /// the blocking and streaming paths so the two never drift.
-    fn apply_role_tuning(&self, body: &mut Value) {
+    fn apply_role_tuning(&self, body: &mut Value, request: &CompletionRequest) {
         if let Some(t) = self.temperature {
             body["temperature"] = json!(t);
         }
-        if let Some(effort) = &self.reasoning_effort {
+        let effort = request
+            .reasoning
+            .as_deref()
+            .or(self.reasoning_effort.as_deref());
+        if let Some(effort) = effort {
             // OpenAI-compatible reasoning control: `off` disables thinking; otherwise pass the
             // effort level. OpenRouter and OpenAI both accept the `reasoning` object shape.
-            body["reasoning"] = match effort.as_str() {
+            body["reasoning"] = match effort {
                 "off" | "none" | "disabled" => json!({ "enabled": false }),
                 other => json!({ "effort": other }),
             };
@@ -228,7 +232,7 @@ impl Provider for OpenAiCompatibleProvider {
         let name_map = build_tool_name_map(&request.tools);
         let model = self.model();
         let mut body = to_openai_request(&model, &request, &name_map);
-        self.apply_role_tuning(&mut body);
+        self.apply_role_tuning(&mut body, &request);
 
         let response = self
             .client
@@ -266,7 +270,7 @@ impl Provider for OpenAiCompatibleProvider {
         let name_map = build_tool_name_map(&request.tools);
         let model = self.model();
         let mut body = to_openai_request(&model, &request, &name_map);
-        self.apply_role_tuning(&mut body);
+        self.apply_role_tuning(&mut body, &request);
         body["stream"] = json!(true);
         // Ask for the trailing usage chunk so streamed calls report token counts (latency journal).
         body["stream_options"] = json!({ "include_usage": true });
@@ -667,6 +671,14 @@ mod wire_seam {
             body.get("reasoning").is_none(),
             "an unset role reasoning level must leave the provider/model default alone"
         );
+    }
+
+    #[tokio::test]
+    async fn request_reasoning_is_sent_when_the_provider_has_none() {
+        let mut request = one_turn();
+        request.reasoning = Some("high".into());
+        let body = sent_by_complete(|p| p, request).await;
+        assert_eq!(body["reasoning"], json!({ "effort": "high" }));
     }
 
     // ---- tools ----

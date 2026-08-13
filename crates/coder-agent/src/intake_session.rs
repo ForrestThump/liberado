@@ -169,6 +169,7 @@ mod tests {
             temperature: None,
             max_tokens: None,
             max_turns: Some(4),
+            reasoning: None,
         }
     }
 
@@ -197,6 +198,7 @@ mod tests {
                 prompt_dir: None,
                 edit: Default::default(),
                 workspace_build: Default::default(),
+                offered_tools: None,
             },
             attempt: 0,
             prior_feedback: Vec::new(),

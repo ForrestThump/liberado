@@ -58,6 +58,7 @@ async fn main() {
         temperature: Some(0.0),
         max_tokens: Some(8000),
         max_turns: Some(1),
+        reasoning: None,
     };
 
     println!("model:      {model}");

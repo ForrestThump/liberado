@@ -442,6 +442,7 @@ fn disabled_role(model: &str) -> CoderRoleConfig {
         temperature: None,
         max_tokens: None,
         max_turns: Some(0),
+        reasoning: None,
     }
 }
 
@@ -467,6 +468,7 @@ fn reviewer_role(
         temperature: configured.temperature.or(Some(0.0)),
         max_tokens: configured.max_tokens.or(Some(4000)),
         max_turns: Some(1),
+        reasoning: None,
     }
 }
 
@@ -648,6 +650,7 @@ mod tests {
                     temperature: Some(0.1),
                     max_tokens: None,
                     max_turns: Some(12),
+                    reasoning: None,
                 },
                 mode: CodingMode::Normal,
                 command_policy: tuning.command_policy.clone(),
@@ -861,6 +864,7 @@ mod tests {
                     temperature: None,
                     max_tokens: None,
                     max_turns: Some(5),
+                    reasoning: None,
                 },
                 mode: CodingMode::Explore,
                 command_policy: CommandPolicy::default(),

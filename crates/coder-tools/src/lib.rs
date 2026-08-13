@@ -90,6 +90,7 @@ pub struct CodingToolRuntime {
     edit: liberado_coder_core::EditConfig,
     background_jobs: Arc<Mutex<HashMap<String, BackgroundJob>>>,
     background_limits: BackgroundLimits,
+    offered_tools: Option<Vec<String>>,
 }
 
 struct BackgroundJob {
@@ -239,6 +240,7 @@ impl CodingToolRuntime {
             edit: liberado_coder_core::EditConfig::default(),
             background_jobs: Arc::new(Mutex::new(HashMap::new())),
             background_limits: BackgroundLimits::default(),
+            offered_tools: None,
         }
     }
 
@@ -262,6 +264,13 @@ impl CodingToolRuntime {
     /// Anchor-matching behaviour for `edit_file`.
     pub fn with_edit(mut self, config: liberado_coder_core::EditConfig) -> Self {
         self.edit = config;
+        self
+    }
+
+    /// Restrict the model-offered coding catalog to these names. `None` keeps the full set.
+    /// Executor-injected finish tools are not this list.
+    pub fn with_offered_tools(mut self, names: Option<Vec<String>>) -> Self {
+        self.offered_tools = names.filter(|n| !n.is_empty());
         self
     }
 
@@ -1832,7 +1841,7 @@ impl ToolRuntime for CodingToolRuntime {
         // view and two tools that match raw text — it pasted the numbered view into the text
         // tools in 14 of 41 calls in one run. oh-my-pi avoids this by construction: its
         // `edit.mode` is an enum. `hashline.enabled` is that enum, spelled as a boolean.
-        let full: Vec<ToolDef> = if self.hashline.enabled {
+        let mut full: Vec<ToolDef> = if self.hashline.enabled {
             full.into_iter()
                 .filter(|t| t.name != "edit_file" && t.name != "apply_patch")
                 .collect()
@@ -1842,12 +1851,12 @@ impl ToolRuntime for CodingToolRuntime {
                 .collect()
         };
         if self.path_policy.writes_disabled() {
-            full.into_iter()
-                .filter(|t| EXPLORE_TOOL_NAMES.contains(&t.name.as_str()))
-                .collect()
-        } else {
-            full
+            full.retain(|t| EXPLORE_TOOL_NAMES.contains(&t.name.as_str()));
         }
+        if let Some(names) = &self.offered_tools {
+            full.retain(|t| names.iter().any(|n| n == &t.name));
+        }
+        full
     }
 
     async fn invoke(&self, call: &ToolInvocation) -> Result<String, String> {
@@ -2077,6 +2086,22 @@ fn walk_files(
     policy: &PathPolicy,
     mut visit: impl FnMut(&Path, &str) -> bool,
 ) -> Result<(), ToolError> {
+    // A file path is a valid grep/list target. `read_dir` on a file is
+    // "The directory name is invalid. (os error 267)" on Windows.
+    if root.is_file() {
+        let rel = root
+            .file_name()
+            .map(|n| n.to_string_lossy().replace('\\', "/"))
+            .unwrap_or_default();
+        let _ = visit(root, &rel);
+        return Ok(());
+    }
+    if !root.is_dir() {
+        return Err(ToolError::BadRequest(format!(
+            "path is not a searchable file or directory: {}",
+            root.display()
+        )));
+    }
     let mut queue = VecDeque::from([root.to_path_buf()]);
     let mut visited = 0usize;
     while let Some(dir) = queue.pop_front() {
@@ -3482,6 +3507,21 @@ beta
         assert_eq!(result["matches"][0]["line"], 2);
     }
 
+    #[tokio::test]
+    async fn grep_on_a_file_path_searches_that_file() {
+        let (dir, runtime) = runtime();
+        std::fs::write(dir.path().join("notes.txt"), "alpha\nbeta\n").unwrap();
+        let result = runtime
+            .invoke_json(
+                "grep",
+                json!({"pattern": "beta", "path": "notes.txt", "output_mode": "content"}),
+            )
+            .await
+            .expect("grep of a file must not fail as an invalid directory");
+        assert_eq!(result["total"], 1);
+        assert_eq!(result["matches"][0]["path"], "notes.txt");
+    }
+
     // ── grep ─────────────────────────────────────────────────────────────────────────────
 
     /// The old `search_text` is still callable. A run started against an older catalog must not
@@ -4150,6 +4190,22 @@ beta
                 "catalog should contain {tool}, got: {names:?}"
             );
         }
+    }
+
+    #[test]
+    fn a_configured_offered_set_is_what_the_model_sees() {
+        let (_dir, runtime) = runtime();
+        let runtime = runtime.with_offered_tools(Some(vec![
+            "read_file".into(),
+            "write_file".into(),
+            "edit_file".into(),
+            "run_command".into(),
+        ]));
+        let names: Vec<String> = runtime.catalog().into_iter().map(|t| t.name).collect();
+        assert_eq!(
+            names,
+            vec!["read_file", "write_file", "edit_file", "run_command"]
+        );
     }
 
     #[tokio::test]

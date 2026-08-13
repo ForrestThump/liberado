@@ -116,6 +116,10 @@ pub struct CompletionRequest {
     /// beat the daemon default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    /// Per-request reasoning effort (`off` / `low` / `medium` / `high`). `None` leaves the
+    /// provider's configured default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning: Option<String>,
 }
 
 impl CompletionRequest {
@@ -128,6 +132,7 @@ impl CompletionRequest {
             temperature: None,
             max_tokens: None,
             model: None,
+            reasoning: None,
         }
     }
 
@@ -140,6 +145,12 @@ impl CompletionRequest {
     /// Run this call on `model` instead of the provider's configured one. `None` leaves it alone.
     pub fn with_model(mut self, model: Option<String>) -> Self {
         self.model = model;
+        self
+    }
+
+    /// Set per-request reasoning effort. `None` leaves the provider default.
+    pub fn with_reasoning(mut self, reasoning: Option<String>) -> Self {
+        self.reasoning = reasoning;
         self
     }
 

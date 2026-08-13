@@ -655,6 +655,7 @@ fn workspace_env(tuning: &CoderTuning) -> std::collections::BTreeMap<String, Str
 struct RoleBoundProvider {
     inner: Arc<dyn Provider>,
     model: String,
+    reasoning: Option<String>,
 }
 
 #[async_trait::async_trait]
@@ -665,7 +666,11 @@ impl Provider for RoleBoundProvider {
 
     async fn complete(&self, request: CompletionRequest) -> ProviderResult<CompletionResponse> {
         self.inner
-            .complete(request.with_model(Some(self.model.clone())))
+            .complete(
+                request
+                    .with_model(Some(self.model.clone()))
+                    .with_reasoning(self.reasoning.clone()),
+            )
             .await
     }
 
@@ -674,7 +679,11 @@ impl Provider for RoleBoundProvider {
         request: CompletionRequest,
     ) -> ProviderResult<CompletionStream> {
         self.inner
-            .complete_stream(request.with_model(Some(self.model.clone())))
+            .complete_stream(
+                request
+                    .with_model(Some(self.model.clone()))
+                    .with_reasoning(self.reasoning.clone()),
+            )
             .await
     }
 
@@ -697,6 +706,7 @@ impl CoderProviderFactory for RoleProviderFactory {
         Ok(Arc::new(RoleBoundProvider {
             inner: Arc::clone(&self.provider),
             model: config.model.clone(),
+            reasoning: config.reasoning.clone(),
         }))
     }
 }
@@ -727,6 +737,7 @@ mod reviewer_role_tests {
                 temperature: None,
                 max_tokens: None,
                 max_turns: Some(1),
+                reasoning: None,
             },
             ..CoderTuning::default()
         }
@@ -786,6 +797,29 @@ mod reviewer_role_tests {
             inner.last_request().and_then(|request| request.model),
             Some("critic-model".to_string()),
             "the configured role model must override the session provider model on the wire"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_role_provider_sends_configured_reasoning_effort() {
+        let inner = Arc::new(MockProvider::with_script(
+            "session-model",
+            [CompletionResponse::text("ok")],
+        ));
+        let factory = role_factory(Arc::clone(&inner) as Arc<dyn Provider>);
+        let mut critic = tuning_with_critic("critic-model").critic;
+        critic.reasoning = Some("high".into());
+        let provider = factory.provider_for("critic", &critic).unwrap();
+
+        provider
+            .complete(CompletionRequest::new(vec![Message::user("review")]))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            inner.last_request().and_then(|request| request.reasoning),
+            Some("high".to_string()),
+            "ACP coding construction must put role reasoning on the outbound request"
         );
     }
 

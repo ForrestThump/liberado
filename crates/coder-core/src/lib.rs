@@ -405,7 +405,7 @@ impl PathPolicy {
 }
 
 /// One configurable model/prompt role in a coder run.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct CoderRoleConfig {
     pub model: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -418,6 +418,10 @@ pub struct CoderRoleConfig {
     pub max_tokens: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_turns: Option<u32>,
+    /// Reasoning / thinking effort (`off` / `low` / `medium` / `high`). Mapped onto the
+    /// OpenAI-compatible `reasoning` body field. `None` leaves the provider default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning: Option<String>,
 }
 
 /// Completion-gate settings for a coder run (S1 of `docs/future-work/coding-tui-plan.md`).
@@ -734,6 +738,10 @@ pub struct CoderRunConfig {
     /// Build cache and warm-up (`[coder.workspace]`).
     #[serde(default)]
     pub workspace_build: WorkspaceBuildConfig,
+    /// Names of coding tools to offer the model. `None` / empty = the full pack catalog.
+    /// Executor finish tools (`submit_report`, scratchpad) are not this list.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub offered_tools: Option<Vec<String>>,
 }
 
 // ── review findings ───────────────────────────────────────────────────────────────────────────
@@ -1236,6 +1244,7 @@ mod tests {
             temperature: Some(0.1),
             max_tokens: Some(4096),
             max_turns: Some(8),
+            reasoning: None,
         }
     }
 
@@ -1271,6 +1280,7 @@ mod tests {
                 prompt_dir: None,
                 edit: Default::default(),
                 workspace_build: Default::default(),
+                offered_tools: None,
             },
             attempt: 0,
             prior_feedback: Vec::new(),
