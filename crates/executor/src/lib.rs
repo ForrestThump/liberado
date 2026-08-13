@@ -3409,6 +3409,7 @@ mod tests {
                     completion_tokens: tokens / 2,
                     total_tokens: tokens,
                     cached_prompt_tokens: None,
+                    reasoning_tokens: None,
                 }),
             }
         }

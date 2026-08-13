@@ -203,7 +203,13 @@ impl CodingToolRuntime {
         session_id: Option<&str>,
     ) -> Result<Self, ToolError> {
         match sandbox {
-            SandboxSpec::HostLocal => Self::new(root, command_policy, path_policy),
+            SandboxSpec::HostLocal => {
+                // A git worktree (compare trees, Paseo checkouts) has no gitignored
+                // path-deps. Copy them from the main checkout so `cargo check` can resolve.
+                let root = root.into();
+                let _ = liberado_coder_sandbox::provision_path_deps(&root, &root).await;
+                Self::new(root, command_policy, path_policy)
+            }
             SandboxSpec::Docker(spec) => {
                 let workspace = DockerWorkspace::new(root, spec, command_policy)?;
                 Ok(Self::from_workspace(workspace, path_policy))
@@ -1864,6 +1870,14 @@ impl ToolRuntime for CodingToolRuntime {
         if self.path_policy.writes_disabled() && !EXPLORE_TOOL_NAMES.contains(&call.name.as_str()) {
             return Err(format!(
                 "tool '{}' is not available in explore (read-only) mode",
+                call.name
+            ));
+        }
+        if let Some(names) = &self.offered_tools
+            && !names.iter().any(|n| n == &call.name)
+        {
+            return Err(format!(
+                "tool '{}' is not offered; search with run_command if you need grep",
                 call.name
             ));
         }
@@ -4205,6 +4219,29 @@ beta
         assert_eq!(
             names,
             vec!["read_file", "write_file", "edit_file", "run_command"]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_tool_not_in_the_offered_set_is_refused() {
+        let (_dir, runtime) = runtime();
+        let runtime = runtime.with_offered_tools(Some(vec![
+            "read_file".into(),
+            "write_file".into(),
+            "edit_file".into(),
+            "run_command".into(),
+        ]));
+        let err = runtime
+            .invoke(&liberado_provider::ToolInvocation {
+                id: "g1".into(),
+                name: "grep".into(),
+                arguments: json!({"pattern": "x", "path": "."}),
+            })
+            .await
+            .expect_err("grep must not run when it is not offered");
+        assert!(
+            err.contains("not offered"),
+            "refusal must name the gap, got: {err}"
         );
     }
 

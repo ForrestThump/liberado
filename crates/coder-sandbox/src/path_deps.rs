@@ -410,6 +410,28 @@ external = { path = "../outside/thing" }
         );
     }
 
+    /// Headless compare trees are HostLocal on a linked worktree: dest is the worktree itself.
+    #[tokio::test]
+    async fn a_linked_worktree_used_as_its_own_dest_gets_the_main_checkouts_deps() {
+        let (_guard, main, linked) = repo_with_linked_worktree();
+        std::fs::write(
+            linked.join("Cargo.toml"),
+            "[workspace.dependencies]\ndep = { path = \"vendored/crates/dep\" }\n",
+        )
+        .expect("manifest");
+        let vendored = main.join("vendored/crates/dep");
+        std::fs::create_dir_all(&vendored).expect("vendored");
+        std::fs::write(vendored.join("lib.rs"), "// source").expect("lib.rs");
+
+        let copied = provision_path_deps(&linked, &linked).await;
+
+        assert_eq!(copied, vec!["vendored".to_string()]);
+        assert!(
+            linked.join("vendored/crates/dep/lib.rs").is_file(),
+            "HostLocal on a git worktree must resolve cargo path-deps"
+        );
+    }
+
     #[tokio::test]
     async fn an_already_present_directory_is_not_overwritten() {
         let parent = tempfile::tempdir().expect("parent");

@@ -260,6 +260,9 @@ pub struct Usage {
     /// provider said nothing, which is not the same as zero — see [`cache_hit_rate`](Self::cache_hit_rate).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cached_prompt_tokens: Option<u32>,
+    /// Thinking tokens the backend reported. `None` means it said nothing, not zero.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_tokens: Option<u32>,
 }
 
 impl Usage {

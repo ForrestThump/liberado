@@ -314,6 +314,7 @@ mod tests {
                 completion_tokens: 1024,
                 total_tokens: 2224,
                 cached_prompt_tokens: None,
+                reasoning_tokens: None,
             }),
         };
         let mock = MockProvider::with_script("m", [capped.clone(), capped]);

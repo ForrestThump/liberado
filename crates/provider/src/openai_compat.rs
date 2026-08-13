@@ -387,11 +387,20 @@ fn parse_usage(u: &Value) -> Option<Usage> {
         })
         .or_else(|| u.get("cached_tokens").and_then(Value::as_u64))
         .map(|v| v as u32);
+    // OpenRouter/OpenAI: `completion_tokens_details.reasoning_tokens`. Some backends
+    // also put `reasoning_tokens` at the top of `usage`.
+    let reasoning_tokens = u
+        .get("completion_tokens_details")
+        .and_then(|d| d.get("reasoning_tokens"))
+        .and_then(Value::as_u64)
+        .or_else(|| u.get("reasoning_tokens").and_then(Value::as_u64))
+        .map(|v| v as u32);
     Some(Usage {
         prompt_tokens: field("prompt_tokens"),
         completion_tokens: field("completion_tokens"),
         total_tokens: field("total_tokens"),
         cached_prompt_tokens,
+        reasoning_tokens,
     })
 }
 
@@ -468,6 +477,22 @@ mod tests {
         let u = parse_usage(&silent).unwrap();
         assert_eq!(u.cached_prompt_tokens, None);
         assert_eq!(u.cache_hit_rate(), None);
+        assert_eq!(u.reasoning_tokens, None);
+    }
+
+    #[test]
+    fn reasoning_tokens_are_read_under_each_backend_spelling() {
+        let nested = json!({
+            "prompt_tokens": 100, "completion_tokens": 20, "total_tokens": 120,
+            "completion_tokens_details": { "reasoning_tokens": 33 }
+        });
+        assert_eq!(parse_usage(&nested).unwrap().reasoning_tokens, Some(33));
+
+        let top = json!({
+            "prompt_tokens": 100, "completion_tokens": 20, "total_tokens": 120,
+            "reasoning_tokens": 19
+        });
+        assert_eq!(parse_usage(&top).unwrap().reasoning_tokens, Some(19));
     }
 
     #[test]
