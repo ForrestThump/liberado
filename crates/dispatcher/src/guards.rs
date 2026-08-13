@@ -194,6 +194,7 @@ fn referenced_grants(action: &DispatchAction) -> Vec<&str> {
         DispatchAction::ExecuteDirect {
             seed_calls,
             relevant_mcps,
+            ..
         } => seed_calls
             // The tool name whole, not `mcp_of` it: this is the one place the action is specific
             // enough to check a per-tool grant, and discarding that was the precision loss.
@@ -374,6 +375,7 @@ mod tests {
                     args: serde_json::json!({}),
                 }],
                 relevant_mcps: Vec::new(),
+                delivery: Delivery::Summarize,
             },
             confidence,
             rationale: "test".into(),
@@ -562,6 +564,7 @@ mod tests {
                     args: serde_json::json!({}),
                 }],
                 relevant_mcps: vec!["tasks-mcp".into(), "email-mcp".into()],
+                delivery: Delivery::Summarize,
             },
             confidence: 0.95,
             rationale: "test".into(),
@@ -583,6 +586,7 @@ mod tests {
             action: DispatchAction::ExecuteDirect {
                 seed_calls: Vec::new(),
                 relevant_mcps: vec!["tasks-mcp".into()],
+                delivery: Delivery::Summarize,
             },
             confidence: 0.95,
             rationale: "test".into(),

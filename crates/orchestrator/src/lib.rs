@@ -912,6 +912,7 @@ impl Orchestrator {
                 DispatchAction::ExecuteDirect {
                     seed_calls,
                     relevant_mcps,
+                    delivery,
                 } => {
                     // The direct path has no `Depth` to select a budget from — it is always the
                     // shallow one — so the override is applied here rather than in `budget_for`.
@@ -935,13 +936,25 @@ impl Orchestrator {
                             .filter(|name| relevant_mcps.contains(name))
                             .collect()
                     };
+                    // Same `research` derivation as the DispatchSubagent arm: whether every MCP
+                    // this dispatch can reach is read-only. Used to decide whether the output
+                    // contract asks for a relayable summary (chat delegate) or nothing (action).
+                    let research = self.delivery_consequence_ok(&allowed_mcps);
+                    let mut instructions = DIRECT_INSTRUCTIONS.to_string();
+                    instructions.push_str(&self.output_contract(
+                        &delivery,
+                        &allowed_mcps,
+                        research,
+                    ));
                     tracing::info!(
                         seed_count = seed_calls.len(),
                         allowed_mcps = allowed_mcps.len(),
+                        research,
+                        delivery = delivery.label(),
                         "building execute-direct task"
                     );
-                    let task = Task::new(DIRECT_INSTRUCTIONS, goal).with_seed(seed_calls);
-                    let report = if allowed_mcps.is_empty() {
+                    let task = Task::new(instructions, goal).with_seed(seed_calls);
+                    let mut report = if allowed_mcps.is_empty() {
                         self.execute(&direct_budget, &NoMcpRuntime, task).await?
                     } else {
                         let provenance =
@@ -956,6 +969,8 @@ impl Orchestrator {
                         report.deferred_to_human = deferred_flag_of(&deferral);
                         report
                     };
+                    self.deliver(&mut report, &delivery, &allowed_mcps, trigger_correlation)
+                        .await?;
                     tracing::Span::current().record("disposition", "reported");
                     tracing::info!(outcome = ?report.outcome, "execute-direct completed");
                     Ok(Disposition::Reported(report))
@@ -2869,6 +2884,7 @@ mod tests {
             action: DispatchAction::ExecuteDirect {
                 seed_calls: Vec::new(),
                 relevant_mcps: Vec::new(),
+                delivery: Delivery::Summarize,
             },
             confidence: 0.9,
             rationale: "simple".into(),
@@ -3146,6 +3162,7 @@ mod tests {
                         action: DispatchAction::ExecuteDirect {
                             seed_calls: Vec::new(),
                             relevant_mcps: Vec::new(),
+                            delivery: Delivery::Summarize,
                         },
                         confidence: 0.9,
                         rationale: "test".into(),

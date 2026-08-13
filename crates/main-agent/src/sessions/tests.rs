@@ -1,5 +1,6 @@
 use super::*;
 use async_trait::async_trait;
+use liberado_common::Delivery;
 use liberado_conversation_store::{ConversationStore, StoreError};
 use liberado_executor::Budget;
 use liberado_provider::{
@@ -609,6 +610,7 @@ async fn a_delegated_subagent_becomes_a_background_session_under_the_chat_that_a
         action: DispatchAction::ExecuteDirect {
             seed_calls: Vec::new(),
             relevant_mcps: Vec::new(),
+            delivery: Delivery::Summarize,
         },
         confidence: 0.95,
         rationale: "routine lookup".into(),
@@ -797,6 +799,7 @@ async fn execute_direct_decision_falls_through_to_normal_execution() {
         action: DispatchAction::ExecuteDirect {
             seed_calls: Vec::new(),
             relevant_mcps: Vec::new(),
+            delivery: Delivery::Summarize,
         },
         confidence: 0.95,
         rationale: "trivial".into(),
@@ -890,6 +893,7 @@ async fn sessions_for_narrowing_test(
         action: DispatchAction::ExecuteDirect {
             seed_calls: Vec::new(),
             relevant_mcps,
+            delivery: Delivery::Summarize,
         },
         confidence: 0.9,
         rationale: "test".into(),

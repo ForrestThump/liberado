@@ -31,32 +31,29 @@ researched.
 > relay contract reaches the **subagent's actual system prompt**, with the vault and acting paths
 > pinned alongside. The must-not-regress pair is covered in `main-agent/src/sessions/tests.rs`.
 
-## `ExecuteDirect` has the same gap, deliberately left open (2026-08-03)
+## `ExecuteDirect` has the same gap, now closed
 
 A chat `delegate` goes through the dispatch pack to `dispatcher.dispatch()`, which may classify it
-as **`ExecuteDirect`** rather than `DispatchSubagent`. That branch builds its task from
-[`DIRECT_INSTRUCTIONS`](../../../crates/orchestrator/src/lib.rs#L107) alone and appends **no output
+as **`ExecuteDirect`** rather than `DispatchSubagent`. That branch used to build its task from
+[`DIRECT_INSTRUCTIONS`](../../../crates/orchestrator/src/lib.rs#L107) alone and append **no output
 contract** — and those instructions ask for a *"concise, high-signal result"*, which is the same
 "short" contract that caused the original bug.
 
-So the gap is structurally real. It is left open on purpose, for two reasons:
+The destination is now on the action. `ExecuteDirect` carries `Delivery` (default
+`Summarize`, same as `DispatchSubagent`). The orchestrator then calls `output_contract` and
+`deliver` on the same path the subagent arm already used:
 
-1. **`ExecuteDirect` carries no `Delivery`.** `DispatchSubagent` has one, which is how
-   `output_contract` knows a report is being relayed to a conversation rather than filed. Direct
-   execution has no such field — its report always goes back as a summary, to a chat *or* to a cron
-   brief *or* to a vault reaction, and nothing distinguishes them.
-2. **A blanket fix would be a token regression on the largest bucket.** Appending `relay_directive`
-   to every read-only `ExecuteDirect` tells cron and vault-triggered runs to write full documents
-   too. Those are `orchestrator`-role work, which is 92.8% of all token spend
-   ([`token-economics-findings-2026-08.md`](../token-economics-findings-2026-08.md)) — paying document
-   output on every reactive lookup to fix a chat-only provenance problem.
+- research + `Summarize` (a chat relay) gets `relay_directive`
+- acting work stays on the short baseline — no blanket document contract
+- `Delivery::Vault` gets the document contract and the orchestrator files the report
 
-**Practical severity is low**, which is why this is a note and not a deliverable. The classifier picks
-`ExecuteDirect` when a few steps suffice, so its summary usually *is* the whole answer — the
-fabrication risk was specific to research, where a lot is gathered and then discarded. The real fix
-is to give direct execution a destination it can reason about, not to append a directive
-unconditionally. `execute_direct_gets_no_output_contract_today` pins the current behaviour so this
-stays a decision rather than an accident.
+Pinned by `a_research_shaped_execute_direct_to_chat_gets_the_relay_contract`,
+`an_acting_execute_direct_gets_no_output_contract`, and
+`an_execute_direct_filed_to_the_vault_gets_the_document_contract`.
+
+A blanket `relay_directive` on every read-only `ExecuteDirect` would still be wrong: cron and
+vault-triggered lookups are the large token bucket. The destination is what makes the contract
+safe to attach.
 
 ## What happens
 

@@ -1,6 +1,6 @@
 use super::*;
 use crate::helpers::*;
-use liberado_common::{McpDescriptor, WriteProvenance, event_source};
+use liberado_common::{Delivery, McpDescriptor, WriteProvenance, event_source};
 use liberado_orchestrator::Disposition;
 use liberado_session::TerminalKind;
 use std::path::Path;
@@ -487,6 +487,7 @@ async fn a_cron_firing_is_recorded_as_a_background_session_instead_of_vanishing(
         action: DispatchAction::ExecuteDirect {
             seed_calls: Vec::new(),
             relevant_mcps: Vec::new(),
+            delivery: Delivery::Summarize,
         },
         confidence: 0.95,
         rationale: "a nightly summary is routine".into(),
@@ -783,6 +784,7 @@ async fn a_reaction_whose_execution_blew_up_says_so_instead_of_blaming_a_missing
         action: DispatchAction::ExecuteDirect {
             seed_calls: Vec::new(),
             relevant_mcps: Vec::new(),
+            delivery: Delivery::Summarize,
         },
         confidence: 0.95,
         rationale: "routine".into(),
@@ -913,6 +915,7 @@ async fn pools_are_authority_segregated() {
         action: DispatchAction::ExecuteDirect {
             seed_calls: Vec::new(),
             relevant_mcps: vec!["shared-mcp".into()],
+            delivery: Delivery::Summarize,
         },
         confidence: 0.9,
         rationale: "test".into(),
@@ -1156,6 +1159,7 @@ async fn daemon_acts_on_a_decision_via_the_orchestrator() {
         action: DispatchAction::ExecuteDirect {
             seed_calls: Vec::new(),
             relevant_mcps: Vec::new(),
+            delivery: Delivery::Summarize,
         },
         confidence: 0.95,
         rationale: "trivial".into(),
@@ -1266,6 +1270,7 @@ async fn daemon_emits_a_proposal_for_a_high_consequence_action() {
                 args: serde_json::json!({ "to": "boss@example.com" }),
             }],
             relevant_mcps: Vec::new(),
+            delivery: Delivery::Summarize,
         },
         confidence: 0.95,
         rationale: "send the requested email".into(),
@@ -1399,6 +1404,7 @@ async fn daemon_downgrades_a_zone_restricted_seed_call_to_a_proposal() {
                 args: serde_json::json!({ "path": "reviews/q1.md" }),
             }],
             relevant_mcps: Vec::new(),
+            delivery: Delivery::Summarize,
         },
         confidence: 0.95,
         rationale: "file the review note".into(),
@@ -2541,6 +2547,7 @@ async fn known_session_profile_still_dispatches() {
         action: DispatchAction::ExecuteDirect {
             seed_calls: Vec::new(),
             relevant_mcps: Vec::new(),
+            delivery: Delivery::Summarize,
         },
         confidence: 0.95,
         rationale: "profile ok".into(),
@@ -2692,6 +2699,7 @@ async fn l9_cron_event_becomes_joinable_dispatched_session() {
         action: DispatchAction::ExecuteDirect {
             seed_calls: Vec::new(),
             relevant_mcps: Vec::new(),
+            delivery: Delivery::Summarize,
         },
         confidence: 0.95,
         rationale: "L9 routine cron".into(),
@@ -2991,6 +2999,7 @@ async fn l9_webhook_event_becomes_joinable_dispatched_session() {
         action: DispatchAction::ExecuteDirect {
             seed_calls: Vec::new(),
             relevant_mcps: Vec::new(),
+            delivery: Delivery::Summarize,
         },
         confidence: 0.95,
         rationale: "webhook task".into(),
@@ -3169,6 +3178,7 @@ async fn l9_webhook_session_triggers_notifier_deliver_cron() {
         action: DispatchAction::ExecuteDirect {
             seed_calls: Vec::new(),
             relevant_mcps: Vec::new(),
+            delivery: Delivery::Summarize,
         },
         confidence: 0.95,
         rationale: "notify task".into(),
@@ -3322,6 +3332,7 @@ async fn guard_conformance_capability_gap_agrees_both_sides() {
                 args: serde_json::json!({}),
             }],
             relevant_mcps: Vec::new(),
+            delivery: Delivery::Summarize,
         },
         confidence: 0.95,
         rationale: "test".into(),
@@ -3405,6 +3416,7 @@ async fn guard_conformance_consequence_agrees_on_external_mcp() {
                 args: serde_json::json!({}),
             }],
             relevant_mcps: Vec::new(),
+            delivery: Delivery::Summarize,
         },
         confidence: 0.95,
         rationale: "test".into(),
@@ -3489,6 +3501,7 @@ async fn guard_conformance_magnitude_agrees_on_sweeping_destructive() {
                 args: serde_json::json!({}),
             }],
             relevant_mcps: Vec::new(),
+            delivery: Delivery::Summarize,
         },
         confidence: 0.95,
         rationale: "test".into(),

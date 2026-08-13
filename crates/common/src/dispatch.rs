@@ -41,6 +41,11 @@ pub enum DispatchAction {
         /// whatever the model produced here in that case (deterministic, not model-trusted).
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         relevant_mcps: Vec<String>,
+        /// Where this dispatch's terminal [`Report`] should go — see [`Delivery`]. Defaults to
+        /// [`Delivery::Summarize`] (the pre-existing behaviour), so an omitted field is the safe
+        /// value and every persisted decision round-trips unchanged.
+        #[serde(default, skip_serializing_if = "Delivery::is_summarize")]
+        delivery: Delivery,
     },
 
     /// Hand off to a narrowly-scoped subagent with a disjoint context slice.
@@ -437,6 +442,7 @@ mod tests {
         let ed = DispatchAction::ExecuteDirect {
             seed_calls: vec![],
             relevant_mcps: vec![],
+            delivery: Delivery::Summarize,
         };
         let ds = DispatchAction::DispatchSubagent {
             goal: "x".into(),

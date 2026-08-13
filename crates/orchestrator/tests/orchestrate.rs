@@ -58,6 +58,7 @@ async fn execute_direct_scopes_the_runtime_to_the_granted_mcps() {
         action: DispatchAction::ExecuteDirect {
             seed_calls: Vec::new(),
             relevant_mcps: Vec::new(),
+            delivery: Delivery::Summarize,
         },
         confidence: 0.9,
         rationale: "simple".into(),
@@ -104,6 +105,7 @@ async fn execute_direct_relevant_mcps_narrows_within_the_granted_ceiling() {
         action: DispatchAction::ExecuteDirect {
             seed_calls: Vec::new(),
             relevant_mcps: vec!["tasks-mcp".into()],
+            delivery: Delivery::Summarize,
         },
         confidence: 0.9,
         rationale: "simple".into(),
@@ -133,6 +135,7 @@ async fn execute_direct_with_zero_grants_never_calls_the_factory() {
         action: DispatchAction::ExecuteDirect {
             seed_calls: Vec::new(),
             relevant_mcps: Vec::new(),
+            delivery: Delivery::Summarize,
         },
         confidence: 0.9,
         rationale: "simple".into(),
@@ -407,6 +410,7 @@ async fn execute_direct_downgrades_a_high_consequence_adaptive_call() {
         action: DispatchAction::ExecuteDirect {
             seed_calls: Vec::new(),
             relevant_mcps: Vec::new(),
+            delivery: Delivery::Summarize,
         },
         confidence: 0.9,
         rationale: "looked simple".into(),
@@ -477,6 +481,7 @@ async fn execute_direct_rejects_an_out_of_capability_adaptive_call() {
         action: DispatchAction::ExecuteDirect {
             seed_calls: Vec::new(),
             relevant_mcps: Vec::new(),
+            delivery: Delivery::Summarize,
         },
         confidence: 0.9,
         rationale: "looked simple".into(),
@@ -899,6 +904,7 @@ async fn per_run_capabilities_narrow_the_pool_ceiling_and_never_widen() {
         action: DispatchAction::ExecuteDirect {
             seed_calls: Vec::new(),
             relevant_mcps: Vec::new(),
+            delivery: Delivery::Summarize,
         },
         confidence: 0.9,
         rationale: "routine".into(),
@@ -1403,6 +1409,7 @@ async fn factory_setup_error_is_surfaced_by_orchestrator() {
         action: DispatchAction::ExecuteDirect {
             seed_calls: Vec::new(),
             relevant_mcps: vec!["tasks-mcp".into()],
+            delivery: Delivery::Summarize,
         },
         confidence: 0.9,
         rationale: "should fail".into(),
@@ -1775,21 +1782,16 @@ async fn acting_subagent_gets_no_output_contract() {
     );
 }
 
-/// Pins the **known gap**: `ExecuteDirect` gets no output contract, and its baseline instructions
-/// ask for a *"concise, high-signal result"* — the same "short" contract that caused the seam bug.
-/// A chat `delegate` the classifier judges simple lands here, so this path can still return an
-/// unshaped summary.
+/// B1: a research-shaped `ExecuteDirect` (read-only MCPs, `Delivery::Summarize`) now gets the
+/// relay output contract — the same protection `DispatchSubagent` already has. A chat `delegate`
+/// the classifier judges simple lands here, so without this the summary would be a 504-char
+/// status line and the face agent would fill the gap from memory.
 ///
-/// It is left this way deliberately, and this test exists so that stays a decision rather than an
-/// accident. `ExecuteDirect` carries no `Delivery`, so the orchestrator cannot tell a chat relay
-/// from a cron brief or a vault reaction; appending `relay_directive` unconditionally would tell
-/// every read-only direct execution to write a document, and that is the `orchestrator` role —
-/// 92.8% of token spend. The fix needs a destination, not a directive.
-///
-/// **If you make `ExecuteDirect` destination-aware, this test should start failing.** Change it
-/// then, and see `delegated-work-is-discarded-at-the-seam.md`.
+/// This replaces the `execute_direct_gets_no_output_contract_today` pin test: `ExecuteDirect`
+/// now has a delivery destination the orchestrator can reason about, so it attaches the matching
+/// output contract (see `delegated-work-is-discarded-at-the-seam.md`).
 #[tokio::test]
-async fn execute_direct_gets_no_output_contract_today() {
+async fn a_research_shaped_execute_direct_to_chat_gets_the_relay_contract() {
     let provider = Arc::new(MockProvider::with_script("mock", [long_findings_report()]));
     let ceiling = research_ceiling();
     let orch = Orchestrator::new(
@@ -1807,9 +1809,10 @@ async fn execute_direct_gets_no_output_contract_today() {
     let decision = DispatchDecision {
         action: DispatchAction::ExecuteDirect {
             seed_calls: Vec::new(),
-            // Read-only MCPs: research-shaped, so this is the case that *would* qualify for the
-            // relay contract if direct execution knew where its report was going.
+            // Read-only MCPs: research-shaped chat delegate.
             relevant_mcps: vec!["search".into()],
+            // Summarize = back to the main agent (chat relay).
+            delivery: Delivery::Summarize,
         },
         confidence: 0.9,
         rationale: "few steps suffice".into(),
@@ -1834,12 +1837,194 @@ async fn execute_direct_gets_no_output_contract_today() {
         .collect::<Vec<_>>()
         .join("\n");
     assert!(
-        !system_blob.contains("Anything you leave out is gone"),
-        "documented gap: ExecuteDirect has no relay contract. If you fixed that, update this test \
-         and the seam doc; got:\n{system_blob}"
+        system_blob.contains("Anything you leave out is gone"),
+        "research ExecuteDirect relayed to chat must get the relay contract; got:\n{system_blob}"
     );
     assert!(
         system_blob.contains("concise, high-signal"),
-        "and its baseline instructions still ask for concision — the shape of the original bug"
+        "DIRECT_INSTRUCTIONS baseline must still be present; got:\n{system_blob}"
+    );
+    assert!(
+        !system_blob.contains("FINISHED DOCUMENT"),
+        "a chat relay must NOT get the vault document contract; got:\n{system_blob}"
+    );
+}
+
+/// B1: an acting `ExecuteDirect` (External MCPs) with `Delivery::Summarize` gets NO output
+/// contract — the blanket-append guard that protects the 92.8% token bucket. Action work
+/// produces its own artifact, so a short status is the right report.
+#[tokio::test]
+async fn an_acting_execute_direct_gets_no_output_contract() {
+    let provider = Arc::new(MockProvider::with_script("mock", [long_findings_report()]));
+    let ceiling = research_ceiling();
+    let orch = Orchestrator::new(
+        provider.clone(),
+        CallRecordingFactory::default(),
+        ceiling.clone(),
+        research_catalog(),
+        Vec::new(),
+        Vec::new(),
+        std::env::temp_dir(),
+        ProposalSigner::random(),
+        "default",
+    );
+
+    let decision = DispatchDecision {
+        action: DispatchAction::ExecuteDirect {
+            seed_calls: Vec::new(),
+            // External MCP: acting work, not research.
+            relevant_mcps: vec!["email".into()],
+            delivery: Delivery::Summarize,
+        },
+        confidence: 0.9,
+        rationale: "send the summary".into(),
+    };
+
+    let _ = orch
+        .run(
+            decision,
+            "send a follow-up",
+            "chat-delegate-action",
+            &ceiling,
+        )
+        .await
+        .expect("run");
+
+    let req = provider.last_request().expect("executor called");
+    let system_blob: String = req
+        .messages
+        .iter()
+        .filter(|m| m.role == liberado_provider::Role::System)
+        .map(|m| m.content.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        !system_blob.contains("Anything you leave out is gone"),
+        "acting ExecuteDirect must not get the relay contract (token regression guard); got:\n{system_blob}"
+    );
+    assert!(
+        !system_blob.contains("FINISHED DOCUMENT"),
+        "acting ExecuteDirect must not get the vault contract; got:\n{system_blob}"
+    );
+    assert!(
+        system_blob.contains("concise, high-signal"),
+        "but the baseline DIRECT_INSTRUCTIONS must still be present; got:\n{system_blob}"
+    );
+}
+
+/// B1: an `ExecuteDirect` with `Delivery::Vault` gets the document output contract, and the
+/// orchestrator files the report to the vault — one deterministic tool call, no model reads the
+/// body on the way there.
+#[tokio::test]
+async fn an_execute_direct_filed_to_the_vault_gets_the_document_contract() {
+    let long_summary = "# Belt vs Chain: Full Comparison\n\n\
+                        ## Findings\n\n\
+                        Carbon belts need an eccentric BB or similar tensioning mechanism. \
+                        CyclingAbout's 135,000 km test confirms this is the main maintenance \
+                        difference from chain drives. Chain drives remain lighter and cheaper \
+                        for most riders according to BikeRadar's 2024 comparison. Gates Carbon \
+                        Drive is the dominant belt system, with tension windows that are tighter \
+                        than chains but still manageable.\n\n\
+                        ## Sources\n\n\
+                        - CyclingAbout long-term test (135,000 km)\n\
+                        - BikeRadar belt-drive review (2024)\n\
+                        - Hackaday tensioning notes\n\
+                        - Multiple manufacturer specifications for belt alignment\n\
+                        - Community forum reports on conversion kits";
+    let provider = Arc::new(MockProvider::with_script(
+        "mock",
+        [CompletionResponse::tool_calls(vec![ToolInvocation::new(
+            "c",
+            SUBMIT_REPORT_TOOL,
+            serde_json::json!({
+                "outcome": "succeeded",
+                "summary": long_summary,
+                "artifacts": [],
+                "new_high_signal_facts": ["belt needs eccentric BB"],
+            }),
+        )])],
+    ));
+    let runtime = InvocationRecordingRuntime::default();
+    let invoked = runtime.invoked.clone();
+    let ceiling = CapabilitySet::from_iter([
+        Capability::ExecuteMcp("search".into()),
+        Capability::Write(liberado_common::Zone::vault("Learning")),
+    ]);
+    let orch = Orchestrator::new(
+        provider.clone(),
+        InvocationRecordingFactory { runtime },
+        ceiling.clone(),
+        research_catalog(),
+        Vec::new(),
+        vec![(
+            "Learning".into(),
+            liberado_common::WriteClass::AgentWritable,
+        )],
+        std::env::temp_dir(),
+        ProposalSigner::random(),
+        "default",
+    )
+    .with_report_sink(liberado_orchestrator::ReportSink::new(
+        "turbovault",
+        "write_note",
+        "path",
+        "content",
+    ));
+
+    let decision = DispatchDecision {
+        action: DispatchAction::ExecuteDirect {
+            seed_calls: Vec::new(),
+            relevant_mcps: vec!["search".into()],
+            delivery: Delivery::Vault {
+                path: "Learning/belt-vs-chain.md".into(),
+            },
+        },
+        confidence: 0.9,
+        rationale: "direct save".into(),
+    };
+
+    let _ = orch
+        .run(
+            decision,
+            "compare belt vs chain and save to my vault",
+            "direct-vault-trigger",
+            &ceiling,
+        )
+        .await
+        .expect("run");
+
+    // The executor's system prompt carries the delivery document contract.
+    let req = provider.last_request().expect("executor called");
+    let system_blob: String = req
+        .messages
+        .iter()
+        .filter(|m| m.role == liberado_provider::Role::System)
+        .map(|m| m.content.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        system_blob.contains("FINISHED DOCUMENT"),
+        "vault-targeted ExecuteDirect must get the document contract; got:\n{system_blob}"
+    );
+    assert!(
+        system_blob.contains("Learning/belt-vs-chain.md"),
+        "the contract must name the destination path; got:\n{system_blob}"
+    );
+
+    // The orchestrator performed the write itself.
+    let calls = invoked.lock().unwrap().clone();
+    let write = calls
+        .iter()
+        .find(|c| c.name == "turbovault:write_note")
+        .expect("the orchestrator must have written the report to the vault");
+    assert_eq!(write.arguments["path"], "Learning/belt-vs-chain.md");
+    let content = write.arguments["content"].as_str().unwrap();
+    assert!(
+        content.contains("Belt vs Chain"),
+        "the report body is filed verbatim, not paraphrased: {content}"
+    );
+    assert!(
+        content.contains("direct-vault-trigger"),
+        "provenance correlation must appear in front matter: {content}"
     );
 }

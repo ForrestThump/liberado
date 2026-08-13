@@ -33,7 +33,7 @@ a second priority order.
 | **7** | **0.9 — implement one evidence-selected cost lever** | Select from trace evidence. Tool-output offload is a hypothesis, not permission to skip measurement. |
 | **8** | **A1 — read one day of deployed token-economics data** | Measure the existing production system before narrowing its catalogue. |
 | **9** | **A2 — narrow the tool catalogue** | Blocked on A1. Change only what A1 supports. |
-| **10** | **B1 — give `ExecuteDirect` an explicit delivery destination** | Close the remaining output-contract correctness gap before adding more delegation paths. |
+| **10** | ~~**B1 — give `ExecuteDirect` an explicit delivery destination**~~ **Landed.** | `ExecuteDirect` now carries `Delivery`; the orchestrator attaches the matching output contract. |
 | **11** | **C1 — replace unrestricted shell git with a capability-visible library path** | Close the residual authority hole before expanding parallel coding. |
 | **12** | **E4 — add directory enumeration in turbovault** | External prerequisite for the inbox layer. Record the upstream commit before continuing. |
 | **13** | **E5 — stop the turbomcp SSE reconnect storm** | Restore useful homelab diagnostics before dogfooding the inbox path. |
@@ -219,7 +219,7 @@ measurement is in [`token-economics-findings-2026-08.md`](token-economics-findin
 
 | # | What | Pointer |
 |---|---|---|
-| **B1** | **`ExecuteDirect` gets no output contract**, and `DIRECT_INSTRUCTIONS` asks for a *"concise, high-signal result"* — the shape of the seam bug. **Do not blanket-fix**: it carries no `Delivery`, so this would tell every cron and vault run to write documents. Needs a destination first. | [`delegated-work-is-discarded-at-the-seam.md`](archive/delegated-work-is-discarded-at-the-seam.md) |
+| **B1** | ~~**`ExecuteDirect` gets no output contract**~~ **Landed.** `ExecuteDirect` carries `Delivery`. A research chat relay gets `relay_directive`; acting work stays short; vault delivery files the report. The old pin was `execute_direct_gets_no_output_contract_today`. | [`delegated-work-is-discarded-at-the-seam.md`](archive/delegated-work-is-discarded-at-the-seam.md) |
 
 ## Band E — homelab dogfood asks (2026-08-08)
 
