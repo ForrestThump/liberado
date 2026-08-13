@@ -4,7 +4,7 @@ status: active
 authority: implementation
 domain: coding-harness
 canonical_for: mvl-e2e-integration-test
-open_items: false
+open_items: true
 last_verified: 2026-08-13
 ---
 
