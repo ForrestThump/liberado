@@ -51,6 +51,10 @@ deny:
 preflight:
     cargo run --locked -p liberado-cli -- ci check
 
+# Validate the Rust-native PR shepherd's failure-identity and state-machine guards.
+shepherd-self-test:
+    cargo run --locked -p liberado-cli -- shepherd --self-test
+
 # Verify every relative link in docs/ resolves to a real file.
 # Skips http(s) URLs and .secret files; CI gates on it (doc-links job).
 check-links:

@@ -63,13 +63,8 @@ jobs:
           cargo clippy --version
           cargo fmt --version
 
-      - name: Python for shepherd self-test
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.x"
-
       - name: PR shepherd self-test
-        run: python scripts/pr-shepherd.py --self-test
+        run: cargo run --locked -p liberado-cli -- shepherd --self-test
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2

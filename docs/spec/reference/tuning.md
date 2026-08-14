@@ -329,9 +329,9 @@ their natural scope is "this whole runner invocation" rather than "this deployme
 |---|---|---|
 | `LIBERADO_CODER_PUSH` | unset (off) | `1`/`true` makes `liberado-coder-run` **push** the branch it commits after a run. It always commits locally — that is what makes a run's output survive the workspace being deleted — but publishing to a shared remote is outward-facing, so it stays a deliberate choice. |
 | `LIBERADO_CODER_VERIFY_CMD` | unset | Replaces the default `cargo check --workspace --all-targets` acceptance verifier for a non-Rust stack. The non-empty-diff verifier always runs regardless. |
-| `SHEPHERD_PROFILE` | `coding-unattended` | Which session profile `pr-shepherd.py` starts goals under. It must name a profile whose grant **omits `AskHuman`**, or every goal parks on an intake question with nobody to answer it. |
+| `SHEPHERD_PROFILE` | `coding-unattended` | Which session profile `liberado shepherd` starts goals under. It must name a profile whose grant **omits `AskHuman`**, or every goal parks on an intake question with nobody to answer it. |
 
-`pr-shepherd.py` also reads `SHEPHERD_MAX_KICKBACKS` (2), `SHEPHERD_COLD_REVIEWS` (2),
+`liberado shepherd` also reads `SHEPHERD_MAX_KICKBACKS` (2), `SHEPHERD_COLD_REVIEWS` (2),
 `SHEPHERD_MAX_CONCURRENT` (2), `SHEPHERD_POLL_SECONDS` (120), `SHEPHERD_BASE` (`main`),
 `SHEPHERD_PROJECT` (`liberado`), and `LIBERADO_SERVER` (`http://localhost:4201`).
 

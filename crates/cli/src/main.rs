@@ -9,6 +9,7 @@
 //!   liberado chat [session-id]       the streaming terminal client of a running daemon
 //!   liberado config check            load + validate config, print a summary (or an error)
 //!   liberado ci check                run the cross-platform repository ship preflight
+//!   liberado shepherd --once          run the unattended PR shepherd once
 //!   liberado docs check-links         check relative Markdown links
 //!   liberado docs crate-map           check the generated crate map
 //!   liberado docs crate-map --write   regenerate the crate map
@@ -37,6 +38,7 @@ mod crate_map_cmd;
 mod docs_cmd;
 mod docs_meta_cmd;
 mod docs_site_cmd;
+mod shepherd_cmd;
 mod summarize_cmd;
 
 #[tokio::main]
@@ -60,6 +62,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             Some("check") => ci_cmd::check(),
             _ => Err("usage: liberado ci check".into()),
         },
+        Some("shepherd") => shepherd_cmd::run(args),
         Some("docs") => match args.next().as_deref() {
             Some("check-links") => docs_cmd::check_links(),
             Some("crate-map") => {
