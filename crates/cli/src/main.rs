@@ -9,6 +9,7 @@
 //!   liberado chat [session-id]       the streaming terminal client of a running daemon
 //!   liberado config check            load + validate config, print a summary (or an error)
 //!   liberado ci check                run the cross-platform repository ship preflight
+//!   liberado docs check-links         check relative Markdown links
 //!   liberado prompt \[profile\]        print the system prompt a chat under <profile> would get
 //!   liberado coder trace <id>        render a durable coding trace as a human transcript
 //!   liberado coder compare <a> <b>   side-by-side harness metrics for two native traces
@@ -24,6 +25,7 @@
 mod chat_client;
 mod ci_cmd;
 mod coder_cmd;
+mod docs_cmd;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -45,6 +47,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some("ci") => match args.next().as_deref() {
             Some("check") => ci_cmd::check(),
             _ => Err("usage: liberado ci check".into()),
+        },
+        Some("docs") => match args.next().as_deref() {
+            Some("check-links") => docs_cmd::check_links(),
+            _ => Err("usage: liberado docs check-links".into()),
         },
         Some("config") => match args.next().as_deref() {
             // `config check` is synchronous (no daemon): resolve the default dir via bootstrap

@@ -144,11 +144,31 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Regex-based checker for relative markdown links in docs/. Skips http(s)
-      # URLs and .secret files; fails the job on broken links.
+      - name: Checkout turbovault (sibling path dep)
+        uses: actions/checkout@v4
+        with:
+          repository: ForrestThump/turbovault
+          ref: develop
+          path: turbovault
+          token: ${{ secrets.SIBLINGS_TOKEN || github.token }}
+
+      - name: Checkout turbomcp (sibling path dep)
+        uses: actions/checkout@v4
+        with:
+          repository: ForrestThump/turbomcp
+          ref: develop
+          path: turbomcp
+          token: ${{ secrets.SIBLINGS_TOKEN || github.token }}
+
+      - name: Rust toolchain (from rust-toolchain.toml)
+        run: rustup show
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      # Native checker for relative Markdown links. Skips external URLs and .secret files.
       - name: Check docs links
-        shell: pwsh
-        run: ./scripts/check-doc-links.ps1
+        run: cargo run --locked -p liberado-cli -- docs check-links
 
       # Authority metadata, generated indexes, and obsolete path guards.
       # See docs/spec/reference/doc-authority.md and scripts/docs_meta.py.
