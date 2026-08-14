@@ -48,7 +48,7 @@ binding.
 | Unattended session spawn | `GoalSessionHub::start_background` — [`crates/session/src/hub.rs`](../../crates/session/src/hub.rs) | **Exists.** |
 | Routing a goal to the coding pack | `DomainHint::Coding` — [`crates/session/src/goal.rs`](../../crates/session/src/goal.rs) | **Exists, and is the default.** |
 | Playbooks as files | [`Skills/`](../../Skills/) — `cold-review-pr.md`, `dream.md` | **Exists**, but nothing binds a trigger to one. |
-| Driving an agent PR to ready-or-blocked | [`scripts/pr-shepherd.py`](../../scripts/pr-shepherd.py) | **Exists.** |
+| Driving an agent PR to ready-or-blocked | `liberado shepherd` | **Exists.** |
 | Bounded concurrency for agent sessions | fan-out cap of 3 (S6, PR #72) | **Exists**, reusable. |
 | Per-schedule turn budget and delivery silencing | `Schedule.max_turns`, `Schedule.deliver` | **Exists** on cron — a maintenance schedule that usually finds nothing already has a way not to spam. |
 

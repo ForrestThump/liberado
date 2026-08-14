@@ -382,7 +382,7 @@ without merge). F12 landed as PR #156.
 | **F7** | ~~**Reconcile orphaned parked sessions at daemon startup.**~~ **Landed (PR #144).** Startup keeps parks that a registered pack can resume and cancels store-only orphans after all packs register. | medium | `crates/session/`, `crates/server/` |
 | **F8** | ~~**`ModelRequestSent` event.**~~ **Landed (PR #117).** Request-time events record the offered tools and the resolved system-prompt hash. The common joined-log emitter remains 0.6. | small | `crates/executor/` |
 | **F11** | ~~**An unattended goal must not receive `AskHuman`.**~~ **Landed (PR #138).** `interactive: false` now narrows the effective grant at `goals_start`; accepted-payload tests bind the real call site. | medium | `crates/server/src/api/goals.rs` |
-| **F13** | ~~**Apply shepherd review labels only after success.**~~ **Landed (PR #139).** Pending review state settles from the goal's terminal result, and the default cold-review budget is 60 turns. | small | `scripts/pr-shepherd.py` |
+| **F13** | ~~**Apply shepherd review labels only after success.**~~ **Landed (PR #139).** Pending review state settles from the goal's terminal result, and the default cold-review budget is 60 turns. | small | `liberado shepherd` |
 | **F12** | ~~**The vault watcher reacts to every note you touch.**~~ **Landed (PR #156).** The watcher only emits for configured `capture_paths` and `#now` notes; `#hold-off` parks. | medium | `crates/daemon/src/vault_source.rs` |
 | **F9** | ~~**Cap concurrent background commands.**~~ **Landed (PR #146).** Two background jobs, one build-like, refused in band. | medium | `crates/coder-tools/` |
 

@@ -7,7 +7,7 @@ generated: true
 
 # Future Work
 
-Index of forward-looking work. **Generated** by `scripts/docs_meta.py generate`.
+Index of forward-looking work. **Generated** by `liberado docs metadata generate`.
 Do not edit the tables by hand — update document frontmatter and re-run generate.
 
 | Doc | Role |

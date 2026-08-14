@@ -38,7 +38,7 @@ sit beneath kernel/config/store. If a dependency feels awkward, the layering is 
 something rather than being in the way.
 
 - **What each crate is:** [`docs/spec/reference/crate-map.md`](docs/spec/reference/crate-map.md) —
-  generated from the manifests; regenerate with `powershell -File scripts/gen-crate-map.ps1`.
+  generated from the manifests; regenerate with `just gen-crate-map`.
 - **Why the layers are what they are:** [`docs/spec/architecture/contracts.md`](docs/spec/architecture/contracts.md).
 - **What is being worked on:** [`docs/roadmap.md`](docs/roadmap.md) — the living scoreboard.
 
@@ -121,7 +121,7 @@ production entry point still reads it.
 - `crates/coder-sandbox/` — workspaces, worktrees, checkpoints, preflight.
 - `crates/executor/` — the bounded decide/act loop shared by all agents.
 - `Skills/` — task playbooks (e.g. `cold-review-pr.md`).
-- `scripts/pr-shepherd.py` — drives agent PRs to ready-or-blocked on the same differential rule.
+- `liberado shepherd` — drives agent PRs to ready-or-blocked on the same differential rule.
 
 **A `succeeded` report is not accepted while `cargo check` is red.** The coding pack refuses it
 in the same executor conversation (`WorkspaceCompileGate`, PR #163). Partial, Failed, wrap-up

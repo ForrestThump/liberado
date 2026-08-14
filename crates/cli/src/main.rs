@@ -8,9 +8,20 @@
 //!   LIBERADO_VAULT=<vault> liberado  same, taking the vault from the environment
 //!   liberado chat [session-id]       the streaming terminal client of a running daemon
 //!   liberado config check            load + validate config, print a summary (or an error)
+//!   liberado ci check                run the cross-platform repository ship preflight
+//!   liberado shepherd --once          run the unattended PR shepherd once
+//!   liberado docs check-links         check relative Markdown links
+//!   liberado docs crate-map           check the generated crate map
+//!   liberado docs crate-map --write   regenerate the crate map
+//!   liberado docs metadata <command>  lint or generate documentation metadata
+//!   liberado docs site [--out <path>] generate the searchable documentation site
 //!   liberado prompt \[profile\]        print the system prompt a chat under <profile> would get
 //!   liberado coder trace <id>        render a durable coding trace as a human transcript
 //!   liberado coder compare <a> <b>   side-by-side harness metrics for two native traces
+//!   liberado coder compare prepare   print the pinned comparison plan
+//!   liberado coder compare reset     restore tracked files in a compare workspace
+//!   liberado coder summarize <path>  summarize a cross-harness compare run
+//!   liberado coder smoke              validate the coder runner process boundary
 //!   liberado coder import <file>     foreign (Kilo / OpenHands) → `.messages.json`
 //!
 //! `serve` runs in the foreground, hosting the vault watch loop and the chat/HTTP/SSE API until
@@ -21,7 +32,14 @@
 //! daemon. Reactions are logged to stderr by the server; stdout is left for data.
 
 mod chat_client;
+mod ci_cmd;
 mod coder_cmd;
+mod crate_map_cmd;
+mod docs_cmd;
+mod docs_meta_cmd;
+mod docs_site_cmd;
+mod shepherd_cmd;
+mod summarize_cmd;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -40,6 +58,37 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some("chat") => chat_client::run(args.next()).await,
         // Harness observability over durable coding traces (F1–F3). Synchronous — no daemon.
         Some("coder") => coder_cmd::run(args),
+        Some("ci") => match args.next().as_deref() {
+            Some("check") => ci_cmd::check(),
+            _ => Err("usage: liberado ci check".into()),
+        },
+        Some("shepherd") => shepherd_cmd::run(args),
+        Some("docs") => match args.next().as_deref() {
+            Some("check-links") => docs_cmd::check_links(),
+            Some("crate-map") => {
+                let arguments: Vec<_> = args.collect();
+                let write = match arguments.as_slice() {
+                    [] => false,
+                    [flag] if flag == "--write" => true,
+                    _ => return Err("usage: liberado docs crate-map [--write]".into()),
+                };
+                crate_map_cmd::check_or_write(&crate_map_cmd::repository_root()?, write)
+            }
+            Some("metadata") => {
+                let command = args.next().ok_or(
+                    "usage: liberado docs metadata <lint|generate|check-stale-rs|self-test>",
+                )?;
+                if args.next().is_some() {
+                    return Err(
+                        "usage: liberado docs metadata <lint|generate|check-stale-rs|self-test>"
+                            .into(),
+                    );
+                }
+                docs_meta_cmd::run(&crate_map_cmd::repository_root()?, &command)
+            }
+            Some("site") => docs_site_cmd::run(args),
+            _ => Err("usage: liberado docs <check-links|crate-map|metadata|site>".into()),
+        },
         Some("config") => match args.next().as_deref() {
             // `config check` is synchronous (no daemon): resolve the default dir via bootstrap
             // (passing None) and run the loader. Routed through the server so the cli keeps a single

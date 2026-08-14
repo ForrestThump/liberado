@@ -12,32 +12,32 @@ default:
 
 # Build the full native workspace (webui is WASM-only and excluded).
 build:
-    cargo build --workspace
+    cargo build --locked --workspace
 
 # Release build of the `liberado` binary.
 build-release:
-    cargo build --release --bin liberado
+    cargo build --locked --release --bin liberado
 
 # ── Test ─────────────────────────────────────────────────────────────────────
 
 # Run the whole workspace test suite (includes the layer-rules gate).
 test:
-    cargo test --workspace
+    cargo test --locked --workspace --no-fail-fast
 
 # Run tests for one crate: `just test-p dispatcher`
 test-p name:
-    cargo test -p liberado-{{name}}
+    cargo test --locked -p liberado-{{name}}
 
 # Run just the Tier-1 conformance suite (server, MockProvider, no network).
 test-t1:
-    cargo test -p liberado-server -- t1_conformance
+    cargo test --locked -p liberado-server -- t1_conformance
 
 # ── Quality gates (what CI runs) ─────────────────────────────────────────────
 
 # CI gate: fmt + clippy. Green is required before every commit.
 check:
     cargo fmt --all -- --check
-    cargo clippy --workspace --exclude liberado-webui --all-targets -- -D warnings
+    cargo clippy --locked --workspace --exclude liberado-webui --all-targets -- -D warnings
 
 # Auto-format the whole workspace.
 fmt:
@@ -47,10 +47,71 @@ fmt:
 deny:
     cargo deny check
 
+# Full local ship preflight. Runs through the native Liberado CLI on every host OS.
+preflight:
+    cargo run --locked -p liberado-cli -- ci check
+
+# Validate the Rust-native PR shepherd's failure-identity and state-machine guards.
+shepherd-self-test:
+    cargo run --locked -p liberado-cli -- shepherd --self-test
+
+# Print the resolved forge and daemon policy before running the shepherd.
+shepherd-config:
+    cargo run --locked -p liberado-cli -- shepherd config check
+
+# Inspect all open PRs without changing GitHub labels, rerunning CI, or starting coder goals.
+shepherd-dry-run:
+    cargo run --locked -p liberado-cli -- shepherd --dry-run --once
+
+# Validate the coder-runner process boundary.
+coder-smoke:
+    cargo run --locked -p liberado-cli -- coder smoke
+
+# CI-safe mock coder curriculum. No model key or network access.
+curriculum-mock:
+    cargo test --locked -p liberado-heuristics-tuner --lib mock_curriculum -- --nocapture
+
+# Run the heuristics tuner. It reads OPENROUTER_API_KEY from the environment.
+tuner:
+    cargo run --locked --quiet -p liberado-heuristics-tuner
+
 # Verify every relative link in docs/ resolves to a real file.
 # Skips http(s) URLs and .secret files; CI gates on it (doc-links job).
 check-links:
-    {{ if os() == "windows" { "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/check-doc-links.ps1" } else { "pwsh -NoProfile -File scripts/check-doc-links.ps1" } }}
+    cargo run --locked -p liberado-cli -- docs check-links
+
+# Verify that the checked-in crate map matches Cargo manifests.
+check-crate-map:
+    cargo run --locked -p liberado-cli -- docs crate-map
+
+# Regenerate the crate map from Cargo manifests.
+gen-crate-map:
+    cargo run --locked -p liberado-cli -- docs crate-map --write
+
+# Run the native documentation metadata self-test.
+docs-meta-test:
+    cargo run --locked -p liberado-cli -- docs metadata self-test
+
+# Validate document metadata, generated indexes, and stale Rust doc paths.
+docs-meta-check:
+    cargo run --locked -p liberado-cli -- docs metadata lint
+    cargo run --locked -p liberado-cli -- docs metadata check-stale-rs
+
+# Generate the searchable documentation site.
+docs-site out="":
+    cargo run --locked -p liberado-cli -- docs site {{if out == "" { "" } else { "--out " + out }}}
+
+# Summarize a Liberado, MVL, pi, or compare-run artifact.
+summarize path:
+    cargo run --locked -p liberado-cli -- coder summarize {{path}}
+
+# Print the pinned, non-running MVL comparison preparation plan.
+compare-prepare:
+    cargo run --locked -p liberado-cli -- coder compare prepare
+
+# Restore tracked files in a compare workspace; preserves untracked path dependencies.
+compare-reset path commit="":
+    cargo run --locked -p liberado-cli -- coder compare reset {{path}} {{if commit == "" { "" } else { "--commit " + commit }}}
 
 # ── Mutation testing ─────────────────────────────────────────────────────────
 
@@ -87,3 +148,39 @@ tui: # Run the ratatui TUI against the dev stack.
 [windows]
 stop-daemon: # Stop the running daemon.
     powershell -ExecutionPolicy Bypass -File scripts/stop-daemon.ps1
+
+[windows]
+webui: # Start the detached daemon that serves the built WebUI.
+    powershell -ExecutionPolicy Bypass -File scripts/start-webui.ps1
+
+[windows]
+webui-build: # Build the WebUI, then start the detached WebUI daemon.
+    powershell -ExecutionPolicy Bypass -File scripts/start-webui.ps1 -Build
+
+[windows]
+webui-dev: # Start Dioxus WebUI hot reload; requires a daemon on port 4201.
+    powershell -ExecutionPolicy Bypass -File scripts/start-webui-dev.ps1
+
+[windows]
+stop-webui: # Stop the detached WebUI daemon.
+    powershell -ExecutionPolicy Bypass -File scripts/stop-webui.ps1
+
+[windows]
+stop-webui-dev: # Stop the Dioxus WebUI development server.
+    powershell -ExecutionPolicy Bypass -File scripts/stop-webui-dev.ps1
+
+[windows]
+paseo-install: # Install liberado-acp and register its Paseo provider.
+    powershell -ExecutionPolicy Bypass -File scripts/install-paseo-liberado.ps1
+
+[windows]
+deploy-webui-homelab: # Build and ship the WebUI bundle to the homelab.
+    powershell -ExecutionPolicy Bypass -File scripts/deploy-webui-homelab.ps1
+
+[windows]
+deploy-homelab: # Build and deploy the daemon image to the homelab.
+    powershell -ExecutionPolicy Bypass -File scripts/deploy-homelab.ps1
+
+# Dispatch one ACP coding run through the same Node stdio boundary that Paseo uses.
+acp-dispatch *args:
+    node scripts/dispatch-acp-run.js {{args}}

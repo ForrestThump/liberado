@@ -92,6 +92,6 @@ Liberado is sequenced **daemon (life-ops) → chat surface → coding pack**, no
 - Do not use site-root paths like `/docs/...` (they break on GitHub blob views).
 - Archive pages must not be linked as "current" architecture without a status banner.
 
-**Checking links:** run `just check-links` (or `powershell -File scripts/check-doc-links.ps1` directly) to verify every relative markdown link in `docs/`, the repo-root `README.md`, and every `crates/*/ARCHITECTURE.md` resolves to a real file, resolved from each linking file's directory. External `http(s)`/protocol URLs and `.secret` files are skipped, so the check never needs network access. CI enforces the same check in the `doc-links` job.
+**Checking links:** run `just check-links` (or `cargo run --locked -p liberado-cli -- docs check-links`) to verify every relative markdown link in `docs/`, the repo-root `README.md`, and every `crates/*/ARCHITECTURE.md` resolves to a real file, resolved from each linking file's directory. External `http(s)`/protocol URLs and `.secret` files are skipped, so the check never needs network access. CI enforces the same check in the `doc-links` job.
 
 **Last updated:** 2026-07-31 — docs reorganized per `project/` → `spec/impl/future-work/validation/project` schema; `just check-links` doc-link checker added.

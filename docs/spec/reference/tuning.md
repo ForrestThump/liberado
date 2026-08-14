@@ -329,9 +329,18 @@ their natural scope is "this whole runner invocation" rather than "this deployme
 |---|---|---|
 | `LIBERADO_CODER_PUSH` | unset (off) | `1`/`true` makes `liberado-coder-run` **push** the branch it commits after a run. It always commits locally — that is what makes a run's output survive the workspace being deleted — but publishing to a shared remote is outward-facing, so it stays a deliberate choice. |
 | `LIBERADO_CODER_VERIFY_CMD` | unset | Replaces the default `cargo check --workspace --all-targets` acceptance verifier for a non-Rust stack. The non-empty-diff verifier always runs regardless. |
-| `SHEPHERD_PROFILE` | `coding-unattended` | Which session profile `pr-shepherd.py` starts goals under. It must name a profile whose grant **omits `AskHuman`**, or every goal parks on an intake question with nobody to answer it. |
+| `SHEPHERD_PROFILE` | `coding-unattended` | Which session profile `liberado shepherd` starts goals under. It must name a profile whose grant **omits `AskHuman`**, or every goal parks on an intake question with nobody to answer it. |
 
-`pr-shepherd.py` also reads `SHEPHERD_MAX_KICKBACKS` (2), `SHEPHERD_COLD_REVIEWS` (2),
+`liberado shepherd` can instead select a typed `[[shepherd.projects]]` entry with
+`--project <name>`. The entry controls the GitHub repository, selected check names, daemon coding
+project/profile, and retry/review limits. A configured check that GitHub does not report keeps the
+PR waiting; this prevents a renamed check or typo from being treated as success. `liberado shepherd
+config check --project <name>` prints the resolved policy before any forge mutation or goal start.
+
+The shepherd compares GitHub check/job conclusions. Local commands and their normal successful
+exit code (`0`) remain under `[projects.preflight]`; do not duplicate CI commands in the shepherd.
+
+Without a configured project, it reads `SHEPHERD_MAX_KICKBACKS` (2), `SHEPHERD_COLD_REVIEWS` (2),
 `SHEPHERD_MAX_CONCURRENT` (2), `SHEPHERD_POLL_SECONDS` (120), `SHEPHERD_BASE` (`main`),
 `SHEPHERD_PROJECT` (`liberado`), and `LIBERADO_SERVER` (`http://localhost:4201`).
 

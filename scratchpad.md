@@ -43,7 +43,7 @@ Hygiene is not a gate before these — keep coupling rules as you go; extract ke
 ### D detail — done
 
 1. **Mock curriculum (CI):** `cargo test -p liberado-heuristics-tuner --lib mock_curriculum` — smoke+core (and sample stress) via scripted MockProvider + real Liberado loop.
-2. Module: `heuristics-tuner/src/coder_curriculum_mock.rs`; script: `scripts/run-coder-curriculum-mock.ps1`.
+2. Module: `heuristics-tuner/src/coder_curriculum_mock.rs`; command: `just curriculum-mock`.
 3. **Hybrid/live sparse** already landed (`live_scaffold`, worker smoke); documented in `coder-eval-curriculum.md`.
 4. Live lessons (intake JSON resilience, contract-path mock worker) stay on lower rungs.
 
@@ -79,7 +79,7 @@ Hygiene is not a gate before these — keep coupling rules as you go; extract ke
 
 - **TUI maturity plan:** `docs/roadmap/tui-maturity-roadmap.md` (audit + T0–T8 vs Claude Code / Grok Build / OpenCode / …). **Coupling:** shared client core for TUI+WebUI (§1.1); no goals/chat logic only in `tui`.
 - Mock ladder (always): `cargo test -p liberado-coder-agent --test mock_intake_e2e`
-- Mock **curriculum** (always): `cargo test -p liberado-heuristics-tuner --lib mock_curriculum` (or `scripts/run-coder-curriculum-mock.ps1`)
+- Mock **curriculum** (always): `just curriculum-mock`
 - Live worker (opt-in): `cargo test -p liberado-coder-agent openrouter_deepseek_live_coding_smoke -- --ignored`
 - Hybrid intake: `cargo test -p liberado-coder-agent --test live_scaffold -- --ignored`
 

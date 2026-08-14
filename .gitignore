@@ -52,7 +52,7 @@ mutants.out*/
 .tmp/
 coder-traces/
 
-# Generated wiki-like docs site (scripts/gen-docs-site.py)
+# Generated wiki-like docs site (`just docs-site`)
 /docs-site/
 
 # Python bytecode

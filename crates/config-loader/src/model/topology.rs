@@ -72,6 +72,9 @@ pub struct Topology {
     /// in the goal payload) remain allowed.
     #[serde(default)]
     pub projects: Vec<ProjectConfig>,
+    /// Forge-side policy for unattended pull-request repair and review.
+    #[serde(default)]
+    pub shepherd: ShepherdConfig,
     /// How the conversational main agent presents itself and which tools it sees.
     /// Default: human-interfacer + built-in `delegate` tool (specialist MCPs stay on the dispatcher).
     pub main_agent: MainAgentConfig,
@@ -406,11 +409,55 @@ impl Default for Topology {
             pools: Vec::new(),
             session_profiles: Vec::new(),
             projects: Vec::new(),
+            shepherd: ShepherdConfig::default(),
             main_agent: MainAgentConfig::default(),
             webui: WebUiConfig::default(),
             roles: HashMap::new(),
         }
     }
+}
+
+/// Configuration for the PR shepherd. It observes forge checks; project preflight remains the
+/// separate local command policy under [`ProjectConfig::preflight`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct ShepherdConfig {
+    #[serde(default)]
+    pub projects: Vec<ShepherdProjectConfig>,
+}
+
+/// One repository the shepherd may operate on.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ShepherdProjectConfig {
+    /// Stable selector passed to `liberado shepherd --project <name>`.
+    pub name: String,
+    /// GitHub `OWNER/REPOSITORY`; passed to `gh --repo`, so this need not be the CLI checkout.
+    pub repository: String,
+    /// Declared coding project that the daemon authorizes for repair goals.
+    pub coding_project: String,
+    #[serde(default = "default_main_branch")]
+    pub base_branch: String,
+    #[serde(default = "default_shepherd_profile")]
+    pub profile: String,
+    /// Exact GitHub check/job names to compare. Empty means every reported check.
+    #[serde(default)]
+    pub check_names: Vec<String>,
+    #[serde(default)]
+    pub max_kickbacks: Option<usize>,
+    #[serde(default)]
+    pub cold_reviews: Option<usize>,
+    #[serde(default)]
+    pub cold_review_max_turns: Option<u32>,
+    #[serde(default)]
+    pub max_concurrent_goals: Option<usize>,
+    #[serde(default)]
+    pub poll_seconds: Option<u64>,
+}
+
+fn default_main_branch() -> String {
+    "main".into()
+}
+fn default_shepherd_profile() -> String {
+    "coding-unattended".into()
 }
 
 impl Topology {

@@ -36,9 +36,9 @@ vault_path = "/home/shiloh/vault"
 # write_class = "agent_writable"
 # # Ship preflight before coding goal Succeeded / ready PR (language-agnostic steps).
 # # When omitted for name "liberado", the coding pack uses built-in CI-equivalent cargo steps.
-# # Prefer a shared script that CI also calls (see scripts/preflight-ship.sh).
+# # Prefer the native CLI command that CI mirrors.
 # [projects.preflight.ship]
-# # script = "./scripts/preflight-ship.sh"
+# # script = "cargo run --locked -p liberado-cli -- ci check"
 # steps = [
 #   { name = "fmt", run = "cargo fmt --check" },
 #   { name = "clippy", run = "cargo clippy --workspace --exclude liberado-webui --all-targets -- -D warnings" },
@@ -49,6 +49,23 @@ vault_path = "/home/shiloh/vault"
 # [[projects]]
 # name = "notes-site"
 # root = "/home/shiloh/Code/notes-site"
+
+# Unattended PR repair/review. The shepherd observes forge check results; local command gates live
+# under the matching [[projects]].preflight configuration above.
+# [[shepherd.projects]]
+# name = "notes-site"
+# repository = "owner/notes-site"
+# coding_project = "notes-site"
+# base_branch = "main"
+# profile = "coding-unattended"
+# # Empty means all reported GitHub checks. Otherwise list exact check/job names. A named check
+# # that is absent keeps the PR waiting, so a rename or typo cannot silently pass CI.
+# check_names = []
+# max_kickbacks = 2
+# cold_reviews = 2
+# cold_review_max_turns = 60
+# max_concurrent_goals = 2
+# poll_seconds = 120
 
 # Coding modes. Each is a preset over the existing path/command policy — not a separate permission
 # system — selected by the goal payload `mode` ("plan" | "explore"), or by the older

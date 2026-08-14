@@ -8,7 +8,7 @@ generated: true
 # Document catalog
 
 Repository-wide catalog of managed documents (those with YAML frontmatter).
-**Generated** by `scripts/docs_meta.py generate`. Do not edit by hand.
+**Generated** by `liberado docs metadata generate`. Do not edit by hand.
 
 Authority model: [doc-authority.md](spec/reference/doc-authority.md).
 
