@@ -57,6 +57,15 @@ fn refused_succeeded(body: &str) -> String {
     )
 }
 
+/// Host failed (disk, OOM). The model cannot repair this; do not ask it to.
+fn refused_host_failure(body: &str) -> String {
+    format!(
+        "`submit_report` with outcome=succeeded was NOT accepted — the host failed, \
+         not the change. Your files are still on disk. Do not try to repair this. \
+         An operator must act.\n\n{body}"
+    )
+}
+
 #[async_trait]
 impl ReportGate for WorkspaceCompileGate {
     async fn accept(&self, report: &Report, wrapping_up: bool) -> Result<(), String> {
@@ -84,9 +93,13 @@ impl ReportGate for WorkspaceCompileGate {
         if pipeline.is_pass() {
             return Ok(());
         }
-        Err(refused_succeeded(
-            &crate::repair_feedback::format_pipeline_repair(&pipeline),
-        ))
+        let body = crate::repair_feedback::format_pipeline_repair(&pipeline);
+        if crate::repair_feedback::classify_pipeline(&pipeline)
+            == crate::repair_feedback::FailureClass::Infrastructure
+        {
+            return Err(refused_host_failure(&body));
+        }
+        Err(refused_succeeded(&body))
     }
 }
 
@@ -159,6 +172,17 @@ mod tests {
         assert!(
             shown.contains("partially_succeeded"),
             "the model must be told how to leave with half-finished work: {shown}"
+        );
+    }
+
+    #[test]
+    fn host_failure_does_not_ask_the_model_to_fix_compile_errors() {
+        let shown = refused_host_failure("FAILURE_CLASS: infrastructure\nno space on device");
+        assert!(shown.contains("host failed"), "{shown}");
+        assert!(shown.contains("operator"), "{shown}");
+        assert!(
+            !shown.contains("Fix the compile errors"),
+            "a full disk is not a red crate: {shown}"
         );
     }
 }

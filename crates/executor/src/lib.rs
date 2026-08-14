@@ -30,6 +30,7 @@ pub use budget::{Budget, ResourceLimit, ResourceUsage, TokenLimit, WallClockLimi
 pub use mvl::MvlSession;
 pub use risk_gated::RiskGatedToolRuntime;
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -370,6 +371,29 @@ pub trait RuntimeFactory: Send + Sync {
         allowed_mcps: &[String],
         provenance: WriteProvenance,
     ) -> Result<Box<dyn ToolRuntime>, RuntimeSetupError>;
+
+    /// Like [`runtime_for`](Self::runtime_for), but scoped to a per-worker workspace root.
+    ///
+    /// `workspace_root` is `Some(path)` when the worker must operate inside an isolated
+    /// filesystem workspace (a git worktree, in the coding pack's world) and `None` when the
+    /// worker is unconstrained. The **default** implementation ignores the root and behaves
+    /// exactly like [`runtime_for`](Self::runtime_for) — factories that do not care about
+    /// workspace isolation (the MCP registry, test mocks) never need to override this.
+    ///
+    /// Placement (backlog C7): the *seam* is kernel-side — an orchestrator that fans work out
+    /// passes the root through untouched — but the *isolation* is a pack concern. The concrete
+    /// worktree primitive lives in `coder-sandbox` (pack); the production caller builds the
+    /// workspaces and supplies a factory that roots each worker's runtime in one. The kernel
+    /// never reaches across the layer line for the primitive itself.
+    async fn runtime_for_in(
+        &self,
+        allowed_mcps: &[String],
+        provenance: WriteProvenance,
+        workspace_root: Option<PathBuf>,
+    ) -> Result<Box<dyn ToolRuntime>, RuntimeSetupError> {
+        let _ = workspace_root;
+        self.runtime_for(allowed_mcps, provenance).await
+    }
 }
 
 /// A unit of work for the engine: how to behave (`instructions`), what to do (`goal`), and an
@@ -1241,14 +1265,29 @@ impl Executor {
                                 && let Some(gate) = &self.report_gate
                                 && let Err(shown) = gate.accept(&report, wrapping_up).await
                             {
-                                tracing::info!(
-                                    turn,
-                                    outcome = ?report.outcome,
-                                    "submit_report succeeded was not accepted; handing the check back"
-                                );
                                 self.mvl_tool_started(turn, call);
                                 self.mvl_tool_result(turn, call, false, &shown);
-                                messages.push(Message::tool_result(&call.id, shown));
+                                messages.push(Message::tool_result(&call.id, shown.clone()));
+                                if shown
+                                    .to_ascii_lowercase()
+                                    .contains("failure_class: infrastructure")
+                                {
+                                    tracing::warn!(
+                                        turn,
+                                        "submit_report succeeded refused: host failed; not asking the model"
+                                    );
+                                    submitted_report = Some(Report {
+                                        outcome: Outcome::Failed,
+                                        summary: shown,
+                                        ..report
+                                    });
+                                } else {
+                                    tracing::info!(
+                                        turn,
+                                        outcome = ?report.outcome,
+                                        "submit_report succeeded was not accepted; handing the check back"
+                                    );
+                                }
                             } else {
                                 tracing::info!(turn, "subagent filed report");
                                 self.mvl_tool_started(turn, call);
@@ -2405,6 +2444,42 @@ mod tests {
             provider.received_requests().len(),
             2,
             "the first succeeded must be refused so the model gets another turn; a skipped gate would accept on turn 1"
+        );
+    }
+
+    struct RefuseInfrastructure;
+
+    #[async_trait]
+    impl ReportGate for RefuseInfrastructure {
+        async fn accept(&self, _report: &Report, _wrapping_up: bool) -> Result<(), String> {
+            Err("FAILURE_CLASS: infrastructure\nREPAIR_HINT: stop\nno space on device".into())
+        }
+    }
+
+    #[tokio::test]
+    async fn an_infrastructure_gate_refusal_ends_as_failed_without_asking_the_model() {
+        let (provider, exec) = executor(vec![submit(valid_report_args())], Budget::default());
+        let exec = exec.with_report_gate(Arc::new(RefuseInfrastructure));
+        let runtime = MockToolRuntime::new(&["search"], Ok("data".into()));
+
+        let report = exec
+            .execute(&runtime, Task::new("worker", "do it"))
+            .await
+            .expect("host failure must end the loop");
+
+        assert_eq!(report.outcome, Outcome::Failed);
+        assert!(
+            report
+                .summary
+                .to_ascii_lowercase()
+                .contains("infrastructure"),
+            "{}",
+            report.summary
+        );
+        assert_eq!(
+            provider.received_requests().len(),
+            1,
+            "the model must not get another turn to 'fix' a full disk"
         );
     }
 

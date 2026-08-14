@@ -227,6 +227,14 @@ pub struct SubDispatch {
     pub correlation_id: String,
     /// Human-readable label for the merged report.
     pub label: String,
+    /// Filesystem root the worker must operate inside, or `None` for an unconstrained worker.
+    ///
+    /// **Placement (C7):** this field is the kernel-side *seam*, not the isolation itself. The
+    /// orchestrator never creates or manages the workspace — it forwards the root to
+    /// [`RuntimeFactory::runtime_for_in`] unchanged, and the caller-supplied factory decides
+    /// what an isolated workspace means. The concrete git-worktree primitive
+    /// (`WorktreeWorkspace`) lives in `coder-sandbox` (pack).
+    pub workspace_root: Option<PathBuf>,
 }
 
 /// Errors from orchestrating a decision. (Tool-level failures are *not* here — the executor feeds
@@ -1324,6 +1332,11 @@ impl Orchestrator {
     /// Run multiple subagent dispatches in parallel, each capability-narrowed to the MCPs
     /// its sub-goal actually needs. Results are collected into a single merged Report.
     /// Bounded by `max_concurrent` (from `tuning.dispatch.max_concurrent_subagents`).
+    ///
+    /// When a [`SubDispatch`] carries a [`workspace_root`](SubDispatch::workspace_root), the
+    /// runtime factory is asked for a runtime scoped to that root via
+    /// [`RuntimeFactory::runtime_for_in`]. The caller creates and cleans up those workspaces.
+    /// Workers never fan out: a worker's runtime exposes no fan-out tool.
     pub async fn dispatch_parallel(
         &self,
         sub_dispatches: Vec<SubDispatch>,
@@ -1353,7 +1366,7 @@ impl Orchestrator {
             let provenance = WriteProvenance::agent(self.source.clone(), &sub.correlation_id);
             let runtime = self
                 .factory
-                .runtime_for(&sub.allowed_mcps, provenance)
+                .runtime_for_in(&sub.allowed_mcps, provenance, sub.workspace_root.clone())
                 .await?;
             // No explicit CapabilitySet on `SubDispatch` — derive from allowed_mcps against the
             // ceiling (same rules as `DispatchSubagent` with empty decision capabilities).
@@ -2625,6 +2638,7 @@ mod tests {
                 success_criteria: vec![],
                 correlation_id: "corr-a".into(),
                 label: "A".into(),
+                workspace_root: None,
             },
             SubDispatch {
                 goal: "do B".into(),
@@ -2632,6 +2646,7 @@ mod tests {
                 success_criteria: vec![],
                 correlation_id: "corr-b".into(),
                 label: "B".into(),
+                workspace_root: None,
             },
         ];
 
@@ -2707,6 +2722,7 @@ mod tests {
                 success_criteria: vec![],
                 correlation_id: "corr-a".into(),
                 label: "A".into(),
+                workspace_root: None,
             },
             SubDispatch {
                 goal: "do B".into(),
@@ -2714,6 +2730,7 @@ mod tests {
                 success_criteria: vec![],
                 correlation_id: "corr-b".into(),
                 label: "B".into(),
+                workspace_root: None,
             },
         ];
 
@@ -2763,6 +2780,7 @@ mod tests {
                 success_criteria: vec![],
                 correlation_id: "c1".into(),
                 label: "1".into(),
+                workspace_root: None,
             },
             SubDispatch {
                 goal: "task 2".into(),
@@ -2770,6 +2788,7 @@ mod tests {
                 success_criteria: vec![],
                 correlation_id: "c2".into(),
                 label: "2".into(),
+                workspace_root: None,
             },
         ];
 
@@ -2812,6 +2831,7 @@ mod tests {
             success_criteria: vec![],
             correlation_id: "c1".into(),
             label: "only".into(),
+            workspace_root: None,
         }];
 
         let report = orch
@@ -2908,6 +2928,7 @@ mod tests {
                 success_criteria: vec![],
                 correlation_id: "delegated-1".into(),
                 label: "D".into(),
+                workspace_root: None,
             }],
             1,
         )

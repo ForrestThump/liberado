@@ -10,6 +10,8 @@ repository.workspace = true
 
 [dependencies]
 async-trait = { workspace = true }
+liberado-coder-core = { workspace = true }
+liberado-coder-sandbox = { workspace = true }
 liberado-common = { workspace = true }
 liberado-dispatcher = { workspace = true }
 liberado-notify = { workspace = true }

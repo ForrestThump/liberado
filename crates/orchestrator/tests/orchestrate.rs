@@ -711,6 +711,7 @@ async fn dispatch_parallel_gates_each_sub_dispatch() {
         success_criteria: vec![],
         correlation_id: "sub-a".into(),
         label: "A".into(),
+        workspace_root: None,
     }];
 
     let report = orch
