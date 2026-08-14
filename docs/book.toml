@@ -1,7 +1,7 @@
 # Optional mdBook config for the repository docs/ tree.
 #
 # The searchable catalog is produced separately by:
-#   python scripts/gen-docs-site.py
+#   liberado docs site
 # That command writes index.html, search-index.json (with body text), mirrored
 # pages/, and SUMMARY.md into docs-site/ (or --out). That SUMMARY.md is not this
 # file's companion; mdBook uses docs/ as src, and you must supply or copy a

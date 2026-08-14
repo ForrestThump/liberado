@@ -13,6 +13,7 @@
 //!   liberado docs crate-map           check the generated crate map
 //!   liberado docs crate-map --write   regenerate the crate map
 //!   liberado docs metadata <command>  lint or generate documentation metadata
+//!   liberado docs site [--out <path>] generate the searchable documentation site
 //!   liberado prompt \[profile\]        print the system prompt a chat under <profile> would get
 //!   liberado coder trace <id>        render a durable coding trace as a human transcript
 //!   liberado coder compare <a> <b>   side-by-side harness metrics for two native traces
@@ -32,6 +33,7 @@ mod coder_cmd;
 mod crate_map_cmd;
 mod docs_cmd;
 mod docs_meta_cmd;
+mod docs_site_cmd;
 mod summarize_cmd;
 
 #[tokio::main]
@@ -67,7 +69,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 )?;
                 docs_meta_cmd::run(&crate_map_cmd::repository_root()?, &command)
             }
-            _ => Err("usage: liberado docs <check-links|crate-map|metadata>".into()),
+            Some("site") => docs_site_cmd::run(args),
+            _ => Err("usage: liberado docs <check-links|crate-map|metadata|site>".into()),
         },
         Some("config") => match args.next().as_deref() {
             // `config check` is synchronous (no daemon): resolve the default dir via bootstrap

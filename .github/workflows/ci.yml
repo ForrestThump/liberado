@@ -185,7 +185,7 @@ jobs:
         run: cargo run --locked -p liberado-cli -- docs metadata check-stale-rs
 
       - name: Docs site generator smoke
-        run: python scripts/gen-docs-site.py --out "${{ runner.temp }}/docs-site"
+        run: cargo run --locked -p liberado-cli -- docs site --out "${{ runner.temp }}/docs-site"
 
   rustdoc:
     name: cargo doc (broken intra-doc links denied)

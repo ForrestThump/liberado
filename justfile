@@ -73,6 +73,10 @@ docs-meta-check:
     cargo run --locked -p liberado-cli -- docs metadata lint
     cargo run --locked -p liberado-cli -- docs metadata check-stale-rs
 
+# Generate the searchable documentation site.
+docs-site out="":
+    cargo run --locked -p liberado-cli -- docs site {{if out == "" { "" } else { "--out " + out }}}
+
 # Summarize a Liberado, MVL, pi, or compare-run artifact.
 summarize path:
     cargo run --locked -p liberado-cli -- coder summarize {{path}}

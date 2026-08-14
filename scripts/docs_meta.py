@@ -17,7 +17,7 @@ from typing import Any
 
 @dataclass
 class DocRecord:
-    """Small read-only compatibility type used by the docs-site generator."""
+    """Small read-only compatibility type for older local integrations."""
 
     path: str
     meta: dict[str, Any] | None
@@ -25,7 +25,7 @@ class DocRecord:
 
 
 def configure_stdio() -> None:
-    """Keep the remaining Python docs-site helper safe on Windows consoles."""
+    """Keep this legacy compatibility module safe on Windows consoles."""
     for stream in (sys.stdout, sys.stderr):
         reconfigure = getattr(stream, "reconfigure", None)
         if callable(reconfigure):
@@ -58,7 +58,7 @@ def _split_frontmatter(text: str) -> tuple[dict[str, Any] | None, str]:
 
 
 def load_docs_from_tree(root: Path) -> list[DocRecord]:
-    """Read Markdown for the still-Python docs-site renderer."""
+    """Read Markdown for older integrations that imported this helper."""
     docs: list[DocRecord] = []
     for path in sorted((root / "docs").rglob("*.md")):
         if path.name == "session-profiles-next-actions.md":
