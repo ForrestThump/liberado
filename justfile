@@ -55,6 +55,10 @@ preflight:
 shepherd-self-test:
     cargo run --locked -p liberado-cli -- shepherd --self-test
 
+# Print the resolved forge and daemon policy before running the shepherd.
+shepherd-config:
+    cargo run --locked -p liberado-cli -- shepherd config check
+
 # Inspect all open PRs without changing GitHub labels, rerunning CI, or starting coder goals.
 shepherd-dry-run:
     cargo run --locked -p liberado-cli -- shepherd --dry-run --once

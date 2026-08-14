@@ -50,6 +50,22 @@ vault_path = "/home/shiloh/vault"
 # name = "notes-site"
 # root = "/home/shiloh/Code/notes-site"
 
+# Unattended PR repair/review. The shepherd observes forge check results; local command gates live
+# under the matching [[projects]].preflight configuration above.
+# [[shepherd.projects]]
+# name = "notes-site"
+# repository = "owner/notes-site"
+# coding_project = "notes-site"
+# base_branch = "main"
+# profile = "coding-unattended"
+# # Empty means all reported GitHub checks. Otherwise list exact check/job names.
+# check_names = []
+# max_kickbacks = 2
+# cold_reviews = 2
+# cold_review_max_turns = 60
+# max_concurrent_goals = 2
+# poll_seconds = 120
+
 # Coding modes. Each is a preset over the existing path/command policy — not a separate permission
 # system — selected by the goal payload `mode` ("plan" | "explore"), or by the older
 # `plan_mode` / `explore_mode` booleans. No extra topology is required to use them:

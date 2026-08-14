@@ -4499,6 +4499,8 @@ dependencies = [
  "futures",
  "liberado-coder-core",
  "liberado-common",
+ "liberado-config",
+ "liberado-config-loader",
  "liberado-server",
  "regex",
  "reqwest 0.12.28",

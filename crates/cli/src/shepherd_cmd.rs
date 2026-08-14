@@ -23,6 +23,8 @@ const BLOCKED: &str = "shepherd:blocked";
 #[derive(Clone)]
 struct Config {
     root: PathBuf,
+    repository: Option<String>,
+    check_names: Vec<String>,
     daemon: String,
     project: String,
     base: String,
@@ -43,9 +45,11 @@ impl Config {
     {
         Ok(std::env::var(key).ok().map_or(Ok(default), |v| v.parse())?)
     }
-    fn load() -> Result<Self, Box<dyn std::error::Error>> {
-        Ok(Self {
+    fn load(selected_project: Option<&str>) -> Result<Self, Box<dyn std::error::Error>> {
+        let mut config = Self {
             root: crate::crate_map_cmd::repository_root()?,
+            repository: None,
+            check_names: Vec::new(),
             daemon: Self::get("LIBERADO_SERVER", "http://localhost:4201"),
             project: Self::get("SHEPHERD_PROJECT", "liberado"),
             base: Self::get("SHEPHERD_BASE", "main"),
@@ -55,11 +59,55 @@ impl Config {
             cold_turns: Self::number("SHEPHERD_COLD_REVIEW_MAX_TURNS", 60)?,
             max_concurrent: Self::number("SHEPHERD_MAX_CONCURRENT", 2)?,
             poll: Self::number("SHEPHERD_POLL_SECONDS", 120)?,
-        })
+        };
+        let topology = load_shepherd_topology()?;
+        match (selected_project, topology) {
+            (Some(name), topology) => {
+                let project = topology
+                    .shepherd
+                    .projects
+                    .iter()
+                    .find(|project| project.name == name)
+                    .ok_or_else(|| format!("unknown shepherd project '{name}'"))?;
+                config.apply_project(project);
+            }
+            (None, topology) if topology.shepherd.projects.len() == 1 => {
+                config.apply_project(&topology.shepherd.projects[0]);
+            }
+            (None, topology) if topology.shepherd.projects.len() > 1 => {
+                return Err("multiple shepherd projects configured; pass --project <name>".into());
+            }
+            (None, _) => {}
+        }
+        Ok(config)
+    }
+    fn apply_project(&mut self, project: &liberado_config::ShepherdProjectConfig) {
+        self.repository = Some(project.repository.clone());
+        self.check_names = project.check_names.clone();
+        self.project = project.coding_project.clone();
+        self.base = project.base_branch.clone();
+        self.profile = project.profile.clone();
+        self.max_kickbacks = project.max_kickbacks.unwrap_or(self.max_kickbacks);
+        self.cold_reviews = project.cold_reviews.unwrap_or(self.cold_reviews);
+        self.cold_turns = project.cold_review_max_turns.unwrap_or(self.cold_turns);
+        self.max_concurrent = project.max_concurrent_goals.unwrap_or(self.max_concurrent);
+        self.poll = project.poll_seconds.unwrap_or(self.poll);
     }
     fn state(&self) -> PathBuf {
         self.root.join(".liberado/shepherd")
     }
+}
+
+fn load_shepherd_topology() -> Result<liberado_config::Topology, Box<dyn std::error::Error>> {
+    let Some(dir) = liberado_config::config_dir() else {
+        return Ok(liberado_config::Topology::default());
+    };
+    liberado_config_loader::ChainLoader::new()
+        .add_source(Box::new(liberado_config_loader::FileSource::new(
+            dir.join("topology.toml"),
+        )))
+        .load()
+        .map_err(|error| format!("cannot load topology.toml: {error}").into())
 }
 #[derive(Clone)]
 struct Pr {
@@ -91,17 +139,27 @@ pub fn run(args: impl Iterator<Item = String>) -> Result<(), Box<dyn std::error:
     let once = args.iter().any(|a| a == "--once");
     let watch = args.iter().any(|a| a == "--watch");
     let dry = args.iter().any(|a| a == "--dry-run");
+    let selected_project = args
+        .windows(2)
+        .find(|a| a[0] == "--project")
+        .map(|a| a[1].as_str());
+    if args.first().is_some_and(|arg| arg == "config") {
+        if args.get(1).is_none_or(|arg| arg != "check") {
+            return Err("usage: liberado shepherd config check [--project <name>]".into());
+        }
+        return config_check(selected_project);
+    }
     let seed_path = args
         .windows(2)
         .find(|a| a[0] == "--seed")
         .map(|a| PathBuf::from(&a[1]));
     if !(once || watch || seed_path.is_some()) {
         return Err(
-            "usage: liberado shepherd <--once|--watch|--seed FILE> [--dry-run] | --self-test"
+            "usage: liberado shepherd <--once|--watch|--seed FILE> [--project <name>] [--dry-run]\n       liberado shepherd config check [--project <name>]\n       liberado shepherd --self-test"
                 .into(),
         );
     }
-    let cfg = Config::load()?;
+    let cfg = Config::load(selected_project)?;
     if args.iter().any(|a| a == "--reset-baselines") {
         reset_baselines(&cfg)?;
     }
@@ -134,11 +192,39 @@ pub fn run(args: impl Iterator<Item = String>) -> Result<(), Box<dyn std::error:
         thread::sleep(Duration::from_secs(cfg.poll));
     }
 }
+fn config_check(selected_project: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
+    let cfg = Config::load(selected_project)?;
+    println!("shepherd configuration:");
+    println!(
+        "  repository: {}",
+        cfg.repository
+            .as_deref()
+            .unwrap_or("current checkout (legacy environment configuration)")
+    );
+    println!("  base branch: {}", cfg.base);
+    println!("  coding project: {}", cfg.project);
+    println!("  profile: {}", cfg.profile);
+    println!(
+        "  checks: {}",
+        if cfg.check_names.is_empty() {
+            "all reported checks".into()
+        } else {
+            cfg.check_names.join(", ")
+        }
+    );
+    println!(
+        "  limits: kickbacks={}, reviews={}, review_turns={}, concurrent={}, poll={}s",
+        cfg.max_kickbacks, cfg.cold_reviews, cfg.cold_turns, cfg.max_concurrent, cfg.poll
+    );
+    Ok(())
+}
 fn gh(cfg: &Config, args: &[&str], check: bool) -> Result<String, Box<dyn std::error::Error>> {
-    let out = std_command("gh")
-        .args(args)
-        .current_dir(&cfg.root)
-        .output()?;
+    let mut command = std_command("gh");
+    command.args(args).current_dir(&cfg.root);
+    if let Some(repository) = &cfg.repository {
+        command.args(["--repo", repository]);
+    }
+    let out = command.output()?;
     if check && !out.status.success() {
         return Err(format!(
             "gh {} failed: {}",
@@ -254,7 +340,16 @@ fn failure_set(cfg: &Config, id: u64) -> BTreeSet<String> {
             set.insert(format!("{name}|step:<unknown step>"));
         }
     }
-    set
+    set.into_iter()
+        .filter(|key| check_selected(cfg, key))
+        .collect()
+}
+
+fn check_selected(cfg: &Config, key: &str) -> bool {
+    cfg.check_names.is_empty()
+        || key
+            .split_once('|')
+            .is_some_and(|(job, _)| cfg.check_names.iter().any(|name| name == job))
 }
 fn baseline(
     cfg: &Config,
@@ -364,6 +459,12 @@ fn ci_status(cfg: &Config, pr: &Pr) -> &'static str {
     }
     let states: Vec<_> = rows
         .iter()
+        .filter(|row| {
+            cfg.check_names.is_empty()
+                || row["name"]
+                    .as_str()
+                    .is_some_and(|name| cfg.check_names.iter().any(|expected| expected == name))
+        })
         .filter_map(|r| r["state"].as_str())
         .map(|s| s.to_ascii_lowercase())
         .collect();
@@ -646,5 +747,25 @@ mod tests {
     fn preexisting_note_is_bounded() {
         let set = (0..11).map(|i| format!("j|{i}")).collect();
         assert!(note(&set).lines().count() <= 12)
+    }
+
+    #[test]
+    fn selected_checks_filter_by_job_name() {
+        let cfg = Config {
+            root: PathBuf::new(),
+            repository: None,
+            check_names: vec!["test (windows-latest)".into()],
+            daemon: String::new(),
+            project: String::new(),
+            base: String::new(),
+            profile: String::new(),
+            max_kickbacks: 0,
+            cold_reviews: 0,
+            cold_turns: 0,
+            max_concurrent: 0,
+            poll: 0,
+        };
+        assert!(check_selected(&cfg, "test (windows-latest)|crate::test"));
+        assert!(!check_selected(&cfg, "test (ubuntu-latest)|crate::test"));
     }
 }

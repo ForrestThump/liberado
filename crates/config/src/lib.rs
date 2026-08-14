@@ -35,9 +35,9 @@ pub use liberado_config_loader::{
     CompactionSettings, CompactionTriggerSource, ConcurrencyTuning, Config, ConfigBuilder,
     ContextTuning, CronSchedule, DEFAULT_POOL, DispatchTuning, Grant, HookConfig, MainAgentConfig,
     MaintenanceTuning, McpConfig, McpPoolingTuning, McpTransport, ModelCompactionSettings, Policy,
-    PoolConfig, ProjectConfig, ProviderProfile, RoleOverride, SubagentIsolation,
-    TelegramApprovalsTuning, ToolImpact, Topology, Tuning, ZonePolicy, managed_binary_path,
-    resolve_declared_zone,
+    PoolConfig, ProjectConfig, ProviderProfile, RoleOverride, ShepherdConfig,
+    ShepherdProjectConfig, SubagentIsolation, TelegramApprovalsTuning, ToolImpact, Topology,
+    Tuning, ZonePolicy, managed_binary_path, resolve_declared_zone,
 };
 
 /// Records which source file contributed each section of a loaded [`Config`],
