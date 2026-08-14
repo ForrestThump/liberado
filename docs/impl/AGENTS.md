@@ -68,7 +68,7 @@ turbovault/          # Co-developed path dep (sibling repo, not a workspace memb
 turbomcp/            # Co-developed path dep (sibling repo, not a workspace member)
 ```
 
-Full generated inventory: [`docs/spec/reference/crate-map.md`](../spec/reference/crate-map.md) — regenerate with `scripts/gen-crate-map.ps1`.
+Full generated inventory: [`docs/spec/reference/crate-map.md`](../spec/reference/crate-map.md) — regenerate with `just gen-crate-map`.
 
 ---
 

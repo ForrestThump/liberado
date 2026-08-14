@@ -61,6 +61,7 @@ impl Config {
             poll: Self::number("SHEPHERD_POLL_SECONDS", 120)?,
         };
         let topology = load_shepherd_topology()?;
+        validate_shepherd_topology(&topology)?;
         match (selected_project, topology) {
             (Some(name), topology) => {
                 let project = topology
@@ -108,6 +109,70 @@ fn load_shepherd_topology() -> Result<liberado_config::Topology, Box<dyn std::er
         )))
         .load()
         .map_err(|error| format!("cannot load topology.toml: {error}").into())
+}
+
+/// Validate only the shepherd policy. Loading the full application configuration would make
+/// forge observation depend on unrelated provider and webhook secrets.
+fn validate_shepherd_topology(
+    topology: &liberado_config::Topology,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let declared_projects: BTreeSet<_> = topology
+        .projects
+        .iter()
+        .map(|project| project.name.as_str())
+        .collect();
+    let mut names = BTreeSet::new();
+    for project in &topology.shepherd.projects {
+        if project.name.trim().is_empty() {
+            return Err("shepherd project name must not be empty".into());
+        }
+        if !names.insert(project.name.as_str()) {
+            return Err(format!("duplicate shepherd project name '{}'", project.name).into());
+        }
+        let mut repository = project.repository.split('/');
+        if repository.next().is_none_or(str::is_empty)
+            || repository.next().is_none_or(str::is_empty)
+            || repository.next().is_some()
+        {
+            return Err(format!(
+                "shepherd project '{}' repository must be OWNER/REPOSITORY",
+                project.name
+            )
+            .into());
+        }
+        if !declared_projects.contains(project.coding_project.as_str()) {
+            return Err(format!(
+                "shepherd project '{}' references unknown coding_project '{}'",
+                project.name, project.coding_project
+            )
+            .into());
+        }
+        if project.base_branch.trim().is_empty() || project.profile.trim().is_empty() {
+            return Err(format!(
+                "shepherd project '{}' base_branch and profile must not be empty",
+                project.name
+            )
+            .into());
+        }
+        if project.max_concurrent_goals == Some(0) || project.poll_seconds == Some(0) {
+            return Err(format!(
+                "shepherd project '{}' max_concurrent_goals and poll_seconds must be greater than zero",
+                project.name
+            )
+            .into());
+        }
+        let mut checks = BTreeSet::new();
+        for check in &project.check_names {
+            if check.trim().is_empty() || !checks.insert(check.as_str()) {
+                return Err(format!(
+                    "shepherd project '{}' check_names must be non-empty and unique",
+                    project.name
+                )
+                .into());
+            }
+        }
+    }
+    Ok(())
 }
 #[derive(Clone)]
 struct Pr {
@@ -454,16 +519,29 @@ fn ci_status(cfg: &Config, pr: &Pr) -> &'static str {
     let Some(rows) = value.as_array() else {
         return "none";
     };
+    check_status(&cfg.check_names, rows)
+}
+
+fn check_status(check_names: &[String], rows: &[Value]) -> &'static str {
     if rows.is_empty() {
         return "none";
+    }
+    let names: BTreeSet<_> = rows.iter().filter_map(|row| row["name"].as_str()).collect();
+    // A typo or renamed GitHub check must not silently mark a PR ready. Treat an absent selected
+    // check as waiting, which is safe both before CI has reported and after a configuration error.
+    if check_names
+        .iter()
+        .any(|expected| !names.contains(expected.as_str()))
+    {
+        return "pending";
     }
     let states: Vec<_> = rows
         .iter()
         .filter(|row| {
-            cfg.check_names.is_empty()
+            check_names.is_empty()
                 || row["name"]
                     .as_str()
-                    .is_some_and(|name| cfg.check_names.iter().any(|expected| expected == name))
+                    .is_some_and(|name| check_names.iter().any(|expected| expected == name))
         })
         .filter_map(|r| r["state"].as_str())
         .map(|s| s.to_ascii_lowercase())
@@ -767,5 +845,38 @@ mod tests {
         };
         assert!(check_selected(&cfg, "test (windows-latest)|crate::test"));
         assert!(!check_selected(&cfg, "test (ubuntu-latest)|crate::test"));
+    }
+
+    #[test]
+    fn missing_selected_check_is_not_success() {
+        let rows = vec![json!({"name":"test (ubuntu)","state":"SUCCESS"})];
+        assert_eq!(check_status(&["test (windows)".into()], &rows), "pending");
+    }
+
+    #[test]
+    fn shepherd_config_rejects_unknown_coding_project() {
+        let mut topology = liberado_config::Topology::default();
+        topology
+            .shepherd
+            .projects
+            .push(liberado_config::ShepherdProjectConfig {
+                name: "example".into(),
+                repository: "owner/repo".into(),
+                coding_project: "missing".into(),
+                base_branch: "main".into(),
+                profile: "coding-unattended".into(),
+                check_names: Vec::new(),
+                max_kickbacks: None,
+                cold_reviews: None,
+                cold_review_max_turns: None,
+                max_concurrent_goals: None,
+                poll_seconds: None,
+            });
+        assert!(
+            validate_shepherd_topology(&topology)
+                .unwrap_err()
+                .to_string()
+                .contains("unknown coding_project")
+        );
     }
 }

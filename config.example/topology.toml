@@ -58,7 +58,8 @@ vault_path = "/home/shiloh/vault"
 # coding_project = "notes-site"
 # base_branch = "main"
 # profile = "coding-unattended"
-# # Empty means all reported GitHub checks. Otherwise list exact check/job names.
+# # Empty means all reported GitHub checks. Otherwise list exact check/job names. A named check
+# # that is absent keeps the PR waiting, so a rename or typo cannot silently pass CI.
 # check_names = []
 # max_kickbacks = 2
 # cold_reviews = 2

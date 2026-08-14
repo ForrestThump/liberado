@@ -333,8 +333,9 @@ their natural scope is "this whole runner invocation" rather than "this deployme
 
 `liberado shepherd` can instead select a typed `[[shepherd.projects]]` entry with
 `--project <name>`. The entry controls the GitHub repository, selected check names, daemon coding
-project/profile, and retry/review limits. `liberado shepherd config check --project <name>` prints
-the resolved policy before any forge mutation or goal start.
+project/profile, and retry/review limits. A configured check that GitHub does not report keeps the
+PR waiting; this prevents a renamed check or typo from being treated as success. `liberado shepherd
+config check --project <name>` prints the resolved policy before any forge mutation or goal start.
 
 The shepherd compares GitHub check/job conclusions. Local commands and their normal successful
 exit code (`0`) remain under `[projects.preflight]`; do not duplicate CI commands in the shepherd.

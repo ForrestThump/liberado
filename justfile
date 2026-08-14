@@ -67,6 +67,14 @@ shepherd-dry-run:
 coder-smoke:
     cargo run --locked -p liberado-cli -- coder smoke
 
+# CI-safe mock coder curriculum. No model key or network access.
+curriculum-mock:
+    cargo test --locked -p liberado-heuristics-tuner --lib mock_curriculum -- --nocapture
+
+# Run the heuristics tuner. It reads OPENROUTER_API_KEY from the environment.
+tuner:
+    cargo run --locked --quiet -p liberado-heuristics-tuner
+
 # Verify every relative link in docs/ resolves to a real file.
 # Skips http(s) URLs and .secret files; CI gates on it (doc-links job).
 check-links:
@@ -140,3 +148,39 @@ tui: # Run the ratatui TUI against the dev stack.
 [windows]
 stop-daemon: # Stop the running daemon.
     powershell -ExecutionPolicy Bypass -File scripts/stop-daemon.ps1
+
+[windows]
+webui: # Start the detached daemon that serves the built WebUI.
+    powershell -ExecutionPolicy Bypass -File scripts/start-webui.ps1
+
+[windows]
+webui-build: # Build the WebUI, then start the detached WebUI daemon.
+    powershell -ExecutionPolicy Bypass -File scripts/start-webui.ps1 -Build
+
+[windows]
+webui-dev: # Start Dioxus WebUI hot reload; requires a daemon on port 4201.
+    powershell -ExecutionPolicy Bypass -File scripts/start-webui-dev.ps1
+
+[windows]
+stop-webui: # Stop the detached WebUI daemon.
+    powershell -ExecutionPolicy Bypass -File scripts/stop-webui.ps1
+
+[windows]
+stop-webui-dev: # Stop the Dioxus WebUI development server.
+    powershell -ExecutionPolicy Bypass -File scripts/stop-webui-dev.ps1
+
+[windows]
+paseo-install: # Install liberado-acp and register its Paseo provider.
+    powershell -ExecutionPolicy Bypass -File scripts/install-paseo-liberado.ps1
+
+[windows]
+deploy-webui-homelab: # Build and ship the WebUI bundle to the homelab.
+    powershell -ExecutionPolicy Bypass -File scripts/deploy-webui-homelab.ps1
+
+[windows]
+deploy-homelab: # Build and deploy the daemon image to the homelab.
+    powershell -ExecutionPolicy Bypass -File scripts/deploy-homelab.ps1
+
+# Dispatch one ACP coding run through the same Node stdio boundary that Paseo uses.
+acp-dispatch *args:
+    node scripts/dispatch-acp-run.js {{args}}
