@@ -213,7 +213,8 @@ Resist the temptation to start with TE3 because it is the easiest to write.
   the *most* cached part of every prompt; in dollar terms its 62.6% share is discounted well below
   that, while accumulation — where the newest tool result is never cached — costs more per token
   than its share suggests. The token ranking here is solid; the dollar ranking would be flatter and
-  has not been measured. Doing so needs `[[models]]` rates, which the box does not declare — see
+  has not been measured. Rates for the journalled DeepSeek slugs shipped in PR #154; a live box
+  that still reports `unpriced` has not picked up that host mount. See
   [`tuning.md`](../spec/reference/tuning.md).
 - **"Delegating turns cost 11× more" is confounded** by task difficulty: the dispatcher routes hard
   work to subagents, and those tasks might have cost as much inline. The face-context finding is

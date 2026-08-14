@@ -127,6 +127,10 @@ production entry point still reads it.
 in the same executor conversation (`WorkspaceCompileGate`, PR #163). Partial, Failed, wrap-up
 and turn exhaustion keep the dirty tree. The post-execute ship bar still runs `cargo test`.
 
+**A host failure ends the run.** Disk-full and the same infrastructure class are not a repair
+the model can make. The finish gate refuses `succeeded`, the executor files `Failed`, and the
+model does not get another turn (PR #166).
+
 **Debugging an agent run: read its trace, do not re-derive it.** Every coding run writes
 `<workspace>/coder-traces/<session>.json` recording, per turn, the tools the model was *offered*
 (guards withdraw them mid-run, so this changes), its text verbatim, what it called, and why the turn

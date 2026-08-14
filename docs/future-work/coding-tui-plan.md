@@ -289,13 +289,13 @@ for agent-created loops); whether a human-typed `/loop new …` may also write o
 
 ### G7 — Coding subagents (hub-spawned, worktree-isolated)
 
-> **Ordering constraint (audited 2026-07-24).** Isolation must land before *any* fan-out. Today
-> nothing in production can dispatch two subagents at once — `dispatch_parallel` exists but is
-> unreachable, `DispatchAction` cannot express fan-out, and the executor invokes tool calls
-> serially — so the workspace race is prevented only by the *absence* of concurrency. Closing any
-> one of those gaps without `WorktreeWorkspace` reproduces Bun's failure: agents sharing a git
-> workspace overwrite each other, silently. Full audit and the fixed 3-step sequence:
-> `docs/spec/architecture/agentic-loops.md` §Concurrency.
+> **Ordering constraint (audited 2026-07-24; C7 landed PR #166).** Isolation must land before
+> *any* fan-out. `WorktreeWorkspace` (#58) and one reachable path (`dispatch_parallel` via the
+> dispatch pack) are on `main`. `DispatchAction` still cannot express fan-out, `delegate` is
+> still synchronous, and the executor still invokes tool calls serially. Do not add a second
+> fan-out API. Closing those remaining gaps without isolation still reproduces Bun's failure:
+> agents sharing a git workspace overwrite each other, silently. Full audit and the 3-step
+> sequence: `docs/spec/architecture/agentic-loops.md` §Concurrency.
 
 - `delegate` gains a coding route: when the face agent (or a coding worker, one level deep max)
   delegates with `domain:"coding"`, the hub starts a child coding session with a narrowed grant

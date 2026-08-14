@@ -26,7 +26,7 @@ a second priority order.
 |---:|---|---|
 | **1** | ~~**F9 — cap concurrent background commands**~~ **Landed (PR #146).** | Two background jobs, one build-like. |
 | **2** | ~~**0.1b — stage ship preflight output**~~ **Landed (PR #147).** | Format, then compile, then test and clippy; no fail-fast. |
-| **3** | **D2 — configure model prices** | The baseline and later A1 report need real cost, not `unpriced`. |
+| **3** | ~~**D2 — configure model prices**~~ **Landed (PR #154).** | Example and homelab topology declare DeepSeek v4 rates. |
 | **4** | ~~**0.6 — emit the joined MVL and execution logs**~~ **Landed (PR #151).** | The assembly path and contracts landed in PRs #141 and #140. This instrument is the prerequisite for controlled comparisons. |
 | **5** | **0.7 / C3 — publish the controlled cross-harness baseline** | One item, not two: instrument the pinned forks and compare fixed tasks only after 0.6. |
 | **6** | **C5 — measure the completion gate** | Use the same baseline method to compare gate off/on before changing the default. |
@@ -39,8 +39,8 @@ a second priority order.
 | **13** | **E5 — stop the turbomcp SSE reconnect storm** | Restore useful homelab diagnostics before dogfooding the inbox path. |
 | **14** | ~~**F12 — give the vault watcher a positive scope**~~ **Landed (PR #156).** | Capture paths + `#now` / `#hold-off`. |
 | **15** | **E2 — implement the inbox layer** | E3 and F12 are landed; start after E4. |
-| **16** | **C6 — add repo-map and context selection at the kernel/pack seam** | Large context lever; do it after the measured harness work so its effect can be isolated. |
-| **17** | ~~**C7 — expose one isolated parallel execution path**~~ **Landed.** | `dispatch_parallel` carries an optional workspace root; the dispatch pack creates worktrees. `delegate` stays synchronous. |
+| **16** | **C6 — add repo-map and context selection at the kernel/pack seam** | **Parked 2026-08-14.** Focused search is enough; an always-on map adds noise. Do not schedule this ahead of measured harness work. |
+| **17** | ~~**C7 — expose one isolated parallel execution path**~~ **Landed (PR #166).** | `dispatch_parallel` carries an optional workspace root; the dispatch pack creates worktrees. `delegate` stays synchronous. |
 | **18** | **C4 — finish dedicated goal-view panes** | Useful surface work, but it does not block correctness, measurement, or unattended shipping. |
 
 ### Branch and integration rule
@@ -296,8 +296,8 @@ Crates in there that map onto items below, so nobody reads the whole 94 MB:
 | **C3** | **Controlled cross-harness baseline.** This is the same work as 0.7, not a second item. Follow 0.7's fixed-task, fixed-model, fixed-resource acceptance criteria and land one report. | 0.7 |
 | **C4** | **Dedicated goal-view panes** — role timeline, gate panel, verifier panel. Gate votes stream live (#53) but render inline in the joined pane, so the streaming has nowhere good to land. | `crates/tui/` |
 | **C5** | **Turn on the completion gate and measure it.** S1 is default-off pending S7 because it costs `1 + fresh_reviewers` model calls per attempt. With `liberado-cost --json` that price is now measurable — run a handful of tasks with it on and off. | `[coder.gate] enabled` |
-| **C6** | **Repo map / context selection** — the biggest context lever, and we have nothing equivalent. **Split the seam on the way in**: "rank and select the relevant context for a goal" is general and belongs in the kernel — a research or vault pack wants exactly that — while "walk a source tree and build a symbol graph" is coding and belongs in `coder-*`. Build it whole inside the pack and the next pack rebuilds the ranking half. Read `xai-codebase-graph` first. **This item is both the highest-leverage coding work and the most likely duplication source**; get the seam right rather than fixing it later. | kernel + `crates/coder-*` |
-| **C7** | ~~**Use the isolation #58 unblocked.**~~ **Landed.** `dispatch_parallel` is the one exposed path: `SubDispatch.workspace_root` plus `RuntimeFactory::runtime_for_in` is the kernel seam; the dispatch pack creates `WorktreeWorkspace`s and a `parallel_goals` payload reaches that path. `delegate` stays synchronous. Placement: the primitive stays in `coder-sandbox`; the kernel only forwards a path. | `crates/orchestrator/`, `crates/dispatch-pack/` |
+| **C6** | **Repo map / context selection** — **Parked 2026-08-14.** The biggest context lever on paper, and we have nothing equivalent — but an always-on map is noise next to focused search. Reopen only after a measurement says missing context, not missing files, is the limiter. If it reopens: **split the seam on the way in** — "rank and select the relevant context for a goal" is general and belongs in the kernel; "walk a source tree and build a symbol graph" is coding and belongs in `coder-*`. | kernel + `crates/coder-*` |
+| **C7** | ~~**Use the isolation #58 unblocked.**~~ **Landed (PR #166).** `dispatch_parallel` is the one exposed path: `SubDispatch.workspace_root` plus `RuntimeFactory::runtime_for_in` is the kernel seam; the dispatch pack creates `WorktreeWorkspace`s and a `parallel_goals` payload reaches that path. `delegate` stays synchronous. Placement: the primitive stays in `coder-sandbox`; the kernel only forwards a path. | `crates/orchestrator/`, `crates/dispatch-pack/` |
 
 ## Band F — harness observability and the delegation split (2026-08-09)
 
@@ -382,7 +382,7 @@ without merge). F12 landed as PR #156.
 | # | What | Pointer |
 |---|---|---|
 | **D1** | ~~**Promote `provenance_ratio` / `delegation_cost` from examples to subcommands.**~~ **Landed (PR #63).** | `crates/cost/` |
-| **D2** | **`liberado-cost` prices nothing** — the box declares no `[[models]]` rates, so every report reads `unpriced`. Config-only; schema and doc already exist. | [`tuning.md`](../spec/reference/tuning.md) |
+| **D2** | ~~**`liberado-cost` prices nothing**~~ **Landed (PR #154).** Example and homelab topology declare DeepSeek v4 rates; the cost test reads those files through `price_table_from_topology_path`. A live box that still reports `unpriced` has not picked up that host mount. | [`tuning.md`](../spec/reference/tuning.md) |
 
 ## Not available
 

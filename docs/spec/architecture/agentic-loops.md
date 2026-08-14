@@ -205,10 +205,10 @@ This is not hypothetical and not fixable with prompting. Bun's Zig-to-Rust port 
 agents sharing one git workspace; agents ran overlapping git commands and overwrote each other. The
 fix was structural — forbid the unsafe commands, give each worker its own worktree.
 
-Step 1 of that sequence has landed. `coder-sandbox` ships `WorktreeWorkspace` (PR #58). The
-coding pack already fans `payload.subtasks` onto worktrees (S6). What is still closed is the
-kernel/face path: `dispatch_parallel` is built and only its tests call it; `delegate` is still
-synchronous. That remaining wire is backlog **C7** — expose *one* of those two, not both.
+Step 1 and step 2 of that sequence have landed. `coder-sandbox` ships `WorktreeWorkspace`
+(PR #58). The coding pack already fans `payload.subtasks` onto worktrees (S6). The kernel/face
+path is open through the dispatch pack (C7, PR #166): `dispatch_parallel` is reachable;
+`delegate` is still synchronous. Do not expose a second fan-out API.
 
 The original 2026-07-24 audit recorded no `WorktreeWorkspace`. Do not rebuild it.
 

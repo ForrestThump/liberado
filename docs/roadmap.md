@@ -188,8 +188,9 @@ Two carried-forward limitations worth knowing before building on this:
 
 **Goal:** dispatch a scoped task and get back a PR whose review is taste and scope, not repair.
 This table is the harness track. The repo-wide total order is the
-[backlog implementation order](future-work/backlog.md#implementation-order); F9 and 0.1b have
-landed, so D2 is the next open prerequisite before the next harness row. The evidence says
+[backlog implementation order](future-work/backlog.md#implementation-order); F9, 0.1b, D2
+(#154), 0.6, B1, C1, C7 (#166) and the progress-guard have landed. The next open harness
+row is **0.7 / C3** (publish the controlled baseline). The evidence says
 something specific: **every measured improvement so far came from fixing a defect, not from tuning
 a value.** Edit failure went 66–70% → 8% → 0% across PRs #106–#128, all defect fixes. No knob has
 yet been tuned to a measured gain.
@@ -267,12 +268,13 @@ not a model ceiling.
 
   P3 autonomous PR ──► F9 landed (#146)                (safety)
                     ├── 0.1b landed (#147)             (staged preflight)
-                    ├── D2 model prices                (cost prerequisite)
+                    ├── D2 landed (#154)               (cost prerequisite)
                     ├── 0.6 landed (#151)              (instrument)
                     ├── B1 landed (#162)               (ExecuteDirect delivery)
                     ├── same-session check (#163)      (refuse red succeeded)
                     ├── C1 landed (#164)               (deny shell git; gix tools)
                     ├── progress-guard (#165)          (report beats churn fatal)
+                    ├── C7 landed (#166)               (isolated parallel door)
                     ├── 0.7/C3 controlled baseline     (measurement)
                     ├── C5 completion-gate comparison  (decision)
                     └── 0.9 first evidence-selected lever
@@ -287,6 +289,7 @@ not a model ceiling.
 
 | When | What |
 |------|------|
+| **2026-08-14** | **C7 + host-failure.** `dispatch_parallel` is reachable through the dispatch pack: optional `workspace_root` plus `RuntimeFactory::runtime_for_in`, with `WorktreeWorkspace` per worker ([#166](https://github.com/ForrestThump/liberado/pull/166)). `delegate` stays synchronous. A host infrastructure failure (disk full, and the same class) ends the run; the executor files `Failed` and does not give the model another turn. |
 | **2026-08-14** | **C1 + progress-guard.** Default `CommandPolicy` denies shell `git` (and `git.exe` by stem); dedicated `git_*` tools go through `coder-tools::git` ([#164](https://github.com/ForrestThump/liberado/pull/164)). A filed report is no longer rewritten to `NoChanges` by a progress fatal; `run_command` is not same-tool-churn; mutating cycles match on exact args ([#165](https://github.com/ForrestThump/liberado/pull/165)). |
 | **2026-08-13** | **B1 + same-session compile.** `ExecuteDirect` now carries `Delivery` ([#162](https://github.com/ForrestThump/liberado/pull/162)): a research chat relay gets the relay contract, acting work stays short, vault delivery files the report. `submit_report outcome=succeeded` is refused while `cargo check` is red ([#163](https://github.com/ForrestThump/liberado/pull/163)); the files stay. F9 (#146), 0.1b (#147) and F12 (#156) were already on `main` and are now marked landed in the backlog. |
 | **2026-08-11** | **Eight reviewed slices landed with green Ubuntu, Windows, dependency and docs checks.** ACP provider config now uses multi-tier resolution ([#137](https://github.com/ForrestThump/liberado/pull/137)); unattended goals lose `AskHuman` at the real grant boundary ([#138](https://github.com/ForrestThump/liberado/pull/138)); shepherd review labels now follow successful completion and use a 60-turn default ([#139](https://github.com/ForrestThump/liberado/pull/139)); exact MVL/execution-log contracts and conformance fixtures landed ([#140](https://github.com/ForrestThump/liberado/pull/140)); all three production coding surfaces use one assembler ([#141](https://github.com/ForrestThump/liberado/pull/141)); cold review is diff-bound and gets one reverified fix round ([#142](https://github.com/ForrestThump/liberado/pull/142)); termination preserves dirty headless work under meaningful task labels ([#143](https://github.com/ForrestThump/liberado/pull/143)); and daemon startup reconciles parked rows only after pack registration ([#144](https://github.com/ForrestThump/liberado/pull/144)). |
