@@ -85,7 +85,7 @@ cargo run -p liberado-test-support --bin mvl-conformance -- \
 
 ## Start commands (do not execute)
 
-Print-only helper: `powershell -File scripts/prep-mvl-live-compare.ps1`.
+Print-only helper: `just compare-prepare`.
 It prints these commands and exits 0. It does not spawn a harness.
 
 ### 1. Liberado (ACP path — the Paseo dogfood path)

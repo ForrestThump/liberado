@@ -55,6 +55,14 @@ preflight:
 shepherd-self-test:
     cargo run --locked -p liberado-cli -- shepherd --self-test
 
+# Inspect all open PRs without changing GitHub labels, rerunning CI, or starting coder goals.
+shepherd-dry-run:
+    cargo run --locked -p liberado-cli -- shepherd --dry-run --once
+
+# Validate the coder-runner process boundary.
+coder-smoke:
+    cargo run --locked -p liberado-cli -- coder smoke
+
 # Verify every relative link in docs/ resolves to a real file.
 # Skips http(s) URLs and .secret files; CI gates on it (doc-links job).
 check-links:

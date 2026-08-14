@@ -1,6 +1,6 @@
 //! Cross-harness compare-run summaries.
 //!
-//! Native replacement for scripts/summarize-compare-run.py. It reads loose JSON/JSONL
+//! Native command for summarizing loose JSON/JSONL compare artifacts. It reads
 //! records so foreign harnesses do not need Liberado's trace schema.
 
 use chrono::{DateTime, FixedOffset};

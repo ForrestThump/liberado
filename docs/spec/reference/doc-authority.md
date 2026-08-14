@@ -65,7 +65,7 @@ and required fields are enforced on **all** managed documents, not only root pla
 
 ## CI rejection rules
 
-`python scripts/docs_meta.py lint` rejects:
+`just docs-meta-check` rejects:
 
 1. A root `docs/future-work/*.md` document without metadata.
 2. A managed document missing `kind` / `status` / `authority`, or using a value outside the kind-aware vocabulary (e.g. `status: banana` on an ADR).

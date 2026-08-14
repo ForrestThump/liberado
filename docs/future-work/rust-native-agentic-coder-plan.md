@@ -591,7 +591,7 @@ Do not expand scope mid-slice. Recommended sequence from **current** state:
 1. ~~**PR-dispatch cutover to Liberado loop default**~~ — done 2026-07-10 (`CODING_BACKEND`
    defaults to `liberado-loop`, built-in prompt, binary resolve, `VALIDATE_CMD` → validation gate).
 2. **Live smokes** on real models (one-file edit → repair → full draft PR). Use
-   `scripts/smoke-liberado-coder.ps1` and PR-dispatch tasks.
+   `just coder-smoke` and PR-dispatch tasks.
 3. ~~**Coder layer in `liberado-heuristics-tuner`**~~ — landed: `TUNER_LAYER=coder` scores real
    temp workspaces via `liberado-coder-agent`, beam-searches system prompts, writes proposal
    rubrics only. Expand scenarios and run live with `OPENROUTER_API_KEY` as the meta-loop.
