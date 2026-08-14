@@ -17,6 +17,8 @@
 //!   liberado prompt \[profile\]        print the system prompt a chat under <profile> would get
 //!   liberado coder trace <id>        render a durable coding trace as a human transcript
 //!   liberado coder compare <a> <b>   side-by-side harness metrics for two native traces
+//!   liberado coder compare prepare   print the pinned comparison plan
+//!   liberado coder compare reset     restore tracked files in a compare workspace
 //!   liberado coder summarize <path>  summarize a cross-harness compare run
 //!   liberado coder smoke              validate the coder runner process boundary
 //!   liberado coder import <file>     foreign (Kilo / OpenHands) → `.messages.json`

@@ -103,6 +103,76 @@ fn docs_link_check_command_uses_the_current_working_repository() {
 }
 
 #[test]
+fn compare_prepare_is_print_only_and_uses_the_current_repository() {
+    let temp = tempdir().expect("temporary repository");
+    fs::create_dir(temp.path().join("crates")).expect("crates directory");
+    fs::write(
+        temp.path().join("Cargo.toml"),
+        "[workspace]\nmembers = []\n",
+    )
+    .expect("Cargo.toml");
+
+    let output = run_cli(temp.path(), &["coder", "compare", "prepare"]);
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("print only. No harness started."));
+    assert!(stdout.contains("Provider: openrouter"));
+    assert!(stdout.contains("--mode coding"));
+}
+
+#[test]
+fn compare_reset_restores_tracked_files_and_preserves_untracked_files() {
+    let temp = tempdir().expect("temporary workspace");
+    let workspace = temp.path().join("compare-workspace");
+    fs::create_dir(&workspace).expect("workspace directory");
+    git_test(&workspace, &["init"]);
+    fs::write(workspace.join("tracked.txt"), "base\n").expect("tracked file");
+    git_test(&workspace, &["config", "user.email", "test@example.com"]);
+    git_test(&workspace, &["config", "user.name", "Test"]);
+    git_test(&workspace, &["add", "."]);
+    git_test(&workspace, &["commit", "-m", "base"]);
+    fs::write(workspace.join("tracked.txt"), "changed\n").expect("change tracked file");
+    fs::write(workspace.join("scratch.txt"), "keep me\n").expect("untracked file");
+
+    let output = run_cli(
+        temp.path(),
+        &[
+            "coder",
+            "compare",
+            "reset",
+            workspace.to_str().expect("UTF-8 workspace path"),
+        ],
+    );
+
+    assert!(
+        output.status.success(),
+        "reset failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        fs::read_to_string(workspace.join("tracked.txt")).expect("restored file"),
+        "base\n"
+    );
+    assert_eq!(
+        fs::read_to_string(workspace.join("scratch.txt")).expect("preserved file"),
+        "keep me\n"
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).contains("untracked path-deps left in place"));
+}
+
+fn git_test(workspace: &Path, args: &[&str]) {
+    let status = std_command("git")
+        .arg("-C")
+        .arg(workspace)
+        .args(args)
+        .status()
+        .expect("git should start");
+    assert!(status.success(), "git {args:?} failed with {status}");
+}
+
+#[test]
 fn coder_summarize_command_dispatches_and_reports_native_trace() {
     let temp = tempdir().expect("temporary directory");
     let trace = temp.path().join("run.json");

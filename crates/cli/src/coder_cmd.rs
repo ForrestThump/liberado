@@ -41,6 +41,8 @@ fn usage() -> &'static str {
     "usage:\n  \
      liberado coder trace <session-id|path> [--dir <trace-dir>] [--path <file>]\n  \
      liberado coder compare <trace-a> <trace-b> [--dir <trace-dir>] [--json]\n  \
+     liberado coder compare prepare              print the pinned comparison plan\n  \
+     liberado coder diff <run-a> <run-b> [--json]   cross-harness: where two runs parted\n  \
      liberado coder diff <run-a> <run-b> [--json]   cross-harness: where two runs parted\n  \
      liberado coder import <foreign.json> [-o <out.messages.json>] [--format kilo|kilo-cli|openhands|auto] [--session-id <id>]
   liberado coder smoke              validate the coder runner process boundary"
@@ -222,11 +224,19 @@ fn cmd_trace(args: &mut dyn Iterator<Item = String>) -> Result<(), Box<dyn std::
 }
 
 fn cmd_compare(args: &mut dyn Iterator<Item = String>) -> Result<(), Box<dyn std::error::Error>> {
+    let all: Vec<String> = args.collect();
+    if all.first().map(String::as_str) == Some("prepare") {
+        return cmd_compare_prepare(&all[1..]);
+    }
+    if all.first().map(String::as_str) == Some("reset") {
+        return cmd_compare_reset(&all[1..]);
+    }
+
     let mut paths: Vec<String> = Vec::new();
     let mut dirs: Vec<PathBuf> = default_trace_dirs();
     let mut as_json = false;
 
-    while let Some(arg) = args.next() {
+    for arg in all {
         match arg.as_str() {
             "--dir" => {
                 let d = args.next().ok_or("--dir requires a value")?;
@@ -261,6 +271,138 @@ fn cmd_compare(args: &mut dyn Iterator<Item = String>) -> Result<(), Box<dyn std
         print!("{}", format_comparison(&comparison));
     }
     Ok(())
+}
+
+fn cmd_compare_prepare(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
+    if !args.is_empty() {
+        if args == ["-h"] || args == ["--help"] {
+            println!("usage: liberado coder compare prepare");
+            return Ok(());
+        }
+        return Err("usage: liberado coder compare prepare".into());
+    }
+
+    let root = crate::crate_map_cmd::repository_root()?;
+    let pin = "69933c9a8c8c5d64a35ac3d0a10bf1c0465adc1c";
+    let model = "deepseek/deepseek-v4-pro";
+    let provider = "openrouter";
+    let temperature = "0.1";
+    let max_turns = 30;
+    let timeout_min = 45;
+
+    println!("MVL live comparison PREP - print only. No harness started.");
+    println!("Item: backlog 0.6 / roadmap 4b (emit joined MVL + execution logs)");
+    println!("Commit: {pin}");
+    println!("Provider: {provider}");
+    println!("Model: {model}");
+    println!("Sampling: temperature={temperature} max_tokens=unset");
+    println!("Caps: max_turns={max_turns} timeout_min={timeout_min}");
+    println!();
+    println!(
+        "See docs/future-work/mvl-live-comparison-prep.md for the shared prompt and output paths."
+    );
+    println!();
+    println!("--- Liberado (ACP; print only, do not run) ---");
+    println!(
+        "node \"{}\" --cwd \"{}\" --config-dir \"{}\" --mode coding --timeout-min {timeout_min} --prompt TASK.txt",
+        root.join("scripts").join("dispatch-acp-run.js").display(),
+        root.display(),
+        root.join("config").display()
+    );
+    println!();
+    println!("--- pi (print only, do not run) ---");
+    println!("pi --provider {provider} --model {model} --mode json -p TASK.txt");
+    println!();
+    println!("--- deepagents (print only, do not run) ---");
+    println!("uv run python run_0_6.py   # create_deep_agent, native prompt/tools, same model");
+    println!();
+    println!("--- After a future run, judge any MVL with the Liberado oracle ---");
+    println!(
+        "cargo run -p liberado-test-support --bin mvl-conformance -- --mvl $OUT/run.mvl.jsonl --execution $OUT/run.execution.jsonl"
+    );
+    println!();
+    println!(
+        "Blocker: Liberado has no production MVL until 0.6; deepagents has no MVL writer here."
+    );
+    Ok(())
+}
+
+fn cmd_compare_reset(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
+    let mut path = None;
+    let mut commit = None;
+    let mut index = 0;
+    while index < args.len() {
+        match args[index].as_str() {
+            "-h" | "--help" => {
+                println!("usage: liberado coder compare reset <path> [--commit <sha>]");
+                return Ok(());
+            }
+            "--commit" => {
+                index += 1;
+                commit = Some(args.get(index).ok_or("--commit requires a value")?.clone());
+            }
+            value if value.starts_with('-') => {
+                return Err(format!("unknown flag for coder compare reset: {value}").into());
+            }
+            value => {
+                if path.is_some() {
+                    return Err("coder compare reset takes one workspace path".into());
+                }
+                path = Some(PathBuf::from(value));
+            }
+        }
+        index += 1;
+    }
+
+    let path = path.ok_or("usage: liberado coder compare reset <path> [--commit <sha>]")?;
+    if !path.is_dir() {
+        return Err(format!("compare workspace does not exist: {}", path.display()).into());
+    }
+    reject_sibling_links(&path)?;
+
+    if let Some(commit) = commit {
+        run_git_inherit(&path, &["checkout", "--detach", &commit])?;
+    }
+    run_git_inherit(
+        &path,
+        &["restore", "--source=HEAD", "--worktree", "--staged", "."],
+    )?;
+    run_git_inherit(&path, &["status", "-sb"])?;
+    let short = run_git_capture(&path, &["rev-parse", "--short", "HEAD"])?;
+    println!("{}", short.trim());
+    println!("restored tracked files; untracked path-deps left in place");
+    Ok(())
+}
+
+fn reject_sibling_links(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    for name in ["turbovault", "turbomcp"] {
+        let sibling = path.join(name);
+        if sibling.exists() && fs::symlink_metadata(&sibling)?.file_type().is_symlink() {
+            return Err(format!(
+                "refusing linked sibling path dependency {name}; copy it into the workspace instead"
+            )
+            .into());
+        }
+    }
+    Ok(())
+}
+
+fn run_git_inherit(path: &Path, args: &[&str]) -> Result<(), Box<dyn std::error::Error>> {
+    let status = std_command("git").arg("-C").arg(path).args(args).status()?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!("git {} failed with {status}", args.join(" ")).into())
+    }
+}
+
+fn run_git_capture(path: &Path, args: &[&str]) -> Result<String, Box<dyn std::error::Error>> {
+    let output = std_command("git").arg("-C").arg(path).args(args).output()?;
+    if output.status.success() {
+        Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+    } else {
+        Err(format!("git {} failed with {}", args.join(" "), output.status).into())
+    }
 }
 
 /// `liberado coder diff <a> <b>` — the cross-harness question: same task, two harnesses, where did

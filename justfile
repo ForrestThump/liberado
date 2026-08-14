@@ -81,6 +81,14 @@ docs-site out="":
 summarize path:
     cargo run --locked -p liberado-cli -- coder summarize {{path}}
 
+# Print the pinned, non-running MVL comparison preparation plan.
+compare-prepare:
+    cargo run --locked -p liberado-cli -- coder compare prepare
+
+# Restore tracked files in a compare workspace; preserves untracked path dependencies.
+compare-reset path commit="":
+    cargo run --locked -p liberado-cli -- coder compare reset {{path}} {{if commit == "" { "" } else { "--commit " + commit }}}
+
 # ── Mutation testing ─────────────────────────────────────────────────────────
 
 # Mutation-test one crate with hung-test protection:
