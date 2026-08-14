@@ -10,6 +10,9 @@
 //!   liberado config check            load + validate config, print a summary (or an error)
 //!   liberado ci check                run the cross-platform repository ship preflight
 //!   liberado docs check-links         check relative Markdown links
+//!   liberado docs crate-map           check the generated crate map
+//!   liberado docs crate-map --write   regenerate the crate map
+//!   liberado docs metadata <command>  lint or generate documentation metadata
 //!   liberado prompt \[profile\]        print the system prompt a chat under <profile> would get
 //!   liberado coder trace <id>        render a durable coding trace as a human transcript
 //!   liberado coder compare <a> <b>   side-by-side harness metrics for two native traces
@@ -25,7 +28,9 @@
 mod chat_client;
 mod ci_cmd;
 mod coder_cmd;
+mod crate_map_cmd;
 mod docs_cmd;
+mod docs_meta_cmd;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -50,7 +55,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         },
         Some("docs") => match args.next().as_deref() {
             Some("check-links") => docs_cmd::check_links(),
-            _ => Err("usage: liberado docs check-links".into()),
+            Some("crate-map") => {
+                let write = args.next().as_deref() == Some("--write");
+                crate_map_cmd::check_or_write(&crate_map_cmd::repository_root()?, write)
+            }
+            Some("metadata") => {
+                let command = args.next().ok_or(
+                    "usage: liberado docs metadata <lint|generate|check-stale-rs|self-test>",
+                )?;
+                docs_meta_cmd::run(&crate_map_cmd::repository_root()?, &command)
+            }
+            _ => Err("usage: liberado docs <check-links|crate-map|metadata>".into()),
         },
         Some("config") => match args.next().as_deref() {
             // `config check` is synchronous (no daemon): resolve the default dir via bootstrap

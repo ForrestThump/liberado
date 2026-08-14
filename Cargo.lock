@@ -4495,6 +4495,7 @@ name = "liberado-cli"
 version = "0.1.0"
 dependencies = [
  "chat-client-contract",
+ "chrono",
  "futures",
  "liberado-coder-core",
  "liberado-common",
@@ -4502,6 +4503,7 @@ dependencies = [
  "regex",
  "reqwest 0.12.28",
  "serde_json",
+ "serde_yaml",
  "tempfile",
  "tokio",
  "tracing-subscriber",

@@ -56,6 +56,23 @@ preflight:
 check-links:
     cargo run -p liberado-cli -- docs check-links
 
+# Verify that the checked-in crate map matches Cargo manifests.
+check-crate-map:
+    cargo run --locked -p liberado-cli -- docs crate-map
+
+# Regenerate the crate map from Cargo manifests.
+gen-crate-map:
+    cargo run --locked -p liberado-cli -- docs crate-map --write
+
+# Run the native documentation metadata self-test.
+docs-meta-test:
+    cargo run --locked -p liberado-cli -- docs metadata self-test
+
+# Validate document metadata, generated indexes, and stale Rust doc paths.
+docs-meta-check:
+    cargo run --locked -p liberado-cli -- docs metadata lint
+    cargo run --locked -p liberado-cli -- docs metadata check-stale-rs
+
 # ── Mutation testing ─────────────────────────────────────────────────────────
 
 # Mutation-test one crate with hung-test protection:

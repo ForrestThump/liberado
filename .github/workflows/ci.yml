@@ -171,16 +171,18 @@ jobs:
         run: cargo run --locked -p liberado-cli -- docs check-links
 
       # Authority metadata, generated indexes, and obsolete path guards.
-      # See docs/spec/reference/doc-authority.md and scripts/docs_meta.py.
-      # Runs on Windows too: scripts must not require PYTHONIOENCODING workarounds.
+      # See docs/spec/reference/doc-authority.md. These checks run in the native CLI on both OSes.
       - name: Document metadata self-test
-        run: python scripts/docs_meta.py self-test
+        run: cargo run --locked -p liberado-cli -- docs metadata self-test
 
       - name: Document metadata and index lint
-        run: python scripts/docs_meta.py lint
+        run: cargo run --locked -p liberado-cli -- docs metadata lint
+
+      - name: Crate map is current
+        run: cargo run --locked -p liberado-cli -- docs crate-map
 
       - name: Obsolete docs paths in Rust sources
-        run: python scripts/docs_meta.py check-stale-rs
+        run: cargo run --locked -p liberado-cli -- docs metadata check-stale-rs
 
       - name: Docs site generator smoke
         run: python scripts/gen-docs-site.py --out "${{ runner.temp }}/docs-site"
