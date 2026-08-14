@@ -217,6 +217,8 @@ async fn run_command_check(
         env: env.clone(),
         timeout_secs,
         output_max_bytes,
+        // Backend ship bar, not a model tool result: keep head truncation.
+        offload_dir: None,
     };
     // Prefer HostWorkspace runner for consistent caps when available.
     // Empty allow list = all programs permitted (backend gate is not the model allowlist).

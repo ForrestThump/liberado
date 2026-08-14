@@ -81,6 +81,94 @@ fn preview(text: &str) -> String {
     }
 }
 
+fn sanitize_spill_label(label: &str) -> String {
+    let mut out: String = label
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .take(64)
+        .collect();
+    if out.is_empty() {
+        out.push_str("call");
+    }
+    out
+}
+
+/// Path the model should `read_file`, workspace-relative when `.liberado/offload` is in use.
+fn spill_preview_path(spill_dir: &std::path::Path, file_name: &str) -> String {
+    if spill_dir.file_name().is_some_and(|n| n == "offload") {
+        format!(".liberado/offload/{file_name}")
+    } else {
+        spill_dir
+            .join(file_name)
+            .to_string_lossy()
+            .replace('\\', "/")
+    }
+}
+
+fn char_boundary_at_or_before(text: &str, mut idx: usize) -> usize {
+    idx = idx.min(text.len());
+    while idx > 0 && !text.is_char_boundary(idx) {
+        idx -= 1;
+    }
+    idx
+}
+
+fn truncate_head(text: &str, max: usize) -> String {
+    let end = char_boundary_at_or_before(text, max);
+    text[..end].to_string()
+}
+
+/// Spill an oversized tool result: write the full body and return a head+tail preview.
+///
+/// Under the threshold, returns `text` unchanged. A second pack needs this — it lives
+/// in the kernel, not in a coding-only clip.
+fn spill_oversized_result(
+    text: &str,
+    max_bytes: usize,
+    spill_dir: &std::path::Path,
+    label: &str,
+) -> (String, Option<String>) {
+    if text.len() <= max_bytes {
+        return (text.to_string(), None);
+    }
+    let file_name = format!("tool-spill-{}.txt", sanitize_spill_label(label));
+    let path = spill_dir.join(&file_name);
+    let _ = std::fs::create_dir_all(spill_dir);
+    if std::fs::write(&path, text).is_err() {
+        let head = truncate_head(text, 2048);
+        return (
+            format!("{head}\n\n··· (truncated, {} total bytes) ···", text.len()),
+            None,
+        );
+    }
+    let preview_path = spill_preview_path(spill_dir, &file_name);
+    const HEAD: usize = 2048;
+    const TAIL: usize = 1024;
+    let head_end = char_boundary_at_or_before(text, HEAD);
+    let tail_start = char_boundary_at_or_before(text, text.len().saturating_sub(TAIL));
+    let preview = if head_end >= tail_start {
+        format!(
+            "{}\n\n··· (truncated, {} total bytes; full body at `{preview_path}`) ···",
+            &text[..head_end],
+            text.len()
+        )
+    } else {
+        format!(
+            "{}\n\n··· (truncated, {} total bytes; full body at `{preview_path}`) ···\n\n{}",
+            &text[..head_end],
+            text.len(),
+            &text[tail_start..]
+        )
+    };
+    (preview, Some(preview_path))
+}
+
 /// Name of the synthetic finish-tool the engine injects in report mode. A real [`ToolRuntime`]
 /// must not expose a tool with this name (it would be shadowed by the engine's terminator).
 pub const SUBMIT_REPORT_TOOL: &str = "submit_report";
@@ -584,6 +672,10 @@ pub struct Executor {
     report_gate: Option<Arc<dyn ReportGate>>,
     /// Production MVL / execution JSONL (backlog 0.6). `None` writes nothing.
     mvl: Option<Arc<MvlSession>>,
+    /// Directory where oversized tool results are written. `None` leaves results intact.
+    spill_dir: Option<PathBuf>,
+    /// Byte threshold for spilling a tool result. Default 64 KiB.
+    spill_max_bytes: usize,
     /// Model for the calls this executor makes. `None` = the provider's own.
     ///
     /// Held here rather than on the provider because a provider is shared by every session, and a
@@ -601,7 +693,27 @@ impl Executor {
             observer: None,
             report_gate: None,
             mvl: None,
+            spill_dir: None,
+            spill_max_bytes: 64 * 1024,
         }
+    }
+
+    /// Attach a spill directory for oversized tool results.
+    ///
+    /// When set, any tool result over `spill_max_bytes` is written to a file and the
+    /// model sees a head+tail preview plus a `read_file` path. When unset, results
+    /// pass through unchanged — other packs keep their current behaviour.
+    #[must_use]
+    pub fn with_spill_dir(mut self, dir: PathBuf) -> Self {
+        self.spill_dir = Some(dir);
+        self
+    }
+
+    /// Override the spill threshold (default 64 KiB).
+    #[must_use]
+    pub fn with_spill_max_bytes(mut self, max: usize) -> Self {
+        self.spill_max_bytes = max;
+        self
     }
 
     /// Attach a production MVL session. Events are append-flushed at the request/tool boundary.
@@ -1008,14 +1120,20 @@ impl Executor {
                         Err(message) => (false, format!("tool error: {message}")),
                     };
                     self.mvl_tool_result(turn, call, ok, &result);
+                    let shown = run_tool_spill(
+                        &result,
+                        self.spill_dir.as_deref(),
+                        self.spill_max_bytes,
+                        &call.id,
+                    );
                     let _ = events
                         .send(AgentEvent::ToolFinished {
                             name: call.name.clone(),
                             ok,
-                            preview: preview(&result),
+                            preview: preview(&shown),
                         })
                         .await;
-                    messages.push(Message::tool_result(&call.id, result));
+                    messages.push(Message::tool_result(&call.id, shown));
                 }
                 tracing::info!(turn, tools = response.tool_calls.len(), "turn used tools");
             }
@@ -1384,9 +1502,17 @@ impl Executor {
                                 name = %call.name,
                                 id = %call.id
                             );
-                            async { run_tool(runtime, &call).await }
-                                .instrument(tool_span)
+                            async {
+                                run_tool(
+                                    runtime,
+                                    &call,
+                                    self.spill_dir.as_deref(),
+                                    self.spill_max_bytes,
+                                )
                                 .await
+                            }
+                            .instrument(tool_span)
+                            .await
                         }
                     })
                     .collect();
@@ -1418,9 +1544,17 @@ impl Executor {
             for call in writes {
                 let tool_span = tracing::debug_span!("tool_call", name = %call.name, id = %call.id);
                 self.mvl_tool_started(turn, call);
-                let result = async { run_tool(runtime, call).await }
-                    .instrument(tool_span)
-                    .await;
+                let result = async {
+                    run_tool(
+                        runtime,
+                        call,
+                        self.spill_dir.as_deref(),
+                        self.spill_max_bytes,
+                    )
+                    .await
+                }
+                .instrument(tool_span)
+                .await;
                 let ok = !result.starts_with("tool error:");
                 self.mvl_tool_result(turn, call, ok, &result);
                 call_history.push((call.name.clone(), call.arguments.clone(), result.clone()));
@@ -1578,9 +1712,17 @@ impl Executor {
         });
         for inv in &invocations {
             let span = tracing::debug_span!("seed_call", tool = %inv.name, id = %inv.id);
-            let result = async { run_tool(runtime, inv).await }
-                .instrument(span)
-                .await;
+            let result = async {
+                run_tool(
+                    runtime,
+                    inv,
+                    self.spill_dir.as_deref(),
+                    self.spill_max_bytes,
+                )
+                .await
+            }
+            .instrument(span)
+            .await;
             messages.push(Message::tool_result(&inv.id, result));
         }
     }
@@ -1588,11 +1730,31 @@ impl Executor {
 
 /// Run one tool call, folding a tool-level error into an in-band result string so the model can
 /// adapt rather than the loop aborting.
-async fn run_tool(runtime: &dyn ToolRuntime, call: &ToolInvocation) -> String {
-    match runtime.invoke(call).await {
+/// When `spill_dir` is set and the result exceeds `spill_max_bytes`, write the full
+/// body and return a head+tail preview. No directory: pass through unchanged.
+fn run_tool_spill(
+    result: &str,
+    spill_dir: Option<&std::path::Path>,
+    spill_max_bytes: usize,
+    label: &str,
+) -> String {
+    match spill_dir {
+        Some(dir) => spill_oversized_result(result, spill_max_bytes, dir, label).0,
+        None => result.to_string(),
+    }
+}
+
+async fn run_tool(
+    runtime: &dyn ToolRuntime,
+    call: &ToolInvocation,
+    spill_dir: Option<&std::path::Path>,
+    spill_max_bytes: usize,
+) -> String {
+    let raw = match runtime.invoke(call).await {
         Ok(content) => content,
         Err(message) => format!("tool error: {message}"),
-    }
+    };
+    run_tool_spill(&raw, spill_dir, spill_max_bytes, &call.id)
 }
 
 /// Reconstruct the assistant message from a completion response (content + requested tool calls).
@@ -4570,6 +4732,61 @@ mod tests {
             "after the doom-loop guard removes it, the record must show it gone: {:?}",
             last.tools_offered
         );
+    }
+
+    #[test]
+    fn spill_oversized_result_under_threshold_passes_through() {
+        let dir = tempfile::tempdir().unwrap();
+        let text = "small result";
+        let (shown, path) = spill_oversized_result(text, 1024, dir.path(), "test");
+        assert_eq!(shown, text);
+        assert!(path.is_none());
+    }
+
+    #[test]
+    fn spill_oversized_result_writes_file_and_keeps_the_tail() {
+        let dir = tempfile::tempdir().unwrap();
+        let spill = dir.path().join(".liberado").join("offload");
+        let text = format!("{}MID{}", "A".repeat(3000), "Z".repeat(2000));
+        let (shown, path) = spill_oversized_result(&text, 100, &spill, "call-1");
+        assert!(shown.len() < text.len(), "preview shorter than body");
+        assert!(shown.contains("truncated"));
+        assert!(shown.contains("AAAA"), "head present");
+        assert!(shown.contains("ZZZZ"), "tail present");
+        let rel = path.expect("must return a path");
+        assert_eq!(rel, ".liberado/offload/tool-spill-call-1.txt");
+        let spilled = std::fs::read_to_string(spill.join("tool-spill-call-1.txt")).unwrap();
+        assert_eq!(spilled, text);
+    }
+
+    #[test]
+    fn spill_oversized_result_distinct_labels_do_not_collide() {
+        let dir = tempfile::tempdir().unwrap();
+        let text = "oversized content".repeat(1000);
+        let (_, a) = spill_oversized_result(&text, 10, dir.path(), "call-a");
+        let (_, b) = spill_oversized_result(&text, 10, dir.path(), "call-b");
+        assert_ne!(a, b);
+        assert!(dir.path().join("tool-spill-call-a.txt").exists());
+        assert!(dir.path().join("tool-spill-call-b.txt").exists());
+    }
+
+    #[test]
+    fn run_tool_spill_without_dir_passes_through_even_when_large() {
+        let result = "big content!".repeat(10_000);
+        let shown = run_tool_spill(&result, None, 100, "test");
+        assert_eq!(shown, result, "no spill_dir must not truncate");
+    }
+
+    #[test]
+    fn run_tool_spill_writes_file_for_oversized() {
+        let dir = tempfile::tempdir().unwrap();
+        let result = "big content!".repeat(10_000);
+        let shown = run_tool_spill(&result, Some(dir.path()), 100, "tool-call-1");
+        assert!(shown.len() < result.len());
+        assert!(shown.contains("tool-call-1"));
+        let spilled =
+            std::fs::read_to_string(dir.path().join("tool-spill-tool-call-1.txt")).unwrap();
+        assert_eq!(spilled, result);
     }
 }
 
