@@ -16,6 +16,7 @@
 //!   liberado prompt \[profile\]        print the system prompt a chat under <profile> would get
 //!   liberado coder trace <id>        render a durable coding trace as a human transcript
 //!   liberado coder compare <a> <b>   side-by-side harness metrics for two native traces
+//!   liberado coder summarize <path>  summarize a cross-harness compare run
 //!   liberado coder import <file>     foreign (Kilo / OpenHands) → `.messages.json`
 //!
 //! `serve` runs in the foreground, hosting the vault watch loop and the chat/HTTP/SSE API until
@@ -31,6 +32,7 @@ mod coder_cmd;
 mod crate_map_cmd;
 mod docs_cmd;
 mod docs_meta_cmd;
+mod summarize_cmd;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {

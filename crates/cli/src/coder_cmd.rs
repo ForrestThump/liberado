@@ -26,6 +26,7 @@ pub fn run(mut args: impl Iterator<Item = String>) -> Result<(), Box<dyn std::er
         Some("compare") => cmd_compare(&mut args),
         Some("diff") => cmd_diff(&mut args),
         Some("import") => cmd_import(&mut args),
+        Some("summarize") => crate::summarize_cmd::run(args),
         Some(other) => Err(format!("unknown coder subcommand '{other}'\n{}", usage()).into()),
         None => Err(usage().into()),
     }
