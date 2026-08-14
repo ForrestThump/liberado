@@ -12,32 +12,32 @@ default:
 
 # Build the full native workspace (webui is WASM-only and excluded).
 build:
-    cargo build --workspace
+    cargo build --locked --workspace
 
 # Release build of the `liberado` binary.
 build-release:
-    cargo build --release --bin liberado
+    cargo build --locked --release --bin liberado
 
 # ── Test ─────────────────────────────────────────────────────────────────────
 
 # Run the whole workspace test suite (includes the layer-rules gate).
 test:
-    cargo test --workspace
+    cargo test --locked --workspace --no-fail-fast
 
 # Run tests for one crate: `just test-p dispatcher`
 test-p name:
-    cargo test -p liberado-{{name}}
+    cargo test --locked -p liberado-{{name}}
 
 # Run just the Tier-1 conformance suite (server, MockProvider, no network).
 test-t1:
-    cargo test -p liberado-server -- t1_conformance
+    cargo test --locked -p liberado-server -- t1_conformance
 
 # ── Quality gates (what CI runs) ─────────────────────────────────────────────
 
 # CI gate: fmt + clippy. Green is required before every commit.
 check:
     cargo fmt --all -- --check
-    cargo clippy --workspace --exclude liberado-webui --all-targets -- -D warnings
+    cargo clippy --locked --workspace --exclude liberado-webui --all-targets -- -D warnings
 
 # Auto-format the whole workspace.
 fmt:
@@ -49,12 +49,12 @@ deny:
 
 # Full local ship preflight. Runs through the native Liberado CLI on every host OS.
 preflight:
-    cargo run -p liberado-cli -- ci check
+    cargo run --locked -p liberado-cli -- ci check
 
 # Verify every relative link in docs/ resolves to a real file.
 # Skips http(s) URLs and .secret files; CI gates on it (doc-links job).
 check-links:
-    cargo run -p liberado-cli -- docs check-links
+    cargo run --locked -p liberado-cli -- docs check-links
 
 # Verify that the checked-in crate map matches Cargo manifests.
 check-crate-map:
@@ -72,6 +72,10 @@ docs-meta-test:
 docs-meta-check:
     cargo run --locked -p liberado-cli -- docs metadata lint
     cargo run --locked -p liberado-cli -- docs metadata check-stale-rs
+
+# Summarize a Liberado, MVL, pi, or compare-run artifact.
+summarize path:
+    cargo run --locked -p liberado-cli -- coder summarize {{path}}
 
 # ── Mutation testing ─────────────────────────────────────────────────────────
 
