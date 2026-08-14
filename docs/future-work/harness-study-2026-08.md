@@ -134,7 +134,8 @@ from four different harnesses, the event contract has to come first and be adapt
 A TOML table: if `run_command` / bash matches `program` + argv, append one line to that
 result. Cheap, no new tool. The first rule people reach for (`git commit` → “run CI”) is
 the wrong one for this pack — a red `cargo check` now refuses `succeeded` in the same
-conversation (PR #163), and the ship bar still runs `cargo test` after that. Compare 4
+conversation (PR #163), and the ship bar still runs `cargo test` after that. A filed
+report is no longer rewritten to `NoChanges` by a progress fatal (PR #165). Compare 4
 never committed. The matches that would have helped are `cargo test -p` and “edits with no
 `cargo check`.” Recorded in
 [`tool-result-hint-hooks.md`](tool-result-hint-hooks.md). Do not schedule it ahead of the

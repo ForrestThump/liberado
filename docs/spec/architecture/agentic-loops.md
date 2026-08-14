@@ -205,17 +205,20 @@ This is not hypothetical and not fixable with prompting. Bun's Zig-to-Rust port 
 agents sharing one git workspace; agents ran overlapping git commands and overwrote each other. The
 fix was structural — forbid the unsafe commands, give each worker its own worktree.
 
-Liberado is currently *protected by accident*: nothing can fan out, so nothing can collide. That
-protection disappears the moment any of the three gaps above is closed. Today `coder-sandbox` ships
-`HostWorkspace` and `DockerWorkspace`; there is **no** `WorktreeWorkspace`, and the coding pack's
-default workspace is a single directory per session.
+Step 1 of that sequence has landed. `coder-sandbox` ships `WorktreeWorkspace` (PR #58). The
+coding pack already fans `payload.subtasks` onto worktrees (S6). What is still closed is the
+kernel/face path: `dispatch_parallel` is built and only its tests call it; `delegate` is still
+synchronous. That remaining wire is backlog **C7** — expose *one* of those two, not both.
+
+The original 2026-07-24 audit recorded no `WorktreeWorkspace`. Do not rebuild it.
 
 So the sequence is fixed:
 
-1. **`WorktreeWorkspace`** in `coder-sandbox` — per-worker isolation and a defined merge-back.
-   (`coding-tui-plan.md` G7/S6.)
-2. **A fan-out `DispatchAction`** — the missing vocabulary; `dispatch_parallel` is already built and
-   tested behind it.
+1. ~~**`WorktreeWorkspace`** in `coder-sandbox`~~ **Landed (PR #58).** Per-worker isolation
+   and a defined merge-back. (`coding-tui-plan.md` G7/S6.)
+2. **A reachable fan-out** — `dispatch_parallel` is already built and tested; C7 is making
+   one production path call it (or a coding-route `delegate` on a worktree). Do not expose
+   both APIs.
 3. **Decomposition in the classifier** — deciding *what* is independent, which is the genuinely hard
    part and the one worth doing last.
 
