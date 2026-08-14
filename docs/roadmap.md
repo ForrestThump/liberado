@@ -189,8 +189,8 @@ Two carried-forward limitations worth knowing before building on this:
 **Goal:** dispatch a scoped task and get back a PR whose review is taste and scope, not repair.
 This table is the harness track. The repo-wide total order is the
 [backlog implementation order](future-work/backlog.md#implementation-order); F9, 0.1b, D2
-(#154), 0.6, B1, C1, C7 (#166) and the progress-guard have landed. The next open harness
-row is **0.7 / C3** (publish the controlled baseline). The evidence says
+(#154), 0.6, B1, C1, C7 (#166), 0.9 (#167) and the progress-guard have landed. The next
+open harness row is **0.7 / C3** (publish the controlled baseline). The evidence says
 something specific: **every measured improvement so far came from fixing a defect, not from tuning
 a value.** Edit failure went 66–70% → 8% → 0% across PRs #106–#128, all defect fixes. No knob has
 yet been tuned to a measured gain.
@@ -204,7 +204,7 @@ yet been tuned to a measured gain.
 | ~~**4b**~~ | ~~**Emit the joined logs from the common boundary.**~~ **Landed, PR #151.** Implement append-and-flush at the `executor` / provider boundary, not only in `coder-agent`. | The instrument. Every later claim — knob, prompt, cache, graph or harness — is unmeasurable without it. |
 | **5** | **Run a controlled cross-harness baseline.** Add minimal emitters to the pinned pi, Hermes and Deep Agents forks; then run Liberado and the references on the same user task, repository commit, model, provider, sampling settings and resource caps. Keep each harness's native system prompt and tool schemas. | Source reading gives hypotheses. Repeated A/B/C/D runs say which mechanisms improve the accepted result, cost and latency. This comes before copying another architecture. |
 | ~~**6**~~ | ~~**Productize cold review + one fix round.**~~ **Landed, PR #142.** | Fresh review is bound to changed paths and excerpts; one retained-finding fix round must be reverified before readiness. |
-| **7** | **Implement the first evidence-selected cost lever.** Tool-output offload is the strongest current hypothesis; cache policy, context selection and structured compaction follow only where the baseline supports them. | Change one mechanism at a time. The previous benchmark changed several settings together and cannot attribute the gain. |
+| ~~**7**~~ | ~~**Implement the first evidence-selected cost lever.**~~ **Landed, PR #167.** Oversized tool results spill to `.liberado/offload`; the tail stays reachable. Cache policy, context selection and structured compaction still follow only where a baseline supports them. | Change one mechanism at a time. The previous benchmark changed several settings together and cannot attribute the gain. |
 | **8** | **Extract knobs where a measurement says the constant is wrong.** | Not "as many knobs as plausible". See the note below. |
 | **9** | **Per-model profiles, then the SQL tuning ledger.** | Correct to defer while we run only DeepSeek v4 pro/flash. [`model-knob-profiles.md`](future-work/model-knob-profiles.md) |
 
@@ -275,9 +275,9 @@ not a model ceiling.
                     ├── C1 landed (#164)               (deny shell git; gix tools)
                     ├── progress-guard (#165)          (report beats churn fatal)
                     ├── C7 landed (#166)               (isolated parallel door)
+                    ├── 0.9 landed (#167)              (offload oversized results)
                     ├── 0.7/C3 controlled baseline     (measurement)
-                    ├── C5 completion-gate comparison  (decision)
-                    └── 0.9 first evidence-selected lever
+                    └── C5 completion-gate comparison  (decision)
 
   Full total order ──► docs/future-work/backlog.md#implementation-order
 
@@ -289,6 +289,7 @@ not a model ceiling.
 
 | When | What |
 |------|------|
+| **2026-08-14** | **0.9 offload.** Oversized command output and (when a spill directory is set) any oversized tool result are written under `.liberado/offload`; the model sees a head+tail preview and can `read_file` the rest ([#167](https://github.com/ForrestThump/liberado/pull/167)). Under the threshold, or with no directory, the result is unchanged. Backend gates stay truncated. |
 | **2026-08-14** | **C7 + host-failure.** `dispatch_parallel` is reachable through the dispatch pack: optional `workspace_root` plus `RuntimeFactory::runtime_for_in`, with `WorktreeWorkspace` per worker ([#166](https://github.com/ForrestThump/liberado/pull/166)). `delegate` stays synchronous. A host infrastructure failure (disk full, and the same class) ends the run; the executor files `Failed` and does not give the model another turn. |
 | **2026-08-14** | **C1 + progress-guard.** Default `CommandPolicy` denies shell `git` (and `git.exe` by stem); dedicated `git_*` tools go through `coder-tools::git` ([#164](https://github.com/ForrestThump/liberado/pull/164)). A filed report is no longer rewritten to `NoChanges` by a progress fatal; `run_command` is not same-tool-churn; mutating cycles match on exact args ([#165](https://github.com/ForrestThump/liberado/pull/165)). |
 | **2026-08-13** | **B1 + same-session compile.** `ExecuteDirect` now carries `Delivery` ([#162](https://github.com/ForrestThump/liberado/pull/162)): a research chat relay gets the relay contract, acting work stays short, vault delivery files the report. `submit_report outcome=succeeded` is refused while `cargo check` is red ([#163](https://github.com/ForrestThump/liberado/pull/163)); the files stay. F9 (#146), 0.1b (#147) and F12 (#156) were already on `main` and are now marked landed in the backlog. |

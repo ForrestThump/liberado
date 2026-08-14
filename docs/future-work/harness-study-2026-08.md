@@ -43,12 +43,17 @@ to the filesystem and replaces it in-context with a head+tail preview plus:
 > path: {path}. You can read the result from the filesystem by using the read_file tool, but make
 > sure to only read part of the result at a time."*
 
-**Why this is our biggest lever.** We currently *truncate* — `TRACE_MAX_CHARS`, `read_max_bytes`,
+**Why this is our biggest lever.** We used to *truncate* — `TRACE_MAX_CHARS`, `read_max_bytes`,
 `output_max_bytes`. Truncation and offload cost the same context; only offload keeps the data
 reachable. Our worst offender is `run_command`: a failing `cargo test --workspace` is tens of
-kilobytes, it lands in context in full or clipped to uselessness, and it **stays there for every
+kilobytes, it landed in context in full or clipped to uselessness, and it **stayed there for every
 subsequent turn**. Given the measured finding that 56% of all spend is re-sent base context, moving
 build output out of the window is the single highest-value change on this list.
+
+**Landed (PR #167).** Command output that exceeds the cap, and any oversized tool result when the
+executor has a spill directory, is written under `.liberado/offload`. The model sees a head+tail
+preview plus a `read_file` path. A controlled rerun that measures accepted-result cost is still
+0.7 / C3.
 
 It also fixes a correctness problem we already hit: a 120s command timeout once returned *no output
 at all*, and a 500-character clip dropped the part of a compiler error that explained the run.
@@ -200,14 +205,14 @@ one setting.
 1. ~~**One production coding-run assembly path.**~~ Landed in PR #141.
 2. ~~**The MVL and companion execution-log contracts** (#8), with shared conformance fixtures.~~
    Landed in PR #140.
-3. **Emit both streams from Liberado's common executor/provider boundary.** Do not make them a
-   second coding-pack-only source of truth. This is backlog 0.6.
-4. **Instrument the three pinned forks and establish the repeated baseline.** Only after #3, so
-   every adapter targets one schema. This is one item shared by backlog 0.7 and C3.
+3. ~~**Emit both streams from Liberado's common executor/provider boundary.**~~ Landed in PR #151
+   (backlog 0.6).
+4. **Instrument the three pinned forks and establish the repeated baseline.** This is one item
+   shared by backlog 0.7 and C3. It is also the rerun that should say whether 0.9 paid for itself.
 5. **Measure the completion gate against that baseline.** Do not change its default from one or two
    anecdotes.
-6. **Implement one evidence-selected lever.** Tool-output offload (#1) is the strongest current
-   hypothesis. Retain it only if the controlled rerun improves accepted-result cost or quality.
+6. ~~**Implement one evidence-selected lever.**~~ Landed in PR #167 (tool-output offload). Retain
+   it only if the 0.7 rerun improves accepted-result cost or quality.
 7. **Mutation landed check** (#6), **side-effect classification** (#5), cache work (#3) and
    compaction file-op lists (#4) follow when evidence supports them or a correctness task touches
    that area.

@@ -131,6 +131,11 @@ and turn exhaustion keep the dirty tree. The post-execute ship bar still runs `c
 the model can make. The finish gate refuses `succeeded`, the executor files `Failed`, and the
 model does not get another turn (PR #166).
 
+**Oversized tool results are offloaded, not discarded.** Command output over the cap, and any
+oversized tool result when the executor has a spill directory, is written under
+`.liberado/offload`. The model sees a head+tail preview and can `read_file` the rest (PR #167).
+Backend gates and the ship bar still truncate.
+
 **Debugging an agent run: read its trace, do not re-derive it.** Every coding run writes
 `<workspace>/coder-traces/<session>.json` recording, per turn, the tools the model was *offered*
 (guards withdraw them mid-run, so this changes), its text verbatim, what it called, and why the turn
