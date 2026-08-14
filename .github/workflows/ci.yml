@@ -63,11 +63,11 @@ jobs:
           cargo clippy --version
           cargo fmt --version
 
-      - name: PR shepherd self-test
-        run: cargo run --locked -p liberado-cli -- shepherd --self-test
-
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
+
+      - name: PR shepherd self-test
+        run: cargo run --locked -p liberado-cli -- shepherd --self-test
 
       - name: Format check
         if: matrix.os == 'ubuntu-latest'

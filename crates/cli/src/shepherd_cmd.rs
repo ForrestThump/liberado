@@ -300,11 +300,9 @@ fn gh(cfg: &Config, args: &[&str], check: bool) -> Result<String, Box<dyn std::e
     }
     Ok(String::from_utf8_lossy(&out.stdout).into())
 }
-fn gh_json(cfg: &Config, args: &[&str]) -> Value {
-    gh(cfg, args, false)
-        .ok()
-        .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or(Value::Null)
+fn gh_json(cfg: &Config, args: &[&str]) -> Result<Value, Box<dyn std::error::Error>> {
+    let output = gh(cfg, args, true)?;
+    Ok(serde_json::from_str(&output)?)
 }
 fn log(cfg: &Config, event: &str, fields: Value) {
     let record = json!({"ts":Utc::now().to_rfc3339(),"event":event,"fields":fields});
@@ -347,7 +345,11 @@ fn parse_failure_set(text: &str) -> BTreeSet<String> {
     }
     result
 }
-fn latest_run(cfg: &Config, branch: &str, sha: Option<&str>) -> Option<Value> {
+fn latest_run(
+    cfg: &Config,
+    branch: &str,
+    sha: Option<&str>,
+) -> Result<Option<Value>, Box<dyn std::error::Error>> {
     let rows = gh_json(
         cfg,
         &[
@@ -360,24 +362,28 @@ fn latest_run(cfg: &Config, branch: &str, sha: Option<&str>) -> Option<Value> {
             "--json",
             "databaseId,headSha,status,conclusion,workflowName",
         ],
-    )
-    .as_array()?
-    .clone();
-    rows.into_iter().find(|r| {
-        r["status"] == "completed"
-            && sha.is_none_or(|wanted| {
-                r["headSha"]
-                    .as_str()
-                    .is_some_and(|s| s.starts_with(&wanted[..wanted.len().min(12)]))
-            })
-    })
+    )?;
+    let Some(rows) = rows.as_array() else {
+        return Ok(None);
+    };
+    Ok(rows
+        .iter()
+        .find(|r| {
+            r["status"] == "completed"
+                && sha.is_none_or(|wanted| {
+                    r["headSha"]
+                        .as_str()
+                        .is_some_and(|s| s.starts_with(&wanted[..wanted.len().min(12)]))
+                })
+        })
+        .cloned())
 }
-fn failure_set(cfg: &Config, id: u64) -> BTreeSet<String> {
+fn failure_set(cfg: &Config, id: u64) -> Result<BTreeSet<String>, Box<dyn std::error::Error>> {
     let id = id.to_string();
     let mut set = parse_failure_set(
         &gh(cfg, &["run", "view", &id, "--log-failed"], false).unwrap_or_default(),
     );
-    let jobs = gh_json(cfg, &["run", "view", &id, "--json", "jobs"]);
+    let jobs = gh_json(cfg, &["run", "view", &id, "--json", "jobs"])?;
     for job in jobs["jobs"]
         .as_array()
         .into_iter()
@@ -405,9 +411,10 @@ fn failure_set(cfg: &Config, id: u64) -> BTreeSet<String> {
             set.insert(format!("{name}|step:<unknown step>"));
         }
     }
-    set.into_iter()
+    Ok(set
+        .into_iter()
         .filter(|key| check_selected(cfg, key))
-        .collect()
+        .collect())
 }
 
 fn check_selected(cfg: &Config, key: &str) -> bool {
@@ -437,11 +444,11 @@ fn baseline(
             v["provenance"].as_str().unwrap_or("cache").into(),
         ));
     }
-    let exact = latest_run(cfg, &cfg.base, Some(sha));
+    let exact = latest_run(cfg, &cfg.base, Some(sha))?;
     let (run, provenance) = match exact {
         Some(r) => (Some(r), format!("exact:{short}")),
         None => {
-            let r = latest_run(cfg, &cfg.base, None);
+            let r = latest_run(cfg, &cfg.base, None)?;
             let h = r
                 .as_ref()
                 .and_then(|r| r["headSha"].as_str())
@@ -455,6 +462,7 @@ fn baseline(
         .as_ref()
         .and_then(|r| r["databaseId"].as_u64())
         .map(|id| failure_set(cfg, id))
+        .transpose()?
         .unwrap_or_default();
     fs::write(
         path,
@@ -466,7 +474,7 @@ fn baseline(
 }
 
 fn prs(cfg: &Config) -> Result<Vec<Pr>, Box<dyn std::error::Error>> {
-    Ok(gh_json(
+    let response = gh_json(
         cfg,
         &[
             "pr",
@@ -478,25 +486,26 @@ fn prs(cfg: &Config) -> Result<Vec<Pr>, Box<dyn std::error::Error>> {
             "--json",
             "number,title,headRefName,baseRefOid,labels,isDraft",
         ],
-    )
-    .as_array()
-    .into_iter()
-    .flatten()
-    .filter(|r| !r["isDraft"].as_bool().unwrap_or(false))
-    .filter_map(|r| {
-        Some(Pr {
-            number: r["number"].as_u64()?,
-            title: r["title"].as_str()?.into(),
-            branch: r["headRefName"].as_str()?.into(),
-            base_sha: r["baseRefOid"].as_str().unwrap_or("").into(),
-            labels: r["labels"]
-                .as_array()?
-                .iter()
-                .filter_map(|v| v["name"].as_str().map(str::to_owned))
-                .collect(),
+    )?;
+    Ok(response
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|r| !r["isDraft"].as_bool().unwrap_or(false))
+        .filter_map(|r| {
+            Some(Pr {
+                number: r["number"].as_u64()?,
+                title: r["title"].as_str()?.into(),
+                branch: r["headRefName"].as_str()?.into(),
+                base_sha: r["baseRefOid"].as_str().unwrap_or("").into(),
+                labels: r["labels"]
+                    .as_array()?
+                    .iter()
+                    .filter_map(|v| v["name"].as_str().map(str::to_owned))
+                    .collect(),
+            })
         })
-    })
-    .collect())
+        .collect())
 }
 fn label(cfg: &Config, pr: &mut Pr, name: String) {
     let _ = gh(
@@ -513,13 +522,13 @@ fn remove_label(cfg: &Config, pr: &mut Pr, name: &str) {
     let _ = gh(cfg, &["pr", "edit", &number, "--remove-label", name], false);
     pr.labels.retain(|l| l != name)
 }
-fn ci_status(cfg: &Config, pr: &Pr) -> &'static str {
+fn ci_status(cfg: &Config, pr: &Pr) -> Result<&'static str, Box<dyn std::error::Error>> {
     let number = pr.number.to_string();
-    let value = gh_json(cfg, &["pr", "checks", &number, "--json", "state,name"]);
+    let value = gh_json(cfg, &["pr", "checks", &number, "--json", "state,name"])?;
     let Some(rows) = value.as_array() else {
-        return "none";
+        return Ok("none");
     };
-    check_status(&cfg.check_names, rows)
+    Ok(check_status(&cfg.check_names, rows))
 }
 
 fn check_status(check_names: &[String], rows: &[Value]) -> &'static str {
@@ -613,7 +622,11 @@ fn goal_status(cfg: &Config, id: &str) -> Option<String> {
         return Some("missing".into());
     }
     let v: Value = r.json().ok()?;
-    v.get("session").unwrap_or(&v)["status"]
+    parse_goal_status(&v)
+}
+
+fn parse_goal_status(value: &Value) -> Option<String> {
+    value.get("session").unwrap_or(value)["status"]
         .as_str()
         .map(|s| s.to_ascii_lowercase())
 }
@@ -622,33 +635,72 @@ fn pending(cfg: &Config, number: u64) -> PathBuf {
         .join("pending_reviews")
         .join(format!("{number}.json"))
 }
-fn settle(cfg: &Config, pr: &mut Pr, dry: bool) -> Result<bool, Box<dyn std::error::Error>> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReviewTransition {
+    None,
+    Waiting,
+    Labeled,
+    Failed,
+}
+
+fn review_transition(status: Option<&str>) -> ReviewTransition {
+    match status {
+        None | Some("running" | "pending" | "starting" | "active" | "parked") => {
+            ReviewTransition::Waiting
+        }
+        Some("succeeded") => ReviewTransition::Labeled,
+        Some(_) => ReviewTransition::Failed,
+    }
+}
+
+fn settle(
+    cfg: &Config,
+    pr: &mut Pr,
+    dry: bool,
+) -> Result<ReviewTransition, Box<dyn std::error::Error>> {
+    settle_with(
+        cfg,
+        pr,
+        dry,
+        |id| goal_status(cfg, id),
+        |pr, label_name| label(cfg, pr, label_name),
+    )
+}
+
+fn settle_with(
+    cfg: &Config,
+    pr: &mut Pr,
+    dry: bool,
+    mut status_lookup: impl FnMut(&str) -> Option<String>,
+    mut labeler: impl FnMut(&mut Pr, String),
+) -> Result<ReviewTransition, Box<dyn std::error::Error>> {
     let path = pending(cfg, pr.number);
     let Ok(text) = fs::read_to_string(&path) else {
-        return Ok(false);
+        return Ok(ReviewTransition::None);
     };
     let value: Value = serde_json::from_str(&text)?;
     let (Some(id), Some(round)) = (value["session_id"].as_str(), value["round"].as_u64()) else {
         if !dry {
             let _ = fs::remove_file(path);
         }
-        return Ok(false);
+        return Ok(ReviewTransition::None);
     };
-    match goal_status(cfg, id).as_deref() {
-        None | Some("running" | "pending" | "starting" | "active" | "parked") => Ok(true),
-        Some("succeeded") => {
+    match review_transition(status_lookup(id).as_deref()) {
+        ReviewTransition::Waiting => Ok(ReviewTransition::Waiting),
+        ReviewTransition::Labeled => {
             if !dry {
-                label(cfg, pr, format!("shepherd:review-{round}"));
+                labeler(pr, format!("shepherd:review-{round}"));
                 let _ = fs::remove_file(path);
             }
-            Ok(false)
+            Ok(ReviewTransition::Labeled)
         }
-        Some(_) => {
+        ReviewTransition::Failed => {
             if !dry {
                 let _ = fs::remove_file(path);
             }
-            Ok(false)
+            Ok(ReviewTransition::Failed)
         }
+        ReviewTransition::None => unreachable!("status transition is never none"),
     }
 }
 fn note(set: &BTreeSet<String>) -> String {
@@ -666,22 +718,58 @@ fn note(set: &BTreeSet<String>) -> String {
         )
     }
 }
+
+fn kickback_prompt(pr: &Pr, failures: &BTreeSet<String>, old: &BTreeSet<String>) -> String {
+    let list = failures
+        .iter()
+        .map(|failure| format!("  - {failure}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    format!(
+        "Pull request #{} (branch `{}`: {}) introduced {} new CI failure(s).\n\nNew failures:\n{}\n\n{}Do this:\n1. `git fetch origin` and check out `{}`.\n2. Reproduce a new failure locally before changing anything. A fix you never watched fail is a guess.\n3. Fix the cause. Do not delete, skip, or `#[ignore]` a test to get green. If a test is genuinely wrong, explain why in the commit message.\n4. Commit and push to `{}`.\n\nStay inside this scope. Do not refactor, reformat, or fix unrelated things.",
+        pr.number,
+        pr.branch,
+        pr.title,
+        failures.len(),
+        list,
+        note(old),
+        pr.branch,
+        pr.branch,
+    )
+}
+
+fn cold_review_prompt(cfg: &Config, pr: &Pr, round: usize, old: &BTreeSet<String>) -> String {
+    format!(
+        "Cold review of pull request #{} (branch `{}`: {}). Round {} of {}.\n\nYou have no prior context on this change. Review it as written.\n\n1. `git fetch origin`, check out `{}`, and read `git diff origin/{}...HEAD`.\n2. Find real problems: bugs, missing edge cases, security holes, or broken invariants. Ignore style and formatting; CI already enforces those.\n3. For each suspicion, read the actual code and classify it as Real, Exaggerated, or Hallucinated. Fix only what is Real.\n4. For each real fix, add a test that fails without it and passes with it. Run it both ways; a test you never watched fail proves nothing.\n5. Commit and push to `{}`. If you found nothing Real, push nothing and say so.\n\n{}",
+        pr.number,
+        pr.branch,
+        pr.title,
+        round,
+        cfg.cold_reviews,
+        pr.branch,
+        cfg.base,
+        pr.branch,
+        note(old),
+    )
+}
+
 fn tick(cfg: &Config, pr: &mut Pr, dry: bool) -> Result<(), Box<dyn std::error::Error>> {
     if pr.terminal() {
         return Ok(());
     }
-    match ci_status(cfg, pr) {
+    match ci_status(cfg, pr)? {
         "pending" | "none" => return Ok(()),
         _ => {}
     }
-    if settle(cfg, pr, dry)? {
+    if settle(cfg, pr, dry)? == ReviewTransition::Waiting {
         return Ok(());
     }
-    let run = latest_run(cfg, &pr.branch, None);
+    let run = latest_run(cfg, &pr.branch, None)?;
     let current = run
         .as_ref()
         .and_then(|r| r["databaseId"].as_u64())
         .map(|id| failure_set(cfg, id))
+        .transpose()?
         .unwrap_or_default();
     let (base, provenance) = if pr.base_sha.is_empty() {
         (BTreeSet::new(), "no-base".into())
@@ -715,21 +803,7 @@ fn tick(cfg: &Config, pr: &mut Pr, dry: bool) -> Result<(), Box<dyn std::error::
             return Ok(());
         }
         if !dry {
-            let list = new
-                .iter()
-                .map(|s| format!("  - {s}"))
-                .collect::<Vec<_>>()
-                .join("\n");
-            let prompt = format!(
-                "Pull request #{} (branch `{}`: {}) introduced {} new CI failure(s).\n\nNew failures:\n{}\n\n{}Reproduce, fix, test, commit, and push to `{}`. Stay in scope.",
-                pr.number,
-                pr.branch,
-                pr.title,
-                new.len(),
-                list,
-                note(&old),
-                pr.branch
-            );
+            let prompt = kickback_prompt(pr, &new, &old);
             if let Some(id) = start_goal(cfg, prompt, 0) {
                 label(cfg, pr, format!("shepherd:kickback-{}", kicks + 1));
                 remove_label(cfg, pr, RERUN);
@@ -754,16 +828,7 @@ fn tick(cfg: &Config, pr: &mut Pr, dry: bool) -> Result<(), Box<dyn std::error::
     }
     if !dry {
         let round = reviews + 1;
-        let prompt = format!(
-            "Cold review pull request #{} (branch `{}`: {}). Round {} of {}. Fetch origin, inspect `git diff origin/{}...HEAD`, find only real bugs, add a test for each real fix, then commit and push. If no real issue exists, push nothing.\n\n{}",
-            pr.number,
-            pr.branch,
-            pr.title,
-            round,
-            cfg.cold_reviews,
-            cfg.base,
-            note(&old)
-        );
+        let prompt = cold_review_prompt(cfg, pr, round, &old);
         if let Some(id) = start_goal(cfg, prompt, cfg.cold_turns) {
             let path = pending(cfg, pr.number);
             fs::create_dir_all(path.parent().unwrap())?;
@@ -802,14 +867,25 @@ fn reset_baselines(cfg: &Config) -> Result<(), Box<dyn std::error::Error>> {
 }
 fn self_test() -> Result<(), Box<dyn std::error::Error>> {
     let got = parse_failure_set(
-        "test (ubuntu)\tTests\tX test a::b ... FAILED\ntest (windows)\tTests\tX test a::b ... FAILED\nclippy\tLint\tX error: could not compile `x`",
+        "test (ubuntu-latest)\tTests\tX test a::b ... FAILED\ntest (ubuntu-latest)\tTests\tX test c::d ... FAILED\ntest (windows-latest)\tTests\tX test a::b ... FAILED\nclippy\tLint\tX error: could not compile `x`",
     );
-    assert_eq!(got.len(), 3);
+    assert_eq!(got.len(), 4);
     assert!(got.contains("clippy|step:Lint"));
+    assert!(got.contains("test (ubuntu-latest)|a::b"));
+    assert!(got.contains("test (windows-latest)|a::b"));
     let base: BTreeSet<String> = BTreeSet::from(["j|a".into(), "j|b".into()]);
     let head: BTreeSet<String> = BTreeSet::from(["j|a".into(), "j|c".into()]);
     assert_eq!(base.len(), head.len());
     assert!(head.difference(&base).next().is_some());
+    assert_eq!(
+        parse_goal_status(&json!({"session":{"status":"Succeeded"}})),
+        Some("succeeded".into())
+    );
+    assert_eq!(review_transition(Some("failed")), ReviewTransition::Failed);
+    assert_eq!(
+        review_transition(Some("running")),
+        ReviewTransition::Waiting
+    );
     println!("shepherd self-test: ok");
     Ok(())
 }
@@ -817,6 +893,23 @@ fn self_test() -> Result<(), Box<dyn std::error::Error>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn test_config(root: PathBuf) -> Config {
+        Config {
+            root,
+            repository: None,
+            check_names: Vec::new(),
+            daemon: String::new(),
+            project: String::new(),
+            base: "main".into(),
+            profile: String::new(),
+            max_kickbacks: 2,
+            cold_reviews: 2,
+            cold_turns: 60,
+            max_concurrent: 2,
+            poll: 120,
+        }
+    }
     #[test]
     fn parser_is_platform_specific_and_preserves_step_failure() {
         self_test().unwrap()
@@ -878,5 +971,84 @@ mod tests {
                 .to_string()
                 .contains("unknown coding_project")
         );
+    }
+
+    #[test]
+    fn settled_review_labels_only_on_success_and_preserves_dry_run_state() {
+        let temp = tempfile::tempdir().unwrap();
+        let cfg = test_config(temp.path().to_path_buf());
+        let mut pr = Pr {
+            number: 42,
+            title: "test".into(),
+            branch: "test".into(),
+            base_sha: String::new(),
+            labels: Vec::new(),
+        };
+        let path = pending(&cfg, pr.number);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, r#"{"session_id":"one","round":1}"#).unwrap();
+        let mut labels = Vec::new();
+        assert_eq!(
+            settle_with(
+                &cfg,
+                &mut pr,
+                false,
+                |_| Some("failed".into()),
+                |_, label| labels.push(label)
+            )
+            .unwrap(),
+            ReviewTransition::Failed
+        );
+        assert!(!path.exists());
+        assert!(labels.is_empty());
+
+        fs::write(&path, r#"{"session_id":"two","round":1}"#).unwrap();
+        assert_eq!(
+            settle_with(
+                &cfg,
+                &mut pr,
+                false,
+                |_| Some("succeeded".into()),
+                |_, label| labels.push(label)
+            )
+            .unwrap(),
+            ReviewTransition::Labeled
+        );
+        assert!(!path.exists());
+        assert_eq!(labels, ["shepherd:review-1"]);
+
+        fs::write(&path, r#"{"session_id":"three","round":2}"#).unwrap();
+        assert_eq!(
+            settle_with(
+                &cfg,
+                &mut pr,
+                true,
+                |_| Some("succeeded".into()),
+                |_, label| labels.push(label)
+            )
+            .unwrap(),
+            ReviewTransition::Labeled
+        );
+        assert!(path.exists());
+        assert_eq!(labels, ["shepherd:review-1"]);
+    }
+
+    #[test]
+    fn prompts_keep_unattended_guardrails() {
+        let cfg = test_config(PathBuf::new());
+        let pr = Pr {
+            number: 1,
+            title: "title".into(),
+            branch: "branch".into(),
+            base_sha: String::new(),
+            labels: Vec::new(),
+        };
+        let failures = BTreeSet::from(["test|case".into()]);
+        let kickback = kickback_prompt(&pr, &failures, &BTreeSet::new());
+        assert!(kickback.contains("Reproduce a new failure locally before changing anything"));
+        assert!(kickback.contains("Do not delete, skip, or `#[ignore]` a test"));
+        let review = cold_review_prompt(&cfg, &pr, 1, &BTreeSet::new());
+        assert!(review.contains("Real, Exaggerated, or Hallucinated"));
+        assert!(review.contains("Run it both ways"));
     }
 }

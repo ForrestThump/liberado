@@ -43,7 +43,6 @@ fn usage() -> &'static str {
      liberado coder compare <trace-a> <trace-b> [--dir <trace-dir>] [--json]\n  \
      liberado coder compare prepare              print the pinned comparison plan\n  \
      liberado coder diff <run-a> <run-b> [--json]   cross-harness: where two runs parted\n  \
-     liberado coder diff <run-a> <run-b> [--json]   cross-harness: where two runs parted\n  \
      liberado coder import <foreign.json> [-o <out.messages.json>] [--format kilo|kilo-cli|openhands|auto] [--session-id <id>]
   liberado coder smoke              validate the coder runner process boundary"
 }
@@ -236,10 +235,11 @@ fn cmd_compare(args: &mut dyn Iterator<Item = String>) -> Result<(), Box<dyn std
     let mut dirs: Vec<PathBuf> = default_trace_dirs();
     let mut as_json = false;
 
-    for arg in all {
+    let mut all = all.into_iter();
+    while let Some(arg) = all.next() {
         match arg.as_str() {
             "--dir" => {
-                let d = args.next().ok_or("--dir requires a value")?;
+                let d = all.next().ok_or("--dir requires a value")?;
                 dirs.insert(0, PathBuf::from(d));
             }
             "--json" => as_json = true,
@@ -527,7 +527,7 @@ fn cmd_import(args: &mut dyn Iterator<Item = String>) -> Result<(), Box<dyn std:
 
 #[cfg(test)]
 mod tests {
-    use super::smoke_request;
+    use super::{cmd_compare, smoke_request};
     use std::path::Path;
 
     #[test]
@@ -544,5 +544,18 @@ mod tests {
             0
         );
         assert_eq!(request["config"]["path_policy"]["deny_globs"][0], ".git/**");
+    }
+
+    #[test]
+    fn compare_consumes_dir_value_before_resolving_traces() {
+        let mut args = vec![
+            "--dir".to_owned(),
+            "custom-traces".to_owned(),
+            "missing-a".to_owned(),
+            "missing-b".to_owned(),
+        ]
+        .into_iter();
+        let error = cmd_compare(&mut args).unwrap_err().to_string();
+        assert!(!error.contains("--dir requires a value"), "{error}");
     }
 }

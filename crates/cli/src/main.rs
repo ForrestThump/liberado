@@ -66,13 +66,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some("docs") => match args.next().as_deref() {
             Some("check-links") => docs_cmd::check_links(),
             Some("crate-map") => {
-                let write = args.next().as_deref() == Some("--write");
+                let arguments: Vec<_> = args.collect();
+                let write = match arguments.as_slice() {
+                    [] => false,
+                    [flag] if flag == "--write" => true,
+                    _ => return Err("usage: liberado docs crate-map [--write]".into()),
+                };
                 crate_map_cmd::check_or_write(&crate_map_cmd::repository_root()?, write)
             }
             Some("metadata") => {
                 let command = args.next().ok_or(
                     "usage: liberado docs metadata <lint|generate|check-stale-rs|self-test>",
                 )?;
+                if args.next().is_some() {
+                    return Err(
+                        "usage: liberado docs metadata <lint|generate|check-stale-rs|self-test>"
+                            .into(),
+                    );
+                }
                 docs_meta_cmd::run(&crate_map_cmd::repository_root()?, &command)
             }
             Some("site") => docs_site_cmd::run(args),

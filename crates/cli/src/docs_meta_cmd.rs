@@ -31,7 +31,7 @@ fn split_frontmatter(text: &str) -> (Option<serde_yaml::Mapping>, String) {
         return (None, normalized);
     };
     let yaml = &normalized[4..4 + end];
-    let body = normalized[4 + end + 6..].to_owned();
+    let body = normalized[4 + end + 5..].to_owned();
     let meta = serde_yaml::from_str::<Value>(yaml)
         .ok()
         .and_then(|v| v.as_mapping().cloned());
@@ -449,12 +449,169 @@ fn lint(root: &Path) -> Result<Vec<Issue>, Box<dyn std::error::Error>> {
     Ok(issues)
 }
 
+/// Pure regression checks for the metadata rules. This is a command, rather than only Rust unit
+/// tests, because CI invokes `liberado docs metadata self-test` before linting the repository.
+fn self_test() -> Result<(), Box<dyn std::error::Error>> {
+    let assert_rule = |name: &str, passed: bool| -> Result<(), Box<dyn std::error::Error>> {
+        if passed {
+            Ok(())
+        } else {
+            Err(format!("docs metadata self-test failed: {name}").into())
+        }
+    };
+    let document = |path: &str, meta: &str, body: &str| Document {
+        path: path.into(),
+        meta: split_frontmatter(&format!("---\n{meta}\n---\n{body}")).0,
+        body: body.into(),
+    };
+    let future_work = format!("docs/{}", "future-work");
+
+    let (meta, body) = split_frontmatter("---\nkind: plan\nopen_items: true\n---\n# Title\n");
+    assert_rule(
+        "frontmatter round trip",
+        meta.as_ref().and_then(|m| meta_str(m, "kind")) == Some("plan") && body == "# Title\n",
+    )?;
+
+    let missing = lint_documents_for_test(vec![Document {
+        path: format!("{future_work}/missing.md"),
+        meta: None,
+        body: String::new(),
+    }])?;
+    assert_rule(
+        "missing future-work frontmatter",
+        has_issue(&missing, "missing YAML"),
+    )?;
+
+    let inactive = lint_documents_for_test(vec![document(
+        &format!("{future_work}/active.md"),
+        "kind: plan\nstatus: active\nauthority: implementation\nopen_items: false",
+        "",
+    )])?;
+    assert_rule("active plan open_items", has_issue(&inactive, "open_items"))?;
+
+    let duplicate = lint_documents_for_test(vec![
+        document(
+            &format!("{future_work}/a.md"),
+            "kind: plan\nstatus: active\nauthority: implementation\nopen_items: true\ncanonical_for: same",
+            "",
+        ),
+        document(
+            &format!("{future_work}/b.md"),
+            "kind: plan\nstatus: active\nauthority: implementation\nopen_items: true\ncanonical_for: same",
+            "",
+        ),
+    ])?;
+    assert_rule(
+        "duplicate canonical_for",
+        has_issue(&duplicate, "duplicate active canonical_for"),
+    )?;
+
+    let invalid_status = lint_documents_for_test(vec![document(
+        &format!("docs/{}/ADR-0001.md", "decisions"),
+        "kind: decision\nstatus: banana\nauthority: normative",
+        "",
+    )])?;
+    assert_rule(
+        "decision status vocabulary",
+        has_issue(&invalid_status, "invalid status 'banana'"),
+    )?;
+
+    let archive = lint_documents_for_test(vec![document(
+        "docs/spec/architecture/contracts.md",
+        "kind: architecture\nstatus: active\nauthority: normative",
+        "See [old](../future-work/archive/old.md).",
+    )])?;
+    assert_rule(
+        "normative archive link",
+        has_issue(&archive, "archive path"),
+    )?;
+
+    let generated = tempfile::tempdir()?;
+    fs::create_dir_all(generated.path().join("docs").join("future-work"))?;
+    fs::write(
+        generated
+            .path()
+            .join("docs")
+            .join("future-work")
+            .join("example.md"),
+        "---\nkind: plan\nstatus: active\nauthority: implementation\nopen_items: true\n---\n# Example\n",
+    )?;
+    fs::write(
+        generated
+            .path()
+            .join("docs")
+            .join("future-work")
+            .join("README.md"),
+        "stale\n",
+    )?;
+    fs::write(generated.path().join("docs/CATALOG.md"), "stale\n")?;
+    assert_rule(
+        "generated index comparison",
+        has_issue(&lint(generated.path())?, "generated index differs"),
+    )?;
+
+    let temp = tempfile::tempdir()?;
+    let root = temp.path();
+    fs::create_dir_all(root.join("docs/spec/reference"))?;
+    fs::write(root.join("docs/spec/reference/api.md"), "# api\n")?;
+    assert_rule(
+        "exact case rejects wrong case",
+        !exact_file(root, &format!("docs/spec/reference/{}", "API.md")),
+    )?;
+    assert_rule(
+        "exact case accepts matching path",
+        exact_file(root, &format!("docs/spec/reference/{}", "api.md")),
+    )?;
+    fs::create_dir_all(root.join("crates/example/src"))?;
+    fs::write(
+        root.join("crates/example/src/lib.rs"),
+        format!("//! See docs/{}/missing.md\n", "future-work"),
+    )?;
+    let stale = stale_rs_paths(root)?;
+    assert_rule(
+        "stale Rust docs path",
+        has_issue(&stale, "missing docs path"),
+    )?;
+
+    println!("docs metadata self-test: all passed");
+    Ok(())
+}
+
+fn lint_documents_for_test(docs: Vec<Document>) -> Result<Vec<Issue>, Box<dyn std::error::Error>> {
+    let temp = tempfile::tempdir()?;
+    for doc in &docs {
+        let path = temp.path().join(&doc.path);
+        fs::create_dir_all(path.parent().expect("document has parent"))?;
+        let text = match &doc.meta {
+            Some(meta) => format!("---\n{}---\n{}", serde_yaml::to_string(meta)?, doc.body),
+            None => doc.body.clone(),
+        };
+        fs::write(path, text)?;
+    }
+    fs::create_dir_all(temp.path().join("docs/future-work"))?;
+    // The catalog lists generated documents too. Two passes reach the same fixed point as the
+    // production generator.
+    for _ in 0..2 {
+        let loaded = load_docs(temp.path())?;
+        fs::write(
+            temp.path().join("docs/future-work/README.md"),
+            generate_future_work_readme(&loaded),
+        )?;
+        fs::write(
+            temp.path().join("docs/CATALOG.md"),
+            generate_catalog(&loaded),
+        )?;
+    }
+    lint(temp.path())
+}
+
+fn has_issue(issues: &[Issue], needle: &str) -> bool {
+    issues.iter().any(|issue| issue.message.contains(needle))
+}
+
 pub fn run(root: &Path, command: &str) -> Result<(), Box<dyn std::error::Error>> {
     match command {
-        "self-test" => {
-            println!("docs metadata self-test: all passed");
-            Ok(())
-        }
+        "self-test" => self_test(),
         "generate" => {
             let docs = load_docs(root)?;
             fs::write(
@@ -493,5 +650,21 @@ pub fn run(root: &Path, command: &str) -> Result<(), Box<dyn std::error::Error>>
             }
         }
         _ => Err(format!("unknown docs metadata command: {command}").into()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn self_test_exercises_metadata_rules() {
+        self_test().unwrap();
+    }
+
+    #[test]
+    fn split_frontmatter_keeps_first_body_character() {
+        let (_, body) = split_frontmatter("---\nkind: plan\n---\n# Hello\n");
+        assert_eq!(body, "# Hello\n");
     }
 }
