@@ -151,10 +151,10 @@ fn compare_reset_restores_tracked_files_and_preserves_untracked_files() {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-    assert_eq!(
-        fs::read_to_string(workspace.join("tracked.txt")).expect("restored file"),
-        "base\n"
-    );
+    // Git applies the repository's configured checkout line ending policy.
+    // The reset must restore the text, whether that policy produces LF or CRLF.
+    let restored = fs::read_to_string(workspace.join("tracked.txt")).expect("restored file");
+    assert_eq!(restored.replace("\r\n", "\n"), "base\n");
     assert_eq!(
         fs::read_to_string(workspace.join("scratch.txt")).expect("preserved file"),
         "keep me\n"
