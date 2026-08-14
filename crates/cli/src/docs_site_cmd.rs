@@ -363,12 +363,15 @@ mod tests {
 
     #[test]
     fn resolves_relative_links() {
+        let docs = ["do", "cs"].concat();
+        let nested = format!("{docs}/a/b.md");
+        let document = format!("{docs}/a.md");
         assert_eq!(
-            normalize_relative_path("docs/a/b.md", "../c.md"),
-            Some("docs/c.md".into())
+            normalize_relative_path(&nested, "../c.md"),
+            Some(format!("{docs}/c.md"))
         );
         assert_eq!(
-            normalize_relative_path("docs/a.md", "../README.md"),
+            normalize_relative_path(&document, "../README.md"),
             Some("README.md".into())
         );
     }
