@@ -1,6 +1,7 @@
 //! Coding tool runtime for Liberado's Rust-native agent loop.
 
 mod fuzzy_match;
+pub mod git;
 mod hashline;
 pub mod repo_map;
 mod text_view;
@@ -30,6 +31,18 @@ use tokio::sync::oneshot;
 pub use hashline::{
     compute_file_hash as hashline_compute_file_hash, prompt_guidance as hashline_prompt_guidance,
 };
+
+/// Run a blocking git-module call in spawn_blocking so the async executor stays responsive.
+async fn git_call<T: Send + 'static>(
+    f: impl FnOnce() -> Result<T, git::GitError> + Send + 'static,
+) -> Result<T, git::GitError> {
+    tokio::task::spawn_blocking(f)
+        .await
+        .map_err(|e| git::GitError {
+            exit_code: 1,
+            message: format!("git task join failed: {e}"),
+        })?
+}
 
 #[derive(Debug, Error)]
 pub enum ToolError {
@@ -986,15 +999,21 @@ impl CodingToolRuntime {
     }
 
     async fn git_status(&self) -> Result<Value, ToolError> {
-        let mut request = CommandRequest::new("git");
-        request.args = vec!["status".to_string(), "--porcelain".to_string()];
-        let output = self.workspace.run_command(request).await?;
-        Ok(json!({
-            "exit_code": output.exit_code,
-            "stdout": output.stdout,
-            "stderr": output.stderr,
-            "timed_out": output.timed_out,
-        }))
+        let root = self.workspace.root().to_path_buf();
+        match git_call(move || git::status(&root)).await {
+            Ok(stdout) => Ok(json!({
+                "exit_code": 0,
+                "stdout": stdout,
+                "stderr": "",
+                "timed_out": false,
+            })),
+            Err(e) => Ok(json!({
+                "exit_code": e.exit_code,
+                "stdout": "",
+                "stderr": e.message,
+                "timed_out": false,
+            })),
+        }
     }
 
     async fn git_diff(&self, args: Value) -> Result<Value, ToolError> {
@@ -1004,30 +1023,36 @@ impl CodingToolRuntime {
             mode: String,
         }
         let args: Args = parse_args(args)?;
-        let mut request = CommandRequest::new("git");
-        request.args = match args.mode.as_str() {
-            "name_only" => vec!["diff".to_string(), "--name-only".to_string()],
-            "stat" => vec!["diff".to_string(), "--stat".to_string()],
-            "patch" => vec!["diff".to_string()],
-            other => {
-                return Err(ToolError::BadRequest(format!(
-                    "unsupported diff mode: {other}"
-                )));
-            }
+        if !matches!(args.mode.as_str(), "name_only" | "stat" | "patch") {
+            return Err(ToolError::BadRequest(format!(
+                "unsupported diff mode: {}",
+                args.mode
+            )));
+        }
+        let mode = args.mode.clone();
+        let root = self.workspace.root().to_path_buf();
+        let output = git_call(move || match mode.as_str() {
+            "name_only" => git::diff_name_only(&root),
+            "stat" => git::diff_stat(&root),
+            _ => git::diff_patch(&root),
+        })
+        .await;
+        let (exit_code, diff_stdout, stderr) = match output {
+            Ok(stdout) => (0, stdout, String::new()),
+            Err(e) => (e.exit_code, String::new(), e.message),
         };
-        let output = self.workspace.run_command(request).await?;
         let untracked = self.untracked_section(&args.mode).await?;
         let stdout = match untracked {
-            Some(extra) if output.stdout.trim().is_empty() => extra,
-            Some(extra) => format!("{}\n{extra}", output.stdout.trim_end()),
-            None => output.stdout,
+            Some(extra) if diff_stdout.trim().is_empty() => extra,
+            Some(extra) => format!("{}\n{extra}", diff_stdout.trim_end()),
+            None => diff_stdout,
         };
         Ok(json!({
             "mode": args.mode,
-            "exit_code": output.exit_code,
+            "exit_code": exit_code,
             "stdout": stdout,
-            "stderr": output.stderr,
-            "timed_out": output.timed_out,
+            "stderr": stderr,
+            "timed_out": false,
         }))
     }
 
@@ -1043,33 +1068,26 @@ impl CodingToolRuntime {
     /// "what have I changed" has to count it. `--exclude-standard` keeps `.gitignore` honoured,
     /// so `target/` does not drown the answer.
     async fn untracked_section(&self, mode: &str) -> Result<Option<String>, ToolError> {
-        let mut request = CommandRequest::new("git");
-        request.args = vec![
-            "ls-files".to_string(),
-            "--others".to_string(),
-            "--exclude-standard".to_string(),
-        ];
-        let listed = self.workspace.run_command(request).await?;
-        let paths: Vec<&str> = listed
-            .stdout
-            .lines()
-            .map(str::trim)
-            .filter(|l| !l.is_empty())
-            .collect();
-        if paths.is_empty() {
+        let root = self.workspace.root().to_path_buf();
+        let listed = git_call(move || git::untracked_files(&root)).await;
+        let listed = match listed {
+            Ok(paths) => paths,
+            Err(_) => return Ok(None), // not a repo: no untracked section
+        };
+        if listed.is_empty() {
             return Ok(None);
         }
 
         let mut out = String::from("# untracked (new files, not yet added)\n");
         match mode {
             "name_only" => {
-                for path in &paths {
+                for path in &listed {
                     out.push_str(path);
                     out.push('\n');
                 }
             }
             "stat" => {
-                for path in &paths {
+                for path in &listed {
                     match self.untracked_body(path) {
                         Some(body) => {
                             let n = body.lines().count();
@@ -1083,7 +1101,7 @@ impl CodingToolRuntime {
             // generated file cannot crowd out the rest of the answer.
             _ => {
                 let mut budget = UNTRACKED_PATCH_BUDGET;
-                for path in &paths {
+                for path in &listed {
                     let Some(body) = self.untracked_body(path) else {
                         out.push_str(&format!("--- new file {path} (unreadable)\n"));
                         continue;
@@ -1144,16 +1162,24 @@ impl CodingToolRuntime {
             ));
         }
         let branch_name = args.name.clone();
-        let mut request = CommandRequest::new("git");
-        request.args = vec!["checkout".to_string(), "-b".to_string(), args.name];
-        let output = self.workspace.run_command(request).await?;
-        Ok(json!({
-            "branch": branch_name,
-            "exit_code": output.exit_code,
-            "stdout": output.stdout,
-            "stderr": output.stderr,
-            "timed_out": output.timed_out,
-        }))
+        let root = self.workspace.root().to_path_buf();
+        let name_for_closure = branch_name.clone();
+        match git_call(move || git::branch_create(&root, &name_for_closure)).await {
+            Ok(()) => Ok(json!({
+                "branch": branch_name,
+                "exit_code": 0,
+                "stdout": "",
+                "stderr": "",
+                "timed_out": false,
+            })),
+            Err(e) => Ok(json!({
+                "branch": branch_name,
+                "exit_code": e.exit_code,
+                "stdout": "",
+                "stderr": e.message,
+                "timed_out": false,
+            })),
+        }
     }
 
     async fn git_commit(&self, args: Value) -> Result<Value, ToolError> {
@@ -1170,49 +1196,27 @@ impl CodingToolRuntime {
             ));
         }
 
-        let mut stage = CommandRequest::new("git");
-        if args.files.is_empty() {
-            stage.args = vec!["add".to_string(), "-A".to_string()];
-        } else {
-            stage.args = vec!["add".to_string(), "--".to_string()];
-            stage.args.extend(args.files.clone());
-        }
-        let stage_output = self.workspace.run_command(stage).await?;
-        if stage_output.exit_code != Some(0) {
-            return Ok(json!({
-                "committed": false,
-                "stage_exit_code": stage_output.exit_code,
-                "stage_stderr": stage_output.stderr,
-                "exit_code": null,
-                "stdout": "",
+        let files = args.files.clone();
+        let message = args.message.clone();
+        let root = self.workspace.root().to_path_buf();
+        match git_call(move || git::commit(&root, &message, Some(&files))).await {
+            Ok(stdout) => Ok(json!({
+                "committed": true,
+                "exit_code": 0,
+                "stdout": stdout,
                 "stderr": "",
-                "timed_out": stage_output.timed_out,
-            }));
+                "timed_out": false,
+            })),
+            Err(e) => Ok(json!({
+                "committed": false,
+                "stage_exit_code": null,
+                "stage_stderr": "",
+                "exit_code": e.exit_code,
+                "stdout": "",
+                "stderr": e.message,
+                "timed_out": false,
+            })),
         }
-
-        let mut request = CommandRequest::new("git");
-        request.args = vec!["commit".to_string(), "-m".to_string(), args.message];
-        request
-            .env
-            .insert("GIT_AUTHOR_NAME".to_string(), "liberado".to_string());
-        request
-            .env
-            .insert("GIT_AUTHOR_EMAIL".to_string(), "liberado@local".to_string());
-        request
-            .env
-            .insert("GIT_COMMITTER_NAME".to_string(), "liberado".to_string());
-        request.env.insert(
-            "GIT_COMMITTER_EMAIL".to_string(),
-            "liberado@local".to_string(),
-        );
-        let output = self.workspace.run_command(request).await?;
-        Ok(json!({
-            "committed": output.exit_code == Some(0),
-            "exit_code": output.exit_code,
-            "stdout": output.stdout,
-            "stderr": output.stderr,
-            "timed_out": output.timed_out,
-        }))
     }
 
     async fn git_push(&self, args: Value) -> Result<Value, ToolError> {
@@ -1248,22 +1252,24 @@ impl CodingToolRuntime {
                 ));
             }
         }
-        let mut request = CommandRequest::new("git");
-        request.args = vec!["push".to_string()];
-        if args.set_upstream {
-            request.args.push("--set-upstream".to_string());
+        let remote = args.remote.clone();
+        let branch = args.branch.clone();
+        let set_upstream = args.set_upstream;
+        let root = self.workspace.root().to_path_buf();
+        match git_call(move || git::push(&root, &remote, branch.as_deref(), set_upstream)).await {
+            Ok(stdout) => Ok(json!({
+                "exit_code": 0,
+                "stdout": stdout,
+                "stderr": "",
+                "timed_out": false,
+            })),
+            Err(e) => Ok(json!({
+                "exit_code": e.exit_code,
+                "stdout": "",
+                "stderr": e.message,
+                "timed_out": false,
+            })),
         }
-        request.args.push(args.remote);
-        if let Some(branch) = args.branch {
-            request.args.push(branch);
-        }
-        let output = self.workspace.run_command(request).await?;
-        Ok(json!({
-            "exit_code": output.exit_code,
-            "stdout": output.stdout,
-            "stderr": output.stderr,
-            "timed_out": output.timed_out,
-        }))
     }
 
     async fn git_log(&self, args: Value) -> Result<Value, ToolError> {
@@ -1281,25 +1287,23 @@ impl CodingToolRuntime {
         }
         let args: Args = parse_args(args)?;
         let limit = args.limit.min(100);
-        let mut request = CommandRequest::new("git");
         let fmt = args.format.unwrap_or_else(|| "%h %s".to_string());
-        request.args = vec![
-            "log".to_string(),
-            format!("--max-count={limit}"),
-            format!("--format={fmt}"),
-        ];
-        if let Some(ref branch) = args.branch
-            && !branch.is_empty()
-        {
-            request.args.push(branch.clone());
+        let branch = args.branch.filter(|b| !b.is_empty());
+        let root = self.workspace.root().to_path_buf();
+        match git_call(move || git::log(&root, limit, Some(&fmt), branch.as_deref())).await {
+            Ok(stdout) => Ok(json!({
+                "exit_code": 0,
+                "stdout": stdout,
+                "stderr": "",
+                "timed_out": false,
+            })),
+            Err(e) => Ok(json!({
+                "exit_code": e.exit_code,
+                "stdout": "",
+                "stderr": e.message,
+                "timed_out": false,
+            })),
         }
-        let output = self.workspace.run_command(request).await?;
-        Ok(json!({
-            "exit_code": output.exit_code,
-            "stdout": output.stdout,
-            "stderr": output.stderr,
-            "timed_out": output.timed_out,
-        }))
     }
 
     async fn git_fetch(&self, args: Value) -> Result<Value, ToolError> {
@@ -1316,20 +1320,35 @@ impl CodingToolRuntime {
                 "remote must not start with '-'".to_string(),
             ));
         }
-        let mut request = CommandRequest::new("git");
-        request.args = vec!["fetch".to_string(), args.remote];
-        if let Some(ref branch) = args.branch
-            && !branch.is_empty()
-        {
-            request.args.push(branch.clone());
+        if let Some(ref branch) = args.branch {
+            if branch.is_empty() {
+                return Err(ToolError::BadRequest(
+                    "branch must not be empty".to_string(),
+                ));
+            }
+            if branch.starts_with('-') {
+                return Err(ToolError::BadRequest(
+                    "branch must not start with '-'".to_string(),
+                ));
+            }
         }
-        let output = self.workspace.run_command(request).await?;
-        Ok(json!({
-            "exit_code": output.exit_code,
-            "stdout": output.stdout,
-            "stderr": output.stderr,
-            "timed_out": output.timed_out,
-        }))
+        let remote = args.remote.clone();
+        let branch = args.branch.clone();
+        let root = self.workspace.root().to_path_buf();
+        match git_call(move || git::fetch(&root, &remote, branch.as_deref())).await {
+            Ok(stdout) => Ok(json!({
+                "exit_code": 0,
+                "stdout": stdout,
+                "stderr": "",
+                "timed_out": false,
+            })),
+            Err(e) => Ok(json!({
+                "exit_code": e.exit_code,
+                "stdout": "",
+                "stderr": e.message,
+                "timed_out": false,
+            })),
+        }
     }
 
     async fn git_merge(&self, args: Value) -> Result<Value, ToolError> {
@@ -1350,19 +1369,23 @@ impl CodingToolRuntime {
                 "branch must not start with '-'".to_string(),
             ));
         }
-        let mut request = CommandRequest::new("git");
-        request.args = vec!["merge".to_string()];
-        if args.fast_forward_only {
-            request.args.push("--ff-only".to_string());
+        let branch = args.branch.clone();
+        let ff_only = args.fast_forward_only;
+        let root = self.workspace.root().to_path_buf();
+        match git_call(move || git::merge(&root, &branch, ff_only)).await {
+            Ok(stdout) => Ok(json!({
+                "exit_code": 0,
+                "stdout": stdout,
+                "stderr": "",
+                "timed_out": false,
+            })),
+            Err(e) => Ok(json!({
+                "exit_code": e.exit_code,
+                "stdout": "",
+                "stderr": e.message,
+                "timed_out": false,
+            })),
         }
-        request.args.push(args.branch);
-        let output = self.workspace.run_command(request).await?;
-        Ok(json!({
-            "exit_code": output.exit_code,
-            "stdout": output.stdout,
-            "stderr": output.stderr,
-            "timed_out": output.timed_out,
-        }))
     }
 
     async fn run_command_background(&self, args: Value) -> Result<Value, ToolError> {
@@ -3811,6 +3834,54 @@ beta
         assert_eq!(result["timed_out"], false);
     }
 
+    /// Backlog item C1: `run_command` must refuse git even though the default `allow` list is
+    /// empty (which means "allow all"). The default `deny` entry carries that weight.
+    #[tokio::test]
+    async fn run_command_refuses_git() {
+        let dir = tempfile::tempdir().unwrap();
+        let runtime =
+            CodingToolRuntime::new(dir.path(), CommandPolicy::default(), PathPolicy::default())
+                .unwrap();
+
+        let err = runtime
+            .invoke_json(
+                "run_command",
+                json!({"program": "git", "args": ["status", "--porcelain"]}),
+            )
+            .await
+            .expect_err("run_command must refuse git with the default policy");
+        assert!(
+            err.to_string().contains("denied"),
+            "the refusal must name the policy deny, got: {err}"
+        );
+    }
+
+    /// C1's other half: the dedicated git tools still work with the default policy — they go
+    /// through the gix-backed path, not `run_command`.
+    #[tokio::test]
+    async fn dedicated_git_tool_still_works_with_default_policy() {
+        let dir = tempfile::tempdir().unwrap();
+        init_temp_git_repo(dir.path());
+        let runtime =
+            CodingToolRuntime::new(dir.path(), CommandPolicy::default(), PathPolicy::default())
+                .unwrap();
+
+        let result = runtime
+            .invoke_json("git_branch", json!({"name": "c1-test-branch"}))
+            .await
+            .unwrap();
+        assert_eq!(result["branch"], "c1-test-branch");
+        assert_eq!(result["exit_code"], 0);
+
+        let current = std::process::Command::new("git")
+            .args(["branch", "--show-current"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        let branch = String::from_utf8_lossy(&current.stdout).trim().to_string();
+        assert_eq!(branch, "c1-test-branch");
+    }
+
     /// A cargo workspace with no configured command still gets a real answer.
     ///
     /// The empty answer cost a run nine turns: it called `validate` at turn 8, was told
@@ -4622,7 +4693,7 @@ beta
 
     fn init_temp_git_repo(dir: &std::path::Path) {
         let run = |args: &[&str]| {
-            std::process::Command::new("git")
+            let out = std::process::Command::new("git")
                 .args(args)
                 .current_dir(dir)
                 .env("GIT_AUTHOR_NAME", "test")
@@ -4630,9 +4701,19 @@ beta
                 .env("GIT_COMMITTER_NAME", "test")
                 .env("GIT_COMMITTER_EMAIL", "test@test")
                 .output()
-                .unwrap()
+                .unwrap();
+            assert!(
+                out.status.success(),
+                "git {args:?}: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
         };
         run(&["init", "--quiet"]);
+        // Repo-local identity: exists on every dev machine and on no CI runner
+        // unless we write it. `commit.gpgsign=false` for the reverse case.
+        run(&["config", "user.email", "test@liberado.local"]);
+        run(&["config", "user.name", "Test"]);
+        run(&["config", "commit.gpgsign", "false"]);
         std::fs::write(dir.join("seed.txt"), "initial\n").unwrap();
         run(&["add", "seed.txt"]);
         run(&["commit", "-m", "initial commit"]);

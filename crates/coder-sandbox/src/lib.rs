@@ -406,6 +406,16 @@ pub fn ensure_command_allowed(
     if policy.deny.iter().any(|rule| command_matches(rule, &line)) {
         return Err(SandboxError::CommandDenied(line));
     }
+    // A single-token deny rule also matches the program's file-stem, so the default deny `git`
+    // refuses `git.exe` and `C:\path\to\git.exe` on Windows, not only the bare `git` argv.
+    // `program` is argv, never a shell word, so there is no quoting to worry about.
+    if policy
+        .deny
+        .iter()
+        .any(|rule| deny_matches_program_stem(rule, &request.program))
+    {
+        return Err(SandboxError::CommandDenied(line));
+    }
     if !policy.allow.is_empty() && !policy.allow.iter().any(|rule| command_matches(rule, &line)) {
         return Err(SandboxError::CommandDenied(line));
     }
@@ -415,6 +425,37 @@ pub fn ensure_command_allowed(
 fn command_matches(rule: &str, command_line: &str) -> bool {
     let rule = rule.trim();
     !rule.is_empty() && (command_line == rule || command_line.starts_with(&format!("{rule} ")))
+}
+
+/// Last path component of an argv program, treating both `/` and `\` as separators
+/// and dropping a trailing `.exe` of any case.
+///
+/// [`Path::file_stem`] is host-OS-dependent: on Unix a Windows path is one
+/// filename, so `C:\Program Files\Git\bin\git.exe` stems to
+/// `C:\Program Files\Git\bin\git`, not `git`. The deny rule has to refuse
+/// that spelling on every runner.
+fn program_file_stem(program: &str) -> &str {
+    let name = program
+        .rsplit(['/', '\\'])
+        .find(|s| !s.is_empty())
+        .unwrap_or(program);
+    if name.len() >= 4 && name[name.len() - 4..].eq_ignore_ascii_case(".exe") {
+        &name[..name.len() - 4]
+    } else {
+        name
+    }
+}
+
+/// Does a deny `rule` (a bare program name, no arguments) name this program by file-stem?
+///
+/// Case-insensitive everywhere: on Windows `GIT.EXE` and `git` are the same program, and being
+/// permissive in the *denying* direction is always safe.
+fn deny_matches_program_stem(rule: &str, program: &str) -> bool {
+    let rule = rule.trim();
+    if rule.is_empty() || rule.contains(' ') {
+        return false;
+    }
+    program_file_stem(program).eq_ignore_ascii_case(rule)
 }
 
 fn decode_command_bytes(buf: &[u8]) -> String {
@@ -810,6 +851,78 @@ mod tests {
         let mut request = CommandRequest::new("cargo");
         request.args = vec!["test".to_string(), "-p".to_string(), "x".to_string()];
         assert!(ensure_command_allowed(&policy, &request).is_ok());
+    }
+
+    /// Backlog item C1: an empty `allow` list means "allow all", so without a default deny
+    /// `run_command` could invoke git with no capability check at all. The default policy must
+    /// refuse git, in every argv spelling — including the Windows binary name.
+    #[test]
+    fn default_policy_denies_git() {
+        let policy = CommandPolicy::default();
+        for (program, args) in [
+            ("git", vec!["status".to_string(), "--porcelain".to_string()]),
+            ("git", vec!["push".to_string()]),
+            ("git.exe", vec!["status".to_string()]),
+            ("GIT", vec!["status".to_string()]),
+        ] {
+            let mut request = CommandRequest::new(program);
+            request.args = args.clone();
+            assert!(
+                ensure_command_allowed(&policy, &request).is_err(),
+                "default policy must refuse git: {program} {args:?}"
+            );
+        }
+    }
+
+    /// A configured deny rule still beats an allow rule, and the prefix semantics are unchanged:
+    /// `deny: ["cargo publish"]` denies `cargo publish --dry-run` but not `cargo build`.
+    #[test]
+    fn command_policy_deny_still_wins_over_allow() {
+        let policy = CommandPolicy {
+            allow: vec!["cargo".to_string()],
+            deny: vec!["cargo publish".to_string()],
+            ..CommandPolicy::default()
+        };
+        let mut request = CommandRequest::new("cargo");
+        request.args = vec!["publish".to_string(), "--dry-run".to_string()];
+        assert!(ensure_command_allowed(&policy, &request).is_err());
+
+        let mut build = CommandRequest::new("cargo");
+        build.args = vec!["build".to_string()];
+        assert!(ensure_command_allowed(&policy, &build).is_ok());
+    }
+
+    /// Windows: the model may name the program `git.exe` (or a full path to it). The stem match
+    /// must catch it even though the full command line "git.exe status" does not start with "git ".
+    #[test]
+    fn deny_matches_windows_git_exe_stem() {
+        assert!(deny_matches_program_stem("git", "git.exe"));
+        assert!(deny_matches_program_stem(
+            "git",
+            "C:\\Program Files\\Git\\bin\\git.exe"
+        ));
+        assert!(deny_matches_program_stem("git", "GIT.EXE"));
+        assert!(deny_matches_program_stem("git", "/usr/bin/git"));
+        assert!(deny_matches_program_stem(
+            "git",
+            "C:/Program Files/Git/cmd/git.exe"
+        ));
+        assert!(!deny_matches_program_stem("git", "gitty"));
+        assert!(!deny_matches_program_stem("git status", "git"));
+        assert!(!deny_matches_program_stem("", "git"));
+    }
+
+    /// `Path::file_stem` on Unix treats a Windows path as one filename. The helper
+    /// must not.
+    #[test]
+    fn program_stem_splits_on_backslash_even_on_unix() {
+        assert_eq!(
+            program_file_stem(r"C:\Program Files\Git\bin\git.exe"),
+            "git"
+        );
+        assert_eq!(program_file_stem("/usr/bin/git"), "git");
+        assert_eq!(program_file_stem("GIT.EXE"), "GIT");
+        assert_eq!(program_file_stem("gitty"), "gitty");
     }
 
     #[test]
