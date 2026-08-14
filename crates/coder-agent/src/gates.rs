@@ -19,6 +19,8 @@ pub fn command_request(command: &CoderCommandConfig) -> CommandRequest {
         env: command.env.clone(),
         timeout_secs: command.timeout_secs,
         output_max_bytes: command.output_max_bytes,
+        // Backend gates, not model tool results: keep head truncation.
+        offload_dir: None,
     }
 }
 

@@ -104,6 +104,11 @@ pub struct CodingToolRuntime {
     background_jobs: Arc<Mutex<HashMap<String, BackgroundJob>>>,
     background_limits: BackgroundLimits,
     offered_tools: Option<Vec<String>>,
+    /// Absolute directory where oversized command output is written (backlog 0.9).
+    ///
+    /// Under the workspace root (`<root>/.liberado/offload`) so the model can `read_file`
+    /// the full body. The sandbox writes; this pack chooses the directory.
+    offload_dir: PathBuf,
 }
 
 struct BackgroundJob {
@@ -263,6 +268,7 @@ impl CodingToolRuntime {
     }
 
     pub fn from_workspace(workspace: impl Workspace + 'static, path_policy: PathPolicy) -> Self {
+        let offload_dir = workspace.root().join(".liberado").join("offload");
         Self {
             workspace: Arc::new(workspace),
             path_policy,
@@ -272,6 +278,7 @@ impl CodingToolRuntime {
             background_jobs: Arc::new(Mutex::new(HashMap::new())),
             background_limits: BackgroundLimits::default(),
             offered_tools: None,
+            offload_dir,
         }
     }
 
@@ -311,6 +318,40 @@ impl CodingToolRuntime {
 
     pub fn workspace_root(&self) -> &Path {
         self.workspace.root()
+    }
+
+    /// Stamp the runtime's offload directory onto a command request.
+    ///
+    /// Model-visible commands go through this. Gate/backend requests that do not
+    /// keep `offload_dir: None` and keep head truncation.
+    fn with_offload(&self, mut request: CommandRequest) -> CommandRequest {
+        request.offload_dir = Some(self.offload_dir.clone());
+        request
+    }
+
+    /// Turn an absolute offload path into the workspace-relative spelling the model reads.
+    fn offload_rel(&self, path: &Option<PathBuf>) -> Option<String> {
+        let abs = path.as_ref()?;
+        let rel = abs.strip_prefix(self.workspace.root()).ok()?;
+        Some(rel.to_string_lossy().replace('\\', "/"))
+    }
+
+    /// When a command result was offloaded, append the reachable path and a dedicated key.
+    fn apply_offload(&self, output: &CommandOutput, value: &mut Value) {
+        if let Some(rel) = self.offload_rel(&output.stdout_offload) {
+            value["stdout"] = json!(format!(
+                "{}\n\n[full stdout saved to {rel} — read it with read_file]",
+                output.stdout
+            ));
+            value["full_stdout_path"] = json!(rel);
+        }
+        if let Some(rel) = self.offload_rel(&output.stderr_offload) {
+            value["stderr"] = json!(format!(
+                "{}\n\n[full stderr saved to {rel} — read it with read_file]",
+                output.stderr
+            ));
+            value["full_stderr_path"] = json!(rel);
+        }
     }
 
     pub async fn invoke_json_for_backend(
@@ -1447,6 +1488,7 @@ impl CodingToolRuntime {
 
         let mut request = CommandRequest::new(args.program.clone());
         request.args = args.args;
+        let request = self.with_offload(request);
         let program_name = args.program.clone();
 
         let (tx, rx) = oneshot::channel();
@@ -1502,14 +1544,18 @@ impl CodingToolRuntime {
 
         let jid = args.job_id.clone();
         match job.receiver.try_recv() {
-            Ok(Ok(output)) => Ok(json!({
-                "job_id": jid,
-                "status": "completed",
-                "exit_code": output.exit_code,
-                "stdout": output.stdout,
-                "stderr": output.stderr,
-                "timed_out": output.timed_out,
-            })),
+            Ok(Ok(output)) => {
+                let mut value = json!({
+                    "job_id": jid,
+                    "status": "completed",
+                    "exit_code": output.exit_code,
+                    "stdout": output.stdout.clone(),
+                    "stderr": output.stderr.clone(),
+                    "timed_out": output.timed_out,
+                });
+                self.apply_offload(&output, &mut value);
+                Ok(value)
+            }
             Ok(Err(e)) => Ok(json!({
                 "job_id": jid,
                 "status": "failed",
@@ -1548,13 +1594,18 @@ impl CodingToolRuntime {
         }
         let mut request = CommandRequest::new(args.program);
         request.args = args.args;
-        let output = self.workspace.run_command(request).await?;
-        Ok(json!({
+        let output = self
+            .workspace
+            .run_command(self.with_offload(request))
+            .await?;
+        let mut value = json!({
             "exit_code": output.exit_code,
-            "stdout": output.stdout,
-            "stderr": output.stderr,
+            "stdout": output.stdout.clone(),
+            "stderr": output.stderr.clone(),
             "timed_out": output.timed_out,
-        }))
+        });
+        self.apply_offload(&output, &mut value);
+        Ok(value)
     }
 
     /// Check the workspace, and answer even when nothing was configured.
@@ -1579,15 +1630,20 @@ impl CodingToolRuntime {
                 None => return Ok(json!({ "configured": false, "passed": null })),
             },
         };
-        let output = self.workspace.run_command(command).await?;
-        Ok(json!({
+        let output = self
+            .workspace
+            .run_command(self.with_offload(command))
+            .await?;
+        let mut value = json!({
             "configured": true,
             "passed": output.exit_code == Some(0) && !output.timed_out,
             "exit_code": output.exit_code,
-            "stdout": output.stdout,
-            "stderr": output.stderr,
+            "stdout": output.stdout.clone(),
+            "stderr": output.stderr.clone(),
             "timed_out": output.timed_out,
-        }))
+        });
+        self.apply_offload(&output, &mut value);
+        Ok(value)
     }
 }
 
@@ -1610,6 +1666,7 @@ impl CodingToolRuntime {
             env: Default::default(),
             timeout_secs: None,
             output_max_bytes: None,
+            offload_dir: None,
         })
     }
 }
@@ -3854,6 +3911,126 @@ beta
             err.to_string().contains("denied"),
             "the refusal must name the policy deny, got: {err}"
         );
+    }
+
+    /// A cross-platform "print this text" command pair.
+    fn echo_args(text: &str) -> (String, Vec<String>) {
+        #[cfg(windows)]
+        {
+            (
+                "cmd.exe".to_string(),
+                vec!["/C".to_string(), "echo".to_string(), text.to_string()],
+            )
+        }
+        #[cfg(not(windows))]
+        {
+            ("/bin/echo".to_string(), vec![text.to_string()])
+        }
+    }
+
+    /// Backlog 0.9: an oversized `run_command` result is offloaded, not truncated.
+    /// The model sees a head+tail preview plus a path `read_file` can open.
+    #[tokio::test]
+    async fn run_command_offloads_oversized_output_and_the_full_body_is_reachable() {
+        let dir = tempfile::tempdir().unwrap();
+        let runtime = CodingToolRuntime::new(
+            dir.path(),
+            CommandPolicy {
+                output_max_bytes: 16,
+                ..CommandPolicy::default()
+            },
+            PathPolicy::default(),
+        )
+        .unwrap();
+
+        let body = "M".repeat(1000);
+        let (program, args) = echo_args(&body);
+        let result = runtime
+            .invoke_json("run_command", json!({"program": program, "args": args}))
+            .await
+            .unwrap();
+
+        let rel = result["full_stdout_path"]
+            .as_str()
+            .expect("oversized stdout must carry a full_stdout_path");
+        assert!(
+            !rel.contains('\\'),
+            "the path the model reads must use forward slashes: {rel}"
+        );
+        assert!(
+            rel.starts_with(".liberado/offload/"),
+            "offload path must sit under the workspace offload dir: {rel}"
+        );
+        let full = std::fs::read_to_string(dir.path().join(rel)).unwrap();
+        assert_eq!(
+            full.trim(),
+            body,
+            "offload file must hold the full body, not a preview"
+        );
+        assert_ne!(
+            result["stdout"].as_str().unwrap(),
+            full,
+            "the model must see a preview, not the full body"
+        );
+        assert!(
+            result["stdout"]
+                .as_str()
+                .unwrap()
+                .contains("full stdout saved to"),
+            "the preview must name the offload file: {}",
+            result["stdout"]
+        );
+        assert!(
+            result["stdout"].as_str().unwrap().contains("truncated"),
+            "the preview must keep the truncation marker"
+        );
+
+        let reread = runtime
+            .invoke_json("read_file", json!({"path": rel}))
+            .await
+            .unwrap();
+        assert_eq!(
+            reread["content"].as_str().unwrap().trim(),
+            body,
+            "read_file must return the offloaded full body: {}",
+            reread["content"]
+        );
+    }
+
+    /// Backlog 0.9: a result under the threshold is unchanged.
+    #[tokio::test]
+    async fn run_command_result_under_threshold_is_unchanged() {
+        let dir = tempfile::tempdir().unwrap();
+        let runtime = CodingToolRuntime::new(
+            dir.path(),
+            CommandPolicy {
+                output_max_bytes: 64 * 1024,
+                ..CommandPolicy::default()
+            },
+            PathPolicy::default(),
+        )
+        .unwrap();
+
+        let (program, args) = echo_args("hi");
+        let result = runtime
+            .invoke_json("run_command", json!({"program": program, "args": args}))
+            .await
+            .unwrap();
+
+        assert!(
+            result.get("full_stdout_path").is_none(),
+            "under threshold -> no offload key: {result}"
+        );
+        assert!(
+            result.get("full_stderr_path").is_none(),
+            "under threshold -> no stderr offload key: {result}"
+        );
+        assert_eq!(
+            result["stdout"].as_str().unwrap().trim(),
+            "hi",
+            "stdout must be the full, untruncated output: {result}"
+        );
+        assert_eq!(result["exit_code"], 0, "{result}");
     }
 
     /// C1's other half: the dedicated git tools still work with the default policy — they go

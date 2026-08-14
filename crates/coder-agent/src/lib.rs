@@ -673,7 +673,12 @@ impl LiberadoLoopBackend {
             )))
             .with_report_gate(Arc::new(finish_gate::WorkspaceCompileGate::new(
                 effective_root.clone(),
-            )));
+            )))
+            .with_spill_dir(
+                std::path::Path::new(&effective_root)
+                    .join(".liberado")
+                    .join("offload"),
+            );
         if let Some(dir) = request.config.trace_dir.as_deref() {
             let mvl_path = Path::new(dir).join(format!("{session_id}.mvl.jsonl"));
             let exec_path = Path::new(dir).join(format!("{session_id}.execution.jsonl"));
