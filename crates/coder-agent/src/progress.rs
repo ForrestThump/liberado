@@ -146,7 +146,13 @@ impl ProgressGuard {
             return ProgressAction::Continue { nudge: None };
         }
 
-        self.track_same_tool(tool_name);
+        // `run_command` is a multiplexer: rg, cargo, git, and echo share one name.
+        // Compare 7 counted twenty distinct searches as SameToolChurn and then
+        // discarded a filed `succeeded`. The executor's args-aware doom loop
+        // still catches a replayed identical command.
+        if !is_multiplex_tool(tool_name) {
+            self.track_same_tool(tool_name);
+        }
 
         if is_mutating(tool_name) {
             if ok {
@@ -272,6 +278,14 @@ impl ProgressGuard {
 
 fn is_mutating(name: &str) -> bool {
     MUTATING_TOOLS.contains(&name)
+}
+
+/// Tools whose *name* is not the action. Same-tool counting on these is a false stall.
+fn is_multiplex_tool(name: &str) -> bool {
+    matches!(
+        name,
+        "run_command" | "run_command_background" | "bash" | "exec"
+    )
 }
 
 /// Tools that must still reach [`ProgressGuard::observe`] once a fatal has latched: the remedy the
@@ -453,6 +467,20 @@ mod tests {
             guard.observe("validate", true, fail),
             ProgressAction::Fatal(ProgressFatal::ValidationChurn { repeats: 3, .. })
         ));
+    }
+
+    #[test]
+    fn run_command_is_not_same_tool_churn() {
+        let mut guard = ProgressGuard::new(policy());
+        guard.observe("write_file", true, "{}");
+        for _ in 0..20 {
+            let action = guard.observe("run_command", true, r#"{"exit_code":0}"#);
+            assert!(
+                matches!(action, ProgressAction::Continue { .. }),
+                "distinct run_command calls are not one tool: {action:?}"
+            );
+        }
+        assert!(guard.fatal().is_none());
     }
 
     #[test]
