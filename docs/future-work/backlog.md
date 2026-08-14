@@ -40,7 +40,7 @@ a second priority order.
 | **14** | ~~**F12 — give the vault watcher a positive scope**~~ **Landed (PR #156).** | Capture paths + `#now` / `#hold-off`. |
 | **15** | **E2 — implement the inbox layer** | E3 and F12 are landed; start after E4. |
 | **16** | **C6 — add repo-map and context selection at the kernel/pack seam** | Large context lever; do it after the measured harness work so its effect can be isolated. |
-| **17** | **C7 — expose one isolated parallel execution path** | Build on the proven worktree boundary and C1's safer git path. Do not expose both fan-out APIs at once. |
+| **17** | ~~**C7 — expose one isolated parallel execution path**~~ **Landed.** | `dispatch_parallel` carries an optional workspace root; the dispatch pack creates worktrees. `delegate` stays synchronous. |
 | **18** | **C4 — finish dedicated goal-view panes** | Useful surface work, but it does not block correctness, measurement, or unattended shipping. |
 
 ### Branch and integration rule
@@ -297,7 +297,7 @@ Crates in there that map onto items below, so nobody reads the whole 94 MB:
 | **C4** | **Dedicated goal-view panes** — role timeline, gate panel, verifier panel. Gate votes stream live (#53) but render inline in the joined pane, so the streaming has nowhere good to land. | `crates/tui/` |
 | **C5** | **Turn on the completion gate and measure it.** S1 is default-off pending S7 because it costs `1 + fresh_reviewers` model calls per attempt. With `liberado-cost --json` that price is now measurable — run a handful of tasks with it on and off. | `[coder.gate] enabled` |
 | **C6** | **Repo map / context selection** — the biggest context lever, and we have nothing equivalent. **Split the seam on the way in**: "rank and select the relevant context for a goal" is general and belongs in the kernel — a research or vault pack wants exactly that — while "walk a source tree and build a symbol graph" is coding and belongs in `coder-*`. Build it whole inside the pack and the next pack rebuilds the ranking half. Read `xai-codebase-graph` first. **This item is both the highest-leverage coding work and the most likely duplication source**; get the seam right rather than fixing it later. | kernel + `crates/coder-*` |
-| **C7** | **Use the isolation #58 unblocked.** `dispatch_parallel` is built and unreachable; `delegate` is synchronous. Scope one of them onto `WorktreeWorkspace` rather than both. **Placement check while you are there:** `WorktreeWorkspace` lives in `coder-sandbox` (pack), but "give a parallel worker an isolated workspace" is general and `dispatch_parallel` is kernel-side. If the orchestrator needs it, it is on the wrong side of the line — say so rather than reaching across. | `crates/orchestrator/`, `crates/coder-agent/` |
+| **C7** | ~~**Use the isolation #58 unblocked.**~~ **Landed.** `dispatch_parallel` is the one exposed path: `SubDispatch.workspace_root` plus `RuntimeFactory::runtime_for_in` is the kernel seam; the dispatch pack creates `WorktreeWorkspace`s and a `parallel_goals` payload reaches that path. `delegate` stays synchronous. Placement: the primitive stays in `coder-sandbox`; the kernel only forwards a path. | `crates/orchestrator/`, `crates/dispatch-pack/` |
 
 ## Band F — harness observability and the delegation split (2026-08-09)
 

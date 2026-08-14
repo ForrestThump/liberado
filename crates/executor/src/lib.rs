@@ -30,6 +30,7 @@ pub use budget::{Budget, ResourceLimit, ResourceUsage, TokenLimit, WallClockLimi
 pub use mvl::MvlSession;
 pub use risk_gated::RiskGatedToolRuntime;
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -370,6 +371,29 @@ pub trait RuntimeFactory: Send + Sync {
         allowed_mcps: &[String],
         provenance: WriteProvenance,
     ) -> Result<Box<dyn ToolRuntime>, RuntimeSetupError>;
+
+    /// Like [`runtime_for`](Self::runtime_for), but scoped to a per-worker workspace root.
+    ///
+    /// `workspace_root` is `Some(path)` when the worker must operate inside an isolated
+    /// filesystem workspace (a git worktree, in the coding pack's world) and `None` when the
+    /// worker is unconstrained. The **default** implementation ignores the root and behaves
+    /// exactly like [`runtime_for`](Self::runtime_for) — factories that do not care about
+    /// workspace isolation (the MCP registry, test mocks) never need to override this.
+    ///
+    /// Placement (backlog C7): the *seam* is kernel-side — an orchestrator that fans work out
+    /// passes the root through untouched — but the *isolation* is a pack concern. The concrete
+    /// worktree primitive lives in `coder-sandbox` (pack); the production caller builds the
+    /// workspaces and supplies a factory that roots each worker's runtime in one. The kernel
+    /// never reaches across the layer line for the primitive itself.
+    async fn runtime_for_in(
+        &self,
+        allowed_mcps: &[String],
+        provenance: WriteProvenance,
+        workspace_root: Option<PathBuf>,
+    ) -> Result<Box<dyn ToolRuntime>, RuntimeSetupError> {
+        let _ = workspace_root;
+        self.runtime_for(allowed_mcps, provenance).await
+    }
 }
 
 /// A unit of work for the engine: how to behave (`instructions`), what to do (`goal`), and an

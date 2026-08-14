@@ -4758,6 +4758,8 @@ name = "liberado-dispatch-pack"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "liberado-coder-core",
+ "liberado-coder-sandbox",
  "liberado-common",
  "liberado-config-loader",
  "liberado-dispatcher",

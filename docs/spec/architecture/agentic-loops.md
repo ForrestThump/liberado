@@ -179,7 +179,7 @@ which they get connected matters more than the connecting does.
 
 | Capability | Machinery | Reachable by an agent? |
 |---|---|---|
-| Bounded-concurrent fan-out | `Orchestrator::dispatch_parallel` — semaphore over `tuning.dispatch.max_concurrent_subagents`, per-subagent capability narrowing, merged `Report` | **No.** Only its own tests call it. Nothing in production constructs a `SubDispatch`. |
+| Bounded-concurrent fan-out | `Orchestrator::dispatch_parallel` — semaphore over `tuning.dispatch.max_concurrent_subagents`, per-subagent capability narrowing, merged `Report` | **Yes, via the dispatch pack.** A `parallel_goals` payload constructs `SubDispatch`s. Optional `workspace_root` is forwarded to `RuntimeFactory::runtime_for_in`. |
 | Expressing "these are independent" | — | **No.** `DispatchAction` is `{ExecuteDirect, DispatchSubagent, Clarify, Propose}`; `DispatchSubagent` is singular. A classifier cannot say *fan out*. |
 | Background session + later callback | `hub.start_background` + `spawn_return_handoff` + `ChatSessions::append_note` | **No.** Wired to the human `/spawn` path (`POST /api/goals` with an `origin`), not to any tool. |
 | Several tool calls in one turn | executor's tool loop | **Yes, but serialized** — `for call in &response.tool_calls { … runtime.invoke(call).await }` (`liberado-executor` `src/lib.rs`, both the streaming and non-streaming paths). No `JoinSet`, no `join_all`. |
@@ -216,9 +216,9 @@ So the sequence is fixed:
 
 1. ~~**`WorktreeWorkspace`** in `coder-sandbox`~~ **Landed (PR #58).** Per-worker isolation
    and a defined merge-back. (`coding-tui-plan.md` G7/S6.)
-2. **A reachable fan-out** — `dispatch_parallel` is already built and tested; C7 is making
-   one production path call it (or a coding-route `delegate` on a worktree). Do not expose
-   both APIs.
+2. ~~**A reachable fan-out**~~ **Landed (C7).** `dispatch_parallel` is reachable from the
+   dispatch pack. The kernel forwards an opaque `workspace_root`; the pack supplies
+   `WorktreeWorkspace`. `delegate` is untouched. Do not expose a second fan-out API.
 3. **Decomposition in the classifier** — deciding *what* is independent, which is the genuinely hard
    part and the one worth doing last.
 

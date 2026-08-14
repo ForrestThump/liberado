@@ -13,10 +13,12 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use liberado_coder_core::CommandPolicy;
+use liberado_coder_sandbox::{Workspace, WorktreeWorkspace};
 use liberado_common::{CapabilityCatalog, DEFAULT_POOL, PROPOSALS_DIR, SignedProposal, WriteClass};
 use liberado_dispatcher::{DispatchRequest, Dispatcher};
 use liberado_notify::Notifier;
-use liberado_orchestrator::{Disposition, Orchestrator};
+use liberado_orchestrator::{Disposition, Orchestrator, SubDispatch};
 use liberado_session::{
     DomainPackRunner, GoalResult, GoalSpec, InputChannel, PackContext, PackError, SessionEvent,
     SessionEventKind, TurnAuthor,
@@ -126,6 +128,136 @@ impl DispatchPack {
         }
         Ok(notified)
     }
+
+    /// Production C7 path: `parallel_goals` on the payload reaches `dispatch_parallel`.
+    /// When `parent_root` is set, each worker gets a `WorktreeWorkspace`. Worktree
+    /// creation is fail-closed — a shared fallback would be silent collision.
+    async fn run_parallel(
+        pool: &Pool,
+        session_id: &str,
+        goal: &GoalSpec,
+        events: &Sender<SessionEvent>,
+        correlation_id: &str,
+        parallel_goals: &[serde_json::Value],
+    ) -> Result<GoalResult, PackError> {
+        if parallel_goals.is_empty() {
+            return Err(PackError::Setup(
+                "parallel dispatch requires at least one sub-goal".into(),
+            ));
+        }
+        let max_concurrent = goal
+            .payload
+            .get("max_concurrent_parallel")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(4)
+            .max(1) as usize;
+        let parent_root: Option<PathBuf> = goal
+            .payload
+            .get("parent_root")
+            .and_then(|v| v.as_str())
+            .map(PathBuf::from);
+        let worktrees_base: PathBuf = goal
+            .payload
+            .get("worktrees_base")
+            .and_then(|v| v.as_str())
+            .map(PathBuf::from)
+            .unwrap_or_else(|| std::env::temp_dir().join("dispatch-worktrees"));
+
+        let _ = events
+            .send(SessionEvent::new(
+                session_id,
+                SessionEventKind::Progress {
+                    message: format!(
+                        "parallel dispatch: {} sub-goal(s), max_concurrent={max_concurrent}, worktree_isolation={}",
+                        parallel_goals.len(),
+                        if parent_root.is_some() { "yes" } else { "no" },
+                    ),
+                },
+            ))
+            .await;
+
+        let mut worktrees: Vec<Option<WorktreeWorkspace>> =
+            Vec::with_capacity(parallel_goals.len());
+        if let Some(parent) = parent_root.as_ref() {
+            for i in 0..parallel_goals.len() {
+                let wt_session = format!("dp-{correlation_id}-{i}");
+                let ws = WorktreeWorkspace::new(
+                    parent,
+                    &wt_session,
+                    &worktrees_base,
+                    CommandPolicy::default(),
+                )
+                .await
+                .map_err(|e| {
+                    PackError::Failed(format!("worktree for parallel sub-goal {i}: {e}"))
+                })?;
+                worktrees.push(Some(ws));
+            }
+        } else {
+            worktrees.resize_with(parallel_goals.len(), || None);
+        }
+
+        let sub_dispatches: Vec<SubDispatch> = parallel_goals
+            .iter()
+            .enumerate()
+            .map(|(i, item)| {
+                let goal_text = item
+                    .get("goal")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let label = item
+                    .get("label")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or(&format!("sub-{i}"))
+                    .to_string();
+                let allowed_mcps: Vec<String> = item
+                    .get("allowed_mcps")
+                    .and_then(|v| v.as_array())
+                    .map(|a| {
+                        a.iter()
+                            .filter_map(|v| v.as_str().map(String::from))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let success_criteria: Vec<String> = item
+                    .get("success_criteria")
+                    .and_then(|v| v.as_array())
+                    .map(|a| {
+                        a.iter()
+                            .filter_map(|v| v.as_str().map(String::from))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                SubDispatch {
+                    goal: goal_text,
+                    allowed_mcps,
+                    success_criteria,
+                    correlation_id: format!("{correlation_id}-{i}"),
+                    label,
+                    workspace_root: worktrees[i].as_ref().map(|ws| ws.root().to_path_buf()),
+                }
+            })
+            .collect();
+
+        let report = pool
+            .orchestrator
+            .dispatch_parallel(sub_dispatches, max_concurrent)
+            .await
+            .map_err(|e| PackError::Failed(format!("parallel dispatch failed: {e}")))?;
+
+        let (terminal, summary) = Disposition::Reported(report).terminal_summary();
+        Ok(GoalResult {
+            terminal,
+            summary,
+            artifacts: Vec::new(),
+            diagnostics: serde_json::json!({
+                "pool": Self::pool_name(goal),
+                "correlation_id": correlation_id,
+                "parallel": true,
+            }),
+        })
+    }
 }
 
 #[async_trait]
@@ -160,6 +292,34 @@ impl DomainPackRunner for DispatchPack {
             .as_ref()
             .and_then(|o| o.correlation_id.clone())
             .unwrap_or_else(|| format!("dispatch-session-{session_id}"));
+
+        if goal.payload.get("parallel_child").and_then(|v| v.as_bool()) == Some(true)
+            && goal
+                .payload
+                .get("parallel_goals")
+                .and_then(|v| v.as_array())
+                .is_some()
+        {
+            return Err(PackError::Setup(
+                "parallel dispatch children cannot nest further parallel goals".into(),
+            ));
+        }
+        if let Some(parallel_goals) = goal
+            .payload
+            .get("parallel_goals")
+            .and_then(|v| v.as_array())
+            && !parallel_goals.is_empty()
+        {
+            return Self::run_parallel(
+                pool,
+                session_id,
+                goal,
+                &events,
+                &correlation_id,
+                parallel_goals,
+            )
+            .await;
+        }
 
         // The session grant is the per-run authority (E1). Classification and execution both see it;
         // the orchestrator still intersects with its pool ceiling so a grant can never widen.
@@ -276,6 +436,7 @@ mod tests {
     };
     use liberado_config_loader::DispatchTuning;
     use liberado_executor::{RuntimeFactory, RuntimeSetupError, SUBMIT_REPORT_TOOL, ToolRuntime};
+    use liberado_orchestrator::SubDispatch;
     use liberado_provider::{CompletionResponse, MockProvider, ToolInvocation};
     use liberado_session::{
         DomainHint, GoalSessionHub, GoalSessionStore, SessionGrant, SessionStatus, TerminalKind,
@@ -562,5 +723,250 @@ mod tests {
         assert_eq!(DispatchPack::pool_name(&goal), DEFAULT_POOL);
         goal.payload = serde_json::json!({ "pool": "research" });
         assert_eq!(DispatchPack::pool_name(&goal), "research");
+    }
+
+    struct MarkerRuntime {
+        root: std::path::PathBuf,
+        marker_name: String,
+    }
+
+    #[async_trait]
+    impl ToolRuntime for MarkerRuntime {
+        fn catalog(&self) -> Vec<liberado_provider::ToolDef> {
+            vec![liberado_provider::ToolDef::new(
+                "write_marker",
+                "Write a marker file into the workspace root.",
+                serde_json::json!({ "type": "object", "properties": {}, "required": [] }),
+            )]
+        }
+
+        async fn invoke(&self, _call: &ToolInvocation) -> Result<String, String> {
+            let path = self.root.join(format!("{}.txt", self.marker_name));
+            tokio::fs::write(&path, "isolated worker wrote here")
+                .await
+                .map_err(|e| format!("write marker: {e}"))?;
+            Ok(format!("wrote {}", path.display()))
+        }
+    }
+
+    #[derive(Clone, Default)]
+    struct RootedMarkerFactory {
+        scoped_roots: Arc<std::sync::Mutex<Vec<std::path::PathBuf>>>,
+        unscoped_calls: Arc<std::sync::Mutex<Vec<Vec<String>>>>,
+    }
+
+    #[async_trait]
+    impl RuntimeFactory for RootedMarkerFactory {
+        async fn runtime_for(
+            &self,
+            allowed_mcps: &[String],
+            _provenance: WriteProvenance,
+        ) -> Result<Box<dyn ToolRuntime>, RuntimeSetupError> {
+            self.unscoped_calls
+                .lock()
+                .unwrap()
+                .push(allowed_mcps.to_vec());
+            Err(RuntimeSetupError(
+                "the parallel path must scope runtimes via runtime_for_in".into(),
+            ))
+        }
+
+        async fn runtime_for_in(
+            &self,
+            _allowed_mcps: &[String],
+            _provenance: WriteProvenance,
+            workspace_root: Option<std::path::PathBuf>,
+        ) -> Result<Box<dyn ToolRuntime>, RuntimeSetupError> {
+            let root = workspace_root
+                .expect("an isolated worker must receive a workspace root from the caller");
+            let mut roots = self.scoped_roots.lock().unwrap();
+            roots.push(root.clone());
+            let index = roots.len();
+            Ok(Box::new(MarkerRuntime {
+                root,
+                marker_name: format!("worker-{index}"),
+            }))
+        }
+    }
+
+    fn init_parent_repo(dir: &std::path::Path) {
+        let run = |args: &[&str]| {
+            let out = std::process::Command::new("git")
+                .args(args)
+                .current_dir(dir)
+                .env("GIT_AUTHOR_NAME", "dispatch-pack-test")
+                .env("GIT_AUTHOR_EMAIL", "dispatch-pack-test@local")
+                .env("GIT_COMMITTER_NAME", "dispatch-pack-test")
+                .env("GIT_COMMITTER_EMAIL", "dispatch-pack-test@local")
+                .output()
+                .unwrap();
+            assert!(
+                out.status.success(),
+                "git {args:?}: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        };
+        run(&["init", "--quiet"]);
+        run(&["config", "user.email", "dispatch-pack-test@local"]);
+        run(&["config", "user.name", "dispatch-pack-test"]);
+        run(&["config", "commit.gpgsign", "false"]);
+        std::fs::write(dir.join("baseline.txt"), "shared baseline\n").unwrap();
+        run(&["add", "baseline.txt"]);
+        run(&["commit", "--quiet", "-m", "init"]);
+    }
+
+    #[tokio::test]
+    async fn dispatch_parallel_runs_each_worker_in_its_own_worktree() {
+        let parent = tempfile::tempdir().unwrap();
+        let base = tempfile::tempdir().unwrap();
+        init_parent_repo(parent.path());
+        let ws_a = WorktreeWorkspace::new(
+            parent.path(),
+            "worker-a",
+            base.path(),
+            CommandPolicy::default(),
+        )
+        .await
+        .expect("worktree A");
+        let ws_b = WorktreeWorkspace::new(
+            parent.path(),
+            "worker-b",
+            base.path(),
+            CommandPolicy::default(),
+        )
+        .await
+        .expect("worktree B");
+        assert_ne!(ws_a.root(), ws_b.root());
+        let root_a = ws_a.root().to_path_buf();
+        let root_b = ws_b.root().to_path_buf();
+
+        let factory = RootedMarkerFactory::default();
+        let scoped_roots = factory.scoped_roots.clone();
+        let unscoped_calls = factory.unscoped_calls.clone();
+        let script = [
+            CompletionResponse::tool_calls(vec![ToolInvocation::new(
+                "c1",
+                "write_marker",
+                serde_json::json!({}),
+            )]),
+            CompletionResponse::tool_calls(vec![ToolInvocation::new(
+                "c1",
+                SUBMIT_REPORT_TOOL,
+                serde_json::json!({
+                    "outcome": "succeeded",
+                    "summary": "worker wrote its isolated marker",
+                    "artifacts": [],
+                    "new_high_signal_facts": [],
+                }),
+            )]),
+            CompletionResponse::tool_calls(vec![ToolInvocation::new(
+                "c2",
+                "write_marker",
+                serde_json::json!({}),
+            )]),
+            CompletionResponse::tool_calls(vec![ToolInvocation::new(
+                "c2",
+                SUBMIT_REPORT_TOOL,
+                serde_json::json!({
+                    "outcome": "succeeded",
+                    "summary": "worker wrote its isolated marker",
+                    "artifacts": [],
+                    "new_high_signal_facts": [],
+                }),
+            )]),
+        ];
+        let provider = Arc::new(MockProvider::with_script("mock", script));
+        let orch = Orchestrator::new(
+            provider,
+            factory,
+            CapabilitySet::from_iter([Capability::ExecuteTool("write_marker".into())]),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            std::env::temp_dir(),
+            ProposalSigner::random(),
+            DEFAULT_POOL,
+        );
+        let report = orch
+            .dispatch_parallel(
+                vec![
+                    SubDispatch {
+                        goal: "write your marker in your own tree".into(),
+                        allowed_mcps: vec![],
+                        success_criteria: vec![],
+                        correlation_id: "corr-a".into(),
+                        label: "A".into(),
+                        workspace_root: Some(root_a.clone()),
+                    },
+                    SubDispatch {
+                        goal: "write your marker in your own tree".into(),
+                        allowed_mcps: vec![],
+                        success_criteria: vec![],
+                        correlation_id: "corr-b".into(),
+                        label: "B".into(),
+                        workspace_root: Some(root_b.clone()),
+                    },
+                ],
+                1,
+            )
+            .await
+            .expect("dispatch_parallel with isolated workers");
+        assert_eq!(report.outcome, Outcome::Succeeded);
+        assert!(report.summary.contains("worker wrote its isolated marker"));
+        assert!(unscoped_calls.lock().unwrap().is_empty());
+        let scoped = scoped_roots.lock().unwrap();
+        assert_eq!(scoped.len(), 2);
+        assert!(scoped.contains(&root_a));
+        assert!(scoped.contains(&root_b));
+        assert!(root_a.join("worker-1.txt").exists());
+        assert!(root_b.join("worker-2.txt").exists());
+        assert!(!root_a.join("worker-2.txt").exists());
+        assert!(!root_b.join("worker-1.txt").exists());
+    }
+
+    #[tokio::test]
+    async fn pack_refuses_nested_parallel_goals() {
+        let pack = make_pack(
+            DispatchDecision {
+                action: DispatchAction::ExecuteDirect {
+                    seed_calls: Vec::new(),
+                    relevant_mcps: Vec::new(),
+                    delivery: Delivery::Summarize,
+                },
+                confidence: 1.0,
+                rationale: "unused".into(),
+            },
+            vec![],
+            CapabilitySet::empty(),
+        );
+        let mut hub = GoalSessionHub::new(GoalSessionStore::new());
+        hub.register_pack(Arc::new(pack));
+        let hub = Arc::new(hub);
+        let id = hub
+            .start_with_grant(
+                GoalSpec {
+                    id: None,
+                    description: "nested".into(),
+                    success_criteria: vec![],
+                    domain: DomainHint::from(DISPATCH_DOMAIN),
+                    max_turns: 0,
+                    max_idle_secs: None,
+                    origin: None,
+                    profile: None,
+                    payload: serde_json::json!({
+                        "parallel_child": true,
+                        "parallel_goals": [{"goal": "a", "label": "A"}],
+                    }),
+                },
+                SessionGrant::default(),
+            )
+            .await
+            .expect("start");
+        let snap = wait_terminal(&hub, &id).await;
+        assert!(
+            matches!(snap.session.status, SessionStatus::Failed),
+            "nested fan-out must fail: {:?}",
+            snap.session.status
+        );
     }
 }
