@@ -32,6 +32,7 @@ ongoing findings, and current evidence. Implemented and superseded plans are arc
 | [context-compaction-plan.md](context-compaction-plan.md) | plan | chat | implementation |
 | [context-compaction-viewport-rearchitecture.md](context-compaction-viewport-rearchitecture.md) | plan | chat | implementation |
 | [f12-compare3-harness-failures-2026-08.md](f12-compare3-harness-failures-2026-08.md) | finding | coding-harness | evidence |
+| [harness-baseline-0.7-c3-2026-08.md](harness-baseline-0.7-c3-2026-08.md) | finding | coding-harness | evidence |
 | [harness-bench-gaps-and-levers.md](harness-bench-gaps-and-levers.md) | finding | coding-harness | advisory |
 | [harness-study-2026-08.md](harness-study-2026-08.md) | finding | coding-harness | advisory |
 | [heuristics-tuning-engine-plan.md](heuristics-tuning-engine-plan.md) | plan | tuning | implementation |
@@ -42,6 +43,7 @@ ongoing findings, and current evidence. Implemented and superseded plans are arc
 | [mcp-forge-backlog.md](mcp-forge-backlog.md) | plan | mcp | implementation |
 | [mcp-suite-standardization.md](mcp-suite-standardization.md) | plan | mcp | implementation |
 | [mvl-e2e-integration-test-plan.md](mvl-e2e-integration-test-plan.md) | plan | coding-harness | implementation |
+| [mvl-live-comparison-prep.md](mvl-live-comparison-prep.md) | plan | coding-harness | implementation |
 | [parallel-deliverables-2026-08-round-3.md](parallel-deliverables-2026-08-round-3.md) | plan | process | implementation |
 | [paseo-liberado-integration-roadmap.md](paseo-liberado-integration-roadmap.md) | plan | acp | implementation |
 | [pr-dispatch-vtcode-no-write-finding.md](pr-dispatch-vtcode-no-write-finding.md) | finding | coding-harness | evidence |
