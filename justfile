@@ -47,6 +47,10 @@ fmt:
 deny:
     cargo deny check
 
+# Full local ship preflight. Runs through the native Liberado CLI on every host OS.
+preflight:
+    cargo run -p liberado-cli -- ci check
+
 # Verify every relative link in docs/ resolves to a real file.
 # Skips http(s) URLs and .secret files; CI gates on it (doc-links job).
 check-links:

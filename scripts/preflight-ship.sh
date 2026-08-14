@@ -4,7 +4,4 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-cargo fmt --check
-cargo clippy --workspace --exclude liberado-webui --all-targets -- -D warnings
-cargo test --workspace
-cargo deny check
+cargo run -p liberado-cli -- ci check

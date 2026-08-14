@@ -13,6 +13,7 @@ name = "liberado"
 path = "src/main.rs"
 
 [dependencies]
+liberado-common = { workspace = true }
 liberado-server = { workspace = true }
 liberado-coder-core = { workspace = true }
 chat-client-contract = { workspace = true }
