@@ -13,6 +13,12 @@ Maintained 2026-08-11. This file is an ordered work queue. Take the first open, 
 the implementation order below. Do not choose a later item because it is easier or has fewer
 dependencies. One item per PR.
 
+> **Next harness item (2026-08-14): 0.10 — ship-bar excerpt.**
+> Compare 4 and compare 9 both failed `cargo test` and showed a passing `wire` crate
+> because the excerpt is the last N lines. Close this class before the next live
+> compare. Vary the *task*; do not leave a known failure class open. 0.7 is a
+> report, not the next code change.
+
 If an item is blocked only by elapsed time, access to another repository, or an external service,
 record the exact blocker in `current_unmerged_work.md` and take the next item. Do not skip a hard
 code dependency.
@@ -28,20 +34,21 @@ a second priority order.
 | **2** | ~~**0.1b — stage ship preflight output**~~ **Landed (PR #147).** | Format, then compile, then test and clippy; no fail-fast. |
 | **3** | ~~**D2 — configure model prices**~~ **Landed (PR #154).** | Example and homelab topology declare DeepSeek v4 rates. |
 | **4** | ~~**0.6 — emit the joined MVL and execution logs**~~ **Landed (PR #151).** | The assembly path and contracts landed in PRs #141 and #140. This instrument is the prerequisite for controlled comparisons. |
-| **5** | **0.7 / C3 — publish the controlled cross-harness baseline** | One item, not two. Compare 4 on B1 is n = 1 and is not this report. Also: the ship-bar excerpt is last-N lines, so a red `cargo test` names a passing crate. |
-| **6** | **C5 — measure the completion gate** | Use the same baseline method to compare gate off/on before changing the default. |
-| **7** | ~~**0.9 — implement one evidence-selected cost lever**~~ **Landed (PR #167).** | Oversized tool results spill to `.liberado/offload`; the tail stays reachable. Cost/quality rerun is still 0.7. |
-| **8** | **A1 — read one day of deployed token-economics data** | Measure the existing production system before narrowing its catalogue. |
-| **9** | **A2 — narrow the tool catalogue** | Blocked on A1. Change only what A1 supports. |
-| **10** | ~~**B1 — give `ExecuteDirect` an explicit delivery destination**~~ **Landed.** | `ExecuteDirect` now carries `Delivery`; the orchestrator attaches the matching output contract. |
-| **11** | ~~**C1 — replace unrestricted shell git with a capability-visible library path**~~ **Landed.** | Default `CommandPolicy` denies `git`; dedicated tools go through `coder-tools::git`. |
-| **12** | **E4 — add directory enumeration in turbovault** | External prerequisite for the inbox layer. Record the upstream commit before continuing. |
-| **13** | **E5 — stop the turbomcp SSE reconnect storm** | Restore useful homelab diagnostics before dogfooding the inbox path. |
-| **14** | ~~**F12 — give the vault watcher a positive scope**~~ **Landed (PR #156).** | Capture paths + `#now` / `#hold-off`. |
-| **15** | **E2 — implement the inbox layer** | E3 and F12 are landed; start after E4. |
-| **16** | **C6 — add repo-map and context selection at the kernel/pack seam** | **Parked 2026-08-14.** Focused search is enough; an always-on map adds noise. Do not schedule this ahead of measured harness work. |
-| **17** | ~~**C7 — expose one isolated parallel execution path**~~ **Landed (PR #166).** | `dispatch_parallel` carries an optional workspace root; the dispatch pack creates worktrees. `delegate` stays synchronous. |
-| **18** | **C4 — finish dedicated goal-view panes** | Useful surface work, but it does not block correctness, measurement, or unattended shipping. |
+| **5** | **0.10 — ship-bar excerpt must name the failing crate** | **Next harness code.** Last-N lines of a workspace `cargo test` is a passing crate. Prefer `FAILED` / error lines, or the first failing package. Close this class before the next live compare. |
+| **6** | **0.7 / C3 — publish the controlled cross-harness baseline** | A report, not the next code change. Compare 4 on B1 is n = 1 and is not this report. Do not raise shipped `max_turns` from it. |
+| **7** | **C5 — measure the completion gate** | Use the same baseline method to compare gate off/on before changing the default. After finish-rate is non-zero. |
+| **8** | ~~**0.9 — implement one evidence-selected cost lever**~~ **Landed (PR #167).** | Oversized tool results spill to `.liberado/offload`; the tail stays reachable. Cost/quality rerun is still 0.7. |
+| **9** | **A1 — read one day of deployed token-economics data** | Measure the existing production system before narrowing its catalogue. |
+| **10** | **A2 — narrow the tool catalogue** | Blocked on A1. Change only what A1 supports. |
+| **11** | ~~**B1 — give `ExecuteDirect` an explicit delivery destination**~~ **Landed.** | `ExecuteDirect` now carries `Delivery`; the orchestrator attaches the matching output contract. |
+| **12** | ~~**C1 — replace unrestricted shell git with a capability-visible library path**~~ **Landed.** | Default `CommandPolicy` denies `git`; dedicated tools go through `coder-tools::git`. |
+| **13** | **E4 — add directory enumeration in turbovault** | External prerequisite for the inbox layer. Record the upstream commit before continuing. |
+| **14** | **E5 — stop the turbomcp SSE reconnect storm** | Restore useful homelab diagnostics before dogfooding the inbox path. |
+| **15** | ~~**F12 — give the vault watcher a positive scope**~~ **Landed (PR #156).** | Capture paths + `#now` / `#hold-off`. |
+| **16** | **E2 — implement the inbox layer** | E3 and F12 are landed; start after E4. |
+| **17** | **C6 — add repo-map and context selection at the kernel/pack seam** | **Parked 2026-08-14.** Focused search is enough; an always-on map adds noise. Do not schedule this ahead of measured harness work. |
+| **18** | ~~**C7 — expose one isolated parallel execution path**~~ **Landed (PR #166).** | `dispatch_parallel` carries an optional workspace root; the dispatch pack creates worktrees. `delegate` stays synchronous. |
+| **19** | **C4 — finish dedicated goal-view panes** | Useful surface work, but it does not block correctness, measurement, or unattended shipping. |
 
 ### Branch and integration rule
 
@@ -181,6 +188,7 @@ defect fixes. No knob has yet produced a measured gain. Knobs come after the ins
 | **0.7** | **Instrument pinned pi, Hermes and Deep Agents forks and publish the baseline.** Use the same user task, repository commit, model, provider, sampling settings and resource caps; keep each harness's native system prompt and tool schemas. Run repeats where cost permits. Report ship-gate/merge-ready rate, cost per accepted result, p50/p95, human repair and trace-linked failure classes. Compare 4 (B1, n = 1, no Hermes) is evidence, not this item: do not close 0.7 from it, do not raise shipped `max_turns` from it, do not rank harnesses from 0/3. | large, external patch series + one report | forks, [`harness-study-2026-08.md`](harness-study-2026-08.md) |
 | **0.8** | ~~**Productize cold review + one fix round.**~~ **Landed (PR #142).** Review requests are fresh, path- and excerpt-bound to the actual diff, retained findings get one fix round, and readiness requires post-fix verification. | medium | `Skills/cold-review-pr.md`, `crates/coder-agent/` |
 | **0.9** | ~~**Implement one evidence-selected cost lever.**~~ **Landed (PR #167).** Command output that exceeds the cap is written under `.liberado/offload` with a unique name; the model sees a head+tail preview and can `read_file` the full body. The executor does the same for any oversized tool result when a spill directory is set. No directory: results pass through. Backend gates and the ship bar stay truncated. A controlled rerun that measures accepted-result cost is still 0.7. | medium | `crates/executor/`, `crates/coder-sandbox/`, `crates/coder-tools/` |
+| **0.10** | **Ship-bar excerpt must name the failing crate.** `clip_log_excerpt` takes the last 40 lines. On `cargo test --workspace` that is the last crate, often a passing `wire` crate (61 ok). The model never sees `FAILED` or the rustc line. Prefer `FAILED` / `error[` / `panicked` lines, or the first failing package. Compare 4 and compare 9. Close this before the next live compare. Vary the next *task*; do not leave this class open. | small | `crates/coder-agent/src/repair_feedback.rs` |
 
 **0.1b landed (PR #147).** `run_preflight` no longer fail-fasts on the first required step; format,
 compile, test and clippy all run, and the report carries the full failure set.

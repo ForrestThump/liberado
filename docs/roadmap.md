@@ -190,7 +190,9 @@ Two carried-forward limitations worth knowing before building on this:
 This table is the harness track. The repo-wide total order is the
 [backlog implementation order](future-work/backlog.md#implementation-order); F9, 0.1b, D2
 (#154), 0.6, B1, C1, C7 (#166), 0.9 (#167) and the progress-guard have landed. The next
-open harness row is **0.7 / C3** (publish the controlled baseline). The evidence says
+harness *code* is **0.10** (ship-bar excerpt: name the failing crate, not the last
+crate). **0.7 / C3** is still the next *report*, not the next fix. Vary the task;
+close the last failure class before the next live compare. The evidence says
 something specific: **every measured improvement so far came from fixing a defect, not from tuning
 a value.** Edit failure went 66–70% → 8% → 0% across PRs #106–#128, all defect fixes. No knob has
 yet been tuned to a measured gain.
@@ -276,6 +278,7 @@ not a model ceiling.
                     ├── progress-guard (#165)          (report beats churn fatal)
                     ├── C7 landed (#166)               (isolated parallel door)
                     ├── 0.9 landed (#167)              (offload oversized results)
+                    ├── 0.10 ship-bar excerpt          (NEXT: failing crate, not last-N)
                     ├── 0.7/C3 controlled baseline     (measurement)
                     └── C5 completion-gate comparison  (decision)
 

@@ -126,8 +126,13 @@ production entry point still reads it.
 **A `succeeded` report is not accepted while `cargo check` is red.** The coding pack refuses it
 in the same executor conversation (`WorkspaceCompileGate`, PR #163). Partial, Failed, wrap-up
 and turn exhaustion keep the dirty tree. The post-execute ship bar still runs `cargo test`.
-The excerpt it shows is the last N lines of that log, so a red workspace suite often names a
-passing crate. Prefer `FAILED` / error lines, or the first failing package.
+
+**Next harness item: 0.10 — ship-bar excerpt.** The excerpt is the last N lines of that log,
+so a red workspace suite often names a passing crate (`wire`, 61 ok, compares 4 and 9).
+Prefer `FAILED` / `error[` / `panicked`, or the first failing package. Close this class
+before the next live compare. Vary the *task*; do not leave a known class open. 0.7 is a
+report, not the next code change. `crates/coder-agent/src/repair_feedback.rs`
+(`clip_log_excerpt`).
 
 **A host failure ends the run.** Disk-full and the same infrastructure class are not a repair
 the model can make. The finish gate refuses `succeeded`, the executor files `Failed`, and the
