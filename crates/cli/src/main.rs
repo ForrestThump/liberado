@@ -18,6 +18,7 @@
 //!   liberado coder trace <id>        render a durable coding trace as a human transcript
 //!   liberado coder compare <a> <b>   side-by-side harness metrics for two native traces
 //!   liberado coder summarize <path>  summarize a cross-harness compare run
+//!   liberado coder smoke              validate the coder runner process boundary
 //!   liberado coder import <file>     foreign (Kilo / OpenHands) → `.messages.json`
 //!
 //! `serve` runs in the foreground, hosting the vault watch loop and the chat/HTTP/SSE API until

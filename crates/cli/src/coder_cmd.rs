@@ -3,13 +3,17 @@
 //! Thin adapter: resolve path → call pure functions in `liberado_coder_core::trace_view` → print.
 //! Domain logic stays in the pack contract crate so unit tests drive the same path the binary uses.
 
+use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Stdio;
 
 use liberado_coder_core::{
     ForeignTraceFormat, compare_traces, diverge, format_comparison, format_divergence,
     import_foreign_file, load_run_view, load_trace, render_transcript, resolve_trace_path,
     write_messages_export,
 };
+use liberado_common::process::std_command;
+use serde_json::json;
 
 /// Default directories searched when resolving a session id (cwd-relative + common local path).
 fn default_trace_dirs() -> Vec<PathBuf> {
@@ -27,6 +31,7 @@ pub fn run(mut args: impl Iterator<Item = String>) -> Result<(), Box<dyn std::er
         Some("diff") => cmd_diff(&mut args),
         Some("import") => cmd_import(&mut args),
         Some("summarize") => crate::summarize_cmd::run(args),
+        Some("smoke") => cmd_smoke(&mut args),
         Some(other) => Err(format!("unknown coder subcommand '{other}'\n{}", usage()).into()),
         None => Err(usage().into()),
     }
@@ -37,7 +42,139 @@ fn usage() -> &'static str {
      liberado coder trace <session-id|path> [--dir <trace-dir>] [--path <file>]\n  \
      liberado coder compare <trace-a> <trace-b> [--dir <trace-dir>] [--json]\n  \
      liberado coder diff <run-a> <run-b> [--json]   cross-harness: where two runs parted\n  \
-     liberado coder import <foreign.json> [-o <out.messages.json>] [--format kilo|kilo-cli|openhands|auto] [--session-id <id>]"
+     liberado coder import <foreign.json> [-o <out.messages.json>] [--format kilo|kilo-cli|openhands|auto] [--session-id <id>]
+  liberado coder smoke              validate the coder runner process boundary"
+}
+
+fn cmd_smoke(args: &mut dyn Iterator<Item = String>) -> Result<(), Box<dyn std::error::Error>> {
+    if let Some(arg) = args.next() {
+        if arg == "-h" || arg == "--help" {
+            println!("usage: liberado coder smoke");
+            return Ok(());
+        }
+        return Err("usage: liberado coder smoke".into());
+    }
+
+    let root = crate::crate_map_cmd::repository_root()?;
+    println!("== building liberado-coder-runner ==");
+    let build = std_command("cargo")
+        .args(["build", "--locked", "-p", "liberado-coder-runner"])
+        .current_dir(&root)
+        .status()?;
+    if !build.success() {
+        return Err("liberado-coder-runner build failed".into());
+    }
+
+    let runner = root.join("target").join("debug").join(if cfg!(windows) {
+        "liberado-coder-run.exe"
+    } else {
+        "liberado-coder-run"
+    });
+    if !runner.is_file() {
+        return Err(format!(
+            "liberado-coder-runner binary not found: {}",
+            runner.display()
+        )
+        .into());
+    }
+    println!("binary: {}", runner.display());
+
+    let temp = tempfile::tempdir()?;
+    initialize_smoke_repository(temp.path())?;
+    let request_path = temp.path().join("request.json");
+    fs::write(
+        &request_path,
+        serde_json::to_vec_pretty(&smoke_request(temp.path()))?,
+    )?;
+
+    println!("== process boundary smoke (expects provider key or clean failure) ==");
+    let provider =
+        std::env::var("LIBERADO_CODER_PROVIDER").unwrap_or_else(|_| "openrouter".to_owned());
+    let output = std_command(&runner)
+        .args([
+            "--request",
+            request_path.to_str().ok_or("request path is not UTF-8")?,
+        ])
+        .env("LIBERADO_CODER_PROVIDER", provider)
+        .current_dir(&root)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if output.status.success() {
+        println!("OK: live provider completed a coding run");
+        return Ok(());
+    }
+
+    let combined = format!("{stdout}\n{stderr}").to_lowercase();
+    if ["api key", "required for", "provider"]
+        .iter()
+        .any(|marker| combined.contains(marker))
+    {
+        println!("OK: runner reached the provider boundary without credentials");
+        println!("  exit status: {}", output.status);
+        return Ok(());
+    }
+
+    Err(format!(
+        "coder smoke failed with {}:\n{}",
+        output.status,
+        combined.trim()
+    )
+    .into())
+}
+
+fn initialize_smoke_repository(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    run_git(path, &["init"])?;
+    fs::write(path.join("README.md"), "# smoke\n")?;
+    run_git(path, &["config", "user.email", "smoke@example.com"])?;
+    run_git(path, &["config", "user.name", "Smoke"])?;
+    run_git(path, &["add", "."])?;
+    run_git(path, &["commit", "-m", "base"])?;
+    Ok(())
+}
+
+fn run_git(path: &Path, args: &[&str]) -> Result<(), Box<dyn std::error::Error>> {
+    let status = std_command("git")
+        .arg("-C")
+        .arg(path)
+        .args(args)
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .status()?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!("git smoke setup failed: {status}").into())
+    }
+}
+
+fn smoke_request(workspace: &Path) -> serde_json::Value {
+    json!({
+        "task": {
+            "id": "smoke-1",
+            "description": "Create hello.txt with content hello",
+            "success_criteria": ["hello.txt exists"]
+        },
+        "workspace": {"root": workspace.to_string_lossy(), "base_ref": "HEAD"},
+        "config": {
+            "backend": "liberado-loop",
+            "planner": {"model": "mock", "max_turns": 1},
+            "coder": {
+                "model": "deepseek/deepseek-v4-pro",
+                "prompt": "You are a coding agent. Write files then submit_report.",
+                "max_turns": 8
+            },
+            "critic": {"model": "mock", "max_turns": 1},
+            "sandbox": {"backend": "host_local"},
+            "command_policy": {"allow": [], "deny": [], "timeout_secs": 60, "output_max_bytes": 65536},
+            "path_policy": {"allow_write_globs": ["**"], "deny_globs": [".git/**"], "read_max_bytes": 131072, "search_max_results": 50},
+            "progress": {"read_only_turn_limit": 4, "same_tool_limit": 3, "validation_repeat_limit": 2, "max_attempts": 1, "event_preview_max_chars": 200}
+        },
+        "attempt": 0,
+        "prior_feedback": []
+    })
 }
 
 fn cmd_trace(args: &mut dyn Iterator<Item = String>) -> Result<(), Box<dyn std::error::Error>> {
