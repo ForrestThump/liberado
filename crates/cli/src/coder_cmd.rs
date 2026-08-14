@@ -382,3 +382,25 @@ fn cmd_import(args: &mut dyn Iterator<Item = String>) -> Result<(), Box<dyn std:
     println!("{}", serde_json::to_string_pretty(&export)?);
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::smoke_request;
+    use std::path::Path;
+
+    #[test]
+    fn smoke_request_contains_a_git_backed_task_and_fail_closed_config() {
+        let request = smoke_request(Path::new("C:/smoke-workspace"));
+        assert_eq!(request["task"]["id"], "smoke-1");
+        assert_eq!(request["workspace"]["base_ref"], "HEAD");
+        assert_eq!(request["config"]["coder"]["max_turns"], 8);
+        assert_eq!(
+            request["config"]["command_policy"]["allow"]
+                .as_array()
+                .unwrap()
+                .len(),
+            0
+        );
+        assert_eq!(request["config"]["path_policy"]["deny_globs"][0], ".git/**");
+    }
+}
