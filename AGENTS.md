@@ -126,6 +126,8 @@ production entry point still reads it.
 **A `succeeded` report is not accepted while `cargo check` is red.** The coding pack refuses it
 in the same executor conversation (`WorkspaceCompileGate`, PR #163). Partial, Failed, wrap-up
 and turn exhaustion keep the dirty tree. The post-execute ship bar still runs `cargo test`.
+The excerpt it shows is the last N lines of that log, so a red workspace suite often names a
+passing crate. Prefer `FAILED` / error lines, or the first failing package.
 
 **A host failure ends the run.** Disk-full and the same infrastructure class are not a repair
 the model can make. The finish gate refuses `succeeded`, the executor files `Failed`, and the

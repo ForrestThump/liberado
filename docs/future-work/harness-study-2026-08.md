@@ -209,6 +209,9 @@ one setting.
    (backlog 0.6).
 4. **Instrument the three pinned forks and establish the repeated baseline.** This is one item
    shared by backlog 0.7 and C3. It is also the rerun that should say whether 0.9 paid for itself.
+   Compare 4 on B1 is n = 1 and does not close this. The ship-bar excerpt is still last-N lines
+   of the test log (a passing `wire` crate on compares 4 and 9); prefer FAILED / error lines
+   or the first failing package.
 5. **Measure the completion gate against that baseline.** Do not change its default from one or two
    anecdotes.
 6. ~~**Implement one evidence-selected lever.**~~ Landed in PR #167 (tool-output offload). Retain

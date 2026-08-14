@@ -28,7 +28,7 @@ a second priority order.
 | **2** | ~~**0.1b — stage ship preflight output**~~ **Landed (PR #147).** | Format, then compile, then test and clippy; no fail-fast. |
 | **3** | ~~**D2 — configure model prices**~~ **Landed (PR #154).** | Example and homelab topology declare DeepSeek v4 rates. |
 | **4** | ~~**0.6 — emit the joined MVL and execution logs**~~ **Landed (PR #151).** | The assembly path and contracts landed in PRs #141 and #140. This instrument is the prerequisite for controlled comparisons. |
-| **5** | **0.7 / C3 — publish the controlled cross-harness baseline** | One item, not two: instrument the pinned forks and compare fixed tasks only after 0.6. |
+| **5** | **0.7 / C3 — publish the controlled cross-harness baseline** | One item, not two. Compare 4 on B1 is n = 1 and is not this report. Also: the ship-bar excerpt is last-N lines, so a red `cargo test` names a passing crate. |
 | **6** | **C5 — measure the completion gate** | Use the same baseline method to compare gate off/on before changing the default. |
 | **7** | ~~**0.9 — implement one evidence-selected cost lever**~~ **Landed (PR #167).** | Oversized tool results spill to `.liberado/offload`; the tail stays reachable. Cost/quality rerun is still 0.7. |
 | **8** | **A1 — read one day of deployed token-economics data** | Measure the existing production system before narrowing its catalogue. |
@@ -178,7 +178,7 @@ defect fixes. No knob has yet produced a measured gain. Knobs come after the ins
 | **0.4** | ~~**Make one production coding-run assembly path.**~~ **Landed (PR #141).** `assemble_production_run` is the shared pack-owned path for `CodingSessionPack`, ACP and the headless runner. Mechanical rules bind all production entry points to it, while surface-owned trace provenance remains distinct. | medium | `crates/coder-agent/`, `crates/acp-bridge/`, `crates/coder-runner/` |
 | **0.5** | ~~**Finish the two joined trace contracts and their conformance fixtures.**~~ **Landed (PR #140).** MVL reconstruction now requires exact request metadata, unambiguous call-ID joins, full snapshots after context changes, and paired attempt boundaries in the joined execution log. Production emission remains 0.6. | small–medium | `docs/spec/reference/`, `crates/test-support/` |
 | **0.6** | ~~**Emit the joined logs from the common boundary.**~~ **Landed (PR #151).** Write append-and-flush JSONL from `executor` / provider request handling, then adapt coding outcomes to it. Pass the shared crash-survival and reconstruction fixtures. Do not add a second coding-only source of truth. | medium–large | `crates/executor/`, provider adapters, `crates/coder-agent/` |
-| **0.7** | **Instrument pinned pi, Hermes and Deep Agents forks and publish the baseline.** Use the same user task, repository commit, model, provider, sampling settings and resource caps; keep each harness's native system prompt and tool schemas. Run repeats where cost permits. Report ship-gate/merge-ready rate, cost per accepted result, p50/p95, human repair and trace-linked failure classes. | large, external patch series + one report | forks, [`harness-study-2026-08.md`](harness-study-2026-08.md) |
+| **0.7** | **Instrument pinned pi, Hermes and Deep Agents forks and publish the baseline.** Use the same user task, repository commit, model, provider, sampling settings and resource caps; keep each harness's native system prompt and tool schemas. Run repeats where cost permits. Report ship-gate/merge-ready rate, cost per accepted result, p50/p95, human repair and trace-linked failure classes. Compare 4 (B1, n = 1, no Hermes) is evidence, not this item: do not close 0.7 from it, do not raise shipped `max_turns` from it, do not rank harnesses from 0/3. | large, external patch series + one report | forks, [`harness-study-2026-08.md`](harness-study-2026-08.md) |
 | **0.8** | ~~**Productize cold review + one fix round.**~~ **Landed (PR #142).** Review requests are fresh, path- and excerpt-bound to the actual diff, retained findings get one fix round, and readiness requires post-fix verification. | medium | `Skills/cold-review-pr.md`, `crates/coder-agent/` |
 | **0.9** | ~~**Implement one evidence-selected cost lever.**~~ **Landed (PR #167).** Command output that exceeds the cap is written under `.liberado/offload` with a unique name; the model sees a head+tail preview and can `read_file` the full body. The executor does the same for any oversized tool result when a spill directory is set. No directory: results pass through. Backend gates and the ship bar stay truncated. A controlled rerun that measures accepted-result cost is still 0.7. | medium | `crates/executor/`, `crates/coder-sandbox/`, `crates/coder-tools/` |
 
@@ -188,6 +188,9 @@ compile, test and clippy all run, and the report carries the full failure set.
 **Same-session compile (PR #163).** `submit_report` with `outcome=succeeded` is refused while
 `cargo check` is red. The refusal is a tool result in the same conversation. Partial, Failed,
 wrap-up and turn exhaustion keep the dirty tree. The post-execute ship bar still runs `cargo test`.
+The excerpt it shows is the last N lines of the log. On a workspace suite that is the last
+crate, often a passing `wire` crate, so the model never sees the failing package. Prefer
+`FAILED` / error lines, or the first failing package. Compare 4 and compare 9 both hit this.
 
 **The bar only runs if the config is loaded.** 0.1 gates on the declared `[[projects]]` entry that
 contains the run's root, so a bridge that resolved no config dir has no project and no bar. That was
