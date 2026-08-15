@@ -39,6 +39,7 @@ ongoing findings, and current evidence. Implemented and superseded plans are arc
 | [paseo-liberado-integration-roadmap.md](paseo-liberado-integration-roadmap.md) | plan | acp | implementation |
 | [pr-dispatch-vtcode-no-write-finding.md](pr-dispatch-vtcode-no-write-finding.md) | finding | coding-harness | evidence |
 | [rust-native-agentic-coder-plan.md](rust-native-agentic-coder-plan.md) | plan | coding-harness | implementation |
+| [sysmap-generic-core-plan.md](sysmap-generic-core-plan.md) | plan | tooling | implementation |
 | [token-cost-accounting-plan.md](token-cost-accounting-plan.md) | plan | token-economics | implementation |
 | [token-economics-findings-2026-08.md](token-economics-findings-2026-08.md) | finding | token-economics | evidence |
 | [tui-maturity-roadmap.md](tui-maturity-roadmap.md) | plan | tui | implementation |
@@ -54,6 +55,5 @@ Prefer archive/ for completed plans.
 |-----|--------|------|
 | [cadence-triggered-maintenance-agents.md](cadence-triggered-maintenance-agents.md) | draft | plan |
 | [model-knob-profiles.md](model-knob-profiles.md) | draft | plan |
-| [sysmap-generic-core-plan.md](sysmap-generic-core-plan.md) | draft | plan |
 
 Start every planning session at [roadmap.md](../roadmap.md).

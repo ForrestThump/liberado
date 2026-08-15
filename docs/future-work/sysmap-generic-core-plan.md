@@ -1,18 +1,20 @@
 ---
 kind: plan
-status: draft
+status: active
 authority: implementation
 domain: tooling
+open_items: true
 ---
 
 # sysmap — split into a generic core + a Liberado profile
 
-**Status**: draft, 2026-08-15. Not started. This plan records the proposed split of the
-isometric/3D system map (`liberado-sysmap` + `liberado-sysmap-gui`, see
-[`crates/sysmap/README.md`](../../crates/sysmap/README.md)) into a **project-agnostic** core crate
-plus a thin **Liberado-specific** profile, so the map becomes portable to other Rust projects. The
-split is a refactor of the existing working map — no user-visible behavior change is intended until
-the extraction is complete.
+**Status**: active, 2026-08-15. **Phase 1 done** — `sysmap-core` extracted (pure move) and its
+layer/kind vocabulary opened (`Layer`/`NodeKind` are string ids against a `Vocabulary` carried on
+`SystemMap`; the Liberado palette lives in `liberado-sysmap/src/profile.rs`). **Phases 2–6 open.**
+This plan records the split of the isometric/3D system map (`liberado-sysmap` +
+`liberado-sysmap-gui`, see [`crates/sysmap/README.md`](../../crates/sysmap/README.md)) into a
+**project-agnostic** core crate plus a thin **Liberado-specific** profile, so the map becomes
+portable to other Rust projects.
 
 ## The principle: three sources, three homes
 
@@ -63,13 +65,14 @@ That is exactly what the template is for.
 name = "Liberado"
 manifest_namespace = "liberado"   # reads [package.metadata.<ns>] role + flows
 
-# Crate grouping, bottom-to-top. Order = layout stack.
+# Crate grouping, bottom-to-top. `main = true` layers stack in the main district.
 [[layers]]
 id = "kernel"
 label = "Kernel"
 color = "#4f7ce0"
 blurb = "The orchestration engine: decide/act loops, sessions, capability."
-# … repeat per layer
+main = true
+# … repeat per layer; main = false puts a layer in the side "meta" district
 
 # Non-crate node kinds.
 [[kinds]]
@@ -77,6 +80,7 @@ id = "mcp"
 label = "MCP server"
 color = "#6a8fd0"
 blurb = "Out-of-process tool server"
+height = 0.95
 
 # Extra nodes not in cargo (the adapter may also emit these programmatically).
 [[nodes]]
