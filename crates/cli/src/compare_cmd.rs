@@ -219,27 +219,47 @@ pub fn run(args: &[String]) -> Result<(), Box<dyn Error>> {
     let liberado_exit = run_or_record_launch_error(&manifest, "liberado", || {
         run_liberado(&manifest, &parsed, &task, &liberado_session)
     });
+    let liberado_verifier_exit = verify_harness(&manifest, "liberado");
     save_result(
         &manifest,
         "liberado",
         Some(&liberado_session),
         Some(liberado_exit),
+        Some(liberado_verifier_exit),
     )?;
 
     let pi_exit = run_or_record_launch_error(&manifest, "pi", || {
         run_pi(&manifest, &parsed, &task, &pi_session)
     });
-    save_result(&manifest, "pi", Some(&pi_session), Some(pi_exit))?;
+    let pi_verifier_exit = verify_harness(&manifest, "pi");
+    save_result(
+        &manifest,
+        "pi",
+        Some(&pi_session),
+        Some(pi_exit),
+        Some(pi_verifier_exit),
+    )?;
 
     println!("liberado exit: {liberado_exit}");
+    println!("liberado verifier exit: {liberado_verifier_exit}");
     println!("pi exit: {pi_exit}");
+    println!("pi verifier exit: {pi_verifier_exit}");
     println!(
         "artifacts: {}",
         manifest.run_root.join("artifacts").display()
     );
-    if liberado_exit != 0 || pi_exit != 0 {
+    if [
+        liberado_exit,
+        liberado_verifier_exit,
+        pi_exit,
+        pi_verifier_exit,
+    ]
+    .iter()
+    .any(|code| *code != 0)
+    {
         return Err(
-            "one or more comparison harnesses failed; work and artifacts were saved".into(),
+            "one or more harnesses or common verifiers failed; work and artifacts were saved"
+                .into(),
         );
     }
     Ok(())
@@ -269,13 +289,14 @@ pub fn save(args: &[String]) -> Result<(), Box<dyn Error>> {
     if args == ["-h"] || args == ["--help"] {
         println!(
             "usage: liberado coder compare save <run-dir> <liberado|pi> \
-             [--session-id <id>] [--exit-code <n>]"
+             [--session-id <id>] [--exit-code <n>] [--verifier-exit-code <n>]"
         );
         return Ok(());
     }
     let mut positional = Vec::new();
     let mut session_id = None;
     let mut exit_code = None;
+    let mut verifier_exit_code = None;
     let mut index = 0;
     while index < args.len() {
         match args[index].as_str() {
@@ -291,6 +312,14 @@ pub fn save(args: &[String]) -> Result<(), Box<dyn Error>> {
                         .map_err(|_| "--exit-code must be an integer")?,
                 );
             }
+            "--verifier-exit-code" => {
+                index += 1;
+                verifier_exit_code = Some(
+                    value(args, index, "--verifier-exit-code")?
+                        .parse()
+                        .map_err(|_| "--verifier-exit-code must be an integer")?,
+                );
+            }
             flag if flag.starts_with('-') => {
                 return Err(format!("unknown flag for coder compare save: {flag}").into());
             }
@@ -302,7 +331,13 @@ pub fn save(args: &[String]) -> Result<(), Box<dyn Error>> {
         return Err("usage: liberado coder compare save <run-dir> <liberado|pi>".into());
     }
     let manifest = load_manifest(Path::new(&positional[0]))?;
-    save_result(&manifest, &positional[1], session_id.as_deref(), exit_code)
+    save_result(
+        &manifest,
+        &positional[1],
+        session_id.as_deref(),
+        exit_code,
+        verifier_exit_code,
+    )
 }
 
 fn parse_run_args(args: &[String]) -> Result<RunArgs, Box<dyn Error>> {
@@ -553,6 +588,58 @@ fn warm_harness(manifest: &CompareManifest, name: &str) -> Result<(), Box<dyn Er
     }
 }
 
+fn verify_harness(manifest: &CompareManifest, name: &str) -> i32 {
+    let layout = match harness(manifest, name) {
+        Ok(layout) => layout,
+        Err(error) => {
+            eprintln!("{name} verifier setup failed: {error}");
+            return 125;
+        }
+    };
+    let mut cmd = command("cargo");
+    cmd.args(["test", "--workspace", "--no-fail-fast"])
+        .current_dir(&layout.worktree)
+        .env("CARGO_TARGET_DIR", &layout.target_dir);
+    let started = Utc::now();
+    let result = tokio::task::block_in_place(|| {
+        tokio::runtime::Handle::current().block_on(output_within(
+            &mut cmd,
+            "cargo test --workspace --no-fail-fast",
+            Duration::from_secs(manifest.compile_timeout_secs),
+        ))
+    });
+    let finished = Utc::now();
+    let (exit, stdout, stderr) = match result {
+        Ok(output) => (
+            output.status.code().unwrap_or(1),
+            output.stdout,
+            output.stderr,
+        ),
+        Err(error) => (124, Vec::new(), format!("{error}\n").into_bytes()),
+    };
+    if let Err(error) = fs::write(layout.artifacts.join("verifier.stdout.log"), stdout) {
+        eprintln!("could not save {name} verifier stdout: {error}");
+        return 125;
+    }
+    if let Err(error) = fs::write(layout.artifacts.join("verifier.stderr.log"), stderr) {
+        eprintln!("could not save {name} verifier stderr: {error}");
+        return 125;
+    }
+    if let Err(error) = fs::write(
+        layout.artifacts.join("verifier-status.txt"),
+        format!(
+            "started={}\nfinished={}\nexit={}\n",
+            started.to_rfc3339(),
+            finished.to_rfc3339(),
+            exit
+        ),
+    ) {
+        eprintln!("could not save {name} verifier status: {error}");
+        return 125;
+    }
+    exit
+}
+
 fn run_liberado(
     manifest: &CompareManifest,
     args: &RunArgs,
@@ -651,6 +738,7 @@ fn save_result(
     name: &str,
     session_id: Option<&str>,
     exit_code: Option<i32>,
+    verifier_exit_code: Option<i32>,
 ) -> Result<(), Box<dyn Error>> {
     let layout = harness(manifest, name)?;
     fs::create_dir_all(layout.artifacts.join("git"))?;
@@ -725,6 +813,7 @@ fn save_result(
             "head_commit": head,
             "archive_branch": branch,
             "exit_code": exit_code,
+            "verifier_exit_code": verifier_exit_code,
             "session_id": session_id,
             "saved_at": Utc::now(),
             "had_uncommitted_changes": !status_before.trim().is_empty(),

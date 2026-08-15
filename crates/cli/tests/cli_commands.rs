@@ -205,6 +205,8 @@ fn compare_save_commits_failed_work_and_collects_git_and_trace_artifacts() {
             "save-case",
             "--exit-code",
             "17",
+            "--verifier-exit-code",
+            "19",
         ],
     );
     assert!(
@@ -224,6 +226,7 @@ fn compare_save_commits_failed_work_and_collects_git_and_trace_artifacts() {
         serde_json::from_slice(&fs::read(artifacts.join("result.json")).expect("saved result"))
             .expect("valid saved result");
     assert_eq!(result["exit_code"], 17);
+    assert_eq!(result["verifier_exit_code"], 19);
     assert_eq!(result["had_uncommitted_changes"], true);
     assert!(artifacts.join("git").join("diff.patch").is_file());
     assert!(
@@ -303,8 +306,14 @@ fn compare_run_uses_owned_paths_and_saves_both_results() {
         assert!(artifacts.join("session.stderr.log").is_file());
         assert!(artifacts.join("warmup.stdout.log").is_file());
         assert!(artifacts.join("warmup.stderr.log").is_file());
+        assert!(artifacts.join("verifier.stdout.log").is_file());
+        assert!(artifacts.join("verifier.stderr.log").is_file());
+        assert!(artifacts.join("verifier-status.txt").is_file());
         assert!(artifacts.join("git").join("diff.patch").is_file());
-        assert!(artifacts.join("result.json").is_file());
+        let result: serde_json::Value =
+            serde_json::from_slice(&fs::read(artifacts.join("result.json")).expect("saved result"))
+                .expect("valid saved result");
+        assert_eq!(result["verifier_exit_code"], 0);
     }
     assert!(
         run.join("artifacts")
@@ -398,6 +407,71 @@ fn compare_run_saves_launch_failure_and_still_runs_the_other_harness() {
     remove_compare_worktrees(source.path(), &run);
 }
 
+#[test]
+fn compare_run_rejects_zero_exit_when_the_common_verifier_fails() {
+    let source = tempdir().expect("temporary source repository");
+    let runs = tempdir().expect("temporary run parent");
+    initialize_compare_source(source.path());
+    let run = runs.path().join("compare-verifier-failure");
+    let prepare = run_cli(
+        source.path(),
+        &[
+            "coder",
+            "compare",
+            "prepare",
+            run.to_str().expect("UTF-8 run path"),
+            "--source",
+            source.path().to_str().expect("UTF-8 source path"),
+            "--commit",
+            "main",
+        ],
+    );
+    assert!(prepare.status.success());
+    let task = runs.path().join("task.txt");
+    fs::write(&task, "task").expect("task file");
+    let fake = write_fake_harness(runs.path());
+
+    let output = std_command(env!("CARGO_BIN_EXE_liberado"))
+        .args([
+            "coder",
+            "compare",
+            "run",
+            run.to_str().expect("UTF-8 run path"),
+            "--task",
+            task.to_str().expect("UTF-8 task path"),
+            "--api-key-env",
+            "LIBERADO_COMPARE_TEST_KEY",
+            "--liberado-bin",
+            fake.to_str().expect("UTF-8 fake harness path"),
+            "--pi-bin",
+            fake.to_str().expect("UTF-8 fake harness path"),
+        ])
+        .env("LIBERADO_COMPARE_TEST_KEY", "test-only")
+        .env("LIBERADO_COMPARE_BREAK_BUILD", "1")
+        .current_dir(source.path())
+        .output()
+        .expect("comparison run starts");
+    assert!(
+        !output.status.success(),
+        "a red common verifier must fail the comparison"
+    );
+
+    for harness in ["liberado", "pi"] {
+        let artifacts = run.join("artifacts").join(harness);
+        let result: serde_json::Value =
+            serde_json::from_slice(&fs::read(artifacts.join("result.json")).expect("saved result"))
+                .expect("valid saved result");
+        assert_eq!(result["exit_code"], 0);
+        assert_ne!(result["verifier_exit_code"], 0);
+        assert_eq!(
+            git_capture_test(&run.join("worktrees").join(harness), &["status", "--short"]),
+            ""
+        );
+    }
+
+    remove_compare_worktrees(source.path(), &run);
+}
+
 fn initialize_compare_source(root: &Path) {
     git_test(root, &["init", "-b", "main"]);
     git_test(root, &["config", "user.email", "test@example.com"]);
@@ -444,7 +518,7 @@ fn write_fake_harness(root: &Path) -> std::path::PathBuf {
     let path = root.join("fake-harness.cmd");
     fs::write(
         &path,
-        "@echo off\r\necho fake result>tracked.txt\r\nif not exist coder-traces mkdir coder-traces\r\necho {}>coder-traces\\compare-run-liberado.fake.json\r\necho fake stdout\r\necho fake stderr 1>&2\r\nexit /b 0\r\n",
+        "@echo off\r\necho fake result>tracked.txt\r\nif \"%LIBERADO_COMPARE_BREAK_BUILD%\"==\"1\" echo this is not Rust>src\\lib.rs\r\nif not exist coder-traces mkdir coder-traces\r\necho {}>coder-traces\\compare-run-liberado.fake.json\r\necho fake stdout\r\necho fake stderr 1>&2\r\nexit /b 0\r\n",
     )
     .expect("fake Windows harness");
     path
@@ -457,7 +531,7 @@ fn write_fake_harness(root: &Path) -> std::path::PathBuf {
     let path = root.join("fake-harness.sh");
     fs::write(
         &path,
-        "#!/bin/sh\nprintf 'fake result\\n' > tracked.txt\nmkdir -p coder-traces\nprintf '{}\\n' > coder-traces/compare-run-liberado.fake.json\necho fake stdout\necho fake stderr >&2\nexit 0\n",
+        "#!/bin/sh\nprintf 'fake result\\n' > tracked.txt\nif [ \"$LIBERADO_COMPARE_BREAK_BUILD\" = \"1\" ]; then printf 'this is not Rust\\n' > src/lib.rs; fi\nmkdir -p coder-traces\nprintf '{}\\n' > coder-traces/compare-run-liberado.fake.json\necho fake stdout\necho fake stderr >&2\nexit 0\n",
     )
     .expect("fake Unix harness");
     let mut permissions = fs::metadata(&path)

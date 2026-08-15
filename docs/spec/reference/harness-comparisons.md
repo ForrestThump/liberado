@@ -46,8 +46,10 @@ liberado coder compare run <run-dir> --task <task-file> \
 
 `run` copies the task to `<run-dir>/task.txt`, writes the exact pins, and prewarms both isolated
 caches with `cargo check --workspace --locked`. Both warm-ups must pass before a model call.
-Liberado runs first. Pi runs second. Pi receives the captured task through its supported `@file`
-input, which avoids unsafe Windows batch-file quoting.
+Liberado runs first. Pi runs second. After each harness, the runner applies the same independent
+`cargo test --workspace --no-fail-fast` gate. A harness exit of zero does not hide a red common
+gate. Pi receives the captured task through its supported `@file` input, which avoids unsafe
+Windows batch-file quoting.
 
 Each harness writes to its own stable artifact directory. Pi's durable session directory is inside
 that directory. Liberado trace files that start with the run session ID are copied there after the
@@ -67,6 +69,7 @@ tracked work with a local comparison identity, creates an archive branch, and re
 - the saved HEAD and short log;
 - a binary-capable patch and diff stat against the pinned base;
 - the process exit code and session ID;
+- the independent verifier exit code and logs;
 - matching Liberado traces or Pi sessions;
 - stdout, stderr, warm-up output, and timestamps.
 
