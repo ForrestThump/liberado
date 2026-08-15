@@ -34,6 +34,10 @@ The Cargo target directories are separate. Never share one target directory acro
 worktrees. Cargo can otherwise reuse freshness state or a same-named workspace binary from the
 wrong checkout.
 
+`targets/` is rebuildable Cargo state. Once `artifacts/` contains the saved result and archive ref,
+an operator may remove a run's `targets/` directory to recover disk space. Do not remove its
+`worktrees/` while a result still needs local inspection.
+
 The default compile and command timeout is 1,800 seconds. Use
 `--compile-timeout-secs <n>` when a colder machine needs more time.
 
@@ -47,10 +51,11 @@ liberado coder compare run <run-dir> --task <task-file> \
 
 `run` copies the task to `<run-dir>/task.txt`, writes the exact pins, and prewarms both isolated
 caches with `cargo check --workspace --locked`. Both warm-ups must pass before a model call.
-Liberado runs first. Pi runs second. After each harness, the runner applies the same independent
-`cargo test --workspace --no-fail-fast` gate. A harness exit of zero does not hide a red common
-gate. Pi receives the captured task through its supported `@file` input, which avoids unsafe
-Windows batch-file quoting.
+Liberado then builds `liberado-coder-runner` in its own pinned worktree and target directory; it
+never relies on an unrelated caller `target/debug` binary. Liberado runs first. Pi runs second.
+After each harness, the runner applies the same independent `cargo test --workspace --no-fail-fast`
+gate. A harness exit of zero does not hide a red common gate. Pi receives the captured task through
+its supported `@file` input, which avoids unsafe Windows batch-file quoting.
 
 `--acceptance-overlay <dir>` captures an independent test overlay before either model runs. The
 runner installs the same files only while it verifies each result, then removes them before it

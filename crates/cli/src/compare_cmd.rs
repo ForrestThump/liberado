@@ -944,20 +944,7 @@ fn run_liberado(
     session_id: &str,
 ) -> Result<i32, Box<dyn Error>> {
     let layout = harness(manifest, "liberado")?;
-    let binary = args.liberado_bin.clone().unwrap_or_else(|| {
-        manifest
-            .source_root
-            .join("target")
-            .join("debug")
-            .join(if cfg!(windows) {
-                "liberado-coder-run.exe"
-            } else {
-                "liberado-coder-run"
-            })
-    });
-    if !binary.is_file() {
-        return Err(format!("Liberado runner does not exist: {}", binary.display()).into());
-    }
+    let binary = ensure_liberado_runner(manifest, args, layout)?;
     let mut cmd = std_command(&binary);
     cmd.args(["task", "run", "--prompt"])
         .arg(task)
@@ -978,6 +965,81 @@ fn run_liberado(
         .env("CARGO_TARGET_DIR", &layout.target_dir)
         .env("LIBERADO_CODER_PROVIDER", &args.provider);
     execute_logged(&mut cmd, layout, "session")
+}
+
+/// Resolve the runner from the same pinned worktree and isolated cache as the Liberado harness.
+///
+/// `cargo check` prewarms dependencies but does not create an executable. Building this binary in
+/// the harness cache avoids an accidental dependency on whichever `target/debug` the caller last
+/// happened to build, and makes the runner source match the comparison's pinned revision.
+fn ensure_liberado_runner(
+    manifest: &CompareManifest,
+    args: &RunArgs,
+    layout: &HarnessLayout,
+) -> Result<PathBuf, Box<dyn Error>> {
+    let binary = liberado_runner_path(layout, args.liberado_bin.as_deref());
+    if args.liberado_bin.is_some() {
+        if binary.is_file() {
+            return Ok(binary);
+        }
+        return Err(format!("Liberado runner does not exist: {}", binary.display()).into());
+    }
+    if binary.is_file() {
+        return Ok(binary);
+    }
+
+    let mut cmd = command("cargo");
+    cmd.args(["build", "--locked", "-p", "liberado-coder-runner"])
+        .current_dir(&layout.worktree)
+        .env("CARGO_TARGET_DIR", &layout.target_dir);
+    let output = tokio::task::block_in_place(|| {
+        tokio::runtime::Handle::current().block_on(output_within(
+            &mut cmd,
+            "cargo build --locked -p liberado-coder-runner",
+            Duration::from_secs(manifest.compile_timeout_secs),
+        ))
+    });
+    match output {
+        Ok(output) => {
+            fs::write(
+                layout.artifacts.join("runner-build.stdout.log"),
+                &output.stdout,
+            )?;
+            fs::write(
+                layout.artifacts.join("runner-build.stderr.log"),
+                &output.stderr,
+            )?;
+            if !output.status.success() {
+                return Err(format!("Liberado runner build failed with {}", output.status).into());
+            }
+        }
+        Err(error) => {
+            fs::write(
+                layout.artifacts.join("runner-build.stderr.log"),
+                format!("{error}\n"),
+            )?;
+            return Err(format!("Liberado runner build failed: {error}").into());
+        }
+    }
+    if binary.is_file() {
+        Ok(binary)
+    } else {
+        Err(format!(
+            "Liberado runner build succeeded but did not create: {}",
+            binary.display()
+        )
+        .into())
+    }
+}
+
+fn liberado_runner_path(layout: &HarnessLayout, explicit: Option<&Path>) -> PathBuf {
+    explicit.map(PathBuf::from).unwrap_or_else(|| {
+        layout.target_dir.join("debug").join(if cfg!(windows) {
+            "liberado-coder-run.exe"
+        } else {
+            "liberado-coder-run"
+        })
+    })
 }
 
 fn run_pi(
@@ -1251,6 +1313,39 @@ fn change_scope_pattern(value: &str) -> Result<String, Box<dyn Error>> {
         .into());
     }
     Ok(normalized)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{HarnessLayout, liberado_runner_path};
+    use std::path::PathBuf;
+
+    fn layout() -> HarnessLayout {
+        HarnessLayout {
+            worktree: PathBuf::from("C:/comparison/worktree"),
+            target_dir: PathBuf::from("C:/comparison/targets/liberado"),
+            artifacts: PathBuf::from("C:/comparison/artifacts/liberado"),
+        }
+    }
+
+    #[test]
+    fn default_runner_is_built_in_the_liberado_harness_target() {
+        let path = liberado_runner_path(&layout(), None);
+        assert_eq!(
+            path,
+            PathBuf::from("C:/comparison/targets/liberado/debug").join(if cfg!(windows) {
+                "liberado-coder-run.exe"
+            } else {
+                "liberado-coder-run"
+            })
+        );
+    }
+
+    #[test]
+    fn explicit_runner_path_remains_an_operator_override() {
+        let explicit = PathBuf::from("C:/tools/liberado-coder-run.exe");
+        assert_eq!(liberado_runner_path(&layout(), Some(&explicit)), explicit,);
+    }
 }
 
 fn run_slug(path: &Path) -> String {

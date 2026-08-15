@@ -17,6 +17,7 @@ use tokio::sync::mpsc::Sender;
 
 use super::CodingSessionPack;
 use super::policies::WorkspacePolicies;
+use crate::CodingGoalPayload;
 
 /// Is this a failure a **human answer** could plausibly unblock?
 ///
@@ -103,6 +104,8 @@ impl CodingSessionPack {
         &self,
         session_id: &str,
         goal: &GoalSpec,
+        payload: &CodingGoalPayload,
+        payload_json: &serde_json::Value,
         ctx: &PackContext<'_>,
         contract: Option<Box<GoalContract>>,
         events: Sender<SessionEvent>,
@@ -112,10 +115,8 @@ impl CodingSessionPack {
         let may_ask = ctx.can(&liberado_common::Capability::AskHuman);
 
         // ── Phase 2: build against the frozen contract ──────────────────────────────────────
-        let workspace = goal
-            .payload
-            .get("workspace_root")
-            .and_then(|v| v.as_str())
+        let workspace = payload
+            .workspace_root()
             .map(PathBuf::from)
             .unwrap_or_else(|| {
                 self.default_workspace_parent
@@ -129,10 +130,8 @@ impl CodingSessionPack {
         // literal `"session-coder"`, which is not a model any provider knows — and it did not
         // matter, because `SingleProviderFactory` ignored the requested model entirely. With a
         // model-aware factory installed this string is what actually gets called.
-        let model = goal
-            .payload
-            .get("model")
-            .and_then(|v| v.as_str())
+        let model = payload
+            .model()
             .unwrap_or(self.coder_role.model.as_str())
             .to_string();
 
@@ -140,16 +139,13 @@ impl CodingSessionPack {
         // Parent-only merge; children never self-merge. Prefer hub-spawned child goal sessions
         // when the pack has an attached hub; fall back to in-process backend workers (tests).
         // Nested fan-out is refused: children set fanout_child and must not carry subtasks.
-        if goal.payload.get("fanout_child").and_then(|v| v.as_bool()) == Some(true)
-            && crate::fanout::subtasks_from_payload(&goal.payload).is_some()
-        {
+        if payload.fanout_child() && crate::fanout::subtasks_from_payload(payload_json).is_some() {
             return Err(PackError::Setup(
                 "fanout child sessions cannot nest further subtasks".into(),
             ));
         }
-        if let Some(subtasks) = crate::fanout::subtasks_from_payload(&goal.payload) {
-            let max_concurrent = goal
-                .payload
+        if let Some(subtasks) = crate::fanout::subtasks_from_payload(payload_json) {
+            let max_concurrent = payload_json
                 .get("max_concurrent_subagents")
                 .and_then(|v| v.as_u64())
                 .or_else(|| {
@@ -290,9 +286,9 @@ impl CodingSessionPack {
         // Path/command policy from profile overrides + payload
         // (plan = restricted write preset; explore = read-only preset).
         let policies =
-            WorkspacePolicies::resolve(ctx.overrides(), &goal.payload, self.hashline.clone());
+            WorkspacePolicies::resolve(ctx.overrides(), payload_json, self.hashline.clone());
         let prompt = policies.coder_prompt(
-            &goal.payload,
+            payload_json,
             // Loaded from prompts/coder/session-pack-coder.md, not a literal: the daemon path's
             // prompt was a second copy of coder instructions that nobody could diff against the
             // other two, and retuning it cost a rebuild.
@@ -348,16 +344,7 @@ impl CodingSessionPack {
         // Build mode on a git repo: **durable** session worktree under coding-worktrees/{session_id}
         // + HostLocal (S4). Ephemeral Worktree Drop would delete the FS root that shadow-git
         // checkpoints and mid-build park/resume need to survive attempt teardown (C7 + E6-c(b)).
-        let force_host = goal
-            .payload
-            .get("force_host_local")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false)
-            || goal
-                .payload
-                .get("fanout_child")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false);
+        let force_host = payload.force_host_local() || payload.fanout_child();
         let (attempt_workspace, sandbox) = if policies.explore_mode() || force_host {
             (workspace.clone(), SandboxSpec::HostLocal)
         } else if is_git_repo(&workspace) {

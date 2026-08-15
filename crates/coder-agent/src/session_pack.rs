@@ -42,7 +42,7 @@ use liberado_session::{
 };
 use tokio::sync::mpsc::Sender;
 
-use crate::LiberadoLoopBackend;
+use crate::{CodingGoalPayload, LiberadoLoopBackend};
 
 /// Runs coding goals via a [`CoderBackend`] (in production, [`LiberadoLoopBackend`]), intake-first.
 pub struct CodingSessionPack {
@@ -318,6 +318,10 @@ impl DomainPackRunner for CodingSessionPack {
         if *cancel.borrow() {
             return Err(PackError::Cancelled);
         }
+        // The session kernel deliberately treats `GoalSpec::payload` as opaque. The coding pack
+        // owns its interpretation, so validate it before any path reaches workspace setup.
+        let payload = CodingGoalPayload::parse(&goal.payload).map_err(PackError::Setup)?;
+        let payload_json = payload.to_value();
 
         let prior = ctx.prior_events().await;
         let mid_build_resume = prior.iter().any(|e| {
@@ -334,8 +338,11 @@ impl DomainPackRunner for CodingSessionPack {
         // HostLocal / non-git sessions.
         if mid_build_resume {
             if let Some((id, label)) = last_checkpoint(&prior) {
-                let workspace =
-                    coding_checkpoint_workspace(session_id, goal, &self.default_workspace_parent);
+                let workspace = coding_checkpoint_workspace(
+                    session_id,
+                    &payload,
+                    &self.default_workspace_parent,
+                );
                 match liberado_coder_sandbox::ShadowGit::open_or_init(&workspace, session_id) {
                     Ok(sg) => {
                         if let Err(e) = sg.restore(&id).await {
@@ -365,7 +372,17 @@ impl DomainPackRunner for CodingSessionPack {
             }
             // Skip intake — contract negotiation already happened (or was skipped) before park.
             return self
-                .run_build_phase(session_id, goal, ctx, None, events, inputs, cancel)
+                .run_build_phase(
+                    session_id,
+                    goal,
+                    &payload,
+                    &payload_json,
+                    ctx,
+                    None,
+                    events,
+                    inputs,
+                    cancel,
+                )
                 .await;
         }
 
@@ -373,7 +390,7 @@ impl DomainPackRunner for CodingSessionPack {
         // Asking the human is a capability, not a mode (S6). A session whose grant omits AskHuman
         // has a closed input channel, so intake would deadlock until its idle budget burned — skip
         // it and build directly from the description, which is exactly what this pack did pre-S7.
-        let settings = IntakeSettings::resolve(ctx.overrides(), &goal.payload);
+        let settings = IntakeSettings::resolve(ctx.overrides(), &payload_json);
         let may_ask = ctx.can(&Capability::AskHuman);
 
         let contract = if settings.enabled && may_ask {
@@ -450,8 +467,18 @@ impl DomainPackRunner for CodingSessionPack {
             None
         };
 
-        self.run_build_phase(session_id, goal, ctx, contract, events, inputs, cancel)
-            .await
+        self.run_build_phase(
+            session_id,
+            goal,
+            &payload,
+            &payload_json,
+            ctx,
+            contract,
+            events,
+            inputs,
+            cancel,
+        )
+        .await
     }
 }
 
@@ -468,7 +495,7 @@ fn last_checkpoint(events: &[SessionEvent]) -> Option<(String, String)> {
 /// authorized `workspace_root` / default goal workspace (HostLocal / non-git).
 pub(crate) fn coding_checkpoint_workspace(
     session_id: &str,
-    goal: &GoalSpec,
+    payload: &CodingGoalPayload,
     default_parent: &std::path::Path,
 ) -> std::path::PathBuf {
     if let Some(sess) = liberado_coder_tools::durable_session_workspace(session_id)
@@ -476,9 +503,8 @@ pub(crate) fn coding_checkpoint_workspace(
     {
         return sess;
     }
-    goal.payload
-        .get("workspace_root")
-        .and_then(|v| v.as_str())
+    payload
+        .workspace_root()
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| default_parent.join(format!("goal-{session_id}")))
 }

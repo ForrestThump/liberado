@@ -6,6 +6,7 @@
 //! `docs/spec/architecture/agentic-loops.md` and `docs/future-work/archive/agentic-mesh-hygiene-audit-2026-07-10.md`.
 
 pub mod assemble;
+mod coding_goal;
 pub mod cold_review;
 mod completion_gate;
 mod critic;
@@ -30,6 +31,7 @@ pub use assemble::{
     ProductionSurface, RepairPolicy, TraceDirPolicy, assemble_production_run,
 };
 
+pub use coding_goal::CodingGoalPayload;
 pub use cold_review::{
     ChangeSurface, ColdFinding, ColdReviewRequest, DropReason, FilterResult,
     ForbiddenAuthorContext, MAX_FIX_ROUNDS, ReadyInputs, Severity, StageDecision,
