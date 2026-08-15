@@ -59,6 +59,14 @@ captured oracle and its SHA-256 fingerprint stay under the run directory, so the
 is reviewable without becoming model context. Use an overlay for behavior that the normal
 workspace suite does not test; omit it when the task already has an adequate independent gate.
 
+`--allow-change <path-or-prefix>` and `--deny-change <path-or-prefix>` are repeatable, optional
+per-dispatch write-scope rules. With one or more `--allow-change` values, only matching paths may
+change; an allow match takes precedence over a deny match. With no allow values, `--deny-change`
+blocks matching paths and leaves other paths available. The common verifier applies the same scope
+to both harnesses before tests run, including untracked files, and records it in `pins.txt`.
+Liberado also receives the scope as a tool-level write restriction. Base protections such as
+`.git/**`, `target/**`, and restricted coding modes remain non-overridable.
+
 `--task-aware-context` changes one Liberado model-visible variable and records
 `task_aware_context=true` in `pins.txt`. It writes `[coder.repo_map] task_aware = true` to the run's
 captured `tuning.toml`; omit the flag for the default-off control. Pi stays on its native dynamic

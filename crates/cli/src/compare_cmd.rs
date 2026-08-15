@@ -3,7 +3,7 @@
 //! The comparison owns its worktrees, build caches, logs, sessions, traces, and saved Git refs.
 //! This keeps orchestration policy in compiled code. Shell wrappers only need to pass arguments.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::ffi::OsStr;
 use std::fs::{self, File};
@@ -13,6 +13,7 @@ use std::process::{Command, Stdio};
 use std::time::Duration;
 
 use chrono::Utc;
+use liberado_coder_core::DispatchWriteScope;
 use liberado_common::process::{command, output_within, std_command};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -55,6 +56,7 @@ struct RunArgs {
     thinking: String,
     max_turns: u32,
     task_aware_context: bool,
+    write_scope: DispatchWriteScope,
     acceptance_overlay: Option<PathBuf>,
     liberado_bin: Option<PathBuf>,
     pi_bin: Option<PathBuf>,
@@ -191,6 +193,7 @@ pub fn run(args: &[String]) -> Result<(), Box<dyn Error>> {
             "usage: liberado coder compare run <run-dir> --task <file> [--model <id>] \
              [--provider <name>] [--base-url <url>] [--api-key-env <name>] \
              [--thinking <level>] [--max-turns <n>] [--task-aware-context] \
+             [--allow-change <path-or-prefix>] [--deny-change <path-or-prefix>] \
              [--acceptance-overlay <dir>] \
              [--liberado-bin <path>] [--pi-bin <path>]"
         );
@@ -225,8 +228,12 @@ pub fn run(args: &[String]) -> Result<(), Box<dyn Error>> {
     let liberado_exit = run_or_record_launch_error(&manifest, "liberado", || {
         run_liberado(&manifest, &parsed, &task, &liberado_session)
     });
-    let liberado_verifier_exit =
-        verify_harness(&manifest, "liberado", acceptance_overlay.as_deref());
+    let liberado_verifier_exit = verify_harness(
+        &manifest,
+        "liberado",
+        &parsed.write_scope,
+        acceptance_overlay.as_deref(),
+    );
     save_result(
         &manifest,
         "liberado",
@@ -238,7 +245,12 @@ pub fn run(args: &[String]) -> Result<(), Box<dyn Error>> {
     let pi_exit = run_or_record_launch_error(&manifest, "pi", || {
         run_pi(&manifest, &parsed, &task, &pi_session)
     });
-    let pi_verifier_exit = verify_harness(&manifest, "pi", acceptance_overlay.as_deref());
+    let pi_verifier_exit = verify_harness(
+        &manifest,
+        "pi",
+        &parsed.write_scope,
+        acceptance_overlay.as_deref(),
+    );
     save_result(
         &manifest,
         "pi",
@@ -357,6 +369,7 @@ fn parse_run_args(args: &[String]) -> Result<RunArgs, Box<dyn Error>> {
     let mut thinking = DEFAULT_THINKING.to_string();
     let mut max_turns = DEFAULT_MAX_TURNS;
     let mut task_aware_context = false;
+    let mut write_scope = DispatchWriteScope::default();
     let mut acceptance_overlay = None;
     let mut liberado_bin = None;
     let mut pi_bin = None;
@@ -400,6 +413,18 @@ fn parse_run_args(args: &[String]) -> Result<RunArgs, Box<dyn Error>> {
             "--task-aware-context" => {
                 task_aware_context = true;
             }
+            "--allow-change" => {
+                index += 1;
+                write_scope
+                    .allow_globs
+                    .push(change_scope_pattern(value(args, index, flag)?)?);
+            }
+            "--deny-change" => {
+                index += 1;
+                write_scope
+                    .deny_globs
+                    .push(change_scope_pattern(value(args, index, flag)?)?);
+            }
             "--acceptance-overlay" => {
                 index += 1;
                 acceptance_overlay = Some(absolute(&PathBuf::from(value(args, index, flag)?))?);
@@ -434,6 +459,7 @@ fn parse_run_args(args: &[String]) -> Result<RunArgs, Box<dyn Error>> {
         thinking,
         max_turns,
         task_aware_context,
+        write_scope,
         acceptance_overlay,
         liberado_bin,
         pi_bin,
@@ -554,13 +580,22 @@ fn write_run_config(manifest: &CompareManifest, args: &RunArgs) -> Result<(), Bo
     } else {
         ""
     };
+    let write_scope = if args.write_scope.is_active() {
+        format!(
+            "\n[coder.path_policy.write_scope]\nallow_globs = {}\ndeny_globs = {}\n",
+            toml_string_array(&args.write_scope.allow_globs),
+            toml_string_array(&args.write_scope.deny_globs),
+        )
+    } else {
+        String::new()
+    };
     fs::write(
         config.join("tuning.toml"),
         format!(
             "[coder]\ntrace_dir = \"coder-traces\"\noffered_tools = [\"read_file\", \"write_file\", \"edit_file\", \"run_command\"]\n\n\
              [coder.coder]\nmodel = {}\nmax_turns = {}\nreasoning = {}\n\n\
              [coder.command_policy]\ntimeout_secs = {}\noutput_max_bytes = 65536\ndeny = [\"git\"]\n\n\
-             [coder.workspace]\nshared_target_dir = {}\nwarmup = false\nwarmup_timeout_secs = {}\n{}",
+             [coder.workspace]\nshared_target_dir = {}\nwarmup = false\nwarmup_timeout_secs = {}\n{}{}",
             toml_string(&args.model),
             args.max_turns,
             toml_string(&args.thinking),
@@ -568,6 +603,7 @@ fn write_run_config(manifest: &CompareManifest, args: &RunArgs) -> Result<(), Bo
             toml_string(&path_text(&liberado.target_dir)),
             manifest.compile_timeout_secs,
             repo_map,
+            write_scope,
         ),
     )?;
     Ok(())
@@ -585,7 +621,7 @@ fn write_run_pins(
     fs::write(
         manifest.run_root.join("pins.txt"),
         format!(
-            "base_revision={}\nbase_commit={}\nprovider={}\nmodel={}\nthinking={}\nliberado_max_turns={}\npi_turn_cap=client default\ncompile_timeout_secs={}\ntask_aware_context={}\nacceptance_overlay_hash={}\nsampling=temperature omitted by both clients\n",
+            "base_revision={}\nbase_commit={}\nprovider={}\nmodel={}\nthinking={}\nliberado_max_turns={}\npi_turn_cap=client default\ncompile_timeout_secs={}\ntask_aware_context={}\nwrite_scope_allow={}\nwrite_scope_deny={}\nacceptance_overlay_hash={}\nsampling=temperature omitted by both clients\n",
             manifest.base_revision,
             manifest.base_commit,
             args.provider,
@@ -594,6 +630,8 @@ fn write_run_pins(
             args.max_turns,
             manifest.compile_timeout_secs,
             args.task_aware_context,
+            args.write_scope.allow_globs.join(","),
+            args.write_scope.deny_globs.join(","),
             overlay_hash,
         ),
     )?;
@@ -766,6 +804,7 @@ fn warm_harness(manifest: &CompareManifest, name: &str) -> Result<(), Box<dyn Er
 fn verify_harness(
     manifest: &CompareManifest,
     name: &str,
+    write_scope: &DispatchWriteScope,
     acceptance_overlay: Option<&Path>,
 ) -> i32 {
     let layout = match harness(manifest, name) {
@@ -775,6 +814,22 @@ fn verify_harness(
             return 125;
         }
     };
+    if let Err(error) = verify_changed_paths(manifest, &layout.worktree, write_scope) {
+        let message = format!("{name} change-scope verification failed: {error}\n");
+        eprint!("{message}");
+        let _ = fs::write(layout.artifacts.join("verifier.stdout.log"), b"");
+        let _ = fs::write(layout.artifacts.join("verifier.stderr.log"), &message);
+        let now = Utc::now();
+        let _ = fs::write(
+            layout.artifacts.join("verifier-status.txt"),
+            format!(
+                "started={}\nfinished={}\nexit=126\n",
+                now.to_rfc3339(),
+                now.to_rfc3339()
+            ),
+        );
+        return 126;
+    }
     let _installed_overlay = match acceptance_overlay
         .map(|source| InstalledAcceptanceOverlay::install(source, &layout.worktree))
         .transpose()
@@ -839,6 +894,47 @@ fn verify_harness(
         return 125;
     }
     exit
+}
+
+fn verify_changed_paths(
+    manifest: &CompareManifest,
+    worktree: &Path,
+    write_scope: &DispatchWriteScope,
+) -> Result<(), Box<dyn Error>> {
+    if !write_scope.is_active() {
+        return Ok(());
+    }
+    let mut changed = BTreeSet::new();
+    for arguments in [
+        vec![
+            "diff",
+            "--name-only",
+            "--no-renames",
+            manifest.base_commit.as_str(),
+        ],
+        vec!["ls-files", "--others", "--exclude-standard"],
+    ] {
+        for path in git_capture(worktree, &arguments)?
+            .lines()
+            .filter(|path| !path.is_empty())
+        {
+            changed.insert(path.replace('\\', "/"));
+        }
+    }
+    let rejected: Vec<_> = changed
+        .iter()
+        .filter(|path| !write_scope.permits(path))
+        .cloned()
+        .collect();
+    if rejected.is_empty() {
+        Ok(())
+    } else {
+        Err(format!(
+            "changed path(s) outside the dispatch write scope: {}",
+            rejected.join(", ")
+        )
+        .into())
+    }
 }
 
 fn run_liberado(
@@ -1130,6 +1226,31 @@ fn path_text(path: &Path) -> String {
 
 fn toml_string(value: &str) -> String {
     format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
+}
+
+fn toml_string_array(values: &[String]) -> String {
+    format!(
+        "[{}]",
+        values
+            .iter()
+            .map(|value| toml_string(value))
+            .collect::<Vec<_>>()
+            .join(", ")
+    )
+}
+
+fn change_scope_pattern(value: &str) -> Result<String, Box<dyn Error>> {
+    let normalized = value.replace('\\', "/");
+    if normalized.is_empty()
+        || normalized.starts_with('/')
+        || normalized.split('/').any(|component| component == "..")
+    {
+        return Err(format!(
+            "change-scope path must be a non-empty workspace-relative path or prefix: {value}"
+        )
+        .into());
+    }
+    Ok(normalized)
 }
 
 fn run_slug(path: &Path) -> String {

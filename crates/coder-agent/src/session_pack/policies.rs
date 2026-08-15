@@ -5,7 +5,9 @@
 //! [`PathPolicy`] / [`CommandPolicy`] values (`docs/future-work/coding-tui-plan.md`: modes are
 //! capability/path tiers, not different agents), selected by a single [`CodingMode`].
 
-use liberado_coder_core::{CodingMode, CommandPolicy, HashlineConfig, PathPolicy};
+use liberado_coder_core::{
+    CodingMode, CommandPolicy, DispatchWriteScope, HashlineConfig, PathPolicy,
+};
 
 /// Workspace tool policies for one coding session.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -97,10 +99,23 @@ fn parse_path_policy(
     overrides: &serde_json::Value,
     payload: &serde_json::Value,
 ) -> Option<PathPolicy> {
-    payload
+    let mut policy: PathPolicy = payload
         .get("path_policy")
         .or_else(|| overrides.get("path_policy"))
         .and_then(|v| serde_json::from_value(v.clone()).ok())
+        .unwrap_or_default();
+    let scope = payload
+        .get("write_scope")
+        .or_else(|| overrides.get("write_scope"))
+        .and_then(|v| serde_json::from_value::<DispatchWriteScope>(v.clone()).ok());
+    if let Some(scope) = scope.as_ref() {
+        policy.write_scope = scope.clone();
+    }
+    if policy != PathPolicy::default() || scope.is_some() {
+        Some(policy)
+    } else {
+        None
+    }
 }
 
 fn parse_command_policy(
@@ -140,6 +155,26 @@ mod tests {
         assert_eq!(p.mode, CodingMode::Normal);
         assert_eq!(p.path_policy.allow_write_globs, vec!["**".to_string()]);
         assert!(p.command_policy.allow.is_empty());
+    }
+
+    #[test]
+    fn payload_write_scope_can_constrain_one_normal_dispatch() {
+        let p = resolve(
+            &json!({}),
+            &json!({
+                "write_scope": {
+                    "allow_globs": ["docs/**"],
+                    "deny_globs": ["docs/private/**"]
+                }
+            }),
+        );
+        assert!(p.path_policy.write_scope.is_active());
+        assert!(p.path_policy.write_scope.permits("docs/guide.md"));
+        assert!(!p.path_policy.write_scope.permits("src/main.rs"));
+        assert!(
+            p.path_policy.write_scope.permits("docs/private/notes.md"),
+            "an allowlist overrides the dispatch blacklist"
+        );
     }
 
     // ── plan ────────────────────────────────────────────────────────────────

@@ -444,6 +444,22 @@ mod tests {
     }
 
     #[test]
+    fn parses_a_scope_only_path_policy_with_base_defaults() {
+        let value: toml::Value = toml::from_str(
+            r#"
+            [path_policy.write_scope]
+            allow_globs = ["docs/**"]
+            deny_globs = ["docs/private/**"]
+            "#,
+        )
+        .unwrap();
+        let tuning = CoderTuning::from_value(Some(&value)).unwrap();
+        assert_eq!(tuning.path_policy.allow_write_globs, vec!["**"]);
+        assert!(tuning.path_policy.write_scope.permits("docs/guide.md"));
+        assert!(!tuning.path_policy.write_scope.permits("src/main.rs"));
+    }
+
+    #[test]
     fn validation_rejects_missing_role_budget() {
         let mut tuning = CoderTuning::default();
         tuning.coder.max_turns = None;
