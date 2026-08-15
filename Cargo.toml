@@ -30,6 +30,7 @@ chrono = { version = "0.4", features = ["serde"] }
 chrono-tz = "0.10"
 thiserror = "2"
 toml = "0.8"
+cargo_metadata = "0.23"
 dirs = "5"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

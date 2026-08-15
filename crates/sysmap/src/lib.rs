@@ -7,8 +7,9 @@
 //!
 //! The map is **regenerated from source**, never hand-drawn:
 //!
-//! * crate nodes come from `crates/*/Cargo.toml` (`[package]` name/description,
-//!   `[package.metadata.liberado] role`, `[dependencies]`),
+//! * crate nodes and build-time dependency edges come from `cargo metadata` (workspace membership
+//!   decides what is internal; each crate's `[package.metadata.liberado] role` and declared
+//!   `flows` are read from the package metadata),
 //! * runtime nodes and payload edges come from an optional `topology.toml` plus the curated
 //!   runtime wiring in [`wiring`] (grounded in `docs/spec/architecture/overview.md`),
 //! * the layout and projection are pure functions of the node set ([`layout`], [`iso`]), so a
@@ -173,14 +174,21 @@ mod tests {
     use std::fs;
     use tempfile::tempdir;
 
+    fn write_workspace(dir: &Path) {
+        fs::write(
+            dir.join("Cargo.toml"),
+            "[workspace]\nresolver = \"3\"\nmembers = [\"crates/*\"]\n",
+        )
+        .unwrap();
+    }
+
     fn add_crate(dir: &Path, name: &str, role: &str, deps: &[&str], flows: &[(&str, &str, &str)]) {
-        let crate_dir = dir
-            .join("crates")
-            .join(name.strip_prefix("liberado-").unwrap());
-        fs::create_dir_all(&crate_dir).unwrap();
+        let crate_dir = dir.join("crates").join(name);
+        fs::create_dir_all(crate_dir.join("src")).unwrap();
+        fs::write(crate_dir.join("src/lib.rs"), "// test fixture\n").unwrap();
         let deps_toml = deps
             .iter()
-            .map(|d| format!("{d} = {{ workspace = true }}\n"))
+            .map(|d| format!("{d} = {{ path = \"../{d}\" }}\n"))
             .collect::<String>();
         let flows_toml = flows
             .iter()
@@ -193,7 +201,7 @@ mod tests {
         fs::write(
             crate_dir.join("Cargo.toml"),
             format!(
-                "[package]\nname = \"{name}\"\ndescription = \"{name} crate\"\n[package.metadata.liberado]\nrole = \"{role}\"\n{flows_toml}[dependencies]\n{deps_toml}"
+                "[package]\nname = \"{name}\"\nversion = \"0.1.0\"\nedition = \"2024\"\ndescription = \"{name} crate\"\n[package.metadata.liberado]\nrole = \"{role}\"\n{flows_toml}[dependencies]\n{deps_toml}"
             ),
         )
         .unwrap();
@@ -201,6 +209,7 @@ mod tests {
 
     fn repo_with_crates() -> tempfile::TempDir {
         let dir = tempdir().unwrap();
+        write_workspace(dir.path());
         add_crate(dir.path(), "liberado-common", "foundation", &[], &[]);
         add_crate(
             dir.path(),
@@ -237,6 +246,7 @@ mod tests {
     #[test]
     fn declared_flows_produce_runtime_edges() {
         let dir = tempdir().unwrap();
+        write_workspace(dir.path());
         add_crate(dir.path(), "liberado-common", "foundation", &[], &[]);
         add_crate(
             dir.path(),

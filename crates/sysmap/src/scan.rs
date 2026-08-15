@@ -1,13 +1,19 @@
-//! Scans the repository's `crates/*/Cargo.toml` manifests and an optional `topology.toml` into
-//! [`MapNode`]s. This is the *data acquisition* half of the map; it reuses the same `toml`-based
-//! manifest reading as `crates/test-support/tests/layer_rules.rs` and the real config model from
-//! `liberado-config-loader` (no re-declared field names to drift).
+//! Scans the workspace's crates via `cargo metadata` and an optional `topology.toml` into
+//! [`MapNode`]s. This is the *data acquisition* half of the map.
+//!
+//! Crate names, descriptions, and dependencies come from `cargo metadata`: workspace membership
+//! decides what counts as an *internal* dependency, so there is no name-prefix heuristic here. The
+//! declared runtime wiring (`role` and `flows`) comes from each package's `[package.metadata]`.
+//! The runtime topology reuses the real config model from `liberado-config-loader` (no re-declared
+//! field names to drift).
 
 use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use cargo_metadata::{Dependency, DependencyKind, MetadataCommand, Package};
 use liberado_common::Consequence;
 use liberado_config_loader::model::SessionProfile;
 use liberado_config_loader::{CronSchedule, HookConfig, McpConfig, McpTransport, PoolConfig};
@@ -26,6 +32,8 @@ pub enum ScanError {
         path: PathBuf,
         source: Box<toml::de::Error>,
     },
+    /// `cargo metadata` failed (missing cargo, malformed workspace, …).
+    Cargo { source: cargo_metadata::Error },
 }
 
 impl fmt::Display for ScanError {
@@ -33,6 +41,7 @@ impl fmt::Display for ScanError {
         match self {
             ScanError::Io { path, source } => write!(f, "reading {}: {source}", path.display()),
             ScanError::Toml { path, source } => write!(f, "parsing {}: {source}", path.display()),
+            ScanError::Cargo { source } => write!(f, "cargo metadata: {source}"),
         }
     }
 }
@@ -40,13 +49,6 @@ impl fmt::Display for ScanError {
 impl std::error::Error for ScanError {}
 
 type Result<T> = std::result::Result<T, ScanError>;
-
-fn is_internal(dep: &str) -> bool {
-    // `sysmap-core` is the one workspace crate without the `liberado-` prefix (it is the liftable
-    // core); the prefix heuristic here is replaced by workspace-membership in the cargo-metadata
-    // phase (see docs/future-work/sysmap-generic-core-plan.md).
-    dep.starts_with("liberado-") || dep == "chat-client-contract" || dep == "sysmap-core"
-}
 
 /// The layer a runtime node is *grouped near* for coloring. Runtime nodes use their kind color for
 /// the building itself; this value feeds only ordering and the detail panel, not the building
@@ -63,25 +65,42 @@ pub fn runtime_layer(kind: &str) -> Layer {
     Layer::from(layer)
 }
 
-/// Scan every `crates/*/Cargo.toml` under `root`, returning crate nodes sorted by id.
+/// Which dependency kinds become internal edges. Defaults match the old `[dependencies]`-only
+/// scanner (dev- and build-dependencies are excluded), so behavior is unchanged unless a caller
+/// opts in.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ScanOptions {
+    pub include_dev: bool,
+    pub include_build: bool,
+}
+
+/// Scan the workspace rooted at `root` (its `Cargo.toml` must be the workspace manifest) into
+/// crate nodes, sorted by id.
 pub fn scan_repository(root: &Path) -> Result<Vec<MapNode>> {
-    let crates_dir = root.join("crates");
+    scan_repository_with(root, ScanOptions::default())
+}
+
+/// Scan with an explicit dependency-kind policy.
+pub fn scan_repository_with(root: &Path, opts: ScanOptions) -> Result<Vec<MapNode>> {
+    let metadata = MetadataCommand::new()
+        .manifest_path(root.join("Cargo.toml"))
+        .no_deps()
+        .exec()
+        .map_err(|e| ScanError::Cargo { source: e })?;
+
+    // Workspace members are the "internal" packages: an internal dependency edge is any direct
+    // dependency that resolves to one of these. This replaces the old `liberado-` /
+    // `chat-client-contract` name-prefix heuristic with the real workspace-membership relation, so
+    // any workspace layout and any crate naming convention works.
+    let members: BTreeSet<String> = metadata
+        .packages
+        .iter()
+        .map(|p| p.name.to_string())
+        .collect();
+
     let mut nodes = Vec::new();
-    let entries = fs::read_dir(&crates_dir).map_err(|e| ScanError::Io {
-        path: crates_dir.clone(),
-        source: Box::new(e),
-    })?;
-    for entry in entries {
-        let entry = entry.map_err(|e| ScanError::Io {
-            path: crates_dir.clone(),
-            source: Box::new(e),
-        })?;
-        let dir = entry.path();
-        let manifest_path = dir.join("Cargo.toml");
-        if !manifest_path.is_file() {
-            continue;
-        }
-        if let Some(node) = read_manifest(&manifest_path)? {
+    for package in &metadata.packages {
+        if let Some(node) = node_from_package(package, &members, &opts) {
             nodes.push(node);
         }
     }
@@ -89,46 +108,54 @@ pub fn scan_repository(root: &Path) -> Result<Vec<MapNode>> {
     Ok(nodes)
 }
 
-fn read_manifest(manifest_path: &Path) -> Result<Option<MapNode>> {
-    let raw = fs::read_to_string(manifest_path).map_err(|e| ScanError::Io {
-        path: manifest_path.to_path_buf(),
-        source: Box::new(e),
-    })?;
-    let manifest: toml::Value = toml::from_str(&raw).map_err(|e| ScanError::Toml {
-        path: manifest_path.to_path_buf(),
-        source: Box::new(e),
-    })?;
-
-    let Some(package) = manifest.get("package") else {
-        return Ok(None);
-    };
-    let Some(name) = package.get("name").and_then(|v| v.as_str()) else {
-        return Ok(None);
-    };
-
+fn node_from_package(
+    package: &Package,
+    members: &BTreeSet<String>,
+    opts: &ScanOptions,
+) -> Option<MapNode> {
     let role_str = package
-        .get("metadata")
-        .and_then(|m| m.get("liberado"))
+        .metadata
+        .get("liberado")
         .and_then(|l| l.get("role"))
         .and_then(|v| v.as_str())
         .unwrap_or_default();
-    let description = package
-        .get("description")
-        .and_then(|v| v.as_str())
-        .unwrap_or_default()
-        .to_string();
-    let mut deps: Vec<String> = manifest
-        .get("dependencies")
-        .and_then(|d| d.as_table())
-        .map(|deps| deps.keys().filter(|k| is_internal(k)).cloned().collect())
-        .unwrap_or_default();
-    deps.sort();
+    let description = package.description.clone().unwrap_or_default();
 
-    // Declared runtime wiring: `[[package.metadata.liberado.flows]]`. A crate states its own
-    // outbound flows here; the tool only reads them (see `DeclaredFlow`).
-    let flows: Vec<DeclaredFlow> = package
-        .get("metadata")
-        .and_then(|m| m.get("liberado"))
+    let mut deps: Vec<String> = package
+        .dependencies
+        .iter()
+        .filter(|d| include_dep(d, opts))
+        .filter(|d| members.contains(d.name.as_str()))
+        .map(|d| d.name.clone())
+        .collect();
+    deps.sort();
+    deps.dedup();
+
+    let layer = if role_str.is_empty() {
+        Layer::unknown()
+    } else {
+        Layer::from(role_str)
+    };
+
+    Some(MapNode {
+        id: package.name.to_string(),
+        label: package.name.to_string(),
+        kind: NodeKind::crate_kind(),
+        layer,
+        description,
+        deps,
+        flows: parse_flows(package),
+        meta: BTreeMap::new(),
+        enabled: true,
+    })
+}
+
+/// Declared runtime wiring: `[[package.metadata.liberado.flows]]`. A crate states its own outbound
+/// flows here; the tool only reads them (see `DeclaredFlow`).
+fn parse_flows(package: &Package) -> Vec<DeclaredFlow> {
+    package
+        .metadata
+        .get("liberado")
         .and_then(|l| l.get("flows"))
         .and_then(|f| f.as_array())
         .map(|arr| {
@@ -148,25 +175,16 @@ fn read_manifest(manifest_path: &Path) -> Result<Option<MapNode>> {
                 })
                 .collect()
         })
-        .unwrap_or_default();
+        .unwrap_or_default()
+}
 
-    let layer = if role_str.is_empty() {
-        Layer::unknown()
-    } else {
-        Layer::from(role_str)
-    };
-
-    Ok(Some(MapNode {
-        id: name.to_string(),
-        label: name.to_string(),
-        kind: NodeKind::crate_kind(),
-        layer,
-        description,
-        deps,
-        flows,
-        meta: BTreeMap::new(),
-        enabled: true,
-    }))
+fn include_dep(dep: &Dependency, opts: &ScanOptions) -> bool {
+    match dep.kind {
+        DependencyKind::Normal => true,
+        DependencyKind::Development => opts.include_dev,
+        DependencyKind::Build => opts.include_build,
+        DependencyKind::Unknown => false,
+    }
 }
 
 /// Load `topology.toml` from `config_dir` if present. `None` means "no runtime overlay".
@@ -478,51 +496,93 @@ mod tests {
     use super::*;
     use tempfile::tempdir;
 
-    #[test]
-    fn scans_manifest_name_role_description_deps() {
-        let dir = tempdir().unwrap();
-        let crate_dir = dir.path().join("crates/demo");
-        fs::create_dir_all(&crate_dir).unwrap();
+    fn write_workspace(root: &Path) {
         fs::write(
-            crate_dir.join("Cargo.toml"),
-            r#"
-[package]
-name = "liberado-demo"
-description = "A demo crate"
-[package.metadata.liberado]
-role = "kernel"
-[dependencies]
-liberado-common = { workspace = true }
-serde = "1"
-[dev-dependencies]
-liberado-provider = { workspace = true }
-"#,
+            root.join("Cargo.toml"),
+            "[workspace]\nresolver = \"3\"\nmembers = [\"crates/*\"]\n",
         )
         .unwrap();
+    }
 
-        let nodes = scan_repository(dir.path()).unwrap();
-        assert_eq!(nodes.len(), 1);
-        let n = &nodes[0];
-        assert_eq!(n.id, "liberado-demo");
-        assert_eq!(n.layer, Layer::from("kernel"));
-        assert_eq!(n.description, "A demo crate");
-        // dev-dependencies are excluded; only real internal deps count.
-        assert_eq!(n.deps, vec!["liberado-common".to_string()]);
+    fn add_crate(root: &Path, name: &str, role: Option<&str>, deps: &[&str], dev_deps: &[&str]) {
+        let dir = root.join("crates").join(name);
+        fs::create_dir_all(dir.join("src")).unwrap();
+        fs::write(dir.join("src/lib.rs"), "// test fixture\n").unwrap();
+        let role_toml = match role {
+            Some(r) => format!("[package.metadata.liberado]\nrole = \"{r}\"\n"),
+            None => String::new(),
+        };
+        let deps_toml = deps
+            .iter()
+            .map(|d| format!("{d} = {{ path = \"../{d}\" }}\n"))
+            .collect::<String>();
+        let dev_deps_toml = if dev_deps.is_empty() {
+            String::new()
+        } else {
+            format!(
+                "[dev-dependencies]\n{}",
+                dev_deps
+                    .iter()
+                    .map(|d| format!("{d} = {{ path = \"../{d}\" }}\n"))
+                    .collect::<String>()
+            )
+        };
+        fs::write(
+            dir.join("Cargo.toml"),
+            format!(
+                "[package]\nname = \"{name}\"\nversion = \"0.1.0\"\nedition = \"2024\"\ndescription = \"{name} crate\"\n{role_toml}[dependencies]\n{deps_toml}{dev_deps_toml}"
+            ),
+        )
+        .unwrap();
     }
 
     #[test]
-    fn untagged_crate_maps_to_unknown_not_skipped() {
+    fn scans_name_role_description_and_internal_deps_by_workspace_membership() {
         let dir = tempdir().unwrap();
-        let crate_dir = dir.path().join("crates/demo");
-        fs::create_dir_all(&crate_dir).unwrap();
-        fs::write(
-            crate_dir.join("Cargo.toml"),
-            "[package]\nname = \"liberado-untagged\"\ndescription = \"x\"\n",
+        write_workspace(dir.path());
+        add_crate(dir.path(), "demo-common", None, &[], &[]);
+        add_crate(dir.path(), "demo-tools", None, &[], &[]);
+        // `demo` depends on `demo-common` (internal) and dev-depends on `demo-tools` (excluded by
+        // default). None of these names carry a `liberado-` prefix — membership decides, not the name.
+        add_crate(
+            dir.path(),
+            "demo",
+            Some("kernel"),
+            &["demo-common"],
+            &["demo-tools"],
+        );
+
+        let nodes = scan_repository(dir.path()).unwrap();
+        assert_eq!(nodes.len(), 3);
+        let n = nodes.iter().find(|n| n.id == "demo").unwrap();
+        assert_eq!(n.layer, Layer::from("kernel"));
+        assert_eq!(n.description, "demo crate");
+        assert_eq!(n.deps, vec!["demo-common".to_string()]);
+        // A member with no role maps to "unknown" and is still present.
+        assert!(
+            nodes
+                .iter()
+                .any(|n| n.id == "demo-common" && n.layer == Layer::unknown())
+        );
+    }
+
+    #[test]
+    fn include_dev_adds_dev_dependencies() {
+        let dir = tempdir().unwrap();
+        write_workspace(dir.path());
+        add_crate(dir.path(), "demo-common", None, &[], &[]);
+        add_crate(dir.path(), "demo", Some("kernel"), &[], &["demo-common"]);
+
+        let nodes = scan_repository_with(
+            dir.path(),
+            ScanOptions {
+                include_dev: true,
+                include_build: false,
+            },
         )
         .unwrap();
-        let nodes = scan_repository(dir.path()).unwrap();
-        assert_eq!(nodes.len(), 1);
-        assert_eq!(nodes[0].layer, Layer::unknown());
+        let n = nodes.iter().find(|n| n.id == "demo").unwrap();
+        assert_eq!(n.deps, vec!["demo-common".to_string()]);
     }
 
     #[test]

@@ -8,9 +8,10 @@ open_items: true
 
 # sysmap — split into a generic core + a Liberado profile
 
-**Status**: active, 2026-08-15. **Phase 1 done** — `sysmap-core` extracted (pure move) and its
-layer/kind vocabulary opened (`Layer`/`NodeKind` are string ids against a `Vocabulary` carried on
-`SystemMap`; the Liberado palette lives in `liberado-sysmap/src/profile.rs`). **Phases 2–6 open.**
+**Status**: active, 2026-08-15. **Phases 1–2 done** — `sysmap-core` extracted and its layer/kind
+vocabulary opened (Phase 1); the scanner now reads `cargo metadata` and `[package.metadata]`
+(Phase 2), so internal-dependency detection is workspace membership, not a name prefix. **Phases
+3–6 open.**
 This plan records the split of the isometric/3D system map (`liberado-sysmap` +
 `liberado-sysmap-gui`, see [`crates/sysmap/README.md`](../../crates/sysmap/README.md)) into a
 **project-agnostic** core crate plus a thin **Liberado-specific** profile, so the map becomes

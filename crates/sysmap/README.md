@@ -21,13 +21,14 @@ Arguments: `--repo PATH` (repository root; default walks up from the cwd), `--co
 
 ## What it shows
 
-* **Buildings** are workspace crates (`crates/*/Cargo.toml`) plus runtime components declared in
+* **Buildings** are workspace crates (via `cargo metadata`) plus runtime components declared in
   `topology.toml`: providers, MCP servers, pools, session profiles, coding projects, cron
   schedules, webhooks, the vault, and the notifier.
 * **Layer colors** follow each crate's `[package.metadata.liberado] role` — the same vocabulary
   `crates/test-support/tests/layer_rules.rs` enforces. Height is fan-in + fan-out (dependency
   hub-ness).
-* **Gray edges** are build-time dependencies from `[dependencies]`.
+* **Gray edges** are workspace-internal build-time dependencies (workspace membership decides
+  what is internal; dev/build-dependencies are excluded by default).
 * **Orange/green arrows** are runtime control and data paths — the perceive → decide → act →
   loop-break loop, surfaces, inference, and notification. Edge labels name the payload.
 
@@ -35,8 +36,8 @@ Arguments: `--repo PATH` (repository root; default walks up from the cwd), `--co
 
 The map is **generated from source, never hand-drawn**. On every launch the model crate re-scans:
 
-1. `crates/*/Cargo.toml` for name, role, description, internal dependencies, and declared runtime
-   flows, and
+1. `cargo metadata` for the workspace members — name, description, dependencies — plus each
+   crate's `[package.metadata.liberado] role` and declared runtime `flows`, and
 2. `topology.toml` (when a config dir resolves) for the runtime instances,
 
 then applies a **deterministic layout** (a pure function of the node set). A dependency change
@@ -48,7 +49,8 @@ through JSON, so a web or headless renderer can consume the same graph without r
 
 ## How runtime wiring is declared (no hardcoded understanding)
 
-Build-time dependencies were never hardcoded — they are parsed from each crate's `Cargo.toml`.
+Build-time dependencies were never hardcoded — they come from `cargo metadata`, where *internal*
+means *resolves to a workspace member* (no name-prefix heuristic).
 The **runtime** control/data paths are now declared the same way, in the crates themselves, under
 `[[package.metadata.liberado.flows]]`:
 

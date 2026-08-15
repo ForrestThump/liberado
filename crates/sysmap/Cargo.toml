@@ -9,6 +9,7 @@ authors.workspace = true
 repository.workspace = true
 
 [dependencies]
+cargo_metadata = { workspace = true }
 liberado-common = { workspace = true }
 liberado-config-loader = { workspace = true }
 serde = { workspace = true }
