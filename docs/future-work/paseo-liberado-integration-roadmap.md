@@ -196,7 +196,7 @@ the bridge crate is acceptable with an explicit follow-up to converge.
 |---|--------|-----|------------|
 | **P4.1** | **Error stop reasons** — ⚠️ **open, but the acceptance below is unachievable as written** | Provider/turn failures still return `stopReason: "end_turn"` with an “Error:” text prefix (three sites in `main.rs`). | ACP's `StopReason` is a **closed set** — `end_turn`, `max_tokens`, `max_turn_requests`, `refusal`, `cancelled` — with **no error variant** (confirmed against `zed-industries/agent-client-protocol`, 2026-08-10). So "use a distinct stop reason where ACP allows" has no answer. The real choice is between returning a JSON-RPC error for harness failures and documenting the `end_turn` mapping deliberately. **Decide that first**; do not dispatch this as an agent task until it is decided, because the done-condition is a judgement call. |
 | **P4.2** | ~~**Stdout serialization**~~ | — | ✅ **Landed.** `StdoutWire` in `crates/acp-bridge/src/wire.rs` is a single write path under one lock; responses and notifications both go through it. |
-| **P4.3** | **Richer prompt blocks** | Text + weak resource URI only; image/audio correctly advertised false. | Embedded context blocks produce useful tool-facing text; no fake image support. |
+| **P4.3** | ~~**Richer prompt blocks**~~ | — | ✅ **Implemented in PR #169.** Embedded text resources keep their source URI and content; resource links and binary blobs keep useful metadata; image/audio remain unsupported and are not decoded into fake text. |
 | **P4.4** | **Permission mapping** | Optional: Paseo `requestPermission` for Liberado write/execute gates. | Only if dogfood shows Paseo-mediated approvals are needed; default remains Liberado-internal policy. |
 
 ---

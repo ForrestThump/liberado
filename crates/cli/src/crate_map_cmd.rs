@@ -116,12 +116,7 @@ fn generate(root: &Path) -> std::io::Result<(String, usize)> {
     out.push_str("> Source of truth: each crate's `Cargo.toml` (`description` + `[package.metadata.liberado] role`).\n");
     out.push_str("> Layer semantics and dependency rules: [contracts.md](../architecture/contracts.md) and\n");
     out.push_str("> `crates/test-support/tests/layer_rules.rs` (the same role tags, mechanically enforced).\n\n");
-    let date = chrono::Utc::now().format("%Y-%m-%d");
-    out.push_str(&format!(
-        "{} workspace crates as of {}.\n",
-        crates.len(),
-        date
-    ));
+    out.push_str(&format!("{} workspace crates.\n", crates.len()));
 
     for role in ROLE_ORDER {
         let mut group: Vec<&CrateInfo> = crates.iter().filter(|c| c.role == *role).collect();
@@ -224,5 +219,10 @@ liberado-common = { workspace = true }
         assert!(text.contains("## tooling"));
         assert!(text.contains("`liberado-common`"));
         assert!(text.contains("A demo \\| crate"));
+        assert!(text.contains("1 workspace crates."));
+        assert!(
+            !text.contains(" as of "),
+            "generated output must not change when the UTC date changes"
+        );
     }
 }
