@@ -7,11 +7,12 @@ assemble long-lived run policy in PowerShell. A wrapper can supply arguments, bu
 build-cache isolation, process order, Git preservation, and artifact collection are compiled Rust
 code in `crates/harness-eval/`. The CLI is a thin argument surface over that crate.
 
-Common verifier failures can receive bounded repair. Each harness gets two additional model
-sessions by default; the coordinator writes the verifier diagnostics into the next session
-prompt, re-runs the verifier, and preserves every attempt in the normal logs. Override this per
-dispatch with `--verifier-repair-attempts N` (zero disables repair). Host failures, scope violations,
-and verifier timeouts remain terminal and are not sent back to the model.
+Common verifier failures can receive bounded repair, but this assistance is disabled by default.
+Benchmark comparisons must measure native first-pass harness behavior; otherwise the score includes
+the coordinator's recovery policy. Opt in per dispatch with `--verifier-repair-attempts N` (for
+example, `2` for production recovery). The coordinator writes verifier diagnostics into the next
+session prompt, re-runs the verifier, and preserves every attempt in the normal logs. Host failures,
+scope violations, and verifier timeouts remain terminal and are not sent back to the model.
 
 ## Durable job worker
 

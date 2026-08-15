@@ -108,6 +108,9 @@ pub struct ResourceLimits {
     pub run_timeout_secs: u64,
     pub minimum_free_bytes: u64,
     /// Additional model sessions allowed after a common verifier failure.
+    ///
+    /// This is deliberately zero by default. Benchmark comparisons must measure the harness's
+    /// native first-pass behavior; assisted repair is an explicit production policy.
     #[serde(default = "default_verifier_repair_attempts")]
     pub verifier_repair_attempts: u32,
 }
@@ -124,7 +127,7 @@ impl Default for ResourceLimits {
 }
 
 fn default_verifier_repair_attempts() -> u32 {
-    2
+    0
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -504,5 +507,10 @@ mod tests {
         let mut value = spec();
         value.task.text.push_str(" changed");
         assert!(value.validate().unwrap_err().contains("task digest"));
+    }
+
+    #[test]
+    fn verifier_repairs_are_opt_in_for_fair_comparisons() {
+        assert_eq!(ResourceLimits::default().verifier_repair_attempts, 0);
     }
 }

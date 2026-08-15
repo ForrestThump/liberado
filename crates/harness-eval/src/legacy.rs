@@ -540,7 +540,9 @@ fn parse_run_args(args: &[String]) -> Result<RunArgs, Box<dyn Error>> {
     let mut thinking = DEFAULT_THINKING.to_string();
     let mut max_turns = DEFAULT_MAX_TURNS;
     let mut run_timeout_secs = DEFAULT_RUN_TIMEOUT_SECS;
-    let mut verifier_repair_attempts = 2;
+    // Keep external verifier repair off for benchmark runs. Operators can opt in explicitly;
+    // otherwise the comparison would measure the coordinator's recovery policy, not the harness.
+    let mut verifier_repair_attempts = 0;
     let mut task_aware_context = false;
     let mut write_scope = DispatchWriteScope::default();
     let mut acceptance_overlay = None;

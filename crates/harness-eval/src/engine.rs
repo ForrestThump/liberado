@@ -565,7 +565,7 @@ mod tests {
                 compile_timeout_secs: 1,
                 run_timeout_secs: 1,
                 minimum_free_bytes: 1,
-                verifier_repair_attempts: 2,
+                verifier_repair_attempts: 0,
             },
             verifier: VerifierProfile::WorkspaceTests,
             task_aware_context: false,
