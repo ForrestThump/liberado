@@ -8,10 +8,10 @@ open_items: true
 
 # sysmap — split into a generic core + a Liberado profile
 
-**Status**: active, 2026-08-15. **Phases 1–2 done** — `sysmap-core` extracted and its layer/kind
-vocabulary opened (Phase 1); the scanner now reads `cargo metadata` and `[package.metadata]`
-(Phase 2), so internal-dependency detection is workspace membership, not a name prefix. **Phases
-3–6 open.**
+**Status**: active, 2026-08-15. **Phases 1–3 done** — `sysmap-core` extracted with an open layer/kind
+vocabulary (Phase 1); the scanner reads `cargo metadata` + `[package.metadata]` (Phase 2); the
+profile vocabulary, seed edge, and topology wiring now live in `sysmap.toml` and a core rule engine
+applies them (Phase 3). **Phases 4–6 open.**
 This plan records the split of the isometric/3D system map (`liberado-sysmap` +
 `liberado-sysmap-gui`, see [`crates/sysmap/README.md`](../../crates/sysmap/README.md)) into a
 **project-agnostic** core crate plus a thin **Liberado-specific** profile, so the map becomes
@@ -107,17 +107,17 @@ kind = "data"
 label = "zone write"
 dir = "out"                             # matched node → to (or "in" for to → node)
 
-# Value-dependent routing (profiles → domain packs).
+# Value-dependent routing (profiles → domain packs). First matching route wins — specific first.
 [[routes]]
 when = "kind=profile"
-to = "liberado-dispatch-pack"           # default
+if_meta = { domain = "coding" }
+to = "liberado-coder-agent"
 kind = "control"
 label = "domain pack"
 
 [[routes]]
 when = "kind=profile"
-if_meta = { domain = "coding" }
-to = "liberado-coder-agent"
+to = "liberado-dispatch-pack"           # default (matches anything not caught above)
 kind = "control"
 label = "domain pack"
 ```

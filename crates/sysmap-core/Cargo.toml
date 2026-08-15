@@ -10,6 +10,7 @@ repository.workspace = true
 
 [dependencies]
 serde = { workspace = true }
+toml = { workspace = true }
 
 [package.metadata.liberado]
 # Tooling: meta tooling that inspects the workspace — not a build dependency of the system.

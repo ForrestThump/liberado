@@ -11,5 +11,6 @@
 pub mod iso;
 pub mod layout;
 pub mod model;
+pub mod profile;
 pub mod style;
 pub mod vocab;

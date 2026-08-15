@@ -1,0 +1,240 @@
+# Liberado's system-map profile. Everything the map shows that cargo and topology.toml cannot
+# derive: the layer/kind vocabulary (colors, blurbs, heights) and the runtime control/data wiring.
+# The generic `sysmap-core` reads this; see docs/future-work/sysmap-generic-core-plan.md for the
+# schema and how a new project fills its own in.
+
+manifest_namespace = "liberado"
+
+# ── Layers ────────────────────────────────────────────────────────────────────
+# `main = true` layers stack in the main district, bottom-up, in this order.
+[[layers]]
+id = "foundation"
+label = "foundation"
+color = "#8a94a6"
+blurb = "Vocabulary and narrow-waist traits; depends on nothing above."
+main = true
+
+[[layers]]
+id = "client"
+label = "client"
+color = "#2fb8a0"
+blurb = "Front-end building blocks, liftable into any UI."
+main = true
+
+[[layers]]
+id = "kernel"
+label = "kernel"
+color = "#4f7ce0"
+blurb = "The orchestration engine: decide/act loops, sessions, capability."
+main = true
+
+[[layers]]
+id = "store"
+label = "store"
+color = "#d99a3d"
+blurb = "Persistent and shared information: vault, conversations, memory, search."
+main = true
+
+[[layers]]
+id = "pack"
+label = "pack"
+color = "#4caf50"
+blurb = "Domain packs (coding first); never beneath kernel/config/store."
+main = true
+
+[[layers]]
+id = "service"
+label = "service"
+color = "#8e5bc0"
+blurb = "Out-of-process adapters: MCP servers, bots, the forge."
+main = true
+
+[[layers]]
+id = "surface"
+label = "surface"
+color = "#d05a8a"
+blurb = "UIs — clients of the wire contract only."
+main = true
+
+[[layers]]
+id = "root"
+label = "root"
+color = "#c0453a"
+blurb = "Composition roots: the only crates allowed to see everything."
+main = true
+
+[[layers]]
+id = "tooling"
+label = "tooling"
+color = "#9ab82f"
+blurb = "Meta tooling (evals, tuner, this map). Not a build dependency."
+main = false
+
+[[layers]]
+id = "testing"
+label = "testing"
+color = "#a07a50"
+blurb = "Dev-dependency-only test support."
+main = false
+
+[[layers]]
+id = "unknown"
+label = "unknown"
+color = "#5a5f68"
+blurb = "No declared role — should pick a layer."
+main = false
+
+# ── Runtime node kinds ───────────────────────────────────────────────────────
+[[kinds]]
+id = "vault"
+label = "Vault"
+color = "#8a763a"
+blurb = "Obsidian vault (source of truth)"
+height = 1.4
+
+[[kinds]]
+id = "provider"
+label = "Provider"
+color = "#399cb8"
+blurb = "inference backend"
+height = 1.2
+
+[[kinds]]
+id = "mcp"
+label = "MCP server"
+color = "#6a8fd0"
+blurb = "MCP server (agent tools)"
+height = 0.95
+
+[[kinds]]
+id = "pool"
+label = "Pool"
+color = "#7468c9"
+blurb = "authority-segregated pool"
+height = 0.7
+
+[[kinds]]
+id = "profile"
+label = "Session profile"
+color = "#3da886"
+blurb = "session profile (pack + hat)"
+height = 0.7
+
+[[kinds]]
+id = "project"
+label = "Coding project"
+color = "#c4842f"
+blurb = "authorized coding root"
+height = 0.7
+
+[[kinds]]
+id = "schedule"
+label = "Cron schedule"
+color = "#b06a4a"
+blurb = "cron schedule"
+height = 0.7
+
+[[kinds]]
+id = "hook"
+label = "Webhook"
+color = "#a64f6b"
+blurb = "external webhook"
+height = 0.7
+
+[[kinds]]
+id = "notifier"
+label = "Notifier"
+color = "#5b9c8f"
+blurb = "notification channel (Telegram)"
+height = 0.85
+
+# ── Static runtime edges (source is infrastructure, not a crate) ──────────────
+[[edges]]
+from = "vault"
+to = "liberado-daemon"
+kind = "data"
+label = "external change"
+
+# ── Per-node edge rules (applied to every matching, enabled node) ─────────────
+# dir = "out" → matched → to; dir = "in" → to → matched.
+[[edge_rules]]
+when = "kind=provider"
+dir = "in"
+to = "liberado-provider-openai-compat"
+kind = "data"
+label = "chat-completions HTTP"
+
+[[edge_rules]]
+when = "kind=mcp"
+dir = "in"
+to = "liberado-mcp"
+kind = "control"
+label = "connect (spawn / http / docker)"
+
+[[edge_rules]]
+when = "kind=mcp"
+if_meta = { writes_vault = "true" }
+dir = "out"
+to = "vault"
+kind = "data"
+label = "zone write"
+
+[[edge_rules]]
+when = "kind=pool"
+dir = "out"
+to = "liberado-dispatcher"
+kind = "control"
+label = "authority boundary (caps)"
+
+[[edge_rules]]
+when = "kind=project"
+dir = "in"
+to = "liberado-coder-agent"
+kind = "data"
+label = "authorized workspace root"
+
+[[edge_rules]]
+when = "kind=schedule"
+dir = "out"
+to = "liberado-cron"
+kind = "control"
+label = "cron_expr"
+
+[[edge_rules]]
+when = "kind=schedule"
+require_meta = ["pool"]
+dir = "out"
+to = "pool:{meta.pool}"
+kind = "control"
+label = "routes through"
+
+[[edge_rules]]
+when = "kind=hook"
+dir = "out"
+to = "liberado-server"
+kind = "data"
+label = "POST /api/hooks/{name}"
+
+[[edge_rules]]
+when = "kind=hook"
+require_meta = ["pool"]
+dir = "out"
+to = "pool:{meta.pool}"
+kind = "control"
+label = "routes through"
+
+# ── Routes (first matching route wins; specific first, default last) ──────────
+[[routes]]
+when = "kind=profile"
+if_meta = { domain = "coding" }
+dir = "out"
+to = "liberado-coder-agent"
+kind = "control"
+label = "domain pack"
+
+[[routes]]
+when = "kind=profile"
+dir = "out"
+to = "liberado-dispatch-pack"
+kind = "control"
+label = "domain pack"

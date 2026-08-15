@@ -49,10 +49,12 @@ through JSON, so a web or headless renderer can consume the same graph without r
 
 ## How runtime wiring is declared (no hardcoded understanding)
 
-Build-time dependencies were never hardcoded — they come from `cargo metadata`, where *internal*
-means *resolves to a workspace member* (no name-prefix heuristic).
-The **runtime** control/data paths are now declared the same way, in the crates themselves, under
-`[[package.metadata.liberado.flows]]`:
+Build-time dependencies come from `cargo metadata` — *internal* means *resolves to a workspace
+member* (no name-prefix heuristic).
+
+The **runtime** control/data paths are declared in two places, both data rather than Rust:
+
+1. **Each crate states its own outbound flows** under `[[package.metadata.liberado.flows]]`:
 
 ```toml
 [package.metadata.liberado]
@@ -64,18 +66,22 @@ kind = "control"                # "control" | "data"
 label = "decision → Task + provenance"
 ```
 
-`to` names the edge target; `kind` is `control` or `data`; `label` is the payload name. A crate that
-declares any flow owns its outbound wiring (the tool's seed is suppressed for it). The scanner just
-reads these declarations, so a new crate — or a new flow between existing crates — shows up on the
-next launch with no change to this tool. The only edge left in code is the one whose source is
-infrastructure, not a crate: the vault feeding the daemon. (For richer *type-level* relations,
-`cargo metadata` and `rustdoc --output-format json` are the standard programmatic sources; the
-latter is nightly-only and describes impl/dependency structure, not runtime flow.)
+`to` names the edge target; `kind` is `control` or `data`; `label` is the payload name. A new
+crate — or a new flow between existing crates — shows up on the next launch with no change to this
+tool.
+
+2. **Everything whose source or shape is infrastructure, not a crate**, lives in
+   [`sysmap.toml`](sysmap.toml): the layer/kind vocabulary (colors, blurbs, heights), the
+   `vault → liberado-daemon` seed edge, and the per-kind `[[edge_rules]]` / `[[routes]]` that wire
+   runtime instances (MCPs, providers, pools, profiles, projects, schedules, hooks) to their host
+   crates and to each other. The generic `sysmap-core` parses that file and applies its rules, so
+   no runtime wiring is hardcoded in Rust.
 
 ## Crates
 
-* `liberado-sysmap` (this crate) — the model: scanning, declared-flow wiring, deterministic layout,
-  isometric projection, and colors. No GUI dependency.
+* `sysmap-core` — the project-agnostic core: graph model, deterministic layout, isometric
+  projection, color styling, and the `sysmap.toml` profile/rule engine. No Liberado dependency.
+* `liberado-sysmap` (this crate) — the Liberado profile and adapter: `sysmap.toml`, the
+  `cargo metadata` scanner, and the `topology.toml` → runtime-node translation.
 * `liberado-sysmap-gui` — the `three-d` window: 3D scene (orbit/pan/zoom camera), interaction,
-  legend, and explainer. This branch ports the renderer from the egui 2D isometric painter to
-  `three-d`; the model crate and its `--write-json` output are unchanged.
+  legend, and explainer.

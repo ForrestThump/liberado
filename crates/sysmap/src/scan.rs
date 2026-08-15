@@ -76,12 +76,16 @@ pub struct ScanOptions {
 
 /// Scan the workspace rooted at `root` (its `Cargo.toml` must be the workspace manifest) into
 /// crate nodes, sorted by id.
-pub fn scan_repository(root: &Path) -> Result<Vec<MapNode>> {
-    scan_repository_with(root, ScanOptions::default())
+pub fn scan_repository(root: &Path, namespace: &str) -> Result<Vec<MapNode>> {
+    scan_repository_with(root, namespace, ScanOptions::default())
 }
 
 /// Scan with an explicit dependency-kind policy.
-pub fn scan_repository_with(root: &Path, opts: ScanOptions) -> Result<Vec<MapNode>> {
+pub fn scan_repository_with(
+    root: &Path,
+    namespace: &str,
+    opts: ScanOptions,
+) -> Result<Vec<MapNode>> {
     let metadata = MetadataCommand::new()
         .manifest_path(root.join("Cargo.toml"))
         .no_deps()
@@ -100,7 +104,7 @@ pub fn scan_repository_with(root: &Path, opts: ScanOptions) -> Result<Vec<MapNod
 
     let mut nodes = Vec::new();
     for package in &metadata.packages {
-        if let Some(node) = node_from_package(package, &members, &opts) {
+        if let Some(node) = node_from_package(package, namespace, &members, &opts) {
             nodes.push(node);
         }
     }
@@ -110,12 +114,13 @@ pub fn scan_repository_with(root: &Path, opts: ScanOptions) -> Result<Vec<MapNod
 
 fn node_from_package(
     package: &Package,
+    namespace: &str,
     members: &BTreeSet<String>,
     opts: &ScanOptions,
 ) -> Option<MapNode> {
     let role_str = package
         .metadata
-        .get("liberado")
+        .get(namespace)
         .and_then(|l| l.get("role"))
         .and_then(|v| v.as_str())
         .unwrap_or_default();
@@ -144,18 +149,18 @@ fn node_from_package(
         layer,
         description,
         deps,
-        flows: parse_flows(package),
+        flows: parse_flows(package, namespace),
         meta: BTreeMap::new(),
         enabled: true,
     })
 }
 
-/// Declared runtime wiring: `[[package.metadata.liberado.flows]]`. A crate states its own outbound
-/// flows here; the tool only reads them (see `DeclaredFlow`).
-fn parse_flows(package: &Package) -> Vec<DeclaredFlow> {
+/// Declared runtime wiring: `[[package.metadata.<namespace>.flows]]`. A crate states its own
+/// outbound flows here; the tool only reads them (see `DeclaredFlow`).
+fn parse_flows(package: &Package, namespace: &str) -> Vec<DeclaredFlow> {
     package
         .metadata
-        .get("liberado")
+        .get(namespace)
         .and_then(|l| l.get("flows"))
         .and_then(|f| f.as_array())
         .map(|arr| {
@@ -332,9 +337,11 @@ fn mcp_node(m: &McpConfig) -> MapNode {
             m.default_zone.clone().unwrap_or_default(),
         );
     }
-    if m.writes_vault == Some(false) {
-        meta.insert("writes_vault".to_string(), "false".to_string());
-    }
+    // The vault-write edge rule keys on this flag (see sysmap.toml `[[edge_rules]]`).
+    meta.insert(
+        "writes_vault".to_string(),
+        if mcp_writes_vault(m) { "true" } else { "false" }.to_string(),
+    );
 
     MapNode {
         id: format!("mcp:{}", m.name),
@@ -486,11 +493,6 @@ pub fn mcp_writes_vault(m: &McpConfig) -> bool {
     m.default_zone.is_some() || m.zone_from_arg.is_some()
 }
 
-/// Whether a profile runs the coding domain (the coding pack is the only declared domain today).
-pub fn profile_domain_is_coding(profile: &SessionProfile) -> bool {
-    profile.domain.as_deref() == Some("coding")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -552,7 +554,7 @@ mod tests {
             &["demo-tools"],
         );
 
-        let nodes = scan_repository(dir.path()).unwrap();
+        let nodes = scan_repository(dir.path(), "liberado").unwrap();
         assert_eq!(nodes.len(), 3);
         let n = nodes.iter().find(|n| n.id == "demo").unwrap();
         assert_eq!(n.layer, Layer::from("kernel"));
@@ -575,6 +577,7 @@ mod tests {
 
         let nodes = scan_repository_with(
             dir.path(),
+            "liberado",
             ScanOptions {
                 include_dev: true,
                 include_build: false,

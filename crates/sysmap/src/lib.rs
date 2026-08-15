@@ -10,8 +10,9 @@
 //! * crate nodes and build-time dependency edges come from `cargo metadata` (workspace membership
 //!   decides what is internal; each crate's `[package.metadata.liberado] role` and declared
 //!   `flows` are read from the package metadata),
-//! * runtime nodes and payload edges come from an optional `topology.toml` plus the curated
-//!   runtime wiring in [`wiring`] (grounded in `docs/spec/architecture/overview.md`),
+//! * runtime nodes come from an optional `topology.toml`; runtime payload edges come from the
+//!   declared profile in [`profile`] (Liberado's `sysmap.toml`), grounded in
+//!   `docs/spec/architecture/overview.md`,
 //! * the layout and projection are pure functions of the node set ([`layout`], [`iso`]), so a
 //!   change to any `Cargo.toml` or `topology.toml` is reflected on the next launch with no
 //!   re-examination.
@@ -21,11 +22,10 @@
 
 pub mod profile;
 pub mod scan;
-pub mod wiring;
 
-// The project-agnostic half (model, layout, projection, styling, vocabulary) lives in
-// `sysmap-core` and is re-exported unchanged so `liberado_sysmap::model`, `::layout`, … keep
-// resolving. `profile` is Liberado's vocabulary data (the part that stays project-specific).
+// The project-agnostic half (model, layout, projection, styling, vocabulary, profile/rule engine)
+// lives in `sysmap-core` and is re-exported unchanged so `liberado_sysmap::model`, `::layout`, …
+// keep resolving. `profile` is Liberado's sysmap.toml data (the part that stays project-specific).
 pub use sysmap_core::{iso, layout, model, style, vocab};
 
 use std::collections::BTreeSet;
@@ -43,7 +43,10 @@ pub use scan::ScanError;
 /// dropped, so a missing topology yields the crates DAG plus the always-present crate-to-crate
 /// runtime loop.
 pub fn build(root: &Path, config_dir: Option<&Path>) -> Result<SystemMap, ScanError> {
-    let mut nodes = scan::scan_repository(root)?;
+    let profile = profile::liberado_profile();
+
+    let mut nodes = scan::scan_repository(root, &profile.manifest_namespace)?;
+    nodes.extend(profile.map_nodes());
 
     let topo = scan::load_topology(config_dir)?;
     if let Some(t) = &topo {
@@ -75,13 +78,7 @@ pub fn build(root: &Path, config_dir: Option<&Path>) -> Result<SystemMap, ScanEr
         }
     }
 
-    // Declared per-crate runtime flows — the generic, codebase-owned wiring. A crate that states
-    // its own outbound flows replaces the built-in seed for itself (see `DeclaredFlow`).
-    let declared_from: BTreeSet<String> = nodes
-        .iter()
-        .filter(|n| !n.flows.is_empty())
-        .map(|n| n.id.clone())
-        .collect();
+    // Declared per-crate runtime flows (each crate states its own outbound wiring).
     for node in &nodes {
         for flow in &node.flows {
             edges.push(MapEdge {
@@ -93,18 +90,8 @@ pub fn build(root: &Path, config_dir: Option<&Path>) -> Result<SystemMap, ScanEr
         }
     }
 
-    // Seed runtime crate-to-crate flows, applied only to crates that did NOT declare their own.
-    for edge in wiring::crate_runtime_edges() {
-        if declared_from.contains(&edge.from) {
-            continue;
-        }
-        edges.push(edge);
-    }
-
-    // Runtime instance flows, only when a topology declared the instances.
-    if let Some(t) = &topo {
-        edges.extend(wiring::topology_edges(t));
-    }
+    // Declared runtime wiring from the profile: static edges + per-node rules + routes.
+    edges.extend(profile.apply(&nodes));
 
     // Drop edges referencing missing nodes and deduplicate (from,to,kind).
     edges.retain(|e| existing.contains(&e.from) && existing.contains(&e.to));
@@ -117,7 +104,7 @@ pub fn build(root: &Path, config_dir: Option<&Path>) -> Result<SystemMap, ScanEr
         generated_at: Utc::now().to_rfc3339(),
         repository_root: root.to_string_lossy().into_owned(),
         config_dir: config_dir.map(|p| p.to_string_lossy().into_owned()),
-        vocabulary: profile::liberado_vocabulary(),
+        vocabulary: profile.vocabulary(),
         nodes,
         edges,
     })
