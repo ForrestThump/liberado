@@ -54,5 +54,6 @@ Prefer archive/ for completed plans.
 |-----|--------|------|
 | [cadence-triggered-maintenance-agents.md](cadence-triggered-maintenance-agents.md) | draft | plan |
 | [model-knob-profiles.md](model-knob-profiles.md) | draft | plan |
+| [sysmap-generic-core-plan.md](sysmap-generic-core-plan.md) | draft | plan |
 
 Start every planning session at [roadmap.md](../roadmap.md).
