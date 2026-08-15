@@ -7,12 +7,9 @@
 //!
 //! The map is **regenerated from source**, never hand-drawn:
 //!
-//! * crate nodes and build-time dependency edges come from `cargo metadata` (workspace membership
-//!   decides what is internal; each crate's `[package.metadata.liberado] role` and declared
-//!   `flows` are read from the package metadata),
-//! * runtime nodes come from an optional `topology.toml`; runtime payload edges come from the
-//!   declared profile in [`profile`] (Liberado's `sysmap.toml`), grounded in
-//!   `docs/spec/architecture/overview.md`,
+//! * crate scanning and map assembly live in `sysmap-core` (`cargo metadata` + the `sysmap.toml`
+//!   profile rules); this crate supplies Liberado's profile and translates `topology.toml` into
+//!   runtime nodes,
 //! * the layout and projection are pure functions of the node set ([`layout`], [`iso`]), so a
 //!   change to any `Cargo.toml` or `topology.toml` is reflected on the next launch with no
 //!   re-examination.
@@ -28,86 +25,51 @@ pub mod scan;
 // keep resolving. `profile` is Liberado's sysmap.toml data (the part that stays project-specific).
 pub use sysmap_core::{iso, layout, model, style, vocab};
 
-use std::collections::BTreeSet;
+use std::fmt;
 use std::path::{Path, PathBuf};
 
-use chrono::Utc;
-
 pub use model::{EdgeKind, Layer, MapEdge, MapNode, NodeKind, SystemMap};
-pub use scan::ScanError;
+
+/// An error while building the map: a topology read/parse failure, or a core (cargo metadata)
+/// failure.
+#[derive(Debug)]
+pub enum BuildError {
+    Topology(scan::ScanError),
+    Core(sysmap_core::scan::ScanError),
+}
+
+impl fmt::Display for BuildError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            BuildError::Topology(e) => write!(f, "{e}"),
+            BuildError::Core(e) => write!(f, "{e}"),
+        }
+    }
+}
+
+impl std::error::Error for BuildError {}
 
 /// Build the system map from a repository root and an optional config directory.
 ///
 /// `config_dir` names a directory that may contain `topology.toml`; `None` produces a crates-only
-/// map (dependency graph, no runtime overlay). Runtime wiring edges whose endpoints are absent are
-/// dropped, so a missing topology yields the crates DAG plus the always-present crate-to-crate
-/// runtime loop.
-pub fn build(root: &Path, config_dir: Option<&Path>) -> Result<SystemMap, ScanError> {
+/// map (dependency graph plus the always-present crate-to-crate runtime flows). The cargo scan and
+/// assembly are delegated to `sysmap-core`; this crate only supplies the profile and the runtime
+/// topology nodes.
+pub fn build(root: &Path, config_dir: Option<&Path>) -> Result<SystemMap, BuildError> {
     let profile = profile::liberado_profile();
 
-    let mut nodes = scan::scan_repository(root, &profile.manifest_namespace)?;
-    nodes.extend(profile.map_nodes());
+    let extra_nodes = match scan::load_topology(config_dir).map_err(BuildError::Topology)? {
+        Some(topo) => scan::build_runtime_nodes(&topo),
+        None => Vec::new(),
+    };
 
-    let topo = scan::load_topology(config_dir)?;
-    if let Some(t) = &topo {
-        nodes.extend(scan::build_runtime_nodes(t));
-    }
-
-    // Deduplicate by id (a crate id can never collide with a `kind:`-prefixed runtime id).
-    nodes.sort_by(|a, b| a.id.cmp(&b.id));
-    nodes.dedup_by(|a, b| a.id == b.id);
-
-    let existing: BTreeSet<String> = nodes.iter().map(|n| n.id.clone()).collect();
-
-    let mut edges: Vec<MapEdge> = Vec::new();
-
-    // Build-time dependency edges (crates only).
-    for node in &nodes {
-        if !node.kind.is_crate() {
-            continue;
-        }
-        for dep in &node.deps {
-            if existing.contains(dep) {
-                edges.push(MapEdge {
-                    from: node.id.clone(),
-                    to: dep.clone(),
-                    kind: EdgeKind::Dependency,
-                    label: String::new(),
-                });
-            }
-        }
-    }
-
-    // Declared per-crate runtime flows (each crate states its own outbound wiring).
-    for node in &nodes {
-        for flow in &node.flows {
-            edges.push(MapEdge {
-                from: node.id.clone(),
-                to: flow.to.clone(),
-                kind: flow.kind,
-                label: flow.label.clone(),
-            });
-        }
-    }
-
-    // Declared runtime wiring from the profile: static edges + per-node rules + routes.
-    edges.extend(profile.apply(&nodes));
-
-    // Drop edges referencing missing nodes and deduplicate (from,to,kind).
-    edges.retain(|e| existing.contains(&e.from) && existing.contains(&e.to));
-    edges.sort_by(|a, b| {
-        (&a.from, &a.to, &a.kind, &a.label).cmp(&(&b.from, &b.to, &b.kind, &b.label))
-    });
-    edges.dedup_by(|a, b| a.from == b.from && a.to == b.to && a.kind == b.kind);
-
-    Ok(SystemMap {
-        generated_at: Utc::now().to_rfc3339(),
-        repository_root: root.to_string_lossy().into_owned(),
-        config_dir: config_dir.map(|p| p.to_string_lossy().into_owned()),
-        vocabulary: profile.vocabulary(),
-        nodes,
-        edges,
-    })
+    sysmap_core::build::build(
+        root,
+        &profile,
+        extra_nodes,
+        config_dir.map(|p| p.to_string_lossy().into_owned()),
+    )
+    .map_err(BuildError::Core)
 }
 
 /// Walk up from the current directory to the repository root (a directory containing both

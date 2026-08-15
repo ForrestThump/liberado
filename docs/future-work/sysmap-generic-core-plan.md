@@ -8,10 +8,11 @@ open_items: true
 
 # sysmap — split into a generic core + a Liberado profile
 
-**Status**: active, 2026-08-15. **Phases 1–3 done** — `sysmap-core` extracted with an open layer/kind
+**Status**: active, 2026-08-15. **Phases 1–4 done** — `sysmap-core` extracted with an open layer/kind
 vocabulary (Phase 1); the scanner reads `cargo metadata` + `[package.metadata]` (Phase 2); the
-profile vocabulary, seed edge, and topology wiring now live in `sysmap.toml` and a core rule engine
-applies them (Phase 3). **Phases 4–6 open.**
+profile vocabulary, seed edge, and topology wiring live in `sysmap.toml` and a core rule engine
+applies them (Phase 3); the scanner and assembly moved into `sysmap-core`, so `liberado-sysmap` is
+just the profile + topology adapter (Phase 4). **Phases 5–6 open.**
 This plan records the split of the isometric/3D system map (`liberado-sysmap` +
 `liberado-sysmap-gui`, see [`crates/sysmap/README.md`](../../crates/sysmap/README.md)) into a
 **project-agnostic** core crate plus a thin **Liberado-specific** profile, so the map becomes

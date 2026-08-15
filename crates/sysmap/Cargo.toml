@@ -9,14 +9,10 @@ authors.workspace = true
 repository.workspace = true
 
 [dependencies]
-cargo_metadata = { workspace = true }
 liberado-common = { workspace = true }
 liberado-config-loader = { workspace = true }
-serde = { workspace = true }
-serde_json = { workspace = true }
 sysmap-core = { workspace = true }
 toml = { workspace = true }
-chrono = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

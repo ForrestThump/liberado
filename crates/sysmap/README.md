@@ -79,9 +79,10 @@ tool.
 
 ## Crates
 
-* `sysmap-core` — the project-agnostic core: graph model, deterministic layout, isometric
-  projection, color styling, and the `sysmap.toml` profile/rule engine. No Liberado dependency.
-* `liberado-sysmap` (this crate) — the Liberado profile and adapter: `sysmap.toml`, the
-  `cargo metadata` scanner, and the `topology.toml` → runtime-node translation.
+* `sysmap-core` — the project-agnostic core: `cargo metadata` scanner, map assembly, graph model,
+  deterministic layout, isometric projection, color styling, and the `sysmap.toml` profile/rule
+  engine. No Liberado dependency.
+* `liberado-sysmap` (this crate) — the Liberado profile (`sysmap.toml`) and the `topology.toml` →
+  runtime-node adapter.
 * `liberado-sysmap-gui` — the `three-d` window: 3D scene (orbit/pan/zoom camera), interaction,
   legend, and explainer.

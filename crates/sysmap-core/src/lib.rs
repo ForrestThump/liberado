@@ -8,9 +8,11 @@
 //! This crate is the extraction seam: `liberado-sysmap` re-exports these modules so consumers keep
 //! working while the scanner and wiring (which *are* project-specific) stay behind.
 
+pub mod build;
 pub mod iso;
 pub mod layout;
 pub mod model;
 pub mod profile;
+pub mod scan;
 pub mod style;
 pub mod vocab;
