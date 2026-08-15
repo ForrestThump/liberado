@@ -53,6 +53,7 @@ struct RunArgs {
     api_key_env: String,
     thinking: String,
     max_turns: u32,
+    task_aware_context: bool,
     liberado_bin: Option<PathBuf>,
     pi_bin: Option<PathBuf>,
 }
@@ -187,7 +188,8 @@ pub fn run(args: &[String]) -> Result<(), Box<dyn Error>> {
         println!(
             "usage: liberado coder compare run <run-dir> --task <file> [--model <id>] \
              [--provider <name>] [--base-url <url>] [--api-key-env <name>] \
-             [--thinking <level>] [--max-turns <n>] [--liberado-bin <path>] [--pi-bin <path>]"
+             [--thinking <level>] [--max-turns <n>] [--task-aware-context] \
+             [--liberado-bin <path>] [--pi-bin <path>]"
         );
         return Ok(());
     }
@@ -349,6 +351,7 @@ fn parse_run_args(args: &[String]) -> Result<RunArgs, Box<dyn Error>> {
     let mut api_key_env = DEFAULT_API_KEY_ENV.to_string();
     let mut thinking = DEFAULT_THINKING.to_string();
     let mut max_turns = DEFAULT_MAX_TURNS;
+    let mut task_aware_context = false;
     let mut liberado_bin = None;
     let mut pi_bin = None;
     let mut index = 0;
@@ -388,6 +391,9 @@ fn parse_run_args(args: &[String]) -> Result<RunArgs, Box<dyn Error>> {
                     return Err("--max-turns must be a positive integer".into());
                 }
             }
+            "--task-aware-context" => {
+                task_aware_context = true;
+            }
             "--liberado-bin" => {
                 index += 1;
                 liberado_bin = Some(PathBuf::from(value(args, index, flag)?));
@@ -417,6 +423,7 @@ fn parse_run_args(args: &[String]) -> Result<RunArgs, Box<dyn Error>> {
         api_key_env,
         thinking,
         max_turns,
+        task_aware_context,
         liberado_bin,
         pi_bin,
     })
@@ -531,19 +538,25 @@ fn write_run_config(manifest: &CompareManifest, args: &RunArgs) -> Result<(), Bo
         ),
     )?;
     fs::create_dir_all(manifest.run_root.join("vault"))?;
+    let repo_map = if args.task_aware_context {
+        "\n[coder.repo_map]\ntask_aware = true\n"
+    } else {
+        ""
+    };
     fs::write(
         config.join("tuning.toml"),
         format!(
             "[coder]\ntrace_dir = \"coder-traces\"\noffered_tools = [\"read_file\", \"write_file\", \"edit_file\", \"run_command\"]\n\n\
              [coder.coder]\nmodel = {}\nmax_turns = {}\nreasoning = {}\n\n\
              [coder.command_policy]\ntimeout_secs = {}\noutput_max_bytes = 65536\ndeny = [\"git\"]\n\n\
-             [coder.workspace]\nshared_target_dir = {}\nwarmup = false\nwarmup_timeout_secs = {}\n",
+             [coder.workspace]\nshared_target_dir = {}\nwarmup = false\nwarmup_timeout_secs = {}\n{}",
             toml_string(&args.model),
             args.max_turns,
             toml_string(&args.thinking),
             manifest.compile_timeout_secs,
             toml_string(&path_text(&liberado.target_dir)),
             manifest.compile_timeout_secs,
+            repo_map,
         ),
     )?;
     Ok(())
@@ -553,7 +566,7 @@ fn write_run_pins(manifest: &CompareManifest, args: &RunArgs) -> Result<(), Box<
     fs::write(
         manifest.run_root.join("pins.txt"),
         format!(
-            "base_revision={}\nbase_commit={}\nprovider={}\nmodel={}\nthinking={}\nliberado_max_turns={}\npi_turn_cap=client default\ncompile_timeout_secs={}\nsampling=temperature omitted by both clients\n",
+            "base_revision={}\nbase_commit={}\nprovider={}\nmodel={}\nthinking={}\nliberado_max_turns={}\npi_turn_cap=client default\ncompile_timeout_secs={}\ntask_aware_context={}\nsampling=temperature omitted by both clients\n",
             manifest.base_revision,
             manifest.base_commit,
             args.provider,
@@ -561,6 +574,7 @@ fn write_run_pins(manifest: &CompareManifest, args: &RunArgs) -> Result<(), Box<
             args.thinking,
             args.max_turns,
             manifest.compile_timeout_secs,
+            args.task_aware_context,
         ),
     )?;
     Ok(())

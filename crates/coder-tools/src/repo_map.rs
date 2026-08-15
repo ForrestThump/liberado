@@ -43,7 +43,66 @@ struct RankedDef {
 const SOURCE_EXTENSIONS: &[&str] = &["rs", "py", "pyi", "ts", "tsx", "js", "jsx", "go"];
 
 const MAX_FILES: usize = 500;
+const MAX_SCAN_FILES: usize = 5_000;
 const MAX_FILE_SIZE: usize = 200_000;
+
+/// Extract stable search terms from a coding task for opt-in context routing.
+///
+/// Code-like names and paths survive intact (`ResourceLink`, `foo::bar`, `src/lib.rs`). Common
+/// prose words are removed so a long task cannot make every source file look relevant.
+pub fn extract_task_terms(task: &str) -> Vec<String> {
+    const STOP_WORDS: &[&str] = &[
+        "about",
+        "acceptance",
+        "after",
+        "before",
+        "change",
+        "correct",
+        "ensure",
+        "from",
+        "have",
+        "implement",
+        "into",
+        "must",
+        "should",
+        "tests",
+        "that",
+        "their",
+        "then",
+        "these",
+        "this",
+        "when",
+        "where",
+        "which",
+        "with",
+        "without",
+    ];
+
+    let mut seen = HashSet::new();
+    let mut terms: Vec<(usize, u8, String)> = task
+        .split(|c: char| !(c.is_alphanumeric() || matches!(c, '_' | '-' | '.' | '/' | '\\' | ':')))
+        .map(|term| term.trim_matches(['.', '/', '\\', ':', '-']))
+        .filter(|term| term.len() >= 3)
+        .filter(|term| {
+            let lower = term.to_ascii_lowercase();
+            !STOP_WORDS.contains(&lower.as_str()) && lower.chars().any(|c| c.is_alphabetic())
+        })
+        .enumerate()
+        .filter(|(_, term)| seen.insert(term.to_ascii_lowercase()))
+        .map(|(position, term)| {
+            let code_like = term.contains(['_', '-', '.', '/', '\\', ':'])
+                || term.chars().skip(1).any(|c| c.is_uppercase())
+                || (term.len() <= 8 && term.chars().all(|c| !c.is_lowercase()));
+            (position, u8::from(code_like), term.to_string())
+        })
+        .collect();
+    terms.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    terms
+        .into_iter()
+        .map(|(_, _, term)| term)
+        .take(32)
+        .collect()
+}
 
 fn detect_lang(path: &str) -> Option<(&'static str, Language)> {
     let ext = path.rsplit('.').next()?;
@@ -402,6 +461,82 @@ fn count_ref_files(name: &str, file_tags: &[Vec<Tag>]) -> usize {
 
 // ── rendering ──────────────────────────────────────────────────────────────
 
+fn render_context_map(
+    ranked: &[RankedDef],
+    mentioned_terms: &[String],
+    max_tokens: usize,
+) -> String {
+    if mentioned_terms.is_empty() || max_tokens < 256 {
+        return render_repo_map(ranked, max_tokens);
+    }
+
+    let terms = normalized_terms(mentioned_terms);
+    let mut evidence: Vec<(u32, &RankedDef)> = ranked
+        .iter()
+        .filter_map(|definition| {
+            let score = task_match_score(&definition.name, &terms) * 4
+                + task_match_score(&definition.file, &terms) * 2
+                + task_match_score(&definition.snippet, &terms);
+            (score > 0).then_some((score, definition))
+        })
+        .collect();
+    evidence.sort_by(|a, b| {
+        b.0.cmp(&a.0)
+            .then_with(|| {
+                b.1.rank
+                    .partial_cmp(&a.1.rank)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .then_with(|| a.1.file.cmp(&b.1.file))
+            .then_with(|| a.1.line.cmp(&b.1.line))
+    });
+    if evidence.is_empty() {
+        return render_repo_map(ranked, max_tokens);
+    }
+
+    let evidence_budget = (max_tokens / 3).min(384);
+    let mut output = render_task_evidence(&evidence, evidence_budget);
+    output.push_str("\n\n");
+    output.push_str(&render_repo_map(
+        ranked,
+        max_tokens.saturating_sub(evidence_budget),
+    ));
+    output
+}
+
+fn render_task_evidence(evidence: &[(u32, &RankedDef)], max_tokens: usize) -> String {
+    let mut lines = vec!["Task evidence (task-linked definitions before global rank):".to_string()];
+    let mut current_file = None;
+    let mut token_est = estimate_tokens(&lines[0], 3.5);
+    let mut seen = HashSet::new();
+
+    for (_, definition) in evidence {
+        if !seen.insert((&definition.file, &definition.name)) {
+            continue;
+        }
+        let file_changed = current_file != Some(definition.file.as_str());
+        let file_line = definition.file.clone();
+        let def_line = format!("  L{:>4}  {}", definition.line, definition.snippet);
+        let file_tokens = if file_changed {
+            estimate_tokens(&file_line, 3.5)
+        } else {
+            0
+        };
+        let added = estimate_tokens(&def_line, 3.5) + file_tokens;
+        if token_est + added > max_tokens {
+            lines.push("  ... (task evidence truncated)".into());
+            break;
+        }
+        if file_changed {
+            lines.push(file_line);
+            current_file = Some(definition.file.as_str());
+        }
+        lines.push(def_line);
+        token_est += added;
+    }
+    lines.join("\n")
+}
+
 fn render_repo_map(ranked: &[RankedDef], max_tokens: usize) -> String {
     let mut file_order: Vec<&str> = Vec::new();
     let mut seen_files: HashSet<&str> = HashSet::new();
@@ -512,7 +647,8 @@ impl Default for RepoMapOptions {
 }
 
 pub async fn generate_repo_map(workspace_root: &Path, options: &RepoMapOptions) -> Option<String> {
-    let file_paths = walk_source_files(workspace_root);
+    let file_paths =
+        select_source_files(walk_source_files(workspace_root), &options.mentioned_terms).await;
     if file_paths.len() < options.min_source_files {
         return None;
     }
@@ -528,7 +664,7 @@ pub async fn generate_repo_map(workspace_root: &Path, options: &RepoMapOptions) 
         .filter_map(|p| {
             p.strip_prefix(workspace_root)
                 .ok()
-                .map(|r| r.to_string_lossy().to_string())
+                .map(|r| normalize_rel_path(&r.to_string_lossy()))
         })
         .collect();
 
@@ -541,6 +677,7 @@ pub async fn generate_repo_map(workspace_root: &Path, options: &RepoMapOptions) 
     let personalization = build_personalization(
         graph.file_count,
         &graph.file_names,
+        &graph.file_tags,
         &chat_set,
         &options.mentioned_terms,
     );
@@ -558,7 +695,11 @@ pub async fn generate_repo_map(workspace_root: &Path, options: &RepoMapOptions) 
         return None;
     }
 
-    Some(render_repo_map(&ranked, options.max_map_tokens))
+    Some(render_context_map(
+        &ranked,
+        &options.mentioned_terms,
+        options.max_map_tokens,
+    ))
 }
 
 // ── file walking ───────────────────────────────────────────────────────────
@@ -576,7 +717,7 @@ fn walk_source_files(root: &Path) -> Vec<(String, PathBuf)> {
     // The root now consumes one level, so the cap is one deeper than the 8 it replaced — the same
     // reach below the workspace as before.
     let mut depth = 0;
-    while !stack.is_empty() && files.len() < MAX_FILES {
+    while !stack.is_empty() && files.len() < MAX_SCAN_FILES {
         depth += 1;
         if depth > 9 {
             break;
@@ -584,7 +725,9 @@ fn walk_source_files(root: &Path) -> Vec<(String, PathBuf)> {
         let mut next: Vec<PathBuf> = Vec::new();
         for dir in &stack {
             if let Ok(entries) = std::fs::read_dir(dir) {
-                for entry in entries.flatten() {
+                let mut entries: Vec<_> = entries.flatten().collect();
+                entries.sort_by_key(|entry| entry.file_name());
+                for entry in entries {
                     let path = entry.path();
                     let fname = path
                         .file_name()
@@ -605,24 +748,55 @@ fn walk_source_files(root: &Path) -> Vec<(String, PathBuf)> {
                             && let Ok(meta) = path.metadata()
                             && meta.len() < MAX_FILE_SIZE as u64
                         {
-                            let rel = path
-                                .strip_prefix(root)
-                                .unwrap_or(&path)
-                                .to_string_lossy()
-                                .to_string();
+                            let rel = normalize_rel_path(
+                                &path.strip_prefix(root).unwrap_or(&path).to_string_lossy(),
+                            );
                             files.push((rel, path));
                         }
                     }
                 }
             }
-            if files.len() >= MAX_FILES {
+            if files.len() >= MAX_SCAN_FILES {
                 break;
             }
         }
+        next.sort();
         stack = next;
     }
 
+    files.sort_by(|a, b| a.0.cmp(&b.0));
     files
+}
+
+fn normalize_rel_path(path: &str) -> String {
+    path.replace('\\', "/")
+}
+
+async fn select_source_files(
+    mut files: Vec<(String, PathBuf)>,
+    mentioned_terms: &[String],
+) -> Vec<(String, PathBuf)> {
+    if files.len() <= MAX_FILES {
+        return files;
+    }
+    if mentioned_terms.is_empty() {
+        files.truncate(MAX_FILES);
+        return files;
+    }
+
+    let terms = normalized_terms(mentioned_terms);
+    let mut scored = Vec::with_capacity(files.len());
+    for (rel, path) in files {
+        let source = tokio::fs::read_to_string(&path).await.unwrap_or_default();
+        let score = task_match_score(&rel, &terms) * 4 + task_match_score(&source, &terms);
+        scored.push((score, rel, path));
+    }
+    scored.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
+    scored.truncate(MAX_FILES);
+    scored
+        .into_iter()
+        .map(|(_, rel, path)| (rel, path))
+        .collect()
 }
 
 // ── tag extraction (sequential I/O, blocking parse) ────────────────────────
@@ -656,11 +830,13 @@ async fn extract_all_tags(file_paths: &[(String, PathBuf)]) -> Vec<Tag> {
 fn build_personalization(
     num_files: usize,
     file_names: &[String],
+    file_tags: &[Vec<Tag>],
     chat_set: &HashSet<String>,
     mentioned_terms: &[String],
 ) -> Vec<f64> {
     let base = 1.0 / num_files.max(1) as f64;
     let mut vec = vec![base; num_files];
+    let terms = normalized_terms(mentioned_terms);
 
     for (i, fname) in file_names.iter().enumerate() {
         let mut boost = 1.0_f64;
@@ -669,12 +845,17 @@ fn build_personalization(
             boost *= 10.0;
         }
 
-        let lower = fname.to_lowercase();
-        for term in mentioned_terms {
-            if !term.is_empty() && lower.contains(&term.to_lowercase()) {
-                boost *= 3.0;
-                break;
-            }
+        let path_score = task_match_score(fname, &terms);
+        let symbol_score = file_tags
+            .get(i)
+            .into_iter()
+            .flatten()
+            .filter(|tag| tag.is_def)
+            .map(|tag| task_match_score(&tag.name, &terms))
+            .max()
+            .unwrap_or(0);
+        if path_score > 0 || symbol_score > 0 {
+            boost *= 3.0 + f64::from((path_score + symbol_score).min(9));
         }
 
         vec[i] *= boost;
@@ -688,6 +869,39 @@ fn build_personalization(
     }
 
     vec
+}
+
+fn normalized_terms(mentioned_terms: &[String]) -> Vec<String> {
+    let mut terms: Vec<String> = mentioned_terms
+        .iter()
+        .map(|term| term.to_ascii_lowercase())
+        .filter(|term| !term.is_empty())
+        .collect();
+    terms.sort();
+    terms.dedup();
+    terms
+}
+
+fn task_match_score(candidate: &str, terms: &[String]) -> u32 {
+    let candidate = candidate.to_ascii_lowercase();
+    terms
+        .iter()
+        .map(|term| {
+            if candidate == *term {
+                12
+            } else if candidate.contains(term) {
+                4
+            } else {
+                let singular = term.strip_suffix('s').filter(|term| term.len() >= 4);
+                if singular.is_some_and(|term| candidate.contains(term)) {
+                    2
+                } else {
+                    0
+                }
+            }
+        })
+        .sum::<u32>()
+        .min(64)
 }
 
 // ── tests ──────────────────────────────────────────────────────────────────
@@ -706,6 +920,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
         std::fs::write(root.join("main.rs"), "fn main() {}").unwrap();
+        std::fs::write(root.join("z_last.rs"), "fn z_last() {}").unwrap();
+        std::fs::write(root.join("a_first.rs"), "fn a_first() {}").unwrap();
         std::fs::create_dir_all(root.join("src")).unwrap();
         std::fs::write(root.join("src").join("nested.rs"), "fn nested() {}").unwrap();
 
@@ -713,6 +929,11 @@ mod tests {
             .into_iter()
             .map(|(rel, _)| rel.replace('\\', "/"))
             .collect();
+
+        assert!(
+            found.windows(2).all(|pair| pair[0] <= pair[1]),
+            "walk order must be deterministic: {found:?}"
+        );
 
         assert!(
             found.iter().any(|f| f == "src/nested.rs"),
@@ -869,10 +1090,125 @@ def main():
         ];
         let mut chat = HashSet::new();
         chat.insert("src/main.rs".to_string());
-        let vec = build_personalization(3, &files, &chat, &[]);
+        let tags = vec![Vec::new(), Vec::new(), Vec::new()];
+        let vec = build_personalization(3, &files, &tags, &chat, &[]);
 
         assert!(vec[0] > vec[1]);
         assert!(vec[0] > vec[2]);
+    }
+
+    #[test]
+    fn task_symbol_boosts_its_defining_file() {
+        let files = ["src/alpha.rs".to_string(), "src/beta.rs".to_string()];
+        let tags = vec![
+            Vec::new(),
+            vec![Tag {
+                file: "src/beta.rs".into(),
+                name: "ResourceLink".into(),
+                is_def: true,
+                line: 7,
+                snippet: "pub struct ResourceLink {".into(),
+            }],
+        ];
+        let vec =
+            build_personalization(2, &files, &tags, &HashSet::new(), &["ResourceLink".into()]);
+        assert!(vec[1] > vec[0], "{vec:?}");
+    }
+
+    #[test]
+    fn task_terms_keep_code_names_and_drop_common_instructions() {
+        let terms = extract_task_terms(
+            "Implement ResourceLink and ContentBlock handling in turbomcp/crates/types/src/content.rs with tests",
+        );
+        assert!(terms.contains(&"ResourceLink".to_string()), "{terms:?}");
+        assert!(terms.contains(&"ContentBlock".to_string()), "{terms:?}");
+        assert!(
+            terms.contains(&"turbomcp/crates/types/src/content.rs".to_string()),
+            "{terms:?}"
+        );
+        assert!(
+            !terms
+                .iter()
+                .any(|term| term.eq_ignore_ascii_case("implement"))
+        );
+        assert!(!terms.iter().any(|term| term.eq_ignore_ascii_case("with")));
+    }
+
+    #[test]
+    fn code_like_terms_survive_a_long_task() {
+        let mut task = (0..40)
+            .map(|index| format!("ordinaryword{index}"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        task.push_str(" ResourceLink src/content.rs");
+        let terms = extract_task_terms(&task);
+        assert_eq!(terms.len(), 32);
+        assert!(terms.contains(&"ResourceLink".to_string()), "{terms:?}");
+        assert!(terms.contains(&"src/content.rs".to_string()), "{terms:?}");
+    }
+
+    #[tokio::test]
+    async fn task_match_survives_the_global_file_cap() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let filler = root.join("crates/filler/src");
+        std::fs::create_dir_all(&filler).unwrap();
+        for index in 0..MAX_FILES {
+            std::fs::write(
+                filler.join(format!("file_{index:03}.rs")),
+                format!("fn filler_{index}() {{}}"),
+            )
+            .unwrap();
+        }
+        let authoritative = root.join("turbomcp/crates/turbomcp-types/src");
+        std::fs::create_dir_all(&authoritative).unwrap();
+        std::fs::write(
+            authoritative.join("content.rs"),
+            "pub struct ResourceLink { pub uri: String }",
+        )
+        .unwrap();
+
+        let selected = select_source_files(walk_source_files(root), &["ResourceLink".into()]).await;
+        assert_eq!(selected.len(), MAX_FILES);
+        assert!(
+            selected.iter().any(|(path, _)| {
+                path.replace('\\', "/") == "turbomcp/crates/turbomcp-types/src/content.rs"
+            }),
+            "task evidence must displace an unrelated filler file"
+        );
+    }
+
+    #[tokio::test]
+    async fn task_evidence_precedes_global_rank() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("turbomcp/crates/turbomcp-types/src")).unwrap();
+        std::fs::create_dir_all(root.join("crates/app/src")).unwrap();
+        std::fs::write(
+            root.join("turbomcp/crates/turbomcp-types/src/content.rs"),
+            "pub struct ResourceLink { pub uri: String }\npub enum ContentBlock { Text }",
+        )
+        .unwrap();
+        std::fs::write(root.join("crates/app/src/lib.rs"), "pub fn unrelated() {}").unwrap();
+
+        let output = generate_repo_map(
+            root,
+            &RepoMapOptions {
+                min_source_files: 1,
+                mentioned_terms: vec!["ResourceLink".into(), "ContentBlock".into()],
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("repo map");
+        let evidence = output.find("Task evidence").expect("task evidence heading");
+        let path = output
+            .find("turbomcp/crates/turbomcp-types/src/content.rs")
+            .expect("authoritative path");
+        let global = output.find("Repo map").expect("global map heading");
+        assert!(evidence < path && path < global, "{output}");
+        assert!(output.contains("ResourceLink"), "{output}");
+        assert!(output.contains("ContentBlock"), "{output}");
     }
 
     #[test]

@@ -41,7 +41,7 @@ The default compile and command timeout is 1,800 seconds. Use
 
 ```text
 liberado coder compare run <run-dir> --task <task-file> \
-  --model deepseek/deepseek-v4-flash --thinking high
+  --model deepseek/deepseek-v4-flash --thinking high --task-aware-context
 ```
 
 `run` copies the task to `<run-dir>/task.txt`, writes the exact pins, and prewarms both isolated
@@ -50,6 +50,19 @@ Liberado runs first. Pi runs second. After each harness, the runner applies the 
 `cargo test --workspace --no-fail-fast` gate. A harness exit of zero does not hide a red common
 gate. Pi receives the captured task through its supported `@file` input, which avoids unsafe
 Windows batch-file quoting.
+
+`--task-aware-context` changes one Liberado model-visible variable and records
+`task_aware_context=true` in `pins.txt`. It writes `[coder.repo_map] task_aware = true` to the run's
+captured `tuning.toml`; omit the flag for the default-off control. Pi stays on its native dynamic
+search path. Use this flag only when context routing is the declared experiment.
+
+Two other hypotheses remain parked and documented, not mixed into this run:
+
+- An external-contract prompt overlay could require the model to inspect a named protocol, wire
+  type, generated type, or framework API before editing. It is not implemented because it would
+  change the system prompt and overlap with the routing experiment.
+- A fresh critic pass is already configurable and default off. It costs another model call and has
+  not shown that it repairs missing authoritative context, so it stays off for this comparison.
 
 Each harness writes to its own stable artifact directory. Pi's durable session directory is inside
 that directory. Liberado trace files that start with the run session ID are copied there after the

@@ -278,6 +278,7 @@ fn compare_run_uses_owned_paths_and_saves_both_results() {
             task.to_str().expect("UTF-8 task path"),
             "--api-key-env",
             "LIBERADO_COMPARE_TEST_KEY",
+            "--task-aware-context",
             "--liberado-bin",
             fake.to_str().expect("UTF-8 fake harness path"),
             "--pi-bin",
@@ -331,6 +332,10 @@ fn compare_run_uses_owned_paths_and_saves_both_results() {
     assert!(tuning.contains("timeout_secs = 1800"));
     assert!(tuning.contains("warmup_timeout_secs = 1800"));
     assert!(tuning.contains("warmup = false"));
+    assert!(tuning.contains("[coder.repo_map]"));
+    assert!(tuning.contains("task_aware = true"));
+    let pins = fs::read_to_string(run.join("pins.txt")).expect("captured comparison pins");
+    assert!(pins.contains("task_aware_context=true"));
 
     remove_compare_worktrees(source.path(), &run);
 }
@@ -403,6 +408,11 @@ fn compare_run_saves_launch_failure_and_still_runs_the_other_harness() {
         ),
         "fake result"
     );
+    let tuning = fs::read_to_string(run.join("config").join("tuning.toml"))
+        .expect("captured comparison tuning");
+    assert!(!tuning.contains("task_aware"), "{tuning}");
+    let pins = fs::read_to_string(run.join("pins.txt")).expect("captured comparison pins");
+    assert!(pins.contains("task_aware_context=false"), "{pins}");
 
     remove_compare_worktrees(source.path(), &run);
 }

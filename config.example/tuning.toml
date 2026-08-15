@@ -89,6 +89,15 @@
 # enabled = false
 # hash_length = 7
 
+# Cold-start repository map. The global map remains on by default. Task-aware routing is a
+# separate experiment: it puts task-named paths and symbols in a bounded evidence block before
+# the global rank. It is off by default until accepted-result comparisons show a benefit.
+# [coder.repo_map]
+# enabled = true
+# task_aware = false
+# max_map_tokens = 1024
+# min_source_files = 20
+
 # Build cache and pre-run warm-up.
 #
 # `shared_target_dir` points every coding worktree at one CARGO_TARGET_DIR. A worktree starts with

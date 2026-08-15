@@ -168,6 +168,26 @@ research_max_turns = 30          # ceiling for depth = "deep" subagents
 
 The dispatcher chooses `depth` (`shallow`/`normal`/`deep`) per dispatch; this caps the deep end.
 
+### Coding repository context — `tuning.toml`
+
+```toml
+[coder.repo_map]
+enabled = true
+task_aware = false
+max_map_tokens = 1024
+min_source_files = 20
+```
+
+The global symbol map is on by default. `task_aware` is a separate, default-off experiment. When
+enabled, the headless coding runner extracts bounded terms from the task, keeps exact source hits
+inside the 500-file parse budget, boosts files that define matching symbols, and renders a small
+`Task evidence` block before the global PageRank map. The selected paths and definitions are thus
+visible in the ordinary coding trace. It does not fetch external documentation or add a model call.
+
+Changing these values does not require a rebuild. The next coding run reads them from
+`tuning.toml`. ACP and session-pack entry points do not yet generate a repo map; this toggle is for
+the headless runner used by the current harness comparison.
+
 ### Report delivery — `topology.toml`
 
 ```toml
