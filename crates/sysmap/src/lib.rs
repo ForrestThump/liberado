@@ -18,12 +18,12 @@
 //! [`SystemMap`] round-trips through JSON (`liberado-sysmap --write-json`), which is the seam a
 //! future renderer (web, headless export) can consume without re-deriving the graph.
 
-pub mod iso;
-pub mod layout;
-pub mod model;
 pub mod scan;
-pub mod style;
 pub mod wiring;
+
+// The project-agnostic half (model, layout, projection, styling) now lives in `sysmap-core` and is
+// re-exported unchanged so `liberado_sysmap::model`, `liberado_sysmap::layout`, … keep resolving.
+pub use sysmap_core::{iso, layout, model, style};
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};

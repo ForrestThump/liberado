@@ -93,7 +93,9 @@ fn load_crates() -> BTreeMap<String, CrateInfo> {
 }
 
 fn is_internal(dep: &str) -> bool {
-    dep.starts_with("liberado-") || dep == "chat-client-contract"
+    // `sysmap-core` is the one workspace crate without the `liberado-` prefix (the liftable
+    // system-map core); the prefix heuristic here is a name match until the cargo-metadata phase.
+    dep.starts_with("liberado-") || dep == "chat-client-contract" || dep == "sysmap-core"
 }
 
 const ROLES: &[&str] = &[

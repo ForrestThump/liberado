@@ -1,0 +1,16 @@
+[package]
+name = "sysmap-core"
+version = "0.1.0"
+description = "Project-agnostic system-map core: serializable graph model, deterministic layout, isometric projection, and color styling. No project-specific vocabulary — layers, kinds, colors, and wiring come from outside."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+
+[package.metadata.liberado]
+# Tooling: meta tooling that inspects the workspace — not a build dependency of the system.
+role = "tooling"

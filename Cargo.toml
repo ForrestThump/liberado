@@ -98,6 +98,7 @@ liberado-dispatch-pack = { path = "crates/dispatch-pack" }
 liberado-harness-eval = { path = "crates/harness-eval" }
 liberado-sysmap = { path = "crates/sysmap" }
 liberado-sysmap-gui = { path = "crates/sysmap-gui" }
+sysmap-core = { path = "crates/sysmap-core" }
 
 # --- co-developed path dependencies (Decision 7) ---
 # Pinned to whatever is checked out in the sibling directories (currently the

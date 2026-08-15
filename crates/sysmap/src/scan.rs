@@ -42,7 +42,10 @@ impl std::error::Error for ScanError {}
 type Result<T> = std::result::Result<T, ScanError>;
 
 fn is_internal(dep: &str) -> bool {
-    dep.starts_with("liberado-") || dep == "chat-client-contract"
+    // `sysmap-core` is the one workspace crate without the `liberado-` prefix (it is the liftable
+    // core); the prefix heuristic here is replaced by workspace-membership in the cargo-metadata
+    // phase (see docs/future-work/sysmap-generic-core-plan.md).
+    dep.starts_with("liberado-") || dep == "chat-client-contract" || dep == "sysmap-core"
 }
 
 /// The layer a runtime node is *grouped near* for coloring. Runtime nodes use their kind color for
