@@ -41,7 +41,8 @@ The default compile and command timeout is 1,800 seconds. Use
 
 ```text
 liberado coder compare run <run-dir> --task <task-file> \
-  --model deepseek/deepseek-v4-flash --thinking high --task-aware-context
+  --model deepseek/deepseek-v4-flash --thinking high --task-aware-context \
+  --acceptance-overlay <hidden-test-dir>
 ```
 
 `run` copies the task to `<run-dir>/task.txt`, writes the exact pins, and prewarms both isolated
@@ -50,6 +51,13 @@ Liberado runs first. Pi runs second. After each harness, the runner applies the 
 `cargo test --workspace --no-fail-fast` gate. A harness exit of zero does not hide a red common
 gate. Pi receives the captured task through its supported `@file` input, which avoids unsafe
 Windows batch-file quoting.
+
+`--acceptance-overlay <dir>` captures an independent test overlay before either model runs. The
+runner installs the same files only while it verifies each result, then removes them before it
+saves or commits the harness worktree. An overlay cannot replace a model-visible file. The
+captured oracle and its SHA-256 fingerprint stay under the run directory, so the acceptance rule
+is reviewable without becoming model context. Use an overlay for behavior that the normal
+workspace suite does not test; omit it when the task already has an adequate independent gate.
 
 `--task-aware-context` changes one Liberado model-visible variable and records
 `task_aware_context=true` in `pins.txt`. It writes `[coder.repo_map] task_aware = true` to the run's

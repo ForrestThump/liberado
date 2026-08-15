@@ -482,6 +482,163 @@ fn compare_run_rejects_zero_exit_when_the_common_verifier_fails() {
     remove_compare_worktrees(source.path(), &run);
 }
 
+#[test]
+fn compare_run_applies_hidden_acceptance_overlay_to_both_harnesses() {
+    let source = tempdir().expect("temporary source repository");
+    let runs = tempdir().expect("temporary run parent");
+    initialize_compare_source(source.path());
+    let run = runs.path().join("compare-hidden-acceptance");
+    let prepare = run_cli(
+        source.path(),
+        &[
+            "coder",
+            "compare",
+            "prepare",
+            run.to_str().expect("UTF-8 run path"),
+            "--source",
+            source.path().to_str().expect("UTF-8 source path"),
+            "--commit",
+            "main",
+        ],
+    );
+    assert!(prepare.status.success());
+    let task = runs.path().join("task.txt");
+    fs::write(&task, "task").expect("task file");
+    let overlay = runs.path().join("hidden-overlay");
+    fs::create_dir_all(overlay.join("tests")).expect("overlay tests directory");
+    fs::write(
+        overlay.join("tests").join("hidden_acceptance.rs"),
+        r#"#[test]
+fn result_matches_hidden_contract() {
+    assert_eq!(include_str!("../tracked.txt"), "accepted result\n");
+}
+"#,
+    )
+    .expect("hidden acceptance test");
+    let fake = write_fake_harness(runs.path());
+
+    let output = std_command(env!("CARGO_BIN_EXE_liberado"))
+        .args([
+            "coder",
+            "compare",
+            "run",
+            run.to_str().expect("UTF-8 run path"),
+            "--task",
+            task.to_str().expect("UTF-8 task path"),
+            "--acceptance-overlay",
+            overlay.to_str().expect("UTF-8 overlay path"),
+            "--api-key-env",
+            "LIBERADO_COMPARE_TEST_KEY",
+            "--liberado-bin",
+            fake.to_str().expect("UTF-8 fake harness path"),
+            "--pi-bin",
+            fake.to_str().expect("UTF-8 fake harness path"),
+        ])
+        .env("LIBERADO_COMPARE_TEST_KEY", "test-only")
+        .current_dir(source.path())
+        .output()
+        .expect("comparison run starts");
+    assert!(
+        !output.status.success(),
+        "hidden contract must reject both results"
+    );
+
+    for harness in ["liberado", "pi"] {
+        let worktree = run.join("worktrees").join(harness);
+        let result: serde_json::Value = serde_json::from_slice(
+            &fs::read(run.join("artifacts").join(harness).join("result.json"))
+                .expect("saved result"),
+        )
+        .expect("valid saved result");
+        assert_ne!(result["verifier_exit_code"], 0);
+        assert!(
+            !worktree.join("tests").join("hidden_acceptance.rs").exists(),
+            "hidden oracle must be removed before result preservation"
+        );
+        assert_eq!(git_capture_test(&worktree, &["status", "--short"]), "");
+    }
+    assert!(
+        run.join("acceptance-overlay")
+            .join("tests")
+            .join("hidden_acceptance.rs")
+            .is_file(),
+        "captured oracle must remain with the run"
+    );
+    let pins = fs::read_to_string(run.join("pins.txt")).expect("captured pins");
+    assert!(!pins.contains("acceptance_overlay_hash=none"), "{pins}");
+
+    remove_compare_worktrees(source.path(), &run);
+}
+
+#[test]
+fn compare_run_refuses_an_acceptance_overlay_that_would_overwrite_source() {
+    let source = tempdir().expect("temporary source repository");
+    let runs = tempdir().expect("temporary run parent");
+    initialize_compare_source(source.path());
+    let run = runs.path().join("compare-overwriting-acceptance");
+    let prepare = run_cli(
+        source.path(),
+        &[
+            "coder",
+            "compare",
+            "prepare",
+            run.to_str().expect("UTF-8 run path"),
+            "--source",
+            source.path().to_str().expect("UTF-8 source path"),
+            "--commit",
+            "main",
+        ],
+    );
+    assert!(prepare.status.success());
+    let task = runs.path().join("task.txt");
+    fs::write(&task, "task").expect("task file");
+    let overlay = runs.path().join("overwriting-overlay");
+    fs::create_dir_all(overlay.join("src")).expect("overlay source directory");
+    fs::write(overlay.join("src").join("lib.rs"), "not allowed\n")
+        .expect("overwriting acceptance file");
+    let fake = write_fake_harness(runs.path());
+
+    let output = std_command(env!("CARGO_BIN_EXE_liberado"))
+        .args([
+            "coder",
+            "compare",
+            "run",
+            run.to_str().expect("UTF-8 run path"),
+            "--task",
+            task.to_str().expect("UTF-8 task path"),
+            "--acceptance-overlay",
+            overlay.to_str().expect("UTF-8 overlay path"),
+            "--api-key-env",
+            "LIBERADO_COMPARE_TEST_KEY",
+            "--liberado-bin",
+            fake.to_str().expect("UTF-8 fake harness path"),
+            "--pi-bin",
+            fake.to_str().expect("UTF-8 fake harness path"),
+        ])
+        .env("LIBERADO_COMPARE_TEST_KEY", "test-only")
+        .current_dir(source.path())
+        .output()
+        .expect("comparison run starts");
+    assert!(!output.status.success());
+
+    for harness in ["liberado", "pi"] {
+        let worktree = run.join("worktrees").join(harness);
+        let result: serde_json::Value = serde_json::from_slice(
+            &fs::read(run.join("artifacts").join(harness).join("result.json"))
+                .expect("saved result"),
+        )
+        .expect("valid saved result");
+        assert_eq!(result["verifier_exit_code"], 125);
+        assert_eq!(
+            fs::read_to_string(worktree.join("src").join("lib.rs")).expect("source file"),
+            "pub fn fixture() {}\n"
+        );
+        assert_eq!(git_capture_test(&worktree, &["status", "--short"]), "");
+    }
+
+    remove_compare_worktrees(source.path(), &run);
+}
+
 fn initialize_compare_source(root: &Path) {
     git_test(root, &["init", "-b", "main"]);
     git_test(root, &["config", "user.email", "test@example.com"]);

@@ -15,6 +15,7 @@ use std::time::Duration;
 use chrono::Utc;
 use liberado_common::process::{command, output_within, std_command};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 const MANIFEST_VERSION: u32 = 1;
 const DEFAULT_COMPILE_TIMEOUT_SECS: u64 = 1_800;
@@ -54,6 +55,7 @@ struct RunArgs {
     thinking: String,
     max_turns: u32,
     task_aware_context: bool,
+    acceptance_overlay: Option<PathBuf>,
     liberado_bin: Option<PathBuf>,
     pi_bin: Option<PathBuf>,
 }
@@ -189,6 +191,7 @@ pub fn run(args: &[String]) -> Result<(), Box<dyn Error>> {
             "usage: liberado coder compare run <run-dir> --task <file> [--model <id>] \
              [--provider <name>] [--base-url <url>] [--api-key-env <name>] \
              [--thinking <level>] [--max-turns <n>] [--task-aware-context] \
+             [--acceptance-overlay <dir>] \
              [--liberado-bin <path>] [--pi-bin <path>]"
         );
         return Ok(());
@@ -200,8 +203,9 @@ pub fn run(args: &[String]) -> Result<(), Box<dyn Error>> {
         return Err("comparison task file is empty".into());
     }
     fs::write(manifest.run_root.join("task.txt"), &task)?;
+    let acceptance_overlay = capture_acceptance_overlay(&manifest, &parsed)?;
     write_run_config(&manifest, &parsed)?;
-    write_run_pins(&manifest, &parsed)?;
+    write_run_pins(&manifest, &parsed, acceptance_overlay.as_deref())?;
 
     if std::env::var_os(&parsed.api_key_env).is_none() {
         return Err(format!("{} is not set in this process", parsed.api_key_env).into());
@@ -221,7 +225,8 @@ pub fn run(args: &[String]) -> Result<(), Box<dyn Error>> {
     let liberado_exit = run_or_record_launch_error(&manifest, "liberado", || {
         run_liberado(&manifest, &parsed, &task, &liberado_session)
     });
-    let liberado_verifier_exit = verify_harness(&manifest, "liberado");
+    let liberado_verifier_exit =
+        verify_harness(&manifest, "liberado", acceptance_overlay.as_deref());
     save_result(
         &manifest,
         "liberado",
@@ -233,7 +238,7 @@ pub fn run(args: &[String]) -> Result<(), Box<dyn Error>> {
     let pi_exit = run_or_record_launch_error(&manifest, "pi", || {
         run_pi(&manifest, &parsed, &task, &pi_session)
     });
-    let pi_verifier_exit = verify_harness(&manifest, "pi");
+    let pi_verifier_exit = verify_harness(&manifest, "pi", acceptance_overlay.as_deref());
     save_result(
         &manifest,
         "pi",
@@ -352,6 +357,7 @@ fn parse_run_args(args: &[String]) -> Result<RunArgs, Box<dyn Error>> {
     let mut thinking = DEFAULT_THINKING.to_string();
     let mut max_turns = DEFAULT_MAX_TURNS;
     let mut task_aware_context = false;
+    let mut acceptance_overlay = None;
     let mut liberado_bin = None;
     let mut pi_bin = None;
     let mut index = 0;
@@ -394,6 +400,10 @@ fn parse_run_args(args: &[String]) -> Result<RunArgs, Box<dyn Error>> {
             "--task-aware-context" => {
                 task_aware_context = true;
             }
+            "--acceptance-overlay" => {
+                index += 1;
+                acceptance_overlay = Some(absolute(&PathBuf::from(value(args, index, flag)?))?);
+            }
             "--liberado-bin" => {
                 index += 1;
                 liberado_bin = Some(PathBuf::from(value(args, index, flag)?));
@@ -424,6 +434,7 @@ fn parse_run_args(args: &[String]) -> Result<RunArgs, Box<dyn Error>> {
         thinking,
         max_turns,
         task_aware_context,
+        acceptance_overlay,
         liberado_bin,
         pi_bin,
     })
@@ -562,11 +573,19 @@ fn write_run_config(manifest: &CompareManifest, args: &RunArgs) -> Result<(), Bo
     Ok(())
 }
 
-fn write_run_pins(manifest: &CompareManifest, args: &RunArgs) -> Result<(), Box<dyn Error>> {
+fn write_run_pins(
+    manifest: &CompareManifest,
+    args: &RunArgs,
+    acceptance_overlay: Option<&Path>,
+) -> Result<(), Box<dyn Error>> {
+    let overlay_hash = acceptance_overlay
+        .map(overlay_fingerprint)
+        .transpose()?
+        .unwrap_or_else(|| "none".into());
     fs::write(
         manifest.run_root.join("pins.txt"),
         format!(
-            "base_revision={}\nbase_commit={}\nprovider={}\nmodel={}\nthinking={}\nliberado_max_turns={}\npi_turn_cap=client default\ncompile_timeout_secs={}\ntask_aware_context={}\nsampling=temperature omitted by both clients\n",
+            "base_revision={}\nbase_commit={}\nprovider={}\nmodel={}\nthinking={}\nliberado_max_turns={}\npi_turn_cap=client default\ncompile_timeout_secs={}\ntask_aware_context={}\nacceptance_overlay_hash={}\nsampling=temperature omitted by both clients\n",
             manifest.base_revision,
             manifest.base_commit,
             args.provider,
@@ -575,9 +594,151 @@ fn write_run_pins(manifest: &CompareManifest, args: &RunArgs) -> Result<(), Box<
             args.max_turns,
             manifest.compile_timeout_secs,
             args.task_aware_context,
+            overlay_hash,
         ),
     )?;
     Ok(())
+}
+
+fn capture_acceptance_overlay(
+    manifest: &CompareManifest,
+    args: &RunArgs,
+) -> Result<Option<PathBuf>, Box<dyn Error>> {
+    let Some(source) = args.acceptance_overlay.as_deref() else {
+        return Ok(None);
+    };
+    if !source.is_dir() {
+        return Err(format!(
+            "acceptance overlay is not a directory: {}",
+            source.display()
+        )
+        .into());
+    }
+    let captured = manifest.run_root.join("acceptance-overlay");
+    if captured.exists() {
+        return Err(format!(
+            "captured acceptance overlay already exists: {}",
+            captured.display()
+        )
+        .into());
+    }
+    copy_tree(source, &captured)?;
+    if overlay_files(&captured)?.is_empty() {
+        return Err("acceptance overlay contains no files".into());
+    }
+    Ok(Some(captured))
+}
+
+fn overlay_fingerprint(root: &Path) -> Result<String, Box<dyn Error>> {
+    let files = overlay_files(root)?;
+    let mut digest = Sha256::new();
+    for (relative, source) in files {
+        let relative = path_text(&relative);
+        let bytes = fs::read(source)?;
+        digest.update((relative.len() as u64).to_le_bytes());
+        digest.update(relative.as_bytes());
+        digest.update((bytes.len() as u64).to_le_bytes());
+        digest.update(bytes);
+    }
+    Ok(format!("{:x}", digest.finalize()))
+}
+
+fn overlay_files(root: &Path) -> Result<Vec<(PathBuf, PathBuf)>, Box<dyn Error>> {
+    fn visit(
+        root: &Path,
+        directory: &Path,
+        files: &mut Vec<(PathBuf, PathBuf)>,
+    ) -> Result<(), Box<dyn Error>> {
+        let mut entries: Vec<_> = fs::read_dir(directory)?.collect::<Result<_, _>>()?;
+        entries.sort_by_key(|entry| entry.file_name());
+        for entry in entries {
+            let path = entry.path();
+            if is_link_like(&path)? {
+                return Err(
+                    format!("refusing link in acceptance overlay: {}", path.display()).into(),
+                );
+            }
+            if entry.file_type()?.is_dir() {
+                visit(root, &path, files)?;
+            } else {
+                files.push((path.strip_prefix(root)?.to_path_buf(), path));
+            }
+        }
+        Ok(())
+    }
+
+    if is_link_like(root)? {
+        return Err(format!("refusing linked acceptance overlay: {}", root.display()).into());
+    }
+    let mut files = Vec::new();
+    visit(root, root, &mut files)?;
+    files.sort_by(|a, b| a.0.cmp(&b.0));
+    Ok(files)
+}
+
+struct InstalledAcceptanceOverlay {
+    files: Vec<PathBuf>,
+}
+
+impl InstalledAcceptanceOverlay {
+    fn install(source: &Path, worktree: &Path) -> Result<Self, Box<dyn Error>> {
+        let sources = overlay_files(source)?;
+        for (relative, _) in &sources {
+            let target = worktree.join(relative);
+            ensure_install_target_is_safe(worktree, relative, &target)?;
+        }
+
+        let mut installed = Self { files: Vec::new() };
+        for (relative, source) in sources {
+            let target = worktree.join(relative);
+            if let Some(parent) = target.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            fs::copy(source, &target)?;
+            installed.files.push(target);
+        }
+        Ok(installed)
+    }
+}
+
+fn ensure_install_target_is_safe(
+    worktree: &Path,
+    relative: &Path,
+    target: &Path,
+) -> Result<(), Box<dyn Error>> {
+    let mut current = worktree.to_path_buf();
+    for component in relative.components() {
+        current.push(component);
+        match fs::symlink_metadata(&current) {
+            Ok(metadata) => {
+                if is_link_like(&current)? {
+                    return Err(format!(
+                        "acceptance overlay path crosses a link: {}",
+                        current.display()
+                    )
+                    .into());
+                }
+                if current == target || !metadata.is_dir() {
+                    return Err(format!(
+                        "acceptance overlay would overwrite model-visible path: {}",
+                        current.display()
+                    )
+                    .into());
+                }
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
+    }
+    Ok(())
+}
+
+impl Drop for InstalledAcceptanceOverlay {
+    fn drop(&mut self) {
+        for path in self.files.iter().rev() {
+            let _ = fs::remove_file(path);
+        }
+    }
 }
 
 fn warm_harness(manifest: &CompareManifest, name: &str) -> Result<(), Box<dyn Error>> {
@@ -602,11 +763,37 @@ fn warm_harness(manifest: &CompareManifest, name: &str) -> Result<(), Box<dyn Er
     }
 }
 
-fn verify_harness(manifest: &CompareManifest, name: &str) -> i32 {
+fn verify_harness(
+    manifest: &CompareManifest,
+    name: &str,
+    acceptance_overlay: Option<&Path>,
+) -> i32 {
     let layout = match harness(manifest, name) {
         Ok(layout) => layout,
         Err(error) => {
             eprintln!("{name} verifier setup failed: {error}");
+            return 125;
+        }
+    };
+    let _installed_overlay = match acceptance_overlay
+        .map(|source| InstalledAcceptanceOverlay::install(source, &layout.worktree))
+        .transpose()
+    {
+        Ok(overlay) => overlay,
+        Err(error) => {
+            let message = format!("{name} acceptance overlay setup failed: {error}\n");
+            eprint!("{message}");
+            let _ = fs::write(layout.artifacts.join("verifier.stdout.log"), b"");
+            let _ = fs::write(layout.artifacts.join("verifier.stderr.log"), &message);
+            let now = Utc::now();
+            let _ = fs::write(
+                layout.artifacts.join("verifier-status.txt"),
+                format!(
+                    "started={}\nfinished={}\nexit=125\n",
+                    now.to_rfc3339(),
+                    now.to_rfc3339()
+                ),
+            );
             return 125;
         }
     };
