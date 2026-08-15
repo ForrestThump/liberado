@@ -1417,19 +1417,69 @@ fn model_state(catalog: &[CatalogModel], current_model_id: &str) -> Value {
     })
 }
 
+/// Reduce a `session/prompt` payload to the single text string sent to the model.
+///
+/// The wire carries ACP `ContentBlock`s. This bridge advertises `embeddedContext: true`, so a
+/// client may embed `resource` blocks whose textual content must reach the model. Blocks render
+/// in prompt order:
+///
+/// - `text` → the text verbatim.
+/// - `resource` with `resource.text` → the text, preceded by a `[resource: …]` source line so
+///   the model knows where it came from.
+/// - `resource` with `resource.blob`, and `resource_link` → a concise `[resource: …]` source
+///   marker. Payloads are never fetched or decoded, so a binary blob stays metadata-only.
+/// - `image` / `audio` → dropped. The bridge advertises those capabilities false, so receiving
+///   one is client error; decoding base64 media into text would be fake support.
 fn extract_prompt_text(params: &Value) -> Result<String, String> {
     if let Some(arr) = params.get("prompt").and_then(|v| v.as_array()) {
         let mut parts = Vec::new();
         for block in arr {
             let ty = block.get("type").and_then(|t| t.as_str()).unwrap_or("text");
-            if ty == "text" {
-                if let Some(t) = block.get("text").and_then(|t| t.as_str()) {
-                    parts.push(t.to_string());
+            match ty {
+                "text" => {
+                    if let Some(t) = block.get("text").and_then(|t| t.as_str()) {
+                        parts.push(t.to_string());
+                    }
                 }
-            } else if let Some(t) = block.get("text").and_then(|t| t.as_str()) {
-                parts.push(t.to_string());
-            } else if let Some(uri) = block.get("uri").and_then(|u| u.as_str()) {
-                parts.push(format!("[resource: {uri}]"));
+                // Embedded resource:
+                // `{ "type": "resource", "resource": { uri, text|blob, mimeType? } }`.
+                "resource" => {
+                    if let Some(res) = block.get("resource") {
+                        let uri = res.get("uri").and_then(|u| u.as_str()).unwrap_or("");
+                        let mime = res.get("mimeType").and_then(|m| m.as_str()).unwrap_or("");
+                        if let Some(t) = res
+                            .get("text")
+                            .and_then(|t| t.as_str())
+                            .filter(|t| !t.is_empty())
+                        {
+                            parts.push(format!("{}\n{t}", resource_marker(uri, "", mime)));
+                        } else {
+                            // Blob (binary) payload or empty text: metadata-only marker.
+                            parts.push(resource_marker(uri, "", mime));
+                        }
+                    }
+                }
+                // Resource link: `{ "type": "resource_link", uri, name, mimeType? }`.
+                // No content was embedded; a concise source marker is all there is to render.
+                "resource_link" => {
+                    let uri = block.get("uri").and_then(|u| u.as_str()).unwrap_or("");
+                    let name = block.get("name").and_then(|n| n.as_str()).unwrap_or("");
+                    let mime = block.get("mimeType").and_then(|m| m.as_str()).unwrap_or("");
+                    parts.push(resource_marker(uri, name, mime));
+                }
+                // The bridge advertises these capabilities false. Never decode their base64 data
+                // or accept a synthetic text field as a substitute.
+                "image" | "audio" => {}
+                // Unknown types keep the historical flattened top-level text/URI fallback.
+                _ => {
+                    if let Some(t) = block.get("text").and_then(|t| t.as_str()) {
+                        parts.push(t.to_string());
+                    } else if let Some(uri) = block.get("uri").and_then(|u| u.as_str()) {
+                        let name = block.get("name").and_then(|n| n.as_str()).unwrap_or("");
+                        let mime = block.get("mimeType").and_then(|m| m.as_str()).unwrap_or("");
+                        parts.push(resource_marker(uri, name, mime));
+                    }
+                }
             }
         }
         let text = parts.join("\n");
@@ -1445,6 +1495,21 @@ fn extract_prompt_text(params: &Value) -> Result<String, String> {
         return Ok(t.to_string());
     }
     Err("missing prompt".into())
+}
+
+/// One-line source marker naming a resource the prompt references but does not carry usable text
+/// for (resource links, binary blobs). Concise enough to read naturally in the model prompt;
+/// never includes the payload, which for a blob is base64 and would be fake text.
+fn resource_marker(uri: &str, name: &str, mime: &str) -> String {
+    let mut marker = format!("[resource: {uri}");
+    if !name.is_empty() {
+        marker.push_str(&format!(" | {name}"));
+    }
+    if !mime.is_empty() {
+        marker.push_str(&format!(" ({mime})"));
+    }
+    marker.push(']');
+    marker
 }
 
 async fn run_prompt_turn(
@@ -1557,6 +1622,182 @@ mod tests {
             ]
         });
         assert_eq!(extract_prompt_text(&params).unwrap(), "hello \nworld");
+    }
+
+    /// Independent P4.3 oracle. The fixture uses the ACP wire shapes, not shapes inferred from an
+    /// implementation: embedded text/blob content is nested under `resource`, while
+    /// `resource_link`, `image`, and `audio` are top-level content blocks.
+    #[test]
+    fn p4_3_acceptance_uses_exact_acp_wire_shapes() {
+        let cases: Value =
+            serde_json::from_str(include_str!("../tests/fixtures/p4_3_prompt_blocks.json"))
+                .expect("valid P4.3 fixture");
+        for case in cases.as_array().expect("fixture case array") {
+            let name = case["name"].as_str().expect("case name");
+            let result = extract_prompt_text(&case["params"]);
+            if let Some(expected) = case.get("expected").and_then(Value::as_str) {
+                assert_eq!(result.expect(name), expected, "{name}");
+            } else {
+                let expected_error = case["error"].as_str().expect("case error");
+                assert_eq!(result.expect_err(name), expected_error, "{name}");
+            }
+        }
+    }
+
+    /// The whole point of advertising `embeddedContext: true`: embedded textual resources reach
+    /// the model with a source line above them, in prompt order, without dropping the rest.
+    #[test]
+    fn extract_prompt_preserves_mixed_block_order() {
+        let params = json!({
+            "sessionId": "s1",
+            "prompt": [
+                { "type": "text", "text": "first" },
+                {
+                    "type": "resource",
+                    "resource": {
+                        "uri": "file:///notes/plan.md",
+                        "mimeType": "text/markdown",
+                        "text": "embedded body"
+                    }
+                },
+                { "type": "text", "text": "last" }
+            ]
+        });
+        let out = extract_prompt_text(&params).unwrap();
+        let first = out.find("first").unwrap();
+        let marker = out.find("[resource: file:///notes/plan.md").unwrap();
+        let body = out.find("embedded body").unwrap();
+        let last = out.find("last").unwrap();
+        assert!(
+            first < marker && marker < body && body < last,
+            "block order must survive extraction: {out:?}"
+        );
+    }
+
+    #[test]
+    fn extract_prompt_renders_embedded_text_resource() {
+        let params = json!({
+            "prompt": [
+                {
+                    "type": "resource",
+                    "resource": {
+                        "uri": "file:///notes/plan.md",
+                        "mimeType": "text/markdown",
+                        "text": "# Plan\n\nDo the thing."
+                    }
+                }
+            ]
+        });
+        assert_eq!(
+            extract_prompt_text(&params).unwrap(),
+            "[resource: file:///notes/plan.md (text/markdown)]\n# Plan\n\nDo the thing."
+        );
+    }
+
+    /// A resource link carries no embedded text, so it renders as a concise source marker.
+    #[test]
+    fn extract_prompt_marks_resource_link() {
+        let params = json!({
+            "prompt": [
+                {
+                    "type": "resource_link",
+                    "uri": "file:///src/lib.rs",
+                    "name": "lib.rs",
+                    "mimeType": "text/x-rust"
+                }
+            ]
+        });
+        assert_eq!(
+            extract_prompt_text(&params).unwrap(),
+            "[resource: file:///src/lib.rs | lib.rs (text/x-rust)]"
+        );
+    }
+
+    /// A resource link without optional MIME data still identifies its required name and URI.
+    #[test]
+    fn extract_prompt_marks_resource_link_without_mime() {
+        let params = json!({
+            "prompt": [
+                { "type": "resource_link", "uri": "file:///data.csv", "name": "data.csv" }
+            ]
+        });
+        assert_eq!(
+            extract_prompt_text(&params).unwrap(),
+            "[resource: file:///data.csv | data.csv]"
+        );
+    }
+
+    /// A binary blob is embedded but must stay metadata-only: the base64 payload is never decoded
+    /// into text, only the source marker is rendered.
+    #[test]
+    fn extract_prompt_keeps_binary_resource_metadata_only() {
+        let params = json!({
+            "prompt": [
+                {
+                    "type": "resource",
+                    "resource": {
+                        "uri": "file:///data.bin",
+                        "mimeType": "application/octet-stream",
+                        "blob": "SGVsbG8="
+                    }
+                }
+            ]
+        });
+        let out = extract_prompt_text(&params).unwrap();
+        assert_eq!(
+            out,
+            "[resource: file:///data.bin (application/octet-stream)]"
+        );
+        assert!(
+            !out.contains("SGVsbG8="),
+            "base64 payload must not reach the model"
+        );
+    }
+
+    /// Image and audio blocks are rejected from the text stream entirely; a prompt made only of
+    /// them has no usable text and must fail as before.
+    #[test]
+    fn extract_prompt_rejects_media_only_prompt() {
+        let params = json!({
+            "prompt": [
+                { "type": "image", "data": "aW1hZ2U=", "mimeType": "image/png" },
+                { "type": "audio", "data": "YXVkaW8=", "mimeType": "audio/mp3" }
+            ]
+        });
+        assert_eq!(
+            extract_prompt_text(&params).unwrap_err(),
+            "prompt contained no text content"
+        );
+    }
+
+    /// When media blocks sit next to real text, they are dropped, never decoded.
+    #[test]
+    fn extract_prompt_media_blocks_never_decode_to_text() {
+        let params = json!({
+            "prompt": [
+                { "type": "text", "text": "keep me" },
+                { "type": "image", "data": "aW1hZ2U=", "mimeType": "image/png" },
+                { "type": "audio", "data": "YXVkaW8=", "mimeType": "audio/mp3" }
+            ]
+        });
+        let out = extract_prompt_text(&params).unwrap();
+        assert_eq!(out, "keep me");
+        assert!(!out.contains("aW1hZ2U=") && !out.contains("YXVkaW8="));
+    }
+
+    /// Whitespace-only blocks must still fail; embedded-context support must not make an empty
+    /// prompt look usable.
+    #[test]
+    fn extract_prompt_empty_text_still_fails() {
+        let params = json!({
+            "prompt": [
+                { "type": "text", "text": "   " }
+            ]
+        });
+        assert_eq!(
+            extract_prompt_text(&params).unwrap_err(),
+            "prompt contained no text content"
+        );
     }
 
     #[test]
