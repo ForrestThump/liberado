@@ -96,6 +96,8 @@ liberado-session = { path = "crates/session" }
 liberado-session-store = { path = "crates/session-store" }
 liberado-dispatch-pack = { path = "crates/dispatch-pack" }
 liberado-harness-eval = { path = "crates/harness-eval" }
+liberado-sysmap = { path = "crates/sysmap" }
+liberado-sysmap-gui = { path = "crates/sysmap-gui" }
 
 # --- co-developed path dependencies (Decision 7) ---
 # Pinned to whatever is checked out in the sibling directories (currently the
