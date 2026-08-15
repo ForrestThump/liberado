@@ -146,14 +146,72 @@ pub fn format_pipeline_repair(pipeline: &PipelineResult) -> String {
     lines.join("\n")
 }
 
-/// Last `max_lines` of a verifier log. Compare 3's repair role only saw
-/// `cargo exited 101`; the rustc / FAILED lines were already on the verdict.
-fn clip_log_excerpt(excerpt: &str, max_lines: usize) -> String {
+/// A bounded verifier-log excerpt that keeps failure evidence ahead of routine tail output.
+///
+/// Workspace `cargo test --no-fail-fast` can print a failing crate and then hundreds of lines
+/// from later, passing crates. A plain tail made compares 4 and 9 tell the repair role only that
+/// `wire` passed 61 tests. Cargo's final `error: test failed, to rerun pass '-p <crate>'` line is
+/// preferred because it names the package; test failures, panics, and compiler errors follow.
+/// Unknown output retains the old tail fallback.
+pub(crate) fn clip_log_excerpt(excerpt: &str, max_lines: usize) -> String {
+    if max_lines == 0 {
+        return String::new();
+    }
     let lines: Vec<&str> = excerpt.lines().collect();
     if lines.len() <= max_lines {
         return excerpt.trim().to_string();
     }
-    lines[lines.len() - max_lines..].join("\n")
+
+    let package_markers = lines
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, line)| is_package_failure_marker(line).then_some(idx));
+    let other_markers = lines
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, line)| is_failure_marker(line).then_some(idx));
+
+    let mut seen = std::collections::BTreeSet::new();
+    let mut selected = Vec::new();
+    for anchor in package_markers.chain(other_markers) {
+        let start = anchor.saturating_sub(2);
+        let end = (anchor + 3).min(lines.len());
+        for idx in start..end {
+            if selected.len() == max_lines {
+                break;
+            }
+            if seen.insert(idx) {
+                selected.push(idx);
+            }
+        }
+        if selected.len() == max_lines {
+            break;
+        }
+    }
+
+    if selected.is_empty() {
+        return lines[lines.len() - max_lines..].join("\n");
+    }
+    selected
+        .into_iter()
+        .map(|idx| lines[idx])
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn is_package_failure_marker(line: &str) -> bool {
+    let lower = line.to_ascii_lowercase();
+    lower.contains("error: test failed") || lower.contains("could not compile")
+}
+
+fn is_failure_marker(line: &str) -> bool {
+    let lower = line.to_ascii_lowercase();
+    is_package_failure_marker(line)
+        || line.contains(" FAILED")
+        || lower.contains("error[")
+        || lower.contains("error:")
+        || lower.contains("panicked at")
+        || lower.contains("test result: failed")
 }
 
 /// Drop prior-attempt verifier blocks that a later attempt already cleared.
@@ -558,6 +616,34 @@ mod tests {
             "repair role must see the failing test name: {fb}"
         );
         assert!(fb.contains("OUTPUT (cargo-check):"), "{fb}");
+    }
+
+    #[test]
+    fn failure_excerpt_beats_a_later_passing_crate() {
+        let mut log = vec![
+            "running 1 test".to_string(),
+            "test checkpoint::tests::resumes_cleanly ... FAILED".to_string(),
+            "test result: FAILED. 0 passed; 1 failed; 0 ignored".to_string(),
+            "error: test failed, to rerun pass `-p liberado-coder-sandbox --lib`".to_string(),
+        ];
+        log.extend((0..61).map(|n| format!("test wire::tests::case_{n} ... ok")));
+
+        let clipped = clip_log_excerpt(&log.join("\n"), 12);
+        assert!(clipped.contains("resumes_cleanly ... FAILED"), "{clipped}");
+        assert!(clipped.contains("liberado-coder-sandbox"), "{clipped}");
+        assert!(clipped.lines().count() <= 12, "{clipped}");
+    }
+
+    #[test]
+    fn unknown_long_output_keeps_the_tail() {
+        let log = (0..50)
+            .map(|n| format!("ordinary line {n}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let clipped = clip_log_excerpt(&log, 5);
+        assert!(!clipped.contains("ordinary line 44"), "{clipped}");
+        assert!(clipped.starts_with("ordinary line 45"), "{clipped}");
+        assert!(clipped.ends_with("ordinary line 49"), "{clipped}");
     }
 
     #[test]
