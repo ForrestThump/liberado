@@ -245,10 +245,10 @@ async fn run_command_check(
 }
 
 fn command_output_to_verdict(id: &str, program: &str, output: &CommandOutput) -> Verdict {
-    let excerpt = truncate_log(&format!(
-        "stdout:\n{}\nstderr:\n{}",
-        output.stdout, output.stderr
-    ));
+    let combined = format!("stdout:\n{}\nstderr:\n{}", output.stdout, output.stderr);
+    // Select diagnostics while the whole captured command result is still available. A later
+    // byte cap cannot recover the failing package after a long passing workspace-test tail.
+    let excerpt = truncate_log(&crate::repair_feedback::clip_log_excerpt(&combined, 80));
     if output.timed_out {
         return Verdict::fail(
             format!("{program} timed out"),
@@ -338,8 +338,18 @@ fn truncate_log(s: &str) -> String {
     if s.len() <= MAX {
         s.to_string()
     } else {
-        format!("{}…[truncated]", &s[..MAX])
+        const MARKER: &str = "\n…[truncated]";
+        let content_max = MAX.saturating_sub(MARKER.len());
+        format!("{}{}", prefix_at_char_boundary(s, content_max), MARKER)
     }
+}
+
+fn prefix_at_char_boundary(s: &str, max_bytes: usize) -> &str {
+    let mut end = max_bytes.min(s.len());
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    &s[..end]
 }
 
 fn signature_pipeline(results: &[NamedVerdict]) -> String {
@@ -401,5 +411,63 @@ mod tests {
         .unwrap();
         assert!(!result.is_pass());
         assert!(result.repair_feedback().contains("nope.rs"));
+    }
+
+    /// Compare 4/9 shape: the workspace failure is followed by enough passing `wire` output to
+    /// defeat both the old first-4-KiB cap and the old last-40-lines repair excerpt.
+    #[test]
+    fn long_workspace_test_output_names_the_failing_package_in_repair_feedback() {
+        let mut stdout = String::from(
+            "running 1 test\ntest checkpoint::tests::resumes_cleanly ... FAILED\n\
+             test result: FAILED. 0 passed; 1 failed; 0 ignored\n",
+        );
+        for n in 0..120 {
+            stdout.push_str(&format!("test wire::tests::passing_case_{n:03} ... ok\n"));
+        }
+        stdout.push_str("test result: ok. 120 passed; 0 failed; 0 ignored\n");
+        let output = CommandOutput {
+            exit_code: Some(101),
+            stdout,
+            stderr: "error: test failed, to rerun pass `-p liberado-coder-sandbox --lib`\n".into(),
+            timed_out: false,
+            stdout_offload: None,
+            stderr_offload: None,
+        };
+
+        let verdict = command_output_to_verdict("cargo-test", "cargo", &output);
+        let pipeline = PipelineResult {
+            overall: VerdictStatus::Fail,
+            combined_findings: verdict.findings.clone(),
+            results: vec![NamedVerdict {
+                id: "cargo-test".into(),
+                kind: "command".into(),
+                verdict,
+            }],
+            combined_signature: Some("compare-4-9".into()),
+        };
+        let feedback = crate::repair_feedback::format_pipeline_repair(&pipeline);
+
+        assert!(
+            feedback.contains("liberado-coder-sandbox"),
+            "repair feedback must name the failing package: {feedback}"
+        );
+        assert!(
+            feedback.contains("resumes_cleanly ... FAILED"),
+            "repair feedback must retain the failing test: {feedback}"
+        );
+        assert!(
+            feedback.lines().count() <= 50,
+            "repair feedback must stay bounded: {} lines",
+            feedback.lines().count()
+        );
+    }
+
+    #[test]
+    fn log_truncation_is_utf8_safe_and_bounded() {
+        let input = format!("HEAD-{}🎉{}-TAIL", "a".repeat(3_990), "b".repeat(3_990));
+        let clipped = truncate_log(&input);
+        assert!(clipped.starts_with("HEAD-"), "{clipped}");
+        assert!(clipped.ends_with("…[truncated]"), "{clipped}");
+        assert!(clipped.len() <= 4_000, "{} bytes", clipped.len());
     }
 }
