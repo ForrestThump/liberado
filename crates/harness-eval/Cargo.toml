@@ -1,0 +1,40 @@
+[package]
+name = "liberado-harness-eval"
+version = "0.1.0"
+description = "Durable cross-harness comparison jobs, adapters, journals, and worker transport"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "liberado-harness-worker"
+path = "src/bin/worker.rs"
+
+[[bin]]
+name = "liberado-harness-worker-background"
+path = "src/bin/worker_background.rs"
+
+[dependencies]
+chrono = { workspace = true }
+liberado-coder-core = { workspace = true }
+liberado-common = { workspace = true }
+notify = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+tokio = { workspace = true }
+ulid = { workspace = true }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_JobObjects", "Win32_System_Registry", "Win32_System_Threading"] }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[package.metadata.liberado]
+role = "tooling"

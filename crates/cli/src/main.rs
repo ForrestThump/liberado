@@ -22,6 +22,8 @@
 //!   liberado coder compare run       run both harnesses and preserve all results
 //!   liberado coder compare save      commit and archive one harness result
 //!   liberado coder compare reset     restore tracked files in a compare workspace
+//!   liberado coder compare submit    enqueue a durable user-worker comparison job
+//!   liberado coder compare await     wait locally for one comparison job
 //!   liberado coder summarize <path>  summarize a cross-harness compare run
 //!   liberado coder smoke              validate the coder runner process boundary
 //!   liberado coder import <file>     foreign (Kilo / OpenHands) → `.messages.json`

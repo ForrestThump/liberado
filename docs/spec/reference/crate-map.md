@@ -5,7 +5,7 @@
 > Layer semantics and dependency rules: [contracts.md](../architecture/contracts.md) and
 > `crates/test-support/tests/layer_rules.rs` (the same role tags, mechanically enforced).
 
-46 workspace crates.
+47 workspace crates.
 
 ## foundation
 
@@ -100,7 +100,7 @@ Composition roots: the only crates allowed to see everything.
 |---|---|---|
 | [`liberado-acp-bridge`](../../../crates/acp-bridge/) | `chat-client-contract` | ACP (Agent Client Protocol) bridge over stdio for Paseo integration. |
 | [`liberado-bootstrap`](../../../crates/bootstrap/) | `liberado-coder-agent`, `liberado-coder-core`, `liberado-common`, `liberado-config`, `liberado-cron`, `liberado-daemon`, `liberado-dispatcher`, `liberado-dispatch-pack`, `liberado-notify`, `liberado-orchestrator`, `liberado-executor`, `liberado-mcp`, `liberado-provider`, `liberado-provider-openai-compat` | Composition helpers that build Liberado's provider/dispatcher/orchestrator from the process environment — the shared daemon-assembly logic for every binary, so the env wiring lives in one place. |
-| [`liberado-cli`](../../../crates/cli/) | `liberado-common`, `liberado-config`, `liberado-config-loader`, `liberado-server`, `liberado-coder-core`, `chat-client-contract` | the `liberado` binary: a client + launcher — `serve` runs the daemon/API, `chat` is a streaming client |
+| [`liberado-cli`](../../../crates/cli/) | `liberado-common`, `liberado-config`, `liberado-config-loader`, `liberado-server`, `liberado-coder-core`, `liberado-harness-eval`, `chat-client-contract` | the `liberado` binary: a client + launcher — `serve` runs the daemon/API, `chat` is a streaming client |
 | [`liberado-daemon`](../../../crates/daemon/) | `liberado-common`, `liberado-config`, `liberado-notify`, `liberado-vault`, `liberado-dispatcher`, `liberado-orchestrator`, `liberado-session`, `liberado-provider` | The Liberado daemon (Decision 2, daemon-first): the long-running core that watches the vault, attributes changes (loop-breaking), and emits reactable events. v1 vertical slice. |
 | [`liberado-server`](../../../crates/server/) | `chat-client-contract`, `liberado-bootstrap`, `liberado-chat-search`, `liberado-common`, `liberado-cost`, `liberado-config`, `liberado-daemon`, `liberado-dispatcher`, `liberado-mcp`, `liberado-executor`, `liberado-main-agent`, `liberado-conversation-store`, `liberado-provider`, `liberado-telegram-approvals`, `liberado-commands`, `liberado-memory-store`, `liberado-vault`, `liberado-session`, `liberado-session-store`, `liberado-coder-agent`, `liberado-coder-core`, `liberado-notify`, `liberado-messaging` | The Liberado daemon's API server (library): the watch loop + chat + HTTP/SSE API. Runnable via `liberado serve`. |
 
@@ -113,6 +113,7 @@ Meta tooling (evals, heuristics tuner). Not build dependencies of the system.
 | [`liberado-conformance`](../../../crates/conformance/) | `chat-client-contract` | Tier 3 live conformance runner: exercises each execution path against a deployed daemon over HTTP, asserts ground-truth outcomes, writes vault reports. Hand-run on the box for v1. |
 | [`liberado-cost`](../../../crates/cost/) | `liberado-common`, `liberado-config-loader` | Token cost accounting over the latency journal (D1+D2): read-time pricing from [[models]] rates, conversation rollup via dispatch journals, per-role / turn growth / cache-hit reports. |
 | [`liberado-eval`](../../../crates/eval/) | `liberado-common`, `liberado-config-loader`, `liberado-dispatcher`, `liberado-provider`, `liberado-provider-openai-compat` | The heuristic-tuning instrument (testing-and-eval-spec §4.2): runs the real dispatcher over a labeled set of routing scenarios and reports routing accuracy, safe-default rate, and the safety-regression gate — used to A/B the system prompt and tune the guards. |
+| [`liberado-harness-eval`](../../../crates/harness-eval/) | `liberado-coder-core`, `liberado-common` | Durable cross-harness comparison jobs, adapters, journals, and worker transport |
 | [`liberado-heuristics-tuner`](../../../crates/heuristics-tuner/) | `liberado-coder-agent`, `liberado-coder-core`, `liberado-common`, `liberado-config`, `liberado-dispatcher`, `liberado-eval`, `liberado-executor`, `liberado-orchestrator`, `liberado-provider`, `liberado-provider-openai-compat` | Automates prompt-tuning for dispatcher, executor/subagent tool loops, and Liberado coder-role system prompts via beam search; proposes diffs + rubrics for human review. Never auto-applies prompt changes. |
 
 ## testing

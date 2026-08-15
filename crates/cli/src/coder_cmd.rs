@@ -44,6 +44,9 @@ fn usage() -> &'static str {
      liberado coder compare prepare <run-dir> [--commit <ref>]   create pinned worktrees\n  \
      liberado coder compare run <run-dir> --task <file>          run and preserve both harnesses\n  \
      liberado coder compare save <run-dir> <liberado|pi>         preserve one result\n  \
+     liberado coder compare submit --task <file>                 enqueue a durable worker job\n  \
+     liberado coder compare status|await|cancel|report <job-id>  inspect a durable worker job\n  \
+     liberado coder compare worker install|start|once            manage the user-context worker\n  \
      liberado coder compare reset <workspace> [--commit <ref>]   restore tracked files\n  \
      liberado coder diff <run-a> <run-b> [--json]   cross-harness: where two runs parted\n  \
      liberado coder import <foreign.json> [-o <out.messages.json>] [--format kilo|kilo-cli|openhands|auto] [--session-id <id>]
@@ -235,6 +238,12 @@ fn cmd_compare(args: &mut dyn Iterator<Item = String>) -> Result<(), Box<dyn std
     }
     if all.first().map(String::as_str) == Some("save") {
         return crate::compare_cmd::save(&all[1..]);
+    }
+    if matches!(
+        all.first().map(String::as_str),
+        Some("submit" | "status" | "await" | "cancel" | "report" | "worker")
+    ) {
+        return liberado_harness_eval::job_cli::run(&all);
     }
     if all.first().map(String::as_str) == Some("reset") {
         return cmd_compare_reset(&all[1..]);

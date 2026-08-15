@@ -4501,6 +4501,7 @@ dependencies = [
  "liberado-common",
  "liberado-config",
  "liberado-config-loader",
+ "liberado-harness-eval",
  "liberado-server",
  "regex",
  "reqwest 0.12.28",
@@ -4828,6 +4829,23 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "liberado-harness-eval"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "liberado-coder-core",
+ "liberado-common",
+ "notify",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "tokio",
+ "ulid",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]

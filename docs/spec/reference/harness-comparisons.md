@@ -5,7 +5,104 @@
 `liberado coder compare` owns the durable infrastructure for a Liberado/Pi comparison. Do not
 assemble long-lived run policy in PowerShell. A wrapper can supply arguments, but worktree setup,
 build-cache isolation, process order, Git preservation, and artifact collection are compiled Rust
-code in `crates/cli/src/compare_cmd.rs`.
+code in `crates/harness-eval/`. The CLI is a thin argument surface over that crate.
+
+Common verifier failures can receive bounded repair. Each harness gets two additional model
+sessions by default; the coordinator writes the verifier diagnostics into the next session
+prompt, re-runs the verifier, and preserves every attempt in the normal logs. Override this per
+dispatch with `--verifier-repair-attempts N` (zero disables repair). Host failures, scope violations,
+and verifier timeouts remain terminal and are not sent back to the model.
+
+## Durable job worker
+
+The normal automation path does not require Paseo changes and does not require the dispatching
+process to hold a provider key. It has three boundaries:
+
+- `liberado-harness-eval` owns the versioned job contract, worktrees, verifier, adapters, journal,
+  result classification, and preservation;
+- `liberado-harness-worker-background` runs without a console window as the logged-in user and
+  executes accepted jobs. The console worker remains available for foreground diagnosis;
+- `liberado coder compare submit|status|await|cancel|report` reads and writes typed job records.
+
+The transport is a repository-scoped durable spool at `.liberado/harness-jobs/`. The repository
+filesystem permissions are its access boundary. A request cannot contain a shell command or a
+provider secret. The worker also applies its own repository, provider, model, turn, timeout, disk,
+verifier, and credential-alias policy before it mutates a worktree or calls a model.
+
+Submission resolves the requested Git ref to an exact commit before it creates `job.json`. The
+worker permits only configured provider/base-URL pairs, so a request cannot redirect a credential
+to another endpoint. Harness binary overrides are disabled by default. The worker also rechecks the
+captured task and acceptance-overlay digests immediately before preflight.
+
+Install the worker once from an interactive PowerShell session under the Windows account that owns
+the provider credential:
+
+```text
+cargo build --locked -p liberado-harness-eval --bins
+cargo run --locked -p liberado-cli -- coder compare worker install \
+  --worker-bin target/debug/liberado-harness-worker-background.exe
+```
+
+`worker install` writes `.liberado/harness-worker.json`, registers the background binary in the
+current user's Windows startup key, and starts it without a visible terminal. The installer first
+copies the binary to a content-addressed `.liberado/bin/` path, so `cargo clean` cannot break the
+next login. This keeps startup inside the same non-administrator user and credential boundary. Host
+lifecycle errors go to the predictable
+`.liberado/harness-worker.log`; each job keeps its detailed journal and artifacts in the job spool.
+The policy maps the alias `openrouter-default` to `OPENROUTER_API_KEY`. At execution time,
+the worker first checks its process environment and then reads the Windows user environment from
+`HKCU\Environment`. The key is passed only to each harness child. It is not written to the job,
+policy, event log, report, or parent environment.
+
+After this one-time user-context bootstrap, any process with write access to the repository can
+submit and wait for a comparison:
+
+```text
+liberado coder compare submit --task target/compare/task.txt \
+  --commit main --model deepseek/deepseek-v4-flash --provider openrouter \
+  --credential openrouter-default --thinking high --max-turns 400 \
+  --compile-timeout-secs 3600 --run-timeout-secs 14400 \
+  --minimum-free-gib 20 --task-aware-context \
+  --allow-change docs/future-work/paseo-liberado-integration-roadmap.md \
+  --acceptance-overlay target/compare/acceptance-overlay \
+  --hypothesis "task-aware routing improves acceptance" \
+  --variable "task_aware_context=on"
+
+liberado coder compare await <job-id>
+liberado coder compare report <job-id> --json
+```
+
+`await` is one blocking local process. It and the worker use operating-system filesystem events as
+their wake hook, with a 30-second recovery check for missed or coalesced events. Waiting does not
+consume model turns or require a Paseo hook. The worker writes every transition to append-and-flush
+`events.jsonl`, and state is stored as immutable numbered records. A crash cannot replace the last
+valid state with a partial JSON file.
+
+Each job has one immutable `job.json`, one hash of the experiment pins, captured task and acceptance
+inputs, and predictable outputs:
+
+```text
+.liberado/harness-jobs/<job-id>/
+  job.json
+  experiment.json
+  events.jsonl
+  state-00000000000000000000.json
+  input/{task.txt,acceptance-overlay/}
+  execution/{manifest.json,worktrees/,targets/,pins.txt}
+  artifacts/harnesses/<name>/{result.json,session.*,verifier.*,git/,sessions/,traces/}
+  report.json
+  report.md
+```
+
+The worker reports one terminal class: task failure, scope violation, verifier failure, harness
+failure, timeout, host infrastructure failure, or cancelled. It does not silently discard malformed
+JSONL or malformed result JSON. On Windows, each paid harness process is assigned to a Job Object
+with `KILL_ON_JOB_CLOSE`, so cancellation and the wall-clock limit terminate its process tree.
+
+The adapter contract keeps harness-specific launch behavior narrow. The coordinator owns experiment
+order, worktrees, common verification, result preservation, and classification. The initial adapters
+are Liberado and Pi. A later Cline adapter must implement the same boundary and produce the common
+result and MVL artifacts; it does not get to change comparison policy.
 
 ## Prepare
 
@@ -26,17 +123,19 @@ liberado coder compare prepare <run-dir> --commit main
   artifacts/pi/{git,sessions,traces}/
 ```
 
-The command copies the required `turbovault/` and `turbomcp/` path dependencies into each
-worktree. It rejects symlinks and Windows reparse points. It never links a worktree to a sibling
+The command copies the required `turbovault/` and `turbomcp/` source into each worktree. It rejects
+symlinks and Windows reparse points, and excludes rebuildable or repository-local `.git/`,
+`target/`, `.liberado/`, and `.fastembed_cache/` directories. It never links a worktree to a sibling
 checkout.
 
 The Cargo target directories are separate. Never share one target directory across comparison
 worktrees. Cargo can otherwise reuse freshness state or a same-named workspace binary from the
 wrong checkout.
 
-`targets/` is rebuildable Cargo state. Once `artifacts/` contains the saved result and archive ref,
-an operator may remove a run's `targets/` directory to recover disk space. Do not remove its
-`worktrees/` while a result still needs local inspection.
+`targets/` is rebuildable Cargo state. Durable worker jobs remove it after artifacts and archive
+refs are saved unless `retain_build_caches` is enabled in worker policy. They also remove completed
+worktrees by default; `retain_worktrees` keeps them for local inspection. Archive refs and captured
+Git artifacts remain after cleanup. Direct legacy runs leave both directories for the operator.
 
 The default compile and command timeout is 1,800 seconds. Use
 `--compile-timeout-secs <n>` when a colder machine needs more time.

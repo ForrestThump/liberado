@@ -124,12 +124,24 @@ Ship these before treating the integration as “ready to daily-drive.”
 
 ---
 
-### Phase 1 — Regression net (Liberado)
+### Phase 1 — Regression net (Liberado) — ✅ **all landed**
+
+**Verified complete 2026-08-15.** Both slices shipped; the table below is kept for the reasoning, not
+as open work.
+
+- **P1.1** — `mock_provider_turn_streams_paired_tool_and_text` in `crates/acp-bridge/src/main.rs`
+  drives `MockProvider` through the chat-path wire stack (`run_prompt_turn` + `CaptureSink`) and
+  asserts streamed text chunks plus a matching `toolCallId` across `tool_call` / `tool_call_update`
+  — the mutation target for P0.1.
+- **P1.2** — `initialize_and_session_new_over_stdio` in `crates/acp-bridge/tests/stdio_smoke.rs`
+  spawns `liberado-acp` and drives `initialize` + `session/new` over stdio, network-free and
+  key-free, against an isolated temp config dir. Runs under `cargo test --workspace --no-fail-fast`
+  in CI.
 
 | # | Slice | Why | Acceptance |
 |---|--------|-----|------------|
-| **P1.1** | **Mock-provider stream integration test** | Current unit tests never assert streamed `session/update` pairing. P0.1 would have been invisible. | Drive `MockProvider` (or lib-exported request loop) through prompt + tools; assert text chunks and tool start/finish share ids. Prefer library-exported handler over only-stdio if that keeps the test hermetic. |
-| **P1.2** | **Stdio smoke for initialize + session/new** | Install script already pipes initialize; codify in CI if not already under `cargo test -p liberado-acp-bridge`. | Automated, no network, no API key required for initialize/new. |
+| **P1.1** | **Mock-provider stream integration test** — ✅ **Landed** | Current unit tests never asserted streamed `session/update` pairing. P0.1 would have been invisible. | ✅ `CaptureSink` over `run_prompt_turn` drives `MockProvider` with tool calls + text; asserts `toolCallId` identity between `tool_call` and `tool_call_update`. |
+| **P1.2** | **Stdio smoke for initialize + session/new** — ✅ **Landed** | Install script already pipes initialize; codify in CI. | ✅ Hermetic binary spawn via `CARGO_BIN_EXE_liberado-acp`; no network, no API key; validates `initialize` + `session/new` + `session/set_mode` on the real wire. |
 
 ---
 
