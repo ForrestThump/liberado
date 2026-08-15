@@ -1,7 +1,7 @@
 [package]
 name = "liberado-sysmap-gui"
 version = "0.1.0"
-description = "Interactive isometric system map of Liberado — a native window rendering the crate dependency graph plus runtime control/data paths."
+description = "Interactive 3D system map of Liberado — a native window rendering the crate dependency graph plus runtime control/data paths with an orbit camera (three-d)."
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -17,8 +17,9 @@ doc = false
 
 [dependencies]
 liberado-sysmap = { workspace = true }
-eframe = "0.33"
-egui = "0.33"
+three-d = { version = "0.19", features = ["egui-gui"] }
+# Match three-d's egui version so the panel code shares one egui.
+egui = "0.34"
 serde_json = { workspace = true }
 chrono = { workspace = true }
 

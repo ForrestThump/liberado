@@ -1,10 +1,10 @@
 # liberado-sysmap
 
-An **interactive isometric system map** of Liberado, shipped as a native window. It renders the
+An **interactive 3D system map** of Liberado, shipped as a native window. It renders the
 workspace's crates as 3D buildings on a grid — colored by architectural layer, sized by dependency
 hub-ness — with build-time dependencies and the runtime control/data paths drawn as edges. A legend
-and an explainer panel make it legible; click any building to inspect it, drag to pan, scroll to
-zoom.
+and an explainer panel make it legible; left-drag to orbit, the wheel to zoom, right-drag to pan,
+click any building to inspect it.
 
 ## Run it
 
@@ -74,4 +74,6 @@ latter is nightly-only and describes impl/dependency structure, not runtime flow
 
 * `liberado-sysmap` (this crate) — the model: scanning, declared-flow wiring, deterministic layout,
   isometric projection, and colors. No GUI dependency.
-* `liberado-sysmap-gui` — the `eframe`/`egui` window: rendering, interaction, legend, and explainer.
+* `liberado-sysmap-gui` — the `three-d` window: 3D scene (orbit/pan/zoom camera), interaction,
+  legend, and explainer. This branch ports the renderer from the egui 2D isometric painter to
+  `three-d`; the model crate and its `--write-json` output are unchanged.
