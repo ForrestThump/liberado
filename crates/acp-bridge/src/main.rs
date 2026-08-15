@@ -9,7 +9,7 @@
 //! | `session/new` | Start a session rooted at `cwd` (coding tools enabled) |
 //! | `session/prompt` | User turn; streams `session/update` chunks |
 //! | `session/cancel` | Abort the in-flight turn (notification) |
-//! | `session/load` | Not advertised (`loadSession: false`) until history is durable |
+//! | `session/load` | Advertised (`loadSession: true`); restores stored history into model conversation |
 //! | `session/set_mode` | Switch coding / chat / face (Liberado-owned; one Paseo provider) |
 //! | `session/set_model` | Hot-swap the active model (must be in the live catalog) |
 //!
