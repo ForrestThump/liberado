@@ -111,7 +111,7 @@ struct App {
 
 impl App {
     fn new(context: &Context, map: SystemMap, repo: PathBuf) -> Self {
-        let layout = layout(&map);
+        let layout = layout(&map, &map.vocabulary);
         let placed: BTreeMap<String, PlacedNode> = layout
             .placed
             .iter()
@@ -126,7 +126,11 @@ impl App {
             let p = &placed[id];
             let node = map.node(id).expect("placed node in map");
             building_transforms.push(building_transform(p));
-            building_base_colors.push(srgba(style::node_color(node.layer, node.kind)));
+            building_base_colors.push(srgba(style::node_color(
+                &map.vocabulary,
+                node.layer.as_str(),
+                node.kind.as_str(),
+            )));
         }
         let buildings = Gm::new(
             InstancedMesh::new(
@@ -453,24 +457,23 @@ impl App {
             ui.add_space(8.0);
 
             ui.label(egui::RichText::new("Layers").strong());
-            for layer in liberado_sysmap::model::Layer::ALL.iter().copied() {
-                swatch_row(ui, style::layer_color(layer), layer.as_str(), layer.blurb());
+            for layer in &self.map.vocabulary.layers {
+                swatch_row(
+                    ui,
+                    style::layer_color(&self.map.vocabulary, &layer.id),
+                    &layer.label,
+                    &layer.blurb,
+                );
             }
-            swatch_row(
-                ui,
-                style::layer_color(liberado_sysmap::model::Layer::Unknown),
-                "unknown",
-                liberado_sysmap::model::Layer::Unknown.blurb(),
-            );
 
             ui.add_space(8.0);
             ui.label(egui::RichText::new("Runtime infrastructure").strong());
-            for kind in runtime_kinds() {
+            for kind in &self.map.vocabulary.kinds {
                 swatch_row(
                     ui,
-                    style::kind_color(kind),
-                    kind.label(),
-                    kind_label_blurb(kind),
+                    style::kind_color(&self.map.vocabulary, &kind.id),
+                    &kind.label,
+                    &kind.blurb,
                 );
             }
 
@@ -509,15 +512,23 @@ impl App {
         let Some(node) = self.map.node(id) else {
             return;
         };
-        let color = style::node_color(node.layer, node.kind);
+        let color = style::node_color(
+            &self.map.vocabulary,
+            node.layer.as_str(),
+            node.kind.as_str(),
+        );
         ui.horizontal(|ui| {
             let (rect, _) = ui.allocate_exact_size(egui::vec2(14.0, 14.0), egui::Sense::hover());
             ui.painter().rect_filled(rect, 2.0, color32(color));
             ui.heading(&node.label);
         });
-        ui.label(
-            egui::RichText::new(format!("{} · layer: {}", node.kind.label(), node.layer)).weak(),
-        );
+        let kind_label = self
+            .map
+            .vocabulary
+            .kind(node.kind.as_str())
+            .map(|k| k.label.as_str())
+            .unwrap_or_else(|| node.kind.as_str());
+        ui.label(egui::RichText::new(format!("{kind_label} · layer: {}", node.layer)).weak());
         if !node.description.is_empty() {
             ui.add_space(4.0);
             ui.label(&node.description);
@@ -646,37 +657,6 @@ fn edge_row(ui: &mut egui::Ui, kind: EdgeKind, label: &str) {
         ui.painter().rect_filled(rect, 1.0, color32(c));
         ui.label(egui::RichText::new(label).weak().small());
     });
-}
-
-fn runtime_kinds() -> [liberado_sysmap::model::NodeKind; 9] {
-    use liberado_sysmap::model::NodeKind;
-    [
-        NodeKind::Vault,
-        NodeKind::Provider,
-        NodeKind::Mcp,
-        NodeKind::Pool,
-        NodeKind::Profile,
-        NodeKind::Project,
-        NodeKind::Schedule,
-        NodeKind::Hook,
-        NodeKind::Notifier,
-    ]
-}
-
-fn kind_label_blurb(kind: liberado_sysmap::model::NodeKind) -> &'static str {
-    use liberado_sysmap::model::NodeKind;
-    match kind {
-        NodeKind::Vault => "Obsidian vault (source of truth)",
-        NodeKind::Provider => "inference backend",
-        NodeKind::Mcp => "MCP server (agent tools)",
-        NodeKind::Pool => "authority-segregated pool",
-        NodeKind::Profile => "session profile (pack + hat)",
-        NodeKind::Project => "authorized coding root",
-        NodeKind::Schedule => "cron schedule",
-        NodeKind::Hook => "external webhook",
-        NodeKind::Notifier => "notification channel (Telegram)",
-        NodeKind::Crate => "crate",
-    }
 }
 
 fn explainer_ui(ui: &mut egui::Ui) {

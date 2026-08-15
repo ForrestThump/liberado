@@ -18,12 +18,14 @@
 //! [`SystemMap`] round-trips through JSON (`liberado-sysmap --write-json`), which is the seam a
 //! future renderer (web, headless export) can consume without re-deriving the graph.
 
+pub mod profile;
 pub mod scan;
 pub mod wiring;
 
-// The project-agnostic half (model, layout, projection, styling) now lives in `sysmap-core` and is
-// re-exported unchanged so `liberado_sysmap::model`, `liberado_sysmap::layout`, … keep resolving.
-pub use sysmap_core::{iso, layout, model, style};
+// The project-agnostic half (model, layout, projection, styling, vocabulary) lives in
+// `sysmap-core` and is re-exported unchanged so `liberado_sysmap::model`, `::layout`, … keep
+// resolving. `profile` is Liberado's vocabulary data (the part that stays project-specific).
+pub use sysmap_core::{iso, layout, model, style, vocab};
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -57,7 +59,7 @@ pub fn build(root: &Path, config_dir: Option<&Path>) -> Result<SystemMap, ScanEr
 
     // Build-time dependency edges (crates only).
     for node in &nodes {
-        if node.kind != NodeKind::Crate {
+        if !node.kind.is_crate() {
             continue;
         }
         for dep in &node.deps {
@@ -114,6 +116,7 @@ pub fn build(root: &Path, config_dir: Option<&Path>) -> Result<SystemMap, ScanEr
         generated_at: Utc::now().to_rfc3339(),
         repository_root: root.to_string_lossy().into_owned(),
         config_dir: config_dir.map(|p| p.to_string_lossy().into_owned()),
+        vocabulary: profile::liberado_vocabulary(),
         nodes,
         edges,
     })
@@ -263,7 +266,7 @@ mod tests {
                 .iter()
                 .any(|e| e.from == "vault" || e.to == "vault")
         );
-        assert!(map.nodes.iter().all(|n| n.kind == NodeKind::Crate));
+        assert!(map.nodes.iter().all(|n| n.kind.is_crate()));
     }
 
     #[test]

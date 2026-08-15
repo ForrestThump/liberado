@@ -26,7 +26,7 @@ fn real_workspace_map_is_well_formed() {
         map.nodes.len()
     );
 
-    let layout = layout(&map);
+    let layout = layout(&map, &map.vocabulary);
     assert_eq!(layout.placed.len(), map.nodes.len());
 
     let mut positions = BTreeSet::new();

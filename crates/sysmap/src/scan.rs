@@ -51,19 +51,16 @@ fn is_internal(dep: &str) -> bool {
 /// The layer a runtime node is *grouped near* for coloring. Runtime nodes use their kind color for
 /// the building itself; this value feeds only ordering and the detail panel, not the building
 /// color (see [`crate::style::node_color`]).
-pub fn runtime_layer(kind: NodeKind) -> Layer {
-    match kind {
-        NodeKind::Provider => Layer::Foundation,
-        NodeKind::Mcp => Layer::Service,
-        NodeKind::Pool => Layer::Kernel,
-        NodeKind::Profile => Layer::Kernel,
-        NodeKind::Project => Layer::Pack,
-        NodeKind::Schedule => Layer::Kernel,
-        NodeKind::Hook => Layer::Service,
-        NodeKind::Vault => Layer::Store,
-        NodeKind::Notifier => Layer::Foundation,
-        NodeKind::Crate => Layer::Unknown,
-    }
+pub fn runtime_layer(kind: &str) -> Layer {
+    let layer = match kind {
+        "provider" | "notifier" => "foundation",
+        "mcp" | "hook" => "service",
+        "pool" | "profile" | "schedule" => "kernel",
+        "project" => "pack",
+        "vault" => "store",
+        _ => "unknown",
+    };
+    Layer::from(layer)
 }
 
 /// Scan every `crates/*/Cargo.toml` under `root`, returning crate nodes sorted by id.
@@ -153,12 +150,16 @@ fn read_manifest(manifest_path: &Path) -> Result<Option<MapNode>> {
         })
         .unwrap_or_default();
 
-    let layer = Layer::from_role_str(role_str).unwrap_or(Layer::Unknown);
+    let layer = if role_str.is_empty() {
+        Layer::unknown()
+    } else {
+        Layer::from(role_str)
+    };
 
     Ok(Some(MapNode {
         id: name.to_string(),
         label: name.to_string(),
-        kind: NodeKind::Crate,
+        kind: NodeKind::crate_kind(),
         layer,
         description,
         deps,
@@ -209,8 +210,8 @@ pub fn build_runtime_nodes(topo: &Topology) -> Vec<MapNode> {
     nodes.push(MapNode {
         id: "vault".to_string(),
         label: "vault".to_string(),
-        kind: NodeKind::Vault,
-        layer: runtime_layer(NodeKind::Vault),
+        kind: NodeKind::from("vault"),
+        layer: runtime_layer("vault"),
         description: "The Obsidian vault — source of truth and write target".to_string(),
         deps: Vec::new(),
         flows: Vec::new(),
@@ -230,8 +231,8 @@ pub fn build_runtime_nodes(topo: &Topology) -> Vec<MapNode> {
         nodes.push(MapNode {
             id: format!("provider:{}", p.name),
             label: p.name.clone(),
-            kind: NodeKind::Provider,
-            layer: runtime_layer(NodeKind::Provider),
+            kind: NodeKind::from("provider"),
+            layer: runtime_layer("provider"),
             description: "Inference backend (OpenAI-compatible)".to_string(),
             deps: Vec::new(),
             flows: Vec::new(),
@@ -269,8 +270,8 @@ pub fn build_runtime_nodes(topo: &Topology) -> Vec<MapNode> {
     nodes.push(MapNode {
         id: "notifier:telegram".to_string(),
         label: "telegram".to_string(),
-        kind: NodeKind::Notifier,
-        layer: runtime_layer(NodeKind::Notifier),
+        kind: NodeKind::from("notifier"),
+        layer: runtime_layer("notifier"),
         description: "Human-facing notification channel".to_string(),
         deps: Vec::new(),
         flows: Vec::new(),
@@ -320,8 +321,8 @@ fn mcp_node(m: &McpConfig) -> MapNode {
     MapNode {
         id: format!("mcp:{}", m.name),
         label: m.name.clone(),
-        kind: NodeKind::Mcp,
-        layer: runtime_layer(NodeKind::Mcp),
+        kind: NodeKind::from("mcp"),
+        layer: runtime_layer("mcp"),
         description: if m.description.is_empty() {
             "MCP server".to_string()
         } else {
@@ -338,8 +339,8 @@ fn pool_node(pool: &PoolConfig) -> MapNode {
     MapNode {
         id: format!("pool:{}", pool.name),
         label: pool.name.clone(),
-        kind: NodeKind::Pool,
-        layer: runtime_layer(NodeKind::Pool),
+        kind: NodeKind::from("pool"),
+        layer: runtime_layer("pool"),
         description: "Authority-segregated dispatcher/executor pool".to_string(),
         deps: Vec::new(),
         flows: Vec::new(),
@@ -362,8 +363,8 @@ fn profile_node(profile: &SessionProfile) -> MapNode {
     MapNode {
         id: format!("profile:{}", profile.name),
         label: profile.name.clone(),
-        kind: NodeKind::Profile,
-        layer: runtime_layer(NodeKind::Profile),
+        kind: NodeKind::from("profile"),
+        layer: runtime_layer("profile"),
         description: "Session profile (pack + authority hat)".to_string(),
         deps: Vec::new(),
         flows: Vec::new(),
@@ -387,8 +388,8 @@ fn project_node(project: &ProjectConfig) -> MapNode {
     MapNode {
         id: format!("project:{}", project.name),
         label: project.name.clone(),
-        kind: NodeKind::Project,
-        layer: runtime_layer(NodeKind::Project),
+        kind: NodeKind::from("project"),
+        layer: runtime_layer("project"),
         description: "Authorized coding workspace root".to_string(),
         deps: Vec::new(),
         flows: Vec::new(),
@@ -411,8 +412,8 @@ fn schedule_node(schedule: &CronSchedule) -> MapNode {
     MapNode {
         id: format!("schedule:{}", schedule.name),
         label: schedule.name.clone(),
-        kind: NodeKind::Schedule,
-        layer: runtime_layer(NodeKind::Schedule),
+        kind: NodeKind::from("schedule"),
+        layer: runtime_layer("schedule"),
         description: "Cron schedule (temporal event source)".to_string(),
         deps: Vec::new(),
         flows: Vec::new(),
@@ -435,8 +436,8 @@ fn hook_node(hook: &HookConfig) -> MapNode {
     MapNode {
         id: format!("hook:{}", hook.name),
         label: hook.name.clone(),
-        kind: NodeKind::Hook,
-        layer: runtime_layer(NodeKind::Hook),
+        kind: NodeKind::from("hook"),
+        layer: runtime_layer("hook"),
         description: "Webhook (network event source)".to_string(),
         deps: Vec::new(),
         flows: Vec::new(),
@@ -503,7 +504,7 @@ liberado-provider = { workspace = true }
         assert_eq!(nodes.len(), 1);
         let n = &nodes[0];
         assert_eq!(n.id, "liberado-demo");
-        assert_eq!(n.layer, Layer::Kernel);
+        assert_eq!(n.layer, Layer::from("kernel"));
         assert_eq!(n.description, "A demo crate");
         // dev-dependencies are excluded; only real internal deps count.
         assert_eq!(n.deps, vec!["liberado-common".to_string()]);
@@ -521,7 +522,7 @@ liberado-provider = { workspace = true }
         .unwrap();
         let nodes = scan_repository(dir.path()).unwrap();
         assert_eq!(nodes.len(), 1);
-        assert_eq!(nodes[0].layer, Layer::Unknown);
+        assert_eq!(nodes[0].layer, Layer::unknown());
     }
 
     #[test]

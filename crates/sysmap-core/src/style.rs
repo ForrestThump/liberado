@@ -1,10 +1,11 @@
-//! Color tokens for the map. This is the single source of truth for how a node/edge is colored;
-//! the GUI consumes these and the legend renders them, so the two can never drift.
+//! Color styling for the map. The palette for layers and kinds comes from the map's [`Vocabulary`];
+//! only the *generic* edge colors, scene constants, and the fallback palette live here. This keeps
+//! `sysmap-core` free of project-specific color choices.
 //!
-//! Colors are chosen for distinction between the ten layers plus runtime kinds, and are tuned so
-//! the dark "shade" / light "tint" faces of an isometric box read as one building.
+//! The GUI consumes these and the legend renders them, so color and legend can never drift.
 
-use crate::model::{EdgeKind, Layer, NodeKind};
+use crate::model::{EdgeKind, NodeKind};
+use crate::vocab::Vocabulary;
 
 /// An sRGB color, 0-255 per channel.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -17,6 +18,18 @@ pub struct Rgb {
 impl Rgb {
     pub const fn new(r: u8, g: u8, b: u8) -> Self {
         Self { r, g, b }
+    }
+
+    /// Parse `#rrggbb` (the leading `#` optional). Returns `None` for malformed input.
+    pub fn from_hex(hex: &str) -> Option<Self> {
+        let h = hex.trim().strip_prefix('#').unwrap_or(hex.trim());
+        if h.len() != 6 {
+            return None;
+        }
+        let r = u8::from_str_radix(&h[0..2], 16).ok()?;
+        let g = u8::from_str_radix(&h[2..4], 16).ok()?;
+        let b = u8::from_str_radix(&h[4..6], 16).ok()?;
+        Some(Self::new(r, g, b))
     }
 
     /// Scale each channel toward white by `t` in `[0,1]` (1 = white).
@@ -42,51 +55,68 @@ impl Rgb {
     }
 }
 
-/// Base color for a layer.
-pub fn layer_color(layer: Layer) -> Rgb {
-    match layer {
-        Layer::Foundation => Rgb::new(0x8a, 0x94, 0xa6), // slate
-        Layer::Client => Rgb::new(0x2f, 0xb8, 0xa0),     // teal
-        Layer::Kernel => Rgb::new(0x4f, 0x7c, 0xe0),     // blue
-        Layer::Store => Rgb::new(0xd9, 0x9a, 0x3d),      // amber
-        Layer::Pack => Rgb::new(0x4c, 0xaf, 0x50),       // green
-        Layer::Service => Rgb::new(0x8e, 0x5b, 0xc0),    // purple
-        Layer::Surface => Rgb::new(0xd0, 0x5a, 0x8a),    // magenta
-        Layer::Root => Rgb::new(0xc0, 0x45, 0x3a),       // crimson
-        Layer::Tooling => Rgb::new(0x9a, 0xb8, 0x2f),    // lime
-        Layer::Testing => Rgb::new(0xa0, 0x7a, 0x50),    // tan
-        Layer::Unknown => Rgb::new(0x5a, 0x5f, 0x68),    // neutral gray
-    }
+/// A deterministic, distinct fallback color for an id not declared in the vocabulary.
+pub fn fallback_color(id: &str) -> Rgb {
+    let h = fnv1a(id);
+    FALLBACK_PALETTE[(h % FALLBACK_PALETTE.len() as u64) as usize]
 }
 
-/// Base color for a runtime node kind. Runtime nodes share a steel-blue family so they read as
-/// "infrastructure" rather than crates, with per-kind accents.
-pub fn kind_color(kind: NodeKind) -> Rgb {
-    match kind {
-        NodeKind::Crate => Rgb::new(0x55, 0x5f, 0x6e),
-        NodeKind::Provider => Rgb::new(0x39, 0x9c, 0xb8), // cyan
-        NodeKind::Mcp => Rgb::new(0x6a, 0x8f, 0xd0),      // steel blue
-        NodeKind::Pool => Rgb::new(0x74, 0x68, 0xc9),     // indigo
-        NodeKind::Profile => Rgb::new(0x3d, 0xa8, 0x86),  // sea green
-        NodeKind::Project => Rgb::new(0xc4, 0x84, 0x2f),  // ochre
-        NodeKind::Schedule => Rgb::new(0xb0, 0x6a, 0x4a), // rust
-        NodeKind::Hook => Rgb::new(0xa6, 0x4f, 0x6b),     // rose
-        NodeKind::Vault => Rgb::new(0x8a, 0x76, 0x3a),    // bronze
-        NodeKind::Notifier => Rgb::new(0x5b, 0x9c, 0x8f), // sage
+fn fnv1a(s: &str) -> u64 {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in s.bytes() {
+        hash ^= u64::from(b);
+        hash = hash.wrapping_mul(0x100_0000_01b3);
     }
+    hash
+}
+
+/// 16 visually distinct colors, reused for undeclared layer/kind ids (hash-addressed).
+const FALLBACK_PALETTE: [Rgb; 16] = [
+    Rgb::new(0xe6, 0x19, 0x4b),
+    Rgb::new(0x3c, 0xb4, 0x4b),
+    Rgb::new(0x43, 0x63, 0xd8),
+    Rgb::new(0xf5, 0x82, 0x31),
+    Rgb::new(0x91, 0x1e, 0xb4),
+    Rgb::new(0x46, 0xf0, 0xf0),
+    Rgb::new(0xf0, 0x32, 0xe6),
+    Rgb::new(0xbc, 0xf6, 0x0c),
+    Rgb::new(0xfa, 0xbe, 0xbe),
+    Rgb::new(0x00, 0x80, 0x80),
+    Rgb::new(0xe6, 0xbe, 0xff),
+    Rgb::new(0x9a, 0x63, 0x24),
+    Rgb::new(0xff, 0xff, 0xff),
+    Rgb::new(0x80, 0x00, 0x00),
+    Rgb::new(0xaa, 0xff, 0xc3),
+    Rgb::new(0x80, 0x80, 0x00),
+];
+
+/// Color for a layer id, from the vocabulary, with a fallback for undeclared ids.
+pub fn layer_color(vocab: &Vocabulary, layer_id: &str) -> Rgb {
+    vocab
+        .layer(layer_id)
+        .and_then(|l| Rgb::from_hex(&l.color))
+        .unwrap_or_else(|| fallback_color(layer_id))
+}
+
+/// Color for a node-kind id, from the vocabulary, with a fallback for undeclared ids.
+pub fn kind_color(vocab: &Vocabulary, kind_id: &str) -> Rgb {
+    vocab
+        .kind(kind_id)
+        .and_then(|k| Rgb::from_hex(&k.color))
+        .unwrap_or_else(|| fallback_color(kind_id))
 }
 
 /// The color used to draw a node's building. Crates use their layer color; runtime nodes use their
 /// kind color.
-pub fn node_color(layer: Layer, kind: NodeKind) -> Rgb {
-    if kind == NodeKind::Crate {
-        layer_color(layer)
+pub fn node_color(vocab: &Vocabulary, layer_id: &str, kind_id: &str) -> Rgb {
+    if kind_id == NodeKind::CRATE {
+        layer_color(vocab, layer_id)
     } else {
-        kind_color(kind)
+        kind_color(vocab, kind_id)
     }
 }
 
-/// Edge stroke color by kind.
+/// Edge stroke color by kind (generic semantics — build vs control vs data).
 pub fn edge_color(kind: EdgeKind) -> Rgb {
     match kind {
         EdgeKind::Dependency => Rgb::new(0x6b, 0x74, 0x82), // neutral gray
@@ -95,7 +125,7 @@ pub fn edge_color(kind: EdgeKind) -> Rgb {
     }
 }
 
-/// Background color for the isometric scene.
+/// Background color for the scene.
 pub const SCENE_BACKGROUND: Rgb = Rgb::new(0x10, 0x13, 0x18);
 /// Grid-line color under the buildings.
 pub const GRID_LINE: Rgb = Rgb::new(0x2a, 0x30, 0x3a);
@@ -105,6 +135,7 @@ pub const LABEL: Rgb = Rgb::new(0xd6, 0xdc, 0xe6);
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::vocab::{KindSpec, LayerSpec};
 
     #[test]
     fn tint_and_shade_are_extreme_continuous() {
@@ -116,13 +147,35 @@ mod tests {
     }
 
     #[test]
-    fn every_layer_has_a_distinct_color() {
-        let mut seen = std::collections::BTreeSet::new();
-        for layer in Layer::ALL {
-            assert!(
-                seen.insert(layer_color(layer).to_array()),
-                "{layer:?} shares a color"
-            );
-        }
+    fn from_hex_parses_with_and_without_hash() {
+        assert_eq!(Rgb::from_hex("#4f7ce0"), Some(Rgb::new(0x4f, 0x7c, 0xe0)));
+        assert_eq!(Rgb::from_hex("4f7ce0"), Some(Rgb::new(0x4f, 0x7c, 0xe0)));
+        assert_eq!(Rgb::from_hex("zzz"), None);
+        assert_eq!(Rgb::from_hex("#4f7c"), None);
+    }
+
+    #[test]
+    fn fallback_color_is_deterministic_and_uses_declared_color_when_present() {
+        let vocab = Vocabulary {
+            layers: vec![LayerSpec {
+                id: "kernel".into(),
+                label: "Kernel".into(),
+                color: "#4f7ce0".into(),
+                blurb: String::new(),
+                main: true,
+            }],
+            kinds: vec![KindSpec {
+                id: "vault".into(),
+                label: "Vault".into(),
+                color: "#8a763a".into(),
+                blurb: String::new(),
+                height: 1.4,
+            }],
+        };
+        assert_eq!(layer_color(&vocab, "kernel"), Rgb::new(0x4f, 0x7c, 0xe0));
+        assert_eq!(kind_color(&vocab, "vault"), Rgb::new(0x8a, 0x76, 0x3a));
+        // Undeclared ids get the same fallback color on every call.
+        assert_eq!(layer_color(&vocab, "novel"), fallback_color("novel"));
+        assert_eq!(layer_color(&vocab, "novel"), layer_color(&vocab, "novel"));
     }
 }

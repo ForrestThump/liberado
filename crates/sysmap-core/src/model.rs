@@ -1,162 +1,95 @@
-//! The serializable system-map model: nodes, edges, layers, and node kinds.
+//! The serializable system-map model: nodes, edges, edge kinds, and the open layer/node-kind ids.
 //!
-//! Everything here derives `Serialize`/`Deserialize` so the whole map can be emitted as JSON
-//! (`liberado-sysmap --write-json`) and re-rendered by any consumer without re-deriving it. That
-//! is the regeneration contract: the map is a pure function of the repository's `Cargo.toml`
-//! files and an optional `topology.toml`, never a hand-drawn artifact.
+//! Everything here derives `Serialize`/`Deserialize` so the whole map can be emitted as JSON and
+//! re-rendered by any consumer without re-deriving it. The *vocabulary* (which layer ids exist,
+//! their colors, blurbs, and layout order) lives in [`crate::vocab::Vocabulary`], not here — so
+//! this crate stays reusable across projects with different architectures.
 
 use std::collections::BTreeMap;
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
-/// The architectural layer a crate belongs to (its `[package.metadata.liberado] role`).
-///
-/// Order follows the dependency direction: `Foundation` is the bottom, `Root` the top. The order
-/// is load-bearing — the layout stacks layers in this order so a viewer reads the system bottom-up
-/// the same way the dependency rules enforce it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Layer {
-    Foundation,
-    Client,
-    Kernel,
-    Store,
-    Pack,
-    Service,
-    Surface,
-    Root,
-    Tooling,
-    Testing,
-    /// A crate with no declared role. Not part of [`Layer::ALL`]; rendered last so a missing
-    /// `[package.metadata.liberado] role` is visible instead of silently re-homed.
-    Unknown,
-}
+use crate::vocab::Vocabulary;
+
+/// An open architectural-layer id. Crates declare their role string in their manifest; the set of
+/// known roles, their colors, blurbs, and layout order lives in a [`Vocabulary`]. A crate with no
+/// role gets [`Layer::unknown`].
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct Layer(String);
 
 impl Layer {
-    /// The role strings used in `[package.metadata.liberado] role`, in dependency order.
-    pub const ALL: [Layer; 10] = [
-        Layer::Foundation,
-        Layer::Client,
-        Layer::Kernel,
-        Layer::Store,
-        Layer::Pack,
-        Layer::Service,
-        Layer::Surface,
-        Layer::Root,
-        Layer::Tooling,
-        Layer::Testing,
-    ];
+    /// The id a crate with no declared role maps to.
+    pub const UNKNOWN: &'static str = "unknown";
 
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Layer::Foundation => "foundation",
-            Layer::Client => "client",
-            Layer::Kernel => "kernel",
-            Layer::Store => "store",
-            Layer::Pack => "pack",
-            Layer::Service => "service",
-            Layer::Surface => "surface",
-            Layer::Root => "root",
-            Layer::Tooling => "tooling",
-            Layer::Testing => "testing",
-            Layer::Unknown => "unknown",
-        }
+    pub fn unknown() -> Self {
+        Layer(Self::UNKNOWN.to_string())
     }
 
-    pub fn from_role_str(s: &str) -> Option<Layer> {
-        Layer::ALL.iter().copied().find(|l| l.as_str() == s)
+    pub fn as_str(&self) -> &str {
+        &self.0
     }
 
-    /// One-line explanation of what this layer is for, shown in the legend and explainer.
-    pub const fn blurb(self) -> &'static str {
-        match self {
-            Layer::Foundation => "Vocabulary and narrow-waist traits; depends on nothing above.",
-            Layer::Client => "Front-end building blocks, liftable into any UI.",
-            Layer::Kernel => "The orchestration engine: decide/act loops, sessions, capability.",
-            Layer::Store => {
-                "Persistent and shared information: vault, conversations, memory, search."
-            }
-            Layer::Pack => "Domain packs (coding first); never beneath kernel/config/store.",
-            Layer::Service => "Out-of-process adapters: MCP servers, bots, the forge.",
-            Layer::Surface => "UIs — clients of the wire contract only.",
-            Layer::Root => "Composition roots: the only crates allowed to see everything.",
-            Layer::Tooling => "Meta tooling (evals, tuner, this map). Not a build dependency.",
-            Layer::Testing => "Dev-dependency-only test support.",
-            Layer::Unknown => "No declared role — should pick a layer.",
-        }
+    pub fn is_unknown(&self) -> bool {
+        self.0 == Self::UNKNOWN
+    }
+}
+
+impl From<&str> for Layer {
+    fn from(s: &str) -> Self {
+        Layer(s.to_string())
+    }
+}
+
+impl From<String> for Layer {
+    fn from(s: String) -> Self {
+        Layer(s)
     }
 }
 
 impl fmt::Display for Layer {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.as_str())
+        f.write_str(&self.0)
     }
 }
 
-/// What a node *is*. Crates are the build-time units; the rest are runtime instances declared in
-/// `topology.toml` (or fixed infrastructure) that participate in the control/data paths.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum NodeKind {
-    /// A workspace crate (`crates/*`).
-    Crate,
-    /// An inference backend declared under `[[providers]]`.
-    Provider,
-    /// An MCP server declared under `[[mcps]]`.
-    Mcp,
-    /// A named dispatcher/executor pool under `[[pools]]`.
-    Pool,
-    /// A session profile under `[[session_profiles]]`.
-    Profile,
-    /// A coding project root under `[[projects]]`.
-    Project,
-    /// A cron schedule under `[[schedules]]`.
-    Schedule,
-    /// An external webhook under `[[hooks]]`.
-    Hook,
-    /// The Obsidian vault (source of truth).
-    Vault,
-    /// A human-facing notification channel (Telegram).
-    Notifier,
-}
+/// An open node-kind id for non-crate (runtime) nodes. Like layers, the vocabulary of known kinds
+/// is external; crates use the fixed [`NodeKind::CRATE`] id.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct NodeKind(String);
 
 impl NodeKind {
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            NodeKind::Crate => "crate",
-            NodeKind::Provider => "provider",
-            NodeKind::Mcp => "mcp",
-            NodeKind::Pool => "pool",
-            NodeKind::Profile => "profile",
-            NodeKind::Project => "project",
-            NodeKind::Schedule => "schedule",
-            NodeKind::Hook => "hook",
-            NodeKind::Vault => "vault",
-            NodeKind::Notifier => "notifier",
-        }
+    /// The id every workspace crate carries.
+    pub const CRATE: &'static str = "crate";
+
+    pub fn crate_kind() -> Self {
+        NodeKind(Self::CRATE.to_string())
     }
 
-    /// Human label for a node of this kind (used in the legend).
-    pub const fn label(self) -> &'static str {
-        match self {
-            NodeKind::Crate => "Crate",
-            NodeKind::Provider => "Provider",
-            NodeKind::Mcp => "MCP server",
-            NodeKind::Pool => "Pool",
-            NodeKind::Profile => "Session profile",
-            NodeKind::Project => "Coding project",
-            NodeKind::Schedule => "Cron schedule",
-            NodeKind::Hook => "Webhook",
-            NodeKind::Vault => "Vault",
-            NodeKind::Notifier => "Notifier",
-        }
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    pub fn is_crate(&self) -> bool {
+        self.0 == Self::CRATE
+    }
+}
+
+impl From<&str> for NodeKind {
+    fn from(s: &str) -> Self {
+        NodeKind(s.to_string())
+    }
+}
+
+impl From<String> for NodeKind {
+    fn from(s: String) -> Self {
+        NodeKind(s)
     }
 }
 
 impl fmt::Display for NodeKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.as_str())
+        f.write_str(&self.0)
     }
 }
 
@@ -188,8 +121,8 @@ impl fmt::Display for EdgeKind {
     }
 }
 
-/// A runtime edge a crate declares about itself, under `[[package.metadata.liberado.flows]]` in
-/// its `Cargo.toml`. This is the *declarative* form of the runtime wiring: instead of the map tool
+/// A runtime edge a crate declares about itself, under `[[package.metadata.<ns>.flows]]` in its
+/// `Cargo.toml`. This is the *declarative* form of the runtime wiring: instead of the map tool
 /// hardcoding who sends what to whom, each crate states its own outbound flows and the tool reads
 /// them — so the map grows and evolves with the codebase, not with the tool.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -211,8 +144,8 @@ pub struct MapNode {
     /// Display label.
     pub label: String,
     pub kind: NodeKind,
-    /// For crates, their declared role; for runtime nodes, the layer they are grouped near for
-    /// coloring (see [`scan::runtime_layer`](crate::scan::runtime_layer)).
+    /// For crates, their declared role id; for runtime nodes, the layer they are grouped near
+    /// (informational — runtime nodes are colored by kind, not layer).
     pub layer: Layer,
     /// Short description (crate `description`, or a derived summary for runtime nodes).
     pub description: String,
@@ -238,7 +171,7 @@ fn default_enabled() -> bool {
 impl MapNode {
     /// A compact one-line summary for tooltips.
     pub fn summary(&self) -> String {
-        let kind = self.kind.label();
+        let kind = self.kind.as_str();
         if self.description.is_empty() {
             format!("{kind} · {}", self.label)
         } else {
@@ -270,6 +203,9 @@ pub struct SystemMap {
     /// The config directory the topology was read from, if any.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub config_dir: Option<String>,
+    /// The layer/kind vocabulary this map is rendered with. Carried here so the JSON export is
+    /// self-contained: any renderer can draw the legend and colors without project knowledge.
+    pub vocabulary: Vocabulary,
     pub nodes: Vec<MapNode>,
     pub edges: Vec<MapEdge>,
 }
