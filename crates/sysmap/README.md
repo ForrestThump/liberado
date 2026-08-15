@@ -84,5 +84,7 @@ tool.
   engine. No Liberado dependency.
 * `liberado-sysmap` (this crate) — the Liberado profile (`sysmap.toml`) and the `topology.toml` →
   runtime-node adapter.
-* `liberado-sysmap-gui` — the `three-d` window: 3D scene (orbit/pan/zoom camera), interaction,
-  legend, and explainer.
+* `liberado-sysmap-gui` — the project-agnostic three-d renderer **library** (`launch(map, repo)`);
+  depends on `sysmap-core` only (plus three-d/egui), so it renders any `SystemMap`.
+* `liberado-sysmap-cli` — the `liberado-sysmap` binary: builds the map (Liberado profile +
+  topology) and opens the window, or writes the JSON export.

@@ -1,15 +1,13 @@
-//! `liberado-sysmap` — the interactive isometric system map.
+//! `liberado-sysmap` — the Liberado system-map CLI.
 //!
-//! Launches a native window rendering the Liberado crate dependency graph plus the runtime
-//! control/data paths, with a legend and an explainer panel. The map is regenerated from
-//! `crates/*/Cargo.toml` and an optional `topology.toml` on every launch.
+//! Builds the map (Liberado profile + topology) and either opens it in the three-d window or
+//! writes the JSON export. This is the thin launcher; the renderer is `liberado-sysmap-gui` and
+//! the data is `liberado-sysmap` + `sysmap-core`.
 //!
 //! Usage:
 //!   liberado-sysmap [--repo PATH] [--config-dir PATH]   open the map in a window
 //!   liberado-sysmap --write-json PATH                    write the generated map JSON and exit
 //!   liberado-sysmap --help                               print this help
-
-mod app;
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -64,7 +62,7 @@ fn parse_args() -> Result<Args, String> {
 
 fn print_help() {
     println!(
-        "liberado-sysmap — interactive isometric system map of Liberado\n\n\
+        "liberado-sysmap — interactive system map of Liberado\n\n\
          USAGE:\n    liberado-sysmap [OPTIONS]\n\n\
          OPTIONS:\n    \
          --repo <PATH>        repository root to scan (default: walk up from cwd)\n    \
@@ -72,7 +70,7 @@ fn print_help() {
                               then the platform config dir's liberado/ subfolder)\n    \
          --write-json <PATH>  write the generated map as JSON and exit (headless, no window)\n    \
          --help               print this help\n\n\
-         The map is regenerated from crates/*/Cargo.toml and an optional topology.toml on every\n\
+         The map is regenerated from cargo metadata and an optional topology.toml on every\n\
          launch — nothing is hand-drawn, so dependency changes appear on the next run."
     );
 }
@@ -100,5 +98,5 @@ fn run() -> Result<(), String> {
         return Ok(());
     }
 
-    app::launch(map, repo)
+    liberado_sysmap_gui::launch(map, repo)
 }

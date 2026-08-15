@@ -1,27 +1,18 @@
 [package]
 name = "liberado-sysmap-gui"
 version = "0.1.0"
-description = "Interactive 3D system map of Liberado — a native window rendering the crate dependency graph plus runtime control/data paths with an orbit camera (three-d)."
+description = "Project-agnostic three-d system-map renderer: a native window with an orbit camera and egui panels, rendering any sysmap-core SystemMap."
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 repository.workspace = true
 
-[[bin]]
-name = "liberado-sysmap"
-path = "src/main.rs"
-# The lib crate `liberado-sysmap` already documents the model; skipping the bin avoids a
-# `cargo doc` output-filename collision between this bin and that lib.
-doc = false
-
 [dependencies]
-liberado-sysmap = { workspace = true }
+sysmap-core = { workspace = true }
 three-d = { version = "0.19", features = ["egui-gui"] }
 # Match three-d's egui version so the panel code shares one egui.
 egui = "0.34"
-serde_json = { workspace = true }
-chrono = { workspace = true }
 
 [package.metadata.liberado]
 # Layer role for the layer-rules test + crate-map generator (docs/architecture/contracts.md).

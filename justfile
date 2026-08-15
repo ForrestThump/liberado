@@ -99,13 +99,13 @@ check-crate-map:
 gen-crate-map:
     cargo run --locked -p liberado-cli -- docs crate-map --write
 
-# Launch the interactive isometric system map (native window).
+# Launch the interactive system map (native window).
 sysmap:
-    cargo run --locked -p liberado-sysmap-gui
+    cargo run --locked -p liberado-sysmap-cli
 
 # Write the generated system-map graph as JSON (headless; proves the map is data-driven).
 sysmap-json path:
-    cargo run --locked -p liberado-sysmap-gui -- --write-json {{path}}
+    cargo run --locked -p liberado-sysmap-cli -- --write-json {{path}}
 
 # Run the native documentation metadata self-test.
 docs-meta-test:

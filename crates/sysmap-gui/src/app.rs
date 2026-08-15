@@ -1,16 +1,16 @@
-//! The three-d renderer: a true 3D scene (orbit/pan/zoom camera) instead of the 2D isometric
-//! projection. The data model (`liberado_sysmap`) is unchanged — this crate only swaps the
-//! projection and scene construction; the legend, explainer and detail panels stay egui, overlaid
-//! on the 3D view via three-d's egui `GUI`.
+//! The three-d renderer: a true 3D scene (orbit/pan/zoom camera). This crate renders any
+//! [`sysmap_core::model::SystemMap`] — it depends only on `sysmap-core` (plus three-d/egui), so it
+//! is liftable out of Liberado. The legend, explainer and detail panels are egui, overlaid on the
+//! 3D view via three-d's egui `GUI`.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use three_d::*;
 
-use liberado_sysmap::layout::{PlacedNode, layout};
-use liberado_sysmap::model::{EdgeKind, SystemMap};
-use liberado_sysmap::style::{self, Rgb};
+use sysmap_core::layout::{PlacedNode, layout};
+use sysmap_core::model::{EdgeKind, SystemMap};
+use sysmap_core::style::{self, Rgb};
 
 pub fn launch(map: SystemMap, repo: PathBuf) -> Result<(), String> {
     let window = Window::new(WindowSettings {
