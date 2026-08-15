@@ -1,17 +1,18 @@
 ---
 kind: plan
-status: active
-authority: implementation
+status: superseded
+authority: historical
 domain: coding-harness
 canonical_for: mvl-live-comparison-prep
-open_items: true
-last_verified: 2026-08-12
+open_items: false
+last_verified: 2026-08-14
 ---
 
 # Prep: live comparison of liberado, pi, and deepagents on backlog 0.6
 
-**Status**: Prep only. Do **not** start this run. No dispatch, no paid completion, no
-pi/deepagents job.
+**Status**: Superseded historical plan. Do not use these pins or commands. Current two-harness
+comparisons use the compiled workflow in
+[`docs/spec/reference/harness-comparisons.md`](../spec/reference/harness-comparisons.md).
 
 **Item:** backlog **0.6** / roadmap **4b** — *Emit the joined logs from the common boundary.*
 Write append-and-flush JSONL from `executor` / provider request handling, then adapt coding

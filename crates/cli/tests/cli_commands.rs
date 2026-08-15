@@ -103,22 +103,396 @@ fn docs_link_check_command_uses_the_current_working_repository() {
 }
 
 #[test]
-fn compare_prepare_is_print_only_and_uses_the_current_repository() {
-    let temp = tempdir().expect("temporary repository");
-    fs::create_dir(temp.path().join("crates")).expect("crates directory");
-    fs::write(
-        temp.path().join("Cargo.toml"),
-        "[workspace]\nmembers = []\n",
+fn compare_prepare_creates_pinned_worktrees_with_separate_caches_and_artifacts() {
+    let source = tempdir().expect("temporary source repository");
+    let runs = tempdir().expect("temporary run parent");
+    initialize_compare_source(source.path());
+    let run = runs.path().join("compare-17");
+
+    let output = run_cli(
+        source.path(),
+        &[
+            "coder",
+            "compare",
+            "prepare",
+            run.to_str().expect("UTF-8 run path"),
+            "--source",
+            source.path().to_str().expect("UTF-8 source path"),
+            "--commit",
+            "main",
+            "--compile-timeout-secs",
+            "2400",
+        ],
+    );
+
+    assert!(
+        output.status.success(),
+        "prepare failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let manifest: serde_json::Value =
+        serde_json::from_slice(&fs::read(run.join("manifest.json")).expect("comparison manifest"))
+            .expect("valid comparison manifest");
+    assert_eq!(manifest["base_revision"], "main");
+    assert_eq!(manifest["compile_timeout_secs"], 2400);
+    let liberado_target = manifest["harnesses"]["liberado"]["target_dir"]
+        .as_str()
+        .expect("Liberado target path");
+    let pi_target = manifest["harnesses"]["pi"]["target_dir"]
+        .as_str()
+        .expect("Pi target path");
+    assert_ne!(
+        liberado_target, pi_target,
+        "build caches must not be shared"
+    );
+    for harness in ["liberado", "pi"] {
+        let worktree = run.join("worktrees").join(harness);
+        assert_eq!(
+            git_capture_test(&worktree, &["rev-parse", "HEAD"]),
+            manifest["base_commit"].as_str().expect("base commit")
+        );
+        assert!(worktree.join("turbovault").join("copied.txt").is_file());
+        assert!(worktree.join("turbomcp").join("copied.txt").is_file());
+        assert!(run.join("artifacts").join(harness).join("traces").is_dir());
+        assert!(
+            run.join("artifacts")
+                .join(harness)
+                .join("sessions")
+                .is_dir()
+        );
+    }
+
+    remove_compare_worktrees(source.path(), &run);
+}
+
+#[test]
+fn compare_save_commits_failed_work_and_collects_git_and_trace_artifacts() {
+    let source = tempdir().expect("temporary source repository");
+    let runs = tempdir().expect("temporary run parent");
+    initialize_compare_source(source.path());
+    let run = runs.path().join("compare-save");
+    let prepare = run_cli(
+        source.path(),
+        &[
+            "coder",
+            "compare",
+            "prepare",
+            run.to_str().expect("UTF-8 run path"),
+            "--source",
+            source.path().to_str().expect("UTF-8 source path"),
+            "--commit",
+            "main",
+        ],
+    );
+    assert!(prepare.status.success());
+
+    let pi = run.join("worktrees").join("pi");
+    fs::write(pi.join("tracked.txt"), "agent result\n").expect("dirty Pi result");
+    let trace_dir = pi.join("coder-traces");
+    fs::create_dir(&trace_dir).expect("trace directory");
+    fs::write(trace_dir.join("save-case.events.jsonl"), "{}\n").expect("trace");
+
+    let save = run_cli(
+        source.path(),
+        &[
+            "coder",
+            "compare",
+            "save",
+            run.to_str().expect("UTF-8 run path"),
+            "pi",
+            "--session-id",
+            "save-case",
+            "--exit-code",
+            "17",
+        ],
+    );
+    assert!(
+        save.status.success(),
+        "save failed:\n{}\n{}",
+        String::from_utf8_lossy(&save.stdout),
+        String::from_utf8_lossy(&save.stderr)
+    );
+    assert_eq!(git_capture_test(&pi, &["status", "--short"]), "");
+    assert_eq!(
+        git_capture_test(&pi, &["show", "HEAD:tracked.txt"]),
+        "agent result"
+    );
+
+    let artifacts = run.join("artifacts").join("pi");
+    let result: serde_json::Value =
+        serde_json::from_slice(&fs::read(artifacts.join("result.json")).expect("saved result"))
+            .expect("valid saved result");
+    assert_eq!(result["exit_code"], 17);
+    assert_eq!(result["had_uncommitted_changes"], true);
+    assert!(artifacts.join("git").join("diff.patch").is_file());
+    assert!(
+        artifacts
+            .join("traces")
+            .join("save-case.events.jsonl")
+            .is_file()
+    );
+    let branch = result["archive_branch"].as_str().expect("archive branch");
+    assert_eq!(
+        git_capture_test(source.path(), &["rev-parse", branch]),
+        git_capture_test(&pi, &["rev-parse", "HEAD"])
+    );
+
+    remove_compare_worktrees(source.path(), &run);
+}
+
+#[test]
+fn compare_run_uses_owned_paths_and_saves_both_results() {
+    let source = tempdir().expect("temporary source repository");
+    let runs = tempdir().expect("temporary run parent");
+    initialize_compare_source(source.path());
+    let run = runs.path().join("compare-run");
+    let prepare = run_cli(
+        source.path(),
+        &[
+            "coder",
+            "compare",
+            "prepare",
+            run.to_str().expect("UTF-8 run path"),
+            "--source",
+            source.path().to_str().expect("UTF-8 source path"),
+            "--commit",
+            "main",
+        ],
+    );
+    assert!(prepare.status.success());
+    let task = runs.path().join("task.txt");
+    fs::write(&task, "task").expect("task file");
+    let fake = write_fake_harness(runs.path());
+
+    let output = std_command(env!("CARGO_BIN_EXE_liberado"))
+        .args([
+            "coder",
+            "compare",
+            "run",
+            run.to_str().expect("UTF-8 run path"),
+            "--task",
+            task.to_str().expect("UTF-8 task path"),
+            "--api-key-env",
+            "LIBERADO_COMPARE_TEST_KEY",
+            "--liberado-bin",
+            fake.to_str().expect("UTF-8 fake harness path"),
+            "--pi-bin",
+            fake.to_str().expect("UTF-8 fake harness path"),
+        ])
+        .env("LIBERADO_COMPARE_TEST_KEY", "test-only")
+        .current_dir(source.path())
+        .output()
+        .expect("comparison run starts");
+    assert!(
+        output.status.success(),
+        "run failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    for harness in ["liberado", "pi"] {
+        let worktree = run.join("worktrees").join(harness);
+        let artifacts = run.join("artifacts").join(harness);
+        assert_eq!(git_capture_test(&worktree, &["status", "--short"]), "");
+        assert_eq!(
+            git_capture_test(&worktree, &["show", "HEAD:tracked.txt"]),
+            "fake result"
+        );
+        assert!(artifacts.join("session.stdout.log").is_file());
+        assert!(artifacts.join("session.stderr.log").is_file());
+        assert!(artifacts.join("warmup.stdout.log").is_file());
+        assert!(artifacts.join("warmup.stderr.log").is_file());
+        assert!(artifacts.join("git").join("diff.patch").is_file());
+        assert!(artifacts.join("result.json").is_file());
+    }
+    assert!(
+        run.join("artifacts")
+            .join("liberado")
+            .join("traces")
+            .join("compare-run-liberado.fake.json")
+            .is_file()
+    );
+    assert_eq!(
+        fs::read_to_string(run.join("task.txt")).expect("captured task"),
+        "task"
+    );
+    let tuning = fs::read_to_string(run.join("config").join("tuning.toml"))
+        .expect("captured comparison tuning");
+    assert!(tuning.contains("timeout_secs = 1800"));
+    assert!(tuning.contains("warmup_timeout_secs = 1800"));
+    assert!(tuning.contains("warmup = false"));
+
+    remove_compare_worktrees(source.path(), &run);
+}
+
+#[test]
+fn compare_run_saves_launch_failure_and_still_runs_the_other_harness() {
+    let source = tempdir().expect("temporary source repository");
+    let runs = tempdir().expect("temporary run parent");
+    initialize_compare_source(source.path());
+    let run = runs.path().join("compare-launch-failure");
+    let prepare = run_cli(
+        source.path(),
+        &[
+            "coder",
+            "compare",
+            "prepare",
+            run.to_str().expect("UTF-8 run path"),
+            "--source",
+            source.path().to_str().expect("UTF-8 source path"),
+            "--commit",
+            "main",
+        ],
+    );
+    assert!(prepare.status.success());
+    let task = runs.path().join("task.txt");
+    fs::write(&task, "task").expect("task file");
+    let fake = write_fake_harness(runs.path());
+    let missing = runs.path().join("missing-liberado-runner");
+
+    let output = std_command(env!("CARGO_BIN_EXE_liberado"))
+        .args([
+            "coder",
+            "compare",
+            "run",
+            run.to_str().expect("UTF-8 run path"),
+            "--task",
+            task.to_str().expect("UTF-8 task path"),
+            "--api-key-env",
+            "LIBERADO_COMPARE_TEST_KEY",
+            "--liberado-bin",
+            missing.to_str().expect("UTF-8 missing path"),
+            "--pi-bin",
+            fake.to_str().expect("UTF-8 fake harness path"),
+        ])
+        .env("LIBERADO_COMPARE_TEST_KEY", "test-only")
+        .current_dir(source.path())
+        .output()
+        .expect("comparison run starts");
+    assert!(
+        !output.status.success(),
+        "one failed harness must fail the command"
+    );
+
+    let liberado_artifacts = run.join("artifacts").join("liberado");
+    let pi_artifacts = run.join("artifacts").join("pi");
+    assert!(liberado_artifacts.join("launch-error.txt").is_file());
+    let liberado_result: serde_json::Value = serde_json::from_slice(
+        &fs::read(liberado_artifacts.join("result.json")).expect("Liberado result"),
     )
-    .expect("Cargo.toml");
+    .expect("valid Liberado result");
+    let pi_result: serde_json::Value =
+        serde_json::from_slice(&fs::read(pi_artifacts.join("result.json")).expect("Pi result"))
+            .expect("valid Pi result");
+    assert_eq!(liberado_result["exit_code"], 127);
+    assert_eq!(pi_result["exit_code"], 0);
+    assert_eq!(
+        git_capture_test(
+            &run.join("worktrees").join("pi"),
+            &["show", "HEAD:tracked.txt"]
+        ),
+        "fake result"
+    );
 
-    let output = run_cli(temp.path(), &["coder", "compare", "prepare"]);
+    remove_compare_worktrees(source.path(), &run);
+}
 
-    assert!(output.status.success());
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("print only. No harness started."));
-    assert!(stdout.contains("Provider: openrouter"));
-    assert!(stdout.contains("--mode coding"));
+fn initialize_compare_source(root: &Path) {
+    git_test(root, &["init", "-b", "main"]);
+    git_test(root, &["config", "user.email", "test@example.com"]);
+    git_test(root, &["config", "user.name", "Test"]);
+    fs::write(root.join("tracked.txt"), "base\n").expect("tracked source file");
+    fs::write(
+        root.join("Cargo.toml"),
+        "[package]\nname = \"compare-fixture\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+    )
+    .expect("workspace manifest");
+    fs::write(
+        root.join("Cargo.lock"),
+        "version = 4\n\n[[package]]\nname = \"compare-fixture\"\nversion = \"0.1.0\"\n",
+    )
+    .expect("workspace lockfile");
+    fs::create_dir(root.join("src")).expect("source directory");
+    fs::write(root.join("src").join("lib.rs"), "pub fn fixture() {}\n").expect("fixture source");
+    fs::write(
+        root.join(".gitignore"),
+        "turbovault/\nturbomcp/\ncoder-traces/\ntarget/\n",
+    )
+    .expect("gitignore");
+    for sibling in ["turbovault", "turbomcp"] {
+        let path = root.join(sibling);
+        fs::create_dir(&path).expect("sibling checkout");
+        fs::write(path.join("copied.txt"), sibling).expect("sibling marker");
+    }
+    git_test(
+        root,
+        &[
+            "add",
+            "tracked.txt",
+            ".gitignore",
+            "Cargo.toml",
+            "Cargo.lock",
+            "src/lib.rs",
+        ],
+    );
+    git_test(root, &["commit", "-m", "base"]);
+}
+
+#[cfg(windows)]
+fn write_fake_harness(root: &Path) -> std::path::PathBuf {
+    let path = root.join("fake-harness.cmd");
+    fs::write(
+        &path,
+        "@echo off\r\necho fake result>tracked.txt\r\nif not exist coder-traces mkdir coder-traces\r\necho {}>coder-traces\\compare-run-liberado.fake.json\r\necho fake stdout\r\necho fake stderr 1>&2\r\nexit /b 0\r\n",
+    )
+    .expect("fake Windows harness");
+    path
+}
+
+#[cfg(unix)]
+fn write_fake_harness(root: &Path) -> std::path::PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+
+    let path = root.join("fake-harness.sh");
+    fs::write(
+        &path,
+        "#!/bin/sh\nprintf 'fake result\\n' > tracked.txt\nmkdir -p coder-traces\nprintf '{}\\n' > coder-traces/compare-run-liberado.fake.json\necho fake stdout\necho fake stderr >&2\nexit 0\n",
+    )
+    .expect("fake Unix harness");
+    let mut permissions = fs::metadata(&path)
+        .expect("fake harness metadata")
+        .permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&path, permissions).expect("executable fake harness");
+    path
+}
+
+fn remove_compare_worktrees(source: &Path, run: &Path) {
+    for harness in ["liberado", "pi"] {
+        let path = run.join("worktrees").join(harness);
+        if path.exists() {
+            let status = std_command("git")
+                .arg("-C")
+                .arg(source)
+                .args(["worktree", "remove", "--force"])
+                .arg(&path)
+                .status()
+                .expect("git worktree remove starts");
+            assert!(status.success(), "remove {harness} worktree");
+        }
+    }
+}
+
+fn git_capture_test(root: &Path, args: &[&str]) -> String {
+    let output = std_command("git")
+        .arg("-C")
+        .arg(root)
+        .args(args)
+        .output()
+        .expect("git starts");
+    assert!(output.status.success(), "git {args:?} failed");
+    String::from_utf8_lossy(&output.stdout).trim().to_string()
 }
 
 #[test]

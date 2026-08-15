@@ -539,16 +539,17 @@ pub struct HashlineConfig {
 /// Where a coding run builds, and whether the harness warms it first.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct WorkspaceBuildConfig {
-    /// One `CARGO_TARGET_DIR` shared by every coding worktree.
+    /// An optional `CARGO_TARGET_DIR` for worktrees from one controlled source root.
     ///
     /// A worktree starts with no build cache, so the run's first compile rebuilds the whole
     /// dependency graph — 706 of this workspace's 770 packages are registry crates, and those are
-    /// keyed by registry/name/version rather than by path, so every worktree can reuse them.
-    /// Workspace-member crates live at different paths and get their own artifacts, which coexist
-    /// rather than collide.
+    /// keyed by registry/name/version rather than by path, so worktrees from that source can reuse
+    /// them. Distinct source roots must use distinct target directories. A live comparison reused
+    /// a passing test binary built from another checkout after the active source had changed.
     ///
-    /// **One run at a time.** Cargo takes an exclusive lock on a target directory; concurrent
-    /// builds do not corrupt each other, they queue. Measured: a second `cargo build` printed
+    /// **One source root and one run at a time.** Cargo takes an exclusive lock on a target
+    /// directory; concurrent builds do not corrupt each other, they queue. Measured: a second
+    /// `cargo build` printed
     /// "Blocking waiting for file lock on artifact directory" and waited out the first. With a
     /// command timeout in play, a run queued behind a cold build times out having done nothing,
     /// which is worse than giving it its own cache. Sharing safely across concurrent runs needs

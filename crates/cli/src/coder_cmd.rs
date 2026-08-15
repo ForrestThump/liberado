@@ -41,7 +41,10 @@ fn usage() -> &'static str {
     "usage:\n  \
      liberado coder trace <session-id|path> [--dir <trace-dir>] [--path <file>]\n  \
      liberado coder compare <trace-a> <trace-b> [--dir <trace-dir>] [--json]\n  \
-     liberado coder compare prepare              print the pinned comparison plan\n  \
+     liberado coder compare prepare <run-dir> [--commit <ref>]   create pinned worktrees\n  \
+     liberado coder compare run <run-dir> --task <file>          run and preserve both harnesses\n  \
+     liberado coder compare save <run-dir> <liberado|pi>         preserve one result\n  \
+     liberado coder compare reset <workspace> [--commit <ref>]   restore tracked files\n  \
      liberado coder diff <run-a> <run-b> [--json]   cross-harness: where two runs parted\n  \
      liberado coder import <foreign.json> [-o <out.messages.json>] [--format kilo|kilo-cli|openhands|auto] [--session-id <id>]
   liberado coder smoke              validate the coder runner process boundary"
@@ -225,7 +228,13 @@ fn cmd_trace(args: &mut dyn Iterator<Item = String>) -> Result<(), Box<dyn std::
 fn cmd_compare(args: &mut dyn Iterator<Item = String>) -> Result<(), Box<dyn std::error::Error>> {
     let all: Vec<String> = args.collect();
     if all.first().map(String::as_str) == Some("prepare") {
-        return cmd_compare_prepare(&all[1..]);
+        return crate::compare_cmd::prepare(&all[1..]);
+    }
+    if all.first().map(String::as_str) == Some("run") {
+        return crate::compare_cmd::run(&all[1..]);
+    }
+    if all.first().map(String::as_str) == Some("save") {
+        return crate::compare_cmd::save(&all[1..]);
     }
     if all.first().map(String::as_str) == Some("reset") {
         return cmd_compare_reset(&all[1..]);
@@ -270,60 +279,6 @@ fn cmd_compare(args: &mut dyn Iterator<Item = String>) -> Result<(), Box<dyn std
     } else {
         print!("{}", format_comparison(&comparison));
     }
-    Ok(())
-}
-
-fn cmd_compare_prepare(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
-    if !args.is_empty() {
-        if args == ["-h"] || args == ["--help"] {
-            println!("usage: liberado coder compare prepare");
-            return Ok(());
-        }
-        return Err("usage: liberado coder compare prepare".into());
-    }
-
-    let root = crate::crate_map_cmd::repository_root()?;
-    let pin = "69933c9a8c8c5d64a35ac3d0a10bf1c0465adc1c";
-    let model = "deepseek/deepseek-v4-pro";
-    let provider = "openrouter";
-    let temperature = "0.1";
-    let max_turns = 30;
-    let timeout_min = 45;
-
-    println!("MVL live comparison PREP - print only. No harness started.");
-    println!("Item: backlog 0.6 / roadmap 4b (emit joined MVL + execution logs)");
-    println!("Commit: {pin}");
-    println!("Provider: {provider}");
-    println!("Model: {model}");
-    println!("Sampling: temperature={temperature} max_tokens=unset");
-    println!("Caps: max_turns={max_turns} timeout_min={timeout_min}");
-    println!();
-    println!(
-        "See docs/future-work/mvl-live-comparison-prep.md for the shared prompt and output paths."
-    );
-    println!();
-    println!("--- Liberado (ACP; print only, do not run) ---");
-    println!(
-        "node \"{}\" --cwd \"{}\" --config-dir \"{}\" --mode coding --timeout-min {timeout_min} --prompt TASK.txt",
-        root.join("scripts").join("dispatch-acp-run.js").display(),
-        root.display(),
-        root.join("config").display()
-    );
-    println!();
-    println!("--- pi (print only, do not run) ---");
-    println!("pi --provider {provider} --model {model} --mode json -p TASK.txt");
-    println!();
-    println!("--- deepagents (print only, do not run) ---");
-    println!("uv run python run_0_6.py   # create_deep_agent, native prompt/tools, same model");
-    println!();
-    println!("--- After a future run, judge any MVL with the Liberado oracle ---");
-    println!(
-        "cargo run -p liberado-test-support --bin mvl-conformance -- --mvl $OUT/run.mvl.jsonl --execution $OUT/run.execution.jsonl"
-    );
-    println!();
-    println!(
-        "Blocker: Liberado has no production MVL until 0.6; deepagents has no MVL writer here."
-    );
     Ok(())
 }
 
