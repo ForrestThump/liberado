@@ -72,8 +72,31 @@ pub fn build(root: &Path, config_dir: Option<&Path>) -> Result<SystemMap, ScanEr
         }
     }
 
-    // Runtime crate-to-crate flows (always applicable; endpoints are crate names).
-    edges.extend(wiring::crate_runtime_edges());
+    // Declared per-crate runtime flows — the generic, codebase-owned wiring. A crate that states
+    // its own outbound flows replaces the built-in seed for itself (see `DeclaredFlow`).
+    let declared_from: BTreeSet<String> = nodes
+        .iter()
+        .filter(|n| !n.flows.is_empty())
+        .map(|n| n.id.clone())
+        .collect();
+    for node in &nodes {
+        for flow in &node.flows {
+            edges.push(MapEdge {
+                from: node.id.clone(),
+                to: flow.to.clone(),
+                kind: flow.kind,
+                label: flow.label.clone(),
+            });
+        }
+    }
+
+    // Seed runtime crate-to-crate flows, applied only to crates that did NOT declare their own.
+    for edge in wiring::crate_runtime_edges() {
+        if declared_from.contains(&edge.from) {
+            continue;
+        }
+        edges.push(edge);
+    }
 
     // Runtime instance flows, only when a topology declared the instances.
     if let Some(t) = &topo {
@@ -147,7 +170,7 @@ mod tests {
     use std::fs;
     use tempfile::tempdir;
 
-    fn add_crate(dir: &Path, name: &str, role: &str, deps: &[&str]) {
+    fn add_crate(dir: &Path, name: &str, role: &str, deps: &[&str], flows: &[(&str, &str, &str)]) {
         let crate_dir = dir
             .join("crates")
             .join(name.strip_prefix("liberado-").unwrap());
@@ -156,10 +179,18 @@ mod tests {
             .iter()
             .map(|d| format!("{d} = {{ workspace = true }}\n"))
             .collect::<String>();
+        let flows_toml = flows
+            .iter()
+            .map(|(to, kind, label)| {
+                format!(
+                    "[[package.metadata.liberado.flows]]\nto = \"{to}\"\nkind = \"{kind}\"\nlabel = \"{label}\"\n"
+                )
+            })
+            .collect::<String>();
         fs::write(
             crate_dir.join("Cargo.toml"),
             format!(
-                "[package]\nname = \"{name}\"\ndescription = \"{name} crate\"\n[package.metadata.liberado]\nrole = \"{role}\"\n[dependencies]\n{deps_toml}"
+                "[package]\nname = \"{name}\"\ndescription = \"{name} crate\"\n[package.metadata.liberado]\nrole = \"{role}\"\n{flows_toml}[dependencies]\n{deps_toml}"
             ),
         )
         .unwrap();
@@ -167,18 +198,20 @@ mod tests {
 
     fn repo_with_crates() -> tempfile::TempDir {
         let dir = tempdir().unwrap();
-        add_crate(dir.path(), "liberado-common", "foundation", &[]);
+        add_crate(dir.path(), "liberado-common", "foundation", &[], &[]);
         add_crate(
             dir.path(),
             "liberado-provider",
             "foundation",
             &["liberado-common"],
+            &[],
         );
         add_crate(
             dir.path(),
             "liberado-daemon",
             "root",
             &["liberado-common", "liberado-provider"],
+            &[],
         );
         dir
     }
@@ -196,10 +229,28 @@ mod tests {
             .collect();
         assert_eq!(dep_edges.len(), 3);
         assert!(map.node("liberado-common").is_some());
-        // The crate-to-crate runtime loop is present even without a topology.
-        assert!(map.edges.iter().any(|e| e.kind == EdgeKind::Control
-            && e.from == "liberado-daemon"
-            && e.to == "liberado-daemon"));
+    }
+
+    #[test]
+    fn declared_flows_produce_runtime_edges() {
+        let dir = tempdir().unwrap();
+        add_crate(dir.path(), "liberado-common", "foundation", &[], &[]);
+        add_crate(
+            dir.path(),
+            "liberado-daemon",
+            "root",
+            &[],
+            &[("liberado-common", "control", "act")],
+        );
+        let map = build(dir.path(), None).unwrap();
+        assert!(map.edges.iter().any(|e| e.from == "liberado-daemon"
+            && e.to == "liberado-common"
+            && e.kind == EdgeKind::Control
+            && e.label == "act"));
+        // The flow is also serialized on the node for round-tripping.
+        let daemon = map.node("liberado-daemon").unwrap();
+        assert_eq!(daemon.flows.len(), 1);
+        assert_eq!(daemon.flows[0].to, "liberado-common");
     }
 
     #[test]
@@ -226,10 +277,29 @@ mod tests {
     #[test]
     fn topology_adds_runtime_nodes_and_instance_edges() {
         let dir = repo_with_crates();
-        // Add the crates the runtime wiring references so the loop paths materialize.
-        add_crate(dir.path(), "liberado-server", "root", &["liberado-daemon"]);
-        add_crate(dir.path(), "liberado-mcp", "kernel", &["liberado-provider"]);
-        add_crate(dir.path(), "liberado-cron", "kernel", &["liberado-common"]);
+        // Add the crates the runtime wiring references so the loop paths materialize. The server
+        // declares its own flow (as the real crate does), exercising the declared-flow mechanism.
+        add_crate(
+            dir.path(),
+            "liberado-server",
+            "root",
+            &["liberado-daemon"],
+            &[("liberado-daemon", "control", "inject event (event_sender)")],
+        );
+        add_crate(
+            dir.path(),
+            "liberado-mcp",
+            "kernel",
+            &["liberado-provider"],
+            &[],
+        );
+        add_crate(
+            dir.path(),
+            "liberado-cron",
+            "kernel",
+            &["liberado-common"],
+            &[],
+        );
         let config = dir.path().join("config");
         fs::create_dir_all(&config).unwrap();
         fs::write(
@@ -266,17 +336,16 @@ enabled = true
                 .iter()
                 .any(|e| e.from == "mcp:tasks-mcp" && e.to == "vault" && e.kind == EdgeKind::Data)
         );
-        // The hook injects into the server (which exists here), then the server into the daemon.
+        // The hook injects into the server (which exists here), then the server into the daemon
+        // via its declared flow.
         assert!(
             map.edges
                 .iter()
                 .any(|e| e.from == "hook:nightly-backup" && e.to == "liberado-server")
         );
-        assert!(
-            map.edges
-                .iter()
-                .any(|e| e.from == "liberado-server" && e.to == "liberado-daemon")
-        );
+        assert!(map.edges.iter().any(|e| e.from == "liberado-server"
+            && e.to == "liberado-daemon"
+            && e.kind == EdgeKind::Control));
         // The provider backend is served by the openai-compat crate when that crate exists.
         // (Here it is absent, so that edge is dropped — no dangling edges are allowed at all.)
         assert!(map.edges.iter().all(|e| {

@@ -8,12 +8,15 @@ use std::collections::BTreeMap;
 
 use crate::model::{EdgeKind, Layer, NodeKind, SystemMap};
 
+/// World-space spacing between building centers along both axes. Exported so the GUI's ground-grid
+/// can use the same step as the layout (single source of truth).
+pub const GRID_STEP: f32 = 2.4;
 /// World-space spacing between building centers along the east-west axis.
-const CELL_DX: f32 = 1.7;
+const CELL_DX: f32 = GRID_STEP;
 /// World-space spacing between layer rows along the north-south axis.
-const LAYER_DY: f32 = 1.7;
+const LAYER_DY: f32 = GRID_STEP;
 /// Base footprint half-extent of a crate building (world units).
-const FOOT_HALF: f32 = 0.62;
+const FOOT_HALF: f32 = 0.56;
 
 /// The "flow" layers that stack bottom-up in the main district. Tooling/testing/unknown live in a
 /// side district; runtime nodes in another.
@@ -194,6 +197,7 @@ mod tests {
             layer,
             description: String::new(),
             deps: Vec::new(),
+            flows: Vec::new(),
             meta: BTreeMap::new(),
             enabled: true,
         }

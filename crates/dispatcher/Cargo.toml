@@ -23,3 +23,16 @@ async-trait = { workspace = true }
 [package.metadata.liberado]
 # Layer role for the layer-rules test + crate-map generator (docs/architecture/contracts.md)
 role = "kernel"
+
+# Runtime wiring for the isometric system map (crates/sysmap). Outbound edges: `to` names
+# a crate or runtime id (`vault`, `notifier:telegram`); `kind` is control|data. Declaring
+# any flow replaces the tool's seed wiring for this crate, so the map grows with the code.
+[[package.metadata.liberado.flows]]
+to = "liberado-orchestrator"
+kind = "control"
+label = "decision → Task + provenance"
+[[package.metadata.liberado.flows]]
+to = "liberado-provider"
+kind = "data"
+label = "classify"
+

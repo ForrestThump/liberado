@@ -1,186 +1,33 @@
 //! The runtime control/data paths — the "payloads" half of the map.
 //!
-//! Dependency edges come from `Cargo.toml` (build-time). These edges are the *runtime* flows that
-//! the dependency graph alone does not convey: who sends what to whom when the system runs. They
-//! are curated from `docs/spec/architecture/overview.md` (the perceive→decide→act→loop-break loop,
-//! the "star around one daemon" process shape) and `docs/spec/architecture/contracts.md` (the
-//! narrow-waist seams), not invented. Each edge carries a label naming the payload.
+//! Dependency edges come from `Cargo.toml` (build-time). Runtime edges are the flows the
+//! dependency graph alone does not convey: who sends what to whom when the system runs. They are
+//! now **declared in the codebase**, not hardcoded here: each crate states its own outbound edges
+//! under `[[package.metadata.liberado.flows]]` in its `Cargo.toml` (see `crates/sysmap/README.md`
+//! and `model::DeclaredFlow`). The scanner reads those, so the map grows and evolves with the
+//! codebase rather than with this tool.
 //!
-//! Edge ids reference either a crate name (`liberado-daemon`) or a runtime node id (`vault`,
-//! `provider:deepseek`, `mcp:tasks-mcp`, …). Edges whose endpoint does not exist (e.g. a hook when
-//! no topology is loaded) are dropped at assembly time, so the map degrades gracefully.
+//! What remains here is the thin seed of edges whose *source* is infrastructure rather than a
+//! crate, plus the topology-derived instance edges ([`topology_edges`]) that only exist once a
+//! `topology.toml` declares them. Edge ids reference a crate name (`liberado-daemon`) or a runtime
+//! node id (`vault`, `provider:deepseek`, `mcp:tasks-mcp`, …); edges whose endpoint does not exist
+//! are dropped at assembly time, so the map degrades gracefully.
 
 use liberado_config_loader::Topology;
 
 use crate::model::{EdgeKind, MapEdge};
 use crate::scan::mcp_writes_vault;
 
-/// The canonical crate-to-crate runtime flows, in the order they execute.
-///
-/// Source: `docs/spec/architecture/overview.md` §"The loop" and §"Cross-cutting concepts".
+/// The seed runtime flows whose source is infrastructure, not a crate: `vault` is a runtime node,
+/// not a workspace crate, so no crate can declare this edge about itself. Every other runtime flow
+/// lives in its owning crate's `[[package.metadata.liberado.flows]]`.
 const CRATE_FLOWS: &[(&str, &str, &str, EdgeKind)] = &[
-    // ── The perceive → decide → act → don't-loop loop (overview.md mermaid) ──
+    // The vault (external source of truth) changes; the daemon reacts.
     (
         "vault",
         "liberado-daemon",
         "external change",
         EdgeKind::Data,
-    ),
-    (
-        "liberado-daemon",
-        "liberado-dispatcher",
-        "Execute / Subagent / Clarify",
-        EdgeKind::Control,
-    ),
-    (
-        "liberado-dispatcher",
-        "liberado-orchestrator",
-        "decision → Task + provenance",
-        EdgeKind::Control,
-    ),
-    (
-        "liberado-orchestrator",
-        "liberado-executor",
-        "tool calls",
-        EdgeKind::Control,
-    ),
-    (
-        "liberado-executor",
-        "liberado-mcp",
-        "invoke ToolRuntime",
-        EdgeKind::Control,
-    ),
-    (
-        "liberado-mcp",
-        "vault",
-        "writes carry provenance (_meta)",
-        EdgeKind::Data,
-    ),
-    (
-        "liberado-daemon",
-        "liberado-daemon",
-        "suppress own write (loop-break)",
-        EdgeKind::Control,
-    ),
-    // ── Event sources fan into one daemon channel (overview.md "star around one daemon") ──
-    (
-        "liberado-cron",
-        "liberado-daemon",
-        "timer event",
-        EdgeKind::Data,
-    ),
-    (
-        "liberado-server",
-        "liberado-daemon",
-        "inject event (event_sender)",
-        EdgeKind::Control,
-    ),
-    // ── Surfaces are clients of the HTTP/SSE wire contract ──
-    (
-        "liberado-tui",
-        "liberado-server",
-        "HTTP/SSE",
-        EdgeKind::Data,
-    ),
-    (
-        "liberado-webui",
-        "liberado-server",
-        "HTTP/SSE",
-        EdgeKind::Data,
-    ),
-    (
-        "liberado-cli",
-        "liberado-server",
-        "HTTP/SSE",
-        EdgeKind::Data,
-    ),
-    (
-        "liberado-acp-bridge",
-        "liberado-server",
-        "HTTP/SSE",
-        EdgeKind::Data,
-    ),
-    // ── Chat: the server turns a turn over to the main agent, which delegates ──
-    (
-        "liberado-server",
-        "liberado-main-agent",
-        "chat turn",
-        EdgeKind::Control,
-    ),
-    (
-        "liberado-main-agent",
-        "liberado-dispatcher",
-        "delegate",
-        EdgeKind::Control,
-    ),
-    (
-        "liberado-main-agent",
-        "liberado-executor",
-        "streaming loop",
-        EdgeKind::Control,
-    ),
-    // ── Inference: anything that thinks reaches the Provider narrow waist ──
-    (
-        "liberado-dispatcher",
-        "liberado-provider",
-        "classify",
-        EdgeKind::Data,
-    ),
-    (
-        "liberado-orchestrator",
-        "liberado-provider",
-        "worker completion",
-        EdgeKind::Data,
-    ),
-    (
-        "liberado-executor",
-        "liberado-provider",
-        "agent-loop completion",
-        EdgeKind::Data,
-    ),
-    (
-        "liberado-main-agent",
-        "liberado-provider",
-        "chat completion",
-        EdgeKind::Data,
-    ),
-    // ── Notification: the engine notifies humans, even unattended ──
-    (
-        "liberado-orchestrator",
-        "liberado-notify",
-        "notify proposal",
-        EdgeKind::Control,
-    ),
-    (
-        "liberado-executor",
-        "liberado-notify",
-        "risk-gated notify",
-        EdgeKind::Control,
-    ),
-    (
-        "liberado-notify",
-        "notifier:telegram",
-        "send",
-        EdgeKind::Data,
-    ),
-    // ── Coding pack rides the same kernel (dispatch-pack runs dispatcher+orchestrator) ──
-    (
-        "liberado-dispatch-pack",
-        "liberado-dispatcher",
-        "goal dispatch",
-        EdgeKind::Control,
-    ),
-    (
-        "liberado-dispatch-pack",
-        "liberado-orchestrator",
-        "run execution",
-        EdgeKind::Control,
-    ),
-    (
-        "liberado-coder-agent",
-        "liberado-executor",
-        "coding session loop",
-        EdgeKind::Control,
     ),
 ];
 

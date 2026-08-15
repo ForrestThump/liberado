@@ -188,6 +188,20 @@ impl fmt::Display for EdgeKind {
     }
 }
 
+/// A runtime edge a crate declares about itself, under `[[package.metadata.liberado.flows]]` in
+/// its `Cargo.toml`. This is the *declarative* form of the runtime wiring: instead of the map tool
+/// hardcoding who sends what to whom, each crate states its own outbound flows and the tool reads
+/// them — so the map grows and evolves with the codebase, not with the tool.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DeclaredFlow {
+    /// Target node id: a crate name (`liberado-daemon`) or a runtime id (`vault`, `mcp:<name>`, …).
+    pub to: String,
+    pub kind: EdgeKind,
+    /// Payload label, e.g. "decision → Task + provenance".
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub label: String,
+}
+
 /// One node in the map.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MapNode {
@@ -205,6 +219,10 @@ pub struct MapNode {
     /// Internal crate dependencies (crates only).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub deps: Vec<String>,
+    /// Outbound runtime flows the crate declares about itself (see [`DeclaredFlow`]). When
+    /// non-empty, these *replace* the built-in seed wiring for this crate.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub flows: Vec<DeclaredFlow>,
     /// Free-form metadata for the detail panel (transport kind, base URL, pool, cron expr, …).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub meta: BTreeMap<String, String>,

@@ -71,4 +71,9 @@ fn real_workspace_map_includes_runtime_overlay_from_example_topology() {
     assert!(map.edges.iter().any(|e| e.kind == EdgeKind::Control));
     assert!(map.edges.iter().any(|e| e.kind == EdgeKind::Data));
     assert!(map.edges.iter().any(|e| e.kind == EdgeKind::Dependency));
+    // The core loop edge is declared by the dispatcher crate's own `[[package.metadata.liberado.flows]]`,
+    // proving the runtime wiring is read from the codebase rather than hardcoded in the tool.
+    assert!(map.edges.iter().any(|e| e.from == "liberado-dispatcher"
+        && e.to == "liberado-orchestrator"
+        && e.kind == EdgeKind::Control));
 }

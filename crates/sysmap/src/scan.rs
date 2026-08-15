@@ -13,7 +13,7 @@ use liberado_config_loader::model::SessionProfile;
 use liberado_config_loader::{CronSchedule, HookConfig, McpConfig, McpTransport, PoolConfig};
 use liberado_config_loader::{ProjectConfig, Topology};
 
-use crate::model::{Layer, MapNode, NodeKind};
+use crate::model::{DeclaredFlow, EdgeKind, Layer, MapNode, NodeKind};
 
 /// An error while scanning manifests or topology.
 #[derive(Debug)]
@@ -124,6 +124,32 @@ fn read_manifest(manifest_path: &Path) -> Result<Option<MapNode>> {
         .unwrap_or_default();
     deps.sort();
 
+    // Declared runtime wiring: `[[package.metadata.liberado.flows]]`. A crate states its own
+    // outbound flows here; the tool only reads them (see `DeclaredFlow`).
+    let flows: Vec<DeclaredFlow> = package
+        .get("metadata")
+        .and_then(|m| m.get("liberado"))
+        .and_then(|l| l.get("flows"))
+        .and_then(|f| f.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|entry| {
+                    let to = entry.get("to")?.as_str()?.to_string();
+                    let kind = match entry.get("kind").and_then(|v| v.as_str()) {
+                        Some("control") => EdgeKind::Control,
+                        _ => EdgeKind::Data,
+                    };
+                    let label = entry
+                        .get("label")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_default()
+                        .to_string();
+                    Some(DeclaredFlow { to, kind, label })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
     let layer = Layer::from_role_str(role_str).unwrap_or(Layer::Unknown);
 
     Ok(Some(MapNode {
@@ -133,6 +159,7 @@ fn read_manifest(manifest_path: &Path) -> Result<Option<MapNode>> {
         layer,
         description,
         deps,
+        flows,
         meta: BTreeMap::new(),
         enabled: true,
     }))
@@ -183,6 +210,7 @@ pub fn build_runtime_nodes(topo: &Topology) -> Vec<MapNode> {
         layer: runtime_layer(NodeKind::Vault),
         description: "The Obsidian vault — source of truth and write target".to_string(),
         deps: Vec::new(),
+        flows: Vec::new(),
         meta: vault_meta,
         enabled: true,
     });
@@ -203,6 +231,7 @@ pub fn build_runtime_nodes(topo: &Topology) -> Vec<MapNode> {
             layer: runtime_layer(NodeKind::Provider),
             description: "Inference backend (OpenAI-compatible)".to_string(),
             deps: Vec::new(),
+            flows: Vec::new(),
             meta,
             enabled: true,
         });
@@ -241,6 +270,7 @@ pub fn build_runtime_nodes(topo: &Topology) -> Vec<MapNode> {
         layer: runtime_layer(NodeKind::Notifier),
         description: "Human-facing notification channel".to_string(),
         deps: Vec::new(),
+        flows: Vec::new(),
         meta: BTreeMap::new(),
         enabled: true,
     });
@@ -295,6 +325,7 @@ fn mcp_node(m: &McpConfig) -> MapNode {
             m.description.clone()
         },
         deps: Vec::new(),
+        flows: Vec::new(),
         meta,
         enabled: enabled(&m.enabled),
     }
@@ -308,6 +339,7 @@ fn pool_node(pool: &PoolConfig) -> MapNode {
         layer: runtime_layer(NodeKind::Pool),
         description: "Authority-segregated dispatcher/executor pool".to_string(),
         deps: Vec::new(),
+        flows: Vec::new(),
         meta: BTreeMap::new(),
         enabled: enabled(&pool.enabled),
     }
@@ -331,6 +363,7 @@ fn profile_node(profile: &SessionProfile) -> MapNode {
         layer: runtime_layer(NodeKind::Profile),
         description: "Session profile (pack + authority hat)".to_string(),
         deps: Vec::new(),
+        flows: Vec::new(),
         meta,
         enabled: enabled(&profile.enabled),
     }
@@ -355,6 +388,7 @@ fn project_node(project: &ProjectConfig) -> MapNode {
         layer: runtime_layer(NodeKind::Project),
         description: "Authorized coding workspace root".to_string(),
         deps: Vec::new(),
+        flows: Vec::new(),
         meta,
         enabled: enabled(&project.enabled),
     }
@@ -378,6 +412,7 @@ fn schedule_node(schedule: &CronSchedule) -> MapNode {
         layer: runtime_layer(NodeKind::Schedule),
         description: "Cron schedule (temporal event source)".to_string(),
         deps: Vec::new(),
+        flows: Vec::new(),
         meta,
         enabled: enabled(&schedule.enabled),
     }
@@ -401,6 +436,7 @@ fn hook_node(hook: &HookConfig) -> MapNode {
         layer: runtime_layer(NodeKind::Hook),
         description: "Webhook (network event source)".to_string(),
         deps: Vec::new(),
+        flows: Vec::new(),
         meta,
         enabled: enabled(&hook.enabled),
     }

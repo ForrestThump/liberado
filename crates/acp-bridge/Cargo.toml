@@ -17,6 +17,15 @@ repository.workspace = true
 # point in the same class as `daemon` and `server`.
 role = "root"
 
+# Runtime wiring for the isometric system map (crates/sysmap). Outbound edges: `to` names
+# a crate or runtime id (`vault`, `notifier:telegram`); `kind` is control|data. Declaring
+# any flow replaces the tool's seed wiring for this crate, so the map grows with the code.
+[[package.metadata.liberado.flows]]
+to = "liberado-server"
+kind = "data"
+label = "HTTP/SSE"
+
+
 [lib]
 name = "liberado_acp_bridge"
 path = "src/lib.rs"

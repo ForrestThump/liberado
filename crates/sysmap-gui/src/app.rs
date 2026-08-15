@@ -285,7 +285,7 @@ impl App {
         let line_color = egui::Color32::from_rgb(0x24, 0x2a, 0x34);
         let stroke = egui::Stroke::new(1.0, line_color);
         // Draw world-space grid lines across the visible area.
-        let step = 1.7f32;
+        let step = liberado_sysmap::layout::GRID_STEP;
         let range = 120i32;
         for i in -range..=range {
             let c = i as f32 * step;
@@ -460,7 +460,7 @@ impl App {
             pos,
             egui::Align2::CENTER_TOP,
             text,
-            egui::FontId::proportional(11.0),
+            egui::FontId::proportional(12.0),
             color32(style::LABEL),
         );
     }
@@ -680,7 +680,9 @@ pub fn explainer_ui(ui: &mut egui::Ui) {
     ui.add_space(4.0);
     ui.label(
         "The map is rebuilt from crates/*/Cargo.toml and topology.toml on every launch, so a \
-         dependency change appears on the next run — no re-examination. Run \
-         `liberado-sysmap --write-json out.json` for the serialized graph.",
+         dependency change appears on the next run — no re-examination. Runtime paths are declared \
+         by each crate under [[package.metadata.liberado.flows]] in its Cargo.toml, so the map grows \
+         with the codebase, not with this tool. Run `liberado-sysmap --write-json out.json` for the \
+         serialized graph.",
     );
 }
