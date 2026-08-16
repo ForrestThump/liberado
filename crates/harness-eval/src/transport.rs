@@ -28,7 +28,6 @@ pub struct SubmitOptions {
     pub limits: ResourceLimits,
     pub verifier: VerifierProfile,
     pub task_aware_context: bool,
-    pub write_scope: WriteScope,
     pub acceptance_overlay: Option<PathBuf>,
     pub experiment: Option<Experiment>,
 }
@@ -105,7 +104,6 @@ pub fn build_spec(options: SubmitOptions) -> Result<JobSpec, Box<dyn Error>> {
         limits: options.limits,
         verifier: options.verifier,
         task_aware_context: options.task_aware_context,
-        write_scope: options.write_scope,
         acceptance,
         experiment: options.experiment,
         experiment_id: String::new(),
@@ -360,7 +358,6 @@ mod tests {
             limits: ResourceLimits::default(),
             verifier: VerifierProfile::WorkspaceTests,
             task_aware_context: false,
-            write_scope: WriteScope::default(),
             acceptance_overlay: Some(overlay),
             experiment: None,
         })
@@ -433,7 +430,6 @@ mod tests {
             limits: ResourceLimits::default(),
             verifier: VerifierProfile::WorkspaceTests,
             task_aware_context: false,
-            write_scope: WriteScope::default(),
             acceptance_overlay: None,
             experiment: None,
         })

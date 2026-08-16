@@ -352,7 +352,6 @@ mod tests {
             limits: ResourceLimits::default(),
             verifier: VerifierProfile::WorkspaceTests,
             task_aware_context: false,
-            write_scope: WriteScope::default(),
             acceptance: None,
             experiment: None,
             experiment_id: String::new(),

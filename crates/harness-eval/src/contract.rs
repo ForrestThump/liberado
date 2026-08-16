@@ -130,14 +130,6 @@ fn default_verifier_repair_attempts() -> u32 {
     0
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct WriteScope {
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub allow: Vec<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub deny: Vec<String>,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum VerifierProfile {
@@ -164,8 +156,6 @@ pub struct JobSpec {
     pub verifier: VerifierProfile,
     #[serde(default)]
     pub task_aware_context: bool,
-    #[serde(default)]
-    pub write_scope: WriteScope,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub acceptance: Option<AcceptanceBundle>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -224,9 +214,6 @@ impl JobSpec {
         {
             return Err("turn and time limits must be positive".to_string());
         }
-        for pattern in self.write_scope.allow.iter().chain(&self.write_scope.deny) {
-            validate_workspace_pattern(pattern)?;
-        }
         if let Some(acceptance) = &self.acceptance {
             if acceptance.directory.is_absolute()
                 || acceptance
@@ -254,7 +241,6 @@ impl JobSpec {
             limits: &'a ResourceLimits,
             verifier: &'a VerifierProfile,
             task_aware_context: bool,
-            write_scope: &'a WriteScope,
             acceptance_sha256: Option<&'a str>,
             experiment: &'a Option<Experiment>,
         }
@@ -267,7 +253,6 @@ impl JobSpec {
             limits: &self.limits,
             verifier: &self.verifier,
             task_aware_context: self.task_aware_context,
-            write_scope: &self.write_scope,
             acceptance_sha256: self.acceptance.as_ref().map(|value| value.sha256.as_str()),
             experiment: &self.experiment,
         })
@@ -300,7 +285,6 @@ impl JobStatus {
 #[serde(rename_all = "snake_case")]
 pub enum FailureClass {
     TaskFailure,
-    ScopeViolation,
     VerifierFailure,
     HarnessFailure,
     Timeout,
@@ -440,19 +424,6 @@ pub fn sha256(bytes: &[u8]) -> String {
     format!("{:x}", digest.finalize())
 }
 
-pub fn validate_workspace_pattern(value: &str) -> Result<(), String> {
-    let normalized = value.replace('\\', "/");
-    if normalized.is_empty()
-        || normalized.starts_with('/')
-        || normalized.split('/').any(|component| component == "..")
-    {
-        return Err(format!(
-            "change-scope path must be a non-empty workspace-relative path or prefix: {value}"
-        ));
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -486,7 +457,6 @@ mod tests {
             limits: ResourceLimits::default(),
             verifier: VerifierProfile::WorkspaceTests,
             task_aware_context: true,
-            write_scope: WriteScope::default(),
             acceptance: None,
             experiment: None,
             experiment_id: String::new(),

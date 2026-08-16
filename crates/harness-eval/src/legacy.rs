@@ -3,7 +3,7 @@
 //! The comparison owns its worktrees, build caches, logs, sessions, traces, and saved Git refs.
 //! This keeps orchestration policy in compiled code. Shell wrappers only need to pass arguments.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::error::Error;
 use std::ffi::OsStr;
 use std::fs::{self, File};
@@ -13,7 +13,6 @@ use std::process::{Command, Stdio};
 use std::time::Duration;
 
 use chrono::Utc;
-use liberado_coder_core::DispatchWriteScope;
 use liberado_common::path::child_process_path;
 use liberado_common::process::{command, output_within, std_command};
 use serde::{Deserialize, Serialize};
@@ -63,7 +62,6 @@ struct RunArgs {
     run_timeout_secs: u64,
     verifier_repair_attempts: u32,
     task_aware_context: bool,
-    write_scope: DispatchWriteScope,
     acceptance_overlay: Option<PathBuf>,
     liberado_bin: Option<PathBuf>,
     pi_bin: Option<PathBuf>,
@@ -202,7 +200,6 @@ pub fn run(args: &[String]) -> Result<(), Box<dyn Error>> {
              [--provider <name>] [--base-url <url>] [--api-key-env <name>] \
              [--thinking <level>] [--max-turns <n>] [--run-timeout-secs <n>] \
              [--verifier-repair-attempts <n>] [--task-aware-context] \
-             [--allow-change <path-or-prefix>] [--deny-change <path-or-prefix>] \
              [--acceptance-overlay <dir>] \
              [--liberado-bin <path>] [--pi-bin <path>]"
         );
@@ -277,7 +274,6 @@ fn run_parsed(parsed: RunArgs, credential: ResolvedCredential) -> Result<(), Box
                 stem,
             )
         },
-        &parsed.write_scope,
         acceptance_overlay.as_deref(),
     );
     save_result(
@@ -313,7 +309,6 @@ fn run_parsed(parsed: RunArgs, credential: ResolvedCredential) -> Result<(), Box
                 stem,
             )
         },
-        &parsed.write_scope,
         acceptance_overlay.as_deref(),
     );
     save_result(
@@ -378,7 +373,6 @@ fn run_with_verifier_repairs<F, R>(
     name: &str,
     initial: F,
     mut repair: R,
-    write_scope: &DispatchWriteScope,
     acceptance_overlay: Option<&Path>,
 ) -> (i32, i32)
 where
@@ -386,7 +380,7 @@ where
     R: FnMut(&str, &str) -> Result<i32, Box<dyn Error>>,
 {
     let mut exit = run_or_record_launch_error(manifest, name, initial);
-    let mut verifier = verify_harness(manifest, name, write_scope, acceptance_overlay);
+    let mut verifier = verify_harness(manifest, name, acceptance_overlay);
     for attempt in 1..=args.verifier_repair_attempts {
         if exit != 0 || !repairable_verifier_exit(verifier) {
             break;
@@ -396,8 +390,8 @@ where
             "The common comparison verifier rejected your completed work.\n\n\
              Verifier feedback:\n{feedback}\n\n\
              Repair attempt {attempt} of {}: inspect the failing evidence, make the smallest \
-             scoped correction in the existing workspace, run the relevant check, and submit \
-             the result again. Do not undo correct work or change files outside the task scope.",
+             correction in the existing workspace, run the relevant check, and submit the result \
+             again. Do not undo correct work or change unrelated files.",
             args.verifier_repair_attempts
         );
         let stem = format!("repair-{attempt}-session");
@@ -416,7 +410,7 @@ where
                 break;
             }
         }
-        verifier = verify_harness(manifest, name, write_scope, acceptance_overlay);
+        verifier = verify_harness(manifest, name, acceptance_overlay);
     }
     (exit, verifier)
 }
@@ -544,7 +538,6 @@ fn parse_run_args(args: &[String]) -> Result<RunArgs, Box<dyn Error>> {
     // otherwise the comparison would measure the coordinator's recovery policy, not the harness.
     let mut verifier_repair_attempts = 0;
     let mut task_aware_context = false;
-    let mut write_scope = DispatchWriteScope::default();
     let mut acceptance_overlay = None;
     let mut liberado_bin = None;
     let mut pi_bin = None;
@@ -604,18 +597,6 @@ fn parse_run_args(args: &[String]) -> Result<RunArgs, Box<dyn Error>> {
             "--task-aware-context" => {
                 task_aware_context = true;
             }
-            "--allow-change" => {
-                index += 1;
-                write_scope
-                    .allow_globs
-                    .push(change_scope_pattern(value(args, index, flag)?)?);
-            }
-            "--deny-change" => {
-                index += 1;
-                write_scope
-                    .deny_globs
-                    .push(change_scope_pattern(value(args, index, flag)?)?);
-            }
             "--acceptance-overlay" => {
                 index += 1;
                 acceptance_overlay = Some(absolute(&PathBuf::from(value(args, index, flag)?))?);
@@ -656,7 +637,6 @@ fn parse_run_args(args: &[String]) -> Result<RunArgs, Box<dyn Error>> {
         run_timeout_secs,
         verifier_repair_attempts,
         task_aware_context,
-        write_scope,
         acceptance_overlay,
         liberado_bin,
         pi_bin,
@@ -835,22 +815,13 @@ fn write_run_config(manifest: &CompareManifest, args: &RunArgs) -> Result<(), Bo
     } else {
         ""
     };
-    let write_scope = if args.write_scope.is_active() {
-        format!(
-            "\n[coder.path_policy.write_scope]\nallow_globs = {}\ndeny_globs = {}\n",
-            toml_string_array(&args.write_scope.allow_globs),
-            toml_string_array(&args.write_scope.deny_globs),
-        )
-    } else {
-        String::new()
-    };
     fs::write(
         config.join("tuning.toml"),
         format!(
             "[coder]\ntrace_dir = \"coder-traces\"\noffered_tools = [\"read_file\", \"write_file\", \"edit_file\", \"run_command\"]\n\n\
              [coder.coder]\nmodel = {}\nmax_turns = {}\nreasoning = {}\n\n\
              [coder.command_policy]\ntimeout_secs = {}\noutput_max_bytes = 65536\ndeny = [\"git\"]\n\n\
-             [coder.workspace]\nshared_target_dir = {}\nwarmup = false\nwarmup_timeout_secs = {}\n{}{}",
+             [coder.workspace]\nshared_target_dir = {}\nwarmup = false\nwarmup_timeout_secs = {}\n{}",
             toml_string(&args.model),
             args.max_turns,
             toml_string(&args.thinking),
@@ -858,7 +829,6 @@ fn write_run_config(manifest: &CompareManifest, args: &RunArgs) -> Result<(), Bo
             toml_string(&path_text(&liberado.target_dir)),
             manifest.compile_timeout_secs,
             repo_map,
-            write_scope,
         ),
     )?;
     Ok(())
@@ -876,7 +846,7 @@ fn write_run_pins(
     fs::write(
         manifest.run_root.join("pins.txt"),
         format!(
-            "base_revision={}\nbase_commit={}\nprovider={}\nmodel={}\nthinking={}\nliberado_max_turns={}\npi_turn_cap=client default\ncompile_timeout_secs={}\nverifier_repair_attempts={}\ntask_aware_context={}\nwrite_scope_allow={}\nwrite_scope_deny={}\nacceptance_overlay_hash={}\nsampling=temperature omitted by both clients\n",
+            "base_revision={}\nbase_commit={}\nprovider={}\nmodel={}\nthinking={}\nliberado_max_turns={}\npi_turn_cap=client default\ncompile_timeout_secs={}\nverifier_repair_attempts={}\ntask_aware_context={}\nacceptance_overlay_hash={}\nsampling=temperature omitted by both clients\n",
             manifest.base_revision,
             manifest.base_commit,
             args.provider,
@@ -886,8 +856,6 @@ fn write_run_pins(
             manifest.compile_timeout_secs,
             args.verifier_repair_attempts,
             args.task_aware_context,
-            args.write_scope.allow_globs.join(","),
-            args.write_scope.deny_globs.join(","),
             overlay_hash,
         ),
     )?;
@@ -1058,7 +1026,6 @@ fn warm_harness(manifest: &CompareManifest, name: &str) -> Result<(), Box<dyn Er
 fn verify_harness(
     manifest: &CompareManifest,
     name: &str,
-    write_scope: &DispatchWriteScope,
     acceptance_overlay: Option<&Path>,
 ) -> i32 {
     let layout = match harness(manifest, name) {
@@ -1068,22 +1035,6 @@ fn verify_harness(
             return 125;
         }
     };
-    if let Err(error) = verify_changed_paths(manifest, &layout.worktree, write_scope) {
-        let message = format!("{name} change-scope verification failed: {error}\n");
-        eprint!("{message}");
-        let _ = fs::write(layout.artifacts.join("verifier.stdout.log"), b"");
-        let _ = fs::write(layout.artifacts.join("verifier.stderr.log"), &message);
-        let now = Utc::now();
-        let _ = fs::write(
-            layout.artifacts.join("verifier-status.txt"),
-            format!(
-                "started={}\nfinished={}\nexit=126\n",
-                now.to_rfc3339(),
-                now.to_rfc3339()
-            ),
-        );
-        return 126;
-    }
     let _installed_overlay = match acceptance_overlay
         .map(|source| InstalledAcceptanceOverlay::install(source, &layout.worktree))
         .transpose()
@@ -1146,47 +1097,6 @@ fn verify_harness(
         return 125;
     }
     exit
-}
-
-fn verify_changed_paths(
-    manifest: &CompareManifest,
-    worktree: &Path,
-    write_scope: &DispatchWriteScope,
-) -> Result<(), Box<dyn Error>> {
-    if !write_scope.is_active() {
-        return Ok(());
-    }
-    let mut changed = BTreeSet::new();
-    for arguments in [
-        vec![
-            "diff",
-            "--name-only",
-            "--no-renames",
-            manifest.base_commit.as_str(),
-        ],
-        vec!["ls-files", "--others", "--exclude-standard"],
-    ] {
-        for path in git_capture(worktree, &arguments)?
-            .lines()
-            .filter(|path| !path.is_empty())
-        {
-            changed.insert(path.replace('\\', "/"));
-        }
-    }
-    let rejected: Vec<_> = changed
-        .iter()
-        .filter(|path| !write_scope.permits(path))
-        .cloned()
-        .collect();
-    if rejected.is_empty() {
-        Ok(())
-    } else {
-        Err(format!(
-            "changed path(s) outside the dispatch write scope: {}",
-            rejected.join(", ")
-        )
-        .into())
-    }
 }
 
 struct LiberadoAdapter<'a> {
@@ -1754,31 +1664,6 @@ fn path_text(path: &Path) -> String {
 
 fn toml_string(value: &str) -> String {
     format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
-}
-
-fn toml_string_array(values: &[String]) -> String {
-    format!(
-        "[{}]",
-        values
-            .iter()
-            .map(|value| toml_string(value))
-            .collect::<Vec<_>>()
-            .join(", ")
-    )
-}
-
-fn change_scope_pattern(value: &str) -> Result<String, Box<dyn Error>> {
-    let normalized = value.replace('\\', "/");
-    if normalized.is_empty()
-        || normalized.starts_with('/')
-        || normalized.split('/').any(|component| component == "..")
-    {
-        return Err(format!(
-            "change-scope path must be a non-empty workspace-relative path or prefix: {value}"
-        )
-        .into());
-    }
-    Ok(normalized)
 }
 
 fn run_slug(path: &Path) -> String {

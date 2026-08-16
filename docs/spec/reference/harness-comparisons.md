@@ -64,7 +64,6 @@ liberado coder compare submit --task target/compare/task.txt \
   --credential openrouter-default --thinking high --max-turns 400 \
   --compile-timeout-secs 3600 --run-timeout-secs 14400 \
   --minimum-free-gib 20 --task-aware-context \
-  --allow-change docs/future-work/paseo-liberado-integration-roadmap.md \
   --acceptance-overlay target/compare/acceptance-overlay \
   --hypothesis "task-aware routing improves acceptance" \
   --variable "task_aware_context=on"
@@ -121,8 +120,8 @@ inputs, and predictable outputs:
   report.md
 ```
 
-The worker reports one terminal class: task failure, scope violation, verifier failure, harness
-failure, timeout, host infrastructure failure, or cancelled. It does not silently discard malformed
+The worker reports one terminal class: task failure, verifier failure, harness failure, timeout,
+host infrastructure failure, or cancelled. It does not silently discard malformed
 JSONL or malformed result JSON. On Windows, each paid harness process is assigned to a Job Object
 with `KILL_ON_JOB_CLOSE`, so cancellation and the wall-clock limit terminate its process tree.
 
@@ -190,13 +189,11 @@ captured oracle and its SHA-256 fingerprint stay under the run directory, so the
 is reviewable without becoming model context. Use an overlay for behavior that the normal
 workspace suite does not test; omit it when the task already has an adequate independent gate.
 
-`--allow-change <path-or-prefix>` and `--deny-change <path-or-prefix>` are repeatable, optional
-per-dispatch write-scope rules. With one or more `--allow-change` values, only matching paths may
-change; an allow match takes precedence over a deny match. With no allow values, `--deny-change`
-blocks matching paths and leaves other paths available. The common verifier applies the same scope
-to both harnesses before tests run, including untracked files, and records it in `pins.txt`.
-Liberado also receives the scope as a tool-level write restriction. Base protections such as
-`.git/**`, `target/**`, and restricted coding modes remain non-overridable.
+The comparison coordinator does not impose an allowlist or blacklist on either harness. This keeps
+the benchmark fair: a native Liberado dispatch may use its own optional write-scope policy, but that
+policy is not injected into Pi or enforced by the common verifier. The coordinator still records
+changed files, patches, and test results for human or agent review. Base protections such as
+`.git/**`, `target/**`, and restricted coding modes remain native harness policies.
 
 `--task-aware-context` changes one Liberado model-visible variable and records
 `task_aware_context=true` in `pins.txt`. It writes `[coder.repo_map] task_aware = true` to the run's
