@@ -5,11 +5,13 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use crate::contract::*;
-use crate::{repository_root, transport, worker};
+use crate::journal::JobStore;
+use crate::{preflight, repository_root, transport, worker};
 
 pub fn run(args: &[String]) -> Result<(), Box<dyn Error>> {
     match args.first().map(String::as_str) {
         Some("submit") => submit(&args[1..]),
+        Some("doctor") => doctor(&args[1..]),
         Some("status") => status(&args[1..]),
         Some("await") => await_job(&args[1..]),
         Some("cancel") => cancel(&args[1..]),
@@ -21,7 +23,8 @@ pub fn run(args: &[String]) -> Result<(), Box<dyn Error>> {
 
 pub fn usage() -> &'static str {
     "usage:\n  \
-     liberado coder compare submit --task <file> [pins and scope]\n  \
+     liberado coder compare submit --task <file> [pins and scope] [--wait]\n  \
+     liberado coder compare doctor --task <file> [pins and scope]\n  \
      liberado coder compare status <job-id> [--source <repo>]\n  \
      liberado coder compare await <job-id> [--timeout-secs <n>] [--source <repo>]\n  \
      liberado coder compare cancel <job-id> [--source <repo>]\n  \
@@ -47,6 +50,8 @@ fn submit(args: &[String]) -> Result<(), Box<dyn Error>> {
     let mut pi_bin = None;
     let mut hypothesis = None;
     let mut variable = None;
+    let mut wait = false;
+    let mut wait_timeout = None;
     let mut index = 0;
     while index < args.len() {
         let flag = args[index].as_str();
@@ -89,6 +94,10 @@ fn submit(args: &[String]) -> Result<(), Box<dyn Error>> {
             "--pi-bin" => pi_bin = Some(PathBuf::from(next(args, &mut index, flag)?)),
             "--hypothesis" => hypothesis = Some(next(args, &mut index, flag)?.to_string()),
             "--variable" => variable = Some(next(args, &mut index, flag)?.to_string()),
+            "--wait" => wait = true,
+            "--timeout-secs" => {
+                wait_timeout = Some(positive_u64(next(args, &mut index, flag)?, flag)?)
+            }
             "-h" | "--help" => {
                 println!("{}", usage());
                 return Ok(());
@@ -108,7 +117,7 @@ fn submit(args: &[String]) -> Result<(), Box<dyn Error>> {
         _ => return Err("--hypothesis and --variable must be supplied together".into()),
     };
     let spec = transport::submit(transport::SubmitOptions {
-        repository,
+        repository: repository.clone(),
         base_revision: commit,
         task_file,
         harnesses: vec![
@@ -139,6 +148,128 @@ fn submit(args: &[String]) -> Result<(), Box<dyn Error>> {
     println!("{}", spec.job_id);
     println!("experiment_id={}", spec.experiment_id);
     println!("status=accepted");
+    if wait {
+        let state = transport::await_terminal(
+            &repository,
+            &spec.job_id,
+            wait_timeout.map(Duration::from_secs),
+        )?;
+        let report_path = JobStore::for_repository(&repository)
+            .job_root(&spec.job_id)
+            .join("report.md");
+        println!("status={:?}", state.status);
+        println!("report={}", report_path.display());
+        if state.status != JobStatus::Succeeded {
+            return Err(format!("job {} finished as {:?}", spec.job_id, state.status).into());
+        }
+    }
+    Ok(())
+}
+
+fn doctor(args: &[String]) -> Result<(), Box<dyn Error>> {
+    let mut repository = None;
+    let mut task = None;
+    let mut commit = "main".to_string();
+    let mut provider = "openrouter".to_string();
+    let mut model = "deepseek/deepseek-v4-flash".to_string();
+    let mut base_url = "https://openrouter.ai/api/v1".to_string();
+    let mut credential_alias = "openrouter-default".to_string();
+    let mut thinking = "high".to_string();
+    let mut limits = ResourceLimits::default();
+    let mut max_turns = 400;
+    let mut task_aware_context = false;
+    let mut write_scope = WriteScope::default();
+    let mut acceptance_overlay = None;
+    let mut index = 0;
+    while index < args.len() {
+        let flag = args[index].as_str();
+        match flag {
+            "--source" => repository = Some(PathBuf::from(next(args, &mut index, flag)?)),
+            "--task" => task = Some(PathBuf::from(next(args, &mut index, flag)?)),
+            "--commit" => commit = next(args, &mut index, flag)?.to_string(),
+            "--provider" => provider = next(args, &mut index, flag)?.to_string(),
+            "--model" => model = next(args, &mut index, flag)?.to_string(),
+            "--base-url" => base_url = next(args, &mut index, flag)?.to_string(),
+            "--credential" => credential_alias = next(args, &mut index, flag)?.to_string(),
+            "--thinking" => thinking = next(args, &mut index, flag)?.to_string(),
+            "--max-turns" => max_turns = positive_u32(next(args, &mut index, flag)?, flag)?,
+            "--compile-timeout-secs" => {
+                limits.compile_timeout_secs = positive_u64(next(args, &mut index, flag)?, flag)?
+            }
+            "--run-timeout-secs" => {
+                limits.run_timeout_secs = positive_u64(next(args, &mut index, flag)?, flag)?
+            }
+            "--minimum-free-gib" => {
+                limits.minimum_free_bytes = positive_u64(next(args, &mut index, flag)?, flag)?
+                    .saturating_mul(1024 * 1024 * 1024)
+            }
+            "--task-aware-context" => task_aware_context = true,
+            "--allow-change" => write_scope
+                .allow
+                .push(next(args, &mut index, flag)?.to_string()),
+            "--deny-change" => write_scope
+                .deny
+                .push(next(args, &mut index, flag)?.to_string()),
+            "--acceptance-overlay" => {
+                acceptance_overlay = Some(PathBuf::from(next(args, &mut index, flag)?))
+            }
+            "-h" | "--help" => {
+                println!("{}", usage());
+                return Ok(());
+            }
+            other => return Err(format!("unknown compare doctor argument: {other}").into()),
+        }
+        index += 1;
+    }
+    let repository = repository.unwrap_or(repository_root()?).canonicalize()?;
+    let task_file = task.ok_or("compare doctor requires --task <file>")?;
+    let options = transport::SubmitOptions {
+        repository: repository.clone(),
+        base_revision: commit,
+        task_file,
+        harnesses: vec![
+            HarnessRequest {
+                id: "liberado".into(),
+                binary: None,
+            },
+            HarnessRequest {
+                id: "pi".into(),
+                binary: None,
+            },
+        ],
+        model: ModelPins {
+            provider,
+            model,
+            base_url,
+            credential_alias,
+            thinking,
+            max_turns,
+        },
+        limits,
+        verifier: VerifierProfile::WorkspaceTests,
+        task_aware_context,
+        write_scope,
+        acceptance_overlay,
+        experiment: None,
+    };
+    let spec = transport::build_spec(options)?;
+    let policy_path = transport::policy_path(&repository);
+    let policy = transport::load_policy(&policy_path).map_err(|error| {
+        format!(
+            "worker policy is unavailable at {}: {error}",
+            policy_path.display()
+        )
+    })?;
+    let report = preflight::run(&spec, &policy)?;
+    println!("doctor=ok");
+    println!("repository={}", report.0.repository.display());
+    println!("base_commit={}", report.0.base_commit);
+    println!("free_bytes={}", report.0.free_bytes);
+    println!(
+        "estimated_required_bytes={}",
+        report.0.estimated_required_bytes
+    );
+    println!("credential_environment={}", report.0.credential_environment);
     Ok(())
 }
 
