@@ -19,10 +19,32 @@ use liberado_executor::{RuntimeSetupError, ToolRuntime};
 use liberado_provider::{ToolDef, ToolInvocation};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
+/// Shut down each pooled runtime on a background task, then let it drop.
+///
+/// `Client::shutdown()` is async (it aborts the SSE task and sends the session-terminating
+/// `DELETE`), so it cannot run on the pool's sync `Drop` path. Reaping by bare `Drop` leaked HTTP
+/// connections: the `Client` vanished but its SSE stream stayed open server-side, piling up until
+/// the proxy ran out of worker connections. Discarded pooled runtimes (reaped, dead, or
+/// invalidated) are routed through here instead of being dropped bare.
+fn spawn_shutdown(runtimes: Vec<Box<dyn RebindableRuntime>>) {
+    // No current runtime (sync unit tests) → the only runtimes we reap there are test doubles with
+    // no connection to tear down, so a bare drop is fine. In production there is always a runtime.
+    let Ok(handle) = tokio::runtime::Handle::try_current() else {
+        drop(runtimes);
+        return;
+    };
+    for mut rt in runtimes {
+        handle.spawn(async move {
+            rt.shutdown().await;
+        });
+    }
+}
+
 /// A [`ToolRuntime`] that can accept a new execution's write provenance without reconnecting.
 ///
 /// Pooling reuses the underlying MCP session/catalog; provenance (Decision 5 correlation) must
 /// still be per-execution — implementors update whatever they inject into tool `_meta`.
+#[async_trait]
 pub trait RebindableRuntime: ToolRuntime {
     fn rebind_provenance(&mut self, provenance: WriteProvenance);
 
@@ -31,6 +53,15 @@ pub trait RebindableRuntime: ToolRuntime {
     fn connection_is_dead(&self) -> bool {
         false
     }
+
+    /// Gracefully shut down the underlying connection and release transport resources.
+    ///
+    /// Called (on a spawned task, since teardown needs `await`) before a pooled runtime is
+    /// discarded — idle reap, dead checkout, or invalidate — so HTTP SSE tasks are aborted and the
+    /// server-side session is terminated. Without this, a bare sync `Drop` leaks pooled HTTP
+    /// connections and they pile up server-side. Default is a no-op for peers with no connection
+    /// to tear down (stdio children drop their process on `Drop`).
+    async fn shutdown(&mut self) {}
 }
 
 /// Pool policy: enable/disable, idle TTL, and per-name concurrency. Constructed from config at
@@ -112,12 +143,35 @@ impl ConnectionPool {
         if !self.policy.enabled {
             return 0;
         }
+        let reaped = self.take_expired();
+        let n = reaped.len();
+        if n > 0 {
+            spawn_shutdown(reaped);
+        }
+        n
+    }
+
+    /// Remove all slots idle longer than the TTL and return their runtimes **without** dropping
+    /// them. The caller owns teardown (see [`spawn_shutdown`]), so connections are shut down
+    /// gracefully instead of being leaked by a bare sync `Drop`.
+    fn take_expired(&self) -> Vec<Box<dyn RebindableRuntime>> {
+        if !self.policy.enabled {
+            return Vec::new();
+        }
         let now = self.now();
         let ttl = self.policy.idle_ttl;
         let mut slots = self.slots.lock().unwrap_or_else(|e| e.into_inner());
-        let before = slots.len();
-        slots.retain(|_, slot| now.saturating_duration_since(slot.last_used) <= ttl);
-        before.saturating_sub(slots.len())
+        let mut expired = Vec::new();
+        let mut kept = HashMap::with_capacity(slots.len());
+        for (name, slot) in slots.drain() {
+            if now.saturating_duration_since(slot.last_used) <= ttl {
+                kept.insert(name, slot);
+            } else {
+                expired.push(slot.runtime);
+            }
+        }
+        *slots = kept;
+        expired
     }
 
     /// Spawn a background task that periodically calls [`reap_idle`](Self::reap_idle).
@@ -189,9 +243,11 @@ impl ConnectionPool {
         self.reap_idle();
         let mut slots = self.slots.lock().unwrap_or_else(|e| e.into_inner());
         let slot = slots.remove(name)?;
-        // Slot passed reap_idle; still guard in case of clock skew between reap and remove.
+        // Slot passed reap_idle; still guard in case of clock skew between reap and remove. If it
+        // has since expired, shut it down rather than leaking it by a bare drop.
         let idle = self.now().saturating_duration_since(slot.last_used);
         if idle > self.policy.idle_ttl {
+            spawn_shutdown(vec![slot.runtime]);
             return None;
         }
         let mut runtime = slot.runtime;
@@ -227,7 +283,9 @@ impl ConnectionPool {
     /// Drop a named slot without returning a runtime (e.g. after connection-level failure).
     pub(crate) fn invalidate(&self, name: &str) {
         let mut slots = self.slots.lock().unwrap_or_else(|e| e.into_inner());
-        slots.remove(name);
+        if let Some(slot) = slots.remove(name) {
+            spawn_shutdown(vec![slot.runtime]);
+        }
     }
 }
 
@@ -302,7 +360,14 @@ impl Drop for PooledCheckout {
         let Some(runtime) = self.runtime.take() else {
             return;
         };
-        if !self.healthy.load(Ordering::SeqCst) || !self.pool.policy.enabled {
+        // Transport death made this checkout unhealthy: discard it, but shut the connection down
+        // first. A bare drop would leak the SSE task/server session exactly like an unreaped idle
+        // slot, because `Client` teardown is async.
+        if !self.healthy.load(Ordering::SeqCst) {
+            spawn_shutdown(vec![runtime]);
+            return;
+        }
+        if !self.pool.policy.enabled {
             return;
         }
         self.pool.checkin(self.name.clone(), runtime);
