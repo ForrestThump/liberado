@@ -42,6 +42,14 @@ mod tests {
     }
 
     #[test]
+    fn child_process_path_keeps_forward_slash_drive_paths_unchanged() {
+        assert_eq!(
+            child_process_path(Path::new("C:/Users/me/repo")),
+            PathBuf::from("C:/Users/me/repo")
+        );
+    }
+
+    #[test]
     fn child_process_path_keeps_plain_paths() {
         assert_eq!(
             child_process_path(Path::new("/home/me/repo")),
