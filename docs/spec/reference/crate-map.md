@@ -5,7 +5,7 @@
 > Layer semantics and dependency rules: [contracts.md](../architecture/contracts.md) and
 > `crates/test-support/tests/layer_rules.rs` (the same role tags, mechanically enforced).
 
-49 workspace crates.
+51 workspace crates.
 
 ## foundation
 
