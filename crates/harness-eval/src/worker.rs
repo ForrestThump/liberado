@@ -90,9 +90,30 @@ pub fn spawn_executor(repository: &Path, job_id: &JobId) -> Result<(), Box<dyn E
         const DETACHED_PROCESS: u32 = 0x0000_0008;
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
         command.creation_flags(CREATE_NEW_PROCESS_GROUP | DETACHED_PROCESS | CREATE_NO_WINDOW);
+        detach_stdio_from_children();
     }
     command.spawn()?;
     Ok(())
+}
+
+/// Stop the detached executor from inheriting the submitter's stdio handles.
+///
+/// A shell (or an agent harness) that pipes `submit`'s output gives it an *inheritable* stdout
+/// handle. `CreateProcessW` passes every inheritable handle to the child even when the child's
+/// own stdio is redirected to NUL, so the executor would hold the submitter's pipe open and a
+/// `submit | tail` pipeline would never see EOF. Clearing the inherit flag on our own stdio
+/// before the spawn is what makes `submit` return when its output is piped.
+#[cfg(windows)]
+fn detach_stdio_from_children() {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Foundation::{HANDLE_FLAG_INHERIT, SetHandleInformation};
+    for handle in [
+        std::io::stdin().as_raw_handle(),
+        std::io::stdout().as_raw_handle(),
+        std::io::stderr().as_raw_handle(),
+    ] {
+        unsafe { SetHandleInformation(handle, HANDLE_FLAG_INHERIT, 0) };
+    }
 }
 
 fn executor_binary() -> Result<PathBuf, Box<dyn Error>> {
@@ -118,5 +139,27 @@ mod tests {
     fn run_job_requires_a_source_repository() {
         let error = run_command(["run-job".to_string()].into_iter()).unwrap_err();
         assert!(error.to_string().contains("--source"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn detach_stdio_clears_the_inherit_flag() {
+        use std::os::windows::io::AsRawHandle;
+        use windows_sys::Win32::Foundation::{
+            GetHandleInformation, HANDLE_FLAG_INHERIT, SetHandleInformation,
+        };
+        let stdout = std::io::stdout().as_raw_handle();
+        let mut original = 0_u32;
+        assert_ne!(unsafe { GetHandleInformation(stdout, &mut original) }, 0);
+        // Make the handle inheritable first, so the test fails if the helper does nothing.
+        unsafe { SetHandleInformation(stdout, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT) };
+        detach_stdio_from_children();
+        let mut flags = 0_u32;
+        assert_ne!(unsafe { GetHandleInformation(stdout, &mut flags) }, 0);
+        assert_eq!(flags & HANDLE_FLAG_INHERIT, 0);
+        // Restore the original flag so this test does not leak process-global state.
+        unsafe {
+            SetHandleInformation(stdout, HANDLE_FLAG_INHERIT, original & HANDLE_FLAG_INHERIT);
+        }
     }
 }
