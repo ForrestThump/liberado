@@ -369,6 +369,9 @@ impl CodingToolRuntime {
         if write && !path_allowed_to_write(rel_path, &self.path_policy) {
             return Err(ToolError::PathDenied(rel_path.to_string()));
         }
+        if write && !self.path_policy.write_scope.permits(rel_path) {
+            return Err(ToolError::PathDenied(rel_path.to_string()));
+        }
         Ok(self.workspace.resolve_path(rel_path)?)
     }
 
@@ -4568,6 +4571,62 @@ beta
             .await
             .unwrap();
         assert_eq!(ok["written"], true);
+    }
+
+    #[tokio::test]
+    async fn dispatch_write_scope_allows_a_whitelist_over_its_blacklist() {
+        use liberado_coder_core::DispatchWriteScope;
+
+        let dir = tempfile::tempdir().unwrap();
+        let policy = PathPolicy {
+            write_scope: DispatchWriteScope {
+                allow_globs: vec!["docs/**".to_string()],
+                deny_globs: vec!["docs/**".to_string(), "src/**".to_string()],
+            },
+            ..PathPolicy::default()
+        };
+        let runtime = CodingToolRuntime::new(dir.path(), CommandPolicy::default(), policy).unwrap();
+
+        let allowed = runtime
+            .invoke_json(
+                "write_file",
+                json!({"path": "docs/guide.md", "content": "ok"}), // docs-check: ignore
+            )
+            .await
+            .unwrap();
+        assert_eq!(allowed["written"], true);
+
+        let denied = runtime
+            .invoke_json(
+                "write_file",
+                json!({"path": "src/main.rs", "content": "no"}),
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(denied, ToolError::PathDenied(_)));
+    }
+
+    #[tokio::test]
+    async fn dispatch_write_scope_does_not_bypass_base_denials() {
+        use liberado_coder_core::DispatchWriteScope;
+
+        let dir = tempfile::tempdir().unwrap();
+        let policy = PathPolicy {
+            write_scope: DispatchWriteScope {
+                allow_globs: vec![".git/**".to_string()],
+                deny_globs: Vec::new(),
+            },
+            ..PathPolicy::default()
+        };
+        let runtime = CodingToolRuntime::new(dir.path(), CommandPolicy::default(), policy).unwrap();
+        let denied = runtime
+            .invoke_json(
+                "write_file",
+                json!({"path": ".git/config", "content": "no"}),
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(denied, ToolError::PathDenied(_)));
     }
 
     /// Plan mode is PathPolicy::plan_mode() only — no parallel write gate in the tools crate.

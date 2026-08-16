@@ -168,6 +168,49 @@ research_max_turns = 30          # ceiling for depth = "deep" subagents
 
 The dispatcher chooses `depth` (`shallow`/`normal`/`deep`) per dispatch; this caps the deep end.
 
+### Coding repository context — `tuning.toml`
+
+```toml
+[coder.repo_map]
+enabled = true
+task_aware = false
+max_map_tokens = 1024
+min_source_files = 20
+```
+
+The global symbol map is on by default. `task_aware` is a separate, default-off experiment. When
+enabled, the headless coding runner extracts bounded terms from the task, keeps exact source hits
+inside the 500-file parse budget, boosts files that define matching symbols, and renders a small
+`Task evidence` block before the global PageRank map. The selected paths and definitions are thus
+visible in the ordinary coding trace. It does not fetch external documentation or add a model call.
+
+Changing these values does not require a rebuild. The next coding run reads them from
+`tuning.toml`. ACP and session-pack entry points do not yet generate a repo map; this toggle is for
+the headless runner used by the current harness comparison.
+
+### Per-dispatch coding write scope
+
+`write_scope` is task data, not a persistent tuning default. A human or dispatcher can put it in a
+normal coding goal payload when the change boundary is known:
+
+```json
+{
+  "write_scope": {
+    "allow_globs": [
+      "crates/acp-bridge/src/main.rs",
+      "docs/future-work/paseo-liberado-integration-roadmap.md"
+    ],
+    "deny_globs": ["docs/future-work/**"]
+  }
+}
+```
+
+Patterns are an exact workspace-relative path, a directory prefix ending in `/**`, or `**`. An
+empty scope changes nothing. A non-empty `allow_globs` list is a complete allowlist: only matches
+can change, and a matching allow rule wins over `deny_globs`. Without an allowlist, `deny_globs`
+is a blacklist. The scope cannot bypass the permanent `.git/**`, `target/**`, or
+`node_modules/**` protections, and plan/explore modes stay stricter.
+
 ### Report delivery — `topology.toml`
 
 ```toml

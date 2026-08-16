@@ -124,12 +124,24 @@ Ship these before treating the integration as “ready to daily-drive.”
 
 ---
 
-### Phase 1 — Regression net (Liberado)
+### Phase 1 — Regression net (Liberado) — ✅ **all landed**
+
+**Verified complete 2026-08-15.** Both slices shipped; the table below is kept for the reasoning, not
+as open work.
+
+- **P1.1** — `mock_provider_turn_streams_paired_tool_and_text` in `crates/acp-bridge/src/main.rs`
+  drives `MockProvider` through the chat-path wire stack (`run_prompt_turn` + `CaptureSink`) and
+  asserts streamed text chunks plus a matching `toolCallId` across `tool_call` / `tool_call_update`
+  — the mutation target for P0.1.
+- **P1.2** — `initialize_and_session_new_over_stdio` in `crates/acp-bridge/tests/stdio_smoke.rs`
+  spawns `liberado-acp` and drives `initialize` + `session/new` over stdio, network-free and
+  key-free, against an isolated temp config dir. Runs under `cargo test --workspace --no-fail-fast`
+  in CI.
 
 | # | Slice | Why | Acceptance |
 |---|--------|-----|------------|
-| **P1.1** | **Mock-provider stream integration test** | Current unit tests never assert streamed `session/update` pairing. P0.1 would have been invisible. | Drive `MockProvider` (or lib-exported request loop) through prompt + tools; assert text chunks and tool start/finish share ids. Prefer library-exported handler over only-stdio if that keeps the test hermetic. |
-| **P1.2** | **Stdio smoke for initialize + session/new** | Install script already pipes initialize; codify in CI if not already under `cargo test -p liberado-acp-bridge`. | Automated, no network, no API key required for initialize/new. |
+| **P1.1** | **Mock-provider stream integration test** — ✅ **Landed** | Current unit tests never asserted streamed `session/update` pairing. P0.1 would have been invisible. | ✅ `CaptureSink` over `run_prompt_turn` drives `MockProvider` with tool calls + text; asserts `toolCallId` identity between `tool_call` and `tool_call_update`. |
+| **P1.2** | **Stdio smoke for initialize + session/new** — ✅ **Landed** | Install script already pipes initialize; codify in CI. | ✅ Hermetic binary spawn via `CARGO_BIN_EXE_liberado-acp`; no network, no API key; validates `initialize` + `session/new` + `session/set_mode` on the real wire. |
 
 ---
 
@@ -151,16 +163,16 @@ the one written below, so read the code before trusting the row.
 
 ---
 
-### Phase 3 — Durable ACP sessions (Liberado)
+### Phase 3 — Durable ACP sessions (Liberado) — ✅ **all landed in PR #127**
 
-P0.2 chose honesty (`loadSession: false`), so this phase is unblocked and **is the next real work in
-this roadmap**.
+P0.2 chose honesty (`loadSession: false`) as a temporary posture until durable load existed.
+**P3.2 (history replay) and P3.3 (re-enable `loadSession`) landed together in PR #127.**
 
 **P3.1a landed 2026-08-10** as [#121](https://github.com/ForrestThump/liberado/pull/121) —
 `crates/acp-bridge/src/session_store.rs`, written by the coding pack on its second attempt and
 finished by hand. Records persist under `<LIBERADO_DATA_DIR>/acp-sessions/`; `session/new`, a
-completed `session/prompt`, `set_mode` and `set_model` all write. **P3.2 (replay) and P3.3
-(re-enable the capability) remain open**, and the storage they need now exists.
+completed `session/prompt`, `set_mode` and `set_model` all write. The storage they needed now
+exists and is exercised by [#127](https://github.com/ForrestThump/liberado/pull/127).
 
 The original slice brief is kept below because it is a good template for a dispatchable task:
 
@@ -181,12 +193,8 @@ landed. Background, including what the second run still got wrong:
 | # | Slice | Why | Acceptance |
 |---|--------|-----|------------|
 | **P3.1** | **Persist conversation under session id** | Process-local only today. | Restart of `liberado-acp` + `session/load` restores messages for that id (store under data dir, not vault MCP). |
-| **P3.2** | **History replay on load** | Paseo resume expects history via session updates / loaded state, not an empty transcript. | After load, client sees prior user/assistant content (shape aligned with ACP load semantics Paseo uses). |
-| **P3.3** | **Re-enable `loadSession: true`** | Only when P3.1–P3.2 pass. | Capability flag matches behaviour; dogfood resume in Paseo. |
-
-Prefer composing existing session-store machinery over inventing a parallel store. If that
-pulls daemon layering into the bridge uncomfortably, a small file-backed ACP session store in
-the bridge crate is acceptable with an explicit follow-up to converge.
+| **P3.2** | **History replay on load** | Paseo resume expects history via session updates / loaded state, not an empty transcript. | ✅ **Landed in PR #127.** After load, client sees prior user/assistant content (shape aligned with ACP load semantics Paseo uses); model conversation also receives the stored history so subsequent turns are coherent. |
+| **P3.3** | **Re-enable `loadSession: true`** | Only when P3.1–P3.2 pass. | ✅ **Landed in PR #127.** `LOAD_SESSION_CAPABILITY = true`; `initialize` advertises `loadSession: true`; `session/load` restores mode, model, cwd, and replays stored messages into both the wire and the live conversation. |
 
 ---
 
@@ -292,8 +300,10 @@ powershell -File scripts/install-paseo-liberado.ps1
 Known dogfood friction until fixed:
 
 - Tool rows may not complete cleanly in UI (P0.1)
-- Resume may wipe chat (P0.2)
 - Version diagnostic row may fail (P0.3)
+
+> Resume clarity: `loadSession: true` with history replay landed in PR #127;
+> session load is no longer a false promise. Remove this note when P0.1 and P0.3 are also shipped.
 
 ---
 

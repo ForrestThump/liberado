@@ -129,11 +129,17 @@ async fn run_headless(args: HeadlessArgs) -> Result<(), String> {
 
     let tuning = read_tuning(config_dir.as_deref())?;
     let repo_map = if tuning.repo_map.enabled {
+        let mentioned_terms = if tuning.repo_map.task_aware {
+            repo_map::extract_task_terms(&prompt)
+        } else {
+            Vec::new()
+        };
         repo_map::generate_repo_map(
             &workspace,
             &RepoMapOptions {
                 max_map_tokens: tuning.repo_map.max_map_tokens,
                 min_source_files: tuning.repo_map.min_source_files,
+                mentioned_terms,
                 ..Default::default()
             },
         )

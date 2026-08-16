@@ -46,6 +46,7 @@ pub mod frontmatter;
 pub mod guidance;
 pub mod local_time;
 pub mod model;
+pub mod path;
 pub mod process;
 pub mod proposal;
 pub mod provenance;

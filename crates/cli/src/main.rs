@@ -18,8 +18,12 @@
 //!   liberado prompt \[profile\]        print the system prompt a chat under <profile> would get
 //!   liberado coder trace <id>        render a durable coding trace as a human transcript
 //!   liberado coder compare <a> <b>   side-by-side harness metrics for two native traces
-//!   liberado coder compare prepare   print the pinned comparison plan
+//!   liberado coder compare prepare   create isolated, pinned comparison worktrees
+//!   liberado coder compare run       run both harnesses and preserve all results
+//!   liberado coder compare save      commit and archive one harness result
 //!   liberado coder compare reset     restore tracked files in a compare workspace
+//!   liberado coder compare submit    enqueue a durable user-worker comparison job
+//!   liberado coder compare await     wait locally for one comparison job
 //!   liberado coder summarize <path>  summarize a cross-harness compare run
 //!   liberado coder smoke              validate the coder runner process boundary
 //!   liberado coder import <file>     foreign (Kilo / OpenHands) → `.messages.json`
@@ -34,6 +38,7 @@
 mod chat_client;
 mod ci_cmd;
 mod coder_cmd;
+mod compare_cmd;
 mod crate_map_cmd;
 mod docs_cmd;
 mod docs_meta_cmd;

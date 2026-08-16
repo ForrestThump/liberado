@@ -170,36 +170,33 @@ pub async fn goals_start(
     // against topology `[[projects]]` before the pack runs. Fail closed — unknown names and
     // undeclared paths never reach the coding tools.
     if domain == liberado_session::CODING_DOMAIN {
-        let project = goal
-            .payload
-            .get("project")
-            .and_then(|v| v.as_str())
-            .map(str::to_string);
-        let workspace_root = goal
-            .payload
-            .get("workspace_root")
-            .and_then(|v| v.as_str())
-            .map(str::to_string);
+        let mut payload = match liberado_coder_agent::CodingGoalPayload::parse(&goal.payload) {
+            Ok(payload) => payload,
+            Err(error) => {
+                return (StatusCode::BAD_REQUEST, Json(ApiError { error })).into_response();
+            }
+        };
+        let project = payload.project().map(str::to_string);
+        let workspace_root = payload.workspace_root().map(str::to_string);
         match state
             .config
             .authorize_coding_workspace(project.as_deref(), workspace_root.as_deref())
         {
-            Ok(liberado_config::CodingWorkspaceAuth::Ephemeral) => {}
+            Ok(liberado_config::CodingWorkspaceAuth::Ephemeral) => {
+                goal.payload = payload.into_value();
+            }
             Ok(liberado_config::CodingWorkspaceAuth::Project { name, root }) => {
-                if !goal.payload.is_object() {
-                    goal.payload = serde_json::json!({});
-                }
-                let payload = goal
-                    .payload
-                    .as_object_mut()
-                    .expect("payload forced to object above");
-                payload.insert("project".into(), serde_json::json!(name));
                 // Strip Windows `\\?\` extended prefixes so session records and git tools see a
                 // plain drive path (dogfood finding #1 residual).
                 let root_s = strip_windows_extended_path(&root);
-                payload.insert("workspace_root".into(), serde_json::json!(root_s));
+                payload.set_authorized_workspace(name.clone(), root_s);
+                goal.payload = payload.into_value();
                 // Inject ship preflight from topology when the client did not supply steps.
                 // Pack still applies liberado built-in defaults when project is "liberado".
+                let payload = goal
+                    .payload
+                    .as_object_mut()
+                    .expect("CodingGoalPayload always serializes to an object");
                 if payload
                     .get("preflight")
                     .and_then(|v| v.get("steps"))
@@ -1771,6 +1768,31 @@ mod project_auth_http_tests {
             body.contains("not under any declared") || body.contains("fail-closed"),
             "{body}"
         );
+    }
+
+    #[tokio::test]
+    async fn malformed_coding_payload_is_rejected_before_workspace_authorization() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(dir.path()).unwrap();
+        let app = coding_goals_app(config_with_project(ProjectConfig {
+            name: "liberado".into(),
+            root,
+            write_class: WriteClass::AgentWritable,
+            enabled: true,
+            preflight: Default::default(),
+        }));
+        let (status, body) = post_goal(
+            &app,
+            serde_json::json!({
+                "description": "do a thing",
+                "domain": "coding",
+                "payload": { "workspace_root": 42 }
+            }),
+        )
+        .await;
+
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+        assert!(body.contains("invalid coding goal payload"), "{body}");
     }
 
     #[tokio::test]

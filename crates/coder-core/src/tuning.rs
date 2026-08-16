@@ -102,6 +102,9 @@ pub struct CoderTuning {
 pub struct RepoMapConfig {
     /// Enable the repo map.  When false the feature is completely off.
     pub enabled: bool,
+    /// Route task-named paths and symbols into a bounded evidence block before global ranking.
+    /// Off by default until controlled comparisons show an accepted-result benefit.
+    pub task_aware: bool,
     /// Approximate token budget for the rendered map (in tokens).
     pub max_map_tokens: usize,
     /// Skip the map entirely when the workspace has fewer than this many source files.
@@ -112,6 +115,7 @@ impl Default for RepoMapConfig {
     fn default() -> Self {
         Self {
             enabled: true,
+            task_aware: false,
             max_map_tokens: 1024,
             min_source_files: 20,
         }
@@ -440,6 +444,22 @@ mod tests {
     }
 
     #[test]
+    fn parses_a_scope_only_path_policy_with_base_defaults() {
+        let value: toml::Value = toml::from_str(
+            r#"
+            [path_policy.write_scope]
+            allow_globs = ["docs/**"]
+            deny_globs = ["docs/private/**"]
+            "#,
+        )
+        .unwrap();
+        let tuning = CoderTuning::from_value(Some(&value)).unwrap();
+        assert_eq!(tuning.path_policy.allow_write_globs, vec!["**"]);
+        assert!(tuning.path_policy.write_scope.permits("docs/guide.md")); // docs-check: ignore
+        assert!(!tuning.path_policy.write_scope.permits("src/main.rs"));
+    }
+
+    #[test]
     fn validation_rejects_missing_role_budget() {
         let mut tuning = CoderTuning::default();
         tuning.coder.max_turns = None;
@@ -725,6 +745,7 @@ mod tests {
         let value: toml::Value = toml::from_str(
             r#"
             enabled = false
+            task_aware = true
             max_map_tokens = 500
             min_source_files = 50
             "#,
@@ -732,6 +753,7 @@ mod tests {
         .unwrap();
         let cfg: RepoMapConfig = value.try_into().unwrap();
         assert!(!cfg.enabled);
+        assert!(cfg.task_aware);
         assert_eq!(cfg.max_map_tokens, 500);
         assert_eq!(cfg.min_source_files, 50);
     }
@@ -749,6 +771,7 @@ mod tests {
         .unwrap();
         let tuning = CoderTuning::from_value(Some(&value)).unwrap();
         assert!(tuning.repo_map.enabled);
+        assert!(!tuning.repo_map.task_aware);
         assert_eq!(tuning.repo_map.max_map_tokens, 1024);
         assert_eq!(tuning.repo_map.min_source_files, 20);
     }

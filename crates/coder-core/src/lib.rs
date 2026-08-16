@@ -356,30 +356,102 @@ impl CoderCommandConfig {
 /// inventing a parallel location.
 pub const PLAN_ARTIFACT_REL: &str = ".liberado/plan.md";
 
-/// Path containment and write policy for the workspace.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PathPolicy {
+/// Optional write restriction attached to one coding dispatch.
+///
+/// A non-empty allow list is a complete allowlist and takes precedence over the deny list. With
+/// no allow list, the deny list blocks matching paths. This scope can narrow a dispatch, but it
+/// never relaxes the enclosing [`PathPolicy`] or a restricted [`CodingMode`].
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DispatchWriteScope {
     #[serde(default)]
-    pub allow_write_globs: Vec<String>,
+    pub allow_globs: Vec<String>,
     #[serde(default)]
     pub deny_globs: Vec<String>,
+}
+
+impl DispatchWriteScope {
+    /// Whether this scope changes the default per-dispatch write behavior.
+    pub fn is_active(&self) -> bool {
+        !self.allow_globs.is_empty() || !self.deny_globs.is_empty()
+    }
+
+    /// Whether this dispatch scope permits one workspace-relative path.
+    ///
+    /// The match syntax deliberately mirrors the coding tool path policy: an exact path, a
+    /// directory prefix ending in `/**`, or `**` for the whole workspace.
+    pub fn permits(&self, relative_path: &str) -> bool {
+        if self.allow_globs.is_empty() {
+            !self
+                .deny_globs
+                .iter()
+                .any(|pattern| scope_path_matches(pattern, relative_path))
+        } else {
+            self.allow_globs
+                .iter()
+                .any(|pattern| scope_path_matches(pattern, relative_path))
+        }
+    }
+}
+
+fn scope_path_matches(pattern: &str, relative_path: &str) -> bool {
+    let pattern = pattern.replace('\\', "/");
+    let relative_path = relative_path.replace('\\', "/");
+    pattern == "**"
+        || pattern == relative_path
+        || pattern.strip_suffix("/**").is_some_and(|prefix| {
+            relative_path == prefix || relative_path.starts_with(&format!("{prefix}/"))
+        })
+}
+
+/// Path containment and write policy for the workspace.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PathPolicy {
+    #[serde(default = "default_allow_write_globs")]
+    pub allow_write_globs: Vec<String>,
+    #[serde(default = "default_deny_globs")]
+    pub deny_globs: Vec<String>,
+    /// Optional restriction supplied by the dispatcher for this one task. It is intentionally
+    /// separate from the persistent policy: the latter remains the hard capability ceiling.
+    #[serde(default)]
+    pub write_scope: DispatchWriteScope,
+    #[serde(default = "default_read_max_bytes")]
     pub read_max_bytes: usize,
+    #[serde(default = "default_search_max_results")]
     pub search_max_results: usize,
 }
 
 impl Default for PathPolicy {
     fn default() -> Self {
         Self {
-            allow_write_globs: vec!["**".to_string()],
-            deny_globs: vec![
-                ".git/**".to_string(),
-                "target/**".to_string(),
-                "node_modules/**".to_string(),
-            ],
-            read_max_bytes: 128 * 1024,
-            search_max_results: 200,
+            allow_write_globs: default_allow_write_globs(),
+            deny_globs: default_deny_globs(),
+            write_scope: DispatchWriteScope::default(),
+            read_max_bytes: default_read_max_bytes(),
+            search_max_results: default_search_max_results(),
         }
     }
+}
+
+fn default_allow_write_globs() -> Vec<String> {
+    vec!["**".to_string()]
+}
+
+fn default_deny_globs() -> Vec<String> {
+    vec![
+        ".git/**".to_string(),
+        "target/**".to_string(),
+        "node_modules/**".to_string(),
+    ]
+}
+
+fn default_read_max_bytes() -> usize {
+    128 * 1024
+}
+
+fn default_search_max_results() -> usize {
+    200
 }
 
 impl PathPolicy {
@@ -539,16 +611,17 @@ pub struct HashlineConfig {
 /// Where a coding run builds, and whether the harness warms it first.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct WorkspaceBuildConfig {
-    /// One `CARGO_TARGET_DIR` shared by every coding worktree.
+    /// An optional `CARGO_TARGET_DIR` for worktrees from one controlled source root.
     ///
     /// A worktree starts with no build cache, so the run's first compile rebuilds the whole
     /// dependency graph — 706 of this workspace's 770 packages are registry crates, and those are
-    /// keyed by registry/name/version rather than by path, so every worktree can reuse them.
-    /// Workspace-member crates live at different paths and get their own artifacts, which coexist
-    /// rather than collide.
+    /// keyed by registry/name/version rather than by path, so worktrees from that source can reuse
+    /// them. Distinct source roots must use distinct target directories. A live comparison reused
+    /// a passing test binary built from another checkout after the active source had changed.
     ///
-    /// **One run at a time.** Cargo takes an exclusive lock on a target directory; concurrent
-    /// builds do not corrupt each other, they queue. Measured: a second `cargo build` printed
+    /// **One source root and one run at a time.** Cargo takes an exclusive lock on a target
+    /// directory; concurrent builds do not corrupt each other, they queue. Measured: a second
+    /// `cargo build` printed
     /// "Blocking waiting for file lock on artifact directory" and waited out the first. With a
     /// command timeout in play, a run queued behind a cold build times out having done nothing,
     /// which is worse than giving it its own cache. Sharing safely across concurrent runs needs
@@ -1459,6 +1532,19 @@ mod tests {
         let p = PathPolicy::plan_mode();
         assert_eq!(p.allow_write_globs, vec![PLAN_ARTIFACT_REL]);
         assert!(!p.writes_disabled());
+    }
+
+    #[test]
+    fn path_policy_accepts_a_dispatch_write_scope_without_other_fields() {
+        let policy: PathPolicy = serde_json::from_value(serde_json::json!({
+            "write_scope": { "allow_globs": ["docs/**"] }
+        }))
+        .expect("scope-only path policy");
+        assert_eq!(policy.allow_write_globs, vec!["**"]);
+        assert_eq!(policy.deny_globs, PathPolicy::default().deny_globs);
+        assert!(policy.write_scope.is_active());
+        assert!(policy.write_scope.permits("docs/guide.md")); // docs-check: ignore
+        assert!(!policy.write_scope.permits("src/main.rs"));
     }
 
     #[test]

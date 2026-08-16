@@ -327,28 +327,8 @@ fn normalize_docker_path(path: &str) -> String {
     path.replace('\\', "/")
 }
 
-/// Strip Windows extended-length prefixes so paths can be passed to git and other CLIs.
-///
-/// `std::fs::canonicalize` on Windows returns `\\?\C:\...` (or `\\?\UNC\...`). Git for Windows
-/// turns that into `//?/C:/...` and fails with "could not create leading directories … Invalid
-/// argument". Host `current_dir` is similarly happier with a plain drive path.
-///
-/// Idempotent on non-Windows / already-stripped paths.
-pub fn strip_extended_path_prefix(path: &Path) -> PathBuf {
-    let s = path.to_string_lossy();
-    if let Some(rest) = s.strip_prefix(r"\\?\") {
-        if let Some(unc) = rest.strip_prefix(r"UNC\") {
-            return PathBuf::from(format!(r"\\{unc}"));
-        }
-        return PathBuf::from(rest);
-    }
-    // Defensive: if a caller already stringified the extended form with forward slashes.
-    if let Some(rest) = s.strip_prefix("//?/") {
-        let rest = rest.replace('/', "\\");
-        return PathBuf::from(rest);
-    }
-    path.to_path_buf()
-}
+/// Backward-compatible name for the shared child-process path normalization rule.
+pub use liberado_common::path::child_process_path as strip_extended_path_prefix;
 
 /// Path string safe for `git -C` and similar CLIs (extended prefix stripped).
 pub fn path_for_cli(path: &Path) -> String {

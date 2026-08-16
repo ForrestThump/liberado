@@ -48,6 +48,7 @@ sha2 = "0.10"
 rand = "0.8"
 cron = "0.12"
 regex = "1"
+notify = "8"
 proptest = "1"
 gix = { version = "0.86", default-features = false, features = ["max-performance-safe", "blocking-network-client", "blob-diff", "worktree-mutation", "sha1", "excludes", "worktree-stream", "status"] }
 glob = "0.3"
@@ -94,6 +95,7 @@ liberado-coder-tools = { path = "crates/coder-tools" }
 liberado-session = { path = "crates/session" }
 liberado-session-store = { path = "crates/session-store" }
 liberado-dispatch-pack = { path = "crates/dispatch-pack" }
+liberado-harness-eval = { path = "crates/harness-eval" }
 
 # --- co-developed path dependencies (Decision 7) ---
 # Pinned to whatever is checked out in the sibling directories (currently the
