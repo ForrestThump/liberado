@@ -361,6 +361,27 @@ pub struct HarnessResult {
     pub accepted: bool,
     #[serde(default)]
     pub diagnostics: Vec<String>,
+    /// Wall-clock start of the harness run, parsed from its `run-status.txt`. `None` when the
+    /// adapter produced no run-status (e.g. a launch failure before the process spawned).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started_at: Option<DateTime<Utc>>,
+    /// Wall-clock end of the harness run, parsed from its `run-status.txt`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub finished_at: Option<DateTime<Utc>>,
+    /// Run duration in seconds, derived from `started_at`/`finished_at`. Kept as a first-class field
+    /// so scoreboards never have to recompute it by hand (the source of historical analysis errors).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_secs: Option<f64>,
+    /// Model turns consumed, parsed from the harness's native transcript (Liberado `coder-traces`,
+    /// pi `session.jsonl`). `None` when the transcript is absent or unparseable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turns_used: Option<u32>,
+    /// Prompt tokens consumed across the run, parsed from the harness's native transcript.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tokens_in: Option<u64>,
+    /// Completion tokens produced across the run, parsed from the harness's native transcript.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tokens_out: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
