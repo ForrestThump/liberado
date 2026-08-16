@@ -23,8 +23,8 @@ pub fn run(args: &[String]) -> Result<(), Box<dyn Error>> {
 
 pub fn usage() -> &'static str {
     "usage:\n  \
-     liberado coder compare submit --task <file> [pins and scope] [--wait]\n  \
-     liberado coder compare doctor --task <file> [pins and scope]\n  \
+     liberado coder compare submit --task <file> [pins] [--wait]\n  \
+     liberado coder compare doctor --task <file> [pins]\n  \
      liberado coder compare status <job-id> [--source <repo>]\n  \
      liberado coder compare await <job-id> [--timeout-secs <n>] [--source <repo>]\n  \
      liberado coder compare cancel <job-id> [--source <repo>]\n  \
@@ -44,7 +44,6 @@ fn submit(args: &[String]) -> Result<(), Box<dyn Error>> {
     let mut limits = ResourceLimits::default();
     let mut max_turns = 400;
     let mut task_aware_context = false;
-    let mut write_scope = WriteScope::default();
     let mut acceptance_overlay = None;
     let mut liberado_bin = None;
     let mut pi_bin = None;
@@ -81,12 +80,6 @@ fn submit(args: &[String]) -> Result<(), Box<dyn Error>> {
                     .saturating_mul(1024 * 1024 * 1024)
             }
             "--task-aware-context" => task_aware_context = true,
-            "--allow-change" => write_scope
-                .allow
-                .push(next(args, &mut index, flag)?.to_string()),
-            "--deny-change" => write_scope
-                .deny
-                .push(next(args, &mut index, flag)?.to_string()),
             "--acceptance-overlay" => {
                 acceptance_overlay = Some(PathBuf::from(next(args, &mut index, flag)?))
             }
@@ -141,7 +134,6 @@ fn submit(args: &[String]) -> Result<(), Box<dyn Error>> {
         limits,
         verifier: VerifierProfile::WorkspaceTests,
         task_aware_context,
-        write_scope,
         acceptance_overlay,
         experiment,
     })?;
@@ -178,7 +170,6 @@ fn doctor(args: &[String]) -> Result<(), Box<dyn Error>> {
     let mut limits = ResourceLimits::default();
     let mut max_turns = 400;
     let mut task_aware_context = false;
-    let mut write_scope = WriteScope::default();
     let mut acceptance_overlay = None;
     let mut index = 0;
     while index < args.len() {
@@ -204,12 +195,6 @@ fn doctor(args: &[String]) -> Result<(), Box<dyn Error>> {
                     .saturating_mul(1024 * 1024 * 1024)
             }
             "--task-aware-context" => task_aware_context = true,
-            "--allow-change" => write_scope
-                .allow
-                .push(next(args, &mut index, flag)?.to_string()),
-            "--deny-change" => write_scope
-                .deny
-                .push(next(args, &mut index, flag)?.to_string()),
             "--acceptance-overlay" => {
                 acceptance_overlay = Some(PathBuf::from(next(args, &mut index, flag)?))
             }
@@ -248,7 +233,6 @@ fn doctor(args: &[String]) -> Result<(), Box<dyn Error>> {
         limits,
         verifier: VerifierProfile::WorkspaceTests,
         task_aware_context,
-        write_scope,
         acceptance_overlay,
         experiment: None,
     };

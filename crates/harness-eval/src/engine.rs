@@ -242,12 +242,6 @@ fn legacy_run_args(
     if spec.task_aware_context {
         args.push("--task-aware-context".to_string());
     }
-    for pattern in &spec.write_scope.allow {
-        args.extend(["--allow-change".to_string(), pattern.clone()]);
-    }
-    for pattern in &spec.write_scope.deny {
-        args.extend(["--deny-change".to_string(), pattern.clone()]);
-    }
     if let Some(acceptance) = &spec.acceptance {
         args.extend([
             "--acceptance-overlay".to_string(),
@@ -366,20 +360,6 @@ fn classify(
                 .or(run_error)
                 .unwrap_or_else(|| "harness timed out".to_string()),
         ));
-    }
-    for result in harnesses.values() {
-        let verifier_stderr = fs::read_to_string(
-            artifact_root
-                .join(&result.harness)
-                .join("verifier.stderr.log"),
-        )
-        .unwrap_or_default();
-        if verifier_stderr.contains("outside the dispatch write scope") {
-            return Some((
-                FailureClass::ScopeViolation,
-                verifier_stderr.trim().to_string(),
-            ));
-        }
     }
     // A missing exit code means the adapter never produced a result. Treat that as a host
     // infrastructure failure before checking ordinary non-zero harness exits.
@@ -607,7 +587,6 @@ mod tests {
             },
             verifier: VerifierProfile::WorkspaceTests,
             task_aware_context: false,
-            write_scope: WriteScope::default(),
             acceptance: None,
             experiment: None,
             experiment_id: String::new(),

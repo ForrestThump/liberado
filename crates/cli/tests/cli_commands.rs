@@ -279,10 +279,6 @@ fn compare_run_uses_owned_paths_and_saves_both_results() {
             "--api-key-env",
             "LIBERADO_COMPARE_TEST_KEY",
             "--task-aware-context",
-            "--allow-change",
-            "tracked.txt",
-            "--deny-change",
-            "tracked.txt",
             "--liberado-bin",
             fake.to_str().expect("UTF-8 fake harness path"),
             "--pi-bin",
@@ -338,23 +334,19 @@ fn compare_run_uses_owned_paths_and_saves_both_results() {
     assert!(tuning.contains("warmup = false"));
     assert!(tuning.contains("[coder.repo_map]"));
     assert!(tuning.contains("task_aware = true"));
-    assert!(tuning.contains("[coder.path_policy.write_scope]"));
-    assert!(tuning.contains("allow_globs = [\"tracked.txt\"]"));
-    assert!(tuning.contains("deny_globs = [\"tracked.txt\"]"));
     let pins = fs::read_to_string(run.join("pins.txt")).expect("captured comparison pins");
     assert!(pins.contains("task_aware_context=true"));
-    assert!(pins.contains("write_scope_allow=tracked.txt"));
-    assert!(pins.contains("write_scope_deny=tracked.txt"));
+    assert!(!pins.contains("write_scope_"));
 
     remove_compare_worktrees(source.path(), &run);
 }
 
 #[test]
-fn compare_run_rejects_changed_paths_on_the_dispatch_blacklist() {
+fn compare_run_does_not_enforce_native_dispatch_scope() {
     let source = tempdir().expect("temporary source repository");
     let runs = tempdir().expect("temporary run parent");
     initialize_compare_source(source.path());
-    let run = runs.path().join("compare-change-scope");
+    let run = runs.path().join("compare-no-change-scope");
     let prepare = run_cli(
         source.path(),
         &[
@@ -383,8 +375,6 @@ fn compare_run_rejects_changed_paths_on_the_dispatch_blacklist() {
             task.to_str().expect("UTF-8 task path"),
             "--api-key-env",
             "LIBERADO_COMPARE_TEST_KEY",
-            "--deny-change",
-            "tracked.txt",
             "--liberado-bin",
             fake.to_str().expect("UTF-8 fake harness path"),
             "--pi-bin",
@@ -395,8 +385,9 @@ fn compare_run_rejects_changed_paths_on_the_dispatch_blacklist() {
         .output()
         .expect("comparison run starts");
     assert!(
-        !output.status.success(),
-        "blacklisted changes must fail the common gate"
+        output.status.success(),
+        "comparison must not impose a native dispatch scope: {}",
+        String::from_utf8_lossy(&output.stderr)
     );
 
     for harness in ["liberado", "pi"] {
@@ -404,10 +395,7 @@ fn compare_run_rejects_changed_paths_on_the_dispatch_blacklist() {
         let result: serde_json::Value =
             serde_json::from_slice(&fs::read(artifacts.join("result.json")).expect("saved result"))
                 .expect("valid saved result");
-        assert_eq!(result["verifier_exit_code"], 126);
-        let stderr =
-            fs::read_to_string(artifacts.join("verifier.stderr.log")).expect("scope verifier log");
-        assert!(stderr.contains("tracked.txt"), "{stderr}");
+        assert_eq!(result["verifier_exit_code"], 0);
     }
 
     remove_compare_worktrees(source.path(), &run);
