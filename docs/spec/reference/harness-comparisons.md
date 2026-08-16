@@ -120,6 +120,13 @@ inputs, and predictable outputs:
   report.md
 ```
 
+`report.json` carries, per harness, the exit and verifier codes, the archived HEAD, `accepted`,
+and — when the harness artifacts are present and parseable — the wall-clock window (`started_at`,
+`finished_at`, `duration_secs`), model turns used, and tokens in/out. Metrics are parsed from the
+harness's own artifacts (`run-status.txt`, Liberado `traces/*.json`, pi `sessions/*.jsonl`) and are
+omitted rather than invented when a transcript is missing or unparseable. Correctness — `accepted`
+= harness exit 0 and verifier exit 0 — is unchanged.
+
 The worker reports one terminal class: task failure, verifier failure, harness failure, timeout,
 host infrastructure failure, or cancelled. It does not silently discard malformed
 JSONL or malformed result JSON. On Windows, each paid harness process is assigned to a Job Object

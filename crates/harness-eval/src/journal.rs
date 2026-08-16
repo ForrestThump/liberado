@@ -325,19 +325,15 @@ fn render_report(report: &ComparisonReport) -> String {
             (Some(input), Some(output)) => format!("{input} in / {output} out"),
             _ => "unknown".to_string(),
         };
+        let window = match (result.started_at, result.finished_at) {
+            (Some(start), Some(finish)) => {
+                format!(" ({} -> {})", start.to_rfc3339(), finish.to_rfc3339())
+            }
+            _ => String::new(),
+        };
         text.push_str(&format!(
-            "  - wall-clock: {} ({} -> {})\n  - turns: {}\n  - tokens: {}\n",
-            duration,
-            result
-                .started_at
-                .map(|t| t.to_rfc3339())
-                .unwrap_or_default(),
-            result
-                .finished_at
-                .map(|t| t.to_rfc3339())
-                .unwrap_or_default(),
-            turns,
-            tokens
+            "  - wall-clock: {}{}\n  - turns: {}\n  - tokens: {}\n",
+            duration, window, turns, tokens
         ));
     }
     if !report.diagnostics.is_empty() {
