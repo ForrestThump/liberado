@@ -604,7 +604,7 @@ async fn handle_request(
                     "version": env!("CARGO_PKG_VERSION"),
                     "title": "Liberado (coding · chat · face)",
                 },
-                // loadSession stays false until durable history + replay ship (P3).
+                // Durable history and replay now back the loadSession capability.
                 // Advertising true made Paseo take the resume path and get an empty transcript.
                 "agentCapabilities": {
                     "loadSession": LOAD_SESSION_CAPABILITY,

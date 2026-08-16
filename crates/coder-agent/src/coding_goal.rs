@@ -5,6 +5,7 @@
 //! they remain available to pack-owned extensions, but a malformed known field now fails before a
 //! coding session can select or write a workspace.
 
+use liberado_coder_core::DispatchWriteScope;
 use serde::{Deserialize, Serialize};
 
 /// Stable, surface-supplied fields of a coding goal payload.
@@ -25,6 +26,8 @@ pub struct CodingGoalPayload {
     force_host_local: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     fanout_child: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    write_scope: Option<DispatchWriteScope>,
     /// Pack-owned extensions. This preserves forwards compatibility without making the session
     /// kernel understand coding controls.
     #[serde(flatten)]
@@ -78,6 +81,10 @@ impl CodingGoalPayload {
         self.fanout_child.unwrap_or(false)
     }
 
+    pub fn write_scope(&self) -> Option<&DispatchWriteScope> {
+        self.write_scope.as_ref()
+    }
+
     /// Record the configuration-resolved project root. A client path never survives this rewrite.
     pub fn set_authorized_workspace(&mut self, project: String, workspace_root: String) {
         self.project = Some(project);
@@ -127,5 +134,14 @@ mod tests {
         let error = CodingGoalPayload::parse(&json!({ "workspace_root": 42 }))
             .expect_err("workspace must be a string");
         assert!(error.contains("expected a string"), "error: {error}");
+    }
+
+    #[test]
+    fn rejects_malformed_write_scope_before_policy_resolution() {
+        let error = CodingGoalPayload::parse(&json!({
+            "write_scope": { "allow": ["docs/**"] }
+        }))
+        .expect_err("write_scope must use its typed fields");
+        assert!(error.contains("unknown field `allow`"), "error: {error}");
     }
 }

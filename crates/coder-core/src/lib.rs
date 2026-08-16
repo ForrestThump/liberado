@@ -362,6 +362,7 @@ pub const PLAN_ARTIFACT_REL: &str = ".liberado/plan.md";
 /// no allow list, the deny list blocks matching paths. This scope can narrow a dispatch, but it
 /// never relaxes the enclosing [`PathPolicy`] or a restricted [`CodingMode`].
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct DispatchWriteScope {
     #[serde(default)]
     pub allow_globs: Vec<String>,

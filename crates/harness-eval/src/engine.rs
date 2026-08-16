@@ -79,7 +79,7 @@ pub fn execute(
             started_at,
             &mut tracker,
             FailureClass::HostInfrastructureFailure,
-            "the v1 coordinator requires the liberado and pi adapters".to_string(),
+            "the v1 coordinator requires the liberado and pi adapters in that order".to_string(),
             BTreeMap::new(),
             Some(preflight.base_commit),
         );
@@ -381,16 +381,18 @@ fn classify(
             ));
         }
     }
+    // A missing exit code means the adapter never produced a result. Treat that as a host
+    // infrastructure failure before checking ordinary non-zero harness exits.
+    if harnesses.values().all(|result| result.exit_code.is_none())
+        && let Some(message) = run_error.clone()
+    {
+        return Some((FailureClass::HostInfrastructureFailure, message));
+    }
     if harnesses.values().any(|result| result.exit_code != Some(0)) {
         return Some((
             FailureClass::HarnessFailure,
             run_error.unwrap_or_else(|| "one or more harnesses failed".to_string()),
         ));
-    }
-    if harnesses.values().all(|result| result.exit_code.is_none())
-        && let Some(message) = run_error
-    {
-        return Some((FailureClass::HostInfrastructureFailure, message));
     }
     if harnesses
         .values()
@@ -521,6 +523,42 @@ impl<'a> StateTracker<'a> {
 mod tests {
     use super::*;
     use liberado_common::process::std_command;
+
+    #[test]
+    fn missing_harness_results_are_host_infrastructure_failures() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = JobStore::new(temp.path().join("jobs"));
+        let artifact_root = temp.path().join("artifacts");
+        let job_id = JobId::new();
+        let harnesses = ["liberado", "pi"]
+            .into_iter()
+            .map(|harness| {
+                (
+                    harness.to_string(),
+                    HarnessResult {
+                        harness: harness.to_string(),
+                        exit_code: None,
+                        verifier_exit_code: None,
+                        head_commit: None,
+                        archive_branch: None,
+                        accepted: false,
+                        diagnostics: Vec::new(),
+                    },
+                )
+            })
+            .collect();
+        let run_result: Result<(), Box<dyn Error>> = Err("warm-up failed".into());
+
+        let classification = classify(&run_result, &harnesses, &artifact_root, &store, &job_id);
+
+        assert_eq!(
+            classification,
+            Some((
+                FailureClass::HostInfrastructureFailure,
+                "warm-up failed".to_string()
+            ))
+        );
+    }
 
     #[test]
     fn unpaid_preflight_failure_is_terminal_and_reported() {
