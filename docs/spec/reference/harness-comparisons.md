@@ -29,6 +29,19 @@ environment, so the credential alias resolves from the process environment; ther
 daemon, startup key, background binary, or registry read. `--no-spawn` creates the job without
 dispatching it, for foreground diagnosis.
 
+Two prerequisites are runtime state, tracked nowhere in Git, and neither is created for you:
+
+- **The executor binary.** `submit` spawns `liberado-harness-worker` resolved as a sibling of the
+  running `liberado` executable. Build both: `cargo build -p liberado-cli` and
+  `cargo build -p liberado-harness-eval --bins` (or `cargo install --path` both). If the executor
+  binary is missing, `submit` writes the job and then fails at spawn, leaving the job `Accepted`
+  with no lease. Once the binary exists, run such a job — or any `--no-spawn` job — in the
+  foreground with `liberado-harness-worker run-job <job-id> --source <repo>`.
+- **The executor policy** at `.liberado/harness-worker.json`. Create it once per repository;
+  `WorkerPolicy::for_repository` in `crates/harness-eval/src/contract.rs` is the canonical default
+  (openrouter only, the alias `openrouter-default` mapping to `OPENROUTER_API_KEY`, a 400-turn
+  ceiling, 20 GiB free-disk floor). `doctor` fails fast and names the path when it is missing.
+
 The transport is a repository-scoped durable spool at `.liberado/harness-jobs/`. The repository
 filesystem permissions are its access boundary. A request cannot contain a shell command or a
 provider secret. The executor also applies its own repository, provider, model, turn, timeout, disk,
@@ -179,7 +192,9 @@ liberado coder compare run <run-dir> --task <task-file> \
 `run` copies the task to `<run-dir>/task.txt`, writes the exact pins, and prewarms both isolated
 caches with `cargo check --workspace --locked`. Both warm-ups must pass before a model call.
 Liberado then builds `liberado-coder-runner` in its own pinned worktree and target directory; it
-never relies on an unrelated caller `target/debug` binary. Liberado runs first. Pi runs second.
+never relies on an unrelated caller `target/debug` binary. The harnesses run in the declared run
+order: `--run-order pi,liberado` flips a direct run, and submitted jobs alternate the order per job
+and record it in `report.json` and `pins.txt`.
 After each harness, the runner applies the same independent `cargo test --workspace --no-fail-fast`
 gate. A harness exit of zero does not hide a red common gate. Pi receives the captured task through
 its supported `@file` input, which avoids unsafe Windows batch-file quoting.

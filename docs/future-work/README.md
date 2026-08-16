@@ -65,7 +65,6 @@ Prefer archive/ for completed plans.
 |-----|--------|------|
 | [cadence-triggered-maintenance-agents.md](cadence-triggered-maintenance-agents.md) | draft | plan |
 | [delegation-failure-modes.md](delegation-failure-modes.md) | historical | finding |
-| [harness-comparison-redesign-2026-08.md](harness-comparison-redesign-2026-08.md) | draft | plan |
 | [model-knob-profiles.md](model-knob-profiles.md) | draft | plan |
 | [mvl-live-comparison-prep.md](mvl-live-comparison-prep.md) | superseded | plan |
 

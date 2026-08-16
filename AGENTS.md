@@ -125,7 +125,10 @@ production entry point still reads it.
 - `crates/harness-eval/` and `liberado coder compare prepare|run|save|submit|await` — own durable Liberado/Pi comparisons: pinned
   worktrees, separate Cargo caches, 30-minute compile ceilings, spawn-on-submit dispatch behind a
   spool-wide runner lock (one paid run at a time), saved Git refs, and stable logs/traces under
-  one run directory. See `docs/spec/reference/harness-comparisons.md`.
+  one run directory. Dispatch needs two pieces of untracked runtime state: the
+  `liberado-harness-worker` binary as a sibling of the `liberado` executable, and the executor
+  policy at `.liberado/harness-worker.json`. See
+  `docs/spec/reference/harness-comparisons.md`.
 
 **A `succeeded` report is not accepted while `cargo check` is red.** The coding pack refuses it
 in the same executor conversation (`WorkspaceCompileGate`, PR #163). Partial, Failed, wrap-up

@@ -1,18 +1,24 @@
 ---
 kind: plan
-status: draft
+status: implemented
 authority: advisory
 domain: coding-harness
 canonical_for: harness-comparison-redesign
-open_items: true
+open_items: false
 ---
 
 # Harness comparison redesign — dispatch, wake, and fairness
 
-**Status**: Plan, recorded 2026-08-16. Reviewed against the code at `28dabad` and the job spool
-history under `.liberado/harness-jobs/`. No code yet. When this ships, update
-[`spec/reference/harness-comparisons.md`](../spec/reference/harness-comparisons.md) in the same PR —
-that document describes the daemon topology this plan removes.
+> **Archived.** This plan is not current truth. Open work lives in [backlog.md](../backlog.md) and
+> [roadmap.md](../../roadmap.md). See [doc-authority.md](../../spec/reference/doc-authority.md).
+
+**Status**: Implemented 2026-08-16 in six PRs reviewed and merged to `main` (#174 fairness pins,
+#175 metrics roll-up, #176 run order + real adapter trait, #177 per-job detached executor, #178
+typed engine path, #180 live-test fixes). The plan kept one documented correction (F2 keeps
+`deny = ["git"]`, which matches native `CommandPolicy::default()`). The topology this plan removes
+is gone from [`spec/reference/harness-comparisons.md`](../../spec/reference/harness-comparisons.md);
+that document describes the shipped state. Recorded 2026-08-16 from the code at `28dabad` and the
+job spool history under `.liberado/harness-jobs/`.
 
 **Owner's framing:** *"I want an agent to dispatch an identical prompt to Pi and the Liberado
 coding pack, be free to talk to me and work on other things (non-blocking dispatch), and have it

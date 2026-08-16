@@ -41,6 +41,7 @@ Authority model: [doc-authority.md](spec/reference/doc-authority.md).
 | [docs/future-work/archive/chat-search-plan.md](future-work/archive/chat-search-plan.md) | plan | implemented | advisory | chat | chat-search |
 | [docs/future-work/archive/delegated-work-is-discarded-at-the-seam.md](future-work/archive/delegated-work-is-discarded-at-the-seam.md) | finding | implemented | evidence | delegation | delegated-work-seam |
 | [docs/future-work/archive/docs_fixup.md](future-work/archive/docs_fixup.md) | plan | implemented | advisory | docs | docs-lifecycle |
+| [docs/future-work/archive/harness-comparison-redesign-2026-08.md](future-work/archive/harness-comparison-redesign-2026-08.md) | plan | implemented | advisory | coding-harness | harness-comparison-redesign |
 | [docs/future-work/archive/parallel-deliverables-2026-08-round-2.md](future-work/archive/parallel-deliverables-2026-08-round-2.md) | plan | implemented | advisory | process | parallel-deliverables-r2 |
 | [docs/future-work/archive/parallel-deliverables-2026-08.md](future-work/archive/parallel-deliverables-2026-08.md) | plan | implemented | advisory | process | parallel-deliverables-r1 |
 | [docs/future-work/backlog.md](future-work/backlog.md) | plan | active | implementation | product | implementation-backlog |
@@ -55,7 +56,6 @@ Authority model: [doc-authority.md](spec/reference/doc-authority.md).
 | [docs/future-work/f12-compare3-harness-failures-2026-08.md](future-work/f12-compare3-harness-failures-2026-08.md) | finding | active | evidence | coding-harness | f12-compare3-harness-failures |
 | [docs/future-work/harness-baseline-0.7-c3-2026-08.md](future-work/harness-baseline-0.7-c3-2026-08.md) | finding | active | evidence | coding-harness | harness-baseline-0.7-c3 |
 | [docs/future-work/harness-bench-gaps-and-levers.md](future-work/harness-bench-gaps-and-levers.md) | finding | active | advisory | coding-harness | harness-bench-gaps |
-| [docs/future-work/harness-comparison-redesign-2026-08.md](future-work/harness-comparison-redesign-2026-08.md) | plan | draft | advisory | coding-harness | harness-comparison-redesign |
 | [docs/future-work/harness-study-2026-08.md](future-work/harness-study-2026-08.md) | finding | active | advisory | coding-harness | harness-study-2026-08 |
 | [docs/future-work/heuristics-tuning-engine-plan.md](future-work/heuristics-tuning-engine-plan.md) | plan | active | implementation | tuning | heuristics-tuning-engine |
 | [docs/future-work/latency-and-routing-observability-plan.md](future-work/latency-and-routing-observability-plan.md) | plan | active | implementation | observability | latency-routing-observability |
