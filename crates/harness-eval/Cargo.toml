@@ -15,10 +15,6 @@ path = "src/lib.rs"
 name = "liberado-harness-worker"
 path = "src/bin/worker.rs"
 
-[[bin]]
-name = "liberado-harness-worker-background"
-path = "src/bin/worker_background.rs"
-
 [dependencies]
 chrono = { workspace = true }
 liberado-coder-core = { workspace = true }

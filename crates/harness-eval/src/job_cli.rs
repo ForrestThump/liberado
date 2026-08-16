@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use crate::contract::*;
-use crate::journal::JobStore;
+use crate::journal::{JobStore, RunnerLock};
 use crate::{preflight, repository_root, transport, worker};
 
 pub fn run(args: &[String]) -> Result<(), Box<dyn Error>> {
@@ -16,20 +16,18 @@ pub fn run(args: &[String]) -> Result<(), Box<dyn Error>> {
         Some("await") => await_job(&args[1..]),
         Some("cancel") => cancel(&args[1..]),
         Some("report") => report(&args[1..]),
-        Some("worker") => worker_command(&args[1..]),
         _ => Err(usage().into()),
     }
 }
 
 pub fn usage() -> &'static str {
     "usage:\n  \
-     liberado coder compare submit --task <file> [pins] [--wait]\n  \
+     liberado coder compare submit --task <file> [pins] [--wait] [--no-spawn]\n  \
      liberado coder compare doctor --task <file> [pins]\n  \
      liberado coder compare status <job-id> [--source <repo>]\n  \
-     liberado coder compare await <job-id> [--timeout-secs <n>] [--source <repo>]\n  \
+     liberado coder compare await <job-id> [--timeout-secs <n>] [--stall-secs <n>] [--source <repo>]\n  \
      liberado coder compare cancel <job-id> [--source <repo>]\n  \
-     liberado coder compare report <job-id> [--json] [--source <repo>]\n  \
-     liberado coder compare worker install|start|once [--source <repo>] [--worker-bin <path>]"
+     liberado coder compare report <job-id> [--json] [--source <repo>]"
 }
 
 fn submit(args: &[String]) -> Result<(), Box<dyn Error>> {
@@ -51,6 +49,7 @@ fn submit(args: &[String]) -> Result<(), Box<dyn Error>> {
     let mut variable = None;
     let mut wait = false;
     let mut wait_timeout = None;
+    let mut no_spawn = false;
     let mut index = 0;
     while index < args.len() {
         let flag = args[index].as_str();
@@ -88,6 +87,7 @@ fn submit(args: &[String]) -> Result<(), Box<dyn Error>> {
             "--hypothesis" => hypothesis = Some(next(args, &mut index, flag)?.to_string()),
             "--variable" => variable = Some(next(args, &mut index, flag)?.to_string()),
             "--wait" => wait = true,
+            "--no-spawn" => no_spawn = true,
             "--timeout-secs" => {
                 wait_timeout = Some(positive_u64(next(args, &mut index, flag)?, flag)?)
             }
@@ -99,8 +99,14 @@ fn submit(args: &[String]) -> Result<(), Box<dyn Error>> {
         }
         index += 1;
     }
-    let repository = repository.unwrap_or(repository_root()?);
+    let repository = repository.unwrap_or(repository_root()?).canonicalize()?;
     let task_file = task.ok_or("compare submit requires --task <file>")?;
+    // Refuse a new run while another comparison holds the runner lock. One at a time is a
+    // measurement policy, not a limitation.
+    let store = JobStore::for_repository(&repository);
+    if RunnerLock::is_held(&store) {
+        return Err("another comparison is already running in this repository".into());
+    }
     let experiment = match (hypothesis, variable) {
         (None, None) => None,
         (Some(hypothesis), Some(variable)) => Some(Experiment {
@@ -145,11 +151,15 @@ fn submit(args: &[String]) -> Result<(), Box<dyn Error>> {
     println!("{}", spec.job_id);
     println!("experiment_id={}", spec.experiment_id);
     println!("status=accepted");
+    if !no_spawn {
+        worker::spawn_executor(&repository, &spec.job_id)?;
+    }
     if wait {
         let state = transport::await_terminal(
             &repository,
             &spec.job_id,
             wait_timeout.map(Duration::from_secs),
+            None,
         )?;
         let report_path = JobStore::for_repository(&repository)
             .job_root(&spec.job_id)
@@ -265,28 +275,33 @@ fn doctor(args: &[String]) -> Result<(), Box<dyn Error>> {
 }
 
 fn status(args: &[String]) -> Result<(), Box<dyn Error>> {
-    let (repository, job_id, _) = common_job_args(args, false)?;
+    let job = common_job_args(args, false)?;
     println!(
         "{}",
-        serde_json::to_string_pretty(&transport::status(&repository, &job_id)?)?
+        serde_json::to_string_pretty(&transport::status(&job.repository, &job.job_id)?)?
     );
     Ok(())
 }
 
 fn await_job(args: &[String]) -> Result<(), Box<dyn Error>> {
-    let (repository, job_id, timeout) = common_job_args(args, true)?;
-    let state = transport::await_terminal(&repository, &job_id, timeout.map(Duration::from_secs))?;
+    let job = common_job_args(args, true)?;
+    let state = transport::await_terminal(
+        &job.repository,
+        &job.job_id,
+        job.timeout.map(Duration::from_secs),
+        job.stall_secs,
+    )?;
     if state.status == JobStatus::Succeeded {
         Ok(())
     } else {
-        Err(format!("job {} finished as {:?}", job_id, state.status).into())
+        Err(format!("job {} finished as {:?}", job.job_id, state.status).into())
     }
 }
 
 fn cancel(args: &[String]) -> Result<(), Box<dyn Error>> {
-    let (repository, job_id, _) = common_job_args(args, false)?;
-    transport::cancel(&repository, &job_id)?;
-    println!("cancel requested: {job_id}");
+    let job = common_job_args(args, false)?;
+    transport::cancel(&job.repository, &job.job_id)?;
+    println!("cancel requested: {}", job.job_id);
     Ok(())
 }
 
@@ -297,60 +312,33 @@ fn report(args: &[String]) -> Result<(), Box<dyn Error>> {
         .filter(|argument| argument.as_str() != "--json")
         .cloned()
         .collect();
-    let (repository, job_id, _) = common_job_args(&filtered, false)?;
+    let job = common_job_args(&filtered, false)?;
     if json {
         println!(
             "{}",
-            serde_json::to_string_pretty(&transport::report(&repository, &job_id)?)?
+            serde_json::to_string_pretty(&transport::report(&job.repository, &job.job_id)?)?
         );
     } else {
-        let path = crate::journal::JobStore::for_repository(&repository)
-            .job_root(&job_id)
+        let path = crate::journal::JobStore::for_repository(&job.repository)
+            .job_root(&job.job_id)
             .join("report.md");
         print!("{}", std::fs::read_to_string(path)?);
     }
     Ok(())
 }
 
-fn worker_command(args: &[String]) -> Result<(), Box<dyn Error>> {
-    let action = args.first().ok_or(usage())?;
-    let mut repository = None;
-    let mut worker_binary = None;
-    let mut index = 1;
-    while index < args.len() {
-        let flag = args[index].as_str();
-        match flag {
-            "--source" => repository = Some(PathBuf::from(next(args, &mut index, flag)?)),
-            "--worker-bin" => worker_binary = Some(PathBuf::from(next(args, &mut index, flag)?)),
-            other => return Err(format!("unknown compare worker argument: {other}").into()),
-        }
-        index += 1;
-    }
-    let repository = repository.unwrap_or(repository_root()?).canonicalize()?;
-    let policy = transport::policy_path(&repository);
-    match action.as_str() {
-        "install" => {
-            let path = worker::install(&repository, worker_binary.as_deref())?;
-            println!("worker installed and started");
-            println!("policy={}", path.display());
-        }
-        "start" => {
-            worker::start(&policy, worker_binary.as_deref())?;
-            println!("worker started");
-        }
-        "once" => worker::run(&policy, true)?,
-        _ => return Err(usage().into()),
-    }
-    Ok(())
+struct JobArgs {
+    repository: PathBuf,
+    job_id: JobId,
+    timeout: Option<u64>,
+    stall_secs: Option<u64>,
 }
 
-fn common_job_args(
-    args: &[String],
-    allow_timeout: bool,
-) -> Result<(PathBuf, JobId, Option<u64>), Box<dyn Error>> {
+fn common_job_args(args: &[String], allow_timeout: bool) -> Result<JobArgs, Box<dyn Error>> {
     let mut repository = None;
     let mut job_id = None;
     let mut timeout = None;
+    let mut stall_secs = None;
     let mut index = 0;
     while index < args.len() {
         let value = args[index].as_str();
@@ -358,6 +346,9 @@ fn common_job_args(
             "--source" => repository = Some(PathBuf::from(next(args, &mut index, value)?)),
             "--timeout-secs" if allow_timeout => {
                 timeout = Some(positive_u64(next(args, &mut index, value)?, value)?)
+            }
+            "--stall-secs" if allow_timeout => {
+                stall_secs = Some(positive_u64(next(args, &mut index, value)?, value)?)
             }
             flag if flag.starts_with('-') => return Err(format!("unknown argument: {flag}").into()),
             value => {
@@ -369,11 +360,12 @@ fn common_job_args(
         }
         index += 1;
     }
-    Ok((
-        repository.unwrap_or(repository_root()?).canonicalize()?,
-        job_id.ok_or("job id is required")?,
+    Ok(JobArgs {
+        repository: repository.unwrap_or(repository_root()?).canonicalize()?,
+        job_id: job_id.ok_or("job id is required")?,
         timeout,
-    ))
+        stall_secs,
+    })
 }
 
 fn next<'a>(args: &'a [String], index: &mut usize, flag: &str) -> Result<&'a str, Box<dyn Error>> {

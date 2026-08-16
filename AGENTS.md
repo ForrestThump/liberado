@@ -123,9 +123,9 @@ production entry point still reads it.
 - `Skills/` — task playbooks (e.g. `cold-review-pr.md`).
 - `liberado shepherd` — drives agent PRs to ready-or-blocked on the same differential rule.
 - `crates/harness-eval/` and `liberado coder compare prepare|run|save|submit|await` — own durable Liberado/Pi comparisons: pinned
-  worktrees, separate Cargo caches, 30-minute compile ceilings, sequential launches, saved Git
-  refs, and stable logs/traces under one run directory. See
-  `docs/spec/reference/harness-comparisons.md`.
+  worktrees, separate Cargo caches, 30-minute compile ceilings, spawn-on-submit dispatch behind a
+  spool-wide runner lock (one paid run at a time), saved Git refs, and stable logs/traces under
+  one run directory. See `docs/spec/reference/harness-comparisons.md`.
 
 **A `succeeded` report is not accepted while `cargo check` is red.** The coding pack refuses it
 in the same executor conversation (`WorkspaceCompileGate`, PR #163). Partial, Failed, wrap-up

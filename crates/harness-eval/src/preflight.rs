@@ -5,8 +5,6 @@ use std::error::Error;
 use std::ffi::OsStr;
 use std::io;
 use std::path::{Path, PathBuf};
-#[cfg(windows)]
-use std::process::Stdio;
 
 use liberado_common::process::std_command;
 
@@ -229,34 +227,15 @@ fn validate_policy(spec: &JobSpec, policy: &WorkerPolicy) -> Result<(), Box<dyn 
 }
 
 fn resolve_user_credential(environment: &str) -> Result<ResolvedCredential, Box<dyn Error>> {
+    // The executor inherits the submitter's environment. The dispatching agent is trusted, so the
+    // credential alias resolves from the process environment; there is no HKCU fallback.
     if let Some(value) = std::env::var_os(environment)
         && !value.is_empty()
     {
         return Ok(ResolvedCredential(value.to_string_lossy().into_owned()));
     }
-    #[cfg(windows)]
-    {
-        // The worker runs under the logged-in user. Reading HKCU at execution time avoids a stale
-        // parent-process environment block and is the persistent fix for user-scoped API keys.
-        let output = std_command("reg.exe")
-            .args(["query", "HKCU\\Environment", "/v", environment])
-            .stdin(Stdio::null())
-            .output()?;
-        if output.status.success() {
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            for line in stdout.lines().rev() {
-                let columns: Vec<_> = line.split_whitespace().collect();
-                if columns.first().copied() == Some(environment) && columns.len() >= 3 {
-                    let value = columns[2..].join(" ");
-                    if !value.is_empty() {
-                        return Ok(ResolvedCredential(value));
-                    }
-                }
-            }
-        }
-    }
     Err(format!(
-        "credential environment '{}' is not available to the user-context worker",
+        "credential environment '{}' is not available to the executor",
         environment
     )
     .into())

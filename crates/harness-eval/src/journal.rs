@@ -5,7 +5,9 @@ use std::io::{self, BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use ulid::Ulid;
 
-use crate::contract::{ComparisonReport, JobEvent, JobId, JobSpec, JobState};
+use crate::contract::{
+    ComparisonReport, FailureClass, JobEvent, JobId, JobSpec, JobState, JobStatus,
+};
 
 pub const JOBS_DIRECTORY: &str = ".liberado/harness-jobs";
 
@@ -232,6 +234,72 @@ impl JobStore {
         }
         Ok(count)
     }
+
+    /// Mark a non-terminal job failed with a host-infrastructure class. Used by the dead-lease
+    /// sweep and by the executor when it cannot acquire the runner lock. Idempotent: a terminal
+    /// job is left untouched.
+    pub fn mark_failed(&self, job_id: &JobId, message: String) -> io::Result<()> {
+        let mut state = self.load_state(job_id)?;
+        if state.status.is_terminal() {
+            return Ok(());
+        }
+        state.revision += 1;
+        state.status = JobStatus::Failed;
+        state.phase = "host_failure".to_string();
+        state.updated_at = chrono::Utc::now();
+        state.failure_class = Some(FailureClass::HostInfrastructureFailure);
+        state.message = Some(message.clone());
+        self.write_state(&state)?;
+        self.append_job_event(
+            job_id,
+            &JobEvent {
+                sequence: state.revision,
+                at: state.updated_at,
+                status: state.status,
+                phase: state.phase.clone(),
+                message: message.clone(),
+            },
+        )?;
+        let spec = self.load_spec(job_id)?;
+        self.write_report(&ComparisonReport {
+            version: 1,
+            job_id: job_id.clone(),
+            experiment_id: spec.experiment_id,
+            status: JobStatus::Failed,
+            failure_class: Some(FailureClass::HostInfrastructureFailure),
+            base_commit: None,
+            started_at: state.updated_at,
+            finished_at: chrono::Utc::now(),
+            harnesses: Default::default(),
+            run_order: spec.run_order.clone(),
+            diagnostics: vec![message],
+            artifact_root: self.job_root(job_id).join("artifacts"),
+        })?;
+        Ok(())
+    }
+
+    /// If a non-terminal job's lease names a dead process, mark it failed. A dead executor leaves
+    /// a dead lease; the next `status`/`await` read sweeps it so the job does not stay accepted
+    /// forever.
+    pub fn sweep_dead_lease(&self, job_id: &JobId) -> io::Result<()> {
+        let state = self.load_state(job_id)?;
+        if state.status.is_terminal() {
+            return Ok(());
+        }
+        let lease = self.job_root(job_id).join("worker.lease");
+        if !lease.is_file() {
+            // Never started (for example a `--no-spawn` submit): not a dead lease.
+            return Ok(());
+        }
+        let pid = lease_pid(&lease).unwrap_or(0);
+        if pid != 0 && process_is_alive(pid) {
+            return Ok(());
+        }
+        self.mark_failed(
+            job_id,
+            "executor process is no longer alive; the comparison was interrupted".to_string(),
+        )
+    }
 }
 
 fn lease_pid(path: &Path) -> Option<u32> {
@@ -273,6 +341,54 @@ pub struct JobLease {
 }
 
 impl Drop for JobLease {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.path);
+    }
+}
+
+/// A spool-wide lock that serializes paid execution per repository. One comparison at a time is a
+/// measurement policy: parallel runs would contaminate wall-clock data. The executor holds this for
+/// the whole run; `submit` checks it and refuses when it is held.
+#[derive(Debug)]
+pub struct RunnerLock {
+    path: PathBuf,
+}
+
+impl RunnerLock {
+    pub fn acquire(store: &JobStore) -> io::Result<Self> {
+        let path = store.root().join("runner.lock");
+        match OpenOptions::new().write(true).create_new(true).open(&path) {
+            Ok(mut file) => {
+                writeln!(file, "pid={}", std::process::id())?;
+                writeln!(file, "started={}", chrono::Utc::now().to_rfc3339())?;
+                file.sync_all()?;
+                Ok(Self { path })
+            }
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+                let pid = lease_pid(&path).unwrap_or(0);
+                if pid != 0 && process_is_alive(pid) {
+                    return Err(io::Error::new(
+                        io::ErrorKind::AlreadyExists,
+                        format!("another comparison is already running as process {pid}"),
+                    ));
+                }
+                fs::remove_file(&path)?;
+                Self::acquire(store)
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    /// Best-effort check used by `submit` to refuse a new job while one is running. The executor's
+    /// atomic `acquire` is the real serialization point; this is only a fast, friendly refusal.
+    pub fn is_held(store: &JobStore) -> bool {
+        let path = store.root().join("runner.lock");
+        let pid = lease_pid(&path).unwrap_or(0);
+        pid != 0 && process_is_alive(pid)
+    }
+}
+
+impl Drop for RunnerLock {
     fn drop(&mut self) {
         let _ = fs::remove_file(&self.path);
     }
@@ -453,5 +569,54 @@ mod tests {
         .unwrap();
         let error = store.events(&spec.job_id).unwrap_err();
         assert!(error.to_string().contains("line 2"));
+    }
+
+    #[test]
+    fn runner_lock_is_exclusive_and_released() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = JobStore::new(temp.path().join("jobs"));
+        fs::create_dir_all(store.root()).unwrap();
+        let first = RunnerLock::acquire(&store).unwrap();
+        assert!(RunnerLock::is_held(&store));
+        assert_eq!(
+            RunnerLock::acquire(&store).unwrap_err().kind(),
+            io::ErrorKind::AlreadyExists
+        );
+        drop(first);
+        assert!(!RunnerLock::is_held(&store));
+        RunnerLock::acquire(&store).unwrap();
+    }
+
+    #[test]
+    fn dead_lease_is_swept_to_failed() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = JobStore::new(temp.path().join("jobs"));
+        let spec = spec();
+        store.create(&spec).unwrap();
+        fs::write(
+            store.job_root(&spec.job_id).join("worker.lease"),
+            "pid=999999999\n",
+        )
+        .unwrap();
+        store.sweep_dead_lease(&spec.job_id).unwrap();
+        let state = store.load_state(&spec.job_id).unwrap();
+        assert_eq!(state.status, JobStatus::Failed);
+        assert_eq!(
+            state.failure_class,
+            Some(FailureClass::HostInfrastructureFailure)
+        );
+    }
+
+    #[test]
+    fn never_started_job_is_not_swept() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = JobStore::new(temp.path().join("jobs"));
+        let spec = spec();
+        store.create(&spec).unwrap();
+        store.sweep_dead_lease(&spec.job_id).unwrap();
+        assert_eq!(
+            store.load_state(&spec.job_id).unwrap().status,
+            JobStatus::Accepted
+        );
     }
 }
