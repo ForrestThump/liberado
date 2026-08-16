@@ -109,6 +109,9 @@ fn submit(args: &[String]) -> Result<(), Box<dyn Error>> {
         }),
         _ => return Err("--hypothesis and --variable must be supplied together".into()),
     };
+    // Alternate the run order per job so the systematic "first harness" bias cancels out across
+    // jobs. The order is recorded in report.json; it is not part of the experiment id.
+    let run_order = alternate_run_order(JobStore::for_repository(&repository).job_count()?);
     let spec = transport::submit(transport::SubmitOptions {
         repository: repository.clone(),
         base_revision: commit,
@@ -123,6 +126,7 @@ fn submit(args: &[String]) -> Result<(), Box<dyn Error>> {
                 binary: pi_bin,
             },
         ],
+        run_order,
         model: ModelPins {
             provider,
             model,
@@ -223,6 +227,7 @@ fn doctor(args: &[String]) -> Result<(), Box<dyn Error>> {
                 binary: None,
             },
         ],
+        run_order: default_run_order(),
         model: ModelPins {
             provider,
             model,

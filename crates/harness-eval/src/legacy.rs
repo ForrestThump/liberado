@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::adapter::{AdapterPreflight, HarnessAdapter, HarnessExecution};
-use crate::contract::SAMPLING_OMITTED;
+use crate::contract::{SAMPLING_OMITTED, default_run_order};
 use crate::preflight::ResolvedCredential;
 
 const MANIFEST_VERSION: u32 = 1;
@@ -61,6 +61,7 @@ struct RunArgs {
     thinking: String,
     max_turns: u32,
     sampling: String,
+    run_order: Vec<String>,
     run_timeout_secs: u64,
     verifier_repair_attempts: u32,
     task_aware_context: bool,
@@ -255,88 +256,69 @@ fn run_parsed(parsed: RunArgs, credential: ResolvedCredential) -> Result<(), Box
         session_id: &pi_session,
         credential: &credential,
     };
-    // Both adapters must be ready before the first paid model request.
-    let liberado_preflight = liberado.preflight().map_err(|error| error.to_string());
-    let pi_preflight = pi.preflight().map_err(|error| error.to_string());
-    let (liberado_exit, liberado_verifier_exit) = run_with_verifier_repairs(
-        &manifest,
-        &parsed,
-        "liberado",
-        || match &liberado_preflight {
-            Ok(_) => liberado.launch().map(|result| result.exit_code),
-            Err(error) => Err(error.clone().into()),
-        },
-        |prompt, stem| {
-            run_liberado(
-                &manifest,
-                &parsed,
-                prompt,
-                &liberado_session,
-                &credential,
-                stem,
-            )
-        },
-        acceptance_overlay.as_deref(),
-    );
-    save_result(
-        &manifest,
-        "liberado",
-        Some(&liberado_session),
-        Some(liberado_exit),
-        Some(liberado_verifier_exit),
-    )?;
+    let mut adapters: Vec<&dyn HarnessAdapter> = vec![&liberado, &pi];
+    // Run in the declared order, not a hardcoded one. Unknown ids (rejected earlier by the job
+    // spec) sort last and therefore never run.
+    adapters.sort_by_key(|adapter| {
+        parsed
+            .run_order
+            .iter()
+            .position(|id| id.as_str() == adapter.id())
+            .unwrap_or(usize::MAX)
+    });
 
-    let (pi_exit, pi_verifier_exit) = run_with_verifier_repairs(
-        &manifest,
-        &parsed,
-        "pi",
-        || match &pi_preflight {
-            Ok(_) => pi.launch().map(|result| result.exit_code),
-            Err(error) => Err(error.clone().into()),
-        },
-        |prompt, stem| {
-            let path = manifest
-                .run_root
-                .join("artifacts")
-                .join("pi")
-                .join(format!("{stem}.prompt.txt"));
-            fs::write(&path, prompt)?;
-            let prompt_arg = format!("@{}", path.display());
-            run_pi(
-                &manifest,
-                &parsed,
-                &prompt_arg,
-                &pi_session,
-                &credential,
-                stem,
+    // Every adapter must be ready before the first paid model request.
+    let preflights: std::collections::BTreeMap<String, Result<AdapterPreflight, String>> = adapters
+        .iter()
+        .map(|adapter| {
+            (
+                adapter.id().to_string(),
+                adapter.preflight().map_err(|error| error.to_string()),
             )
-        },
-        acceptance_overlay.as_deref(),
-    );
-    save_result(
-        &manifest,
-        "pi",
-        Some(&pi_session),
-        Some(pi_exit),
-        Some(pi_verifier_exit),
-    )?;
+        })
+        .collect();
 
-    println!("liberado exit: {liberado_exit}");
-    println!("liberado verifier exit: {liberado_verifier_exit}");
-    println!("pi exit: {pi_exit}");
-    println!("pi verifier exit: {pi_verifier_exit}");
+    let mut exits = std::collections::BTreeMap::new();
+    let mut verifier_exits = std::collections::BTreeMap::new();
+    for adapter in &adapters {
+        let name = adapter.id();
+        let preflight = &preflights[name];
+        let (exit, verifier_exit) = run_with_verifier_repairs(
+            &manifest,
+            &parsed,
+            name,
+            || match preflight {
+                Ok(_) => adapter.launch().map(|result| result.exit_code),
+                Err(error) => Err(error.clone().into()),
+            },
+            |prompt, stem| adapter.run(prompt, stem),
+            acceptance_overlay.as_deref(),
+        );
+        save_result(
+            &manifest,
+            name,
+            Some(adapter.session_id()),
+            Some(exit),
+            Some(verifier_exit),
+        )?;
+        exits.insert(name.to_string(), exit);
+        verifier_exits.insert(name.to_string(), verifier_exit);
+    }
+
+    for (name, exit) in &exits {
+        println!("{name} exit: {exit}");
+    }
+    for (name, verifier_exit) in &verifier_exits {
+        println!("{name} verifier exit: {verifier_exit}");
+    }
     println!(
         "artifacts: {}",
         manifest.run_root.join("artifacts").display()
     );
-    if [
-        liberado_exit,
-        liberado_verifier_exit,
-        pi_exit,
-        pi_verifier_exit,
-    ]
-    .iter()
-    .any(|code| *code != 0)
+    if exits
+        .values()
+        .chain(verifier_exits.values())
+        .any(|code| *code != 0)
     {
         return Err(
             "one or more harnesses or common verifiers failed; work and artifacts were saved"
@@ -536,6 +518,7 @@ fn parse_run_args(args: &[String]) -> Result<RunArgs, Box<dyn Error>> {
     let mut thinking = DEFAULT_THINKING.to_string();
     let mut max_turns = DEFAULT_MAX_TURNS;
     let mut sampling = SAMPLING_OMITTED.to_string();
+    let mut run_order = default_run_order();
     let mut run_timeout_secs = DEFAULT_RUN_TIMEOUT_SECS;
     // Keep external verifier repair off for benchmark runs. Operators can opt in explicitly;
     // otherwise the comparison would measure the coordinator's recovery policy, not the harness.
@@ -590,6 +573,17 @@ fn parse_run_args(args: &[String]) -> Result<RunArgs, Box<dyn Error>> {
                         "sampling '{sampling}' is not yet applied by either client; only '{SAMPLING_OMITTED}' is supported"
                     )
                     .into());
+                }
+            }
+            "--run-order" => {
+                index += 1;
+                run_order = value(args, index, flag)?
+                    .split(',')
+                    .map(|part| part.trim().to_string())
+                    .filter(|part| !part.is_empty())
+                    .collect();
+                if run_order.is_empty() {
+                    return Err("--run-order must name at least one harness".into());
                 }
             }
             "--run-timeout-secs" => {
@@ -648,6 +642,7 @@ fn parse_run_args(args: &[String]) -> Result<RunArgs, Box<dyn Error>> {
         thinking,
         max_turns,
         sampling,
+        run_order,
         run_timeout_secs,
         verifier_repair_attempts,
         task_aware_context,
@@ -860,13 +855,14 @@ fn write_run_pins(
     fs::write(
         manifest.run_root.join("pins.txt"),
         format!(
-            "base_revision={}\nbase_commit={}\nprovider={}\nmodel={}\nthinking={}\nliberado_max_turns={}\npi_turn_cap=unset (pi native default)\ntool_surface=native (full tool catalog)\ncompile_timeout_secs={}\nverifier_repair_attempts={}\ntask_aware_context={}\nacceptance_overlay_hash={}\nsampling={}\n",
+            "base_revision={}\nbase_commit={}\nprovider={}\nmodel={}\nthinking={}\nliberado_max_turns={}\npi_turn_cap=unset (pi native default)\ntool_surface=native (full tool catalog)\nrun_order={}\ncompile_timeout_secs={}\nverifier_repair_attempts={}\ntask_aware_context={}\nacceptance_overlay_hash={}\nsampling={}\n",
             manifest.base_revision,
             manifest.base_commit,
             args.provider,
             args.model,
             args.thinking,
             args.max_turns,
+            args.run_order.join(","),
             manifest.compile_timeout_secs,
             args.verifier_repair_attempts,
             args.task_aware_context,
@@ -1127,6 +1123,10 @@ impl HarnessAdapter for LiberadoAdapter<'_> {
         "liberado"
     }
 
+    fn session_id(&self) -> &str {
+        self.session_id
+    }
+
     fn preflight(&self) -> Result<AdapterPreflight, Box<dyn Error>> {
         let layout = harness(self.manifest, self.id())?;
         let executable = ensure_liberado_runner(self.manifest, self.args, layout)?;
@@ -1151,6 +1151,17 @@ impl HarnessAdapter for LiberadoAdapter<'_> {
             exit_code,
         })
     }
+
+    fn run(&self, prompt: &str, stem: &str) -> Result<i32, Box<dyn Error>> {
+        run_liberado(
+            self.manifest,
+            self.args,
+            prompt,
+            self.session_id,
+            self.credential,
+            stem,
+        )
+    }
 }
 
 struct PiAdapter<'a> {
@@ -1163,6 +1174,10 @@ struct PiAdapter<'a> {
 impl HarnessAdapter for PiAdapter<'_> {
     fn id(&self) -> &'static str {
         "pi"
+    }
+
+    fn session_id(&self) -> &str {
+        self.session_id
     }
 
     fn preflight(&self) -> Result<AdapterPreflight, Box<dyn Error>> {
@@ -1195,6 +1210,25 @@ impl HarnessAdapter for PiAdapter<'_> {
             session_id: self.session_id.to_string(),
             exit_code,
         })
+    }
+
+    fn run(&self, prompt: &str, stem: &str) -> Result<i32, Box<dyn Error>> {
+        let path = self
+            .manifest
+            .run_root
+            .join("artifacts")
+            .join("pi")
+            .join(format!("{stem}.prompt.txt"));
+        fs::write(&path, prompt)?;
+        let prompt_arg = format!("@{}", path.display());
+        run_pi(
+            self.manifest,
+            self.args,
+            &prompt_arg,
+            self.session_id,
+            self.credential,
+            stem,
+        )
     }
 }
 
@@ -1707,8 +1741,8 @@ fn run_slug(path: &Path) -> String {
 mod tests {
     use super::{
         CompareManifest, HarnessLayout, RunArgs, SAMPLING_OMITTED, bounded_feedback,
-        copy_path_dependency_tree, liberado_runner_path, parse_run_args, repairable_verifier_exit,
-        run_async_command, write_run_config, write_run_pins,
+        copy_path_dependency_tree, default_run_order, liberado_runner_path, parse_run_args,
+        repairable_verifier_exit, run_async_command, write_run_config, write_run_pins,
     };
     #[cfg(windows)]
     use super::{prepare, remove_job_worktrees};
@@ -1764,6 +1798,7 @@ mod tests {
             thinking: "high".to_string(),
             max_turns: 400,
             sampling: SAMPLING_OMITTED.to_string(),
+            run_order: default_run_order(),
             run_timeout_secs: 14_400,
             verifier_repair_attempts: 0,
             task_aware_context: false,
@@ -1809,6 +1844,43 @@ mod tests {
         ])
         .unwrap_err();
         assert!(error.to_string().contains("not yet applied"));
+    }
+
+    #[test]
+    fn run_order_flag_parses_and_defaults_to_liberado_first() {
+        let temp = tempfile::tempdir().unwrap();
+        let run = temp.path().join("run");
+        fs::create_dir(&run).unwrap();
+        let task = temp.path().join("task.txt");
+        fs::write(&task, "do it").unwrap();
+
+        let default = parse_run_args(&[
+            run.to_string_lossy().into_owned(),
+            "--task".to_string(),
+            task.to_string_lossy().into_owned(),
+        ])
+        .unwrap();
+        assert_eq!(default.run_order, vec!["liberado", "pi"]);
+
+        let reversed = parse_run_args(&[
+            run.to_string_lossy().into_owned(),
+            "--task".to_string(),
+            task.to_string_lossy().into_owned(),
+            "--run-order".to_string(),
+            "pi,liberado".to_string(),
+        ])
+        .unwrap();
+        assert_eq!(reversed.run_order, vec!["pi", "liberado"]);
+    }
+
+    #[test]
+    fn pins_record_the_run_order() {
+        let (_temp, manifest) = compare_manifest();
+        let mut args = run_args();
+        args.run_order = vec!["pi".to_string(), "liberado".to_string()];
+        write_run_pins(&manifest, &args, None).unwrap();
+        let pins = fs::read_to_string(manifest.run_root.join("pins.txt")).unwrap();
+        assert!(pins.contains("run_order=pi,liberado"));
     }
 
     #[test]

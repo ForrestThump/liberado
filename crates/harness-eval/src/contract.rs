@@ -168,6 +168,12 @@ pub struct JobSpec {
     pub base_revision: String,
     pub task: TaskBundle,
     pub harnesses: Vec<HarnessRequest>,
+    /// Order in which the harnesses run. A fairness control (F3): the coordinator alternates it
+    /// per job so the systematic "first harness" bias cancels out. Recorded in `report.json` but
+    /// deliberately not part of the experiment id — two runs of the same experiment differ only in
+    /// order and must share an id.
+    #[serde(default = "default_run_order")]
+    pub run_order: Vec<String>,
     pub model: ModelPins,
     pub limits: ResourceLimits,
     pub verifier: VerifierProfile,
@@ -178,6 +184,22 @@ pub struct JobSpec {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub experiment: Option<Experiment>,
     pub experiment_id: String,
+}
+
+/// The default run order: Liberado first, then pi. This is the historical order and the fallback
+/// when a job does not declare one.
+pub fn default_run_order() -> Vec<String> {
+    vec!["liberado".to_string(), "pi".to_string()]
+}
+
+/// Alternate the run order for a new job so the systematic "first harness" bias cancels out across
+/// jobs. Even job counts run Liberado first; odd counts run pi first.
+pub fn alternate_run_order(job_count: usize) -> Vec<String> {
+    if job_count.is_multiple_of(2) {
+        default_run_order()
+    } else {
+        vec!["pi".to_string(), "liberado".to_string()]
+    }
 }
 
 impl JobSpec {
@@ -217,6 +239,16 @@ impl JobSpec {
             }
             if !ids.insert(&harness.id) {
                 return Err(format!("duplicate harness '{}'", harness.id));
+            }
+        }
+        // run_order must be a permutation of the harness ids: same set, no missing or extra ids.
+        {
+            let mut harness_ids: Vec<&str> = self.harnesses.iter().map(|h| h.id.as_str()).collect();
+            harness_ids.sort();
+            let mut order: Vec<&str> = self.run_order.iter().map(|s| s.as_str()).collect();
+            order.sort();
+            if harness_ids != order {
+                return Err("run_order must be a permutation of the harness ids".to_string());
             }
         }
         if self.model.provider.trim().is_empty()
@@ -397,6 +429,8 @@ pub struct ComparisonReport {
     pub finished_at: DateTime<Utc>,
     pub harnesses: BTreeMap<String, HarnessResult>,
     #[serde(default)]
+    pub run_order: Vec<String>,
+    #[serde(default)]
     pub diagnostics: Vec<String>,
     pub artifact_root: PathBuf,
 }
@@ -490,6 +524,7 @@ mod tests {
                     binary: None,
                 },
             ],
+            run_order: default_run_order(),
             model: ModelPins {
                 provider: "openrouter".to_string(),
                 model: "deepseek/test".to_string(),
@@ -534,5 +569,41 @@ mod tests {
         let mut value = spec();
         value.model.sampling = "0.1".to_string();
         assert!(value.validate().unwrap_err().contains("sampling"));
+    }
+
+    #[test]
+    fn run_order_must_be_a_permutation_of_harness_ids() {
+        let mut value = spec();
+        value.run_order = vec!["pi".to_string()];
+        assert!(
+            value
+                .validate()
+                .unwrap_err()
+                .contains("run_order must be a permutation")
+        );
+
+        let mut value = spec();
+        value.run_order = vec!["pi".to_string(), "pi".to_string()];
+        assert!(
+            value
+                .validate()
+                .unwrap_err()
+                .contains("run_order must be a permutation")
+        );
+    }
+
+    #[test]
+    fn run_order_is_not_part_of_the_experiment_id() {
+        let mut value = spec();
+        let id = value.experiment_id.clone();
+        value.run_order = vec!["pi".to_string(), "liberado".to_string()];
+        assert_eq!(value.compute_experiment_id().unwrap(), id);
+    }
+
+    #[test]
+    fn alternate_run_order_flips_on_parity() {
+        assert_eq!(alternate_run_order(0), vec!["liberado", "pi"]);
+        assert_eq!(alternate_run_order(1), vec!["pi", "liberado"]);
+        assert_eq!(alternate_run_order(2), vec!["liberado", "pi"]);
     }
 }

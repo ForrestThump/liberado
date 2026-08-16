@@ -72,14 +72,16 @@ pub fn execute(
     )?;
     atomic_json(&store.job_root(job_id).join("experiment.json"), &spec)?;
 
-    if harness_ids(&spec) != ["liberado", "pi"] {
+    let mut ids = harness_ids(&spec);
+    ids.sort();
+    if ids != ["liberado", "pi"] {
         return finish_failure(
             store,
             &spec,
             started_at,
             &mut tracker,
             FailureClass::HostInfrastructureFailure,
-            "the v1 coordinator requires the liberado and pi adapters in that order".to_string(),
+            "the v1 coordinator requires the liberado and pi adapters".to_string(),
             BTreeMap::new(),
             Some(preflight.base_commit),
         );
@@ -179,6 +181,7 @@ pub fn execute(
                 started_at,
                 finished_at: Utc::now(),
                 harnesses,
+                run_order: spec.run_order.clone(),
                 diagnostics: cleanup_diagnostics,
                 artifact_root: job_root.join("artifacts"),
             };
@@ -231,6 +234,8 @@ fn legacy_run_args(
         spec.model.max_turns.to_string(),
         "--sampling".to_string(),
         spec.model.sampling.clone(),
+        "--run-order".to_string(),
+        spec.run_order.join(","),
         "--run-timeout-secs".to_string(),
         spec.limits.run_timeout_secs.to_string(),
         "--verifier-repair-attempts".to_string(),
@@ -454,6 +459,7 @@ fn finish_failure(
         started_at,
         finished_at: Utc::now(),
         harnesses,
+        run_order: spec.run_order.clone(),
         diagnostics: vec![message],
         artifact_root: store.job_root(&spec.job_id).join("artifacts"),
     };
@@ -593,6 +599,7 @@ mod tests {
                     binary: Some(fake),
                 },
             ],
+            run_order: default_run_order(),
             model: ModelPins {
                 provider: "openrouter".to_string(),
                 model: "deepseek/test".to_string(),

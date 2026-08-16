@@ -259,6 +259,7 @@ fn record_worker_failure(
         started_at: state.updated_at,
         finished_at: Utc::now(),
         harnesses: Default::default(),
+        run_order: spec.run_order.clone(),
         diagnostics: vec![message],
         artifact_root: store.job_root(job_id).join("artifacts"),
     })?;

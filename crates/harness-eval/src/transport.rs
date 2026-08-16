@@ -24,6 +24,7 @@ pub struct SubmitOptions {
     pub base_revision: String,
     pub task_file: PathBuf,
     pub harnesses: Vec<HarnessRequest>,
+    pub run_order: Vec<String>,
     pub model: ModelPins,
     pub limits: ResourceLimits,
     pub verifier: VerifierProfile,
@@ -100,6 +101,7 @@ pub fn build_spec(options: SubmitOptions) -> Result<JobSpec, Box<dyn Error>> {
         base_revision,
         task,
         harnesses,
+        run_order: options.run_order,
         model: options.model,
         limits: options.limits,
         verifier: options.verifier,
@@ -347,6 +349,7 @@ mod tests {
                 id: "pi".to_string(),
                 binary: None,
             }],
+            run_order: vec!["pi".to_string()],
             model: ModelPins {
                 provider: "openrouter".to_string(),
                 model: "deepseek/test".to_string(),
@@ -420,6 +423,7 @@ mod tests {
                 id: "pi".to_string(),
                 binary: None,
             }],
+            run_order: vec!["pi".to_string()],
             model: ModelPins {
                 provider: "openrouter".to_string(),
                 model: "deepseek/test".to_string(),

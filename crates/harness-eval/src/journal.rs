@@ -212,6 +212,26 @@ impl JobStore {
         jobs.sort();
         Ok(jobs)
     }
+
+    /// Count every job directory in the spool, regardless of state. Used to alternate the run
+    /// order per job (fairness item F3): the count is a deterministic, monotonic source of parity.
+    pub fn job_count(&self) -> io::Result<usize> {
+        if !self.root.is_dir() {
+            return Ok(0);
+        }
+        let mut count = 0;
+        for entry in fs::read_dir(&self.root)? {
+            let entry = entry?;
+            if !entry.file_type()?.is_dir() {
+                continue;
+            }
+            let value = entry.file_name().to_string_lossy().into_owned();
+            if JobId::parse(&value).is_ok() {
+                count += 1;
+            }
+        }
+        Ok(count)
+    }
 }
 
 fn lease_pid(path: &Path) -> Option<u32> {
@@ -300,9 +320,14 @@ fn invalid_data(error: impl std::fmt::Display) -> io::Error {
 }
 
 fn render_report(report: &ComparisonReport) -> String {
+    let run_order = if report.run_order.is_empty() {
+        "unknown".to_string()
+    } else {
+        report.run_order.join(" -> ")
+    };
     let mut text = format!(
-        "# Harness comparison {}\n\nStatus: `{:?}`\n\nExperiment: `{}`\n\n",
-        report.job_id, report.status, report.experiment_id
+        "# Harness comparison {}\n\nStatus: `{:?}`\n\nExperiment: `{}`\n\nRun order: {}\n\n",
+        report.job_id, report.status, report.experiment_id, run_order
     );
     for result in report.harnesses.values() {
         text.push_str(&format!(
@@ -363,6 +388,7 @@ mod tests {
                 id: "liberado".to_string(),
                 binary: None,
             }],
+            run_order: vec!["liberado".to_string()],
             model: ModelPins {
                 provider: "openrouter".to_string(),
                 model: "deepseek/test".to_string(),

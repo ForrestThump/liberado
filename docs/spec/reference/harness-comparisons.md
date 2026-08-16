@@ -202,13 +202,20 @@ policy is not injected into Pi or enforced by the common verifier. The coordinat
 changed files, patches, and test results for human or agent review. Base protections such as
 `.git/**`, `target/**`, and restricted coding modes remain native harness policies.
 
+Because Liberado's native write-scope gate can fail a task that Pi ignores, baseline tasks must stay
+inside Liberado's granted scope — otherwise the comparison measures policy, not capability. A task
+that needs out-of-scope writes is a declared experiment variable, not a silent default.
+
 The baseline records its fairness decisions in `pins.txt` so no silent default can split two runs:
 `tool_surface=native` (neither harness's tool catalog is narrowed), `pi_turn_cap=unset` (pi runs
-its native turn budget while `liberado_max_turns` records the Liberado cap), and `sampling=omitted` (no temperature
-is passed to either client). `sampling` is also part of the immutable job pins, so it appears in
-`experiment.json` and changes the experiment id when it changes. The coordinator accepts only
-`sampling=omitted` today; a value that is not actually applied to both clients would record a claim
-the run cannot keep.
+its native turn budget while `liberado_max_turns` records the Liberado cap), `run_order` (the order
+the harnesses ran, alternated per job so the systematic "first harness" bias cancels out), and
+`sampling=omitted` (no temperature is passed to either client). `sampling` is also part of the
+immutable job pins, so it appears in `experiment.json` and changes the experiment id when it
+changes. `run_order` is recorded in `report.json` but is deliberately not part of the experiment
+id: two runs of the same experiment differ only in order and must share an id. The coordinator
+accepts only `sampling=omitted` today; a value that is not actually applied to both clients would
+record a claim the run cannot keep.
 
 `--task-aware-context` changes one Liberado model-visible variable and records
 `task_aware_context=true` in `pins.txt`. It writes `[coder.repo_map] task_aware = true` to the run's
