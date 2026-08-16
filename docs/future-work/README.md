@@ -31,6 +31,7 @@ ongoing findings, and current evidence. Implemented and superseded plans are arc
 | [coding-tui-plan.md](coding-tui-plan.md) | plan | coding-harness | implementation |
 | [context-compaction-plan.md](context-compaction-plan.md) | plan | chat | implementation |
 | [context-compaction-viewport-rearchitecture.md](context-compaction-viewport-rearchitecture.md) | plan | chat | implementation |
+| [current_unmerged_work.md](current_unmerged_work.md) | plan | coding-harness | implementation |
 | [f12-compare3-harness-failures-2026-08.md](f12-compare3-harness-failures-2026-08.md) | finding | coding-harness | evidence |
 | [harness-baseline-0.7-c3-2026-08.md](harness-baseline-0.7-c3-2026-08.md) | finding | coding-harness | evidence |
 | [harness-bench-gaps-and-levers.md](harness-bench-gaps-and-levers.md) | finding | coding-harness | advisory |
@@ -65,6 +66,7 @@ Prefer archive/ for completed plans.
 |-----|--------|------|
 | [cadence-triggered-maintenance-agents.md](cadence-triggered-maintenance-agents.md) | draft | plan |
 | [delegation-failure-modes.md](delegation-failure-modes.md) | historical | finding |
+| [harness-comparison-redesign-2026-08.md](harness-comparison-redesign-2026-08.md) | draft | plan |
 | [model-knob-profiles.md](model-knob-profiles.md) | draft | plan |
 | [mvl-live-comparison-prep.md](mvl-live-comparison-prep.md) | superseded | plan |
 

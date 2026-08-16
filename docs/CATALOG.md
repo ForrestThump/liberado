@@ -51,10 +51,12 @@ Authority model: [doc-authority.md](spec/reference/doc-authority.md).
 | [docs/future-work/coding-tui-plan.md](future-work/coding-tui-plan.md) | plan | active | implementation | coding-harness | coding-tui |
 | [docs/future-work/context-compaction-plan.md](future-work/context-compaction-plan.md) | plan | active | implementation | chat | context-compaction |
 | [docs/future-work/context-compaction-viewport-rearchitecture.md](future-work/context-compaction-viewport-rearchitecture.md) | plan | active | implementation | chat | context-compaction-viewport |
+| [docs/future-work/current_unmerged_work.md](future-work/current_unmerged_work.md) | plan | active | implementation | coding-harness | current-unmerged-work |
 | [docs/future-work/delegation-failure-modes.md](future-work/delegation-failure-modes.md) | finding | historical | evidence | delegation | delegation-failure-modes |
 | [docs/future-work/f12-compare3-harness-failures-2026-08.md](future-work/f12-compare3-harness-failures-2026-08.md) | finding | active | evidence | coding-harness | f12-compare3-harness-failures |
 | [docs/future-work/harness-baseline-0.7-c3-2026-08.md](future-work/harness-baseline-0.7-c3-2026-08.md) | finding | active | evidence | coding-harness | harness-baseline-0.7-c3 |
 | [docs/future-work/harness-bench-gaps-and-levers.md](future-work/harness-bench-gaps-and-levers.md) | finding | active | advisory | coding-harness | harness-bench-gaps |
+| [docs/future-work/harness-comparison-redesign-2026-08.md](future-work/harness-comparison-redesign-2026-08.md) | plan | draft | advisory | coding-harness | harness-comparison-redesign |
 | [docs/future-work/harness-study-2026-08.md](future-work/harness-study-2026-08.md) | finding | active | advisory | coding-harness | harness-study-2026-08 |
 | [docs/future-work/heuristics-tuning-engine-plan.md](future-work/heuristics-tuning-engine-plan.md) | plan | active | implementation | tuning | heuristics-tuning-engine |
 | [docs/future-work/latency-and-routing-observability-plan.md](future-work/latency-and-routing-observability-plan.md) | plan | active | implementation | observability | latency-routing-observability |
