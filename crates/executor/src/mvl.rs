@@ -25,13 +25,23 @@ struct JsonlWriter {
 }
 
 impl JsonlWriter {
+    /// Create a fresh log, truncating any pre-existing content at `path`.
+    ///
+    /// `open` always means "start a new session". Appending to a stale file would let a
+    /// reused path (e.g. a temp dir keyed only by pid, or a retried session id) inherit
+    /// another run's events, which the seq-gap oracle then rejects. Per-event durability is
+    /// still append-and-flush: each `emit` writes to the current end of the (now fresh) file.
     fn create(path: &Path, run: impl Into<String>) -> io::Result<Self> {
         if let Some(parent) = path.parent()
             && !parent.as_os_str().is_empty()
         {
             std::fs::create_dir_all(parent)?;
         }
-        let file = OpenOptions::new().create(true).append(true).open(path)?;
+        let file = OpenOptions::new()
+            .create(true)
+            .truncate(true)
+            .write(true)
+            .open(path)?;
         Ok(Self {
             file: Mutex::new(file),
             run: run.into(),
@@ -461,6 +471,28 @@ mod tests {
             "append-flush must persist before emit returns: {text}"
         );
         assert!(text.ends_with('\n'));
+    }
+
+    #[test]
+    fn create_truncates_stale_content_from_a_reused_path() {
+        // A reused path (temp dir keyed by pid, or a retried session id) must not inherit a
+        // previous run's events. Appending would leave two `run_started` records and a seq gap.
+        let path = scratch("reuse.mvl.jsonl");
+        std::fs::write(&path, "{\"type\":\"stale\"}\n").unwrap();
+        let writer = JsonlWriter::create(&path, "r").unwrap();
+        writer
+            .emit("run_started", json!({"harness":{"name":"t"}}))
+            .unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            !text.contains("stale"),
+            "open must start a fresh log, got stale content: {text}"
+        );
+        assert_eq!(
+            text.lines().count(),
+            1,
+            "one event, not stale + new: {text}"
+        );
     }
 
     #[test]
