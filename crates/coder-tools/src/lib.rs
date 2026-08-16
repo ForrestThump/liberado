@@ -4590,7 +4590,7 @@ beta
         let allowed = runtime
             .invoke_json(
                 "write_file",
-                json!({"path": "docs/guide.md", "content": "ok"}),
+                json!({"path": "docs/guide.md", "content": "ok"}), // docs-check: ignore
             )
             .await
             .unwrap();

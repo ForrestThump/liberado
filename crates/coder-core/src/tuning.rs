@@ -455,7 +455,7 @@ mod tests {
         .unwrap();
         let tuning = CoderTuning::from_value(Some(&value)).unwrap();
         assert_eq!(tuning.path_policy.allow_write_globs, vec!["**"]);
-        assert!(tuning.path_policy.write_scope.permits("docs/guide.md"));
+        assert!(tuning.path_policy.write_scope.permits("docs/guide.md")); // docs-check: ignore
         assert!(!tuning.path_policy.write_scope.permits("src/main.rs"));
     }
 

@@ -267,6 +267,11 @@ fn stale_rs_paths(root: &Path) -> Result<Vec<Issue>, Box<dyn std::error::Error>>
             .to_string_lossy()
             .replace('\\', "/");
         for (line_no, line) in text.lines().enumerate() {
+            // Test fixtures often use plausible docs paths without creating files. Mark those
+            // literals explicitly instead of weakening the check for real Rust references.
+            if line.contains("docs-check: ignore") {
+                continue;
+            }
             for prefix in [
                 concat!("docs/", "architecture/"),
                 concat!("docs/", "roadmap/"),

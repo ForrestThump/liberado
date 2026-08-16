@@ -1542,7 +1542,7 @@ mod tests {
         assert_eq!(policy.allow_write_globs, vec!["**"]);
         assert_eq!(policy.deny_globs, PathPolicy::default().deny_globs);
         assert!(policy.write_scope.is_active());
-        assert!(policy.write_scope.permits("docs/guide.md"));
+        assert!(policy.write_scope.permits("docs/guide.md")); // docs-check: ignore
         assert!(!policy.write_scope.permits("src/main.rs"));
     }
 

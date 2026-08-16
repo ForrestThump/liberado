@@ -169,10 +169,10 @@ mod tests {
             }),
         );
         assert!(p.path_policy.write_scope.is_active());
-        assert!(p.path_policy.write_scope.permits("docs/guide.md"));
+        assert!(p.path_policy.write_scope.permits("docs/guide.md")); // docs-check: ignore
         assert!(!p.path_policy.write_scope.permits("src/main.rs"));
         assert!(
-            p.path_policy.write_scope.permits("docs/private/notes.md"),
+            p.path_policy.write_scope.permits("docs/private/notes.md"), // docs-check: ignore
             "an allowlist overrides the dispatch blacklist"
         );
     }
