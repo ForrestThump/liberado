@@ -416,6 +416,7 @@ struct PoisonableRuntime {
     poison_next: Arc<AtomicBool>,
     transport_dead: AtomicBool,
     tools: Vec<liberado_provider::ToolDef>,
+    shutdowns: Arc<AtomicUsize>,
 }
 
 #[async_trait::async_trait]
@@ -432,6 +433,7 @@ impl liberado_executor::ToolRuntime for PoisonableRuntime {
     }
 }
 
+#[async_trait::async_trait]
 impl RebindableRuntime for PoisonableRuntime {
     fn rebind_provenance(&mut self, _provenance: WriteProvenance) {
         self.transport_dead.store(false, Ordering::SeqCst);
@@ -439,11 +441,15 @@ impl RebindableRuntime for PoisonableRuntime {
     fn connection_is_dead(&self) -> bool {
         self.transport_dead.load(Ordering::SeqCst)
     }
+    async fn shutdown(&mut self) {
+        self.shutdowns.fetch_add(1, Ordering::SeqCst);
+    }
 }
 
 struct PoisonableConnector {
     connects: Arc<AtomicUsize>,
     poison_next: Arc<AtomicBool>,
+    shutdowns: Arc<AtomicUsize>,
 }
 
 #[async_trait::async_trait]
@@ -461,6 +467,7 @@ impl McpConnector for PoisonableConnector {
                 "t",
                 serde_json::json!({"type": "object"}),
             )],
+            shutdowns: self.shutdowns.clone(),
         }))
     }
 }
@@ -476,6 +483,7 @@ async fn pooled_connection_transport_failure_invalidates_and_reconnects() {
         PoisonableConnector {
             connects: connects.clone(),
             poison_next: poison.clone(),
+            shutdowns: Arc::new(AtomicUsize::new(0)),
         },
     );
 
@@ -504,6 +512,49 @@ async fn pooled_connection_transport_failure_invalidates_and_reconnects() {
         connects.load(Ordering::SeqCst),
         2,
         "after transport death on a pooled checkout, next acquire must reconnect"
+    );
+}
+
+#[tokio::test]
+async fn transport_failure_shuts_down_dead_connection() {
+    // Regression: a pooled checkout that dies at the transport layer is discarded on drop, but
+    // the discard must still run `shutdown()` (async SSE/DELETE teardown) rather than a bare sync
+    // drop that leaks the server-side session.
+    let connects = Arc::new(AtomicUsize::new(0));
+    let poison = Arc::new(AtomicBool::new(false));
+    let shutdowns = Arc::new(AtomicUsize::new(0));
+    let registry = McpRegistry::with_pool_settings(McpPoolSettings::default()).register(
+        "tasks",
+        PoisonableConnector {
+            connects: connects.clone(),
+            poison_next: poison.clone(),
+            shutdowns: shutdowns.clone(),
+        },
+    );
+
+    {
+        let rt = registry.runtime_for(&[], prov()).await.unwrap();
+        assert!(rt.invoke(&call("tasks:add")).await.is_ok());
+        drop(rt); // healthy checkin
+    }
+    assert_eq!(connects.load(Ordering::SeqCst), 1);
+    assert_eq!(shutdowns.load(Ordering::SeqCst), 0);
+
+    {
+        let rt = registry.runtime_for(&[], prov()).await.unwrap();
+        poison.store(true, Ordering::SeqCst);
+        let err = rt.invoke(&call("tasks:add")).await.unwrap_err();
+        assert!(err.contains("connection reset"), "{err}");
+        drop(rt); // dead peer must be shut down, not leaked
+    }
+
+    // The shutdown is driven on a background task; yield so the spawn runs.
+    tokio::task::yield_now().await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert_eq!(
+        shutdowns.load(Ordering::SeqCst),
+        1,
+        "dead connection must be shut down, not leaked"
     );
 }
 
@@ -619,6 +670,60 @@ async fn idle_ttl_reaped_when_another_peer_is_acquired() {
         weather_connects.load(Ordering::SeqCst),
         2,
         "weather must reconnect after idle TTL even though it was never re-checked-out until now"
+    );
+}
+
+#[tokio::test]
+async fn idle_ttl_reap_calls_shutdown_on_reaped_connection() {
+    // Regression: reaping must NOT leak the pooled connection. A bare sync `Drop` cannot run the
+    // async `shutdown()` (which aborts the SSE task and sends the session-terminating DELETE), so
+    // reaped runtimes are routed through `shutdown()` on a background task. Assert it runs.
+    let connects = Arc::new(AtomicUsize::new(0));
+    let shutdowns = Arc::new(AtomicUsize::new(0));
+    let now = Arc::new(std::sync::Mutex::new(Instant::now()));
+    let clock_now = Arc::clone(&now);
+    let settings = McpPoolSettings {
+        enabled: true,
+        idle_ttl: Duration::from_secs(10),
+        ..Default::default()
+    };
+    let registry =
+        McpRegistry::with_pool_and_clock(settings, Arc::new(move || *clock_now.lock().unwrap()))
+            .register(
+                "weather",
+                PoisonableConnector {
+                    connects: connects.clone(),
+                    poison_next: Arc::new(AtomicBool::new(false)),
+                    shutdowns: shutdowns.clone(),
+                },
+            );
+
+    {
+        let rt = registry
+            .runtime_for(&["weather".into()], prov())
+            .await
+            .unwrap();
+        drop(rt); // healthy checkin
+    }
+    assert_eq!(connects.load(Ordering::SeqCst), 1);
+    assert_eq!(shutdowns.load(Ordering::SeqCst), 0);
+
+    *now.lock().unwrap() += Duration::from_secs(11);
+
+    // Any pool activity reaps the expired slot and must shut the connection down.
+    let rt = registry
+        .runtime_for(&["weather".into()], prov())
+        .await
+        .unwrap();
+    drop(rt);
+
+    // The shutdown is driven on a background task; yield so the spawn runs.
+    tokio::task::yield_now().await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert_eq!(
+        shutdowns.load(Ordering::SeqCst),
+        1,
+        "reaped connection must be shut down, not leaked"
     );
 }
 

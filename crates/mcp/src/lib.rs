@@ -128,6 +128,7 @@ impl<T: Transport + 'static> ToolRuntime for TurbomcpRuntime<T> {
     }
 }
 
+#[async_trait]
 impl<T: Transport + 'static> RebindableRuntime for TurbomcpRuntime<T> {
     fn rebind_provenance(&mut self, provenance: WriteProvenance) {
         self.provenance_meta = provenance.to_audit_metadata();
@@ -138,6 +139,16 @@ impl<T: Transport + 'static> RebindableRuntime for TurbomcpRuntime<T> {
     fn connection_is_dead(&self) -> bool {
         self.transport_dead
             .load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    async fn shutdown(&mut self) {
+        // Gracefully terminate the MCP session: aborts the SSE task and sends the
+        // session-terminating DELETE so the server actually releases the connection. A bare
+        // `Drop` cannot do this (teardown is async), which is what leaked HTTP connections
+        // server-side until the pool's reaper exhausted the proxy's worker connections.
+        if let Err(e) = self.client.shutdown().await {
+            tracing::warn!(error = %e, "MCP client shutdown reported an error");
+        }
     }
 }
 
