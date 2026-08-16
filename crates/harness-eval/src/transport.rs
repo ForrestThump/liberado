@@ -34,6 +34,34 @@ pub struct SubmitOptions {
 }
 
 pub fn submit(options: SubmitOptions) -> Result<JobSpec, Box<dyn Error>> {
+    let acceptance_source = options.acceptance_overlay.clone();
+    let spec = build_spec(options)?;
+    let repository = spec.repository.clone();
+    let store = JobStore::for_repository(&repository);
+    store.create_with_inputs(&spec, |job_root| {
+        fs::write(job_root.join("input/task.txt"), &spec.task.text)?;
+        if let Some(source) = acceptance_source.as_deref() {
+            let destination = job_root.join("input/acceptance-overlay");
+            copy_tree(source, &destination)?;
+            let (digest, file_count) = fingerprint_tree(&destination)
+                .map_err(|error| io::Error::other(error.to_string()))?;
+            let expected = spec.acceptance.as_ref().ok_or_else(|| {
+                io::Error::new(io::ErrorKind::InvalidData, "acceptance spec is missing")
+            })?;
+            if digest != expected.sha256 || file_count != expected.file_count {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "acceptance overlay changed while it was being captured",
+                ));
+            }
+        }
+        Ok(())
+    })?;
+    Ok(spec)
+}
+
+/// Build and validate an immutable job specification without creating a queued job.
+pub fn build_spec(options: SubmitOptions) -> Result<JobSpec, Box<dyn Error>> {
     let repository = options.repository.canonicalize()?;
     let base_revision = resolve_commit(&repository, &options.base_revision)?;
     let task_file = options.task_file.canonicalize()?;
@@ -83,26 +111,6 @@ pub fn submit(options: SubmitOptions) -> Result<JobSpec, Box<dyn Error>> {
         experiment_id: String::new(),
     }
     .finalize()?;
-    let store = JobStore::for_repository(&repository);
-    store.create_with_inputs(&spec, |job_root| {
-        fs::write(job_root.join("input/task.txt"), &spec.task.text)?;
-        if let Some(source) = options.acceptance_overlay.as_deref() {
-            let destination = job_root.join("input/acceptance-overlay");
-            copy_tree(source, &destination)?;
-            let (digest, file_count) = fingerprint_tree(&destination)
-                .map_err(|error| io::Error::other(error.to_string()))?;
-            let expected = spec.acceptance.as_ref().ok_or_else(|| {
-                io::Error::new(io::ErrorKind::InvalidData, "acceptance spec is missing")
-            })?;
-            if digest != expected.sha256 || file_count != expected.file_count {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    "acceptance overlay changed while it was being captured",
-                ));
-            }
-        }
-        Ok(())
-    })?;
     Ok(spec)
 }
 
@@ -389,6 +397,52 @@ mod tests {
                 .unwrap_err()
                 .to_string()
                 .contains("captured task")
+        );
+    }
+
+    #[test]
+    fn build_spec_performs_no_queue_side_effects() {
+        let temp = tempfile::tempdir().unwrap();
+        let repository = temp.path().join("repo");
+        fs::create_dir_all(&repository).unwrap();
+        git(&repository, &["init"]);
+        git(&repository, &["config", "user.email", "test@example.com"]);
+        git(&repository, &["config", "user.name", "Test"]);
+        fs::write(repository.join("README.md"), "test\n").unwrap();
+        git(&repository, &["add", "."]);
+        git(&repository, &["commit", "-m", "base"]);
+        let task = temp.path().join("task.txt");
+        fs::write(&task, "Make the change").unwrap();
+
+        let spec = build_spec(SubmitOptions {
+            repository: repository.clone(),
+            base_revision: "HEAD".to_string(),
+            task_file: task,
+            harnesses: vec![HarnessRequest {
+                id: "pi".to_string(),
+                binary: None,
+            }],
+            model: ModelPins {
+                provider: "openrouter".to_string(),
+                model: "deepseek/test".to_string(),
+                base_url: "https://example.invalid".to_string(),
+                credential_alias: "openrouter-default".to_string(),
+                thinking: "high".to_string(),
+                max_turns: 10,
+            },
+            limits: ResourceLimits::default(),
+            verifier: VerifierProfile::WorkspaceTests,
+            task_aware_context: false,
+            write_scope: WriteScope::default(),
+            acceptance_overlay: None,
+            experiment: None,
+        })
+        .unwrap();
+        assert_eq!(spec.base_revision.len(), 40);
+        assert!(
+            !JobStore::for_repository(&repository)
+                .job_root(&spec.job_id)
+                .exists()
         );
     }
 

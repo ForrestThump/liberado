@@ -73,6 +73,32 @@ liberado coder compare await <job-id>
 liberado coder compare report <job-id> --json
 ```
 
+For a single foreground workflow, add `--wait` (and optionally
+`--timeout-secs <n>`). The command still creates the same durable job and watches the same
+filesystem journal; it only combines submission, waiting, and final status reporting:
+
+```text
+liberado coder compare submit --task target/compare/task.txt \
+  --model deepseek/deepseek-v4-flash --provider openrouter --credential openrouter-default \
+  --wait
+```
+
+The job ID and report remain available in the spool even if the waiting client exits. `--wait` is
+an interface convenience, not a comparison policy or retry mechanism.
+
+Before submitting, `doctor` runs the same immutable-spec and host preflight checks without creating
+a job or spending model tokens:
+
+```text
+liberado coder compare doctor --task target/compare/task.txt \
+  --model deepseek/deepseek-v4-flash --provider openrouter \
+  --credential openrouter-default
+```
+
+It checks the worker policy, repository and pinned revision, required path dependencies, harness
+launchers, credential availability, Git locks, and disk estimate. It never starts a harness and
+does not replace the worker's execution-time preflight.
+
 `await` is one blocking local process. It and the worker use operating-system filesystem events as
 their wake hook, with a 30-second recovery check for missed or coalesced events. Waiting does not
 consume model turns or require a Paseo hook. The worker writes every transition to append-and-flush
