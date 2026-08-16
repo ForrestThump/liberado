@@ -45,6 +45,7 @@ fn usage() -> &'static str {
      liberado coder compare run <run-dir> --task <file>          run and preserve both harnesses\n  \
      liberado coder compare save <run-dir> <liberado|pi>         preserve one result\n  \
      liberado coder compare submit --task <file>                 submit and dispatch a comparison job\n  \
+     liberado coder compare doctor --task <file>                 check prerequisites without running\n  \
      liberado coder compare status|await|cancel|report <job-id>  inspect a comparison job\n  \
      liberado coder compare reset <workspace> [--commit <ref>]   restore tracked files\n  \
      liberado coder diff <run-a> <run-b> [--json]   cross-harness: where two runs parted\n  \
@@ -240,7 +241,7 @@ fn cmd_compare(args: &mut dyn Iterator<Item = String>) -> Result<(), Box<dyn std
     }
     if matches!(
         all.first().map(String::as_str),
-        Some("submit" | "status" | "await" | "cancel" | "report" | "worker")
+        Some("submit" | "doctor" | "status" | "await" | "cancel" | "report" | "worker")
     ) {
         return liberado_harness_eval::job_cli::run(&all);
     }
