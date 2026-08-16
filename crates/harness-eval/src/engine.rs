@@ -270,7 +270,9 @@ fn collect_results(
 ) -> Result<BTreeMap<String, HarnessResult>, Box<dyn Error>> {
     let mut results = BTreeMap::new();
     for harness in &spec.harnesses {
-        let path = artifact_root.join(&harness.id).join("result.json");
+        let harness_dir = artifact_root.join(&harness.id);
+        let metrics = crate::metrics::HarnessMetrics::collect(&harness.id, &harness_dir);
+        let path = harness_dir.join("result.json");
         if !path.is_file() {
             results.insert(
                 harness.id.clone(),
@@ -282,6 +284,12 @@ fn collect_results(
                     archive_branch: None,
                     accepted: false,
                     diagnostics: vec!["result.json is missing".to_string()],
+                    started_at: metrics.started_at,
+                    finished_at: metrics.finished_at,
+                    duration_secs: metrics.duration_secs,
+                    turns_used: metrics.turns_used,
+                    tokens_in: metrics.tokens_in,
+                    tokens_out: metrics.tokens_out,
                 },
             );
             continue;
@@ -306,6 +314,12 @@ fn collect_results(
                 archive_branch: Some(value.archive_branch),
                 accepted: exit_code == Some(0) && verifier_exit_code == Some(0),
                 diagnostics: Vec::new(),
+                started_at: metrics.started_at,
+                finished_at: metrics.finished_at,
+                duration_secs: metrics.duration_secs,
+                turns_used: metrics.turns_used,
+                tokens_in: metrics.tokens_in,
+                tokens_out: metrics.tokens_out,
             },
         );
     }
@@ -525,6 +539,12 @@ mod tests {
                         archive_branch: None,
                         accepted: false,
                         diagnostics: Vec::new(),
+                        started_at: None,
+                        finished_at: None,
+                        duration_secs: None,
+                        turns_used: None,
+                        tokens_in: None,
+                        tokens_out: None,
                     },
                 )
             })

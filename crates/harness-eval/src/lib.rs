@@ -10,6 +10,7 @@ pub mod engine;
 pub mod job_cli;
 pub mod journal;
 pub mod legacy;
+pub mod metrics;
 pub mod preflight;
 pub mod transport;
 pub mod worker;

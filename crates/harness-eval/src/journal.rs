@@ -313,6 +313,28 @@ fn render_report(report: &ComparisonReport) -> String {
             result.verifier_exit_code,
             result.head_commit.as_deref().unwrap_or("none")
         ));
+        let duration = result
+            .duration_secs
+            .map(|secs| format!("{secs:.1}s"))
+            .unwrap_or_else(|| "unknown".to_string());
+        let turns = result
+            .turns_used
+            .map(|turns| turns.to_string())
+            .unwrap_or_else(|| "unknown".to_string());
+        let tokens = match (result.tokens_in, result.tokens_out) {
+            (Some(input), Some(output)) => format!("{input} in / {output} out"),
+            _ => "unknown".to_string(),
+        };
+        let window = match (result.started_at, result.finished_at) {
+            (Some(start), Some(finish)) => {
+                format!(" ({} -> {})", start.to_rfc3339(), finish.to_rfc3339())
+            }
+            _ => String::new(),
+        };
+        text.push_str(&format!(
+            "  - wall-clock: {}{}\n  - turns: {}\n  - tokens: {}\n",
+            duration, window, turns, tokens
+        ));
     }
     if !report.diagnostics.is_empty() {
         text.push_str("\nDiagnostics:\n\n");
