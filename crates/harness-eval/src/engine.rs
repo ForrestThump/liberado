@@ -229,6 +229,8 @@ fn legacy_run_args(
         spec.model.thinking.clone(),
         "--max-turns".to_string(),
         spec.model.max_turns.to_string(),
+        "--sampling".to_string(),
+        spec.model.sampling.clone(),
         "--run-timeout-secs".to_string(),
         spec.limits.run_timeout_secs.to_string(),
         "--verifier-repair-attempts".to_string(),
@@ -578,6 +580,7 @@ mod tests {
                 credential_alias: "missing-test".to_string(),
                 thinking: "high".to_string(),
                 max_turns: 1,
+                sampling: SAMPLING_OMITTED.to_string(),
             },
             limits: ResourceLimits {
                 compile_timeout_secs: 1,
