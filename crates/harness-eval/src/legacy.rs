@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::adapter::{AdapterPreflight, HarnessAdapter, HarnessExecution};
-use crate::contract::{SAMPLING_OMITTED, default_run_order};
+use crate::contract::{JobSpec, SAMPLING_OMITTED, default_run_order};
 use crate::preflight::ResolvedCredential;
 
 const MANIFEST_VERSION: u32 = 1;
@@ -51,7 +51,7 @@ struct CompareManifest {
 }
 
 #[derive(Debug, Clone)]
-struct RunArgs {
+pub(crate) struct RunArgs {
     run_root: PathBuf,
     task: PathBuf,
     model: String,
@@ -117,13 +117,40 @@ pub fn prepare(args: &[String]) -> Result<(), Box<dyn Error>> {
         index += 1;
     }
 
-    let source_root = child_process_path(&match source_root {
+    let source_root = match source_root {
         Some(path) => absolute(&path)?,
         None => absolute(&crate::repository_root()?)?,
-    });
-    let run_root = child_process_path(&absolute_unchecked(
+    };
+    let run_root = absolute_unchecked(
         &run_root.ok_or("usage: liberado coder compare prepare <run-dir> [--commit <ref>]")?,
-    )?);
+    )?;
+    let base_commit = git_capture(
+        &child_process_path(&source_root),
+        &["rev-parse", &format!("{revision}^{{commit}}")],
+    )?
+    .trim()
+    .to_string();
+    prepare_parsed(
+        &run_root,
+        &source_root,
+        &revision,
+        &base_commit,
+        compile_timeout_secs,
+    )
+}
+
+/// Prepare a comparison run directory from already-resolved inputs. This is the single execution
+/// path shared by the `prepare` verb and the job coordinator: the coordinator calls it directly
+/// with the preflight-resolved repository and commit instead of serializing them into argv.
+pub(crate) fn prepare_parsed(
+    run_root: &Path,
+    source_root: &Path,
+    revision: &str,
+    base_commit: &str,
+    compile_timeout_secs: u64,
+) -> Result<(), Box<dyn Error>> {
+    let run_root = child_process_path(run_root);
+    let source_root = child_process_path(source_root);
     if run_root.exists() {
         return Err(format!(
             "comparison run directory already exists: {}",
@@ -131,12 +158,6 @@ pub fn prepare(args: &[String]) -> Result<(), Box<dyn Error>> {
         )
         .into());
     }
-    let base_commit = git_capture(
-        &source_root,
-        &["rev-parse", &format!("{revision}^{{commit}}")],
-    )?
-    .trim()
-    .to_string();
 
     let worktrees = run_root.join("worktrees");
     let targets = run_root.join("targets");
@@ -158,7 +179,7 @@ pub fn prepare(args: &[String]) -> Result<(), Box<dyn Error>> {
         harnesses.insert(name.to_string(), layout);
     }
 
-    let result = prepare_worktrees(&source_root, &base_commit, &harnesses);
+    let result = prepare_worktrees(&source_root, base_commit, &harnesses);
     if let Err(error) = result {
         cleanup_prepared_worktrees(&source_root, &harnesses);
         let _ = fs::remove_dir_all(&run_root);
@@ -169,8 +190,8 @@ pub fn prepare(args: &[String]) -> Result<(), Box<dyn Error>> {
         version: MANIFEST_VERSION,
         source_root,
         run_root: run_root.clone(),
-        base_revision: revision,
-        base_commit,
+        base_revision: revision.to_string(),
+        base_commit: base_commit.to_string(),
         compile_timeout_secs,
         harnesses,
     };
@@ -214,14 +235,10 @@ pub fn run(args: &[String]) -> Result<(), Box<dyn Error>> {
     run_parsed(parsed, ResolvedCredential::new(credential))
 }
 
-pub(crate) fn run_with_credential(
-    args: &[String],
+pub(crate) fn run_parsed(
+    parsed: RunArgs,
     credential: ResolvedCredential,
 ) -> Result<(), Box<dyn Error>> {
-    run_parsed(parse_run_args(args)?, credential)
-}
-
-fn run_parsed(parsed: RunArgs, credential: ResolvedCredential) -> Result<(), Box<dyn Error>> {
     let manifest = load_manifest(&parsed.run_root)?;
     let task = fs::read_to_string(&parsed.task)?;
     if task.trim().is_empty() {
@@ -326,6 +343,48 @@ fn run_parsed(parsed: RunArgs, credential: ResolvedCredential) -> Result<(), Box
         );
     }
     Ok(())
+}
+
+/// Build the typed run arguments from a job spec, without the argv round-trip. The coordinator
+/// calls [`run_parsed`] directly with this; the `run` verb parses argv into the same shape.
+pub(crate) fn run_args_from_spec(
+    spec: &JobSpec,
+    job_root: &Path,
+    execution_root: &Path,
+    credential_environment: &str,
+) -> RunArgs {
+    let mut args = RunArgs {
+        run_root: execution_root.to_path_buf(),
+        task: job_root.join("input/task.txt"),
+        model: spec.model.model.clone(),
+        provider: spec.model.provider.clone(),
+        base_url: spec.model.base_url.clone(),
+        api_key_env: credential_environment.to_string(),
+        thinking: spec.model.thinking.clone(),
+        max_turns: spec.model.max_turns,
+        sampling: spec.model.sampling.clone(),
+        run_order: spec.run_order.clone(),
+        run_timeout_secs: spec.limits.run_timeout_secs,
+        verifier_repair_attempts: spec.limits.verifier_repair_attempts,
+        task_aware_context: spec.task_aware_context,
+        acceptance_overlay: spec
+            .acceptance
+            .as_ref()
+            .map(|a| job_root.join(&a.directory)),
+        liberado_bin: None,
+        pi_bin: None,
+        cancel_file: Some(job_root.join("cancel-requested")),
+    };
+    for harness in &spec.harnesses {
+        if let Some(binary) = &harness.binary {
+            match harness.id.as_str() {
+                "liberado" => args.liberado_bin = Some(binary.clone()),
+                "pi" => args.pi_bin = Some(binary.clone()),
+                _ => {}
+            }
+        }
+    }
+    args
 }
 
 fn run_or_record_launch_error(
@@ -1742,10 +1801,16 @@ mod tests {
     use super::{
         CompareManifest, HarnessLayout, RunArgs, SAMPLING_OMITTED, bounded_feedback,
         copy_path_dependency_tree, default_run_order, liberado_runner_path, parse_run_args,
-        repairable_verifier_exit, run_async_command, write_run_config, write_run_pins,
+        repairable_verifier_exit, run_args_from_spec, run_async_command, write_run_config,
+        write_run_pins,
     };
     #[cfg(windows)]
     use super::{prepare, remove_job_worktrees};
+    use crate::contract::{
+        AcceptanceBundle, HarnessRequest, JOB_SPEC_VERSION, JobId, JobSpec, ModelPins,
+        ResourceLimits, TaskBundle, VerifierProfile,
+    };
+    use chrono::Utc;
     use liberado_common::process::command;
     use std::collections::BTreeMap;
     use std::fs;
@@ -2000,5 +2065,79 @@ mod tests {
         assert!(run_root.join("worktrees/liberado/.git").is_file());
         assert!(run_root.join("worktrees/pi/.git").is_file());
         remove_job_worktrees(&run_root).unwrap();
+    }
+
+    #[test]
+    fn run_args_from_spec_maps_every_field_without_argv() {
+        let spec = JobSpec {
+            version: JOB_SPEC_VERSION,
+            job_id: JobId::new(),
+            submitted_at: Utc::now(),
+            repository: PathBuf::from("C:/repo"),
+            base_revision: "main".to_string(),
+            task: TaskBundle::new("task.txt", "do it".to_string()).unwrap(),
+            harnesses: vec![
+                HarnessRequest {
+                    id: "liberado".to_string(),
+                    binary: Some(PathBuf::from("liberado.exe")),
+                },
+                HarnessRequest {
+                    id: "pi".to_string(),
+                    binary: Some(PathBuf::from("pi.exe")),
+                },
+            ],
+            run_order: vec!["pi".to_string(), "liberado".to_string()],
+            model: ModelPins {
+                provider: "openrouter".to_string(),
+                model: "deepseek/test".to_string(),
+                base_url: "https://example.invalid".to_string(),
+                credential_alias: "openrouter-default".to_string(),
+                thinking: "high".to_string(),
+                max_turns: 7,
+                sampling: SAMPLING_OMITTED.to_string(),
+            },
+            limits: ResourceLimits {
+                compile_timeout_secs: 11,
+                run_timeout_secs: 13,
+                minimum_free_bytes: 0,
+                verifier_repair_attempts: 2,
+            },
+            verifier: VerifierProfile::WorkspaceTests,
+            task_aware_context: true,
+            acceptance: Some(AcceptanceBundle {
+                directory: PathBuf::from("input/acceptance"),
+                sha256: "x".to_string(),
+                file_count: 1,
+            }),
+            experiment: None,
+            experiment_id: String::new(),
+        }
+        .finalize()
+        .unwrap();
+
+        let job_root = PathBuf::from("C:/jobs/01");
+        let execution_root = job_root.join("execution");
+        let args = run_args_from_spec(&spec, &job_root, &execution_root, "OPENROUTER_API_KEY");
+
+        assert_eq!(args.run_root, execution_root);
+        assert_eq!(args.task, job_root.join("input/task.txt"));
+        assert_eq!(args.model, "deepseek/test");
+        assert_eq!(args.provider, "openrouter");
+        assert_eq!(args.base_url, "https://example.invalid");
+        assert_eq!(args.api_key_env, "OPENROUTER_API_KEY");
+        assert_eq!(args.thinking, "high");
+        assert_eq!(args.max_turns, 7);
+        assert_eq!(args.sampling, SAMPLING_OMITTED);
+        assert_eq!(args.run_order, vec!["pi", "liberado"]);
+        assert_eq!(args.run_timeout_secs, 13);
+        assert_eq!(args.verifier_repair_attempts, 2);
+        assert!(args.task_aware_context);
+        assert_eq!(
+            args.acceptance_overlay,
+            Some(job_root.join("input/acceptance"))
+        );
+        assert_eq!(args.liberado_bin, Some(PathBuf::from("liberado.exe")));
+        assert_eq!(args.pi_bin, Some(PathBuf::from("pi.exe")));
+        assert_eq!(args.cancel_file, Some(job_root.join("cancel-requested")));
     }
 }

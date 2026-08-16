@@ -94,16 +94,13 @@ pub fn execute(
     )?;
     let job_root = store.job_root(job_id);
     let execution_root = job_root.join("execution");
-    let prepare_args = vec![
-        execution_root.to_string_lossy().into_owned(),
-        "--source".to_string(),
-        spec.repository.to_string_lossy().into_owned(),
-        "--commit".to_string(),
-        preflight.base_commit.clone(),
-        "--compile-timeout-secs".to_string(),
-        spec.limits.compile_timeout_secs.to_string(),
-    ];
-    if let Err(error) = legacy::prepare(&prepare_args) {
+    if let Err(error) = legacy::prepare_parsed(
+        &execution_root,
+        &preflight.repository,
+        &preflight.base_commit,
+        &preflight.base_commit,
+        spec.limits.compile_timeout_secs,
+    ) {
         return finish_failure(
             store,
             &spec,
@@ -121,13 +118,13 @@ pub fn execute(
         "run",
         "running harness adapters in declared order",
     )?;
-    let run_args = legacy_run_args(
+    let run_args = legacy::run_args_from_spec(
         &spec,
         &job_root,
         &execution_root,
         &preflight.credential_environment,
     );
-    let run_result = legacy::run_with_credential(&run_args, credential);
+    let run_result = legacy::run_parsed(run_args, credential);
 
     tracker.advance(
         JobStatus::Verifying,
@@ -205,68 +202,6 @@ pub fn execute(
             )
         }
     }
-}
-
-fn legacy_run_args(
-    spec: &JobSpec,
-    job_root: &Path,
-    execution_root: &Path,
-    credential_environment: &str,
-) -> Vec<String> {
-    let mut args = vec![
-        execution_root.to_string_lossy().into_owned(),
-        "--task".to_string(),
-        job_root
-            .join("input/task.txt")
-            .to_string_lossy()
-            .into_owned(),
-        "--model".to_string(),
-        spec.model.model.clone(),
-        "--provider".to_string(),
-        spec.model.provider.clone(),
-        "--base-url".to_string(),
-        spec.model.base_url.clone(),
-        "--api-key-env".to_string(),
-        credential_environment.to_string(),
-        "--thinking".to_string(),
-        spec.model.thinking.clone(),
-        "--max-turns".to_string(),
-        spec.model.max_turns.to_string(),
-        "--sampling".to_string(),
-        spec.model.sampling.clone(),
-        "--run-order".to_string(),
-        spec.run_order.join(","),
-        "--run-timeout-secs".to_string(),
-        spec.limits.run_timeout_secs.to_string(),
-        "--verifier-repair-attempts".to_string(),
-        spec.limits.verifier_repair_attempts.to_string(),
-        "--cancel-file".to_string(),
-        job_root
-            .join("cancel-requested")
-            .to_string_lossy()
-            .into_owned(),
-    ];
-    if spec.task_aware_context {
-        args.push("--task-aware-context".to_string());
-    }
-    if let Some(acceptance) = &spec.acceptance {
-        args.extend([
-            "--acceptance-overlay".to_string(),
-            job_root
-                .join(&acceptance.directory)
-                .to_string_lossy()
-                .into_owned(),
-        ]);
-    }
-    for harness in &spec.harnesses {
-        if let Some(binary) = &harness.binary {
-            args.extend([
-                format!("--{}-bin", harness.id),
-                binary.to_string_lossy().into_owned(),
-            ]);
-        }
-    }
-    args
 }
 
 fn collect_results(
