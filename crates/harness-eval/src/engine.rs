@@ -566,6 +566,11 @@ mod tests {
             .unwrap();
         let mut policy = WorkerPolicy::for_repository(repository);
         policy.minimum_free_bytes = 1;
+        // Neutralize the disk-space preflight so it cannot fire before the credential check this
+        // test actually targets. The default estimate is 15 GB per harness; a Windows runner with
+        // less free space than that estimate fails here with a disk message instead, and this
+        // assertion then reports a red that has nothing to do with credentials (seen on main).
+        policy.estimated_build_bytes_per_harness = 0;
         policy.maximum_compile_timeout_secs = 1;
         policy.maximum_run_timeout_secs = 1;
         policy.maximum_turns = 1;
