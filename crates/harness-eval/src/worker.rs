@@ -9,6 +9,7 @@ use std::process::Stdio;
 use std::time::Duration;
 
 use chrono::Utc;
+#[cfg(windows)]
 use liberado_common::path::child_process_path;
 use liberado_common::process::std_command;
 use sha2::{Digest, Sha256};

@@ -703,7 +703,9 @@ fn compare_run_refuses_an_acceptance_overlay_that_would_overwrite_source() {
         .expect("valid saved result");
         assert_eq!(result["verifier_exit_code"], 125);
         assert_eq!(
-            fs::read_to_string(worktree.join("src").join("lib.rs")).expect("source file"),
+            fs::read_to_string(worktree.join("src").join("lib.rs"))
+                .expect("source file")
+                .replace("\r\n", "\n"),
             "pub fn fixture() {}\n"
         );
         assert_eq!(git_capture_test(&worktree, &["status", "--short"]), "");

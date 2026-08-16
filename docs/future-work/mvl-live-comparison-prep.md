@@ -1,7 +1,7 @@
 ---
 kind: plan
 status: superseded
-authority: historical
+authority: evidence
 domain: coding-harness
 canonical_for: mvl-live-comparison-prep
 open_items: false

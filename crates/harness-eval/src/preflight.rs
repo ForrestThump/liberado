@@ -1,9 +1,11 @@
 //! Fail-fast checks that run before a paid model request or worktree mutation.
 
 use std::error::Error;
+#[cfg(windows)]
 use std::ffi::OsStr;
 use std::io;
 use std::path::{Path, PathBuf};
+#[cfg(windows)]
 use std::process::Stdio;
 
 use liberado_common::process::std_command;
