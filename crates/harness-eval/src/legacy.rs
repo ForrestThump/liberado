@@ -1806,12 +1806,15 @@ fn run_slug(path: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        HarnessLayout, bounded_feedback, copy_path_dependency_tree, liberado_runner_path, prepare,
-        remove_job_worktrees, repairable_verifier_exit, run_async_command,
+        HarnessLayout, bounded_feedback, copy_path_dependency_tree, liberado_runner_path,
+        repairable_verifier_exit, run_async_command,
     };
+    #[cfg(windows)]
+    use super::{prepare, remove_job_worktrees};
     use liberado_common::process::command;
     use std::fs;
     use std::path::PathBuf;
+    #[cfg(windows)]
     use std::process::Command;
     use std::time::Duration;
 
