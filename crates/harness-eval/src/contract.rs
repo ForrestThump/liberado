@@ -11,6 +11,12 @@ use ulid::Ulid;
 pub const JOB_SPEC_VERSION: u32 = 1;
 pub const WORKER_CONFIG_VERSION: u32 = 1;
 
+/// The only sampling value the v1 coordinator records today: no temperature is passed to either
+/// client, so "omitted" is the honest pin. Kept as a named constant so every pin, default, and
+/// validation agrees on the spelling. A later change that actually applies a temperature to both
+/// clients replaces this with a real value.
+pub const SAMPLING_OMITTED: &str = "omitted";
+
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct JobId(pub String);
@@ -100,6 +106,17 @@ pub struct ModelPins {
     pub credential_alias: String,
     pub thinking: String,
     pub max_turns: u32,
+    /// Declared sampling policy for both clients.
+    ///
+    /// The v1 coordinator does not yet pass a temperature to either client, so [`SAMPLING_OMITTED`]
+    /// is the only honest value today. Recording it here makes the decision an immutable
+    /// experiment pin (it is part of the experiment id) and shows it in `experiment.json`.
+    #[serde(default = "default_sampling")]
+    pub sampling: String,
+}
+
+fn default_sampling() -> String {
+    SAMPLING_OMITTED.to_string()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -213,6 +230,12 @@ impl JobSpec {
             || self.limits.run_timeout_secs == 0
         {
             return Err("turn and time limits must be positive".to_string());
+        }
+        if self.model.sampling != SAMPLING_OMITTED {
+            return Err(format!(
+                "sampling pin '{}' is not yet applied by either client; only '{}' is supported",
+                self.model.sampling, SAMPLING_OMITTED
+            ));
         }
         if let Some(acceptance) = &self.acceptance {
             if acceptance.directory.is_absolute()
@@ -453,6 +476,7 @@ mod tests {
                 credential_alias: "openrouter-default".to_string(),
                 thinking: "high".to_string(),
                 max_turns: 400,
+                sampling: SAMPLING_OMITTED.to_string(),
             },
             limits: ResourceLimits::default(),
             verifier: VerifierProfile::WorkspaceTests,
@@ -482,5 +506,12 @@ mod tests {
     #[test]
     fn verifier_repairs_are_opt_in_for_fair_comparisons() {
         assert_eq!(ResourceLimits::default().verifier_repair_attempts, 0);
+    }
+
+    #[test]
+    fn sampling_pin_rejects_values_not_applied_by_either_client() {
+        let mut value = spec();
+        value.model.sampling = "0.1".to_string();
+        assert!(value.validate().unwrap_err().contains("sampling"));
     }
 }

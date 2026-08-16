@@ -383,6 +383,7 @@ mod tests {
                 credential_alias: "openrouter-default".to_string(),
                 thinking: "high".to_string(),
                 max_turns: 1,
+                sampling: SAMPLING_OMITTED.to_string(),
             },
             limits: ResourceLimits {
                 compile_timeout_secs: 1,

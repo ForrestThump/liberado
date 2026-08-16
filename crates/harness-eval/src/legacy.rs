@@ -19,6 +19,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::adapter::{AdapterPreflight, HarnessAdapter, HarnessExecution};
+use crate::contract::SAMPLING_OMITTED;
 use crate::preflight::ResolvedCredential;
 
 const MANIFEST_VERSION: u32 = 1;
@@ -59,6 +60,7 @@ struct RunArgs {
     api_key_env: String,
     thinking: String,
     max_turns: u32,
+    sampling: String,
     run_timeout_secs: u64,
     verifier_repair_attempts: u32,
     task_aware_context: bool,
@@ -533,6 +535,7 @@ fn parse_run_args(args: &[String]) -> Result<RunArgs, Box<dyn Error>> {
     let mut api_key_env = DEFAULT_API_KEY_ENV.to_string();
     let mut thinking = DEFAULT_THINKING.to_string();
     let mut max_turns = DEFAULT_MAX_TURNS;
+    let mut sampling = SAMPLING_OMITTED.to_string();
     let mut run_timeout_secs = DEFAULT_RUN_TIMEOUT_SECS;
     // Keep external verifier repair off for benchmark runs. Operators can opt in explicitly;
     // otherwise the comparison would measure the coordinator's recovery policy, not the harness.
@@ -577,6 +580,16 @@ fn parse_run_args(args: &[String]) -> Result<RunArgs, Box<dyn Error>> {
                     .map_err(|_| "--max-turns must be a positive integer")?;
                 if max_turns == 0 {
                     return Err("--max-turns must be a positive integer".into());
+                }
+            }
+            "--sampling" => {
+                index += 1;
+                sampling = value(args, index, flag)?.to_string();
+                if sampling != SAMPLING_OMITTED {
+                    return Err(format!(
+                        "sampling '{sampling}' is not yet applied by either client; only '{SAMPLING_OMITTED}' is supported"
+                    )
+                    .into());
                 }
             }
             "--run-timeout-secs" => {
@@ -634,6 +647,7 @@ fn parse_run_args(args: &[String]) -> Result<RunArgs, Box<dyn Error>> {
         api_key_env,
         thinking,
         max_turns,
+        sampling,
         run_timeout_secs,
         verifier_repair_attempts,
         task_aware_context,
@@ -818,7 +832,7 @@ fn write_run_config(manifest: &CompareManifest, args: &RunArgs) -> Result<(), Bo
     fs::write(
         config.join("tuning.toml"),
         format!(
-            "[coder]\ntrace_dir = \"coder-traces\"\noffered_tools = [\"read_file\", \"write_file\", \"edit_file\", \"run_command\"]\n\n\
+            "[coder]\ntrace_dir = \"coder-traces\"\n\n\
              [coder.coder]\nmodel = {}\nmax_turns = {}\nreasoning = {}\n\n\
              [coder.command_policy]\ntimeout_secs = {}\noutput_max_bytes = 65536\ndeny = [\"git\"]\n\n\
              [coder.workspace]\nshared_target_dir = {}\nwarmup = false\nwarmup_timeout_secs = {}\n{}",
@@ -846,7 +860,7 @@ fn write_run_pins(
     fs::write(
         manifest.run_root.join("pins.txt"),
         format!(
-            "base_revision={}\nbase_commit={}\nprovider={}\nmodel={}\nthinking={}\nliberado_max_turns={}\npi_turn_cap=client default\ncompile_timeout_secs={}\nverifier_repair_attempts={}\ntask_aware_context={}\nacceptance_overlay_hash={}\nsampling=temperature omitted by both clients\n",
+            "base_revision={}\nbase_commit={}\nprovider={}\nmodel={}\nthinking={}\nliberado_max_turns={}\npi_turn_cap=unset (pi native default)\ntool_surface=native (full tool catalog)\ncompile_timeout_secs={}\nverifier_repair_attempts={}\ntask_aware_context={}\nacceptance_overlay_hash={}\nsampling={}\n",
             manifest.base_revision,
             manifest.base_commit,
             args.provider,
@@ -857,6 +871,7 @@ fn write_run_pins(
             args.verifier_repair_attempts,
             args.task_aware_context,
             overlay_hash,
+            args.sampling,
         ),
     )?;
     Ok(())
@@ -1691,12 +1706,14 @@ fn run_slug(path: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        HarnessLayout, bounded_feedback, copy_path_dependency_tree, liberado_runner_path,
-        repairable_verifier_exit, run_async_command,
+        CompareManifest, HarnessLayout, RunArgs, SAMPLING_OMITTED, bounded_feedback,
+        copy_path_dependency_tree, liberado_runner_path, parse_run_args, repairable_verifier_exit,
+        run_async_command, write_run_config, write_run_pins,
     };
     #[cfg(windows)]
     use super::{prepare, remove_job_worktrees};
     use liberado_common::process::command;
+    use std::collections::BTreeMap;
     use std::fs;
     use std::path::PathBuf;
     #[cfg(windows)]
@@ -1709,6 +1726,89 @@ mod tests {
             target_dir: PathBuf::from("C:/comparison/targets/liberado"),
             artifacts: PathBuf::from("C:/comparison/artifacts/liberado"),
         }
+    }
+
+    fn compare_manifest() -> (tempfile::TempDir, CompareManifest) {
+        let temp = tempfile::tempdir().unwrap();
+        let mut harnesses = BTreeMap::new();
+        for name in ["liberado", "pi"] {
+            harnesses.insert(
+                name.to_string(),
+                HarnessLayout {
+                    worktree: temp.path().join("worktrees").join(name),
+                    target_dir: temp.path().join("targets").join(name),
+                    artifacts: temp.path().join("artifacts").join(name),
+                },
+            );
+        }
+        let manifest = CompareManifest {
+            version: 1,
+            source_root: temp.path().join("source"),
+            run_root: temp.path().to_path_buf(),
+            base_revision: "main".to_string(),
+            base_commit: "abc123".to_string(),
+            compile_timeout_secs: 1800,
+            harnesses,
+        };
+        (temp, manifest)
+    }
+
+    fn run_args() -> RunArgs {
+        RunArgs {
+            run_root: PathBuf::new(),
+            task: PathBuf::from("task.txt"),
+            model: "deepseek/test".to_string(),
+            provider: "openrouter".to_string(),
+            base_url: "https://openrouter.ai/api/v1".to_string(),
+            api_key_env: "OPENROUTER_API_KEY".to_string(),
+            thinking: "high".to_string(),
+            max_turns: 400,
+            sampling: SAMPLING_OMITTED.to_string(),
+            run_timeout_secs: 14_400,
+            verifier_repair_attempts: 0,
+            task_aware_context: false,
+            acceptance_overlay: None,
+            liberado_bin: None,
+            pi_bin: None,
+            cancel_file: None,
+        }
+    }
+
+    #[test]
+    fn generated_config_keeps_native_tool_catalog_and_command_policy() {
+        let (_temp, manifest) = compare_manifest();
+        write_run_config(&manifest, &run_args()).unwrap();
+        let tuning = fs::read_to_string(manifest.run_root.join("config/tuning.toml")).unwrap();
+        // The coordinator must not narrow the model's tool surface: native Liberado offers the
+        // full catalog. `deny = ["git"]` stays because it matches Liberado's native command
+        // policy (CommandPolicy::default), not a coordinator-imposed narrowing.
+        assert!(!tuning.contains("offered_tools"));
+        assert!(tuning.contains("deny = [\"git\"]"));
+    }
+
+    #[test]
+    fn pins_record_native_surface_and_honest_sampling_and_turn_budget() {
+        let (_temp, manifest) = compare_manifest();
+        write_run_pins(&manifest, &run_args(), None).unwrap();
+        let pins = fs::read_to_string(manifest.run_root.join("pins.txt")).unwrap();
+        assert!(pins.contains("tool_surface=native"));
+        assert!(pins.contains("pi_turn_cap=unset"));
+        assert!(pins.contains("sampling=omitted"));
+        assert!(!pins.contains("client default"));
+        assert!(!pins.contains("temperature omitted"));
+    }
+
+    #[test]
+    fn sampling_flag_rejects_values_not_applied_to_clients() {
+        let error = parse_run_args(&[
+            "C:/comparison/run".to_string(),
+            "--task".to_string(),
+            "C:/comparison/task.txt".to_string(),
+            "--sampling".to_string(),
+            "0.1".to_string(),
+        ])
+        .unwrap_err();
+        assert!(error.to_string().contains("not yet applied"));
     }
 
     #[test]
