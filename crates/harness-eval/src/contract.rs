@@ -456,7 +456,6 @@ pub struct WorkerPolicy {
     pub retain_worktrees: bool,
     #[serde(default)]
     pub allow_binary_overrides: bool,
-    pub poll_interval_ms: u64,
     pub credential_aliases: BTreeMap<String, String>,
 }
 
@@ -476,7 +475,6 @@ impl WorkerPolicy {
             retain_build_caches: false,
             retain_worktrees: false,
             allow_binary_overrides: false,
-            poll_interval_ms: 30_000,
             credential_aliases: BTreeMap::from([(
                 "openrouter-default".to_string(),
                 "OPENROUTER_API_KEY".to_string(),

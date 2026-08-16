@@ -14,7 +14,7 @@ use liberado_common::process::std_command;
 use sha2::{Digest, Sha256};
 
 use crate::contract::*;
-use crate::journal::{JobStore, atomic_json};
+use crate::journal::JobStore;
 
 pub const WORKER_POLICY_FILE: &str = ".liberado/harness-worker.json";
 
@@ -149,7 +149,9 @@ fn resolve_commit(repository: &Path, revision: &str) -> Result<String, Box<dyn E
 }
 
 pub fn status(repository: &Path, job_id: &JobId) -> io::Result<JobState> {
-    JobStore::for_repository(repository).load_state(job_id)
+    let store = JobStore::for_repository(repository);
+    store.sweep_dead_lease(job_id)?;
+    store.load_state(job_id)
 }
 
 pub fn cancel(repository: &Path, job_id: &JobId) -> io::Result<()> {
@@ -169,14 +171,20 @@ pub fn report(repository: &Path, job_id: &JobId) -> io::Result<ComparisonReport>
 }
 
 /// Wait inside one local process. This does not consume model turns or require a Paseo hook.
+///
+/// `stall_secs`, when set, exits with a distinct error if neither the event log nor any harness
+/// stdout/stderr log has grown in that many seconds.
 pub fn await_terminal(
     repository: &Path,
     job_id: &JobId,
     timeout: Option<Duration>,
+    stall_secs: Option<u64>,
 ) -> io::Result<JobState> {
     let store = JobStore::for_repository(repository);
+    store.sweep_dead_lease(job_id)?;
     let started = Instant::now();
     let mut revision = None;
+    let mut last_progress = progress_mtime(&store.job_root(job_id))?;
     let (wake_send, wake_receive) = std::sync::mpsc::channel();
     let mut watcher = notify::recommended_watcher(move |event| {
         let _ = wake_send.send(event);
@@ -208,6 +216,21 @@ pub fn await_terminal(
                 format!("job {job_id} did not finish before the await timeout"),
             ));
         }
+        if let Some(limit) = stall_secs {
+            let now = progress_mtime(&store.job_root(job_id))?;
+            if now != last_progress {
+                last_progress = now;
+            } else if last_progress.is_some_and(|at| {
+                at.elapsed()
+                    .map_err(io::Error::other)
+                    .is_ok_and(|age| age >= Duration::from_secs(limit))
+            }) {
+                return Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    format!("job {job_id} stalled: no progress for {limit} seconds"),
+                ));
+            }
+        }
         let wait = timeout
             .map(|limit| limit.saturating_sub(started.elapsed()))
             .unwrap_or(Duration::from_secs(30))
@@ -216,18 +239,42 @@ pub fn await_terminal(
     }
 }
 
-pub fn policy_path(repository: &Path) -> PathBuf {
-    repository.join(WORKER_POLICY_FILE)
+/// The most recent modification time among the files that grow while a comparison makes progress:
+/// the event log and each harness's stdout/stderr logs.
+fn progress_mtime(job_root: &Path) -> io::Result<Option<std::time::SystemTime>> {
+    let mut latest: Option<std::time::SystemTime> = None;
+    let mut consider = |path: &Path| {
+        if let Ok(metadata) = fs::metadata(path)
+            && let Ok(modified) = metadata.modified()
+            && latest.is_none_or(|at| modified > at)
+        {
+            latest = Some(modified);
+        }
+    };
+    consider(&job_root.join("events.jsonl"));
+    for base in ["execution/artifacts", "artifacts/harnesses"] {
+        let root = job_root.join(base);
+        let Ok(entries) = fs::read_dir(&root) else {
+            continue;
+        };
+        for harness in entries.flatten() {
+            let Ok(files) = fs::read_dir(harness.path()) else {
+                continue;
+            };
+            for file in files.flatten() {
+                let name = file.file_name();
+                let name = name.to_string_lossy();
+                if name.ends_with(".stdout.log") || name.ends_with(".stderr.log") {
+                    consider(&file.path());
+                }
+            }
+        }
+    }
+    Ok(latest)
 }
 
-pub fn write_default_policy(repository: &Path, overwrite: bool) -> io::Result<PathBuf> {
-    let repository = repository.canonicalize()?;
-    let path = policy_path(&repository);
-    if path.exists() && !overwrite {
-        return Ok(path);
-    }
-    atomic_json(&path, &WorkerPolicy::for_repository(repository))?;
-    Ok(path)
+pub fn policy_path(repository: &Path) -> PathBuf {
+    repository.join(WORKER_POLICY_FILE)
 }
 
 pub fn load_policy(path: &Path) -> io::Result<WorkerPolicy> {
@@ -389,7 +436,8 @@ mod tests {
             state.phase = "complete".to_string();
             updater.write_state(&state).unwrap();
         });
-        let state = await_terminal(&repository, &job_id, Some(Duration::from_secs(2))).unwrap();
+        let state =
+            await_terminal(&repository, &job_id, Some(Duration::from_secs(2)), None).unwrap();
         assert_eq!(state.status, JobStatus::Succeeded);
         verify_captured_inputs(&spec, &root).unwrap();
         fs::write(root.join("input/task.txt"), "tampered").unwrap();
@@ -456,5 +504,18 @@ mod tests {
             .status()
             .unwrap();
         assert!(status.success(), "git {arguments:?} failed");
+    }
+
+    #[test]
+    fn progress_mtime_tracks_events_and_harness_logs() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        assert_eq!(progress_mtime(root).unwrap(), None);
+        fs::write(root.join("events.jsonl"), "x\n").unwrap();
+        assert!(progress_mtime(root).unwrap().is_some());
+        let stdout = root.join("artifacts/harnesses/liberado/session.stdout.log");
+        fs::create_dir_all(stdout.parent().unwrap()).unwrap();
+        fs::write(&stdout, "y\n").unwrap();
+        assert!(progress_mtime(root).unwrap().is_some());
     }
 }

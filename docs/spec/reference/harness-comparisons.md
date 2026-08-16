@@ -14,49 +14,43 @@ example, `2` for production recovery). The coordinator writes verifier diagnosti
 session prompt, re-runs the verifier, and preserves every attempt in the normal logs. Host failures,
 scope violations, and verifier timeouts remain terminal and are not sent back to the model.
 
-## Durable job worker
+## Durable jobs
 
-The normal automation path does not require Paseo changes and does not require the dispatching
-process to hold a provider key. It has three boundaries:
+The normal automation path does not require Paseo changes. It has two boundaries:
 
 - `liberado-harness-eval` owns the versioned job contract, worktrees, verifier, adapters, journal,
   result classification, and preservation;
-- `liberado-harness-worker-background` runs without a console window as the logged-in user and
-  executes accepted jobs. The console worker remains available for foreground diagnosis;
 - `liberado coder compare submit|status|await|cancel|report` reads and writes typed job records.
+
+`submit` writes the job directory exactly as today, then spawns one detached executor process for
+that job (`liberado-harness-worker run-job <id>`) and returns the job id immediately. Non-blocking
+dispatch is a property of process spawning, not of a service. The executor inherits the submitter's
+environment, so the credential alias resolves from the process environment; there is no installed
+daemon, startup key, background binary, or registry read. `--no-spawn` creates the job without
+dispatching it, for foreground diagnosis.
 
 The transport is a repository-scoped durable spool at `.liberado/harness-jobs/`. The repository
 filesystem permissions are its access boundary. A request cannot contain a shell command or a
-provider secret. The worker also applies its own repository, provider, model, turn, timeout, disk,
+provider secret. The executor also applies its own repository, provider, model, turn, timeout, disk,
 verifier, and credential-alias policy before it mutates a worktree or calls a model.
 
+A spool-wide runner lock (`runner.lock`) serializes paid execution per repository: one comparison at
+a time is a measurement policy, not a limitation. `submit` refuses while the lock is held. A dead
+executor leaves a dead lease; the next `status`/`await` read marks the job `Failed` with a
+host-infrastructure class. `await --stall-secs <n>` wakes the caller when neither the event log nor
+the active harness's stdout/stderr log has grown in `n` seconds.
+
 Submission resolves the requested Git ref to an exact commit before it creates `job.json`. The
-worker permits only configured provider/base-URL pairs, so a request cannot redirect a credential
-to another endpoint. Harness binary overrides are disabled by default. The worker also rechecks the
-captured task and acceptance-overlay digests immediately before preflight.
+executor permits only configured provider/base-URL pairs, so a request cannot redirect a credential
+to another endpoint. Harness binary overrides are disabled by default. The executor also rechecks
+the captured task and acceptance-overlay digests immediately before preflight.
 
-Install the worker once from an interactive PowerShell session under the Windows account that owns
-the provider credential:
+The policy lives at `.liberado/harness-worker.json` and maps the alias `openrouter-default` to
+`OPENROUTER_API_KEY`. The executor reads the credential from its own inherited process environment.
+The key is passed only to each harness child. It is not written to the job, policy, event log,
+report, or parent environment.
 
-```text
-cargo build --locked -p liberado-harness-eval --bins
-cargo run --locked -p liberado-cli -- coder compare worker install \
-  --worker-bin target/debug/liberado-harness-worker-background.exe
-```
-
-`worker install` writes `.liberado/harness-worker.json`, registers the background binary in the
-current user's Windows startup key, and starts it without a visible terminal. The installer first
-copies the binary to a content-addressed `.liberado/bin/` path, so `cargo clean` cannot break the
-next login. This keeps startup inside the same non-administrator user and credential boundary. Host
-lifecycle errors go to the predictable
-`.liberado/harness-worker.log`; each job keeps its detailed journal and artifacts in the job spool.
-The policy maps the alias `openrouter-default` to `OPENROUTER_API_KEY`. At execution time,
-the worker first checks its process environment and then reads the Windows user environment from
-`HKCU\Environment`. The key is passed only to each harness child. It is not written to the job,
-policy, event log, report, or parent environment.
-
-After this one-time user-context bootstrap, any process with write access to the repository can
-submit and wait for a comparison:
+Any process with write access to the repository can submit and wait for a comparison:
 
 ```text
 liberado coder compare submit --task target/compare/task.txt \
@@ -96,11 +90,11 @@ liberado coder compare doctor --task target/compare/task.txt \
 
 It checks the worker policy, repository and pinned revision, required path dependencies, harness
 launchers, credential availability, Git locks, and disk estimate. It never starts a harness and
-does not replace the worker's execution-time preflight.
+does not replace the executor's execution-time preflight.
 
-`await` is one blocking local process. It and the worker use operating-system filesystem events as
+`await` is one blocking local process. It and the executor use operating-system filesystem events as
 their wake hook, with a 30-second recovery check for missed or coalesced events. Waiting does not
-consume model turns or require a Paseo hook. The worker writes every transition to append-and-flush
+consume model turns or require a Paseo hook. The executor writes every transition to append-and-flush
 `events.jsonl`, and state is stored as immutable numbered records. A crash cannot replace the last
 valid state with a partial JSON file.
 
@@ -127,7 +121,7 @@ harness's own artifacts (`run-status.txt`, Liberado `traces/*.json`, pi `session
 omitted rather than invented when a transcript is missing or unparseable. Correctness — `accepted`
 = harness exit 0 and verifier exit 0 — is unchanged.
 
-The worker reports one terminal class: task failure, verifier failure, harness failure, timeout,
+The executor reports one terminal class: task failure, verifier failure, harness failure, timeout,
 host infrastructure failure, or cancelled. It does not silently discard malformed
 JSONL or malformed result JSON. On Windows, each paid harness process is assigned to a Job Object
 with `KILL_ON_JOB_CLOSE`, so cancellation and the wall-clock limit terminate its process tree.
@@ -165,8 +159,9 @@ The Cargo target directories are separate. Never share one target directory acro
 worktrees. Cargo can otherwise reuse freshness state or a same-named workspace binary from the
 wrong checkout.
 
-`targets/` is rebuildable Cargo state. Durable worker jobs remove it after artifacts and archive
-refs are saved unless `retain_build_caches` is enabled in worker policy. They also remove completed
+`targets/` is rebuildable Cargo state. Durable jobs remove it after artifacts and archive
+refs are saved unless `retain_build_caches` is enabled in the executor policy. They also remove
+completed
 worktrees by default; `retain_worktrees` keeps them for local inspection. Archive refs and captured
 Git artifacts remain after cleanup. Direct legacy runs leave both directories for the operator.
 
