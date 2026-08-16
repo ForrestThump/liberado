@@ -23,7 +23,15 @@ pub struct HarnessExecution {
 pub trait HarnessAdapter {
     fn id(&self) -> &'static str;
 
+    /// The session id this adapter's runs are recorded under.
+    fn session_id(&self) -> &str;
+
     fn preflight(&self) -> Result<AdapterPreflight, Box<dyn Error>>;
 
     fn launch(&self) -> Result<HarnessExecution, Box<dyn Error>>;
+
+    /// Run one repair attempt with the given prompt, writing the harness-specific artifact stem.
+    /// The prompt is passed the way this harness expects it (raw text for Liberado, an `@file`
+    /// reference for pi).
+    fn run(&self, prompt: &str, stem: &str) -> Result<i32, Box<dyn Error>>;
 }

@@ -376,6 +376,7 @@ mod tests {
                 id: "liberado".to_string(),
                 binary: Some(repository.join("runner.exe")),
             }],
+            run_order: vec!["liberado".to_string()],
             model: ModelPins {
                 provider: "openrouter".to_string(),
                 model: "deepseek/test".to_string(),
