@@ -24,6 +24,37 @@ fn consequence_badge_class(consequence: &str) -> &'static str {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::consequence_badge_class;
+
+    /// Every consequence the daemon can report has its own badge class, and anything it cannot
+    /// name yet renders as `unknown` rather than panicking or colliding with a real class.
+    #[test]
+    fn each_consequence_has_its_own_badge() {
+        assert_eq!(
+            consequence_badge_class("read_only"),
+            "consequence-badge read-only"
+        );
+        assert_eq!(
+            consequence_badge_class("reversible"),
+            "consequence-badge reversible"
+        );
+        assert_eq!(
+            consequence_badge_class("irreversible"),
+            "consequence-badge irreversible"
+        );
+        assert_eq!(
+            consequence_badge_class("external"),
+            "consequence-badge external"
+        );
+        assert_eq!(
+            consequence_badge_class("something-new"),
+            "consequence-badge unknown"
+        );
+    }
+}
+
 #[component]
 pub fn McpPanel(api_base: String) -> Element {
     let catalog = use_resource({

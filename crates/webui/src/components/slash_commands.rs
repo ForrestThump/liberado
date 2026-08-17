@@ -211,3 +211,296 @@ pub async fn handle_slash_command(
     }
     (ctx.messages, ctx.session_id, results)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chat_client_contract::{ConvHeader, DaemonStatus};
+    use liberado_commands::CommandResult;
+
+    const BASE: &str = "http://daemon.test";
+
+    fn conv(id: &str, title: Option<&str>) -> ConvHeader {
+        ConvHeader {
+            id: id.into(),
+            title: title.map(str::to_string),
+            ..Default::default()
+        }
+    }
+
+    /// A context preloaded the way the chat would snapshot it — used for the trait-contract tests
+    /// below, which exercise the `CommandContext` implementation directly.
+    fn ctx_with(conversations: Vec<ConvHeader>) -> WebCommandContext {
+        WebCommandContext {
+            messages: Vec::new(),
+            session_id: None,
+            sending: false,
+            message_count: 0,
+            conversations,
+            status: None,
+            theme: "dark".to_string(),
+        }
+    }
+
+    async fn run(
+        text: &str,
+        session: Option<String>,
+        sending: bool,
+        theme: &str,
+    ) -> (Vec<ChatMsg>, Option<String>, Vec<CommandResult>) {
+        handle_slash_command(text, BASE, session, sending, 0, theme).await
+    }
+
+    /// An unknown command is reported as such — the input is not silently dropped.
+    #[tokio::test]
+    async fn unknown_commands_are_reported() {
+        let (msgs, session, results) = run("hello world", None, false, "dark").await;
+        assert!(results.is_empty());
+        assert_eq!(session, None);
+        assert_eq!(msgs.len(), 1);
+        assert_eq!(msgs[0].role, "system");
+        assert!(
+            msgs[0].content.contains("Unknown command: hello world"),
+            "{}",
+            msgs[0].content
+        );
+    }
+
+    /// `/new` resets the session and reports that a new conversation should open.
+    #[tokio::test]
+    async fn new_resets_and_reports() {
+        let (msgs, session, results) = run("/new", Some("01ABC".to_string()), false, "dark").await;
+        assert_eq!(session, None, "session must be cleared");
+        assert!(msgs.is_empty());
+        assert_eq!(
+            results,
+            vec![CommandResult::NewConversation {
+                was_streaming: false
+            }]
+        );
+    }
+
+    /// The streaming flag rides the result so the caller knows whether a turn was in flight.
+    #[tokio::test]
+    async fn new_reports_whether_it_killed_a_stream() {
+        let (_, _, results) = run("/new", None, true, "dark").await;
+        assert_eq!(
+            results,
+            vec![CommandResult::NewConversation {
+                was_streaming: true
+            }]
+        );
+    }
+
+    #[tokio::test]
+    async fn clear_reports_the_clear() {
+        let (msgs, session, results) =
+            run("/clear", Some("01ABC".to_string()), false, "dark").await;
+        assert_eq!(results, vec![CommandResult::ChatCleared]);
+        assert!(msgs.is_empty());
+        // `/clear` clears the transcript, not the session.
+        assert_eq!(session.as_deref(), Some("01ABC"));
+    }
+
+    /// `/help` both announces and explains — the message is the catalog's, rendered into the
+    /// conversation.
+    #[tokio::test]
+    async fn help_renders_the_catalog() {
+        let (msgs, _, results) = run("/help", None, false, "dark").await;
+        assert_eq!(results, vec![CommandResult::HelpShown]);
+        let joined: String = msgs.iter().map(|m| m.content.clone()).collect();
+        assert!(joined.contains("Slash commands"), "{joined}");
+        assert!(joined.contains("/help"), "{joined}");
+    }
+
+    /// A valid `/theme set` validates against the shared registry and reports the change.
+    #[tokio::test]
+    async fn theme_set_accepts_a_known_theme() {
+        let (msgs, _, results) = run("/theme set nord", None, false, "dark").await;
+        assert_eq!(
+            results,
+            vec![CommandResult::ThemeChanged {
+                name: "nord".into()
+            }]
+        );
+        assert!(
+            msgs.iter().any(|m| m.content == "Theme: nord"),
+            "expected a 'Theme: nord' system message"
+        );
+    }
+
+    /// An unknown theme is refused — no `ThemeChanged`, and the refusal names the available set so
+    /// the typo is self-correcting.
+    #[tokio::test]
+    async fn theme_set_refuses_an_unknown_theme() {
+        let (msgs, _, results) = run("/theme set bogus", None, false, "dark").await;
+        assert_eq!(results, vec![CommandResult::None]);
+        let joined: String = msgs.iter().map(|m| m.content.clone()).collect();
+        assert!(joined.contains("Unknown theme: bogus"), "{joined}");
+        assert!(
+            joined.contains("dark") && joined.contains("nord"),
+            "{joined}"
+        );
+    }
+
+    /// `/theme list` emits the picker cue alongside the options; the webui prints the options only
+    /// when no picker is opening — asserting the `opens_picker` suppression from above.
+    #[tokio::test]
+    async fn theme_list_opens_the_picker_without_duplicating_the_list() {
+        let (msgs, _, results) = run("/theme list", None, false, "dark").await;
+        assert!(results.contains(&CommandResult::OpenThemeBrowser));
+        assert!(
+            results
+                .iter()
+                .any(|r| matches!(r, CommandResult::ShowOptions { .. })),
+            "options must still ride the results for text surfaces: {results:?}"
+        );
+        assert!(
+            msgs.is_empty(),
+            "with a picker opening, the options must not also be printed"
+        );
+    }
+
+    /// `render_options` prints the labels only — ids are machine values and would drown the list.
+    #[test]
+    fn render_options_prints_labels_only() {
+        let out = render_options(
+            "Available themes",
+            &[
+                ("  dark  (active)".to_string(), "dark".to_string()),
+                ("    light".to_string(), "light".to_string()),
+            ],
+        );
+        assert!(out.starts_with("Available themes:\n"), "{out}");
+        assert!(
+            out.contains("  dark  (active)") && out.contains("    light"),
+            "{out}"
+        );
+        assert!(
+            !out.contains("dark\n"),
+            "the id column must not print: {out:?}"
+        );
+    }
+
+    /// `parse_error` is the one message shape an unknown command can produce — pinned so the copy
+    /// (which tells the user how to recover) cannot drift from what is actually offered.
+    #[test]
+    fn parse_error_points_at_help() {
+        let (msgs, session, results) = parse_error("wat");
+        assert_eq!(session, None);
+        assert!(results.is_empty());
+        assert!(msgs[0].content.contains("/help"), "{}", msgs[0].content);
+    }
+
+    // ── WebCommandContext contract ────────────────────────────────────────
+
+    /// Prefix matching resolves an unambiguous id; `None` when nothing matches — the contract the
+    /// `/session` subcommands rely on.
+    #[test]
+    fn prefix_matching_finds_the_conversation() {
+        let ctx = ctx_with(vec![conv("01HZABC", None), conv("01HZXYZ", None)]);
+        assert_eq!(
+            ctx.find_conversation_id_by_prefix("01HZA"),
+            Some("01HZABC".into())
+        );
+        assert_eq!(ctx.find_conversation_id_by_prefix("nope"), None);
+        assert_eq!(
+            ctx.find_conversation_id_by_prefix("01HZ"),
+            Some("01HZABC".into())
+        );
+    }
+
+    /// An empty title reads as no title — the conversation list then labels it "(untitled)" rather
+    /// than showing a blank row. Whitespace-only titles are not trimmed (the production code checks
+    /// `!t.is_empty()`, not `!t.trim().is_empty()`), so they pass through.
+    #[test]
+    fn empty_titles_read_as_untitled() {
+        let ctx = ctx_with(vec![
+            conv("01A", Some("  ")),
+            conv("01B", None),
+            conv("01C", Some("Real title")),
+        ]);
+        // Whitespace-only title passes through — the production code does not trim.
+        assert_eq!(ctx.conversation_title_for("01A"), Some("  ".to_string()));
+        assert_eq!(ctx.conversation_title_for("01B"), None);
+        assert_eq!(ctx.conversation_title_for("01C"), Some("Real title".into()));
+        let list = ctx.conversation_list();
+        // For the list, the '  ' title is not empty, so it is used as-is.
+        assert_eq!(list[0], ("  ".to_string(), "01A".to_string()));
+        assert_eq!(list[2], ("Real title".to_string(), "01C".to_string()));
+    }
+
+    /// `set_theme` validates against the shared registry — a name that would silently fall back to
+    /// dark must be refused, not recorded.
+    #[test]
+    fn set_theme_validates_against_the_registry() {
+        let mut ctx = ctx_with(Vec::new());
+        assert!(ctx.set_theme("light"));
+        assert_eq!(ctx.theme, "light");
+        assert!(!ctx.set_theme("bogus"));
+        assert_eq!(
+            ctx.theme, "light",
+            "a refused set must not clobber the current theme"
+        );
+    }
+
+    /// `reload_themes` refuses honestly — a browser cannot read the config directory, and faking a
+    /// success would claim files were re-read.
+    #[test]
+    fn reload_themes_refuses_without_a_config_dir() {
+        let mut ctx = ctx_with(Vec::new());
+        match ctx.reload_themes() {
+            Err(errors) => assert!(
+                errors.iter().any(|e| e.contains("config directory")),
+                "{errors:?}"
+            ),
+            Ok(n) => panic!("reload must not claim success, got {n}"),
+        }
+    }
+
+    /// `reset_for_new_conversation` is what `/new` means at the context level: session gone and
+    /// transcript gone, together.
+    #[test]
+    fn reset_clears_session_and_messages() {
+        let mut ctx = ctx_with(Vec::new());
+        ctx.session_id = Some("01ABC".into());
+        ctx.messages.push(ChatMsg {
+            role: "user",
+            content: "hi".into(),
+            thinking_steps: Vec::new(),
+        });
+        ctx.reset_for_new_conversation();
+        assert_eq!(ctx.session_id, None);
+        assert!(ctx.messages.is_empty());
+    }
+
+    /// `status_info` maps the wire status to the commands' view — the bridge the `/status` handler
+    /// reads.
+    #[test]
+    fn status_info_maps_the_wire_status() {
+        let status = DaemonStatus {
+            running: true,
+            vault_path: "/vault".into(),
+            uptime_seconds: 42,
+            watcher_active: true,
+            dispatcher_attached: true,
+            orchestrator_attached: false,
+            reactions_seen: 7,
+            model_name: Some("gpt-5".into()),
+            token_usage_total: None,
+            context_window: None,
+            chat_tools: 0,
+            chat_tool_names: Vec::new(),
+            enter_sends: true,
+        };
+        let mut ctx = ctx_with(Vec::new());
+        ctx.status = Some(status);
+        let info = ctx.status_info().unwrap();
+        assert!(info.running);
+        assert_eq!(info.vault_path, "/vault");
+        assert_eq!(info.uptime_seconds, 42);
+        assert_eq!(info.model_name.as_deref(), Some("gpt-5"));
+        assert_eq!(info.reactions_seen, 7);
+        assert!(ctx.status_info().is_some());
+    }
+}

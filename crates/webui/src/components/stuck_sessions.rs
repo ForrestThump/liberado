@@ -90,6 +90,70 @@ fn short_id(id: &str) -> String {
     id.chars().take(12).collect()
 }
 
+#[cfg(test)]
+mod tests {
+    use super::{age_label, short_id};
+
+    /// A missing timestamp reads as "age unknown" — never an empty label or a crash.
+    #[test]
+    fn missing_timestamp_is_age_unknown() {
+        assert_eq!(age_label(None), "age unknown");
+    }
+
+    /// An unparseable timestamp is shown raw: hiding it would claim the row is newer than it is,
+    /// and inventing a number would claim something false.
+    #[test]
+    fn unparseable_timestamp_is_shown_raw() {
+        assert_eq!(age_label(Some("not-a-date")), "not-a-date");
+    }
+
+    /// Each band has its own unit: seconds under a minute, minutes under an hour, hours under a
+    /// day, days after that. The unit is the point of the label.
+    #[test]
+    fn age_bands_choose_the_unit() {
+        // 45 seconds ago → "45s"
+        let raw = (chrono::Utc::now() - chrono::Duration::seconds(45)).to_rfc3339();
+        assert_eq!(age_label(Some(&raw)), "45s");
+
+        // 5 minutes ago → "5m"
+        let raw = (chrono::Utc::now() - chrono::Duration::minutes(5)).to_rfc3339();
+        assert_eq!(age_label(Some(&raw)), "5m");
+
+        // 3 hours ago → "3h"
+        let raw = (chrono::Utc::now() - chrono::Duration::hours(3)).to_rfc3339();
+        assert_eq!(age_label(Some(&raw)), "3h");
+
+        // 2 days ago → "2d"
+        let raw = (chrono::Utc::now() - chrono::Duration::days(2)).to_rfc3339();
+        assert_eq!(age_label(Some(&raw)), "2d");
+    }
+
+    /// A timestamp from the future (clock skew) must not produce a negative age label.
+    #[test]
+    fn future_timestamp_clamps_to_zero() {
+        let raw = (chrono::Utc::now() + chrono::Duration::minutes(1)).to_rfc3339();
+        assert_eq!(age_label(Some(&raw)), "0s");
+    }
+
+    /// Short ids pass through whole; long ones lose only the tail.
+    #[test]
+    fn short_id_truncates_to_twelve_chars() {
+        assert_eq!(short_id("abc"), "abc");
+        assert_eq!(short_id("0123456789ab"), "0123456789ab");
+        assert_eq!(short_id("0123456789abcdef"), "0123456789ab");
+    }
+
+    /// Multi-byte ids must be cut on char boundaries — the regression the char-based version
+    /// exists for. The first 12 *chars* survive even when that ends mid-codepoint in byte terms.
+    #[test]
+    fn short_id_is_char_boundary_safe() {
+        let id = "中中中中中中中中中中中中";
+        let short = short_id(id);
+        assert_eq!(short.chars().count(), 12);
+        assert!(id.starts_with(&short));
+    }
+}
+
 #[component]
 pub fn StuckSessionsPanel(api_base: String) -> Element {
     let refresh = use_signal(|| 0u32);

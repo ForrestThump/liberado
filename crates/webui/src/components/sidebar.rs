@@ -98,6 +98,61 @@ fn relative_time(iso: &str) -> String {
     dt.format("%b %d").to_string()
 }
 
+#[cfg(test)]
+mod tests {
+    use super::relative_time;
+
+    fn ago(dur: chrono::Duration) -> String {
+        (chrono::Utc::now() - dur).to_rfc3339()
+    }
+
+    /// Unparseable input renders as nothing rather than a garbage label or a panic.
+    #[test]
+    fn unparseable_is_empty() {
+        assert_eq!(relative_time("not-a-date"), "");
+    }
+
+    /// A timestamp from the future (clock skew, a fast daemon clock) reads as "just now" — never a
+    /// negative age.
+    #[test]
+    fn future_reads_as_just_now() {
+        assert_eq!(
+            relative_time(&ago(-chrono::Duration::minutes(1))),
+            "just now"
+        );
+    }
+
+    /// The age bands choose their unit, matching what a conversation list should say at each
+    /// distance.
+    #[test]
+    fn age_bands_choose_the_unit() {
+        assert_eq!(
+            relative_time(&ago(chrono::Duration::seconds(12))),
+            "12s ago"
+        );
+        assert_eq!(relative_time(&ago(chrono::Duration::minutes(5))), "5m ago");
+        assert_eq!(relative_time(&ago(chrono::Duration::hours(3))), "3h ago");
+        assert_eq!(relative_time(&ago(chrono::Duration::days(2))), "2d ago");
+    }
+
+    /// Past a month, a relative count stops being readable; the row shows the calendar date
+    /// instead. Fixed input so the expectation is exact, not derived from the same function.
+    #[test]
+    fn past_a_month_shows_the_date() {
+        assert_eq!(relative_time("2000-01-15T10:00:00Z"), "Jan 15");
+    }
+
+    /// A timestamp without an offset (as older daemon versions emitted) is still understood — the
+    /// append-`Z` fallback treats it as UTC rather than dropping the row's time label.
+    #[test]
+    fn offsetless_timestamp_is_treated_as_utc() {
+        let raw = (chrono::Utc::now() - chrono::Duration::minutes(7))
+            .format("%Y-%m-%dT%H:%M:%S%.f")
+            .to_string();
+        assert_eq!(relative_time(&raw), "7m ago");
+    }
+}
+
 #[component]
 pub fn Sidebar(
     api_base: String,

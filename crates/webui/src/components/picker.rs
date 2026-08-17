@@ -51,6 +51,47 @@ fn filtered(items: &[String], query: &str) -> Vec<String> {
         .collect()
 }
 
+#[cfg(test)]
+mod tests {
+    use super::{MAX_ROWS, filtered};
+
+    fn list(items: &[&str]) -> Vec<String> {
+        items.iter().map(|s| s.to_string()).collect()
+    }
+
+    /// An empty query shows everything — the picker's list is its own first page, and filtering
+    /// must never hide items the caller asked to show.
+    #[test]
+    fn empty_query_shows_everything() {
+        let items = list(&["a", "b", "c"]);
+        assert_eq!(filtered(&items, ""), items);
+        assert_eq!(filtered(&items, "   "), items);
+    }
+
+    /// Matching is case-insensitive and substring-based; order is the caller's order, not
+    /// alphabetical or by relevance.
+    #[test]
+    fn matching_is_case_insensitive_substring() {
+        let items = list(&["OpenAI GPT-5", "Z-AI GLM", "openrouter/deepseek"]);
+        assert_eq!(filtered(&items, "gpt"), vec!["OpenAI GPT-5"]);
+        assert_eq!(
+            filtered(&items, "OPEN"),
+            vec!["OpenAI GPT-5", "openrouter/deepseek"]
+        );
+        assert_eq!(filtered(&items, "no-such"), Vec::<String>::new());
+    }
+
+    /// Past the first screen, people type more rather than scroll — the window caps at `MAX_ROWS`
+    /// so a keystroke cannot build hundreds of rows.
+    #[test]
+    fn window_is_capped() {
+        let items: Vec<String> = (0..(MAX_ROWS + 50)).map(|i| format!("m{i}")).collect();
+        assert_eq!(filtered(&items, "m").len(), MAX_ROWS);
+        // "m1" matches m1 + m10…m19 = 11 rows; well under the cap.
+        assert_eq!(filtered(&items, "m1").len(), 11);
+    }
+}
+
 #[component]
 pub fn Picker(
     /// Heading, e.g. "Switch model".
