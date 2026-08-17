@@ -692,6 +692,16 @@ fn provider_profile(config_dir: Option<&Path>) -> Result<ProviderProfile, String
         None => Topology::default(),
     };
     let provider_name = env::var(PROVIDER_ENV).unwrap_or_else(|_| topology.provider.clone());
+    provider_profile_named(topology, &provider_name)
+}
+
+/// The pure provider-lookup half of [`provider_profile`], with the provider name supplied as an
+/// argument instead of read from the environment — so tests can pin each branch without mutating
+/// process-global env vars (the repo's inject-not-mutate convention).
+fn provider_profile_named(
+    topology: Topology,
+    provider_name: &str,
+) -> Result<ProviderProfile, String> {
     topology
         .providers
         .into_iter()
@@ -1039,6 +1049,19 @@ mod tests {
     fn unknown_arg_is_an_error() {
         let err = Args::parse(["--wat"].into_iter().map(str::to_string)).unwrap_err();
         assert!(err.contains("unknown argument"));
+        // The error carries the usage text — a usage() that returns empty would pass the
+        // unknown-argument check alone.
+        assert!(err.contains("JSON bridge mode"), "{err}");
+    }
+
+    #[test]
+    fn help_as_first_arg_is_an_error() {
+        for flag in ["--help", "-h"] {
+            let err = Args::parse([flag].into_iter().map(str::to_string)).unwrap_err();
+            assert!(err.contains("JSON bridge mode"), "flag {flag}: {err}");
+            // The dedicated help arm must win over the unknown-argument arm.
+            assert!(!err.contains("unknown argument"), "flag {flag}: {err}");
+        }
     }
 
     #[test]
@@ -1091,6 +1114,10 @@ mod tests {
                 "OPENROUTER_API_KEY",
                 "--base-url",
                 "https://openrouter.ai/api/v1",
+                "--config-dir",
+                "/srv/config",
+                "--session-id",
+                "recurring-task-7",
             ]
             .into_iter()
             .map(str::to_string),
@@ -1104,7 +1131,8 @@ mod tests {
                 max_turns,
                 api_key_env,
                 base_url,
-                ..
+                config_dir,
+                session_id,
             } => {
                 assert_eq!(prompt, "do thing");
                 assert_eq!(workspace, PathBuf::from("/tmp/ws"));
@@ -1112,6 +1140,8 @@ mod tests {
                 assert_eq!(max_turns, Some(15));
                 assert_eq!(api_key_env, Some("OPENROUTER_API_KEY".to_string()));
                 assert_eq!(base_url, Some("https://openrouter.ai/api/v1".to_string()));
+                assert_eq!(config_dir, Some(PathBuf::from("/srv/config")));
+                assert_eq!(session_id, Some("recurring-task-7".to_string()));
             }
             _ => panic!("expected TaskRun command"),
         }
@@ -1624,5 +1654,444 @@ mod preserve_work_tests {
 
         result.expect("an unattended run must commit without ambient git identity");
         assert!(!is_dirty(repo.path()), "the tree must be clean afterwards");
+    }
+}
+
+#[cfg(test)]
+mod impl_tests {
+    use super::*;
+    use liberado_coder_core::CoderRunResult;
+
+    // ── build_workspace_summary ────────────────────────────────────────────────
+
+    #[test]
+    fn workspace_summary_empty_dir_is_marked_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let summary = build_workspace_summary(dir.path()).unwrap();
+        assert!(summary.contains("(empty workspace)"), "{summary}");
+    }
+
+    #[test]
+    fn workspace_summary_lists_files_and_dir_counts() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a.txt"), "hello").unwrap();
+        std::fs::create_dir_all(dir.path().join("sub")).unwrap();
+        std::fs::write(dir.path().join("sub").join("b.rs"), "fn b() {}").unwrap();
+        std::fs::write(dir.path().join("sub").join("c.rs"), "fn c() {}").unwrap();
+
+        let summary = build_workspace_summary(dir.path()).unwrap();
+        assert!(summary.contains("a.txt  (5 bytes)"), "{summary}");
+        assert!(summary.contains("sub/  (2 files)"), "{summary}");
+    }
+
+    #[test]
+    fn workspace_summary_skips_git_and_liberado_state() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".git")).unwrap();
+        std::fs::create_dir_all(dir.path().join(".liberado")).unwrap();
+        std::fs::write(dir.path().join(".git").join("HEAD"), "ref: x").unwrap();
+        std::fs::write(dir.path().join("real.txt"), "x").unwrap();
+
+        let summary = build_workspace_summary(dir.path()).unwrap();
+        assert!(!summary.contains(".git"), "{summary}");
+        assert!(!summary.contains(".liberado"), "{summary}");
+        assert!(summary.contains("real.txt"), "{summary}");
+    }
+
+    /// Exactly 40 entries must NOT trip the "and N more" cap — only a 41st entry should.
+    #[test]
+    fn workspace_summary_exactly_forty_entries_has_no_cap_line() {
+        let dir = tempfile::tempdir().unwrap();
+        for i in 0..40 {
+            std::fs::write(dir.path().join(format!("f{i:02}.txt")), "x").unwrap();
+        }
+        let summary = build_workspace_summary(dir.path()).unwrap();
+        assert!(!summary.contains("more entries"), "{summary}");
+    }
+
+    #[test]
+    fn workspace_summary_caps_at_forty_entries() {
+        let dir = tempfile::tempdir().unwrap();
+        for i in 0..45 {
+            std::fs::write(dir.path().join(format!("f{i:02}.txt")), "x").unwrap();
+        }
+        let summary = build_workspace_summary(dir.path()).unwrap();
+        assert!(summary.contains("... and 5 more entries"), "{summary}");
+    }
+
+    // ── session state ──────────────────────────────────────────────────────────
+
+    fn sample_round(session: &str, round: u32, prompt: &str) -> SessionRound {
+        SessionRound {
+            session_id: session.into(),
+            round,
+            prompt: prompt.into(),
+            summary: "done".into(),
+            files_changed: vec!["a.rs".into()],
+        }
+    }
+
+    #[test]
+    fn load_prior_rounds_absent_dir_is_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(load_prior_rounds(dir.path(), "sess-1").unwrap().is_empty());
+    }
+
+    #[test]
+    fn load_prior_rounds_parses_and_sorts() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = session_state_dir(dir.path(), "sess-1");
+        std::fs::create_dir_all(&state).unwrap();
+        std::fs::write(
+            state.join("round-01.json"),
+            serde_json::to_string(&sample_round("sess-1", 1, "second")).unwrap(),
+        )
+        .unwrap();
+        std::fs::write(
+            state.join("round-00.json"),
+            serde_json::to_string(&sample_round("sess-1", 0, "first")).unwrap(),
+        )
+        .unwrap();
+
+        let rounds = load_prior_rounds(dir.path(), "sess-1").unwrap();
+        assert_eq!(rounds.len(), 2);
+        assert_eq!(
+            rounds[0].prompt, "first",
+            "must sort by filename, not insertion"
+        );
+        assert_eq!(rounds[1].prompt, "second");
+    }
+
+    #[test]
+    fn load_prior_rounds_unreadable_dir_is_an_error() {
+        let dir = tempfile::tempdir().unwrap();
+        // A file where the session dir should be: read_dir fails, not silently empty.
+        let state = session_state_dir(dir.path(), "sess-1");
+        std::fs::create_dir_all(state.parent().unwrap()).unwrap();
+        std::fs::write(&state, "not a dir").unwrap();
+        let err = load_prior_rounds(dir.path(), "sess-1").unwrap_err();
+        assert!(err.contains("read session dir"), "{err}");
+    }
+
+    #[test]
+    fn load_prior_rounds_corrupt_file_is_an_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = session_state_dir(dir.path(), "sess-1");
+        std::fs::create_dir_all(&state).unwrap();
+        std::fs::write(state.join("round-00.json"), "not json").unwrap();
+        let err = load_prior_rounds(dir.path(), "sess-1").unwrap_err();
+        assert!(err.contains("parse"), "{err}");
+    }
+
+    #[test]
+    fn build_session_context_renders_rounds() {
+        let ctx = build_session_context(&[
+            sample_round("sess-1", 0, "first task"),
+            sample_round("sess-1", 1, "second task"),
+        ]);
+        assert!(ctx.contains("[Session history — prior rounds]"), "{ctx}");
+        assert!(ctx.contains("Round 1: first task"), "{ctx}");
+        assert!(ctx.contains("Round 2: second task"), "{ctx}");
+        assert!(ctx.contains("Files changed: a.rs"), "{ctx}");
+        assert!(ctx.contains("[End session history]"), "{ctx}");
+    }
+
+    #[tokio::test]
+    async fn save_round_state_numbers_files_sequentially() {
+        let dir = tempfile::tempdir().unwrap();
+        // Partial JSON is enough: every other field has a serde default.
+        let result: CoderRunResult = serde_json::from_value(serde_json::json!({
+            "backend": "test",
+            "outcome": "succeeded",
+            "summary": "wrote a.rs",
+            "files_changed": ["a.rs"]
+        }))
+        .unwrap();
+        save_round_state(dir.path(), "sess-1", "prompt one", &result).unwrap();
+        save_round_state(dir.path(), "sess-1", "prompt two", &result).unwrap();
+
+        let state = session_state_dir(dir.path(), "sess-1");
+        let round0: SessionRound =
+            serde_json::from_str(&std::fs::read_to_string(state.join("round-00.json")).unwrap())
+                .unwrap();
+        assert_eq!(round0.prompt, "prompt one");
+        assert_eq!(round0.round, 0);
+        let round1: SessionRound =
+            serde_json::from_str(&std::fs::read_to_string(state.join("round-01.json")).unwrap())
+                .unwrap();
+        assert_eq!(round1.prompt, "prompt two");
+        assert_eq!(round1.round, 1);
+    }
+
+    // ── read_request ───────────────────────────────────────────────────────────
+
+    fn valid_request_json() -> String {
+        let tuning = CoderTuning::default();
+        let assembled = assemble_production_run(
+            &tuning,
+            liberado_coder_agent::assemble::entry::runner_surface(
+                CoderTask::new("d1", "do the thing"),
+                PathBuf::from("/tmp/ws"),
+                None,
+                Some(30),
+            ),
+        );
+        serde_json::to_string(&assembled.request).unwrap()
+    }
+
+    #[tokio::test]
+    async fn read_request_parses_a_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("request.json");
+        std::fs::write(&path, valid_request_json()).unwrap();
+
+        let req = read_request(Some(&path)).await.unwrap();
+        assert_eq!(req.task.description, "do the thing");
+        assert!(req.task.id.ends_with("d1") || req.task.id == "d1");
+    }
+
+    #[tokio::test]
+    async fn read_request_rejects_bad_json() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("request.json");
+        std::fs::write(&path, "{{{not json").unwrap();
+        let err = read_request(Some(&path)).await.unwrap_err();
+        assert!(err.contains("parse CoderRunRequest"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn read_request_missing_file_is_an_error() {
+        let err = read_request(Some(Path::new("/nonexistent/request.json")))
+            .await
+            .unwrap_err();
+        assert!(err.contains("read request"), "{err}");
+    }
+
+    // ── provider_profile / read_topology ───────────────────────────────────────
+
+    #[test]
+    fn provider_profile_named_finds_deepseek_in_defaults() {
+        let profile = provider_profile_named(Topology::default(), "deepseek").unwrap();
+        assert_eq!(profile.api_key_env, "DEEPSEEK_API_KEY");
+    }
+
+    #[test]
+    fn provider_profile_named_finds_openrouter_in_defaults() {
+        let profile = provider_profile_named(Topology::default(), "openrouter").unwrap();
+        assert_eq!(profile.name, "openrouter");
+    }
+
+    #[test]
+    fn provider_profile_reads_topology_provider() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("topology.toml"),
+            r#"
+provider = "custom"
+[[providers]]
+name = "custom"
+base_url = "https://custom.example/v1"
+default_model = "m"
+api_key_env = "CUSTOM_API_KEY"
+"#,
+        )
+        .unwrap();
+        let topo = read_topology(dir.path()).unwrap();
+        let profile = provider_profile_named(topo, "custom").unwrap();
+        assert_eq!(profile.name, "custom");
+        assert_eq!(profile.api_key_env, "CUSTOM_API_KEY");
+    }
+
+    #[test]
+    fn provider_profile_unknown_provider_is_an_error() {
+        let err = provider_profile_named(Topology::default(), "nope").unwrap_err();
+        assert!(err.contains("is not declared"), "{err}");
+    }
+
+    #[test]
+    fn read_topology_absent_file_is_defaults() {
+        let dir = tempfile::tempdir().unwrap();
+        let topo = read_topology(dir.path()).unwrap();
+        assert_eq!(topo.provider, "deepseek");
+    }
+
+    #[test]
+    fn read_topology_malformed_is_an_error() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("topology.toml"), "provider = [not valid").unwrap();
+        let err = read_topology(dir.path()).unwrap_err();
+        assert!(err.contains("parse topology"), "{err}");
+    }
+
+    // ── push_enabled ───────────────────────────────────────────────────────────
+
+    #[test]
+    fn push_enabled_reads_the_opt_in_env() {
+        for (val, want) in [("1", true), ("true", true), ("0", false), ("", false)] {
+            unsafe { std::env::set_var("LIBERADO_CODER_PUSH", val) };
+            assert_eq!(push_enabled(), want, "LIBERADO_CODER_PUSH={val:?}");
+        }
+        unsafe { std::env::remove_var("LIBERADO_CODER_PUSH") };
+        assert!(!push_enabled(), "unset must be false");
+    }
+
+    // ── ensure_git_repo / configure_git_safe_directory ─────────────────────────
+
+    static ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+    /// A gitconfig with an identity, so `git commit` works without ambient config (CI-style).
+    fn identity_gitconfig() -> tempfile::NamedTempFile {
+        let f = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(
+            f.path(),
+            "[user]\n\tname = test-runner\n\temail = runner@test.local\n",
+        )
+        .unwrap();
+        f
+    }
+
+    fn temp_repo() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().to_string_lossy().to_string();
+        let out = liberado_common::process::std_command("git")
+            .args(["-C", &p, "init", "-q"])
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "git init: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        std::fs::write(dir.path().join("seed.txt"), "seed\n").unwrap();
+        let out = liberado_common::process::std_command("git")
+            .args([
+                "-C",
+                &p,
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@t",
+                "add",
+                "-A",
+            ])
+            .output()
+            .unwrap();
+        assert!(out.status.success());
+        let out = liberado_common::process::std_command("git")
+            .args([
+                "-C",
+                &p,
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@t",
+                "commit",
+                "-q",
+                "-m",
+                "seed",
+            ])
+            .output()
+            .unwrap();
+        assert!(out.status.success());
+        dir
+    }
+
+    #[tokio::test]
+    async fn ensure_git_repo_accepts_an_existing_repo() {
+        let repo = temp_repo();
+        ensure_git_repo(repo.path())
+            .await
+            .expect("existing repo is fine");
+        assert!(repo.path().join(".git").exists());
+    }
+
+    #[tokio::test]
+    async fn ensure_git_repo_initialises_a_bare_workspace() {
+        let _guard = ENV_LOCK.lock().await;
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = identity_gitconfig();
+        let prior = std::env::var_os("GIT_CONFIG_GLOBAL");
+        unsafe { std::env::set_var("GIT_CONFIG_GLOBAL", cfg.path()) };
+
+        let result = ensure_git_repo(dir.path()).await;
+
+        unsafe {
+            match prior {
+                Some(v) => std::env::set_var("GIT_CONFIG_GLOBAL", v),
+                None => std::env::remove_var("GIT_CONFIG_GLOBAL"),
+            }
+        }
+        result.expect("must init + baseline-commit a bare workspace");
+        assert!(dir.path().join(".git").exists());
+    }
+
+    /// The `\?\` canonical form round-trips through git on this host, so idempotency can be
+    /// asserted on file content: the second call must not append. A pre-seeded *foreign* entry
+    /// (a different safe.directory) makes the membership check's other arm reachable — without
+    /// it, only the exact-path arm is ever exercised.
+    #[test]
+    fn configure_git_safe_directory_is_scoped_and_idempotent() {
+        // Sync test: block on the async mutex so the concurrent GIT_CONFIG_GLOBAL tests are excluded.
+        let _guard = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(ENV_LOCK.lock());
+        let repo = temp_repo();
+        let cfg = identity_gitconfig();
+        // A foreign entry from an earlier machine config: must not short-circuit the add.
+        std::fs::write(
+            cfg.path(),
+            format!(
+                "{}\n[safe]\n\tdirectory = C:/other/work\n",
+                std::fs::read_to_string(cfg.path()).unwrap()
+            ),
+        )
+        .unwrap();
+
+        let prior = std::env::var_os("GIT_CONFIG_GLOBAL");
+        unsafe { std::env::set_var("GIT_CONFIG_GLOBAL", cfg.path()) };
+
+        let first = configure_git_safe_directory(repo.path());
+        let before = std::fs::read_to_string(cfg.path()).unwrap();
+        let second = configure_git_safe_directory(repo.path());
+        let after = std::fs::read_to_string(cfg.path()).unwrap();
+
+        // Restore the env before any assertion, so a failed assert can't leave it poisoned.
+        unsafe {
+            match prior {
+                Some(v) => std::env::set_var("GIT_CONFIG_GLOBAL", v),
+                None => std::env::remove_var("GIT_CONFIG_GLOBAL"),
+            }
+        }
+
+        first.expect("first call must configure");
+        second.expect("second call must succeed");
+        assert_eq!(
+            before, after,
+            "a second call must not append a duplicate line:\n{after}"
+        );
+        assert_eq!(
+            before.matches("directory = ").count(),
+            2,
+            "the foreign entry plus ours must both be present:\n{before}"
+        );
+    }
+
+    /// The headless no-config provider factory builds an OpenAI-compatible provider wired to the
+    /// configured model/base-url — construction must not touch the network.
+    #[test]
+    fn direct_provider_factory_builds_a_configured_provider() {
+        let factory = DirectProviderFactory {
+            api_key: "k".into(),
+            base_url: "https://llm.test/v1".into(),
+        };
+        let role = CoderRoleConfig {
+            model: "m3".into(),
+            reasoning: Some("high".into()),
+            ..Default::default()
+        };
+        let provider = factory
+            .provider_for("coder", &role)
+            .expect("constructs without network");
+        assert_eq!(provider.model(), "m3");
     }
 }
