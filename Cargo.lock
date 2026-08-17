@@ -4484,6 +4484,7 @@ dependencies = [
  "liberado-chat-search",
  "liberado-config",
  "serde_json",
+ "tempfile",
  "tokio",
  "tracing",
  "tracing-subscriber",
