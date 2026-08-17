@@ -272,3 +272,139 @@ fn visual_lines_for_offset(chars: usize, content_width: usize) -> usize {
         chars.div_ceil(content_width)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app::Focus;
+    use crate::render::test_support;
+
+    // ── Pure wrapping/cursor helpers ───────────────────────────────────
+
+    #[test]
+    fn take_width_splits_on_char_boundaries() {
+        assert_eq!(take_width("hello world", 5), ("hello", " world"));
+        assert_eq!(take_width("abc", 10), ("abc", ""));
+        assert_eq!(take_width("abc", 0), ("", "abc"));
+        assert_eq!(take_width("ééçç", 2), ("éé", "çç"));
+    }
+
+    #[test]
+    fn visual_lines_for_offset_counts_wraps() {
+        assert_eq!(visual_lines_for_offset(0, 10), 1);
+        assert_eq!(visual_lines_for_offset(3, 0), 1);
+        assert_eq!(visual_lines_for_offset(10, 5), 2);
+        assert_eq!(visual_lines_for_offset(15, 5), 3);
+        assert_eq!(visual_lines_for_offset(10, 10), 1);
+    }
+
+    #[test]
+    fn visual_cursor_accounts_for_wrapping() {
+        // cursor at byte 0 → (0,0); a cursor mid-first-line maps straight down.
+        assert_eq!(visual_cursor("hello", 3, 10), (0, 3));
+        // "hello world": char 8 folds onto line 2 at width 5.
+        assert_eq!(visual_cursor("hello world", 8, 5), (1, 3));
+        // Ends of lines clamp to the start of the next visual line.
+        assert_eq!(visual_cursor("hello", 5, 10), (0, 5));
+        // Multi-line input, cursor on the second logical line.
+        assert_eq!(visual_cursor("ab\ncd", 4, 10), (1, 1));
+    }
+
+    #[test]
+    fn wrap_input_with_ghost_splits_typed_and_ghost() {
+        let app = test_support::app();
+        let th = app.theme;
+        let bg = c(&th.input_bg, "#1a1a2e");
+        let lines = wrap_input_with_ghost("/new mygoal", " — start a new chat", 12, &th, bg);
+        // First line holds only typed text at width 12; the ghost spills to line 2.
+        let l0: String = lines[0].spans.iter().map(|s| s.content.as_ref()).collect();
+        let l1: String = lines[1].spans.iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(l0.trim_end(), "/new mygoal");
+        assert!(l1.contains("start"), "ghost tail: {l1}");
+        // The ghost span uses the placeholder color, not the typed color.
+        let expected_ghost_fg = c(&th.input_placeholder, "#404040");
+        let ghost_span = lines[1]
+            .spans
+            .iter()
+            .find(|s| s.style.fg == Some(expected_ghost_fg));
+        assert!(ghost_span.is_some(), "ghost must be dimmed");
+    }
+
+    #[test]
+    fn style_segment_splits_a_mixed_already_normalized_segment() {
+        let app = test_support::app();
+        let th = app.theme;
+        let bg = c(&th.input_bg, "#1a1a2e");
+        let typed = Style::default().fg(c(&th.input_text, "#ffffff")).bg(bg);
+        let ghost = Style::default()
+            .fg(c(&th.input_placeholder, "#404040"))
+            .bg(bg);
+        // Whole segment typed.
+        let line = style_segment("abcd", 0, 4, typed, ghost);
+        assert_eq!(line.spans.len(), 1);
+        // Mixed: 2 typed + 2 ghost.
+        let line = style_segment("abcd", 2, 4, typed, ghost);
+        assert_eq!(line.spans.len(), 2, "must split typed/ghost");
+        assert_eq!(line.spans[0].content.as_ref(), "ab");
+        assert_eq!(line.spans[1].content.as_ref(), "cd");
+    }
+
+    // ── Draw path ──────────────────────────────────────────────────────
+
+    #[test]
+    fn empty_focused_input_shows_the_placeholder() {
+        let mut app = test_support::app();
+        app.focus = Focus::Input;
+        let th = app.theme.clone();
+        let out =
+            test_support::render_pane(60, 6, |f| draw(f, Rect::new(0, 3, 60, 3), &mut app, &th));
+        assert!(out.contains("Type a message"), "placeholder:\n{out}");
+        assert!(out.contains("Message"), "block title:\n{out}");
+    }
+
+    #[test]
+    fn focused_input_renders_typed_text() {
+        let mut app = test_support::app();
+        app.focus = Focus::Input;
+        app.input = "hello there".into();
+        app.cursor = "hello".len();
+        let th = app.theme.clone();
+        let out =
+            test_support::render_pane(40, 6, |f| draw(f, Rect::new(0, 3, 40, 3), &mut app, &th));
+        assert!(out.contains("hello there"), "typed text:\n{out}");
+        assert!(
+            !out.contains("Type a message"),
+            "no placeholder with text:\n{out}"
+        );
+    }
+
+    #[test]
+    fn long_input_wraps_within_the_block() {
+        let mut app = test_support::app();
+        app.focus = Focus::Input;
+        app.input = "a very long message that must wrap across several visual lines".into();
+        app.cursor = app.input.len();
+        let th = app.theme.clone();
+        let out =
+            test_support::render_pane(30, 8, |f| draw(f, Rect::new(0, 2, 30, 6), &mut app, &th));
+        // The wrapped text spans at least two content rows, so the block isn't one line high:
+        // the original single logical line broke onto `a very...`, `t wrap...`, ` lines`.
+        let content_rows = out
+            .lines()
+            .filter(|l| l.contains("a very") || l.contains("wrap across") || l.contains("lines"))
+            .count();
+        assert!(content_rows >= 2, "wrapped across rows:\n{out}");
+    }
+
+    #[test]
+    fn unfocused_input_uses_the_unfocused_border() {
+        let mut app = test_support::app();
+        app.focus = Focus::ChatMessages;
+        app.input = "text".into();
+        let th = app.theme.clone();
+        let out =
+            test_support::render_pane(40, 6, |f| draw(f, Rect::new(0, 3, 40, 3), &mut app, &th));
+        // Block still renders, just from the other border color (asserted via presence).
+        assert!(out.contains("Message"), "block title:\n{out}");
+    }
+}

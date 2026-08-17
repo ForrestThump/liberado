@@ -519,3 +519,106 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &mut App, th: &Theme, spi
 
     frame.render_widget(paragraph, area);
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::api::{ToolCallChip, ToolResultChip};
+    use crate::app::{Focus, Message};
+    use crate::render::test_support;
+
+    fn render(app: &mut App, w: u16, h: u16) -> String {
+        let th = app.theme.clone();
+        test_support::render_pane(w, h, |f| draw(f, Rect::new(0, 1, w, h), app, &th, 0))
+    }
+
+    #[test]
+    fn empty_conversation_shows_a_new_conversation_title() {
+        let mut app = test_support::app();
+        let out = render(&mut app, 80, 20);
+        assert!(out.contains("Chat — new conversation"), "title:\n{out}");
+    }
+
+    #[test]
+    fn user_assistant_and_system_messages_render() {
+        let mut app = test_support::app();
+        app.messages = vec![
+            Message::User("hello there".into()),
+            Message::Assistant("hi! how can I help".into()),
+            Message::System("connected".into()),
+        ];
+        app.scroll_offset = 0;
+        let out = render(&mut app, 80, 20);
+        assert!(out.contains("hello there"), "user:\n{out}");
+        assert!(out.contains("hi! how can I help"), "assistant:\n{out}");
+        assert!(out.contains("connected"), "system:\n{out}");
+    }
+
+    #[test]
+    fn loading_state_shows_a_spinner_when_pending() {
+        let mut app = test_support::app();
+        app.pending_load = Some("c1".into());
+        let out = render(&mut app, 60, 12);
+        assert!(out.contains("Loading conversation"), "loading:\n{out}");
+    }
+
+    #[test]
+    fn tool_chips_render_inline() {
+        let mut app = test_support::app();
+        app.messages = vec![
+            Message::ToolCall(ToolCallChip {
+                name: "search".into(),
+                args: "{\"q\":\"stuff\"}".into(),
+            }),
+            Message::ToolResult(ToolResultChip {
+                name: "search".into(),
+                ok: true,
+                preview: "3 results".into(),
+            }),
+        ];
+        let out = render(&mut app, 100, 20);
+        assert!(out.contains("search"), "tool name:\n{out}");
+        assert!(out.contains("3 results"), "result preview:\n{out}");
+    }
+
+    #[test]
+    fn joined_goal_session_title_and_awaiting_banner_render() {
+        use crate::api::SessionKind;
+        let mut app = test_support::app();
+        app.joined = Some(crate::app::JoinedSession {
+            id: "g1".into(),
+            kind: SessionKind::Coding,
+            status: "running".into(),
+            finished: false,
+            description: "build the CLI".into(),
+            messages: vec![Message::Assistant("work in progress".into())],
+            stream_buf: String::new(),
+            awaiting: Some(crate::app::AwaitingPrompt {
+                prompt: "choose an option".into(),
+                options: vec!["A".into(), "B".into()],
+            }),
+            gate_votes: Vec::new(),
+            active_role: None,
+            last_validation: None,
+        });
+        let out = render(&mut app, 100, 20);
+        assert!(out.contains("build the CLI"), "description:\n{out}");
+        assert!(out.contains("Coding"), "kind label:\n{out}");
+        assert!(out.contains("running"), "status:\n{out}");
+        assert!(out.contains("awaiting"), "awaiting banner:\n{out}");
+        assert!(
+            out.contains("work in progress"),
+            "joined transcript:\n{out}"
+        );
+        assert!(out.contains("/back to leave"), "leave hint:\n{out}");
+    }
+
+    #[test]
+    fn history_focus_shows_navigation_hint() {
+        let mut app = test_support::app();
+        app.focus = Focus::ChatMessages;
+        app.messages = vec![Message::User("x".into())];
+        let out = render(&mut app, 100, 16);
+        assert!(out.contains("j/k"), "nav hint:\n{out}");
+    }
+}

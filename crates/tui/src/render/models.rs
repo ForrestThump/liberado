@@ -137,3 +137,90 @@ fn draw_hint(frame: &mut Frame, area: Rect, th: &Theme) {
         area,
     );
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::api::DaemonStatus;
+    use crate::app::Focus;
+    use crate::render::test_support;
+
+    /// A minimal live daemon status with a model name for the current-model marker.
+    fn status() -> DaemonStatus {
+        DaemonStatus {
+            running: true,
+            vault_path: "/v".into(),
+            uptime_seconds: 1,
+            watcher_active: false,
+            dispatcher_attached: false,
+            orchestrator_attached: false,
+            reactions_seen: 0,
+            model_name: Some("alpha".into()),
+            token_usage_total: None,
+            context_window: None,
+            chat_tools: 0,
+            chat_tool_names: Vec::new(),
+            enter_sends: true,
+        }
+    }
+
+    fn render(app: &App, w: u16, h: u16) -> String {
+        let th = app.theme.clone();
+        test_support::render_pane(w, h, |f| draw(f, f.area(), app, &th))
+    }
+
+    #[test]
+    fn empty_catalog_shows_a_message() {
+        let mut app = test_support::app();
+        app.focus = Focus::ModelBrowser;
+        let out = render(&app, 80, 24);
+        assert!(
+            out.contains("provider returned no models"),
+            "empty state:\n{out}"
+        );
+        assert!(out.contains("0 model(s)"), "title count:\n{out}");
+    }
+
+    #[test]
+    fn loading_shows_the_fetch_state() {
+        let mut app = test_support::app();
+        app.focus = Focus::ModelBrowser;
+        app.models_loading = true;
+        let out = render(&app, 80, 24);
+        assert!(out.contains("loading models"), "loading title:\n{out}");
+        assert!(
+            out.contains("Fetching model catalog"),
+            "fetch message:\n{out}"
+        );
+    }
+
+    #[test]
+    fn filter_and_current_model_marker_render() {
+        let mut app = test_support::app();
+        app.focus = Focus::ModelBrowser;
+        app.models = vec!["alpha".into(), "beta-max".into(), "gamma".into()];
+        app.sidebar_filter = "alpha".into();
+        app.status = Some(status());
+        let out = render(&app, 80, 24);
+        assert!(out.contains("alpha"), "filtered row:\n{out}");
+        assert!(!out.contains("beta"), "non-matching filtered out:\n{out}");
+        assert!(out.contains("1 model(s)"), "filtered count:\n{out}");
+        assert!(out.contains(" Models — filter "), "filter title:\n{out}");
+    }
+
+    #[test]
+    fn no_matches_for_filter_and_errors_render() {
+        let mut app = test_support::app();
+        app.focus = Focus::ModelBrowser;
+        app.models = vec!["alpha".into()];
+        app.sidebar_filter = "zzz".into();
+        let out = render(&app, 80, 24);
+        assert!(out.contains("no matches for filter"), "filter miss:\n{out}");
+
+        let mut app = test_support::app();
+        app.focus = Focus::ModelBrowser;
+        app.models_error = Some("daemon down".into());
+        let out = render(&app, 80, 24);
+        assert!(out.contains("no models — daemon down"), "error:\n{out}");
+    }
+}

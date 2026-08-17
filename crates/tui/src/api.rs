@@ -642,4 +642,479 @@ mod tests {
         assert!(result.ok);
         assert_eq!(result.preview, "3 results");
     }
+
+    use wiremock::matchers::{body_json, method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    fn client() -> Client {
+        Client::new()
+    }
+
+    fn status_body() -> serde_json::Value {
+        serde_json::json!({
+            "running": true,
+            "vault_path": "/vault",
+            "uptime_seconds": 42,
+            "watcher_active": false,
+            "dispatcher_attached": true,
+            "orchestrator_attached": false,
+            "reactions_seen": 3,
+            "chat_tools": 2
+        })
+    }
+
+    #[tokio::test]
+    async fn fetch_status_success_and_unavailable() {
+        let mock = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/status"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(status_body()))
+            .mount(&mock)
+            .await;
+        let status = fetch_status(&client(), &mock.uri()).await.unwrap().unwrap();
+        assert!(status.running);
+        assert_eq!(status.vault_path, "/vault");
+        assert_eq!(status.uptime_seconds, 42);
+
+        mock.reset().await;
+        Mock::given(method("GET"))
+            .and(path("/api/status"))
+            .respond_with(ResponseTemplate::new(503))
+            .mount(&mock)
+            .await;
+        assert!(
+            fetch_status(&client(), &mock.uri())
+                .await
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn fetch_reactions_success_and_unavailable() {
+        let mock = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/reactions"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {
+                    "event_type": "file_changed",
+                    "timestamp": "2025-06-25T12:00:00Z",
+                    "source": "watcher",
+                    "correlation_id": "x",
+                    "path": "/docs/notes.md",
+                    "outcome": "observed"
+                }
+            ])))
+            .mount(&mock)
+            .await;
+        let events = fetch_reactions(&client(), &mock.uri(), 5).await.unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].event_type, "file_changed");
+        assert_eq!(events[0].outcome, ReactionOutcome::Observed);
+
+        mock.reset().await;
+        Mock::given(method("GET"))
+            .and(path("/api/reactions"))
+            .respond_with(ResponseTemplate::new(503))
+            .mount(&mock)
+            .await;
+        assert!(
+            fetch_reactions(&client(), &mock.uri(), 5)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn fetch_conversations_success_and_unavailable() {
+        let mock = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/conversations"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {"id": "c1", "title": "test", "created_at": "2025-06-25T12:00:00Z"}
+            ])))
+            .mount(&mock)
+            .await;
+        let convs = fetch_conversations(&client(), &mock.uri()).await.unwrap();
+        assert_eq!(convs.len(), 1);
+        assert_eq!(convs[0].id, "c1");
+
+        mock.reset().await;
+        Mock::given(method("GET"))
+            .and(path("/api/conversations"))
+            .respond_with(ResponseTemplate::new(503))
+            .mount(&mock)
+            .await;
+        assert!(
+            fetch_conversations(&client(), &mock.uri())
+                .await
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn fetch_history_found_not_found_and_unavailable() {
+        let mock = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/conversations/c1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "messages": [{"role": "user", "content": "hi"}]
+            })))
+            .mount(&mock)
+            .await;
+        let history = fetch_conversation_history(&client(), &mock.uri(), "c1")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(history.messages.len(), 1);
+
+        Mock::given(method("GET"))
+            .and(path("/api/conversations/missing"))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&mock)
+            .await;
+        assert!(
+            fetch_conversation_history(&client(), &mock.uri(), "missing")
+                .await
+                .unwrap()
+                .is_none()
+        );
+
+        Mock::given(method("GET"))
+            .and(path("/api/conversations/down"))
+            .respond_with(ResponseTemplate::new(503))
+            .mount(&mock)
+            .await;
+        assert!(
+            fetch_conversation_history(&client(), &mock.uri(), "down")
+                .await
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn fetch_models_success_and_unavailable() {
+        let mock = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/models"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "models": ["alpha", "beta"],
+                "current": "alpha"
+            })))
+            .mount(&mock)
+            .await;
+        let m = fetch_models(&client(), &mock.uri()).await.unwrap();
+        assert_eq!(m.models, vec!["alpha", "beta"]);
+        assert_eq!(m.current.as_deref(), Some("alpha"));
+
+        mock.reset().await;
+        Mock::given(method("GET"))
+            .and(path("/api/models"))
+            .respond_with(ResponseTemplate::new(503))
+            .mount(&mock)
+            .await;
+        let m = fetch_models(&client(), &mock.uri()).await.unwrap();
+        assert!(m.models.is_empty());
+        assert!(m.error.is_some(), "unavailable must set the soft error");
+    }
+
+    #[tokio::test]
+    async fn select_model_scopes_to_a_conversation_when_given_one() {
+        let mock = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/models/select"))
+            .and(body_json(
+                serde_json::json!({"model": "beta", "conversation": "c1"}),
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "models": [], "current": "beta"
+            })))
+            .mount(&mock)
+            .await;
+        let m = select_model(&client(), &mock.uri(), "beta", Some("c1"))
+            .await
+            .unwrap();
+        assert_eq!(m.current.as_deref(), Some("beta"));
+
+        // Without a conversation the body omits the field.
+        Mock::given(method("POST"))
+            .and(path("/api/models/select"))
+            .and(body_json(serde_json::json!({"model": "beta"})))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "models": [], "current": null
+            })))
+            .mount(&mock)
+            .await;
+        let m = select_model(&client(), &mock.uri(), "beta", None)
+            .await
+            .unwrap();
+        assert!(m.current.is_none());
+    }
+
+    #[tokio::test]
+    async fn cancel_conversation_posts_and_returns_ok() {
+        let mock = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/conversations/c1/cancel"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&mock)
+            .await;
+        cancel_conversation(&client(), &mock.uri(), "c1")
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn fetch_sessions_success_and_unavailable() {
+        let mock = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/sessions"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {"id": "s1", "status": "running"}
+            ])))
+            .mount(&mock)
+            .await;
+        let sessions = fetch_sessions(&client(), &mock.uri()).await.unwrap();
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].id, "s1");
+
+        mock.reset().await;
+        Mock::given(method("GET"))
+            .and(path("/api/sessions"))
+            .respond_with(ResponseTemplate::new(503))
+            .mount(&mock)
+            .await;
+        assert!(
+            fetch_sessions(&client(), &mock.uri())
+                .await
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn fork_conversation_returns_the_new_session_or_the_servers_reason() {
+        let mock = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/sessions/c1/fork"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": "fork-1", "forked_from": "c1", "kept_turns": 3, "total_turns": 5
+            })))
+            .mount(&mock)
+            .await;
+        let fork = fork_conversation(&client(), &mock.uri(), "c1", Some(3))
+            .await
+            .unwrap();
+        assert_eq!(fork.id, "fork-1");
+        assert_eq!(fork.kept_turns, 3);
+
+        mock.reset().await;
+        Mock::given(method("POST"))
+            .and(path("/api/sessions/c1/fork"))
+            .respond_with(ResponseTemplate::new(409).set_body_json(serde_json::json!({
+                "error": "no transcript to fork"
+            })))
+            .mount(&mock)
+            .await;
+        let err = fork_conversation(&client(), &mock.uri(), "c1", None)
+            .await
+            .unwrap_err();
+        assert_eq!(err, "no transcript to fork");
+    }
+
+    #[tokio::test]
+    async fn post_goal_message_maps_every_status() {
+        use GoalMessageOutcome as O;
+        let mock = MockServer::start().await;
+        for (status, body, expected) in [
+            (200, serde_json::json!({}), O::Accepted),
+            (202, serde_json::json!({}), O::Accepted),
+            (404, serde_json::json!({}), O::NotFound),
+            (403, serde_json::json!({}), O::NotPermitted),
+            (409, serde_json::json!({"error": "parked"}), O::Parked),
+            (409, serde_json::json!({"error": "finished"}), O::Finished),
+            (
+                500,
+                serde_json::json!({}),
+                O::Error("server returned 500 Internal Server Error".into()),
+            ),
+        ] {
+            Mock::given(method("POST"))
+                .and(path("/api/goals/g1/message"))
+                .and(body_json(serde_json::json!({"text": "answer"})))
+                .respond_with(ResponseTemplate::new(status).set_body_json(body))
+                .mount(&mock)
+                .await;
+            let outcome = post_goal_message(&client(), &mock.uri(), "g1", "answer").await;
+            assert_eq!(outcome, expected, "status {status} mapped wrong");
+            mock.reset().await;
+        }
+    }
+
+    #[tokio::test]
+    async fn list_projects_parses_rows_and_reports_errors() {
+        let mock = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/projects"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "projects": [
+                    {"name": "liberado", "root": "/wt", "write_class": "w"},
+                    {"name": "notes", "root": "/notes"}
+                ]
+            })))
+            .mount(&mock)
+            .await;
+        let projects = list_projects(&client(), &mock.uri()).await.unwrap();
+        assert_eq!(projects.len(), 2);
+        assert_eq!(projects[0].name, "liberado");
+        assert_eq!(projects[0].root, "/wt");
+        assert_eq!(projects[0].write_class.as_deref(), Some("w"));
+        assert!(
+            projects[1].write_class.is_none(),
+            "missing write_class defaults"
+        );
+
+        mock.reset().await;
+        Mock::given(method("GET"))
+            .and(path("/api/projects"))
+            .respond_with(ResponseTemplate::new(500))
+            .mount(&mock)
+            .await;
+        assert!(list_projects(&client(), &mock.uri()).await.is_err());
+
+        mock.reset().await;
+        Mock::given(method("GET"))
+            .and(path("/api/projects"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+            .mount(&mock)
+            .await;
+        assert!(
+            list_projects(&client(), &mock.uri())
+                .await
+                .unwrap()
+                .is_empty(),
+            "missing projects key is an empty list"
+        );
+    }
+
+    #[tokio::test]
+    async fn start_coding_goal_posts_payload_and_reads_session_id() {
+        let mock = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/goals"))
+            .and(body_json(serde_json::json!({
+                "description": "do it",
+                "domain": "coding",
+                "origin": {"conversation_id": "c1"},
+                "payload": {"interactive": true, "project": "liberado", "mode": "plan"}
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "session_id": "g-1"
+            })))
+            .mount(&mock)
+            .await;
+        let id = start_coding_goal(
+            &client(),
+            &mock.uri(),
+            Some("liberado"),
+            "do it",
+            Some(liberado_commands::CodingGoalMode::Plan),
+            Some("c1"),
+        )
+        .await
+        .unwrap();
+        assert_eq!(id, "g-1");
+
+        mock.reset().await;
+        Mock::given(method("POST"))
+            .and(path("/api/goals"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+            .mount(&mock)
+            .await;
+        assert!(
+            start_coding_goal(&client(), &mock.uri(), None, "do it", None, None)
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn post_goal_action_and_spawn_goal_cover_their_error_paths() {
+        let mock = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/goals/g1/park"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&mock)
+            .await;
+        post_goal_action(&client(), &mock.uri(), "g1", "park")
+            .await
+            .unwrap();
+
+        mock.reset().await;
+        Mock::given(method("POST"))
+            .and(path("/api/goals/g1/park"))
+            .respond_with(ResponseTemplate::new(500))
+            .mount(&mock)
+            .await;
+        assert!(
+            post_goal_action(&client(), &mock.uri(), "g1", "park")
+                .await
+                .is_err()
+        );
+
+        Mock::given(method("POST"))
+            .and(path("/api/goals"))
+            .and(body_json(serde_json::json!({
+                "description": "goal text",
+                "domain": "life",
+                "profile": "life",
+                "payload": {"interactive": true}
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "session_id": "g-2"
+            })))
+            .mount(&mock)
+            .await;
+        let id = spawn_goal(&client(), &mock.uri(), "life", "goal text", None)
+            .await
+            .unwrap();
+        assert_eq!(id, "g-2");
+    }
+
+    #[tokio::test]
+    async fn stream_openers_return_the_response() {
+        let mock = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/conversations/c1/attach"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&mock)
+            .await;
+        let r = attach_conversation_stream(&client(), &mock.uri(), "c1")
+            .await
+            .unwrap();
+        assert!(r.status().is_success());
+
+        Mock::given(method("GET"))
+            .and(path("/api/goals/g1/stream"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&mock)
+            .await;
+        let r = open_goal_stream(&client(), &mock.uri(), "g1")
+            .await
+            .unwrap();
+        assert!(r.status().is_success());
+
+        Mock::given(method("POST"))
+            .and(path("/api/chat/stream"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&mock)
+            .await;
+        let r = post_chat_stream(&client(), &mock.uri(), "hello", Some("c1"))
+            .await
+            .unwrap();
+        assert!(r.status().is_success());
+    }
 }
