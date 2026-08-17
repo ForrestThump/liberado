@@ -139,6 +139,10 @@ pub struct TelegramNotifier {
     client: reqwest::Client,
     token: String,
     chat_id: String,
+    /// Full API base (including the `/bot` prefix) — the real Telegram host by default, or a
+    /// test mock server's URL. Injected as a field so transport tests can point at a wiremock
+    /// server instead of hitting the network (same shape as `sessions_root` / `run_sync_in`).
+    api_base: String,
     /// Long-poll timeout for `getUpdates` (seconds). Telegram caps this at 50.
     getupdate_timeout_secs: u64,
     /// Sleep after a failed `getUpdates` before retrying.
@@ -155,9 +159,17 @@ impl TelegramNotifier {
             client: reqwest::Client::new(),
             token: token.into(),
             chat_id: chat_id.into(),
+            api_base: TELEGRAM_API_BASE.to_string(),
             getupdate_timeout_secs: 25,
             poll_retry_backoff_secs: 10,
         }
+    }
+
+    /// Override the API base URL — used only by tests to point at a local mock server.
+    #[allow(dead_code)] // exercised by #[cfg(test)]; harmless to expose for composition.
+    pub fn with_api_base(mut self, api_base: impl Into<String>) -> Self {
+        self.api_base = api_base.into();
+        self
     }
 
     /// Override long-poll timing (from `config.tuning.telegram_approvals`).
@@ -180,7 +192,7 @@ impl TelegramNotifier {
     }
 
     fn api_url(&self, method: &str) -> String {
-        format!("{TELEGRAM_API_BASE}{}/{method}", self.token)
+        format!("{}{}/{}", self.api_base, self.token, method)
     }
 
     /// POST `payload` to `sendMessage` and translate a non-2xx response into a [`MessagingError`].
@@ -633,37 +645,62 @@ mod tests {
             .expect("a real send with real credentials must succeed");
     }
 
-    /// A notifier that only implements `notify` — tests the default impls for
-    /// `notify_proposal`, `notify_permission_request`, and `deliver_cron`.
-    struct NotifyOnlyNotifier;
+    /// A notifier that only implements `notify` — records what it was told, so the default
+    /// `notify_proposal` / `notify_permission_request` / `deliver_cron` impls can be asserted to
+    /// actually delegate to `notify` rather than just return `Ok`.
+    struct NotifyOnlyNotifier {
+        told: Arc<std::sync::Mutex<Vec<String>>>,
+    }
+
+    impl NotifyOnlyNotifier {
+        fn new() -> Self {
+            Self {
+                told: Arc::new(std::sync::Mutex::new(Vec::new())),
+            }
+        }
+    }
 
     #[async_trait]
     impl Notifier for NotifyOnlyNotifier {
-        async fn notify(&self, _message: &str) -> Result<(), NotifyError> {
+        async fn notify(&self, message: &str) -> Result<(), NotifyError> {
+            self.told.lock().unwrap().push(message.to_string());
             Ok(())
         }
     }
 
     #[tokio::test]
     async fn default_notify_proposal_delegates_to_notify() {
-        let n = NotifyOnlyNotifier;
-        assert!(n.notify_proposal("prop-1", "test").await.is_ok());
+        let n = NotifyOnlyNotifier::new();
+        let told = n.told.clone();
+        assert!(
+            n.notify_proposal("prop-1", "approve proposal x")
+                .await
+                .is_ok()
+        );
+        assert_eq!(told.lock().unwrap().as_slice(), &["approve proposal x"]);
     }
 
     #[tokio::test]
     async fn default_notify_permission_request_delegates_to_notify() {
-        let n = NotifyOnlyNotifier;
+        let n = NotifyOnlyNotifier::new();
+        let told = n.told.clone();
         assert!(
-            n.notify_permission_request("prop-1", "request access to Work zone")
+            n.notify_permission_request("perm-1", "request access to Work zone")
                 .await
                 .is_ok()
+        );
+        assert_eq!(
+            told.lock().unwrap().as_slice(),
+            &["request access to Work zone"]
         );
     }
 
     #[tokio::test]
     async fn default_deliver_cron_delegates_to_notify() {
-        let n = NotifyOnlyNotifier;
+        let n = NotifyOnlyNotifier::new();
+        let told = n.told.clone();
         assert!(n.deliver_cron("cron message").await.is_ok());
+        assert_eq!(told.lock().unwrap().as_slice(), &["cron message"]);
     }
 
     /// A recording [`MessagingChannel`] for testing [`ChannelNotifier`].
@@ -744,5 +781,57 @@ mod tests {
                 .iter()
                 .any(|m| m.contains("needs access"))
         );
+    }
+
+    #[test]
+    fn from_env_reads_both_telegram_vars_and_default_base() {
+        // One test pins the production env entry point (repo convention). No other test in this
+        // binary touches these vars, and from_env is synchronous, so the set/read/clear window is
+        // effectively closed.
+        unsafe { std::env::set_var("LIBERADO_TELEGRAM_BOT_TOKEN", "tok-1") };
+        unsafe { std::env::set_var("LIBERADO_TELEGRAM_CHAT_ID", "42") };
+        let constructed = TelegramNotifier::from_env();
+        unsafe { std::env::remove_var("LIBERADO_TELEGRAM_BOT_TOKEN") };
+        unsafe { std::env::remove_var("LIBERADO_TELEGRAM_CHAT_ID") };
+
+        let n = constructed.expect("both vars set -> Some");
+        // The un-injected construction keeps the real Telegram base with the env token.
+        assert_eq!(
+            n.api_url("sendMessage"),
+            "https://api.telegram.org/bottok-1/sendMessage"
+        );
+    }
+
+    #[test]
+    fn from_env_is_none_when_a_var_is_missing() {
+        unsafe { std::env::remove_var("LIBERADO_TELEGRAM_BOT_TOKEN") };
+        unsafe { std::env::remove_var("LIBERADO_TELEGRAM_CHAT_ID") };
+        assert!(TelegramNotifier::from_env().is_none());
+    }
+
+    #[test]
+    fn with_api_base_overrides_send_url_and_poll_tuning_keeps_defaults() {
+        let n = TelegramNotifier::new("t", "42").with_api_base("http://localhost:9/bot");
+        assert_eq!(n.api_url("getMe"), "http://localhost:9/bott/getMe");
+    }
+
+    #[test]
+    fn channel_name_is_telegram() {
+        assert_eq!(TelegramNotifier::new("t", "42").name(), "Telegram");
+    }
+
+    #[test]
+    fn notify_error_displays_inner_message() {
+        let e = NotifyError::from(MessagingError("boom".into()));
+        assert_eq!(e.to_string(), "boom");
+    }
+
+    #[tokio::test]
+    async fn channel_notifier_exposes_inner_channel() {
+        let channel = Arc::new(RecordingChannel {
+            sent: Arc::new(std::sync::Mutex::new(Vec::new())),
+        });
+        let notifier = ChannelNotifier::new(channel);
+        assert_eq!(notifier.channel().name(), "test-recording");
     }
 }
