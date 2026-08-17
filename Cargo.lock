@@ -4944,12 +4944,14 @@ dependencies = [
 name = "liberado-memory-mcp"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "liberado-common",
  "liberado-config",
  "liberado-memory-store",
  "liberado-vault",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
  "tracing",
  "tracing-subscriber",
