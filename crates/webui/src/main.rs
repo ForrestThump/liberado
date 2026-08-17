@@ -81,6 +81,27 @@ fn main() {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // The host build has no browser: these are the stub branches, pinned so the wasm and host
+    // halves cannot drift in intent.
+
+    /// The host half of `api_base` is the same loopback the browser falls back to when window
+    /// access fails — the daemon's own port on this machine.
+    #[test]
+    fn host_api_base_is_the_loopback_fallback() {
+        assert_eq!(api_base(), "http://127.0.0.1:4201");
+    }
+
+    /// No browser means no viewport; the host build must not claim the layout is phone-width.
+    #[test]
+    fn host_viewport_is_never_narrow() {
+        assert!(!is_narrow_viewport());
+    }
+}
+
 #[component]
 fn App() -> Element {
     let base = api_base();

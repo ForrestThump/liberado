@@ -285,3 +285,158 @@ pub fn theme_css_vars(t: &Theme) -> String {
 }}"#
     )
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every CSS custom property the stylesheet can consume. `theme_css_vars` must keep emitting
+    /// all of them: a missing `--lib-*` variable is not a compile error — a selector that uses it
+    /// silently gets nothing.
+    const EXPECTED_VARS: &[&str] = &[
+        "--lib-app-bg",
+        "--lib-accent",
+        "--lib-border",
+        "--lib-surface",
+        "--lib-surface-2",
+        "--lib-chat-user-text",
+        "--lib-chat-user-prefix",
+        "--lib-chat-assistant-text",
+        "--lib-chat-system-text",
+        "--lib-chat-streaming-cursor",
+        "--lib-tool-label",
+        "--lib-tool-name",
+        "--lib-tool-args",
+        "--lib-tool-ok",
+        "--lib-tool-err",
+        "--lib-code-block-header",
+        "--lib-code-block-bg",
+        "--lib-code-block-fg",
+        "--lib-input-bg",
+        "--lib-input-text",
+        "--lib-input-placeholder",
+        "--lib-input-border-focused",
+        "--lib-input-border-unfocused",
+        "--lib-status-bar-text",
+        "--lib-status-dot-online",
+        "--lib-status-dot-offline",
+        "--lib-status-dot-connecting",
+        "--lib-reaction-observed",
+        "--lib-reaction-dispatched",
+        "--lib-reaction-acted",
+        "--lib-reaction-unknown",
+        "--lib-sidebar-selected-bg",
+        "--lib-sidebar-selected-fg",
+        "--lib-sidebar-text",
+        "--lib-sidebar-border-focused",
+        "--lib-sidebar-border-unfocused",
+        "--lib-sidebar-item-bg",
+        "--lib-md-bold",
+        "--lib-md-italic",
+        "--lib-md-code",
+        "--lib-md-link",
+        "--lib-md-bullet",
+        "--lib-md-heading",
+        "--lib-md-rule",
+    ];
+
+    /// A known name resolves to that theme's own name; the webui injects it into a `<style>` tag
+    /// keyed on nothing else.
+    #[test]
+    fn theme_by_name_resolves_builtins() {
+        assert_eq!(theme_by_name("dark").name, "dark");
+        assert_eq!(theme_by_name("light").name, "light");
+        assert_eq!(theme_by_name("nord").name, "nord");
+    }
+
+    /// An unknown name must not render nothing (an empty `<style>` would drop every CSS variable
+    /// the layout depends on) — it falls back to the built-in dark, whose name identifies it.
+    #[test]
+    fn unknown_theme_name_falls_back_to_dark() {
+        assert_eq!(theme_by_name("no-such-theme").name, "dark");
+        assert_eq!(theme_by_name("").name, "dark");
+    }
+
+    /// The host build has no browser storage, so the remembered theme is the fallback — the same
+    /// `dark` the wasm half returns when nothing is stored.
+    #[test]
+    fn host_saved_theme_defaults_to_dark() {
+        assert_eq!(saved_theme_name(), "dark");
+    }
+
+    /// Sorted, so `/theme list` shows a stable order, and containing exactly the built-ins the
+    /// shared registry ships — a webui-local list could drift from what the TUI offers.
+    #[test]
+    fn theme_names_are_sorted_and_have_the_builtins() {
+        let names = theme_names();
+        assert!(names.windows(2).all(|w| w[0] < w[1]), "sorted: {names:?}");
+        for expected in ["dark", "light", "nord"] {
+            assert!(
+                names.iter().any(|n| n == expected),
+                "missing {expected}: {names:?}"
+            );
+        }
+    }
+
+    /// The output must define every variable the stylesheet uses, in one `:root` block. A missing
+    /// variable silently renders nothing, so assert the whole contract rather than a sample.
+    #[test]
+    fn css_vars_cover_the_whole_contract() {
+        let css = theme_css_vars(&Theme::default_dark());
+        assert!(css.starts_with(":root {"), "one block: {css}");
+        for var in EXPECTED_VARS {
+            assert!(css.contains(var), "missing {var} in: {css}");
+        }
+        // Every definition terminates; an unterminated one would swallow the next property.
+        for line in css.lines().filter(|l| l.trim().starts_with("--lib-")) {
+            assert!(line.trim_end().ends_with(';'), "unterminated: {line}");
+        }
+    }
+
+    /// A custom theme's values must reach the output verbatim — the whole point of the function.
+    #[test]
+    fn custom_values_wire_through() {
+        let t = Theme {
+            name: "custom".into(),
+            accent: Some("#112233".into()),
+            app_bg: Some("#abcdef".into()),
+            md_link: Some("#fedcba".into()),
+            ..Default::default()
+        };
+        let css = theme_css_vars(&t);
+        assert!(css.contains("--lib-accent: #112233;"), "{css}");
+        assert!(css.contains("--lib-app-bg: #abcdef;"), "{css}");
+        assert!(css.contains("--lib-md-link: #fedcba;"), "{css}");
+    }
+
+    /// A theme whose fields are all `None` renders identically to the built-in dark: `None` means
+    /// "use the consumer's default", and this function is the consumer.
+    #[test]
+    fn none_fields_fall_back_to_default_dark() {
+        let bare = Theme {
+            name: "bare".into(),
+            ..Default::default()
+        };
+        assert_eq!(
+            theme_css_vars(&bare),
+            theme_css_vars(&Theme::default_dark()),
+            "all-None theme must equal default dark"
+        );
+    }
+
+    /// The derived surfaces track the tokens they copy — `--lib-surface` is the sidebar item
+    /// background and `--lib-surface-2` the code-block background. If the pairing ever changes,
+    /// the stylesheet classes using them must change with it.
+    #[test]
+    fn derived_surfaces_track_their_source_tokens() {
+        let t = Theme {
+            name: "custom".into(),
+            sidebar_item_bg: Some("#010101".into()),
+            code_block_bg: Some("#020202".into()),
+            ..Default::default()
+        };
+        let css = theme_css_vars(&t);
+        assert!(css.contains("--lib-surface: #010101;"), "{css}");
+        assert!(css.contains("--lib-surface-2: #020202;"), "{css}");
+    }
+}

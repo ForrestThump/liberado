@@ -124,6 +124,12 @@ mod tests {
         let (start, end) = visible_window(20, 19);
         assert_eq!(end, 20);
         assert_eq!(end - start, MAX_VISIBLE);
+
+        // A small list with the window sliding right: the first visible row only advances once the
+        // selection passes the head of the window.
+        let (start, end) = visible_window(15, 9);
+        assert_eq!((start, end), (2, 10));
+        assert_eq!(end - start, MAX_VISIBLE);
     }
 
     #[test]
