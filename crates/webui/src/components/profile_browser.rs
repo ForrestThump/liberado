@@ -270,4 +270,16 @@ mod tests {
             Some("unlisted".to_string())
         );
     }
+
+    /// The description is part of the label — the picker row is unreadable without it — and a
+    /// whitespace-only description is dropped exactly like an empty one.
+    #[test]
+    fn the_description_is_part_of_the_label() {
+        assert_eq!(
+            label_for(&row("basic-chat", Some("Quick answers."))),
+            "basic-chat  —  Quick answers."
+        );
+        assert_eq!(label_for(&row("plain", None)), "plain");
+        assert_eq!(label_for(&row("blank", Some("   "))), "blank");
+    }
 }

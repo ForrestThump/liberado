@@ -357,6 +357,13 @@ mod tests {
         assert_eq!(theme_by_name("").name, "dark");
     }
 
+    /// The host build has no browser storage, so the remembered theme is the fallback — the same
+    /// `dark` the wasm half returns when nothing is stored.
+    #[test]
+    fn host_saved_theme_defaults_to_dark() {
+        assert_eq!(saved_theme_name(), "dark");
+    }
+
     /// Sorted, so `/theme list` shows a stable order, and containing exactly the built-ins the
     /// shared registry ships — a webui-local list could drift from what the TUI offers.
     #[test]

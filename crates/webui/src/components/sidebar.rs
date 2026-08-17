@@ -16,6 +16,12 @@ async fn fetch_conversations(api_base: String) -> Result<Vec<ConvHeader>, String
     Ok(headers)
 }
 
+/// A delete "succeeded" when the daemon answered 2xx, or 404 — the row was already gone, which
+/// is the outcome the caller wanted.
+fn delete_accepted(status: u16) -> bool {
+    (200..300).contains(&status) || status == 404
+}
+
 /// `DELETE /api/conversations/{id}` — a real delete: the daemon removes the log from disk.
 ///
 /// A 404 counts as success. The only thing reporting it would tell the user is something they cannot
@@ -28,7 +34,7 @@ async fn delete_conversation(api_base: &str, id: &str) -> Result<(), String> {
         .send()
         .await
         .map_err(|e| format!("Failed to reach daemon: {e}"))?;
-    if resp.status().is_success() || resp.status().as_u16() == 404 {
+    if delete_accepted(resp.status().as_u16()) {
         Ok(())
     } else {
         Err(format!("Delete failed: HTTP {}", resp.status().as_u16()))
@@ -100,7 +106,7 @@ fn relative_time(iso: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::relative_time;
+    use super::{conv_title, delete_accepted, relative_time};
 
     fn ago(dur: chrono::Duration) -> String {
         (chrono::Utc::now() - dur).to_rfc3339()
@@ -150,6 +156,61 @@ mod tests {
             .format("%Y-%m-%dT%H:%M:%S%.f")
             .to_string();
         assert_eq!(relative_time(&raw), "7m ago");
+    }
+
+    /// The band boundaries are exact: 60s is a minute ago, not 60 seconds ago — the `<` comparisons
+    /// must be strict or the unit drifts by exactly one.
+    #[test]
+    fn band_boundaries_fall_up() {
+        let at = |secs: i64| (chrono::Utc::now() - chrono::Duration::seconds(secs)).to_rfc3339();
+        assert_eq!(relative_time(&at(60)), "1m ago");
+        assert_eq!(relative_time(&at(3600)), "1h ago");
+        assert_eq!(relative_time(&at(86_400)), "1d ago");
+    }
+
+    /// Past a month the row shows the calendar date — the `days < 30` is strict, so exactly 30 days
+    /// is already "months ago" and gets the date form. Expected date is derived from the same
+    /// instant so the assertion is about the *form chosen*, not a fixed calendar day.
+    #[test]
+    fn exactly_thirty_days_shows_the_date() {
+        let raw = (chrono::Utc::now() - chrono::Duration::days(30)).to_rfc3339();
+        let expected = chrono::DateTime::parse_from_rfc3339(&raw)
+            .unwrap()
+            .format("%b %d")
+            .to_string();
+        assert_eq!(relative_time(&raw), expected);
+    }
+
+    /// A sub-second delta reads as zero seconds ago, not "just now" — the future check is strict
+    /// (`< 0`, not `<= 0`), so a just-created row ages from 0s.
+    #[test]
+    fn sub_second_ages_from_zero() {
+        let raw = (chrono::Utc::now() - chrono::Duration::milliseconds(500)).to_rfc3339();
+        assert_eq!(relative_time(&raw), "0s ago");
+    }
+
+    /// `delete_accepted` treats 2xx and 404 as success, everything else as failure.
+    #[test]
+    fn delete_accepts_2xx_and_404() {
+        for ok in [200, 204, 299, 404] {
+            assert!(delete_accepted(ok), "{ok} should delete cleanly");
+        }
+        for no in [300, 403, 500] {
+            assert!(
+                !delete_accepted(no),
+                "{no} should surface as a delete failure"
+            );
+        }
+    }
+
+    /// An unnamed conversation reads as "Untitled" in both the conversation list and search results.
+    #[test]
+    fn empty_titles_are_untitled() {
+        assert_eq!(conv_title(&Some("A title".into())), "A title");
+        assert_eq!(conv_title(&Some(String::new())), "Untitled");
+        assert_eq!(conv_title(&None), "Untitled");
+        // Whitespace is not emptiness — matches the `!is_empty()` guard.
+        assert_eq!(conv_title(&Some("  ".into())), "  ");
     }
 }
 
@@ -377,6 +438,16 @@ pub fn Sidebar(
     }
 }
 
+/// The row's title, or "Untitled" when it is missing or empty. Shared by the conversation row and
+/// the search-result row so the two lists cannot disagree about what an unnamed conversation is
+/// called. Whitespace-only titles pass through — the guard is `!is_empty()`, not `!trim().is_empty()`.
+fn conv_title(title: &Option<String>) -> &str {
+    match title {
+        Some(t) if !t.is_empty() => t.as_str(),
+        _ => "Untitled",
+    }
+}
+
 #[component]
 fn ConvItem(
     conv: ConvHeader,
@@ -391,10 +462,7 @@ fn ConvItem(
     } else {
         "conv-item"
     };
-    let title = match &conv.title {
-        Some(t) if !t.is_empty() => t.as_str(),
-        _ => "Untitled",
-    };
+    let title = conv_title(&conv.title);
 
     // A row wrapping two buttons, not one big button: the options control has to be its own button,
     // and a button nested inside a button is invalid HTML that browsers resolve by dropping events.
@@ -468,10 +536,7 @@ fn SearchResultItem(
     } else {
         "conv-item"
     };
-    let title = match &result.title {
-        Some(t) if !t.is_empty() => t.as_str(),
-        _ => "Untitled",
-    };
+    let title = conv_title(&result.title);
 
     rsx! {
         button {

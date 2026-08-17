@@ -43,6 +43,12 @@ async fn fetch_goals(api_base: String) -> Result<Vec<GoalSessionRow>, String> {
         .map_err(|e| format!("Bad goals response: {e}"))
 }
 
+/// Whether a cancel response counts as accepted. 202 Accepted is the documented success path;
+/// some stacks return plain 200, so any 2xx counts.
+fn cancel_accepted(status: u16) -> bool {
+    status == 202 || (200..300).contains(&status)
+}
+
 async fn cancel_goal(api_base: String, id: String) -> Result<(), String> {
     let url = format!("{api_base}/api/goals/{id}/cancel");
     let client = reqwest::Client::new();
@@ -51,8 +57,7 @@ async fn cancel_goal(api_base: String, id: String) -> Result<(), String> {
         .send()
         .await
         .map_err(|e| format!("cancel request failed: {e}"))?;
-    // 202 Accepted is the success path; some stacks may return 200.
-    if resp.status().as_u16() == 202 || resp.status().is_success() {
+    if cancel_accepted(resp.status().as_u16()) {
         Ok(())
     } else {
         let body = resp.text().await.unwrap_or_default();
@@ -92,7 +97,7 @@ fn short_id(id: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{age_label, short_id};
+    use super::{age_label, cancel_accepted, short_id};
 
     /// A missing timestamp reads as "age unknown" — never an empty label or a crash.
     #[test]
@@ -133,6 +138,31 @@ mod tests {
     fn future_timestamp_clamps_to_zero() {
         let raw = (chrono::Utc::now() + chrono::Duration::minutes(1)).to_rfc3339();
         assert_eq!(age_label(Some(&raw)), "0s");
+    }
+
+    /// The band boundaries are exact: 60s is a minute, 3600s an hour, 86400s a day — the `<`
+    /// comparisons must be strict or the unit drifts by exactly one.
+    #[test]
+    fn band_boundaries_fall_up() {
+        let at = |secs: i64| (chrono::Utc::now() - chrono::Duration::seconds(secs)).to_rfc3339();
+        assert_eq!(age_label(Some(&at(60))), "1m");
+        assert_eq!(age_label(Some(&at(3600))), "1h");
+        assert_eq!(age_label(Some(&at(86_400))), "1d");
+    }
+
+    /// `cancel_accepted` treats 202 and any other 2xx as success; everything else is a refusal
+    /// worth showing.
+    #[test]
+    fn cancel_accepts_2xx_including_202() {
+        for ok in [200, 202, 204] {
+            assert!(cancel_accepted(ok), "{ok} should cancel cleanly");
+        }
+        for no in [300, 400, 500] {
+            assert!(
+                !cancel_accepted(no),
+                "{no} should surface as a cancel failure"
+            );
+        }
     }
 
     /// Short ids pass through whole; long ones lose only the tail.

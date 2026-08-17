@@ -503,4 +503,47 @@ mod tests {
         assert_eq!(info.reactions_seen, 7);
         assert!(ctx.status_info().is_some());
     }
+
+    /// The snapshot's read methods mirror the fields they wrap — a command that reads one must see
+    /// what the chat actually snapshot. Two conversations, so a literal in the impl cannot match by
+    /// accident.
+    #[test]
+    fn context_reads_expose_the_snapshot() {
+        let mut ctx = ctx_with(vec![conv("01A", None), conv("01B", None)]);
+        ctx.session_id = Some("01A".into());
+        ctx.message_count = 7;
+        ctx.theme = "nord".into();
+        assert_eq!(ctx.active_session_id(), Some("01A"));
+        assert_eq!(ctx.message_count(), 7);
+        assert_eq!(ctx.current_theme_name(), "nord");
+        assert_eq!(ctx.conversation_count(), 2);
+        // `ConvHeader` does not carry lineage over the wire; the context reports unknown rather
+        // than guessing a parent that could route a fork to the wrong conversation.
+        assert_eq!(ctx.conversation_parent_for("01A"), None);
+    }
+
+    /// The mutation methods change the snapshot the caller re-applies — `/new`, `/clear` and
+    /// `/session switch` all depend on these taking effect.
+    #[test]
+    fn context_writes_update_the_snapshot() {
+        let mut ctx = ctx_with(Vec::new());
+        ctx.messages.push(ChatMsg {
+            role: "user",
+            content: "hi".into(),
+            thinking_steps: Vec::new(),
+        });
+        ctx.session_id = Some("01A".into());
+
+        ctx.set_active_session(None);
+        assert_eq!(
+            ctx.session_id, None,
+            "set_active_session must replace the id"
+        );
+
+        ctx.clear_chat();
+        assert!(
+            ctx.messages.is_empty(),
+            "clear_chat must drop the transcript"
+        );
+    }
 }
