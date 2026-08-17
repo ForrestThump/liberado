@@ -492,11 +492,11 @@ fn cmd_import(args: &mut dyn Iterator<Item = String>) -> Result<(), Box<dyn std:
 #[cfg(test)]
 mod tests {
     use super::{
-        cmd_compare, cmd_compare_reset, cmd_diff, cmd_import, cmd_trace, reject_sibling_links,
-        smoke_request,
+        cmd_compare, cmd_compare_reset, cmd_diff, cmd_import, cmd_trace, default_trace_dirs,
+        reject_sibling_links, run_git_capture, smoke_request,
     };
     use std::fs;
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
 
     #[test]
     fn smoke_request_contains_a_git_backed_task_and_fail_closed_config() {
@@ -655,6 +655,90 @@ mod tests {
         let args = vec!["a".into(), "b".into()];
         let err = cmd_compare_reset(&args).unwrap_err().to_string();
         assert!(err.contains("takes one workspace path"), "{err}");
+    }
+
+    // ── default_trace_dirs ──────────────────────────────────────────────
+
+    #[test]
+    fn trace_dirs_include_cwd_and_a_relative_fallback() {
+        let dirs = default_trace_dirs();
+        assert!(dirs.contains(&PathBuf::from("coder-traces")));
+        let cwd = std::env::current_dir().unwrap().join("coder-traces");
+        assert!(dirs.contains(&cwd), "{dirs:?}");
+    }
+
+    // ── cmd_compare / cmd_import flag guards ────────────────────────────
+
+    /// A flag-looking positional is refused as an unknown flag, not silently treated as a path.
+    #[test]
+    fn compare_rejects_unknown_flags() {
+        let mut args = vec!["--bogus".to_owned()].into_iter();
+        let err = cmd_compare(&mut args).unwrap_err().to_string();
+        assert!(err.contains("unknown flag for coder compare"), "{err}");
+    }
+
+    /// Two plain positionals reach the trace resolver, not the flag handler.
+    #[test]
+    fn compare_treats_plain_positionals_as_paths() {
+        let mut args = vec!["missing-a".to_owned(), "missing-b".to_owned()].into_iter();
+        let err = cmd_compare(&mut args).unwrap_err().to_string();
+        assert!(!err.contains("unknown flag"), "{err}");
+    }
+
+    #[test]
+    fn compare_requires_two_paths() {
+        let mut args = vec!["only-one".to_owned()].into_iter();
+        let err = cmd_compare(&mut args).unwrap_err().to_string();
+        assert!(err.contains("usage: liberado coder compare"), "{err}");
+    }
+
+    /// Same flag/positional split for the import subcommand.
+    #[test]
+    fn import_rejects_unknown_flags() {
+        let mut args = vec!["--bogus".to_owned()].into_iter();
+        let err = cmd_import(&mut args).unwrap_err().to_string();
+        assert!(err.contains("unknown flag for coder import"), "{err}");
+    }
+
+    #[test]
+    fn import_treats_plain_positionals_as_paths() {
+        let mut args = vec!["missing.json".to_owned()].into_iter();
+        let err = cmd_import(&mut args).unwrap_err().to_string();
+        assert!(!err.contains("unknown flag"), "{err}");
+    }
+
+    // ── run_git_capture ────────────────────────────────────────────────
+
+    /// `run_git_capture` returns the trimmed stdout of a successful git call.
+    #[test]
+    fn run_git_capture_reads_stdout() {
+        let dir = tempfile::tempdir().unwrap();
+        git(dir.path(), &["init", "-b", "main"]);
+        git(dir.path(), &["config", "user.email", "t@example.com"]);
+        git(dir.path(), &["config", "user.name", "Test"]);
+        fs::write(dir.path().join("f.txt"), "x").unwrap();
+        git(dir.path(), &["add", "."]);
+        git(dir.path(), &["commit", "-m", "base"]);
+        let out = run_git_capture(dir.path(), &["rev-parse", "--short", "HEAD"]).unwrap();
+        assert_eq!(out.trim().len(), 7, "short sha: {out}");
+    }
+
+    #[test]
+    fn run_git_capture_fails_in_a_non_repository() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(run_git_capture(dir.path(), &["rev-parse", "--short", "HEAD"]).is_err());
+    }
+
+    fn git(path: &Path, args: &[&str]) {
+        let status = std::process::Command::new("git")
+            .arg("-C")
+            .arg(path)
+            .args(args)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .expect("git runs");
+        assert!(status.success(), "git {args:?} failed");
     }
 
     // ── reject_sibling_links ────────────────────────────────────────────

@@ -179,6 +179,75 @@ fn shepherd_requires_a_mode_flag() {
     assert!(stderr.contains("usage: liberado shepherd"), "{stderr}");
 }
 
+/// `config check` parses as its own arm (not the catch-all usage error) and runs the loader;
+/// from a throwaway directory it fails on the missing vault_path — a usage error instead would
+/// mean the `Some("check")` arm was dropped.
+#[test]
+fn config_check_runs_the_loader() {
+    let temp = tempdir().unwrap();
+    let output = run_cli(temp.path(), &["config", "check"]);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stderr.contains("usage: liberado config"),
+        "the loader must run, not the usage catch-all, got: {stderr}"
+    );
+    assert!(
+        stderr.contains("vault_path"),
+        "expected a loader error about the missing vault, got: {stderr}"
+    );
+}
+
+/// `docs crate-map` with no flag takes the "read" arm and only then fails on the missing
+/// repository — a usage error instead would mean the `[]` arm was dropped.
+#[test]
+fn docs_crate_map_reads_by_default() {
+    let temp = tempdir().unwrap();
+    let stderr = run_usage(temp.path(), &["docs", "crate-map"]);
+    assert!(
+        stderr.contains("could not find repository root"),
+        "expected the repository-root error, got: {stderr}"
+    );
+}
+
+/// `config explain` with all three arguments reaches the explain arm, not the usage error.
+#[test]
+fn config_explain_reaches_the_explain_arm() {
+    let temp = tempdir().unwrap();
+    let output = run_cli(
+        temp.path(),
+        &[
+            "config",
+            "explain",
+            "dispatcher",
+            "turbovault:write_note",
+            "Learning/x.md",
+        ],
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stderr.contains("usage: liberado config explain"),
+        "the explain arm must run, got: {stderr}"
+    );
+}
+
+/// `shepherd config check` resolves the repository and prints the effective configuration — a
+/// no-op instead would exit zero from a throwaway directory.
+#[test]
+fn shepherd_config_check_requires_a_repository() {
+    let temp = tempdir().unwrap();
+    let output = run_cli(temp.path(), &["shepherd", "config", "check"]);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stderr.contains("usage: liberado shepherd"),
+        "the config-check arm must run, got: {stderr}"
+    );
+    assert!(
+        stderr.contains("could not find repository root")
+            || stderr.contains("cannot load topology"),
+        "expected a repository/config error, got: {stderr}"
+    );
+}
+
 #[test]
 fn coder_requires_a_subcommand() {
     let temp = tempdir().unwrap();

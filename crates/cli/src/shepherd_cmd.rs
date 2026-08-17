@@ -62,23 +62,10 @@ impl Config {
         };
         let topology = load_shepherd_topology()?;
         validate_shepherd_topology(&topology)?;
-        match (selected_project, topology) {
-            (Some(name), topology) => {
-                let project = topology
-                    .shepherd
-                    .projects
-                    .iter()
-                    .find(|project| project.name == name)
-                    .ok_or_else(|| format!("unknown shepherd project '{name}'"))?;
-                config.apply_project(project);
-            }
-            (None, topology) if topology.shepherd.projects.len() == 1 => {
-                config.apply_project(&topology.shepherd.projects[0]);
-            }
-            (None, topology) if topology.shepherd.projects.len() > 1 => {
-                return Err("multiple shepherd projects configured; pass --project <name>".into());
-            }
-            (None, _) => {}
+        if let Some(project) =
+            select_shepherd_project(selected_project, &topology.shepherd.projects)?
+        {
+            config.apply_project(project);
         }
         Ok(config)
     }
@@ -96,6 +83,28 @@ impl Config {
     }
     fn state(&self) -> PathBuf {
         self.root.join(".liberado/shepherd")
+    }
+}
+
+/// Resolve which shepherd project config applies — the three-way rule `Config::load` used to
+/// inline: an explicit `--project <name>` wins and must exist; a single configured project
+/// auto-applies; several without a name is an error rather than a guess; none means the
+/// environment defaults.
+fn select_shepherd_project<'a>(
+    selected: Option<&str>,
+    projects: &'a [liberado_config::ShepherdProjectConfig],
+) -> Result<Option<&'a liberado_config::ShepherdProjectConfig>, String> {
+    match selected {
+        Some(name) => projects
+            .iter()
+            .find(|p| p.name == name)
+            .map(Some)
+            .ok_or_else(|| format!("unknown shepherd project '{name}'")),
+        None if projects.len() == 1 => Ok(projects.first()),
+        None if projects.len() > 1 => {
+            Err("multiple shepherd projects configured; pass --project <name>".into())
+        }
+        None => Ok(None),
     }
 }
 
@@ -1068,6 +1077,121 @@ mod tests {
     #[test]
     fn shepherd_config_accepts_a_valid_project() {
         assert!(validate_shepherd_topology(&topology_with(valid_project("ok"))).is_ok());
+    }
+
+    // ── select_shepherd_project ────────────────────────────────────────
+
+    #[test]
+    fn project_selection_follows_the_three_way_rule() {
+        let one = valid_project("one");
+        let two = valid_project("two");
+        // An explicit name wins and must exist.
+        let both = [one.clone(), two.clone()];
+        let picked = select_shepherd_project(Some("two"), &both)
+            .unwrap()
+            .unwrap();
+        assert_eq!(picked.name, "two");
+        assert!(
+            select_shepherd_project(Some("nope"), std::slice::from_ref(&one))
+                .unwrap_err()
+                .contains("unknown shepherd project")
+        );
+        // A single configured project auto-applies.
+        let single = [one.clone()];
+        let picked = select_shepherd_project(None, &single).unwrap().unwrap();
+        assert_eq!(picked.name, "one");
+        // Several without a name is an error, not a guess.
+        let pair = [one, two];
+        assert!(
+            select_shepherd_project(None, &pair)
+                .unwrap_err()
+                .contains("multiple")
+        );
+        // None configured means the environment defaults apply.
+        assert!(select_shepherd_project(None, &[]).unwrap().is_none());
+    }
+
+    // ── apply_project / state ───────────────────────────────────────────
+
+    #[test]
+    fn apply_project_copies_every_field() {
+        let mut cfg = test_config(PathBuf::from("/tmp/root"));
+        let project = liberado_config::ShepherdProjectConfig {
+            name: "p".into(),
+            repository: "owner/repo".into(),
+            coding_project: "proj".into(),
+            base_branch: "dev".into(),
+            profile: "prof".into(),
+            check_names: vec!["a".into(), "b".into()],
+            max_kickbacks: Some(1),
+            cold_reviews: Some(3),
+            cold_review_max_turns: Some(9),
+            max_concurrent_goals: Some(4),
+            poll_seconds: Some(30),
+        };
+        cfg.apply_project(&project);
+        assert_eq!(cfg.repository.as_deref(), Some("owner/repo"));
+        assert_eq!(cfg.check_names, vec!["a", "b"]);
+        assert_eq!(cfg.project, "proj");
+        assert_eq!(cfg.base, "dev");
+        assert_eq!(cfg.profile, "prof");
+        assert_eq!(cfg.max_kickbacks, 1);
+        assert_eq!(cfg.cold_reviews, 3);
+        assert_eq!(cfg.cold_turns, 9);
+        assert_eq!(cfg.max_concurrent, 4);
+        assert_eq!(cfg.poll, 30);
+    }
+
+    #[test]
+    fn state_lives_under_the_shepherd_dir() {
+        let cfg = test_config(PathBuf::from("/tmp/root"));
+        assert_eq!(cfg.state(), PathBuf::from("/tmp/root/.liberado/shepherd"));
+    }
+
+    // ── reset_baselines ─────────────────────────────────────────────────
+
+    #[test]
+    fn reset_baselines_removes_only_json_caches() {
+        let temp = tempfile::tempdir().unwrap();
+        let cfg = test_config(temp.path().to_path_buf());
+        let dir = cfg.state().join("baselines");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("abc.json"), "{}").unwrap();
+        fs::write(dir.join("keep.txt"), "x").unwrap();
+        reset_baselines(&cfg).unwrap();
+        assert!(!dir.join("abc.json").exists(), "json cache must be removed");
+        assert!(
+            dir.join("keep.txt").exists(),
+            "non-json files are not baselines"
+        );
+    }
+
+    // ── Config::get ─────────────────────────────────────────────────────
+
+    /// `get` reads its environment variable, falling back to the default when unset. The var name
+    /// is unique to this test so the set/clear pair cannot be observed by another test.
+    #[test]
+    fn config_get_reads_env_with_a_default() {
+        let key = "SHEPHERD_TEST_GET_9f2c7d";
+        // Edition 2024 marks these unsafe: the pair is scoped to this test with a unique key.
+        unsafe { std::env::set_var(key, "from-env") };
+        assert_eq!(Config::get(key, "fallback"), "from-env");
+        unsafe { std::env::remove_var(key) };
+        assert_eq!(Config::get(key, "fallback"), "fallback");
+    }
+
+    // ── seed (dry mode) ────────────────────────────────────────────────
+
+    /// Dry mode parses and validates the task file but never talks to the daemon.
+    #[test]
+    fn seed_in_dry_mode_parses_tasks_without_starting_goals() {
+        let temp = tempfile::tempdir().unwrap();
+        let cfg = test_config(temp.path().to_path_buf());
+        let task = temp.path().join("tasks.txt");
+        fs::write(&task, "# comment\n\nfirst task\nsecond task\n\n").unwrap();
+        assert!(seed(&cfg, &task, true).is_ok());
+        // A missing file is still an error in dry mode.
+        assert!(seed(&cfg, &temp.path().join("nope.txt"), true).is_err());
     }
 
     /// The baseline cache is read without touching the network: a `baselines/<short>.json` file
