@@ -340,85 +340,699 @@ fn validate_id(id: &str) -> Result<(), MemoryError> {
 mod tests {
     use super::*;
     use liberado_vault::Vault;
-    use turbovault_vector::FastembedEngine;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use turbovault_vector::VectorError;
 
-    async fn test_store(tmp: &tempfile::TempDir) -> MemoryStore {
+    // ── Test doubles ──────────────────────────────────────────────────────────────
+    //
+    // The production `FastembedEngine` downloads an ONNX model on first use, which is why the
+    // tests this module replaces were `#[ignore]`d. These stubs replace exactly that one moving
+    // part; everything else (Vault, SQLite `ChunkStore`, HNSW `VectorIndex`, chunking) is the
+    // real code, so the tests exercise the real index round trip.
+
+    /// Vocabulary the stub embedder counts. Chosen to cover the words used in this module's test
+    /// content; tokens outside it (YAML frontmatter keys, ULIDs, stopwords) are ignored, so a
+    /// note's frontmatter does not dilute cosine similarity the way it does with a real embedder.
+    const VOCAB: &[&str] = &[
+        "user",
+        "prefers",
+        "dark",
+        "mode",
+        "tui",
+        "theme",
+        "sidebar",
+        "weather",
+        "forecast",
+        "lookup",
+        "search",
+        "always",
+        "check",
+        "planning",
+        "build",
+        "use",
+        "tool",
+        "guidance",
+        "directive",
+        "task",
+        "alpha",
+        "beta",
+        "gamma",
+        "delta",
+        "epsilon",
+        "zeta",
+        "eta",
+        "theta",
+        "memory",
+        "note",
+        "fact",
+        "store",
+        "manual",
+        "test",
+    ];
+
+    const N1: &str = "User prefers dark mode in the TUI.";
+    const N1_QUERY: &str = "dark mode preference";
+    const N2: &str = "Always check the weather forecast before planning a build.";
+    const N3: &str = "The dark mode theme is in the sidebar settings.";
+    const N3_QUERY: &str = "dark mode";
+    const G1: &str = "Always use the forecast tool for weather lookup.";
+    const G1_QUERY: &str = "weather forecast lookup";
+    const MANUAL: &str = "Manual memory note written directly into the store directory.";
+
+    /// Deterministic, model-free embedder: a term-frequency vector over [`VOCAB`]. Identical
+    /// text embeds identically (cosine 1.0, so exact-duplicate dedup at the 0.92 threshold
+    /// fires); text sharing vocabulary terms lands at a moderate cosine (search finds it);
+    /// disjoint text scores 0 and is filtered by `min_similarity`. A `fail` flag injects embed
+    /// errors for the degrade-gracefully paths of [`ToolGuidanceSource`].
+    struct StubEmbedder {
+        fail: AtomicBool,
+    }
+
+    impl StubEmbedder {
+        fn new() -> Self {
+            Self {
+                fail: AtomicBool::new(false),
+            }
+        }
+
+        /// Make the next `embed` call fail (error-path injection).
+        fn fail_next_embed(&self) {
+            self.fail.store(true, Ordering::SeqCst);
+        }
+
+        fn embed_one(text: &str) -> Vec<f32> {
+            let mut v = vec![0.0f32; VOCAB.len()];
+            for word in text.split(|c: char| !c.is_alphanumeric()) {
+                if word.is_empty() {
+                    continue;
+                }
+                let lower = word.to_ascii_lowercase();
+                if let Some(i) = VOCAB.iter().position(|w| *w == lower.as_str()) {
+                    v[i] += 1.0;
+                }
+            }
+            if v.iter().all(|x| *x == 0.0) {
+                // No vocabulary terms (e.g. an all-digits text): fall back to a deterministic
+                // pseudo-random vector so the HNSW index never sees a zero vector — cosine is
+                // undefined on it and usearch silently drops duplicate vectors.
+                let mut h = 0xcbf29ce484222325u64;
+                for b in text.bytes() {
+                    h ^= b as u64;
+                    h = h.wrapping_mul(0x100000001b3);
+                }
+                for slot in v.iter_mut() {
+                    h = h.wrapping_mul(0x9e3779b97f4a7c15).rotate_left(13) ^ (h >> 7);
+                    *slot = ((h >> 32) as u32 % 997) as f32 / 997.0;
+                }
+            }
+            v
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl EmbeddingEngine for StubEmbedder {
+        async fn embed(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>, VectorError> {
+            if self.fail.swap(false, Ordering::SeqCst) {
+                return Err(VectorError::Embedding("injected test failure".into()));
+            }
+            Ok(texts.iter().map(|t| Self::embed_one(t)).collect())
+        }
+
+        fn dimensions(&self) -> usize {
+            VOCAB.len()
+        }
+
+        fn model_name(&self) -> &str {
+            "stub-tf-embedder"
+        }
+    }
+
+    /// Cross-encoder stub: scores candidates by content — 100.0 if the chunk preview contains
+    /// "sidebar", else 0.0. The reorder is therefore driven by content, not by the cosine order
+    /// `vector_only` already produced (which HNSW approximate search does not guarantee to be
+    /// stable). Deterministic and cheap, so the `with_reranker` branch of [`MemoryStore::open`]
+    /// and the reorder path of `search` are exercised without loading a reranker model.
+    struct StubReranker;
+
+    #[async_trait::async_trait]
+    impl Reranker for StubReranker {
+        async fn rerank(
+            &self,
+            _query: &str,
+            candidates: &[String],
+        ) -> Result<Vec<f32>, VectorError> {
+            Ok(candidates
+                .iter()
+                .map(|c| if c.contains("sidebar") { 100.0 } else { 0.0 })
+                .collect())
+        }
+    }
+
+    // ── Helpers ──────────────────────────────────────────────────────────────────
+
+    fn provenance() -> WriteProvenance {
+        WriteProvenance::agent("test", "corr-1")
+    }
+
+    async fn open_store(
+        tmp: &tempfile::TempDir,
+        subdir: &str,
+        embedder: Arc<StubEmbedder>,
+        reranker: Option<Arc<dyn Reranker>>,
+        config: MemoryStoreConfig,
+    ) -> MemoryStore {
+        let embedder: Arc<dyn EmbeddingEngine> = embedder;
         let vault = Vault::open("test", tmp.path().to_path_buf()).await.unwrap();
-        let embedder: Arc<dyn EmbeddingEngine> =
-            Arc::new(FastembedEngine::new("all-MiniLM-L6-v2", None).unwrap());
-        MemoryStore::open(
+        MemoryStore::open(vault, subdir, embedder, reranker, config)
+            .await
+            .unwrap()
+    }
+
+    async fn default_store(tmp: &tempfile::TempDir) -> (MemoryStore, Arc<StubEmbedder>) {
+        let embedder = Arc::new(StubEmbedder::new());
+        let store = open_store(
+            tmp,
+            "memory/general",
+            embedder.clone(),
+            None,
+            MemoryStoreConfig::default(),
+        )
+        .await;
+        (store, embedder)
+    }
+
+    fn note_file_count(store: &MemoryStore) -> usize {
+        std::fs::read_dir(store.vault.root().join(&store.dir))
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.path().extension() == Some("md".as_ref()))
+            .count()
+    }
+
+    // ── open ─────────────────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn open_creates_state_directory_and_chunk_db() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (store, _) = default_store(&tmp).await;
+
+        let state = store.vault.root().join("memory/general/.index");
+        assert!(
+            state.is_dir(),
+            "open must create the per-store .index state dir"
+        );
+        assert!(
+            state.join("state.db").exists(),
+            "SQLite chunk sidecar must exist"
+        );
+        // The HNSW file itself only materializes on the first flush (first write), not at open.
+    }
+
+    // ── add / add_guidance ───────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn add_writes_note_file_and_search_finds_it() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (store, _) = default_store(&tmp).await;
+
+        let id = store
+            .add(N1, vec!["ui".into(), "preferences".into()], &provenance())
+            .await
+            .unwrap();
+
+        // The note is a real, human-readable markdown file with frontmatter + body.
+        let text = store
+            .vault
+            .read(store.dir.join(format!("{id}.md")))
+            .await
+            .unwrap();
+        let note = MemoryNote::from_note_text(&text).unwrap();
+        assert_eq!(note.content, N1);
+        assert_eq!(note.tags, vec!["ui".to_string(), "preferences".to_string()]);
+        assert_eq!(note.task_type, None);
+
+        let results = store.search(N1_QUERY).await.unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].id, id);
+        assert_eq!(results[0].content, N1);
+        assert_eq!(
+            results[0].tags,
+            vec!["ui".to_string(), "preferences".to_string()]
+        );
+        assert!(results[0].score > 0.0);
+    }
+
+    #[tokio::test]
+    async fn adding_exact_duplicate_returns_existing_id_without_new_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (store, _) = default_store(&tmp).await;
+
+        let first = store.add(N1, vec![], &provenance()).await.unwrap();
+        let second = store.add(N1, vec![], &provenance()).await.unwrap();
+
+        assert_eq!(
+            first, second,
+            "exact duplicate must return the existing note's id"
+        );
+        assert_eq!(
+            note_file_count(&store),
+            1,
+            "dedup must not write a second file"
+        );
+    }
+
+    #[tokio::test]
+    async fn adding_distinct_content_creates_a_new_note() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (store, _) = default_store(&tmp).await;
+
+        let a = store.add(N1, vec![], &provenance()).await.unwrap();
+        let b = store.add(N2, vec![], &provenance()).await.unwrap();
+
+        assert_ne!(a, b, "semantically different content must not dedup");
+        assert_eq!(note_file_count(&store), 2);
+    }
+
+    #[tokio::test]
+    async fn guidance_round_trips_through_search() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (store, _) = default_store(&tmp).await;
+
+        let id = store
+            .add_guidance(
+                G1,
+                Some("lookup".into()),
+                Some(vec!["weather-mcp".into()]),
+                vec!["dispatch".into()],
+                &provenance(),
+            )
+            .await
+            .unwrap();
+
+        let results = store.search(G1_QUERY).await.unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].id, id);
+        assert_eq!(results[0].task_type.as_deref(), Some("lookup"));
+        assert_eq!(results[0].tools_used, Some(vec!["weather-mcp".to_string()]));
+        assert_eq!(results[0].tags, vec!["dispatch".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn concurrent_adds_all_persist_without_lost_updates() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (store, _) = default_store(&tmp).await;
+        let store = Arc::new(store);
+
+        let contents = [
+            "alpha fact one",
+            "beta fact two",
+            "gamma fact three",
+            "delta fact four",
+            "epsilon fact five",
+            "zeta fact six",
+            "eta fact seven",
+            "theta fact eight",
+        ];
+        let mut handles = Vec::new();
+        for content in contents {
+            let store = store.clone();
+            let prov = provenance();
+            handles.push(tokio::spawn(async move {
+                store.add(content, vec![], &prov).await.unwrap()
+            }));
+        }
+
+        let mut ids: Vec<String> = Vec::new();
+        for h in handles {
+            ids.push(h.await.unwrap());
+        }
+        ids.sort();
+        ids.dedup();
+        assert_eq!(ids.len(), contents.len(), "each add must get its own id");
+        assert_eq!(note_file_count(&store), contents.len());
+    }
+
+    #[tokio::test]
+    async fn adding_exact_duplicate_guidance_returns_existing_id() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (store, _) = default_store(&tmp).await;
+
+        let first = store
+            .add_guidance(G1, Some("lookup".into()), None, vec![], &provenance())
+            .await
+            .unwrap();
+        let second = store
+            .add_guidance(G1, Some("lookup".into()), None, vec![], &provenance())
+            .await
+            .unwrap();
+
+        assert_eq!(first, second, "exact-duplicate guidance must dedup too");
+        assert_eq!(note_file_count(&store), 1);
+    }
+
+    #[tokio::test]
+    async fn dedup_skips_candidates_whose_files_were_deleted_outside_the_store() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (store, _) = default_store(&tmp).await;
+        let first = store.add(N1, vec![], &provenance()).await.unwrap();
+
+        // Delete the file behind the store's back — the chunk stays in the index as a dedup
+        // candidate, but the read fails and the candidate must be skipped, not fatal.
+        store
+            .vault
+            .delete(store.dir.join(format!("{first}.md")), None, &provenance())
+            .await
+            .unwrap();
+
+        let second = store.add(N1, vec![], &provenance()).await.unwrap();
+        assert_ne!(
+            first, second,
+            "a stale candidate is not a duplicate — a new note is written"
+        );
+        assert_eq!(note_file_count(&store), 1);
+    }
+
+    #[tokio::test]
+    async fn open_fails_when_state_dir_cannot_be_created() {
+        let tmp = tempfile::tempdir().unwrap();
+        let vault = Vault::open("test", tmp.path().to_path_buf()).await.unwrap();
+        // Occupy the `.index` path with a plain FILE so `create_dir_all` fails.
+        let state = tmp.path().join("memory/general/.index");
+        std::fs::create_dir_all(state.parent().unwrap()).unwrap();
+        std::fs::write(&state, "in the way").unwrap();
+
+        let embedder: Arc<dyn EmbeddingEngine> = Arc::new(StubEmbedder::new());
+        let result = MemoryStore::open(
             vault,
             "memory/general",
             embedder,
             None,
             MemoryStoreConfig::default(),
         )
-        .await
-        .unwrap()
+        .await;
+        assert!(
+            matches!(result, Err(MemoryError::Vector(_))),
+            "open must surface the state-dir creation failure"
+        );
+    }
+
+    // ── search ───────────────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn search_on_empty_store_returns_nothing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (store, _) = default_store(&tmp).await;
+
+        assert!(store.search(N1_QUERY).await.unwrap().is_empty());
     }
 
     #[tokio::test]
-    #[ignore = "downloads an ONNX model on first run; run explicitly with --ignored"]
-    async fn add_then_search_finds_it() {
+    async fn search_skips_stale_index_entries_for_notes_deleted_outside_the_store() {
         let tmp = tempfile::tempdir().unwrap();
-        let store = test_store(&tmp).await;
-        let provenance = WriteProvenance::agent("test", "corr-1");
+        let (store, _) = default_store(&tmp).await;
+        let id = store.add(N1, vec![], &provenance()).await.unwrap();
 
-        let id = store
-            .add("User prefers dark mode in the TUI.", vec![], &provenance)
+        // Delete the file behind the store's back — the chunk/vector entries survive.
+        store
+            .vault
+            .delete(store.dir.join(format!("{id}.md")), None, &provenance())
             .await
             .unwrap();
 
-        let results = store.search("dark mode preference").await.unwrap();
-        assert!(results.iter().any(|r| r.id == id));
+        let results = store.search(N1_QUERY).await.unwrap();
+        assert!(
+            results.is_empty(),
+            "stale index entry must be skipped, not surfaced as an error"
+        );
     }
 
     #[tokio::test]
-    #[ignore = "downloads an ONNX model on first run; run explicitly with --ignored"]
-    async fn adding_a_near_duplicate_returns_the_existing_id() {
+    async fn search_limit_caps_the_number_of_results() {
         let tmp = tempfile::tempdir().unwrap();
-        let store = test_store(&tmp).await;
-        let provenance = WriteProvenance::agent("test", "corr-1");
+        let embedder = Arc::new(StubEmbedder::new());
+        let config = MemoryStoreConfig {
+            search_limit: 1,
+            ..MemoryStoreConfig::default()
+        };
+        let store = open_store(&tmp, "memory/general", embedder, None, config).await;
+        store.add(N1, vec![], &provenance()).await.unwrap();
+        store.add(N3, vec![], &provenance()).await.unwrap();
 
-        let first = store
-            .add("User prefers dark mode in the TUI.", vec![], &provenance)
-            .await
-            .unwrap();
-        let second = store
-            .add("User prefers dark mode in the TUI.", vec![], &provenance)
-            .await
-            .unwrap();
-
-        assert_eq!(first, second);
+        // Both notes match "dark mode"; the limit must cap the response.
+        assert_eq!(store.search(N3_QUERY).await.unwrap().len(), 1);
     }
 
     #[tokio::test]
-    #[ignore = "downloads an ONNX model on first run; run explicitly with --ignored"]
-    async fn delete_removes_the_note_and_its_index_entry() {
+    async fn search_with_reranker_reorders_results_by_rerank_score() {
         let tmp = tempfile::tempdir().unwrap();
-        let store = test_store(&tmp).await;
-        let provenance = WriteProvenance::agent("test", "corr-1");
+        let embedder = Arc::new(StubEmbedder::new());
+        let store = open_store(
+            &tmp,
+            "memory/general",
+            embedder,
+            Some(Arc::new(StubReranker)),
+            MemoryStoreConfig::default(),
+        )
+        .await;
+        let n1 = store.add(N1, vec![], &provenance()).await.unwrap();
+        let n3 = store.add(N3, vec![], &provenance()).await.unwrap();
 
-        let id = store
-            .add("Some memory.", vec![], &provenance)
+        let results = store.search(N3_QUERY).await.unwrap();
+        assert_eq!(results.len(), 2);
+        // The stub reranker gives the "sidebar" note 100.0 and everything else 0.0, so the final
+        // order is [n3, n1] no matter what the cosine-only order was.
+        assert_eq!(results[0].id, n3);
+        assert_eq!(results[1].id, n1);
+        // Scores in the results stay the cosine scores — the reranker only reorders.
+        assert!(results[0].score > results[1].score);
+    }
+
+    // ── delete ───────────────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn delete_removes_note_and_index_entry_and_is_idempotent() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (store, _) = default_store(&tmp).await;
+        let id = store.add(N1, vec![], &provenance()).await.unwrap();
+
+        assert!(store.delete(&id, &provenance()).await.unwrap());
+        assert!(store.search(N1_QUERY).await.unwrap().is_empty());
+        assert_eq!(note_file_count(&store), 0);
+        assert!(
+            !store.delete(&id, &provenance()).await.unwrap(),
+            "deleting an already-deleted note is idempotent (false, not an error)"
+        );
+    }
+
+    #[tokio::test]
+    async fn delete_of_unknown_but_well_formed_id_is_false_not_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (store, _) = default_store(&tmp).await;
+
+        assert!(!store.delete("01HZY3K9QJXG7Q", &provenance()).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn delete_rejects_path_traversal_ids() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (store, _) = default_store(&tmp).await;
+
+        assert!(matches!(
+            store.delete("../secrets.md", &provenance()).await,
+            Err(MemoryError::InvalidId(_))
+        ));
+    }
+
+    // ── rebuild_all ──────────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn rebuild_all_indexes_notes_written_outside_the_store() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (store, _) = default_store(&tmp).await;
+        let id = store.add(N1, vec![], &provenance()).await.unwrap();
+
+        // A note dropped straight into the directory, bypassing the store (e.g. written in
+        // Obsidian). It needs valid frontmatter to parse back out of search.
+        let manual = MemoryNote::general("manual-note", MANUAL, vec![]);
+        store
+            .vault
+            .write(
+                store.dir.join("manual-note.md"),
+                &manual.to_note_text(),
+                None,
+                &provenance(),
+            )
             .await
             .unwrap();
-        let deleted = store.delete(&id, &provenance).await.unwrap();
-        assert!(deleted);
 
-        let results = store.search("Some memory").await.unwrap();
-        assert!(!results.iter().any(|r| r.id == id));
+        store.rebuild_all().await.unwrap();
 
-        let deleted_again = store.delete(&id, &provenance).await.unwrap();
-        assert!(!deleted_again);
+        let results = store.search("manual memory note").await.unwrap();
+        assert!(
+            results.iter().any(|r| r.id == "manual-note"),
+            "rebuild must pick up notes written outside the store"
+        );
+        assert!(
+            store
+                .search(N1_QUERY)
+                .await
+                .unwrap()
+                .iter()
+                .any(|r| r.id == id),
+            "store-created notes must survive the rebuild"
+        );
+    }
+
+    // ── reopening an existing store ──────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn reopening_an_existing_store_reads_back_indexed_notes() {
+        let tmp = tempfile::tempdir().unwrap();
+        let id = {
+            let (store, _) = default_store(&tmp).await;
+            store.add(N1, vec![], &provenance()).await.unwrap()
+        };
+
+        // Reopen over the same directory — the HNSW file is on disk now, so the index opens in
+        // mmap view mode.
+        let (store, _) = default_store(&tmp).await;
+        assert!(
+            store
+                .search(N1_QUERY)
+                .await
+                .unwrap()
+                .iter()
+                .any(|r| r.id == id),
+            "notes indexed before the reopen must still be found"
+        );
+
+        // Writes after reopen promote the index back to RAM and keep working.
+        let second = store.add(N2, vec![], &provenance()).await.unwrap();
+        assert!(
+            store
+                .search("weather forecast")
+                .await
+                .unwrap()
+                .iter()
+                .any(|r| r.id == second)
+        );
+    }
+
+    // ── ToolGuidanceSource (dispatcher seam) ─────────────────────────────────────
+
+    #[tokio::test]
+    async fn tool_guidance_search_returns_hits() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (store, _) = default_store(&tmp).await;
+        store
+            .add_guidance(
+                G1,
+                Some("lookup".into()),
+                Some(vec!["weather-mcp".into()]),
+                vec![],
+                &provenance(),
+            )
+            .await
+            .unwrap();
+
+        let hits = store.search_tool_guidance(G1_QUERY).await;
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].content, G1);
+        assert_eq!(hits[0].tools_used, vec!["weather-mcp".to_string()]);
+        assert!(hits[0].score > 0.0);
+    }
+
+    #[tokio::test]
+    async fn tool_guidance_search_failure_degrades_to_empty() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (store, embedder) = default_store(&tmp).await;
+        store
+            .add_guidance(G1, None, None, vec![], &provenance())
+            .await
+            .unwrap();
+
+        embedder.fail_next_embed();
+        let hits = store.search_tool_guidance(G1_QUERY).await;
+        assert!(
+            hits.is_empty(),
+            "a backend failure must degrade to 'no guidance', not propagate"
+        );
+    }
+
+    #[tokio::test]
+    async fn tool_guidance_save_records_a_searchable_directive() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (store, _) = default_store(&tmp).await;
+
+        store
+            .save_tool_guidance(G1, Some("lookup".into()), vec!["weather-mcp".into()])
+            .await;
+
+        let hits = store.search_tool_guidance(G1_QUERY).await;
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].content, G1);
+        assert_eq!(hits[0].tools_used, vec!["weather-mcp".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn tool_guidance_save_failure_is_swallowed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (store, embedder) = default_store(&tmp).await;
+
+        embedder.fail_next_embed();
+        // Best-effort by contract: a failure here must not panic or propagate.
+        store.save_tool_guidance(G1, None, vec![]).await;
+
+        assert!(store.search_tool_guidance(G1_QUERY).await.is_empty());
+    }
+
+    // ── pure helpers ─────────────────────────────────────────────────────────────
+
+    #[test]
+    fn cosine_similarity_semantics() {
+        assert!((cosine_similarity(&[1.0, 0.0], &[1.0, 0.0]) - 1.0).abs() < 1e-6);
+        assert!((cosine_similarity(&[1.0, 0.0], &[0.0, 1.0]) - 0.0).abs() < 1e-6);
+        // A zero vector has no direction — similarity is 0, not NaN.
+        assert_eq!(cosine_similarity(&[0.0, 0.0], &[1.0, 1.0]), 0.0);
+        assert_eq!(cosine_similarity(&[1.0, 1.0], &[0.0, 0.0]), 0.0);
     }
 
     #[test]
-    fn rejects_path_traversal_ids() {
-        assert!(matches!(
-            validate_id("../secrets"),
-            Err(MemoryError::InvalidId(_))
-        ));
-        assert!(validate_id("01HZY3K9QJXG7Q").is_ok());
+    fn validate_id_rejects_traversal_and_odd_characters() {
+        for bad in [
+            "",
+            ".",
+            "..",
+            "../secrets",
+            "a/b",
+            "a b",
+            "a.b",
+            "a_b",
+            "日本語",
+            "id\n",
+        ] {
+            assert!(
+                matches!(validate_id(bad), Err(MemoryError::InvalidId(_))),
+                "validate_id must reject {bad:?}"
+            );
+        }
+        for good in ["01HZY3K9QJXG7Q", "a", "a-b-c"] {
+            assert!(
+                validate_id(good).is_ok(),
+                "validate_id must accept {good:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn default_config_values() {
+        let c = MemoryStoreConfig::default();
+        assert_eq!(c.dedup_threshold, DEFAULT_DEDUP_THRESHOLD);
+        assert_eq!(c.search_limit, 10);
+        assert_eq!(c.chunk_max_chars, 800);
+        assert_eq!(c.chunk_overlap_chars, 100);
+        assert_eq!(c.search_overfetch_factor, 5);
+        assert_eq!(c.min_similarity, 0.3);
+        assert_eq!(c.index_quantization, "f16");
     }
 }
