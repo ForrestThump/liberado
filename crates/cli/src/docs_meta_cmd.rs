@@ -672,4 +672,131 @@ mod tests {
         let (_, body) = split_frontmatter("---\nkind: plan\n---\n# Hello\n");
         assert_eq!(body, "# Hello\n");
     }
+
+    // ── is_root_future_work ─────────────────────────────────────────────
+
+    #[test]
+    fn root_future_work_is_a_root_markdown_leaf() {
+        for yes in ["docs/future-work/x.md", "docs/future-work/plan-2026.md"] {
+            assert!(is_root_future_work(yes), "{yes}");
+        }
+        // Not a leaf, not markdown, or the auto-generated README itself.
+        for no in [
+            "docs/future-work/x/y.md",
+            "docs/future-work/x/index.md",
+            "docs/future-work/README.md",
+            "docs/future-work/x.txt",
+            "docs/other/x.md",
+            "docs/future-work",
+        ] {
+            assert!(!is_root_future_work(no), "{no}");
+        }
+    }
+
+    // ── is_managed ──────────────────────────────────────────────────────
+
+    #[test]
+    fn managed_is_a_docs_markdown_file_with_meta_or_root_plan() {
+        let meta = yaml_map("kind: plan\n");
+        assert!(is_managed("docs/goals.md", &Some(meta.clone())));
+        assert!(is_managed("docs/future-work/plan.md", &None));
+        assert!(!is_managed("docs/goals.md", &None));
+        assert!(!is_managed("crates/x/readme.md", &Some(meta.clone())));
+        assert!(!is_managed("docs/README.txt", &Some(meta)));
+    }
+
+    // ── meta accessors ──────────────────────────────────────────────────
+
+    #[test]
+    fn meta_accessors_read_and_default() {
+        let meta = yaml_map("kind: plan\ndomain: \"\"\ncount: 3\n");
+        assert_eq!(meta_str(&meta, "kind"), Some("plan"));
+        assert_eq!(meta_str(&meta, "missing"), None);
+        assert_eq!(display_meta(&meta, "kind"), "plan");
+        assert_eq!(display_meta(&meta, "missing"), "—");
+        assert_eq!(meta_bool(&meta, "count"), None, "non-bool is None");
+        let bool_meta = yaml_map("flag: true\n");
+        assert_eq!(meta_bool(&bool_meta, "flag"), Some(true));
+    }
+
+    // ── parse_active_links ──────────────────────────────────────────────
+
+    /// Active-links scanning: pulls `]()` link targets out of the "## Active …" section, keeps
+    /// basenames, and skips external URLs and archived plans.
+    #[test]
+    fn active_links_are_scanned_from_the_active_section() {
+        let text = "# Index\n\n## Active documents\n\n- [A](a.md)\n- [B](sub/b.md)\n- [Ext](https://example.com/x.md)\n- [Arch](archive/old.md)\n\n## Something else\n\n- [Not us](c.md)\n";
+        let links = parse_active_links(text);
+        assert!(links.contains("a.md"), "{links:?}");
+        assert!(links.contains("b.md"), "basename kept: {links:?}");
+        assert!(
+            !links.contains("c.md"),
+            "outside the active section: {links:?}"
+        );
+        assert!(!links.contains("x.md"), "external URL skipped: {links:?}");
+        assert!(!links.iter().any(|l| l.contains("archive")), "{links:?}");
+    }
+
+    #[test]
+    fn active_links_without_a_section_scan_the_whole_text() {
+        let links = parse_active_links("- [A](a.md)\n");
+        assert!(links.contains("a.md"), "{links:?}");
+    }
+
+    // ── generate_future_work_readme ─────────────────────────────────────
+
+    fn doc(path: &str, kind: &str, status: &str) -> Document {
+        Document {
+            path: path.into(),
+            meta: Some(yaml_map(&format!("kind: {kind}\nstatus: {status}\n"))),
+            body: String::new(),
+        }
+    }
+
+    #[test]
+    fn future_work_readme_splits_active_from_other() {
+        let docs = vec![
+            doc("docs/future-work/a-plan.md", "plan", "active"),
+            doc("docs/future-work/z-done.md", "plan", "archived"),
+            // Not a root future-work leaf — must be skipped entirely.
+            doc("docs/other/x.md", "plan", "active"),
+        ];
+        let readme = generate_future_work_readme(&docs);
+        assert!(readme.contains("a-plan.md"), "active: {readme}");
+        assert!(readme.contains("z-done.md"), "other: {readme}");
+        assert!(
+            !readme.contains("docs/other/x.md"),
+            "non-future-work must not appear: {readme}"
+        );
+        assert!(readme.contains("## Active documents"), "{readme}");
+    }
+
+    // ── exact_file ──────────────────────────────────────────────────────
+
+    #[test]
+    fn exact_file_matches_case_and_leafness() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("a/b")).unwrap();
+        fs::write(dir.path().join("a/b/flat.md"), "x").unwrap();
+        assert!(exact_file(dir.path(), "a/b/flat.md"));
+        assert!(
+            exact_file(dir.path(), "a\\b\\flat.md"),
+            "backslashes normalised"
+        );
+        assert!(
+            !exact_file(dir.path(), "a/b/FLAT.md"),
+            "case must match exactly"
+        );
+        assert!(!exact_file(dir.path(), "a/b"), "a directory is not a file");
+        assert!(!exact_file(dir.path(), "a/b/missing.md"));
+        assert!(
+            !exact_file(dir.path(), "../a/b/flat.md"),
+            "no escaping via .."
+        );
+    }
+
+    fn yaml_map(text: &str) -> serde_yaml::Mapping {
+        let value: serde_yaml::Value = serde_yaml::from_str(text).unwrap();
+        value.as_mapping().cloned().unwrap()
+    }
 }

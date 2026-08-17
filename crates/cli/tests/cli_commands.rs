@@ -102,6 +102,180 @@ fn docs_link_check_command_uses_the_current_working_repository() {
     assert!(String::from_utf8_lossy(&output.stdout).contains("PASS: all 1 link(s) resolve."));
 }
 
+// ── main.rs argument dispatch ───────────────────────────────────────────
+//
+// The single entry-point matchup prints a usage line and fails on a missing or unknown subcommand.
+// These pin the user-facing contract without needing a daemon — the bad-arg branches return before
+// any repository or network work. Run from a throwaway cwd so nothing depends on the checkout.
+
+fn run_usage(cwd: &Path, args: &[&str]) -> String {
+    let output = run_cli(cwd, args);
+    assert!(
+        !output.status.success(),
+        "expected {args:?} to fail (usage)",
+    );
+    String::from_utf8_lossy(&output.stderr).into_owned()
+}
+
+#[test]
+fn docs_requires_a_subcommand() {
+    let temp = tempdir().unwrap();
+    let stderr = run_usage(temp.path(), &["docs"]);
+    assert!(stderr.contains("usage: liberado docs"), "{stderr}");
+}
+
+#[test]
+fn docs_crate_map_rejects_an_unknown_flag() {
+    let temp = tempdir().unwrap();
+    let stderr = run_usage(temp.path(), &["docs", "crate-map", "--bogus"]);
+    assert!(
+        stderr.contains("usage: liberado docs crate-map"),
+        "{stderr}"
+    );
+}
+
+#[test]
+fn docs_metadata_requires_a_subcommand() {
+    let temp = tempdir().unwrap();
+    let stderr = run_usage(temp.path(), &["docs", "metadata"]);
+    assert!(stderr.contains("usage: liberado docs metadata"), "{stderr}");
+}
+
+#[test]
+fn docs_metadata_rejects_extra_arguments() {
+    let temp = tempdir().unwrap();
+    let stderr = run_usage(temp.path(), &["docs", "metadata", "lint", "extra"]);
+    assert!(stderr.contains("usage: liberado docs metadata"), "{stderr}");
+}
+
+#[test]
+fn ci_requires_a_subcommand() {
+    let temp = tempdir().unwrap();
+    let stderr = run_usage(temp.path(), &["ci"]);
+    assert!(stderr.contains("usage: liberado ci"), "{stderr}");
+}
+
+#[test]
+fn config_requires_a_subcommand() {
+    let temp = tempdir().unwrap();
+    let stderr = run_usage(temp.path(), &["config"]);
+    assert!(stderr.contains("usage: liberado config"), "{stderr}");
+}
+
+#[test]
+fn config_explain_requires_three_arguments() {
+    let temp = tempdir().unwrap();
+    let stderr = run_usage(temp.path(), &["config", "explain", "only-one"]);
+    assert!(
+        stderr.contains("usage: liberado config explain"),
+        "{stderr}"
+    );
+}
+
+#[test]
+fn shepherd_requires_a_mode_flag() {
+    let temp = tempdir().unwrap();
+    let stderr = run_usage(temp.path(), &["shepherd"]);
+    assert!(stderr.contains("usage: liberado shepherd"), "{stderr}");
+}
+
+/// `config check` parses as its own arm (not the catch-all usage error) and runs the loader;
+/// from a throwaway directory it fails on the missing vault_path — a usage error instead would
+/// mean the `Some("check")` arm was dropped.
+#[test]
+fn config_check_runs_the_loader() {
+    let temp = tempdir().unwrap();
+    let output = run_cli(temp.path(), &["config", "check"]);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stderr.contains("usage: liberado config"),
+        "the loader must run, not the usage catch-all, got: {stderr}"
+    );
+    assert!(
+        stderr.contains("vault_path"),
+        "expected a loader error about the missing vault, got: {stderr}"
+    );
+}
+
+/// `docs crate-map` with no flag takes the "read" arm and only then fails on the missing
+/// repository — a usage error instead would mean the `[]` arm was dropped.
+#[test]
+fn docs_crate_map_reads_by_default() {
+    let temp = tempdir().unwrap();
+    let stderr = run_usage(temp.path(), &["docs", "crate-map"]);
+    assert!(
+        stderr.contains("could not find repository root"),
+        "expected the repository-root error, got: {stderr}"
+    );
+}
+
+/// `config explain` with all three arguments reaches the explain arm, not the usage error.
+#[test]
+fn config_explain_reaches_the_explain_arm() {
+    let temp = tempdir().unwrap();
+    let output = run_cli(
+        temp.path(),
+        &[
+            "config",
+            "explain",
+            "dispatcher",
+            "turbovault:write_note",
+            "Learning/x.md",
+        ],
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stderr.contains("usage: liberado config explain"),
+        "the explain arm must run, got: {stderr}"
+    );
+}
+
+/// `shepherd config check` resolves the repository and prints the effective configuration — a
+/// no-op instead would exit zero from a throwaway directory.
+#[test]
+fn shepherd_config_check_requires_a_repository() {
+    let temp = tempdir().unwrap();
+    let output = run_cli(temp.path(), &["shepherd", "config", "check"]);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stderr.contains("usage: liberado shepherd"),
+        "the config-check arm must run, got: {stderr}"
+    );
+    assert!(
+        stderr.contains("could not find repository root")
+            || stderr.contains("cannot load topology"),
+        "expected a repository/config error, got: {stderr}"
+    );
+}
+
+#[test]
+fn coder_requires_a_subcommand() {
+    let temp = tempdir().unwrap();
+    let stderr = run_usage(temp.path(), &["coder"]);
+    assert!(stderr.contains("usage:"), "{stderr}");
+}
+
+#[test]
+fn coder_rejects_an_unknown_subcommand() {
+    let temp = tempdir().unwrap();
+    let stderr = run_usage(temp.path(), &["coder", "bogus"]);
+    assert!(stderr.contains("unknown coder subcommand"), "{stderr}");
+}
+
+/// A bare `liberado` (no subcommand) with no `LIBERADO_VAULT` set prints the usage line rather
+/// than guessing a vault and launching a daemon.
+#[test]
+fn bare_invocation_requires_a_vault() {
+    let output = std_command(env!("CARGO_BIN_EXE_liberado"))
+        .env_remove("LIBERADO_VAULT")
+        .current_dir(tempdir().unwrap().path())
+        .output()
+        .expect("liberado CLI should start");
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("usage: liberado"), "{stderr}");
+}
+
 #[test]
 fn compare_prepare_creates_pinned_worktrees_with_separate_caches_and_artifacts() {
     let source = tempdir().expect("temporary source repository");
