@@ -242,4 +242,35 @@ mod tests {
         let (_, _, model) = inspect_transcript(&conv);
         assert!(model.is_none());
     }
+
+    /// Each role/author condition must matter on its own — a node matching only the role field
+    /// must still count, and a node matching only the author field must still count. This pins
+    /// both halves of the `role == X || author == X` checks so neither can be deleted silently.
+    #[test]
+    fn inspect_transcript_counts_role_and_author_independently() {
+        // Role only: counted via `role == "user"` (author differs).
+        let (u, _, _) = inspect_transcript(&serde_json::json!({ "messages": [
+            {"role": "user", "author": "somebody-else"}
+        ]}));
+        assert!(u);
+
+        // Author only: counted via `author == "user"` (role differs).
+        let (u, _, _) = inspect_transcript(&serde_json::json!({ "messages": [
+            {"role": "assistant", "author": "user"}
+        ]}));
+        assert!(u);
+
+        // Role only for assistant.
+        let (_, a, model) = inspect_transcript(&serde_json::json!({ "messages": [
+            {"role": "assistant", "author": "somebody-else", "model": "m"}
+        ]}));
+        assert!(a);
+        assert_eq!(model.as_deref(), Some("m"));
+
+        // Author only for assistant.
+        let (_, a, _) = inspect_transcript(&serde_json::json!({ "messages": [
+            {"role": "user", "author": "assistant"}
+        ]}));
+        assert!(a);
+    }
 }

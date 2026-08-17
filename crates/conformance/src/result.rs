@@ -229,4 +229,45 @@ mod tests {
         assert!(r.reason.as_ref().is_some_and(|s| !s.is_empty()));
         assert!(!r.is_blocking_fail(false));
     }
+
+    /// Every `PathId::parse` arm must stay reachable — a deleted arm is a silently unknown path.
+    #[test]
+    fn parse_accepts_every_alias() {
+        for (alias, id) in [
+            ("p1a", PathId::P1a),
+            ("1a", PathId::P1a),
+            ("p1b", PathId::P1b),
+            ("1b", PathId::P1b),
+            ("p2", PathId::P2),
+            ("2", PathId::P2),
+            ("p3", PathId::P3),
+            ("3", PathId::P3),
+            ("p4", PathId::P4),
+            ("4", PathId::P4),
+            ("p5", PathId::P5),
+            ("5", PathId::P5),
+            ("p6", PathId::P6),
+            ("6", PathId::P6),
+            ("p7", PathId::P7),
+            ("7", PathId::P7),
+        ] {
+            assert_eq!(PathId::parse(alias), Some(id), "alias {alias}");
+            assert_eq!(
+                PathId::parse(&alias.to_uppercase()),
+                Some(id),
+                "alias {alias}"
+            );
+        }
+        assert_eq!(PathId::parse("p8"), None);
+        assert_eq!(PathId::parse(""), None);
+    }
+
+    /// The default set is exactly the five non-advisory, side-effect-free paths.
+    #[test]
+    fn default_set_is_exactly_p1a_through_p4() {
+        assert_eq!(
+            PathId::all_default(),
+            vec![PathId::P1a, PathId::P1b, PathId::P2, PathId::P3, PathId::P4]
+        );
+    }
 }
