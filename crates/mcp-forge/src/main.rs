@@ -233,6 +233,29 @@ mod tests {
     }
 
     #[test]
+    fn only_matching_a_source_syncs_just_it() {
+        let config = tempfile::tempdir().unwrap();
+        let install = tempfile::tempdir().unwrap();
+        let project = tempfile::tempdir().unwrap();
+        scaffold_project(project.path(), "hello");
+        write_sources(
+            config.path(),
+            &format!(
+                "[[source]]\nname = \"hello\"\npath = \"{}\"\n\n[[source]]\nname = \"broken\"\npath = \"C:/does/not/exist\"\n",
+                project.path().display().to_string().replace('\\', "/")
+            ),
+        );
+
+        // "hello" is the only match; "broken" must be filtered out or the run fails.
+        let code = run_sync_in(config.path(), install.path(), false, Some("hello".into()));
+        assert_eq!(code, ExitCode::SUCCESS);
+        assert!(
+            liberado_config::managed_binary_path(install.path(), "hello").is_file(),
+            "--only hello must still install hello"
+        );
+    }
+
+    #[test]
     fn syncs_a_path_source_and_returns_success() {
         let config = tempfile::tempdir().unwrap();
         let install = tempfile::tempdir().unwrap();
