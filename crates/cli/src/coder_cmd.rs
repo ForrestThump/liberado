@@ -491,7 +491,11 @@ fn cmd_import(args: &mut dyn Iterator<Item = String>) -> Result<(), Box<dyn std:
 
 #[cfg(test)]
 mod tests {
-    use super::{cmd_compare, smoke_request};
+    use super::{
+        cmd_compare, cmd_compare_reset, cmd_diff, cmd_import, cmd_trace, reject_sibling_links,
+        smoke_request,
+    };
+    use std::fs;
     use std::path::Path;
 
     #[test]
@@ -521,5 +525,152 @@ mod tests {
         .into_iter();
         let error = cmd_compare(&mut args).unwrap_err().to_string();
         assert!(!error.contains("--dir requires a value"), "{error}");
+    }
+
+    // ── cmd_trace arg parsing ───────────────────────────────────────────
+
+    #[test]
+    fn trace_help_prints_usage() {
+        let mut args = vec!["-h".to_owned()].into_iter();
+        assert!(cmd_trace(&mut args).is_ok());
+    }
+
+    #[test]
+    fn trace_rejects_unknown_flag() {
+        let mut args = vec!["--bogus".to_owned()].into_iter();
+        let err = cmd_trace(&mut args).unwrap_err().to_string();
+        assert!(err.contains("unknown flag for coder trace"), "{err}");
+    }
+
+    #[test]
+    fn trace_rejects_two_positionals() {
+        let mut args = vec!["id1".to_owned(), "id2".to_owned()].into_iter();
+        let err = cmd_trace(&mut args).unwrap_err().to_string();
+        assert!(err.contains("takes a single session-id"), "{err}");
+    }
+
+    #[test]
+    fn trace_requires_a_value_after_flag() {
+        let mut args = vec!["--path".to_owned()].into_iter();
+        let err = cmd_trace(&mut args).unwrap_err().to_string();
+        assert!(err.contains("--path requires a value"), "{err}");
+        let mut args = vec!["--dir".to_owned()].into_iter();
+        let err = cmd_trace(&mut args).unwrap_err().to_string();
+        assert!(err.contains("--dir requires a value"), "{err}");
+    }
+
+    /// A trace with neither an explicit path nor a positional id reaches the "usage" error.
+    #[test]
+    fn trace_without_id_reaches_usage() {
+        let mut args = Vec::<String>::new().into_iter();
+        let err = cmd_trace(&mut args).unwrap_err().to_string();
+        assert!(err.contains("usage: liberado coder trace"), "{err}");
+    }
+
+    // ── cmd_diff arg parsing ────────────────────────────────────────────
+
+    #[test]
+    fn diff_help_prints_usage() {
+        let mut args = vec!["-h".to_owned()].into_iter();
+        assert!(cmd_diff(&mut args).is_ok());
+    }
+
+    #[test]
+    fn diff_rejects_unknown_flag() {
+        let mut args = vec!["--bogus".to_owned()].into_iter();
+        let err = cmd_diff(&mut args).unwrap_err().to_string();
+        assert!(err.contains("unknown flag for coder diff"), "{err}");
+    }
+
+    #[test]
+    fn diff_requires_two_paths() {
+        let mut args = vec!["one".to_owned()].into_iter();
+        let err = cmd_diff(&mut args).unwrap_err().to_string();
+        assert!(err.contains("usage: liberado coder diff"), "{err}");
+    }
+
+    // ── cmd_import arg parsing ──────────────────────────────────────────
+
+    #[test]
+    fn import_help_prints_usage() {
+        let mut args = vec!["-h".to_owned()].into_iter();
+        assert!(cmd_import(&mut args).is_ok());
+    }
+
+    #[test]
+    fn import_rejects_unknown_flag() {
+        let mut args = vec!["--bogus".to_owned()].into_iter();
+        let err = cmd_import(&mut args).unwrap_err().to_string();
+        assert!(err.contains("unknown flag for coder import"), "{err}");
+    }
+
+    #[test]
+    fn import_rejects_bad_format() {
+        let mut args = vec!["--format".into(), "bogus".into(), "in.json".into()].into_iter();
+        let err = cmd_import(&mut args).unwrap_err().to_string();
+        assert!(err.contains("unknown --format"), "{err}");
+    }
+
+    #[test]
+    fn import_requires_an_input_path() {
+        let mut args = vec!["--format".into(), "kilo".into()].into_iter();
+        let err = cmd_import(&mut args).unwrap_err().to_string();
+        assert!(err.contains("usage: liberado coder import"), "{err}");
+    }
+
+    // ── cmd_compare_reset arg parsing ───────────────────────────────────
+
+    #[test]
+    fn compare_reset_help_prints_usage() {
+        let args = vec!["-h".to_owned()];
+        assert!(cmd_compare_reset(&args).is_ok());
+    }
+
+    #[test]
+    fn compare_reset_rejects_unknown_flag() {
+        let args = vec!["--bogus".to_owned()];
+        let err = cmd_compare_reset(&args).unwrap_err().to_string();
+        assert!(
+            err.contains("unknown flag for coder compare reset"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn compare_reset_requires_a_value_after_flag() {
+        let args = vec!["--commit".to_owned()];
+        let err = cmd_compare_reset(&args).unwrap_err().to_string();
+        assert!(err.contains("--commit requires a value"), "{err}");
+    }
+
+    #[test]
+    fn compare_reset_requires_a_path() {
+        let args = vec!["--commit".into(), "abc123".into()];
+        let err = cmd_compare_reset(&args).unwrap_err().to_string();
+        assert!(err.contains("usage: liberado coder compare reset"), "{err}");
+    }
+
+    #[test]
+    fn compare_reset_rejects_unknown_positional() {
+        let args = vec!["a".into(), "b".into()];
+        let err = cmd_compare_reset(&args).unwrap_err().to_string();
+        assert!(err.contains("takes one workspace path"), "{err}");
+    }
+
+    // ── reject_sibling_links ────────────────────────────────────────────
+
+    /// A regular directory named turbovault is not a symlink — it must not be rejected.
+    #[test]
+    fn reject_sibling_links_accepts_regular_dirs() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir(dir.path().join("turbovault")).unwrap();
+        assert!(reject_sibling_links(dir.path()).is_ok());
+    }
+
+    /// A missing sibling directory is not an error.
+    #[test]
+    fn reject_sibling_links_accepts_absent_dirs() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(reject_sibling_links(dir.path()).is_ok());
     }
 }

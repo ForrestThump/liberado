@@ -973,6 +973,128 @@ mod tests {
         );
     }
 
+    /// A minimal valid shepherd project, for the validation-branch tests below.
+    fn valid_project(name: &str) -> liberado_config::ShepherdProjectConfig {
+        liberado_config::ShepherdProjectConfig {
+            name: name.into(),
+            repository: "owner/repo".into(),
+            coding_project: "liberado".into(),
+            base_branch: "main".into(),
+            profile: "coding-unattended".into(),
+            check_names: vec!["test".into()],
+            max_kickbacks: None,
+            cold_reviews: None,
+            cold_review_max_turns: None,
+            max_concurrent_goals: None,
+            poll_seconds: None,
+        }
+    }
+
+    fn topology_with(project: liberado_config::ShepherdProjectConfig) -> liberado_config::Topology {
+        let mut topology = liberado_config::Topology::default();
+        // The project must be declared in the application `[projects]` list too, or validation
+        // fails on the unknown-coding-project check before reaching the branch under test.
+        topology.projects.push(liberado_config::ProjectConfig {
+            name: project.coding_project.clone(),
+            root: PathBuf::from("/tmp/project"),
+            write_class: liberado_common::WriteClass::AgentWritable,
+            enabled: true,
+            preflight: Default::default(),
+        });
+        topology.shepherd.projects.push(project);
+        topology
+    }
+
+    fn rejects(project: liberado_config::ShepherdProjectConfig, needle: &str) {
+        let error = validate_shepherd_topology(&topology_with(project))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains(needle), "expected {needle:?} in {error:?}");
+    }
+
+    /// Every invalid shape is refused with a message that names the problem — a shepherd that
+    /// silently accepts a broken topology would mislabel PRs instead.
+    #[test]
+    fn shepherd_config_rejects_every_invalid_shape() {
+        rejects(valid_project(""), "name must not be empty");
+        rejects(
+            liberado_config::ShepherdProjectConfig {
+                name: "dupe".into(),
+                repository: "not-owner-repo".into(),
+                ..valid_project("dupe")
+            },
+            "OWNER/REPOSITORY",
+        );
+        rejects(
+            liberado_config::ShepherdProjectConfig {
+                base_branch: "  ".into(),
+                ..valid_project("blank-base")
+            },
+            "base_branch and profile must not be empty",
+        );
+        rejects(
+            liberado_config::ShepherdProjectConfig {
+                max_concurrent_goals: Some(0),
+                ..valid_project("zero-concurrent")
+            },
+            "must be greater than zero",
+        );
+        rejects(
+            liberado_config::ShepherdProjectConfig {
+                poll_seconds: Some(0),
+                ..valid_project("zero-poll")
+            },
+            "must be greater than zero",
+        );
+        rejects(
+            liberado_config::ShepherdProjectConfig {
+                check_names: vec![String::new()],
+                ..valid_project("empty-check")
+            },
+            "non-empty and unique",
+        );
+    }
+
+    #[test]
+    fn shepherd_config_rejects_duplicate_project_names() {
+        let mut topology = topology_with(valid_project("dupe"));
+        topology.shepherd.projects.push(valid_project("dupe"));
+        let error = validate_shepherd_topology(&topology)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("duplicate shepherd project name"), "{error}");
+    }
+
+    #[test]
+    fn shepherd_config_accepts_a_valid_project() {
+        assert!(validate_shepherd_topology(&topology_with(valid_project("ok"))).is_ok());
+    }
+
+    /// The baseline cache is read without touching the network: a `baselines/<short>.json` file
+    /// written by a previous run is the whole answer.
+    #[test]
+    fn baseline_reads_the_cached_failure_set() {
+        let temp = tempfile::tempdir().unwrap();
+        let cfg = test_config(temp.path().to_path_buf());
+        let sha = "0123456789abcdef";
+        let dir = cfg.state().join("baselines");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join(format!("{}.json", &sha[..12])),
+            serde_json::to_vec(&json!({
+                "base_sha": sha,
+                "failures": ["job|test::a", "job|step:Lint"],
+                "provenance": "cache",
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let (failures, provenance) = baseline(&cfg, sha).unwrap();
+        assert_eq!(provenance, "cache");
+        assert!(failures.contains("job|test::a"), "{failures:?}");
+        assert!(failures.contains("job|step:Lint"), "{failures:?}");
+    }
+
     #[test]
     fn settled_review_labels_only_on_success_and_preserves_dry_run_state() {
         let temp = tempfile::tempdir().unwrap();
@@ -1050,5 +1172,157 @@ mod tests {
         let review = cold_review_prompt(&cfg, &pr, 1, &BTreeSet::new());
         assert!(review.contains("Real, Exaggerated, or Hallucinated"));
         assert!(review.contains("Run it both ways"));
+    }
+
+    // ── parse_failure_set ───────────────────────────────────────────────
+
+    /// A rustc error with a diagnostic code (`error[E0123]`) is a step failure, folded into the
+    /// result as `job|step:<step>` — the self-test's plain `error:` is only one spelling.
+    #[test]
+    fn failure_set_recognises_diagnostic_codes() {
+        let set =
+            parse_failure_set("test (ubuntu-latest)\tLint\terror[E0123]: unresolved import\n");
+        assert!(set.contains("test (ubuntu-latest)|step:Lint"), "{set:?}");
+    }
+
+    /// `error: could not compile` (the old cargo spelling, no bracket code) is a step failure too.
+    #[test]
+    fn failure_set_recognises_could_not_compile() {
+        let set = parse_failure_set(
+            "clippy\tLint\terror: could not compile `x` (due to 3 previous errors)\n",
+        );
+        assert!(set.contains("clippy|step:Lint"), "{set:?}");
+    }
+
+    /// A step whose named test failed must not ALSO be reported as a bare step failure — that
+    /// would double-count one failure.
+    #[test]
+    fn failure_set_does_not_double_count_named_tests() {
+        let set = parse_failure_set("test (ubuntu-latest)\tTests\tX test crate::case ... FAILED\n");
+        assert!(set.contains("test (ubuntu-latest)|crate::case"), "{set:?}");
+        assert!(!set.contains("test (ubuntu-latest)|step:Tests"), "{set:?}");
+    }
+
+    /// Malformed rows (fewer than the three tab-separated columns) are skipped, not fatal.
+    #[test]
+    fn failure_set_skips_short_rows() {
+        let set = parse_failure_set("only-two-columns\tignored\ngarbage\n");
+        assert!(set.is_empty(), "{set:?}");
+    }
+
+    // ── check_status ────────────────────────────────────────────────────
+
+    fn row(name: &str, state: &str) -> serde_json::Value {
+        json!({ "name": name, "state": state })
+    }
+
+    /// No checks reported yet reads as "none" — the PR is neither green nor red, just unreported.
+    #[test]
+    fn check_status_none_when_no_rows() {
+        assert_eq!(check_status(&[], &[]), "none");
+    }
+
+    /// All passing → success; any pending/queued/in-progress state → pending (never success
+    /// early); any failure/error state → failure.
+    #[test]
+    fn check_status_aggregates_states() {
+        let rows = vec![row("a", "SUCCESS"), row("b", "success")];
+        assert_eq!(check_status(&[], &rows), "success");
+        let rows = vec![row("a", "SUCCESS"), row("b", "in_progress")];
+        assert_eq!(check_status(&[], &rows), "pending");
+        let rows = vec![row("a", "SUCCESS"), row("b", "failure")];
+        assert_eq!(check_status(&[], &rows), "failure");
+        let rows = vec![row("a", "queued"), row("b", "timed_out")];
+        assert_eq!(check_status(&[], &rows), "pending");
+    }
+
+    /// An empty check-name filter means "all reported checks" — the full row set is the gate.
+    #[test]
+    fn check_status_with_no_filter_uses_all_rows() {
+        let rows = vec![row("a", "SUCCESS")];
+        assert_eq!(check_status(&[], &rows), "success");
+    }
+
+    // ── Pr ──────────────────────────────────────────────────────────────
+
+    fn pr(labels: &[&str]) -> Pr {
+        Pr {
+            number: 7,
+            title: "t".into(),
+            branch: "b".into(),
+            base_sha: String::new(),
+            labels: labels.iter().map(|s| s.to_string()).collect(),
+        }
+    }
+
+    /// `has` is exact-label matching; `count` counts the numbered kickback labels; `terminal` is
+    /// ready-or-blocked.
+    #[test]
+    fn pr_label_helpers() {
+        let p = pr(&["shepherd:kickback-1", "shepherd:kickback-2", READY]);
+        assert!(p.has("shepherd:kickback-1"));
+        assert!(!p.has("shepherd:kickback-3"));
+        assert_eq!(p.count("shepherd:kickback-"), 2);
+        assert!(p.terminal());
+        assert!(!pr(&["shepherd:kickback-1"]).terminal());
+        assert!(pr(&[BLOCKED]).terminal());
+    }
+
+    // ── review_transition ───────────────────────────────────────────────
+
+    /// Every status the daemon reports maps to exactly one transition; an unknown status fails
+    /// closed (the review is treated as failed rather than silently passing).
+    #[test]
+    fn review_transition_covers_every_status() {
+        for waiting in [
+            None,
+            Some("running"),
+            Some("pending"),
+            Some("starting"),
+            Some("active"),
+            Some("parked"),
+        ] {
+            assert_eq!(
+                review_transition(waiting),
+                ReviewTransition::Waiting,
+                "{waiting:?}"
+            );
+        }
+        assert_eq!(
+            review_transition(Some("succeeded")),
+            ReviewTransition::Labeled
+        );
+        for failed in [Some("failed"), Some("cancelled"), Some("lost")] {
+            assert_eq!(
+                review_transition(failed),
+                ReviewTransition::Failed,
+                "{failed:?}"
+            );
+        }
+    }
+
+    // ── note ────────────────────────────────────────────────────────────
+
+    #[test]
+    fn note_is_empty_for_no_preexisting_failures() {
+        assert_eq!(note(&BTreeSet::new()), "");
+    }
+
+    // ── parse_goal_status ───────────────────────────────────────────────
+
+    /// The status lives either at the top level or under `session`, lowercase either way. (A bare
+    /// status string is not a shape the daemon emits.)
+    #[test]
+    fn goal_status_reads_top_level_or_session() {
+        assert_eq!(
+            parse_goal_status(&json!({"status": "Running"})),
+            Some("running".into())
+        );
+        assert_eq!(
+            parse_goal_status(&json!({"session": {"status": "succeeded"}})),
+            Some("succeeded".into())
+        );
+        assert_eq!(parse_goal_status(&json!({})), None);
+        assert_eq!(parse_goal_status(&json!("running")), None);
     }
 }

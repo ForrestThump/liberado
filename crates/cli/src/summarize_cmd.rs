@@ -500,6 +500,8 @@ pub fn run(args: impl Iterator<Item = String>) -> Result<(), Box<dyn std::error:
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
+    use std::collections::BTreeMap;
     use tempfile::tempdir;
 
     #[test]
@@ -518,5 +520,175 @@ mod tests {
         let dir = tempdir().unwrap();
         fs::create_dir(dir.path().join("liberado")).unwrap();
         assert_eq!(kind(dir.path()), "compare");
+    }
+
+    // ── text ────────────────────────────────────────────────────────────
+
+    /// `text` unwraps a JSON string scalar, stripping the surrounding quotes; missing values read
+    /// as empty.
+    #[test]
+    fn text_unwraps_scalars_and_defaults_to_empty() {
+        assert_eq!(text(Some(&json!("hello"))), "hello");
+        assert_eq!(text(Some(&json!(42))), "42");
+        assert_eq!(text(Some(&json!(null))), "null");
+        assert_eq!(text(None), "");
+    }
+
+    // ── time / duration ─────────────────────────────────────────────────
+
+    /// `time` accepts RFC3339 (with `Z` normalized to an offset) and rejects anything else.
+    #[test]
+    fn time_parses_rfc3339() {
+        assert!(time(Some(&json!("2026-01-15T10:00:00Z"))).is_some());
+        assert!(time(Some(&json!("2026-01-15T10:00:00+02:00"))).is_some());
+        assert_eq!(time(Some(&json!("not-a-date"))), None);
+        assert_eq!(time(Some(&json!(5))), None);
+        assert_eq!(time(None), None);
+    }
+
+    /// `duration` is wall-clock seconds between two instants, and `None` when either is missing.
+    #[test]
+    fn duration_is_seconds_between_instants() {
+        let a = time(Some(&json!("2026-01-15T10:00:00Z")));
+        let b = time(Some(&json!("2026-01-15T10:00:05.5Z")));
+        let d = duration(a, b).unwrap();
+        assert!((d - 5.5).abs() < 1e-9, "{d}");
+        assert_eq!(duration(a, None), None);
+        assert_eq!(duration(None, b), None);
+    }
+
+    // ── duration_text ───────────────────────────────────────────────────
+
+    #[test]
+    fn duration_text_renders_missing_and_seconds() {
+        assert_eq!(duration_text(None), "?");
+        assert_eq!(duration_text(Some(12.0)), "12s");
+        assert_eq!(duration_text(Some(89.0)), "89s");
+    }
+
+    /// At 90 seconds the display switches to minutes; the seconds remainder stays visible.
+    #[test]
+    fn duration_text_switches_to_minutes_at_90() {
+        assert_eq!(duration_text(Some(60.0)), "60s");
+        assert_eq!(duration_text(Some(90.0)), "2 min 30s");
+        assert_eq!(duration_text(Some(125.0)), "2 min 5s");
+    }
+
+    // ── counts ──────────────────────────────────────────────────────────
+
+    /// `counts` renders the histogram as one compact, sorted line.
+    #[test]
+    fn counts_renders_a_sorted_histogram() {
+        let mut map = BTreeMap::new();
+        map.insert("edit_file".to_string(), 3usize);
+        map.insert("bash".to_string(), 1usize);
+        assert_eq!(counts(&map), "{bash: 1, edit_file: 3}");
+        assert_eq!(counts(&BTreeMap::new()), "{}");
+    }
+
+    // ── kind ────────────────────────────────────────────────────────────
+
+    /// The file-kind classifier drives which renderer runs; each recognisable shape has its own
+    /// label, and everything else is "unknown" rather than a guess.
+    #[test]
+    fn kind_classifies_known_shapes() {
+        let dir = tempdir().unwrap();
+        // A directory with any .json file is a liberado traces dir.
+        fs::write(dir.path().join("x.json"), "{}").unwrap();
+        assert_eq!(kind(dir.path()), "liberado-dir");
+        // An empty directory is just a directory.
+        let empty = tempdir().unwrap();
+        assert_eq!(kind(empty.path()), "dir");
+        // Bare .json / .jsonl files by extension.
+        let json_path = dir.path().join("traces.json");
+        fs::write(&json_path, "{}").unwrap();
+        assert_eq!(kind(&json_path), "liberado-json");
+        let jsonl_path = dir.path().join("x.jsonl");
+        fs::write(&jsonl_path, "{}").unwrap();
+        assert_eq!(kind(&jsonl_path), "jsonl");
+        // Unknown extension.
+        let unknown = dir.path().join("notes.txt");
+        fs::write(&unknown, "x").unwrap();
+        assert_eq!(kind(&unknown), "unknown");
+    }
+
+    // ── renderers over real files ───────────────────────────────────────
+
+    /// `liberado` summarises a native trace JSON: the request/events shape the coder writes.
+    #[test]
+    fn liberado_summarises_a_native_trace() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("trace.json");
+        fs::write(
+            &path,
+            serde_json::to_vec(&json!({
+                "request": {
+                    "attempt": 0,
+                    "config": {"coder": {"model": "m/1", "max_turns": 8}}
+                },
+                "events": [
+                    {"type": "model_turn_finished", "at": "2026-01-15T10:00:00Z"},
+                    {"type": "tool_started", "tool": "edit_file", "at": "2026-01-15T10:00:02Z"},
+                    {"type": "session_finished", "outcome": "Succeeded", "at": "2026-01-15T10:00:05Z"}
+                ]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        assert!(
+            liberado(&path).is_ok(),
+            "a well-formed trace must summarise"
+        );
+    }
+
+    /// `mvl` and `pi` are tolerant parsers: an empty file renders an empty summary rather than
+    /// failing, and malformed lines are skipped by `records`.
+    #[test]
+    fn mvl_and_pi_tolerate_empty_and_partial_input() {
+        let dir = tempdir().unwrap();
+        let mvl_path = dir.path().join("run.mvl.jsonl");
+        fs::write(&mvl_path, "").unwrap();
+        assert!(mvl(&mvl_path, true).is_ok(), "empty MVL must not fail");
+        let pi_path = dir.path().join("session.jsonl");
+        fs::write(
+            &pi_path,
+            "{\"type\":\"turn_start\"}\nnot-json\n{\"type\":\"message_end\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"hi\"}]}}\n",
+        )
+        .unwrap();
+        assert!(pi(&pi_path).is_ok(), "partial pi session must not fail");
+    }
+
+    /// `walk` dispatches by kind; an unrecognised path is an explicit error, not a silent no-op.
+    #[test]
+    fn walk_errors_on_unknown_kinds() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("notes.txt");
+        fs::write(&path, "x").unwrap();
+        let err = walk(&path).unwrap_err().to_string();
+        assert!(err.contains("unrecognized"), "{err}");
+    }
+
+    // ── run arg validation ──────────────────────────────────────────────
+
+    #[test]
+    fn run_rejects_unknown_flags() {
+        let err = run(vec!["path".into(), "--bogus".into()].into_iter())
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("unknown summarize flag"), "{err}");
+    }
+
+    #[test]
+    fn run_requires_a_path() {
+        let err = run(vec![].into_iter()).unwrap_err().to_string();
+        assert!(err.contains("usage: liberado coder summarize"), "{err}");
+    }
+
+    #[test]
+    fn run_reports_a_missing_path() {
+        let err = run(vec!["/no/such/path".into()].into_iter())
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("not found"), "{err}");
     }
 }
