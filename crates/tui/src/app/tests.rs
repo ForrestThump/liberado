@@ -3151,3 +3151,301 @@ fn cursor_visual_col_wraps_the_column_modulo_width() {
     app.cursor = 5;
     assert_eq!(app.cursor_visual_col(), 0);
 }
+
+// ── update() arms: reactions, model selection, tool chips, system lines, goal lifecycle ──────
+
+fn status_with_model(model: Option<String>) -> DaemonStatus {
+    DaemonStatus {
+        running: true,
+        vault_path: "/v".into(),
+        uptime_seconds: 1,
+        watcher_active: false,
+        dispatcher_attached: false,
+        orchestrator_attached: false,
+        reactions_seen: 0,
+        model_name: model,
+        token_usage_total: None,
+        context_window: None,
+        chat_tools: 0,
+        chat_tool_names: vec![],
+        enter_sends: true,
+    }
+}
+
+fn reaction(event_type: &str, path: Option<&str>) -> ReactionEvent {
+    ReactionEvent {
+        event_type: event_type.into(),
+        timestamp: "2026-01-01T00:00:00Z".into(),
+        source: "daemon".into(),
+        correlation_id: "c1".into(),
+        path: path.map(str::to_string),
+        outcome: chat_client_contract::ReactionOutcome::Observed,
+    }
+}
+
+#[test]
+fn reactions_update_sets_the_list_and_marks_dirty() {
+    let mut app = test_app();
+    app.clear_dirty();
+    let effects = app.update(Action::ReactionsUpdate(vec![reaction(
+        "note_created",
+        Some("/v/note.md"),
+    )]));
+    assert_eq!(app.reactions.len(), 1);
+    assert_eq!(app.reactions[0].event_type, "note_created");
+    assert_eq!(app.reactions[0].path.as_deref(), Some("/v/note.md"));
+    assert!(
+        app.is_dirty(),
+        "a new reaction list must mark the app dirty"
+    );
+    assert!(matches!(effects.as_slice(), [Effect::None]));
+
+    // The identical list is a no-op: no dirty mark, no duplicate rows.
+    app.clear_dirty();
+    app.update(Action::ReactionsUpdate(vec![reaction(
+        "note_created",
+        Some("/v/note.md"),
+    )]));
+    assert!(
+        !app.is_dirty(),
+        "an unchanged list must not mark the app dirty"
+    );
+}
+
+#[test]
+fn model_selected_with_error_reports_without_switching_or_closing() {
+    let mut app = test_app();
+    app.status = Some(status_with_model(Some("old".into())));
+    app.focus = Focus::ModelBrowser;
+    let effects = app.update(Action::ModelSelected {
+        model: "new".into(),
+        error: Some("denied by provider".into()),
+        conversation_scoped: false,
+    });
+    assert!(
+        matches!(app.messages.last(), Some(Message::System(m)) if m.contains("Failed to switch model: denied by provider"))
+    );
+    assert_eq!(
+        app.status.as_ref().unwrap().model_name.as_deref(),
+        Some("old"),
+        "a failed switch must not change the active model"
+    );
+    assert_eq!(
+        app.focus,
+        Focus::ModelBrowser,
+        "an error keeps the browser open so the pick can be retried"
+    );
+    assert!(matches!(effects.as_slice(), [Effect::None]));
+}
+
+#[test]
+fn model_selected_switches_the_active_model_daemon_wide() {
+    let mut app = test_app();
+    app.status = Some(status_with_model(Some("old".into())));
+    app.focus = Focus::ModelBrowser;
+    app.update(Action::ModelSelected {
+        model: "new".into(),
+        error: None,
+        conversation_scoped: false,
+    });
+    assert_eq!(
+        app.status.as_ref().unwrap().model_name.as_deref(),
+        Some("new"),
+        "the daemon-wide pick must update the active model"
+    );
+    assert!(
+        matches!(app.messages.last(), Some(Message::System(m)) if m.contains("Active model switched to `new`"))
+    );
+    assert_eq!(
+        app.focus,
+        Focus::Input,
+        "a successful pick closes the browser"
+    );
+}
+
+#[test]
+fn model_selected_scoped_to_conversation_keeps_the_active_model() {
+    let mut app = test_app();
+    app.status = Some(status_with_model(Some("old".into())));
+    app.focus = Focus::ModelBrowser;
+    app.update(Action::ModelSelected {
+        model: "new".into(),
+        error: None,
+        conversation_scoped: true,
+    });
+    assert_eq!(
+        app.status.as_ref().unwrap().model_name.as_deref(),
+        Some("old"),
+        "a conversation-scoped pick must not change the daemon-wide model"
+    );
+    assert!(
+        matches!(app.messages.last(), Some(Message::System(m)) if m.contains("Model `new` set for this conversation"))
+    );
+    assert_eq!(app.focus, Focus::Input);
+}
+
+#[test]
+fn reload_conversation_history_claims_pending_and_requests_the_load() {
+    let mut app = test_app();
+    let effects = app.update(Action::ReloadConversationHistory("c1".into()));
+    assert_eq!(
+        app.pending_load.as_deref(),
+        Some("c1"),
+        "the pending handshake must be claimed before the load"
+    );
+    assert!(
+        effects
+            .iter()
+            .any(|e| matches!(e, Effect::LoadConversationHistory(id) if id == "c1"))
+    );
+    assert!(app.is_dirty());
+}
+
+#[test]
+fn sse_tool_pushes_a_tool_call_chip() {
+    let mut app = test_app();
+    app.update(Action::SseTool {
+        name: "read_file".into(),
+        args: "/a.md".into(),
+    });
+    assert!(
+        matches!(app.messages.last(), Some(Message::ToolCall(ToolCallChip { name, args })) if name == "read_file" && args == "/a.md")
+    );
+    assert!(app.is_dirty());
+}
+
+#[test]
+fn sse_tool_result_pushes_an_outcome_chip() {
+    let mut app = test_app();
+    app.update(Action::SseToolResult {
+        name: "write_file".into(),
+        ok: false,
+        preview: "permission denied".into(),
+    });
+    assert!(
+        matches!(app.messages.last(), Some(Message::ToolResult(ToolResultChip { name, ok, preview })) if name == "write_file" && !ok && preview == "permission denied")
+    );
+    assert!(app.is_dirty());
+}
+
+#[test]
+fn system_message_pushes_a_line_and_resets_scroll() {
+    let mut app = test_app();
+    app.scroll_offset = 7;
+    app.update(Action::SystemMessage("goal parked".into()));
+    assert!(matches!(app.messages.last(), Some(Message::System(m)) if m == "goal parked"));
+    assert_eq!(app.scroll_offset, 0);
+    assert!(app.is_dirty());
+}
+
+#[test]
+fn goal_spawn_failed_pushes_an_error_line_and_resets_scroll() {
+    let mut app = test_app();
+    app.scroll_offset = 3;
+    app.update(Action::GoalSpawnFailed("provider unavailable".into()));
+    assert!(
+        matches!(app.messages.last(), Some(Message::System(m)) if m.contains("[spawn failed] provider unavailable"))
+    );
+    assert_eq!(app.scroll_offset, 0);
+}
+
+#[test]
+fn goal_stream_closed_with_error_appends_a_resubscribe_note() {
+    let mut app = test_app();
+    app.join_session("g1".to_string());
+    app.update(Action::GoalStreamClosed(Some("reset".into())));
+    let j = app.joined.as_ref().unwrap();
+    assert!(
+        j.messages.iter().any(|m| matches!(m, Message::System(s) if s.contains("stream closed: reset") && s.contains("/join to resubscribe"))),
+        "the close note must carry the reason and the resubscribe hint, got {:?}",
+        j.messages
+    );
+    assert!(!j.finished, "a stream close is not a session finish");
+}
+
+#[test]
+fn goal_stream_closed_without_error_appends_the_plain_note() {
+    let mut app = test_app();
+    app.join_session("g1".to_string());
+    app.update(Action::GoalStreamClosed(None));
+    let j = app.joined.as_ref().unwrap();
+    assert!(
+        j.messages.iter().any(
+            |m| matches!(m, Message::System(s) if s == "[stream closed] — /join to resubscribe")
+        )
+    );
+}
+
+#[test]
+fn goal_stream_closed_on_a_finished_session_is_a_noop() {
+    let mut app = test_app();
+    app.join_session("g1".to_string());
+    app.joined.as_mut().unwrap().finished = true;
+    app.update(Action::GoalStreamClosed(Some("late".into())));
+    let j = app.joined.as_ref().unwrap();
+    assert!(
+        j.messages.is_empty(),
+        "a finished session must not accumulate late close notes"
+    );
+}
+
+#[test]
+fn goal_message_outcome_reports_session_state() {
+    let cases: Vec<(GoalMessageOutcome, &str)> = vec![
+        (
+            GoalMessageOutcome::NotFound,
+            "[this session is gone — /back to return to chat]",
+        ),
+        (
+            GoalMessageOutcome::NotPermitted,
+            "never allowed to be answered",
+        ),
+        (GoalMessageOutcome::Parked, "parked"),
+        (
+            GoalMessageOutcome::Finished,
+            "[this session has finished — /back to return to chat]",
+        ),
+        (
+            GoalMessageOutcome::Error("boom".into()),
+            "[could not deliver message: boom]",
+        ),
+    ];
+    for (outcome, needle) in cases {
+        let mut app = test_app();
+        app.update(Action::GoalMessageOutcome(outcome));
+        assert!(
+            matches!(app.messages.last(), Some(Message::System(m)) if m.contains(needle)),
+            "outcome should surface a line containing {needle:?}, got {:?}",
+            app.messages.last()
+        );
+    }
+}
+
+#[test]
+fn goal_message_outcome_accepted_is_silent() {
+    let mut app = test_app();
+    app.update(Action::GoalMessageOutcome(GoalMessageOutcome::Accepted));
+    assert!(
+        app.messages.is_empty(),
+        "an accepted answer is echoed via the stream, not as a system line"
+    );
+}
+
+#[test]
+fn goal_message_outcome_lands_in_the_joined_transcript() {
+    let mut app = test_app();
+    app.join_session("g1".to_string());
+    app.update(Action::GoalMessageOutcome(GoalMessageOutcome::NotFound));
+    let j = app.joined.as_ref().unwrap();
+    assert!(
+        j.messages
+            .iter()
+            .any(|m| matches!(m, Message::System(s) if s.contains("session is gone"))),
+        "the note must go to the joined transcript, got {:?}",
+        j.messages
+    );
+    assert!(
+        app.messages.is_empty(),
+        "the note must not also land in the primary chat"
+    );
+}
