@@ -678,15 +678,16 @@ mod tests {
     #[test]
     fn root_future_work_is_a_root_markdown_leaf() {
         for yes in ["docs/future-work/x.md", "docs/future-work/plan-2026.md"] {
+            // docs-check: ignore
             assert!(is_root_future_work(yes), "{yes}");
         }
         // Not a leaf, not markdown, or the auto-generated README itself.
         for no in [
-            "docs/future-work/x/y.md",
-            "docs/future-work/x/index.md",
+            "docs/future-work/x/y.md",     // docs-check: ignore
+            "docs/future-work/x/index.md", // docs-check: ignore
             "docs/future-work/README.md",
             "docs/future-work/x.txt",
-            "docs/other/x.md",
+            "docs/other/x.md", // docs-check: ignore
             "docs/future-work",
         ] {
             assert!(!is_root_future_work(no), "{no}");
@@ -698,9 +699,9 @@ mod tests {
     #[test]
     fn managed_is_a_docs_markdown_file_with_meta_or_root_plan() {
         let meta = yaml_map("kind: plan\n");
-        assert!(is_managed("docs/goals.md", &Some(meta.clone())));
-        assert!(is_managed("docs/future-work/plan.md", &None));
-        assert!(!is_managed("docs/goals.md", &None));
+        assert!(is_managed("docs/goals.md", &Some(meta.clone()))); // docs-check: ignore
+        assert!(is_managed("docs/future-work/plan.md", &None)); // docs-check: ignore
+        assert!(!is_managed("docs/goals.md", &None)); // docs-check: ignore
         assert!(!is_managed("crates/x/readme.md", &Some(meta.clone())));
         assert!(!is_managed("docs/README.txt", &Some(meta)));
     }
@@ -756,16 +757,16 @@ mod tests {
     #[test]
     fn future_work_readme_splits_active_from_other() {
         let docs = vec![
-            doc("docs/future-work/a-plan.md", "plan", "active"),
-            doc("docs/future-work/z-done.md", "plan", "archived"),
+            doc("docs/future-work/a-plan.md", "plan", "active"), // docs-check: ignore
+            doc("docs/future-work/z-done.md", "plan", "archived"), // docs-check: ignore
             // Not a root future-work leaf — must be skipped entirely.
-            doc("docs/other/x.md", "plan", "active"),
+            doc("docs/other/x.md", "plan", "active"), // docs-check: ignore
         ];
         let readme = generate_future_work_readme(&docs);
         assert!(readme.contains("a-plan.md"), "active: {readme}");
         assert!(readme.contains("z-done.md"), "other: {readme}");
         assert!(
-            !readme.contains("docs/other/x.md"),
+            !readme.contains("docs/other/x.md"), // docs-check: ignore
             "non-future-work must not appear: {readme}"
         );
         assert!(readme.contains("## Active documents"), "{readme}");
