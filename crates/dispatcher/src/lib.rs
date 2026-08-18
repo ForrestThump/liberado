@@ -795,56 +795,73 @@ fn ensure_correlation(decision: &mut DispatchDecision, goal_hash: u64) {
 }
 
 /// Log the classifier (or guidance short-circuit) decision with MCP/tool fields for dogfood.
-#[allow(clippy::cognitive_complexity)]
 fn log_classified_decision(decision: &DispatchDecision, model: &str) {
     match &decision.action {
         DispatchAction::ExecuteDirect {
             seed_calls,
             relevant_mcps,
             ..
-        } => {
-            let seeds: Vec<&str> = seed_calls.iter().map(|c| c.tool.as_str()).collect();
-            tracing::info!(
-                %model,
-                action = "ExecuteDirect",
-                confidence = decision.confidence,
-                relevant_mcps = ?relevant_mcps,
-                seed_tools = ?seeds,
-                rationale = %decision.rationale,
-                "classified decision (pre-guard)"
-            );
-        }
+        } => log_execute_direct(model, decision, seed_calls, relevant_mcps),
         DispatchAction::DispatchSubagent {
             allowed_mcps, goal, ..
-        } => {
-            tracing::info!(
-                %model,
-                action = "DispatchSubagent",
-                confidence = decision.confidence,
-                allowed_mcps = ?allowed_mcps,
-                subgoal = %goal.chars().take(120).collect::<String>(),
-                rationale = %decision.rationale,
-                "classified decision (pre-guard)"
-            );
-        }
-        DispatchAction::Clarify { what_blocked, .. } => {
-            tracing::info!(
-                %model,
-                action = "Clarify",
-                confidence = decision.confidence,
-                ?what_blocked,
-                "classified decision (pre-guard)"
-            );
-        }
-        DispatchAction::Propose { .. } => {
-            tracing::info!(
-                %model,
-                action = "Propose",
-                confidence = decision.confidence,
-                "classified decision (pre-guard)"
-            );
-        }
+        } => log_dispatch_subagent(model, decision, allowed_mcps, goal),
+        DispatchAction::Clarify { what_blocked, .. } => log_clarify(model, decision, what_blocked),
+        DispatchAction::Propose { .. } => log_propose(model, decision),
     }
+}
+
+fn log_execute_direct(
+    model: &str,
+    decision: &DispatchDecision,
+    seed_calls: &[ToolCall],
+    relevant_mcps: &[String],
+) {
+    let seeds: Vec<&str> = seed_calls.iter().map(|c| c.tool.as_str()).collect();
+    tracing::info!(
+        %model,
+        action = "ExecuteDirect",
+        confidence = decision.confidence,
+        relevant_mcps = ?relevant_mcps,
+        seed_tools = ?seeds,
+        rationale = %decision.rationale,
+        "classified decision (pre-guard)"
+    );
+}
+
+fn log_dispatch_subagent(
+    model: &str,
+    decision: &DispatchDecision,
+    allowed_mcps: &[String],
+    goal: &str,
+) {
+    tracing::info!(
+        %model,
+        action = "DispatchSubagent",
+        confidence = decision.confidence,
+        allowed_mcps = ?allowed_mcps,
+        subgoal = %goal.chars().take(120).collect::<String>(),
+        rationale = %decision.rationale,
+        "classified decision (pre-guard)"
+    );
+}
+
+fn log_clarify(model: &str, decision: &DispatchDecision, what_blocked: &BlockReason) {
+    tracing::info!(
+        %model,
+        action = "Clarify",
+        confidence = decision.confidence,
+        ?what_blocked,
+        "classified decision (pre-guard)"
+    );
+}
+
+fn log_propose(model: &str, decision: &DispatchDecision) {
+    tracing::info!(
+        %model,
+        action = "Propose",
+        confidence = decision.confidence,
+        "classified decision (pre-guard)"
+    );
 }
 
 /// Map classifier MCP strings to catalog MCP names and drop unknowns.

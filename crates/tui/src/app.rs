@@ -1283,7 +1283,6 @@ pub enum Effect {
 }
 
 impl App {
-    #[allow(clippy::cognitive_complexity)]
     pub fn update(&mut self, action: Action) -> Vec<Effect> {
         match action {
             Action::StatusUpdate(status) => {
@@ -1322,31 +1321,7 @@ impl App {
                 model,
                 error,
                 conversation_scoped,
-            } => {
-                if let Some(err) = error {
-                    self.messages
-                        .push(Message::System(format!("Failed to switch model: {err}")));
-                } else {
-                    if conversation_scoped {
-                        self.messages.push(Message::System(format!(
-                            "Model `{model}` set for this conversation — its next turn uses it \
-                             (other chats unchanged)."
-                        )));
-                    } else {
-                        if let Some(st) = self.status.as_mut() {
-                            st.model_name = Some(model.clone());
-                        }
-                        self.messages.push(Message::System(format!(
-                            "Active model switched to `{model}` — next chat turns use it \
-                             (no daemon restart)."
-                        )));
-                    }
-                    self.close_model_browser();
-                }
-                self.scroll_offset = 0;
-                self.mark_dirty();
-                vec![Effect::None]
-            }
+            } => self.on_model_selected(model, error, conversation_scoped),
             Action::Forked(fork) => {
                 // Land in the branch. The original is untouched and still in the switcher — say so,
                 // because "fork" sounds like it might have moved or rewritten the conversation, and
@@ -1374,77 +1349,7 @@ impl App {
                 messages,
                 turn_running,
                 turn_unanswered,
-            } => {
-                if self.pending_load.as_deref() != Some(&id) {
-                    return vec![Effect::None]; // stale — newer request superseded this one
-                }
-                self.session = Some(id.clone());
-                self.pending_load = None;
-                self.messages.clear();
-                self.chat_cursor = 0;
-                self.turn_offset = 0;
-                self.expanded_messages.clear();
-                for msg in messages {
-                    match msg.role.as_str() {
-                        "user" => self.messages.push(Message::User(msg.content)),
-                        "assistant" => {
-                            if let Some(tool_calls) = &msg.tool_calls {
-                                self.push_tool_history(tool_calls);
-                            }
-                            if !msg.content.is_empty() {
-                                self.messages.push(Message::Assistant(msg.content));
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-                // Enforce the message cap on history load — this is the primary source of
-                // unbounded growth (loading a conversation with thousands of messages).
-                // Normal conversation turns typically stay well under MAX_MESSAGE_COUNT,
-                // so we only prune here rather than on every user message push.
-                if self.messages.len() > MAX_MESSAGE_COUNT {
-                    let removed = self.messages.len() - MAX_MESSAGE_COUNT;
-                    // Count the human's turns being dropped *before* dropping them, so the turn
-                    // numbers rendered beside what survives still agree with the server's — which
-                    // counts from the real first turn. Otherwise `/fork 3` would branch somewhere
-                    // other than the "3" you can see on screen.
-                    self.turn_offset = self.messages[..removed]
-                        .iter()
-                        .filter(|m| matches!(m, Message::User(_)))
-                        .count();
-                    self.messages = self.messages.split_off(removed);
-                    self.messages.insert(
-                        0,
-                        Message::System(format!("... {removed} earlier messages omitted")),
-                    );
-                }
-                // Turn lifecycle: a missing reply is either still coming or permanently lost.
-                // Silence is the wrong reading of either — attach, or say the turn died.
-                let mut follow_up = Vec::new();
-                if turn_running {
-                    self.streaming = true;
-                    self.messages.push(Message::System(
-                        "A turn is still running — reattaching…".into(),
-                    ));
-                    follow_up.push(Effect::AttachConversationStream(id));
-                } else if turn_unanswered {
-                    self.streaming = false;
-                    self.messages.push(Message::System(
-                        "The last turn ended without a reply (usually the daemon restarted \
-                         mid-inference). Nothing is still running — re-send your question to \
-                         try again."
-                            .into(),
-                    ));
-                }
-                self.scroll_offset = 0;
-                self.focus = Focus::Input;
-                self.mark_dirty();
-                if follow_up.is_empty() {
-                    vec![Effect::None]
-                } else {
-                    follow_up
-                }
-            }
+            } => self.on_history_loaded(id, messages, turn_running, turn_unanswered),
             Action::ReloadConversationHistory(id) => {
                 // Same handshake every other open path uses: `HistoryLoaded` discards a response
                 // whose id is not the pending one, so claim it before asking.
@@ -1565,44 +1470,7 @@ impl App {
                 }
                 vec![Effect::None]
             }
-            Action::GoalMessageOutcome(outcome) => {
-                use crate::api::GoalMessageOutcome as O;
-                match outcome {
-                    O::Accepted => {} // the echo arrives via the stream as a `human_input` event
-                    O::NotFound | O::NotPermitted | O::Parked | O::Finished | O::Error(_) => {
-                        let msg = match outcome {
-                            O::NotFound => {
-                                "[this session is gone — /back to return to chat]".into()
-                            }
-                            O::NotPermitted => {
-                                // Authority, not timing. Waiting will not help; the grant is the fix.
-                                "[this session was never allowed to be answered — its profile \
-                                 grants no AskHuman]"
-                                    .into()
-                            }
-                            O::Parked => {
-                                // It has NOT finished, and saying it had is the difference between
-                                // "start over" and "wait".
-                                "[this session is parked — it was waiting on you when the daemon \
-                                 restarted, and cannot take an answer until it is resumed]"
-                                    .into()
-                            }
-                            O::Finished => {
-                                "[this session has finished — /back to return to chat]".into()
-                            }
-                            O::Error(e) => format!("[could not deliver message: {e}]"),
-                            O::Accepted => unreachable!(),
-                        };
-                        if let Some(j) = self.joined.as_mut() {
-                            j.messages.push(Message::System(msg));
-                        } else {
-                            self.messages.push(Message::System(msg));
-                        }
-                        self.mark_dirty();
-                    }
-                }
-                vec![Effect::None]
-            }
+            Action::GoalMessageOutcome(outcome) => self.on_goal_message_outcome(outcome),
             Action::ConnectionStatus(connected) => {
                 let was = self.daemon_connected;
                 self.daemon_connected = connected;
@@ -1622,6 +1490,150 @@ impl App {
             // Heartbeat only; animation frames are driven by `needs_animation` in the draw loop.
             Action::Tick => vec![Effect::None],
         }
+    }
+
+    fn on_model_selected(
+        &mut self,
+        model: String,
+        error: Option<String>,
+        conversation_scoped: bool,
+    ) -> Vec<Effect> {
+        if let Some(err) = error {
+            self.messages
+                .push(Message::System(format!("Failed to switch model: {err}")));
+        } else {
+            if conversation_scoped {
+                self.messages.push(Message::System(format!(
+                    "Model `{model}` set for this conversation — its next turn uses it \
+                 (other chats unchanged)."
+                )));
+            } else {
+                if let Some(st) = self.status.as_mut() {
+                    st.model_name = Some(model.clone());
+                }
+                self.messages.push(Message::System(format!(
+                    "Active model switched to `{model}` — next chat turns use it \
+                 (no daemon restart)."
+                )));
+            }
+            self.close_model_browser();
+        }
+        self.scroll_offset = 0;
+        self.mark_dirty();
+        vec![Effect::None]
+    }
+
+    fn on_history_loaded(
+        &mut self,
+        id: String,
+        messages: Vec<ChatMessage>,
+        turn_running: bool,
+        turn_unanswered: bool,
+    ) -> Vec<Effect> {
+        if self.pending_load.as_deref() != Some(&id) {
+            return vec![Effect::None]; // stale — newer request superseded this one
+        }
+        self.session = Some(id.clone());
+        self.pending_load = None;
+        self.messages.clear();
+        self.chat_cursor = 0;
+        self.turn_offset = 0;
+        self.expanded_messages.clear();
+        for msg in messages {
+            match msg.role.as_str() {
+                "user" => self.messages.push(Message::User(msg.content)),
+                "assistant" => {
+                    if let Some(tool_calls) = &msg.tool_calls {
+                        self.push_tool_history(tool_calls);
+                    }
+                    if !msg.content.is_empty() {
+                        self.messages.push(Message::Assistant(msg.content));
+                    }
+                }
+                _ => {}
+            }
+        }
+        // Enforce the message cap on history load — this is the primary source of
+        // unbounded growth (loading a conversation with thousands of messages).
+        // Normal conversation turns typically stay well under MAX_MESSAGE_COUNT,
+        // so we only prune here rather than on every user message push.
+        if self.messages.len() > MAX_MESSAGE_COUNT {
+            let removed = self.messages.len() - MAX_MESSAGE_COUNT;
+            // Count the human's turns being dropped *before* dropping them, so the turn
+            // numbers rendered beside what survives still agree with the server's — which
+            // counts from the real first turn. Otherwise `/fork 3` would branch somewhere
+            // other than the "3" you can see on screen.
+            self.turn_offset = self.messages[..removed]
+                .iter()
+                .filter(|m| matches!(m, Message::User(_)))
+                .count();
+            self.messages = self.messages.split_off(removed);
+            self.messages.insert(
+                0,
+                Message::System(format!("... {removed} earlier messages omitted")),
+            );
+        }
+        // Turn lifecycle: a missing reply is either still coming or permanently lost.
+        // Silence is the wrong reading of either — attach, or say the turn died.
+        let mut follow_up = Vec::new();
+        if turn_running {
+            self.streaming = true;
+            self.messages.push(Message::System(
+                "A turn is still running — reattaching…".into(),
+            ));
+            follow_up.push(Effect::AttachConversationStream(id));
+        } else if turn_unanswered {
+            self.streaming = false;
+            self.messages.push(Message::System(
+                "The last turn ended without a reply (usually the daemon restarted \
+             mid-inference). Nothing is still running — re-send your question to \
+             try again."
+                    .into(),
+            ));
+        }
+        self.scroll_offset = 0;
+        self.focus = Focus::Input;
+        self.mark_dirty();
+        if follow_up.is_empty() {
+            vec![Effect::None]
+        } else {
+            follow_up
+        }
+    }
+
+    fn on_goal_message_outcome(&mut self, outcome: GoalMessageOutcome) -> Vec<Effect> {
+        use crate::api::GoalMessageOutcome as O;
+        match outcome {
+            O::Accepted => {} // the echo arrives via the stream as a `human_input` event
+            O::NotFound | O::NotPermitted | O::Parked | O::Finished | O::Error(_) => {
+                let msg = match outcome {
+                    O::NotFound => "[this session is gone — /back to return to chat]".into(),
+                    O::NotPermitted => {
+                        // Authority, not timing. Waiting will not help; the grant is the fix.
+                        "[this session was never allowed to be answered — its profile \
+                     grants no AskHuman]"
+                            .into()
+                    }
+                    O::Parked => {
+                        // It has NOT finished, and saying it had is the difference between
+                        // "start over" and "wait".
+                        "[this session is parked — it was waiting on you when the daemon \
+                     restarted, and cannot take an answer until it is resumed]"
+                            .into()
+                    }
+                    O::Finished => "[this session has finished — /back to return to chat]".into(),
+                    O::Error(e) => format!("[could not deliver message: {e}]"),
+                    O::Accepted => unreachable!(),
+                };
+                if let Some(j) = self.joined.as_mut() {
+                    j.messages.push(Message::System(msg));
+                } else {
+                    self.messages.push(Message::System(msg));
+                }
+                self.mark_dirty();
+            }
+        }
+        vec![Effect::None]
     }
 
     fn push_tool_history(&mut self, tool_calls: &serde_json::Value) {
