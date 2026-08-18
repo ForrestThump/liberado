@@ -8,57 +8,20 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph, Wrap},
 };
 
-use crate::app::{App, Focus, Message};
+use crate::api::{ToolCallChip, ToolResultChip};
+use crate::app::{App, Focus, JoinedSession, Message};
 use crate::format::{short_id, truncate_for_display};
+use crate::md_cache::MarkdownParseCache;
 use crate::render::kind_color;
 use crate::tuning::*;
 use crate::ui::c;
 
-#[allow(clippy::cognitive_complexity)]
 pub(super) fn draw(frame: &mut Frame, area: Rect, app: &mut App, th: &Theme, spinner_tick: u8) {
     // Unified-Session view: when joined to a goal session, the chat pane renders *that* session's
     // (separate-but-linked) transcript and identity; otherwise the primary conversation.
     let joined = app.joined.as_ref();
 
-    let title = if let Some(j) = joined {
-        let desc = if j.description.is_empty() {
-            short_id(&j.id).to_string()
-        } else {
-            truncate_for_display(&j.description, 48)
-        };
-        let awaiting = if j.awaiting.is_some() {
-            "  ⏳ awaiting your reply"
-        } else {
-            ""
-        };
-        format!(" {} — {} [{}]{awaiting}", j.kind.label(), desc, j.status)
-    } else if let Some(ref id) = app.session {
-        format!(" Chat — {}", short_id(id))
-    } else {
-        " Chat — new conversation".to_string()
-    };
-
-    // History-navigation hint only applies to the primary conversation view.
-    let focus_hint = if joined.is_some() {
-        " [/back to leave]"
-    } else if app.focus == Focus::ChatMessages {
-        " [j/k · Enter expand tools · f fork here · Esc back]"
-    } else {
-        " [Tab focus history]"
-    };
-    let title = format!("{title}{focus_hint}");
-
-    let border_color = if let Some(j) = joined {
-        kind_color(j.kind, th)
-    } else if app.focus == Focus::ChatMessages {
-        c(&th.sidebar_border_focused, "#00ffff")
-    } else {
-        c(&th.border, "#808080")
-    };
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .title(title)
-        .style(Style::default().fg(border_color));
+    let block = pane_block(joined, app, th);
 
     // Snapshot the joined view up front (owned clones) so the render loop can still borrow
     // `app.md_cache` mutably below. The primary-chat path stays zero-copy (borrows `app.messages`);
@@ -124,315 +87,39 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &mut App, th: &Theme, spi
         };
 
         match msg {
-            Message::User(text) => {
-                // Soft themed strip so user turns scan apart from agent output.
-                let user_bg = if is_selected {
-                    sel_bg
-                } else {
-                    c(&th.chat_user_bg, "#16162a")
-                };
-                let prefix_fg = if is_selected {
-                    sel_fg
-                } else {
-                    c(&th.chat_user_prefix, "#00ffff")
-                };
-                let text_fg = if is_selected {
-                    sel_fg
-                } else {
-                    c(&th.chat_user_text, "#ffffff")
-                };
-                // The turn number this message is, in the numbering `/fork <n>` uses. Read-only
-                // transcripts aren't forkable, so they stay unnumbered.
-                user_turn += 1;
-                let lead = if joined_active {
-                    "> ".to_string()
-                } else {
-                    format!("{user_turn}> ")
-                };
-                // Continuation lines indent to exactly the width of the lead, whatever its digits.
-                let cont = " ".repeat(lead.chars().count());
-
-                // Multi-line user messages: paint every line with the same soft bg.
-                let mut body_lines = text.lines().peekable();
-                if body_lines.peek().is_none() {
-                    lines.push(Line::from(vec![
-                        Span::styled(
-                            lead,
-                            Style::default()
-                                .fg(prefix_fg)
-                                .bg(user_bg)
-                                .add_modifier(Modifier::BOLD),
-                        ),
-                        Span::styled(" ", Style::default().bg(user_bg)),
-                    ]));
-                } else {
-                    let mut first = true;
-                    for line in text.lines() {
-                        let (lead_text, bold) = if first {
-                            first = false;
-                            (lead.clone(), Modifier::BOLD)
-                        } else {
-                            (cont.clone(), Modifier::empty())
-                        };
-                        lines.push(Line::from(vec![
-                            Span::styled(
-                                lead_text,
-                                Style::default()
-                                    .fg(prefix_fg)
-                                    .bg(user_bg)
-                                    .add_modifier(bold),
-                            ),
-                            Span::styled(
-                                line.to_string(),
-                                Style::default().fg(text_fg).bg(user_bg),
-                            ),
-                        ]));
-                    }
-                }
-            }
+            Message::User(text) => push_user_message(
+                &mut lines,
+                text,
+                th,
+                is_selected,
+                sel_bg,
+                sel_fg,
+                joined_active,
+                &mut user_turn,
+            ),
             Message::Assistant(text) => {
-                // T1.1: parse once per distinct body; redraws while streaming other turns hit cache.
-                let md_lines = app.md_cache.get_or_parse(text);
-                for md in md_lines.iter() {
-                    match md {
-                        MarkdownLine::Paragraph(spans) => {
-                            let line_spans: Vec<Span> = spans
-                                .iter()
-                                .map(|s| {
-                                    let mut style =
-                                        Style::default().fg(c(&th.chat_assistant_text, "#c0c0c0"));
-                                    if s.style.bold {
-                                        style = style
-                                            .fg(c(&th.md_bold, "#ffffff"))
-                                            .add_modifier(Modifier::BOLD);
-                                    }
-                                    if s.style.italic {
-                                        style = style
-                                            .fg(c(&th.md_italic, "#c0c0c0"))
-                                            .add_modifier(Modifier::ITALIC);
-                                    }
-                                    if s.style.code {
-                                        style = Style::default().fg(c(&th.md_code, "#ffff00"));
-                                    }
-                                    if s.style.link {
-                                        style = Style::default()
-                                            .fg(c(&th.md_link, "#8080ff"))
-                                            .add_modifier(Modifier::UNDERLINED);
-                                    }
-                                    Span::styled(s.text.clone(), style)
-                                })
-                                .collect();
-                            if !line_spans.is_empty() {
-                                lines.push(Line::from(line_spans));
-                            }
-                        }
-                        MarkdownLine::CodeBlock {
-                            language,
-                            lines: code,
-                        } => {
-                            let lang = language.as_deref().unwrap_or("");
-                            let header = if lang.is_empty() {
-                                "```".into()
-                            } else {
-                                format!("```{lang}")
-                            };
-                            lines.push(Line::from(Span::styled(
-                                header,
-                                Style::default()
-                                    .fg(c(&th.code_block_header, "#808000"))
-                                    .add_modifier(Modifier::DIM),
-                            )));
-                            for cl in code {
-                                lines.push(Line::from(Span::styled(
-                                    cl.clone(),
-                                    Style::default()
-                                        .fg(c(&th.code_block_fg, "#c0c0c0"))
-                                        .bg(c(&th.code_block_bg, "#303030")),
-                                )));
-                            }
-                            lines.push(Line::from(Span::styled(
-                                "```",
-                                Style::default()
-                                    .fg(c(&th.code_block_header, "#808000"))
-                                    .add_modifier(Modifier::DIM),
-                            )));
-                        }
-                        MarkdownLine::Bullet(item) => {
-                            lines.push(Line::from(vec![
-                                Span::styled(
-                                    "  • ",
-                                    Style::default().fg(c(&th.md_bullet, "#00ffff")),
-                                ),
-                                Span::styled(
-                                    item.clone(),
-                                    Style::default().fg(c(&th.chat_assistant_text, "#c0c0c0")),
-                                ),
-                            ]));
-                        }
-                        MarkdownLine::Heading(level, text) => {
-                            let bold = if *level <= HEADING_BOLD_THRESHOLD {
-                                Modifier::BOLD
-                            } else {
-                                Modifier::empty()
-                            };
-                            lines.push(Line::from(Span::styled(
-                                text.clone(),
-                                Style::default()
-                                    .fg(c(&th.md_heading, "#ffffff"))
-                                    .add_modifier(bold),
-                            )));
-                        }
-                        MarkdownLine::HorizontalRule => {
-                            lines.push(Line::from(Span::styled(
-                                "───",
-                                Style::default().fg(c(&th.md_rule, "#404040")),
-                            )));
-                        }
-                        MarkdownLine::Blank => {
-                            lines.push(Line::from(""));
-                        }
-                    }
-                }
+                push_assistant_message(&mut lines, text, th, &mut app.md_cache)
             }
-            Message::ToolCall(chip) => {
-                let arrow = if is_expanded { "▼" } else { "▶" };
-                let header_bg = sel_bg;
-                let body_bg = if is_selected { sel_bg } else { chip_body_bg };
-                let name_fg = if is_selected {
-                    sel_fg
-                } else {
-                    c(&th.tool_name, "#ffff00")
-                };
-                let args_fg = if is_selected {
-                    sel_fg
-                } else {
-                    c(&th.tool_args, "#808080")
-                };
-                lines.push(Line::from(vec![
-                    Span::styled(
-                        arrow,
-                        Style::default().fg(c(&th.tool_ok, "#00ff00")).bg(header_bg),
-                    ),
-                    Span::styled(
-                        " [tool] ",
-                        Style::default()
-                            .fg(c(&th.tool_label, "#ffff00"))
-                            .add_modifier(Modifier::BOLD)
-                            .bg(header_bg),
-                    ),
-                    Span::styled(
-                        chip.name.clone(),
-                        Style::default().fg(name_fg).bg(header_bg),
-                    ),
-                    Span::styled(
-                        if is_expanded {
-                            String::new()
-                        } else {
-                            format!(
-                                "({})",
-                                truncate_for_display(&chip.args, TOOL_DISPLAY_TRUNCATE)
-                            )
-                        },
-                        Style::default().fg(args_fg).bg(header_bg),
-                    ),
-                ]));
-                if is_expanded {
-                    for line in chip.args.lines() {
-                        lines.push(Line::from(Span::styled(
-                            format!("    {line}"),
-                            Style::default()
-                                .fg(if is_selected {
-                                    sel_fg
-                                } else {
-                                    c(&th.code_block_fg, "#c0c0c0")
-                                })
-                                .bg(body_bg),
-                        )));
-                    }
-                    if chip.args.is_empty() {
-                        lines.push(Line::from(Span::styled(
-                            "    (no args)",
-                            Style::default()
-                                .fg(if is_selected {
-                                    sel_fg
-                                } else {
-                                    c(&th.tool_args, "#808080")
-                                })
-                                .bg(body_bg),
-                        )));
-                    }
-                }
-            }
-            Message::ToolResult(chip) => {
-                let arrow = if is_expanded { "▼" } else { "▶" };
-                let status = if chip.ok { "ok" } else { "err" };
-                let status_color = if chip.ok {
-                    c(&th.tool_ok, "#00ff00")
-                } else {
-                    c(&th.tool_err, "#ff0000")
-                };
-                let header_bg = sel_bg;
-                let body_bg = if is_selected { sel_bg } else { chip_body_bg };
-                let name_fg = if is_selected {
-                    sel_fg
-                } else {
-                    c(&th.tool_name, "#ffff00")
-                };
-                let body_fg = if is_selected {
-                    sel_fg
-                } else {
-                    c(&th.tool_args, "#808080")
-                };
-                let result_fg = if is_selected {
-                    sel_fg
-                } else {
-                    c(&th.code_block_fg, "#c0c0c0")
-                };
-                lines.push(Line::from(vec![
-                    Span::styled(
-                        arrow,
-                        Style::default().fg(c(&th.tool_ok, "#00ff00")).bg(header_bg),
-                    ),
-                    Span::styled(
-                        " [tool] ",
-                        Style::default()
-                            .fg(c(&th.tool_label, "#ffff00"))
-                            .add_modifier(Modifier::BOLD)
-                            .bg(header_bg),
-                    ),
-                    Span::styled(
-                        chip.name.clone(),
-                        Style::default().fg(name_fg).bg(header_bg),
-                    ),
-                    Span::styled(" ", Style::default().bg(header_bg)),
-                    Span::styled(status, Style::default().fg(status_color).bg(header_bg)),
-                    Span::styled(
-                        if is_expanded {
-                            String::new()
-                        } else {
-                            format!(
-                                " {}",
-                                truncate_for_display(&chip.preview, TOOL_DISPLAY_TRUNCATE)
-                            )
-                        },
-                        Style::default().fg(body_fg).bg(header_bg),
-                    ),
-                ]));
-                if is_expanded {
-                    for line in chip.preview.lines() {
-                        lines.push(Line::from(Span::styled(
-                            format!("    {line}"),
-                            Style::default().fg(result_fg).bg(body_bg),
-                        )));
-                    }
-                    if chip.preview.is_empty() {
-                        lines.push(Line::from(Span::styled(
-                            "    (empty result)",
-                            Style::default().fg(body_fg).bg(body_bg),
-                        )));
-                    }
-                }
-            }
+            Message::ToolCall(chip) => push_tool_call(
+                &mut lines,
+                chip,
+                th,
+                is_selected,
+                is_expanded,
+                sel_bg,
+                sel_fg,
+                chip_body_bg,
+            ),
+            Message::ToolResult(chip) => push_tool_result(
+                &mut lines,
+                chip,
+                th,
+                is_selected,
+                is_expanded,
+                sel_bg,
+                sel_fg,
+                chip_body_bg,
+            ),
             Message::System(text) => {
                 for line in text.lines() {
                     lines.push(Line::from(Span::styled(
@@ -519,6 +206,390 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &mut App, th: &Theme, spi
         .scroll((app.scroll_offset.min(u16::MAX as usize) as u16, 0));
 
     frame.render_widget(paragraph, area);
+}
+
+/// The chat pane's frame: title (session identity or primary-chat), focus hint, and border tint.
+fn pane_block(joined: Option<&JoinedSession>, app: &App, th: &Theme) -> Block<'static> {
+    let title = if let Some(j) = joined {
+        let desc = if j.description.is_empty() {
+            short_id(&j.id).to_string()
+        } else {
+            truncate_for_display(&j.description, 48)
+        };
+        let awaiting = if j.awaiting.is_some() {
+            "  ⏳ awaiting your reply"
+        } else {
+            ""
+        };
+        format!(" {} — {} [{}]{awaiting}", j.kind.label(), desc, j.status)
+    } else if let Some(ref id) = app.session {
+        format!(" Chat — {}", short_id(id))
+    } else {
+        " Chat — new conversation".to_string()
+    };
+
+    // History-navigation hint only applies to the primary conversation view.
+    let focus_hint = if joined.is_some() {
+        " [/back to leave]"
+    } else if app.focus == Focus::ChatMessages {
+        " [j/k · Enter expand tools · f fork here · Esc back]"
+    } else {
+        " [Tab focus history]"
+    };
+    let title = format!("{title}{focus_hint}");
+
+    let border_color = if let Some(j) = joined {
+        kind_color(j.kind, th)
+    } else if app.focus == Focus::ChatMessages {
+        c(&th.sidebar_border_focused, "#00ffff")
+    } else {
+        c(&th.border, "#808080")
+    };
+    Block::default()
+        .borders(Borders::ALL)
+        .title(title)
+        .style(Style::default().fg(border_color))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn push_user_message(
+    lines: &mut Vec<Line>,
+    text: &str,
+    th: &Theme,
+    is_selected: bool,
+    sel_bg: Color,
+    sel_fg: Color,
+    joined_active: bool,
+    user_turn: &mut usize,
+) {
+    // Soft themed strip so user turns scan apart from agent output.
+    let user_bg = if is_selected {
+        sel_bg
+    } else {
+        c(&th.chat_user_bg, "#16162a")
+    };
+    let prefix_fg = if is_selected {
+        sel_fg
+    } else {
+        c(&th.chat_user_prefix, "#00ffff")
+    };
+    let text_fg = if is_selected {
+        sel_fg
+    } else {
+        c(&th.chat_user_text, "#ffffff")
+    };
+    // The turn number this message is, in the numbering `/fork <n>` uses. Read-only
+    // transcripts aren't forkable, so they stay unnumbered.
+    *user_turn += 1;
+    let lead = if joined_active {
+        "> ".to_string()
+    } else {
+        format!("{user_turn}> ")
+    };
+    // Continuation lines indent to exactly the width of the lead, whatever its digits.
+    let cont = " ".repeat(lead.chars().count());
+
+    // Multi-line user messages: paint every line with the same soft bg.
+    let mut body_lines = text.lines().peekable();
+    if body_lines.peek().is_none() {
+        lines.push(Line::from(vec![
+            Span::styled(
+                lead,
+                Style::default()
+                    .fg(prefix_fg)
+                    .bg(user_bg)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(" ", Style::default().bg(user_bg)),
+        ]));
+    } else {
+        let mut first = true;
+        for line in text.lines() {
+            let (lead_text, bold) = if first {
+                first = false;
+                (lead.clone(), Modifier::BOLD)
+            } else {
+                (cont.clone(), Modifier::empty())
+            };
+            lines.push(Line::from(vec![
+                Span::styled(
+                    lead_text,
+                    Style::default()
+                        .fg(prefix_fg)
+                        .bg(user_bg)
+                        .add_modifier(bold),
+                ),
+                Span::styled(line.to_string(), Style::default().fg(text_fg).bg(user_bg)),
+            ]));
+        }
+    }
+}
+
+fn push_assistant_message(
+    lines: &mut Vec<Line>,
+    text: &str,
+    th: &Theme,
+    md_cache: &mut MarkdownParseCache,
+) {
+    // T1.1: parse once per distinct body; redraws while streaming other turns hit cache.
+    let md_lines = md_cache.get_or_parse(text);
+    for md in md_lines.iter() {
+        match md {
+            MarkdownLine::Paragraph(spans) => {
+                let line_spans: Vec<Span> = spans
+                    .iter()
+                    .map(|s| {
+                        let mut style = Style::default().fg(c(&th.chat_assistant_text, "#c0c0c0"));
+                        if s.style.bold {
+                            style = style
+                                .fg(c(&th.md_bold, "#ffffff"))
+                                .add_modifier(Modifier::BOLD);
+                        }
+                        if s.style.italic {
+                            style = style
+                                .fg(c(&th.md_italic, "#c0c0c0"))
+                                .add_modifier(Modifier::ITALIC);
+                        }
+                        if s.style.code {
+                            style = Style::default().fg(c(&th.md_code, "#ffff00"));
+                        }
+                        if s.style.link {
+                            style = Style::default()
+                                .fg(c(&th.md_link, "#8080ff"))
+                                .add_modifier(Modifier::UNDERLINED);
+                        }
+                        Span::styled(s.text.clone(), style)
+                    })
+                    .collect();
+                if !line_spans.is_empty() {
+                    lines.push(Line::from(line_spans));
+                }
+            }
+            MarkdownLine::CodeBlock {
+                language,
+                lines: code,
+            } => {
+                let lang = language.as_deref().unwrap_or("");
+                let header = if lang.is_empty() {
+                    "```".into()
+                } else {
+                    format!("```{lang}")
+                };
+                lines.push(Line::from(Span::styled(
+                    header,
+                    Style::default()
+                        .fg(c(&th.code_block_header, "#808000"))
+                        .add_modifier(Modifier::DIM),
+                )));
+                for cl in code {
+                    lines.push(Line::from(Span::styled(
+                        cl.clone(),
+                        Style::default()
+                            .fg(c(&th.code_block_fg, "#c0c0c0"))
+                            .bg(c(&th.code_block_bg, "#303030")),
+                    )));
+                }
+                lines.push(Line::from(Span::styled(
+                    "```",
+                    Style::default()
+                        .fg(c(&th.code_block_header, "#808000"))
+                        .add_modifier(Modifier::DIM),
+                )));
+            }
+            MarkdownLine::Bullet(item) => {
+                lines.push(Line::from(vec![
+                    Span::styled("  • ", Style::default().fg(c(&th.md_bullet, "#00ffff"))),
+                    Span::styled(
+                        item.clone(),
+                        Style::default().fg(c(&th.chat_assistant_text, "#c0c0c0")),
+                    ),
+                ]));
+            }
+            MarkdownLine::Heading(level, text) => {
+                let bold = if *level <= HEADING_BOLD_THRESHOLD {
+                    Modifier::BOLD
+                } else {
+                    Modifier::empty()
+                };
+                lines.push(Line::from(Span::styled(
+                    text.clone(),
+                    Style::default()
+                        .fg(c(&th.md_heading, "#ffffff"))
+                        .add_modifier(bold),
+                )));
+            }
+            MarkdownLine::HorizontalRule => {
+                lines.push(Line::from(Span::styled(
+                    "───",
+                    Style::default().fg(c(&th.md_rule, "#404040")),
+                )));
+            }
+            MarkdownLine::Blank => {
+                lines.push(Line::from(""));
+            }
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn push_tool_call(
+    lines: &mut Vec<Line>,
+    chip: &ToolCallChip,
+    th: &Theme,
+    is_selected: bool,
+    is_expanded: bool,
+    sel_bg: Color,
+    sel_fg: Color,
+    chip_body_bg: Color,
+) {
+    let arrow = if is_expanded { "▼" } else { "▶" };
+    let header_bg = sel_bg;
+    let body_bg = if is_selected { sel_bg } else { chip_body_bg };
+    let name_fg = if is_selected {
+        sel_fg
+    } else {
+        c(&th.tool_name, "#ffff00")
+    };
+    let args_fg = if is_selected {
+        sel_fg
+    } else {
+        c(&th.tool_args, "#808080")
+    };
+    lines.push(Line::from(vec![
+        Span::styled(
+            arrow,
+            Style::default().fg(c(&th.tool_ok, "#00ff00")).bg(header_bg),
+        ),
+        Span::styled(
+            " [tool] ",
+            Style::default()
+                .fg(c(&th.tool_label, "#ffff00"))
+                .add_modifier(Modifier::BOLD)
+                .bg(header_bg),
+        ),
+        Span::styled(
+            chip.name.clone(),
+            Style::default().fg(name_fg).bg(header_bg),
+        ),
+        Span::styled(
+            if is_expanded {
+                String::new()
+            } else {
+                format!(
+                    "({})",
+                    truncate_for_display(&chip.args, TOOL_DISPLAY_TRUNCATE)
+                )
+            },
+            Style::default().fg(args_fg).bg(header_bg),
+        ),
+    ]));
+    if is_expanded {
+        for line in chip.args.lines() {
+            lines.push(Line::from(Span::styled(
+                format!("    {line}"),
+                Style::default()
+                    .fg(if is_selected {
+                        sel_fg
+                    } else {
+                        c(&th.code_block_fg, "#c0c0c0")
+                    })
+                    .bg(body_bg),
+            )));
+        }
+        if chip.args.is_empty() {
+            lines.push(Line::from(Span::styled(
+                "    (no args)",
+                Style::default()
+                    .fg(if is_selected {
+                        sel_fg
+                    } else {
+                        c(&th.tool_args, "#808080")
+                    })
+                    .bg(body_bg),
+            )));
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn push_tool_result(
+    lines: &mut Vec<Line>,
+    chip: &ToolResultChip,
+    th: &Theme,
+    is_selected: bool,
+    is_expanded: bool,
+    sel_bg: Color,
+    sel_fg: Color,
+    chip_body_bg: Color,
+) {
+    let arrow = if is_expanded { "▼" } else { "▶" };
+    let status = if chip.ok { "ok" } else { "err" };
+    let status_color = if chip.ok {
+        c(&th.tool_ok, "#00ff00")
+    } else {
+        c(&th.tool_err, "#ff0000")
+    };
+    let header_bg = sel_bg;
+    let body_bg = if is_selected { sel_bg } else { chip_body_bg };
+    let name_fg = if is_selected {
+        sel_fg
+    } else {
+        c(&th.tool_name, "#ffff00")
+    };
+    let body_fg = if is_selected {
+        sel_fg
+    } else {
+        c(&th.tool_args, "#808080")
+    };
+    let result_fg = if is_selected {
+        sel_fg
+    } else {
+        c(&th.code_block_fg, "#c0c0c0")
+    };
+    lines.push(Line::from(vec![
+        Span::styled(
+            arrow,
+            Style::default().fg(c(&th.tool_ok, "#00ff00")).bg(header_bg),
+        ),
+        Span::styled(
+            " [tool] ",
+            Style::default()
+                .fg(c(&th.tool_label, "#ffff00"))
+                .add_modifier(Modifier::BOLD)
+                .bg(header_bg),
+        ),
+        Span::styled(
+            chip.name.clone(),
+            Style::default().fg(name_fg).bg(header_bg),
+        ),
+        Span::styled(" ", Style::default().bg(header_bg)),
+        Span::styled(status, Style::default().fg(status_color).bg(header_bg)),
+        Span::styled(
+            if is_expanded {
+                String::new()
+            } else {
+                format!(
+                    " {}",
+                    truncate_for_display(&chip.preview, TOOL_DISPLAY_TRUNCATE)
+                )
+            },
+            Style::default().fg(body_fg).bg(header_bg),
+        ),
+    ]));
+    if is_expanded {
+        for line in chip.preview.lines() {
+            lines.push(Line::from(Span::styled(
+                format!("    {line}"),
+                Style::default().fg(result_fg).bg(body_bg),
+            )));
+        }
+        if chip.preview.is_empty() {
+            lines.push(Line::from(Span::styled(
+                "    (empty result)",
+                Style::default().fg(body_fg).bg(body_bg),
+            )));
+        }
+    }
 }
 
 #[cfg(test)]

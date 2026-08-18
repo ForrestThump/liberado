@@ -14,6 +14,7 @@
 //! implementing [`MessagingChannel`] and constructing the bot with [`ApprovalBot::new`].
 
 use std::collections::HashMap;
+use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -431,7 +432,49 @@ impl ApprovalBot {
     /// Read `proposals/{stem}.md`, and — only if it is currently `Pending` and not expired — set
     /// its status and write it back tagged as a human write. Any other current state is reported
     /// back to the human and left untouched.
-    #[allow(clippy::cognitive_complexity)]
+    /// Load `proposals/{stem}.md` and parse it. A missing active-dir note is checked against the
+    /// archive first — the daemon archives a proposal the moment it reaches a terminal state, so a
+    /// second tap on a still-visible notification must say "Already approved", not "not found".
+    async fn load_proposal_or_archived(&self, event_id: &str, stem: &str) -> Option<Proposal> {
+        let path = proposal_path(stem);
+        let content = match self.vault.read(&path).await {
+            Ok(c) => c,
+            Err(e) => {
+                self.ack_read_failure(event_id, stem, e.to_string()).await;
+                return None;
+            }
+        };
+        match Proposal::from_note(&content) {
+            Ok(p) => Some(p),
+            Err(e) => {
+                tracing::warn!(stem, error = %e, "approval-bot: proposal note did not parse");
+                self.ack(event_id, "Could not parse that proposal.").await;
+                None
+            }
+        }
+    }
+
+    /// A read failure usually means the daemon archived the proposal the moment it reached a
+    /// terminal state — a second tap on a still-visible notification reads the active dir and
+    /// finds nothing. Report that as "already resolved" rather than a vault I/O error, which once
+    /// sent a real debugging session (2026-08-01) hunting a storage fault that did not exist.
+    async fn ack_read_failure(&self, event_id: &str, stem: &str, error_desc: String) {
+        match self.archived_outcome(stem).await {
+            Some(outcome) => {
+                tracing::info!(
+                    stem,
+                    outcome,
+                    "approval-bot: proposal already resolved and archived; nothing to do"
+                );
+                self.ack(event_id, &format!("Already {outcome}.")).await;
+            }
+            None => {
+                tracing::warn!(stem, error = %error_desc, "approval-bot: proposal not found");
+                self.ack(event_id, "Proposal not found.").await;
+            }
+        }
+    }
+
     async fn set_status(
         &self,
         event_id: &str,
@@ -439,77 +482,24 @@ impl ApprovalBot {
         stem: &str,
         new_status: ProposalStatus,
     ) {
-        let path = proposal_path(stem);
-
-        let content = match self.vault.read(&path).await {
-            Ok(c) => c,
-            Err(e) => {
-                // The common case is not a missing file: the daemon archives a proposal the moment
-                // it reaches a terminal state, so a second tap on a notification that is still on
-                // screen reads the active dir and finds nothing. Reporting that as a vault I/O
-                // error sent a real debugging session (2026-08-01) looking for a storage fault that
-                // did not exist, and told the operator "Proposal not found" about a proposal that
-                // had been approved seconds earlier.
-                match self.archived_outcome(stem).await {
-                    Some(outcome) => {
-                        tracing::info!(
-                            stem,
-                            outcome,
-                            "approval-bot: proposal already resolved and archived; nothing to do"
-                        );
-                        self.ack(event_id, &format!("Already {outcome}.")).await;
-                    }
-                    None => {
-                        tracing::warn!(stem, error = %e, "approval-bot: proposal not found");
-                        self.ack(event_id, "Proposal not found.").await;
-                    }
-                }
-                return;
-            }
+        let Some(mut proposal) = self.load_proposal_or_archived(event_id, stem).await else {
+            return;
         };
 
-        let mut proposal = match Proposal::from_note(&content) {
-            Ok(p) => p,
-            Err(e) => {
-                tracing::warn!(stem, error = %e, "approval-bot: proposal note did not parse");
-                self.ack(event_id, "Could not parse that proposal.").await;
-                return;
-            }
-        };
-
-        let expired = proposal.is_expired_at(chrono::Utc::now());
-        if proposal.status != ProposalStatus::Pending || expired {
-            let note = if expired {
-                "expired".to_string()
-            } else {
-                format!("{:?}", proposal.status)
-            };
-            self.ack(event_id, &format!("Already {note} — no action taken."))
-                .await;
+        if !self.confirm_pending(event_id, &proposal).await {
             return;
         }
+
+        proposal.status = new_status;
 
         // The decision is recorded **before** the note is touched, and the note is only a view.
         // A tap is the authenticated act; `proposals/` is agent-writable, so nothing written there
         // authorises anything. If the ledger write fails, the decision did not happen — say so
         // rather than leaving a note that claims otherwise.
-        if let Some(ledger) = &self.approvals {
-            let decision = match new_status {
-                ProposalStatus::Approved => Some(liberado_common::ApprovalDecision::Approved),
-                ProposalStatus::Rejected => Some(liberado_common::ApprovalDecision::Rejected),
-                _ => None,
-            };
-            if let Some(decision) = decision
-                && let Err(e) = ledger.record(&proposal.id, decision, "telegram").await
-            {
-                tracing::error!(stem, error = %e, "approval-bot: failed to record the decision");
-                self.ack(event_id, "Failed to record your decision — try again.")
-                    .await;
-                return;
-            }
+        if !self.record_decision(event_id, stem, &proposal).await {
+            return;
         }
-
-        proposal.status = new_status;
+        let path = proposal_path(stem);
         if let Err(e) = self
             .vault
             .write(&path, &proposal.to_note(), None, &WriteProvenance::human())
@@ -521,17 +511,48 @@ impl ApprovalBot {
             return;
         }
 
+        self.send_status_receipt(
+            event_id,
+            message_ref,
+            new_status,
+            proposal.rationale.as_str(),
+        )
+        .await;
+    }
+
+    /// Refuse a proposal that is not `Pending` (or has expired), telling the human why. Returns
+    /// `false` when it was already decided.
+    async fn confirm_pending(&self, event_id: &str, proposal: &Proposal) -> bool {
+        let expired = proposal.is_expired_at(chrono::Utc::now());
+        if proposal.status != ProposalStatus::Pending || expired {
+            let note = if expired {
+                "expired".to_string()
+            } else {
+                format!("{:?}", proposal.status)
+            };
+            self.ack(event_id, &format!("Already {note} — no action taken."))
+                .await;
+            return false;
+        }
+        true
+    }
+
+    /// Send the status-change ack and its receipt line.
+    async fn send_status_receipt(
+        &self,
+        event_id: &str,
+        message_ref: Option<&str>,
+        new_status: ProposalStatus,
+        rationale: &str,
+    ) {
         let (icon, verb) = match new_status {
             ProposalStatus::Approved => ("✅", "Approved"),
             ProposalStatus::Rejected => ("❌", "Rejected"),
             _ => ("✏️", "Updated"),
         };
         self.ack(event_id, verb).await;
-        self.receipt(
-            message_ref,
-            &format!("{icon} {verb} — {}", proposal.rationale),
-        )
-        .await;
+        self.receipt(message_ref, &format!("{icon} {verb} — {rationale}"))
+            .await;
     }
 
     /// Tapped Revise: prompt for a free-text note and remember which proposal it belongs to.
@@ -684,53 +705,84 @@ impl ApprovalBot {
         }
     }
 
-    /// Ask the shared provider to redraft `stem`'s `rationale`/`proposed_action` per `note`, then
-    /// write the result back as a **fresh, re-signed, still-Pending** proposal and send new
-    /// buttons. Never auto-approves.
-    #[allow(clippy::cognitive_complexity)]
-    async fn apply_revision(&self, stem: &str, note: &str) {
+    /// Load and parse the proposal to revise, refusing non-Pending states. Any failure is told
+    /// to the human and yields `None`.
+    async fn load_revision_target(&self, stem: &str) -> Option<Proposal> {
         let path = proposal_path(stem);
-
         let content = match self.vault.read(&path).await {
             Ok(c) => c,
             Err(e) => {
                 tracing::warn!(stem, error = %e, "approval-bot: proposal not found for revision");
                 self.send_text("Could not find that proposal.").await;
-                return;
+                return None;
             }
         };
-
-        let mut proposal = match Proposal::from_note(&content) {
+        let proposal = match Proposal::from_note(&content) {
             Ok(p) => p,
             Err(e) => {
                 tracing::warn!(stem, error = %e, "approval-bot: proposal note did not parse");
                 self.send_text("Could not parse that proposal.").await;
-                return;
+                return None;
             }
         };
-
         if proposal.status != ProposalStatus::Pending {
             self.send_text(&format!(
                 "Proposal is already {:?} — cannot revise.",
                 proposal.status
             ))
             .await;
-            return;
+            return None;
         }
+        Some(proposal)
+    }
 
-        let request = build_revision_request(&proposal, note, self.tuning.revise_temperature);
-        let revision: ProposalRevision =
-            match complete_json(self.provider.as_ref(), request, revision_schema()).await {
-                Ok(r) => r,
-                Err(e) => {
-                    tracing::warn!(stem, error = %e, "approval-bot: revision LLM call failed");
-                    self.send_text(&format!(
-                        "Could not apply that revision ({e}) — the proposal is unchanged."
-                    ))
-                    .await;
-                    return;
-                }
-            };
+    /// Ask the shared provider to redraft the rationale/action per `note`. A failure leaves the
+    /// proposal untouched and is told to the human.
+    async fn complete_revision(
+        &self,
+        stem: &str,
+        proposal: &Proposal,
+        note: &str,
+    ) -> Option<ProposalRevision> {
+        let request = build_revision_request(proposal, note, self.tuning.revise_temperature);
+        match complete_json(self.provider.as_ref(), request, revision_schema()).await {
+            Ok(r) => Some(r),
+            Err(e) => {
+                tracing::warn!(stem, error = %e, "approval-bot: revision LLM call failed");
+                self.send_text(&format!(
+                    "Could not apply that revision ({e}) — the proposal is unchanged."
+                ))
+                .await;
+                None
+            }
+        }
+    }
+
+    /// Write the re-signed note back to the vault; a failure is told to the human.
+    async fn write_revision_note(&self, stem: &str, path: &Path, proposal: &Proposal) -> bool {
+        if let Err(e) = self
+            .vault
+            .write(path, &proposal.to_note(), None, &WriteProvenance::human())
+            .await
+        {
+            tracing::error!(stem, error = %e, "approval-bot: failed to write revision");
+            self.send_text("Failed to save the revision — try again.")
+                .await;
+            return false;
+        }
+        true
+    }
+
+    /// Ask the shared provider to redraft `stem`'s `rationale`/`proposed_action` per `note`, then
+    /// write the result back as a **fresh, re-signed, still-Pending** proposal and send new
+    /// buttons. Never auto-approves.
+    async fn apply_revision(&self, stem: &str, note: &str) {
+        let Some(mut proposal) = self.load_revision_target(stem).await else {
+            return;
+        };
+        let Some(revision) = self.complete_revision(stem, &proposal, note).await else {
+            return;
+        };
 
         // proposed_action is a signed field — any revision must get a fresh signature. status stays
         // Pending: only a subsequent Approve tap (pure code) can ever execute this.
@@ -739,14 +791,11 @@ impl ApprovalBot {
         let mut proposal = self.signer.sign(proposal);
         proposal.set_status(ProposalStatus::Pending);
 
-        if let Err(e) = self
-            .vault
-            .write(&path, &proposal.to_note(), None, &WriteProvenance::human())
+        let path = proposal_path(stem);
+        if !self
+            .write_revision_note(stem, std::path::Path::new(&path), &proposal)
             .await
         {
-            tracing::error!(stem, error = %e, "approval-bot: failed to write revision");
-            self.send_text("Failed to save the revision — try again.")
-                .await;
             return;
         }
 

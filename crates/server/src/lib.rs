@@ -24,12 +24,13 @@ use std::time::{Duration, Instant};
 use std::path::Path;
 
 use axum::Router;
-use liberado_common::{CapabilityCatalog, WriteProvenance};
+use liberado_common::{CapabilityCatalog, CapabilitySet, WriteProvenance};
 use liberado_daemon::Daemon;
 use liberado_dispatcher::Dispatcher;
 use liberado_executor::{Budget, Executor, ToolRuntime};
 use liberado_main_agent::ChatSessions;
 use liberado_mcp::McpRegistry;
+use liberado_provider::Provider;
 use liberado_session_store::SessionStore;
 use tokio::sync::Mutex;
 use tower_http::compression::CompressionLayer;
@@ -796,7 +797,6 @@ struct SessionEngine {
     goals: Arc<liberado_session::GoalSessionHub>,
 }
 
-#[allow(clippy::cognitive_complexity)]
 async fn build_chat(
     providers: &liberado_bootstrap::RoleProviders,
     mcp: McpRegistry,
@@ -832,33 +832,8 @@ async fn build_chat(
     // through `delegate` → hub → dispatch pack, not the face agent's own tool list.
     let runtime = connect_chat_runtime(mcp);
 
-    let mut tool_names: Vec<String> = runtime.catalog().iter().map(|t| t.name.clone()).collect();
-    // Face-agent surface is usually just `delegate` (+ optional main-agent MCP grants).
-    if main_agent_cfg.delegation_mode {
-        tool_names = vec![liberado_main_agent::DELEGATE_TOOL_NAME.to_string()];
-        let granted = main_agent_caps.granted_mcps();
-        if !granted.is_empty() {
-            tool_names.extend(runtime.catalog().iter().filter_map(|t| {
-                let mcp = t.name.split_once(':').map(|(m, _)| m).unwrap_or(&t.name);
-                if granted.iter().any(|g| g == mcp) {
-                    Some(t.name.clone())
-                } else {
-                    None
-                }
-            }));
-        }
-    }
-    let tool_count = tool_names.len();
-    if tool_count > 0 {
-        info!(
-            count = tool_count,
-            tools = ?tool_names,
-            delegation_mode = main_agent_cfg.delegation_mode,
-            "chat: tool surface ready"
-        );
-    } else {
-        info!("chat: no tools available — the model can only converse, not act");
-    }
+    let (tool_names, tool_count) =
+        face_tool_surface(&runtime, main_agent_cfg.delegation_mode, &main_agent_caps);
 
     // ── Build the guarded ChatSessions ───────────────────────────────────────
     let consequence_count = guard.consequences.len();
@@ -919,24 +894,75 @@ async fn build_chat(
 
     // Pre-turn classification (legacy mode) + face-agent `delegate` needs a dispatcher for the
     // classifier; execution is always the hub's dispatch pack.
-    let mut dispatcher = Dispatcher::new(
+    let dispatcher = chat_dispatcher(
         dispatcher_provider,
         config.tuning.dispatch.clone(),
         config.tuning.concurrency.max_reaction_depth,
+        guidance,
+        main_agent_cfg.delegation_mode,
     );
+    sessions = sessions.with_dispatch(dispatcher, catalog);
+
+    (Some(Arc::new(sessions)), tool_count, tool_names)
+}
+
+/// The face agent's tool surface: `delegate` only (plus granted main-agent MCP tools) in
+/// delegation mode, the full live registry otherwise.
+fn face_tool_surface(
+    runtime: &Arc<dyn ToolRuntime>,
+    delegation_mode: bool,
+    caps: &CapabilitySet,
+) -> (Vec<String>, usize) {
+    let mut tool_names: Vec<String> = runtime.catalog().iter().map(|t| t.name.clone()).collect();
+    if delegation_mode {
+        tool_names = vec![liberado_main_agent::DELEGATE_TOOL_NAME.to_string()];
+        let granted = caps.granted_mcps();
+        if !granted.is_empty() {
+            tool_names.extend(runtime.catalog().iter().filter_map(|t| {
+                let mcp = t.name.split_once(':').map(|(m, _)| m).unwrap_or(&t.name);
+                if granted.iter().any(|g| g == mcp) {
+                    Some(t.name.clone())
+                } else {
+                    None
+                }
+            }));
+        }
+    }
+    let tool_count = tool_names.len();
+    if tool_count > 0 {
+        info!(
+            count = tool_count,
+            tools = ?tool_names,
+            delegation_mode,
+            "chat: tool surface ready"
+        );
+    } else {
+        info!("chat: no tools available — the model can only converse, not act");
+    }
+    (tool_names, tool_count)
+}
+
+/// A dispatcher wired with the given guidance and delegation mode (which only changes the
+/// startup log line — the mode is applied downstream by `with_delegation_mode`).
+fn chat_dispatcher(
+    dispatcher_provider: Arc<dyn Provider>,
+    dispatch_tuning: liberado_config::DispatchTuning,
+    max_reaction_depth: u32,
+    guidance: Option<Arc<dyn liberado_common::ToolGuidanceSource>>,
+    delegation_mode: bool,
+) -> Dispatcher {
+    let mut dispatcher = Dispatcher::new(dispatcher_provider, dispatch_tuning, max_reaction_depth);
     if let Some(g) = guidance {
         dispatcher = dispatcher.with_guidance(g);
     }
-    if main_agent_cfg.delegation_mode {
+    if delegation_mode {
         info!("chat: face-agent mode — human interfacer + delegate tool (hub hosts work)");
     } else {
         info!(
             "chat: legacy dispatch mode (pre-turn routing + main-agent MCP tools on stream path)"
         );
     }
-    sessions = sessions.with_dispatch(dispatcher, catalog);
-
-    (Some(Arc::new(sessions)), tool_count, tool_names)
+    dispatcher
 }
 
 /// Build the dispatcher's optional procedural-memory guidance source (`liberado-dispatch-logic-spec.md`

@@ -178,7 +178,6 @@ pub struct CodingRound<'a> {
     pub config_dir: Option<PathBuf>,
 }
 
-#[allow(clippy::cognitive_complexity)]
 pub async fn run_coding_round(
     round: CodingRound<'_>,
     state: &mut CodingSessionState,
@@ -249,33 +248,7 @@ pub async fn run_coding_round(
     // together.
     //
     // Affordable only because of the shared target dir; see `WorkspaceBuildConfig`.
-    if tuning.workspace_build.warmup {
-        let outcome = liberado_coder_sandbox::warmup::warm_workspace(
-            &workspace,
-            &workspace_env(tuning),
-            std::time::Duration::from_secs(tuning.workspace_build.warmup_timeout_secs),
-        )
-        .await;
-        match &outcome {
-            liberado_coder_sandbox::warmup::Warmup::Ready { seconds } => {
-                tracing::info!(seconds, "workspace warm; starting the run")
-            }
-            liberado_coder_sandbox::warmup::Warmup::TimedOut { seconds } => tracing::warn!(
-                seconds,
-                "warm-up build did not finish in time; starting the run anyway"
-            ),
-            liberado_coder_sandbox::warmup::Warmup::Skipped => {}
-            liberado_coder_sandbox::warmup::Warmup::BaselineBroken { detail } => {
-                // Refuse before spending anything. A broken baseline is not the model's problem
-                // to solve, and letting it try produces a report about errors it did not cause.
-                return Err(format!(
-                    "the workspace does not compile before any change was made, so no coding run                      was started. Fix the baseline first.
-
-{detail}"
-                ));
-            }
-        }
-    }
+    warm_workspace_if_configured(tuning, &workspace).await?;
 
     let backend = LiberadoLoopBackend::with_provider_factory(factory);
     // Scope the live tap around the *whole* run. The pack's emitters are task-locals several
@@ -302,27 +275,15 @@ pub async fn run_coding_round(
     // running it first would mix a speculative change into the implementer's work with no way to
     // tell them apart. Failures here are logged and dropped — an optional extra that can fail the
     // run it was meant to help is a bad trade.
-    let mut remediation = None;
-    if tuning.session_critic.remediation && !result.session_findings.is_empty() {
-        let branch =
-            liberado_coder_agent::remediation::remediation_branch(&state.coding_session_id);
-        match commit_and_branch(&workspace, &branch).await {
-            Ok(()) => {
-                match liberado_coder_agent::remediation::run_remediation(
-                    &backend,
-                    &base_request,
-                    &result.session_findings,
-                    branch.clone(),
-                )
-                .await
-                {
-                    Ok(record) => remediation = record,
-                    Err(e) => tracing::warn!(error = %e, "remediation run failed"),
-                }
-            }
-            Err(e) => tracing::warn!(error = %e, %branch, "cannot isolate a remediation branch"),
-        }
-    }
+    let remediation = remediate_if_needed(
+        &backend,
+        tuning,
+        &state.coding_session_id,
+        &workspace,
+        &base_request,
+        &result.session_findings,
+    )
+    .await;
 
     // The ship bar, before this round may be called a success.
     //
@@ -369,6 +330,82 @@ pub async fn run_coding_round(
             },
         ),
     })
+}
+
+/// Optional remediation pass over the round's session findings, on its own branch. Failures are
+/// logged and dropped — an optional extra that can fail the run it was meant to help is a bad
+/// trade. Returns the remediation record, if one was produced.
+async fn remediate_if_needed(
+    backend: &LiberadoLoopBackend,
+    tuning: &CoderTuning,
+    coding_session_id: &str,
+    workspace: &Path,
+    base_request: &liberado_coder_core::CoderRunRequest,
+    session_findings: &[liberado_coder_core::SessionFinding],
+) -> Option<liberado_coder_core::RemediationRecord> {
+    if !tuning.session_critic.remediation || session_findings.is_empty() {
+        return None;
+    }
+    let branch = liberado_coder_agent::remediation::remediation_branch(coding_session_id);
+    match commit_and_branch(workspace, &branch).await {
+        Ok(()) => {
+            match liberado_coder_agent::remediation::run_remediation(
+                backend,
+                base_request,
+                session_findings,
+                branch.clone(),
+            )
+            .await
+            {
+                Ok(record) => record,
+                Err(e) => {
+                    tracing::warn!(error = %e, "remediation run failed");
+                    None
+                }
+            }
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, %branch, "cannot isolate a remediation branch");
+            None
+        }
+    }
+}
+
+/// Warm the shared target dir before the first token goes out. A broken baseline refuses the
+/// run outright — the model is not asked to fix a tree that never compiled.
+async fn warm_workspace_if_configured(
+    tuning: &CoderTuning,
+    workspace: &Path,
+) -> Result<(), String> {
+    if !tuning.workspace_build.warmup {
+        return Ok(());
+    }
+    let outcome = liberado_coder_sandbox::warmup::warm_workspace(
+        workspace,
+        &workspace_env(tuning),
+        std::time::Duration::from_secs(tuning.workspace_build.warmup_timeout_secs),
+    )
+    .await;
+    match &outcome {
+        liberado_coder_sandbox::warmup::Warmup::Ready { seconds } => {
+            tracing::info!(seconds, "workspace warm; starting the run")
+        }
+        liberado_coder_sandbox::warmup::Warmup::TimedOut { seconds } => tracing::warn!(
+            seconds,
+            "warm-up build did not finish in time; starting the run anyway"
+        ),
+        liberado_coder_sandbox::warmup::Warmup::Skipped => {}
+        liberado_coder_sandbox::warmup::Warmup::BaselineBroken { detail } => {
+            // Refuse before spending anything. A broken baseline is not the model's problem
+            // to solve, and letting it try produces a report about errors it did not cause.
+            return Err(format!(
+                "the workspace does not compile before any change was made, so no coding run was started. Fix the baseline first.
+
+{detail}"
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// Run the ship bar over a finished round and return the outcome it earns.

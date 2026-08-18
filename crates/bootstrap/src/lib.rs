@@ -457,7 +457,6 @@ fn watcher_capture_paths(inbox_path: &str, extra: &[String]) -> Vec<String> {
     paths
 }
 
-#[allow(clippy::cognitive_complexity)]
 pub fn configure_daemon(
     daemon: Daemon,
     providers: &RoleProviders,
@@ -468,17 +467,7 @@ pub fn configure_daemon(
     guidance: Option<Arc<dyn ToolGuidanceSource>>,
 ) -> Daemon {
     // Timezone is config-only and useful even in watch-only mode (future notifiers / hooks).
-    let daemon = match config.topology.user_timezone() {
-        Ok(tz) => {
-            tracing::info!(timezone = %tz.iana_name(), "operator timezone configured");
-            daemon.with_user_timezone(tz)
-        }
-        Err(e) => {
-            // validate() already rejects bad names at load; this is a belt-and-suspenders log.
-            tracing::error!(error = %e, "topology.timezone invalid — cron/webhook goals will not get Local time stamps");
-            daemon
-        }
-    };
+    let daemon = apply_timezone(daemon, config);
 
     // Provider-independent knobs: proposal reaper and session-profile grants still matter in
     // watch-only mode (leftover proposals in the vault; fail-closed profile map if a source
@@ -505,14 +494,67 @@ pub fn configure_daemon(
         );
         return daemon;
     };
-    let mut dispatcher = Dispatcher::new(
-        dispatcher_provider.clone(),
-        config.tuning.dispatch.clone(),
-        config.tuning.concurrency.max_reaction_depth,
-    );
-    if let Some(g) = &guidance {
-        dispatcher = dispatcher.with_guidance(g.clone());
-    }
+    wire_dispatch_stack(
+        daemon,
+        dispatcher_provider,
+        subagent_providers,
+        config,
+        catalog,
+        mcp,
+        vault_path,
+        guidance.as_ref(),
+    )
+}
+
+/// Wire every additional named pool (Decision 18 checkpoint #3) — same provider/tuning/consequence
+/// catalog/proposals dir/signer as the default pool, differing only in the capability grant named
+/// after the pool. MCP runtime is the **shared** live registry (clone), so peer hot-reload stays
+/// one transition for every pool.
+#[allow(clippy::too_many_arguments)]
+fn attach_pools(
+    daemon: Daemon,
+    config: &Config,
+    dispatcher_provider: &Arc<dyn liberado_provider::Provider>,
+    guidance: Option<&Arc<dyn ToolGuidanceSource>>,
+    catalog: &Arc<CapabilityCatalog>,
+    orchestrator_infra: &OrchestratorInfra,
+    notifier: Option<&Arc<dyn Notifier>>,
+    mcp: &McpRegistry,
+) -> Daemon {
+    config
+        .topology
+        .pools
+        .iter()
+        .filter(|p| p.enabled)
+        .fold(daemon, |daemon, pool| {
+            wire_extra_pool(
+                daemon,
+                &pool.name,
+                dispatcher_provider,
+                config,
+                guidance,
+                catalog,
+                orchestrator_infra,
+                notifier,
+                mcp,
+            )
+        })
+}
+
+/// Wire the full dispatch stack — dispatcher, orchestrator infra, notifier, cron, the default
+/// pool's orchestrator, and every additional named pool — onto the daemon.
+#[allow(clippy::too_many_arguments)]
+fn wire_dispatch_stack(
+    daemon: Daemon,
+    dispatcher_provider: &Arc<dyn liberado_provider::Provider>,
+    subagent_providers: &SubagentProviders,
+    config: &Config,
+    catalog: Arc<CapabilityCatalog>,
+    mcp: McpRegistry,
+    vault_path: &Path,
+    guidance: Option<&Arc<dyn ToolGuidanceSource>>,
+) -> Daemon {
+    let dispatcher = build_dispatcher(dispatcher_provider, config, guidance);
     let capabilities = config.policy.capabilities_for("dispatcher");
     tracing::info!(
         grants = config.policy.grants.len(),
@@ -523,25 +565,7 @@ pub fn configure_daemon(
     // same consequence catalog, vault-rooted proposals directory, and integrity signer chat's own
     // RiskGatedToolRuntime uses (see `RiskGatedToolRuntime`'s doc comment).
     let guard = guard_context(&catalog, &config.policy, vault_path);
-    // Everything an `Orchestrator` needs that's identical across every pool (see
-    // `OrchestratorInfra`'s doc comment) — built once here, then combined per pool below with just
-    // that pool's own factory/capabilities/name.
-    // Live catalog Arc — orchestrator gates re-read consequence/zone data after MCP hot-reload.
-    let mut orchestrator_infra = OrchestratorInfra::new(
-        subagent_providers.orchestrator.clone(),
-        catalog.clone(),
-        guard.zone_write_classes.clone(),
-        guard.proposals_dir.clone(),
-        guard.signer.clone(),
-    )
-    .with_subagent_provider(subagent_providers.worker.clone());
-    if let Some(max_turns) = config.topology.research_max_turns {
-        orchestrator_infra = orchestrator_infra.with_research_max_turns(max_turns);
-    }
-    if let Some(sink) = report_sink(&config.topology) {
-        orchestrator_infra = orchestrator_infra.with_report_sink(sink);
-    }
-
+    let orchestrator_infra = build_orchestrator_infra(subagent_providers, config, &catalog, &guard);
     // Optional — a daemon/orchestrator with no LIBERADO_TELEGRAM_* vars set just never
     // sends anything, same as before this existed. The motivating case is exactly this daemon
     // path: an unattended (cron-triggered, Phase 3) proposal nobody's watching the vault for.
@@ -563,24 +587,8 @@ pub fn configure_daemon(
         .with_approval_ledger(liberado_common::ApprovalLedger::new(
             liberado_config::data_dir(),
         ));
-    let daemon = match &notifier {
-        Some(n) => daemon.with_notifier(n.clone()),
-        None => daemon,
-    };
-    let daemon = match cron_source_from_config(config) {
-        Ok(Some(cron_source)) => {
-            tracing::info!(
-                schedules = config.topology.schedules.len(),
-                "cron event source attached"
-            );
-            daemon.with_cron_source(Box::new(cron_source))
-        }
-        Ok(None) => daemon,
-        Err(e) => {
-            tracing::error!(error = %e, "cron schedules failed to construct — running without cron");
-            daemon
-        }
-    };
+    let daemon = attach_notifier(daemon, &notifier);
+    let daemon = attach_cron(daemon, config);
     // Always wire the shared live registry (even when empty) so empty→add hot-reload can acquire
     // peers without a process restart. Emptiness only affects acquisition, not composition.
     tracing::info!(
@@ -593,45 +601,143 @@ pub fn configure_daemon(
         None => orchestrator,
     };
     let daemon = daemon.with_orchestrator(orchestrator);
+    attach_pools(
+        daemon,
+        config,
+        dispatcher_provider,
+        guidance,
+        &catalog,
+        &orchestrator_infra,
+        notifier.as_ref(),
+        &mcp,
+    )
+}
 
-    // Additional named pools (Decision 18 checkpoint #3) — same provider/tuning/consequence
-    // catalog/proposals dir/signer as the default pool, differing only in the capability grant
-    // named after the pool. MCP runtime is the **shared** live registry (clone), so peer hot-reload
-    // stays one transition for every pool.
-    config
-        .topology
-        .pools
-        .iter()
-        .filter(|p| p.enabled)
-        .fold(daemon, |daemon, pool| {
-            let pool_capabilities = config.policy.capabilities_for(&pool.name);
+/// Apply the operator timezone; an invalid name is logged (validate() already refused it at
+/// load) and the daemon runs without Local-time stamps.
+fn apply_timezone(daemon: Daemon, config: &Config) -> Daemon {
+    match config.topology.user_timezone() {
+        Ok(tz) => {
+            tracing::info!(timezone = %tz.iana_name(), "operator timezone configured");
+            daemon.with_user_timezone(tz)
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "topology.timezone invalid — cron/webhook goals will not get Local time stamps");
+            daemon
+        }
+    }
+}
+
+/// A dispatcher over the router provider with the shared tunables and optional guidance.
+fn build_dispatcher(
+    dispatcher_provider: &Arc<dyn liberado_provider::Provider>,
+    config: &Config,
+    guidance: Option<&Arc<dyn ToolGuidanceSource>>,
+) -> Dispatcher {
+    let mut dispatcher = Dispatcher::new(
+        dispatcher_provider.clone(),
+        config.tuning.dispatch.clone(),
+        config.tuning.concurrency.max_reaction_depth,
+    );
+    if let Some(g) = guidance {
+        dispatcher = dispatcher.with_guidance(g.clone());
+    }
+    dispatcher
+}
+
+/// Attach the telegram notifier when the environment configured one.
+fn attach_notifier(daemon: Daemon, notifier: &Option<Arc<dyn Notifier>>) -> Daemon {
+    match notifier {
+        Some(n) => daemon.with_notifier(n.clone()),
+        None => daemon,
+    }
+}
+
+/// Attach the cron event source when schedules are configured; a construction failure is logged
+/// and the daemon runs without cron.
+fn attach_cron(daemon: Daemon, config: &Config) -> Daemon {
+    match cron_source_from_config(config) {
+        Ok(Some(cron_source)) => {
             tracing::info!(
-                pool = pool.name,
-                capabilities = pool_capabilities.capabilities.len(),
-                "additional pool capability boundary configured from policy"
+                schedules = config.topology.schedules.len(),
+                "cron event source attached"
             );
-            let mut pool_dispatcher = Dispatcher::new(
-                dispatcher_provider.clone(),
-                config.tuning.dispatch.clone(),
-                config.tuning.concurrency.max_reaction_depth,
-            );
-            if let Some(g) = &guidance {
-                pool_dispatcher = pool_dispatcher.with_guidance(g.clone());
-            }
-            let daemon = daemon.with_pool_dispatcher(
-                pool.name.clone(),
-                pool_dispatcher,
-                catalog.clone(),
-                pool_capabilities.clone(),
-            );
-            let orchestrator =
-                orchestrator_infra.for_pool(mcp.clone(), pool_capabilities, pool.name.clone());
-            let orchestrator = match &notifier {
-                Some(n) => orchestrator.with_notifier(n.clone()),
-                None => orchestrator,
-            };
-            daemon.with_pool_orchestrator(pool.name.clone(), orchestrator)
-        })
+            daemon.with_cron_source(Box::new(cron_source))
+        }
+        Ok(None) => daemon,
+        Err(e) => {
+            tracing::error!(error = %e, "cron schedules failed to construct — running without cron");
+            daemon
+        }
+    }
+}
+
+/// Build the orchestrator infrastructure shared by every pool (and the dispatch pack): the worker
+/// provider, live consequence/zone catalog, proposals dir, and integrity signer.
+fn build_orchestrator_infra(
+    subagent_providers: &SubagentProviders,
+    config: &Config,
+    catalog: &Arc<CapabilityCatalog>,
+    guard: &GuardContext,
+) -> OrchestratorInfra {
+    let mut infra = OrchestratorInfra::new(
+        subagent_providers.orchestrator.clone(),
+        catalog.clone(),
+        guard.zone_write_classes.clone(),
+        guard.proposals_dir.clone(),
+        guard.signer.clone(),
+    )
+    .with_subagent_provider(subagent_providers.worker.clone());
+    if let Some(max_turns) = config.topology.research_max_turns {
+        infra = infra.with_research_max_turns(max_turns);
+    }
+    if let Some(sink) = report_sink(&config.topology) {
+        infra = infra.with_report_sink(sink);
+    }
+    infra
+}
+
+/// Wire one additional named pool: its own dispatcher (same provider/tuning/guidance) and
+/// orchestrator (same infra, its own capability grant and MCP registry clone).
+#[allow(clippy::too_many_arguments)]
+fn wire_extra_pool(
+    daemon: Daemon,
+    pool_name: &str,
+    dispatcher_provider: &Arc<dyn liberado_provider::Provider>,
+    config: &Config,
+    guidance: Option<&Arc<dyn ToolGuidanceSource>>,
+    catalog: &Arc<CapabilityCatalog>,
+    orchestrator_infra: &OrchestratorInfra,
+    notifier: Option<&Arc<dyn Notifier>>,
+    mcp: &McpRegistry,
+) -> Daemon {
+    let pool_capabilities = config.policy.capabilities_for(pool_name);
+    tracing::info!(
+        pool = pool_name,
+        capabilities = pool_capabilities.capabilities.len(),
+        "additional pool capability boundary configured from policy"
+    );
+    let mut pool_dispatcher = Dispatcher::new(
+        dispatcher_provider.clone(),
+        config.tuning.dispatch.clone(),
+        config.tuning.concurrency.max_reaction_depth,
+    );
+    if let Some(g) = guidance {
+        pool_dispatcher = pool_dispatcher.with_guidance(g.clone());
+    }
+    let daemon = daemon.with_pool_dispatcher(
+        pool_name.to_string(),
+        pool_dispatcher,
+        catalog.clone(),
+        pool_capabilities.clone(),
+    );
+    let orchestrator =
+        orchestrator_infra.for_pool(mcp.clone(), pool_capabilities, pool_name.to_string());
+    let orchestrator = match notifier {
+        Some(n) => orchestrator.with_notifier(n.clone()),
+        None => orchestrator,
+    };
+    daemon.with_pool_orchestrator(pool_name.to_string(), orchestrator)
 }
 
 /// Build the [`DispatchPack`] that hosts dispatcher+orchestrator as a goal-session pack (E2/E3).
