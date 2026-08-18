@@ -464,31 +464,59 @@ fn json_preview(s: &str) -> String {
 }
 
 /// Apply edits to file text. Line numbers refer to the **original** file.
+///
+/// Orchestrates the pipeline: split into lines, partition the edit kinds, validate anchors,
+/// apply line edits bottom-up, then fold in BOF/EOF inserts.
 fn apply_edits(text: &str, edits: &[Edit]) -> Result<(String, Option<usize>), String> {
     if edits.is_empty() {
         return Ok((text.to_string(), None));
     }
 
-    // Preserve whether the original ended with a trailing newline via split behaviour.
-    let mut file_lines: Vec<String> = text
-        .split('\n')
-        .map(|l| l.strip_suffix('\r').unwrap_or(l).to_string())
-        .collect();
-
-    // Phantom trailing empty from split on trailing newline is addressable for inserts.
+    let mut file_lines = prepare_lines(text);
     let mut first_changed: Option<usize> = None;
-    let track = |line: usize, first: &mut Option<usize>| {
-        if first.is_none_or(|f| line < f) {
-            *first = Some(line);
-        }
-    };
 
-    // Partition BOF/EOF vs anchor edits.
-    let mut bof: Vec<String> = Vec::new();
-    let mut eof: Vec<String> = Vec::new();
-    let mut by_line: std::collections::BTreeMap<usize, Vec<&Edit>> =
+    let (bof, eof, by_line) = partition_edits(edits);
+    validate_bounds(text, &file_lines, &by_line)?;
+    apply_line_edits(&mut file_lines, &by_line, &mut first_changed)?;
+    apply_bof(&mut file_lines, bof, &mut first_changed);
+    apply_eof(text, &mut file_lines, eof, &mut first_changed);
+
+    // If original had trailing newline and we still have content, prefer keeping final newline
+    // only when last element was empty phantom — join already includes it when last is "".
+    // Empty file edge: single empty string joins to "".
+    let mut result = file_lines.join("\n");
+    if result == "\n" {
+        result = String::new();
+    }
+    Ok((result, first_changed))
+}
+
+/// Split file text into lines, normalizing CRLF so line numbers are computed on LF boundaries.
+fn prepare_lines(text: &str) -> Vec<String> {
+    text.split('\n')
+        .map(|l| l.strip_suffix('\r').unwrap_or(l).to_string())
+        .collect()
+}
+
+/// Record the first (lowest) line an edit touched.
+fn track_first(line: usize, first: &mut Option<usize>) {
+    if first.is_none_or(|f| line < f) {
+        *first = Some(line);
+    }
+}
+
+/// Partition BOF/EOF edits from line-anchored ones.
+fn partition_edits<'a>(
+    edits: &'a [Edit],
+) -> (
+    Vec<String>,
+    Vec<String>,
+    std::collections::BTreeMap<usize, Vec<&'a Edit>>,
+) {
+    let mut bof = Vec::new();
+    let mut eof = Vec::new();
+    let mut by_line: std::collections::BTreeMap<usize, Vec<&'a Edit>> =
         std::collections::BTreeMap::new();
-
     for edit in edits {
         match edit {
             Edit::InsertBof { text } => bof.push(text.clone()),
@@ -501,8 +529,15 @@ fn apply_edits(text: &str, edits: &[Edit]) -> Result<(String, Option<usize>), St
             }
         }
     }
+    (bof, eof, by_line)
+}
 
-    // Validate bounds.
+/// Validate every anchor line against the real file shape.
+fn validate_bounds(
+    text: &str,
+    file_lines: &[String],
+    by_line: &std::collections::BTreeMap<usize, Vec<&Edit>>,
+) -> Result<(), String> {
     let line_count = if file_lines.len() == 1 && file_lines[0].is_empty() {
         0
     } else if text.ends_with('\n') && file_lines.last().is_some_and(|l| l.is_empty()) {
@@ -525,8 +560,15 @@ fn apply_edits(text: &str, edits: &[Edit]) -> Result<(String, Option<usize>), St
             return Err(format!("line {line} does not exist (file is empty)"));
         }
     }
+    Ok(())
+}
 
-    // Apply bottom-up so earlier indices stay valid.
+/// Apply all line-anchored edits bottom-up so earlier indices stay valid.
+fn apply_line_edits(
+    file_lines: &mut Vec<String>,
+    by_line: &std::collections::BTreeMap<usize, Vec<&Edit>>,
+    first_changed: &mut Option<usize>,
+) -> Result<(), String> {
     let lines_desc: Vec<usize> = by_line.keys().copied().rev().collect();
     for line in lines_desc {
         let bucket = by_line.get(&line).cloned().unwrap_or_default();
@@ -542,7 +584,6 @@ fn apply_edits(text: &str, edits: &[Edit]) -> Result<(String, Option<usize>), St
         let mut after = Vec::new();
         let mut replacements = Vec::new();
         let mut delete = false;
-
         for edit in bucket {
             match edit {
                 Edit::InsertBefore { text, .. } => before.push(text.clone()),
@@ -570,47 +611,51 @@ fn apply_edits(text: &str, edits: &[Edit]) -> Result<(String, Option<usize>), St
         };
 
         file_lines.splice(idx..=idx, replacement);
-        track(line, &mut first_changed);
+        track_first(line, first_changed);
     }
+    Ok(())
+}
 
-    if !bof.is_empty() {
-        if file_lines.len() == 1 && file_lines[0].is_empty() {
-            file_lines = bof;
-        } else {
-            for (i, line) in bof.into_iter().enumerate() {
-                file_lines.insert(i, line);
-            }
+/// Insert BOF lines at the front of the file.
+fn apply_bof(file_lines: &mut Vec<String>, bof: Vec<String>, first_changed: &mut Option<usize>) {
+    if bof.is_empty() {
+        return;
+    }
+    if file_lines.len() == 1 && file_lines[0].is_empty() {
+        *file_lines = bof;
+    } else {
+        for (i, line) in bof.into_iter().enumerate() {
+            file_lines.insert(i, line);
         }
-        track(1, &mut first_changed);
     }
+    track_first(1, first_changed);
+}
 
-    if !eof.is_empty() {
-        let insert_at = if file_lines.last().is_some_and(|l| l.is_empty()) && text.ends_with('\n') {
-            file_lines.len() - 1
-        } else if file_lines.len() == 1 && file_lines[0].is_empty() {
-            0
-        } else {
-            file_lines.len()
-        };
-        if insert_at == 0 && file_lines.len() == 1 && file_lines[0].is_empty() {
-            file_lines = eof;
-        } else {
-            for (offset, line) in eof.into_iter().enumerate() {
-                file_lines.insert(insert_at + offset, line);
-            }
+/// Insert EOF lines at the end of the file (or before a trailing phantom newline).
+fn apply_eof(
+    text: &str,
+    file_lines: &mut Vec<String>,
+    eof: Vec<String>,
+    first_changed: &mut Option<usize>,
+) {
+    if eof.is_empty() {
+        return;
+    }
+    let insert_at = if file_lines.last().is_some_and(|l| l.is_empty()) && text.ends_with('\n') {
+        file_lines.len() - 1
+    } else if file_lines.len() == 1 && file_lines[0].is_empty() {
+        0
+    } else {
+        file_lines.len()
+    };
+    if insert_at == 0 && file_lines.len() == 1 && file_lines[0].is_empty() {
+        *file_lines = eof;
+    } else {
+        for (offset, line) in eof.into_iter().enumerate() {
+            file_lines.insert(insert_at + offset, line);
         }
-        track(insert_at + 1, &mut first_changed);
     }
-
-    let mut result = file_lines.join("\n");
-    // If original had trailing newline and we still have content, prefer keeping final newline
-    // only when last element was empty phantom — join already includes it when last is "".
-    // Empty file edge: single empty string joins to "".
-    if result == "\n" {
-        result = String::new();
-    }
-
-    Ok((result, first_changed))
+    track_first(insert_at + 1, first_changed);
 }
 
 /// Apply a multi-section patch against an in-memory file map (preflight + commit).
