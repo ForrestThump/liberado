@@ -339,12 +339,38 @@ impl Config {
     /// additional cross-cutting checks on top (port/socket collisions, dangling zone/secret
     /// refs, triggerless hooks). Returns the first violation found.
     pub fn validate(&self) -> Result<()> {
+        self.validate_vault_and_timezone()?;
+        self.validate_tuning_bounds()?;
+        self.capture_unimplemented_warning();
+        self.validate_capture_schedule()?;
+        self.validate_maintenance_schedules()?;
+        self.validate_telegram_getupdate()?;
+        // `tuning.coder` is opaque here; the coding pack parses + validates it via
+        // `liberado_coder_core::CoderTuning::from_value` at composition time (still fail-fast
+        // at boot, just in the pack's parser — see the field's doc comment on `Tuning`).
+        self.validate_providers()?;
+        self.validate_model_roles()?;
+        self.validate_schedules()?;
+        self.validate_mcp_images()?;
+        self.validate_hooks()?;
+        self.validate_pools()?;
+        self.validate_session_profiles()?;
+        self.validate_profile_stamp()?;
+        self.validate_projects()?;
+        Ok(())
+    }
+
+    fn validate_vault_and_timezone(&self) -> Result<()> {
         if self.topology.vault_path.as_os_str().is_empty() {
             return Err(Error::Config("topology.vault_path is required".into()));
         }
         if let Err(e) = self.topology.user_timezone() {
             return Err(Error::Config(format!("topology.timezone: {e}")));
         }
+        Ok(())
+    }
+
+    fn validate_tuning_bounds(&self) -> Result<()> {
         if self.tuning.dispatch.max_concurrent_subagents == 0 {
             return Err(Error::Config(
                 "tuning.dispatch.max_concurrent_subagents must be >= 1".into(),
@@ -360,12 +386,16 @@ impl Config {
                 "tuning.concurrency.max_reaction_depth must be >= 1".into(),
             ));
         }
-        // `[tuning.capture]` parses and validates. `inbox_ignore_globs`, `inbox_path`,
-        // `capture_paths`, `ready_flag`, and `hold_flag` are live — the F12 positive scope.
-        // The remaining fields (settle windows, `processed_path`, `ambient_sweep_schedule`)
-        // have no code reading them yet — see `CaptureTuning` doc. Warn rather than reject:
-        // rejecting would break configs that already carry the section (including
-        // `config.example/tuning.toml`), and the section is not wrong, just partially inert.
+        Ok(())
+    }
+
+    /// `[tuning.capture]` parses and validates. `inbox_ignore_globs`, `inbox_path`,
+    /// `capture_paths`, `ready_flag`, and `hold_flag` are live — the F12 positive scope.
+    /// The remaining fields (settle windows, `processed_path`, `ambient_sweep_schedule`)
+    /// have no code reading them yet — see `CaptureTuning` doc. Warn rather than reject:
+    /// rejecting would break configs that already carry the section (including
+    /// `config.example/tuning.toml`), and the section is not wrong, just partially inert.
+    fn capture_unimplemented_warning(&self) {
         let c = &self.tuning.capture;
         let default = super::tuning::CaptureTuning::default();
         let unimplemented_fields_differ = c.inbox_settle_window_secs
@@ -375,20 +405,24 @@ impl Config {
             || c.ambient_sweep_schedule != default.ambient_sweep_schedule;
         if unimplemented_fields_differ {
             tracing::warn!(
-                "[tuning.capture] contains unimplemented settings — inbox_ignore_globs, \
-                 inbox_path, capture_paths, ready_flag, and hold_flag are live, but settle \
-                 windows, processed_path, and the ambient sweep all do nothing. \
-                 The vault watcher runs; the inbox layer above it is not built."
+                "[tuning.capture] contains unimplemented settings — inbox_ignore_globs,                  inbox_path, capture_paths, ready_flag, and hold_flag are live, but settle                  windows, processed_path, and the ambient sweep all do nothing.                  The vault watcher runs; the inbox layer above it is not built."
             );
         }
-        // These three are free text, not yet parsed by anything (see their own doc comments) — but
-        // an empty schedule is unambiguously wrong under any future interpretation, so it's caught
-        // here rather than left to surface as a confusing failure once a real consumer exists.
+    }
+
+    fn validate_capture_schedule(&self) -> Result<()> {
+        // This is free text, not yet parsed by anything (see its doc comment) — but an empty
+        // schedule is unambiguously wrong under any future interpretation, so it's caught here
+        // rather than left to surface as a confusing failure once a real consumer exists.
         if self.tuning.capture.ambient_sweep_schedule.trim().is_empty() {
             return Err(Error::Config(
                 "tuning.capture.ambient_sweep_schedule must not be empty".into(),
             ));
         }
+        Ok(())
+    }
+
+    fn validate_maintenance_schedules(&self) -> Result<()> {
         if self
             .tuning
             .maintenance
@@ -411,6 +445,10 @@ impl Config {
                 "tuning.maintenance.maintenance_schedule must not be empty".into(),
             ));
         }
+        Ok(())
+    }
+
+    fn validate_telegram_getupdate(&self) -> Result<()> {
         if self.tuning.telegram_approvals.getupdate_timeout_secs == 0
             || self.tuning.telegram_approvals.getupdate_timeout_secs > 50
         {
@@ -420,13 +458,13 @@ impl Config {
                     .into(),
             ));
         }
-        // `tuning.coder` is opaque here; the coding pack parses + validates it via
-        // `liberado_coder_core::CoderTuning::from_value` at composition time (still fail-fast
-        // at boot, just in the pack's parser — see the field's doc comment on `Tuning`).
+        Ok(())
+    }
 
-        // Provider names must be unique, and `topology.provider` must actually name a declared
-        // one — the same fail-fast shape as the model_roles check just below, so a typo'd or
-        // removed provider name is a load-time error, not a runtime "provider silently unset."
+    /// Provider names must be unique, and `topology.provider` must actually name a declared
+    /// one — the same fail-fast shape as the model_roles check just below, so a typo'd or
+    /// removed provider name is a load-time error, not a runtime "provider silently unset."
+    fn validate_providers(&self) -> Result<()> {
         let mut seen_provider_names = std::collections::HashSet::new();
         for provider in &self.topology.providers {
             if !seen_provider_names.insert(&provider.name) {
@@ -447,8 +485,11 @@ impl Config {
                 self.topology.provider
             )));
         }
+        Ok(())
+    }
 
-        // Every role assignment must name a declared model that meets the role's floor (D13).
+    /// Every role assignment must name a declared model that meets the role's floor (D13).
+    fn validate_model_roles(&self) -> Result<()> {
         for (role, model_name) in &self.topology.model_roles {
             let profile = self
                 .topology
@@ -469,10 +510,13 @@ impl Config {
                 });
             }
         }
+        Ok(())
+    }
 
-        // Every schedule's cron expression must actually parse, and names must be unique — a
-        // malformed or ambiguous schedule is a load-time error (Decision 14 fail-fast), not
-        // something discovered only once it fails to fire.
+    /// Every schedule's cron expression must actually parse, and names must be unique — a
+    /// malformed or ambiguous schedule is a load-time error (Decision 14 fail-fast), not
+    /// something discovered only once it fails to fire.
+    fn validate_schedules(&self) -> Result<()> {
         let mut seen_schedule_names = std::collections::HashSet::new();
         for schedule in &self.topology.schedules {
             if !seen_schedule_names.insert(&schedule.name) {
@@ -490,11 +534,14 @@ impl Config {
                 )));
             }
         }
+        Ok(())
+    }
 
-        // A Docker-transport MCP's image is the one thing that can't be a blank string — image
-        // existence/daemon reachability are connect-time concerns (surfaced as an ordinary
-        // RuntimeSetupError, same as a missing stdio binary), but an empty image is unambiguously
-        // wrong under any interpretation, so it's rejected here at load time instead.
+    /// A Docker-transport MCP's image is the one thing that can't be a blank string — image
+    /// existence/daemon reachability are connect-time concerns (surfaced as an ordinary
+    /// RuntimeSetupError, same as a missing stdio binary), but an empty image is unambiguously
+    /// wrong under any interpretation, so it's rejected here at load time instead.
+    fn validate_mcp_images(&self) -> Result<()> {
         for mcp in &self.topology.mcps {
             if let McpTransport::Docker { image, .. } = &mcp.transport
                 && image.trim().is_empty()
@@ -505,10 +552,13 @@ impl Config {
                 )));
             }
         }
+        Ok(())
+    }
 
-        // Hook names must be unique too — the env-var-existence check for each `secret_ref` is a
-        // cross-cutting concern (needs the live process environment), so it lives in
-        // `validate_merged_config` alongside the identical check for `policy.secret_refs`.
+    /// Hook names must be unique too — the env-var-existence check for each `secret_ref` is a
+    /// cross-cutting concern (needs the live process environment), so it lives in
+    /// `validate_merged_config` alongside the identical check for `policy.secret_refs`.
+    fn validate_hooks(&self) -> Result<()> {
         let mut seen_hook_names = std::collections::HashSet::new();
         for hook in &self.topology.hooks {
             if !seen_hook_names.insert(&hook.name) {
@@ -518,10 +568,13 @@ impl Config {
                 )));
             }
         }
+        Ok(())
+    }
 
-        // Pool names must be unique, and any schedule/hook that names a pool must reference one
-        // that actually exists (the always-present "default", or a declared, enabled entry here) —
-        // fail-fast (Decision 14), not a silent typo that quietly falls back or 404s at runtime.
+    /// Pool names must be unique, and any schedule/hook that names a pool must reference one
+    /// that actually exists (the always-present "default", or a declared, enabled entry here) —
+    /// fail-fast (Decision 14), not a silent typo that quietly falls back or 404s at runtime.
+    fn validate_pools(&self) -> Result<()> {
         let mut seen_pool_names = std::collections::HashSet::new();
         for pool in &self.topology.pools {
             if !seen_pool_names.insert(pool.name.as_str()) {
@@ -561,11 +614,14 @@ impl Config {
                 )));
             }
         }
+        Ok(())
+    }
 
-        // Session profiles (S6): unique names, a non-empty domain, and a capability grant that
-        // actually exists. A profile whose component names no grant would silently run with ZERO
-        // authority — the fail-safe default is correct but a silent one here is almost always a
-        // typo, so it fails fast like every other config reference (Decision 14).
+    /// Session profiles (S6): unique names, a non-empty domain, and a capability grant that
+    /// actually exists. A profile whose component names no grant would silently run with ZERO
+    /// authority — the fail-safe default is correct but a silent one here is almost always a
+    /// typo, so it fails fast like every other config reference (Decision 14).
+    fn validate_session_profiles(&self) -> Result<()> {
         let mut seen_profile_names = std::collections::HashSet::new();
         for profile in &self.topology.session_profiles {
             if !seen_profile_names.insert(profile.name.as_str()) {
@@ -649,9 +705,12 @@ impl Config {
                 }
             }
         }
+        Ok(())
+    }
 
-        // Schedules that name a profile must match an *enabled* session profile — same fail-fast
-        // style as pool names (daemon fail-closed is the runtime backstop; load-time catches typos).
+    /// Schedules that name a profile must match an *enabled* session profile — same fail-fast
+    /// style as pool names (daemon fail-closed is the runtime backstop; load-time catches typos).
+    fn validate_profile_stamp(&self) -> Result<()> {
         let profile_exists = |name: &str| {
             self.topology
                 .session_profiles
@@ -681,8 +740,11 @@ impl Config {
                 )));
             }
         }
+        Ok(())
+    }
 
-        // Coding projects (S3/G4): unique names, non-empty absolute roots.
+    /// Coding projects (S3/G4): unique names, non-empty absolute roots.
+    fn validate_projects(&self) -> Result<()> {
         let mut seen_project_names = std::collections::HashSet::new();
         for project in &self.topology.projects {
             if project.name.trim().is_empty() {
@@ -710,7 +772,6 @@ impl Config {
                 )));
             }
         }
-
         Ok(())
     }
 }
