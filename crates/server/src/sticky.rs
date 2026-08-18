@@ -9,7 +9,7 @@
 //! same lesson `sessions_dir()` was extracted for.
 
 use std::future::Future;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use liberado_conversation_store::Ulid;
@@ -36,35 +36,47 @@ impl StickySession {
     /// still exists. A pointer to a conversation that's gone (store wiped, or a stale file) is
     /// discarded rather than adopted, so we never append a brief into a ghost session — the next
     /// message just lazily creates a fresh one. A missing/empty/garbage file loads as `None`.
-    #[allow(clippy::cognitive_complexity)]
     pub async fn load<F, Fut>(path: PathBuf, is_valid: F) -> Self
     where
         F: FnOnce(Ulid) -> Fut,
         Fut: Future<Output = bool>,
     {
         let initial = match tokio::fs::read_to_string(&path).await {
-            Ok(contents) => match contents.trim().parse::<Ulid>() {
-                Ok(id) if is_valid(id).await => {
-                    tracing::info!(%id, "restored sticky Telegram session from disk");
-                    Some(id)
-                }
-                Ok(id) => {
-                    tracing::info!(
-                        %id,
-                        "persisted sticky Telegram session no longer exists; starting fresh"
-                    );
-                    None
-                }
-                Err(_) => {
-                    tracing::warn!(path = %path.display(), "unparsable sticky session file; ignoring");
-                    None
-                }
-            },
+            Ok(contents) => Self::restore_persisted_id(&path, &contents, is_valid).await,
             Err(_) => None, // no file yet — first run
         };
         Self {
             inner: Arc::new(Mutex::new(initial)),
             path: Some(Arc::new(path)),
+        }
+    }
+
+    /// Parse the persisted sticky id and drop it when it fails validation. A stale or
+    /// unparsable file is a fresh start, not an error.
+    async fn restore_persisted_id<F, Fut>(path: &Path, contents: &str, is_valid: F) -> Option<Ulid>
+    where
+        F: FnOnce(Ulid) -> Fut,
+        Fut: Future<Output = bool>,
+    {
+        match contents.trim().parse::<Ulid>() {
+            Ok(id) if is_valid(id).await => {
+                tracing::info!(%id, "restored sticky Telegram session from disk");
+                Some(id)
+            }
+            Ok(id) => {
+                tracing::info!(
+                    %id,
+                    "persisted sticky Telegram session no longer exists; starting fresh"
+                );
+                None
+            }
+            Err(_) => {
+                tracing::warn!(
+                    path = %path.display(),
+                    "unparsable sticky session file; ignoring"
+                );
+                None
+            }
         }
     }
 
