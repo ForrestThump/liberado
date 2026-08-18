@@ -1283,7 +1283,44 @@ pub enum Effect {
 }
 
 impl App {
+    /// Route an API/SSE event to the state transition that owns it. Split into category handlers
+    /// so no single function carries all 24 arms (each is a small exhaustive match on its slice
+    /// of `Action`; the dispatcher guarantees a handler only ever sees its own actions).
     pub fn update(&mut self, action: Action) -> Vec<Effect> {
+        match action {
+            Action::StatusUpdate(_)
+            | Action::ReactionsUpdate(_)
+            | Action::ConversationsUpdate(_)
+            | Action::ModelsLoaded { .. }
+            | Action::ModelSelected { .. }
+            | Action::HistoryLoaded { .. }
+            | Action::ReloadConversationHistory(_)
+            | Action::SessionsUpdate(_) => self.update_catalog(action),
+
+            Action::SseSession(_)
+            | Action::SseToken(_)
+            | Action::SseTool { .. }
+            | Action::SseToolResult { .. }
+            | Action::SseDone
+            | Action::SseFailed(_)
+            | Action::Forked(_) => self.update_stream(action),
+
+            Action::GoalStreamEvent(_)
+            | Action::GoalOffered { .. }
+            | Action::GoalSpawned { .. }
+            | Action::GoalSpawnFailed(_)
+            | Action::GoalStreamClosed(_)
+            | Action::GoalMessageOutcome(_) => self.update_goals(action),
+
+            Action::SystemMessage(_) | Action::ConnectionStatus(_) | Action::Tick => {
+                self.update_misc(action)
+            }
+        }
+    }
+
+    /// Catalog/newsfeed transitions: daemon status, reactions, the session/conversation
+    /// switchers, the model catalog, and history loads.
+    fn update_catalog(&mut self, action: Action) -> Vec<Effect> {
         match action {
             Action::StatusUpdate(status) => {
                 if self.status.as_ref() != Some(&status) {
@@ -1322,6 +1359,32 @@ impl App {
                 error,
                 conversation_scoped,
             } => self.on_model_selected(model, error, conversation_scoped),
+            Action::HistoryLoaded {
+                id,
+                messages,
+                turn_running,
+                turn_unanswered,
+            } => self.on_history_loaded(id, messages, turn_running, turn_unanswered),
+            Action::ReloadConversationHistory(id) => {
+                // Same handshake every other open path uses: `HistoryLoaded` discards a response
+                // whose id is not the pending one, so claim it before asking.
+                self.pending_load = Some(id.clone());
+                self.mark_dirty();
+                vec![Effect::LoadConversationHistory(id)]
+            }
+            Action::SessionsUpdate(sessions) => {
+                self.sessions = sessions;
+                self.clamp_switcher_selection();
+                self.mark_dirty();
+                vec![Effect::None]
+            }
+            _ => unreachable!("catalog handler got a non-catalog action"),
+        }
+    }
+
+    /// Streaming transitions: the SSE token/tool/done/failed pipeline and forks.
+    fn update_stream(&mut self, action: Action) -> Vec<Effect> {
+        match action {
             Action::Forked(fork) => {
                 // Land in the branch. The original is untouched and still in the switcher — say so,
                 // because "fork" sounds like it might have moved or rewritten the conversation, and
@@ -1343,19 +1406,6 @@ impl App {
                     Effect::LoadConversationHistory(fork.id.clone()),
                     Effect::RefreshSessions,
                 ]
-            }
-            Action::HistoryLoaded {
-                id,
-                messages,
-                turn_running,
-                turn_unanswered,
-            } => self.on_history_loaded(id, messages, turn_running, turn_unanswered),
-            Action::ReloadConversationHistory(id) => {
-                // Same handshake every other open path uses: `HistoryLoaded` discards a response
-                // whose id is not the pending one, so claim it before asking.
-                self.pending_load = Some(id.clone());
-                self.mark_dirty();
-                vec![Effect::LoadConversationHistory(id)]
             }
             Action::SseSession(id) => {
                 if self.session.is_none() {
@@ -1400,12 +1450,13 @@ impl App {
                 self.mark_dirty();
                 vec![Effect::RefreshConversations]
             }
-            Action::SessionsUpdate(sessions) => {
-                self.sessions = sessions;
-                self.clamp_switcher_selection();
-                self.mark_dirty();
-                vec![Effect::None]
-            }
+            _ => unreachable!("stream handler got a non-stream action"),
+        }
+    }
+
+    /// Goal-session transitions: stream events, offers, spawns, and message outcomes.
+    fn update_goals(&mut self, action: Action) -> Vec<Effect> {
+        match action {
             Action::GoalStreamEvent(ev) => {
                 self.apply_goal_event(ev);
                 vec![Effect::None]
@@ -1442,12 +1493,6 @@ impl App {
                 self.join_session_with(session_id.clone(), Some(kind), Some(description));
                 vec![Effect::JoinGoalSession(session_id)]
             }
-            Action::SystemMessage(text) => {
-                self.messages.push(Message::System(text));
-                self.scroll_offset = 0;
-                self.mark_dirty();
-                vec![Effect::None]
-            }
             Action::GoalSpawnFailed(err) => {
                 self.messages
                     .push(Message::System(format!("[spawn failed] {err}")));
@@ -1471,6 +1516,19 @@ impl App {
                 vec![Effect::None]
             }
             Action::GoalMessageOutcome(outcome) => self.on_goal_message_outcome(outcome),
+            _ => unreachable!("goal handler got a non-goal action"),
+        }
+    }
+
+    /// Misc transitions: system lines from background effects, connectivity, and the heartbeat.
+    fn update_misc(&mut self, action: Action) -> Vec<Effect> {
+        match action {
+            Action::SystemMessage(text) => {
+                self.messages.push(Message::System(text));
+                self.scroll_offset = 0;
+                self.mark_dirty();
+                vec![Effect::None]
+            }
             Action::ConnectionStatus(connected) => {
                 let was = self.daemon_connected;
                 self.daemon_connected = connected;
@@ -1487,8 +1545,8 @@ impl App {
                     vec![Effect::None]
                 }
             }
-            // Heartbeat only; animation frames are driven by `needs_animation` in the draw loop.
             Action::Tick => vec![Effect::None],
+            _ => unreachable!("misc handler got a non-misc action"),
         }
     }
 
