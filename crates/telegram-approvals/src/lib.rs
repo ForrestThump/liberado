@@ -148,32 +148,9 @@ impl ApprovalBot {
 
     /// Poll the channel forever, dispatching each inbound event. Never returns under normal
     /// operation — intended to be `tokio::spawn`ed alongside the daemon's own watch loop.
-    #[allow(clippy::cognitive_complexity)]
     pub async fn run(self) {
-        tracing::info!(
-            channel = self.channel.name(),
-            chat = self.chat.is_some(),
-            "starting messaging bot poll loop (approvals{})",
-            if self.chat.is_some() {
-                " + free-form chat"
-            } else {
-                ""
-            }
-        );
-        if !self.command_menu.is_empty() {
-            match self.channel.register_commands(&self.command_menu).await {
-                Ok(()) => tracing::info!(
-                    count = self.command_menu.len(),
-                    channel = self.channel.name(),
-                    "registered slash-command menu"
-                ),
-                Err(e) => tracing::warn!(
-                    error = %e,
-                    channel = self.channel.name(),
-                    "register_commands failed"
-                ),
-            }
-        }
+        self.log_startup_banner();
+        self.register_menu().await;
 
         // Handle each event on its own task. Serially awaiting them meant one long turn froze the
         // whole surface: a deep-research delegate blocks for ~10 minutes, and during that window no
@@ -183,23 +160,38 @@ impl ApprovalBot {
         let this = Arc::new(self);
         let mut cursor = String::from("0");
         loop {
-            match this.channel.receive(&mut cursor).await {
-                Ok(events) => {
-                    for event in events {
-                        let bot = Arc::clone(&this);
-                        tokio::spawn(async move { bot.handle_event(event).await });
-                    }
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        error = %e,
-                        channel = this.channel.name(),
-                        "messaging receive error"
-                    );
-                    tokio::time::sleep(Duration::from_secs(this.tuning.poll_retry_backoff_secs))
-                        .await;
-                }
-            }
+            receive_and_dispatch(&this, &mut cursor).await;
+        }
+    }
+
+    fn log_startup_banner(&self) {
+        let mode = if self.chat.is_some() {
+            " + free-form chat"
+        } else {
+            ""
+        };
+        tracing::info!(
+            channel = self.channel.name(),
+            chat = self.chat.is_some(),
+            "starting messaging bot poll loop (approvals{mode})",
+        );
+    }
+
+    async fn register_menu(&self) {
+        if self.command_menu.is_empty() {
+            return;
+        }
+        match self.channel.register_commands(&self.command_menu).await {
+            Ok(()) => tracing::info!(
+                count = self.command_menu.len(),
+                channel = self.channel.name(),
+                "registered slash-command menu"
+            ),
+            Err(e) => tracing::warn!(
+                error = %e,
+                channel = self.channel.name(),
+                "register_commands failed"
+            ),
         }
     }
 
@@ -731,6 +723,27 @@ impl ApprovalBot {
             .await
         {
             tracing::warn!(error = %e, "approval-bot: failed to send revised proposal buttons");
+        }
+    }
+}
+
+/// Poll the channel once and dispatch every inbound event on its own task (so one long turn
+/// never blocks the approval path). Sleeps on receive errors per tuning.
+async fn receive_and_dispatch(this: &Arc<ApprovalBot>, cursor: &mut String) {
+    match this.channel.receive(cursor).await {
+        Ok(events) => {
+            for event in events {
+                let bot = Arc::clone(this);
+                tokio::spawn(async move { bot.handle_event(event).await });
+            }
+        }
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                channel = this.channel.name(),
+                "messaging receive error"
+            );
+            tokio::time::sleep(Duration::from_secs(this.tuning.poll_retry_backoff_secs)).await;
         }
     }
 }

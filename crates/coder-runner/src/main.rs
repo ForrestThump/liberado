@@ -931,7 +931,6 @@ async fn wait_for_termination_signal() {
 ///
 /// Never fatal. The run's result is what the caller came for, and failing it over a git problem
 /// would discard a successful run to report a bookkeeping error.
-#[allow(clippy::cognitive_complexity)]
 async fn preserve_work(workspace: &Path, task_id: &str, push: bool) -> Result<(), String> {
     let dirty = git_output(workspace, &["status", "--porcelain"]).await?;
     if dirty.trim().is_empty() {
@@ -939,21 +938,43 @@ async fn preserve_work(workspace: &Path, task_id: &str, push: bool) -> Result<()
         return Ok(());
     }
 
-    let slug: String = task_id
-        .chars()
-        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
-        .collect();
-    let stamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or_default();
-    let branch = format!("agent/{}-{stamp}", slug.trim_matches('-'));
+    let slug = task_slug(task_id);
+    let branch = format!("agent/{}-{}", slug.trim_matches('-'), now_unix_seconds());
 
     git_output(workspace, &["checkout", "-b", &branch]).await?;
+    commit_work(workspace, &slug).await?;
+    tracing::info!(%branch, "committed the run's work");
+
+    if push {
+        push_work(workspace, &branch).await;
+    }
+    Ok(())
+}
+
+/// The task id reduced to a git-ref-safe component: alphanumerics kept, everything else a dash.
+/// Untrimmed — the caller trims for the branch name while the commit message keeps the raw form.
+fn task_slug(task_id: &str) -> String {
+    task_id
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect()
+}
+
+/// Seconds since the epoch (0 on a clock failure — the branch still uniques per task id).
+fn now_unix_seconds() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or_default()
+}
+
+/// Stage everything and commit on the preservation branch.
+///
+/// Identity is set explicitly: `user.email`/`user.name` exist on every dev machine and on no
+/// CI runner, so relying on ambient config passes locally and fails in the unattended case
+/// this whole path exists to protect.
+async fn commit_work(workspace: &Path, slug: &str) -> Result<(), String> {
     git_output(workspace, &["add", "-A"]).await?;
-    // Identity is set explicitly: `user.email`/`user.name` exist on every dev machine and on no
-    // CI runner, so relying on ambient config passes locally and fails in the unattended case
-    // this whole function exists to protect.
     git_output(
         workspace,
         &[
@@ -971,17 +992,18 @@ Uncommitted output of an unattended coding run, committed so it survives the wor
         ],
     )
     .await?;
-    tracing::info!(%branch, "committed the run's work");
+    Ok(())
+}
 
-    if push {
-        match git_output(workspace, &["push", "-u", "origin", &branch]).await {
-            Ok(_) => tracing::info!(%branch, "pushed"),
-            Err(error) => {
-                tracing::warn!(%branch, %error, "push failed; the commit is safe locally")
-            }
+/// Best-effort push of the preservation branch: a failure is logged, never fatal — the commit
+/// is already safe locally.
+async fn push_work(workspace: &Path, branch: &str) {
+    match git_output(workspace, &["push", "-u", "origin", branch]).await {
+        Ok(_) => tracing::info!(%branch, "pushed"),
+        Err(error) => {
+            tracing::warn!(%branch, %error, "push failed; the commit is safe locally")
         }
     }
-    Ok(())
 }
 
 /// Whether to push the preservation branch. Opt-in via `LIBERADO_CODER_PUSH=1`.

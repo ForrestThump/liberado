@@ -2,7 +2,7 @@
 
 use std::path::Path;
 
-use liberado_common::DispatchDecision;
+use liberado_common::{CapabilitySet, DispatchDecision};
 use liberado_common::{DEFAULT_POOL, Event, PROPOSALS_DIR};
 use liberado_dispatcher::DispatchRequest;
 use liberado_orchestrator::{Disposition, Orchestrator};
@@ -36,33 +36,11 @@ impl Daemon {
     ///
     /// Edits under `proposals/` bypass the dispatcher — they are evaluated directly as potential
     /// proposal approvals (the human's Obsidian edit is the authorization).
-    #[allow(clippy::cognitive_complexity)]
     pub(crate) async fn react(&self, event: &Event) -> ReactionOutcome {
         // Before any dispatch: check if this is a proposal note change. The human's edit (status
         // approval) is the authorization — no need to re-dispatch (which would re-propose).
-        if let Some(path) = event.payload.path.as_deref() {
-            // The path was normalized to forward slashes in build_event, so starts_with works on
-            // both platforms. Exclude the exact `proposals` directory path to avoid attempting to
-            // read a directory as a proposal note on directory-creation watch events. Exclude the
-            // archive subtree too: archived notes are terminal by construction and must never
-            // re-enter the pipeline (belt-and-suspenders — the archiving move is already suppressed
-            // as a DAEMON_SOURCE write, but a human poking an archived file must be a no-op as well).
-            if path.starts_with(PROPOSALS_DIR)
-                && path != Path::new(PROPOSALS_DIR)
-                && !path.starts_with(PROPOSALS_ARCHIVE_DIR)
-            {
-                // Infra errors (orchestrator runtime_for failure) are logged but degraded to
-                // Observed so the watch loop never crashes. The proposal is NOT marked done when an
-                // error occurs, so a human re-triggering the file (or a future retry mechanism) can
-                // pick it up again.
-                return self
-                    .handle_proposal_change(Path::new(path))
-                    .await
-                    .unwrap_or_else(|e| {
-                        tracing::error!(error = %e, "proposal change handling failed — not marked done, retriable");
-                        ReactionOutcome::Observed
-                    });
-            }
+        if let Some(outcome) = self.handle_proposal_event(event).await {
+            return outcome;
         }
 
         // Which named pool (Decision 18 checkpoint #3) handles this event — the producer sets
@@ -91,52 +69,111 @@ impl Daemon {
         // Preferred path (E3): start a hosted session on the hub. The dispatch pack classifies and
         // executes; this method returns as soon as the session exists. Reactions therefore run
         // concurrently with each other — no more awaiting one orchestrator before the next event.
-        if let Some(hub) = &self.goals {
-            let goal = reaction_goal(event, &request.goal, pool_name);
-            // Named profile must resolve to a boot-time grant. Fail closed on unknown /
-            // disabled / typo'd names — never silently widen to the full pool ceiling.
-            let capabilities = match goal.profile.as_deref() {
-                None => ctx.capabilities.clone(),
-                Some(name) => match self.session_profile_caps.get(name) {
-                    Some(caps) => caps.clone(),
-                    None => {
-                        tracing::warn!(
-                            profile = name,
-                            pool = pool_name,
-                            "event names unknown or disabled session profile — not starting session"
-                        );
-                        return ReactionOutcome::Observed;
-                    }
-                },
-            };
-            let grant = SessionGrant {
-                capabilities,
-                profile: goal.profile.clone(),
-                overrides: serde_json::Value::Null,
-                ..Default::default()
-            };
-            match hub.start_background(goal, grant).await {
-                Ok(session_id) => {
-                    tracing::info!(
-                        %session_id,
-                        pool = pool_name,
-                        "reaction dispatched as hosted session"
-                    );
-                    // A background session normally stores its summary silently. A cron firing is
-                    // the exception: it exists to hand that summary *back to the human*, so deliver
-                    // a cron-sourced session's result through the notifier when it finishes.
-                    self.maybe_deliver_cron_result(event, &session_id);
-                    return ReactionOutcome::Dispatched { session_id };
-                }
-                Err(e) => {
-                    tracing::error!(error = %e, "failed to start reaction session on hub");
-                    return ReactionOutcome::Observed;
-                }
-            }
+        if let Some(outcome) = self.react_via_hub(ctx, &request, event, pool_name).await {
+            return outcome;
         }
 
         // Fallback: no hub attached — inline decide/act without a session (unit tests, watch tools).
         self.dispatch_and_act(pool, ctx, &request, event).await
+    }
+
+    /// A proposal-note change is evaluated directly as a potential approval (the human's Obsidian
+    /// edit is the authorization). Returns `Some(outcome)` when the event named a proposal path.
+    async fn handle_proposal_event(&self, event: &Event) -> Option<ReactionOutcome> {
+        let path = event.payload.path.as_deref()?;
+        // The path was normalized to forward slashes in build_event, so starts_with works on
+        // both platforms. Exclude the exact `proposals` directory path to avoid attempting to
+        // read a directory as a proposal note on directory-creation watch events. Exclude the
+        // archive subtree too: archived notes are terminal by construction and must never
+        // re-enter the pipeline (belt-and-suspenders — the archiving move is already suppressed
+        // as a DAEMON_SOURCE write, but a human poking an archived file must be a no-op as well).
+        if path.starts_with(PROPOSALS_DIR)
+            && path != Path::new(PROPOSALS_DIR)
+            && !path.starts_with(PROPOSALS_ARCHIVE_DIR)
+        {
+            // Infra errors (orchestrator runtime_for failure) are logged but degraded to
+            // Observed so the watch loop never crashes. The proposal is NOT marked done when an
+            // error occurs, so a human re-triggering the file (or a future retry mechanism) can
+            // pick it up again.
+            return Some(
+                self.handle_proposal_change(Path::new(path))
+                    .await
+                    .unwrap_or_else(|e| {
+                        tracing::error!(error = %e, "proposal change handling failed — not marked done, retriable");
+                        ReactionOutcome::Observed
+                    }),
+            );
+        }
+        None
+    }
+
+    /// Resolve a named session profile to its boot-time grant. Fail closed on unknown /
+    /// disabled / typo'd names — never silently widen to the full pool ceiling. `None` means
+    /// "unset profile" (use the pool ceiling unchanged).
+    fn session_capabilities(
+        &self,
+        profile: Option<&str>,
+        ctx: &DispatcherContext,
+        pool_name: &str,
+    ) -> Option<CapabilitySet> {
+        match profile {
+            None => Some(ctx.capabilities.clone()),
+            Some(name) => match self.session_profile_caps.get(name) {
+                Some(caps) => Some(caps.clone()),
+                None => {
+                    tracing::warn!(
+                        profile = name,
+                        pool = pool_name,
+                        "event names unknown or disabled session profile — not starting session"
+                    );
+                    None
+                }
+            },
+        }
+    }
+
+    /// Preferred path (E3): start a hosted session on the hub. The dispatch pack classifies and
+    /// executes; this method returns as soon as the session exists. Returns `Some(outcome)` when a
+    /// hub was attached (handled here); `None` falls through to inline dispatch.
+    async fn react_via_hub(
+        &self,
+        ctx: &DispatcherContext,
+        request: &DispatchRequest,
+        event: &Event,
+        pool_name: &str,
+    ) -> Option<ReactionOutcome> {
+        let hub = self.goals.as_ref()?;
+        let goal = reaction_goal(event, &request.goal, pool_name);
+        // Named profile must resolve to a boot-time grant. Fail closed on unknown /
+        // disabled / typo'd names — never silently widen to the full pool ceiling.
+        let Some(capabilities) = self.session_capabilities(goal.profile.as_deref(), ctx, pool_name)
+        else {
+            return Some(ReactionOutcome::Observed);
+        };
+        let grant = SessionGrant {
+            capabilities,
+            profile: goal.profile.clone(),
+            overrides: serde_json::Value::Null,
+            ..Default::default()
+        };
+        match hub.start_background(goal, grant).await {
+            Ok(session_id) => {
+                tracing::info!(
+                    %session_id,
+                    pool = pool_name,
+                    "reaction dispatched as hosted session"
+                );
+                // A background session normally stores its summary silently. A cron firing is
+                // the exception: it exists to hand that summary *back to the human*, so deliver
+                // a cron-sourced session's result through the notifier when it finishes.
+                self.maybe_deliver_cron_result(event, &session_id);
+                Some(ReactionOutcome::Dispatched { session_id })
+            }
+            Err(e) => {
+                tracing::error!(error = %e, "failed to start reaction session on hub");
+                Some(ReactionOutcome::Observed)
+            }
+        }
     }
 
     /// Prepend "Local time: …" for non-vault triggers when a timezone is configured.
