@@ -163,11 +163,6 @@ pub fn execute(
     let classification = classify(&run_result, &harnesses, &normalized_root, store, job_id);
     match classification {
         None => {
-            tracker.advance(
-                JobStatus::Succeeded,
-                "complete",
-                "all harness results were preserved",
-            )?;
             let report = ComparisonReport {
                 version: 1,
                 job_id: job_id.clone(),
@@ -182,7 +177,16 @@ pub fn execute(
                 diagnostics: cleanup_diagnostics,
                 artifact_root: job_root.join("artifacts"),
             };
-            store.write_report(&report)?;
+            // Report before terminal state: a reader that observes the terminal state must be
+            // able to read report.json (the state file is what awaiters watch; the report is
+            // what they read next). The old order — state then report — let a fast consumer
+            // (await_terminal + load_report) see the terminal state before the report landed.
+            write_report_or_mark_host_failure(store, &mut tracker, &report)?;
+            tracker.advance(
+                JobStatus::Succeeded,
+                "complete",
+                "all harness results were preserved",
+            )?;
             Ok(report)
         }
         Some((class, mut message)) => {
@@ -383,7 +387,6 @@ fn finish_failure(
     } else {
         JobStatus::Failed
     };
-    tracker.fail(status, class, &message)?;
     let report = ComparisonReport {
         version: 1,
         job_id: spec.job_id.clone(),
@@ -395,11 +398,33 @@ fn finish_failure(
         finished_at: Utc::now(),
         harnesses,
         run_order: spec.run_order.clone(),
-        diagnostics: vec![message],
+        diagnostics: vec![message.clone()],
         artifact_root: store.job_root(&spec.job_id).join("artifacts"),
     };
-    store.write_report(&report)?;
+    // Report before terminal state — see the success path for why the order is load-bearing.
+    write_report_or_mark_host_failure(store, tracker, &report)?;
+    tracker.fail(status, class, &message)?;
     Ok(report)
+}
+
+/// Write the terminal report. A report-write failure still marks the job terminal — best effort,
+/// classified as a host failure — so awaiters return instead of hanging forever, and the error
+/// propagates to the caller. The state flip itself stays in the caller so each terminal path
+/// keeps its own phase/message wording.
+fn write_report_or_mark_host_failure(
+    store: &JobStore,
+    tracker: &mut StateTracker<'_>,
+    report: &ComparisonReport,
+) -> Result<(), Box<dyn Error>> {
+    if let Err(error) = store.write_report(report) {
+        let _ = tracker.fail(
+            JobStatus::Failed,
+            FailureClass::HostInfrastructureFailure,
+            &format!("failed to write report.json: {error}"),
+        );
+        return Err(error.into());
+    }
+    Ok(())
 }
 
 struct StateTracker<'a> {
