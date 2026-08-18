@@ -530,7 +530,6 @@ pub struct DeleteParams {
 /// permanent data loss on. Every automatic teardown passes this flag, so the worst a future bug of
 /// the same shape can do is fail to clean up — which the idle sweeper then handles. The sidebar's
 /// Delete button deliberately does *not* pass it: a human clicked it and confirmed.
-#[allow(clippy::cognitive_complexity)]
 pub async fn delete_conversation(
     State(state): State<Arc<AppState>>,
     Path(id): Path<Ulid>,
@@ -546,22 +545,10 @@ pub async fn delete_conversation(
             .into_response();
     };
 
-    if params.ephemeral_only
-        && let Some(header) = state.sessions.session(id).await
-        && !header.ephemeral
+    if let Some((status, body)) =
+        refuse_ephemeral_delete(&state.sessions, id, params.ephemeral_only).await
     {
-        tracing::warn!(
-            conversation = %id,
-            "refused an ephemeral-only delete of a durable conversation — a caller thought a saved \
-             chat was its incognito session"
-        );
-        return (
-            StatusCode::CONFLICT,
-            Json(ApiError {
-                error: "refusing to delete: this conversation is not incognito".into(),
-            }),
-        )
-            .into_response();
+        return (status, body).into_response();
     }
 
     // Stop any turn still running for this conversation *before* removing it, so the two cannot
@@ -591,6 +578,35 @@ pub async fn delete_conversation(
         )
             .into_response(),
         Err(e) => chat_error(e),
+    }
+}
+
+/// The `?ephemeral_only=true` guard for [`delete_conversation`]: returns the `409` response when
+/// the caller asked for an incognito-only delete but the target session is durable. Kept as a
+/// named helper so the handler reads as guard → cancel → delete, and the warning that explains the
+/// guard sits with the guard.
+async fn refuse_ephemeral_delete(
+    sessions: &liberado_session_store::SessionStore,
+    id: Ulid,
+    ephemeral_only: bool,
+) -> Option<(StatusCode, Json<ApiError>)> {
+    if ephemeral_only
+        && let Some(header) = sessions.session(id).await
+        && !header.ephemeral
+    {
+        tracing::warn!(
+            conversation = %id,
+            "refused an ephemeral-only delete of a durable conversation — a caller thought a saved \
+             chat was its incognito session"
+        );
+        Some((
+            StatusCode::CONFLICT,
+            Json(ApiError {
+                error: "refusing to delete: this conversation is not incognito".into(),
+            }),
+        ))
+    } else {
+        None
     }
 }
 

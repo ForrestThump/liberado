@@ -43,7 +43,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use async_trait::async_trait;
 use liberado_common::{
     Capability, CapabilityCatalog, CapabilitySet, Consequence, McpDescriptor, Proposal,
-    ProposalSigner, ProposedAction, WriteClass, WriteTarget, Zone, bare_tool_name,
+    ProposalSigner, ProposedAction, SignedProposal, WriteClass, WriteTarget, Zone, bare_tool_name,
     is_sweeping_destructive, mcp_of, names_single_write_target, write_target,
 };
 use liberado_notify::Notifier;
@@ -679,42 +679,16 @@ impl RiskGatedToolRuntime {
     /// requested capability onto the proposal (signed, tamper-evident) and notifies with the four
     /// scope buttons. On approval the daemon applies the grant per the chosen scope and executes the
     /// carried call.
-    #[allow(clippy::cognitive_complexity)]
     async fn write_permission_request(
         &self,
         call: &ToolInvocation,
         zone: &str,
     ) -> Result<PathBuf, String> {
-        // Compact id: it must fit Telegram's callback_data budget (the full correlation lives in the
-        // proposal's `correlation_id` field, not the stem). The old `perm-{correlation_base}-{nanos}`
-        // was 65 bytes for a `chat-delegate-<ulid>` correlation — over the cap — so the buttons
-        // silently degraded to a plain, un-tappable notification.
-        let proposal_id = format!(
-            "perm-{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_nanos(),
-        );
+        let proposal_id = permission_request_id();
         let proposals_subdir = self.proposals_dir.join(liberado_common::PROPOSALS_DIR);
         let proposal_path = proposals_subdir.join(format!("{proposal_id}.md"));
 
-        let mut proposal = Proposal::pending(
-            &proposal_id,
-            &self.correlation_base,
-            "liberado-chat",
-            ProposedAction::ToolCalls(vec![liberado_common::ToolCall {
-                tool: call.name.clone(),
-                args: call.arguments.clone(),
-            }]),
-            format!(
-                "Permission request: '{}' needs Write access to zone '{zone}'.",
-                call.name
-            ),
-        )
-        .with_requested_grant(Capability::Write(Zone::vault(zone)));
-        proposal.pool = Some(self.pool_name.clone());
-        let proposal = self.signer.sign(proposal);
+        let proposal = self.sign_permission_proposal(&proposal_id, call, zone);
 
         if let Err(e) = tokio::fs::create_dir_all(&proposals_subdir).await {
             tracing::error!(path = %proposals_subdir.display(), error = %e, "failed to create proposals directory");
@@ -732,28 +706,81 @@ impl RiskGatedToolRuntime {
         }
         tracing::info!(path = %proposal_path.display(), tool = %call.name, %zone, "permission request written");
 
-        if let Some(notifier) = &self.notifier {
-            let message = format!(
-                "Liberado needs permission.\n'{}' wants to write zone '{zone}', which its grant \
-                 doesn't include.\nApprove once, for this session, or everywhere?",
-                call.name,
-            );
-            match notifier
-                .notify_permission_request(&proposal_id, &message)
-                .await
-            {
-                // The four scope buttons landed on the human's phone — record the out-of-band
-                // surfacing so the chat surface can drop the duplicate "grant permission" reply
-                // (Gap 2). Only on a confirmed send.
-                Ok(()) => self.notified_deferral.store(true, Ordering::Relaxed),
-                Err(e) => {
-                    tracing::warn!(error = %e, "failed to send permission-request notification");
-                }
-            }
-        }
+        self.notify_permission_request(&proposal_id, call, zone)
+            .await;
 
         Ok(proposal_path)
     }
+
+    /// Build the signed permission-request proposal: the blocked call as a `ProposedAction`, the
+    /// requested capability stamped on before signing (so the signature covers it, tamper-evident),
+    /// and the pool keyed so the daemon's grant lands on the right pool.
+    fn sign_permission_proposal(
+        &self,
+        proposal_id: &str,
+        call: &ToolInvocation,
+        zone: &str,
+    ) -> SignedProposal {
+        let mut proposal = Proposal::pending(
+            proposal_id,
+            &self.correlation_base,
+            "liberado-chat",
+            ProposedAction::ToolCalls(vec![liberado_common::ToolCall {
+                tool: call.name.clone(),
+                args: call.arguments.clone(),
+            }]),
+            format!(
+                "Permission request: '{}' needs Write access to zone '{zone}'.",
+                call.name
+            ),
+        )
+        .with_requested_grant(Capability::Write(Zone::vault(zone)));
+        proposal.pool = Some(self.pool_name.clone());
+        self.signer.sign(proposal)
+    }
+
+    /// Notify the human (when a notifier is attached) that a permission request awaits their
+    /// decision, with the four scope buttons. A confirmed send records the out-of-band surfacing
+    /// so the chat surface can drop the duplicate "grant permission" reply (Gap 2); a failed
+    /// notify leaves the chat reply as the sole signal.
+    async fn notify_permission_request(
+        &self,
+        proposal_id: &str,
+        call: &ToolInvocation,
+        zone: &str,
+    ) {
+        let Some(notifier) = &self.notifier else {
+            return;
+        };
+        let message = format!(
+            "Liberado needs permission.\n'{}' wants to write zone '{zone}', which its grant \
+             doesn't include.\nApprove once, for this session, or everywhere?",
+            call.name,
+        );
+        match notifier
+            .notify_permission_request(proposal_id, &message)
+            .await
+        {
+            Ok(()) => self.notified_deferral.store(true, Ordering::Relaxed),
+            Err(e) => {
+                tracing::warn!(error = %e, "failed to send permission-request notification");
+            }
+        }
+    }
+}
+
+/// Compact permission-request id: it must fit Telegram's callback_data budget (the full
+/// correlation lives in the proposal's `correlation_id` field, not the stem). The old
+/// `perm-{correlation_base}-{nanos}` was 65 bytes for a `chat-delegate-<ulid>` correlation — over
+/// the cap — so the buttons silently degraded to a plain, un-tappable notification.
+fn permission_request_id() -> String {
+    format!(
+        "perm-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos(),
+    )
 }
 
 /// The tool *result* returned for a raised permission request. Tells the model plainly that the

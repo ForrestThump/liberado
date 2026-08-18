@@ -2171,14 +2171,18 @@ mod tests {
         assert_eq!(args.cancel_file, Some(job_root.join("cancel-requested")));
     }
 
-    #[test]
-    #[allow(clippy::cognitive_complexity)]
-    fn parse_run_args_applies_defaults_and_every_flag() {
-        let temp = tempfile::tempdir().unwrap();
+    fn args_fixture(temp: &tempfile::TempDir) -> (std::path::PathBuf, std::path::PathBuf) {
         let run = temp.path().join("run");
         fs::create_dir(&run).unwrap();
         let task = temp.path().join("task.txt");
         fs::write(&task, "do it").unwrap();
+        (run, task)
+    }
+
+    #[test]
+    fn parse_run_args_applies_every_flag() {
+        let temp = tempfile::tempdir().unwrap();
+        let (run, task) = args_fixture(&temp);
         let overlay = temp.path().join("overlay");
         fs::create_dir(&overlay).unwrap();
         fs::write(overlay.join("a.txt"), "a").unwrap();
@@ -2233,8 +2237,12 @@ mod tests {
         assert_eq!(args.liberado_bin, Some(PathBuf::from("liberado.exe")));
         assert_eq!(args.pi_bin, Some(PathBuf::from("pi.exe")));
         assert_eq!(args.cancel_file, Some(PathBuf::from("cancel.txt")));
+    }
 
-        // Defaults without any flags.
+    #[test]
+    fn parse_run_args_applies_defaults() {
+        let temp = tempfile::tempdir().unwrap();
+        let (run, task) = args_fixture(&temp);
         let args = parse_run_args(&[
             run.to_string_lossy().into_owned(),
             "--task".to_string(),

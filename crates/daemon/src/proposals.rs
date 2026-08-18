@@ -310,7 +310,6 @@ impl Daemon {
     /// - `Once` / `None` → nothing to persist.
     ///
     /// Best-effort: a persistence failure is logged, never propagated — the approved call already ran.
-    #[allow(clippy::cognitive_complexity)]
     pub(crate) fn apply_approved_grant(&self, proposal: &liberado_common::Proposal) {
         let Some(capability) = &proposal.requested_grant else {
             return; // ordinary proposal, not a permission request
@@ -318,46 +317,57 @@ impl Daemon {
         let component = grant_component_for_pool(proposal.pool.as_deref());
         match proposal.approved_scope {
             Some(liberado_common::GrantScope::Everywhere) => {
-                match liberado_config::append_grant_to_overlay(component, capability) {
-                    Ok(true) => tracing::info!(
-                        component,
-                        ?capability,
-                        "persisted 'everywhere' grant to the machine-owned overlay \
-                         (effective on next boot)"
-                    ),
-                    Ok(false) => tracing::info!(
-                        component,
-                        ?capability,
-                        "'everywhere' grant already present in the overlay — no change"
-                    ),
-                    Err(e) => tracing::error!(
-                        component,
-                        ?capability,
-                        error = %e,
-                        "failed to persist 'everywhere' grant to the overlay \
-                         (the approved call still ran)"
-                    ),
-                }
+                persist_everywhere_grant(component, capability);
             }
             Some(liberado_common::GrantScope::Session) => {
-                // Process-lifetime, in-memory grant (gone on restart) — the counterpart to
-                // Everywhere's on-disk overlay. Keyed by the proposal's POOL (not the config
-                // component), because that's what the live orchestrator reads back via
-                // `session_grants::session_grant(&self.pool_name)`. Folded post-narrow into the pool's
-                // effective ceiling, so the next same-zone write in this process passes with no prompt.
-                let pool = proposal.pool.as_deref().unwrap_or(DEFAULT_POOL);
-                let newly =
-                    liberado_common::session_grants::grant_for_session(pool, capability.clone());
-                tracing::info!(
-                    pool,
-                    ?capability,
-                    newly,
-                    "applied 'session' grant (process-lifetime; in memory, lost on restart)"
-                );
+                apply_session_grant(proposal.pool.as_deref(), capability);
             }
             Some(liberado_common::GrantScope::Once) | None => {}
         }
     }
+}
+
+/// Persist an `Everywhere` grant to the machine-owned overlay (durable; effective at the next
+/// boot / container recreate). Only a human button tap ever reaches here, so the "agents can't
+/// edit their own permission config" invariant holds. Best-effort: a persistence failure is
+/// logged, never propagated — the approved call already ran.
+fn persist_everywhere_grant(component: &str, capability: &liberado_common::Capability) {
+    match liberado_config::append_grant_to_overlay(component, capability) {
+        Ok(true) => tracing::info!(
+            component,
+            ?capability,
+            "persisted 'everywhere' grant to the machine-owned overlay \
+             (effective on next boot)"
+        ),
+        Ok(false) => tracing::info!(
+            component,
+            ?capability,
+            "'everywhere' grant already present in the overlay — no change"
+        ),
+        Err(e) => tracing::error!(
+            component,
+            ?capability,
+            error = %e,
+            "failed to persist 'everywhere' grant to the overlay \
+             (the approved call still ran)"
+        ),
+    }
+}
+
+/// Apply a `Session` grant: process-lifetime, in-memory (gone on restart) — the counterpart to
+/// Everywhere's on-disk overlay. Keyed by the proposal's POOL (not the config component), because
+/// that's what the live orchestrator reads back via `session_grants::session_grant(&self.pool_name)`.
+/// Folded post-narrow into the pool's effective ceiling, so the next same-zone write in this
+/// process passes with no prompt.
+fn apply_session_grant(pool: Option<&str>, capability: &liberado_common::Capability) {
+    let pool = pool.unwrap_or(DEFAULT_POOL);
+    let newly = liberado_common::session_grants::grant_for_session(pool, capability.clone());
+    tracing::info!(
+        pool,
+        ?capability,
+        newly,
+        "applied 'session' grant (process-lifetime; in memory, lost on restart)"
+    );
 }
 
 /// Best-effort move of a now-terminal proposal note out of the active `proposals/` dir into
@@ -442,7 +452,6 @@ const APPROVED_REAP_GRACE: chrono::Duration = chrono::Duration::hours(1);
 ///
 /// Per-file failures (read, write, archive) are logged and skipped so one bad note cannot starve
 /// the rest of the directory. Only structural failures (cannot list `proposals/`) abort the sweep.
-#[allow(clippy::cognitive_complexity)]
 pub(crate) async fn reap_expired_proposals(vault: &Vault) -> Result<(), DaemonError> {
     let proposals_path = vault.root().join(PROPOSALS_DIR);
 
@@ -452,8 +461,28 @@ pub(crate) async fn reap_expired_proposals(vault: &Vault) -> Result<(), DaemonEr
         Err(e) => return Err(DaemonError::from(VaultError::Backend(e.to_string()))),
     };
 
-    // Materialize the directory listing before mutating (archive moves files out of the active
-    // dir). Mutating while iterating `read_dir` is platform-dependent.
+    let entries = materialize_entries(&mut reader).await?;
+    let now = Utc::now();
+
+    for entry in entries {
+        let Some(rel_path) = active_proposal_rel_path(vault, &entry) else {
+            continue;
+        };
+        let Some(mut proposal) = read_proposal_note(vault, &rel_path).await else {
+            continue;
+        };
+        if !reaper_owns(&proposal, now) {
+            continue;
+        }
+        mark_and_archive_expired(vault, &rel_path, &mut proposal).await;
+    }
+
+    Ok(())
+}
+
+/// Materialize the directory listing before mutating (archive moves files out of the active dir).
+/// Mutating while iterating `read_dir` is platform-dependent.
+async fn materialize_entries(reader: &mut fs::ReadDir) -> Result<Vec<fs::DirEntry>, DaemonError> {
     let mut entries = Vec::new();
     while let Some(entry) = reader
         .next_entry()
@@ -462,99 +491,107 @@ pub(crate) async fn reap_expired_proposals(vault: &Vault) -> Result<(), DaemonEr
     {
         entries.push(entry);
     }
+    Ok(entries)
+}
 
-    let now = Utc::now();
+/// The vault-relative path of an active (non-archive) proposal note, or `None` for entries that
+/// are not notes at all (wrong extension, or outside the vault's root).
+fn active_proposal_rel_path(vault: &Vault, entry: &fs::DirEntry) -> Option<std::path::PathBuf> {
+    let path = entry.path();
+    if path.extension().and_then(|s| s.to_str()) != Some("md") {
+        return None;
+    }
+    // Convert the absolute filesystem path to a vault-relative one.
+    let rel_path = vault.to_relative(&path)?;
+    // Skip the archive subtree — archived entries are already terminal.
+    if rel_path.starts_with(PROPOSALS_ARCHIVE_DIR) {
+        return None;
+    }
+    Some(rel_path)
+}
 
-    for entry in entries {
-        let path = entry.path();
-        if path.extension().and_then(|s| s.to_str()) != Some("md") {
-            continue;
-        }
-
-        // Convert the absolute filesystem path to a vault-relative one.
-        let rel_path = match vault.to_relative(&path) {
-            Some(p) => p,
-            None => continue,
-        };
-
-        // Skip the archive subtree — archived entries are already terminal.
-        if rel_path.starts_with(PROPOSALS_ARCHIVE_DIR) {
-            continue;
-        }
-
-        let content = match vault.read(&rel_path).await {
-            Ok(c) => c,
-            Err(e) => {
-                tracing::warn!(
-                    error = %e,
-                    path = %rel_path.display(),
-                    "proposal reaper: read failed — skipping"
-                );
-                continue;
-            }
-        };
-
-        let mut proposal = match Proposal::from_note(&content) {
-            Ok(p) => p,
-            Err(_) => continue, // not a parseable proposal
-        };
-
-        if !proposal.is_expired_at(now) {
-            continue;
-        }
-        if proposal.status.is_terminal() {
-            continue; // already handled by handle_proposal_change
-        }
-        match proposal.status {
-            // Reaper-owned as soon as the deadline passes — nothing is executing a Pending note.
-            ProposalStatus::Pending => {}
-            // Approved may be mid-execute on the reactive path right at the deadline, so leave it
-            // alone until well past it. Without this arm an Approved note nobody touches again
-            // never leaves the active dir, since the reactive path only runs on a human edit.
-            ProposalStatus::Approved => {
-                let past_deadline = proposal
-                    .expires
-                    .is_some_and(|expires| now - expires >= APPROVED_REAP_GRACE);
-                if !past_deadline {
-                    continue;
-                }
-                tracing::info!(
-                    proposal_id = %proposal.id,
-                    "approved proposal expired over the grace window ago and was never \
-                     resolved — reaping"
-                );
-            }
-            // Anything else is not the reaper's to move.
-            _ => continue,
-        }
-
-        let provenance = WriteProvenance::agent(DAEMON_SOURCE, &proposal.correlation_id);
-        proposal.status = ProposalStatus::Expired;
-        if let Err(e) = vault
-            .write(&rel_path, &proposal.to_note(), None, &provenance)
-            .await
-        {
-            // One unwritable note must not abort the sweep for every later entry.
+/// Read and parse one proposal note; a read failure is logged and skipped so one bad note cannot
+/// starve the rest of the sweep. Unparseable files are not proposals.
+async fn read_proposal_note(vault: &Vault, rel_path: &std::path::Path) -> Option<Proposal> {
+    let content = match vault.read(rel_path).await {
+        Ok(c) => c,
+        Err(e) => {
             tracing::warn!(
                 error = %e,
-                proposal_id = %proposal.id,
                 path = %rel_path.display(),
-                "proposal reaper: failed to mark expired — continuing sweep"
+                "proposal reaper: read failed — skipping"
             );
-            continue;
+            return None;
         }
+    };
+    Proposal::from_note(&content).ok()
+}
 
-        tracing::info!(
+/// Whether the reaper owns this expired proposal right now. Ownership between this and the
+/// reactive path (`handle_proposal_change`) is by status: **Pending** is reaper-owned immediately;
+/// **Approved** only after [`APPROVED_REAP_GRACE`] past the deadline, so an in-flight execute
+/// finishes first; terminal statuses are nobody's.
+fn reaper_owns(proposal: &Proposal, now: chrono::DateTime<Utc>) -> bool {
+    if !proposal.is_expired_at(now) {
+        return false;
+    }
+    if proposal.status.is_terminal() {
+        return false; // already handled by handle_proposal_change
+    }
+    match proposal.status {
+        // Reaper-owned as soon as the deadline passes — nothing is executing a Pending note.
+        ProposalStatus::Pending => true,
+        // Approved may be mid-execute on the reactive path right at the deadline, so leave it
+        // alone until well past it. Without this arm an Approved note nobody touches again
+        // never leaves the active dir, since the reactive path only runs on a human edit.
+        ProposalStatus::Approved => {
+            let past_deadline = proposal
+                .expires
+                .is_some_and(|expires| now - expires >= APPROVED_REAP_GRACE);
+            if !past_deadline {
+                return false;
+            }
+            tracing::info!(
+                proposal_id = %proposal.id,
+                "approved proposal expired over the grace window ago and was never \
+                 resolved — reaping"
+            );
+            true
+        }
+        // Anything else is not the reaper's to move.
+        _ => false,
+    }
+}
+
+/// Mark the note `expired` and archive it. The Expired write uses `DAEMON_SOURCE` provenance and
+/// will not re-enter `handle_proposal_change`, so the reactive terminal-archive branch never sees
+/// it — archiving must happen inline here. One unwritable note must not abort the sweep.
+async fn mark_and_archive_expired(
+    vault: &Vault,
+    rel_path: &std::path::Path,
+    proposal: &mut Proposal,
+) {
+    let provenance = WriteProvenance::agent(DAEMON_SOURCE, &proposal.correlation_id);
+    proposal.status = ProposalStatus::Expired;
+    if let Err(e) = vault
+        .write(rel_path, &proposal.to_note(), None, &provenance)
+        .await
+    {
+        tracing::warn!(
+            error = %e,
             proposal_id = %proposal.id,
-            "marked proposal expired (reaper)"
+            path = %rel_path.display(),
+            "proposal reaper: failed to mark expired — continuing sweep"
         );
-
-        // Archive inline: the Expired write above is DAEMON_SOURCE and will not re-enter
-        // `handle_proposal_change`, so the reactive terminal-archive branch never sees it.
-        archive_terminal_proposal_note(vault, &rel_path, &proposal).await;
+        return;
     }
 
-    Ok(())
+    tracing::info!(
+        proposal_id = %proposal.id,
+        "marked proposal expired (reaper)"
+    );
+
+    archive_terminal_proposal_note(vault, rel_path, proposal).await;
 }
 
 #[cfg(test)]

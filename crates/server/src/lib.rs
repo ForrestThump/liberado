@@ -972,7 +972,6 @@ fn chat_dispatcher(
 /// to agents, so an unopted-in deployment isn't paying for a second copy of that model just to run
 /// `liberado serve`. Any failure (bad vault path, model load error) degrades to `None` — this is
 /// an optimization, never something worth failing boot over.
-#[allow(clippy::cognitive_complexity)]
 async fn dispatcher_guidance_source(
     vault_path: &str,
 ) -> Option<Arc<dyn liberado_common::ToolGuidanceSource>> {
@@ -980,34 +979,10 @@ async fn dispatcher_guidance_source(
         return None;
     }
 
-    let vault = match liberado_vault::Vault::open("dispatcher-guidance", vault_path).await {
-        Ok(v) => v,
-        Err(e) => {
-            warn!(error = %e, "dispatcher guidance: failed to open vault — continuing without it");
-            return None;
-        }
-    };
+    let vault = open_guidance_vault(vault_path).await?;
+    let embedder = load_guidance_embedder()?;
 
-    let model =
-        std::env::var("LIBERADO_MEMORY_MODEL").unwrap_or_else(|_| "bge-small-en-v1.5".to_string());
-    let embedder: Arc<dyn turbovault_vector::EmbeddingEngine> =
-        match turbovault_vector::FastembedEngine::new(&model, None) {
-            Ok(e) => Arc::new(e),
-            Err(e) => {
-                warn!(error = %e, "dispatcher guidance: failed to load embedding model — continuing without it");
-                return None;
-            }
-        };
-
-    match liberado_memory_store::MemoryStore::open(
-        vault,
-        "memory/procedural",
-        embedder,
-        None,
-        liberado_memory_store::MemoryStoreConfig::default(),
-    )
-    .await
-    {
+    match open_procedural_memory(vault, embedder).await {
         Ok(store) => {
             info!("dispatcher guidance: procedural memory enabled");
             Some(Arc::new(store))
@@ -1017,6 +992,50 @@ async fn dispatcher_guidance_source(
             None
         }
     }
+}
+
+/// Open the vault backing the dispatcher's procedural memory. Any failure (bad vault path, model
+/// load error) degrades to `None` — this is an optimization, never something worth failing boot
+/// over.
+async fn open_guidance_vault(vault_path: &str) -> Option<liberado_vault::Vault> {
+    match liberado_vault::Vault::open("dispatcher-guidance", vault_path).await {
+        Ok(v) => Some(v),
+        Err(e) => {
+            warn!(error = %e, "dispatcher guidance: failed to open vault — continuing without it");
+            None
+        }
+    }
+}
+
+/// Load the embedding model for procedural-memory retrieval (`LIBERADO_MEMORY_MODEL`, defaulting
+/// to bge-small-en-v1.5). A failed load degrades to `None` — the same store
+/// `liberado-memory-mcp` (a separate subprocess) already exposes to agents, so an unopted-in
+/// deployment isn't paying for a second copy of that model just to run `liberado serve`.
+fn load_guidance_embedder() -> Option<Arc<dyn turbovault_vector::EmbeddingEngine>> {
+    let model =
+        std::env::var("LIBERADO_MEMORY_MODEL").unwrap_or_else(|_| "bge-small-en-v1.5".to_string());
+    match turbovault_vector::FastembedEngine::new(&model, None) {
+        Ok(e) => Some(Arc::new(e)),
+        Err(e) => {
+            warn!(error = %e, "dispatcher guidance: failed to load embedding model — continuing without it");
+            None
+        }
+    }
+}
+
+/// Open the procedural-memory store over an already-open vault and embedder.
+async fn open_procedural_memory(
+    vault: liberado_vault::Vault,
+    embedder: Arc<dyn turbovault_vector::EmbeddingEngine>,
+) -> Result<liberado_memory_store::MemoryStore, liberado_memory_store::MemoryError> {
+    liberado_memory_store::MemoryStore::open(
+        vault,
+        "memory/procedural",
+        embedder,
+        None,
+        liberado_memory_store::MemoryStoreConfig::default(),
+    )
+    .await
 }
 
 /// Chat face tools: live registry handle that re-connects when the peer set changes (empty→add

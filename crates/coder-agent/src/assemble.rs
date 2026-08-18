@@ -625,13 +625,19 @@ mod tests {
         }
     }
 
-    #[test]
-    #[allow(clippy::cognitive_complexity)]
-    fn three_entry_paths_share_tuning_fields_from_one_fixture() {
+    /// One fixture drives all three entry-path tests, so the fields they check are compared on
+    /// identical inputs. Touching `Cargo.toml` in the workspace lets `default_verifiers` include
+    /// cargo checks when used.
+    fn fixture_runs() -> (
+        CoderTuning,
+        CoderTask,
+        AssembledRun,
+        AssembledRun,
+        AssembledRun,
+    ) {
         let tuning = twisted_tuning();
         let ws = std::env::temp_dir().join("liberado-assemble-fixture");
         let _ = std::fs::create_dir_all(&ws);
-        // Touch Cargo.toml so default_verifiers includes cargo checks when used.
         let _ = std::fs::write(
             ws.join("Cargo.toml"),
             "[package]\nname=\"t\"\nversion=\"0.0.0\"\n",
@@ -672,8 +678,14 @@ mod tests {
         );
         let runner = assemble_production_run(
             &tuning,
-            entry::runner_surface(task, ws.clone(), Some("runner-model".into()), Some(50)),
+            entry::runner_surface(task.clone(), ws, Some("runner-model".into()), Some(50)),
         );
+        (tuning, task, pack, acp, runner)
+    }
+
+    #[test]
+    fn three_entry_paths_share_tuning_fields_from_one_fixture() {
+        let (tuning, _task, pack, acp, runner) = fixture_runs();
 
         // Shared tuning fields that historically drifted must match across all three.
         for (name, assembled) in [("pack", &pack), ("acp", &acp), ("runner", &runner)] {
@@ -720,6 +732,11 @@ mod tests {
             assert_eq!(c.progress.same_tool_limit, 13, "{name}: progress");
             assert_eq!(c.progress.max_attempts, 5, "{name}: progress max_attempts");
         }
+    }
+
+    #[test]
+    fn entry_paths_keep_surface_specific_overrides() {
+        let (_tuning, _task, pack, acp, runner) = fixture_runs();
 
         // Intentional deltas — documented, not silent hardcodes.
         assert_eq!(pack.request.task.description, "do the thing");
@@ -752,6 +769,11 @@ mod tests {
             pack.provenance.source_of("command_policy"),
             Some("surface.command_policy")
         );
+    }
+
+    #[test]
+    fn verifiers_and_critic_policies_differ_by_entry_path() {
+        let (_tuning, _task, pack, acp, runner) = fixture_runs();
 
         assert!(
             pack.request.config.verifiers.is_empty(),
