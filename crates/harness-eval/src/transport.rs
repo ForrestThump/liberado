@@ -518,4 +518,115 @@ mod tests {
         fs::write(&stdout, "y\n").unwrap();
         assert!(progress_mtime(root).unwrap().is_some());
     }
+
+    fn minimal_spec() -> (tempfile::TempDir, JobSpec) {
+        let temp = tempfile::tempdir().unwrap();
+        let repository = temp.path().join("repo");
+        fs::create_dir_all(&repository).unwrap();
+        let spec = JobSpec {
+            version: JOB_SPEC_VERSION,
+            job_id: JobId::new(),
+            submitted_at: Utc::now(),
+            repository: repository.clone(),
+            base_revision: "HEAD".to_string(),
+            task: TaskBundle::new("task.txt", "do it".to_string()).unwrap(),
+            harnesses: vec![HarnessRequest {
+                id: "liberado".to_string(),
+                binary: None,
+            }],
+            run_order: vec!["liberado".to_string()],
+            model: ModelPins {
+                provider: "openrouter".to_string(),
+                model: "deepseek/test".to_string(),
+                base_url: "https://example.invalid".to_string(),
+                credential_alias: "openrouter-default".to_string(),
+                thinking: "high".to_string(),
+                max_turns: 1,
+                sampling: SAMPLING_OMITTED.to_string(),
+            },
+            limits: ResourceLimits::default(),
+            verifier: VerifierProfile::WorkspaceTests,
+            task_aware_context: false,
+            acceptance: None,
+            experiment: None,
+            experiment_id: String::new(),
+        }
+        .finalize()
+        .unwrap();
+        (temp, spec)
+    }
+
+    #[test]
+    fn fingerprint_tree_hashes_and_counts_sorted_files() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("overlay");
+        fs::create_dir_all(root.join("sub")).unwrap();
+        fs::write(root.join("a.txt"), "one").unwrap();
+        fs::write(root.join("sub/b.txt"), "two").unwrap();
+        let (digest, count) = fingerprint_tree(&root).unwrap();
+        assert_eq!(count, 2);
+        assert_eq!(digest.len(), 64);
+        // Deterministic across calls.
+        let (again, again_count) = fingerprint_tree(&root).unwrap();
+        assert_eq!(again, digest);
+        assert_eq!(again_count, count);
+        // Empty and missing roots are rejected.
+        let empty = temp.path().join("empty");
+        fs::create_dir(&empty).unwrap();
+        assert!(fingerprint_tree(&empty).is_err());
+        assert!(fingerprint_tree(&temp.path().join("missing")).is_err());
+        // Content changes change the hash.
+        fs::write(root.join("a.txt"), "ONE").unwrap();
+        assert_ne!(fingerprint_tree(&root).unwrap().0, digest);
+    }
+
+    #[test]
+    fn copy_tree_copies_recursively() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("source");
+        let destination = temp.path().join("destination");
+        fs::create_dir_all(source.join("nested/deep")).unwrap();
+        fs::write(source.join("root.txt"), "root").unwrap();
+        fs::write(source.join("nested/deep/b.txt"), "b").unwrap();
+        copy_tree(&source, &destination).unwrap();
+        assert_eq!(
+            fs::read_to_string(destination.join("nested/deep/b.txt")).unwrap(),
+            "b"
+        );
+        assert_eq!(
+            fs::read_to_string(destination.join("root.txt")).unwrap(),
+            "root"
+        );
+        // Missing source is an error.
+        assert!(copy_tree(&temp.path().join("missing"), &destination).is_err());
+    }
+
+    #[test]
+    fn await_terminal_returns_immediately_for_terminal_jobs() {
+        let (temp, spec) = minimal_spec();
+        let repository = temp.path().join("repo");
+        let store = JobStore::for_repository(&repository);
+        store.create(&spec).unwrap();
+        let mut state = store.load_state(&spec.job_id).unwrap();
+        state.status = JobStatus::Failed;
+        state.phase = "terminal".to_string();
+        store.write_state(&state).unwrap();
+
+        let result = await_terminal(&temp.path().join("repo"), &spec.job_id, None, None);
+        let state = result.expect("terminal job returns immediately");
+        assert_eq!(state.status, JobStatus::Failed);
+    }
+
+    #[test]
+    fn cancel_refuses_terminal_jobs() {
+        let (temp, spec) = minimal_spec();
+        let repository = temp.path().join("repo");
+        let store = JobStore::for_repository(&repository);
+        store.create(&spec).unwrap();
+        let mut state = store.load_state(&spec.job_id).unwrap();
+        state.status = JobStatus::Succeeded;
+        store.write_state(&state).unwrap();
+        let err = cancel(&temp.path().join("repo"), &spec.job_id).unwrap_err();
+        assert!(err.to_string().contains("already terminal"), "{err}");
+    }
 }

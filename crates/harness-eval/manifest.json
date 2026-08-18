@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "source_root": "C:\\Users\\Shiloh\\AppData\\Local\\Temp\\.tmp87HXHn\\repo",
+  "run_root": "",
+  "base_revision": "HEAD",
+  "base_commit": "4a72dc5858876e966cb92cf6f96734f5e89025bc",
+  "compile_timeout_secs": 1800,
+  "harnesses": {
+    "liberado": {
+      "worktree": "worktrees\\liberado",
+      "target_dir": "targets\\liberado",
+      "artifacts": "artifacts\\liberado"
+    },
+    "pi": {
+      "worktree": "worktrees\\pi",
+      "target_dir": "targets\\pi",
+      "artifacts": "artifacts\\pi"
+    }
+  }
+}
