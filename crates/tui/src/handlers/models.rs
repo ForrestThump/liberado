@@ -116,12 +116,15 @@ mod tests {
     }
 
     #[test]
-    fn navigation_stays_in_bounds() {
+    fn navigation_stays_in_bounds_and_moves_from_nonzero() {
         let mut app = app_with_models();
         app.sidebar_selection = 0;
         handle(&mut app, key(KeyCode::Up));
         assert_eq!(app.sidebar_selection, 0, "Up at the top stays");
-        handle(&mut app, key(KeyCode::Down));
+        // Move from a non-zero position so a deleted Up/`k` arm or a flipped guard shows.
+        app.sidebar_selection = 2;
+        handle(&mut app, key(KeyCode::Up));
+        assert_eq!(app.sidebar_selection, 1, "Up moves down a row");
         handle(&mut app, key(KeyCode::Down));
         handle(&mut app, key(KeyCode::Down));
         assert_eq!(app.sidebar_selection, 2, "Down clamps at the last model");
@@ -129,17 +132,32 @@ mod tests {
         assert_eq!(app.sidebar_selection, 2, "j at the bottom stays");
         handle(&mut app, key(KeyCode::Char('k')));
         assert_eq!(app.sidebar_selection, 1, "k moves up");
+        // And from the top, j/k move the other way.
+        app.sidebar_selection = 0;
+        handle(&mut app, key(KeyCode::Char('j')));
+        assert_eq!(app.sidebar_selection, 1, "j moves down from the top");
+        handle(&mut app, key(KeyCode::Char('k')));
+        assert_eq!(app.sidebar_selection, 0, "k moves back up");
     }
 
     #[test]
     fn vim_nav_is_disabled_while_filtering() {
         let mut app = app_with_models();
         app.sidebar_filter = "be".into();
-        app.sidebar_selection = 0;
+        app.sidebar_selection = 2;
         handle(&mut app, key(KeyCode::Char('k')));
         assert_eq!(
             app.sidebar_selection, 0,
             "k is a filter char, not navigation, when filtering"
+        );
+        assert_eq!(app.sidebar_filter, "bek");
+        let mut app = app_with_models();
+        app.sidebar_filter = "be".into();
+        app.sidebar_selection = 2;
+        handle(&mut app, key(KeyCode::Char('j')));
+        assert_eq!(
+            app.sidebar_selection, 0,
+            "j is a filter char, not navigation, when filtering"
         );
     }
 

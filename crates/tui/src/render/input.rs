@@ -408,3 +408,101 @@ mod tests {
         assert!(out.contains("Message"), "block title:\n{out}");
     }
 }
+
+#[cfg(test)]
+mod cursor_tests {
+    use super::*;
+    use crate::app::Focus;
+    use crate::render::test_support;
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    #[test]
+    fn placeholder_positions_the_cursor_inside_the_block() {
+        let mut app = test_support::app();
+        app.focus = Focus::Input;
+        let th = app.theme.clone();
+        let mut terminal = Terminal::new(TestBackend::new(60, 6)).unwrap();
+        terminal
+            .draw(|f| draw(f, Rect::new(0, 3, 60, 3), &mut app, &th))
+            .unwrap();
+        // area.y + 1 = 4, area.x + 1 = 1. A `+`→`*` or `+`→`-` mutation moves this.
+        terminal.backend_mut().assert_cursor_position((1, 4));
+    }
+
+    #[test]
+    fn typed_input_moves_the_cursor_to_the_visual_column() {
+        let mut app = test_support::app();
+        app.focus = Focus::Input;
+        app.input = "hello".into();
+        app.cursor = 3; // mid-word
+        let th = app.theme.clone();
+        let mut terminal = Terminal::new(TestBackend::new(60, 6)).unwrap();
+        terminal
+            .draw(|f| draw(f, Rect::new(0, 3, 60, 3), &mut app, &th))
+            .unwrap();
+        // x = area.x + 1 + col(3) = 4; y = area.y + 1 + line(0) = 4.
+        terminal.backend_mut().assert_cursor_position((4, 4));
+    }
+
+    #[test]
+    fn unfocused_input_never_touches_the_cursor() {
+        let mut app = test_support::app();
+        app.focus = Focus::ChatMessages;
+        app.input = "hello".into();
+        app.cursor = 3;
+        let th = app.theme.clone();
+        let mut terminal = Terminal::new(TestBackend::new(60, 6)).unwrap();
+        terminal
+            .draw(|f| draw(f, Rect::new(0, 3, 60, 3), &mut app, &th))
+            .unwrap();
+        // position_cursor guards on focus: the default position must be untouched.
+        terminal.backend_mut().assert_cursor_position((0, 0));
+    }
+}
+
+#[cfg(test)]
+mod ghost_tests {
+    use super::*;
+    use crate::render::test_support;
+
+    /// The ghost suffix must track its typed/ghost split across **multiple logical lines**
+    /// (char_offset advances per line) and across wraps — a `+=`→`*=` leaves the offset at 0 and
+    /// the second line's ghost is re-styled as typed.
+    #[test]
+    fn ghost_splits_correctly_across_logical_lines() {
+        let app = test_support::app();
+        let th = app.theme;
+        let bg = c(&th.input_bg, "#1a1a2e");
+        let ghost_fg = c(&th.input_placeholder, "#404040");
+        // Two logical lines of typed text plus a ghost suffix on the whole thing.
+        let lines = wrap_input_with_ghost("ab\ncd", "gh", 40, &th, bg);
+        assert_eq!(lines.len(), 2);
+        let line2: String = lines[1].spans.iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(line2, "cdgh");
+        // The ghost part of line 2 must use the ghost color.
+        assert!(
+            lines[1].spans.iter().any(|s| s.style.fg == Some(ghost_fg)),
+            "line 2 keeps a dim ghost: {line2:?}"
+        );
+    }
+
+    #[test]
+    fn ghost_survives_wrapping_onto_later_lines() {
+        let app = test_support::app();
+        let th = app.theme;
+        let bg = c(&th.input_bg, "#1a1a2e");
+        let ghost_fg = c(&th.input_placeholder, "#404040");
+        let typed = "x".repeat(30);
+        let lines = wrap_input_with_ghost(&typed, "ghosttail", 12, &th, bg);
+        assert!(lines.len() > 2, "wraps onto several lines");
+        // Some later line carries dim ghost content.
+        assert!(
+            lines
+                .iter()
+                .skip(1)
+                .any(|l| l.spans.iter().any(|s| s.style.fg == Some(ghost_fg))),
+            "ghost text spills past the first wrap"
+        );
+    }
+}

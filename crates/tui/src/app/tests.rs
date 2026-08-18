@@ -3025,3 +3025,128 @@ fn gate_votes_are_capped_so_a_long_goal_does_not_grow_the_vector_forever() {
     );
     assert_eq!(j.gate_votes[0].reviewer, "rev-25");
 }
+
+// ── Survivor-closing tests (mutants pass 2) ───────────────────────────────
+
+#[test]
+fn clamp_model_selection_pins_to_the_last_match() {
+    let mut app = test_app();
+    app.models = vec!["alpha".into(), "beta".into(), "alpine".into()];
+    app.sidebar_filter = "al".into(); // → alpha, alpine (2 matches)
+    app.sidebar_selection = 3;
+    app.clamp_model_selection();
+    assert_eq!(app.sidebar_selection, 1, "clamped to last match");
+    app.sidebar_filter = "zz".into(); // → 0 matches
+    app.sidebar_selection = 7;
+    app.clamp_model_selection();
+    assert_eq!(app.sidebar_selection, 0, "no matches reset to 0");
+}
+
+#[test]
+fn clamp_switcher_selection_pins_out_of_range_rows() {
+    let mut app = test_app();
+    app.sessions = vec![chat_summary("c1", "one"), chat_summary("g1", "run")];
+    app.sidebar_selection = 5;
+    app.clamp_switcher_selection();
+    assert_eq!(app.sidebar_selection, 1, "clamped to last row");
+    app.sidebar_selection = 0;
+    app.clamp_switcher_selection();
+    assert_eq!(app.sidebar_selection, 0, "in-range selection unchanged");
+}
+
+#[test]
+fn flush_joined_buf_moves_stream_tokens_into_a_message() {
+    let mut app = test_app();
+    app.join_session_with("g1".into(), Some(SessionKind::Coding), None);
+    let joined = app.joined.as_mut().unwrap();
+    joined.stream_buf = "partial".into();
+    App::flush_joined_buf(joined);
+    assert_eq!(joined.messages.len(), 1);
+    let Message::Assistant(text) = &joined.messages[0] else {
+        panic!("expected an assistant message, got {:?}", joined.messages);
+    };
+    assert_eq!(text, "partial");
+    assert!(joined.stream_buf.is_empty(), "buffer drained");
+
+    // An empty buffer adds nothing.
+    let mut app = test_app();
+    app.join_session_with("g2".into(), Some(SessionKind::Coding), None);
+    App::flush_joined_buf(app.joined.as_mut().unwrap());
+    assert!(
+        app.joined.as_ref().unwrap().messages.is_empty(),
+        "empty buffer is a no-op"
+    );
+}
+
+#[test]
+fn filtered_sessions_matches_title_kind_or_id() {
+    let mut app = test_app();
+    app.sessions = vec![
+        chat_summary("c1", "weekly planning"),
+        goal_header("g9", DomainWire::Coding, "build a CLI", "running", false),
+    ];
+    app.sidebar_filter = "planning".into();
+    assert_eq!(app.filtered_sessions().len(), 1, "title match");
+    app.sidebar_filter = "coding".into();
+    assert_eq!(app.filtered_sessions().len(), 1, "kind-label match");
+    app.sidebar_filter = "g9".into();
+    assert_eq!(app.filtered_sessions().len(), 1, "id match");
+    app.sidebar_filter = "zzz".into();
+    assert_eq!(app.filtered_sessions().len(), 0, "no match");
+}
+
+#[test]
+fn needs_animation_any_streaming_pending_or_disconnect() {
+    let mut app = test_app();
+    app.streaming = false;
+    app.pending_load = None;
+    app.daemon_connected = true;
+    assert!(!app.needs_animation());
+    app.streaming = true;
+    assert!(app.needs_animation(), "streaming animates");
+    app.streaming = false;
+    app.daemon_connected = false;
+    assert!(app.needs_animation(), "disconnect animates");
+    app.daemon_connected = true;
+    app.pending_load = Some("c1".into());
+    assert!(app.needs_animation(), "pending load animates");
+}
+
+#[test]
+fn cursor_col_counts_since_the_last_newline() {
+    let mut app = test_app();
+    app.input = "ab\ncd".into();
+    app.cursor = 5; // end of the second logical line
+    assert_eq!(app.cursor_col(), 2, "column counts within the line");
+    app.cursor = 4; // between c and d
+    assert_eq!(app.cursor_col(), 1);
+    app.cursor = 2; // end of the first line
+    assert_eq!(app.cursor_col(), 2);
+    app.input = "single".into();
+    app.cursor = 3;
+    assert_eq!(app.cursor_col(), 3);
+}
+
+#[test]
+fn cursor_visual_line_sums_wrapped_lines_before_the_cursor() {
+    let mut app = test_app();
+    set_content_width(&mut app, 2);
+    app.input = "aaaa\nbb".into();
+    app.cursor = 6; // end of "bb"
+    assert_eq!(
+        app.cursor_visual_line(),
+        2,
+        "aaaa wraps to 2 + bb = 3rd line"
+    );
+}
+
+#[test]
+fn cursor_visual_col_wraps_the_column_modulo_width() {
+    let mut app = test_app();
+    set_content_width(&mut app, 5);
+    app.input = "abcdef".into();
+    app.cursor = 6;
+    assert_eq!(app.cursor_visual_col(), 1, "6 % 5 = 1");
+    app.cursor = 5;
+    assert_eq!(app.cursor_visual_col(), 0);
+}

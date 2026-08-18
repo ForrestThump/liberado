@@ -138,17 +138,27 @@ mod tests {
         app.open_session_switcher();
         handle(&mut app, key(KeyCode::Up));
         assert_eq!(app.sidebar_selection, 0, "Up at top stays");
+        // Move from a non-zero position so a deleted arm or flipped guard shows.
+        app.sidebar_selection = 2;
+        handle(&mut app, key(KeyCode::Up));
+        assert_eq!(app.sidebar_selection, 1, "Up moves down a row");
         for _ in 0..5 {
             handle(&mut app, key(KeyCode::Down));
         }
         assert_eq!(app.sidebar_selection, 2, "Down clamps at last row");
-        handle(&mut app, key(KeyCode::Char('t')));
-        assert_eq!(app.sidebar_filter, "t", "typing filters");
+        handle(&mut app, key(KeyCode::Char('k')));
+        assert_eq!(app.sidebar_selection, 1, "k navigates with an empty filter");
+        handle(&mut app, key(KeyCode::Char('j')));
+        assert_eq!(app.sidebar_selection, 2, "j navigates with an empty filter");
+        // With a filter set, j/k become filter characters, not navigation.
+        app.sidebar_filter = "t".into();
+        app.sidebar_selection = 2;
         handle(&mut app, key(KeyCode::Char('k')));
         assert_eq!(
-            app.sidebar_filter, "tk",
+            app.sidebar_selection, 0,
             "k is a filter char while filtering"
         );
+        assert_eq!(app.sidebar_filter, "tk");
         handle(&mut app, key(KeyCode::Backspace));
         assert_eq!(app.sidebar_filter, "t");
         let empty = test_support::app();
