@@ -171,6 +171,7 @@ mod tests {
         app.conversations = vec![
             conv("c1", Some("weekly planning"), None),
             conv("c2", Some(""), Some("c1")),
+            conv("c3", None, None),
         ];
         app
     }
@@ -184,7 +185,7 @@ mod tests {
         app.streaming = true;
         assert_eq!(app.active_session_id(), Some("s1"));
         assert!(app.is_streaming());
-        assert_eq!(app.conversation_count(), 2);
+        assert_eq!(app.conversation_count(), 3);
         assert_eq!(app.message_count(), 0);
         app.messages.push(Message::User("hi".into()));
         assert_eq!(app.message_count(), 1);
@@ -249,17 +250,22 @@ mod tests {
         // Parent lookup must be by exact id — a `==`→`!=` mutation would answer c1 here.
         assert_eq!(app.conversation_parent_for("missing"), None);
         assert_eq!(app.conversation_parent_for("c2"), Some("c1".into()));
+        assert_eq!(app.conversation_parent_for("c3"), None);
     }
 
     #[test]
     fn conversation_list_flattens_titles_and_ids() {
         let app = context_app();
         let list = app.conversation_list();
-        assert_eq!(list.len(), 2);
+        assert_eq!(list.len(), 3);
         assert!(list.contains(&("weekly planning".to_string(), "c1".to_string())));
         assert!(
             list.contains(&(String::new(), "c2".to_string())),
             "empty titles pass through as-is: {list:?}"
+        );
+        assert!(
+            list.contains(&("(untitled)".to_string(), "c3".to_string())),
+            "missing titles fall back to (untitled): {list:?}"
         );
     }
 

@@ -121,6 +121,12 @@ mod tests {
         assert_eq!(app.sidebar_selection, 1, "k navigates with an empty filter");
         handle(&mut app, key(KeyCode::Char('j')));
         assert_eq!(app.sidebar_selection, 2, "j navigates with an empty filter");
+        // At the top, Up/k must stay: a > -> >= mutation underflows.
+        app.sidebar_selection = 0;
+        handle(&mut app, key(KeyCode::Up));
+        assert_eq!(app.sidebar_selection, 0, "Up at the very top stays");
+        handle(&mut app, key(KeyCode::Char('k')));
+        assert_eq!(app.sidebar_selection, 0, "k at the very top stays");
     }
 
     #[test]

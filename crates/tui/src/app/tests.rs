@@ -848,10 +848,11 @@ fn slash_session_list() {
     let mut app = test_app();
     app.conversations = vec![conv("c1", "alpha"), conv("c2", "beta")];
     app.input = "/session list".into();
-    app.handle_key(key(KeyCode::Enter));
+    let effects = app.handle_key(key(KeyCode::Enter));
     // `/session list` is an alias for the unified switcher.
     assert_eq!(app.focus, Focus::SessionSwitcher);
     assert!(app.input.is_empty());
+    let _ = effects;
 }
 #[test]
 fn connection_status_flips_connected() {

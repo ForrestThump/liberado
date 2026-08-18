@@ -138,6 +138,9 @@ mod tests {
         assert_eq!(app.sidebar_selection, 1, "j moves down from the top");
         handle(&mut app, key(KeyCode::Char('k')));
         assert_eq!(app.sidebar_selection, 0, "k moves back up");
+        // k at the very top must stay: a > -> >= mutation underflows.
+        handle(&mut app, key(KeyCode::Char('k')));
+        assert_eq!(app.sidebar_selection, 0, "k at the top stays");
     }
 
     #[test]
