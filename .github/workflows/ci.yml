@@ -78,7 +78,7 @@ jobs:
       # webui matures past pre-alpha or grows a wasm CI job of its own.
       - name: Clippy
         if: matrix.os == 'ubuntu-latest'
-        run: cargo clippy --workspace --exclude liberado-webui --all-targets -- -D warnings
+        run: cargo clippy --workspace --exclude liberado-webui --all-targets -- -D warnings -D clippy::cognitive_complexity
 
       # `--no-fail-fast` so the run reports EVERY failing test, not just the ones up to the
       # first failing crate. Without it cargo stops at the first broken test binary, and the

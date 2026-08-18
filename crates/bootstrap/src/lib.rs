@@ -457,6 +457,7 @@ fn watcher_capture_paths(inbox_path: &str, extra: &[String]) -> Vec<String> {
     paths
 }
 
+#[allow(clippy::cognitive_complexity)]
 pub fn configure_daemon(
     daemon: Daemon,
     providers: &RoleProviders,

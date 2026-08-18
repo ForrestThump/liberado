@@ -86,6 +86,7 @@ impl GoalSessionStore {
     /// there. The directory is created if missing. A non-terminal session in a replayed log (a
     /// session that was mid-run when the daemon last stopped) is coerced to `Failed` — no pack is
     /// running it after a restart and packs aren't resumable yet, so its transcript is view-only.
+    #[allow(clippy::cognitive_complexity)]
     pub async fn open(dir: impl Into<PathBuf>) -> Self {
         let dir = dir.into();
         if let Err(e) = std::fs::create_dir_all(&dir) {

@@ -1158,6 +1158,7 @@ impl Executor {
     /// The turn loop shared by [`drive`](Self::drive) and
     /// [`converse_messages`](Self::converse_messages): provider call → record the turn → on prose,
     /// terminate per `mode`; on tool calls, run them and continue — until the turn budget.
+    #[allow(clippy::cognitive_complexity)]
     async fn run_loop(
         &self,
         runtime: &dyn ToolRuntime,

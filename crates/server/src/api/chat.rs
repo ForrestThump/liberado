@@ -530,6 +530,7 @@ pub struct DeleteParams {
 /// permanent data loss on. Every automatic teardown passes this flag, so the worst a future bug of
 /// the same shape can do is fail to clean up — which the idle sweeper then handles. The sidebar's
 /// Delete button deliberately does *not* pass it: a human clicked it and confirmed.
+#[allow(clippy::cognitive_complexity)]
 pub async fn delete_conversation(
     State(state): State<Arc<AppState>>,
     Path(id): Path<Ulid>,

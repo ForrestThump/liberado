@@ -48,6 +48,7 @@ pub(crate) fn provider_config_dir() -> Option<PathBuf> {
     liberado_config::config_dir()
 }
 
+#[allow(clippy::cognitive_complexity)]
 pub(crate) fn build_provider() -> Result<ResolvedProvider, String> {
     let model_override = std::env::var("LIBERADO_ACP_MODEL")
         .ok()
@@ -165,6 +166,7 @@ pub(crate) fn build_provider() -> Result<ResolvedProvider, String> {
 }
 
 /// Build the ACP model picker from the live provider catalog.
+#[allow(clippy::cognitive_complexity)]
 pub(crate) async fn load_model_catalog(
     provider: &dyn Provider,
     backend: &str,

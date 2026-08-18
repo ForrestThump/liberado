@@ -308,6 +308,7 @@ impl Daemon {
     /// source produced it — Decision 18/19's event-source seam. Each source runs its own loop in
     /// its own spawned task; this loop only ever sees the resulting [`Event`]s. Returns once every
     /// source has finished (or the `reactions` receiver is dropped).
+    #[allow(clippy::cognitive_complexity)]
     pub async fn run(mut self, reactions: UnboundedSender<Reaction>) -> Result<(), DaemonError> {
         let mut event_rx = self
             .event_rx

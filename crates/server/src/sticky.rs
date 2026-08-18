@@ -36,6 +36,7 @@ impl StickySession {
     /// still exists. A pointer to a conversation that's gone (store wiped, or a stale file) is
     /// discarded rather than adopted, so we never append a brief into a ghost session — the next
     /// message just lazily creates a fresh one. A missing/empty/garbage file loads as `None`.
+    #[allow(clippy::cognitive_complexity)]
     pub async fn load<F, Fut>(path: PathBuf, is_valid: F) -> Self
     where
         F: FnOnce(Ulid) -> Fut,

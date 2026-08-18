@@ -14,6 +14,7 @@ use crate::render::kind_color;
 use crate::tuning::*;
 use crate::ui::c;
 
+#[allow(clippy::cognitive_complexity)]
 pub(super) fn draw(frame: &mut Frame, area: Rect, app: &mut App, th: &Theme, spinner_tick: u8) {
     // Unified-Session view: when joined to a goal session, the chat pane renders *that* session's
     // (separate-but-linked) transcript and identity; otherwise the primary conversation.

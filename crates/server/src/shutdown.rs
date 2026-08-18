@@ -151,6 +151,7 @@ pub async fn refuse_new_turns_if_draining(
 ///
 /// Pure coordination over [`AppState`] — no SIGTERM plumbing; `run` calls this from the signal
 /// handler. Tests call it directly with a short grace.
+#[allow(clippy::cognitive_complexity)]
 pub async fn drain_for_shutdown(state: &AppState, grace: Duration) -> DrainOutcome {
     state.drain.begin_drain();
     info!(

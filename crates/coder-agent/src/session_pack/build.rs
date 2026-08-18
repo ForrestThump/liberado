@@ -99,7 +99,7 @@ impl CodingSessionPack {
     /// Build against the frozen contract (or, for a session that could not ask, against the bare
     /// description). Bounded attempt loop; a failed attempt may spend one ask on a human and fold
     /// their answer into the next attempt's `prior_feedback`.
-    #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments, clippy::cognitive_complexity)]
     pub(super) async fn run_build_phase(
         &self,
         session_id: &str,

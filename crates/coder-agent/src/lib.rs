@@ -284,6 +284,7 @@ impl LiberadoLoopBackend {
     /// reviewer that failed to answer must not turn a completed run into a failed one, and it
     /// must not report a clean review either — a failed call leaves `session_findings` empty and
     /// logs, which reads as "not reviewed", not as "reviewed and fine".
+    #[allow(clippy::cognitive_complexity)]
     async fn review_session_after_run(
         &self,
         config: &liberado_coder_core::CoderRunConfig,
@@ -567,6 +568,7 @@ impl LiberadoLoopBackend {
         }
     }
 
+    #[allow(clippy::cognitive_complexity)]
     async fn attempt_body(
         &self,
         request: CoderRunRequest,

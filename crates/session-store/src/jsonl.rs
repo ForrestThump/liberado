@@ -130,6 +130,7 @@ impl SessionStore {
     /// it any more and packs are not resumable, so leaving it `Running` would be a lie the UI would
     /// faithfully render forever. Chats are goal-less and so are never coerced — an open chat is
     /// simply open.
+    #[allow(clippy::cognitive_complexity)]
     pub async fn open(dir: impl Into<PathBuf>) -> Self {
         let dir = dir.into();
         if let Err(e) = std::fs::create_dir_all(&dir) {

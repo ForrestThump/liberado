@@ -261,6 +261,7 @@ fn print_help() {
     );
 }
 
+#[allow(clippy::cognitive_complexity)]
 async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let resolved = build_provider()?;
     let catalog = load_model_catalog(
@@ -584,6 +585,7 @@ async fn handle_notification(method: &str, _params: Value) {
     tracing::debug!(method = %method, "acp notification ignored");
 }
 
+#[allow(clippy::cognitive_complexity)]
 async fn handle_request(
     bridge: Arc<Bridge>,
     method: &str,

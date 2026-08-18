@@ -138,6 +138,7 @@ pub async fn main_worktree_root(start: &Path) -> Option<PathBuf> {
 /// Best-effort and non-fatal: a worktree without them still *runs*, it just cannot compile, and
 /// failing worktree creation outright would be a worse trade than a loud warning. Returns the
 /// directories actually copied.
+#[allow(clippy::cognitive_complexity)]
 pub async fn provision_path_deps(parent_root: &Path, dest: &Path) -> Vec<String> {
     let manifest = match tokio::fs::read_to_string(parent_root.join("Cargo.toml")).await {
         Ok(m) => m,

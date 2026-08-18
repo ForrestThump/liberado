@@ -795,6 +795,7 @@ fn ensure_correlation(decision: &mut DispatchDecision, goal_hash: u64) {
 }
 
 /// Log the classifier (or guidance short-circuit) decision with MCP/tool fields for dogfood.
+#[allow(clippy::cognitive_complexity)]
 fn log_classified_decision(decision: &DispatchDecision, model: &str) {
     match &decision.action {
         DispatchAction::ExecuteDirect {

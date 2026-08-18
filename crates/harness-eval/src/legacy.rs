@@ -2172,6 +2172,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::cognitive_complexity)]
     fn parse_run_args_applies_defaults_and_every_flag() {
         let temp = tempfile::tempdir().unwrap();
         let run = temp.path().join("run");

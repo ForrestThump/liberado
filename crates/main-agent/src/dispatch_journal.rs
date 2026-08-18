@@ -22,6 +22,7 @@ pub fn journal_path(correlation_id: &str) -> PathBuf {
 }
 
 /// Best-effort append of one JSON object line. Failures are logged and ignored.
+#[allow(clippy::cognitive_complexity)]
 pub async fn append(correlation_id: &str, record: Value) {
     let path = journal_path(correlation_id);
     if let Some(parent) = path.parent()

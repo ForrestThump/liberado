@@ -35,6 +35,7 @@ impl Daemon {
     ///
     /// Edits under `proposals/` bypass the dispatcher — they are evaluated directly as potential
     /// proposal approvals (the human's Obsidian edit is the authorization).
+    #[allow(clippy::cognitive_complexity)]
     pub(crate) async fn react(&self, event: &Event) -> ReactionOutcome {
         // Before any dispatch: check if this is a proposal note change. The human's edit (status
         // approval) is the authorization — no need to re-dispatch (which would re-propose).
@@ -207,6 +208,7 @@ impl Daemon {
     }
 
     /// Inline dispatch → orchestrate when no hub is attached. Prefer the hub path in production.
+    #[allow(clippy::cognitive_complexity)]
     pub(crate) async fn dispatch_and_act(
         &self,
         pool: &DaemonPool,

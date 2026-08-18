@@ -1283,6 +1283,7 @@ pub enum Effect {
 }
 
 impl App {
+    #[allow(clippy::cognitive_complexity)]
     pub fn update(&mut self, action: Action) -> Vec<Effect> {
         match action {
             Action::StatusUpdate(status) => {

@@ -529,6 +529,7 @@ impl RiskGatedToolRuntime {
         None
     }
 
+    #[allow(clippy::cognitive_complexity)]
     async fn write_proposal(
         &self,
         call: &ToolInvocation,
@@ -653,6 +654,7 @@ impl RiskGatedToolRuntime {
     /// requested capability onto the proposal (signed, tamper-evident) and notifies with the four
     /// scope buttons. On approval the daemon applies the grant per the chosen scope and executes the
     /// carried call.
+    #[allow(clippy::cognitive_complexity)]
     async fn write_permission_request(
         &self,
         call: &ToolInvocation,

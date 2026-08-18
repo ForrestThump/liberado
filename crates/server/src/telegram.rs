@@ -252,6 +252,7 @@ impl TelegramChatBridge {
         }
     }
 
+    #[allow(clippy::cognitive_complexity)]
     async fn apply_result(
         &self,
         result: CommandResult,

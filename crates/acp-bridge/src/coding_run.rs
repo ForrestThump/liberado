@@ -178,6 +178,7 @@ pub struct CodingRound<'a> {
     pub config_dir: Option<PathBuf>,
 }
 
+#[allow(clippy::cognitive_complexity)]
 pub async fn run_coding_round(
     round: CodingRound<'_>,
     state: &mut CodingSessionState,

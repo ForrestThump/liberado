@@ -1750,6 +1750,7 @@ impl ChatSessions {
     /// The full sequence (estimation, boundary selection, summarization, persistence) is described
     /// in `docs/future-work/context-compaction-plan.md`. Every failure mode degrades to *running
     /// uncompacted* — a missing summary must never cost the human their turn.
+    #[allow(clippy::cognitive_complexity)]
     async fn maybe_compact(
         &self,
         session: Ulid,

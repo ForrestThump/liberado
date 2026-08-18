@@ -87,6 +87,7 @@ pub fn dir_for(configured: Option<&str>, workspace_root: &str) -> PathBuf {
 /// An empty or whitespace-only file is treated as absent. Truncating a prompt to zero bytes is
 /// far more likely to be an accident — an interrupted write, a bad mount — than an instruction
 /// to run the model with no instructions.
+#[allow(clippy::cognitive_complexity)]
 pub fn load(dir: Option<&Path>, file: &str, baked: &'static str) -> String {
     let mut candidates: Vec<PathBuf> = Vec::new();
     if let Some(dir) = dir {

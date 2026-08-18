@@ -481,6 +481,7 @@ Answer in under 200 words, as plain prose. No preamble, no JSON.";
 /// runs after work that already exists, and a strategist outage must not destroy a run that is
 /// merely struggling. The next attempt simply proceeds without a directive, exactly as it would
 /// have before this role existed.
+#[allow(clippy::cognitive_complexity)]
 pub async fn run_strategist(
     providers: &dyn CoderProviderFactory,
     request: &CoderRunRequest,

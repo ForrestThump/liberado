@@ -359,6 +359,7 @@ impl GoalSessionHub {
     ///
     /// Call **after** packs are registered (resumeability is pack-defined). Returns how many
     /// sessions were finished.
+    #[allow(clippy::cognitive_complexity)]
     pub async fn reconcile_parked_at_startup(&self) -> usize {
         let parked: Vec<GoalSessionRecord> = self
             .list()

@@ -148,6 +148,7 @@ impl ApprovalBot {
 
     /// Poll the channel forever, dispatching each inbound event. Never returns under normal
     /// operation — intended to be `tokio::spawn`ed alongside the daemon's own watch loop.
+    #[allow(clippy::cognitive_complexity)]
     pub async fn run(self) {
         tracing::info!(
             channel = self.channel.name(),
@@ -326,6 +327,7 @@ impl ApprovalBot {
     /// Handle a permission-request scope tap. `scope = None` denies (Rejected); otherwise stamp the
     /// chosen [`GrantScope`] and approve. Same pending/expired guards as `set_status`; the daemon's
     /// proposal reactor does the privileged work (apply the grant, execute the carried call).
+    #[allow(clippy::cognitive_complexity)]
     async fn set_permission_scope(
         &self,
         event_id: &str,
@@ -417,6 +419,7 @@ impl ApprovalBot {
     /// Read `proposals/{stem}.md`, and — only if it is currently `Pending` and not expired — set
     /// its status and write it back tagged as a human write. Any other current state is reported
     /// back to the human and left untouched.
+    #[allow(clippy::cognitive_complexity)]
     async fn set_status(
         &self,
         event_id: &str,
@@ -538,6 +541,7 @@ impl ApprovalBot {
 
     /// Revision replies update proposals; any other free-form text runs a Liberado chat turn when
     /// a surface is attached.
+    #[allow(clippy::cognitive_complexity)]
     async fn handle_message(&self, text: &str, reply_to_prompt: Option<String>) {
         // The human just messaged us — stamp the shared activity clock so a pending cron brief holds
         // off until this conversation goes quiet.
@@ -652,6 +656,7 @@ impl ApprovalBot {
     /// Ask the shared provider to redraft `stem`'s `rationale`/`proposed_action` per `note`, then
     /// write the result back as a **fresh, re-signed, still-Pending** proposal and send new
     /// buttons. Never auto-approves.
+    #[allow(clippy::cognitive_complexity)]
     async fn apply_revision(&self, stem: &str, note: &str) {
         let path = proposal_path(stem);
 

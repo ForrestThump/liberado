@@ -626,6 +626,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::cognitive_complexity)]
     fn three_entry_paths_share_tuning_fields_from_one_fixture() {
         let tuning = twisted_tuning();
         let ws = std::env::temp_dir().join("liberado-assemble-fixture");

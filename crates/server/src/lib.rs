@@ -60,6 +60,7 @@ const DEFAULT_PORT: u16 = 4201;
 /// vault daemon (watch loop), then serve the HTTP/SSE API and static frontend until killed. This is
 /// the daemon's foreground entry point — `liberado serve` calls it. The caller is expected to have
 /// already initialised the tracing subscriber.
+#[allow(clippy::cognitive_complexity)]
 pub async fn run(vault_path: String) -> Result<(), Box<dyn std::error::Error>> {
     let port: u16 = std::env::var("LIBERADO_PORT")
         .ok()
@@ -795,6 +796,7 @@ struct SessionEngine {
     goals: Arc<liberado_session::GoalSessionHub>,
 }
 
+#[allow(clippy::cognitive_complexity)]
 async fn build_chat(
     providers: &liberado_bootstrap::RoleProviders,
     mcp: McpRegistry,
@@ -944,6 +946,7 @@ async fn build_chat(
 /// to agents, so an unopted-in deployment isn't paying for a second copy of that model just to run
 /// `liberado serve`. Any failure (bad vault path, model load error) degrades to `None` — this is
 /// an optimization, never something worth failing boot over.
+#[allow(clippy::cognitive_complexity)]
 async fn dispatcher_guidance_source(
     vault_path: &str,
 ) -> Option<Arc<dyn liberado_common::ToolGuidanceSource>> {

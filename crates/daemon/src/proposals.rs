@@ -50,6 +50,7 @@ impl Daemon {
     /// frontmatter status) are never executed: they are flipped to `status: expired` and archived
     /// so the active dir stays tidy without waiting for the background reaper. Terminal
     /// statuses / unparseable notes are observed (and terminal notes archived if still active).
+    #[allow(clippy::cognitive_complexity)]
     pub(crate) async fn handle_proposal_change(
         &self,
         rel_path: &Path,
@@ -309,6 +310,7 @@ impl Daemon {
     /// - `Once` / `None` → nothing to persist.
     ///
     /// Best-effort: a persistence failure is logged, never propagated — the approved call already ran.
+    #[allow(clippy::cognitive_complexity)]
     pub(crate) fn apply_approved_grant(&self, proposal: &liberado_common::Proposal) {
         let Some(capability) = &proposal.requested_grant else {
             return; // ordinary proposal, not a permission request
@@ -440,6 +442,7 @@ const APPROVED_REAP_GRACE: chrono::Duration = chrono::Duration::hours(1);
 ///
 /// Per-file failures (read, write, archive) are logged and skipped so one bad note cannot starve
 /// the rest of the directory. Only structural failures (cannot list `proposals/`) abort the sweep.
+#[allow(clippy::cognitive_complexity)]
 pub(crate) async fn reap_expired_proposals(vault: &Vault) -> Result<(), DaemonError> {
     let proposals_path = vault.root().join(PROPOSALS_DIR);
 

@@ -931,6 +931,7 @@ async fn wait_for_termination_signal() {
 ///
 /// Never fatal. The run's result is what the caller came for, and failing it over a git problem
 /// would discard a successful run to report a bookkeeping error.
+#[allow(clippy::cognitive_complexity)]
 async fn preserve_work(workspace: &Path, task_id: &str, push: bool) -> Result<(), String> {
     let dirty = git_output(workspace, &["status", "--porcelain"]).await?;
     if dirty.trim().is_empty() {
