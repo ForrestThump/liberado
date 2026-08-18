@@ -568,149 +568,273 @@ pub fn save(args: &[String]) -> Result<(), Box<dyn Error>> {
 }
 
 fn parse_run_args(args: &[String]) -> Result<RunArgs, Box<dyn Error>> {
-    let mut run_root = None;
-    let mut task = None;
-    let mut model = DEFAULT_MODEL.to_string();
-    let mut provider = DEFAULT_PROVIDER.to_string();
-    let mut base_url = DEFAULT_BASE_URL.to_string();
-    let mut api_key_env = DEFAULT_API_KEY_ENV.to_string();
-    let mut thinking = DEFAULT_THINKING.to_string();
-    let mut max_turns = DEFAULT_MAX_TURNS;
-    let mut sampling = SAMPLING_OMITTED.to_string();
-    let mut run_order = default_run_order();
-    let mut run_timeout_secs = DEFAULT_RUN_TIMEOUT_SECS;
-    // Keep external verifier repair off for benchmark runs. Operators can opt in explicitly;
-    // otherwise the comparison would measure the coordinator's recovery policy, not the harness.
-    let mut verifier_repair_attempts = 0;
-    let mut task_aware_context = false;
-    let mut acceptance_overlay = None;
-    let mut liberado_bin = None;
-    let mut pi_bin = None;
-    let mut cancel_file = None;
+    let mut parsed = RunArgsBuilder::default();
     let mut index = 0;
     while index < args.len() {
         let flag = args[index].as_str();
-        match flag {
-            "--task" => {
-                index += 1;
-                task = Some(PathBuf::from(value(args, index, flag)?));
-            }
-            "--model" => {
-                index += 1;
-                model = value(args, index, flag)?.to_string();
-            }
-            "--provider" => {
-                index += 1;
-                provider = value(args, index, flag)?.to_string();
-            }
-            "--base-url" => {
-                index += 1;
-                base_url = value(args, index, flag)?.to_string();
-            }
-            "--api-key-env" => {
-                index += 1;
-                api_key_env = value(args, index, flag)?.to_string();
-            }
-            "--thinking" => {
-                index += 1;
-                thinking = value(args, index, flag)?.to_string();
-            }
-            "--max-turns" => {
-                index += 1;
-                max_turns = value(args, index, flag)?
-                    .parse()
-                    .map_err(|_| "--max-turns must be a positive integer")?;
-                if max_turns == 0 {
-                    return Err("--max-turns must be a positive integer".into());
-                }
-            }
-            "--sampling" => {
-                index += 1;
-                sampling = value(args, index, flag)?.to_string();
-                if sampling != SAMPLING_OMITTED {
-                    return Err(format!(
-                        "sampling '{sampling}' is not yet applied by either client; only '{SAMPLING_OMITTED}' is supported"
-                    )
-                    .into());
-                }
-            }
-            "--run-order" => {
-                index += 1;
-                run_order = value(args, index, flag)?
-                    .split(',')
-                    .map(|part| part.trim().to_string())
-                    .filter(|part| !part.is_empty())
-                    .collect();
-                if run_order.is_empty() {
-                    return Err("--run-order must name at least one harness".into());
-                }
-            }
-            "--run-timeout-secs" => {
-                index += 1;
-                run_timeout_secs = value(args, index, flag)?
-                    .parse()
-                    .map_err(|_| "--run-timeout-secs must be a positive integer")?;
-                if run_timeout_secs == 0 {
-                    return Err("--run-timeout-secs must be a positive integer".into());
-                }
-            }
-            "--verifier-repair-attempts" => {
-                index += 1;
-                verifier_repair_attempts = value(args, index, flag)?
-                    .parse()
-                    .map_err(|_| "--verifier-repair-attempts must be a non-negative integer")?;
-            }
-            "--task-aware-context" => {
-                task_aware_context = true;
-            }
-            "--acceptance-overlay" => {
-                index += 1;
-                acceptance_overlay = Some(absolute(&PathBuf::from(value(args, index, flag)?))?);
-            }
-            "--liberado-bin" => {
-                index += 1;
-                liberado_bin = Some(PathBuf::from(value(args, index, flag)?));
-            }
-            "--pi-bin" => {
-                index += 1;
-                pi_bin = Some(PathBuf::from(value(args, index, flag)?));
-            }
-            "--cancel-file" => {
-                index += 1;
-                cancel_file = Some(PathBuf::from(value(args, index, flag)?));
-            }
-            flag if flag.starts_with('-') => {
+        if flag.starts_with('-') {
+            if let Some((_, apply)) = RUN_FLAG_HANDLERS.iter().find(|(name, _)| *name == flag) {
+                apply(args, &mut index, &mut parsed)?;
+            } else {
                 return Err(format!("unknown flag for coder compare run: {flag}").into());
             }
-            path => {
-                if run_root.is_some() {
-                    return Err("coder compare run takes one run directory".into());
-                }
-                run_root = Some(PathBuf::from(path));
+        } else {
+            // The positional argument is the run directory.
+            if parsed.run_root.is_some() {
+                return Err("coder compare run takes one run directory".into());
             }
+            parsed.run_root = Some(PathBuf::from(flag));
         }
         index += 1;
     }
     Ok(RunArgs {
-        run_root: absolute(&run_root.ok_or("coder compare run requires <run-dir>")?)?,
-        task: absolute(&task.ok_or("coder compare run requires --task <file>")?)?,
-        model,
-        provider,
-        base_url,
-        api_key_env,
-        thinking,
-        max_turns,
-        sampling,
-        run_order,
-        run_timeout_secs,
-        verifier_repair_attempts,
-        task_aware_context,
-        acceptance_overlay,
-        liberado_bin,
-        pi_bin,
-        cancel_file,
+        run_root: absolute(
+            &parsed
+                .run_root
+                .ok_or("coder compare run requires <run-dir>")?,
+        )?,
+        task: absolute(
+            &parsed
+                .task
+                .ok_or("coder compare run requires --task <file>")?,
+        )?,
+        model: parsed.model,
+        provider: parsed.provider,
+        base_url: parsed.base_url,
+        api_key_env: parsed.api_key_env,
+        thinking: parsed.thinking,
+        max_turns: parsed.max_turns,
+        sampling: parsed.sampling,
+        run_order: parsed.run_order,
+        run_timeout_secs: parsed.run_timeout_secs,
+        verifier_repair_attempts: parsed.verifier_repair_attempts,
+        task_aware_context: parsed.task_aware_context,
+        acceptance_overlay: parsed.acceptance_overlay,
+        liberado_bin: parsed.liberado_bin,
+        pi_bin: parsed.pi_bin,
+        cancel_file: parsed.cancel_file,
     })
 }
+
+/// Parsed `coder compare run` flags with the CLI's historical defaults, so a bare
+/// `run <dir> --task <file>` behaves exactly as before.
+#[derive(Debug)]
+struct RunArgsBuilder {
+    run_root: Option<PathBuf>,
+    task: Option<PathBuf>,
+    model: String,
+    provider: String,
+    base_url: String,
+    api_key_env: String,
+    thinking: String,
+    max_turns: u32,
+    sampling: String,
+    run_order: Vec<String>,
+    run_timeout_secs: u64,
+    verifier_repair_attempts: u32,
+    task_aware_context: bool,
+    acceptance_overlay: Option<PathBuf>,
+    liberado_bin: Option<PathBuf>,
+    pi_bin: Option<PathBuf>,
+    cancel_file: Option<PathBuf>,
+}
+
+impl Default for RunArgsBuilder {
+    fn default() -> Self {
+        Self {
+            run_root: None,
+            task: None,
+            model: DEFAULT_MODEL.to_string(),
+            provider: DEFAULT_PROVIDER.to_string(),
+            base_url: DEFAULT_BASE_URL.to_string(),
+            api_key_env: DEFAULT_API_KEY_ENV.to_string(),
+            thinking: DEFAULT_THINKING.to_string(),
+            max_turns: DEFAULT_MAX_TURNS,
+            sampling: SAMPLING_OMITTED.to_string(),
+            run_order: default_run_order(),
+            run_timeout_secs: DEFAULT_RUN_TIMEOUT_SECS,
+            // Keep external verifier repair off for benchmark runs. Operators can opt in
+            // explicitly; otherwise the comparison would measure the coordinator's recovery
+            // policy, not the harness.
+            verifier_repair_attempts: 0,
+            task_aware_context: false,
+            acceptance_overlay: None,
+            liberado_bin: None,
+            pi_bin: None,
+            cancel_file: None,
+        }
+    }
+}
+
+/// One flag's parser: consumes the flag's value argument (via `value`) on `RunArgsBuilder`.
+type FlagHandler = fn(&[String], &mut usize, &mut RunArgsBuilder) -> Result<(), Box<dyn Error>>;
+
+macro_rules! string_run_flag {
+    ($name:ident, $flag:literal, $field:ident) => {
+        fn $name(
+            args: &[String],
+            index: &mut usize,
+            parsed: &mut RunArgsBuilder,
+        ) -> Result<(), Box<dyn Error>> {
+            *index += 1;
+            parsed.$field = value(args, *index, $flag)?.to_string();
+            Ok(())
+        }
+    };
+}
+
+macro_rules! path_run_flag {
+    ($name:ident, $flag:literal, $field:ident) => {
+        fn $name(
+            args: &[String],
+            index: &mut usize,
+            parsed: &mut RunArgsBuilder,
+        ) -> Result<(), Box<dyn Error>> {
+            *index += 1;
+            parsed.$field = Some(PathBuf::from(value(args, *index, $flag)?));
+            Ok(())
+        }
+    };
+}
+
+macro_rules! bool_run_flag {
+    ($name:ident, $flag:literal, $field:ident) => {
+        fn $name(
+            _args: &[String],
+            _index: &mut usize,
+            parsed: &mut RunArgsBuilder,
+        ) -> Result<(), Box<dyn Error>> {
+            parsed.$field = true;
+            Ok(())
+        }
+    };
+}
+
+string_run_flag!(model_flag, "--model", model);
+string_run_flag!(provider_flag, "--provider", provider);
+string_run_flag!(base_url_flag, "--base-url", base_url);
+string_run_flag!(api_key_env_flag, "--api-key-env", api_key_env);
+string_run_flag!(thinking_flag, "--thinking", thinking);
+
+path_run_flag!(task_flag, "--task", task);
+path_run_flag!(liberado_bin_flag, "--liberado-bin", liberado_bin);
+path_run_flag!(pi_bin_flag, "--pi-bin", pi_bin);
+path_run_flag!(cancel_file_flag, "--cancel-file", cancel_file);
+
+bool_run_flag!(
+    task_aware_context_flag,
+    "--task-aware-context",
+    task_aware_context
+);
+
+fn max_turns_flag(
+    args: &[String],
+    index: &mut usize,
+    parsed: &mut RunArgsBuilder,
+) -> Result<(), Box<dyn Error>> {
+    *index += 1;
+    parsed.max_turns = value(args, *index, "--max-turns")?
+        .parse()
+        .map_err(|_| "--max-turns must be a positive integer")?;
+    if parsed.max_turns == 0 {
+        return Err("--max-turns must be a positive integer".into());
+    }
+    Ok(())
+}
+
+fn sampling_flag(
+    args: &[String],
+    index: &mut usize,
+    parsed: &mut RunArgsBuilder,
+) -> Result<(), Box<dyn Error>> {
+    *index += 1;
+    parsed.sampling = value(args, *index, "--sampling")?.to_string();
+    if parsed.sampling != SAMPLING_OMITTED {
+        return Err(format!(
+            "sampling '{}' is not yet applied by either client; only '{SAMPLING_OMITTED}' is supported",
+            parsed.sampling
+        )
+        .into());
+    }
+    Ok(())
+}
+
+fn run_order_flag(
+    args: &[String],
+    index: &mut usize,
+    parsed: &mut RunArgsBuilder,
+) -> Result<(), Box<dyn Error>> {
+    *index += 1;
+    parsed.run_order = value(args, *index, "--run-order")?
+        .split(',')
+        .map(|part| part.trim().to_string())
+        .filter(|part| !part.is_empty())
+        .collect();
+    if parsed.run_order.is_empty() {
+        return Err("--run-order must name at least one harness".into());
+    }
+    Ok(())
+}
+
+fn run_timeout_flag(
+    args: &[String],
+    index: &mut usize,
+    parsed: &mut RunArgsBuilder,
+) -> Result<(), Box<dyn Error>> {
+    *index += 1;
+    parsed.run_timeout_secs = value(args, *index, "--run-timeout-secs")?
+        .parse()
+        .map_err(|_| "--run-timeout-secs must be a positive integer")?;
+    if parsed.run_timeout_secs == 0 {
+        return Err("--run-timeout-secs must be a positive integer".into());
+    }
+    Ok(())
+}
+
+fn verifier_repair_flag(
+    args: &[String],
+    index: &mut usize,
+    parsed: &mut RunArgsBuilder,
+) -> Result<(), Box<dyn Error>> {
+    *index += 1;
+    parsed.verifier_repair_attempts = value(args, *index, "--verifier-repair-attempts")?
+        .parse()
+        .map_err(|_| "--verifier-repair-attempts must be a non-negative integer")?;
+    Ok(())
+}
+
+fn acceptance_overlay_flag(
+    args: &[String],
+    index: &mut usize,
+    parsed: &mut RunArgsBuilder,
+) -> Result<(), Box<dyn Error>> {
+    *index += 1;
+    parsed.acceptance_overlay = Some(absolute(&PathBuf::from(value(
+        args,
+        *index,
+        "--acceptance-overlay",
+    )?))?);
+    Ok(())
+}
+
+const RUN_FLAG_HANDLERS: &[(&str, FlagHandler)] = &[
+    ("--task", task_flag),
+    ("--model", model_flag),
+    ("--provider", provider_flag),
+    ("--base-url", base_url_flag),
+    ("--api-key-env", api_key_env_flag),
+    ("--thinking", thinking_flag),
+    ("--max-turns", max_turns_flag),
+    ("--sampling", sampling_flag),
+    ("--run-order", run_order_flag),
+    ("--run-timeout-secs", run_timeout_flag),
+    ("--verifier-repair-attempts", verifier_repair_flag),
+    ("--task-aware-context", task_aware_context_flag),
+    ("--acceptance-overlay", acceptance_overlay_flag),
+    ("--liberado-bin", liberado_bin_flag),
+    ("--pi-bin", pi_bin_flag),
+    ("--cancel-file", cancel_file_flag),
+];
 
 fn prepare_worktrees(
     source_root: &Path,
