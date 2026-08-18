@@ -107,3 +107,79 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &App, th: &Theme) {
         frame.render_widget(list, area);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::api::ConvHeader;
+    use crate::app::Focus;
+    use crate::render::test_support;
+
+    fn render(app: &App, w: u16, h: u16) -> String {
+        let th = app.theme.clone();
+        test_support::render_pane(w, h, |f| draw(f, f.area(), app, &th))
+    }
+
+    fn conv(id: &str, title: &str) -> ConvHeader {
+        ConvHeader {
+            id: id.into(),
+            title: Some(title.into()),
+            created_at: "2025-06-25T12:00:00Z".into(),
+            parent_conversation: None,
+            spawned_by: None,
+        }
+    }
+
+    #[test]
+    fn empty_list_shows_the_nothing_message() {
+        let mut app = test_support::app();
+        app.focus = Focus::SessionBrowser;
+        let out = render(&app, 40, 12);
+        assert!(out.contains("no conversations"), "empty:\n{out}");
+        assert!(out.contains("Conversations"), "title:\n{out}");
+    }
+
+    #[test]
+    fn rows_show_title_short_id_and_relative_time() {
+        let mut app = test_support::app();
+        app.focus = Focus::SessionBrowser;
+        app.conversations = vec![conv("c1", "weekly planning"), conv("c2", "capture notes")];
+        let out = render(&app, 60, 12);
+        assert!(out.contains("weekly planning"), "row:\n{out}");
+        assert!(out.contains("[c1]"), "short id:\n{out}");
+        assert!(out.contains("Jun 25"), "relative time:\n{out}");
+    }
+
+    #[test]
+    fn selected_active_and_loading_states_mark_rows() {
+        let mut app = test_support::app();
+        app.focus = Focus::SessionBrowser;
+        app.conversations = vec![conv("c1", "weekly planning"), conv("c2", "capture notes")];
+        app.sidebar_selection = 0;
+        app.session = Some("c1".into());
+        app.pending_load = Some("c1".into());
+        let out = render(&app, 60, 12);
+        let line = out
+            .lines()
+            .find(|l| l.contains("weekly planning"))
+            .expect("row renders");
+        assert!(line.contains('*'), "active star: {line}");
+        assert!(line.contains('…'), "loading ellipsis: {line}");
+        // Tree glyphs appear once a child exists.
+        let mut app = test_support::app();
+        app.focus = Focus::SessionBrowser;
+        app.conversations = vec![
+            conv("root", "root thread"),
+            ConvHeader {
+                id: "kid".into(),
+                title: Some("child".into()),
+                created_at: "2025-06-25T12:00:00Z".into(),
+                parent_conversation: Some("root".into()),
+                spawned_by: Some("m".into()),
+            },
+        ];
+        let out = render(&app, 60, 12);
+        assert!(out.contains('└'), "child glyph:\n{out}");
+        assert!(out.contains('│'), "ancestor glyph:\n{out}");
+    }
+}
