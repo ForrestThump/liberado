@@ -684,6 +684,197 @@ pub struct Executor {
     model: Option<String>,
 }
 
+/// The correction text handed back when `submit_report` arguments do not match the Report
+/// schema: the model gets the error and a bound number of retries (see
+/// [`MAX_MALFORMED_REPORTS`]), since a model that cannot produce the shape will not discover it
+/// by repetition.
+fn malformed_report_nudge(e: &serde_json::Error) -> String {
+    format!(
+        "`{SUBMIT_REPORT_TOOL}` was NOT accepted — your arguments did not match the required \
+         schema: {e}. Call it again with the full object: `outcome` (one of \
+         succeeded/partially_succeeded/failed) and `summary` are both required. Nothing else \
+         about your work is lost; only this call needs redoing."
+    )
+}
+
+/// The 1st rung of a doom-loop escalation: warn once and push the nudge directive.
+fn doom_nudge(turn: u32, messages: &mut Vec<Message>) {
+    tracing::warn!(turn, "doom loop detected; nudging once");
+    messages.push(Message::user(DOOM_LOOP_NUDGE));
+}
+
+/// The 2nd rung of a doom-loop escalation: remove the offending tool so the next escalation
+/// changes what's *possible*, not just what's *said*, and grant the one-time recovery top-up.
+fn doom_remove(
+    turn: u32,
+    tools: &mut Vec<ToolDef>,
+    messages: &mut Vec<Message>,
+    bonus_granted: &mut bool,
+    max_turns: &mut u32,
+    tool_name: &str,
+) {
+    tools.retain(|t| t.name != tool_name);
+    tracing::warn!(
+        turn,
+        tool = %tool_name,
+        "doom loop persisted after nudge; removing the tool"
+    );
+    messages.push(Message::user(tool_removed_nudge(tool_name)));
+    grant_recovery_bonus(bonus_granted, max_turns);
+}
+
+/// The 3rd+ rung of a doom-loop escalation: refuse the call, keep the run. See
+/// `tool_withdrawn_refusal`.
+fn doom_give_up(turn: u32, tools: &mut Vec<ToolDef>, messages: &mut Vec<Message>, tool_name: &str) {
+    tools.retain(|t| t.name != tool_name);
+    tracing::warn!(
+        turn,
+        tool = %tool_name,
+        "doom loop persisted after tool removal; refusing the call and continuing"
+    );
+    messages.push(Message::user(tool_withdrawn_refusal(tool_name)));
+}
+
+/// The 1st rung of a tool-cycle escalation: warn once and push the nudge directive.
+fn cycle_nudge(turn: u32, messages: &mut Vec<Message>, cycling: &[String]) {
+    tracing::warn!(turn, ?cycling, "tool cycle detected; nudging once");
+    messages.push(Message::user(CYCLE_NUDGE));
+}
+
+/// The 2nd rung of a tool-cycle escalation: remove the cycling tools and grant the one-time
+/// recovery top-up.
+fn cycle_remove(
+    turn: u32,
+    tools: &mut Vec<ToolDef>,
+    messages: &mut Vec<Message>,
+    bonus_granted: &mut bool,
+    max_turns: &mut u32,
+    cycling: &[String],
+) {
+    tools.retain(|t| !cycling.contains(&t.name));
+    tracing::warn!(
+        turn,
+        ?cycling,
+        "tool cycle persisted after nudge; removing the cycling tools"
+    );
+    messages.push(Message::user(tools_removed_nudge(cycling)));
+    grant_recovery_bonus(bonus_granted, max_turns);
+}
+
+/// The 3rd+ rung of a tool-cycle escalation: refuse the calls, keep the run. See
+/// `tool_withdrawn_refusal`.
+fn cycle_give_up(
+    turn: u32,
+    tools: &mut Vec<ToolDef>,
+    messages: &mut Vec<Message>,
+    cycling: &[String],
+) {
+    tools.retain(|t| !cycling.contains(&t.name));
+    tracing::warn!(
+        turn,
+        ?cycling,
+        "tool cycle persisted after tool removal; refusing the calls and continuing"
+    );
+    messages.push(Message::user(tool_withdrawn_refusal(&cycling.join("`, `"))));
+}
+
+/// The model's reasoning shown alongside its tool call(s), if any.
+fn log_reasoning_if_any(turn: u32, response: &CompletionResponse) {
+    if let Some(content) = &response.content
+        && !content.is_empty()
+    {
+        tracing::info!(turn, %content, "model's reasoning alongside the tool call(s)");
+    }
+}
+
+/// The terminal outcome when the turn budget runs out. The delegating agent is owed a Report, not
+/// a transport error — and it deserves to know what actually happened, not just that time ran out.
+/// See `budget_failed_report_with_progress`'s doc comment for why this stays a compact, mechanical
+/// summary rather than injecting the raw call history upward. `exhausted_name` is the resource
+/// that ran out, so a wall-clock or token exhaustion is not misreported as "exceeded the N-turn
+/// budget".
+fn budget_exhausted_outcome(
+    exhausted_name: &'static str,
+    max_turns: u32,
+    mode: Mode,
+    call_history: &[(String, serde_json::Value, String)],
+    repeat_calls: usize,
+) -> Result<Terminal, ExecError> {
+    tracing::warn!(
+        turns = max_turns,
+        resource = exhausted_name,
+        "execution budget exhausted"
+    );
+    match mode {
+        Mode::Report => Ok(Terminal::Filed(
+            budget_failed_report_with_progress(exhausted_name, max_turns, call_history)
+                .with_repeat_calls(repeat_calls),
+        )),
+        Mode::Conversational => Err(ExecError::BudgetExceeded {
+            resource: exhausted_name,
+            turns: max_turns,
+        }),
+    }
+}
+
+/// The one-time recovery top-up granted when a guard escalates to tool removal (see
+/// `DOOM_LOOP_RECOVERY_BONUS_TURNS`). Capped to once per run by `bonus_granted`; distinct from
+/// `usage`/`extra_limits`: the turn cap is the loop's own mechanical bound, the extra limits are
+/// additional independently-checked bounds layered on top.
+fn grant_recovery_bonus(bonus_granted: &mut bool, max_turns: &mut u32) {
+    if !*bonus_granted {
+        *bonus_granted = true;
+        *max_turns += DOOM_LOOP_RECOVERY_BONUS_TURNS;
+        tracing::info!(
+            max_turns = *max_turns,
+            "granted a one-time recovery top-up after tool removal"
+        );
+    }
+}
+
+/// Escalate a doom-loop detection one rung of the ladder (see [`LoopGuard`]'s doc comment for why
+/// the two guards must NOT share a counter): 1st detection -> nudge, 2nd -> remove the offending
+/// tool(s) and explain why, 3rd+ -> give up honestly. Removal (not just another nudge) is the
+/// second step because a nudge alone did not change DeepSeek/Gemini's behavior in live testing —
+/// they repeated anyway — so the next escalation needs to change what's *possible*, not just
+/// what's *said*. The caller continues the loop after every rung.
+fn escalate_doom(
+    turn: u32,
+    guard: &mut LoopGuard,
+    tools: &mut Vec<ToolDef>,
+    messages: &mut Vec<Message>,
+    bonus_granted: &mut bool,
+    max_turns: &mut u32,
+    tool_name: &str,
+) {
+    match guard.strike() {
+        Escalation::Nudge => doom_nudge(turn, messages),
+        Escalation::Remove => {
+            doom_remove(turn, tools, messages, bonus_granted, max_turns, tool_name)
+        }
+        Escalation::GiveUp => doom_give_up(turn, tools, messages, tool_name),
+    }
+}
+
+/// Escalate a short-cycle detection one rung of the ladder (see [`LoopGuard`]'s doc comment).
+fn escalate_cycle(
+    turn: u32,
+    guard: &mut LoopGuard,
+    tools: &mut Vec<ToolDef>,
+    messages: &mut Vec<Message>,
+    bonus_granted: &mut bool,
+    max_turns: &mut u32,
+    cycling: &[String],
+) {
+    match guard.strike() {
+        Escalation::Nudge => cycle_nudge(turn, messages, cycling),
+        Escalation::Remove => {
+            cycle_remove(turn, tools, messages, bonus_granted, max_turns, cycling)
+        }
+        Escalation::GiveUp => cycle_give_up(turn, tools, messages, cycling),
+    }
+}
+
 impl Executor {
     pub fn new(provider: Arc<dyn Provider>, budget: Budget) -> Self {
         Self {
@@ -1158,7 +1349,6 @@ impl Executor {
     /// The turn loop shared by [`drive`](Self::drive) and
     /// [`converse_messages`](Self::converse_messages): provider call → record the turn → on prose,
     /// terminate per `mode`; on tool calls, run them and continue — until the turn budget.
-    #[allow(clippy::cognitive_complexity)]
     async fn run_loop(
         &self,
         runtime: &dyn ToolRuntime,
@@ -1220,32 +1410,17 @@ impl Executor {
             // spent by definition at that point, so re-checking them would end the reserve on its
             // first turn and it could never be used — the same trap that made the doom-loop
             // guard's tool removal structurally useless before it got a top-up.
-            let exhausted = if turn > max_turns {
-                Some("turns")
-            } else if wrapping_up {
-                None
-            } else {
-                self.budget.exhausted_extra(&usage)
-            };
-            if let Some(name) = exhausted {
-                // All-or-nothing work fails here exactly as it always has: a half-applied change
-                // is not partial credit, and reporting it as such would misstate the world.
-                if wrapping_up || !policy.salvageable || !matches!(mode, Mode::Report) {
-                    break 'turn_loop name;
-                }
-                wrapping_up = true;
-                max_turns = turn + WRAP_UP_TURNS - 1;
-                // Withdraw everything but the finish tool, so the reserve cannot be spent
-                // continuing the work it was granted to conclude.
-                tools.retain(|t| t.name == SUBMIT_REPORT_TOOL);
-                messages.push(Message::user(wrap_up_directive(name, WRAP_UP_TURNS)));
-                tracing::warn!(
-                    turn,
-                    resource = name,
-                    reserve = WRAP_UP_TURNS,
-                    "budget exhausted on salvageable work; granting wrap-up reserve to file a \
-                     partial report"
-                );
+            if let Some(name) = self.exhaustion_step(
+                turn,
+                &usage,
+                mode,
+                &policy,
+                &mut wrapping_up,
+                &mut max_turns,
+                tools,
+                messages,
+            ) {
+                break 'turn_loop name;
             }
             let turn_span = tracing::debug_span!(
                 "turn",
@@ -1297,181 +1472,45 @@ impl Executor {
             messages.push(assistant_turn(&response));
 
             if response.tool_calls.is_empty() {
-                let text = response.content.unwrap_or_default();
-                turn_span.record("finish_reason", "prose");
-                self.observe_turn(
+                if let Some(terminal) = self.handle_prose(
                     turn,
                     &offered,
                     sent_messages,
-                    Some(&text),
-                    "prose",
-                    &[],
+                    &response,
+                    mode,
+                    &mut nudged,
+                    messages,
                     &usage_delta,
-                );
-                match mode {
-                    Mode::Conversational => return Ok(Terminal::Spoke(text)),
-                    Mode::Report if !nudged => {
-                        nudged = true;
-                        tracing::debug!(
-                            turn,
-                            "model replied with prose; nudging to use submit_report"
-                        );
-                        messages.push(Message::user(REPORT_NUDGE));
-                        continue;
-                    }
-                    Mode::Report => {
-                        tracing::warn!(
-                            turn,
-                            "executor finished without submit_report; wrapping prose as Report"
-                        );
-                        return Ok(Terminal::Filed(
-                            prose_report(text).with_repeat_calls(repeat_calls),
-                        ));
-                    }
+                    repeat_calls,
+                    &turn_span,
+                ) {
+                    return Ok(terminal);
                 }
+                continue;
             }
 
-            let tool_count = response.tool_calls.len();
-            turn_span.record("tool_calls", tool_count);
-            turn_span.record("finish_reason", "tool_calls");
-            {
-                let called: Vec<String> =
-                    response.tool_calls.iter().map(|c| c.name.clone()).collect();
-                self.observe_turn(
-                    turn,
-                    &offered,
-                    sent_messages,
-                    response.content.as_deref(),
-                    "tool_calls",
-                    &called,
-                    &usage_delta,
-                );
-            }
-            if tool_count > 0 {
-                let names: Vec<&str> = response
-                    .tool_calls
-                    .iter()
-                    .map(|c| c.name.as_str())
-                    .collect();
-                tracing::info!(turn, tool_count, ?names, "turn called tools");
-                if let Some(content) = &response.content
-                    && !content.is_empty()
-                {
-                    tracing::info!(turn, %content, "model's reasoning alongside the tool call(s)");
-                }
-            }
+            self.log_tool_call_turn(
+                turn,
+                &offered,
+                sent_messages,
+                &response,
+                &usage_delta,
+                &turn_span,
+            );
 
             // --- pre-pass: special-case tools (in-process, never reach ToolRuntime) ---
-            let mut submitted_report: Option<Report> = None;
             let mut doom_hit: Option<String> = None;
             let mut cycle_hit: Option<Vec<String>> = None;
-
-            // The arms are mutually exclusive on purpose: OpenAI-compat providers require exactly
-            // one tool-result message per `tool_call_id` (dogfood D3, 01KX7AGD), so a call that
-            // matches two categories — a scratchpad update arriving while the wrap-up reserve is
-            // running — must be answered once, by the first arm that claims it. Precedence is the
-            // same order the single-pass loop used before the read/write split: finish, then the
-            // wrap-up refusal, then the scratchpad.
-            for call in &response.tool_calls {
-                if call.name == SUBMIT_REPORT_TOOL {
-                    match serde_json::from_value::<Report>(call.arguments.clone()) {
-                        Ok(report) => {
-                            // Partial / Failed / wrap-up end the loop as-is. The worktree is not
-                            // reverted: half-finished files stay for the next attempt or a human.
-                            // Only a live `succeeded` may be a lie, and only then do we ask the
-                            // gate — a refusal is a tool result, not a reset.
-                            if !Self::report_ends_without_gate(report.outcome, wrapping_up)
-                                && let Some(gate) = &self.report_gate
-                                && let Err(shown) = gate.accept(&report, wrapping_up).await
-                            {
-                                self.mvl_tool_started(turn, call);
-                                self.mvl_tool_result(turn, call, false, &shown);
-                                messages.push(Message::tool_result(&call.id, shown.clone()));
-                                if shown
-                                    .to_ascii_lowercase()
-                                    .contains("failure_class: infrastructure")
-                                {
-                                    tracing::warn!(
-                                        turn,
-                                        "submit_report succeeded refused: host failed; not asking the model"
-                                    );
-                                    submitted_report = Some(Report {
-                                        outcome: Outcome::Failed,
-                                        summary: shown,
-                                        ..report
-                                    });
-                                } else {
-                                    tracing::info!(
-                                        turn,
-                                        outcome = ?report.outcome,
-                                        "submit_report succeeded was not accepted; handing the check back"
-                                    );
-                                }
-                            } else {
-                                tracing::info!(turn, "subagent filed report");
-                                self.mvl_tool_started(turn, call);
-                                self.mvl_tool_result(turn, call, true, "report accepted");
-                                messages.push(Message::tool_result(
-                                    &call.id,
-                                    "report accepted".to_string(),
-                                ));
-                                submitted_report = Some(report);
-                            }
-                        }
-                        // A malformed argument object is the model getting a schema slightly wrong,
-                        // which is exactly the class of mistake it can fix when told. Every *other*
-                        // tool failure is already fed back in-band; this one used to abort the whole
-                        // run, discarding completed work over a missing field (live: a coding run
-                        // ended at turn 12 on `missing field \`outcome\``). Hand it the error and let
-                        // it retry — but bound the retries, since a model that cannot produce the
-                        // shape will not discover it by repetition.
-                        Err(e) if malformed_reports < MAX_MALFORMED_REPORTS => {
-                            malformed_reports += 1;
-                            tracing::warn!(
-                                turn,
-                                attempt = malformed_reports,
-                                error = %e,
-                                "submit_report arguments did not match the Report schema; asking the model to correct them"
-                            );
-                            let shown = format!(
-                                "`{SUBMIT_REPORT_TOOL}` was NOT accepted — your arguments did \
-                                 not match the required schema: {e}. Call it again with the \
-                                 full object: `outcome` (one of succeeded/partially_succeeded/\
-                                 failed) and `summary` are both required. Nothing else about \
-                                 your work is lost; only this call needs redoing."
-                            );
-                            self.mvl_tool_started(turn, call);
-                            self.mvl_tool_result(turn, call, false, &shown);
-                            messages.push(Message::tool_result(&call.id, shown));
-                        }
-                        Err(e) => return Err(ExecError::Decode(e.to_string())),
-                    }
-                } else if wrapping_up {
-                    // Withdrawing a tool from the offered catalog only changes what the model is
-                    // *shown*; nothing stops it calling a name it still remembers from earlier
-                    // turns. During the reserve that distinction matters — the whole point is that
-                    // the extra turns cannot buy more work — so refuse outright and say why.
-                    tracing::debug!(turn, tool = %call.name, "refused a tool call during wrap-up");
-                    let shown = format!(
-                        "`{}` is no longer available — you are out of budget. Call `{}` with \
-                         what you have.",
-                        call.name, SUBMIT_REPORT_TOOL
-                    );
-                    self.mvl_tool_started(turn, call);
-                    self.mvl_tool_result(turn, call, false, &shown);
-                    messages.push(Message::tool_result(&call.id, shown));
-                } else if let Some(pad) = scratchpad
-                    && call.name == SCRATCHPAD_TOOL
-                {
-                    // Engine-injected, like `submit_report`: handled in-process, never reaches
-                    // `ToolRuntime`, and — deliberately — never enters doom-loop/cycle tracking.
-                    // Legitimate scratchpad usage would otherwise misfire both guards.
-                    let result = pad.apply(&call.arguments);
-                    self.mvl_tool_started(turn, call);
-                    self.mvl_tool_result(turn, call, true, &result);
-                    messages.push(Message::tool_result(&call.id, result));
-                }
-            }
+            let submitted_report = self
+                .run_prepass(
+                    turn,
+                    &response,
+                    messages,
+                    wrapping_up,
+                    scratchpad,
+                    &mut malformed_reports,
+                )
+                .await?;
 
             // --- partition remaining regular tools into read/write ---
             let regular: Vec<_> = response
@@ -1493,88 +1532,33 @@ impl Executor {
             // same call for both — attributing one tool's output to another and answering that id
             // twice. Position is the only correlation the batch actually has.
             if !reads.is_empty() {
-                let futures: Vec<_> = reads
-                    .iter()
-                    .map(|call: &&ToolInvocation| {
-                        let call = (*call).clone();
-                        async move {
-                            let tool_span = tracing::debug_span!(
-                                "tool_call",
-                                name = %call.name,
-                                id = %call.id
-                            );
-                            async {
-                                run_tool(
-                                    runtime,
-                                    &call,
-                                    self.spill_dir.as_deref(),
-                                    self.spill_max_bytes,
-                                )
-                                .await
-                            }
-                            .instrument(tool_span)
-                            .await
-                        }
-                    })
-                    .collect();
-                let read_results = futures::future::join_all(futures).await;
-                for (call, result) in reads.iter().zip(read_results) {
-                    self.mvl_tool_started(turn, call);
-                    let ok = !result.starts_with("tool error:");
-                    self.mvl_tool_result(turn, call, ok, &result);
-                    call_history.push((call.name.clone(), call.arguments.clone(), result.clone()));
-                    if call_history[..call_history.len() - 1]
-                        .iter()
-                        .any(|(n, a, _)| n == &call.name && a == &call.arguments)
-                    {
-                        repeat_calls += 1;
-                    }
-                    messages.push(Message::tool_result(&call.id, result));
-                }
-                if doom_hit.is_none() && is_doom_loop(&call_history, policy.loop_profile) {
-                    doom_hit = Some("(read batch)".to_string());
-                }
-                if cycle_hit.is_none()
-                    && let Some(cycling) = detect_short_cycle(&call_history)
-                {
-                    cycle_hit = Some(cycling);
-                }
+                self.run_reads(
+                    turn,
+                    &reads,
+                    runtime,
+                    messages,
+                    &mut call_history,
+                    &mut repeat_calls,
+                    &mut doom_hit,
+                    &mut cycle_hit,
+                    &policy,
+                )
+                .await;
             }
 
             // Run write tools serially.
-            for call in writes {
-                let tool_span = tracing::debug_span!("tool_call", name = %call.name, id = %call.id);
-                self.mvl_tool_started(turn, call);
-                let result = async {
-                    run_tool(
-                        runtime,
-                        call,
-                        self.spill_dir.as_deref(),
-                        self.spill_max_bytes,
-                    )
-                    .await
-                }
-                .instrument(tool_span)
-                .await;
-                let ok = !result.starts_with("tool error:");
-                self.mvl_tool_result(turn, call, ok, &result);
-                call_history.push((call.name.clone(), call.arguments.clone(), result.clone()));
-                if call_history[..call_history.len() - 1]
-                    .iter()
-                    .any(|(n, a, _)| n == &call.name && a == &call.arguments)
-                {
-                    repeat_calls += 1;
-                }
-                messages.push(Message::tool_result(&call.id, result));
-                if doom_hit.is_none() && is_doom_loop(&call_history, policy.loop_profile) {
-                    doom_hit = Some(call.name.clone());
-                }
-                if cycle_hit.is_none()
-                    && let Some(cycling) = detect_short_cycle(&call_history)
-                {
-                    cycle_hit = Some(cycling);
-                }
-            }
+            self.run_writes(
+                turn,
+                &writes,
+                runtime,
+                messages,
+                &mut call_history,
+                &mut repeat_calls,
+                &mut doom_hit,
+                &mut cycle_hit,
+                &policy,
+            )
+            .await;
 
             if let Some(report) = submitted_report {
                 // Stamped here so the count covers the whole batch, including calls processed
@@ -1583,106 +1567,442 @@ impl Executor {
             }
 
             // Escalations only after every tool_call_id has a result message.
-            if let Some(tool_name) = doom_hit {
-                match doom_guard.strike() {
-                    Escalation::Nudge => {
-                        tracing::warn!(turn, tool = %tool_name, "doom loop detected; nudging once");
-                        messages.push(Message::user(DOOM_LOOP_NUDGE));
-                        continue 'turn_loop;
-                    }
-                    Escalation::Remove => {
-                        let removed = tool_name;
-                        tools.retain(|t| t.name != removed);
-                        tracing::warn!(
-                            turn,
-                            tool = %removed,
-                            "doom loop persisted after nudge; removing the tool"
-                        );
-                        messages.push(Message::user(tool_removed_nudge(&removed)));
-                        if !bonus_granted {
-                            bonus_granted = true;
-                            max_turns += DOOM_LOOP_RECOVERY_BONUS_TURNS;
-                            tracing::info!(
-                                max_turns,
-                                "granted a one-time recovery top-up after tool removal"
-                            );
-                        }
-                        continue 'turn_loop;
-                    }
-                    Escalation::GiveUp => {
-                        // Refuse the call, keep the run. See `tool_withdrawn_refusal`.
-                        tools.retain(|t| t.name != tool_name);
-                        tracing::warn!(
-                            turn,
-                            tool = %tool_name,
-                            "doom loop persisted after tool removal; refusing the call and continuing"
-                        );
-                        messages.push(Message::user(tool_withdrawn_refusal(&tool_name)));
-                        continue 'turn_loop;
-                    }
-                }
+            if let Some(tool_name) = &doom_hit {
+                escalate_doom(
+                    turn,
+                    &mut doom_guard,
+                    tools,
+                    messages,
+                    &mut bonus_granted,
+                    &mut max_turns,
+                    tool_name,
+                );
+                continue 'turn_loop;
             }
-            if let Some(cycling) = cycle_hit {
-                match cycle_guard.strike() {
-                    Escalation::Nudge => {
-                        tracing::warn!(turn, ?cycling, "tool cycle detected; nudging once");
-                        messages.push(Message::user(CYCLE_NUDGE));
-                        continue 'turn_loop;
-                    }
-                    Escalation::Remove => {
-                        tools.retain(|t| !cycling.contains(&t.name));
-                        tracing::warn!(
-                            turn,
-                            ?cycling,
-                            "tool cycle persisted after nudge; removing the cycling tools"
-                        );
-                        messages.push(Message::user(tools_removed_nudge(&cycling)));
-                        if !bonus_granted {
-                            bonus_granted = true;
-                            max_turns += DOOM_LOOP_RECOVERY_BONUS_TURNS;
-                            tracing::info!(
-                                max_turns,
-                                "granted a one-time recovery top-up after tool removal"
-                            );
-                        }
-                        continue 'turn_loop;
-                    }
-                    Escalation::GiveUp => {
-                        // Refuse the calls, keep the run. See `tool_withdrawn_refusal`.
-                        tools.retain(|t| !cycling.contains(&t.name));
-                        tracing::warn!(
-                            turn,
-                            ?cycling,
-                            "tool cycle persisted after tool removal; refusing the calls and continuing"
-                        );
-                        messages.push(Message::user(tool_withdrawn_refusal(&cycling.join("`, `"))));
-                        continue 'turn_loop;
-                    }
-                }
+            if let Some(cycling) = &cycle_hit {
+                escalate_cycle(
+                    turn,
+                    &mut cycle_guard,
+                    tools,
+                    messages,
+                    &mut bonus_granted,
+                    &mut max_turns,
+                    cycling,
+                );
+                continue 'turn_loop;
             }
         };
 
+        budget_exhausted_outcome(exhausted_name, max_turns, mode, &call_history, repeat_calls)
+    }
+
+    /// Record a tool-calling turn in the trace and log it, returning the tool count. The two
+    /// `tracing::info!` calls live here (each costs ~8 in clippy's cognitive-complexity model, so
+    /// keeping them out of the hot loop body keeps the loop itself measurable).
+    #[allow(clippy::too_many_arguments)]
+    fn log_tool_call_turn(
+        &self,
+        turn: u32,
+        offered: &[String],
+        sent_messages: usize,
+        response: &CompletionResponse,
+        usage_delta: &(u32, u32),
+        turn_span: &tracing::Span,
+    ) -> usize {
+        let tool_count = response.tool_calls.len();
+        turn_span.record("tool_calls", tool_count);
+        turn_span.record("finish_reason", "tool_calls");
+        let called: Vec<String> = response.tool_calls.iter().map(|c| c.name.clone()).collect();
+        self.observe_turn(
+            turn,
+            offered,
+            sent_messages,
+            response.content.as_deref(),
+            "tool_calls",
+            &called,
+            usage_delta,
+        );
+        if tool_count > 0 {
+            let names: Vec<&str> = response
+                .tool_calls
+                .iter()
+                .map(|c| c.name.as_str())
+                .collect();
+            tracing::info!(turn, tool_count, ?names, "turn called tools");
+            log_reasoning_if_any(turn, response);
+        }
+        tool_count
+    }
+
+    /// The budget check for one turn: which bound ran out, if any, and — when the work is
+    /// salvageable — the one-time wrap-up reserve grant that lets the model file a partial report
+    /// instead of losing everything. All-or-nothing work fails exactly as it always has: a
+    /// half-applied change is not partial credit, and reporting it as such would misstate the
+    /// world. Returns the exhausted resource name for the caller to break the loop with.
+    #[allow(clippy::too_many_arguments)]
+    fn exhaustion_step(
+        &self,
+        turn: u32,
+        usage: &ResourceUsage,
+        mode: Mode,
+        policy: &RunPolicy,
+        wrapping_up: &mut bool,
+        max_turns: &mut u32,
+        tools: &mut Vec<ToolDef>,
+        messages: &mut Vec<Message>,
+    ) -> Option<&'static str> {
+        let exhausted = if turn > *max_turns {
+            Some("turns")
+        } else if *wrapping_up {
+            None
+        } else {
+            self.budget.exhausted_extra(usage)
+        };
+        let name = exhausted?;
+        if *wrapping_up || !policy.salvageable || !matches!(mode, Mode::Report) {
+            return Some(name);
+        }
+        *wrapping_up = true;
+        *max_turns = turn + WRAP_UP_TURNS - 1;
+        // Withdraw everything but the finish tool, so the reserve cannot be spent
+        // continuing the work it was granted to conclude.
+        tools.retain(|t| t.name == SUBMIT_REPORT_TOOL);
+        messages.push(Message::user(wrap_up_directive(name, WRAP_UP_TURNS)));
         tracing::warn!(
-            turns = max_turns,
-            resource = exhausted_name,
-            "execution budget exhausted"
+            turn,
+            resource = name,
+            reserve = WRAP_UP_TURNS,
+            "budget exhausted on salvageable work; granting wrap-up reserve to file a \
+             partial report"
+        );
+        None
+    }
+
+    /// Handle a prose-only completion: conversational modes end with the spoken text; report mode
+    /// nudges once toward `submit_report` and otherwise wraps the prose as the filed report.
+    /// `Some(terminal)` ends the run; `None` means the loop continues (the nudge case).
+    #[allow(clippy::too_many_arguments)]
+    fn handle_prose(
+        &self,
+        turn: u32,
+        offered: &[String],
+        sent_messages: usize,
+        response: &CompletionResponse,
+        mode: Mode,
+        nudged: &mut bool,
+        messages: &mut Vec<Message>,
+        usage_delta: &(u32, u32),
+        repeat_calls: usize,
+        turn_span: &tracing::Span,
+    ) -> Option<Terminal> {
+        let text = response.content.clone().unwrap_or_default();
+        turn_span.record("finish_reason", "prose");
+        self.observe_turn(
+            turn,
+            offered,
+            sent_messages,
+            Some(&text),
+            "prose",
+            &[],
+            usage_delta,
         );
         match mode {
-            // The delegating agent is owed a Report, not a transport error — and it deserves to
-            // know what actually happened, not just that time ran out. See
-            // `budget_failed_report_with_progress`'s doc comment for why this stays a compact,
-            // mechanical summary rather than injecting the raw call history upward.
-            Mode::Report => Ok(Terminal::Filed(
-                budget_failed_report_with_progress(exhausted_name, max_turns, &call_history)
-                    .with_repeat_calls(repeat_calls),
-            )),
-            // `exhausted_name` is in scope and was being discarded here, so a wall-clock or token
-            // exhaustion surfaced as "exceeded the N-turn budget" — the wrong diagnosis, handed
-            // to whoever reads the report.
-            Mode::Conversational => Err(ExecError::BudgetExceeded {
-                resource: exhausted_name,
-                turns: max_turns,
-            }),
+            Mode::Conversational => Some(Terminal::Spoke(text)),
+            Mode::Report if !*nudged => {
+                *nudged = true;
+                tracing::debug!(
+                    turn,
+                    "model replied with prose; nudging to use submit_report"
+                );
+                messages.push(Message::user(REPORT_NUDGE));
+                None
+            }
+            Mode::Report => {
+                tracing::warn!(
+                    turn,
+                    "executor finished without submit_report; wrapping prose as Report"
+                );
+                Some(Terminal::Filed(
+                    prose_report(text).with_repeat_calls(repeat_calls),
+                ))
+            }
+        }
+    }
+
+    /// Pre-pass over the turn's tool calls: the in-process tools (`submit_report`, scratchpad)
+    /// and the wrap-up refusal never reach the `ToolRuntime`. The arms are mutually exclusive on
+    /// purpose: OpenAI-compat providers require exactly one tool-result message per
+    /// `tool_call_id` (dogfood D3, 01KX7AGD), so a call that matches two categories — a
+    /// scratchpad update arriving while the wrap-up reserve is running — must be answered once,
+    /// by the first arm that claims it. Precedence is the same order the single-pass loop used
+    /// before the read/write split: finish, then the wrap-up refusal, then the scratchpad.
+    #[allow(clippy::too_many_arguments)]
+    async fn run_prepass(
+        &self,
+        turn: u32,
+        response: &CompletionResponse,
+        messages: &mut Vec<Message>,
+        wrapping_up: bool,
+        scratchpad: &mut Option<Scratchpad>,
+        malformed_reports: &mut u32,
+    ) -> Result<Option<Report>, ExecError> {
+        let mut submitted_report: Option<Report> = None;
+        for call in &response.tool_calls {
+            if call.name == SUBMIT_REPORT_TOOL {
+                if let Some(report) = self
+                    .handle_submit_report(turn, call, wrapping_up, malformed_reports, messages)
+                    .await?
+                {
+                    submitted_report = Some(report);
+                }
+            } else if wrapping_up {
+                // Withdrawing a tool from the offered catalog only changes what the model is
+                // *shown*; nothing stops it calling a name it still remembers from earlier
+                // turns. During the reserve that distinction matters — the whole point is that
+                // the extra turns cannot buy more work — so refuse outright and say why.
+                tracing::debug!(turn, tool = %call.name, "refused a tool call during wrap-up");
+                let shown = format!(
+                    "`{}` is no longer available — you are out of budget. Call `{}` with \
+                     what you have.",
+                    call.name, SUBMIT_REPORT_TOOL
+                );
+                self.mvl_tool_started(turn, call);
+                self.mvl_tool_result(turn, call, false, &shown);
+                messages.push(Message::tool_result(&call.id, shown));
+            } else if let Some(pad) = scratchpad
+                && call.name == SCRATCHPAD_TOOL
+            {
+                // Engine-injected, like `submit_report`: handled in-process, never reaches
+                // `ToolRuntime`, and — deliberately — never enters doom-loop/cycle tracking.
+                // Legitimate scratchpad usage would otherwise misfire both guards.
+                let result = pad.apply(&call.arguments);
+                self.mvl_tool_started(turn, call);
+                self.mvl_tool_result(turn, call, true, &result);
+                messages.push(Message::tool_result(&call.id, result));
+            }
+        }
+        Ok(submitted_report)
+    }
+
+    /// Run the read-only tools of one turn concurrently. `join_all` preserves input order, so
+    /// results are zipped back onto `reads` by position. Matching on `call.id` instead would be
+    /// wrong: nothing guarantees a model gives two calls in one batch distinct ids, and a
+    /// repeated id made `find` return the same call for both — attributing one tool's output to
+    /// another and answering that id twice. Position is the only correlation the batch actually
+    /// has.
+    #[allow(clippy::too_many_arguments)]
+    async fn run_reads(
+        &self,
+        turn: u32,
+        reads: &[&ToolInvocation],
+        runtime: &dyn ToolRuntime,
+        messages: &mut Vec<Message>,
+        call_history: &mut Vec<(String, serde_json::Value, String)>,
+        repeat_calls: &mut usize,
+        doom_hit: &mut Option<String>,
+        cycle_hit: &mut Option<Vec<String>>,
+        policy: &RunPolicy,
+    ) {
+        let futures: Vec<_> = reads
+            .iter()
+            .map(|call: &&ToolInvocation| {
+                let call = (*call).clone();
+                async move {
+                    let tool_span =
+                        tracing::debug_span!("tool_call", name = %call.name, id = %call.id);
+                    async {
+                        run_tool(
+                            runtime,
+                            &call,
+                            self.spill_dir.as_deref(),
+                            self.spill_max_bytes,
+                        )
+                        .await
+                    }
+                    .instrument(tool_span)
+                    .await
+                }
+            })
+            .collect();
+        let read_results = futures::future::join_all(futures).await;
+        for (call, result) in reads.iter().zip(read_results) {
+            self.mvl_tool_started(turn, call);
+            let ok = !result.starts_with("tool error:");
+            self.mvl_tool_result(turn, call, ok, &result);
+            call_history.push((call.name.clone(), call.arguments.clone(), result.clone()));
+            if call_history[..call_history.len() - 1]
+                .iter()
+                .any(|(n, a, _)| n == &call.name && a == &call.arguments)
+            {
+                *repeat_calls += 1;
+            }
+            messages.push(Message::tool_result(&call.id, result));
+        }
+        if doom_hit.is_none() && is_doom_loop(call_history, policy.loop_profile) {
+            *doom_hit = Some("(read batch)".to_string());
+        }
+        if cycle_hit.is_none()
+            && let Some(cycling) = detect_short_cycle(call_history)
+        {
+            *cycle_hit = Some(cycling);
+        }
+    }
+
+    /// Run the write tools of one turn serially.
+    #[allow(clippy::too_many_arguments)]
+    async fn run_writes(
+        &self,
+        turn: u32,
+        writes: &[&ToolInvocation],
+        runtime: &dyn ToolRuntime,
+        messages: &mut Vec<Message>,
+        call_history: &mut Vec<(String, serde_json::Value, String)>,
+        repeat_calls: &mut usize,
+        doom_hit: &mut Option<String>,
+        cycle_hit: &mut Option<Vec<String>>,
+        policy: &RunPolicy,
+    ) {
+        for call in writes {
+            let tool_span = tracing::debug_span!("tool_call", name = %call.name, id = %call.id);
+            self.mvl_tool_started(turn, call);
+            let result = async {
+                run_tool(
+                    runtime,
+                    call,
+                    self.spill_dir.as_deref(),
+                    self.spill_max_bytes,
+                )
+                .await
+            }
+            .instrument(tool_span)
+            .await;
+            let ok = !result.starts_with("tool error:");
+            self.mvl_tool_result(turn, call, ok, &result);
+            call_history.push((call.name.clone(), call.arguments.clone(), result.clone()));
+            if call_history[..call_history.len() - 1]
+                .iter()
+                .any(|(n, a, _)| n == &call.name && a == &call.arguments)
+            {
+                *repeat_calls += 1;
+            }
+            messages.push(Message::tool_result(&call.id, result));
+            if doom_hit.is_none() && is_doom_loop(call_history, policy.loop_profile) {
+                *doom_hit = Some(call.name.clone());
+            }
+            if cycle_hit.is_none()
+                && let Some(cycling) = detect_short_cycle(call_history)
+            {
+                *cycle_hit = Some(cycling);
+            }
+        }
+    }
+
+    /// A gate refusal of a live `succeeded`: feed the check text back in-band and decide whether
+    /// the host itself failed (infrastructure — do not ask the model) or the model must fix the
+    /// work. Returns the report to end the run with, if any.
+    #[allow(clippy::too_many_arguments)]
+    fn handle_refused_report(
+        &self,
+        turn: u32,
+        call: &ToolInvocation,
+        report: Report,
+        shown: String,
+        messages: &mut Vec<Message>,
+    ) -> Option<Report> {
+        self.mvl_tool_started(turn, call);
+        self.mvl_tool_result(turn, call, false, &shown);
+        messages.push(Message::tool_result(&call.id, shown.clone()));
+        if shown
+            .to_ascii_lowercase()
+            .contains("failure_class: infrastructure")
+        {
+            tracing::warn!(
+                turn,
+                "submit_report succeeded refused: host failed; not asking the model"
+            );
+            Some(Report {
+                outcome: Outcome::Failed,
+                summary: shown,
+                ..report
+            })
+        } else {
+            tracing::info!(
+                turn,
+                outcome = ?report.outcome,
+                "submit_report succeeded was not accepted; handing the check back"
+            );
+            None
+        }
+    }
+
+    /// The workspace gate for one report, when it applies: `None` means accepted (or no gate is
+    /// configured for this outcome); `Some(shown)` is the refusal text handed back to the model.
+    /// Only a live `succeeded` may be a lie, and only then do we ask the gate — a refusal is a
+    /// tool result, not a reset.
+    async fn accept_report(&self, report: &Report, wrapping_up: bool) -> Option<String> {
+        if Self::report_ends_without_gate(report.outcome, wrapping_up) {
+            return None;
+        }
+        let Some(gate) = &self.report_gate else {
+            return None;
+        };
+        gate.accept(report, wrapping_up).await.err()
+    }
+
+    /// One `submit_report` call: parse it against the Report schema, run the workspace gate for a
+    /// live `succeeded` (a refusal is a tool result, not a reset), and hand malformed argument
+    /// objects back to the model for correction — bounded, since a model that cannot produce the
+    /// shape will not discover it by repetition. Returns the report to end the run with, if any.
+    #[allow(clippy::too_many_arguments)]
+    async fn handle_submit_report(
+        &self,
+        turn: u32,
+        call: &ToolInvocation,
+        wrapping_up: bool,
+        malformed_reports: &mut u32,
+        messages: &mut Vec<Message>,
+    ) -> Result<Option<Report>, ExecError> {
+        match serde_json::from_value::<Report>(call.arguments.clone()) {
+            Ok(report) => {
+                // Partial / Failed / wrap-up end the loop as-is. The worktree is not
+                // reverted: half-finished files stay for the next attempt or a human.
+                // Only a live `succeeded` may be a lie, and only then do we ask the
+                // gate — a refusal is a tool result, not a reset.
+                if let Some(shown) = self.accept_report(&report, wrapping_up).await {
+                    Ok(self.handle_refused_report(turn, call, report, shown, messages))
+                } else {
+                    tracing::info!(turn, "subagent filed report");
+                    self.mvl_tool_started(turn, call);
+                    self.mvl_tool_result(turn, call, true, "report accepted");
+                    messages.push(Message::tool_result(
+                        &call.id,
+                        "report accepted".to_string(),
+                    ));
+                    Ok(Some(report))
+                }
+            }
+            // A malformed argument object is the model getting a schema slightly wrong,
+            // which is exactly the class of mistake it can fix when told. Every *other*
+            // tool failure is already fed back in-band; this one used to abort the whole
+            // run, discarding completed work over a missing field (live: a coding run
+            // ended at turn 12 on `missing field \`outcome\``). Hand it the error and let
+            // it retry — but bound the retries, since a model that cannot produce the
+            // shape will not discover it by repetition.
+            Err(e) if *malformed_reports < MAX_MALFORMED_REPORTS => {
+                *malformed_reports += 1;
+                tracing::warn!(
+                    turn,
+                    attempt = *malformed_reports,
+                    error = %e,
+                    "submit_report arguments did not match the Report schema; asking the model to correct them"
+                );
+                let shown = malformed_report_nudge(&e);
+                self.mvl_tool_started(turn, call);
+                self.mvl_tool_result(turn, call, false, &shown);
+                messages.push(Message::tool_result(&call.id, shown));
+                Ok(None)
+            }
+            Err(e) => Err(ExecError::Decode(e.to_string())),
         }
     }
 
