@@ -1351,19 +1351,21 @@ mod verifier_tests {
     }
 }
 
+/// `GIT_CONFIG_GLOBAL` is process-global and `cargo test` runs this binary's tests concurrently,
+/// so a test that sets it must exclude every other test that shells out to git. One lock for the
+/// whole binary: a per-module duplicate would let two modules race the same variable, which
+/// flakes exactly when the suite is busiest. Same purpose as `ENV_LOCK` in
+/// `coder-sandbox/src/checkpoint.rs`, but `tokio::sync` rather than `std::sync`: the guard has to
+/// be held across an `await`, and a blocking guard there stalls the whole runtime thread —
+/// `clippy::await_holding_lock` rejects it outright. `coder-agent`'s `DATA_DIR_ENV_LOCK` is the
+/// same choice for the same reason.
+#[cfg(test)]
+static ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 #[cfg(test)]
 mod preserve_work_tests {
     use super::*;
     use std::time::Duration;
-
-    /// `GIT_CONFIG_GLOBAL` is process-global and `cargo test` runs this binary's tests
-    /// concurrently, so a test that sets it must exclude every other test that shells out to git.
-    /// Same purpose as `ENV_LOCK` in `coder-sandbox/src/checkpoint.rs`, but `tokio::sync` rather
-    /// than `std::sync`: the guard has to be held across an `await`, and a blocking guard there
-    /// stalls the whole runtime thread — `clippy::await_holding_lock` rejects it outright.
-    /// `coder-agent`'s `DATA_DIR_ENV_LOCK` is the same choice for the same reason.
-    static ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
-
     /// Minimal git repo with one committed file. Identity is passed with `-c` rather than
     /// configured — `user.email`/`user.name` exist on every dev machine and on no CI runner.
     fn temp_repo() -> tempfile::TempDir {
@@ -1936,8 +1938,6 @@ api_key_env = "CUSTOM_API_KEY"
     }
 
     // ── ensure_git_repo / configure_git_safe_directory ─────────────────────────
-
-    static ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
     /// A gitconfig with an identity, so `git commit` works without ambient config (CI-style).
     fn identity_gitconfig() -> tempfile::NamedTempFile {
