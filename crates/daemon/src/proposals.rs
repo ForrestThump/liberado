@@ -7,7 +7,7 @@ use chrono::Utc;
 use liberado_common::{
     DEFAULT_POOL, PROPOSALS_DIR, Proposal, ProposalStatus, SignedProposal, WriteProvenance,
 };
-use liberado_orchestrator::{Disposition, EXPIRED_PROPOSAL_REFUSAL_SUMMARY};
+use liberado_orchestrator::{Disposition, EXPIRED_PROPOSAL_REFUSAL_SUMMARY, Orchestrator};
 use liberado_vault::{Vault, VaultError};
 use tokio::fs;
 
@@ -50,118 +50,21 @@ impl Daemon {
     /// frontmatter status) are never executed: they are flipped to `status: expired` and archived
     /// so the active dir stays tidy without waiting for the background reaper. Terminal
     /// statuses / unparseable notes are observed (and terminal notes archived if still active).
-    #[allow(clippy::cognitive_complexity)]
     pub(crate) async fn handle_proposal_change(
         &self,
         rel_path: &Path,
     ) -> Result<ReactionOutcome, DaemonError> {
-        // 1. Read the current content (may have vanished — VaultError propagates).
-        let content = self.vault.read(rel_path).await?;
-
-        // 2. Parse. A non-parseable note is just observed (likely a non-proposal file in proposals/,
-        //    or a note whose frontmatter was temporarily mangled during an edit).
-        let mut proposal = match liberado_common::Proposal::from_note(&content) {
-            Ok(p) => p,
-            Err(e) => {
-                tracing::debug!(error = %e, "proposals/ change is not a parseable proposal");
-                return Ok(ReactionOutcome::Observed);
-            }
-        };
-
-        // 2.5. Integrity check: detects tampering with the proposal's immutable fields (or a
-        //    wholesale-forged proposal with no valid signature at all) between creation and this
-        //    edit. This must run before anything else that could execute — a failure is observed
-        //    and left alone, never marked done, so it's never silently treated as if it had
-        //    legitimately run. See `Proposal::integrity`'s doc comment for what this does and
-        //    doesn't defend against.
-        if !self.signer.verify(&proposal) {
-            tracing::warn!(
-                proposal_id = %proposal.id,
-                "proposal failed integrity verification — refusing to treat as actionable \
-                 (possible tampering)"
-            );
-            return Ok(ReactionOutcome::Observed);
-        }
-
-        // 3. Terminal states are never re-executed (at-most-once journal marker, Decision 6). This
-        //    is also where a human deny lands (the Telegram/Obsidian write flips status to
-        //    Rejected): observe it, and file the resolved note into the archive so the active dir
-        //    doesn't accumulate it. The approve path archives its own note inline (step 7.5) — its
-        //    Done write is suppressed and so never re-observes here.
-        if proposal.status.is_terminal() {
-            tracing::debug!(status = ?proposal.status, "proposal is already terminal");
-            self.archive_terminal_proposal(rel_path, &proposal).await;
-            return Ok(ReactionOutcome::Observed);
-        }
-
-        // 4. Wall-clock past `expires` — never execute, even if frontmatter still says pending or
-        //    approved. Complete the expiry lifecycle here (status + archive) so a human touch after
-        //    the deadline cleans the active dir without waiting for the background reaper. Same end
-        //    state as `reap_expired_proposals`; either path may own the cleanup.
-        if proposal.is_expired_at(chrono::Utc::now()) {
-            tracing::info!(
-                proposal_id = %proposal.id,
-                prior_status = ?proposal.status,
-                "proposal is past expires — marking expired and archiving (not executing)"
-            );
-            let provenance =
-                liberado_common::WriteProvenance::agent(DAEMON_SOURCE, &proposal.correlation_id);
-            proposal.status = liberado_common::ProposalStatus::Expired;
-            if let Err(e) = self
-                .vault
-                .write(rel_path, &proposal.to_note(), None, &provenance)
-                .await
-            {
-                // Leave in place for the reaper / a later touch; never execute a past-deadline note.
-                tracing::warn!(
-                    error = %e,
-                    proposal_id = %proposal.id,
-                    path = %rel_path.display(),
-                    "failed to mark proposal expired on reactive path — left in place"
-                );
-                return Ok(ReactionOutcome::Observed);
-            }
-            self.archive_terminal_proposal(rel_path, &proposal).await;
-            return Ok(ReactionOutcome::Observed);
-        }
-
-        // 5. Only Approved is actionable — the note claims something other than approval.
-        if !proposal.status.is_actionable() {
-            tracing::debug!(status = ?proposal.status, "proposal is not actionable");
-            return Ok(ReactionOutcome::Observed);
-        }
-
-        // 5.5. ...and the note's claim is not sufficient. `status` lives in `proposals/`, which
-        //      policy declares `agent_writable`, and it is deliberately outside the integrity
-        //      signature so a human can flip it without invalidating the hash. Both are right
-        //      alone; together they left the approval field of the approval mechanism writable by
-        //      the thing being gated. Provenance cannot rescue it either — MCP tool writes carry
-        //      none into the audit log, so an agent's `edit_note` attributes as `External`, which
-        //      this system reads as *human*.
-        //
-        //      So the authority is the ledger under `<LIBERADO_DATA_DIR>/`, which no MCP mounts and
-        //      no tool addresses. The note is a view. Absent, unreadable, or corrupt, it authorises
-        //      nothing — a proposal needing re-approval is a far better failure than one that runs
-        //      because a file could not be read.
-        let Some(ledger) = &self.approvals else {
-            tracing::warn!(
-                proposal_id = %proposal.id,
-                "no approval ledger attached; refusing to execute (build the daemon with                  `with_approval_ledger`)"
-            );
+        // 1-2. Read + parse. A non-parseable note is just observed (likely a non-proposal file in
+        //      proposals/, or a note whose frontmatter was temporarily mangled mid-edit).
+        let Some(proposal) = self.read_proposal_note(rel_path).await? else {
             return Ok(ReactionOutcome::Observed);
         };
-        match ledger.decision_for(&proposal.id).await {
-            Some(liberado_common::ApprovalDecision::Approved) => {}
-            other => {
-                tracing::warn!(
-                    proposal_id = %proposal.id,
-                    ledger_decision = ?other,
-                    path = %rel_path.display(),
-                    "proposal note says approved but no human approval is recorded — refusing.                      The note is a view; approval is recorded out of band."
-                );
-                return Ok(ReactionOutcome::Observed);
-            }
-        }
+
+        // 2.5-5.5 guard chain: tampering, terminal, expiry, not-actionable, ledger — any of these
+        //        owns the reaction as Observed.
+        let Some(mut proposal) = self.guard_until_actionable(rel_path, proposal).await? else {
+            return Ok(ReactionOutcome::Observed);
+        };
 
         // 6. Execute — via the *same* pool this proposal was proposed under (Decision 18
         //    checkpoint #3), never a different one, so a restricted pool's proposal can never
@@ -172,38 +75,16 @@ impl Daemon {
         //
         // Re-check wall-clock expiry immediately before execute: step 4 may have passed while we
         // awaited other work, and the reaper deliberately skips Approved notes that may be mid-flight.
-        if proposal.is_expired_at(chrono::Utc::now()) {
-            tracing::info!(
-                proposal_id = %proposal.id,
-                "approved proposal expired before execute — marking expired and archiving"
-            );
-            let provenance =
-                liberado_common::WriteProvenance::agent(DAEMON_SOURCE, &proposal.correlation_id);
-            proposal.status = liberado_common::ProposalStatus::Expired;
-            if let Err(e) = self
-                .vault
-                .write(rel_path, &proposal.to_note(), None, &provenance)
-                .await
-            {
-                tracing::warn!(
-                    error = %e,
-                    proposal_id = %proposal.id,
-                    "failed to mark late-expired proposal — left in place"
-                );
-                return Ok(ReactionOutcome::Observed);
-            }
-            self.archive_terminal_proposal(rel_path, &proposal).await;
-            return Ok(ReactionOutcome::Observed);
+        if let Some(outcome) = self
+            .complete_expiry_if_lapsed(rel_path, &mut proposal, true)
+            .await
+        {
+            return Ok(outcome);
         }
-
-        let pool_name = proposal.pool.as_deref().unwrap_or(DEFAULT_POOL);
-        let Some(orch) = self
-            .pools
-            .get(pool_name)
-            .and_then(|pool| pool.orchestrator.as_ref())
-        else {
+        let Some(orch) = self.orchestrator_for(&proposal) else {
+            let pool = proposal.pool.as_deref().unwrap_or(DEFAULT_POOL);
             tracing::warn!(
-                pool = pool_name,
+                pool = pool,
                 "approved proposal's pool has no orchestrator attached to execute it"
             );
             return Ok(ReactionOutcome::Observed);
@@ -223,22 +104,11 @@ impl Daemon {
         //     complete the expiry lifecycle without applying permission grants or marking Done.
         //     Match the refusal summary **exactly** (not substring) so free-form Failed reports
         //     that mention "expired" are not misclassified.
-        if report.outcome == liberado_common::Outcome::Failed
-            && report.summary == EXPIRED_PROPOSAL_REFUSAL_SUMMARY
+        if let Some(outcome) = self
+            .complete_refusal_lifecycle(rel_path, &mut proposal, &report)
+            .await
         {
-            tracing::info!(
-                proposal_id = %proposal.id,
-                "execute_approved refused expired proposal — completing expiry lifecycle"
-            );
-            let provenance =
-                liberado_common::WriteProvenance::agent(DAEMON_SOURCE, &proposal.correlation_id);
-            proposal.status = liberado_common::ProposalStatus::Expired;
-            let _ = self
-                .vault
-                .write(rel_path, &proposal.to_note(), None, &provenance)
-                .await;
-            self.archive_terminal_proposal(rel_path, &proposal).await;
-            return Ok(ReactionOutcome::Observed);
+            return Ok(outcome);
         }
 
         // 6.6. Permission grant only after tools were allowed to run (human tap was the gate).
@@ -248,8 +118,232 @@ impl Daemon {
         //     Best-effort: a persistence failure never fails the reaction.
         self.apply_approved_grant(&proposal);
 
-        // 7. Mark done and persist. The write carries agent provenance (DAEMON_SOURCE) so
-        //    attribution suppresses it — no self-reaction (loop-break, Decision 5).
+        // 7. Mark done and persist; file the note into the archive (7.5). The writes carry agent
+        //    provenance (DAEMON_SOURCE) so attribution suppresses them — no self-reaction
+        //    (loop-break, Decision 5).
+        self.mark_done_and_archive(rel_path, &mut proposal, &report)
+            .await?;
+
+        self.notify_executed(&proposal, &report).await;
+
+        Ok(ReactionOutcome::Acted(Disposition::Reported(report)))
+    }
+
+    /// Step 1-2: read the current content (may have vanished — `VaultError` propagates) and
+    /// parse it. `None` means the note is not a parseable proposal (observed, not an error).
+    async fn read_proposal_note(&self, rel_path: &Path) -> Result<Option<Proposal>, DaemonError> {
+        let content = self.vault.read(rel_path).await?;
+        match liberado_common::Proposal::from_note(&content) {
+            Ok(p) => Ok(Some(p)),
+            Err(e) => {
+                tracing::debug!(error = %e, "proposals/ change is not a parseable proposal");
+                Ok(None)
+            }
+        }
+    }
+
+    /// Step 2.5 integrity check: detects tampering with the proposal's immutable fields (or a
+    /// wholesale-forged proposal with no valid signature at all) between creation and this edit.
+    /// This must run before anything else that could execute — a failure is observed and left
+    /// alone, never marked done, so it's never silently treated as if it had legitimately run.
+    /// See `Proposal::integrity`'s doc comment for what this does and doesn't defend against.
+    fn reject_if_tampered(&self, proposal: &Proposal) -> Option<ReactionOutcome> {
+        if self.signer.verify(proposal) {
+            None
+        } else {
+            tracing::warn!(
+                proposal_id = %proposal.id,
+                "proposal failed integrity verification — refusing to treat as actionable \
+                 (possible tampering)"
+            );
+            Some(ReactionOutcome::Observed)
+        }
+    }
+
+    /// Step 3: terminal states are never re-executed (at-most-once journal marker, Decision 6).
+    /// This is also where a human deny lands (the Telegram/Obsidian write flips status to
+    /// Rejected): observe it, and file the resolved note into the archive so the active dir
+    /// doesn't accumulate it. The approve path archives its own note inline (step 7.5) — its
+    /// Done write is suppressed and so never re-observes here.
+    async fn observe_if_terminal(
+        &self,
+        rel_path: &Path,
+        proposal: &Proposal,
+    ) -> Option<ReactionOutcome> {
+        if !proposal.status.is_terminal() {
+            return None;
+        }
+        tracing::debug!(status = ?proposal.status, "proposal is already terminal");
+        self.archive_terminal_proposal(rel_path, proposal).await;
+        Some(ReactionOutcome::Observed)
+    }
+
+    /// Steps 4 & 6 (pre-execute re-check): wall-clock past `expires` — never execute, even if
+    /// frontmatter still says pending or approved. Complete the expiry lifecycle here (status +
+    /// archive) so a human touch after the deadline cleans the active dir without waiting for the
+    /// background reaper. Same end state as `reap_expired_proposals`; either path may own the
+    /// cleanup. `late` selects the log wording for the step-6 re-check (which has no
+    /// `prior_status` field and a distinct "before execute" message).
+    async fn complete_expiry_if_lapsed(
+        &self,
+        rel_path: &Path,
+        proposal: &mut Proposal,
+        late: bool,
+    ) -> Option<ReactionOutcome> {
+        if !proposal.is_expired_at(chrono::Utc::now()) {
+            return None;
+        }
+        let provenance =
+            liberado_common::WriteProvenance::agent(DAEMON_SOURCE, &proposal.correlation_id);
+        proposal.status = liberado_common::ProposalStatus::Expired;
+        expiry_log(proposal, late);
+        if let Err(e) = self
+            .vault
+            .write(rel_path, &proposal.to_note(), None, &provenance)
+            .await
+        {
+            // Leave in place for the reaper / a later touch; never execute a past-deadline note.
+            tracing::warn!(
+                error = %e,
+                proposal_id = %proposal.id,
+                path = %rel_path.display(),
+                "failed to mark proposal expired on reactive path — left in place"
+            );
+            return Some(ReactionOutcome::Observed);
+        }
+        self.archive_terminal_proposal(rel_path, proposal).await;
+        Some(ReactionOutcome::Observed)
+    }
+
+    /// Step 5.5: the note's claim of approval is not sufficient. `status` lives in `proposals/`,
+    /// which policy declares `agent_writable`, and it is deliberately outside the integrity
+    /// signature so a human can flip it without invalidating the hash. Both are right alone;
+    /// together they left the approval field of the approval mechanism writable by the thing
+    /// being gated. Provenance cannot rescue it either — MCP tool writes carry none into the
+    /// audit log, so an agent's `edit_note` attributes as `External`, which this system reads as
+    /// *human*.
+    ///
+    /// So the authority is the ledger under `<LIBERADO_DATA_DIR>/`, which no MCP mounts and no
+    /// tool addresses. The note is a view. Absent, unreadable, or corrupt, it authorises nothing —
+    /// a proposal needing re-approval is a far better failure than one that runs because a file
+    /// could not be read.
+    async fn refuse_without_ledger_approval(
+        &self,
+        rel_path: &Path,
+        proposal: &Proposal,
+    ) -> Option<ReactionOutcome> {
+        let Some(ledger) = &self.approvals else {
+            tracing::warn!(
+                proposal_id = %proposal.id,
+                "no approval ledger attached; refusing to execute (build the daemon with                  `with_approval_ledger`)"
+            );
+            return Some(ReactionOutcome::Observed);
+        };
+        match ledger.decision_for(&proposal.id).await {
+            Some(liberado_common::ApprovalDecision::Approved) => None,
+            other => {
+                tracing::warn!(
+                    proposal_id = %proposal.id,
+                    ledger_decision = ?other,
+                    path = %rel_path.display(),
+                    "proposal note says approved but no human approval is recorded — refusing.                      The note is a view; approval is recorded out of band."
+                );
+                Some(ReactionOutcome::Observed)
+            }
+        }
+    }
+
+    /// Steps 2.5-5.5 guard chain: each guard that owns the reaction returns `None` (observed);
+    /// the proposal survives to execution only when every guard passes. The actionable check
+    /// (step 5) is inline: only Approved is actionable — the note claims something other than
+    /// approval.
+    async fn guard_until_actionable(
+        &self,
+        rel_path: &Path,
+        mut proposal: Proposal,
+    ) -> Result<Option<Proposal>, DaemonError> {
+        if self.reject_if_tampered(&proposal).is_some() {
+            return Ok(None);
+        }
+        if self
+            .observe_if_terminal(rel_path, &proposal)
+            .await
+            .is_some()
+        {
+            return Ok(None);
+        }
+        if self
+            .complete_expiry_if_lapsed(rel_path, &mut proposal, false)
+            .await
+            .is_some()
+        {
+            return Ok(None);
+        }
+        if !proposal.status.is_actionable() {
+            tracing::debug!(status = ?proposal.status, "proposal is not actionable");
+            return Ok(None);
+        }
+        if self
+            .refuse_without_ledger_approval(rel_path, &proposal)
+            .await
+            .is_some()
+        {
+            return Ok(None);
+        }
+        Ok(Some(proposal))
+    }
+
+    /// The orchestrator for the proposal's pool — the *same* pool it was proposed under. `None`
+    /// when the pool has no orchestrator attached; the caller refuses with the pool name.
+    fn orchestrator_for<'a>(&'a self, proposal: &Proposal) -> Option<&'a Orchestrator> {
+        let pool_name = proposal.pool.as_deref().unwrap_or(DEFAULT_POOL);
+        self.pools
+            .get(pool_name)
+            .and_then(|pool| pool.orchestrator.as_ref())
+    }
+
+    /// Step 6.5: orchestrator pre-execution refuse (wall-clock expiry race) — tools never ran, so
+    /// complete the expiry lifecycle without applying permission grants or marking Done. Matches
+    /// the refusal summary **exactly** (not substring) so free-form Failed reports that mention
+    /// "expired" are not misclassified.
+    async fn complete_refusal_lifecycle(
+        &self,
+        rel_path: &Path,
+        proposal: &mut Proposal,
+        report: &liberado_common::Report,
+    ) -> Option<ReactionOutcome> {
+        if report.outcome != liberado_common::Outcome::Failed
+            || report.summary != EXPIRED_PROPOSAL_REFUSAL_SUMMARY
+        {
+            return None;
+        }
+        tracing::info!(
+            proposal_id = %proposal.id,
+            "execute_approved refused expired proposal — completing expiry lifecycle"
+        );
+        let provenance =
+            liberado_common::WriteProvenance::agent(DAEMON_SOURCE, &proposal.correlation_id);
+        proposal.status = liberado_common::ProposalStatus::Expired;
+        let _ = self
+            .vault
+            .write(rel_path, &proposal.to_note(), None, &provenance)
+            .await;
+        self.archive_terminal_proposal(rel_path, proposal).await;
+        Some(ReactionOutcome::Observed)
+    }
+
+    /// Step 7 + 7.5: mark done and persist, then file the now-Done note into the archive so it
+    /// leaves the active proposals dir. The move is a suppressed DAEMON_SOURCE write to the
+    /// excluded archive subtree, so it never re-observes — this is the *only* place an approved
+    /// note gets archived (its Done write above never surfaces to the terminal-observe branch).
+    async fn mark_done_and_archive(
+        &self,
+        rel_path: &Path,
+        proposal: &mut Proposal,
+        report: &liberado_common::Report,
+    ) -> Result<(), DaemonError> {
+        // The write carries agent provenance (DAEMON_SOURCE) so attribution suppresses it — no
+        // self-reaction (loop-break, Decision 5).
         proposal.status = liberado_common::ProposalStatus::Done;
         let provenance =
             liberado_common::WriteProvenance::agent(DAEMON_SOURCE, &proposal.correlation_id);
@@ -263,25 +357,24 @@ impl Daemon {
             "executed approved proposal and marked done"
         );
 
-        // 7.5. File the now-Done note into the archive so it leaves the active proposals dir. The
-        //     move is a suppressed DAEMON_SOURCE write to the excluded archive subtree, so it never
-        //     re-observes — this is the *only* place an approved note gets archived (its Done write
-        //     above never surfaces to the terminal-observe branch).
-        self.archive_terminal_proposal(rel_path, &proposal).await;
+        self.archive_terminal_proposal(rel_path, proposal).await;
+        Ok(())
+    }
 
-        if let Some(notifier) = &self.notifier {
-            let message = format!(
-                "Liberado: proposal executed.\n{}\nOutcome: {:?}",
-                proposal.rationale, report.outcome
-            );
-            if let Err(e) = notifier.notify(&message).await {
-                // Best-effort — the action already ran and was marked done; a failed
-                // confirmation just means the human finds out by checking the vault instead.
-                tracing::warn!(error = %e, "failed to send proposal-executed notification");
-            }
+    /// Step 7.5 tail: tell the human the proposal ran. Best-effort — the action already ran and
+    /// was marked done; a failed confirmation just means the human finds out by checking the
+    /// vault instead.
+    async fn notify_executed(&self, proposal: &Proposal, report: &liberado_common::Report) {
+        let Some(notifier) = &self.notifier else {
+            return;
+        };
+        let message = format!(
+            "Liberado: proposal executed.\n{}\nOutcome: {:?}",
+            proposal.rationale, report.outcome
+        );
+        if let Err(e) = notifier.notify(&message).await {
+            tracing::warn!(error = %e, "failed to send proposal-executed notification");
         }
-
-        Ok(ReactionOutcome::Acted(Disposition::Reported(report)))
     }
 
     /// Best-effort move of a now-terminal proposal note out of the active `proposals/` dir into
@@ -324,6 +417,24 @@ impl Daemon {
             }
             Some(liberado_common::GrantScope::Once) | None => {}
         }
+    }
+}
+
+/// Log which expiry path owns the cleanup, with the wording each path has always used. The
+/// step-6 pre-execute re-check (`late`) has no `prior_status` field and a distinct "before
+/// execute" message.
+fn expiry_log(proposal: &Proposal, late: bool) {
+    if late {
+        tracing::info!(
+            proposal_id = %proposal.id,
+            "approved proposal expired before execute — marking expired and archiving"
+        );
+    } else {
+        tracing::info!(
+            proposal_id = %proposal.id,
+            prior_status = ?proposal.status,
+            "proposal is past expires — marking expired and archiving (not executing)"
+        );
     }
 }
 
