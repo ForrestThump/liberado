@@ -86,7 +86,6 @@ impl GoalSessionStore {
     /// there. The directory is created if missing. A non-terminal session in a replayed log (a
     /// session that was mid-run when the daemon last stopped) is coerced to `Failed` — no pack is
     /// running it after a restart and packs aren't resumable yet, so its transcript is view-only.
-    #[allow(clippy::cognitive_complexity)]
     pub async fn open(dir: impl Into<PathBuf>) -> Self {
         let dir = dir.into();
         if let Err(e) = std::fs::create_dir_all(&dir) {
@@ -94,8 +93,25 @@ impl GoalSessionStore {
             return Self::new();
         }
 
+        let map = Self::rehydrate_from_disk(&dir);
+        if !map.is_empty() {
+            tracing::info!(
+                sessions = map.len(),
+                "goal-session store: rehydrated from disk"
+            );
+        }
+
+        Self {
+            inner: Arc::new(Mutex::new(map)),
+            dir: Some(Arc::new(dir)),
+        }
+    }
+
+    /// Read every `*.jsonl` session log under `dir`, returning the replayed sessions. Unreadable
+    /// files are skipped with a warning rather than failing the store.
+    fn rehydrate_from_disk(dir: &Path) -> HashMap<String, SessionInner> {
         let mut map = HashMap::new();
-        match std::fs::read_dir(&dir) {
+        match std::fs::read_dir(dir) {
             Ok(entries) => {
                 for entry in entries.flatten() {
                     let path = entry.path();
@@ -116,17 +132,7 @@ impl GoalSessionStore {
                 warn!(error = %e, path = %dir.display(), "goal-session store: could not read dir")
             }
         }
-        if !map.is_empty() {
-            tracing::info!(
-                sessions = map.len(),
-                "goal-session store: rehydrated from disk"
-            );
-        }
-
-        Self {
-            inner: Arc::new(Mutex::new(map)),
-            dir: Some(Arc::new(dir)),
-        }
+        map
     }
 
     /// Append a line to a session's log (best-effort — a persistence failure is logged, never

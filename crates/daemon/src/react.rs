@@ -2,9 +2,10 @@
 
 use std::path::Path;
 
+use liberado_common::DispatchDecision;
 use liberado_common::{DEFAULT_POOL, Event, PROPOSALS_DIR};
 use liberado_dispatcher::DispatchRequest;
-use liberado_orchestrator::Disposition;
+use liberado_orchestrator::{Disposition, Orchestrator};
 use liberado_session::{SessionGrant, TerminalKind};
 
 use crate::helpers::{cron_schedule_name, format_cron_delivery, reaction_goal};
@@ -208,7 +209,6 @@ impl Daemon {
     }
 
     /// Inline dispatch → orchestrate when no hub is attached. Prefer the hub path in production.
-    #[allow(clippy::cognitive_complexity)]
     pub(crate) async fn dispatch_and_act(
         &self,
         pool: &DaemonPool,
@@ -224,11 +224,24 @@ impl Daemon {
             }
         };
 
-        let label = decision.action.label();
-
         let Some(orchestrator) = pool.orchestrator.as_ref() else {
             return ReactionOutcome::Decided(decision);
         };
+
+        self.act_with_orchestrator(decision, orchestrator, request, event, ctx)
+            .await
+    }
+
+    /// Run the orchestrator with the decided action and persist any proposal it emits.
+    async fn act_with_orchestrator(
+        &self,
+        decision: DispatchDecision,
+        orchestrator: &Orchestrator,
+        request: &DispatchRequest,
+        event: &Event,
+        ctx: &DispatcherContext,
+    ) -> ReactionOutcome {
+        let label = decision.action.label();
 
         match orchestrator
             .run(

@@ -481,7 +481,6 @@ Answer in under 200 words, as plain prose. No preamble, no JSON.";
 /// runs after work that already exists, and a strategist outage must not destroy a run that is
 /// merely struggling. The next attempt simply proceeds without a directive, exactly as it would
 /// have before this role existed.
-#[allow(clippy::cognitive_complexity)]
 pub async fn run_strategist(
     providers: &dyn CoderProviderFactory,
     request: &CoderRunRequest,
@@ -501,18 +500,7 @@ pub async fn run_strategist(
         }
     };
 
-    let history = if refutation_history.is_empty() {
-        "(none recorded)".to_string()
-    } else {
-        refutation_history
-            .iter()
-            .rev()
-            .take(PRIOR_REFUTATIONS_MAX)
-            .rev()
-            .map(|r| format!("- {r}"))
-            .collect::<Vec<_>>()
-            .join("\n")
-    };
+    let history = format_refutation_history(refutation_history);
 
     let user = format!(
         "{}\n\nAttempts so far: {}\n\nWhy each attempt was refused:\n{history}",
@@ -528,6 +516,30 @@ pub async fn run_strategist(
         completion = completion.with_max_tokens(max_tokens);
     }
 
+    complete_and_extract(provider.as_ref(), completion, request.attempt).await
+}
+
+/// Render the refutation history newest-first, capped at [`PRIOR_REFUTATIONS_MAX`] entries.
+fn format_refutation_history(refutation_history: &[String]) -> String {
+    if refutation_history.is_empty() {
+        return "(none recorded)".to_string();
+    }
+    refutation_history
+        .iter()
+        .rev()
+        .take(PRIOR_REFUTATIONS_MAX)
+        .rev()
+        .map(|r| format!("- {r}"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Run the completion and map the response to a directive. `None` means "continue without one".
+async fn complete_and_extract(
+    provider: &dyn Provider,
+    completion: CompletionRequest,
+    attempt: u32,
+) -> Result<Option<String>, CoderError> {
     match provider.complete(completion).await {
         Ok(response) => {
             let directive = response
@@ -536,7 +548,7 @@ pub async fn run_strategist(
                 .filter(|c| !c.is_empty());
             match &directive {
                 Some(d) => tracing::info!(
-                    attempt = request.attempt,
+                    attempt,
                     directive = %truncate_chars(d, 200),
                     "strategist proposed a structural change"
                 ),

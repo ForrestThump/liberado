@@ -166,26 +166,12 @@ pub(crate) fn build_provider() -> Result<ResolvedProvider, String> {
 }
 
 /// Build the ACP model picker from the live provider catalog.
-#[allow(clippy::cognitive_complexity)]
 pub(crate) async fn load_model_catalog(
     provider: &dyn Provider,
     backend: &str,
     current: &str,
 ) -> Vec<CatalogModel> {
-    let live = match provider.list_models().await {
-        Ok(ids) if !ids.is_empty() => {
-            tracing::info!(count = ids.len(), %backend, "fetched live /models catalog");
-            ids
-        }
-        Ok(_) => {
-            tracing::warn!(%backend, "provider /models returned empty; using fallbacks");
-            Vec::new()
-        }
-        Err(e) => {
-            tracing::warn!(error = %e, %backend, "provider list_models failed; using fallbacks");
-            Vec::new()
-        }
-    };
+    let live = fetch_live_models(provider, backend).await;
 
     let ordered = if live.is_empty() {
         fallback_model_ids(backend, current)
@@ -201,6 +187,25 @@ pub(crate) async fn load_model_catalog(
             model_id: id.clone(),
         })
         .collect()
+}
+
+/// Fetch the live `/models` catalog. Logs the outcome; an empty result (failure or empty list)
+/// means the caller falls back to the static lists.
+async fn fetch_live_models(provider: &dyn Provider, backend: &str) -> Vec<String> {
+    match provider.list_models().await {
+        Ok(ids) if !ids.is_empty() => {
+            tracing::info!(count = ids.len(), %backend, "fetched live /models catalog");
+            ids
+        }
+        Ok(_) => {
+            tracing::warn!(%backend, "provider /models returned empty; using fallbacks");
+            Vec::new()
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, %backend, "provider list_models failed; using fallbacks");
+            Vec::new()
+        }
+    }
 }
 
 /// Full live catalog, A–Z. Includes `current` if the live list omitted it (e.g. custom slug).
