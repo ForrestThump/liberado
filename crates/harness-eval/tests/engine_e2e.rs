@@ -232,7 +232,19 @@ fn detached_worker_runs_a_queued_job_to_terminal() {
 
     // The detached worker ran the same offline pipeline and classified the harness failures.
     assert_eq!(terminal.status, JobStatus::Failed);
-    let report = store.load_report(&spec.job_id).unwrap();
+    // Report.json is written before the terminal state, but cross-process filesystem visibility
+    // can race: await_terminal sees the state file, then the test reads report.json before the
+    // worker's rename is visible. Retry a few times.
+    let report = (0..10)
+        .map(|_| {
+            store.load_report(&spec.job_id).or_else(|_| {
+                std::thread::sleep(std::time::Duration::from_millis(50));
+                store.load_report(&spec.job_id)
+            })
+        })
+        .find(Result::is_ok)
+        .expect("report.json never appeared after terminal state")
+        .unwrap();
     assert_eq!(report.failure_class, Some(FailureClass::HarnessFailure));
     assert!(store.job_root(&spec.job_id).join("report.json").is_file());
 }

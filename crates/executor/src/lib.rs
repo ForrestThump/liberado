@@ -832,6 +832,33 @@ fn grant_recovery_bonus(bonus_granted: &mut bool, max_turns: &mut u32) {
     }
 }
 
+/// Core escalation logic shared by doom-loop and tool-cycle escalations.
+/// `nudge_fn` receives (turn, messages).
+/// `remove_fn` receives (turn, tools, messages, bonus_granted, max_turns).
+/// `give_up_fn` receives (turn, tools, messages).
+#[allow(clippy::too_many_arguments)]
+fn escalate<F1, F2, F3>(
+    turn: u32,
+    guard: &mut LoopGuard,
+    tools: &mut Vec<ToolDef>,
+    messages: &mut Vec<Message>,
+    bonus_granted: &mut bool,
+    max_turns: &mut u32,
+    nudge_fn: F1,
+    remove_fn: F2,
+    give_up_fn: F3,
+) where
+    F1: FnOnce(u32, &mut Vec<Message>),
+    F2: FnOnce(u32, &mut Vec<ToolDef>, &mut Vec<Message>, &mut bool, &mut u32),
+    F3: FnOnce(u32, &mut Vec<ToolDef>, &mut Vec<Message>),
+{
+    match guard.strike() {
+        Escalation::Nudge => nudge_fn(turn, messages),
+        Escalation::Remove => remove_fn(turn, tools, messages, bonus_granted, max_turns),
+        Escalation::GiveUp => give_up_fn(turn, tools, messages),
+    }
+}
+
 /// Escalate a doom-loop detection one rung of the ladder (see [`LoopGuard`]'s doc comment for why
 /// the two guards must NOT share a counter): 1st detection -> nudge, 2nd -> remove the offending
 /// tool(s) and explain why, 3rd+ -> give up honestly. Removal (not just another nudge) is the
@@ -847,13 +874,17 @@ fn escalate_doom(
     max_turns: &mut u32,
     tool_name: &str,
 ) {
-    match guard.strike() {
-        Escalation::Nudge => doom_nudge(turn, messages),
-        Escalation::Remove => {
-            doom_remove(turn, tools, messages, bonus_granted, max_turns, tool_name)
-        }
-        Escalation::GiveUp => doom_give_up(turn, tools, messages, tool_name),
-    }
+    escalate(
+        turn,
+        guard,
+        tools,
+        messages,
+        bonus_granted,
+        max_turns,
+        doom_nudge,
+        |t, tools, m, b, mx| doom_remove(t, tools, m, b, mx, tool_name),
+        |t, tools, m| doom_give_up(t, tools, m, tool_name),
+    )
 }
 
 /// Escalate a short-cycle detection one rung of the ladder (see [`LoopGuard`]'s doc comment).
@@ -866,13 +897,17 @@ fn escalate_cycle(
     max_turns: &mut u32,
     cycling: &[String],
 ) {
-    match guard.strike() {
-        Escalation::Nudge => cycle_nudge(turn, messages, cycling),
-        Escalation::Remove => {
-            cycle_remove(turn, tools, messages, bonus_granted, max_turns, cycling)
-        }
-        Escalation::GiveUp => cycle_give_up(turn, tools, messages, cycling),
-    }
+    escalate(
+        turn,
+        guard,
+        tools,
+        messages,
+        bonus_granted,
+        max_turns,
+        |t, m| cycle_nudge(t, m, cycling),
+        |t, tools, m, b, mx| cycle_remove(t, tools, m, b, mx, cycling),
+        |t, tools, m| cycle_give_up(t, tools, m, cycling),
+    )
 }
 
 impl Executor {
