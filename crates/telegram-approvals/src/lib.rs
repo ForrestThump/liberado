@@ -319,7 +319,6 @@ impl ApprovalBot {
     /// Handle a permission-request scope tap. `scope = None` denies (Rejected); otherwise stamp the
     /// chosen [`GrantScope`] and approve. Same pending/expired guards as `set_status`; the daemon's
     /// proposal reactor does the privileged work (apply the grant, execute the carried call).
-    #[allow(clippy::cognitive_complexity)]
     async fn set_permission_scope(
         &self,
         event_id: &str,
@@ -327,33 +326,9 @@ impl ApprovalBot {
         stem: &str,
         scope: Option<GrantScope>,
     ) {
-        let path = proposal_path(stem);
-        let content = match self.vault.read(&path).await {
-            Ok(c) => c,
-            Err(e) => {
-                tracing::warn!(stem, error = %e, "approval-bot: permission request not found");
-                self.ack(event_id, "Request not found.").await;
-                return;
-            }
-        };
-        let mut proposal = match Proposal::from_note(&content) {
-            Ok(p) => p,
-            Err(e) => {
-                tracing::warn!(stem, error = %e, "approval-bot: permission note did not parse");
-                self.ack(event_id, "Could not parse that request.").await;
-                return;
-            }
-        };
-        if proposal.requested_grant.is_none() {
-            self.ack(event_id, "Not a permission request.").await;
+        let Some(mut proposal) = self.load_pending_proposal(event_id, stem).await else {
             return;
-        }
-        if proposal.status != ProposalStatus::Pending || proposal.is_expired_at(chrono::Utc::now())
-        {
-            self.ack(event_id, "Already decided — no action taken.")
-                .await;
-            return;
-        }
+        };
 
         match scope {
             None => proposal.status = ProposalStatus::Rejected,
@@ -368,22 +343,11 @@ impl ApprovalBot {
         // without it a tapped permission would flip the note, then be refused by the daemon, and the
         // tap would appear to do nothing. Recorded before the note, for the same reason as
         // `set_status` — the ledger is the decision, the note is its view.
-        if let Some(ledger) = &self.approvals {
-            let decision = match proposal.status {
-                ProposalStatus::Approved => Some(liberado_common::ApprovalDecision::Approved),
-                ProposalStatus::Rejected => Some(liberado_common::ApprovalDecision::Rejected),
-                _ => None,
-            };
-            if let Some(decision) = decision
-                && let Err(e) = ledger.record(&proposal.id, decision, "telegram").await
-            {
-                tracing::error!(stem, error = %e, "approval-bot: failed to record the decision");
-                self.ack(event_id, "Failed to record your decision — try again.")
-                    .await;
-                return;
-            }
+        if !self.record_decision(event_id, stem, &proposal).await {
+            return;
         }
 
+        let path = proposal_path(stem);
         if let Err(e) = self
             .vault
             .write(&path, &proposal.to_note(), None, &WriteProvenance::human())
@@ -406,6 +370,62 @@ impl ApprovalBot {
             &format!("{icon} {verb} — {}", proposal.rationale),
         )
         .await;
+    }
+
+    /// Read `proposals/{stem}.md`, parse it, and confirm it is a `Pending`, unexpired permission
+    /// request. On any mismatch the human is told and `None` is returned — the note is never
+    /// touched unless it was genuinely awaiting this exact decision.
+    async fn load_pending_proposal(&self, event_id: &str, stem: &str) -> Option<Proposal> {
+        let path = proposal_path(stem);
+        let content = match self.vault.read(&path).await {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::warn!(stem, error = %e, "approval-bot: permission request not found");
+                self.ack(event_id, "Request not found.").await;
+                return None;
+            }
+        };
+        let proposal = match Proposal::from_note(&content) {
+            Ok(p) => p,
+            Err(e) => {
+                tracing::warn!(stem, error = %e, "approval-bot: permission note did not parse");
+                self.ack(event_id, "Could not parse that request.").await;
+                return None;
+            }
+        };
+        if proposal.requested_grant.is_none() {
+            self.ack(event_id, "Not a permission request.").await;
+            return None;
+        }
+        if proposal.status != ProposalStatus::Pending || proposal.is_expired_at(chrono::Utc::now())
+        {
+            self.ack(event_id, "Already decided — no action taken.")
+                .await;
+            return None;
+        }
+        Some(proposal)
+    }
+
+    /// Record a decided permission proposal in the approvals ledger (when one is attached).
+    /// Returns `false` — after telling the human — when the ledger refused the decision.
+    async fn record_decision(&self, event_id: &str, stem: &str, proposal: &Proposal) -> bool {
+        let Some(ledger) = &self.approvals else {
+            return true;
+        };
+        let decision = match proposal.status {
+            ProposalStatus::Approved => Some(liberado_common::ApprovalDecision::Approved),
+            ProposalStatus::Rejected => Some(liberado_common::ApprovalDecision::Rejected),
+            _ => None,
+        };
+        if let Some(decision) = decision
+            && let Err(e) = ledger.record(&proposal.id, decision, "telegram").await
+        {
+            tracing::error!(stem, error = %e, "approval-bot: failed to record the decision");
+            self.ack(event_id, "Failed to record your decision — try again.")
+                .await;
+            return false;
+        }
+        true
     }
 
     /// Read `proposals/{stem}.md`, and — only if it is currently `Pending` and not expired — set
@@ -531,9 +551,26 @@ impl ApprovalBot {
         }
     }
 
+    /// Handle a reply to one of our request-approval / revise prompts: apply the revision
+    /// (empty notes are refused) and return, or do nothing when the prompt is not pending.
+    async fn apply_prompt_reply(&self, prompt_id: &str, text: &str) {
+        let Some(stem) = self.pending_revisions.lock().await.remove(prompt_id) else {
+            return;
+        };
+        let note = text.trim();
+        if note.is_empty() {
+            self.send_text("Revision note was empty — please try again.")
+                .await;
+            return;
+        }
+        let _ = self.channel.set_typing().await;
+        let pulse = self.spawn_typing_pulse();
+        self.apply_revision(&stem, note).await;
+        pulse.abort();
+    }
+
     /// Revision replies update proposals; any other free-form text runs a Liberado chat turn when
     /// a surface is attached.
-    #[allow(clippy::cognitive_complexity)]
     async fn handle_message(&self, text: &str, reply_to_prompt: Option<String>) {
         // The human just messaged us — stamp the shared activity clock so a pending cron brief holds
         // off until this conversation goes quiet.
@@ -543,20 +580,8 @@ impl ApprovalBot {
 
         // Revision path: reply to one of our request_reply prompts.
         if let Some(prompt_id) = reply_to_prompt {
-            let stem = { self.pending_revisions.lock().await.remove(&prompt_id) };
-            if let Some(stem) = stem {
-                let note = text.trim();
-                if note.is_empty() {
-                    self.send_text("Revision note was empty — please try again.")
-                        .await;
-                    return;
-                }
-                let _ = self.channel.set_typing().await;
-                let pulse = self.spawn_typing_pulse();
-                self.apply_revision(&stem, note).await;
-                pulse.abort();
-                return;
-            }
+            self.apply_prompt_reply(&prompt_id, text).await;
+            return;
         }
 
         let text = text.trim();
@@ -588,6 +613,20 @@ impl ApprovalBot {
         // the turn to decide what the human needs told.
         let seq = self.latest_seq.fetch_add(1, Ordering::SeqCst) + 1;
         let already_running = self.in_flight.fetch_add(1, Ordering::SeqCst);
+
+        self.run_chat_turn(chat, text, seq, already_running).await;
+    }
+
+    /// Run one free-form chat turn: tell the human when work is already in flight, wait for the
+    /// reply, and label it when newer messages landed meanwhile.
+    async fn run_chat_turn(
+        &self,
+        chat: &Arc<dyn ChatSurface>,
+        text: &str,
+        seq: u64,
+        already_running: usize,
+    ) {
+        use std::sync::atomic::Ordering;
 
         tracing::info!(
             channel = self.channel.name(),

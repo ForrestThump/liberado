@@ -284,7 +284,6 @@ impl LiberadoLoopBackend {
     /// reviewer that failed to answer must not turn a completed run into a failed one, and it
     /// must not report a clean review either — a failed call leaves `session_findings` empty and
     /// logs, which reads as "not reviewed", not as "reviewed and fine".
-    #[allow(clippy::cognitive_complexity)]
     async fn review_session_after_run(
         &self,
         config: &liberado_coder_core::CoderRunConfig,
@@ -297,19 +296,22 @@ impl LiberadoLoopBackend {
             tracing::warn!("session critic is enabled but the run wrote no trace; skipping");
             return;
         };
-        let events = match tokio::fs::read_to_string(&trace).await {
-            Ok(raw) => match serde_json::from_str::<liberado_coder_core::CoderTrace>(&raw) {
-                Ok(t) => t.events,
-                Err(e) => {
-                    tracing::warn!(error = %e, "session critic: unreadable trace");
-                    return;
-                }
-            },
-            Err(e) => {
-                tracing::warn!(error = %e, path = %trace, "session critic: cannot read trace");
-                return;
-            }
+        let Some(events) = Self::read_trace_events(&trace).await else {
+            return;
         };
+        let summary = result.summary.clone();
+        self.run_session_review(config, &events, &summary, result)
+            .await;
+    }
+
+    /// Execute the session review against the loaded trace and record any findings on the result.
+    async fn run_session_review(
+        &self,
+        config: &liberado_coder_core::CoderRunConfig,
+        events: &[liberado_coder_core::CoderEvent],
+        summary: &str,
+        result: &mut CoderRunResult,
+    ) {
         let role = config
             .session_critic
             .role
@@ -322,7 +324,7 @@ impl LiberadoLoopBackend {
         };
         // The reviewer needs a request to name the task; the trace's own copy is the right one.
         let request = liberado_coder_core::CoderRunRequest {
-            task: liberado_coder_core::CoderTask::new("session-review", result.summary.clone()),
+            task: liberado_coder_core::CoderTask::new("session-review", summary.to_string()),
             workspace: liberado_coder_core::WorkspaceRef::new("", "HEAD"),
             config: config.clone(),
             attempt: 0,
@@ -333,8 +335,8 @@ impl LiberadoLoopBackend {
             self.providers.as_ref(),
             &request,
             &role,
-            &events,
-            Some(result.summary.as_str()),
+            events,
+            Some(summary),
             visibility,
         )
         .await
@@ -349,6 +351,25 @@ impl LiberadoLoopBackend {
                 result.session_findings = review.findings;
             }
             Err(e) => tracing::warn!(error = %e, "session critic failed; run left unreviewed"),
+        }
+    }
+
+    /// Load a run's event trace. Any read/parse failure is logged and yields `None`, leaving the
+    /// run unreviewed rather than failing it.
+    async fn read_trace_events(trace: &str) -> Option<Vec<liberado_coder_core::CoderEvent>> {
+        let raw = match tokio::fs::read_to_string(trace).await {
+            Ok(raw) => raw,
+            Err(e) => {
+                tracing::warn!(error = %e, path = %trace, "session critic: cannot read trace");
+                return None;
+            }
+        };
+        match serde_json::from_str::<liberado_coder_core::CoderTrace>(&raw) {
+            Ok(t) => Some(t.events),
+            Err(e) => {
+                tracing::warn!(error = %e, "session critic: unreadable trace");
+                None
+            }
         }
     }
 }

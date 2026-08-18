@@ -36,7 +36,7 @@
 //! if you add a **new** guard here, check whether `guards.rs::evaluate` needs the equivalent, and
 //! vice versa. That sequencing risk is the reason this note exists.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -529,7 +529,6 @@ impl RiskGatedToolRuntime {
         None
     }
 
-    #[allow(clippy::cognitive_complexity)]
     async fn write_proposal(
         &self,
         call: &ToolInvocation,
@@ -585,11 +584,35 @@ impl RiskGatedToolRuntime {
 
         let note = proposal.to_note();
 
+        self.persist_proposal_note(&proposals_subdir, &proposal_path, &note)
+            .await?;
+
+        tracing::info!(
+            path = %proposal_path.display(),
+            tool = %call.name,
+            "proposal written"
+        );
+
+        self.notify_proposal(call, &proposal_id, rationale, &proposal_path)
+            .await;
+
+        Ok(proposal_path)
+    }
+
+    /// Create the proposals directory (if needed) and write the note, honoring the injected
+    /// failpoints. The proposal is the safety artifact — a failure here means the action was NOT
+    /// executed and NO proposal exists, so it must reach the human loudly, not degrade silently.
+    async fn persist_proposal_note(
+        &self,
+        proposals_subdir: &Path,
+        proposal_path: &Path,
+        note: &str,
+    ) -> Result<(), String> {
         // Create the proposals directory if it doesn't exist.
         if self.fail_next_create_dir.swap(false, Ordering::Relaxed) {
             return Err("simulated create_dir_all failure — proposal was NOT saved".into());
         }
-        if let Err(e) = tokio::fs::create_dir_all(&proposals_subdir).await {
+        if let Err(e) = tokio::fs::create_dir_all(proposals_subdir).await {
             tracing::error!(
                 path = %proposals_subdir.display(),
                 error = %e,
@@ -606,7 +629,7 @@ impl RiskGatedToolRuntime {
         if self.fail_next_write.swap(false, Ordering::Relaxed) {
             return Err("simulated write failure — proposal was NOT saved".into());
         }
-        if let Err(e) = tokio::fs::write(&proposal_path, &note).await {
+        if let Err(e) = tokio::fs::write(proposal_path, note).await {
             tracing::error!(
                 path = %proposal_path.display(),
                 error = %e,
@@ -619,34 +642,36 @@ impl RiskGatedToolRuntime {
                 proposal_path.display()
             ));
         }
+        Ok(())
+    }
 
-        tracing::info!(
-            path = %proposal_path.display(),
-            tool = %call.name,
-            "proposal written"
+    /// Tell the human a proposal awaits review. Best-effort: the proposal is already safely on
+    /// disk, so a failed notification only changes where the human hears about it, not whether
+    /// the safety property (a human gets to review) holds.
+    async fn notify_proposal(
+        &self,
+        call: &ToolInvocation,
+        proposal_id: &str,
+        rationale: &str,
+        proposal_path: &Path,
+    ) {
+        let Some(notifier) = &self.notifier else {
+            return;
+        };
+        let message = format!(
+            "Liberado: a new proposal needs your review.\n{rationale}\nTool: {}\nSaved at: {}",
+            call.name,
+            proposal_path.display()
         );
-
-        if let Some(notifier) = &self.notifier {
-            let message = format!(
-                "Liberado: a new proposal needs your review.\n{rationale}\nTool: {}\nSaved at: {}",
-                call.name,
-                proposal_path.display()
-            );
-            match notifier.notify_proposal(&proposal_id, &message).await {
-                // The human now has the proposal on their phone out-of-band — record it so a chat
-                // surface can drop the redundant "this needs approval" reply (Gap 2). Only on a
-                // confirmed send: a failed notify leaves the chat reply as the sole signal.
-                Ok(()) => self.notified_deferral.store(true, Ordering::Relaxed),
-                Err(e) => {
-                    // Best-effort — the proposal itself is already safely written; a failed
-                    // notification just means the human finds out by checking the vault instead of
-                    // their phone, not that the safety property (a human gets to review it) broke.
-                    tracing::warn!(error = %e, "failed to send proposal notification");
-                }
+        match notifier.notify_proposal(proposal_id, &message).await {
+            // The human now has the proposal on their phone out-of-band — record it so a chat
+            // surface can drop the redundant "this needs approval" reply (Gap 2). Only on a
+            // confirmed send: a failed notify leaves the chat reply as the sole signal.
+            Ok(()) => self.notified_deferral.store(true, Ordering::Relaxed),
+            Err(e) => {
+                tracing::warn!(error = %e, "failed to send proposal notification");
             }
         }
-
-        Ok(proposal_path)
     }
 
     /// Like [`write_proposal`](Self::write_proposal), but for a **permission request**: the call is
