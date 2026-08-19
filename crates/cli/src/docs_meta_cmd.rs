@@ -332,126 +332,201 @@ fn lint(root: &Path) -> Result<Vec<Issue>, Box<dyn std::error::Error>> {
     let mut issues = Vec::new();
     let mut canonical = HashMap::new();
     for doc in &docs {
-        if is_root_future_work(&doc.path) && doc.meta.is_none() {
-            issues.push(Issue {
-                path: doc.path.clone(),
-                message: "root future-work document missing YAML frontmatter metadata".into(),
-            });
-            continue;
-        }
-        if !is_managed(&doc.path, &doc.meta) {
-            continue;
-        }
-        let meta = doc.meta.as_ref().unwrap();
-        for field in ["kind", "status", "authority"] {
-            if !meta.contains_key(Value::String(field.into())) {
-                issues.push(Issue {
-                    path: doc.path.clone(),
-                    message: format!("missing required metadata field: {field}"),
-                });
-            }
-        }
-        let kind = meta_str(meta, "kind").unwrap_or("");
-        let status = meta_str(meta, "status").unwrap_or("");
-        let authority = meta_str(meta, "authority").unwrap_or("");
-        if ![
-            "architecture",
-            "reference",
-            "decision",
-            "plan",
-            "finding",
-            "validation",
-            "runbook",
-            "index",
-            "policy",
-            "",
-        ]
-        .contains(&kind)
-        {
-            issues.push(Issue {
-                path: doc.path.clone(),
-                message: format!("invalid kind '{kind}'"),
-            });
-        }
-        if !["normative", "implementation", "advisory", "evidence", ""].contains(&authority) {
-            issues.push(Issue {
-                path: doc.path.clone(),
-                message: format!("invalid authority '{authority}'"),
-            });
-        }
-        let valid_status = if kind == "decision" {
-            [
-                "draft",
-                "proposed",
-                "accepted",
-                "superseded",
-                "historical",
-                "",
-            ]
-            .contains(&status)
-        } else {
-            [
-                "draft",
-                "active",
-                "implemented",
-                "superseded",
-                "historical",
-                "",
-            ]
-            .contains(&status)
-        };
-        if !valid_status {
-            issues.push(Issue {
-                path: doc.path.clone(),
-                message: format!("invalid status '{status}' for kind '{kind}'"),
-            });
-        }
-        if status == "active" && kind == "plan" && meta_bool(meta, "open_items") != Some(true) {
-            issues.push(Issue {
-                path: doc.path.clone(),
-                message:
-                    "active plan must set open_items: true (completed slices belong elsewhere)"
-                        .into(),
-            });
-        }
-        if kind == "plan"
-            && ["implemented", "superseded"].contains(&status)
-            && active.contains(Path::new(&doc.path).file_name().unwrap().to_str().unwrap())
-        {
-            issues.push(Issue {
-                path: doc.path.clone(),
-                message: format!("{status} plan must not appear in the active future-work index"),
-            });
-        }
-        if ["active", "accepted", "proposed"].contains(&status)
-            && let Some(canon) = meta_str(meta, "canonical_for")
-            && let Some(previous) = canonical.insert(canon.to_owned(), doc.path.clone())
-        {
-            issues.push(Issue {
-                path: doc.path.clone(),
-                message: format!(
-                    "duplicate active canonical_for '{canon}' (also claimed by {previous})"
-                ),
-            });
-        }
-        if authority == "normative" && archive_link.is_match(&doc.body) {
-            issues.push(Issue {
-                path: doc.path.clone(),
-                message: "normative document links to archive path as content".into(),
-            });
-        }
+        issues.extend(lint_doc(doc, &active, &mut canonical, &archive_link));
     }
     for (name, expected) in generated {
-        let path = root.join(name);
-        if !path.is_file() || read_text(&path)?.replace("\r\n", "\n") != expected {
+        check_generated_index(root, name, &expected, &mut issues)?;
+    }
+    Ok(issues)
+}
+
+/// Run every metadata rule against one document.
+fn lint_doc(
+    doc: &Document,
+    active: &HashSet<String>,
+    canonical: &mut HashMap<String, String>,
+    archive_link: &Regex,
+) -> Vec<Issue> {
+    let Some(meta) = doc.meta.as_ref() else {
+        // A root future-work document without frontmatter is a real gap; anything else
+        // unmanaged is skipped.
+        return if is_root_future_work(&doc.path) {
+            vec![Issue {
+                path: doc.path.clone(),
+                message: "root future-work document missing YAML frontmatter metadata".into(),
+            }]
+        } else {
+            Vec::new()
+        };
+    };
+    if !is_managed(&doc.path, &doc.meta) {
+        return Vec::new();
+    }
+    let mut issues = lint_required_fields(doc, meta);
+    issues.extend(lint_meta_rules(doc, meta));
+    if let Some(issue) = lint_finished_plan_in_index(doc, meta, active) {
+        issues.push(issue);
+    }
+    if let Some(issue) = lint_canonical_for(doc, meta, canonical) {
+        issues.push(issue);
+    }
+    if let Some(issue) = lint_normative_archive(doc, meta, archive_link) {
+        issues.push(issue);
+    }
+    issues
+}
+
+/// The kind/status/authority fields every managed document must carry.
+fn lint_required_fields(doc: &Document, meta: &serde_yaml::Mapping) -> Vec<Issue> {
+    let mut issues = Vec::new();
+    for field in ["kind", "status", "authority"] {
+        if !meta.contains_key(Value::String(field.into())) {
             issues.push(Issue {
-                path: name.into(),
-                message: "generated index differs from committed copy (run generate and commit)"
-                    .into(),
+                path: doc.path.clone(),
+                message: format!("missing required metadata field: {field}"),
             });
         }
     }
-    Ok(issues)
+    issues
+}
+
+/// Vocabulary and cross-field rules for a managed document's metadata.
+fn lint_meta_rules(doc: &Document, meta: &serde_yaml::Mapping) -> Vec<Issue> {
+    let kind = meta_str(meta, "kind").unwrap_or("");
+    let status = meta_str(meta, "status").unwrap_or("");
+    let authority = meta_str(meta, "authority").unwrap_or("");
+    let mut issues = Vec::new();
+    if ![
+        "architecture",
+        "reference",
+        "decision",
+        "plan",
+        "finding",
+        "validation",
+        "runbook",
+        "index",
+        "policy",
+        "",
+    ]
+    .contains(&kind)
+    {
+        issues.push(Issue {
+            path: doc.path.clone(),
+            message: format!("invalid kind '{kind}'"),
+        });
+    }
+    if !["normative", "implementation", "advisory", "evidence", ""].contains(&authority) {
+        issues.push(Issue {
+            path: doc.path.clone(),
+            message: format!("invalid authority '{authority}'"),
+        });
+    }
+    let valid_status = if kind == "decision" {
+        [
+            "draft",
+            "proposed",
+            "accepted",
+            "superseded",
+            "historical",
+            "",
+        ]
+        .contains(&status)
+    } else {
+        [
+            "draft",
+            "active",
+            "implemented",
+            "superseded",
+            "historical",
+            "",
+        ]
+        .contains(&status)
+    };
+    if !valid_status {
+        issues.push(Issue {
+            path: doc.path.clone(),
+            message: format!("invalid status '{status}' for kind '{kind}'"),
+        });
+    }
+    if status == "active" && kind == "plan" && meta_bool(meta, "open_items") != Some(true) {
+        issues.push(Issue {
+            path: doc.path.clone(),
+            message: "active plan must set open_items: true (completed slices belong elsewhere)"
+                .into(),
+        });
+    }
+    issues
+}
+
+/// A finished plan must not stay in the active future-work index.
+fn lint_finished_plan_in_index(
+    doc: &Document,
+    meta: &serde_yaml::Mapping,
+    active: &HashSet<String>,
+) -> Option<Issue> {
+    let kind = meta_str(meta, "kind").unwrap_or("");
+    let status = meta_str(meta, "status").unwrap_or("");
+    let file = Path::new(&doc.path).file_name()?.to_str()?.to_string();
+    if kind == "plan" && ["implemented", "superseded"].contains(&status) && active.contains(&file) {
+        Some(Issue {
+            path: doc.path.clone(),
+            message: format!("{status} plan must not appear in the active future-work index"),
+        })
+    } else {
+        None
+    }
+}
+
+/// Two active documents must not claim the same canonical_for.
+fn lint_canonical_for(
+    doc: &Document,
+    meta: &serde_yaml::Mapping,
+    canonical: &mut HashMap<String, String>,
+) -> Option<Issue> {
+    let status = meta_str(meta, "status").unwrap_or("");
+    if ["active", "accepted", "proposed"].contains(&status)
+        && let Some(canon) = meta_str(meta, "canonical_for")
+        && let Some(previous) = canonical.insert(canon.to_owned(), doc.path.clone())
+    {
+        Some(Issue {
+            path: doc.path.clone(),
+            message: format!(
+                "duplicate active canonical_for '{canon}' (also claimed by {previous})"
+            ),
+        })
+    } else {
+        None
+    }
+}
+
+/// A normative document must not link to an archive path as content.
+fn lint_normative_archive(
+    doc: &Document,
+    meta: &serde_yaml::Mapping,
+    archive_link: &Regex,
+) -> Option<Issue> {
+    let authority = meta_str(meta, "authority").unwrap_or("");
+    (authority == "normative" && archive_link.is_match(&doc.body)).then(|| Issue {
+        path: doc.path.clone(),
+        message: "normative document links to archive path as content".into(),
+    })
+}
+
+/// A generated index must match its committed copy.
+fn check_generated_index(
+    root: &Path,
+    name: &str,
+    expected: &str,
+    issues: &mut Vec<Issue>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let path = root.join(name);
+    if !path.is_file() || read_text(&path)?.replace("\r\n", "\n") != expected {
+        issues.push(Issue {
+            path: name.into(),
+            message: "generated index differs from committed copy (run generate and commit)".into(),
+        });
+    }
+    Ok(())
 }
 
 /// Pure regression checks for the metadata rules. This is a command, rather than only Rust unit
