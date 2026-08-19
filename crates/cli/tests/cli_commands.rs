@@ -149,9 +149,9 @@ fn docs_metadata_rejects_extra_arguments() {
 }
 
 #[test]
-fn ci_requires_a_subcommand() {
+fn ci_rejects_an_unknown_subcommand() {
     let temp = tempdir().unwrap();
-    let stderr = run_usage(temp.path(), &["ci"]);
+    let stderr = run_usage(temp.path(), &["ci", "bogus"]);
     assert!(stderr.contains("usage: liberado ci"), "{stderr}");
 }
 
