@@ -37,29 +37,25 @@ pub struct PreflightReport {
     pub credential_environment: String,
 }
 
-pub fn run(
-    spec: &JobSpec,
-    policy: &WorkerPolicy,
-) -> Result<(PreflightReport, ResolvedCredential), Box<dyn Error>> {
-    spec.validate()?;
-    validate_policy(spec, policy)?;
-    let repository = spec.repository.canonicalize()?;
-    require_program("git")?;
-    require_program("cargo")?;
+/// The two sibling path-dependencies this comparison needs must exist.
+fn check_sibling_dependencies(repository: &Path) -> Result<(), Box<dyn Error>> {
     for sibling in ["turbovault", "turbomcp"] {
         let path = repository.join(sibling);
         if !path.is_dir() {
             return Err(format!("required path dependency is missing: {}", path.display()).into());
         }
     }
-    reject_git_index_locks(&repository)?;
-    let base_commit = git_capture(
-        &repository,
-        &["rev-parse", &format!("{}^{{commit}}", spec.base_revision)],
-    )?
-    .trim()
-    .to_string();
-    let free_bytes = available_bytes(&repository)?;
+    Ok(())
+}
+
+/// Free-space vs the disk estimate (reserve + dependency bytes × harness count). Returns the
+/// measured free bytes and the estimate; fails when the host is too tight.
+fn disk_reserve_check(
+    repository: &Path,
+    spec: &JobSpec,
+    policy: &WorkerPolicy,
+) -> Result<(u64, u64), Box<dyn Error>> {
+    let free_bytes = available_bytes(repository)?;
     let reserve = spec
         .limits
         .minimum_free_bytes
@@ -86,6 +82,11 @@ pub fn run(
         )
         .into());
     }
+    Ok((free_bytes, estimated_required_bytes))
+}
+
+/// Every harness referenced by the job must have a reachable runner binary.
+fn check_harness_binaries(spec: &JobSpec) -> Result<(), Box<dyn Error>> {
     for harness in &spec.harnesses {
         match harness.id.as_str() {
             "liberado" => {
@@ -113,6 +114,14 @@ pub fn run(
             other => return Err(format!("unsupported harness '{other}'").into()),
         }
     }
+    Ok(())
+}
+
+/// Resolve the environment the model credential must come from, then load the secret.
+fn resolve_credential(
+    spec: &JobSpec,
+    policy: &WorkerPolicy,
+) -> Result<(String, ResolvedCredential), Box<dyn Error>> {
     let environment = policy
         .credential_aliases
         .get(&spec.model.credential_alias)
@@ -123,13 +132,36 @@ pub fn run(
             )
         })?;
     let credential = resolve_user_credential(environment)?;
+    Ok((environment.clone(), credential))
+}
+
+pub fn run(
+    spec: &JobSpec,
+    policy: &WorkerPolicy,
+) -> Result<(PreflightReport, ResolvedCredential), Box<dyn Error>> {
+    spec.validate()?;
+    validate_policy(spec, policy)?;
+    let repository = spec.repository.canonicalize()?;
+    require_program("git")?;
+    require_program("cargo")?;
+    check_sibling_dependencies(&repository)?;
+    reject_git_index_locks(&repository)?;
+    let base_commit = git_capture(
+        &repository,
+        &["rev-parse", &format!("{}^{{commit}}", spec.base_revision)],
+    )?
+    .trim()
+    .to_string();
+    let (free_bytes, estimated_required_bytes) = disk_reserve_check(&repository, spec, policy)?;
+    check_harness_binaries(spec)?;
+    let (credential_environment, credential) = resolve_credential(spec, policy)?;
     Ok((
         PreflightReport {
             repository,
             base_commit,
             free_bytes,
             estimated_required_bytes,
-            credential_environment: environment.clone(),
+            credential_environment,
         },
         credential,
     ))
