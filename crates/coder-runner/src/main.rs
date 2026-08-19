@@ -618,60 +618,35 @@ impl Args {
         let mut session_id = None;
 
         while let Some(arg) = args.next() {
+            // Help never consumes a value, so it is checked before the generic value fetch below.
+            if arg == "--help" || arg == "-h" {
+                return Err(task_usage());
+            }
+            let Some(value) = args.next() else {
+                return Err(format!("{arg} requires a value"));
+            };
             match arg.as_str() {
-                "--prompt" => {
-                    prompt = Some(
-                        args.next()
-                            .ok_or_else(|| "--prompt requires a value".to_string())?,
-                    );
-                }
-                "--workspace" => {
-                    workspace = Some(PathBuf::from(
-                        args.next()
-                            .ok_or_else(|| "--workspace requires a path".to_string())?,
-                    ));
-                }
-                "--model" => {
-                    model = Some(
-                        args.next()
-                            .ok_or_else(|| "--model requires a value".to_string())?,
-                    );
-                }
+                "--prompt" => prompt = Some(value),
+                "--workspace" => workspace = Some(PathBuf::from(value)),
+                "--model" => model = Some(value),
                 "--max-turns" => {
-                    let val = args
-                        .next()
-                        .ok_or_else(|| "--max-turns requires a number".to_string())?;
                     max_turns = Some(
-                        val.parse::<u32>()
-                            .map_err(|_| format!("--max-turns must be a number, got '{val}'"))?,
+                        value
+                            .parse::<u32>()
+                            .map_err(|_| format!("--max-turns must be a number, got '{value}'"))?,
                     );
                 }
-                "--config-dir" => {
-                    config_dir = Some(PathBuf::from(
-                        args.next()
-                            .ok_or_else(|| "--config-dir requires a path".to_string())?,
+                "--config-dir" => config_dir = Some(PathBuf::from(value)),
+                "--api-key-env" => api_key_env = Some(value),
+                "--base-url" => base_url = Some(value),
+                "--session-id" => session_id = Some(value),
+                other => {
+                    return Err(format!(
+                        "unknown argument '{other}'
+{}",
+                        task_usage()
                     ));
                 }
-                "--api-key-env" => {
-                    api_key_env = Some(
-                        args.next()
-                            .ok_or_else(|| "--api-key-env requires a value".to_string())?,
-                    );
-                }
-                "--base-url" => {
-                    base_url = Some(
-                        args.next()
-                            .ok_or_else(|| "--base-url requires a value".to_string())?,
-                    );
-                }
-                "--session-id" => {
-                    session_id = Some(
-                        args.next()
-                            .ok_or_else(|| "--session-id requires a value".to_string())?,
-                    );
-                }
-                "--help" | "-h" => return Err(task_usage()),
-                other => return Err(format!("unknown argument '{other}'\n{}", task_usage())),
             }
         }
 
