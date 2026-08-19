@@ -3,7 +3,8 @@
 //! ## CRAP ratchet
 //!
 //! `crap-baseline.json` is the last best per-function score. GitHub only *reads* it
-//! (`liberado ci crap` / `--fail-regression`). A local `liberado ci` run that stays
+//! (`liberado ci crap` / `--fail-regression`, keyed by file + function name, not
+//! line). A local `liberado ci` run that stays
 //! green *writes* it (`liberado ci ratchet`). That is the same check-vs-write split
 //! as `liberado docs crate-map` / `--write`.
 //!
@@ -103,24 +104,19 @@ New functions must land at or below 450.";
 /// Dispatch `liberado ci …`. No subcommand means the local full run (gates + ratchet).
 pub fn run(args: impl Iterator<Item = String>) -> Result<(), Box<dyn std::error::Error>> {
     let mut args = args.peekable();
-    let verb = args.next();
-    let extra = args.peek().is_some();
-    let known = match verb.as_deref() {
-        None => true,
-        Some("check" | "crap" | "ratchet") if !extra => true,
-        _ => false,
-    };
-    if !known {
-        return Err(USAGE.into());
-    }
-    let log = CiLog::create(&repository_root()?)?;
-    match verb.as_deref() {
-        None => local_run(&log),
-        Some("check") => check(&log),
-        Some("crap") => crap_check(&log),
-        Some("ratchet") => crap_ratchet(&log),
+    match args.next().as_deref() {
+        None => with_log(local_run),
+        Some("check") if args.peek().is_none() => with_log(check),
+        Some("crap") if args.peek().is_none() => with_log(crap_check),
+        Some("ratchet") if args.peek().is_none() => with_log(crap_ratchet),
         _ => Err(USAGE.into()),
     }
+}
+
+fn with_log(
+    body: impl FnOnce(&CiLog) -> Result<(), Box<dyn std::error::Error>>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    body(&CiLog::create(&repository_root()?)?)
 }
 
 /// One invocation's full child log. Truncated at the start of `liberado ci`.
@@ -582,16 +578,41 @@ fn run_cmd(
     args: &[&str],
 ) -> Result<(), Box<dyn std::error::Error>> {
     let program = program.as_ref();
-    let shown = program.to_string_lossy();
+    let gate = begin_cmd(log, program, args)?;
+    finish_cmd(log, gate, spawn_to_log(log, program, args))
+}
+
+struct GateStart {
+    command: String,
+    program: String,
+    start: u64,
+}
+
+fn begin_cmd(
+    log: &CiLog,
+    program: &OsStr,
+    args: &[&str],
+) -> Result<GateStart, Box<dyn std::error::Error>> {
+    let shown = program.to_string_lossy().into_owned();
     let command = format!("{shown} {}", args.join(" "));
     log.writeln(&format!("=== {command} ==="))?;
     eprint!("[liberado ci] {command} ... ");
     let _ = io::stderr().flush();
+    Ok(GateStart {
+        command,
+        program: shown,
+        start: std::fs::metadata(&log.path)?.len(),
+    })
+}
 
-    let start = std::fs::metadata(&log.path)?.len();
+fn spawn_to_log(
+    log: &CiLog,
+    program: &OsStr,
+    args: &[&str],
+) -> io::Result<std::process::ExitStatus> {
     let stdout = std::fs::OpenOptions::new().append(true).open(&log.path)?;
     let stderr = std::fs::OpenOptions::new().append(true).open(&log.path)?;
-    let status = match std_command(program)
+    std_command(program)
         .args(args)
         .current_dir(&log.root)
         .stdin(Stdio::null())
@@ -599,36 +620,43 @@ fn run_cmd(
         .stderr(stderr)
         .env("CARGO_TERM_COLOR", "never")
         .status()
-    {
-        Ok(status) => status,
-        Err(error) => {
-            eprintln!("FAILED");
-            let message = format!("could not start {shown}: {error}\nFull log: {CI_LOG_FILE}");
-            log.writeln(&message)?;
-            eprintln!("----------\nFull log: {CI_LOG_FILE}\n----------");
-            return Err(message.into());
+}
+
+fn finish_cmd(
+    log: &CiLog,
+    gate: GateStart,
+    spawned: io::Result<std::process::ExitStatus>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    match spawned {
+        Ok(status) if status.success() => {
+            eprintln!("ok");
+            Ok(())
         }
-    };
-
-    if status.success() {
-        eprintln!("ok");
-        return Ok(());
+        Ok(status) => gate_failed(log, &gate, format!("{} failed with {status}", gate.command)),
+        Err(error) => gate_failed(
+            log,
+            &gate,
+            format!("could not start {}: {error}", gate.program),
+        ),
     }
+}
 
+fn gate_failed(
+    log: &CiLog,
+    gate: &GateStart,
+    reason: String,
+) -> Result<(), Box<dyn std::error::Error>> {
     eprintln!("FAILED");
-    let chunk = read_log_since(&log.path, start)?;
-    let extracted = extract_ci_failures(&chunk);
+    log.writeln(&reason)?;
+    let extracted = extract_ci_failures(&read_log_since(&log.path, gate.start)?);
     if !extracted.is_empty() {
         eprintln!("\n{extracted}\n");
     }
     eprintln!("----------\nFull log: {CI_LOG_FILE}\n----------");
-    let mut message = format!("{command} failed with {status}\nFull log: {CI_LOG_FILE}");
-    if !extracted.is_empty() {
-        message.push('\n');
-        message.push('\n');
-        message.push_str(&extracted);
+    if extracted.is_empty() {
+        return Err(format!("{reason}\nFull log: {CI_LOG_FILE}").into());
     }
-    Err(message.into())
+    Err(format!("{reason}\nFull log: {CI_LOG_FILE}\n\n{extracted}").into())
 }
 
 fn read_log_since(path: &Path, start: u64) -> Result<String, Box<dyn std::error::Error>> {
@@ -727,7 +755,7 @@ mod tests {
     use super::{
         BASELINE_FILE, CI_LOG_FILE, CRAP_CEILING_GH, CRAP_CEILING_HINT, CRAP_COMPARE_SUMMARY,
         CRAP_EMPTY_BASELINE, CRAP_HOST_CEILING_ONLY, CRAP_REGRESSION_GH, CRAP_REGRESSION_HINT,
-        CiLog, EXTRACT_MAX_LINES, LCOV_FILE, LLVM_COV_ARGS, StageOutcome, USAGE,
+        CiLog, EXTRACT_MAX_LINES, LCOV_FILE, LLVM_COV_ARGS, StageOutcome, USAGE, announce_compare,
         baseline_has_entries, compare_args, compare_banners, crap_failure_hint, emit_crap_failure,
         exe_lives_in_cargo_target, extract_ci_failures, git, porcelain_path, relativize_json_file,
         relativize_lcov, repo_relative_source_path, repository_root, run_cmd,
@@ -886,6 +914,15 @@ error[E0425]: cannot find value `foo` in this scope
         assert_eq!(strip_ansi(colored), "error[E0425]: missing\n");
         let extracted = extract_ci_failures(colored);
         assert!(extracted.contains("error[E0425]"), "{extracted}");
+    }
+
+    #[test]
+    fn announce_compare_records_the_empty_baseline_banner() {
+        let temp = tempdir().unwrap();
+        let log = CiLog::create(temp.path()).unwrap();
+        assert!(!announce_compare(&log).unwrap());
+        let text = std::fs::read_to_string(&log.path).unwrap();
+        assert!(text.contains("no entries yet"), "{text}");
     }
 
     #[test]
