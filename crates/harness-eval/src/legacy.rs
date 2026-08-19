@@ -2002,6 +2002,8 @@ fn run_slug(path: &Path) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(windows)]
+    use super::run_or_record_launch_error;
     use super::{
         CompareManifest, DEFAULT_API_KEY_ENV, DEFAULT_BASE_URL, DEFAULT_MAX_TURNS, DEFAULT_MODEL,
         DEFAULT_PROVIDER, DEFAULT_RUN_TIMEOUT_SECS, DEFAULT_THINKING, HarnessLayout, RunArgs,
@@ -2009,11 +2011,9 @@ mod tests {
         capture_acceptance_overlay, copy_path_dependency_tree, copy_traces, copy_tree,
         default_run_order, ensure_install_target_is_safe, execute_logged, git_capture, git_status,
         git_worktree_add, liberado_runner_path, overlay_files, overlay_fingerprint, parse_run_args,
-        path_text, repairable_verifier_exit, run_args_from_spec, run_async_command,
-        run_or_record_launch_error, run_slug, save_result, toml_string, value, verifier_feedback,
-        write_run_config, write_run_pins,
+        path_text, repairable_verifier_exit, run_args_from_spec, run_async_command, run_slug,
+        save_result, toml_string, value, verifier_feedback, write_run_config, write_run_pins,
     };
-    #[cfg(windows)]
     use super::{parse_prepare_args, prepare, remove_job_worktrees};
     use crate::contract::{
         AcceptanceBundle, HarnessRequest, JOB_SPEC_VERSION, JobId, JobSpec, ModelPins,
@@ -2022,10 +2022,10 @@ mod tests {
     use chrono::Utc;
     use liberado_common::process::command;
     use std::collections::BTreeMap;
+    #[cfg(windows)]
     use std::error::Error;
     use std::fs;
     use std::path::{Path, PathBuf};
-    #[cfg(windows)]
     use std::process::Command;
     use std::time::Duration;
 

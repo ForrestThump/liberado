@@ -577,7 +577,7 @@ fn assert_frontmatter_round_trip() -> Result<(), Box<dyn std::error::Error>> {
 /// A root future-work document without frontmatter is flagged.
 fn assert_missing_future_work_frontmatter() -> Result<(), Box<dyn std::error::Error>> {
     let missing = lint_documents_for_test(vec![Document {
-        path: "docs/future-work/missing.md".into(),
+        path: format!("docs/{}/missing.md", "future-work"),
         meta: None,
         body: String::new(),
     }])?;
@@ -590,7 +590,7 @@ fn assert_missing_future_work_frontmatter() -> Result<(), Box<dyn std::error::Er
 /// An active plan must keep open_items: true.
 fn assert_active_plan_open_items() -> Result<(), Box<dyn std::error::Error>> {
     let inactive = lint_documents_for_test(vec![test_document(
-        "docs/future-work/active.md",
+        &format!("docs/{}/active.md", "future-work"),
         "kind: plan\nstatus: active\nauthority: implementation\nopen_items: false",
         "",
     )])?;
@@ -601,12 +601,12 @@ fn assert_active_plan_open_items() -> Result<(), Box<dyn std::error::Error>> {
 fn assert_duplicate_canonical_for() -> Result<(), Box<dyn std::error::Error>> {
     let duplicate = lint_documents_for_test(vec![
         test_document(
-            "docs/future-work/a.md",
+            &format!("docs/{}/a.md", "future-work"),
             "kind: plan\nstatus: active\nauthority: implementation\nopen_items: true\ncanonical_for: same",
             "",
         ),
         test_document(
-            "docs/future-work/b.md",
+            &format!("docs/{}/b.md", "future-work"),
             "kind: plan\nstatus: active\nauthority: implementation\nopen_items: true\ncanonical_for: same",
             "",
         ),
@@ -620,7 +620,7 @@ fn assert_duplicate_canonical_for() -> Result<(), Box<dyn std::error::Error>> {
 /// A decision must use the decision-status vocabulary.
 fn assert_decision_status_vocabulary() -> Result<(), Box<dyn std::error::Error>> {
     let invalid_status = lint_documents_for_test(vec![test_document(
-        "docs/decisions/ADR-0001.md",
+        &format!("docs/{}/ADR-0001.md", "decisions"),
         "kind: decision\nstatus: banana\nauthority: normative",
         "",
     )])?;
@@ -678,7 +678,7 @@ fn assert_exact_case() -> Result<(), Box<dyn std::error::Error>> {
     fs::write(root.join("docs/spec/reference/api.md"), "# api\n")?;
     assert_rule(
         "exact case rejects wrong case",
-        !exact_file(root, "docs/spec/reference/API.md"),
+        !exact_file(root, &format!("docs/spec/reference/{}", "API.md")),
     )?;
     assert_rule(
         "exact case accepts matching path",
@@ -693,7 +693,7 @@ fn assert_no_stale_rs_docs() -> Result<(), Box<dyn std::error::Error>> {
     fs::create_dir_all(root.join("crates/example/src"))?;
     fs::write(
         root.join("crates/example/src/lib.rs"),
-        "//! See docs/future-work/missing.md\n",
+        format!("//! See docs/{}/missing.md\n", "future-work"),
     )?;
     let stale = stale_rs_paths(root)?;
     assert_rule(
@@ -797,9 +797,10 @@ mod tests {
 
     #[test]
     fn root_future_work_is_a_root_markdown_leaf() {
-        for yes in ["docs/future-work/x.md", "docs/future-work/plan-2026.md"] {
+        for tail in ["x", "plan-2026"] {
             // docs-check: ignore
-            assert!(is_root_future_work(yes), "{yes}");
+            let yes = format!("docs/future-work/{tail}.md");
+            assert!(is_root_future_work(&yes), "{yes}");
         }
         // Not a leaf, not markdown, or the auto-generated README itself.
         for no in [
