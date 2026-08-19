@@ -202,6 +202,88 @@ pub fn alternate_run_order(job_count: usize) -> Vec<String> {
     }
 }
 
+fn validate_job_version(version: u32) -> Result<(), String> {
+    if version != JOB_SPEC_VERSION {
+        return Err(format!("unsupported job spec version {version}"));
+    }
+    Ok(())
+}
+
+/// Harness ids must be known and unique.
+fn validate_harness_list(harnesses: &[HarnessRequest]) -> Result<(), String> {
+    if harnesses.is_empty() {
+        return Err("at least one harness is required".to_string());
+    }
+    let mut ids = std::collections::BTreeSet::new();
+    for harness in harnesses {
+        if !matches!(harness.id.as_str(), "liberado" | "pi") {
+            return Err(format!("unsupported harness '{}'", harness.id));
+        }
+        if !ids.insert(&harness.id) {
+            return Err(format!("duplicate harness '{}'", harness.id));
+        }
+    }
+    Ok(())
+}
+
+/// run_order must be a permutation of the harness ids: same set, no missing or extra ids.
+fn validate_run_order(harnesses: &[HarnessRequest], run_order: &[String]) -> Result<(), String> {
+    let mut harness_ids: Vec<&str> = harnesses.iter().map(|h| h.id.as_str()).collect();
+    harness_ids.sort();
+    let mut order: Vec<&str> = run_order.iter().map(|s| s.as_str()).collect();
+    order.sort();
+    if harness_ids != order {
+        return Err("run_order must be a permutation of the harness ids".to_string());
+    }
+    Ok(())
+}
+
+/// Provider, model, and credential alias are required; turns must be positive; and the sampling
+/// pin must be the unsupported marker both clients agree on.
+fn validate_model_pins(model: &ModelPins) -> Result<(), String> {
+    if model.provider.trim().is_empty()
+        || model.model.trim().is_empty()
+        || model.credential_alias.trim().is_empty()
+    {
+        return Err("provider, model, and credential alias are required".to_string());
+    }
+    if model.max_turns == 0 {
+        return Err("turn and time limits must be positive".to_string());
+    }
+    if model.sampling != SAMPLING_OMITTED {
+        return Err(format!(
+            "sampling pin '{}' is not yet applied by either client; only '{}' is supported",
+            model.sampling, SAMPLING_OMITTED
+        ));
+    }
+    Ok(())
+}
+
+fn validate_limits(limits: &ResourceLimits) -> Result<(), String> {
+    if limits.compile_timeout_secs == 0 || limits.run_timeout_secs == 0 {
+        return Err("turn and time limits must be positive".to_string());
+    }
+    Ok(())
+}
+
+/// An acceptance bundle must live inside the job (no absolute or parent paths) and carry files.
+fn validate_acceptance(acceptance: &Option<AcceptanceBundle>) -> Result<(), String> {
+    if let Some(acceptance) = acceptance {
+        if acceptance.directory.is_absolute()
+            || acceptance
+                .directory
+                .components()
+                .any(|part| matches!(part, std::path::Component::ParentDir))
+        {
+            return Err("acceptance directory must stay inside the job".to_string());
+        }
+        if acceptance.file_count == 0 {
+            return Err("acceptance bundle contains no files".to_string());
+        }
+    }
+    Ok(())
+}
+
 impl JobSpec {
     pub fn finalize(mut self) -> Result<Self, String> {
         self.validate_without_experiment_id()?;
@@ -218,9 +300,7 @@ impl JobSpec {
     }
 
     fn validate_without_experiment_id(&self) -> Result<(), String> {
-        if self.version != JOB_SPEC_VERSION {
-            return Err(format!("unsupported job spec version {}", self.version));
-        }
+        validate_job_version(self.version)?;
         JobId::parse(&self.job_id.0)?;
         self.task.validate()?;
         if self.repository.as_os_str().is_empty() {
@@ -229,59 +309,11 @@ impl JobSpec {
         if self.base_revision.trim().is_empty() {
             return Err("base revision is empty".to_string());
         }
-        if self.harnesses.is_empty() {
-            return Err("at least one harness is required".to_string());
-        }
-        let mut ids = std::collections::BTreeSet::new();
-        for harness in &self.harnesses {
-            if !matches!(harness.id.as_str(), "liberado" | "pi") {
-                return Err(format!("unsupported harness '{}'", harness.id));
-            }
-            if !ids.insert(&harness.id) {
-                return Err(format!("duplicate harness '{}'", harness.id));
-            }
-        }
-        // run_order must be a permutation of the harness ids: same set, no missing or extra ids.
-        {
-            let mut harness_ids: Vec<&str> = self.harnesses.iter().map(|h| h.id.as_str()).collect();
-            harness_ids.sort();
-            let mut order: Vec<&str> = self.run_order.iter().map(|s| s.as_str()).collect();
-            order.sort();
-            if harness_ids != order {
-                return Err("run_order must be a permutation of the harness ids".to_string());
-            }
-        }
-        if self.model.provider.trim().is_empty()
-            || self.model.model.trim().is_empty()
-            || self.model.credential_alias.trim().is_empty()
-        {
-            return Err("provider, model, and credential alias are required".to_string());
-        }
-        if self.model.max_turns == 0
-            || self.limits.compile_timeout_secs == 0
-            || self.limits.run_timeout_secs == 0
-        {
-            return Err("turn and time limits must be positive".to_string());
-        }
-        if self.model.sampling != SAMPLING_OMITTED {
-            return Err(format!(
-                "sampling pin '{}' is not yet applied by either client; only '{}' is supported",
-                self.model.sampling, SAMPLING_OMITTED
-            ));
-        }
-        if let Some(acceptance) = &self.acceptance {
-            if acceptance.directory.is_absolute()
-                || acceptance
-                    .directory
-                    .components()
-                    .any(|part| matches!(part, std::path::Component::ParentDir))
-            {
-                return Err("acceptance directory must stay inside the job".to_string());
-            }
-            if acceptance.file_count == 0 {
-                return Err("acceptance bundle contains no files".to_string());
-            }
-        }
+        validate_harness_list(&self.harnesses)?;
+        validate_run_order(&self.harnesses, &self.run_order)?;
+        validate_model_pins(&self.model)?;
+        validate_limits(&self.limits)?;
+        validate_acceptance(&self.acceptance)?;
         Ok(())
     }
 
