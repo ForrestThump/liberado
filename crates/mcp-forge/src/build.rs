@@ -310,7 +310,7 @@ mod tests {
         scaffold_project(project.path(), "hello");
         let install = tempfile::tempdir().unwrap();
         let mut lock = LockFile::default();
-        // A `package` selects it explicitly (real `-p` flag for `--path` installs).
+        // `package` is the positional crate name for `--path` as well as `--git`.
         let mut source = path_source(project.path(), "hello");
         source.package = Some("hello".into());
 

@@ -2921,7 +2921,11 @@ mod tests {
         );
         assert!(absolute(&PathBuf::from("missing-file-xyz")).is_err());
 
-        let absolute_path = PathBuf::from("C:/absolute/path");
+        let absolute_path = if cfg!(windows) {
+            PathBuf::from("C:/absolute/path")
+        } else {
+            PathBuf::from("/absolute/path")
+        };
         assert_eq!(absolute_unchecked(&absolute_path).unwrap(), absolute_path);
         let relative = absolute_unchecked(&PathBuf::from("relative/path")).unwrap();
         assert!(relative.is_absolute());
