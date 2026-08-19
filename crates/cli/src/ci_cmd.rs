@@ -82,6 +82,14 @@ const CRAP_HOST_CEILING_ONLY: &str = "\
 [liberado ci] this host is not Linux — ceiling only (450). \
 GitHub's Ubuntu job runs the per-function ratchet.";
 
+const CRAP_EMPTY_BASELINE: &str = "\
+[liberado ci] crap-baseline.json has no entries yet — ceiling only (`--fail-above`). \
+A green Linux `liberado ci ratchet` fills the per-function ratchet.";
+
+const CRAP_COMPARE_SUMMARY: &str = "\
+[liberado ci] CRAP compare against crap-baseline.json \
+(per-function ratchet on Linux; 450 is the new-function ceiling)";
+
 const CRAP_CEILING_GH: &str = "\
 A function is above the 450 CRAP ceiling. Split it or add tests. \
 New functions must land at or below 450.";
@@ -236,22 +244,30 @@ fn generate_lcov(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
 
 fn compare_to_baseline(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
     require_crap(root)?;
-    let has_entries = baseline_has_entries(&root.join(BASELINE_FILE));
-    let fail_regression = uses_per_function_ratchet(has_entries);
-    if has_entries && !fail_regression {
-        eprintln!("{CRAP_HOST_CEILING_ONLY}");
-    } else if !has_entries {
-        eprintln!(
-            "[liberado ci] {BASELINE_FILE} has no entries yet — ceiling only (`--fail-above`). \
-             A green Linux `liberado ci ratchet` fills the per-function ratchet."
-        );
-    }
-    eprintln!(
-        "[liberado ci] CRAP compare against {BASELINE_FILE} \
-         (per-function ratchet on Linux; 450 is the new-function ceiling)"
-    );
+    let fail_regression = announce_compare(root);
     run_cmd(root, "cargo", &compare_args(fail_regression))
         .map_err(|error| emit_crap_failure(fail_regression, error))
+}
+
+/// Print the host/baseline banners and decide whether `--fail-regression` runs.
+fn announce_compare(root: &Path) -> bool {
+    let has_entries = baseline_has_entries(&root.join(BASELINE_FILE));
+    let fail_regression = uses_per_function_ratchet(has_entries);
+    for line in compare_banners(has_entries, fail_regression) {
+        eprintln!("{line}");
+    }
+    fail_regression
+}
+
+fn compare_banners(has_entries: bool, fail_regression: bool) -> Vec<&'static str> {
+    let mut lines = Vec::new();
+    if !has_entries {
+        lines.push(CRAP_EMPTY_BASELINE);
+    } else if !fail_regression {
+        lines.push(CRAP_HOST_CEILING_ONLY);
+    }
+    lines.push(CRAP_COMPARE_SUMMARY);
+    lines
 }
 
 /// `--fail-regression` only on Linux. Coverage numbers are host-sensitive;
@@ -557,12 +573,12 @@ fn repository_root() -> Result<PathBuf, Box<dyn std::error::Error>> {
 #[cfg(test)]
 mod tests {
     use super::{
-        BASELINE_FILE, CRAP_CEILING_GH, CRAP_CEILING_HINT, CRAP_HOST_CEILING_ONLY,
-        CRAP_REGRESSION_GH, CRAP_REGRESSION_HINT, LCOV_FILE, LLVM_COV_ARGS, StageOutcome, USAGE,
-        baseline_has_entries, compare_args, crap_failure_hint, emit_crap_failure,
-        exe_lives_in_cargo_target, git, porcelain_path, relativize_json_file, relativize_lcov,
-        repo_relative_source_path, repository_root, run_cmd, stage_ratcheted_baseline,
-        uses_per_function_ratchet,
+        BASELINE_FILE, CRAP_CEILING_GH, CRAP_CEILING_HINT, CRAP_COMPARE_SUMMARY,
+        CRAP_EMPTY_BASELINE, CRAP_HOST_CEILING_ONLY, CRAP_REGRESSION_GH, CRAP_REGRESSION_HINT,
+        LCOV_FILE, LLVM_COV_ARGS, StageOutcome, USAGE, baseline_has_entries, compare_args,
+        compare_banners, crap_failure_hint, emit_crap_failure, exe_lives_in_cargo_target, git,
+        porcelain_path, relativize_json_file, relativize_lcov, repo_relative_source_path,
+        repository_root, run_cmd, stage_ratcheted_baseline, uses_per_function_ratchet,
     };
     use liberado_common::process::std_command;
     use std::fs;
@@ -755,6 +771,21 @@ mod tests {
             args.contains(&"--fail-regression"),
             cfg!(target_os = "linux")
         );
+    }
+
+    #[test]
+    fn compare_banners_name_the_host_rule() {
+        let linux_filled = compare_banners(true, true);
+        assert_eq!(linux_filled, vec![CRAP_COMPARE_SUMMARY]);
+        let windows_filled = compare_banners(true, false);
+        assert_eq!(
+            windows_filled,
+            vec![CRAP_HOST_CEILING_ONLY, CRAP_COMPARE_SUMMARY]
+        );
+        let empty = compare_banners(false, false);
+        assert_eq!(empty, vec![CRAP_EMPTY_BASELINE, CRAP_COMPARE_SUMMARY]);
+        let empty_linux = compare_banners(false, true);
+        assert_eq!(empty_linux, vec![CRAP_EMPTY_BASELINE, CRAP_COMPARE_SUMMARY]);
     }
 
     #[test]
