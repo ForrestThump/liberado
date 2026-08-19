@@ -49,7 +49,6 @@ Authority model: [doc-authority.md](spec/reference/doc-authority.md).
 | [docs/future-work/coder-eval-curriculum.md](future-work/coder-eval-curriculum.md) | plan | active | implementation | coding-harness | coder-eval-curriculum |
 | [docs/future-work/coder-harness-reliability-2026-08.md](future-work/coder-harness-reliability-2026-08.md) | finding | active | evidence | coding-harness | coder-harness-reliability-2026-08 |
 | [docs/future-work/coding-tui-plan.md](future-work/coding-tui-plan.md) | plan | active | implementation | coding-harness | coding-tui |
-| [docs/future-work/context-compaction-plan.md](future-work/context-compaction-plan.md) | plan | active | implementation | chat | context-compaction |
 | [docs/future-work/context-compaction-viewport-rearchitecture.md](future-work/context-compaction-viewport-rearchitecture.md) | plan | active | implementation | chat | context-compaction-viewport |
 | [docs/future-work/delegation-failure-modes.md](future-work/delegation-failure-modes.md) | finding | historical | evidence | delegation | delegation-failure-modes |
 | [docs/future-work/harness-study-2026-08.md](future-work/harness-study-2026-08.md) | finding | active | advisory | coding-harness | harness-study-2026-08 |

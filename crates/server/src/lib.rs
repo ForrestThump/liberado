@@ -1047,7 +1047,7 @@ async fn build_chat(
 
     // CH3 context compaction: config-tier knobs → kernel runtime type (per-model absolute
     // triggers + daemon default). See `state::compaction_config_for_face`. Summaries use the face
-    // provider (docs/future-work/context-compaction-plan.md §Summary generation).
+    // provider (see crates/main-agent/src/compaction.rs).
     let face_model = provider.model();
     let compact_cfg = crate::state::compaction_config_for_face(config, face_model.as_str());
     let compact_enabled = compact_cfg.enabled;

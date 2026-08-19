@@ -393,7 +393,7 @@ transport = { kind = "stdio", command = "riggers-mcp", args = ["--config", "rigg
 # role = "researcher"      # opaque to the config stack; the life pack reads it
 
 # --- Automatic context compaction for long chats (CH3) -----------------------------------------
-# docs/roadmap/context-compaction-plan.md. When a turn's estimated size (chars/4 × 1.3, history +
+# See docs/spec/reference/tuning.md. When a turn's estimated size (chars/4 × 1.3, history +
 # incoming message) exceeds the *resolved* trigger, older history is rolled into a persisted
 # summary. Trigger resolution (first match wins):
 #   1. [main_agent.compaction.models."<face-model>"].trigger_tokens   (absolute, per-model)

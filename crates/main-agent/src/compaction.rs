@@ -1,6 +1,4 @@
-//! Context compaction for long conversations (CH3 — see
-//! `docs/future-work/context-compaction-plan.md` for the design and the four-project research it
-//! distills).
+//! Context compaction for long conversations (CH3).
 //!
 //! The problem: [`ChatSessions`](crate::ChatSessions) rehydrates the *entire* conversation from
 //! the store every turn, so a long enough history eventually exceeds the model's context window.
@@ -21,9 +19,9 @@
 //!   load elides everything strictly between the root and the *latest* marker. Raw history is
 //!   never deleted — the full transcript (marker included) still renders and stays searchable.
 //!
-//! Deliberate non-goals for this tier (captured in the plan doc): mid-turn prechecks inside the
-//! executor loop, between-turn tool-result pruning, overflow-error-retry compaction, a manual
-//! `/compact`, and a dedicated summarizer model.
+//! Deliberate non-goals for this tier: mid-turn prechecks inside the executor loop, between-turn
+//! tool-result pruning, overflow-error-retry compaction, a manual `/compact`, and a dedicated
+//! summarizer model.
 
 use liberado_provider::{CompletionRequest, Message, Role};
 
@@ -46,7 +44,7 @@ pub const SUMMARY_HEADER: &str = "[context compacted — summary of earlier conv
 /// Tunables for [`ChatSessions`](crate::ChatSessions)' automatic compaction. Defaults are sized
 /// for a 64k-context chat model: trigger at 48k estimated tokens leaves ~16k of reserve for tool
 /// schemas, the reply, and estimation slack. All fields have defaults; see
-/// `docs/future-work/context-compaction-plan.md` §Configuration.
+/// `docs/spec/reference/tuning.md` for the operator configuration.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CompactionConfig {
     /// Master switch. Default **on**: a reliability guard that is opt-in is off in practice
