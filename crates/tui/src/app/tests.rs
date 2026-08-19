@@ -3449,3 +3449,204 @@ fn goal_message_outcome_lands_in_the_joined_transcript() {
         "the note must not also land in the primary chat"
     );
 }
+
+// ── apply_goal_event (joined-session stream frames) ──────────────────────────
+
+/// A connected app joined to a goal session.
+fn goal_app() -> App {
+    let mut app = test_app();
+    app.joined = Some(JoinedSession {
+        id: "g1".into(),
+        kind: SessionKind::Coding,
+        status: "running".into(),
+        finished: false,
+        description: String::new(),
+        messages: Vec::new(),
+        stream_buf: String::new(),
+        awaiting: None,
+        gate_votes: Vec::new(),
+        active_role: None,
+        last_validation: None,
+    });
+    app
+}
+
+/// A no-op if not joined: stray events after `/back` must not panic or mutate.
+#[test]
+fn apply_goal_event_is_a_noop_when_not_joined() {
+    let mut app = test_app();
+    app.apply_goal_event(GoalUiEvent::Token("x".into()));
+    app.apply_goal_event(GoalUiEvent::Finished {
+        status: "succeeded".into(),
+        summary: "ok".into(),
+    });
+    assert!(app.joined.is_none());
+}
+
+/// Tokens accumulate into the stream buffer until a structured event flushes.
+#[test]
+fn tokens_accumulate_then_flush_on_a_structured_event() {
+    let mut app = goal_app();
+    app.apply_goal_event(GoalUiEvent::Token("hel".into()));
+    app.apply_goal_event(GoalUiEvent::Token("lo".into()));
+    app.apply_goal_event(GoalUiEvent::Progress("warming up".into()));
+    let j = app.joined.as_ref().unwrap();
+    assert!(
+        j.stream_buf.is_empty(),
+        "the buffer must flush before the status line"
+    );
+    assert!(
+        j.messages
+            .iter()
+            .any(|m| matches!(m, Message::Assistant(t) if t == "hello")),
+        "flushed tokens must become an Assistant message"
+    );
+}
+
+/// Validation and role events flush and update the transient clues.
+#[test]
+fn validation_records_result_and_sets_a_mark() {
+    let mut app = goal_app();
+    app.apply_goal_event(GoalUiEvent::Validation {
+        ok: true,
+        summary: "compile ok".into(),
+    });
+    let j = app.joined.as_ref().unwrap();
+    assert!(j.last_validation.as_ref().unwrap().ok);
+    assert!(
+        j.messages
+            .iter()
+            .any(|m| matches!(m, Message::System(s) if s.contains("✓ compile ok"))),
+        "a passing validation must show the check mark"
+    );
+}
+
+/// A coerced gate vote reads as unavailable ("?"), not as a rejection ("✗").
+#[test]
+fn coerced_gate_vote_is_question_not_rejection() {
+    let mut app = goal_app();
+    app.apply_goal_event(GoalUiEvent::CriticVerdict {
+        reviewer: "r1".into(),
+        kind: "reviewer".into(),
+        approved: false,
+        issues: vec![],
+        coerced: true,
+    });
+    let j = app.joined.as_ref().unwrap();
+    assert_eq!(j.gate_votes.len(), 1);
+    assert!(j.gate_votes[0].coerced);
+    assert!(
+        j.messages
+            .iter()
+            .any(|m| matches!(m, Message::System(s) if s.contains("? gate[") && s.contains("r1"))),
+        "coerced votes must not read as a rejection"
+    );
+}
+
+/// A real (non-coerced) rejection with issues lists them in the transcript.
+#[test]
+fn refuting_gate_vote_lists_issues() {
+    let mut app = goal_app();
+    app.apply_goal_event(GoalUiEvent::CriticVerdict {
+        reviewer: "r1".into(),
+        kind: "reviewer".into(),
+        approved: false,
+        issues: vec!["naming".into(), "sexprs".into()],
+        coerced: false,
+    });
+    let j = app.joined.as_ref().unwrap();
+    assert!(
+        j.messages.iter().any(|m| matches!(m, Message::System(s) if s.contains("✗ gate[") && s.contains("naming") && s.contains("sexprs"))),
+        "a real refutation must show ✗ and its issues"
+    );
+}
+
+/// File changes map to + / - / ~ marks.
+#[test]
+fn file_change_marks_match_added_deleted_modified() {
+    let mut app = goal_app();
+    for (path, change, _mark) in [
+        ("a.rs", "added", "+"),
+        ("b.rs", "deleted", "-"),
+        ("c.rs", "modified", "~"),
+    ] {
+        app.apply_goal_event(GoalUiEvent::FileChanged {
+            path: path.into(),
+            change: change.into(),
+        });
+    }
+    let j = app.joined.as_ref().unwrap();
+    for (path, change, mark) in [
+        ("a.rs", "added", "+"),
+        ("b.rs", "deleted", "-"),
+        ("c.rs", "modified", "~"),
+    ] {
+        let _ = change;
+        assert!(
+            j.messages.iter().any(
+                |m| matches!(m, Message::System(s) if s.starts_with(&format!("{mark} {path}")))
+            ),
+            "{mark} {path} missing"
+        );
+    }
+}
+
+/// A human reply clears the awaiting banner and resumes the session.
+#[test]
+fn human_reply_clears_awaiting_and_resumes() {
+    let mut app = goal_app();
+    app.apply_goal_event(GoalUiEvent::Awaiting {
+        prompt: "pick one".into(),
+        options: vec!["a".into()],
+    });
+    {
+        let j = app.joined.as_ref().unwrap();
+        assert_eq!(j.status, "awaiting");
+        assert!(j.awaiting.is_some());
+    }
+    app.apply_goal_event(GoalUiEvent::Human("the answer".into()));
+    let j = app.joined.as_ref().unwrap();
+    assert!(j.awaiting.is_none());
+    assert_eq!(j.status, "running");
+    assert!(
+        j.messages
+            .iter()
+            .any(|m| matches!(m, Message::User(t) if t == "the answer"))
+    );
+}
+
+/// The terminal event drops transient activity and marks the session finished.
+#[test]
+fn finished_clears_activity_and_sets_status() {
+    let mut app = goal_app();
+    app.apply_goal_event(GoalUiEvent::Role {
+        role: "worker".into(),
+        model: Some("m/1".into()),
+    });
+    app.apply_goal_event(GoalUiEvent::Finished {
+        status: "succeeded".into(),
+        summary: "done".into(),
+    });
+    let j = app.joined.as_ref().unwrap();
+    assert!(j.finished);
+    assert_eq!(j.status, "succeeded");
+    assert!(j.active_role.is_none());
+    assert!(
+        j.messages
+            .iter()
+            .any(|m| matches!(m, Message::System(s) if s.contains("[session succeeded] done")))
+    );
+}
+
+/// Started sets the description only when non-empty.
+#[test]
+fn started_sets_description_only_when_nonempty() {
+    let mut app = goal_app();
+    app.apply_goal_event(GoalUiEvent::Started {
+        description: "build".into(),
+    });
+    app.apply_goal_event(GoalUiEvent::Started {
+        description: "".into(),
+    });
+    assert_eq!(app.joined.as_ref().unwrap().description, "build");
+}

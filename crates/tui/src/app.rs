@@ -543,12 +543,8 @@ impl App {
         }
     }
 
-    /// Apply one goal-session stream frame to the joined view. A no-op if not joined (stray events
-    /// after `/back`) or for a different session id.
-    fn apply_goal_event(&mut self, ev: GoalUiEvent) {
-        let Some(j) = self.joined.as_mut() else {
-            return;
-        };
+    /// Started/stream/tool events: identity, token accumulation, and tool chips.
+    fn on_tool_frame(j: &mut JoinedSession, ev: GoalUiEvent) {
         match ev {
             GoalUiEvent::Started { description } => {
                 if !description.is_empty() {
@@ -565,6 +561,13 @@ impl App {
                 j.messages
                     .push(Message::ToolResult(ToolResultChip { name, ok, preview }));
             }
+            _ => {}
+        }
+    }
+
+    /// Status-line events: roles, progress, validation, gate votes, file changes, loop guards.
+    fn on_status_line(j: &mut JoinedSession, ev: GoalUiEvent) {
+        match ev {
             GoalUiEvent::Role { role, model } => {
                 Self::flush_joined_buf(j);
                 j.active_role = Some(role.clone());
@@ -642,6 +645,13 @@ impl App {
                 Self::flush_joined_buf(j);
                 j.messages.push(Message::System(format!("loop-guard: {m}")));
             }
+            _ => {}
+        }
+    }
+
+    /// Interaction events: the awaiting banner and the human's reply.
+    fn on_interaction(j: &mut JoinedSession, ev: GoalUiEvent) {
+        match ev {
             GoalUiEvent::Awaiting { prompt, options } => {
                 Self::flush_joined_buf(j);
                 j.status = "awaiting".into();
@@ -658,16 +668,45 @@ impl App {
                 }
                 j.messages.push(Message::User(text));
             }
-            GoalUiEvent::Finished { status, summary } => {
-                Self::flush_joined_buf(j);
-                j.awaiting = None;
-                j.active_role = None;
-                j.finished = true;
-                j.status = status.clone();
-                j.messages.push(Message::System(format!(
-                    "[session {status}] {summary}  —  /back to return to chat"
-                )));
-            }
+            _ => {}
+        }
+    }
+
+    /// The terminal event: mark the session finished and drop transient activity.
+    fn on_finished(j: &mut JoinedSession, ev: GoalUiEvent) {
+        if let GoalUiEvent::Finished { status, summary } = ev {
+            Self::flush_joined_buf(j);
+            j.awaiting = None;
+            j.active_role = None;
+            j.finished = true;
+            j.status = status.clone();
+            j.messages.push(Message::System(format!(
+                "[session {status}] {summary}  —  /back to return to chat"
+            )));
+        }
+    }
+
+    /// Apply one goal-session stream frame to the joined view. A no-op if not joined (stray events
+    /// after `/back`) or for a different session id.
+    fn apply_goal_event(&mut self, ev: GoalUiEvent) {
+        let Some(j) = self.joined.as_mut() else {
+            return;
+        };
+        match ev {
+            GoalUiEvent::Started { .. }
+            | GoalUiEvent::Token(_)
+            | GoalUiEvent::ToolStarted { .. }
+            | GoalUiEvent::ToolFinished { .. } => Self::on_tool_frame(j, ev),
+
+            GoalUiEvent::Role { .. }
+            | GoalUiEvent::Progress(_)
+            | GoalUiEvent::Validation { .. }
+            | GoalUiEvent::CriticVerdict { .. }
+            | GoalUiEvent::FileChanged { .. }
+            | GoalUiEvent::LoopGuard(_) => Self::on_status_line(j, ev),
+
+            GoalUiEvent::Awaiting { .. } | GoalUiEvent::Human(_) => Self::on_interaction(j, ev),
+            GoalUiEvent::Finished { .. } => Self::on_finished(j, ev),
         }
         self.scroll_offset = 0;
         self.mark_dirty();
