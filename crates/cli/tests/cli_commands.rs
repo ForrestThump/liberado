@@ -228,6 +228,12 @@ fn config_explain_reaches_the_explain_arm() {
         !stderr.contains("usage: liberado config explain"),
         "the explain arm must run, got: {stderr}"
     );
+    // Without a vault the explain guard fails on the first requirement — that error is proof the
+    // explain path ran (any usage fallback would print a different string).
+    assert!(
+        stderr.contains("topology.vault_path is required"),
+        "explain must reach the write guard, got: {stderr}"
+    );
 }
 
 /// `shepherd config check` resolves the repository and prints the effective configuration — a
