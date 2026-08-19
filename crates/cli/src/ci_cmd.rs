@@ -14,6 +14,12 @@
 //! change, it amends HEAD (`--no-verify`, because this process just ran the suite)
 //! so a subsequent `git push` includes the ratchet. If the tree already has other
 //! dirty files, it only stages — the agent is about to commit its own work.
+//!
+//! `just ci` is `cargo run -p liberado-cli -- ci`. On Windows, `cargo test` cannot
+//! overwrite a running `target/debug/liberado.exe` (Access is denied). A second
+//! process still holds that path (`cargo run` waits on it). Before `cargo test`,
+//! `liberado ci` *renames* the running image to `.liberado/liberado-ci` so cargo
+//! can write a new artifact at the old path. Usage-only verbs do not move it.
 
 use std::ffi::OsStr;
 use std::io;
@@ -28,6 +34,7 @@ const CARGO_CRAP_VERSION: &str = "0.4.3";
 const BASELINE_FILE: &str = "crap-baseline.json";
 const LCOV_FILE: &str = ".liberado/crap.lcov";
 const USAGE: &str = "usage: liberado ci [check|crap|ratchet]";
+const VACATED_BIN: &str = "liberado-ci";
 
 /// `--no-fail-fast` is a cargo-llvm-cov flag. After `--` it is a test-binary
 /// argument, and libtest rejects it (`Unrecognized option: 'no-fail-fast'`).
@@ -76,12 +83,61 @@ pub fn run(args: impl Iterator<Item = String>) -> Result<(), Box<dyn std::error:
     }
 }
 
+/// Move this process's image out of `target/{debug,release}`.
+///
+/// `cargo test --workspace` rebuilds `liberado.exe`. Windows refuses to overwrite
+/// a running image (Access is denied). Re-exec of a copy does not help: the
+/// original process stays alive until the child exits, so the path stays locked.
+/// Rename vacates the cargo artifact path; this process keeps running from the
+/// new name.
+fn vacate_cargo_target_image() -> Result<(), Box<dyn std::error::Error>> {
+    let exe = std::env::current_exe().map_err(|error| {
+        io::Error::new(
+            error.kind(),
+            format!("could not resolve current exe: {error}"),
+        )
+    })?;
+    if !exe_lives_in_cargo_target(&exe) {
+        return Ok(());
+    }
+    let dest_dir = repository_root()?.join(".liberado");
+    std::fs::create_dir_all(&dest_dir)?;
+    let dest = match exe.extension() {
+        Some(ext) => dest_dir.join(VACATED_BIN).with_extension(ext),
+        None => dest_dir.join(VACATED_BIN),
+    };
+    let _ = std::fs::remove_file(&dest);
+    std::fs::rename(&exe, &dest).map_err(|error| {
+        io::Error::new(
+            error.kind(),
+            format!(
+                "could not move running image from {} to {}: {error}",
+                exe.display(),
+                dest.display()
+            ),
+        )
+    })?;
+    eprintln!(
+        "[liberado ci] moved running image to {} so cargo can rebuild it",
+        dest.display()
+    );
+    Ok(())
+}
+
+fn exe_lives_in_cargo_target(exe: &Path) -> bool {
+    let hay = exe.to_string_lossy().replace('\\', "/");
+    hay.contains("/target/debug/")
+        || hay.contains("/target/release/")
+        || hay.contains("/target/llvm-cov-target/")
+}
+
 /// Run the repository's local ship preflight (no CRAP llvm-cov).
 ///
 /// The command list is deliberately kept here, rather than in a shell script, so the same
 /// preflight works through the native `liberado` binary on every host OS.
 pub fn check() -> Result<(), Box<dyn std::error::Error>> {
     let root = repository_root()?;
+    vacate_cargo_target_image()?;
     run_cmd(&root, "cargo", &["fmt", "--check"])?;
     run_cmd(
         &root,
@@ -385,8 +441,8 @@ mod tests {
     use super::{
         BASELINE_FILE, CRAP_CEILING_GH, CRAP_CEILING_HINT, CRAP_REGRESSION_GH,
         CRAP_REGRESSION_HINT, LLVM_COV_ARGS, StageOutcome, USAGE, baseline_has_entries,
-        crap_failure_hint, emit_crap_failure, git, porcelain_path, repository_root, run_cmd,
-        stage_ratcheted_baseline,
+        crap_failure_hint, emit_crap_failure, exe_lives_in_cargo_target, git, porcelain_path,
+        repository_root, run_cmd, stage_ratcheted_baseline,
     };
     use liberado_common::process::std_command;
     use std::fs;
@@ -466,6 +522,22 @@ mod tests {
             !LLVM_COV_ARGS.contains(&"--"),
             "a `--` would send `--no-fail-fast` to libtest, which rejects it"
         );
+    }
+
+    #[test]
+    fn cargo_target_exe_is_the_image_cargo_test_would_overwrite() {
+        assert!(exe_lives_in_cargo_target(Path::new(
+            r"C:\repo\target\debug\liberado.exe"
+        )));
+        assert!(exe_lives_in_cargo_target(Path::new(
+            "/repo/target/release/liberado"
+        )));
+        assert!(!exe_lives_in_cargo_target(Path::new(
+            r"C:\Users\me\.cargo\bin\liberado.exe"
+        )));
+        assert!(!exe_lives_in_cargo_target(Path::new(
+            "/repo/.liberado/liberado-ci"
+        )));
     }
 
     #[test]
