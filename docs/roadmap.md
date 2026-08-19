@@ -23,7 +23,7 @@ The order is deliberate: **automation daemon → chat → coding.** Why: [`spec/
 | # | What | Why it matters |
 |---|---|---|
 | **Dogfood** | **Lean on Telegram harder** | Collect friction → fix real pain. Free-form sticky chat is the phone surface. |
-| **T1** | **Live conformance suite** — [`live-conformance-suite.md`](future-work/live-conformance-suite.md) | **L1–L11 landed. Tier 3 P1a–P6 landed** (P6 = durable turn outlives its connection, PR #31, verified live). **P7 restart survival landed** (PR #36, passing live). Tier 2 remains optional. Note P5–P7 are all opt-in; a plain suite run is P1a–P4. |
+| **T1** | **Run conformance suites when relevant** — [runbook](impl/live-conformance.md) | Tier 1 L1–L11 and Tier 3 P1a–P7 are built. Tier 2 remains optional. |
 | **W1** | **Goal-session view in mobile WebUI** | Later phone surface beyond Telegram. See [`spec/architecture/session-surface-contract.md`](spec/architecture/session-surface-contract.md). |
 | **E5-b** | ~~Telegram session deep-link~~ | **Deprioritized** (prefer WebUI later). |
 

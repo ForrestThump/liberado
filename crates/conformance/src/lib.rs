@@ -4,7 +4,7 @@
 //! pure decisions without a box. The binary (`main.rs`) loads config, runs paths, prints JSON,
 //! writes the vault report, and sets the exit code.
 //!
-//! See `docs/future-work/live-conformance-tier3-build-spec.md`.
+//! Operational commands and safety rules are in `docs/impl/live-conformance.md`.
 
 pub mod client;
 pub mod config;

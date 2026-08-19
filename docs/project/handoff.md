@@ -181,8 +181,8 @@ bar; they do not replace it. Full table: [`../roadmap.md`](../roadmap.md).
    AskHuman-capable schedules ("run this every morning, **ask me if unsure**") via session profiles.
 3. **M1b — done.** Pooling + degraded-catalog routing + topology MCP hot-reload. Peers stay
    hand-edited `topology.toml`; reload via `POST /api/mcp/reload`.
-4. **T1 — Live conformance suite** ([`live-conformance-suite.md`](../future-work/live-conformance-suite.md)).
-   **L1–L10 landed** (server suite + daemon L9). **Open:** Tier 2 only.
+4. **T1 — Live conformance suites** ([runbook](../impl/live-conformance.md)). Tier 1 L1–L11 and the
+   Tier 3 deployed-daemon runner are built. Tier 2 remains optional.
 5. **W1 later — mobile WebUI session view.** Homespun browser UI when Telegram's flat chat is no
    longer enough. **Not** deep-linking background sessions into Telegram (E5-b deprioritized).
 

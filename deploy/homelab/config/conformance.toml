@@ -1,5 +1,5 @@
 # liberado-conformance — runner config (hand-run on the box for v1).
-# Lives next to topology.toml / policy.toml. See docs/future-work/live-conformance-tier3-build-spec.md.
+# Lives next to topology.toml / policy.toml. See docs/impl/live-conformance.md.
 #
 #   liberado-conformance --config /path/to/this/file
 #

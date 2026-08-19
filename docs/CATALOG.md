@@ -59,13 +59,10 @@ Authority model: [doc-authority.md](spec/reference/doc-authority.md).
 | [docs/future-work/harness-study-2026-08.md](future-work/harness-study-2026-08.md) | finding | active | advisory | coding-harness | harness-study-2026-08 |
 | [docs/future-work/heuristics-tuning-engine-plan.md](future-work/heuristics-tuning-engine-plan.md) | plan | active | implementation | tuning | heuristics-tuning-engine |
 | [docs/future-work/latency-and-routing-observability-plan.md](future-work/latency-and-routing-observability-plan.md) | plan | active | implementation | observability | latency-routing-observability |
-| [docs/future-work/live-conformance-suite.md](future-work/live-conformance-suite.md) | plan | active | implementation | conformance | live-conformance |
-| [docs/future-work/live-conformance-tier3-build-spec.md](future-work/live-conformance-tier3-build-spec.md) | plan | active | implementation | conformance | live-conformance-tier3 |
 | [docs/future-work/loops-plan.md](future-work/loops-plan.md) | plan | active | implementation | loops | loops |
 | [docs/future-work/mcp-forge-backlog.md](future-work/mcp-forge-backlog.md) | plan | active | implementation | mcp | mcp-forge-backlog |
 | [docs/future-work/mcp-suite-standardization.md](future-work/mcp-suite-standardization.md) | plan | active | implementation | mcp | mcp-suite-standardization |
 | [docs/future-work/model-knob-profiles.md](future-work/model-knob-profiles.md) | plan | draft | advisory | tuning | model-knob-profiles |
-| [docs/future-work/mvl-e2e-integration-test-plan.md](future-work/mvl-e2e-integration-test-plan.md) | plan | active | implementation | coding-harness | mvl-e2e-integration-test |
 | [docs/future-work/mvl-live-comparison-prep.md](future-work/mvl-live-comparison-prep.md) | plan | superseded | evidence | coding-harness | mvl-live-comparison-prep |
 | [docs/future-work/parallel-deliverables-2026-08-round-3.md](future-work/parallel-deliverables-2026-08-round-3.md) | plan | active | implementation | process | parallel-deliverables-r3 |
 | [docs/future-work/paseo-liberado-integration-roadmap.md](future-work/paseo-liberado-integration-roadmap.md) | plan | active | implementation | acp | paseo-liberado-integration |
@@ -79,6 +76,7 @@ Authority model: [doc-authority.md](spec/reference/doc-authority.md).
 | [docs/future-work/tui-maturity-roadmap.md](future-work/tui-maturity-roadmap.md) | plan | active | implementation | tui | tui-maturity |
 | [docs/future-work/turbovault-modules-integration-roadmap.md](future-work/turbovault-modules-integration-roadmap.md) | plan | active | implementation | turbovault | turbovault-modules |
 | [docs/future-work/turbovault-vault-events-plugin-plan.md](future-work/turbovault-vault-events-plugin-plan.md) | plan | active | implementation | turbovault | turbovault-vault-events |
+| [docs/impl/live-conformance.md](impl/live-conformance.md) | runbook | active | implementation | conformance | live-conformance-operation |
 | [docs/spec/architecture-decisions.md](spec/architecture-decisions.md) | index | superseded | advisory | architecture | — |
 | [docs/spec/reference/doc-authority.md](spec/reference/doc-authority.md) | policy | active | normative | docs | document-authority |
 | [docs/validation/README.md](validation/README.md) | validation | active | evidence | correctness | — |

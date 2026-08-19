@@ -37,12 +37,9 @@ ongoing findings, and current evidence. Implemented and superseded plans are arc
 | [harness-study-2026-08.md](harness-study-2026-08.md) | finding | coding-harness | advisory |
 | [heuristics-tuning-engine-plan.md](heuristics-tuning-engine-plan.md) | plan | tuning | implementation |
 | [latency-and-routing-observability-plan.md](latency-and-routing-observability-plan.md) | plan | observability | implementation |
-| [live-conformance-suite.md](live-conformance-suite.md) | plan | conformance | implementation |
-| [live-conformance-tier3-build-spec.md](live-conformance-tier3-build-spec.md) | plan | conformance | implementation |
 | [loops-plan.md](loops-plan.md) | plan | loops | implementation |
 | [mcp-forge-backlog.md](mcp-forge-backlog.md) | plan | mcp | implementation |
 | [mcp-suite-standardization.md](mcp-suite-standardization.md) | plan | mcp | implementation |
-| [mvl-e2e-integration-test-plan.md](mvl-e2e-integration-test-plan.md) | plan | coding-harness | implementation |
 | [parallel-deliverables-2026-08-round-3.md](parallel-deliverables-2026-08-round-3.md) | plan | process | implementation |
 | [paseo-liberado-integration-roadmap.md](paseo-liberado-integration-roadmap.md) | plan | acp | implementation |
 | [pr-dispatch-vtcode-no-write-finding.md](pr-dispatch-vtcode-no-write-finding.md) | finding | coding-harness | evidence |

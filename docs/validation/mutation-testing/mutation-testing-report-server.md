@@ -48,7 +48,7 @@ coverage.
 ## Remediation
 
 Not recommended for mutation hardening. The server's testing surface is better served by:
-- Tier 3 live conformance (per-path tests against the deployed daemon, per
-  `live-conformance-suite.md`)
+- Tier 3 live conformance against the deployed daemon, per the
+  [conformance runbook](../../impl/live-conformance.md)
 - Adding request-body seam tests at the provider boundary
 - Expanding the T1 conformance suite (already at L1–L11)

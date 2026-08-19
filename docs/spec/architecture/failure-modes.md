@@ -295,10 +295,7 @@ run should be treated as *unverified*, whatever the suite says. The commit messa
 And when a live run does find something, **fix the test that should have caught it** — otherwise the
 same class returns wearing different clothes, which is precisely what those twelve audits are.
 
-> **The remedy, planned but not built**:
-> [`../../future-work/live-conformance-suite.md`](../../future-work/live-conformance-suite.md). The live checks that
-> caught all of this currently exist only as commands somebody typed once. The key realisation is that
-> *most of them do not need a live model* — the ask seam, the parked session, the unenforced `Write`,
-> the no-op `cancel` are all **plumbing**, and a real daemon with a `MockProvider` catches every one.
-> So the valuable tier is fast, deterministic, and belongs in CI — not in an `#[ignore]`d graveyard
-> nobody runs.
+> **The remedy is built:** Tier 1 drives these plumbing paths with a mock provider in CI, and Tier 3
+> checks the deployed daemon. See the [conformance runbook](../../impl/live-conformance.md). Most of
+> these failures do not need a live model: the ask seam, parked session, unenforced `Write`, and
+> no-op `cancel` are deterministic plumbing and belong in the fast suite.
