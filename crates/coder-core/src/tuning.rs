@@ -173,79 +173,109 @@ impl CoderTuning {
     }
 
     pub fn validate(&self) -> Result<()> {
-        if self.backend.trim().is_empty() {
-            return Err(Error::Config(
-                "tuning.coder.backend must not be empty".into(),
-            ));
-        }
+        validate_tuning_backend(&self.backend)?;
         validate_coder_role("planner", &self.planner)?;
         validate_coder_role("coder", &self.coder)?;
         validate_coder_role("critic", &self.critic)?;
         if let Some(repair) = &self.repair {
             validate_coder_role("repair", repair)?;
         }
-        // An enabled gate with no fresh reviewers can never reach a strict majority, so *every*
-        // attempt would be refuted and no coding goal could ever finish. That is fail-closed
-        // working as designed, but as a config it is only ever a mistake — reject it at load
-        // time rather than at 3am on attempt 5.
-        if self.gate.enabled && self.gate.fresh_reviewers == 0 {
-            return Err(Error::Config(
-                "tuning.coder.gate.fresh_reviewers must be >= 1 when the gate is enabled \
-                 (a gate with no reviewers can never approve)"
-                    .into(),
-            ));
-        }
-        for (name, role) in [
-            ("gate.gatekeeper", self.gate.gatekeeper.as_ref()),
-            ("gate.fresh", self.gate.fresh.as_ref()),
-            ("gate.strategist", self.gate.strategist.as_ref()),
-        ] {
-            if let Some(role) = role {
-                validate_single_shot_role(name, role)?;
-            }
-        }
-        if self.command_policy.timeout_secs == 0 {
-            return Err(Error::Config(
-                "tuning.coder.command_policy.timeout_secs must be >= 1".into(),
-            ));
-        }
-        if self.command_policy.output_max_bytes == 0 {
-            return Err(Error::Config(
-                "tuning.coder.command_policy.output_max_bytes must be >= 1".into(),
-            ));
-        }
-        if self.path_policy.read_max_bytes == 0 {
-            return Err(Error::Config(
-                "tuning.coder.path_policy.read_max_bytes must be >= 1".into(),
-            ));
-        }
-        if self.path_policy.search_max_results == 0 {
-            return Err(Error::Config(
-                "tuning.coder.path_policy.search_max_results must be >= 1".into(),
-            ));
-        }
-        if self.progress.read_only_turn_limit == 0
-            || self.progress.same_tool_limit == 0
-            || self.progress.validation_repeat_limit == 0
-            || self.progress.max_attempts == 0
-            || self.progress.event_preview_max_chars == 0
-        {
-            return Err(Error::Config(
-                "tuning.coder.progress limits must all be >= 1".into(),
-            ));
-        }
-        if let Some(command) = &self.validation_command
-            && command.program.trim().is_empty()
-        {
-            return Err(Error::Config(
-                "tuning.coder.validation_command.program must not be empty".into(),
-            ));
-        }
+        validate_tuning_gate(&self.gate)?;
+        validate_tuning_command_policy(&self.command_policy)?;
+        validate_tuning_path_policy(&self.path_policy)?;
+        validate_tuning_progress(&self.progress)?;
+        validate_tuning_validation_command(self.validation_command.as_ref())?;
         self.hashline
             .validate()
             .map_err(|e| Error::Config(format!("tuning.coder.{e}")))?;
         Ok(())
     }
+}
+
+fn validate_tuning_backend(backend: &str) -> Result<()> {
+    if backend.trim().is_empty() {
+        return Err(Error::Config(
+            "tuning.coder.backend must not be empty".into(),
+        ));
+    }
+    Ok(())
+}
+
+/// An enabled gate with no fresh reviewers can never reach a strict majority, so *every* attempt
+/// would be refuted and no coding goal could ever finish. That is fail-closed working as designed,
+/// but as a config it is only ever a mistake — reject it at load time rather than at 3am on
+/// attempt 5 — and the gatekeeper/fresh/strategist roles must be single-shot.
+fn validate_tuning_gate(gate: &CoderGateConfig) -> Result<()> {
+    if gate.enabled && gate.fresh_reviewers == 0 {
+        return Err(Error::Config(
+            "tuning.coder.gate.fresh_reviewers must be >= 1 when the gate is enabled \
+             (a gate with no reviewers can never approve)"
+                .into(),
+        ));
+    }
+    for (name, role) in [
+        ("gate.gatekeeper", gate.gatekeeper.as_ref()),
+        ("gate.fresh", gate.fresh.as_ref()),
+        ("gate.strategist", gate.strategist.as_ref()),
+    ] {
+        if let Some(role) = role {
+            validate_single_shot_role(name, role)?;
+        }
+    }
+    Ok(())
+}
+
+fn validate_tuning_command_policy(policy: &CommandPolicy) -> Result<()> {
+    if policy.timeout_secs == 0 {
+        return Err(Error::Config(
+            "tuning.coder.command_policy.timeout_secs must be >= 1".into(),
+        ));
+    }
+    if policy.output_max_bytes == 0 {
+        return Err(Error::Config(
+            "tuning.coder.command_policy.output_max_bytes must be >= 1".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_tuning_path_policy(policy: &PathPolicy) -> Result<()> {
+    if policy.read_max_bytes == 0 {
+        return Err(Error::Config(
+            "tuning.coder.path_policy.read_max_bytes must be >= 1".into(),
+        ));
+    }
+    if policy.search_max_results == 0 {
+        return Err(Error::Config(
+            "tuning.coder.path_policy.search_max_results must be >= 1".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_tuning_progress(policy: &ProgressPolicy) -> Result<()> {
+    if policy.read_only_turn_limit == 0
+        || policy.same_tool_limit == 0
+        || policy.validation_repeat_limit == 0
+        || policy.max_attempts == 0
+        || policy.event_preview_max_chars == 0
+    {
+        return Err(Error::Config(
+            "tuning.coder.progress limits must all be >= 1".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_tuning_validation_command(command: Option<&CoderCommandConfig>) -> Result<()> {
+    if let Some(command) = command
+        && command.program.trim().is_empty()
+    {
+        return Err(Error::Config(
+            "tuning.coder.validation_command.program must not be empty".into(),
+        ));
+    }
+    Ok(())
 }
 
 impl Default for CoderTuning {
