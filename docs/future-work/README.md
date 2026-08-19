@@ -55,8 +55,6 @@ Prefer archive/ for completed plans.
 | Doc | Status | Kind |
 |-----|--------|------|
 | [cadence-triggered-maintenance-agents.md](cadence-triggered-maintenance-agents.md) | draft | plan |
-| [delegation-failure-modes.md](delegation-failure-modes.md) | historical | finding |
 | [model-knob-profiles.md](model-knob-profiles.md) | draft | plan |
-| [mvl-live-comparison-prep.md](mvl-live-comparison-prep.md) | superseded | plan |
 
 Start every planning session at [roadmap.md](../roadmap.md).
