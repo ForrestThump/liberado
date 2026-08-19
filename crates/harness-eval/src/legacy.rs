@@ -1732,21 +1732,13 @@ impl Drop for WindowsProcessTree {
     }
 }
 
-fn save_result(
-    manifest: &CompareManifest,
+/// Commit any dirty harness state, point the archive branch at the new head, and return both.
+fn commit_and_archive(
+    layout: &HarnessLayout,
     name: &str,
-    session_id: Option<&str>,
-    exit_code: Option<i32>,
-    verifier_exit_code: Option<i32>,
-) -> Result<(), Box<dyn Error>> {
-    let layout = harness(manifest, name)?;
-    fs::create_dir_all(layout.artifacts.join("git"))?;
-    let status_before = git_capture(&layout.worktree, &["status", "--short"])?;
-    fs::write(
-        layout.artifacts.join("git").join("status-before-save.txt"),
-        &status_before,
-    )?;
-
+    manifest: &CompareManifest,
+    status_before: &str,
+) -> Result<(String, String), Box<dyn Error>> {
     if !status_before.trim().is_empty() {
         git_status(&layout.worktree, &["add", "-A"])?;
         let message = format!("wip(compare): preserve {name} harness result");
@@ -1773,7 +1765,15 @@ fn save_result(
         name
     );
     git_status(&layout.worktree, &["branch", "-f", &branch, &head])?;
+    Ok((head, branch))
+}
 
+/// Write the git forensic artifacts: head, status-after-save, the diff, diff-stat, and log.
+fn write_git_artifacts(
+    layout: &HarnessLayout,
+    manifest: &CompareManifest,
+    head: &str,
+) -> Result<(), Box<dyn Error>> {
     let git_dir = layout.artifacts.join("git");
     fs::write(git_dir.join("head.txt"), format!("{head}\n"))?;
     fs::write(
@@ -1802,8 +1802,22 @@ fn save_result(
         git_dir.join("log.txt"),
         git_capture(&layout.worktree, &["log", "--oneline", "--decorate", "-5"])?,
     )?;
+    Ok(())
+}
 
-    copy_traces(layout, session_id)?;
+/// The durable result.json for one harness.
+#[allow(clippy::too_many_arguments)] // the json payload mirrors the save inputs 1:1
+fn write_result_json(
+    layout: &HarnessLayout,
+    manifest: &CompareManifest,
+    name: &str,
+    head: &str,
+    branch: &str,
+    exit_code: Option<i32>,
+    verifier_exit_code: Option<i32>,
+    session_id: Option<&str>,
+    status_before: &str,
+) -> Result<(), Box<dyn Error>> {
     write_json(
         &layout.artifacts.join("result.json"),
         &serde_json::json!({
@@ -1817,6 +1831,37 @@ fn save_result(
             "saved_at": Utc::now(),
             "had_uncommitted_changes": !status_before.trim().is_empty(),
         }),
+    )
+}
+
+fn save_result(
+    manifest: &CompareManifest,
+    name: &str,
+    session_id: Option<&str>,
+    exit_code: Option<i32>,
+    verifier_exit_code: Option<i32>,
+) -> Result<(), Box<dyn Error>> {
+    let layout = harness(manifest, name)?;
+    fs::create_dir_all(layout.artifacts.join("git"))?;
+    let status_before = git_capture(&layout.worktree, &["status", "--short"])?;
+    fs::write(
+        layout.artifacts.join("git").join("status-before-save.txt"),
+        &status_before,
+    )?;
+
+    let (head, branch) = commit_and_archive(layout, name, manifest, &status_before)?;
+    write_git_artifacts(layout, manifest, &head)?;
+    copy_traces(layout, session_id)?;
+    write_result_json(
+        layout,
+        manifest,
+        name,
+        &head,
+        &branch,
+        exit_code,
+        verifier_exit_code,
+        session_id,
+        &status_before,
     )?;
     println!("saved {name}: {head} -> {branch}");
     Ok(())
