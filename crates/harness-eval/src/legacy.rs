@@ -71,15 +71,16 @@ pub(crate) struct RunArgs {
     cancel_file: Option<PathBuf>,
 }
 
-pub fn prepare(args: &[String]) -> Result<(), Box<dyn Error>> {
-    if args == ["-h"] || args == ["--help"] {
-        println!(
-            "usage: liberado coder compare prepare <run-dir> [--source <repo>] [--commit <ref>] \
-             [--compile-timeout-secs <n>]"
-        );
-        return Ok(());
-    }
+/// Parsed `coder compare prepare` options.
+struct PrepareOptions {
+    run_root: Option<PathBuf>,
+    source_root: Option<PathBuf>,
+    revision: String,
+    compile_timeout_secs: u64,
+}
 
+/// Parse the positional run-dir plus the optional flags.
+fn parse_prepare_args(args: &[String]) -> Result<PrepareOptions, Box<dyn Error>> {
     let mut run_root = None;
     let mut source_root = None;
     let mut revision = "main".to_string();
@@ -116,26 +117,57 @@ pub fn prepare(args: &[String]) -> Result<(), Box<dyn Error>> {
         }
         index += 1;
     }
+    Ok(PrepareOptions {
+        run_root,
+        source_root,
+        revision,
+        compile_timeout_secs,
+    })
+}
 
-    let source_root = match source_root {
-        Some(path) => absolute(&path)?,
-        None => absolute(&crate::repository_root()?)?,
-    };
-    let run_root = absolute_unchecked(
+/// Resolve the run directory, absolute (positional path or the repository root for the source).
+fn resolve_run_root(run_root: Option<PathBuf>) -> Result<PathBuf, Box<dyn Error>> {
+    absolute_unchecked(
         &run_root.ok_or("usage: liberado coder compare prepare <run-dir> [--commit <ref>]")?,
-    )?;
-    let base_commit = git_capture(
-        &child_process_path(&source_root),
+    )
+}
+
+fn resolve_source_root(source_root: Option<PathBuf>) -> Result<PathBuf, Box<dyn Error>> {
+    match source_root {
+        Some(path) => absolute(&path),
+        None => absolute(&crate::repository_root()?),
+    }
+}
+
+/// The base commit the worktrees will be frozen at.
+fn resolve_base_commit(source_root: &Path, revision: &str) -> Result<String, Box<dyn Error>> {
+    Ok(git_capture(
+        &child_process_path(source_root),
         &["rev-parse", &format!("{revision}^{{commit}}")],
     )?
     .trim()
-    .to_string();
+    .to_string())
+}
+
+pub fn prepare(args: &[String]) -> Result<(), Box<dyn Error>> {
+    if args == ["-h"] || args == ["--help"] {
+        println!(
+            "usage: liberado coder compare prepare <run-dir> [--source <repo>] [--commit <ref>] \
+             [--compile-timeout-secs <n>]"
+        );
+        return Ok(());
+    }
+
+    let opts = parse_prepare_args(args)?;
+    let run_root = resolve_run_root(opts.run_root)?;
+    let source_root = resolve_source_root(opts.source_root)?;
+    let base_commit = resolve_base_commit(&source_root, &opts.revision)?;
     prepare_parsed(
         &run_root,
         &source_root,
-        &revision,
+        &opts.revision,
         &base_commit,
-        compile_timeout_secs,
+        opts.compile_timeout_secs,
     )
 }
 
@@ -1937,7 +1969,7 @@ mod tests {
         write_run_config, write_run_pins,
     };
     #[cfg(windows)]
-    use super::{prepare, remove_job_worktrees};
+    use super::{parse_prepare_args, prepare, remove_job_worktrees};
     use crate::contract::{
         AcceptanceBundle, HarnessRequest, JOB_SPEC_VERSION, JobId, JobSpec, ModelPins,
         ResourceLimits, TaskBundle, VerifierProfile,
@@ -1951,6 +1983,43 @@ mod tests {
     #[cfg(windows)]
     use std::process::Command;
     use std::time::Duration;
+
+    /// parse_prepare_args: the positional run-dir plus the optional flags, with the trailing error
+    /// guards (unknown flag, two run dirs, zero timeout, missing value).
+    #[test]
+    fn parse_prepare_args_parses_flags_and_positional() {
+        let opts = parse_prepare_args(&[
+            "run-dir".into(),
+            "--source".into(),
+            "/src".into(),
+            "--commit".into(),
+            "v1.0".into(),
+            "--compile-timeout-secs".into(),
+            "120".into(),
+        ])
+        .unwrap();
+        assert_eq!(opts.run_root, Some(PathBuf::from("run-dir")));
+        assert_eq!(opts.source_root, Some(PathBuf::from("/src")));
+        assert_eq!(opts.revision, "v1.0");
+        assert_eq!(opts.compile_timeout_secs, 120);
+
+        assert!(
+            parse_prepare_args(&["--bogus".into()]).is_err(),
+            "an unknown flag must be rejected"
+        );
+        assert!(
+            parse_prepare_args(&["a".into(), "b".into()]).is_err(),
+            "two run directories must be rejected"
+        );
+        assert!(
+            parse_prepare_args(&["--compile-timeout-secs".into(), "0".into()]).is_err(),
+            "a zero timeout must be rejected"
+        );
+        assert!(
+            parse_prepare_args(&["--source".into()]).is_err(),
+            "a flag with no value must be rejected"
+        );
+    }
 
     /// Try to create a directory link; Some(path) only when the platform allowed it. Windows needs
     /// Developer Mode or an elevated shell, so tests that exercise link refusal degrade gracefully
