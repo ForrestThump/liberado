@@ -50,6 +50,14 @@ pub struct StreamState {
 /// directly; the runner never re-reads App state for effect-specific data.
 /// Decode one SSE text chunk into the actions to forward, stopping at a terminal action
 /// (`SseDone` / `SseFailed`). Returns the actions and whether a terminal was seen.
+fn send_or_warn(tx: &mpsc::Sender<Action>, action: Action, label: &str) -> bool {
+    let failed = tx.try_send(action).is_err();
+    if failed {
+        tracing::warn!("action channel full, dropping {label}");
+    }
+    failed
+}
+
 fn sse_actions_from_text(decoder: &mut SseDecoder, text: &str) -> (Vec<Action>, bool) {
     let mut actions = Vec::new();
     let mut terminal = false;
@@ -463,14 +471,11 @@ impl EffectRunner {
                 match api::post_chat_stream(&client, &server, &message, session.as_deref()).await {
                     Ok(r) => r,
                     Err(e) => {
-                        if tx
-                            .try_send(Action::SseFailed(format!(
-                                "could not reach daemon at {server}: {e}"
-                            )))
-                            .is_err()
-                        {
-                            tracing::warn!("action channel full, dropping SseFailed");
-                        }
+                        send_or_warn(
+                            &tx,
+                            Action::SseFailed(format!("could not reach daemon at {server}: {e}")),
+                            "SseFailed",
+                        );
                         state.lock().handle = None;
                         return;
                     }
@@ -479,14 +484,11 @@ impl EffectRunner {
             if !response.status().is_success() {
                 let status = response.status();
                 let body = response.text().await.unwrap_or_default();
-                if tx
-                    .try_send(Action::SseFailed(format!(
-                        "server returned {status}: {body}"
-                    )))
-                    .is_err()
-                {
-                    tracing::warn!("action channel full, dropping SseFailed");
-                }
+                send_or_warn(
+                    &tx,
+                    Action::SseFailed(format!("server returned {status}: {body}")),
+                    "SseFailed",
+                );
                 state.lock().handle = None;
                 return;
             }
@@ -499,12 +501,10 @@ impl EffectRunner {
                         let text = String::from_utf8_lossy(&chunk);
                         let (actions, terminal) = sse_actions_from_text(&mut decoder, &text);
                         for action in actions {
-                            if tx.try_send(action).is_err() {
-                                // SseDone/SseFailed are important — skip is_terminal check since the
-                                // message may not have been delivered; the next chunk will retry
-                                // (or timeout). For terminal events, continue to clean up handle.
-                                tracing::warn!("action channel full, dropping SSE action");
-                            }
+                            // SseDone/SseFailed are important — skip is_terminal check since the
+                            // message may not have been delivered; the next chunk will retry
+                            // (or timeout). For terminal events, continue to clean up handle.
+                            send_or_warn(&tx, action, "SSE action");
                         }
                         if terminal {
                             state.lock().handle = None;
@@ -512,12 +512,11 @@ impl EffectRunner {
                         }
                     }
                     Ok(Some(Err(e))) => {
-                        if tx
-                            .try_send(Action::SseFailed(format!("stream error: {e}")))
-                            .is_err()
-                        {
-                            tracing::warn!("action channel full, dropping SseFailed");
-                        }
+                        send_or_warn(
+                            &tx,
+                            Action::SseFailed(format!("stream error: {e}")),
+                            "SseFailed",
+                        );
                         state.lock().handle = None;
                         return;
                     }
@@ -526,23 +525,18 @@ impl EffectRunner {
                         break;
                     }
                     Err(_elapsed) => {
-                        if tx
-                            .try_send(Action::SseFailed(
-                                "stream timeout — no data for 60s".to_string(),
-                            ))
-                            .is_err()
-                        {
-                            tracing::warn!("action channel full, dropping SseFailed");
-                        }
+                        send_or_warn(
+                            &tx,
+                            Action::SseFailed("stream timeout — no data for 60s".to_string()),
+                            "SseFailed",
+                        );
                         state.lock().handle = None;
                         return;
                     }
                 }
             }
 
-            if tx.try_send(Action::SseDone).is_err() {
-                tracing::warn!("action channel full, dropping SseDone");
-            }
+            send_or_warn(&tx, Action::SseDone, "SseDone");
             state.lock().handle = None;
         });
 
