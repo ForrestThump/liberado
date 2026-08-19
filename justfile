@@ -37,7 +37,16 @@ test-t1:
 # CI gate: fmt + clippy. Green is required before every commit.
 check:
     cargo fmt --all -- --check
-    cargo clippy --locked --workspace --exclude liberado-webui --all-targets -- -D warnings
+    cargo clippy --locked --workspace --exclude liberado-webui --all-targets -- -D warnings -D clippy::cognitive_complexity
+
+# Full local CI. Same CRAP compare GitHub runs: a function whose score went
+# up fails here and is named in the cargo-crap table — fix it before you push.
+# The baseline is not rewritten while that check is red. On success, rewrite
+# `crap-baseline.json` (the ratchet). If the tree is otherwise clean, the new
+# baseline is amended onto HEAD so a later push includes it. If other files
+# are dirty, it is only staged. GitHub never writes that file.
+ci:
+    cargo run --locked -p liberado-cli -- ci
 
 # Auto-format the whole workspace.
 fmt:

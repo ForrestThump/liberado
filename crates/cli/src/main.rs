@@ -8,7 +8,10 @@
 //!   LIBERADO_VAULT=<vault> liberado  same, taking the vault from the environment
 //!   liberado chat [session-id]       the streaming terminal client of a running daemon
 //!   liberado config check            load + validate config, print a summary (or an error)
-//!   liberado ci check                run the cross-platform repository ship preflight
+//!   liberado ci                      full local CI; ratchet and stage/amend crap-baseline.json
+//!   liberado ci check                ship preflight (fmt, clippy, tests, deny)
+//!   liberado ci crap                 compare CRAP scores to crap-baseline.json (no write)
+//!   liberado ci ratchet              check, write baseline, then stage or amend it
 //!   liberado shepherd --once          run the unattended PR shepherd once
 //!   liberado docs check-links         check relative Markdown links
 //!   liberado docs crate-map           check the generated crate map
@@ -91,12 +94,9 @@ async fn dispatch(
     }
 }
 
-/// `liberado ci …` — the cross-platform repository ship preflight.
+/// `liberado ci …` — ship preflight, CRAP check, or the local check-then-ratchet run.
 fn cmd_ci(args: &mut impl Iterator<Item = String>) -> Result<(), Box<dyn std::error::Error>> {
-    match args.next().as_deref() {
-        Some("check") => ci_cmd::check(),
-        _ => Err("usage: liberado ci check".into()),
-    }
+    ci_cmd::run(args)
 }
 
 /// `liberado docs …`

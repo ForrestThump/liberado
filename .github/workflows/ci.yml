@@ -132,6 +132,52 @@ jobs:
       - name: Deny check
         run: cargo deny check
 
+  # Read-only CRAP gate. The committed `crap-baseline.json` is the last best
+  # per-function score; this job never rewrites it. Local `just ci` is what
+  # ratchets the file after a green run. Ubuntu only: coverage numbers are
+  # host-sensitive, and fmt already treats Ubuntu as the source of truth.
+  crap:
+    name: CRAP regression (ubuntu-latest)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout liberado
+        uses: actions/checkout@v4
+
+      - name: Checkout turbovault (sibling path dep)
+        uses: actions/checkout@v4
+        with:
+          repository: ForrestThump/turbovault
+          ref: develop
+          path: turbovault
+          token: ${{ secrets.SIBLINGS_TOKEN || github.token }}
+
+      - name: Checkout turbomcp (sibling path dep)
+        uses: actions/checkout@v4
+        with:
+          repository: ForrestThump/turbomcp
+          ref: develop
+          path: turbomcp
+          token: ${{ secrets.SIBLINGS_TOKEN || github.token }}
+
+      - name: Rust toolchain (from rust-toolchain.toml)
+        run: rustup show
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install cargo-llvm-cov and cargo-crap
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov,cargo-crap@0.4.3
+
+      # Read-only. A red job means a function's CRAP score went up vs
+      # crap-baseline.json (per-function; 50 cannot become 60) or a new
+      # function is above 450. The log names the functions. Do not raise
+      # the baseline — split the function or add tests. `just ci` is the
+      # same compare locally and will not rewrite the file while red.
+      - name: Compare CRAP scores to the committed baseline
+        run: cargo run --locked -p liberado-cli -- ci crap
+
   doc-links:
     name: Docs link check (${{ matrix.os }})
     strategy:

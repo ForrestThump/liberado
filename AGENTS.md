@@ -21,6 +21,8 @@ git clone <fork>/turbomcp  turbomcp  && git -C turbomcp  checkout develop
 runs, and preflight mirrors it.
 
 ```bash
+just ci                                        # full local CI + CRAP ratchet; run before you push
+just preflight                                 # fmt / clippy / test / deny, no llvm-cov
 cargo test --workspace --no-fail-fast          # --no-fail-fast matters; see below
 cargo clippy --workspace --exclude liberado-webui --all-targets -- -D warnings
 cargo fmt --all --check
@@ -73,6 +75,13 @@ uncommitted work.
 
 **`cargo test` stops at the first failing test binary.** Use `--no-fail-fast` whenever you need the
 complete failure set — comparing a branch against its base is meaningless with a truncated list.
+
+**Run `just ci` before you push — CRAP is a per-function ratchet.** `crap-baseline.json` is the last
+best score for each function. GitHub only *reads* it (`liberado ci crap` / job `CRAP regression`);
+it never writes the file. A function at 50 that goes to 60 fails, even under the 450 ceiling. New
+functions must land at or below 450. `just ci` runs the same compare locally, prints the functions
+that rose, and will not rewrite the baseline while the check is red. Split the function or add
+tests. Do not raise the file by hand.
 
 **Gates compare against the base commit, not against green.** Preflight
 (`crates/coder-sandbox/src/preflight.rs`) fails only on failures *absent from the base*, so a red
