@@ -33,6 +33,7 @@ use serde_json::Value;
 const CARGO_CRAP_VERSION: &str = "0.4.3";
 const BASELINE_FILE: &str = "crap-baseline.json";
 const LCOV_FILE: &str = ".liberado/crap.lcov";
+const CURRENT_REPORT: &str = ".liberado/crap-current.json";
 const USAGE: &str = "usage: liberado ci [check|crap|ratchet]";
 const VACATED_BIN: &str = "liberado-ci";
 
@@ -170,9 +171,14 @@ pub fn local_run() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 /// Compare the current tree against `crap-baseline.json`. Never writes the baseline.
+///
+/// Always writes `.liberado/crap-current.json` (gitignored) so a red GitHub job
+/// still has an Ubuntu-shaped report to commit as the next baseline. Coverage is
+/// host-sensitive; a Windows-generated file fails `--fail-regression` on Ubuntu.
 pub fn crap_check() -> Result<(), Box<dyn std::error::Error>> {
     let root = repository_root()?;
     generate_lcov(&root)?;
+    write_crap_json(&root, CURRENT_REPORT)?;
     compare_to_baseline(&root)
 }
 
@@ -231,6 +237,10 @@ fn compare_to_baseline(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn write_baseline(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    write_crap_json(root, BASELINE_FILE)
+}
+
+fn write_crap_json(root: &Path, output: &str) -> Result<(), Box<dyn std::error::Error>> {
     require_crap(root)?;
     run_cmd(
         root,
@@ -245,10 +255,10 @@ fn write_baseline(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
             "--sort",
             "file",
             "--output",
-            BASELINE_FILE,
+            output,
         ],
     )?;
-    relativize_baseline_json(root)
+    relativize_json_file(root, output)
 }
 
 /// Strip the workspace root from an LCOV `SF:` path so Ubuntu CI and a Windows
@@ -271,8 +281,8 @@ fn relativize_lcov(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn relativize_baseline_json(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
-    let path = root.join(BASELINE_FILE);
+fn relativize_json_file(root: &Path, relative: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let path = root.join(relative);
     let mut value: Value = serde_json::from_str(&std::fs::read_to_string(&path)?)?;
     relativize_json_paths(root, &mut value);
     let serialized = serde_json::to_string_pretty(&value)?;
@@ -308,10 +318,10 @@ fn repo_relative_source_path(root: &Path, file: &str) -> String {
     if let Some(relative) = strip_root_prefix(root, &file_norm) {
         return relative;
     }
-    if let Ok(canon_root) = root.canonicalize() {
-        if let Some(relative) = strip_root_prefix(&canon_root, &file_norm) {
-            return relative;
-        }
+    if let Ok(canon_root) = root.canonicalize()
+        && let Some(relative) = strip_root_prefix(&canon_root, &file_norm)
+    {
+        return relative;
     }
     file.replace('\\', "/")
 }
@@ -516,9 +526,10 @@ fn repository_root() -> Result<PathBuf, Box<dyn std::error::Error>> {
 mod tests {
     use super::{
         BASELINE_FILE, CRAP_CEILING_GH, CRAP_CEILING_HINT, CRAP_REGRESSION_GH,
-        CRAP_REGRESSION_HINT, LLVM_COV_ARGS, StageOutcome, USAGE, baseline_has_entries,
+        CRAP_REGRESSION_HINT, LCOV_FILE, LLVM_COV_ARGS, StageOutcome, USAGE, baseline_has_entries,
         crap_failure_hint, emit_crap_failure, exe_lives_in_cargo_target, git, porcelain_path,
-        repo_relative_source_path, repository_root, run_cmd, stage_ratcheted_baseline,
+        relativize_json_file, relativize_lcov, repo_relative_source_path, repository_root, run_cmd,
+        stage_ratcheted_baseline,
     };
     use liberado_common::process::std_command;
     use std::fs;
@@ -589,6 +600,39 @@ mod tests {
         assert!(USAGE.contains("check"));
         assert!(USAGE.contains("crap"));
         assert!(USAGE.contains("ratchet"));
+    }
+
+    #[test]
+    fn relativize_lcov_strips_the_workspace_root() {
+        let temp = tempdir().unwrap();
+        let root = temp.path();
+        fs::create_dir_all(root.join(".liberado")).unwrap();
+        let abs = root.join("crates").join("foo.rs");
+        fs::write(
+            root.join(LCOV_FILE),
+            format!("SF:{}\nend_of_record\n", abs.display()),
+        )
+        .unwrap();
+        relativize_lcov(root).unwrap();
+        let text = fs::read_to_string(root.join(LCOV_FILE)).unwrap();
+        assert_eq!(text.lines().next(), Some("SF:crates/foo.rs"));
+    }
+
+    #[test]
+    fn relativize_json_file_rewrites_source_paths() {
+        let temp = tempdir().unwrap();
+        let root = temp.path();
+        let abs = root.join("crates").join("foo.rs");
+        let escaped = abs.display().to_string().replace('\\', "\\\\");
+        fs::write(
+            root.join("report.json"),
+            format!(r#"{{"entries":[{{"file":"{escaped}"}}]}}"#),
+        )
+        .unwrap();
+        relativize_json_file(root, "report.json").unwrap();
+        let value: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(root.join("report.json")).unwrap()).unwrap();
+        assert_eq!(value["entries"][0]["file"], "crates/foo.rs");
     }
 
     #[test]
