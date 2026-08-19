@@ -79,14 +79,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         stream_state: stream_state.clone(),
     };
 
-    run_loop(&mut terminal, &runner, &mut action_rx, &action_tx).await
+    run_loop(&mut terminal, &runner, &mut action_rx).await
 }
 
 async fn run_loop(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     runner: &EffectRunner,
     action_rx: &mut mpsc::Receiver<Action>,
-    _action_tx: &mpsc::Sender<Action>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // Spinner phase is wall-clock based so reconnect/stream glyphs advance at a fixed
     // human-readable rate (~SPINNER_FRAME_MS each), not once per ~16 ms redraw.
@@ -97,62 +96,81 @@ async fn run_loop(
         }
 
         if event::poll(POLL_INTERVAL)? {
-            match event::read()? {
-                CEvent::Key(key) => {
-                    if key.kind == KeyEventKind::Press || key.kind == KeyEventKind::Repeat {
-                        let effects = {
-                            let mut app_guard = runner.app.lock();
-                            app_guard.handle_key(key)
-                        };
-                        for effect in effects {
-                            runner.run(effect).await;
-                        }
-                    }
-                }
-                CEvent::Mouse(mouse) => {
-                    let effects = {
-                        let mut app_guard = runner.app.lock();
-                        app_guard.handle_mouse(mouse)
-                    };
-                    for effect in effects {
-                        runner.run(effect).await;
-                    }
-                }
-                CEvent::Resize(_, _) => {
-                    // Layout is recomputed from frame.area() on the next draw.
-                    runner.app.lock().mark_dirty();
-                }
-                _ => {}
-            }
+            handle_terminal_event(runner, event::read()?).await;
         }
 
-        'action_loop: while let Ok(action) = action_rx.try_recv() {
+        drain_actions(runner, action_rx).await;
+
+        // T1.3: skip full redraw when state is unchanged and nothing is animating.
+        draw_if_needed(terminal, runner, &spinner_origin).await?;
+    }
+
+    Ok(())
+}
+
+/// Dispatch one terminal event into the app and run the effects it produced.
+async fn handle_terminal_event(runner: &EffectRunner, event: CEvent) {
+    match event {
+        CEvent::Key(key) => {
+            if key.kind == KeyEventKind::Press || key.kind == KeyEventKind::Repeat {
+                let effects = {
+                    let mut app_guard = runner.app.lock();
+                    app_guard.handle_key(key)
+                };
+                for effect in effects {
+                    runner.run(effect).await;
+                }
+            }
+        }
+        CEvent::Mouse(mouse) => {
             let effects = {
                 let mut app_guard = runner.app.lock();
-                app_guard.update(action)
+                app_guard.handle_mouse(mouse)
             };
             for effect in effects {
-                if matches!(effect, Effect::Quit) {
-                    runner.should_quit.store(true, Ordering::Relaxed);
-                    break 'action_loop;
-                }
                 runner.run(effect).await;
             }
         }
+        CEvent::Resize(_, _) => {
+            // Layout is recomputed from frame.area() on the next draw.
+            runner.app.lock().mark_dirty();
+        }
+        _ => {}
+    }
+}
 
-        // T1.3: skip full redraw when state is unchanged and nothing is animating.
-        let should_draw = runner.app.lock().should_draw();
-        if should_draw {
-            let spinner_tick =
-                (spinner_origin.elapsed().as_millis() / u128::from(SPINNER_FRAME_MS)) as u8;
-            terminal.draw(|frame| {
-                let mut app_guard = runner.app.lock();
-                ui::draw(frame, &mut app_guard, spinner_tick);
-                app_guard.clear_dirty();
-            })?;
+/// Drain queued actions into the app until the queue is empty or a Quit effect stops the loop.
+async fn drain_actions(runner: &EffectRunner, action_rx: &mut mpsc::Receiver<Action>) {
+    'action_loop: while let Ok(action) = action_rx.try_recv() {
+        let effects = {
+            let mut app_guard = runner.app.lock();
+            app_guard.update(action)
+        };
+        for effect in effects {
+            if matches!(effect, Effect::Quit) {
+                runner.should_quit.store(true, Ordering::Relaxed);
+                break 'action_loop;
+            }
+            runner.run(effect).await;
         }
     }
+}
 
+/// Redraw when state changed or something is animating.
+async fn draw_if_needed(
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    runner: &EffectRunner,
+    spinner_origin: &Instant,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if runner.app.lock().should_draw() {
+        let spinner_tick =
+            (spinner_origin.elapsed().as_millis() / u128::from(SPINNER_FRAME_MS)) as u8;
+        terminal.draw(|frame| {
+            let mut app_guard = runner.app.lock();
+            ui::draw(frame, &mut app_guard, spinner_tick);
+            app_guard.clear_dirty();
+        })?;
+    }
     Ok(())
 }
 
@@ -214,4 +232,41 @@ fn spawn_poller(tx: mpsc::Sender<Action>, server: String, client: reqwest::Clien
             }
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use liberado_theme::ThemeRegistry;
+    use liberado_tui::effects::{EffectRunner, StreamState};
+
+    fn test_runner() -> (EffectRunner, mpsc::Sender<Action>, mpsc::Receiver<Action>) {
+        let app = Arc::new(Mutex::new(App::new(
+            "http://127.0.0.1:4201".to_string(),
+            ThemeRegistry::new(),
+        )));
+        let should_quit = Arc::new(AtomicBool::new(false));
+        let (action_tx, action_rx) = mpsc::channel::<Action>(32);
+        let runner = EffectRunner {
+            app: app.clone(),
+            should_quit: should_quit.clone(),
+            action_tx: action_tx.clone(),
+            client: reqwest::Client::new(),
+            stream_state: Arc::new(Mutex::new(StreamState::default())),
+        };
+        (runner, action_tx, action_rx)
+    }
+
+    /// Queued actions are drained until the queue is empty.
+    #[tokio::test]
+    async fn drain_actions_empties_the_queue() {
+        let (runner, action_tx, mut action_rx) = test_runner();
+        action_tx.send(Action::SseDone).await.unwrap();
+        action_tx.send(Action::SseDone).await.unwrap();
+        drain_actions(&runner, &mut action_rx).await;
+        assert!(
+            action_rx.try_recv().is_err(),
+            "queue should be empty after drain_actions"
+        );
+    }
 }
