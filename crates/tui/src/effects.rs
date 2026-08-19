@@ -48,6 +48,24 @@ pub struct StreamState {
 /// The runner reads the server URL and other context from `app` — effects that carry
 /// data payloads (e.g. `StartChatStream { message, session }`) use those payloads
 /// directly; the runner never re-reads App state for effect-specific data.
+/// Decode one SSE text chunk into the actions to forward, stopping at a terminal action
+/// (`SseDone` / `SseFailed`). Returns the actions and whether a terminal was seen.
+fn sse_actions_from_text(decoder: &mut SseDecoder, text: &str) -> (Vec<Action>, bool) {
+    let mut actions = Vec::new();
+    let mut terminal = false;
+    for event in decoder.push(text) {
+        let action = event.to_action().unwrap_or_else(Action::SseFailed);
+        if matches!(action, Action::SseDone | Action::SseFailed(_)) {
+            terminal = true;
+        }
+        actions.push(action);
+        if terminal {
+            break;
+        }
+    }
+    (actions, terminal)
+}
+
 pub struct EffectRunner {
     pub app: Arc<Mutex<App>>,
     pub should_quit: Arc<AtomicBool>,
@@ -479,20 +497,18 @@ impl EffectRunner {
                 match tokio::time::timeout(crate::tuning::SSE_STREAM_TIMEOUT, stream.next()).await {
                     Ok(Some(Ok(chunk))) => {
                         let text = String::from_utf8_lossy(&chunk);
-                        for event in decoder.push(&text) {
-                            let action = event.to_action().unwrap_or_else(Action::SseFailed);
-                            let is_terminal =
-                                matches!(action, Action::SseDone | Action::SseFailed(_));
+                        let (actions, terminal) = sse_actions_from_text(&mut decoder, &text);
+                        for action in actions {
                             if tx.try_send(action).is_err() {
-                                tracing::warn!("action channel full, dropping SSE action");
                                 // SseDone/SseFailed are important — skip is_terminal check since the
                                 // message may not have been delivered; the next chunk will retry
                                 // (or timeout). For terminal events, continue to clean up handle.
+                                tracing::warn!("action channel full, dropping SSE action");
                             }
-                            if is_terminal {
-                                state.lock().handle = None;
-                                return;
-                            }
+                        }
+                        if terminal {
+                            state.lock().handle = None;
+                            return;
                         }
                     }
                     Ok(Some(Err(e))) => {
@@ -1238,5 +1254,76 @@ mod tests {
             should_quit.load(Ordering::Relaxed),
             "should_quit should be true after Quit"
         );
+    }
+
+    #[test]
+    fn sse_text_chunk_decodes_events_into_actions() {
+        let mut decoder = SseDecoder::default();
+        let (actions, terminal) = sse_actions_from_text(
+            &mut decoder,
+            "event: token
+data: hello
+
+",
+        );
+        assert!(!terminal);
+        assert_eq!(actions.len(), 1);
+        assert!(matches!(actions[0], Action::SseToken(_)));
+    }
+
+    #[test]
+    fn sse_text_chunk_stops_at_session_finished() {
+        let mut decoder = SseDecoder::default();
+        let text = "event: token\ndata: hi\n\nevent: session_finished\ndata: {\"status\":\"ok\",\"summary\":\"done\"}\n\n";
+        let (actions, terminal) = sse_actions_from_text(&mut decoder, text);
+        assert!(terminal);
+        assert_eq!(actions.len(), 2);
+        assert!(matches!(actions[0], Action::SseToken(_)));
+        assert!(matches!(actions[1], Action::SseDone));
+    }
+
+    #[test]
+    fn sse_text_chunk_flags_failed_as_terminal() {
+        let mut decoder = SseDecoder::default();
+        let (actions, terminal) = sse_actions_from_text(
+            &mut decoder,
+            "event: failed
+data: {\"message\":\"boom\"}
+
+",
+        );
+        assert!(terminal);
+        assert_eq!(actions.len(), 1);
+        assert!(matches!(actions[0], Action::SseFailed(_)));
+    }
+
+    #[test]
+    fn sse_text_chunk_unknown_kind_is_a_benign_noop() {
+        let mut decoder = SseDecoder::default();
+        let (actions, terminal) = sse_actions_from_text(
+            &mut decoder,
+            "event: no_such_event
+data: x
+
+",
+        );
+        assert!(!terminal);
+        assert_eq!(actions.len(), 1);
+        assert!(matches!(actions[0], Action::SseToken(_)));
+    }
+
+    #[test]
+    fn sse_text_chunk_malformed_known_event_yields_sse_failed() {
+        let mut decoder = SseDecoder::default();
+        let (actions, terminal) = sse_actions_from_text(
+            &mut decoder,
+            "event: tool_started
+data: not-json
+
+",
+        );
+        assert!(terminal);
+        assert_eq!(actions.len(), 1);
+        assert!(matches!(actions[0], Action::SseFailed(_)));
     }
 }
