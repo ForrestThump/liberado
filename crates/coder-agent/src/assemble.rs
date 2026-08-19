@@ -12,9 +12,9 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use liberado_coder_core::{
-    CoderRoleConfig, CoderRunRequest, CoderTask, CoderTuning, CodingMode, CommandPolicy,
-    HashlineConfig, PathPolicy, ProgressPolicy, SandboxSpec, TraceFormat, WorkspaceRef,
-    default_verifiers,
+    CoderRoleConfig, CoderRunConfig, CoderRunRequest, CoderTask, CoderTuning, CodingMode,
+    CommandPolicy, HashlineConfig, PathPolicy, ProgressPolicy, SandboxSpec, TraceFormat,
+    WorkspaceRef, default_verifiers,
 };
 use serde::{Deserialize, Serialize};
 
@@ -169,56 +169,83 @@ pub struct AssembledRun {
 /// Starts from [`CoderTuning::run_config`] so every shared field has a single passthrough path,
 /// then applies deliberate surface policy. Critical fields are recorded in
 /// [`AssembledRun::provenance`].
-pub fn assemble_production_run(tuning: &CoderTuning, surface: ProductionSurface) -> AssembledRun {
-    let mut provenance = AssemblyProvenance::default();
-    let mut config = tuning.run_config();
+/// Mutable assembly state: the config being resolved plus the provenance ledger.
+struct AssemblyState {
+    config: CoderRunConfig,
+    provenance: AssemblyProvenance,
+}
 
-    // Baseline: every field that `run_config` copies is from tuning until a surface overrides it.
+/// Baseline: every field that `run_config` copies is from tuning until a surface overrides it.
+fn apply_baseline(sandbox: SandboxSpec, assembly: &mut AssemblyState) {
     for field in BASELINE_TUNING_FIELDS {
-        provenance.record(*field, "tuning");
+        assembly.provenance.record(*field, "tuning");
     }
-    provenance.record("sandbox", "surface.sandbox");
-    config.sandbox = surface.sandbox;
+    assembly.provenance.record("sandbox", "surface.sandbox");
+    assembly.config.sandbox = sandbox;
+}
 
-    // ── Coder role ──────────────────────────────────────────────────────────────────────────
-    if let Some(role) = surface.coder_role {
-        config.coder = role;
-        provenance.record("coder", "surface.coder_role");
-        provenance.record("coder.model", "surface.coder_role");
-        provenance.record("coder.max_turns", "surface.coder_role");
+/// Coder role: a surface role fully replaces tuning; otherwise the model/max_turns overrides apply.
+fn apply_coder_role(
+    coder_role: Option<CoderRoleConfig>,
+    model_override: Option<&str>,
+    max_turns: Option<u32>,
+    assembly: &mut AssemblyState,
+) {
+    if let Some(role) = coder_role {
+        assembly.config.coder = role;
+        assembly.provenance.record("coder", "surface.coder_role");
+        assembly
+            .provenance
+            .record("coder.model", "surface.coder_role");
+        assembly
+            .provenance
+            .record("coder.max_turns", "surface.coder_role");
     } else {
-        if let Some(model) = surface.model_override.as_deref()
+        if let Some(model) = model_override
             && !model.is_empty()
         {
-            config.coder.model = model.to_string();
-            provenance.record("coder.model", "surface.model_override");
+            assembly.config.coder.model = model.to_string();
+            assembly
+                .provenance
+                .record("coder.model", "surface.model_override");
         }
-        if let Some(max_turns) = surface.max_turns {
-            config.coder.max_turns = Some(max_turns);
-            provenance.record("coder.max_turns", "surface.max_turns");
+        if let Some(max_turns) = max_turns {
+            assembly.config.coder.max_turns = Some(max_turns);
+            assembly
+                .provenance
+                .record("coder.max_turns", "surface.max_turns");
         }
     }
+}
 
-    let model_for_disabled = config.coder.model.clone();
-
-    // ── Planner ─────────────────────────────────────────────────────────────────────────────
-    if surface.disable_planner {
-        config.planner = disabled_role(&model_for_disabled);
-        provenance.record("planner", "surface.disabled");
+/// Planner: production direct-execution paths disable it today.
+fn apply_planner(disable_planner: bool, model_for_disabled: &str, assembly: &mut AssemblyState) {
+    if disable_planner {
+        assembly.config.planner = disabled_role(model_for_disabled);
+        assembly.provenance.record("planner", "surface.disabled");
     }
+}
 
-    // ── Critic ──────────────────────────────────────────────────────────────────────────────
-    match surface.critic {
+/// Critic: from tuning, disabled (coder-model fallback when tuning has no critic model), or a
+/// loaded diff-reviewer prompt resolved against the prompt dir.
+fn apply_critic(
+    tuning: &CoderTuning,
+    critic: CriticPolicy,
+    workspace_path: &Path,
+    model_for_disabled: &str,
+    assembly: &mut AssemblyState,
+) {
+    match critic {
         CriticPolicy::FromTuning => {}
         CriticPolicy::Disabled => {
             let model = if tuning.critic.model.trim().is_empty() {
-                model_for_disabled.as_str()
+                model_for_disabled
             } else {
                 tuning.critic.model.as_str()
             };
-            config.critic = disabled_role(model);
-            provenance.record("critic", "surface.disabled");
-            provenance.record(
+            assembly.config.critic = disabled_role(model);
+            assembly.provenance.record("critic", "surface.disabled");
+            assembly.provenance.record(
                 "critic.model",
                 if tuning.critic.model.trim().is_empty() {
                     "surface.coder_fallback"
@@ -228,119 +255,231 @@ pub fn assemble_production_run(tuning: &CoderTuning, surface: ProductionSurface)
             );
         }
         CriticPolicy::ReviewerWithLoadedPrompt => {
-            config.critic = reviewer_role(
+            assembly.config.critic = reviewer_role(
                 &tuning.critic,
-                &model_for_disabled,
+                model_for_disabled,
                 Some(&liberado_coder_core::prompts::dir_for(
                     tuning.prompt_dir.as_deref(),
-                    &surface.workspace_path.to_string_lossy(),
+                    &workspace_path.to_string_lossy(),
                 )),
             );
-            provenance.record("critic", "surface.reviewer_prompt");
-            provenance.record("critic.model", "tuning");
+            assembly
+                .provenance
+                .record("critic", "surface.reviewer_prompt");
+            assembly.provenance.record("critic.model", "tuning");
         }
     }
+}
 
-    // ── Repair ──────────────────────────────────────────────────────────────────────────────
-    if surface.mode.is_restricted() {
-        config.repair = None;
-        provenance.record("repair", "mode.restricted");
+/// Repair: restricted mode drops it; otherwise surface policy replaces tuning or mirrors coder.
+fn apply_repair(
+    mode: CodingMode,
+    repair: RepairPolicy,
+    model_override: Option<&str>,
+    max_turns: Option<u32>,
+    assembly: &mut AssemblyState,
+) {
+    if mode.is_restricted() {
+        assembly.config.repair = None;
+        assembly.provenance.record("repair", "mode.restricted");
     } else {
-        match surface.repair {
+        match repair {
             RepairPolicy::FromTuning => {
-                if let Some(mut repair) = config.repair.take() {
-                    if let Some(model) = surface.model_override.as_deref()
+                if let Some(mut repair) = assembly.config.repair.take() {
+                    if let Some(model) = model_override
                         && !model.is_empty()
                     {
                         repair.model = model.to_string();
-                        provenance.record("repair.model", "surface.model_override");
+                        assembly
+                            .provenance
+                            .record("repair.model", "surface.model_override");
                     }
-                    if let Some(max_turns) = surface.max_turns {
+                    if let Some(max_turns) = max_turns {
                         repair.max_turns = Some(max_turns);
-                        provenance.record("repair.max_turns", "surface.max_turns");
+                        assembly
+                            .provenance
+                            .record("repair.max_turns", "surface.max_turns");
                     }
-                    config.repair = Some(repair);
+                    assembly.config.repair = Some(repair);
                 } else {
-                    provenance.record("repair", "tuning.none");
+                    assembly.provenance.record("repair", "tuning.none");
                 }
             }
             RepairPolicy::MirrorCoder => {
-                config.repair = Some(config.coder.clone());
-                provenance.record("repair", "surface.mirror_coder");
+                assembly.config.repair = Some(assembly.config.coder.clone());
+                assembly.provenance.record("repair", "surface.mirror_coder");
             }
             RepairPolicy::None => {
-                config.repair = None;
-                provenance.record("repair", "surface.none");
+                assembly.config.repair = None;
+                assembly.provenance.record("repair", "surface.none");
             }
         }
     }
+}
 
-    // ── Gate (always from tuning — never hardcode enabled: false at a surface) ──────────────
-    // Provenance already records "gate" → "tuning".
-
-    // ── Command / path policy ───────────────────────────────────────────────────────────────
-    if let Some(policy) = surface.command_policy {
-        config.command_policy = policy;
-        provenance.record("command_policy", "surface.command_policy");
+/// Command / path policy. Gate stays untouched: always from tuning — never hardcode
+/// enabled: false at a surface (provenance already records "gate" → "tuning").
+fn apply_command_and_path_policy(
+    command_policy: Option<CommandPolicy>,
+    path_policy: Option<PathPolicy>,
+    default_empty_path_policy: bool,
+    assembly: &mut AssemblyState,
+) {
+    if let Some(policy) = command_policy {
+        assembly.config.command_policy = policy;
+        assembly
+            .provenance
+            .record("command_policy", "surface.command_policy");
     }
-    if let Some(policy) = surface.path_policy {
-        config.path_policy = policy;
-        provenance.record("path_policy", "surface.path_policy");
-    } else if surface.default_empty_path_policy && config.path_policy.allow_write_globs.is_empty() {
-        config.path_policy = PathPolicy::default();
-        provenance.record("path_policy", "surface.default_empty_path_policy");
+    if let Some(policy) = path_policy {
+        assembly.config.path_policy = policy;
+        assembly
+            .provenance
+            .record("path_policy", "surface.path_policy");
+    } else if default_empty_path_policy && assembly.config.path_policy.allow_write_globs.is_empty()
+    {
+        assembly.config.path_policy = PathPolicy::default();
+        assembly
+            .provenance
+            .record("path_policy", "surface.default_empty_path_policy");
     }
+}
 
-    if let Some(hashline) = surface.hashline {
-        config.hashline = hashline;
-        provenance.record("hashline", "surface.hashline");
+fn apply_hashline(hashline: Option<HashlineConfig>, assembly: &mut AssemblyState) {
+    if let Some(hashline) = hashline {
+        assembly.config.hashline = hashline;
+        assembly.provenance.record("hashline", "surface.hashline");
     }
+}
 
-    // ── Verifiers ───────────────────────────────────────────────────────────────────────────
-    if config.verifiers.is_empty() {
-        match surface.empty_verifiers {
+/// Verifiers: tuning's set is kept as-is; an empty set resolves by policy (or stays empty).
+fn apply_verifiers(
+    empty_verifiers: EmptyVerifiersPolicy,
+    workspace_path: &Path,
+    assembly: &mut AssemblyState,
+) {
+    if assembly.config.verifiers.is_empty() {
+        match empty_verifiers {
             EmptyVerifiersPolicy::LeaveEmpty => {
-                provenance.record("verifiers", "surface.leave_empty");
+                assembly
+                    .provenance
+                    .record("verifiers", "surface.leave_empty");
             }
             EmptyVerifiersPolicy::DefaultForWorkspace => {
-                config.verifiers = default_verifiers(&surface.workspace_path);
-                provenance.record("verifiers", "default_verifiers");
+                assembly.config.verifiers = default_verifiers(workspace_path);
+                assembly.provenance.record("verifiers", "default_verifiers");
             }
         }
     } else {
-        provenance.record("verifiers", "tuning");
+        assembly.provenance.record("verifiers", "tuning");
     }
+}
 
-    // ── Progress (mode may widen/narrow limits) ─────────────────────────────────────────────
-    config.progress = resolve_progress(&tuning.progress, surface.mode, &mut provenance);
+/// Progress: mode may widen/narrow limits (restricted pins max_attempts, explore lifts the
+/// read-only and same-tool guards).
+fn apply_progress(tuning: &CoderTuning, mode: CodingMode, assembly: &mut AssemblyState) {
+    assembly.config.progress = resolve_progress(&tuning.progress, mode, &mut assembly.provenance);
+}
 
-    // ── Trace dir / formats ─────────────────────────────────────────────────────────────────
-    config.trace_dir = resolve_trace_dir(
-        config.trace_dir.take(),
-        &surface.trace_dir,
-        &surface.workspace_path,
-        &mut provenance,
+/// Trace dir / formats: surface policy resolves the directory; an empty formats list defaults
+/// to native traces.
+fn apply_trace(trace_dir: TraceDirPolicy, workspace_path: &Path, assembly: &mut AssemblyState) {
+    assembly.config.trace_dir = resolve_trace_dir(
+        assembly.config.trace_dir.take(),
+        &trace_dir,
+        workspace_path,
+        &mut assembly.provenance,
     );
-    if config.trace_formats.is_empty() {
-        config.trace_formats = vec![TraceFormat::Native];
-        provenance.record("trace_formats", "default.native");
+    if assembly.config.trace_formats.is_empty() {
+        assembly.config.trace_formats = vec![TraceFormat::Native];
+        assembly
+            .provenance
+            .record("trace_formats", "default.native");
     }
+}
+
+/// Resolve a production coding run from shared tuning + surface-only inputs.
+///
+/// Starts from [`CoderTuning::run_config`] so every shared field has a single passthrough path,
+/// then applies deliberate surface policy. Critical fields are recorded in
+/// [`AssembledRun::provenance`].
+pub fn assemble_production_run(tuning: &CoderTuning, surface: ProductionSurface) -> AssembledRun {
+    let ProductionSurface {
+        task,
+        workspace,
+        workspace_path,
+        sandbox,
+        attempt,
+        prior_feedback,
+        strategist_directive,
+        coder_role,
+        model_override,
+        max_turns,
+        mode,
+        command_policy,
+        path_policy,
+        hashline,
+        critic,
+        repair,
+        empty_verifiers,
+        trace_dir,
+        default_empty_path_policy,
+        disable_planner,
+    } = surface;
+
+    let mut assembly = AssemblyState {
+        config: tuning.run_config(),
+        provenance: AssemblyProvenance::default(),
+    };
+
+    apply_baseline(sandbox, &mut assembly);
+    apply_coder_role(
+        coder_role,
+        model_override.as_deref(),
+        max_turns,
+        &mut assembly,
+    );
+    let model_for_disabled = assembly.config.coder.model.clone();
+    apply_planner(disable_planner, &model_for_disabled, &mut assembly);
+    apply_critic(
+        tuning,
+        critic,
+        &workspace_path,
+        &model_for_disabled,
+        &mut assembly,
+    );
+    apply_repair(
+        mode,
+        repair,
+        model_override.as_deref(),
+        max_turns,
+        &mut assembly,
+    );
+    apply_command_and_path_policy(
+        command_policy,
+        path_policy,
+        default_empty_path_policy,
+        &mut assembly,
+    );
+    apply_hashline(hashline, &mut assembly);
+    apply_verifiers(empty_verifiers, &workspace_path, &mut assembly);
+    apply_progress(tuning, mode, &mut assembly);
+    apply_trace(trace_dir, &workspace_path, &mut assembly);
 
     let request = CoderRunRequest {
-        task: surface.task,
-        workspace: surface.workspace,
-        config,
-        attempt: surface.attempt,
-        prior_feedback: surface.prior_feedback,
-        strategist_directive: surface.strategist_directive,
+        task,
+        workspace,
+        config: assembly.config,
+        attempt,
+        prior_feedback,
+        strategist_directive,
     };
 
     AssembledRun {
         request,
-        provenance,
+        provenance: assembly.provenance,
     }
 }
-
 /// Fields that `CoderTuning::run_config` copies 1:1. Used to seed provenance.
 const BASELINE_TUNING_FIELDS: &[&str] = &[
     "backend",
@@ -625,12 +764,19 @@ mod tests {
         }
     }
 
-    #[test]
-    fn three_entry_paths_share_tuning_fields_from_one_fixture() {
+    /// One fixture drives all three entry-path tests, so the fields they check are compared on
+    /// identical inputs. Touching `Cargo.toml` in the workspace lets `default_verifiers` include
+    /// cargo checks when used.
+    fn fixture_runs() -> (
+        CoderTuning,
+        CoderTask,
+        AssembledRun,
+        AssembledRun,
+        AssembledRun,
+    ) {
         let tuning = twisted_tuning();
         let ws = std::env::temp_dir().join("liberado-assemble-fixture");
         let _ = std::fs::create_dir_all(&ws);
-        // Touch Cargo.toml so default_verifiers includes cargo checks when used.
         let _ = std::fs::write(
             ws.join("Cargo.toml"),
             "[package]\nname=\"t\"\nversion=\"0.0.0\"\n",
@@ -671,8 +817,14 @@ mod tests {
         );
         let runner = assemble_production_run(
             &tuning,
-            entry::runner_surface(task, ws.clone(), Some("runner-model".into()), Some(50)),
+            entry::runner_surface(task.clone(), ws, Some("runner-model".into()), Some(50)),
         );
+        (tuning, task, pack, acp, runner)
+    }
+
+    #[test]
+    fn three_entry_paths_share_tuning_fields_from_one_fixture() {
+        let (tuning, _task, pack, acp, runner) = fixture_runs();
 
         // Shared tuning fields that historically drifted must match across all three.
         for (name, assembled) in [("pack", &pack), ("acp", &acp), ("runner", &runner)] {
@@ -719,6 +871,11 @@ mod tests {
             assert_eq!(c.progress.same_tool_limit, 13, "{name}: progress");
             assert_eq!(c.progress.max_attempts, 5, "{name}: progress max_attempts");
         }
+    }
+
+    #[test]
+    fn entry_paths_keep_surface_specific_overrides() {
+        let (_tuning, _task, pack, acp, runner) = fixture_runs();
 
         // Intentional deltas — documented, not silent hardcodes.
         assert_eq!(pack.request.task.description, "do the thing");
@@ -751,6 +908,11 @@ mod tests {
             pack.provenance.source_of("command_policy"),
             Some("surface.command_policy")
         );
+    }
+
+    #[test]
+    fn verifiers_and_critic_policies_differ_by_entry_path() {
+        let (_tuning, _task, pack, acp, runner) = fixture_runs();
 
         assert!(
             pack.request.config.verifiers.is_empty(),

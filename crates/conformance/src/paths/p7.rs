@@ -31,57 +31,37 @@ pub fn post_restart_lifecycle_ok(snap: &ConversationSnapshot) -> bool {
     snap.restart_lifecycle_honest()
 }
 
-pub async fn run(client: &DaemonClient, cfg: &ConformanceConfig, timeout: Duration) -> PathResult {
-    let start = Instant::now();
-
-    let Some(restart_cmd) = cfg.restart_command() else {
-        return PathResult::skipped(
-            PathId::P7,
-            "restart_command unset or empty in conformance.toml — P7 is opt-in and will not \
-             restart the daemon by surprise; configure a host-specific restart hook to run it",
-        );
-    };
-
-    // ── 1. Background turn ───────────────────────────────────────────────────
-    let session = match client
+/// Start the background turn that will be in flight across the restart.
+async fn start_background_turn(
+    client: &DaemonClient,
+    start: Instant,
+) -> Result<String, Box<PathResult>> {
+    match client
         .start_background_turn_drop_stream(RESTART_PROMPT)
         .await
     {
-        Ok(id) => id,
-        Err(e) => {
-            return PathResult::fail(
-                PathId::P7,
-                "POST /api/chat/stream background, drop after session id",
-                elapsed_ms(start),
-                serde_json::json!({"error": e}),
-            );
-        }
-    };
+        Ok(id) => Ok(id),
+        Err(e) => Err(Box::new(PathResult::fail(
+            PathId::P7,
+            "POST /api/chat/stream background, drop after session id",
+            elapsed_ms(start),
+            serde_json::json!({"error": e}),
+        ))),
+    }
+}
 
-    // Best-effort: observe running before we kill the process (not required if the model is fast).
-    let _ = client
-        .wait_turn_running(&session, Duration::from_secs(15).min(timeout))
-        .await;
-
-    // ── 2–3. Spawn restart + probe drain concurrently ────────────────────────
-    // Typical hooks (`docker compose up -d --force-recreate`) drain *during* the command. Awaiting
-    // the process first then probing only sees the new process accepting 200s.
-    let mut child = match spawn_restart_command(restart_cmd) {
-        Ok(c) => c,
-        Err(e) => {
-            return PathResult::fail(
-                PathId::P7,
-                "spawn configured restart_command",
-                elapsed_ms(start),
-                serde_json::json!({
-                    "error": e,
-                    "restart_command": restart_cmd,
-                    "session_id": session
-                }),
-            );
-        }
-    };
-
+/// 2–3. Reap the restart process and probe the daemon drain concurrently.
+///
+/// Typical hooks (`docker compose up -d --force-recreate`) drain *during* the command. Awaiting
+/// the process first then probing only sees the new process accepting 200s.
+async fn probe_drain(
+    client: &DaemonClient,
+    child: &mut tokio::process::Child,
+    restart_cmd: &str,
+    session: &str,
+    timeout: Duration,
+    start: Instant,
+) -> Result<(Option<std::process::ExitStatus>, bool, serde_json::Value), Box<PathResult>> {
     let drain_deadline = Instant::now() + timeout.min(Duration::from_secs(120));
     let mut saw_shutting_down = false;
     let mut last_probe = serde_json::json!({});
@@ -102,7 +82,7 @@ pub async fn run(client: &DaemonClient, cfg: &ConformanceConfig, timeout: Durati
                 }
                 Ok(None) => {}
                 Err(e) => {
-                    return PathResult::fail(
+                    return Err(Box::new(PathResult::fail(
                         PathId::P7,
                         "wait restart_command (try_wait)",
                         elapsed_ms(start),
@@ -111,7 +91,7 @@ pub async fn run(client: &DaemonClient, cfg: &ConformanceConfig, timeout: Durati
                             "restart_command": restart_cmd,
                             "session_id": session
                         }),
-                    );
+                    )));
                 }
             }
         }
@@ -144,6 +124,141 @@ pub async fn run(client: &DaemonClient, cfg: &ConformanceConfig, timeout: Durati
         tokio::time::sleep(Duration::from_millis(200)).await;
     }
 
+    Ok((restart_exit, saw_shutting_down, last_probe))
+}
+
+/// A restart that exited non-zero, or that drained without a 503, is a P7 failure.
+fn check_restart_outcome(
+    restart_status: &std::process::ExitStatus,
+    saw_shutting_down: bool,
+    restart_cmd: &str,
+    session: &str,
+    last_probe: &serde_json::Value,
+    start: Instant,
+) -> Result<(), Box<PathResult>> {
+    if !restart_status.success() {
+        return Err(Box::new(PathResult::fail(
+            PathId::P7,
+            "execute configured restart_command",
+            elapsed_ms(start),
+            serde_json::json!({
+                "error": format!("exit {restart_status}"),
+                "restart_command": restart_cmd,
+                "session_id": session,
+                "saw_shutting_down": saw_shutting_down,
+            }),
+        )));
+    }
+    if !saw_shutting_down {
+        return Err(Box::new(PathResult::fail(
+            PathId::P7,
+            "during restart/drain, POST /api/chat returns 503 with error=shutting_down \
+             (probed concurrently while restart_command ran)",
+            elapsed_ms(start),
+            serde_json::json!({
+                "session_id": session,
+                "last_probe": last_probe,
+                "restart_command": restart_cmd,
+            }),
+        )));
+    }
+    Ok(())
+}
+
+/// 4–6. Wait for the daemon to come back and verify the restarted session's lifecycle is honest.
+async fn verify_post_restart(
+    client: &DaemonClient,
+    session: &str,
+    timeout: Duration,
+    start: Instant,
+) -> Result<ConversationSnapshot, Box<PathResult>> {
+    let up_timeout = timeout
+        .saturating_sub(start.elapsed())
+        .max(Duration::from_secs(60));
+    if let Err(e) = client.wait_until_up(up_timeout).await {
+        return Err(Box::new(PathResult::fail(
+            PathId::P7,
+            "daemon comes back after restart (GET /api/status)",
+            elapsed_ms(start),
+            serde_json::json!({"error": e, "session_id": session}),
+        )));
+    }
+
+    let snap = match client.conversation_snapshot(session).await {
+        Ok(s) => s,
+        Err(e) => {
+            return Err(Box::new(PathResult::fail(
+                PathId::P7,
+                "GET /api/conversations/{id} after restart",
+                elapsed_ms(start),
+                serde_json::json!({"error": e, "session_id": session}),
+            )));
+        }
+    };
+
+    if !post_restart_lifecycle_ok(&snap) {
+        return Err(Box::new(PathResult::fail(
+            PathId::P7,
+            "after restart: turn_running false and (assistant reply OR turn_unanswered) — \
+             never a lost turn or a zombie turn_running",
+            elapsed_ms(start),
+            serde_json::json!({
+                "session_id": session,
+                "turn_running": snap.turn_running,
+                "turn_unanswered": snap.turn_unanswered,
+                "has_user": snap.has_user,
+                "has_assistant": snap.has_assistant,
+            }),
+        )));
+    }
+
+    Ok(snap)
+}
+
+pub async fn run(client: &DaemonClient, cfg: &ConformanceConfig, timeout: Duration) -> PathResult {
+    let start = Instant::now();
+
+    let Some(restart_cmd) = cfg.restart_command() else {
+        return PathResult::skipped(
+            PathId::P7,
+            "restart_command unset or empty in conformance.toml — P7 is opt-in and will not \
+             restart the daemon by surprise; configure a host-specific restart hook to run it",
+        );
+    };
+
+    // ── 1. Background turn ───────────────────────────────────────────────────
+    let session = match start_background_turn(client, start).await {
+        Ok(id) => id,
+        Err(f) => return *f,
+    };
+
+    // Best-effort: observe running before we kill the process (not required if the model is fast).
+    let _ = client
+        .wait_turn_running(&session, Duration::from_secs(15).min(timeout))
+        .await;
+
+    let mut child = match spawn_restart_command(restart_cmd) {
+        Ok(c) => c,
+        Err(e) => {
+            return PathResult::fail(
+                PathId::P7,
+                "spawn configured restart_command",
+                elapsed_ms(start),
+                serde_json::json!({
+                    "error": e,
+                    "restart_command": restart_cmd,
+                    "session_id": session
+                }),
+            );
+        }
+    };
+
+    let (restart_exit, saw_shutting_down, last_probe) =
+        match probe_drain(client, &mut child, restart_cmd, &session, timeout, start).await {
+            Ok(r) => r,
+            Err(f) => return *f,
+        };
+
     // Reap if still running past the probe window.
     let restart_status = match restart_exit {
         Some(st) => st,
@@ -165,75 +280,21 @@ pub async fn run(client: &DaemonClient, cfg: &ConformanceConfig, timeout: Durati
         },
     };
 
-    if !restart_status.success() {
-        return PathResult::fail(
-            PathId::P7,
-            "execute configured restart_command",
-            elapsed_ms(start),
-            serde_json::json!({
-                "error": format!("exit {restart_status}"),
-                "restart_command": restart_cmd,
-                "session_id": session,
-                "saw_shutting_down": saw_shutting_down,
-            }),
-        );
+    if let Err(f) = check_restart_outcome(
+        &restart_status,
+        saw_shutting_down,
+        restart_cmd,
+        &session,
+        &last_probe,
+        start,
+    ) {
+        return *f;
     }
 
-    if !saw_shutting_down {
-        return PathResult::fail(
-            PathId::P7,
-            "during restart/drain, POST /api/chat returns 503 with error=shutting_down \
-             (probed concurrently while restart_command ran)",
-            elapsed_ms(start),
-            serde_json::json!({
-                "session_id": session,
-                "last_probe": last_probe,
-                "restart_command": restart_cmd,
-            }),
-        );
-    }
-
-    // ── 4. Wait for daemon up ────────────────────────────────────────────────
-    let up_timeout = timeout
-        .saturating_sub(start.elapsed())
-        .max(Duration::from_secs(60));
-    if let Err(e) = client.wait_until_up(up_timeout).await {
-        return PathResult::fail(
-            PathId::P7,
-            "daemon comes back after restart (GET /api/status)",
-            elapsed_ms(start),
-            serde_json::json!({"error": e, "session_id": session}),
-        );
-    }
-
-    // ── 5. Honest lifecycle ──────────────────────────────────────────────────
-    let snap = match client.conversation_snapshot(&session).await {
+    let snap = match verify_post_restart(client, &session, timeout, start).await {
         Ok(s) => s,
-        Err(e) => {
-            return PathResult::fail(
-                PathId::P7,
-                "GET /api/conversations/{id} after restart",
-                elapsed_ms(start),
-                serde_json::json!({"error": e, "session_id": session}),
-            );
-        }
+        Err(f) => return *f,
     };
-
-    if !post_restart_lifecycle_ok(&snap) {
-        return PathResult::fail(
-            PathId::P7,
-            "after restart: turn_running false and (assistant reply OR turn_unanswered) — \
-             never a lost turn or a zombie turn_running",
-            elapsed_ms(start),
-            serde_json::json!({
-                "session_id": session,
-                "turn_running": snap.turn_running,
-                "turn_unanswered": snap.turn_unanswered,
-                "has_user": snap.has_user,
-                "has_assistant": snap.has_assistant,
-            }),
-        );
-    }
 
     PathResult::pass(
         PathId::P7,
@@ -249,7 +310,6 @@ pub async fn run(client: &DaemonClient, cfg: &ConformanceConfig, timeout: Durati
         }),
     )
 }
-
 /// Spawn the host restart hook. **Stdout/stderr are discarded** (`Stdio::null`) so a verbose
 /// compose log cannot fill a pipe buffer and deadlock the child while we only `wait`.
 fn spawn_restart_command(cmd: &str) -> Result<tokio::process::Child, String> {

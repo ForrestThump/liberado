@@ -376,6 +376,9 @@ impl CodingToolRuntime {
     }
 
     async fn invoke_json(&self, name: &str, args: Value) -> Result<Value, ToolError> {
+        if let Some(git_tool) = name.strip_prefix("git_") {
+            return self.invoke_git_json(git_tool, args).await;
+        }
         match name {
             "list_files" => self.list_files(args).await,
             // `search_text` is kept as an alias: a run mid-flight against an older
@@ -387,19 +390,26 @@ impl CodingToolRuntime {
             "edit_file" => self.edit_file(args).await,
             "apply_patch" => self.apply_patch(args).await,
             "hashline_edit" => self.hashline_edit(args).await,
-            "git_status" => self.git_status().await,
-            "git_diff" => self.git_diff(args).await,
-            "git_branch" => self.git_branch(args).await,
-            "git_commit" => self.git_commit(args).await,
-            "git_push" => self.git_push(args).await,
-            "git_log" => self.git_log(args).await,
-            "git_fetch" => self.git_fetch(args).await,
-            "git_merge" => self.git_merge(args).await,
             "run_command_background" => self.run_command_background(args).await,
             "check_background" => self.check_background(args).await,
             "run_command" => self.run_command(args).await,
             "validate" => self.validate().await,
             other => Err(ToolError::BadRequest(format!("unknown tool: {other}"))),
+        }
+    }
+
+    /// The git-family tools, named after the `git_` prefix.
+    async fn invoke_git_json(&self, git_tool: &str, args: Value) -> Result<Value, ToolError> {
+        match git_tool {
+            "status" => self.git_status().await,
+            "diff" => self.git_diff(args).await,
+            "branch" => self.git_branch(args).await,
+            "commit" => self.git_commit(args).await,
+            "push" => self.git_push(args).await,
+            "log" => self.git_log(args).await,
+            "fetch" => self.git_fetch(args).await,
+            "merge" => self.git_merge(args).await,
+            other => Err(ToolError::BadRequest(format!("unknown tool: git_{other}"))),
         }
     }
 
@@ -2300,115 +2310,119 @@ fn extract_symbols(path: &str, content: &str) -> Vec<String> {
     symbols
 }
 
-fn extract_rust_symbol(line: &str) -> Option<String> {
-    let line = line.trim();
-    if line.starts_with("//")
-        || line.starts_with("///")
-        || line.starts_with("//!")
-        || line.starts_with("/*")
-        || line.starts_with("* ")
-        || line == "*"
-    {
+/// `keyword` -> the characters that terminate its declaration name.
+const RUST_DECL_TERMINATORS: &[(&str, &[char])] = &[
+    ("fn", &['(', '<']),
+    ("struct", &['<', '{', '(', ';']),
+    ("enum", &['<', '{']),
+    ("trait", &['<', '{']),
+    ("mod", &['{', ';']),
+];
+
+/// True when the trimmed line is a comment or a block-comment continuation. Shared by the
+/// C-family symbol extractors (`//`, `/*`, and `*` continuation lines).
+fn is_comment_line(line: &str) -> bool {
+    line.starts_with("//") || line.starts_with("/*") || line.starts_with('*')
+}
+
+/// Strip each of `prefixes` in order from the front of `s`.
+fn strip_prefixes<'a>(s: &'a str, prefixes: &[&str]) -> &'a str {
+    let mut rest = s;
+    for prefix in prefixes {
+        rest = rest.trim_start_matches(prefix);
+    }
+    rest
+}
+
+/// The identifier following `prefix` on a declaration line, cut at the first structural
+/// terminator. `None` when the line does not start with `prefix` or the name is empty.
+///
+/// Shared by every language extractor — Rust, Python, TypeScript, Go and Java all produce
+/// symbol names by trimming a keyword prefix and cutting at structural punctuation.
+fn symbol_after(trimmed: &str, prefix: &str, terminators: &[char]) -> Option<String> {
+    if !trimmed.starts_with(prefix) {
         return None;
     }
-    // Strip #[derive(...)] and other same-line attributes.
-    let line = if line.starts_with("#[") {
+    let name = trimmed
+        .trim_start_matches(prefix)
+        .split(terminators)
+        .next()?
+        .trim()
+        .to_string();
+    (!name.is_empty()).then_some(name)
+}
+
+/// Strip a same-line `#[...]` attribute, leaving whatever declaration follows it (if any).
+fn strip_same_line_attribute(line: &str) -> &str {
+    if line.starts_with("#[") {
         line.split(']').nth(1).unwrap_or("").trim()
     } else {
         line
-    };
-    if line.is_empty() {
-        return None;
     }
-    // Strip visibility and qualifier prefixes, leaving just the keyword prefix.
-    // Handles: pub, pub(crate), pub(super), pub(in path), const, unsafe, async, extern "C"
-    let rest = line
-        .trim_start_matches("pub(crate) ")
+}
+
+/// Strip visibility and qualifier prefixes, leaving just the keyword prefix.
+/// Handles: pub, pub(crate), pub(super), pub(in path), const, unsafe, async, extern "C".
+fn strip_rust_prefixes(line: &str) -> &str {
+    line.trim_start_matches("pub(crate) ")
         .trim_start_matches("pub(super) ")
         .trim_start_matches("pub ")
         .trim_start_matches("const ")
         .trim_start_matches("unsafe ")
         .trim_start_matches("async ")
-        .trim_start_matches("extern \"C\" ");
-    // fn
-    if rest.starts_with("fn ") {
-        let name = rest
-            .trim_start_matches("fn ")
-            .split(['(', '<'])
-            .next()?
-            .trim()
-            .to_string();
-        if !name.is_empty() {
-            return Some(format!("fn {name}"));
-        }
+        .trim_start_matches("extern \"C\" ")
+}
+
+/// Extract `keyword <name>` from a trimmed declaration line by delegating to the shared
+/// name extraction.
+fn rust_keyword_symbol(rest: &str, keyword: &str, terminators: &[char]) -> Option<String> {
+    let name = symbol_after(rest, &format!("{keyword} "), terminators)?;
+    Some(format!("{keyword} {name}"))
+}
+
+/// Extract `impl <name>` from a declaration that may carry generic parameters.
+fn extract_impl_symbol(rest: &str) -> Option<String> {
+    let rest = rest.trim_start_matches("impl").trim_start_matches(' ');
+    let name = if rest.starts_with('<') {
+        rest.split('>')
+            .nth(1)
+            .and_then(|s| s.trim().split(' ').next())?
+            .to_string()
+    } else {
+        rest.split(['<', '{', ' ']).next()?.trim().to_string()
+    };
+    if !name.is_empty() && !name.starts_with("for") {
+        Some(format!("impl {name}"))
+    } else {
+        None
     }
-    // struct
-    if rest.starts_with("struct ") {
-        let name = rest
-            .trim_start_matches("struct ")
-            .split(['<', '{', '(', ';'])
-            .next()?
-            .trim()
-            .to_string();
-        if !name.is_empty() {
-            return Some(format!("struct {name}"));
-        }
+}
+
+fn extract_rust_symbol(line: &str) -> Option<String> {
+    let line = line.trim();
+    if is_comment_line(line) {
+        return None;
     }
-    // enum
-    if rest.starts_with("enum ") {
-        let name = rest
-            .trim_start_matches("enum ")
-            .split(['<', '{'])
-            .next()?
-            .trim()
-            .to_string();
-        if !name.is_empty() {
-            return Some(format!("enum {name}"));
-        }
+    let line = strip_same_line_attribute(line);
+    if line.is_empty() {
+        return None;
     }
-    // trait
-    if rest.starts_with("trait ") {
-        let name = rest
-            .trim_start_matches("trait ")
-            .split(['<', '{'])
-            .next()?
-            .trim()
-            .to_string();
-        if !name.is_empty() {
-            return Some(format!("trait {name}"));
-        }
-    }
-    // impl
+    let rest = strip_rust_prefixes(line);
+    // `impl` has its own generics/for handling; every other declaration keyword shares one
+    // name-extraction shape (keyword -> structural terminators), so it is table-driven.
     if rest.starts_with("impl<") || rest.starts_with("impl ") {
-        let rest = rest.trim_start_matches("impl").trim_start_matches(' ');
-        let name = if rest.starts_with('<') {
-            rest.split('>')
-                .nth(1)
-                .and_then(|s| s.trim().split(' ').next())?
-                .to_string()
-        } else {
-            rest.split(['<', '{', ' ']).next()?.trim().to_string()
-        };
-        if !name.is_empty() && !name.starts_with("for") {
-            return Some(format!("impl {name}"));
-        }
+        return extract_impl_symbol(rest);
     }
-    // mod
-    if rest.starts_with("mod ") {
-        let name = rest
-            .trim_start_matches("mod ")
-            .split(['{', ';'])
-            .next()?
-            .trim()
-            .to_string();
-        if !name.is_empty() {
-            return Some(format!("mod {name}"));
+    for (keyword, terminators) in RUST_DECL_TERMINATORS {
+        if let Some(sym) = rust_keyword_symbol(rest, keyword, terminators) {
+            return Some(sym);
         }
     }
     None
 }
-
 fn extract_python_symbol(line: &str) -> Option<String> {
+    // Indentation is Python's nesting. A trimmed line cannot tell a module-level `def` from a
+    // method, so the caller hands us the raw line and we reject anything indented.
     if line.starts_with(' ') || line.starts_with('\t') {
         return None;
     }
@@ -2416,109 +2430,65 @@ fn extract_python_symbol(line: &str) -> Option<String> {
     if trimmed.starts_with('#') {
         return None;
     }
-    if trimmed.starts_with("def ") {
-        let name = trimmed
-            .trim_start_matches("def ")
-            .split('(')
-            .next()?
-            .trim()
-            .to_string();
-        if !name.is_empty() && !name.starts_with('_') {
-            return Some(format!("def {name}"));
-        }
+    if let Some(name) = symbol_after(trimmed, "def ", &['('])
+        && !name.starts_with('_')
+    {
+        return Some(format!("def {name}"));
     }
-    if trimmed.starts_with("class ") {
-        let name = trimmed
-            .trim_start_matches("class ")
-            .split(['(', ':'])
-            .next()?
-            .trim()
-            .to_string();
-        if !name.is_empty() {
-            return Some(format!("class {name}"));
-        }
+    if let Some(name) = symbol_after(trimmed, "class ", &['(', ':']) {
+        return Some(format!("class {name}"));
     }
     None
 }
 
 fn extract_ts_symbol(line: &str) -> Option<String> {
     let trimmed = line.trim();
-    if trimmed.starts_with("//") || trimmed.starts_with("/*") || trimmed.starts_with('*') {
+    if is_comment_line(trimmed) {
         return None;
     }
-    if trimmed.starts_with("function ") {
-        let name = trimmed
-            .trim_start_matches("function ")
-            .split('(')
-            .next()?
-            .trim()
-            .to_string();
-        if !name.is_empty() {
-            return Some(format!("function {name}"));
-        }
+    if let Some(name) = symbol_after(trimmed, "function ", &['(']) {
+        return Some(format!("function {name}"));
     }
     if trimmed.starts_with("export function ")
         || trimmed.starts_with("export default function ")
         || trimmed.starts_with("export default async function ")
     {
-        let name = trimmed
-            .trim_start_matches("export default async ")
-            .trim_start_matches("export default ")
-            .trim_start_matches("export ")
-            .trim_start_matches("function ")
-            .split('(')
-            .next()?
-            .trim()
-            .to_string();
-        if !name.is_empty() {
+        let rest = strip_prefixes(
+            trimmed,
+            &["export default async ", "export default ", "export "],
+        );
+        if let Some(name) = symbol_after(rest, "function ", &['(']) {
             return Some(format!("export function {name}"));
         }
     }
     if trimmed.contains(" class ") || trimmed.starts_with("class ") {
-        let rest = if trimmed.starts_with("export ") {
-            trimmed
-                .trim_start_matches("export ")
-                .trim_start_matches("default ")
-                .trim_start_matches("abstract ")
-        } else {
-            trimmed.trim_start_matches("abstract ")
-        };
-        if rest.starts_with("class ") {
-            let name = rest
-                .trim_start_matches("class ")
-                .split(['<', '{', ' ', ':'])
-                .next()?
-                .trim()
-                .to_string();
-            if !name.is_empty() && name != "extends" && name != "implements" {
-                return Some(format!("class {name}"));
-            }
+        let rest = strip_prefixes(
+            trimmed,
+            if trimmed.starts_with("export ") {
+                &["export ", "default ", "abstract "]
+            } else {
+                &["abstract "]
+            },
+        );
+        if let Some(name) = symbol_after(rest, "class ", &['<', '{', ' ', ':'])
+            && name != "extends"
+            && name != "implements"
+        {
+            return Some(format!("class {name}"));
         }
     }
     if trimmed.starts_with("interface ") || trimmed.starts_with("export interface ") {
-        let name = trimmed
-            .trim_start_matches("export ")
-            .trim_start_matches("interface ")
-            .split(['<', '{'])
-            .next()?
-            .trim()
-            .to_string();
-        if !name.is_empty() {
+        let rest = strip_prefixes(trimmed, &["export "]);
+        if let Some(name) = symbol_after(rest, "interface ", &['<', '{']) {
             return Some(format!("interface {name}"));
         }
     }
     if trimmed.starts_with("export const ") || trimmed.starts_with("const ") {
-        let rest = trimmed.trim_start_matches("export ");
-        if rest.starts_with("const ") {
-            let name = rest
-                .trim_start_matches("const ")
-                .split([':', '='])
-                .next()?
-                .trim()
-                .to_string();
-            if !name.is_empty() && rest.contains("=>") {
-                return Some(format!("const {name}"));
-            }
+        let rest = strip_prefixes(trimmed, &["export "]);
+        if let Some(name) = symbol_after(rest, "const ", &[':', '='])
+            && rest.contains("=>")
+        {
+            return Some(format!("const {name}"));
         }
     }
     None
@@ -2526,37 +2496,22 @@ fn extract_ts_symbol(line: &str) -> Option<String> {
 
 fn extract_go_symbol(line: &str) -> Option<String> {
     let trimmed = line.trim();
-    if trimmed.starts_with("//") || trimmed.starts_with("/*") || trimmed.starts_with('*') {
+    if is_comment_line(trimmed) {
         return None;
     }
-    if trimmed.starts_with("func ") {
-        let name = trimmed
-            .trim_start_matches("func ")
-            .split('(')
-            .next()?
-            .trim()
-            .to_string();
-        if !name.is_empty() {
-            return Some(format!("func {name}"));
-        }
+    if let Some(name) = symbol_after(trimmed, "func ", &['(']) {
+        return Some(format!("func {name}"));
     }
-    if trimmed.starts_with("type ") && trimmed.contains(" struct") {
+    if trimmed.starts_with("type ") {
         let name = trimmed
             .trim_start_matches("type ")
             .split_whitespace()
             .next()?
             .to_string();
-        if !name.is_empty() {
+        if trimmed.contains(" struct") {
             return Some(format!("type {name} struct"));
         }
-    }
-    if trimmed.starts_with("type ") && trimmed.contains(" interface") {
-        let name = trimmed
-            .trim_start_matches("type ")
-            .split_whitespace()
-            .next()?
-            .to_string();
-        if !name.is_empty() {
+        if trimmed.contains(" interface") {
             return Some(format!("type {name} interface"));
         }
     }
@@ -2565,48 +2520,21 @@ fn extract_go_symbol(line: &str) -> Option<String> {
 
 fn extract_java_symbol(line: &str) -> Option<String> {
     let trimmed = line.trim();
-    if trimmed.starts_with("//") || trimmed.starts_with("/*") || trimmed.starts_with('*') {
+    if is_comment_line(trimmed) {
         return None;
     }
-    if trimmed.starts_with("public class ") || trimmed.starts_with("class ") {
-        let name = trimmed
-            .trim_start_matches("public ")
-            .trim_start_matches("class ")
-            .split(['<', '{'])
-            .next()?
-            .trim()
-            .to_string();
-        if !name.is_empty() {
-            return Some(format!("class {name}"));
-        }
+    let rest = strip_prefixes(trimmed, &["public "]);
+    if let Some(name) = symbol_after(rest, "class ", &['<', '{']) {
+        return Some(format!("class {name}"));
     }
-    if trimmed.starts_with("public interface ") || trimmed.starts_with("interface ") {
-        let name = trimmed
-            .trim_start_matches("public ")
-            .trim_start_matches("interface ")
-            .split(['<', '{'])
-            .next()?
-            .trim()
-            .to_string();
-        if !name.is_empty() {
-            return Some(format!("interface {name}"));
-        }
+    if let Some(name) = symbol_after(rest, "interface ", &['<', '{']) {
+        return Some(format!("interface {name}"));
     }
-    if trimmed.starts_with("public enum ") || trimmed.starts_with("enum ") {
-        let name = trimmed
-            .trim_start_matches("public ")
-            .trim_start_matches("enum ")
-            .split(['<', '{'])
-            .next()?
-            .trim()
-            .to_string();
-        if !name.is_empty() {
-            return Some(format!("enum {name}"));
-        }
+    if let Some(name) = symbol_after(rest, "enum ", &['<', '{']) {
+        return Some(format!("enum {name}"));
     }
     None
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;

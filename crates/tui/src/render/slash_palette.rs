@@ -93,3 +93,97 @@ pub(super) fn draw(frame: &mut Frame, input_area: Rect, app: &App, th: &Theme) {
     let _ = dim;
     frame.render_widget(list, area);
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app::{App, Focus};
+    use crate::render::test_support;
+
+    fn render(app: &App, w: u16, h: u16) -> String {
+        let th = app.theme.clone();
+        let input_area = Rect::new(0, h - 3, w, 3);
+        test_support::render_pane(w, h, |f| draw(f, input_area, app, &th))
+    }
+
+    #[test]
+    fn no_slash_no_palette() {
+        let mut app = test_support::app();
+        app.focus = Focus::Input;
+        app.input = "hello".into();
+        let out = render(&app, 80, 24);
+        assert!(!out.contains("Commands"), "palette must not show:\n{out}");
+    }
+
+    #[test]
+    fn typed_slash_filters_matches_and_highlights_selection() {
+        let mut app = test_support::app();
+        app.focus = Focus::Input;
+        app.input = "/new".into();
+        let out = render(&app, 80, 24);
+        assert!(out.contains("Commands"), "palette shows:\n{out}");
+        assert!(out.contains("/new"), "matched command:\n{out}");
+        // Selection is style-only: the selected row's background is the highlight color.
+        let th = app.theme.clone();
+        let rows = test_support::render_pane_styled(80, 24, |f| {
+            draw(f, Rect::new(0, 21, 80, 3), &app, &th)
+        });
+        let sel_bg = c(&th.sidebar_selected_bg, "#00ffff");
+        let selected_row = rows.iter().find(|row| {
+            let text: String = row.iter().map(|(s, _, _)| s.clone()).collect();
+            text.contains("/new") && row.iter().any(|(_, _, bg)| *bg == sel_bg)
+        });
+        assert!(
+            selected_row.is_some(),
+            "selected row must use the highlight bg"
+        );
+    }
+
+    #[test]
+    fn many_matches_scroll_with_a_counter_title() {
+        let mut app = test_support::app();
+        app.focus = Focus::Input;
+        app.input = "/".into();
+        app.slash_palette_index = 20;
+        let out = render(&app, 80, 24);
+        assert!(out.contains("Commands (21/"), "counter title:\n{out}");
+        assert!(
+            !out.contains("/help"),
+            "scroll window starts past /help:\n{out}"
+        );
+    }
+
+    #[test]
+    fn palette_hides_when_the_input_area_is_too_small() {
+        let mut app = test_support::app();
+        app.focus = Focus::Input;
+        app.input = "/".into();
+        let th = app.theme.clone();
+        let tiny = Rect::new(0, 1, 20, 2);
+        let out = test_support::render_pane(20, 6, |f| draw(f, tiny, &app, &th));
+        assert!(!out.contains("Commands"), "too small to draw:\n{out}");
+    }
+}
+
+#[cfg(test)]
+mod selection_scroll_tests {
+    use crate::app::Focus;
+    use crate::render::test_support;
+
+    /// Drive `slash_palette_index` clamping through `clamp_slash_palette` on a fresh App.
+    #[test]
+    fn palette_index_clamps_to_the_filtered_set() {
+        let mut app = test_support::app();
+        app.focus = Focus::Input;
+        app.input = "/".into();
+        app.slash_palette_index = 999;
+        app.clamp_slash_palette();
+        assert!(app.slash_palette_index < app.slash_matches().len());
+        let mut app = test_support::app();
+        app.focus = Focus::Input;
+        app.input = "no-slash".into();
+        app.slash_palette_index = 5;
+        app.clamp_slash_palette();
+        assert_eq!(app.slash_palette_index, 0);
+    }
+}

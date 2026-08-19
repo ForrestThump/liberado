@@ -137,6 +137,11 @@ impl CodingSessionPack {
     /// Bounded on purpose — this is a contract negotiation, not an open-ended therapist loop. It
     /// gives up after `max_clarify_rounds` and hands back the last partial draft rather than
     /// grinding on a goal it cannot pin down.
+    /// The intake phase: clarify → draft → human freeze (`verifiers.md` §3.4).
+    ///
+    /// Bounded on purpose — this is a contract negotiation, not an open-ended therapist loop. It
+    /// gives up after `max_clarify_rounds` and hands back the last partial draft rather than
+    /// grinding on a goal it cannot pin down.
     #[allow(clippy::too_many_arguments)]
     pub(super) async fn run_intake_phase(
         &self,
@@ -158,43 +163,20 @@ impl CodingSessionPack {
             ))
             .await;
 
-        // Build intake context: explicit payload.context plus authorized project/workspace so the
-        // model does not re-ask for paths the daemon already resolved (dogfood finding #2).
-        let context_owned = {
-            let mut parts = Vec::new();
-            if let Some(c) = goal
-                .payload
-                .get("context")
-                .and_then(|v| v.as_str())
-                .filter(|c| !c.trim().is_empty())
-            {
-                parts.push(c.to_string());
-            }
-            if let Some(project) = goal.payload.get("project").and_then(|v| v.as_str()) {
-                parts.push(format!(
-                    "Authorized coding project name: `{project}`. Do not ask the human for the \
-                     project name or for a path under this project."
-                ));
-            }
-            if let Some(root) = goal.payload.get("workspace_root").and_then(|v| v.as_str()) {
-                parts.push(format!(
-                    "Authorized workspace_root (absolute, already injected by the daemon): `{root}`. \
-                     Do not ask for the absolute path to the workspace."
-                ));
-            }
-            if parts.is_empty() {
-                None
-            } else {
-                Some(parts.join("\n"))
-            }
-        };
+        let context_owned = build_intake_context(goal);
         let context = context_owned.as_deref();
-
-        // E6-c: on a resume, the transcript is our only memory of the negotiation. Rebuild the
-        // answers from it so we do not re-ask what has already been answered. Empty on a fresh
-        // session, so this costs nothing in the normal case.
-        let mut answers: Vec<IntakeAnswer> = answers_from_transcript(&ctx.prior_turns().await);
-        if !answers.is_empty() {
+        let mut state = IntakeLoop {
+            // E6-c: on a resume, the transcript is our only memory of the negotiation. Rebuild
+            // the answers from it so we do not re-ask what has already been answered. Empty on a
+            // fresh session, so this costs nothing in the normal case.
+            answers: answers_from_transcript(&ctx.prior_turns().await),
+            rounds: 0,
+            // Redrafts spent on the coherence checker, budgeted separately from the human's
+            // clarify rounds: they are the *model's* mistakes, and spending a person's budget on
+            // them means a stubborn model can talk the human out of ever being consulted.
+            coherence_redrafts: 0,
+        };
+        if !state.answers.is_empty() {
             let _ = events
                 .send(SessionEvent::new(
                     session_id,
@@ -202,150 +184,207 @@ impl CodingSessionPack {
                         message: format!(
                             "resumed: picking the contract negotiation back up with {} prior \
                              answer(s)",
-                            answers.len()
+                            state.answers.len()
                         ),
                     },
                 ))
                 .await;
         }
-        let mut rounds: u32 = 0;
-        // Redrafts spent on the coherence checker, budgeted separately from the human's clarify
-        // rounds: they are the *model's* mistakes, and spending a person's budget on them means a
-        // stubborn model can talk the human out of ever being consulted.
-        let mut coherence_redrafts: u32 = 0;
+        let mut c = IntakeCtx {
+            session_id,
+            goal,
+            ctx,
+            settings,
+            events,
+            inputs,
+            cancel,
+        };
 
         loop {
-            let outcome = run_intake(&*self.provider, &goal.description, &answers, context)
-                .await
-                .map_err(|e| PackError::Failed(format!("intake: {e}")))?;
+            let outcome = run_intake(
+                &*self.provider,
+                &c.goal.description,
+                &state.answers,
+                context,
+            )
+            .await
+            .map_err(|e| PackError::Failed(format!("intake: {e}")))?;
 
             match outcome {
                 IntakeOutcome::ReadyForFreeze { draft, rationale } => {
-                    // S7-c: a draft that contradicts *itself* never reaches the human. This is the
-                    // model's mistake to fix, not something to spend a person's attention noticing
-                    // in a wall of prose at the end of a workday — send it straight back with the
-                    // finding. (It bit us twice in one live session: `verify_profile` re-added
-                    // gates the model's own out-of-scope prose said it had dropped, and the model
-                    // could not fix it by editing the verifier list, only by clearing the profile.)
-                    let conflicts = liberado_coder_core::contradictions(&draft);
-                    // Its OWN budget, separate from the human's clarify rounds — and on exhaustion
-                    // it **gives up and asks the human**, it does not kill the session.
-                    //
-                    // Both halves of that were wrong when this shipped, and one live run found it:
-                    // the redrafts consumed `max_clarify_rounds`, so three false contradictions
-                    // (see `GENERIC` in `coherence.rs`) burned the human's entire budget and the
-                    // session died with `needs human review` — having never once asked the human
-                    // anything. A machine check that can terminate a session the human never saw is
-                    // strictly worse than no check at all: it converts "the linter is wrong" into
-                    // "the work is gone". The linter's failure mode must be *deferring to the
-                    // human*, never *overruling* them.
-                    if !conflicts.is_empty() && coherence_redrafts < MAX_COHERENCE_REDRAFTS {
-                        coherence_redrafts += 1;
-                        let detail = conflicts
-                            .iter()
-                            .map(|c| format!("- {}", c.message))
-                            .collect::<Vec<_>>()
-                            .join("\n");
-                        let _ = events
-                            .send(SessionEvent::new(
-                                session_id,
-                                SessionEventKind::Progress {
-                                    message: format!(
-                                        "draft contract contradicts itself ({} finding(s)) — \
-                                         redrafting",
-                                        conflicts.len()
-                                    ),
-                                },
-                            ))
-                            .await;
-                        answers.push(IntakeAnswer {
-                            question_id: "coherence".into(),
-                            answer: format!(
-                                "Your draft contract contradicts itself. A contract is frozen and \
-                                 binding — the worker cannot argue with it — so it must be \
-                                 coherent before I accept it. Fix these and re-draft:\n{detail}"
-                            ),
-                        });
-                        continue;
-                    }
-
                     match self
-                        .confirm_freeze(session_id, ctx, &draft, &rationale, events, inputs, cancel)
+                        .handle_ready_for_freeze(&mut c, &mut state, draft, rationale)
                         .await?
                     {
-                        FreezeReply::Accept => {
-                            // Freeze stamps the contract with a content hash, so the coding worker
-                            // downstream cannot quietly alter the gates it will be judged against.
-                            let contract =
-                                GoalContract::freeze(session_id, draft, FreezeAuthority::Human)
-                                    .map_err(|e| {
-                                        PackError::Setup(format!("freeze rejected the draft: {e}"))
-                                    })?;
-                            let _ = events
-                                .send(SessionEvent::new(
-                                    session_id,
-                                    SessionEventKind::RoleFinished {
-                                        role: "intake".into(),
-                                    },
-                                ))
-                                .await;
-                            return Ok(IntakePhase::Frozen(Box::new(contract)));
-                        }
-                        FreezeReply::Reject => return Ok(IntakePhase::Rejected),
-                        FreezeReply::IdleExpired(d) => return Ok(IntakePhase::IdleExpired(d)),
-                        FreezeReply::Revise(text) => {
-                            rounds += 1;
-                            if rounds > settings.max_clarify_rounds {
-                                return Ok(IntakePhase::NeedsReview(Some(Box::new(draft))));
-                            }
-                            // A revision is just more human input — no separate "edit" machinery.
-                            answers.push(IntakeAnswer {
-                                question_id: "revision".into(),
-                                answer: text,
-                            });
-                        }
+                        IntakeStep::Finish(phase) => return Ok(phase),
+                        IntakeStep::Continue => {}
                     }
                 }
-
                 IntakeOutcome::NeedsClarification {
                     questions,
                     partial_draft,
                 } => {
-                    rounds += 1;
-                    // Out of rounds, or the model asked nothing while still not being ready — in
-                    // either case it cannot converge, so stop instead of looping forever.
-                    if rounds > settings.max_clarify_rounds || questions.is_empty() {
-                        return Ok(IntakePhase::NeedsReview(partial_draft.map(Box::new)));
-                    }
-                    for q in &questions {
-                        match self
-                            .ask(
-                                session_id,
-                                ctx,
-                                events,
-                                inputs,
-                                cancel,
-                                question_prompt(q),
-                                q.options.clone(),
-                            )
-                            .await?
-                        {
-                            Some(text) => answers.push(IntakeAnswer {
-                                question_id: q.id.clone(),
-                                answer: text,
-                            }),
-                            None => {
-                                return Ok(IntakePhase::IdleExpired(
-                                    goal.max_idle_secs
-                                        .map(Duration::from_secs)
-                                        .unwrap_or_default(),
-                                ));
-                            }
-                        }
+                    match self
+                        .handle_clarification(&mut c, &mut state, questions, partial_draft)
+                        .await?
+                    {
+                        IntakeStep::Finish(phase) => return Ok(phase),
+                        IntakeStep::Continue => {}
                     }
                 }
             }
         }
+    }
+
+    /// A draft ready for human freeze: run the coherence check first (its own budget — the
+    /// model's mistakes must not spend the human's clarify rounds), then act on the freeze
+    /// verdict. `Some(phase)` ends the phase; `None` loops again.
+    async fn handle_ready_for_freeze(
+        &self,
+        c: &mut IntakeCtx<'_>,
+        state: &mut IntakeLoop,
+        draft: GoalContractDraft,
+        rationale: String,
+    ) -> Result<IntakeStep, PackError> {
+        // S7-c: a draft that contradicts *itself* never reaches the human. This is the model's
+        // mistake to fix, not something to spend a person's attention noticing in a wall of
+        // prose at the end of a workday — send it straight back with the finding. (It bit us
+        // twice in one live session: `verify_profile` re-added gates the model's own
+        // out-of-scope prose said it had dropped, and the model could not fix it by editing the
+        // verifier list, only by clearing the profile.)
+        let conflicts = liberado_coder_core::contradictions(&draft);
+        // Its OWN budget, separate from the human's clarify rounds — and on exhaustion it
+        // **gives up and asks the human**, it does not kill the session.
+        //
+        // Both halves of that were wrong when this shipped, and one live run found it: the
+        // redrafts consumed `max_clarify_rounds`, so three false contradictions (see `GENERIC`
+        // in `coherence.rs`) burned the human's entire budget and the session died with `needs
+        // human review` — having never once asked the human anything. A machine check that can
+        // terminate a session the human never saw is strictly worse than no check at all: it
+        // converts "the linter is wrong" into "the work is gone". The linter's failure mode must
+        // be *deferring to the human*, never *overruling* them.
+        if !conflicts.is_empty() && state.coherence_redrafts < MAX_COHERENCE_REDRAFTS {
+            state.coherence_redrafts += 1;
+            let detail = conflicts
+                .iter()
+                .map(|c| format!("- {}", c.message))
+                .collect::<Vec<_>>()
+                .join("\n");
+            let _ = c
+                .events
+                .send(SessionEvent::new(
+                    c.session_id,
+                    SessionEventKind::Progress {
+                        message: format!(
+                            "draft contract contradicts itself ({} finding(s)) — redrafting",
+                            conflicts.len()
+                        ),
+                    },
+                ))
+                .await;
+            state.answers.push(IntakeAnswer {
+                question_id: "coherence".into(),
+                answer: format!(
+                    "Your draft contract contradicts itself. A contract is frozen and binding — \
+                     the worker cannot argue with it — so it must be coherent before I accept it. \
+                     Fix these and re-draft:\n{detail}"
+                ),
+            });
+            return Ok(IntakeStep::Continue);
+        }
+
+        match self
+            .confirm_freeze(
+                c.session_id,
+                c.ctx,
+                &draft,
+                &rationale,
+                c.events,
+                c.inputs,
+                c.cancel,
+            )
+            .await?
+        {
+            FreezeReply::Accept => {
+                // Freeze stamps the contract with a content hash, so the coding worker downstream
+                // cannot quietly alter the gates it will be judged against.
+                let contract = GoalContract::freeze(c.session_id, draft, FreezeAuthority::Human)
+                    .map_err(|e| PackError::Setup(format!("freeze rejected the draft: {e}")))?;
+                let _ = c
+                    .events
+                    .send(SessionEvent::new(
+                        c.session_id,
+                        SessionEventKind::RoleFinished {
+                            role: "intake".into(),
+                        },
+                    ))
+                    .await;
+                Ok(IntakeStep::Finish(IntakePhase::Frozen(Box::new(contract))))
+            }
+            FreezeReply::Reject => Ok(IntakeStep::Finish(IntakePhase::Rejected)),
+            FreezeReply::IdleExpired(d) => Ok(IntakeStep::Finish(IntakePhase::IdleExpired(d))),
+            FreezeReply::Revise(text) => {
+                state.rounds += 1;
+                if state.rounds > c.settings.max_clarify_rounds {
+                    return Ok(IntakeStep::Finish(IntakePhase::NeedsReview(Some(
+                        Box::new(draft),
+                    ))));
+                }
+                // A revision is just more human input — no separate "edit" machinery.
+                state.answers.push(IntakeAnswer {
+                    question_id: "revision".into(),
+                    answer: text,
+                });
+                Ok(IntakeStep::Continue)
+            }
+        }
+    }
+
+    /// The model asked for more input: spend one round per question, or give up when the rounds
+    /// are exhausted or the model had nothing to ask.
+    async fn handle_clarification(
+        &self,
+        c: &mut IntakeCtx<'_>,
+        state: &mut IntakeLoop,
+        questions: Vec<IntakeQuestion>,
+        partial_draft: Option<GoalContractDraft>,
+    ) -> Result<IntakeStep, PackError> {
+        state.rounds += 1;
+        // Out of rounds, or the model asked nothing while still not being ready — in either case
+        // it cannot converge, so stop instead of looping forever.
+        if state.rounds > c.settings.max_clarify_rounds || questions.is_empty() {
+            return Ok(IntakeStep::Finish(IntakePhase::NeedsReview(
+                partial_draft.map(Box::new),
+            )));
+        }
+        for q in &questions {
+            match self
+                .ask(
+                    c.session_id,
+                    c.ctx,
+                    c.events,
+                    c.inputs,
+                    c.cancel,
+                    question_prompt(q),
+                    q.options.clone(),
+                )
+                .await?
+            {
+                Some(text) => state.answers.push(IntakeAnswer {
+                    question_id: q.id.clone(),
+                    answer: text,
+                }),
+                None => {
+                    return Ok(IntakeStep::Finish(IntakePhase::IdleExpired(
+                        c.goal
+                            .max_idle_secs
+                            .map(Duration::from_secs)
+                            .unwrap_or_default(),
+                    )));
+                }
+            }
+        }
+        Ok(IntakeStep::Continue)
     }
 
     /// Show the draft contract and get the human's verdict (§3.4 step 3b, §3.7 item 3).
@@ -376,6 +415,61 @@ impl CodingSessionPack {
                 _ => FreezeReply::Revise(text),
             }),
         }
+    }
+}
+
+/// One intake iteration's outcome: `Finish` ends the phase, `Continue` loops again.
+enum IntakeStep {
+    Finish(IntakePhase),
+    Continue,
+}
+
+/// Mutable loop state for the intake negotiation.
+struct IntakeLoop {
+    answers: Vec<IntakeAnswer>,
+    rounds: u32,
+    coherence_redrafts: u32,
+}
+
+/// Immutable inputs for one intake negotiation, bundled so the stage helpers stay small.
+struct IntakeCtx<'a> {
+    session_id: &'a str,
+    goal: &'a GoalSpec,
+    ctx: &'a PackContext<'a>,
+    settings: &'a IntakeSettings,
+    events: &'a Sender<SessionEvent>,
+    inputs: &'a mut InputChannel,
+    cancel: &'a mut tokio::sync::watch::Receiver<bool>,
+}
+
+/// Build intake context: explicit payload.context plus authorized project/workspace so the model
+/// does not re-ask for paths the daemon already resolved (dogfood finding #2).
+fn build_intake_context(goal: &GoalSpec) -> Option<String> {
+    let mut parts = Vec::new();
+    if let Some(c) = goal
+        .payload
+        .get("context")
+        .and_then(|v| v.as_str())
+        .filter(|c| !c.trim().is_empty())
+    {
+        parts.push(c.to_string());
+    }
+    if let Some(project) = goal.payload.get("project").and_then(|v| v.as_str()) {
+        parts.push(format!(
+            "Authorized coding project name: `{project}`. Do not ask the human for the project \
+             name or for a path under this project."
+        ));
+    }
+    if let Some(root) = goal.payload.get("workspace_root").and_then(|v| v.as_str()) {
+        parts.push(format!(
+            "Authorized workspace_root (absolute, already injected by the daemon): `{root}`. \
+             Do not ask for the absolute path to the workspace."
+        ));
+    }
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join("\n"))
     }
 }
 

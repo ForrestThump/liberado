@@ -156,29 +156,40 @@ pub async fn provision_path_deps(parent_root: &Path, dest: &Path) -> Vec<String>
 
     let mut copied = Vec::new();
     for root in declared_path_dep_roots(&manifest) {
-        let dst = dest.join(&root);
-        if dst.exists() {
-            continue; // tracked in git, or already provisioned
-        }
-        let Some(src) = sources.iter().map(|s| s.join(&root)).find(|p| p.is_dir()) else {
-            // Declared but present nowhere we can reach. The developer's own checkout cannot
-            // build either, so this is a setup problem, not something to paper over silently.
-            tracing::warn!(
-                dep = %root,
-                "path dependency is in neither the parent nor the main checkout; \
-                 the worktree will not build"
-            );
-            continue;
-        };
-        match copy_tree(&src, &dst).await {
-            Ok(()) => {
-                tracing::info!(dep = %root, "provisioned path dependency into session worktree");
-                copied.push(root);
-            }
-            Err(e) => tracing::warn!(dep = %root, error = %e, "copying path dependency failed"),
+        if let Some(root) = provision_one_dep(&root, dest, &sources).await {
+            copied.push(root);
         }
     }
     copied
+}
+
+/// Copy one declared path dependency into the worktree when a reachable source exists.
+/// Returns the root name when a copy actually happened (skipped when already present).
+async fn provision_one_dep(root: &str, dest: &Path, sources: &[PathBuf]) -> Option<String> {
+    let dst = dest.join(root);
+    if dst.exists() {
+        return None; // tracked in git, or already provisioned
+    }
+    let Some(src) = sources.iter().map(|s| s.join(root)).find(|p| p.is_dir()) else {
+        // Declared but present nowhere we can reach. The developer's own checkout cannot
+        // build either, so this is a setup problem, not something to paper over silently.
+        tracing::warn!(
+            dep = %root,
+            "path dependency is in neither the parent nor the main checkout; \
+             the worktree will not build"
+        );
+        return None;
+    };
+    match copy_tree(&src, &dst).await {
+        Ok(()) => {
+            tracing::info!(dep = %root, "provisioned path dependency into session worktree");
+            Some(root.to_string())
+        }
+        Err(e) => {
+            tracing::warn!(dep = %root, error = %e, "copying path dependency failed");
+            None
+        }
+    }
 }
 
 /// Directories never worth copying: `.git` is the dependency's own history and `target` is

@@ -162,41 +162,49 @@ pub async fn drain_for_shutdown(state: &AppState, grace: Duration) -> DrainOutco
     let idle = wait_until_idle(state, grace).await;
     let waited = start.elapsed();
 
-    let (aborted, parked_goals) = if idle {
-        (0, 0)
-    } else {
-        let aborted = abort_remaining_turns(state);
-        let parked_goals = park_remaining_goals(state).await;
-        // Cooperative park/cancel needs a moment to leave the running map and flip status.
-        let _ = wait_until_idle(state, Duration::from_millis(PARK_SETTLE_MS)).await;
-        // A pack blocked in a model call cannot observe the signal before we exit, and `Parked` is
-        // only filed when a pack returns. Record it ourselves so nothing is left `Running` with no
-        // host — see `GoalSessionHub::force_park_still_hosted`.
-        let forced_park_goals = state.goals.force_park_still_hosted().await;
-        warn!(
-            aborted,
-            parked_goals,
-            forced_park_goals,
-            waited_ms = waited.as_millis() as u64,
-            "shutdown drain: grace elapsed; aborted chat stragglers and parked remaining goals"
-        );
-        (aborted, parked_goals)
-    };
-
     if idle {
         info!(
             waited_ms = waited.as_millis() as u64,
             "shutdown drain: all in-flight work finished within grace"
         );
+        return DrainOutcome {
+            idle_within_grace: true,
+            waited,
+            aborted: 0,
+            parked_goals: 0,
+            grace,
+        };
     }
 
+    let (aborted, parked_goals) = abort_and_park(state, waited).await;
     DrainOutcome {
-        idle_within_grace: idle,
+        idle_within_grace: false,
         waited,
         aborted,
         parked_goals,
         grace,
     }
+}
+
+/// Grace elapsed with work still in flight: abort chat stragglers, park remaining goal sessions,
+/// and let the park/cancel settle so nothing is left `Running` with no host.
+async fn abort_and_park(state: &AppState, waited: Duration) -> (usize, usize) {
+    let aborted = abort_remaining_turns(state);
+    let parked_goals = park_remaining_goals(state).await;
+    // Cooperative park/cancel needs a moment to leave the running map and flip status.
+    let _ = wait_until_idle(state, Duration::from_millis(PARK_SETTLE_MS)).await;
+    // A pack blocked in a model call cannot observe the signal before we exit, and `Parked` is
+    // only filed when a pack returns. Record it ourselves so nothing is left `Running` with no
+    // host — see `GoalSessionHub::force_park_still_hosted`.
+    let forced_park_goals = state.goals.force_park_still_hosted().await;
+    warn!(
+        aborted,
+        parked_goals,
+        forced_park_goals,
+        waited_ms = waited.as_millis() as u64,
+        "shutdown drain: grace elapsed; aborted chat stragglers and parked remaining goals"
+    );
+    (aborted, parked_goals)
 }
 
 /// Poll until chat + goal in-flight counts are both 0, or `grace` elapses.

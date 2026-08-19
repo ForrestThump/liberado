@@ -103,6 +103,12 @@ async fn select_profile(
 /// reach.
 const CLEAR_LABEL: &str = "(default)  —  the daemon's standard grant, no profile";
 
+/// Turn a picked label into the profile name to send, or `None` for the clear sentinel — which
+/// means "back to the default grant", not "no change".
+fn chosen_name(label: &str) -> Option<String> {
+    (label != CLEAR_LABEL).then(|| name_from_label(label).to_string())
+}
+
 #[component]
 pub fn ProfileBrowser(
     api_base: String,
@@ -156,7 +162,7 @@ pub fn ProfileBrowser(
             // creates one. Refusing here is what made the *first* turn of every chat run on the
             // default grant — the turn a "basic chat" profile most wants to scope.
             let Some(session) = session.clone() else {
-                let chosen = (label != CLEAR_LABEL).then(|| name_from_label(&label).to_string());
+                let chosen = chosen_name(&label);
                 on_switched.call(chosen);
                 open.set(false);
                 return;
@@ -164,7 +170,7 @@ pub fn ProfileBrowser(
             busy.set(true);
             error.set(None);
             let base = base.clone();
-            let chosen = (label != CLEAR_LABEL).then(|| name_from_label(&label).to_string());
+            let chosen = chosen_name(&label);
             #[cfg(target_arch = "wasm32")]
             wasm_bindgen_futures::spawn_local(async move {
                 match select_profile(base, session, chosen.clone()).await {
@@ -244,5 +250,36 @@ mod tests {
         // The caller distinguishes it by identity, not by parsing — this just guards the assumption
         // that no real profile could produce the same label.
         assert!(CLEAR_LABEL.starts_with("(default)"));
+    }
+
+    /// Picking the clear row means "back to the default grant", which the wire spells as `None` —
+    /// not as the literal text of the row.
+    #[test]
+    fn the_clear_row_means_none() {
+        assert_eq!(chosen_name(CLEAR_LABEL), None);
+    }
+
+    /// Any real row maps back to its profile name — the same round trip `label_for`/`name_from_label`
+    /// already guarantees, asserted at the point the label becomes a request.
+    #[test]
+    fn a_real_row_means_its_profile_name() {
+        let r = row("basic-chat", Some("Quick answers. No dispatch."));
+        assert_eq!(chosen_name(&label_for(&r)), Some("basic-chat".to_string()));
+        assert_eq!(
+            chosen_name("unlisted  —  whatever"),
+            Some("unlisted".to_string())
+        );
+    }
+
+    /// The description is part of the label — the picker row is unreadable without it — and a
+    /// whitespace-only description is dropped exactly like an empty one.
+    #[test]
+    fn the_description_is_part_of_the_label() {
+        assert_eq!(
+            label_for(&row("basic-chat", Some("Quick answers."))),
+            "basic-chat  —  Quick answers."
+        );
+        assert_eq!(label_for(&row("plain", None)), "plain");
+        assert_eq!(label_for(&row("blank", Some("   "))), "blank");
     }
 }

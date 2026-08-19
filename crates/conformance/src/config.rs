@@ -146,4 +146,73 @@ mod tests {
         c.restart_command = None;
         assert!(c.restart_command().is_none());
     }
+
+    #[test]
+    fn load_parses_toml_and_applies_defaults() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("conformance.toml");
+        std::fs::write(
+            &path,
+            "base_url = \"http://127.0.0.1:8080\"\nvault_path = \"/srv/vault\"\n",
+        )
+        .unwrap();
+        let cfg = ConformanceConfig::load(&path).unwrap();
+        assert_eq!(cfg.base_url, "http://127.0.0.1:8080");
+        assert_eq!(cfg.budget(), Duration::from_secs(DEFAULT_BUDGET_SECS));
+        assert_eq!(cfg.path_timeout(), Duration::from_secs(600));
+        assert_eq!(cfg.hook_name, "conformance");
+        assert_eq!(cfg.hook_secret_ref, "LIBERADO_HOOK_CONFORMANCE_SECRET");
+        assert_eq!(cfg.profile_name, "conformance");
+        assert!(cfg.paths.is_empty());
+        assert!(!cfg.advisory_counts);
+        assert!(cfg.restart_command().is_none());
+    }
+
+    #[test]
+    fn load_rejects_empty_base_url() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("conformance.toml");
+        std::fs::write(&path, "base_url = \"  \"\nvault_path = \"/v\"\n").unwrap();
+        let err = ConformanceConfig::load(&path).unwrap_err();
+        assert!(err.contains("base_url must be set"), "{err}");
+    }
+
+    #[test]
+    fn load_reports_unreadable_path() {
+        let err = ConformanceConfig::load(Path::new("/nonexistent/conformance.toml")).unwrap_err();
+        assert!(err.contains("read"), "{err}");
+    }
+
+    #[test]
+    fn load_reports_toml_parse_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("conformance.toml");
+        std::fs::write(&path, "base_url = [not a string").unwrap();
+        let err = ConformanceConfig::load(&path).unwrap_err();
+        assert!(err.contains("parse"), "{err}");
+    }
+
+    #[test]
+    fn hook_secret_reads_the_named_env_var() {
+        // Unique var name per test — no cross-test env race (repo convention).
+        let var = "CONF_HOOK_SECRET_UNIT_TEST";
+        unsafe { std::env::remove_var(var) };
+        let c = ConformanceConfig {
+            base_url: "http://127.0.0.1:1".into(),
+            budget_secs: 60,
+            vault_path: PathBuf::from("/tmp"),
+            topology_path: None,
+            hook_name: "conformance".into(),
+            hook_secret_ref: var.into(),
+            profile_name: "conformance".into(),
+            paths: vec![],
+            advisory_counts: false,
+            path_timeout_secs: 60,
+            restart_command: None,
+        };
+        assert!(c.hook_secret().is_err(), "unset var must be an error");
+        unsafe { std::env::set_var(var, "s3cr3t") };
+        assert_eq!(c.hook_secret().unwrap(), "s3cr3t");
+        unsafe { std::env::remove_var(var) };
+    }
 }

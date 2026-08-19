@@ -867,20 +867,27 @@ fn MessageRow(msg: ChatMsg) -> Element {
 ///
 /// Collapsed by default, with the outcome line kept in the header, and it stays wherever the user
 /// puts it.
-#[component]
-fn ToolBlock(content: String) -> Element {
-    let mut expanded = use_signal(|| false);
-
-    // The daemon's first line is already a summary ("RESULT (Succeeded):"). Reuse it as the header
-    // rather than inventing one, falling back only if it is empty so the header is never blank.
-    let label = content
+/// The one-line header for a tool-result block: the daemon's own summary line when present,
+/// falling back to a neutral label, with a trailing colon trimmed ("RESULT (Succeeded):" reads
+/// as "RESULT (Succeeded)").
+fn tool_block_label(content: &str) -> String {
+    content
         .lines()
         .next()
         .map(str::trim)
         .filter(|l| !l.is_empty())
         .unwrap_or("Tool result")
         .trim_end_matches(':')
-        .to_string();
+        .to_string()
+}
+
+#[component]
+fn ToolBlock(content: String) -> Element {
+    let mut expanded = use_signal(|| false);
+
+    // The daemon's first line is already a summary ("RESULT (Succeeded):"). Reuse it as the header
+    // rather than inventing one, falling back only if it is empty so the header is never blank.
+    let label = tool_block_label(&content);
     let arrow = if expanded() { "\u{25BC}" } else { "\u{25B8}" };
 
     rsx! {
@@ -964,6 +971,26 @@ fn ThinkingGroup(steps: Vec<ThinkingStep>) -> Element {
     }
 }
 
+/// `{}` and `null` are the JSON spellings of "no arguments", and the empty string is the
+/// trimmed version of the same idea — all three render as nothing.
+fn clean_args(args: &str) -> String {
+    if args.is_empty() || args == "{}" || args == "null" {
+        String::new()
+    } else {
+        args.to_string()
+    }
+}
+
+/// The parenthesized argument text shown next to a tool name. Empty and JSON-"empty" args show
+/// nothing at all — `tool(clean()_up)` is noise, `tool` is the same information.
+fn args_display(args: &str) -> String {
+    if clean_args(args).is_empty() {
+        String::new()
+    } else {
+        format!("({args})")
+    }
+}
+
 #[component]
 fn ThinkingStepRow(step: ThinkingStep) -> Element {
     let status_cls = match step.ok {
@@ -972,12 +999,7 @@ fn ThinkingStepRow(step: ThinkingStep) -> Element {
         Some(false) => "thinking-step err",
     };
 
-    let args_display =
-        if step.tool_args.is_empty() || step.tool_args == "{}" || step.tool_args == "null" {
-            String::new()
-        } else {
-            format!("({})", step.tool_args)
-        };
+    let args_text = args_display(&step.tool_args);
 
     let mark = match step.ok {
         None => "\u{23F3}",
@@ -985,7 +1007,7 @@ fn ThinkingStepRow(step: ThinkingStep) -> Element {
         Some(false) => "\u{2717}",
     };
 
-    let name_text = format!("\u{1F527} {}{}", step.tool_name, args_display);
+    let name_text = format!("\u{1F527} {}{}", step.tool_name, args_text);
 
     rsx! {
         div {
@@ -1123,6 +1145,24 @@ fn stream_url(
         url.push_str(&format!("&model={}", urlencoding::encode(model)));
     }
     url
+}
+
+/// Truncate a conversation title to 60 bytes, walking back to a char boundary so the cut never
+/// lands mid-codepoint (any curly quote, em-dash, etc.), and appending an ellipsis.
+///
+/// Bytes, not chars, because this is a display cap; the walk-back is what makes the byte cut
+/// safe for non-ASCII text.
+fn truncate_title(text: &str) -> String {
+    let t = text.trim();
+    if t.len() > 60 {
+        let mut cut = 57;
+        while cut > 0 && !t.is_char_boundary(cut) {
+            cut -= 1;
+        }
+        format!("{}…", &t[..cut])
+    } else {
+        t.to_string()
+    }
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -1267,16 +1307,12 @@ fn connect_stream(
                     ..
                 }) = chat_client_contract::SessionEvent::from_sse_data("tool_started", &data)
                 {
-                    let clean_args = if args_preview == "{}" || args_preview == "null" {
-                        String::new()
-                    } else {
-                        args_preview
-                    };
+                    let clean = clean_args(&args_preview);
                     messages.with_mut(|m| match m.last_mut() {
                         Some(last) if last.role == "assistant" => {
                             last.thinking_steps.push(ThinkingStep {
                                 tool_name: name,
-                                tool_args: clean_args,
+                                tool_args: clean.clone(),
                                 ok: None,
                                 preview: String::new(),
                             });
@@ -1285,7 +1321,7 @@ fn connect_stream(
                             let mut msg = ChatMsg::new_assistant(String::new());
                             msg.thinking_steps.push(ThinkingStep {
                                 tool_name: name,
-                                tool_args: clean_args,
+                                tool_args: clean,
                                 ok: None,
                                 preview: String::new(),
                             });
@@ -1359,20 +1395,11 @@ fn connect_stream(
             // does want a title; reading the raw flag left it permanently untitled.
             if should_set_title() && !opened_incognito {
                 should_set_title.set(false);
-                let title_opt = messages.read().iter().find(|m| m.role == "user").map(|m| {
-                    let t = m.content.trim();
-                    if t.len() > 60 {
-                        // Byte-length slicing panics if 57 lands mid-codepoint (any curly
-                        // quote, em-dash, etc.) — walk back to the nearest char boundary.
-                        let mut cut = 57;
-                        while cut > 0 && !t.is_char_boundary(cut) {
-                            cut -= 1;
-                        }
-                        format!("{}…", &t[..cut])
-                    } else {
-                        t.to_string()
-                    }
-                });
+                let title_opt = messages
+                    .read()
+                    .iter()
+                    .find(|m| m.role == "user")
+                    .map(|m| truncate_title(&m.content));
                 let conv_id_opt = session.read().clone();
                 if let (Some(title), Some(conv_id)) = (title_opt, conv_id_opt) {
                     let base = title_base.clone();
@@ -1528,5 +1555,132 @@ mod stream_url_tests {
         let u = stream_url(BASE, "hi", Some("01ABC"), true, Some("basic"), None);
         assert!(u.contains("&session=01ABC"), "{u}");
         assert!(!u.contains("incognito") && !u.contains("profile"), "{u}");
+    }
+}
+
+#[cfg(test)]
+mod chat_msg_tests {
+    use super::*;
+
+    /// The role mapping is a *translation* — the wire's vocabulary to the renderer's — and unknown
+    /// wire roles must not break rendering: they read as user bubbles rather than nothing.
+    #[test]
+    fn wire_roles_map_to_bubble_roles() {
+        for (wire, expected) in [
+            ("assistant", "assistant"),
+            ("tool", "tool"),
+            ("system", "system"),
+            ("user", "user"),
+            ("something-new", "user"),
+        ] {
+            let msg = ChatMsg::from_wire(&ChatMessage {
+                role: wire.to_string(),
+                content: "x".to_string(),
+                tool_calls: None,
+                tool_call_id: None,
+                model: None,
+            });
+            assert_eq!(msg.role, expected, "wire role {wire:?}");
+        }
+    }
+
+    /// History never carries thinking steps (those exist only on the live SSE stream), so the wire
+    /// decoder must not invent any.
+    #[test]
+    fn wire_messages_carry_no_thinking_steps() {
+        let msg = ChatMsg::from_wire(&ChatMessage {
+            role: "assistant".to_string(),
+            content: "hi".to_string(),
+            tool_calls: None,
+            tool_call_id: None,
+            model: None,
+        });
+        assert!(msg.thinking_steps.is_empty());
+        assert_eq!(msg.content, "hi");
+    }
+
+    /// The three constructors set the role that each message kind renders under — a user message
+    /// typed in this tab, an assistant turn, a stream failure.
+    #[test]
+    fn constructors_set_the_role() {
+        assert_eq!(ChatMsg::new_user("q".into()).role, "user");
+        assert_eq!(ChatMsg::new_assistant("a".into()).role, "assistant");
+        assert_eq!(ChatMsg::new_error("e".into()).role, "error");
+        for msg in [
+            ChatMsg::new_user("q".into()),
+            ChatMsg::new_assistant("a".into()),
+            ChatMsg::new_error("e".into()),
+        ] {
+            assert!(
+                msg.thinking_steps.is_empty(),
+                "constructors must not add steps"
+            );
+        }
+    }
+
+    /// Short titles pass through unchanged (and trimmed); only over-60-byte titles are cut.
+    #[test]
+    fn short_titles_pass_through() {
+        assert_eq!(truncate_title("What is a database?"), "What is a database?");
+        assert_eq!(truncate_title("  padded  "), "padded");
+    }
+
+    /// The 60-byte cap is a display limit; crossing it appends the ellipsis that tells the reader
+    /// the row is abbreviated.
+    #[test]
+    fn long_titles_are_cut_and_elided() {
+        let long = "x".repeat(100);
+        let out = truncate_title(&long);
+        assert!(out.ends_with('…'), "{out}");
+        assert!(out.len() < 100);
+        // 57 chars + a 3-byte ellipsis: the visible name is exactly the capped window.
+        assert_eq!(out, format!("{}…", "x".repeat(57)));
+    }
+
+    /// The regression the char-boundary walk exists for: a multi-byte title whose 57th byte lands
+    /// mid-codepoint must not panic the sidebar's title write. Uses 4-byte chars (57 % 4 ≠ 0) so
+    /// the naive byte cut would genuinely land mid-char — 3-byte CJK would put the boundary exactly
+    /// at 57 and pass both ways.
+    #[test]
+    fn long_titles_cut_on_char_boundaries() {
+        // 20 four-byte emoji = 80 bytes; a naive 57-byte cut would split the 15th char.
+        let wide = "😀".repeat(20);
+        let out = truncate_title(&wide);
+        assert!(wide.starts_with(out.trim_end_matches('…')));
+        assert!(
+            out.is_char_boundary(out.len()),
+            "output must be valid UTF-8 at the cut"
+        );
+    }
+
+    /// The JSON spellings of "no arguments" and the empty string all render as nothing.
+    #[test]
+    fn empty_args_render_as_nothing() {
+        assert_eq!(clean_args(""), "");
+        assert_eq!(clean_args("{}"), "");
+        assert_eq!(clean_args("null"), "");
+        assert_eq!(args_display(""), "");
+        assert_eq!(args_display("{}"), "");
+        assert_eq!(args_display("null"), "");
+    }
+
+    #[test]
+    fn real_args_are_kept_and_parenthesized() {
+        assert_eq!(clean_args("path=/tmp/x"), "path=/tmp/x");
+        assert_eq!(args_display("path=/tmp/x"), "(path=/tmp/x)");
+        assert_eq!(args_display("{ \"a\": 1 }"), "({ \"a\": 1 })");
+    }
+
+    /// The tool block's header is the daemon's own summary line, colon trimmed; empty content
+    /// falls back to a neutral label rather than a blank header.
+    #[test]
+    fn tool_block_header_uses_the_daemon_summary_line() {
+        assert_eq!(
+            tool_block_label("RESULT (Succeeded):\nwrote 12 notes\n"),
+            "RESULT (Succeeded)"
+        );
+        assert_eq!(tool_block_label("  RESULT (Failed):  "), "RESULT (Failed)");
+        assert_eq!(tool_block_label("\n\nbody without a header"), "Tool result");
+        assert_eq!(tool_block_label(""), "Tool result");
     }
 }

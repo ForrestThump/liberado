@@ -320,46 +320,9 @@ impl Daemon {
             .take()
             .expect("Daemon::run must only be called once");
 
-        let vault_source = VaultEventSource::new(
-            self.vault.clone(),
-            self.debounce,
-            self.inbox_ignore_globs.clone(),
-            self.capture_scope.clone(),
-        );
-        // Supervised rather than fire-and-forget: the handle was previously dropped on the floor,
-        // so a watch task that died took the daemon's only vault input with it and nothing
-        // anywhere could tell. The flag is the observable.
-        let watcher_active = std::sync::Arc::clone(&self.watcher_active);
-        let watch_handle = tokio::spawn(Box::new(vault_source).run(event_tx.clone()));
-        watcher_active.store(true, std::sync::atomic::Ordering::Relaxed);
-        tokio::spawn(async move {
-            let outcome = watch_handle.await;
-            watcher_active.store(false, std::sync::atomic::Ordering::Relaxed);
-            match outcome {
-                Ok(()) => tracing::warn!("vault watch task ended; watcher_active is now false"),
-                Err(e) => tracing::error!(error = %e, "vault watch task died"),
-            }
-        });
-
-        if let Some(cron_source) = self.cron_source.take() {
-            tracing::info!(
-                source = cron_source.name(),
-                "starting additional event source"
-            );
-            tokio::spawn(cron_source.run(event_tx.clone()));
-        }
-
-        if !self.proposal_reap_interval.is_zero() {
-            let reap_interval = self.proposal_reap_interval;
-            let reap_vault = self.vault.clone();
-            tracing::info!(
-                interval_secs = reap_interval.as_secs(),
-                "starting proposal expiry reaper"
-            );
-            tokio::spawn(async move {
-                proposal_reap_loop(reap_vault, reap_interval).await;
-            });
-        }
+        self.spawn_vault_source(event_tx.clone());
+        self.spawn_extra_sources(event_tx.clone());
+        self.spawn_reaper();
 
         // Drop our own clone so the channel closes once every spawned source — and any external
         // producer holding a clone via `event_sender()` — has finished. Otherwise `event_rx.recv()`
@@ -380,6 +343,54 @@ impl Daemon {
         }
 
         Ok(())
+    }
+
+    /// Spawn the always-on vault watch, supervised so a dead watch task flips `watcher_active`
+    /// instead of silently starving the daemon of input.
+    fn spawn_vault_source(&mut self, event_tx: UnboundedSender<Event>) {
+        let vault_source = VaultEventSource::new(
+            self.vault.clone(),
+            self.debounce,
+            self.inbox_ignore_globs.clone(),
+            self.capture_scope.clone(),
+        );
+        let watcher_active = std::sync::Arc::clone(&self.watcher_active);
+        let watch_handle = tokio::spawn(Box::new(vault_source).run(event_tx));
+        watcher_active.store(true, std::sync::atomic::Ordering::Relaxed);
+        tokio::spawn(async move {
+            let outcome = watch_handle.await;
+            watcher_active.store(false, std::sync::atomic::Ordering::Relaxed);
+            match outcome {
+                Ok(()) => tracing::warn!("vault watch task ended; watcher_active is now false"),
+                Err(e) => tracing::error!(error = %e, "vault watch task died"),
+            }
+        });
+    }
+
+    /// Spawn any additional event source (e.g. cron) the daemon was configured with.
+    fn spawn_extra_sources(&mut self, event_tx: UnboundedSender<Event>) {
+        if let Some(cron_source) = self.cron_source.take() {
+            tracing::info!(
+                source = cron_source.name(),
+                "starting additional event source"
+            );
+            tokio::spawn(cron_source.run(event_tx));
+        }
+    }
+
+    /// Spawn the background proposal-expiry reaper when a non-zero interval is configured.
+    fn spawn_reaper(&mut self) {
+        if !self.proposal_reap_interval.is_zero() {
+            let reap_interval = self.proposal_reap_interval;
+            let reap_vault = self.vault.clone();
+            tracing::info!(
+                interval_secs = reap_interval.as_secs(),
+                "starting proposal expiry reaper"
+            );
+            tokio::spawn(async move {
+                proposal_reap_loop(reap_vault, reap_interval).await;
+            });
+        }
     }
 }
 

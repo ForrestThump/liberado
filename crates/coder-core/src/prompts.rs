@@ -95,24 +95,38 @@ pub fn load(dir: Option<&Path>, file: &str, baked: &'static str) -> String {
     candidates.push(Path::new(PROMPT_DIR).join(file));
 
     for path in candidates {
-        match std::fs::read_to_string(&path) {
-            Ok(text) if !text.trim().is_empty() => {
-                tracing::debug!(path = %path.display(), "loaded prompt from disk");
-                return text;
-            }
-            Ok(_) => tracing::warn!(
-                path = %path.display(),
-                "prompt file is empty; using the built-in copy"
-            ),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => tracing::warn!(
-                path = %path.display(),
-                error = %e,
-                "prompt file exists but could not be read; using the built-in copy"
-            ),
+        if let Some(text) = read_prompt_candidate(&path) {
+            return text;
         }
     }
     baked.to_string()
+}
+
+/// Read one prompt candidate, logging the outcome. `None` means "keep looking": the file is
+/// missing, unreadable, or empty, and the next candidate (or the baked copy) should be used.
+fn read_prompt_candidate(path: &Path) -> Option<String> {
+    match std::fs::read_to_string(path) {
+        Ok(text) if !text.trim().is_empty() => {
+            tracing::debug!(path = %path.display(), "loaded prompt from disk");
+            Some(text)
+        }
+        Ok(_) => {
+            tracing::warn!(
+                path = %path.display(),
+                "prompt file is empty; using the built-in copy"
+            );
+            None
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+        Err(e) => {
+            tracing::warn!(
+                path = %path.display(),
+                error = %e,
+                "prompt file exists but could not be read; using the built-in copy"
+            );
+            None
+        }
+    }
 }
 
 #[cfg(test)]

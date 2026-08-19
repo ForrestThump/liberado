@@ -723,4 +723,71 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn shutting_down_response_requires_503_and_marker() {
+        let body = serde_json::json!({"error": "shutting_down"});
+        assert!(DaemonClient::is_shutting_down_response(503, &body));
+        // Marker on a different status is not a drain signal.
+        assert!(!DaemonClient::is_shutting_down_response(200, &body));
+        // 503 with a different error shape is not the structured drain refusal.
+        assert!(!DaemonClient::is_shutting_down_response(
+            503,
+            &serde_json::json!({"error": "boom"})
+        ));
+        assert!(!DaemonClient::is_shutting_down_response(
+            503,
+            &serde_json::json!({"ok": true})
+        ));
+    }
+
+    /// Empty or whitespace-only content must not count as a message on the transcript — the
+    /// role guards (`!content.is_empty()`) are the thing that keeps an empty assistant node from
+    /// satisfying P6/P7's "reply on disk" assertions.
+    #[test]
+    fn empty_and_whitespace_content_do_not_count_as_messages() {
+        let v = serde_json::json!({
+            "messages": [
+                {"role": "user", "content": ""},
+                {"role": "assistant", "content": "   "},
+                {"role": "user", "content": "real question"},
+                {"role": "assistant", "content": "real answer"}
+            ],
+            "turn_running": false,
+            "turn_unanswered": false
+        });
+        let s = ConversationSnapshot::from_json(&v);
+        assert_eq!(s.user_contents, vec!["real question"]);
+        assert_eq!(s.assistant_contents, vec!["real answer"]);
+    }
+
+    #[test]
+    fn parse_sse_raw_session_data_without_json() {
+        let mut sid = None;
+        let mut tok = false;
+        parse_sse_block("event: session\ndata: raw-session-id", &mut sid, &mut tok);
+        assert_eq!(sid.as_deref(), Some("raw-session-id"));
+        assert!(!tok);
+    }
+
+    #[test]
+    fn parse_sse_accepts_session_id_key() {
+        let mut sid = None;
+        let mut tok = false;
+        parse_sse_block(
+            "event: session\ndata: {\"session_id\":\"alt-key\"}",
+            &mut sid,
+            &mut tok,
+        );
+        assert_eq!(sid.as_deref(), Some("alt-key"));
+    }
+
+    #[test]
+    fn parse_sse_empty_data_is_ignored() {
+        let mut sid = Some("kept".into());
+        let mut tok = false;
+        parse_sse_block("event: token\ndata:\n\n", &mut sid, &mut tok);
+        assert_eq!(sid.as_deref(), Some("kept"), "empty data must not clobber");
+        assert!(!tok, "empty token data must not set saw_token");
+    }
 }

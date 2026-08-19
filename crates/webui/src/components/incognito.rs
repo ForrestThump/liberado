@@ -37,13 +37,21 @@ use dioxus::prelude::*;
 /// idle sweeper.
 pub const DISCARD_QUERY: &str = "?ephemeral_only=true";
 
+/// The URL that discards an incognito session, carrying the guard that makes the daemon refuse to
+/// touch anything else.
+fn discard_url(api_base: &str, id: &str) -> String {
+    format!("{api_base}/api/conversations/{id}{DISCARD_QUERY}")
+}
+
 /// Discard a session we are walking away from.
 ///
 /// Failures are swallowed on purpose: nothing useful can be done about them here, a 404 already
 /// means the outcome we wanted, and a 409 means the guard above just saved us.
 pub async fn discard(api_base: String, id: String) {
-    let url = format!("{api_base}/api/conversations/{id}{DISCARD_QUERY}");
-    let _ = reqwest::Client::new().delete(&url).send().await;
+    let _ = reqwest::Client::new()
+        .delete(discard_url(&api_base, &id))
+        .send()
+        .await;
 }
 
 // The live incognito session, mirrored out of the Dioxus signal.
@@ -115,7 +123,7 @@ pub fn install_unload_discard() {
             &wasm_bindgen::JsValue::from_str("keepalive"),
             &wasm_bindgen::JsValue::TRUE,
         );
-        let url = format!("{base}/api/conversations/{id}{DISCARD_QUERY}");
+        let url = discard_url(&base, &id);
         if let Ok(req) = web_sys::Request::new_with_str_and_init(&url, &opts) {
             // The promise is deliberately dropped: the document is going away and there is nobody
             // left to tell. `keepalive` is what makes the request outlive us, not the awaiting.
@@ -157,5 +165,22 @@ pub fn IncognitoToggle(on: Signal<bool>) -> Element {
             span { class: "incognito-glyph", "\u{1F576}" }
             span { class: "incognito-label", "Incognito" }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::discard_url;
+
+    /// The safety property the whole feature hangs on: the teardown request names the guard query,
+    /// so even a wrong id cannot delete a saved conversation. Asserted on the URL because that is
+    /// exactly what the daemon sees.
+    #[test]
+    fn discard_url_carries_the_ephemeral_only_guard() {
+        let url = discard_url("http://d", "01HZABC");
+        assert_eq!(
+            url,
+            "http://d/api/conversations/01HZABC?ephemeral_only=true"
+        );
     }
 }

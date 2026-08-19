@@ -848,10 +848,11 @@ fn slash_session_list() {
     let mut app = test_app();
     app.conversations = vec![conv("c1", "alpha"), conv("c2", "beta")];
     app.input = "/session list".into();
-    app.handle_key(key(KeyCode::Enter));
+    let effects = app.handle_key(key(KeyCode::Enter));
     // `/session list` is an alias for the unified switcher.
     assert_eq!(app.focus, Focus::SessionSwitcher);
     assert!(app.input.is_empty());
+    let _ = effects;
 }
 #[test]
 fn connection_status_flips_connected() {
@@ -3024,4 +3025,628 @@ fn gate_votes_are_capped_so_a_long_goal_does_not_grow_the_vector_forever() {
         format!("rev-{}", MAX_GATE_VOTES + 24)
     );
     assert_eq!(j.gate_votes[0].reviewer, "rev-25");
+}
+
+// ── Survivor-closing tests (mutants pass 2) ───────────────────────────────
+
+#[test]
+fn clamp_model_selection_pins_to_the_last_match() {
+    let mut app = test_app();
+    app.models = vec!["alpha".into(), "beta".into(), "alpine".into()];
+    app.sidebar_filter = "al".into(); // → alpha, alpine (2 matches)
+    app.sidebar_selection = 3;
+    app.clamp_model_selection();
+    assert_eq!(app.sidebar_selection, 1, "clamped to last match");
+    app.sidebar_filter = "zz".into(); // → 0 matches
+    app.sidebar_selection = 7;
+    app.clamp_model_selection();
+    assert_eq!(app.sidebar_selection, 0, "no matches reset to 0");
+}
+
+#[test]
+fn clamp_switcher_selection_pins_out_of_range_rows() {
+    let mut app = test_app();
+    app.sessions = vec![chat_summary("c1", "one"), chat_summary("g1", "run")];
+    app.sidebar_selection = 5;
+    app.clamp_switcher_selection();
+    assert_eq!(app.sidebar_selection, 1, "clamped to last row");
+    app.sidebar_selection = 0;
+    app.clamp_switcher_selection();
+    assert_eq!(app.sidebar_selection, 0, "in-range selection unchanged");
+}
+
+#[test]
+fn flush_joined_buf_moves_stream_tokens_into_a_message() {
+    let mut app = test_app();
+    app.join_session_with("g1".into(), Some(SessionKind::Coding), None);
+    let joined = app.joined.as_mut().unwrap();
+    joined.stream_buf = "partial".into();
+    App::flush_joined_buf(joined);
+    assert_eq!(joined.messages.len(), 1);
+    let Message::Assistant(text) = &joined.messages[0] else {
+        panic!("expected an assistant message, got {:?}", joined.messages);
+    };
+    assert_eq!(text, "partial");
+    assert!(joined.stream_buf.is_empty(), "buffer drained");
+
+    // An empty buffer adds nothing.
+    let mut app = test_app();
+    app.join_session_with("g2".into(), Some(SessionKind::Coding), None);
+    App::flush_joined_buf(app.joined.as_mut().unwrap());
+    assert!(
+        app.joined.as_ref().unwrap().messages.is_empty(),
+        "empty buffer is a no-op"
+    );
+}
+
+#[test]
+fn filtered_sessions_matches_title_kind_or_id() {
+    let mut app = test_app();
+    app.sessions = vec![
+        chat_summary("c1", "weekly planning"),
+        goal_header("g9", DomainWire::Coding, "build a CLI", "running", false),
+    ];
+    app.sidebar_filter = "planning".into();
+    assert_eq!(app.filtered_sessions().len(), 1, "title match");
+    app.sidebar_filter = "coding".into();
+    assert_eq!(app.filtered_sessions().len(), 1, "kind-label match");
+    app.sidebar_filter = "g9".into();
+    assert_eq!(app.filtered_sessions().len(), 1, "id match");
+    app.sidebar_filter = "zzz".into();
+    assert_eq!(app.filtered_sessions().len(), 0, "no match");
+}
+
+#[test]
+fn needs_animation_any_streaming_pending_or_disconnect() {
+    let mut app = test_app();
+    app.streaming = false;
+    app.pending_load = None;
+    app.daemon_connected = true;
+    assert!(!app.needs_animation());
+    app.streaming = true;
+    assert!(app.needs_animation(), "streaming animates");
+    app.streaming = false;
+    app.daemon_connected = false;
+    assert!(app.needs_animation(), "disconnect animates");
+    app.daemon_connected = true;
+    app.pending_load = Some("c1".into());
+    assert!(app.needs_animation(), "pending load animates");
+}
+
+#[test]
+fn cursor_col_counts_since_the_last_newline() {
+    let mut app = test_app();
+    app.input = "ab\ncd".into();
+    app.cursor = 5; // end of the second logical line
+    assert_eq!(app.cursor_col(), 2, "column counts within the line");
+    app.cursor = 4; // between c and d
+    assert_eq!(app.cursor_col(), 1);
+    app.cursor = 2; // end of the first line
+    assert_eq!(app.cursor_col(), 2);
+    app.input = "single".into();
+    app.cursor = 3;
+    assert_eq!(app.cursor_col(), 3);
+}
+
+#[test]
+fn cursor_visual_line_sums_wrapped_lines_before_the_cursor() {
+    let mut app = test_app();
+    set_content_width(&mut app, 2);
+    app.input = "aaaa\nbb".into();
+    app.cursor = 6; // end of "bb"
+    assert_eq!(
+        app.cursor_visual_line(),
+        2,
+        "aaaa wraps to 2 + bb = 3rd line"
+    );
+}
+
+#[test]
+fn cursor_visual_col_wraps_the_column_modulo_width() {
+    let mut app = test_app();
+    set_content_width(&mut app, 5);
+    app.input = "abcdef".into();
+    app.cursor = 6;
+    assert_eq!(app.cursor_visual_col(), 1, "6 % 5 = 1");
+    app.cursor = 5;
+    assert_eq!(app.cursor_visual_col(), 0);
+}
+
+// ── update() arms: reactions, model selection, tool chips, system lines, goal lifecycle ──────
+
+fn status_with_model(model: Option<String>) -> DaemonStatus {
+    DaemonStatus {
+        running: true,
+        vault_path: "/v".into(),
+        uptime_seconds: 1,
+        watcher_active: false,
+        dispatcher_attached: false,
+        orchestrator_attached: false,
+        reactions_seen: 0,
+        model_name: model,
+        token_usage_total: None,
+        context_window: None,
+        chat_tools: 0,
+        chat_tool_names: vec![],
+        enter_sends: true,
+    }
+}
+
+fn reaction(event_type: &str, path: Option<&str>) -> ReactionEvent {
+    ReactionEvent {
+        event_type: event_type.into(),
+        timestamp: "2026-01-01T00:00:00Z".into(),
+        source: "daemon".into(),
+        correlation_id: "c1".into(),
+        path: path.map(str::to_string),
+        outcome: chat_client_contract::ReactionOutcome::Observed,
+    }
+}
+
+#[test]
+fn reactions_update_sets_the_list_and_marks_dirty() {
+    let mut app = test_app();
+    app.clear_dirty();
+    let effects = app.update(Action::ReactionsUpdate(vec![reaction(
+        "note_created",
+        Some("/v/note.md"),
+    )]));
+    assert_eq!(app.reactions.len(), 1);
+    assert_eq!(app.reactions[0].event_type, "note_created");
+    assert_eq!(app.reactions[0].path.as_deref(), Some("/v/note.md"));
+    assert!(
+        app.is_dirty(),
+        "a new reaction list must mark the app dirty"
+    );
+    assert!(matches!(effects.as_slice(), [Effect::None]));
+
+    // The identical list is a no-op: no dirty mark, no duplicate rows.
+    app.clear_dirty();
+    app.update(Action::ReactionsUpdate(vec![reaction(
+        "note_created",
+        Some("/v/note.md"),
+    )]));
+    assert!(
+        !app.is_dirty(),
+        "an unchanged list must not mark the app dirty"
+    );
+}
+
+#[test]
+fn model_selected_with_error_reports_without_switching_or_closing() {
+    let mut app = test_app();
+    app.status = Some(status_with_model(Some("old".into())));
+    app.focus = Focus::ModelBrowser;
+    let effects = app.update(Action::ModelSelected {
+        model: "new".into(),
+        error: Some("denied by provider".into()),
+        conversation_scoped: false,
+    });
+    assert!(
+        matches!(app.messages.last(), Some(Message::System(m)) if m.contains("Failed to switch model: denied by provider"))
+    );
+    assert_eq!(
+        app.status.as_ref().unwrap().model_name.as_deref(),
+        Some("old"),
+        "a failed switch must not change the active model"
+    );
+    assert_eq!(
+        app.focus,
+        Focus::ModelBrowser,
+        "an error keeps the browser open so the pick can be retried"
+    );
+    assert!(matches!(effects.as_slice(), [Effect::None]));
+}
+
+#[test]
+fn model_selected_switches_the_active_model_daemon_wide() {
+    let mut app = test_app();
+    app.status = Some(status_with_model(Some("old".into())));
+    app.focus = Focus::ModelBrowser;
+    app.update(Action::ModelSelected {
+        model: "new".into(),
+        error: None,
+        conversation_scoped: false,
+    });
+    assert_eq!(
+        app.status.as_ref().unwrap().model_name.as_deref(),
+        Some("new"),
+        "the daemon-wide pick must update the active model"
+    );
+    assert!(
+        matches!(app.messages.last(), Some(Message::System(m)) if m.contains("Active model switched to `new`"))
+    );
+    assert_eq!(
+        app.focus,
+        Focus::Input,
+        "a successful pick closes the browser"
+    );
+}
+
+#[test]
+fn model_selected_scoped_to_conversation_keeps_the_active_model() {
+    let mut app = test_app();
+    app.status = Some(status_with_model(Some("old".into())));
+    app.focus = Focus::ModelBrowser;
+    app.update(Action::ModelSelected {
+        model: "new".into(),
+        error: None,
+        conversation_scoped: true,
+    });
+    assert_eq!(
+        app.status.as_ref().unwrap().model_name.as_deref(),
+        Some("old"),
+        "a conversation-scoped pick must not change the daemon-wide model"
+    );
+    assert!(
+        matches!(app.messages.last(), Some(Message::System(m)) if m.contains("Model `new` set for this conversation"))
+    );
+    assert_eq!(app.focus, Focus::Input);
+}
+
+#[test]
+fn reload_conversation_history_claims_pending_and_requests_the_load() {
+    let mut app = test_app();
+    let effects = app.update(Action::ReloadConversationHistory("c1".into()));
+    assert_eq!(
+        app.pending_load.as_deref(),
+        Some("c1"),
+        "the pending handshake must be claimed before the load"
+    );
+    assert!(
+        effects
+            .iter()
+            .any(|e| matches!(e, Effect::LoadConversationHistory(id) if id == "c1"))
+    );
+    assert!(app.is_dirty());
+}
+
+#[test]
+fn sse_tool_pushes_a_tool_call_chip() {
+    let mut app = test_app();
+    app.update(Action::SseTool {
+        name: "read_file".into(),
+        args: "/a.md".into(),
+    });
+    assert!(
+        matches!(app.messages.last(), Some(Message::ToolCall(ToolCallChip { name, args })) if name == "read_file" && args == "/a.md")
+    );
+    assert!(app.is_dirty());
+}
+
+#[test]
+fn sse_tool_result_pushes_an_outcome_chip() {
+    let mut app = test_app();
+    app.update(Action::SseToolResult {
+        name: "write_file".into(),
+        ok: false,
+        preview: "permission denied".into(),
+    });
+    assert!(
+        matches!(app.messages.last(), Some(Message::ToolResult(ToolResultChip { name, ok, preview })) if name == "write_file" && !ok && preview == "permission denied")
+    );
+    assert!(app.is_dirty());
+}
+
+#[test]
+fn system_message_pushes_a_line_and_resets_scroll() {
+    let mut app = test_app();
+    app.scroll_offset = 7;
+    app.update(Action::SystemMessage("goal parked".into()));
+    assert!(matches!(app.messages.last(), Some(Message::System(m)) if m == "goal parked"));
+    assert_eq!(app.scroll_offset, 0);
+    assert!(app.is_dirty());
+}
+
+#[test]
+fn goal_spawn_failed_pushes_an_error_line_and_resets_scroll() {
+    let mut app = test_app();
+    app.scroll_offset = 3;
+    app.update(Action::GoalSpawnFailed("provider unavailable".into()));
+    assert!(
+        matches!(app.messages.last(), Some(Message::System(m)) if m.contains("[spawn failed] provider unavailable"))
+    );
+    assert_eq!(app.scroll_offset, 0);
+}
+
+#[test]
+fn goal_stream_closed_with_error_appends_a_resubscribe_note() {
+    let mut app = test_app();
+    app.join_session("g1".to_string());
+    app.update(Action::GoalStreamClosed(Some("reset".into())));
+    let j = app.joined.as_ref().unwrap();
+    assert!(
+        j.messages.iter().any(|m| matches!(m, Message::System(s) if s.contains("stream closed: reset") && s.contains("/join to resubscribe"))),
+        "the close note must carry the reason and the resubscribe hint, got {:?}",
+        j.messages
+    );
+    assert!(!j.finished, "a stream close is not a session finish");
+}
+
+#[test]
+fn goal_stream_closed_without_error_appends_the_plain_note() {
+    let mut app = test_app();
+    app.join_session("g1".to_string());
+    app.update(Action::GoalStreamClosed(None));
+    let j = app.joined.as_ref().unwrap();
+    assert!(
+        j.messages.iter().any(
+            |m| matches!(m, Message::System(s) if s == "[stream closed] — /join to resubscribe")
+        )
+    );
+}
+
+#[test]
+fn goal_stream_closed_on_a_finished_session_is_a_noop() {
+    let mut app = test_app();
+    app.join_session("g1".to_string());
+    app.joined.as_mut().unwrap().finished = true;
+    app.update(Action::GoalStreamClosed(Some("late".into())));
+    let j = app.joined.as_ref().unwrap();
+    assert!(
+        j.messages.is_empty(),
+        "a finished session must not accumulate late close notes"
+    );
+}
+
+#[test]
+fn goal_message_outcome_reports_session_state() {
+    let cases: Vec<(GoalMessageOutcome, &str)> = vec![
+        (
+            GoalMessageOutcome::NotFound,
+            "[this session is gone — /back to return to chat]",
+        ),
+        (
+            GoalMessageOutcome::NotPermitted,
+            "never allowed to be answered",
+        ),
+        (GoalMessageOutcome::Parked, "parked"),
+        (
+            GoalMessageOutcome::Finished,
+            "[this session has finished — /back to return to chat]",
+        ),
+        (
+            GoalMessageOutcome::Error("boom".into()),
+            "[could not deliver message: boom]",
+        ),
+    ];
+    for (outcome, needle) in cases {
+        let mut app = test_app();
+        app.update(Action::GoalMessageOutcome(outcome));
+        assert!(
+            matches!(app.messages.last(), Some(Message::System(m)) if m.contains(needle)),
+            "outcome should surface a line containing {needle:?}, got {:?}",
+            app.messages.last()
+        );
+    }
+}
+
+#[test]
+fn goal_message_outcome_accepted_is_silent() {
+    let mut app = test_app();
+    app.update(Action::GoalMessageOutcome(GoalMessageOutcome::Accepted));
+    assert!(
+        app.messages.is_empty(),
+        "an accepted answer is echoed via the stream, not as a system line"
+    );
+}
+
+#[test]
+fn goal_message_outcome_lands_in_the_joined_transcript() {
+    let mut app = test_app();
+    app.join_session("g1".to_string());
+    app.update(Action::GoalMessageOutcome(GoalMessageOutcome::NotFound));
+    let j = app.joined.as_ref().unwrap();
+    assert!(
+        j.messages
+            .iter()
+            .any(|m| matches!(m, Message::System(s) if s.contains("session is gone"))),
+        "the note must go to the joined transcript, got {:?}",
+        j.messages
+    );
+    assert!(
+        app.messages.is_empty(),
+        "the note must not also land in the primary chat"
+    );
+}
+
+// ── apply_goal_event (joined-session stream frames) ──────────────────────────
+
+/// A connected app joined to a goal session.
+fn goal_app() -> App {
+    let mut app = test_app();
+    app.joined = Some(JoinedSession {
+        id: "g1".into(),
+        kind: SessionKind::Coding,
+        status: "running".into(),
+        finished: false,
+        description: String::new(),
+        messages: Vec::new(),
+        stream_buf: String::new(),
+        awaiting: None,
+        gate_votes: Vec::new(),
+        active_role: None,
+        last_validation: None,
+    });
+    app
+}
+
+/// A no-op if not joined: stray events after `/back` must not panic or mutate.
+#[test]
+fn apply_goal_event_is_a_noop_when_not_joined() {
+    let mut app = test_app();
+    app.apply_goal_event(GoalUiEvent::Token("x".into()));
+    app.apply_goal_event(GoalUiEvent::Finished {
+        status: "succeeded".into(),
+        summary: "ok".into(),
+    });
+    assert!(app.joined.is_none());
+}
+
+/// Tokens accumulate into the stream buffer until a structured event flushes.
+#[test]
+fn tokens_accumulate_then_flush_on_a_structured_event() {
+    let mut app = goal_app();
+    app.apply_goal_event(GoalUiEvent::Token("hel".into()));
+    app.apply_goal_event(GoalUiEvent::Token("lo".into()));
+    app.apply_goal_event(GoalUiEvent::Progress("warming up".into()));
+    let j = app.joined.as_ref().unwrap();
+    assert!(
+        j.stream_buf.is_empty(),
+        "the buffer must flush before the status line"
+    );
+    assert!(
+        j.messages
+            .iter()
+            .any(|m| matches!(m, Message::Assistant(t) if t == "hello")),
+        "flushed tokens must become an Assistant message"
+    );
+}
+
+/// Validation and role events flush and update the transient clues.
+#[test]
+fn validation_records_result_and_sets_a_mark() {
+    let mut app = goal_app();
+    app.apply_goal_event(GoalUiEvent::Validation {
+        ok: true,
+        summary: "compile ok".into(),
+    });
+    let j = app.joined.as_ref().unwrap();
+    assert!(j.last_validation.as_ref().unwrap().ok);
+    assert!(
+        j.messages
+            .iter()
+            .any(|m| matches!(m, Message::System(s) if s.contains("✓ compile ok"))),
+        "a passing validation must show the check mark"
+    );
+}
+
+/// A coerced gate vote reads as unavailable ("?"), not as a rejection ("✗").
+#[test]
+fn coerced_gate_vote_is_question_not_rejection() {
+    let mut app = goal_app();
+    app.apply_goal_event(GoalUiEvent::CriticVerdict {
+        reviewer: "r1".into(),
+        kind: "reviewer".into(),
+        approved: false,
+        issues: vec![],
+        coerced: true,
+    });
+    let j = app.joined.as_ref().unwrap();
+    assert_eq!(j.gate_votes.len(), 1);
+    assert!(j.gate_votes[0].coerced);
+    assert!(
+        j.messages
+            .iter()
+            .any(|m| matches!(m, Message::System(s) if s.contains("? gate[") && s.contains("r1"))),
+        "coerced votes must not read as a rejection"
+    );
+}
+
+/// A real (non-coerced) rejection with issues lists them in the transcript.
+#[test]
+fn refuting_gate_vote_lists_issues() {
+    let mut app = goal_app();
+    app.apply_goal_event(GoalUiEvent::CriticVerdict {
+        reviewer: "r1".into(),
+        kind: "reviewer".into(),
+        approved: false,
+        issues: vec!["naming".into(), "sexprs".into()],
+        coerced: false,
+    });
+    let j = app.joined.as_ref().unwrap();
+    assert!(
+        j.messages.iter().any(|m| matches!(m, Message::System(s) if s.contains("✗ gate[") && s.contains("naming") && s.contains("sexprs"))),
+        "a real refutation must show ✗ and its issues"
+    );
+}
+
+/// File changes map to + / - / ~ marks.
+#[test]
+fn file_change_marks_match_added_deleted_modified() {
+    let mut app = goal_app();
+    for (path, change, _mark) in [
+        ("a.rs", "added", "+"),
+        ("b.rs", "deleted", "-"),
+        ("c.rs", "modified", "~"),
+    ] {
+        app.apply_goal_event(GoalUiEvent::FileChanged {
+            path: path.into(),
+            change: change.into(),
+        });
+    }
+    let j = app.joined.as_ref().unwrap();
+    for (path, change, mark) in [
+        ("a.rs", "added", "+"),
+        ("b.rs", "deleted", "-"),
+        ("c.rs", "modified", "~"),
+    ] {
+        let _ = change;
+        assert!(
+            j.messages.iter().any(
+                |m| matches!(m, Message::System(s) if s.starts_with(&format!("{mark} {path}")))
+            ),
+            "{mark} {path} missing"
+        );
+    }
+}
+
+/// A human reply clears the awaiting banner and resumes the session.
+#[test]
+fn human_reply_clears_awaiting_and_resumes() {
+    let mut app = goal_app();
+    app.apply_goal_event(GoalUiEvent::Awaiting {
+        prompt: "pick one".into(),
+        options: vec!["a".into()],
+    });
+    {
+        let j = app.joined.as_ref().unwrap();
+        assert_eq!(j.status, "awaiting");
+        assert!(j.awaiting.is_some());
+    }
+    app.apply_goal_event(GoalUiEvent::Human("the answer".into()));
+    let j = app.joined.as_ref().unwrap();
+    assert!(j.awaiting.is_none());
+    assert_eq!(j.status, "running");
+    assert!(
+        j.messages
+            .iter()
+            .any(|m| matches!(m, Message::User(t) if t == "the answer"))
+    );
+}
+
+/// The terminal event drops transient activity and marks the session finished.
+#[test]
+fn finished_clears_activity_and_sets_status() {
+    let mut app = goal_app();
+    app.apply_goal_event(GoalUiEvent::Role {
+        role: "worker".into(),
+        model: Some("m/1".into()),
+    });
+    app.apply_goal_event(GoalUiEvent::Finished {
+        status: "succeeded".into(),
+        summary: "done".into(),
+    });
+    let j = app.joined.as_ref().unwrap();
+    assert!(j.finished);
+    assert_eq!(j.status, "succeeded");
+    assert!(j.active_role.is_none());
+    assert!(
+        j.messages
+            .iter()
+            .any(|m| matches!(m, Message::System(s) if s.contains("[session succeeded] done")))
+    );
+}
+
+/// Started sets the description only when non-empty.
+#[test]
+fn started_sets_description_only_when_nonempty() {
+    let mut app = goal_app();
+    app.apply_goal_event(GoalUiEvent::Started {
+        description: "build".into(),
+    });
+    app.apply_goal_event(GoalUiEvent::Started {
+        description: "".into(),
+    });
+    assert_eq!(app.joined.as_ref().unwrap().description, "build");
 }

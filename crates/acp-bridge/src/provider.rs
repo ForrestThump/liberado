@@ -53,64 +53,83 @@ pub(crate) fn build_provider() -> Result<ResolvedProvider, String> {
         .ok()
         .filter(|s| !s.is_empty());
 
-    if let Some(config_dir) = provider_config_dir() {
-        match liberado_config::load_config(Some(config_dir.as_path())) {
-            Ok((config, _)) => {
-                if let Some(provider) = liberado_bootstrap::provider_from_config(&config) {
-                    let backend = config.topology.provider.clone();
-                    let model = model_override.clone().unwrap_or_else(|| provider.model());
-                    if let Some(profile) = config
-                        .topology
-                        .providers
-                        .iter()
-                        .find(|p| p.name == config.topology.provider)
-                        && let Ok(p) = OpenAiCompatibleProvider::from_env(
-                            &profile.api_key_env,
-                            profile.model_env.as_deref(),
-                            &model,
-                            &profile.base_url,
-                            profile.extra_client_error_status.clone(),
-                        )
-                    {
-                        tracing::info!(
-                            provider = %profile.name,
-                            %model,
-                            config_dir = %config_dir.display(),
-                            "acp provider from resolved Liberado config"
-                        );
-                        return Ok(ResolvedProvider {
-                            provider: Arc::new(p),
-                            backend,
-                            model_id: model,
-                        });
-                    }
-                    let m = provider.model();
-                    return Ok(ResolvedProvider {
-                        provider,
-                        backend,
-                        model_id: m,
-                    });
-                }
-            }
-            Err(e) => {
-                tracing::warn!(
-                    error = %e,
-                    config_dir = %config_dir.display(),
-                    "resolved Liberado config load failed; falling back to env keys"
-                )
-            }
-        }
+    if let Some(config_dir) = provider_config_dir()
+        && let Some(resolved) = provider_from_liberado_config(&config_dir, model_override.clone())
+    {
+        return Ok(resolved);
     }
 
-    // Prefer OpenRouter so the picker gets `author/model` ids (deepseek/deepseek-v4-pro, …),
-    // then whatever else is declared.
-    //
-    // The profiles come from `Topology::default()`, not a list written out here. This block used to
-    // restate the base URLs, key envs, default models and OpenRouter's `402` "insufficient credits"
-    // status — all of which `config-loader`'s `default_providers()` already declares. Two
-    // declarations of one fact is failure-mode class 6: nothing compares them, so they drift and the
-    // drift is silent. Adding a backend is now an entry in `[[providers]]`, which is where the
-    // config model already says it belongs.
+    provider_from_env_profiles(model_override)
+}
+
+/// Resolve the provider from a loaded Liberado topology (`topology.toml`): the configured backend
+/// plus an OpenAI-compatible endpoint if the profile is one, else the bootstrap-built provider.
+/// Returns `None` when the config fails to load or declares no provider — the caller then falls
+/// back to the env-key scan.
+fn provider_from_liberado_config(
+    config_dir: &std::path::Path,
+    model_override: Option<String>,
+) -> Option<ResolvedProvider> {
+    match liberado_config::load_config(Some(config_dir)) {
+        Ok((config, _)) => {
+            let provider = liberado_bootstrap::provider_from_config(&config)?;
+            let backend = config.topology.provider.clone();
+            let model = model_override.clone().unwrap_or_else(|| provider.model());
+            if let Some(profile) = config
+                .topology
+                .providers
+                .iter()
+                .find(|p| p.name == config.topology.provider)
+                && let Ok(p) = OpenAiCompatibleProvider::from_env(
+                    &profile.api_key_env,
+                    profile.model_env.as_deref(),
+                    &model,
+                    &profile.base_url,
+                    profile.extra_client_error_status.clone(),
+                )
+            {
+                tracing::info!(
+                    provider = %profile.name,
+                    %model,
+                    config_dir = %config_dir.display(),
+                    "acp provider from resolved Liberado config"
+                );
+                return Some(ResolvedProvider {
+                    provider: Arc::new(p),
+                    backend,
+                    model_id: model,
+                });
+            }
+            let m = provider.model();
+            Some(ResolvedProvider {
+                provider,
+                backend,
+                model_id: m,
+            })
+        }
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                config_dir = %config_dir.display(),
+                "resolved Liberado config load failed; falling back to env keys"
+            );
+            None
+        }
+    }
+}
+
+/// Fallback scan of declared provider profiles against the environment, preferring OpenRouter so
+/// the picker gets `author/model` ids (deepseek/deepseek-v4-pro, …), then whatever else is
+/// declared. Ends with a keyless placeholder provider so Paseo can still detect liberado-acp even
+/// though prompts need a key.
+///
+/// The profiles come from `Topology::default()`, not a list written out here. This block used to
+/// restate the base URLs, key envs, default models and OpenRouter's `402` "insufficient credits"
+/// status — all of which `config-loader`'s `default_providers()` already declares. Two
+/// declarations of one fact is failure-mode class 6: nothing compares them, so they drift and the
+/// drift is silent. Adding a backend is now an entry in `[[providers]]`, which is where the
+/// config model already says it belongs.
+fn provider_from_env_profiles(model_override: Option<String>) -> Result<ResolvedProvider, String> {
     let profiles = liberado_config::Topology::default().providers;
     let preferred = ["openrouter", "deepseek"];
     let ordered = preferred
@@ -170,20 +189,7 @@ pub(crate) async fn load_model_catalog(
     backend: &str,
     current: &str,
 ) -> Vec<CatalogModel> {
-    let live = match provider.list_models().await {
-        Ok(ids) if !ids.is_empty() => {
-            tracing::info!(count = ids.len(), %backend, "fetched live /models catalog");
-            ids
-        }
-        Ok(_) => {
-            tracing::warn!(%backend, "provider /models returned empty; using fallbacks");
-            Vec::new()
-        }
-        Err(e) => {
-            tracing::warn!(error = %e, %backend, "provider list_models failed; using fallbacks");
-            Vec::new()
-        }
-    };
+    let live = fetch_live_models(provider, backend).await;
 
     let ordered = if live.is_empty() {
         fallback_model_ids(backend, current)
@@ -199,6 +205,25 @@ pub(crate) async fn load_model_catalog(
             model_id: id.clone(),
         })
         .collect()
+}
+
+/// Fetch the live `/models` catalog. Logs the outcome; an empty result (failure or empty list)
+/// means the caller falls back to the static lists.
+async fn fetch_live_models(provider: &dyn Provider, backend: &str) -> Vec<String> {
+    match provider.list_models().await {
+        Ok(ids) if !ids.is_empty() => {
+            tracing::info!(count = ids.len(), %backend, "fetched live /models catalog");
+            ids
+        }
+        Ok(_) => {
+            tracing::warn!(%backend, "provider /models returned empty; using fallbacks");
+            Vec::new()
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, %backend, "provider list_models failed; using fallbacks");
+            Vec::new()
+        }
+    }
 }
 
 /// Full live catalog, A–Z. Includes `current` if the live list omitted it (e.g. custom slug).

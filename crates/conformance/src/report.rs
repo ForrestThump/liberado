@@ -76,3 +76,69 @@ fn reclaim_owner(path: impl AsRef<Path>) {
 
 #[cfg(not(unix))]
 fn reclaim_owner(_path: impl AsRef<Path>) {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::result::{PathId, PathResult};
+
+    fn sample_report(tag: PathStatus) -> RunReport {
+        RunReport {
+            started_at: "2026-01-01T00:00:00Z".into(),
+            finished_at: "2026-01-01T00:01:00Z".into(),
+            overall: tag,
+            base_url: "http://daemon:8080".into(),
+            results: vec![PathResult::pass(
+                PathId::P2,
+                "background chat turn",
+                123,
+                serde_json::json!({"session_id": "sess-1"}),
+            )],
+        }
+    }
+
+    #[test]
+    fn writes_pass_report_under_conformance_reports() {
+        let vault = tempfile::tempdir().unwrap();
+        let rel = write_vault_report(vault.path(), &sample_report(PathStatus::Pass)).unwrap();
+        assert_eq!(
+            rel.components().count(),
+            3,
+            "conformance/reports/<ts>-pass.md"
+        );
+        let abs = vault.path().join(&rel);
+        let md = std::fs::read_to_string(&abs).unwrap();
+        assert!(md.contains("# Tier 3 conformance — pass"), "{md}");
+        assert!(md.contains("- **overall**: Pass"));
+        assert!(md.contains("### `p2` — Pass"));
+        assert!(md.contains("assertion: background chat turn"));
+        assert!(md.contains("\"session_id\": \"sess-1\""));
+    }
+
+    #[test]
+    fn fail_and_skipped_reports_get_distinct_tags() {
+        let vault = tempfile::tempdir().unwrap();
+        let rel_fail = write_vault_report(vault.path(), &sample_report(PathStatus::Fail)).unwrap();
+        assert!(rel_fail.to_string_lossy().ends_with("-fail.md"));
+        assert!(
+            std::fs::read_to_string(vault.path().join(&rel_fail))
+                .unwrap()
+                .contains("# Tier 3 conformance — fail")
+        );
+
+        let mut skipped = sample_report(PathStatus::Skipped);
+        skipped.results = vec![PathResult::skipped(PathId::P7, "no restart hook")];
+        let rel_skip = write_vault_report(vault.path(), &skipped).unwrap();
+        assert!(rel_skip.to_string_lossy().ends_with("-skipped.md"));
+        let md = std::fs::read_to_string(vault.path().join(&rel_skip)).unwrap();
+        assert!(md.contains("reason: no restart hook"));
+    }
+
+    #[test]
+    fn creates_parent_directories_deep_in_vault() {
+        let vault = tempfile::tempdir().unwrap();
+        let deep = vault.path().join("nested").join("vault");
+        let rel = write_vault_report(&deep, &sample_report(PathStatus::Pass)).unwrap();
+        assert!(deep.join(&rel).exists());
+    }
+}

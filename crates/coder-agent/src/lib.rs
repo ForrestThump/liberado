@@ -296,19 +296,22 @@ impl LiberadoLoopBackend {
             tracing::warn!("session critic is enabled but the run wrote no trace; skipping");
             return;
         };
-        let events = match tokio::fs::read_to_string(&trace).await {
-            Ok(raw) => match serde_json::from_str::<liberado_coder_core::CoderTrace>(&raw) {
-                Ok(t) => t.events,
-                Err(e) => {
-                    tracing::warn!(error = %e, "session critic: unreadable trace");
-                    return;
-                }
-            },
-            Err(e) => {
-                tracing::warn!(error = %e, path = %trace, "session critic: cannot read trace");
-                return;
-            }
+        let Some(events) = Self::read_trace_events(&trace).await else {
+            return;
         };
+        let summary = result.summary.clone();
+        self.run_session_review(config, &events, &summary, result)
+            .await;
+    }
+
+    /// Execute the session review against the loaded trace and record any findings on the result.
+    async fn run_session_review(
+        &self,
+        config: &liberado_coder_core::CoderRunConfig,
+        events: &[liberado_coder_core::CoderEvent],
+        summary: &str,
+        result: &mut CoderRunResult,
+    ) {
         let role = config
             .session_critic
             .role
@@ -321,7 +324,7 @@ impl LiberadoLoopBackend {
         };
         // The reviewer needs a request to name the task; the trace's own copy is the right one.
         let request = liberado_coder_core::CoderRunRequest {
-            task: liberado_coder_core::CoderTask::new("session-review", result.summary.clone()),
+            task: liberado_coder_core::CoderTask::new("session-review", summary.to_string()),
             workspace: liberado_coder_core::WorkspaceRef::new("", "HEAD"),
             config: config.clone(),
             attempt: 0,
@@ -332,8 +335,8 @@ impl LiberadoLoopBackend {
             self.providers.as_ref(),
             &request,
             &role,
-            &events,
-            Some(result.summary.as_str()),
+            events,
+            Some(summary),
             visibility,
         )
         .await
@@ -348,6 +351,25 @@ impl LiberadoLoopBackend {
                 result.session_findings = review.findings;
             }
             Err(e) => tracing::warn!(error = %e, "session critic failed; run left unreviewed"),
+        }
+    }
+
+    /// Load a run's event trace. Any read/parse failure is logged and yields `None`, leaving the
+    /// run unreviewed rather than failing it.
+    async fn read_trace_events(trace: &str) -> Option<Vec<liberado_coder_core::CoderEvent>> {
+        let raw = match tokio::fs::read_to_string(trace).await {
+            Ok(raw) => raw,
+            Err(e) => {
+                tracing::warn!(error = %e, path = %trace, "session critic: cannot read trace");
+                return None;
+            }
+        };
+        match serde_json::from_str::<liberado_coder_core::CoderTrace>(&raw) {
+            Ok(t) => Some(t.events),
+            Err(e) => {
+                tracing::warn!(error = %e, "session critic: unreadable trace");
+                None
+            }
         }
     }
 }
@@ -503,6 +525,122 @@ pub(crate) async fn workspace_diff(workspace_root: &str) -> Result<String, Coder
     Ok(diff)
 }
 
+/// Assemble the executor for one worker attempt: the observer that traces each turn, the
+/// workspace-compile finish gate (a `succeeded` report is not accepted while `cargo check` is
+/// red), and the spill directory oversized tool results are offloaded into.
+fn build_executor(
+    provider: Arc<dyn Provider>,
+    max_turns: u32,
+    events: &trace::EventLog,
+    worker_role_name: &str,
+    effective_root: &str,
+) -> Executor {
+    Executor::new(provider, Budget::new(max_turns))
+        .with_observer(Arc::new(trace::TurnTracer::new(
+            events.clone(),
+            worker_role_name,
+        )))
+        .with_report_gate(Arc::new(finish_gate::WorkspaceCompileGate::new(
+            effective_root.to_string(),
+        )))
+        .with_spill_dir(Path::new(effective_root).join(".liberado").join("offload"))
+}
+
+/// Attach the MVL (model-verifier loop) session when `trace_dir` is configured. A failed open is
+/// logged and the run continues without it — tracing must never fail a coding run.
+fn attach_mvl_if_configured(
+    executor: Executor,
+    trace_dir: Option<&str>,
+    session_id: &str,
+) -> Executor {
+    let Some(dir) = trace_dir else {
+        return executor;
+    };
+    let mvl_path = Path::new(dir).join(format!("{session_id}.mvl.jsonl"));
+    let exec_path = Path::new(dir).join(format!("{session_id}.execution.jsonl"));
+    match MvlSession::open(&mvl_path, Some(&exec_path), session_id.to_string()) {
+        Ok(session) => executor.with_mvl(Arc::new(session)),
+        Err(error) => {
+            tracing::warn!(
+                session_id = %session_id,
+                error = %error,
+                "MVL session failed to open; coding run continues without it"
+            );
+            executor
+        }
+    }
+}
+
+/// The executor already filed a report; this guard turns a worker that changed nothing (and did
+/// not itself file a failure) into a `NoChanges` error the caller does not retry. Compare 7 C1:
+/// the model submitted `succeeded` after a compiling change set; `same_tool_churn` had latched on
+/// twenty `run_command` searches, and this site turned that into `NoChanges` (not retried). The
+/// ship bar still runs below. A latched inspect stall must not outrank a report the model was
+/// told to file. Records both trace events the original inline block emitted.
+fn no_changes_guard(events: &trace::EventLog) -> CoderError {
+    trace::push_event(
+        events,
+        CoderEvent::LoopGuardTriggered {
+            guard: "no_changes".to_string(),
+            action: "fail_run".to_string(),
+            at: Utc::now(),
+        },
+    );
+    trace::push_event(
+        events,
+        CoderEvent::SessionFinished {
+            outcome: Outcome::Failed,
+            at: Utc::now(),
+        },
+    );
+    CoderError::NoChanges
+}
+
+/// Workspace-side state prepared once per attempt, before the executor runs. Kept as a struct so
+/// `attempt_body` reads as prepare → run → report, with the pieces the post-run stages consume
+/// (root, baseline, progress) named once.
+struct WorkerRuntime {
+    effective_root: String,
+    checkpoint_key: String,
+    baseline_sha: Option<String>,
+    progress: Arc<Mutex<ProgressGuard>>,
+    runtime: runtime::GuardedTracingRuntime,
+}
+
+/// The executor already filed a report; a latched progress-fatal is logged and ignored. Compare
+/// 7 C1: the model submitted `succeeded` after a compiling change set; `same_tool_churn` had
+/// latched on twenty `run_command` searches, and this site turned that into `NoChanges` (not
+/// retried). The ship bar still runs below. A latched inspect stall must not outrank a report the
+/// model was told to file.
+fn log_ignored_fatal(progress: &Arc<Mutex<ProgressGuard>>, outcome: Outcome) {
+    if let Some(fatal) = progress
+        .lock()
+        .expect("progress mutex poisoned")
+        .take_fatal()
+    {
+        tracing::warn!(
+            guard = fatal.guard_name(),
+            outcome = ?outcome,
+            "progress fatal ignored; a report was filed"
+        );
+    }
+}
+
+/// Resolve the files this attempt changed against its baseline HEAD, as typed change records.
+async fn resolve_attempt_changes(
+    effective_root: &str,
+    baseline_sha: Option<&str>,
+) -> Result<Vec<liberado_coder_core::FileChangeRecord>, CoderError> {
+    Ok(gates::resolve_attempt_changes(effective_root, baseline_sha)
+        .await?
+        .into_iter()
+        .map(|(path, change)| liberado_coder_core::FileChangeRecord {
+            path,
+            change: change.to_string(),
+        })
+        .collect())
+}
+
 impl LiberadoLoopBackend {
     /// Run one attempt and **write its trace on every exit path**.
     ///
@@ -567,37 +705,30 @@ impl LiberadoLoopBackend {
         }
     }
 
-    async fn attempt_body(
-        &self,
-        request: CoderRunRequest,
-        session_id: &str,
-        events: &trace::EventLog,
-    ) -> Result<CoderRunResult, CoderError> {
-        let events = events.clone();
-        let session_id = session_id.to_string();
-
-        // Optional planner (attempt 0 only) — inject plan into task context for the worker.
-        let mut request = request;
-        if request.attempt == 0
-            && let Some(plan) =
-                planner::run_planner(self.providers.as_ref(), &request, &events).await?
-        {
-            let block = plan.as_context_block();
-            request.task.context = Some(match request.task.context.take() {
-                Some(existing) => format!("{existing}\n\n{block}"),
-                None => block,
-            });
-        }
-
-        let worker_role_name = roles::worker_role_name(&request);
-        let worker_config = roles::worker_role_config(&request);
+    /// The role resolved from the request: its name and the max-turns budget its config
+    /// requires. A role without `max_turns` is a configuration error, refused up front.
+    fn resolve_worker_role(request: &CoderRunRequest) -> Result<(String, u32), CoderError> {
+        let worker_role_name = roles::worker_role_name(request);
+        let worker_config = roles::worker_role_config(request);
         let max_turns = worker_config.max_turns.ok_or_else(|| {
             CoderError::Setup(format!(
                 "{worker_role_name} role requires max_turns in resolved config"
             ))
         })?;
-        let event_preview_max_chars = request.config.progress.event_preview_max_chars;
+        Ok((worker_role_name.to_string(), max_turns))
+    }
 
+    /// Everything the worker run needs that lives on the workspace side: the runtime (with the
+    /// sandbox's *effective* root — it may have created a separate worktree), the start
+    /// checkpoint keyed by stable goal/task id (not per-attempt trace id, S4), the pre-run HEAD
+    /// (so a clean tree after `git_commit` still counts as progress), and the progress/runtime
+    /// wrappers the executor drives.
+    async fn prepare_worker_runtime(
+        request: &CoderRunRequest,
+        session_id: &str,
+        events: &trace::EventLog,
+        event_preview_max_chars: usize,
+    ) -> Result<WorkerRuntime, CoderError> {
         let workspace_root_in = request.workspace.root.clone();
         // Pass the task/session id so Worktree isolation gets a unique directory name (not the
         // project folder name — self-host on `life-os` would otherwise collide and fail on Windows
@@ -623,7 +754,7 @@ impl LiberadoLoopBackend {
             .to_string();
         // S4: shadow-git checkpoints keyed by stable goal/task id (not per-attempt trace id).
         let checkpoint_key = if request.task.id.is_empty() {
-            session_id.clone()
+            session_id.to_string()
         } else {
             request.task.id.clone()
         };
@@ -649,9 +780,26 @@ impl LiberadoLoopBackend {
             progress.clone(),
             event_preview_max_chars,
         );
+        Ok(WorkerRuntime {
+            effective_root,
+            checkpoint_key,
+            baseline_sha,
+            progress,
+            runtime,
+        })
+    }
 
+    /// Resolve the role's provider and assemble the executor's task: role instructions plus the
+    /// optional hashline prompt guidance, over the request's goal.
+    async fn build_worker_task(
+        &self,
+        request: &CoderRunRequest,
+        worker_role_name: &str,
+        events: &trace::EventLog,
+    ) -> Result<(Arc<dyn Provider>, Task), CoderError> {
+        let worker_config = roles::worker_role_config(request);
         trace::push_event(
-            &events,
+            events,
             CoderEvent::RoleStarted {
                 role: worker_role_name.to_string(),
                 model: worker_config.model.clone(),
@@ -667,34 +815,67 @@ impl LiberadoLoopBackend {
                 request.config.hashline.hash_length,
             ));
         }
-        let task = Task::new(instructions, roles::coder_goal(&request));
-        let mut executor = Executor::new(provider, Budget::new(max_turns))
-            .with_observer(Arc::new(trace::TurnTracer::new(
-                events.clone(),
-                worker_role_name,
-            )))
-            .with_report_gate(Arc::new(finish_gate::WorkspaceCompileGate::new(
-                effective_root.clone(),
-            )))
-            .with_spill_dir(
-                std::path::Path::new(&effective_root)
-                    .join(".liberado")
-                    .join("offload"),
-            );
-        if let Some(dir) = request.config.trace_dir.as_deref() {
-            let mvl_path = Path::new(dir).join(format!("{session_id}.mvl.jsonl"));
-            let exec_path = Path::new(dir).join(format!("{session_id}.execution.jsonl"));
-            match MvlSession::open(&mvl_path, Some(&exec_path), session_id.clone()) {
-                Ok(session) => executor = executor.with_mvl(Arc::new(session)),
-                Err(error) => {
-                    tracing::warn!(
-                        session_id = %session_id,
-                        error = %error,
-                        "MVL session failed to open; coding run continues without it"
-                    );
-                }
-            }
+        let task = Task::new(instructions, roles::coder_goal(request));
+        Ok((provider, task))
+    }
+
+    /// Optional planner (attempt 0 only): run the planner and inject its plan into the task
+    /// context for the worker, preserving any context the caller already provided (the plan is
+    /// appended after it).
+    async fn apply_planner_plan(
+        &self,
+        request: &mut CoderRunRequest,
+        events: &trace::EventLog,
+    ) -> Result<(), CoderError> {
+        if request.attempt == 0
+            && let Some(plan) =
+                planner::run_planner(self.providers.as_ref(), request, events).await?
+        {
+            let block = plan.as_context_block();
+            request.task.context = Some(match request.task.context.take() {
+                Some(existing) => format!("{existing}\n\n{block}"),
+                None => block,
+            });
         }
+        Ok(())
+    }
+
+    async fn attempt_body(
+        &self,
+        request: CoderRunRequest,
+        session_id: &str,
+        events: &trace::EventLog,
+    ) -> Result<CoderRunResult, CoderError> {
+        let events = events.clone();
+        let session_id = session_id.to_string();
+
+        // Optional planner (attempt 0 only) — inject plan into task context for the worker.
+        let mut request = request;
+        self.apply_planner_plan(&mut request, &events).await?;
+
+        let (worker_role_name, max_turns) = Self::resolve_worker_role(&request)?;
+        let event_preview_max_chars = request.config.progress.event_preview_max_chars;
+        let WorkerRuntime {
+            effective_root,
+            checkpoint_key,
+            baseline_sha,
+            progress,
+            runtime,
+        } = Self::prepare_worker_runtime(&request, &session_id, &events, event_preview_max_chars)
+            .await?;
+
+        let (provider, task) = self
+            .build_worker_task(&request, &worker_role_name, &events)
+            .await?;
+        let mut executor = build_executor(
+            provider,
+            max_turns,
+            &events,
+            &worker_role_name,
+            &effective_root,
+        );
+        executor =
+            attach_mvl_if_configured(executor, request.config.trace_dir.as_deref(), &session_id);
         let report = executor
             .execute(&runtime, task)
             .await
@@ -722,50 +903,13 @@ impl LiberadoLoopBackend {
             },
         );
 
-        let fatal = progress
-            .lock()
-            .expect("progress mutex poisoned")
-            .take_fatal();
-        // The executor already filed a report. Compare 7 C1: the model submitted
-        // `succeeded` after a compiling change set; `same_tool_churn` had latched
-        // on twenty `run_command` searches, and this site turned that into
-        // `NoChanges` (not retried). The ship bar still runs below. A latched
-        // inspect stall must not outrank a report the model was told to file.
-        if let Some(fatal) = fatal {
-            tracing::warn!(
-                guard = fatal.guard_name(),
-                outcome = ?report.outcome,
-                "progress fatal ignored; a report was filed"
-            );
-        }
+        log_ignored_fatal(&progress, report.outcome);
 
-        let file_changes: Vec<liberado_coder_core::FileChangeRecord> =
-            gates::resolve_attempt_changes(&effective_root, baseline_sha.as_deref())
-                .await?
-                .into_iter()
-                .map(|(path, change)| liberado_coder_core::FileChangeRecord {
-                    path,
-                    change: change.to_string(),
-                })
-                .collect();
+        let file_changes =
+            resolve_attempt_changes(&effective_root, baseline_sha.as_deref()).await?;
         let files_changed: Vec<String> = file_changes.iter().map(|c| c.path.clone()).collect();
         if files_changed.is_empty() && report.outcome != Outcome::Failed {
-            trace::push_event(
-                &events,
-                CoderEvent::LoopGuardTriggered {
-                    guard: "no_changes".to_string(),
-                    action: "fail_run".to_string(),
-                    at: Utc::now(),
-                },
-            );
-            trace::push_event(
-                &events,
-                CoderEvent::SessionFinished {
-                    outcome: Outcome::Failed,
-                    at: Utc::now(),
-                },
-            );
-            return Err(CoderError::NoChanges);
+            return Err(no_changes_guard(&events));
         }
         for path in &files_changed {
             trace::push_event(
@@ -779,166 +923,53 @@ impl LiberadoLoopBackend {
 
         // Authoritative verifier pipeline (config list and/or legacy validation_command).
         // Skipped when the worker already reported Failed (honest stop).
-        let mut validation_notes = None;
-        let mut outcome = report.outcome;
-        let mut summary = report.summary;
-        // Verifier results outlive the pipeline block: the completion gate shows them to reviewers
-        // as the deterministic floor they may not override.
-        let mut verifier_results: Vec<liberado_coder_core::NamedVerdict> = Vec::new();
-        if outcome != Outcome::Failed {
-            let specs = resolve_verifier_specs(
-                &request.config.verifiers,
-                request.config.validation_command.as_ref(),
-            );
-            if !specs.is_empty() {
-                let mut pipeline = verify_pipeline::run_pipeline(
-                    &effective_root,
-                    &specs,
-                    &request.config.verify_policy,
-                    Some(&events),
-                )
-                .await?;
-                // A test failure that already existed on the base commit is not the agent's
-                // fault. Compare named cargo-test failures against `compute_baseline` (throwaway
-                // worktree at HEAD-before-edits, cached per commit). If every failure is
-                // pre-existing, the test verifier is treated as passing.
-                if !pipeline.is_pass() && baseline_sha.is_some() {
-                    let baseline_failures = gates::baseline_test_failures(
-                        &effective_root,
-                        baseline_sha.as_deref().unwrap(),
-                    )
-                    .await
-                    .unwrap_or_else(|e| {
-                        tracing::warn!(
-                            error = %e,
-                            "baseline test comparison failed; treating all cargo-test failures as new"
-                        );
-                        std::collections::BTreeSet::new()
-                    });
-                    pipeline = soften_pre_existing_test_failures(&pipeline, &baseline_failures);
-                }
-                if !pipeline.is_pass() {
-                    // Signature-aware feedback for repair routing (scratchpad C).
-                    let feedback = repair_feedback::format_pipeline_repair(&pipeline);
-                    trace::push_event(
-                        &events,
-                        CoderEvent::LoopGuardTriggered {
-                            guard: "verifier_pipeline".to_string(),
-                            action: "fail_run".to_string(),
-                            at: Utc::now(),
-                        },
-                    );
-                    trace::push_event(
-                        &events,
-                        CoderEvent::SessionFinished {
-                            outcome: Outcome::Failed,
-                            at: Utc::now(),
-                        },
-                    );
-                    return Err(CoderError::Validation(feedback));
-                }
-                validation_notes = Some(
-                    pipeline
-                        .results
-                        .iter()
-                        .map(|r| format!("{}: {}", r.id, r.verdict.summary))
-                        .collect::<Vec<_>>()
-                        .join("; "),
-                );
-                verifier_results = pipeline.results.clone();
-            }
-        }
+        // Authoritative verifier pipeline (config list and/or legacy validation_command).
+        // Skipped when the worker already reported Failed (honest stop).
+        let VerifierOutcome {
+            notes: validation_notes,
+            results: verifier_results,
+        } = run_verifier_pipeline(
+            &request,
+            &effective_root,
+            baseline_sha.as_ref(),
+            &events,
+            report.outcome,
+        )
+        .await?;
 
-        // The judgment layer, on top of the deterministic verifiers above. Two shapes:
-        //
-        // * gate enabled  — a remembered gatekeeper plus a quorum of cold reviewers, adjudicated
-        //   by the kernel (`liberado_session::CompletionGate`). Fail-closed.
-        // * gate disabled — the legacy single critic, unchanged.
-        //
-        // Both are skipped when the worker already failed or changed nothing: there is no claim to
-        // dispute, and asking a reviewer to bless an empty diff only burns tokens.
-        let mut critic_verdict = None;
-        let mut gate_votes = Vec::new();
-        let reviewable = outcome != Outcome::Failed && !files_changed.is_empty();
-        if reviewable && request.config.gate.enabled {
-            let gate_outcome = completion_gate::run_gate(
-                self.providers.as_ref(),
-                &request,
-                &verifier_results,
-                &events,
-            )
-            .await?;
-            gate_votes = completion_gate::flatten_votes(&gate_outcome);
-            let verdict = match &gate_outcome.verdict {
-                liberado_session::GateVerdict::Approved => CriticVerdict::Acceptable,
-                liberado_session::GateVerdict::Refuted { issues } => {
-                    // Belt and braces: `run`'s attempt loop also derives Failed from a
-                    // `NeedsRevision` verdict, so this assignment is not the only thing standing
-                    // between a refutation and a Succeeded result. It is kept so `run_attempt`'s
-                    // own return value is self-consistent — a caller reading it directly (evals,
-                    // future single-attempt callers) must never see Succeeded next to a refuted
-                    // verdict. `critic_verdict`, not `outcome`, is the signal that drives retry.
-                    outcome = Outcome::Failed;
-                    summary = format!(
-                        "{summary}; completion gate refused ({} of {} votes refuting): {}",
-                        gate_outcome
-                            .votes
-                            .iter()
-                            .filter(|v| !v.vote.is_approve())
-                            .count(),
-                        gate_outcome.votes.len(),
-                        issues.join("; ")
-                    );
-                    CriticVerdict::NeedsRevision {
-                        issues: issues.clone(),
-                    }
-                }
-            };
-            critic_verdict = Some(verdict);
-        } else if reviewable && roles::critic_enabled(&request) {
-            // `None` is an abstention — the reviewer returned nothing usable. The run keeps the
-            // verdict the deterministic verifiers already gave it; `critic_verdict` stays `None`
-            // so no consumer can mistake silence for approval.
-            if let Some(verdict) =
-                critic::run_critic(self.providers.as_ref(), &request, &events).await?
-            {
-                trace::push_event(
-                    &events,
-                    CoderEvent::CriticVerdict {
-                        verdict: verdict.clone(),
-                        at: Utc::now(),
-                    },
-                );
-                if let CriticVerdict::NeedsRevision { issues } = &verdict {
-                    outcome = Outcome::Failed;
-                    summary = format!(
-                        "{summary}; critic requested revision: {}",
-                        issues.join("; ")
-                    );
-                }
-                critic_verdict = Some(verdict);
-            } else {
-                summary = format!("{summary}; critic abstained (no usable response)");
-            }
-        }
+        let mut state = VerdictState {
+            outcome: report.outcome,
+            summary: report.summary,
+            critic_verdict: None,
+            gate_votes: Vec::new(),
+        };
+        apply_judgment(
+            self.providers.as_ref(),
+            &request,
+            &verifier_results,
+            &files_changed,
+            &events,
+            &mut state,
+        )
+        .await?;
 
         trace::push_event(
             &events,
             CoderEvent::SessionFinished {
-                outcome,
+                outcome: state.outcome,
                 at: Utc::now(),
             },
         );
 
         let result = CoderRunResult {
             backend: self.name().to_string(),
-            outcome,
-            summary,
+            outcome: state.outcome,
+            summary: state.summary,
             files_changed,
             file_changes,
             validation_notes,
-            critic_verdict,
-            gate_votes,
+            critic_verdict: state.critic_verdict,
+            gate_votes: state.gate_votes,
             trace_path: None,
             diff_findings: Vec::new(),
             session_findings: Vec::new(),
@@ -951,6 +982,184 @@ impl LiberadoLoopBackend {
         };
         Ok(result)
     }
+}
+
+/// What the authoritative verifier pipeline produced for one attempt: the human-readable note
+/// plus the per-verifier results the completion gate may show to reviewers.
+struct VerifierOutcome {
+    notes: Option<String>,
+    results: Vec<liberado_coder_core::NamedVerdict>,
+}
+
+/// The authoritative verifier pipeline (config list and/or legacy `validation_command`).
+/// Skipped when the worker already reported `Failed` (honest stop). Verifier results outlive the
+/// pipeline block: the completion gate shows them to reviewers as the deterministic floor they
+/// may not override.
+async fn run_verifier_pipeline(
+    request: &CoderRunRequest,
+    effective_root: &str,
+    baseline_sha: Option<&String>,
+    events: &trace::EventLog,
+    outcome: Outcome,
+) -> Result<VerifierOutcome, CoderError> {
+    if outcome == Outcome::Failed {
+        return Ok(VerifierOutcome {
+            notes: None,
+            results: Vec::new(),
+        });
+    }
+    let specs = resolve_verifier_specs(
+        &request.config.verifiers,
+        request.config.validation_command.as_ref(),
+    );
+    if specs.is_empty() {
+        return Ok(VerifierOutcome {
+            notes: None,
+            results: Vec::new(),
+        });
+    }
+    let mut pipeline = verify_pipeline::run_pipeline(
+        effective_root,
+        &specs,
+        &request.config.verify_policy,
+        Some(events),
+    )
+    .await?;
+    // A test failure that already existed on the base commit is not the agent's fault. Compare
+    // named cargo-test failures against `compute_baseline` (throwaway worktree at
+    // HEAD-before-edits, cached per commit). If every failure is pre-existing, the test verifier
+    // is treated as passing.
+    if !pipeline.is_pass()
+        && let Some(baseline_sha) = baseline_sha
+    {
+        let baseline_failures = gates::baseline_test_failures(effective_root, baseline_sha)
+            .await
+            .unwrap_or_else(|e| {
+                tracing::warn!(
+                    error = %e,
+                    "baseline test comparison failed; treating all cargo-test failures as new"
+                );
+                std::collections::BTreeSet::new()
+            });
+        pipeline = soften_pre_existing_test_failures(&pipeline, &baseline_failures);
+    }
+    if !pipeline.is_pass() {
+        // Signature-aware feedback for repair routing (scratchpad C).
+        let feedback = repair_feedback::format_pipeline_repair(&pipeline);
+        trace::push_event(
+            events,
+            CoderEvent::LoopGuardTriggered {
+                guard: "verifier_pipeline".to_string(),
+                action: "fail_run".to_string(),
+                at: Utc::now(),
+            },
+        );
+        trace::push_event(
+            events,
+            CoderEvent::SessionFinished {
+                outcome: Outcome::Failed,
+                at: Utc::now(),
+            },
+        );
+        return Err(CoderError::Validation(feedback));
+    }
+    let notes = Some(
+        pipeline
+            .results
+            .iter()
+            .map(|r| format!("{}: {}", r.id, r.verdict.summary))
+            .collect::<Vec<_>>()
+            .join("; "),
+    );
+    Ok(VerifierOutcome {
+        notes,
+        results: pipeline.results.clone(),
+    })
+}
+
+/// The verdict layer's working state: the outcome/summary the worker and verifiers produced, to
+/// be mutated by the gate or critic, plus their recorded outputs.
+struct VerdictState {
+    outcome: Outcome,
+    summary: String,
+    critic_verdict: Option<CriticVerdict>,
+    gate_votes: Vec<liberado_coder_core::GateVoteRecord>,
+}
+
+/// The judgment layer, on top of the deterministic verifiers above. Two shapes:
+///
+/// * gate enabled  — a remembered gatekeeper plus a quorum of cold reviewers, adjudicated by the
+///   kernel (`liberado_session::CompletionGate`). Fail-closed.
+/// * gate disabled — the legacy single critic, unchanged.
+///
+/// Both are skipped when the worker already failed or changed nothing: there is no claim to
+/// dispute, and asking a reviewer to bless an empty diff only burns tokens.
+async fn apply_judgment(
+    providers: &dyn CoderProviderFactory,
+    request: &CoderRunRequest,
+    verifier_results: &[liberado_coder_core::NamedVerdict],
+    files_changed: &[String],
+    events: &trace::EventLog,
+    state: &mut VerdictState,
+) -> Result<(), CoderError> {
+    let reviewable = state.outcome != Outcome::Failed && !files_changed.is_empty();
+    if reviewable && request.config.gate.enabled {
+        let gate_outcome =
+            completion_gate::run_gate(providers, request, verifier_results, events).await?;
+        state.gate_votes = completion_gate::flatten_votes(&gate_outcome);
+        let verdict = match &gate_outcome.verdict {
+            liberado_session::GateVerdict::Approved => CriticVerdict::Acceptable,
+            liberado_session::GateVerdict::Refuted { issues } => {
+                // Belt and braces: `run`'s attempt loop also derives Failed from a
+                // `NeedsRevision` verdict, so this assignment is not the only thing standing
+                // between a refutation and a Succeeded result. It is kept so `run_attempt`'s
+                // own return value is self-consistent — a caller reading it directly (evals,
+                // future single-attempt callers) must never see Succeeded next to a refuted
+                // verdict. `critic_verdict`, not `outcome`, is the signal that drives retry.
+                state.outcome = Outcome::Failed;
+                state.summary = format!(
+                    "{}; completion gate refused ({} of {} votes refuting): {}",
+                    state.summary,
+                    gate_outcome
+                        .votes
+                        .iter()
+                        .filter(|v| !v.vote.is_approve())
+                        .count(),
+                    gate_outcome.votes.len(),
+                    issues.join("; ")
+                );
+                CriticVerdict::NeedsRevision {
+                    issues: issues.clone(),
+                }
+            }
+        };
+        state.critic_verdict = Some(verdict);
+    } else if reviewable && roles::critic_enabled(request) {
+        // `None` is an abstention — the reviewer returned nothing usable. The run keeps the
+        // verdict the deterministic verifiers already gave it; `critic_verdict` stays `None`
+        // so no consumer can mistake silence for approval.
+        if let Some(verdict) = critic::run_critic(providers, request, events).await? {
+            trace::push_event(
+                events,
+                CoderEvent::CriticVerdict {
+                    verdict: verdict.clone(),
+                    at: Utc::now(),
+                },
+            );
+            if let CriticVerdict::NeedsRevision { issues } = &verdict {
+                state.outcome = Outcome::Failed;
+                state.summary = format!(
+                    "{}; critic requested revision: {}",
+                    state.summary,
+                    issues.join("; ")
+                );
+            }
+            state.critic_verdict = Some(verdict);
+        } else {
+            state.summary = format!("{}; critic abstained (no usable response)", state.summary);
+        }
+    }
+    Ok(())
 }
 
 /// When the pipeline fails and a cargo-test verifier is among the failures, check whether every

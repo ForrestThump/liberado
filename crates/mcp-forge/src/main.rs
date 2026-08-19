@@ -13,6 +13,7 @@ mod build;
 mod lock;
 mod sources;
 
+use std::path::Path;
 use std::process::ExitCode;
 
 use lock::LockFile;
@@ -65,7 +66,20 @@ fn run_sync(force: bool, only: Option<String>) -> ExitCode {
         eprintln!("no config directory found (set LIBERADO_CONFIG_DIR)");
         return ExitCode::FAILURE;
     };
+    let install_dir = liberado_config::mcp_install_dir();
+    run_sync_in(&config_dir, &install_dir, force, only)
+}
 
+/// The pure part of `run_sync`: the two directories come in as parameters instead of being
+/// resolved from process env here, so tests can drive the whole sync (including the exit code)
+/// without mutating `LIBERADO_CONFIG_DIR` / `LIBERADO_MCP_INSTALL_DIR` — process-global state
+/// that races under `cargo test`'s parallel execution.
+fn run_sync_in(
+    config_dir: &Path,
+    install_dir: &Path,
+    force: bool,
+    only: Option<String>,
+) -> ExitCode {
     let sources_path = config_dir.join(SOURCES_FILE);
     let sources = match sources::load_sources(&sources_path) {
         Ok(sources) => sources,
@@ -88,12 +102,11 @@ fn run_sync(force: bool, only: Option<String>) -> ExitCode {
         return ExitCode::FAILURE;
     }
 
-    let install_dir = liberado_config::mcp_install_dir();
-    let mut lock = LockFile::load(&install_dir);
+    let mut lock = LockFile::load(install_dir);
 
     let mut failed = false;
     for source in &sources {
-        match build::sync_source(source, &install_dir, &mut lock, force) {
+        match build::sync_source(source, install_dir, &mut lock, force) {
             Ok(build::SyncOutcome::UpToDate) => println!("[{}] up to date", source.name),
             Ok(build::SyncOutcome::Built) => println!("[{}] built", source.name),
             Err(e) => {
@@ -103,7 +116,7 @@ fn run_sync(force: bool, only: Option<String>) -> ExitCode {
         }
     }
 
-    if let Err(e) = lock.save(&install_dir) {
+    if let Err(e) = lock.save(install_dir) {
         eprintln!("warning: failed to save lockfile: {e}");
     }
 
@@ -111,5 +124,209 @@ fn run_sync(force: bool, only: Option<String>) -> ExitCode {
         ExitCode::FAILURE
     } else {
         ExitCode::SUCCESS
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    fn write_sources(config_dir: &Path, toml: &str) -> PathBuf {
+        std::fs::create_dir_all(config_dir).unwrap();
+        let path = config_dir.join(SOURCES_FILE);
+        std::fs::write(&path, toml).unwrap();
+        path
+    }
+
+    fn sources_toml(name: &str, path: &Path) -> String {
+        // Forward slashes: a raw Windows `\` inside a TOML basic string is an escape sequence.
+        let path = path.display().to_string().replace('\\', "/");
+        format!("[[source]]\nname = \"{name}\"\npath = \"{path}\"\n")
+    }
+
+    /// A minimal, dependency-free Cargo project that `cargo install --path` can build.
+    fn scaffold_project(dir: &Path, name: &str) {
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::write(
+            dir.join("Cargo.toml"),
+            format!("[package]\nname = \"{name}\"\nversion = \"0.1.0\"\nedition = \"2021\"\n"),
+        )
+        .unwrap();
+        std::fs::write(dir.join("src/main.rs"), "fn main() {}\n").unwrap();
+        let status = std::process::Command::new("cargo")
+            .current_dir(dir)
+            .arg("generate-lockfile")
+            .status()
+            .expect("cargo runs");
+        assert!(status.success(), "cargo generate-lockfile failed");
+    }
+
+    /// `git init` plus a committed file, with a test identity set (git refuses to commit without
+    /// one on CI runners). Returns the HEAD SHA.
+    fn init_git_repo(dir: &Path) -> String {
+        let run = |args: &[&str]| {
+            let out = std::process::Command::new("git")
+                .current_dir(dir)
+                .args(args)
+                .output()
+                .expect("git runs");
+            assert!(
+                out.status.success(),
+                "git {args:?}: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+            out
+        };
+        run(&["init", "-q"]);
+        run(&["config", "user.email", "forge-test@example.com"]);
+        run(&["config", "user.name", "Forge Test"]);
+        std::fs::write(dir.join("README.md"), "forge test repo\n").unwrap();
+        run(&["add", "."]);
+        run(&["commit", "-q", "-m", "initial"]);
+        String::from_utf8(run(&["rev-parse", "HEAD"]).stdout)
+            .unwrap()
+            .trim()
+            .to_string()
+    }
+
+    fn git_source_toml(name: &str, repo: &Path) -> String {
+        // A `file://` URL rather than a bare Windows path: `git ls-remote` accepts both, but
+        // `cargo install --git` rejects a bare `C:\...` path as an invalid URL.
+        let url = format!("file:///{}", repo.display().to_string().replace('\\', "/"));
+        format!("[[source]]\nname = \"{name}\"\ngit = \"{url}\"\n")
+    }
+
+    #[test]
+    fn missing_sources_file_is_failure() {
+        let config = tempfile::tempdir().unwrap();
+        let install = tempfile::tempdir().unwrap();
+        assert_eq!(
+            run_sync_in(config.path(), install.path(), false, None),
+            ExitCode::FAILURE
+        );
+    }
+
+    #[test]
+    fn empty_sources_file_is_failure() {
+        let config = tempfile::tempdir().unwrap();
+        write_sources(config.path(), "# no sources yet\n");
+        let install = tempfile::tempdir().unwrap();
+        assert_eq!(
+            run_sync_in(config.path(), install.path(), false, None),
+            ExitCode::FAILURE
+        );
+    }
+
+    #[test]
+    fn only_matching_no_source_is_failure() {
+        let config = tempfile::tempdir().unwrap();
+        write_sources(
+            config.path(),
+            "[[source]]\nname = \"hello\"\ngit = \"https://example.invalid/repo\"\n",
+        );
+        let install = tempfile::tempdir().unwrap();
+        assert_eq!(
+            run_sync_in(config.path(), install.path(), false, Some("other".into())),
+            ExitCode::FAILURE
+        );
+    }
+
+    #[test]
+    fn only_matching_a_source_syncs_just_it() {
+        let config = tempfile::tempdir().unwrap();
+        let install = tempfile::tempdir().unwrap();
+        let project = tempfile::tempdir().unwrap();
+        scaffold_project(project.path(), "hello");
+        write_sources(
+            config.path(),
+            &format!(
+                "[[source]]\nname = \"hello\"\npath = \"{}\"\n\n[[source]]\nname = \"broken\"\npath = \"C:/does/not/exist\"\n",
+                project.path().display().to_string().replace('\\', "/")
+            ),
+        );
+
+        // "hello" is the only match; "broken" must be filtered out or the run fails.
+        let code = run_sync_in(config.path(), install.path(), false, Some("hello".into()));
+        assert_eq!(code, ExitCode::SUCCESS);
+        assert!(
+            liberado_config::managed_binary_path(install.path(), "hello").is_file(),
+            "--only hello must still install hello"
+        );
+    }
+
+    #[test]
+    fn syncs_a_path_source_and_returns_success() {
+        let config = tempfile::tempdir().unwrap();
+        let install = tempfile::tempdir().unwrap();
+        let project = tempfile::tempdir().unwrap();
+        scaffold_project(project.path(), "hello");
+        write_sources(config.path(), &sources_toml("hello", project.path()));
+
+        let code = run_sync_in(config.path(), install.path(), false, None);
+        assert_eq!(code, ExitCode::SUCCESS);
+        assert!(liberado_config::managed_binary_path(install.path(), "hello").is_file());
+    }
+
+    #[test]
+    fn a_failing_source_marks_the_run_failed_but_still_saves_the_lock() {
+        let config = tempfile::tempdir().unwrap();
+        let install = tempfile::tempdir().unwrap();
+        write_sources(
+            config.path(),
+            "[[source]]\nname = \"broken\"\npath = \"C:/does/not/exist\"\n",
+        );
+
+        let code = run_sync_in(config.path(), install.path(), false, None);
+        assert_eq!(code, ExitCode::FAILURE);
+        assert!(
+            install.path().join(".mcp-forge-lock.toml").is_file(),
+            "lockfile must still be saved after a failed source"
+        );
+    }
+
+    #[test]
+    fn second_sync_reports_uptodate() {
+        let config = tempfile::tempdir().unwrap();
+        let install = tempfile::tempdir().unwrap();
+        let repo = tempfile::tempdir().unwrap();
+        scaffold_project(repo.path(), "hello");
+        init_git_repo(repo.path());
+        write_sources(config.path(), &git_source_toml("hello", repo.path()));
+
+        assert_eq!(
+            run_sync_in(config.path(), install.path(), false, None),
+            ExitCode::SUCCESS
+        );
+        // The second run resolves the same remote SHA, sees it in the lock, and reports
+        // "up to date" instead of rebuilding.
+        assert_eq!(
+            run_sync_in(config.path(), install.path(), false, None),
+            ExitCode::SUCCESS
+        );
+        let lock_text =
+            std::fs::read_to_string(install.path().join(".mcp-forge-lock.toml")).unwrap();
+        assert!(
+            lock_text.contains("hello"),
+            "lock must record the built source"
+        );
+    }
+
+    #[test]
+    fn lock_save_failure_is_reported_as_a_warning() {
+        let config = tempfile::tempdir().unwrap();
+        let install = tempfile::tempdir().unwrap();
+        // A file where a directory should be: `lock.save`'s `create_dir_all` fails because the
+        // parent of `install_dir` is not a directory.
+        let blocker = install.path().join("blocker");
+        std::fs::write(&blocker, "in the way").unwrap();
+        let install_dir = blocker.join("install");
+        write_sources(
+            config.path(),
+            "[[source]]\nname = \"broken\"\npath = \"C:/does/not/exist\"\n",
+        );
+
+        let code = run_sync_in(config.path(), &install_dir, false, None);
+        assert_eq!(code, ExitCode::FAILURE);
     }
 }

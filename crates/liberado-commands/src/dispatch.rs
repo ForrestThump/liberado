@@ -3,6 +3,20 @@ use crate::context::CommandContext;
 use crate::handlers;
 use crate::result::CommandResult;
 
+/// No-argument commands: `/name` maps straight to the command.
+const NO_ARG_COMMANDS: &[(&str, SlashCommand)] = &[
+    ("/quit", SlashCommand::Quit),
+    ("/exit", SlashCommand::Exit),
+    ("/new", SlashCommand::New),
+    ("/clear", SlashCommand::Clear),
+    ("/help", SlashCommand::Help),
+    ("/status", SlashCommand::Status),
+    ("/model", SlashCommand::Model),
+    ("/profile", SlashCommand::Profile),
+    ("/sessions", SlashCommand::Sessions),
+    ("/back", SlashCommand::Back),
+];
+
 pub fn parse(input: &str) -> Option<SlashCommand> {
     let trimmed = input.trim();
     if !trimmed.starts_with('/') {
@@ -10,20 +24,14 @@ pub fn parse(input: &str) -> Option<SlashCommand> {
     }
     let parts: Vec<&str> = trimmed.splitn(3, ' ').collect();
     let cmd = parts[0];
+    if let Some((_, command)) = NO_ARG_COMMANDS.iter().find(|(name, _)| *name == cmd) {
+        return Some(command.clone());
+    }
     match cmd {
-        "/quit" => Some(SlashCommand::Quit),
-        "/exit" => Some(SlashCommand::Exit),
-        "/new" => Some(SlashCommand::New),
-        "/clear" => Some(SlashCommand::Clear),
-        "/help" => Some(SlashCommand::Help),
-        "/status" => Some(SlashCommand::Status),
         "/theme" => Some(parse_theme(parts.get(1).copied(), parts.get(2).copied())),
-        "/model" => Some(SlashCommand::Model),
-        "/profile" => Some(SlashCommand::Profile),
         // `/session` and `/sessions` are aliases: both open the one unified switcher (all chats +
         // goal sessions). `/session <sub>` still exposes the power-user subcommands (info/switch/close).
         "/session" => Some(parse_session(parts.get(1).copied(), parts.get(2).copied())),
-        "/sessions" => Some(SlashCommand::Sessions),
         "/join" => Some(SlashCommand::Join(
             parts.get(1).copied().unwrap_or("").to_string(),
         )),
@@ -46,7 +54,6 @@ pub fn parse(input: &str) -> Option<SlashCommand> {
             trimmed.strip_prefix("/explore").unwrap_or("").trim(),
             CodingGoalMode::Explore,
         )),
-        "/back" => Some(SlashCommand::Back),
         // `/fork 3` branches after your 3rd turn; a bare `/fork` takes the whole conversation.
         // A non-numeric argument is a typo, not a turn — fall back to the whole conversation rather
         // than silently forking at some other point than the one the human asked for.

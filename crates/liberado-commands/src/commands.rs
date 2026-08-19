@@ -128,6 +128,65 @@ pub enum SessionCmd {
     Unknown(String),
 }
 
+/// Test-only formatting. Sub-command enums format the tail after their command word; the
+/// top-level `Display` composes the command. Keeping each enum's formatting next to its
+/// variants means the `/goal`-family strings are written once and the top-level match stays
+/// one arm per command.
+#[cfg(test)]
+impl std::fmt::Display for ThemeCmd {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ThemeCmd::List => write!(f, "list"),
+            ThemeCmd::Set(name) => write!(f, "set {name}"),
+            ThemeCmd::Reload => write!(f, "reload"),
+        }
+    }
+}
+
+#[cfg(test)]
+impl std::fmt::Display for SessionCmd {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SessionCmd::Info => write!(f, "info"),
+            SessionCmd::List => write!(f, "list"),
+            SessionCmd::Switch(id) => write!(f, "switch {id}"),
+            SessionCmd::Close => write!(f, "close"),
+            SessionCmd::Unknown(sub) => write!(f, "{sub}"),
+        }
+    }
+}
+
+#[cfg(test)]
+impl std::fmt::Display for GoalCmd {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            GoalCmd::Start {
+                project: Some(p),
+                text,
+            } => write!(f, "in {p} {text}"),
+            GoalCmd::Start {
+                project: None,
+                text,
+            } => write!(f, "{text}"),
+            GoalCmd::View => Ok(()), // the bare `/goal` — no tail
+            GoalCmd::Status => write!(f, "status"),
+            GoalCmd::Pause => write!(f, "pause"),
+            GoalCmd::Resume(a) if a.is_empty() => write!(f, "resume"),
+            GoalCmd::Resume(a) => write!(f, "resume {a}"),
+            GoalCmd::Clear => write!(f, "clear"),
+        }
+    }
+}
+
+#[cfg(test)]
+/// The slash text for a coding goal: `mode in <project> <text>` when a project is named.
+fn coding_slash(mode: CodingGoalMode, project: Option<&str>, text: &str) -> String {
+    match project {
+        Some(p) => format!("{} in {p} {text}", mode.slash()),
+        None => format!("{} {text}", mode.slash()),
+    }
+}
+
 #[cfg(test)]
 impl std::fmt::Display for SlashCommand {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -138,49 +197,20 @@ impl std::fmt::Display for SlashCommand {
             SlashCommand::Clear => write!(f, "/clear"),
             SlashCommand::Help => write!(f, "/help"),
             SlashCommand::Status => write!(f, "/status"),
-            SlashCommand::Theme(cmd) => match cmd {
-                ThemeCmd::List => write!(f, "/theme list"),
-                ThemeCmd::Set(name) => write!(f, "/theme set {name}"),
-                ThemeCmd::Reload => write!(f, "/theme reload"),
-            },
+            SlashCommand::Theme(cmd) => write!(f, "/theme {cmd}"),
             SlashCommand::Model => write!(f, "/model"),
             SlashCommand::Profile => write!(f, "/profile"),
-            SlashCommand::Session(cmd) => match cmd {
-                SessionCmd::Info => write!(f, "/session info"),
-                SessionCmd::List => write!(f, "/session list"),
-                SessionCmd::Switch(id) => write!(f, "/session switch {id}"),
-                SessionCmd::Close => write!(f, "/session close"),
-                SessionCmd::Unknown(sub) => write!(f, "/session {sub}"),
-            },
+            SlashCommand::Session(cmd) => write!(f, "/session {cmd}"),
             SlashCommand::Sessions => write!(f, "/sessions"),
             SlashCommand::Join(id) => write!(f, "/join {id}"),
             SlashCommand::Spawn { domain, goal } => write!(f, "/spawn {domain} {goal}"),
-            SlashCommand::Goal(g) => match g {
-                GoalCmd::Start {
-                    project: Some(p),
-                    text,
-                } => write!(f, "/goal in {p} {text}"),
-                GoalCmd::Start {
-                    project: None,
-                    text,
-                } => write!(f, "/goal {text}"),
-                GoalCmd::View => write!(f, "/goal"),
-                GoalCmd::Status => write!(f, "/goal status"),
-                GoalCmd::Pause => write!(f, "/goal pause"),
-                GoalCmd::Resume(a) if a.is_empty() => write!(f, "/goal resume"),
-                GoalCmd::Resume(a) => write!(f, "/goal resume {a}"),
-                GoalCmd::Clear => write!(f, "/goal clear"),
-            },
+            SlashCommand::Goal(GoalCmd::View) => write!(f, "/goal"),
+            SlashCommand::Goal(g) => write!(f, "/goal {g}"),
             SlashCommand::Coding {
                 mode,
-                project: Some(p),
+                project,
                 text,
-            } => write!(f, "{} in {p} {text}", mode.slash()),
-            SlashCommand::Coding {
-                mode,
-                project: None,
-                text,
-            } => write!(f, "{} {text}", mode.slash()),
+            } => write!(f, "{}", coding_slash(*mode, project.as_deref(), text)),
             SlashCommand::Back => write!(f, "/back"),
             SlashCommand::Fork { after_turn: None } => write!(f, "/fork"),
             SlashCommand::Fork {

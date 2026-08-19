@@ -332,176 +332,281 @@ fn lint(root: &Path) -> Result<Vec<Issue>, Box<dyn std::error::Error>> {
     let mut issues = Vec::new();
     let mut canonical = HashMap::new();
     for doc in &docs {
-        if is_root_future_work(&doc.path) && doc.meta.is_none() {
-            issues.push(Issue {
-                path: doc.path.clone(),
-                message: "root future-work document missing YAML frontmatter metadata".into(),
-            });
-            continue;
-        }
-        if !is_managed(&doc.path, &doc.meta) {
-            continue;
-        }
-        let meta = doc.meta.as_ref().unwrap();
-        for field in ["kind", "status", "authority"] {
-            if !meta.contains_key(Value::String(field.into())) {
-                issues.push(Issue {
-                    path: doc.path.clone(),
-                    message: format!("missing required metadata field: {field}"),
-                });
-            }
-        }
-        let kind = meta_str(meta, "kind").unwrap_or("");
-        let status = meta_str(meta, "status").unwrap_or("");
-        let authority = meta_str(meta, "authority").unwrap_or("");
-        if ![
-            "architecture",
-            "reference",
-            "decision",
-            "plan",
-            "finding",
-            "validation",
-            "runbook",
-            "index",
-            "policy",
-            "",
-        ]
-        .contains(&kind)
-        {
-            issues.push(Issue {
-                path: doc.path.clone(),
-                message: format!("invalid kind '{kind}'"),
-            });
-        }
-        if !["normative", "implementation", "advisory", "evidence", ""].contains(&authority) {
-            issues.push(Issue {
-                path: doc.path.clone(),
-                message: format!("invalid authority '{authority}'"),
-            });
-        }
-        let valid_status = if kind == "decision" {
-            [
-                "draft",
-                "proposed",
-                "accepted",
-                "superseded",
-                "historical",
-                "",
-            ]
-            .contains(&status)
-        } else {
-            [
-                "draft",
-                "active",
-                "implemented",
-                "superseded",
-                "historical",
-                "",
-            ]
-            .contains(&status)
-        };
-        if !valid_status {
-            issues.push(Issue {
-                path: doc.path.clone(),
-                message: format!("invalid status '{status}' for kind '{kind}'"),
-            });
-        }
-        if status == "active" && kind == "plan" && meta_bool(meta, "open_items") != Some(true) {
-            issues.push(Issue {
-                path: doc.path.clone(),
-                message:
-                    "active plan must set open_items: true (completed slices belong elsewhere)"
-                        .into(),
-            });
-        }
-        if kind == "plan"
-            && ["implemented", "superseded"].contains(&status)
-            && active.contains(Path::new(&doc.path).file_name().unwrap().to_str().unwrap())
-        {
-            issues.push(Issue {
-                path: doc.path.clone(),
-                message: format!("{status} plan must not appear in the active future-work index"),
-            });
-        }
-        if ["active", "accepted", "proposed"].contains(&status)
-            && let Some(canon) = meta_str(meta, "canonical_for")
-            && let Some(previous) = canonical.insert(canon.to_owned(), doc.path.clone())
-        {
-            issues.push(Issue {
-                path: doc.path.clone(),
-                message: format!(
-                    "duplicate active canonical_for '{canon}' (also claimed by {previous})"
-                ),
-            });
-        }
-        if authority == "normative" && archive_link.is_match(&doc.body) {
-            issues.push(Issue {
-                path: doc.path.clone(),
-                message: "normative document links to archive path as content".into(),
-            });
-        }
+        issues.extend(lint_doc(doc, &active, &mut canonical, &archive_link));
     }
     for (name, expected) in generated {
-        let path = root.join(name);
-        if !path.is_file() || read_text(&path)?.replace("\r\n", "\n") != expected {
-            issues.push(Issue {
-                path: name.into(),
-                message: "generated index differs from committed copy (run generate and commit)"
-                    .into(),
-            });
-        }
+        check_generated_index(root, name, &expected, &mut issues)?;
     }
     Ok(issues)
 }
 
+/// Run every metadata rule against one document.
+fn lint_doc(
+    doc: &Document,
+    active: &HashSet<String>,
+    canonical: &mut HashMap<String, String>,
+    archive_link: &Regex,
+) -> Vec<Issue> {
+    let Some(meta) = doc.meta.as_ref() else {
+        // A root future-work document without frontmatter is a real gap; anything else
+        // unmanaged is skipped.
+        return if is_root_future_work(&doc.path) {
+            vec![Issue {
+                path: doc.path.clone(),
+                message: "root future-work document missing YAML frontmatter metadata".into(),
+            }]
+        } else {
+            Vec::new()
+        };
+    };
+    if !is_managed(&doc.path, &doc.meta) {
+        return Vec::new();
+    }
+    let mut issues = lint_required_fields(doc, meta);
+    issues.extend(lint_meta_rules(doc, meta));
+    if let Some(issue) = lint_finished_plan_in_index(doc, meta, active) {
+        issues.push(issue);
+    }
+    if let Some(issue) = lint_canonical_for(doc, meta, canonical) {
+        issues.push(issue);
+    }
+    if let Some(issue) = lint_normative_archive(doc, meta, archive_link) {
+        issues.push(issue);
+    }
+    issues
+}
+
+/// The kind/status/authority fields every managed document must carry.
+fn lint_required_fields(doc: &Document, meta: &serde_yaml::Mapping) -> Vec<Issue> {
+    let mut issues = Vec::new();
+    for field in ["kind", "status", "authority"] {
+        if !meta.contains_key(Value::String(field.into())) {
+            issues.push(Issue {
+                path: doc.path.clone(),
+                message: format!("missing required metadata field: {field}"),
+            });
+        }
+    }
+    issues
+}
+
+/// Vocabulary and cross-field rules for a managed document's metadata.
+fn lint_meta_rules(doc: &Document, meta: &serde_yaml::Mapping) -> Vec<Issue> {
+    let kind = meta_str(meta, "kind").unwrap_or("");
+    let status = meta_str(meta, "status").unwrap_or("");
+    let authority = meta_str(meta, "authority").unwrap_or("");
+    let mut issues = Vec::new();
+    if ![
+        "architecture",
+        "reference",
+        "decision",
+        "plan",
+        "finding",
+        "validation",
+        "runbook",
+        "index",
+        "policy",
+        "",
+    ]
+    .contains(&kind)
+    {
+        issues.push(Issue {
+            path: doc.path.clone(),
+            message: format!("invalid kind '{kind}'"),
+        });
+    }
+    if !["normative", "implementation", "advisory", "evidence", ""].contains(&authority) {
+        issues.push(Issue {
+            path: doc.path.clone(),
+            message: format!("invalid authority '{authority}'"),
+        });
+    }
+    let valid_status = if kind == "decision" {
+        [
+            "draft",
+            "proposed",
+            "accepted",
+            "superseded",
+            "historical",
+            "",
+        ]
+        .contains(&status)
+    } else {
+        [
+            "draft",
+            "active",
+            "implemented",
+            "superseded",
+            "historical",
+            "",
+        ]
+        .contains(&status)
+    };
+    if !valid_status {
+        issues.push(Issue {
+            path: doc.path.clone(),
+            message: format!("invalid status '{status}' for kind '{kind}'"),
+        });
+    }
+    if status == "active" && kind == "plan" && meta_bool(meta, "open_items") != Some(true) {
+        issues.push(Issue {
+            path: doc.path.clone(),
+            message: "active plan must set open_items: true (completed slices belong elsewhere)"
+                .into(),
+        });
+    }
+    issues
+}
+
+/// A finished plan must not stay in the active future-work index.
+fn lint_finished_plan_in_index(
+    doc: &Document,
+    meta: &serde_yaml::Mapping,
+    active: &HashSet<String>,
+) -> Option<Issue> {
+    let kind = meta_str(meta, "kind").unwrap_or("");
+    let status = meta_str(meta, "status").unwrap_or("");
+    let file = Path::new(&doc.path).file_name()?.to_str()?.to_string();
+    if kind == "plan" && ["implemented", "superseded"].contains(&status) && active.contains(&file) {
+        Some(Issue {
+            path: doc.path.clone(),
+            message: format!("{status} plan must not appear in the active future-work index"),
+        })
+    } else {
+        None
+    }
+}
+
+/// Two active documents must not claim the same canonical_for.
+fn lint_canonical_for(
+    doc: &Document,
+    meta: &serde_yaml::Mapping,
+    canonical: &mut HashMap<String, String>,
+) -> Option<Issue> {
+    let status = meta_str(meta, "status").unwrap_or("");
+    if ["active", "accepted", "proposed"].contains(&status)
+        && let Some(canon) = meta_str(meta, "canonical_for")
+        && let Some(previous) = canonical.insert(canon.to_owned(), doc.path.clone())
+    {
+        Some(Issue {
+            path: doc.path.clone(),
+            message: format!(
+                "duplicate active canonical_for '{canon}' (also claimed by {previous})"
+            ),
+        })
+    } else {
+        None
+    }
+}
+
+/// A normative document must not link to an archive path as content.
+fn lint_normative_archive(
+    doc: &Document,
+    meta: &serde_yaml::Mapping,
+    archive_link: &Regex,
+) -> Option<Issue> {
+    let authority = meta_str(meta, "authority").unwrap_or("");
+    (authority == "normative" && archive_link.is_match(&doc.body)).then(|| Issue {
+        path: doc.path.clone(),
+        message: "normative document links to archive path as content".into(),
+    })
+}
+
+/// A generated index must match its committed copy.
+fn check_generated_index(
+    root: &Path,
+    name: &str,
+    expected: &str,
+    issues: &mut Vec<Issue>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let path = root.join(name);
+    if !path.is_file() || read_text(&path)?.replace("\r\n", "\n") != expected {
+        issues.push(Issue {
+            path: name.into(),
+            message: "generated index differs from committed copy (run generate and commit)".into(),
+        });
+    }
+    Ok(())
+}
+
+/// Pure regression checks for the metadata rules. This is a command, rather than only Rust unit
+/// tests, because CI invokes `liberado docs metadata self-test` before linting the repository.
 /// Pure regression checks for the metadata rules. This is a command, rather than only Rust unit
 /// tests, because CI invokes `liberado docs metadata self-test` before linting the repository.
 fn self_test() -> Result<(), Box<dyn std::error::Error>> {
-    let assert_rule = |name: &str, passed: bool| -> Result<(), Box<dyn std::error::Error>> {
-        if passed {
-            Ok(())
-        } else {
-            Err(format!("docs metadata self-test failed: {name}").into())
-        }
-    };
-    let document = |path: &str, meta: &str, body: &str| Document {
+    assert_frontmatter_round_trip()?;
+    assert_missing_future_work_frontmatter()?;
+    assert_active_plan_open_items()?;
+    assert_duplicate_canonical_for()?;
+    assert_decision_status_vocabulary()?;
+    assert_normative_archive_link()?;
+    assert_generated_index_comparison()?;
+    assert_exact_case()?;
+    assert_no_stale_rs_docs()?;
+    println!("docs metadata self-test: all passed");
+    Ok(())
+}
+
+/// Fail the self-test run unless `passed` is true.
+fn assert_rule(name: &str, passed: bool) -> Result<(), Box<dyn std::error::Error>> {
+    if passed {
+        Ok(())
+    } else {
+        Err(format!("docs metadata self-test failed: {name}").into())
+    }
+}
+
+/// Build a `Document` from frontmatter YAML text and a body, for a self-test fixture.
+fn test_document(path: &str, meta: &str, body: &str) -> Document {
+    Document {
         path: path.into(),
         meta: split_frontmatter(&format!("---\n{meta}\n---\n{body}")).0,
         body: body.into(),
-    };
-    let future_work = format!("docs/{}", "future-work");
+    }
+}
 
+/// frontmatter parses back to the same kind and body.
+fn assert_frontmatter_round_trip() -> Result<(), Box<dyn std::error::Error>> {
     let (meta, body) = split_frontmatter("---\nkind: plan\nopen_items: true\n---\n# Title\n");
     assert_rule(
         "frontmatter round trip",
         meta.as_ref().and_then(|m| meta_str(m, "kind")) == Some("plan") && body == "# Title\n",
-    )?;
+    )
+}
 
+/// A root future-work document without frontmatter is flagged.
+fn assert_missing_future_work_frontmatter() -> Result<(), Box<dyn std::error::Error>> {
     let missing = lint_documents_for_test(vec![Document {
-        path: format!("{future_work}/missing.md"),
+        path: format!("docs/{}/missing.md", "future-work"),
         meta: None,
         body: String::new(),
     }])?;
     assert_rule(
         "missing future-work frontmatter",
         has_issue(&missing, "missing YAML"),
-    )?;
+    )
+}
 
-    let inactive = lint_documents_for_test(vec![document(
-        &format!("{future_work}/active.md"),
+/// An active plan must keep open_items: true.
+fn assert_active_plan_open_items() -> Result<(), Box<dyn std::error::Error>> {
+    let inactive = lint_documents_for_test(vec![test_document(
+        &format!("docs/{}/active.md", "future-work"),
         "kind: plan\nstatus: active\nauthority: implementation\nopen_items: false",
         "",
     )])?;
-    assert_rule("active plan open_items", has_issue(&inactive, "open_items"))?;
+    assert_rule("active plan open_items", has_issue(&inactive, "open_items"))
+}
 
+/// Two active plans cannot claim the same canonical_for.
+fn assert_duplicate_canonical_for() -> Result<(), Box<dyn std::error::Error>> {
     let duplicate = lint_documents_for_test(vec![
-        document(
-            &format!("{future_work}/a.md"),
+        test_document(
+            &format!("docs/{}/a.md", "future-work"),
             "kind: plan\nstatus: active\nauthority: implementation\nopen_items: true\ncanonical_for: same",
             "",
         ),
-        document(
-            &format!("{future_work}/b.md"),
+        test_document(
+            &format!("docs/{}/b.md", "future-work"),
             "kind: plan\nstatus: active\nauthority: implementation\nopen_items: true\ncanonical_for: same",
             "",
         ),
@@ -509,9 +614,12 @@ fn self_test() -> Result<(), Box<dyn std::error::Error>> {
     assert_rule(
         "duplicate canonical_for",
         has_issue(&duplicate, "duplicate active canonical_for"),
-    )?;
+    )
+}
 
-    let invalid_status = lint_documents_for_test(vec![document(
+/// A decision must use the decision-status vocabulary.
+fn assert_decision_status_vocabulary() -> Result<(), Box<dyn std::error::Error>> {
+    let invalid_status = lint_documents_for_test(vec![test_document(
         &format!("docs/{}/ADR-0001.md", "decisions"),
         "kind: decision\nstatus: banana\nauthority: normative",
         "",
@@ -519,9 +627,12 @@ fn self_test() -> Result<(), Box<dyn std::error::Error>> {
     assert_rule(
         "decision status vocabulary",
         has_issue(&invalid_status, "invalid status 'banana'"),
-    )?;
+    )
+}
 
-    let archive = lint_documents_for_test(vec![document(
+/// A normative document must not link to an archive path as content.
+fn assert_normative_archive_link() -> Result<(), Box<dyn std::error::Error>> {
+    let archive = lint_documents_for_test(vec![test_document(
         "docs/spec/architecture/contracts.md",
         "kind: architecture\nstatus: active\nauthority: normative",
         "See [old](../future-work/archive/old.md).",
@@ -529,8 +640,11 @@ fn self_test() -> Result<(), Box<dyn std::error::Error>> {
     assert_rule(
         "normative archive link",
         has_issue(&archive, "archive path"),
-    )?;
+    )
+}
 
+/// A committed generated index must match what the generator would produce.
+fn assert_generated_index_comparison() -> Result<(), Box<dyn std::error::Error>> {
     let generated = tempfile::tempdir()?;
     fs::create_dir_all(generated.path().join("docs").join("future-work"))?;
     fs::write(
@@ -553,8 +667,11 @@ fn self_test() -> Result<(), Box<dyn std::error::Error>> {
     assert_rule(
         "generated index comparison",
         has_issue(&lint(generated.path())?, "generated index differs"),
-    )?;
+    )
+}
 
+/// exact_file is case-sensitive and leaf-exact.
+fn assert_exact_case() -> Result<(), Box<dyn std::error::Error>> {
     let temp = tempfile::tempdir()?;
     let root = temp.path();
     fs::create_dir_all(root.join("docs/spec/reference"))?;
@@ -565,8 +682,14 @@ fn self_test() -> Result<(), Box<dyn std::error::Error>> {
     )?;
     assert_rule(
         "exact case accepts matching path",
-        exact_file(root, &format!("docs/spec/reference/{}", "api.md")),
-    )?;
+        exact_file(root, "docs/spec/reference/api.md"),
+    )
+}
+
+/// A rust doc link to a missing docs path is flagged.
+fn assert_no_stale_rs_docs() -> Result<(), Box<dyn std::error::Error>> {
+    let temp = tempfile::tempdir()?;
+    let root = temp.path();
     fs::create_dir_all(root.join("crates/example/src"))?;
     fs::write(
         root.join("crates/example/src/lib.rs"),
@@ -576,10 +699,7 @@ fn self_test() -> Result<(), Box<dyn std::error::Error>> {
     assert_rule(
         "stale Rust docs path",
         has_issue(&stale, "missing docs path"),
-    )?;
-
-    println!("docs metadata self-test: all passed");
-    Ok(())
+    )
 }
 
 fn lint_documents_for_test(docs: Vec<Document>) -> Result<Vec<Issue>, Box<dyn std::error::Error>> {
@@ -671,5 +791,134 @@ mod tests {
     fn split_frontmatter_keeps_first_body_character() {
         let (_, body) = split_frontmatter("---\nkind: plan\n---\n# Hello\n");
         assert_eq!(body, "# Hello\n");
+    }
+
+    // ── is_root_future_work ─────────────────────────────────────────────
+
+    #[test]
+    fn root_future_work_is_a_root_markdown_leaf() {
+        for tail in ["x", "plan-2026"] {
+            // docs-check: ignore
+            let yes = format!("docs/future-work/{tail}.md");
+            assert!(is_root_future_work(&yes), "{yes}");
+        }
+        // Not a leaf, not markdown, or the auto-generated README itself.
+        for no in [
+            "docs/future-work/x/y.md",     // docs-check: ignore
+            "docs/future-work/x/index.md", // docs-check: ignore
+            "docs/future-work/README.md",
+            "docs/future-work/x.txt",
+            "docs/other/x.md", // docs-check: ignore
+            "docs/future-work",
+        ] {
+            assert!(!is_root_future_work(no), "{no}");
+        }
+    }
+
+    // ── is_managed ──────────────────────────────────────────────────────
+
+    #[test]
+    fn managed_is_a_docs_markdown_file_with_meta_or_root_plan() {
+        let meta = yaml_map("kind: plan\n");
+        assert!(is_managed("docs/goals.md", &Some(meta.clone()))); // docs-check: ignore
+        assert!(is_managed("docs/future-work/plan.md", &None)); // docs-check: ignore
+        assert!(!is_managed("docs/goals.md", &None)); // docs-check: ignore
+        assert!(!is_managed("crates/x/readme.md", &Some(meta.clone())));
+        assert!(!is_managed("docs/README.txt", &Some(meta)));
+    }
+
+    // ── meta accessors ──────────────────────────────────────────────────
+
+    #[test]
+    fn meta_accessors_read_and_default() {
+        let meta = yaml_map("kind: plan\ndomain: \"\"\ncount: 3\n");
+        assert_eq!(meta_str(&meta, "kind"), Some("plan"));
+        assert_eq!(meta_str(&meta, "missing"), None);
+        assert_eq!(display_meta(&meta, "kind"), "plan");
+        assert_eq!(display_meta(&meta, "missing"), "—");
+        assert_eq!(meta_bool(&meta, "count"), None, "non-bool is None");
+        let bool_meta = yaml_map("flag: true\n");
+        assert_eq!(meta_bool(&bool_meta, "flag"), Some(true));
+    }
+
+    // ── parse_active_links ──────────────────────────────────────────────
+
+    /// Active-links scanning: pulls `]()` link targets out of the "## Active …" section, keeps
+    /// basenames, and skips external URLs and archived plans.
+    #[test]
+    fn active_links_are_scanned_from_the_active_section() {
+        let text = "# Index\n\n## Active documents\n\n- [A](a.md)\n- [B](sub/b.md)\n- [Ext](https://example.com/x.md)\n- [Arch](archive/old.md)\n\n## Something else\n\n- [Not us](c.md)\n";
+        let links = parse_active_links(text);
+        assert!(links.contains("a.md"), "{links:?}");
+        assert!(links.contains("b.md"), "basename kept: {links:?}");
+        assert!(
+            !links.contains("c.md"),
+            "outside the active section: {links:?}"
+        );
+        assert!(!links.contains("x.md"), "external URL skipped: {links:?}");
+        assert!(!links.iter().any(|l| l.contains("archive")), "{links:?}");
+    }
+
+    #[test]
+    fn active_links_without_a_section_scan_the_whole_text() {
+        let links = parse_active_links("- [A](a.md)\n");
+        assert!(links.contains("a.md"), "{links:?}");
+    }
+
+    // ── generate_future_work_readme ─────────────────────────────────────
+
+    fn doc(path: &str, kind: &str, status: &str) -> Document {
+        Document {
+            path: path.into(),
+            meta: Some(yaml_map(&format!("kind: {kind}\nstatus: {status}\n"))),
+            body: String::new(),
+        }
+    }
+
+    #[test]
+    fn future_work_readme_splits_active_from_other() {
+        let docs = vec![
+            doc("docs/future-work/a-plan.md", "plan", "active"), // docs-check: ignore
+            doc("docs/future-work/z-done.md", "plan", "archived"), // docs-check: ignore
+            // Not a root future-work leaf — must be skipped entirely.
+            doc("docs/other/x.md", "plan", "active"), // docs-check: ignore
+        ];
+        let readme = generate_future_work_readme(&docs);
+        assert!(readme.contains("a-plan.md"), "active: {readme}");
+        assert!(readme.contains("z-done.md"), "other: {readme}");
+        assert!(
+            !readme.contains("docs/other/x.md"), // docs-check: ignore
+            "non-future-work must not appear: {readme}"
+        );
+        assert!(readme.contains("## Active documents"), "{readme}");
+    }
+
+    // ── exact_file ──────────────────────────────────────────────────────
+
+    #[test]
+    fn exact_file_matches_case_and_leafness() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("a/b")).unwrap();
+        fs::write(dir.path().join("a/b/flat.md"), "x").unwrap();
+        assert!(exact_file(dir.path(), "a/b/flat.md"));
+        assert!(
+            exact_file(dir.path(), "a\\b\\flat.md"),
+            "backslashes normalised"
+        );
+        assert!(
+            !exact_file(dir.path(), "a/b/FLAT.md"),
+            "case must match exactly"
+        );
+        assert!(!exact_file(dir.path(), "a/b"), "a directory is not a file");
+        assert!(!exact_file(dir.path(), "a/b/missing.md"));
+        assert!(
+            !exact_file(dir.path(), "../a/b/flat.md"),
+            "no escaping via .."
+        );
+    }
+
+    fn yaml_map(text: &str) -> serde_yaml::Mapping {
+        let value: serde_yaml::Value = serde_yaml::from_str(text).unwrap();
+        value.as_mapping().cloned().unwrap()
     }
 }

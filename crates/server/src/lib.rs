@@ -24,12 +24,13 @@ use std::time::{Duration, Instant};
 use std::path::Path;
 
 use axum::Router;
-use liberado_common::{CapabilityCatalog, WriteProvenance};
+use liberado_common::{CapabilityCatalog, CapabilitySet, WriteProvenance};
 use liberado_daemon::Daemon;
 use liberado_dispatcher::Dispatcher;
 use liberado_executor::{Budget, Executor, ToolRuntime};
 use liberado_main_agent::ChatSessions;
 use liberado_mcp::McpRegistry;
+use liberado_provider::Provider;
 use liberado_session_store::SessionStore;
 use tokio::sync::Mutex;
 use tower_http::compression::CompressionLayer;
@@ -61,10 +62,7 @@ const DEFAULT_PORT: u16 = 4201;
 /// the daemon's foreground entry point — `liberado serve` calls it. The caller is expected to have
 /// already initialised the tracing subscriber.
 pub async fn run(vault_path: String) -> Result<(), Box<dyn std::error::Error>> {
-    let port: u16 = std::env::var("LIBERADO_PORT")
-        .ok()
-        .and_then(|p| p.parse().ok())
-        .unwrap_or(DEFAULT_PORT);
+    let port = resolve_port();
 
     // Load + validate the config up front (Decision 14 fail-fast). A bad config is a hard error
     // here rather than a half-booted daemon; the message names the file/setting to fix.
@@ -72,17 +70,7 @@ pub async fn run(vault_path: String) -> Result<(), Box<dyn std::error::Error>> {
 
     // Resolve the vault path CLI-over-config: the `run` argument wins (the CLI always supplies one);
     // an empty argument falls back to `topology.vault_path`. Both empty is a hard error.
-    let vault_path = if vault_path.trim().is_empty() {
-        let from_config = config.topology.vault_path.to_string_lossy().into_owned();
-        if from_config.trim().is_empty() {
-            return Err(
-                "no vault path: pass one to `liberado serve` or set topology.vault_path".into(),
-            );
-        }
-        from_config
-    } else {
-        vault_path
-    };
+    let vault_path = resolve_vault_path(vault_path, &config)?;
 
     // One live catalog + shared MCP registry (boot apply + hot-reload). Every consumer (API,
     // daemon pools, chat, dispatch pack) uses the same cloneable registry handle.
@@ -117,115 +105,19 @@ pub async fn run(vault_path: String) -> Result<(), Box<dyn std::error::Error>> {
     //
     // One `sessions_dir()`, not a `.join("sessions")` here and another in the `chat-search` MCP —
     // that is precisely how the MCP got left behind pointing at the dead `conversations/` directory.
-    let sessions_root = liberado_bootstrap::sessions_dir();
-    let sessions = Arc::new(liberado_session_store::SessionStore::open(&sessions_root).await);
+    let (sessions_root, sessions) = open_session_store().await;
 
-    // Backstop for incognito chats whose surface never got to discard them — a closed laptop, a
-    // killed tab, a dropped connection. The WebUI deletes its own on the way out and that is what
-    // runs almost every time; this is what makes "almost" not the end of the story, because an
-    // incognito transcript sitting in daemon RAM until the next restart is exactly the thing the mode
-    // promises not to do. Nothing here touches the disk: an ephemeral session has no file to remove.
-    {
-        const SWEEP_EVERY: std::time::Duration = std::time::Duration::from_secs(5 * 60);
-        // Generous next to the sweep interval: this is the abandonment threshold, not an idle
-        // timeout, and a chat you walked away from mid-thought should still be there when you come
-        // back from lunch-adjacent distances.
-        const IDLE_BEFORE_SWEEP: std::time::Duration = std::time::Duration::from_secs(30 * 60);
-        let sessions = Arc::clone(&sessions);
-        tokio::spawn(async move {
-            let mut ticker = tokio::time::interval(SWEEP_EVERY);
-            loop {
-                ticker.tick().await;
-                sessions.sweep_ephemeral(IDLE_BEFORE_SWEEP).await;
-            }
-        });
-    }
-
-    // Goal session hub first — the **one** execution engine (one-execution-engine plan E3/E4).
-    // Life-ops demo always; coding when a provider is available; dispatch pack so cron/webhook/
-    // delegate are hosted sessions, not a second engine. Built before chat so `delegate` can use it.
-    let mut goals_hub = liberado_session::GoalSessionHub::new(SessionStore::clone(&sessions));
-    goals_hub.register_pack(Arc::new(liberado_session::LifeOpsDemoRunner));
-    // Coding pack: hold Arc so we can attach the hub after `Arc::new` (S6 child goal sessions).
-    let coding_pack: Option<Arc<liberado_coder_agent::CodingSessionPack>> =
-        provider.as_ref().map(|p| {
-            let work_parent = liberado_bootstrap::data_dir().join("goal-workspaces");
-            let _ = std::fs::create_dir_all(&work_parent);
-            {
-                let mut pack = liberado_coder_agent::CodingSessionPack::new(p.clone(), work_parent)
-                    .with_max_concurrent_coding_subagents(
-                        config.tuning.dispatch.max_concurrent_coding_subagents,
-                    );
-                // A malformed `[coder]` section used to be swallowed by `if let Ok(..)`, so the
-                // pack silently kept its defaults and the operator's settings did nothing — with
-                // no line anywhere saying why. Cost an hour of "why is my configured model being
-                // ignored"; say it out loud instead.
-                match liberado_coder_core::CoderTuning::from_value(config.tuning.coder.as_ref()) {
-                    Ok(coder_tuning) => {
-                        // One call: keeps pack fields and the shared production assembly path
-                        // on the same CoderTuning (backlog 0.4).
-                        pack = pack.with_tuning(coder_tuning);
-                    }
-                    Err(e) => {
-                        tracing::error!(
-                            error = %e,
-                            "[coder] tuning section is invalid and was IGNORED; the coding pack is running on built-in defaults, not your config"
-                        );
-                    }
-                }
-                // Without this the pack's provider factory returns the daemon's provider for every
-                // role, so the coder's configured model is ignored and the run reports a model
-                // name nothing resolves.
-                if let Some(factory) =
-                    liberado_bootstrap::CoderRoleProviderFactory::for_config(&config)
-                {
-                    pack = pack.with_provider_factory(std::sync::Arc::new(factory));
-                }
-                Arc::new(pack)
-            }
-        });
-    if let Some(pack) = coding_pack.as_ref() {
-        goals_hub.register_pack(Arc::clone(pack) as Arc<dyn liberado_session::DomainPackRunner>);
-    }
-    if let Some(pack) = liberado_bootstrap::build_dispatch_pack(
-        &providers,
+    let goals = build_goal_hub(
         &config,
-        capability_catalog.clone(),
-        mcp_registry.clone(),
-        Path::new(&vault_path),
-        guidance.clone(),
-    ) {
-        goals_hub.register_pack(Arc::new(pack));
-        info!("goal session packs: life + coding + dispatch");
-    } else if provider.is_some() {
-        info!("goal session packs: life + coding (no dispatch pack)");
-    } else {
-        info!("goal session packs: life only (no provider)");
-    }
-    // E5: when a session awaits input and nobody has the stream open, ping out-of-band.
-    if let Some(n) = liberado_notify::TelegramNotifier::from_env() {
-        goals_hub = goals_hub.with_alert(Arc::new(NotifySessionAlert(Arc::new(n))));
-        info!("session alerts: telegram notifier attached");
-    }
-    // F7: parked rows survive restart; the hub does not. Finish orphans that cannot be resumed
-    // (no AskHuman, no pack, or pack refuses) so they do not sit forever. Human-resumable parks
-    // stay for the stuck panel / answer path.
-    let reconciled = goals_hub.reconcile_parked_at_startup().await;
-    if reconciled > 0 {
-        info!(
-            reconciled,
-            "startup: cancelled orphaned parked sessions with no resume path"
-        );
-    }
-    let goals = Arc::new(goals_hub);
-    // S6: coding fan-out spawns child goal sessions on this same hub.
-    if let Some(pack) = coding_pack.as_ref() {
-        pack.attach_hub(Arc::clone(&goals));
-        info!(
-            max_concurrent = config.tuning.dispatch.max_concurrent_coding_subagents,
-            "coding pack: hub attached for subagent fan-out"
-        );
-    }
+        &providers,
+        provider.as_ref(),
+        &vault_path,
+        &capability_catalog,
+        &mcp_registry,
+        &guidance,
+        &sessions,
+    )
+    .await;
 
     let (chat, chat_tools, chat_tool_names) = build_chat(
         &providers,
@@ -263,44 +155,14 @@ pub async fn run(vault_path: String) -> Result<(), Box<dyn std::error::Error>> {
     // same volume as the session store): on boot we restore the last conversation so a container
     // restart no longer forces an implicit `/new`. A restored id is adopted only if the conversation
     // still exists (validated against the chat store) — a stale pointer is dropped, not resurrected.
-    let telegram_sticky = if let Some(chat_sessions) = chat.as_ref() {
-        let cs = chat_sessions.clone();
-        sticky::StickySession::load(
-            liberado_bootstrap::data_dir().join("telegram-sticky-session"),
-            move |id| async move {
-                cs.list()
-                    .await
-                    .map(|headers| headers.iter().any(|h| h.id == id))
-                    .unwrap_or(false)
-            },
-        )
-        .await
-    } else {
-        sticky::StickySession::ephemeral()
-    };
-    let telegram_activity: Arc<Mutex<Option<Instant>>> = Arc::new(Mutex::new(None));
-
-    // When both Telegram and a chat surface exist, route the daemon's cron delivery through the
-    // chat-delivering notifier: it folds each brief into the sticky conversation and defers the send
-    // around active chat. Proposals still go out immediately (its inner notifier). Without chat or
-    // Telegram, the daemon keeps whatever `configure_daemon` set (plain immediate notify).
-    let daemon = match (chat.as_ref(), liberado_notify::TelegramNotifier::from_env()) {
-        (Some(chat_sessions), Some(inner)) => {
-            let cdn = cron_delivery::ChatDeliveringNotifier::new(
-                Arc::new(inner),
-                chat_sessions.clone(),
-                telegram_sticky.clone(),
-                telegram_activity.clone(),
-                Duration::from_secs(config.tuning.cron_delivery.quiet_delay_secs),
-                Duration::from_secs(config.tuning.cron_delivery.deliver_by_secs),
-            );
-            info!(
-                "cron delivery: folding briefs into the sticky Telegram chat (quiet-delay defer)"
-            );
-            daemon.with_notifier(Arc::new(cdn))
-        }
-        _ => daemon,
-    };
+    let (telegram_sticky, telegram_activity) = resolve_telegram_state(chat.as_ref()).await;
+    let daemon = wrap_cron_notifier(
+        daemon,
+        chat.as_ref(),
+        &config,
+        &telegram_sticky,
+        &telegram_activity,
+    );
 
     // The webhook hooks endpoint's seam into the daemon's reactive pipeline — a clone of the same
     // channel every `EventSource` (vault-watch, cron) pushes onto. Grabbed before `daemon` moves
@@ -348,55 +210,192 @@ pub async fn run(vault_path: String) -> Result<(), Box<dyn std::error::Error>> {
         drain: crate::shutdown::DrainGate::default(),
     });
 
-    // Optional — Telegram bot: proposal Approve/Reject/Revise buttons + free-form chat when a
-    // ChatSessions surface exists. Only when a provider is attached and LIBERADO_TELEGRAM_* env
-    // vars are set. Cloning the vault/signer here, before `daemon` moves into its own spawn below,
-    // gives the bot its own handle onto the same vault (`Vault` is cheap to clone).
-    if let Some(p) = provider.as_ref()
-        && let Some(mut bot) = liberado_telegram_approvals::ApprovalBot::from_env(
-            daemon.vault().clone(),
-            daemon.signer().clone(),
-            p.clone(),
-            config.tuning.telegram_approvals.clone(),
-        )
-        // The same ledger the daemon reads. A tap is the authenticated act; the vault note it also
-        // updates is only the human-readable view of a decision recorded here.
-        .map(|b| {
-            b.with_approval_ledger(liberado_common::ApprovalLedger::new(
-                liberado_config::data_dir(),
-            ))
-        })
-    {
-        if state.chat.is_some() {
-            // The shared slash-command catalog (also used by the TUI/WebUI), curated to the
-            // top-level commands Telegram can advertise, so typing `/` shows an autocomplete menu.
-            let command_menu = liberado_commands::telegram_commands()
-                .into_iter()
-                .map(|(c, d)| (c.to_string(), d.to_string()))
-                .collect();
-            bot = bot
-                .with_chat(Arc::new(crate::telegram::TelegramChatBridge {
-                    state: state.clone(),
-                    session_id: telegram_sticky.clone(),
-                }))
-                .with_activity_tracker(telegram_activity.clone())
-                .with_command_menu(command_menu);
-            info!(
-                "Telegram free-form chat surface attached (slash commands enabled + menu registered)"
-            );
-        }
-        tokio::spawn(bot.run());
-    }
+    spawn_telegram_bot(
+        &state,
+        &daemon,
+        provider.as_ref(),
+        &config,
+        &telegram_sticky,
+        telegram_activity,
+    );
 
     let reaction_tx = state.reaction_tx();
     let daemon_handle = tokio::spawn(async move {
         daemon.run(reaction_tx).await.ok();
     });
 
-    // Work-starting routes only: middleware refuses with `shutting_down` once drain begins.
-    // Attach/cancel/park/list stay on the main router so clients can rejoin or stop work already
-    // in flight. `POST /api/goals` is gated here for the same reason as chat — the gate is the
-    // capability, not the surface that happened to be wired first.
+    let app = build_app_router(&state);
+
+    let addr = format!("0.0.0.0:{port}");
+    serve_with_drain(app, &state, &addr).await?;
+
+    // Vault-watch / reaction loop: stop after chat drain so cron/vault reactions do not keep the
+    // process alive past the grace budget.
+    daemon_handle.abort();
+    Ok(())
+}
+
+/// The converged Session store (S5′ / D7): ONE store under `<data_dir>/sessions/`, handed to
+/// *both* chat and the goal-session hub. A chat and a goal session are the same record with a
+/// different `goal: Option` — so they share an id space, a directory, and a log format. Chat sees
+/// it through `ConversationStore`, the kernel through `SessionRecordStore`; neither knows the
+/// other is there.
+///
+/// The previous `<data_dir>/conversations/` and `<data_dir>/goal-sessions/` directories are left
+/// untouched but no longer read (deliberate: fresh start, nothing destroyed).
+///
+/// One `sessions_dir()`, not a `.join("sessions")` here and another in the `chat-search` MCP —
+/// that is precisely how the MCP got left behind pointing at the dead `conversations/` directory.
+///
+/// Also spawns the incognito backstop: the WebUI deletes its own ephemeral chats on the way out,
+/// and this sweep is what makes "almost" not the end of the story for the ones it never got to
+/// discard. Nothing here touches the disk: an ephemeral session has no file to remove.
+async fn open_session_store() -> (std::path::PathBuf, Arc<SessionStore>) {
+    let sessions_root = liberado_bootstrap::sessions_dir();
+    let sessions = Arc::new(liberado_session_store::SessionStore::open(&sessions_root).await);
+
+    // Backstop for incognito chats whose surface never got to discard them — a closed laptop, a
+    // killed tab, a dropped connection. The WebUI deletes its own on the way out and that is what
+    // runs almost every time; this is what makes "almost" not the end of the story, because an
+    // incognito transcript sitting in daemon RAM until the next restart is exactly the thing the
+    // mode promises not to do.
+    {
+        const SWEEP_EVERY: std::time::Duration = std::time::Duration::from_secs(5 * 60);
+        // Generous next to the sweep interval: this is the abandonment threshold, not an idle
+        // timeout, and a chat you walked away from mid-thought should still be there when you come
+        // back from lunch-adjacent distances.
+        const IDLE_BEFORE_SWEEP: std::time::Duration = std::time::Duration::from_secs(30 * 60);
+        let sessions = Arc::clone(&sessions);
+        tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(SWEEP_EVERY);
+            loop {
+                ticker.tick().await;
+                sessions.sweep_ephemeral(IDLE_BEFORE_SWEEP).await;
+            }
+        });
+    }
+    (sessions_root, sessions)
+}
+
+/// Shared state for chat-aware cron delivery
+/// (`docs/future-work/ideas/cron-delivery-timing-idea.md`): the sticky Telegram session id (also
+/// owned by the chat bridge) and the "last human message" clock (also stamped by the approval
+/// bot). Built here so the daemon's delivery notifier and the bot/bridge below all point at the
+/// same instances.
+///
+/// The sticky id is now **persisted** across restarts (`<data_dir>/telegram-sticky-session`, on
+/// the same volume as the session store): on boot we restore the last conversation so a container
+/// restart no longer forces an implicit `/new`. A restored id is adopted only if the conversation
+/// still exists (validated against the chat store) — a stale pointer is dropped, not resurrected.
+async fn resolve_telegram_state(
+    chat: Option<&Arc<ChatSessions>>,
+) -> (sticky::StickySession, Arc<Mutex<Option<Instant>>>) {
+    let telegram_sticky = if let Some(chat_sessions) = chat {
+        let cs = chat_sessions.clone();
+        sticky::StickySession::load(
+            liberado_bootstrap::data_dir().join("telegram-sticky-session"),
+            move |id| async move {
+                cs.list()
+                    .await
+                    .map(|headers| headers.iter().any(|h| h.id == id))
+                    .unwrap_or(false)
+            },
+        )
+        .await
+    } else {
+        sticky::StickySession::ephemeral()
+    };
+    let telegram_activity: Arc<Mutex<Option<Instant>>> = Arc::new(Mutex::new(None));
+    (telegram_sticky, telegram_activity)
+}
+
+/// When both Telegram and a chat surface exist, route the daemon's cron delivery through the
+/// chat-delivering notifier: it folds each brief into the sticky conversation and defers the send
+/// around active chat. Proposals still go out immediately (its inner notifier). Without chat or
+/// Telegram, the daemon keeps whatever `configure_daemon` set (plain immediate notify).
+fn wrap_cron_notifier(
+    daemon: Daemon,
+    chat: Option<&Arc<ChatSessions>>,
+    config: &liberado_bootstrap::Config,
+    telegram_sticky: &sticky::StickySession,
+    telegram_activity: &Arc<Mutex<Option<Instant>>>,
+) -> Daemon {
+    match (chat, liberado_notify::TelegramNotifier::from_env()) {
+        (Some(chat_sessions), Some(inner)) => {
+            let cdn = cron_delivery::ChatDeliveringNotifier::new(
+                Arc::new(inner),
+                chat_sessions.clone(),
+                telegram_sticky.clone(),
+                telegram_activity.clone(),
+                Duration::from_secs(config.tuning.cron_delivery.quiet_delay_secs),
+                Duration::from_secs(config.tuning.cron_delivery.deliver_by_secs),
+            );
+            info!(
+                "cron delivery: folding briefs into the sticky Telegram chat (quiet-delay defer)"
+            );
+            daemon.with_notifier(Arc::new(cdn))
+        }
+        _ => daemon,
+    }
+}
+
+/// Optional — Telegram bot: proposal Approve/Reject/Revise buttons + free-form chat when a
+/// ChatSessions surface exists. Only when a provider is attached and LIBERADO_TELEGRAM_* env vars
+/// are set. Cloning the vault/signer here, before `daemon` moves into its own spawn, gives the
+/// bot its own handle onto the same vault (`Vault` is cheap to clone).
+fn spawn_telegram_bot(
+    state: &Arc<AppState>,
+    daemon: &Daemon,
+    provider: Option<&Arc<dyn Provider>>,
+    config: &liberado_bootstrap::Config,
+    telegram_sticky: &sticky::StickySession,
+    telegram_activity: Arc<Mutex<Option<Instant>>>,
+) {
+    let Some(p) = provider else {
+        return;
+    };
+    let Some(mut bot) = liberado_telegram_approvals::ApprovalBot::from_env(
+        daemon.vault().clone(),
+        daemon.signer().clone(),
+        p.clone(),
+        config.tuning.telegram_approvals.clone(),
+    )
+    // The same ledger the daemon reads. A tap is the authenticated act; the vault note it also
+    // updates is only the human-readable view of a decision recorded here.
+    .map(|b| {
+        b.with_approval_ledger(liberado_common::ApprovalLedger::new(
+            liberado_config::data_dir(),
+        ))
+    }) else {
+        return;
+    };
+    if state.chat.is_some() {
+        // The shared slash-command catalog (also used by the TUI/WebUI), curated to the
+        // top-level commands Telegram can advertise, so typing `/` shows an autocomplete menu.
+        let command_menu = liberado_commands::telegram_commands()
+            .into_iter()
+            .map(|(c, d)| (c.to_string(), d.to_string()))
+            .collect();
+        bot = bot
+            .with_chat(Arc::new(crate::telegram::TelegramChatBridge {
+                state: state.clone(),
+                session_id: telegram_sticky.clone(),
+            }))
+            .with_activity_tracker(telegram_activity)
+            .with_command_menu(command_menu);
+        info!(
+            "Telegram free-form chat surface attached (slash commands enabled + menu registered)"
+        );
+    }
+    tokio::spawn(bot.run());
+}
+
+/// The full HTTP/SSE API router plus the static frontend fallback. Work-starting routes are
+/// grouped behind the drain middleware (it refuses with `shutting_down` once drain begins);
+/// attach/cancel/park/list stay on the main router so clients can rejoin or stop work already in
+/// flight. `POST /api/goals` is gated for the same reason as chat — the gate is the capability,
+/// not the surface that happened to be wired first.
+fn build_app_router(state: &Arc<AppState>) -> Router {
     let work_start_routes = Router::new()
         .route("/api/chat", axum::routing::post(api::chat))
         .route(
@@ -410,7 +409,7 @@ pub async fn run(vault_path: String) -> Result<(), Box<dyn std::error::Error>> {
         ))
         .with_state(state.clone());
 
-    let app = Router::new()
+    Router::new()
         .merge(work_start_routes)
         .route("/api/status", axum::routing::get(api::status))
         .route("/api/models", axum::routing::get(api::models))
@@ -490,18 +489,26 @@ pub async fn run(vault_path: String) -> Result<(), Box<dyn std::error::Error>> {
         )
         .layer(CorsLayer::permissive())
         .with_state(state.clone())
-        // Compression is scoped to the static fallback, deliberately not applied to the router as a
-        // whole. The payload that needs it is the release .wasm (multi-MB, ~4x compressible, and the
-        // whole page blocks on it over the tailnet); the payload that must never be buffered is
-        // `/api/chat/stream`, where holding bytes back turns a live turn into a frozen UI. Scoping it
-        // here makes that impossible by construction rather than by trusting a predicate.
+        // Compression is scoped to the static fallback, deliberately not applied to the router as
+        // a whole. The payload that needs it is the release .wasm (multi-MB, ~4x compressible, and
+        // the whole page blocks on it over the tailnet); the payload that must never be buffered
+        // is `/api/chat/stream`, where holding bytes back turns a live turn into a frozen UI.
+        // Scoping it here makes that impossible by construction rather than by trusting a
+        // predicate.
         .fallback_service(
             tower::ServiceBuilder::new()
                 .layer(CompressionLayer::new())
                 .service(ServeDir::new(dist_dir())),
-        );
+        )
+}
 
-    let addr = format!("0.0.0.0:{port}");
+/// Bind and serve the router with a graceful shutdown: on SIGTERM/Ctrl+C, drain refuses new turns
+/// for up to the grace period, then the HTTP accept stops.
+async fn serve_with_drain(
+    app: Router,
+    state: &Arc<AppState>,
+    addr: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
     let grace = shutdown::shutdown_grace_from_env();
     info!("Web UI server listening on http://{}", addr);
     info!(
@@ -509,17 +516,9 @@ pub async fn run(vault_path: String) -> Result<(), Box<dyn std::error::Error>> {
         "shutdown: on SIGTERM/Ctrl+C drain refuses new turns for up to grace_secs then exits \
          (set LIBERADO_SHUTDOWN_GRACE_SECS; compose stop_grace_period should be ≥ this)"
     );
-    info!("API endpoints:");
-    info!("  GET /api/status  — daemon status");
-    info!("  GET /api/models  — live provider model catalog");
-    info!("  POST /api/models/select  — hot-swap active model");
-    info!("  GET /api/reactions?limit=20  — recent reactions");
-    info!("  GET /api/vault  — vault info");
-    info!("  GET /api/goals  — list goal sessions; POST /api/goals starts one (drain-gated)");
-    info!("  GET /api/goals/{{id}}/stream  — SSE goal session events");
-    info!("  /  — static frontend (build with `dx build` from crates/webui/)");
+    log_endpoint_summary();
 
-    let listener = tokio::net::TcpListener::bind(&addr).await?;
+    let listener = tokio::net::TcpListener::bind(addr).await?;
     let drain_state = state.clone();
     axum::serve(listener, app)
         .with_graceful_shutdown(async move {
@@ -534,11 +533,196 @@ pub async fn run(vault_path: String) -> Result<(), Box<dyn std::error::Error>> {
             );
         })
         .await?;
-
-    // Vault-watch / reaction loop: stop after chat drain so cron/vault reactions do not keep the
-    // process alive past the grace budget.
-    daemon_handle.abort();
     Ok(())
+}
+
+/// The port the daemon serves on: `LIBERADO_PORT` if set and parseable, else [`DEFAULT_PORT`].
+fn resolve_port() -> u16 {
+    std::env::var("LIBERADO_PORT")
+        .ok()
+        .and_then(|p| p.parse().ok())
+        .unwrap_or(DEFAULT_PORT)
+}
+
+/// The vault path this daemon serves, CLI-over-config: the `run` argument wins (the CLI always
+/// supplies one); an empty argument falls back to `topology.vault_path`. Both empty is a hard
+/// error.
+fn resolve_vault_path(
+    vault_path: String,
+    config: &liberado_bootstrap::Config,
+) -> Result<String, Box<dyn std::error::Error>> {
+    if !vault_path.trim().is_empty() {
+        return Ok(vault_path);
+    }
+    let from_config = config.topology.vault_path.to_string_lossy().into_owned();
+    if from_config.trim().is_empty() {
+        return Err(
+            "no vault path: pass one to `liberado serve` or set topology.vault_path".into(),
+        );
+    }
+    Ok(from_config)
+}
+
+/// The goal-session hub — the **one** execution engine (one-execution-engine plan E3/E4). Life-ops
+/// demo always; coding when a provider is available; dispatch pack so cron/webhook/delegate are
+/// hosted sessions, not a second engine. Built before chat so `delegate` can use it. Also attaches
+/// the out-of-band alert (E5) and reconciles orphaned parked sessions at startup (F7).
+#[allow(clippy::too_many_arguments)]
+async fn build_goal_hub(
+    config: &liberado_bootstrap::Config,
+    providers: &liberado_bootstrap::RoleProviders,
+    provider: Option<&Arc<dyn Provider>>,
+    vault_path: &str,
+    capability_catalog: &Arc<CapabilityCatalog>,
+    mcp_registry: &McpRegistry,
+    guidance: &Option<Arc<dyn liberado_common::ToolGuidanceSource>>,
+    sessions: &Arc<SessionStore>,
+) -> Arc<liberado_session::GoalSessionHub> {
+    let mut goals_hub = liberado_session::GoalSessionHub::new(SessionStore::clone(sessions));
+    let coding_pack = register_goal_packs(
+        &mut goals_hub,
+        config,
+        providers,
+        provider,
+        vault_path,
+        capability_catalog,
+        mcp_registry,
+        guidance,
+    );
+    finalize_goal_hub(goals_hub, config, coding_pack).await
+}
+
+/// Register the goal-hub's domain packs: life-ops demo always; coding when a provider is
+/// attached; dispatch pack so cron/webhook/delegate are hosted sessions, not a second engine.
+/// Returns the coding pack (held so the hub can be attached after `Arc::new`, S6 child goal
+/// sessions).
+#[allow(clippy::too_many_arguments)]
+fn register_goal_packs(
+    goals_hub: &mut liberado_session::GoalSessionHub,
+    config: &liberado_bootstrap::Config,
+    providers: &liberado_bootstrap::RoleProviders,
+    provider: Option<&Arc<dyn Provider>>,
+    vault_path: &str,
+    capability_catalog: &Arc<CapabilityCatalog>,
+    mcp_registry: &McpRegistry,
+    guidance: &Option<Arc<dyn liberado_common::ToolGuidanceSource>>,
+) -> Option<Arc<liberado_coder_agent::CodingSessionPack>> {
+    goals_hub.register_pack(Arc::new(liberado_session::LifeOpsDemoRunner));
+    // Coding pack: hold Arc so we can attach the hub after `Arc::new` (S6 child goal sessions).
+    let coding_pack = build_coding_pack(provider, config);
+    if let Some(pack) = coding_pack.as_ref() {
+        goals_hub.register_pack(Arc::clone(pack) as Arc<dyn liberado_session::DomainPackRunner>);
+    }
+    if let Some(pack) = liberado_bootstrap::build_dispatch_pack(
+        providers,
+        config,
+        Arc::clone(capability_catalog),
+        mcp_registry.clone(),
+        Path::new(vault_path),
+        guidance.clone(),
+    ) {
+        goals_hub.register_pack(Arc::new(pack));
+        info!("goal session packs: life + coding + dispatch");
+    } else if provider.is_some() {
+        info!("goal session packs: life + coding (no dispatch pack)");
+    } else {
+        info!("goal session packs: life only (no provider)");
+    }
+    coding_pack
+}
+
+/// Tail of goal-hub assembly: attach the out-of-band alert (E5), reconcile orphaned parked
+/// sessions at startup (F7), and attach the hub to the coding pack for subagent fan-out (S6).
+async fn finalize_goal_hub(
+    mut goals_hub: liberado_session::GoalSessionHub,
+    config: &liberado_bootstrap::Config,
+    coding_pack: Option<Arc<liberado_coder_agent::CodingSessionPack>>,
+) -> Arc<liberado_session::GoalSessionHub> {
+    // E5: when a session awaits input and nobody has the stream open, ping out-of-band.
+    if let Some(n) = liberado_notify::TelegramNotifier::from_env() {
+        goals_hub = goals_hub.with_alert(Arc::new(NotifySessionAlert(Arc::new(n))));
+        info!("session alerts: telegram notifier attached");
+    }
+    // F7: parked rows survive restart; the hub does not. Finish orphans that cannot be resumed
+    // (no AskHuman, no pack, or pack refuses) so they do not sit forever. Human-resumable parks
+    // stay for the stuck panel / answer path.
+    let reconciled = goals_hub.reconcile_parked_at_startup().await;
+    if reconciled > 0 {
+        info!(
+            reconciled,
+            "startup: cancelled orphaned parked sessions with no resume path"
+        );
+    }
+    let goals = Arc::new(goals_hub);
+    attach_coding_pack_hub(&goals, &coding_pack, config);
+    goals
+}
+
+/// S6: coding fan-out spawns child goal sessions on this same hub — attach it once the hub is
+/// fully assembled.
+fn attach_coding_pack_hub(
+    goals: &Arc<liberado_session::GoalSessionHub>,
+    coding_pack: &Option<Arc<liberado_coder_agent::CodingSessionPack>>,
+    config: &liberado_bootstrap::Config,
+) {
+    if let Some(pack) = coding_pack.as_ref() {
+        pack.attach_hub(Arc::clone(goals));
+        info!(
+            max_concurrent = config.tuning.dispatch.max_concurrent_coding_subagents,
+            "coding pack: hub attached for subagent fan-out"
+        );
+    }
+}
+
+/// Print the API endpoint summary once at boot. One record with embedded newlines: tracing's
+/// `info!` expansion is expensive for clippy's cognitive-complexity model (roughly 8 per call),
+/// and each line here is a listing, not a decision.
+fn log_endpoint_summary() {
+    info!(
+        "API endpoints:\n  GET /api/status  — daemon status\n  GET /api/models  — live provider \
+         model catalog\n  POST /api/models/select  — hot-swap active model\n  \
+         GET /api/reactions?limit=20  — recent reactions\n  GET /api/vault  — vault info\n  \
+         GET /api/goals  — list goal sessions; POST /api/goals starts one (drain-gated)\n  \
+         GET /api/goals/{{id}}/stream  — SSE goal session events\n  /  — static frontend (build \
+         with `dx build` from crates/webui/)"
+    );
+}
+
+/// Build the coding pack for the goal hub, when a provider is attached. A malformed `[coder]`
+/// section used to be swallowed by `if let Ok(..)`, so the pack silently kept its defaults and the
+/// operator's settings did nothing — with no line anywhere saying why. Cost an hour of "why is my
+/// configured model being ignored"; say it out loud instead.
+fn build_coding_pack(
+    provider: Option<&Arc<dyn Provider>>,
+    config: &liberado_bootstrap::Config,
+) -> Option<Arc<liberado_coder_agent::CodingSessionPack>> {
+    let p = provider?;
+    let work_parent = liberado_bootstrap::data_dir().join("goal-workspaces");
+    let _ = std::fs::create_dir_all(&work_parent);
+    let mut pack = liberado_coder_agent::CodingSessionPack::new(p.clone(), work_parent)
+        .with_max_concurrent_coding_subagents(
+            config.tuning.dispatch.max_concurrent_coding_subagents,
+        );
+    match liberado_coder_core::CoderTuning::from_value(config.tuning.coder.as_ref()) {
+        Ok(coder_tuning) => {
+            // One call: keeps pack fields and the shared production assembly path
+            // on the same CoderTuning (backlog 0.4).
+            pack = pack.with_tuning(coder_tuning);
+        }
+        Err(e) => {
+            tracing::error!(
+                error = %e,
+                "[coder] tuning section is invalid and was IGNORED; the coding pack is running on built-in defaults, not your config"
+            );
+        }
+    }
+    // Without this the pack's provider factory returns the daemon's provider for every
+    // role, so the coder's configured model is ignored and the run reports a model
+    // name nothing resolves.
+    if let Some(factory) = liberado_bootstrap::CoderRoleProviderFactory::for_config(config) {
+        pack = pack.with_provider_factory(std::sync::Arc::new(factory));
+    }
+    Some(Arc::new(pack))
 }
 
 /// Load + validate the config and print a concise summary — the `liberado config check` subcommand.
@@ -830,33 +1014,8 @@ async fn build_chat(
     // through `delegate` → hub → dispatch pack, not the face agent's own tool list.
     let runtime = connect_chat_runtime(mcp);
 
-    let mut tool_names: Vec<String> = runtime.catalog().iter().map(|t| t.name.clone()).collect();
-    // Face-agent surface is usually just `delegate` (+ optional main-agent MCP grants).
-    if main_agent_cfg.delegation_mode {
-        tool_names = vec![liberado_main_agent::DELEGATE_TOOL_NAME.to_string()];
-        let granted = main_agent_caps.granted_mcps();
-        if !granted.is_empty() {
-            tool_names.extend(runtime.catalog().iter().filter_map(|t| {
-                let mcp = t.name.split_once(':').map(|(m, _)| m).unwrap_or(&t.name);
-                if granted.iter().any(|g| g == mcp) {
-                    Some(t.name.clone())
-                } else {
-                    None
-                }
-            }));
-        }
-    }
-    let tool_count = tool_names.len();
-    if tool_count > 0 {
-        info!(
-            count = tool_count,
-            tools = ?tool_names,
-            delegation_mode = main_agent_cfg.delegation_mode,
-            "chat: tool surface ready"
-        );
-    } else {
-        info!("chat: no tools available — the model can only converse, not act");
-    }
+    let (tool_names, tool_count) =
+        face_tool_surface(&runtime, main_agent_cfg.delegation_mode, &main_agent_caps);
 
     // ── Build the guarded ChatSessions ───────────────────────────────────────
     let consequence_count = guard.consequences.len();
@@ -917,24 +1076,75 @@ async fn build_chat(
 
     // Pre-turn classification (legacy mode) + face-agent `delegate` needs a dispatcher for the
     // classifier; execution is always the hub's dispatch pack.
-    let mut dispatcher = Dispatcher::new(
+    let dispatcher = chat_dispatcher(
         dispatcher_provider,
         config.tuning.dispatch.clone(),
         config.tuning.concurrency.max_reaction_depth,
+        guidance,
+        main_agent_cfg.delegation_mode,
     );
+    sessions = sessions.with_dispatch(dispatcher, catalog);
+
+    (Some(Arc::new(sessions)), tool_count, tool_names)
+}
+
+/// The face agent's tool surface: `delegate` only (plus granted main-agent MCP tools) in
+/// delegation mode, the full live registry otherwise.
+fn face_tool_surface(
+    runtime: &Arc<dyn ToolRuntime>,
+    delegation_mode: bool,
+    caps: &CapabilitySet,
+) -> (Vec<String>, usize) {
+    let mut tool_names: Vec<String> = runtime.catalog().iter().map(|t| t.name.clone()).collect();
+    if delegation_mode {
+        tool_names = vec![liberado_main_agent::DELEGATE_TOOL_NAME.to_string()];
+        let granted = caps.granted_mcps();
+        if !granted.is_empty() {
+            tool_names.extend(runtime.catalog().iter().filter_map(|t| {
+                let mcp = t.name.split_once(':').map(|(m, _)| m).unwrap_or(&t.name);
+                if granted.iter().any(|g| g == mcp) {
+                    Some(t.name.clone())
+                } else {
+                    None
+                }
+            }));
+        }
+    }
+    let tool_count = tool_names.len();
+    if tool_count > 0 {
+        info!(
+            count = tool_count,
+            tools = ?tool_names,
+            delegation_mode,
+            "chat: tool surface ready"
+        );
+    } else {
+        info!("chat: no tools available — the model can only converse, not act");
+    }
+    (tool_names, tool_count)
+}
+
+/// A dispatcher wired with the given guidance and delegation mode (which only changes the
+/// startup log line — the mode is applied downstream by `with_delegation_mode`).
+fn chat_dispatcher(
+    dispatcher_provider: Arc<dyn Provider>,
+    dispatch_tuning: liberado_config::DispatchTuning,
+    max_reaction_depth: u32,
+    guidance: Option<Arc<dyn liberado_common::ToolGuidanceSource>>,
+    delegation_mode: bool,
+) -> Dispatcher {
+    let mut dispatcher = Dispatcher::new(dispatcher_provider, dispatch_tuning, max_reaction_depth);
     if let Some(g) = guidance {
         dispatcher = dispatcher.with_guidance(g);
     }
-    if main_agent_cfg.delegation_mode {
+    if delegation_mode {
         info!("chat: face-agent mode — human interfacer + delegate tool (hub hosts work)");
     } else {
         info!(
             "chat: legacy dispatch mode (pre-turn routing + main-agent MCP tools on stream path)"
         );
     }
-    sessions = sessions.with_dispatch(dispatcher, catalog);
-
-    (Some(Arc::new(sessions)), tool_count, tool_names)
+    dispatcher
 }
 
 /// Build the dispatcher's optional procedural-memory guidance source (`liberado-dispatch-logic-spec.md`
@@ -951,34 +1161,10 @@ async fn dispatcher_guidance_source(
         return None;
     }
 
-    let vault = match liberado_vault::Vault::open("dispatcher-guidance", vault_path).await {
-        Ok(v) => v,
-        Err(e) => {
-            warn!(error = %e, "dispatcher guidance: failed to open vault — continuing without it");
-            return None;
-        }
-    };
+    let vault = open_guidance_vault(vault_path).await?;
+    let embedder = load_guidance_embedder()?;
 
-    let model =
-        std::env::var("LIBERADO_MEMORY_MODEL").unwrap_or_else(|_| "bge-small-en-v1.5".to_string());
-    let embedder: Arc<dyn turbovault_vector::EmbeddingEngine> =
-        match turbovault_vector::FastembedEngine::new(&model, None) {
-            Ok(e) => Arc::new(e),
-            Err(e) => {
-                warn!(error = %e, "dispatcher guidance: failed to load embedding model — continuing without it");
-                return None;
-            }
-        };
-
-    match liberado_memory_store::MemoryStore::open(
-        vault,
-        "memory/procedural",
-        embedder,
-        None,
-        liberado_memory_store::MemoryStoreConfig::default(),
-    )
-    .await
-    {
+    match open_procedural_memory(vault, embedder).await {
         Ok(store) => {
             info!("dispatcher guidance: procedural memory enabled");
             Some(Arc::new(store))
@@ -988,6 +1174,50 @@ async fn dispatcher_guidance_source(
             None
         }
     }
+}
+
+/// Open the vault backing the dispatcher's procedural memory. Any failure (bad vault path, model
+/// load error) degrades to `None` — this is an optimization, never something worth failing boot
+/// over.
+async fn open_guidance_vault(vault_path: &str) -> Option<liberado_vault::Vault> {
+    match liberado_vault::Vault::open("dispatcher-guidance", vault_path).await {
+        Ok(v) => Some(v),
+        Err(e) => {
+            warn!(error = %e, "dispatcher guidance: failed to open vault — continuing without it");
+            None
+        }
+    }
+}
+
+/// Load the embedding model for procedural-memory retrieval (`LIBERADO_MEMORY_MODEL`, defaulting
+/// to bge-small-en-v1.5). A failed load degrades to `None` — the same store
+/// `liberado-memory-mcp` (a separate subprocess) already exposes to agents, so an unopted-in
+/// deployment isn't paying for a second copy of that model just to run `liberado serve`.
+fn load_guidance_embedder() -> Option<Arc<dyn turbovault_vector::EmbeddingEngine>> {
+    let model =
+        std::env::var("LIBERADO_MEMORY_MODEL").unwrap_or_else(|_| "bge-small-en-v1.5".to_string());
+    match turbovault_vector::FastembedEngine::new(&model, None) {
+        Ok(e) => Some(Arc::new(e)),
+        Err(e) => {
+            warn!(error = %e, "dispatcher guidance: failed to load embedding model — continuing without it");
+            None
+        }
+    }
+}
+
+/// Open the procedural-memory store over an already-open vault and embedder.
+async fn open_procedural_memory(
+    vault: liberado_vault::Vault,
+    embedder: Arc<dyn turbovault_vector::EmbeddingEngine>,
+) -> Result<liberado_memory_store::MemoryStore, liberado_memory_store::MemoryError> {
+    liberado_memory_store::MemoryStore::open(
+        vault,
+        "memory/procedural",
+        embedder,
+        None,
+        liberado_memory_store::MemoryStoreConfig::default(),
+    )
+    .await
 }
 
 /// Chat face tools: live registry handle that re-connects when the peer set changes (empty→add

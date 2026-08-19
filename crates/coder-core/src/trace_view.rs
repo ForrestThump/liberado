@@ -123,8 +123,8 @@ pub fn resolve_trace_path(id_or_path: &str, search_dirs: &[&Path]) -> Result<Pat
 /// Includes, for each model turn: tools offered, model text (when present), tool calls, subsequent
 /// tool results, and any loop-guard events. Other events (role start/finish, session lifecycle)
 /// appear as section markers so the timeline stays complete.
-pub fn render_transcript(trace: &CoderTrace) -> String {
-    let mut out = String::new();
+/// Render the preamble: session id, task, and result summary.
+fn render_header(out: &mut String, trace: &CoderTrace) {
     out.push_str(&format!("# Coder trace: {}\n", trace.session_id));
     out.push_str(&format!(
         "task: {} — {}\n",
@@ -137,155 +137,203 @@ pub fn render_transcript(trace: &CoderTrace) -> String {
         ));
     }
     out.push('\n');
+}
 
-    for event in &trace.events {
-        match event {
-            // The system prompt, rendered once — the first turn that carries the text. Later
-            // turns repeat only the hash, and a transcript that reprinted a 5 KB prompt forty
-            // times would bury everything else.
-            CoderEvent::ModelRequestSent {
-                turn,
-                system_prompt_sha256,
-                system_prompt: Some(prompt),
-                tools_offered,
-                ..
-            } => {
-                out.push_str(&format!(
-                    "== system prompt (turn {turn}, sha256 {}) ==
+/// Render turn-timeline events: requests, role starts/finishes, turn start/finish.
+fn render_turn_events(out: &mut String, event: &CoderEvent) {
+    match event {
+        // The system prompt, rendered once — the first turn that carries the text. Later
+        // turns repeat only the hash, and a transcript that reprinted a 5 KB prompt forty
+        // times would bury everything else. A `None` prompt is that hash-only case.
+        CoderEvent::ModelRequestSent {
+            turn,
+            system_prompt_sha256,
+            system_prompt: Some(prompt),
+            tools_offered,
+            ..
+        } => {
+            out.push_str(&format!(
+                "== system prompt (turn {turn}, sha256 {}) ==
 {prompt}
 
   tools offered: {}
 
 ",
-                    &system_prompt_sha256[..system_prompt_sha256.len().min(12)],
-                    tools_offered.join(", ")
-                ));
-            }
-            // Subsequent requests: the hash alone, so a prompt that changes mid-run is visible.
-            CoderEvent::ModelRequestSent { .. } => {}
-            CoderEvent::SessionStarted {
-                session_id,
-                backend,
-                task_id,
-                at,
-            } => {
-                out.push_str(&format!(
-                    "== session started ==\n  id: {session_id}\n  backend: {backend}\n  task: {task_id}\n  at: {at}\n\n"
-                ));
-            }
-            CoderEvent::RoleStarted { role, model, at } => {
-                out.push_str(&format!("-- role started: {role} ({model}) @ {at} --\n\n"));
-            }
-            CoderEvent::RoleFinished { role, at } => {
-                out.push_str(&format!("-- role finished: {role} @ {at} --\n\n"));
-            }
-            CoderEvent::ModelTurnStarted { role, turn, at } => {
-                out.push_str(&format!("## turn {turn} ({role}) started @ {at}\n\n"));
-            }
-            CoderEvent::ModelTurnFinished {
-                role,
-                turn,
-                tools_offered,
-                content,
-                finish_reason,
-                tool_calls,
-                prompt_tokens,
-                completion_tokens,
-                at,
-                ..
-            } => {
-                out.push_str(&format!("## turn {turn} — {role} finished @ {at}\n"));
-                out.push_str(&format!("  finish: {finish_reason}\n"));
-                out.push_str(&format!(
-                    "  tokens: prompt={prompt_tokens} completion={completion_tokens}\n"
-                ));
-                out.push_str("  tools offered:\n");
-                if tools_offered.is_empty() {
-                    out.push_str("    (none)\n");
-                } else {
-                    for t in tools_offered {
-                        out.push_str(&format!("    - {t}\n"));
-                    }
-                }
-                if let Some(text) = content {
-                    out.push_str("  model text:\n");
-                    for line in text.lines() {
-                        out.push_str(&format!("    | {line}\n"));
-                    }
-                } else {
-                    out.push_str("  model text: (none — tool calls only)\n");
-                }
-                out.push_str("  tool calls:\n");
-                if tool_calls.is_empty() {
-                    out.push_str("    (none)\n");
-                } else {
-                    for c in tool_calls {
-                        out.push_str(&format!("    → {c}\n"));
-                    }
-                }
-                out.push('\n');
-            }
-            CoderEvent::ToolStarted {
-                name,
-                args_preview,
-                at,
-            } => {
-                out.push_str(&format!("  tool start: {name} @ {at}\n"));
-                if !args_preview.is_empty() {
-                    out.push_str(&format!("    args: {args_preview}\n"));
+                &system_prompt_sha256[..system_prompt_sha256.len().min(12)],
+                tools_offered.join(", ")
+            ));
+        }
+        // A later request carries only the hash — print nothing rather than repeat the prompt.
+        CoderEvent::ModelRequestSent { .. } => {}
+        CoderEvent::RoleStarted { role, model, at } => {
+            out.push_str(&format!("-- role started: {role} ({model}) @ {at} --\n\n"));
+        }
+        CoderEvent::RoleFinished { role, at } => {
+            out.push_str(&format!("-- role finished: {role} @ {at} --\n\n"));
+        }
+        CoderEvent::ModelTurnStarted { role, turn, at } => {
+            out.push_str(&format!("## turn {turn} ({role}) started @ {at}\n\n"));
+        }
+        CoderEvent::ModelTurnFinished {
+            role,
+            turn,
+            tools_offered,
+            content,
+            finish_reason,
+            tool_calls,
+            prompt_tokens,
+            completion_tokens,
+            at,
+            ..
+        } => {
+            out.push_str(&format!("## turn {turn} — {role} finished @ {at}\n"));
+            out.push_str(&format!("  finish: {finish_reason}\n"));
+            out.push_str(&format!(
+                "  tokens: prompt={prompt_tokens} completion={completion_tokens}\n"
+            ));
+            out.push_str("  tools offered:\n");
+            if tools_offered.is_empty() {
+                out.push_str("    (none)\n");
+            } else {
+                for t in tools_offered {
+                    out.push_str(&format!("    - {t}\n"));
                 }
             }
-            CoderEvent::ToolFinished {
-                name,
-                ok,
-                result_preview,
-                at,
-            } => {
-                let mark = if *ok { "ok" } else { "FAILED" };
-                out.push_str(&format!("  tool result [{mark}]: {name} @ {at}\n"));
-                if !result_preview.is_empty() {
-                    for line in result_preview.lines().take(20) {
-                        out.push_str(&format!("    | {line}\n"));
-                    }
+            if let Some(text) = content {
+                out.push_str("  model text:\n");
+                for line in text.lines() {
+                    out.push_str(&format!("    | {line}\n"));
                 }
-                out.push('\n');
+            } else {
+                out.push_str("  model text: (none — tool calls only)\n");
             }
-            CoderEvent::FileChanged { path, at } => {
-                out.push_str(&format!("  file changed: {path} @ {at}\n\n"));
+            out.push_str("  tool calls:\n");
+            if tool_calls.is_empty() {
+                out.push_str("    (none)\n");
+            } else {
+                for c in tool_calls {
+                    out.push_str(&format!("    → {c}\n"));
+                }
             }
-            CoderEvent::ValidationFinished { ok, summary, at } => {
-                let mark = if *ok { "ok" } else { "FAILED" };
-                out.push_str(&format!("  validation [{mark}] @ {at}: {summary}\n\n"));
+            out.push('\n');
+        }
+        _ => {}
+    }
+}
+
+/// Render session-lifecycle markers.
+fn render_session_events(out: &mut String, event: &CoderEvent) {
+    match event {
+        CoderEvent::SessionStarted {
+            session_id,
+            backend,
+            task_id,
+            at,
+        } => {
+            out.push_str(&format!(
+                "== session started ==\n  id: {session_id}\n  backend: {backend}\n  task: {task_id}\n  at: {at}\n\n"
+            ));
+        }
+        CoderEvent::ReportFiled {
+            outcome,
+            summary,
+            at,
+        } => {
+            out.push_str(&format!(
+                "== report filed ==\n  outcome: {outcome:?}\n  summary: {summary}\n  at: {at}\n\n"
+            ));
+        }
+        CoderEvent::SessionFinished { outcome, at } => {
+            out.push_str(&format!(
+                "== session finished ==\n  outcome: {outcome:?}\n  at: {at}\n\n"
+            ));
+        }
+        CoderEvent::SessionAborted { error, at } => {
+            // Loud on purpose. This is the attempt that crashed rather than concluded, and
+            // before the trace recorded it the run had no tail at all.
+            out.push_str(&format!(
+                "== session ABORTED (unhandled error) ==\n  error: {error}\n  at: {at}\n\n"
+            ));
+        }
+        _ => {}
+    }
+}
+
+/// Render tool and validation activity.
+fn render_activity_events(out: &mut String, event: &CoderEvent) {
+    match event {
+        CoderEvent::ToolStarted {
+            name,
+            args_preview,
+            at,
+        } => {
+            out.push_str(&format!("  tool start: {name} @ {at}\n"));
+            if !args_preview.is_empty() {
+                out.push_str(&format!("    args: {args_preview}\n"));
             }
-            CoderEvent::LoopGuardTriggered { guard, action, at } => {
-                out.push_str(&format!(
-                    "  !! guard triggered: {guard} → {action} @ {at}\n\n"
-                ));
+        }
+        CoderEvent::ToolFinished {
+            name,
+            ok,
+            result_preview,
+            at,
+        } => {
+            let mark = if *ok { "ok" } else { "FAILED" };
+            out.push_str(&format!("  tool result [{mark}]: {name} @ {at}\n"));
+            if !result_preview.is_empty() {
+                for line in result_preview.lines().take(20) {
+                    out.push_str(&format!("    | {line}\n"));
+                }
             }
-            CoderEvent::CriticVerdict { verdict, at } => {
-                out.push_str(&format!("  critic @ {at}: {verdict:?}\n\n"));
-            }
-            CoderEvent::ReportFiled {
-                outcome,
-                summary,
-                at,
-            } => {
-                out.push_str(&format!(
-                    "== report filed ==\n  outcome: {outcome:?}\n  summary: {summary}\n  at: {at}\n\n"
-                ));
-            }
-            CoderEvent::SessionFinished { outcome, at } => {
-                out.push_str(&format!(
-                    "== session finished ==\n  outcome: {outcome:?}\n  at: {at}\n\n"
-                ));
-            }
-            CoderEvent::SessionAborted { error, at } => {
-                // Loud on purpose. This is the attempt that crashed rather than concluded, and
-                // before the trace recorded it the run had no tail at all.
-                out.push_str(&format!(
-                    "== session ABORTED (unhandled error) ==\n  error: {error}\n  at: {at}\n\n"
-                ));
-            }
+            out.push('\n');
+        }
+        CoderEvent::FileChanged { path, at } => {
+            out.push_str(&format!("  file changed: {path} @ {at}\n\n"));
+        }
+        CoderEvent::ValidationFinished { ok, summary, at } => {
+            let mark = if *ok { "ok" } else { "FAILED" };
+            out.push_str(&format!("  validation [{mark}] @ {at}: {summary}\n\n"));
+        }
+        CoderEvent::LoopGuardTriggered { guard, action, at } => {
+            out.push_str(&format!(
+                "  !! guard triggered: {guard} → {action} @ {at}\n\n"
+            ));
+        }
+        CoderEvent::CriticVerdict { verdict, at } => {
+            out.push_str(&format!("  critic @ {at}: {verdict:?}\n\n"));
+        }
+        _ => {}
+    }
+}
+
+/// Render a native trace as a turn-by-turn human transcript.
+///
+/// Includes, for each model turn: tools offered, model text (when present), tool calls, subsequent
+/// tool results, and any loop-guard events. Other events (role start/finish, session lifecycle)
+/// appear as section markers so the timeline stays complete.
+pub fn render_transcript(trace: &CoderTrace) -> String {
+    let mut out = String::new();
+    render_header(&mut out, trace);
+
+    for event in &trace.events {
+        match event {
+            CoderEvent::ModelRequestSent { .. }
+            | CoderEvent::RoleStarted { .. }
+            | CoderEvent::RoleFinished { .. }
+            | CoderEvent::ModelTurnStarted { .. }
+            | CoderEvent::ModelTurnFinished { .. } => render_turn_events(&mut out, event),
+
+            CoderEvent::SessionStarted { .. }
+            | CoderEvent::ReportFiled { .. }
+            | CoderEvent::SessionFinished { .. }
+            | CoderEvent::SessionAborted { .. } => render_session_events(&mut out, event),
+
+            CoderEvent::ToolStarted { .. }
+            | CoderEvent::ToolFinished { .. }
+            | CoderEvent::FileChanged { .. }
+            | CoderEvent::ValidationFinished { .. }
+            | CoderEvent::LoopGuardTriggered { .. }
+            | CoderEvent::CriticVerdict { .. } => render_activity_events(&mut out, event),
         }
     }
 

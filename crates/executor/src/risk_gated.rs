@@ -36,14 +36,14 @@
 //! if you add a **new** guard here, check whether `guards.rs::evaluate` needs the equivalent, and
 //! vice versa. That sequencing risk is the reason this note exists.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use async_trait::async_trait;
 use liberado_common::{
     Capability, CapabilityCatalog, CapabilitySet, Consequence, McpDescriptor, Proposal,
-    ProposalSigner, ProposedAction, WriteClass, WriteTarget, Zone, bare_tool_name,
+    ProposalSigner, ProposedAction, SignedProposal, WriteClass, WriteTarget, Zone, bare_tool_name,
     is_sweeping_destructive, mcp_of, names_single_write_target, write_target,
 };
 use liberado_notify::Notifier;
@@ -584,11 +584,35 @@ impl RiskGatedToolRuntime {
 
         let note = proposal.to_note();
 
+        self.persist_proposal_note(&proposals_subdir, &proposal_path, &note)
+            .await?;
+
+        tracing::info!(
+            path = %proposal_path.display(),
+            tool = %call.name,
+            "proposal written"
+        );
+
+        self.notify_proposal(call, &proposal_id, rationale, &proposal_path)
+            .await;
+
+        Ok(proposal_path)
+    }
+
+    /// Create the proposals directory (if needed) and write the note, honoring the injected
+    /// failpoints. The proposal is the safety artifact — a failure here means the action was NOT
+    /// executed and NO proposal exists, so it must reach the human loudly, not degrade silently.
+    async fn persist_proposal_note(
+        &self,
+        proposals_subdir: &Path,
+        proposal_path: &Path,
+        note: &str,
+    ) -> Result<(), String> {
         // Create the proposals directory if it doesn't exist.
         if self.fail_next_create_dir.swap(false, Ordering::Relaxed) {
             return Err("simulated create_dir_all failure — proposal was NOT saved".into());
         }
-        if let Err(e) = tokio::fs::create_dir_all(&proposals_subdir).await {
+        if let Err(e) = tokio::fs::create_dir_all(proposals_subdir).await {
             tracing::error!(
                 path = %proposals_subdir.display(),
                 error = %e,
@@ -605,7 +629,7 @@ impl RiskGatedToolRuntime {
         if self.fail_next_write.swap(false, Ordering::Relaxed) {
             return Err("simulated write failure — proposal was NOT saved".into());
         }
-        if let Err(e) = tokio::fs::write(&proposal_path, &note).await {
+        if let Err(e) = tokio::fs::write(proposal_path, note).await {
             tracing::error!(
                 path = %proposal_path.display(),
                 error = %e,
@@ -618,34 +642,36 @@ impl RiskGatedToolRuntime {
                 proposal_path.display()
             ));
         }
+        Ok(())
+    }
 
-        tracing::info!(
-            path = %proposal_path.display(),
-            tool = %call.name,
-            "proposal written"
+    /// Tell the human a proposal awaits review. Best-effort: the proposal is already safely on
+    /// disk, so a failed notification only changes where the human hears about it, not whether
+    /// the safety property (a human gets to review) holds.
+    async fn notify_proposal(
+        &self,
+        call: &ToolInvocation,
+        proposal_id: &str,
+        rationale: &str,
+        proposal_path: &Path,
+    ) {
+        let Some(notifier) = &self.notifier else {
+            return;
+        };
+        let message = format!(
+            "Liberado: a new proposal needs your review.\n{rationale}\nTool: {}\nSaved at: {}",
+            call.name,
+            proposal_path.display()
         );
-
-        if let Some(notifier) = &self.notifier {
-            let message = format!(
-                "Liberado: a new proposal needs your review.\n{rationale}\nTool: {}\nSaved at: {}",
-                call.name,
-                proposal_path.display()
-            );
-            match notifier.notify_proposal(&proposal_id, &message).await {
-                // The human now has the proposal on their phone out-of-band — record it so a chat
-                // surface can drop the redundant "this needs approval" reply (Gap 2). Only on a
-                // confirmed send: a failed notify leaves the chat reply as the sole signal.
-                Ok(()) => self.notified_deferral.store(true, Ordering::Relaxed),
-                Err(e) => {
-                    // Best-effort — the proposal itself is already safely written; a failed
-                    // notification just means the human finds out by checking the vault instead of
-                    // their phone, not that the safety property (a human gets to review it) broke.
-                    tracing::warn!(error = %e, "failed to send proposal notification");
-                }
+        match notifier.notify_proposal(proposal_id, &message).await {
+            // The human now has the proposal on their phone out-of-band — record it so a chat
+            // surface can drop the redundant "this needs approval" reply (Gap 2). Only on a
+            // confirmed send: a failed notify leaves the chat reply as the sole signal.
+            Ok(()) => self.notified_deferral.store(true, Ordering::Relaxed),
+            Err(e) => {
+                tracing::warn!(error = %e, "failed to send proposal notification");
             }
         }
-
-        Ok(proposal_path)
     }
 
     /// Like [`write_proposal`](Self::write_proposal), but for a **permission request**: the call is
@@ -658,36 +684,11 @@ impl RiskGatedToolRuntime {
         call: &ToolInvocation,
         zone: &str,
     ) -> Result<PathBuf, String> {
-        // Compact id: it must fit Telegram's callback_data budget (the full correlation lives in the
-        // proposal's `correlation_id` field, not the stem). The old `perm-{correlation_base}-{nanos}`
-        // was 65 bytes for a `chat-delegate-<ulid>` correlation — over the cap — so the buttons
-        // silently degraded to a plain, un-tappable notification.
-        let proposal_id = format!(
-            "perm-{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_nanos(),
-        );
+        let proposal_id = permission_request_id();
         let proposals_subdir = self.proposals_dir.join(liberado_common::PROPOSALS_DIR);
         let proposal_path = proposals_subdir.join(format!("{proposal_id}.md"));
 
-        let mut proposal = Proposal::pending(
-            &proposal_id,
-            &self.correlation_base,
-            "liberado-chat",
-            ProposedAction::ToolCalls(vec![liberado_common::ToolCall {
-                tool: call.name.clone(),
-                args: call.arguments.clone(),
-            }]),
-            format!(
-                "Permission request: '{}' needs Write access to zone '{zone}'.",
-                call.name
-            ),
-        )
-        .with_requested_grant(Capability::Write(Zone::vault(zone)));
-        proposal.pool = Some(self.pool_name.clone());
-        let proposal = self.signer.sign(proposal);
+        let proposal = self.sign_permission_proposal(&proposal_id, call, zone);
 
         if let Err(e) = tokio::fs::create_dir_all(&proposals_subdir).await {
             tracing::error!(path = %proposals_subdir.display(), error = %e, "failed to create proposals directory");
@@ -705,28 +706,81 @@ impl RiskGatedToolRuntime {
         }
         tracing::info!(path = %proposal_path.display(), tool = %call.name, %zone, "permission request written");
 
-        if let Some(notifier) = &self.notifier {
-            let message = format!(
-                "Liberado needs permission.\n'{}' wants to write zone '{zone}', which its grant \
-                 doesn't include.\nApprove once, for this session, or everywhere?",
-                call.name,
-            );
-            match notifier
-                .notify_permission_request(&proposal_id, &message)
-                .await
-            {
-                // The four scope buttons landed on the human's phone — record the out-of-band
-                // surfacing so the chat surface can drop the duplicate "grant permission" reply
-                // (Gap 2). Only on a confirmed send.
-                Ok(()) => self.notified_deferral.store(true, Ordering::Relaxed),
-                Err(e) => {
-                    tracing::warn!(error = %e, "failed to send permission-request notification");
-                }
-            }
-        }
+        self.notify_permission_request(&proposal_id, call, zone)
+            .await;
 
         Ok(proposal_path)
     }
+
+    /// Build the signed permission-request proposal: the blocked call as a `ProposedAction`, the
+    /// requested capability stamped on before signing (so the signature covers it, tamper-evident),
+    /// and the pool keyed so the daemon's grant lands on the right pool.
+    fn sign_permission_proposal(
+        &self,
+        proposal_id: &str,
+        call: &ToolInvocation,
+        zone: &str,
+    ) -> SignedProposal {
+        let mut proposal = Proposal::pending(
+            proposal_id,
+            &self.correlation_base,
+            "liberado-chat",
+            ProposedAction::ToolCalls(vec![liberado_common::ToolCall {
+                tool: call.name.clone(),
+                args: call.arguments.clone(),
+            }]),
+            format!(
+                "Permission request: '{}' needs Write access to zone '{zone}'.",
+                call.name
+            ),
+        )
+        .with_requested_grant(Capability::Write(Zone::vault(zone)));
+        proposal.pool = Some(self.pool_name.clone());
+        self.signer.sign(proposal)
+    }
+
+    /// Notify the human (when a notifier is attached) that a permission request awaits their
+    /// decision, with the four scope buttons. A confirmed send records the out-of-band surfacing
+    /// so the chat surface can drop the duplicate "grant permission" reply (Gap 2); a failed
+    /// notify leaves the chat reply as the sole signal.
+    async fn notify_permission_request(
+        &self,
+        proposal_id: &str,
+        call: &ToolInvocation,
+        zone: &str,
+    ) {
+        let Some(notifier) = &self.notifier else {
+            return;
+        };
+        let message = format!(
+            "Liberado needs permission.\n'{}' wants to write zone '{zone}', which its grant \
+             doesn't include.\nApprove once, for this session, or everywhere?",
+            call.name,
+        );
+        match notifier
+            .notify_permission_request(proposal_id, &message)
+            .await
+        {
+            Ok(()) => self.notified_deferral.store(true, Ordering::Relaxed),
+            Err(e) => {
+                tracing::warn!(error = %e, "failed to send permission-request notification");
+            }
+        }
+    }
+}
+
+/// Compact permission-request id: it must fit Telegram's callback_data budget (the full
+/// correlation lives in the proposal's `correlation_id` field, not the stem). The old
+/// `perm-{correlation_base}-{nanos}` was 65 bytes for a `chat-delegate-<ulid>` correlation — over
+/// the cap — so the buttons silently degraded to a plain, un-tappable notification.
+fn permission_request_id() -> String {
+    format!(
+        "perm-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos(),
+    )
 }
 
 /// The tool *result* returned for a raised permission request. Tells the model plainly that the

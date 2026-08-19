@@ -199,6 +199,71 @@ fn normalize_path(path: &str) -> String {
         .replace('\\', "/")
 }
 
+/// Handle a `PUT <locator>:` op: parse the locator, collect the following `+` body rows (with
+/// the interior-blank layout rule), and apply. Returns the next line index (which may sit on the
+/// next section/op header).
+fn parse_put(
+    edits: &mut Vec<Edit>,
+    start_line: usize,
+    lines: &[&str],
+    rest: &str,
+) -> Result<usize, String> {
+    let (locator, had_colon) = if let Some(stripped) = rest.strip_suffix(':') {
+        (stripped.trim(), true)
+    } else {
+        (rest, false)
+    };
+
+    if !had_colon {
+        return Err(format!(
+            "colonless PUT (register paste) is not supported yet; got PUT {}",
+            json_preview(locator)
+        ));
+    }
+
+    // Collect + body rows.
+    let mut i = start_line + 1;
+    let mut payloads = Vec::new();
+    while i < lines.len() {
+        let body_line = lines[i].trim_end_matches('\r');
+        let body_trim = body_line.trim_start();
+        // Next op or section?
+        if is_op_header(body_trim) || (body_trim.starts_with('[') && body_trim.ends_with(']')) {
+            break;
+        }
+        if body_trim.is_empty() {
+            // Interior blank: only keep if we already have payloads (trailing blanks discarded
+            // later).
+            if !payloads.is_empty() {
+                // Peek ahead — trailing blanks before next header are layout, not content.
+                let mut j = i + 1;
+                while j < lines.len() && lines[j].trim().is_empty() {
+                    j += 1;
+                }
+                if j >= lines.len() || is_op_header(lines[j].trim_start()) {
+                    break;
+                }
+                payloads.push(String::new());
+            }
+            i += 1;
+            continue;
+        }
+        if let Some(text) = body_line.strip_prefix('+') {
+            payloads.push(text.to_string());
+        } else if let Some(text) = body_trim.strip_prefix('+') {
+            // Indent before + is unusual; accept and keep content after +.
+            payloads.push(text.to_string());
+        } else {
+            // Bare body row: treat as payload with warning-level leniency.
+            payloads.push(strip_read_prefix(body_line));
+        }
+        i += 1;
+    }
+
+    apply_put_locator(locator, &payloads, edits)?;
+    Ok(i)
+}
+
 fn parse_section_body(lines: &[&str]) -> Result<(Vec<Edit>, FileOp), String> {
     let mut edits = Vec::new();
     let mut file_op = FileOp::Update;
@@ -238,61 +303,7 @@ fn parse_section_body(lines: &[&str]) -> Result<(Vec<Edit>, FileOp), String> {
 
         // PUT variants
         if let Some(rest) = strip_keyword(trimmed, "PUT") {
-            let rest = rest.trim();
-            let (locator, had_colon) = if let Some(stripped) = rest.strip_suffix(':') {
-                (stripped.trim(), true)
-            } else {
-                (rest, false)
-            };
-
-            if !had_colon {
-                return Err(format!(
-                    "colonless PUT (register paste) is not supported yet; got PUT {}",
-                    json_preview(locator)
-                ));
-            }
-
-            // Collect + body rows.
-            i += 1;
-            let mut payloads = Vec::new();
-            while i < lines.len() {
-                let body_line = lines[i].trim_end_matches('\r');
-                let body_trim = body_line.trim_start();
-                // Next op or section?
-                if is_op_header(body_trim)
-                    || (body_trim.starts_with('[') && body_trim.ends_with(']'))
-                {
-                    break;
-                }
-                if body_trim.is_empty() {
-                    // Interior blank: only keep if we already have payloads (trailing blanks discarded later).
-                    if !payloads.is_empty() {
-                        // Peek ahead — trailing blanks before next header are layout, not content.
-                        let mut j = i + 1;
-                        while j < lines.len() && lines[j].trim().is_empty() {
-                            j += 1;
-                        }
-                        if j >= lines.len() || is_op_header(lines[j].trim_start()) {
-                            break;
-                        }
-                        payloads.push(String::new());
-                    }
-                    i += 1;
-                    continue;
-                }
-                if let Some(text) = body_line.strip_prefix('+') {
-                    payloads.push(text.to_string());
-                } else if let Some(text) = body_trim.strip_prefix('+') {
-                    // Indent before + is unusual; accept and keep content after +.
-                    payloads.push(text.to_string());
-                } else {
-                    // Bare body row: treat as payload with warning-level leniency.
-                    payloads.push(strip_read_prefix(body_line));
-                }
-                i += 1;
-            }
-
-            apply_put_locator(locator, &payloads, &mut edits)?;
+            i = parse_put(&mut edits, i, lines, rest.trim())?;
             continue;
         }
 
@@ -464,31 +475,59 @@ fn json_preview(s: &str) -> String {
 }
 
 /// Apply edits to file text. Line numbers refer to the **original** file.
+///
+/// Orchestrates the pipeline: split into lines, partition the edit kinds, validate anchors,
+/// apply line edits bottom-up, then fold in BOF/EOF inserts.
 fn apply_edits(text: &str, edits: &[Edit]) -> Result<(String, Option<usize>), String> {
     if edits.is_empty() {
         return Ok((text.to_string(), None));
     }
 
-    // Preserve whether the original ended with a trailing newline via split behaviour.
-    let mut file_lines: Vec<String> = text
-        .split('\n')
-        .map(|l| l.strip_suffix('\r').unwrap_or(l).to_string())
-        .collect();
-
-    // Phantom trailing empty from split on trailing newline is addressable for inserts.
+    let mut file_lines = prepare_lines(text);
     let mut first_changed: Option<usize> = None;
-    let track = |line: usize, first: &mut Option<usize>| {
-        if first.is_none_or(|f| line < f) {
-            *first = Some(line);
-        }
-    };
 
-    // Partition BOF/EOF vs anchor edits.
-    let mut bof: Vec<String> = Vec::new();
-    let mut eof: Vec<String> = Vec::new();
-    let mut by_line: std::collections::BTreeMap<usize, Vec<&Edit>> =
+    let (bof, eof, by_line) = partition_edits(edits);
+    validate_bounds(text, &file_lines, &by_line)?;
+    apply_line_edits(&mut file_lines, &by_line, &mut first_changed)?;
+    apply_bof(&mut file_lines, bof, &mut first_changed);
+    apply_eof(text, &mut file_lines, eof, &mut first_changed);
+
+    // If original had trailing newline and we still have content, prefer keeping final newline
+    // only when last element was empty phantom — join already includes it when last is "".
+    // Empty file edge: single empty string joins to "".
+    let mut result = file_lines.join("\n");
+    if result == "\n" {
+        result = String::new();
+    }
+    Ok((result, first_changed))
+}
+
+/// Split file text into lines, normalizing CRLF so line numbers are computed on LF boundaries.
+fn prepare_lines(text: &str) -> Vec<String> {
+    text.split('\n')
+        .map(|l| l.strip_suffix('\r').unwrap_or(l).to_string())
+        .collect()
+}
+
+/// Record the first (lowest) line an edit touched.
+fn track_first(line: usize, first: &mut Option<usize>) {
+    if first.is_none_or(|f| line < f) {
+        *first = Some(line);
+    }
+}
+
+/// Partition BOF/EOF edits from line-anchored ones.
+fn partition_edits<'a>(
+    edits: &'a [Edit],
+) -> (
+    Vec<String>,
+    Vec<String>,
+    std::collections::BTreeMap<usize, Vec<&'a Edit>>,
+) {
+    let mut bof = Vec::new();
+    let mut eof = Vec::new();
+    let mut by_line: std::collections::BTreeMap<usize, Vec<&'a Edit>> =
         std::collections::BTreeMap::new();
-
     for edit in edits {
         match edit {
             Edit::InsertBof { text } => bof.push(text.clone()),
@@ -501,8 +540,15 @@ fn apply_edits(text: &str, edits: &[Edit]) -> Result<(String, Option<usize>), St
             }
         }
     }
+    (bof, eof, by_line)
+}
 
-    // Validate bounds.
+/// Validate every anchor line against the real file shape.
+fn validate_bounds(
+    text: &str,
+    file_lines: &[String],
+    by_line: &std::collections::BTreeMap<usize, Vec<&Edit>>,
+) -> Result<(), String> {
     let line_count = if file_lines.len() == 1 && file_lines[0].is_empty() {
         0
     } else if text.ends_with('\n') && file_lines.last().is_some_and(|l| l.is_empty()) {
@@ -525,8 +571,15 @@ fn apply_edits(text: &str, edits: &[Edit]) -> Result<(String, Option<usize>), St
             return Err(format!("line {line} does not exist (file is empty)"));
         }
     }
+    Ok(())
+}
 
-    // Apply bottom-up so earlier indices stay valid.
+/// Apply all line-anchored edits bottom-up so earlier indices stay valid.
+fn apply_line_edits(
+    file_lines: &mut Vec<String>,
+    by_line: &std::collections::BTreeMap<usize, Vec<&Edit>>,
+    first_changed: &mut Option<usize>,
+) -> Result<(), String> {
     let lines_desc: Vec<usize> = by_line.keys().copied().rev().collect();
     for line in lines_desc {
         let bucket = by_line.get(&line).cloned().unwrap_or_default();
@@ -542,7 +595,6 @@ fn apply_edits(text: &str, edits: &[Edit]) -> Result<(String, Option<usize>), St
         let mut after = Vec::new();
         let mut replacements = Vec::new();
         let mut delete = false;
-
         for edit in bucket {
             match edit {
                 Edit::InsertBefore { text, .. } => before.push(text.clone()),
@@ -570,47 +622,51 @@ fn apply_edits(text: &str, edits: &[Edit]) -> Result<(String, Option<usize>), St
         };
 
         file_lines.splice(idx..=idx, replacement);
-        track(line, &mut first_changed);
+        track_first(line, first_changed);
     }
+    Ok(())
+}
 
-    if !bof.is_empty() {
-        if file_lines.len() == 1 && file_lines[0].is_empty() {
-            file_lines = bof;
-        } else {
-            for (i, line) in bof.into_iter().enumerate() {
-                file_lines.insert(i, line);
-            }
+/// Insert BOF lines at the front of the file.
+fn apply_bof(file_lines: &mut Vec<String>, bof: Vec<String>, first_changed: &mut Option<usize>) {
+    if bof.is_empty() {
+        return;
+    }
+    if file_lines.len() == 1 && file_lines[0].is_empty() {
+        *file_lines = bof;
+    } else {
+        for (i, line) in bof.into_iter().enumerate() {
+            file_lines.insert(i, line);
         }
-        track(1, &mut first_changed);
     }
+    track_first(1, first_changed);
+}
 
-    if !eof.is_empty() {
-        let insert_at = if file_lines.last().is_some_and(|l| l.is_empty()) && text.ends_with('\n') {
-            file_lines.len() - 1
-        } else if file_lines.len() == 1 && file_lines[0].is_empty() {
-            0
-        } else {
-            file_lines.len()
-        };
-        if insert_at == 0 && file_lines.len() == 1 && file_lines[0].is_empty() {
-            file_lines = eof;
-        } else {
-            for (offset, line) in eof.into_iter().enumerate() {
-                file_lines.insert(insert_at + offset, line);
-            }
+/// Insert EOF lines at the end of the file (or before a trailing phantom newline).
+fn apply_eof(
+    text: &str,
+    file_lines: &mut Vec<String>,
+    eof: Vec<String>,
+    first_changed: &mut Option<usize>,
+) {
+    if eof.is_empty() {
+        return;
+    }
+    let insert_at = if file_lines.last().is_some_and(|l| l.is_empty()) && text.ends_with('\n') {
+        file_lines.len() - 1
+    } else if file_lines.len() == 1 && file_lines[0].is_empty() {
+        0
+    } else {
+        file_lines.len()
+    };
+    if insert_at == 0 && file_lines.len() == 1 && file_lines[0].is_empty() {
+        *file_lines = eof;
+    } else {
+        for (offset, line) in eof.into_iter().enumerate() {
+            file_lines.insert(insert_at + offset, line);
         }
-        track(insert_at + 1, &mut first_changed);
     }
-
-    let mut result = file_lines.join("\n");
-    // If original had trailing newline and we still have content, prefer keeping final newline
-    // only when last element was empty phantom — join already includes it when last is "".
-    // Empty file edge: single empty string joins to "".
-    if result == "\n" {
-        result = String::new();
-    }
-
-    Ok((result, first_changed))
+    track_first(insert_at + 1, first_changed);
 }
 
 /// Apply a multi-section patch against an in-memory file map (preflight + commit).

@@ -24,10 +24,7 @@ pub fn journal_path(correlation_id: &str) -> PathBuf {
 /// Best-effort append of one JSON object line. Failures are logged and ignored.
 pub async fn append(correlation_id: &str, record: Value) {
     let path = journal_path(correlation_id);
-    if let Some(parent) = path.parent()
-        && let Err(e) = tokio::fs::create_dir_all(parent).await
-    {
-        tracing::warn!(error = %e, path = %parent.display(), "dispatch journal mkdir failed");
+    if !ensure_parent(&path).await {
         return;
     }
     let mut line = record.to_string();
@@ -41,11 +38,34 @@ pub async fn append(correlation_id: &str, record: Value) {
         Ok(mut f) => {
             use tokio::io::AsyncWriteExt;
             if let Err(e) = f.write_all(line.as_bytes()).await {
-                tracing::warn!(error = %e, path = %path.display(), "dispatch journal write failed");
+                tracing::warn!(
+                    error = %e,
+                    path = %path.display(),
+                    "dispatch journal write failed"
+                );
             }
         }
         Err(e) => {
             tracing::warn!(error = %e, path = %path.display(), "dispatch journal open failed");
+        }
+    }
+}
+
+/// Create the journal's parent directory. `false` means the write is abandoned (and already
+/// logged); the caller must not proceed.
+async fn ensure_parent(path: &Path) -> bool {
+    let Some(parent) = path.parent() else {
+        return true;
+    };
+    match tokio::fs::create_dir_all(parent).await {
+        Ok(()) => true,
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                path = %parent.display(),
+                "dispatch journal mkdir failed"
+            );
+            false
         }
     }
 }

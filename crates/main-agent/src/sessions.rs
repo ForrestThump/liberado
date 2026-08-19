@@ -1747,6 +1747,91 @@ impl ChatSessions {
     /// Compact `nodes` if warranted, returning the [`Conversation`] to run the turn over and the
     /// parent the turn's first new message hangs off of. Unchanged inputs pass through untouched.
     ///
+    /// Ask the summarizer for a compacted digest of the elided span. Any failure (provider
+    /// error or empty reply) is logged and yields `None` — the run proceeds uncompacted.
+    async fn summarize_elided(engine: &CompactionEngine, elided: &[Message]) -> Option<String> {
+        let request = compaction::summary_request(elided, &engine.config);
+        match engine.provider.complete(request).await {
+            Ok(resp) => match resp.content.filter(|c| !c.trim().is_empty()) {
+                Some(text) => Some(text),
+                None => {
+                    tracing::warn!(
+                        "chat compaction: summarizer returned empty — running uncompacted"
+                    );
+                    None
+                }
+            },
+            Err(e) => {
+                tracing::warn!(error = %e, "chat compaction: summarizer failed — running uncompacted");
+                None
+            }
+        }
+    }
+
+    /// Append the compaction marker, then re-append the kept tail verbatim. Returns the
+    /// in-memory view (always complete — a store blip must never strip the tail from the
+    /// conversation the model is about to run), the last durable parent, and the count of tail
+    /// appends that failed.
+    async fn persist_compacted_view(
+        store: &Arc<dyn ConversationStore>,
+        session: Ulid,
+        parent_leaf: Option<Ulid>,
+        marker: Message,
+        tail: &[MessageNode],
+        messages: &[Message],
+    ) -> (Vec<Message>, Option<Ulid>, usize) {
+        // The marker is durable before any tail copy: a crash between the two leaves a
+        // marker-only suffix, which is a valid (if short) compaction.
+        let mut parent = match store
+            .append(
+                session,
+                NewNode {
+                    parent_id: parent_leaf,
+                    author: Author::Named(COMPACTION_AUTHOR.into()),
+                    message: marker.clone(),
+                    model: None,
+                },
+            )
+            .await
+        {
+            Ok(node) => Some(node.id),
+            Err(e) => {
+                tracing::warn!(error = %e, "chat compaction: marker append failed — running uncompacted");
+                return (messages.to_vec(), parent_leaf, 0);
+            }
+        };
+        let mut view: Vec<Message> = vec![messages[0].clone(), marker];
+        let mut tail_persist_failures: usize = 0;
+        // Do not stop re-appending after the first failure: parent stays at the last successful
+        // node, so later successes still form a linear chain.
+        for tail_node in tail {
+            match store
+                .append(
+                    session,
+                    NewNode {
+                        parent_id: parent,
+                        author: Author::Named(COMPACTION_TAIL_AUTHOR.into()),
+                        message: tail_node.message.clone(),
+                        model: None,
+                    },
+                )
+                .await
+            {
+                Ok(node) => parent = Some(node.id),
+                Err(e) => {
+                    tail_persist_failures += 1;
+                    tracing::error!(
+                        error = %e,
+                        failures = tail_persist_failures,
+                        "chat compaction: tail re-append failed — keeping full in-memory tail for this turn and continuing remaining appends"
+                    );
+                }
+            }
+            view.push(tail_node.message.clone());
+        }
+        (view, parent, tail_persist_failures)
+    }
+
     /// The full sequence (estimation, boundary selection, summarization, persistence) is described
     /// in `docs/future-work/context-compaction-plan.md`. Every failure mode degrades to *running
     /// uncompacted* — a missing summary must never cost the human their turn.
@@ -1799,93 +1884,23 @@ impl ChatSessions {
 
         let elided: Vec<Message> = messages[1..boundary].to_vec(); // skip the system root at 0
         let tail: &[MessageNode] = &nodes[boundary..];
-        let request = compaction::summary_request(&elided, &engine.config);
-        let summary = match engine.provider.complete(request).await {
-            Ok(resp) => match resp.content.filter(|c| !c.trim().is_empty()) {
-                Some(text) => text,
-                None => {
-                    tracing::warn!(
-                        "chat compaction: summarizer returned empty — running uncompacted"
-                    );
-                    return pass_through();
-                }
-            },
-            Err(e) => {
-                tracing::warn!(error = %e, "chat compaction: summarizer failed — running uncompacted");
-                return pass_through();
-            }
+        let Some(summary) = Self::summarize_elided(engine, &elided).await else {
+            return pass_through();
         };
 
         // Persist the compacted view: marker off the pre-compaction leaf, then the tail re-appended
         // verbatim (original authors/content, fresh ids) so the view is a contiguous log suffix —
         // see the plan doc's "persisted-marker model" for why the tail is copied, not referenced.
         let marker = compaction::marker_message(&summary);
-        let mut parent = match self
-            .store
-            .append(
-                session,
-                NewNode {
-                    parent_id: parent_leaf,
-                    author: Author::Named(COMPACTION_AUTHOR.into()),
-                    message: marker.clone(),
-                    model: None,
-                },
-            )
-            .await
-        {
-            Ok(node) => Some(node.id),
-            Err(e) => {
-                tracing::warn!(error = %e, "chat compaction: marker append failed — running uncompacted");
-                return pass_through();
-            }
-        };
-        // The marker is already durable. Re-append the kept tail best-effort so the compacted
-        // view is a contiguous log suffix. Two invariants on partial failure:
-        //
-        // 1. **This turn's model view is always complete.** We push every tail message into
-        //    `view` regardless of whether its append succeeded — a store blip must never strip
-        //    the kept tail from the conversation the model is about to run.
-        // 2. **Do not stop re-appending after the first failure.** Parent stays at the last
-        //    successful node, so later successes still form a linear chain. Breaking early used
-        //    to permanently drop the rest of the suffix on every subsequent load (elision hides
-        //    the pre-marker originals).
-        //
-        // Without a transactional multi-node append, a durable half-written suffix remains
-        // possible; operators see the error log. The next load then resumes from marker +
-        // whatever re-appended.
-        //
-        // The copies are authored [`COMPACTION_TAIL_AUTHOR`], not the original author: the
-        // originals are still on the log before the marker, and stamping the copies is what lets
-        // raw-leaf-path readers (rendered history, `Author::User` turn indexing, search) show each
-        // message once. The model view reads `message`, never `author`, so it is unaffected.
-        let mut view: Vec<Message> = vec![messages[0].clone(), marker];
-        let mut tail_persist_failures: usize = 0;
-        for tail_node in tail {
-            match self
-                .store
-                .append(
-                    session,
-                    NewNode {
-                        parent_id: parent,
-                        author: Author::Named(COMPACTION_TAIL_AUTHOR.into()),
-                        message: tail_node.message.clone(),
-                        model: None,
-                    },
-                )
-                .await
-            {
-                Ok(node) => parent = Some(node.id),
-                Err(e) => {
-                    tail_persist_failures += 1;
-                    tracing::error!(
-                        error = %e,
-                        failures = tail_persist_failures,
-                        "chat compaction: tail re-append failed — keeping full in-memory tail for this turn and continuing remaining appends"
-                    );
-                }
-            }
-            view.push(tail_node.message.clone());
-        }
+        let (view, parent, tail_persist_failures) = Self::persist_compacted_view(
+            &self.store,
+            session,
+            parent_leaf,
+            marker,
+            tail,
+            &messages,
+        )
+        .await;
         if tail_persist_failures > 0 {
             tracing::error!(
                 failures = tail_persist_failures,

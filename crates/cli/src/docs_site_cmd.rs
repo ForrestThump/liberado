@@ -351,7 +351,19 @@ fn readme() -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use super::{normalize_relative_path, split_frontmatter};
+    use super::{meta_string, normalize_relative_path, split_frontmatter};
+
+    #[test]
+    fn meta_string_reads_string_fields_or_defaults() {
+        let (meta, _) = split_frontmatter("---\nkind: plan\ncount: 3\n---\n");
+        assert_eq!(meta_string(&meta, "kind"), "plan");
+        assert_eq!(meta_string(&meta, "missing"), "");
+        assert_eq!(
+            meta_string(&meta, "count"),
+            "",
+            "non-string values are not meta strings"
+        );
+    }
 
     #[test]
     fn parses_frontmatter_and_body() {

@@ -262,6 +262,149 @@ fn print_help() {
 }
 
 async fn run() -> Result<(), Box<dyn std::error::Error>> {
+    let bridge = resolve_bridge_startup().await?;
+    // Single writer for JSON-RPC responses *and* session/update notifications.
+    // Required once prompts run concurrent with stdin (cancel mid-turn).
+    let wire = Arc::new(StdoutWire);
+
+    // Take a private handle on the JSON-RPC wire and point the process-level stdin at the null
+    // device, so no child can inherit the wire even if some future spawn site forgets to null
+    // its stdin. See `stdin_guard` for why the order matters.
+    //
+    // Lines then arrive over a channel regardless of source, so the select! below does not care
+    // which of the two readers is running.
+    let (stdin_tx, mut stdin_rx) = mpsc::channel::<std::io::Result<Option<String>>>(64);
+    spawn_stdin_reader(stdin_tx);
+    let mut in_flight: Option<InFlightPrompt> = None;
+
+    loop {
+        tokio::select! {
+            // Complete in-flight prompt responses without blocking cancel on stdin.
+            join = async {
+                match in_flight.as_mut() {
+                    Some(inf) => {
+                        let r = (&mut inf.handle).await;
+                        Some((inf.session_id.clone(), inf.request_id.clone(), r))
+                    }
+                    None => std::future::pending().await,
+                }
+            } => {
+                handle_prompt_join(&wire, join, &mut in_flight)?;
+            }
+            line = stdin_rx.recv() => {
+                // A closed channel means the reader ended — same as EOF on stdin.
+                if !handle_stdin_line(&bridge, &wire, line, &mut in_flight).await? {
+                    break;
+                }
+            }
+        }
+    }
+
+    if let Some(inf) = in_flight.take() {
+        inf.handle.abort();
+        let _ = inf.handle.await;
+    }
+
+    tracing::info!("stdin closed; acp bridge exiting");
+    Ok(())
+}
+
+/// Say which config this run is using, before anything depends on it. The failure this replaces
+/// was invisible precisely because nothing was ever printed about it.
+fn report_config_dir(config_dir: &Option<std::path::PathBuf>) {
+    match config_dir {
+        Some(dir) => tracing::info!(
+            config_dir = %dir.display(),
+            topology = dir.join("topology.toml").exists(),
+            policy = dir.join("policy.toml").exists(),
+            tuning = dir.join("tuning.toml").exists(),
+            "config directory resolved"
+        ),
+        None => tracing::warn!(
+            "no config directory resolved; running on defaults with no declared project, no ship \
+             bar and no policy grant"
+        ),
+    }
+}
+
+/// Point every child process at the shared build cache, once, before anything runs.
+///
+/// Set on this process rather than threaded through each command builder because it has to reach
+/// three places that construct their own runners — the model's `run_command`, the verifier
+/// pipeline, and the warm-up build — and a cache that two of the three use is a cache that warms
+/// a directory the third ignores. Inheritance makes them agree by construction.
+///
+/// Correct here specifically because tuning is loaded once, above, and every session this bridge
+/// serves shares it. A daemon serving sessions with *different* coder configs could not do this
+/// and would have to thread the value.
+///
+/// SAFETY: single-threaded startup, before any session or task exists.
+fn apply_shared_target_dir(shared_target_dir: &Option<String>) {
+    if let Some(dir) = shared_target_dir
+        .as_deref()
+        .map(str::trim)
+        .filter(|d| !d.is_empty())
+    {
+        unsafe { std::env::set_var("CARGO_TARGET_DIR", dir) };
+        tracing::info!(target_dir = %dir, "coding worktrees share one cargo build cache");
+    }
+}
+
+/// Spawn `session/prompt` on a task so `session/cancel` can be read mid-turn. Refuses with a
+/// JSON-RPC error when another prompt is already in flight or the session id is missing/empty.
+/// Returns once the task is registered in `in_flight`.
+fn spawn_prompt_if_free(
+    bridge: &Arc<Bridge>,
+    wire: &Arc<StdoutWire>,
+    params: &Value,
+    id: Value,
+    in_flight: &mut Option<InFlightPrompt>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if in_flight.is_some() {
+        wire.write_rpc_response(
+            id,
+            Err(JsonRpcErrorBody {
+                code: -32603,
+                message: "another session/prompt is already in flight".into(),
+            }),
+        )?;
+        return Ok(());
+    }
+    let sid = match params
+        .get("sessionId")
+        .and_then(|v| v.as_str())
+        .map(str::to_string)
+    {
+        Some(s) if !s.is_empty() => s,
+        _ => {
+            wire.write_rpc_response(
+                id,
+                Err(JsonRpcErrorBody {
+                    // -32602 Invalid params: the request is well-formed and the
+                    // method exists, the arguments are wrong.
+                    code: JSONRPC_INVALID_PARAMS,
+                    message: "missing sessionId".into(),
+                }),
+            )?;
+            return Ok(());
+        }
+    };
+    let bridge_p = Arc::clone(bridge);
+    let sink: Arc<dyn WireSink> = Arc::clone(wire) as Arc<dyn WireSink>;
+    let params = params.clone();
+    let handle = tokio::spawn(async move { run_session_prompt(bridge_p, sink, params).await });
+    *in_flight = Some(InFlightPrompt {
+        session_id: sid,
+        request_id: id,
+        handle,
+    });
+    Ok(())
+}
+
+/// Resolve every piece of startup state the bridge needs: provider, catalog, config (with the
+/// resolution tier reported before anything depends on it), the shared build-cache override, and
+/// the declared authority grant. Refuses to serve when the configured grant is missing.
+async fn resolve_bridge_startup() -> Result<Arc<Bridge>, Box<dyn std::error::Error>> {
     let resolved = build_provider()?;
     let catalog = load_model_catalog(
         resolved.provider.as_ref(),
@@ -279,43 +422,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     // every setting at a compiled-in default.
     let config_dir = liberado_config::config_dir();
     let coder_tuning = coding_run::load_coder_tuning(config_dir.as_deref())?;
-    // Say which config this run is using, before anything depends on it. The failure this
-    // replaces was invisible precisely because nothing was ever printed about it.
-    match &config_dir {
-        Some(dir) => tracing::info!(
-            config_dir = %dir.display(),
-            topology = dir.join("topology.toml").exists(),
-            policy = dir.join("policy.toml").exists(),
-            tuning = dir.join("tuning.toml").exists(),
-            "config directory resolved"
-        ),
-        None => tracing::warn!(
-            "no config directory resolved; running on defaults with no declared project, no ship \
-             bar and no policy grant"
-        ),
-    }
-    // Point every child process at the shared build cache, once, before anything runs.
-    //
-    // Set on this process rather than threaded through each command builder because it has to
-    // reach three places that construct their own runners — the model's `run_command`, the
-    // verifier pipeline, and the warm-up build — and a cache that two of the three use is a cache
-    // that warms a directory the third ignores. Inheritance makes them agree by construction.
-    //
-    // Correct here specifically because tuning is loaded once, above, and every session this
-    // bridge serves shares it. A daemon serving sessions with *different* coder configs could not
-    // do this and would have to thread the value.
-    //
-    // SAFETY: single-threaded startup, before any session or task exists.
-    if let Some(dir) = coder_tuning
-        .workspace_build
-        .shared_target_dir
-        .as_deref()
-        .map(str::trim)
-        .filter(|d| !d.is_empty())
-    {
-        unsafe { std::env::set_var("CARGO_TARGET_DIR", dir) };
-        tracing::info!(target_dir = %dir, "coding worktrees share one cargo build cache");
-    }
+    report_config_dir(&config_dir);
+    apply_shared_target_dir(&coder_tuning.workspace_build.shared_target_dir);
     // `[acp]` from the same config the coding pack reads, so the prompt and the turn budget are
     // versioned prose in a file rather than JSON strings pasted into another tool's config.
     let acp_config = coding_run::load_acp_config(config_dir.as_deref());
@@ -332,7 +440,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         mode = %default_mode.id(),
         "acp multi-mode agent ready"
     );
-    let bridge = Arc::new(Bridge {
+    Ok(Arc::new(Bridge {
         provider: resolved.provider,
         backend: resolved.backend,
         catalog: Mutex::new(catalog),
@@ -344,18 +452,14 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         local_grant,
         system_prompt,
         acp_sessions: Mutex::new(HashMap::new()),
-    });
-    // Single writer for JSON-RPC responses *and* session/update notifications.
-    // Required once prompts run concurrent with stdin (cancel mid-turn).
-    let wire = Arc::new(StdoutWire);
+    }))
+}
 
-    // Take a private handle on the JSON-RPC wire and point the process-level stdin at the null
-    // device, so no child can inherit the wire even if some future spawn site forgets to null
-    // its stdin. See `stdin_guard` for why the order matters.
-    //
-    // Lines then arrive over a channel regardless of source, so the select! below does not care
-    // which of the two readers is running.
-    let (stdin_tx, mut stdin_rx) = mpsc::channel::<std::io::Result<Option<String>>>(64);
+/// Take a private handle on the JSON-RPC wire and point the process-level stdin at the null
+/// device, so no child can inherit the wire even if some future spawn site forgets to null its
+/// stdin. Lines then arrive over a channel regardless of source, so the select loop does not care
+/// which of the two readers is running.
+fn spawn_stdin_reader(stdin_tx: mpsc::Sender<std::io::Result<Option<String>>>) {
     match stdin_guard::take_wire_stdin() {
         Some(wire_stdin) => {
             tracing::info!("stdin detached from children; reading the wire on a private handle");
@@ -394,160 +498,134 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             });
         }
     }
-    let mut in_flight: Option<InFlightPrompt> = None;
+}
 
-    loop {
-        tokio::select! {
-            // Complete in-flight prompt responses without blocking cancel on stdin.
-            join = async {
-                match in_flight.as_mut() {
-                    Some(inf) => {
-                        let r = (&mut inf.handle).await;
-                        Some((inf.session_id.clone(), inf.request_id.clone(), r))
-                    }
-                    None => std::future::pending().await,
-                }
-            } => {
-                if let Some((_sid, id, join_result)) = join {
-                    in_flight = None;
-                    let outcome = match join_result {
-                        Ok(Ok(v)) => Ok(v),
-                        Ok(Err(message)) => Err(JsonRpcErrorBody {
-                            code: -32603,
-                            message,
-                        }),
-                        // Task abort (hard cancel backup) → cancelled turn.
-                        Err(je) if je.is_cancelled() => {
-                            Ok(json!({ "stopReason": "cancelled" }))
-                        }
-                        Err(je) => Err(JsonRpcErrorBody {
-                            code: -32603,
-                            message: format!("prompt task failed: {je}"),
-                        }),
-                    };
-                    wire.write_rpc_response(id, outcome)?;
-                }
-            }
-            line = stdin_rx.recv() => {
-                // A closed channel means the reader ended — same as EOF on stdin.
-                let Some(line) = line else { break };
-                let Some(line) = line? else {
-                    break;
-                };
-                let line = line.trim().to_string();
-                if line.is_empty() {
-                    continue;
-                }
+/// Complete an in-flight prompt: clear the slot, map the join result onto a JSON-RPC response
+/// (task abort — the hard cancel backup — becomes a cancelled stopReason), and write it.
+/// The value the select loop's join arm receives: session id, request id, and the prompt task's
+/// join result (the inner `Result` being the JSON-RPC outcome, the outer the task's own status).
+type PromptJoin = (
+    String,
+    Value,
+    Result<Result<Value, String>, tokio::task::JoinError>,
+);
 
-                let msg: JsonRpcIncoming = match serde_json::from_str(&line) {
-                    Ok(m) => m,
-                    Err(e) => {
-                        tracing::warn!(%line, %e, "unparseable ACP message");
-                        continue;
-                    }
-                };
-
-                let method = msg.method.unwrap_or_default();
-                // Notifications have no id (or null id) and expect no response.
-                let is_notification =
-                    msg.id.is_none() || msg.id.as_ref().is_some_and(|id| id.is_null());
-
-                if is_notification {
-                    if method == "session/cancel" {
-                        let sid = msg
-                            .params
-                            .get("sessionId")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("")
-                            .to_string();
-                        if !sid.is_empty() {
-                            request_session_cancel(&bridge, &sid).await;
-                            // Hard-stop backup if the turn is stuck outside cooperative points.
-                            if let Some(inf) = &in_flight
-                                && inf.session_id == sid
-                            {
-                                inf.handle.abort();
-                            }
-                        }
-                    } else {
-                        handle_notification(&method, msg.params).await;
-                    }
-                    continue;
-                }
-
-                let id = msg.id.unwrap_or(Value::Null);
-
-                // session/prompt runs in a task so session/cancel can be read mid-turn.
-                if method == "session/prompt" {
-                    if in_flight.is_some() {
-                        wire.write_rpc_response(
-                            id,
-                            Err(JsonRpcErrorBody {
-                                code: -32603,
-                                message: "another session/prompt is already in flight".into(),
-                            }),
-                        )?;
-                        continue;
-                    }
-                    let sid = match msg
-                        .params
-                        .get("sessionId")
-                        .and_then(|v| v.as_str())
-                        .map(str::to_string)
-                    {
-                        Some(s) if !s.is_empty() => s,
-                        _ => {
-                            wire.write_rpc_response(
-                                id,
-                                Err(JsonRpcErrorBody {
-                                    // -32602 Invalid params: the request is well-formed and the
-                                    // method exists, the arguments are wrong.
-                                    code: JSONRPC_INVALID_PARAMS,
-                                    message: "missing sessionId".into(),
-                                }),
-                            )?;
-                            continue;
-                        }
-                    };
-                    let bridge_p = Arc::clone(&bridge);
-                    let sink: Arc<dyn WireSink> = Arc::clone(&wire) as Arc<dyn WireSink>;
-                    let params = msg.params;
-                    let handle = tokio::spawn(async move {
-                        run_session_prompt(bridge_p, sink, params).await
-                    });
-                    in_flight = Some(InFlightPrompt {
-                        session_id: sid,
-                        request_id: id,
-                        handle,
-                    });
-                    continue;
-                }
-
-                match handle_request(Arc::clone(&bridge), &method, msg.params, &*wire).await {
-                    Ok(result) => wire.write_rpc_response(id, Ok(result))?,
-                    Err(message) => wire.write_rpc_response(
-                        id,
-                        Err(JsonRpcErrorBody {
-                            code: if message.starts_with(METHOD_NOT_FOUND_PREFIX) {
-                                JSONRPC_METHOD_NOT_FOUND
-                            } else {
-                                JSONRPC_INTERNAL_ERROR
-                            },
-                            message,
-                        }),
-                    )?,
-                }
-            }
-        }
-    }
-
-    if let Some(inf) = in_flight.take() {
-        inf.handle.abort();
-        let _ = inf.handle.await;
-    }
-
-    tracing::info!("stdin closed; acp bridge exiting");
+fn handle_prompt_join(
+    wire: &StdoutWire,
+    join: Option<PromptJoin>,
+    in_flight: &mut Option<InFlightPrompt>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let Some((_sid, id, join_result)) = join else {
+        return Ok(());
+    };
+    *in_flight = None;
+    let outcome = match join_result {
+        Ok(Ok(v)) => Ok(v),
+        Ok(Err(message)) => Err(JsonRpcErrorBody {
+            code: -32603,
+            message,
+        }),
+        // Task abort (hard cancel backup) → cancelled turn.
+        Err(je) if je.is_cancelled() => Ok(json!({ "stopReason": "cancelled" })),
+        Err(je) => Err(JsonRpcErrorBody {
+            code: -32603,
+            message: format!("prompt task failed: {je}"),
+        }),
+    };
+    wire.write_rpc_response(id, outcome)?;
     Ok(())
+}
+
+/// Process one line off the JSON-RPC wire. Returns `false` on EOF (closed channel or a `null`
+/// line) so the caller can end the loop; everything else — including notifications, which expect
+/// no response — returns `true`.
+async fn handle_stdin_line(
+    bridge: &Arc<Bridge>,
+    wire: &Arc<StdoutWire>,
+    line: Option<std::io::Result<Option<String>>>,
+    in_flight: &mut Option<InFlightPrompt>,
+) -> Result<bool, Box<dyn std::error::Error>> {
+    // A closed channel means the reader ended — same as EOF on stdin.
+    let Some(line) = line else {
+        return Ok(false);
+    };
+    let Some(line) = line? else {
+        return Ok(false);
+    };
+    let line = line.trim().to_string();
+    if line.is_empty() {
+        return Ok(true);
+    }
+
+    let msg: JsonRpcIncoming = match serde_json::from_str(&line) {
+        Ok(m) => m,
+        Err(e) => {
+            tracing::warn!(%line, %e, "unparseable ACP message");
+            return Ok(true);
+        }
+    };
+
+    let method = msg.method.unwrap_or_default();
+    // Notifications have no id (or null id) and expect no response.
+    let is_notification = msg.id.is_none() || msg.id.as_ref().is_some_and(|id| id.is_null());
+
+    if is_notification {
+        dispatch_notification(bridge, &method, msg.params, in_flight).await;
+        return Ok(true);
+    }
+
+    let id = msg.id.unwrap_or(Value::Null);
+
+    // session/prompt runs in a task so session/cancel can be read mid-turn.
+    if method == "session/prompt" {
+        spawn_prompt_if_free(bridge, wire, &msg.params, id, in_flight)?;
+        return Ok(true);
+    }
+
+    match handle_request(Arc::clone(bridge), &method, msg.params, wire.as_ref()).await {
+        Ok(result) => wire.write_rpc_response(id, Ok(result))?,
+        Err(message) => wire.write_rpc_response(
+            id,
+            Err(JsonRpcErrorBody {
+                code: if message.starts_with(METHOD_NOT_FOUND_PREFIX) {
+                    JSONRPC_METHOD_NOT_FOUND
+                } else {
+                    JSONRPC_INTERNAL_ERROR
+                },
+                message,
+            }),
+        )?,
+    }
+    Ok(true)
+}
+
+/// Route a notification: `session/cancel` asks the live session to stop cooperatively and
+/// hard-stops the in-flight task as a backup; anything else is logged and ignored.
+async fn dispatch_notification(
+    bridge: &Bridge,
+    method: &str,
+    params: Value,
+    in_flight: &Option<InFlightPrompt>,
+) {
+    if method != "session/cancel" {
+        handle_notification(method, params).await;
+        return;
+    }
+    let sid = params
+        .get("sessionId")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    if sid.is_empty() {
+        return;
+    }
+    request_session_cancel(bridge, &sid).await;
+    // Hard-stop backup if the turn is stuck outside cooperative points.
+    if let Some(inf) = in_flight
+        && inf.session_id == sid
+    {
+        inf.handle.abort();
+    }
 }
 
 /// Sink for ACP notifications (`session/update`, …). Production writes NDJSON to stdout;
@@ -591,309 +669,16 @@ async fn handle_request(
     sink: &dyn WireSink,
 ) -> Result<Value, String> {
     match method {
-        "initialize" => {
-            let client_version = params
-                .get("protocolVersion")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(PROTOCOL_VERSION as u64);
-            tracing::info!(client_version, "acp initialize");
-            Ok(json!({
-                "protocolVersion": PROTOCOL_VERSION,
-                "agentInfo": {
-                    "name": "Liberado",
-                    "version": env!("CARGO_PKG_VERSION"),
-                    "title": "Liberado (coding · chat · face)",
-                },
-                // Durable history and replay now back the loadSession capability.
-                // Advertising true made Paseo take the resume path and get an empty transcript.
-                "agentCapabilities": {
-                    "loadSession": LOAD_SESSION_CAPABILITY,
-                    "promptCapabilities": {
-                        "image": false,
-                        "audio": false,
-                        "embeddedContext": true,
-                    },
-                    "mcpCapabilities": {
-                        "http": false,
-                        "sse": false,
-                    },
-                    "sessionCapabilities": {}
-                },
-                "authMethods": []
-            }))
-        }
+        "initialize" => handle_initialize(&params).await,
 
-        "session/new" => {
-            let cwd = params
-                .get("cwd")
-                .and_then(|v| v.as_str())
-                .map(PathBuf::from)
-                .filter(|p| !p.as_os_str().is_empty())
-                .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+        "session/new" => handle_session_new(&bridge, &params).await,
 
-            let sid = new_session_id();
-            let mode = bridge.default_mode;
-            let (cancel_tx, cancel_rx) = watch::channel(false);
-            let chat = if mode == AgentMode::Chat {
-                open_chat_session(
-                    &sid,
-                    cwd.clone(),
-                    Arc::clone(&bridge.provider),
-                    bridge.max_turns,
-                    bridge.system_prompt.clone(),
-                    &[],
-                )
-                .ok()
-                .map(Arc::new)
-            } else {
-                None
-            };
-            let model = bridge.current_model.lock().await.clone();
-            bridge.acp_sessions.lock().await.insert(
-                sid.clone(),
-                AcpSession {
-                    mode,
-                    cwd: cwd.clone(),
-                    coding: coding_run::CodingSessionState {
-                        cwd: cwd.clone(),
-                        coding_session_id: sid.clone(),
-                        prior_feedback: Vec::new(),
-                        last_summary: None,
-                        rounds: 0,
-                    },
-                    chat,
-                    face_daemon_session: None,
-                    cancel_tx,
-                    cancel_rx,
-                },
-            );
-
-            // Persist an initial session record (soft — failure never fails the turn).
-            if let Err(e) = session_store::save(&session_store::SessionRecord {
-                id: sid.clone(),
-                mode: mode.id().to_string(),
-                cwd: cwd.clone(),
-                model: model.clone(),
-                messages: Vec::new(),
-                updated_at: session_store::new_timestamp(),
-            }) {
-                tracing::warn!(session_id = %sid, error = %e, "session/new: failed to persist initial record");
-            }
-
-            tracing::info!(
-                session_id = %sid,
-                cwd = %cwd.display(),
-                mode = %mode.id(),
-                max_turns = bridge.max_turns,
-                "session/new"
-            );
-            let (catalog, current) = bridge_model_snapshot(&bridge).await;
-
-            Ok(session_state_payload(
-                &sid,
-                &catalog,
-                &current,
-                mode,
-                &bridge.local_grant,
-            ))
-        }
-
-        "session/load" => {
-            let sid = params
-                .get("sessionId")
-                .and_then(|v| v.as_str())
-                .ok_or("missing sessionId")?;
-
-            // When the id is already live, return current state without re-emitting history.
-            {
-                let sessions = bridge.acp_sessions.lock().await;
-                if let Some(existing) = sessions.get(sid) {
-                    let (catalog, current) = bridge_model_snapshot(&bridge).await;
-                    return Ok(session_state_payload(
-                        sid,
-                        &catalog,
-                        &current,
-                        existing.mode,
-                        &bridge.local_grant,
-                    ));
-                }
-            }
-
-            let record = match session_store::load(sid) {
-                Ok(Some(r)) => r,
-                Ok(None) => {
-                    return Err(format!(
-                        "no saved session found for id '{sid}' — start a new session with session/new"
-                    ));
-                }
-                Err(e) => return Err(format!("failed to load session '{sid}': {e}")),
-            };
-
-            let mode = AgentMode::parse(&record.mode).unwrap_or(bridge.default_mode);
-
-            // Set the model from the stored record.
-            bridge.provider.set_model(record.model.clone());
-            *bridge.current_model.lock().await = record.model.clone();
-
-            let (cancel_tx, cancel_rx) = watch::channel(false);
-            let chat = if mode == AgentMode::Chat {
-                open_chat_session(
-                    sid,
-                    record.cwd.clone(),
-                    Arc::clone(&bridge.provider),
-                    bridge.max_turns,
-                    bridge.system_prompt.clone(),
-                    // The one call site where history is not empty. Everything else about a load
-                    // is cosmetic if this argument is.
-                    &record.messages,
-                )
-                .ok()
-                .map(Arc::new)
-            } else {
-                None
-            };
-
-            let cwd = record.cwd.clone();
-            bridge.acp_sessions.lock().await.insert(
-                sid.to_string(),
-                AcpSession {
-                    mode,
-                    cwd: cwd.clone(),
-                    coding: coding_run::CodingSessionState {
-                        cwd: cwd.clone(),
-                        coding_session_id: sid.to_string(),
-                        prior_feedback: Vec::new(),
-                        last_summary: None,
-                        rounds: 0,
-                    },
-                    chat,
-                    face_daemon_session: None,
-                    cancel_tx,
-                    cancel_rx,
-                },
-            );
-
-            // Replay the stored transcript so the editor shows the conversation.
-            for msg in &record.messages {
-                match msg.role.as_str() {
-                    "user" => emit_user_message_chunk(sink, sid, &msg.content)?,
-                    "assistant" => emit_agent_text_chunk(sink, sid, &msg.content)?,
-                    _ => {}
-                }
-            }
-
-            tracing::info!(
-                session_id = %sid,
-                mode = %mode.id(),
-                messages = record.messages.len(),
-                "session/load restored from disk"
-            );
-
-            let (catalog, current) = bridge_model_snapshot(&bridge).await;
-            Ok(session_state_payload(
-                sid,
-                &catalog,
-                &current,
-                mode,
-                &bridge.local_grant,
-            ))
-        }
+        "session/load" => handle_session_load(&bridge, &params, sink).await,
 
         // session/prompt is handled by the main loop (spawned so cancel can interleave).
-        "session/set_mode" => {
-            let sid = params
-                .get("sessionId")
-                .and_then(|v| v.as_str())
-                .ok_or("missing sessionId")?;
-            let mode_id = params
-                .get("modeId")
-                .and_then(|v| v.as_str())
-                .ok_or("missing modeId")?;
-            let mode = AgentMode::parse(mode_id)
-                .ok_or_else(|| format!("unknown modeId '{mode_id}' (coding|chat|face)"))?;
-            let mut map = bridge.acp_sessions.lock().await;
-            let sess = map
-                .get_mut(sid)
-                .ok_or_else(|| format!("unknown sessionId '{sid}'"))?;
-            if sess.mode != mode {
-                tracing::info!(session_id = %sid, from = %sess.mode.id(), to = %mode.id(), "session/set_mode");
-                sess.mode = mode;
-                // Lazy-init chat handle when switching into chat.
-                if mode == AgentMode::Chat && sess.chat.is_none() {
-                    sess.chat = open_chat_session(
-                        sid,
-                        sess.cwd.clone(),
-                        Arc::clone(&bridge.provider),
-                        bridge.max_turns,
-                        bridge.system_prompt.clone(),
-                        &[],
-                    )
-                    .ok()
-                    .map(Arc::new);
-                }
-                // Persist the mode change (soft - failure never fails the turn).
-                if let Err(e) = session_store::update_mode(sid, mode.id()) {
-                    tracing::warn!(session_id = %sid, error = %e, "session/set_mode: failed to update persisted mode");
-                }
-            }
-            Ok(json!({}))
-        }
+        "session/set_mode" => handle_set_mode(&bridge, &params).await,
 
-        "session/set_model" => {
-            let model_id = params
-                .get("modelId")
-                .and_then(|v| v.as_str())
-                .ok_or("missing modelId")?
-                .trim()
-                .to_string();
-            if model_id.is_empty() {
-                return Err("modelId must be non-empty".into());
-            }
-
-            {
-                let current = bridge.current_model.lock().await.clone();
-                let fresh =
-                    load_model_catalog(bridge.provider.as_ref(), &bridge.backend, &current).await;
-                if !fresh.is_empty() {
-                    *bridge.catalog.lock().await = fresh;
-                }
-            }
-
-            let allowed = {
-                let catalog = bridge.catalog.lock().await;
-                catalog.iter().any(|m| m.model_id == model_id)
-            };
-            if !allowed {
-                tracing::info!(%model_id, "set_model for id not in prior catalog; accepting");
-                let mut catalog = bridge.catalog.lock().await;
-                catalog.push(CatalogModel {
-                    name: display_name_for(&model_id),
-                    description: description_for(&bridge.backend, &model_id),
-                    model_id: model_id.clone(),
-                });
-                catalog.sort_by(|a, b| a.name.cmp(&b.name));
-            }
-
-            // Catalog ids may be raw OpenRouter slugs; set on the live provider.
-            bridge.provider.set_model(model_id.clone());
-            *bridge.current_model.lock().await = model_id.clone();
-            tracing::info!(%model_id, backend = %bridge.backend, "session/set_model");
-
-            // Persist the model change (soft — failure never fails the turn).
-            // Only when a valid session id is present — an empty id means this
-            // was a global model switch not tied to a specific session.
-            let sid = params
-                .get("sessionId")
-                .and_then(|v| v.as_str())
-                .filter(|s| !s.is_empty());
-            if let Some(sid) = sid
-                && let Err(e) = session_store::update_model(sid, &model_id)
-            {
-                tracing::warn!(%model_id, error = %e, "session/set_model: failed to update persisted model");
-            }
-
-            Ok(json!({}))
-        }
+        "session/set_model" => handle_set_model(&bridge, &params).await,
 
         "session/set_config_option" => Ok(json!({})),
 
@@ -905,6 +690,329 @@ async fn handle_request(
         // the method.
         _ => Err(format!("{METHOD_NOT_FOUND_PREFIX}{method}")),
     }
+}
+
+/// Pull the live model catalog from the provider and install it when non-empty (a failed or
+/// empty fetch leaves the prior catalog in place).
+async fn refresh_catalog_from_live(bridge: &Bridge) {
+    let current = bridge.current_model.lock().await.clone();
+    let fresh = load_model_catalog(bridge.provider.as_ref(), &bridge.backend, &current).await;
+    if !fresh.is_empty() {
+        *bridge.catalog.lock().await = fresh;
+    }
+}
+
+/// Accept a model id the prior catalog did not list: append it as a pickable entry so a client
+/// can select any id the provider actually serves, not just the ones known at boot.
+async fn extend_catalog_with_model(bridge: &Bridge, model_id: &str) {
+    let allowed = {
+        let catalog = bridge.catalog.lock().await;
+        catalog.iter().any(|m| m.model_id == model_id)
+    };
+    if !allowed {
+        tracing::info!(%model_id, "set_model for id not in prior catalog; accepting");
+        let mut catalog = bridge.catalog.lock().await;
+        catalog.push(CatalogModel {
+            name: display_name_for(model_id),
+            description: description_for(&bridge.backend, model_id),
+            model_id: model_id.to_string(),
+        });
+        catalog.sort_by(|a, b| a.name.cmp(&b.name));
+    }
+}
+
+async fn handle_initialize(params: &Value) -> Result<Value, String> {
+    let client_version = params
+        .get("protocolVersion")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(PROTOCOL_VERSION as u64);
+    tracing::info!(client_version, "acp initialize");
+    Ok(json!({
+        "protocolVersion": PROTOCOL_VERSION,
+        "agentInfo": {
+            "name": "Liberado",
+            "version": env!("CARGO_PKG_VERSION"),
+            "title": "Liberado (coding · chat · face)",
+        },
+        // Durable history and replay now back the loadSession capability.
+        // Advertising true made Paseo take the resume path and get an empty transcript.
+        "agentCapabilities": {
+            "loadSession": LOAD_SESSION_CAPABILITY,
+            "promptCapabilities": {
+                "image": false,
+                "audio": false,
+                "embeddedContext": true,
+            },
+            "mcpCapabilities": {
+                "http": false,
+                "sse": false,
+            },
+            "sessionCapabilities": {}
+        },
+        "authMethods": []
+    }))
+}
+
+/// `session/new`: create a live session, persist an initial record (soft), and answer with the
+/// full session state payload.
+async fn handle_session_new(bridge: &Bridge, params: &Value) -> Result<Value, String> {
+    let cwd = params
+        .get("cwd")
+        .and_then(|v| v.as_str())
+        .map(PathBuf::from)
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+
+    let sid = new_session_id();
+    let mode = bridge.default_mode;
+    let (cancel_tx, cancel_rx) = watch::channel(false);
+    let chat = if mode == AgentMode::Chat {
+        open_chat_session(
+            &sid,
+            cwd.clone(),
+            Arc::clone(&bridge.provider),
+            bridge.max_turns,
+            bridge.system_prompt.clone(),
+            &[],
+        )
+        .ok()
+        .map(Arc::new)
+    } else {
+        None
+    };
+    let model = bridge.current_model.lock().await.clone();
+    bridge.acp_sessions.lock().await.insert(
+        sid.clone(),
+        AcpSession {
+            mode,
+            cwd: cwd.clone(),
+            coding: coding_run::CodingSessionState {
+                cwd: cwd.clone(),
+                coding_session_id: sid.clone(),
+                prior_feedback: Vec::new(),
+                last_summary: None,
+                rounds: 0,
+            },
+            chat,
+            face_daemon_session: None,
+            cancel_tx,
+            cancel_rx,
+        },
+    );
+
+    // Persist an initial session record (soft — failure never fails the turn).
+    if let Err(e) = session_store::save(&session_store::SessionRecord {
+        id: sid.clone(),
+        mode: mode.id().to_string(),
+        cwd: cwd.clone(),
+        model: model.clone(),
+        messages: Vec::new(),
+        updated_at: session_store::new_timestamp(),
+    }) {
+        tracing::warn!(session_id = %sid, error = %e, "session/new: failed to persist initial record");
+    }
+
+    tracing::info!(
+        session_id = %sid,
+        cwd = %cwd.display(),
+        mode = %mode.id(),
+        max_turns = bridge.max_turns,
+        "session/new"
+    );
+    let (catalog, current) = bridge_model_snapshot(bridge).await;
+
+    Ok(session_state_payload(
+        &sid,
+        &catalog,
+        &current,
+        mode,
+        &bridge.local_grant,
+    ))
+}
+
+/// `session/load`: restore a persisted session (replaying its transcript chunk-by-chunk), or
+/// answer with current state when the id is already live.
+async fn handle_session_load(
+    bridge: &Bridge,
+    params: &Value,
+    sink: &dyn WireSink,
+) -> Result<Value, String> {
+    let sid = params
+        .get("sessionId")
+        .and_then(|v| v.as_str())
+        .ok_or("missing sessionId")?;
+
+    // When the id is already live, return current state without re-emitting history.
+    {
+        let sessions = bridge.acp_sessions.lock().await;
+        if let Some(existing) = sessions.get(sid) {
+            let (catalog, current) = bridge_model_snapshot(bridge).await;
+            return Ok(session_state_payload(
+                sid,
+                &catalog,
+                &current,
+                existing.mode,
+                &bridge.local_grant,
+            ));
+        }
+    }
+
+    let record = match session_store::load(sid) {
+        Ok(Some(r)) => r,
+        Ok(None) => {
+            return Err(format!(
+                "no saved session found for id '{sid}' — start a new session with session/new"
+            ));
+        }
+        Err(e) => return Err(format!("failed to load session '{sid}': {e}")),
+    };
+
+    let mode = AgentMode::parse(&record.mode).unwrap_or(bridge.default_mode);
+
+    // Set the model from the stored record.
+    bridge.provider.set_model(record.model.clone());
+    *bridge.current_model.lock().await = record.model.clone();
+
+    let (cancel_tx, cancel_rx) = watch::channel(false);
+    let chat = if mode == AgentMode::Chat {
+        open_chat_session(
+            sid,
+            record.cwd.clone(),
+            Arc::clone(&bridge.provider),
+            bridge.max_turns,
+            bridge.system_prompt.clone(),
+            // The one call site where history is not empty. Everything else about a load
+            // is cosmetic if this argument is.
+            &record.messages,
+        )
+        .ok()
+        .map(Arc::new)
+    } else {
+        None
+    };
+
+    let cwd = record.cwd.clone();
+    bridge.acp_sessions.lock().await.insert(
+        sid.to_string(),
+        AcpSession {
+            mode,
+            cwd: cwd.clone(),
+            coding: coding_run::CodingSessionState {
+                cwd: cwd.clone(),
+                coding_session_id: sid.to_string(),
+                prior_feedback: Vec::new(),
+                last_summary: None,
+                rounds: 0,
+            },
+            chat,
+            face_daemon_session: None,
+            cancel_tx,
+            cancel_rx,
+        },
+    );
+
+    // Replay the stored transcript so the editor shows the conversation.
+    for msg in &record.messages {
+        match msg.role.as_str() {
+            "user" => emit_user_message_chunk(sink, sid, &msg.content)?,
+            "assistant" => emit_agent_text_chunk(sink, sid, &msg.content)?,
+            _ => {}
+        }
+    }
+
+    tracing::info!(
+        session_id = %sid,
+        mode = %mode.id(),
+        messages = record.messages.len(),
+        "session/load restored from disk"
+    );
+
+    let (catalog, current) = bridge_model_snapshot(bridge).await;
+    Ok(session_state_payload(
+        sid,
+        &catalog,
+        &current,
+        mode,
+        &bridge.local_grant,
+    ))
+}
+
+/// `session/set_mode`: switch a live session's agent mode, lazy-initializing the chat handle when
+/// entering chat, and persisting the change (soft).
+async fn handle_set_mode(bridge: &Bridge, params: &Value) -> Result<Value, String> {
+    let sid = params
+        .get("sessionId")
+        .and_then(|v| v.as_str())
+        .ok_or("missing sessionId")?;
+    let mode_id = params
+        .get("modeId")
+        .and_then(|v| v.as_str())
+        .ok_or("missing modeId")?;
+    let mode = AgentMode::parse(mode_id)
+        .ok_or_else(|| format!("unknown modeId '{mode_id}' (coding|chat|face)"))?;
+    let mut map = bridge.acp_sessions.lock().await;
+    let sess = map
+        .get_mut(sid)
+        .ok_or_else(|| format!("unknown sessionId '{sid}'"))?;
+    if sess.mode != mode {
+        tracing::info!(session_id = %sid, from = %sess.mode.id(), to = %mode.id(), "session/set_mode");
+        sess.mode = mode;
+        // Lazy-init chat handle when switching into chat.
+        if mode == AgentMode::Chat && sess.chat.is_none() {
+            sess.chat = open_chat_session(
+                sid,
+                sess.cwd.clone(),
+                Arc::clone(&bridge.provider),
+                bridge.max_turns,
+                bridge.system_prompt.clone(),
+                &[],
+            )
+            .ok()
+            .map(Arc::new);
+        }
+        // Persist the mode change (soft - failure never fails the turn).
+        if let Err(e) = session_store::update_mode(sid, mode.id()) {
+            tracing::warn!(session_id = %sid, error = %e, "session/set_mode: failed to update persisted mode");
+        }
+    }
+    Ok(json!({}))
+}
+
+/// `session/set_model`: validate the model against the live catalog (extending it when the id is
+/// new), set it on the provider, and persist per-session (soft).
+async fn handle_set_model(bridge: &Bridge, params: &Value) -> Result<Value, String> {
+    let model_id = params
+        .get("modelId")
+        .and_then(|v| v.as_str())
+        .ok_or("missing modelId")?
+        .trim()
+        .to_string();
+    if model_id.is_empty() {
+        return Err("modelId must be non-empty".into());
+    }
+
+    refresh_catalog_from_live(bridge).await;
+    extend_catalog_with_model(bridge, &model_id).await;
+
+    // Catalog ids may be raw OpenRouter slugs; set on the live provider.
+    bridge.provider.set_model(model_id.clone());
+    *bridge.current_model.lock().await = model_id.clone();
+    tracing::info!(%model_id, backend = %bridge.backend, "session/set_model");
+
+    // Persist the model change (soft — failure never fails the turn).
+    // Only when a valid session id is present — an empty id means this
+    // was a global model switch not tied to a specific session.
+    let sid = params
+        .get("sessionId")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty());
+    if let Some(sid) = sid
+        && let Err(e) = session_store::update_model(sid, &model_id)
+    {
+        tracing::warn!(%model_id, error = %e, "session/set_model: failed to update persisted model");
+    }
+
+    Ok(json!({}))
 }
 
 async fn bridge_model_snapshot(bridge: &Bridge) -> (Vec<CatalogModel>, String) {
@@ -990,6 +1098,42 @@ async fn run_session_prompt(
 }
 
 /// Full coding pack path: LiberadoLoopBackend + durable worktree (same engine as goals).
+/// Cancel the run: preserve the dirty tree, say so, and end the turn.
+async fn cancel_and_preserve(sink: &dyn WireSink, sid: &str, workspace: &std::path::Path) -> Value {
+    let note = match coding_run::preserve_worktree(workspace, "cancelled").await {
+        Ok(Some(sha)) => format!("\n*(cancelled — work committed as `{sha}`)*\n"),
+        Ok(None) => "\n*(cancelled)*\n".to_string(),
+        Err(e) => format!("\n*(cancelled — could not preserve work: {e})*\n"),
+    };
+    let _ = emit_agent_text_chunk(sink, sid, &note);
+    json!({ "stopReason": "cancelled" })
+}
+
+/// Preserve the worktree under the given label and emit the outcome (or error) to the surface.
+async fn finish_coding_run(
+    sink: &dyn WireSink,
+    sid: &str,
+    workspace: &std::path::Path,
+    label: &str,
+    outcome: Option<String>,
+) -> Result<(), String> {
+    let preserved = match coding_run::preserve_worktree(workspace, label).await {
+        Ok(Some(sha)) => format!(
+            "\n**Committed:** `{sha}` on `{}`\n",
+            state_branch(workspace)
+        ),
+        Ok(None) => String::new(),
+        Err(e) => format!("\n**Could not preserve work:** {e}\n"),
+    };
+    if let Some(report) = outcome {
+        emit_agent_text_chunk(sink, sid, &report)?;
+        emit_agent_text_chunk(sink, sid, &preserved)?;
+    } else {
+        emit_agent_text_chunk(sink, sid, &preserved)?;
+    }
+    Ok(())
+}
+
 async fn run_coding_prompt(
     bridge: Arc<Bridge>,
     sink: &dyn WireSink,
@@ -1080,14 +1224,7 @@ async fn run_coding_prompt(
     };
 
     let Some(joined) = joined else {
-        // Cancel is the case F6 exists for: the tree is dirty and nothing else will save it.
-        let note = match coding_run::preserve_worktree(&workspace, "cancelled").await {
-            Ok(Some(sha)) => format!("\n*(cancelled — work committed as `{sha}`)*\n"),
-            Ok(None) => "\n*(cancelled)*\n".to_string(),
-            Err(e) => format!("\n*(cancelled — could not preserve work: {e})*\n"),
-        };
-        let _ = emit_agent_text_chunk(sink, sid, &note);
-        return Ok(json!({ "stopReason": "cancelled" }));
+        return Ok(cancel_and_preserve(sink, sid, &workspace).await);
     };
 
     // Events buffered between the task finishing and the join landing would otherwise be lost —
@@ -1106,30 +1243,16 @@ async fn run_coding_prompt(
     // Preserve before reporting, and on the failure path too: a failed run's diff is the
     // evidence for why it failed, and it is just as lost if nobody commits it.
     let label = if outcome.is_ok() { "done" } else { "failed" };
-    let preserved = match coding_run::preserve_worktree(&workspace, label).await {
-        Ok(Some(sha)) => format!(
-            "\n**Committed:** `{sha}` on `{}`\n",
-            state_branch(&workspace)
-        ),
-        Ok(None) => String::new(),
-        Err(e) => format!("\n**Could not preserve work:** {e}\n"),
-    };
-
-    match outcome {
-        Ok(result) => {
-            let report = result.render();
-            emit_agent_text_chunk(sink, sid, &report)?;
-            emit_agent_text_chunk(sink, sid, &preserved)?;
-            Ok(json!({ "stopReason": "end_turn" }))
-        }
+    let verdict = match outcome {
+        Ok(result) => Some(result.render()),
         Err(e) => {
             emit_agent_text_chunk(sink, sid, &format!("\n**Coding pack error:** {e}\n"))?;
-            emit_agent_text_chunk(sink, sid, &preserved)?;
-            Ok(json!({ "stopReason": "end_turn" }))
+            None
         }
-    }
+    };
+    finish_coding_run(sink, sid, &workspace, label, verdict).await?;
+    Ok(json!({ "stopReason": "end_turn" }))
 }
-
 /// Best-effort branch name for the report line. Cosmetic only — never fails the run.
 fn state_branch(workspace: &std::path::Path) -> String {
     // `std_command`, not `std::process::Command::new` — this is the ACP bridge, whose stdin is
@@ -1157,28 +1280,16 @@ fn state_branch(workspace: &std::path::Path) -> String {
 /// becomes text, because inventing richer ACP shapes for guard trips and validation results
 /// would be guessing at a UI nobody has asked for yet. What matters is that a watcher can tell
 /// the difference between working, stuck, and finished — which previously they could not, at all.
-fn render_coding_event(
+/// Emit the text-chunk ACP update for one text-shaped event (tokens, file changes, progress,
+/// guards, validation, critic verdicts, roles).
+fn emit_text_event(
     sink: &dyn WireSink,
     sid: &str,
     event: &liberado_session::SessionEvent,
-    pending_tool_ids: &mut Vec<(String, String)>,
 ) -> Result<(), String> {
     use liberado_session::SessionEventKind as K;
     match &event.kind {
         K::Token { text } => emit_agent_text_chunk(sink, sid, text)?,
-        K::ToolStarted { name, args_preview } => {
-            let id = push_tool_call_id(pending_tool_ids, name);
-            emit_tool_call(sink, sid, &id, name, args_preview, "pending")?;
-        }
-        K::ToolFinished {
-            name,
-            ok,
-            result_preview,
-        } => {
-            let id = pop_tool_call_id(pending_tool_ids, name);
-            let status = if *ok { "completed" } else { "failed" };
-            emit_tool_call_update(sink, sid, &id, name, status, result_preview)?;
-        }
         K::FileChanged { path, change } => {
             emit_agent_text_chunk(sink, sid, &format!("\n`{change}` {path}\n"))?;
         }
@@ -1211,6 +1322,64 @@ fn render_coding_event(
         K::RoleStarted { role, model } => {
             emit_agent_text_chunk(sink, sid, &format!("\n_{role} ({model})_\n"))?;
         }
+        _ => unreachable!("emit_text_event only receives text-shaped events"),
+    }
+    Ok(())
+}
+
+/// Emit the `tool_call` / `tool_call_update` ACP entries for tool start/finish, tracking the
+/// open ids so the editor can render them as cards.
+fn emit_tool_activity(
+    sink: &dyn WireSink,
+    sid: &str,
+    event: &liberado_session::SessionEvent,
+    pending_tool_ids: &mut Vec<(String, String)>,
+) -> Result<(), String> {
+    use liberado_session::SessionEventKind as K;
+    match &event.kind {
+        K::ToolStarted { name, args_preview } => {
+            let id = push_tool_call_id(pending_tool_ids, name);
+            emit_tool_call(sink, sid, &id, name, args_preview, "pending")?;
+        }
+        K::ToolFinished {
+            name,
+            ok,
+            result_preview,
+        } => {
+            let id = pop_tool_call_id(pending_tool_ids, name);
+            let status = if *ok { "completed" } else { "failed" };
+            emit_tool_call_update(sink, sid, &id, name, status, result_preview)?;
+        }
+        _ => unreachable!("emit_tool_activity only receives tool events"),
+    }
+    Ok(())
+}
+
+/// Turn one live pack event into the ACP updates Paseo renders.
+///
+/// The mapping is deliberately narrow. Tool activity becomes real `tool_call` /
+/// `tool_call_update` entries so the editor can render them as tool cards; everything else
+/// becomes text, because inventing richer ACP shapes for guard trips and validation results
+/// would be guessing at a UI nobody has asked for yet. What matters is that a watcher can tell
+/// the difference between working, stuck, and finished — which previously they could not, at all.
+fn render_coding_event(
+    sink: &dyn WireSink,
+    sid: &str,
+    event: &liberado_session::SessionEvent,
+    pending_tool_ids: &mut Vec<(String, String)>,
+) -> Result<(), String> {
+    use liberado_session::SessionEventKind as K;
+    match &event.kind {
+        K::ToolStarted { .. } | K::ToolFinished { .. } => {
+            emit_tool_activity(sink, sid, event, pending_tool_ids)?;
+        }
+        K::Token { .. }
+        | K::FileChanged { .. }
+        | K::Progress { .. }
+        | K::LoopGuard { .. }
+        | K::ValidationFinished { .. }
+        | K::CriticVerdict { .. }
+        | K::RoleStarted { .. } => emit_text_event(sink, sid, event)?,
         // Deliberately silent. Checkpoints fire often and mean nothing to a reader; role-finished
         // is implied by whatever comes next; the terminal events are already covered by the
         // rendered result the caller emits when the run returns. Adding them would be noise
@@ -2519,6 +2688,86 @@ mod tests {
         assert!(
             sink2.lines.lock().unwrap().is_empty(),
             "re-loading an already-loaded session must not re-emit messages"
+        );
+    }
+
+    /// render_coding_event maps tool activity to tool_call entries and everything else to text.
+    #[test]
+    fn render_coding_event_emits_text_and_tool_entries() {
+        use liberado_session::{SessionEvent, SessionEventKind};
+
+        let sink = CaptureSink {
+            lines: std::sync::Mutex::new(Vec::new()),
+        };
+        let mk = |kind| SessionEvent::new("s", kind);
+
+        render_coding_event(
+            &sink,
+            "s",
+            &mk(SessionEventKind::Token { text: "hi".into() }),
+            &mut Vec::new(),
+        )
+        .unwrap();
+        let mut pending = Vec::new();
+        render_coding_event(
+            &sink,
+            "s",
+            &mk(SessionEventKind::ToolStarted {
+                name: "read".into(),
+                args_preview: "\"a.json\"".into(),
+            }),
+            &mut pending,
+        )
+        .unwrap();
+        assert!(!pending.is_empty(), "an open tool call must be tracked");
+        render_coding_event(
+            &sink,
+            "s",
+            &mk(SessionEventKind::ToolFinished {
+                name: "read".into(),
+                ok: true,
+                result_preview: "ok".into(),
+            }),
+            &mut pending,
+        )
+        .unwrap();
+        assert!(pending.is_empty(), "a finished tool call must be popped");
+        render_coding_event(
+            &sink,
+            "s",
+            &mk(SessionEventKind::ValidationFinished {
+                ok: false,
+                summary: "tests broke".into(),
+            }),
+            &mut Vec::new(),
+        )
+        .unwrap();
+
+        let lines = sink.lines.lock().unwrap();
+        let updates: Vec<String> = lines
+            .iter()
+            .map(|(_, p)| {
+                p["update"]["sessionUpdate"]
+                    .as_str()
+                    .unwrap_or("")
+                    .to_string()
+            })
+            .collect();
+        assert!(
+            updates.contains(&"agent_message_chunk".into()),
+            "tokens and validation must render as text chunks: {updates:?}"
+        );
+        assert!(
+            lines.iter().any(|(_, p)| {
+                p["update"]["content"]["text"]
+                    .as_str()
+                    .is_some_and(|t| t.contains("hi"))
+            }),
+            "the token text must be emitted"
+        );
+        assert!(
+            updates.contains(&"tool_call".into()) && updates.contains(&"tool_call_update".into()),
+            "tool start/finish must render as tool entries: {updates:?}"
         );
     }
 }

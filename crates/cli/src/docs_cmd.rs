@@ -12,80 +12,111 @@ pub fn check_links() -> Result<(), Box<dyn std::error::Error>> {
     check_links_in(repository_root()?, DEFAULT_PATHS)
 }
 
-fn check_links_in(root: PathBuf, specs: &[&str]) -> Result<(), Box<dyn std::error::Error>> {
-    let files = scanned_files(&root, specs)?;
-    if files.is_empty() {
-        return Err(format!("no markdown files matched: {}", specs.join(", ")).into());
+/// Compiled patterns for one link scan.
+struct LinkPatterns {
+    link: Regex,
+    inline_code: Regex,
+    comment: Regex,
+    title: Regex,
+    external: Regex,
+}
+
+impl LinkPatterns {
+    fn compile() -> Result<Self, Box<dyn std::error::Error>> {
+        Ok(LinkPatterns {
+            link: Regex::new(r"\[[^\]\r\n]*\]\(([^\r\n)]+)\)")?,
+            inline_code: Regex::new(r"`[^`\r\n]*`")?,
+            comment: Regex::new(r"<!--.*?-->")?,
+            title: Regex::new(r#"\s+(?:"[^"]*"|'[^']*')\s*$"#)?,
+            external: Regex::new(r"^(https?://|//|mailto:|ftp:|tel:|data:|news:|javascript:)")?,
+        })
     }
+}
 
-    let link_re = Regex::new(r"\[[^\]\r\n]*\]\(([^\r\n)]+)\)")?;
-    let inline_code_re = Regex::new(r"`[^`\r\n]*`")?;
-    let comment_re = Regex::new(r"<!--.*?-->")?;
-    let title_re = Regex::new(r#"\s+(?:"[^"]*"|'[^']*')\s*$"#)?;
-    let external_re = Regex::new(r"^(https?://|//|mailto:|ftp:|tel:|data:|news:|javascript:)")?;
+/// Normalize one raw link target: strip the optional title, unwrap `<>`, and apply the skip
+/// rules. Returns `None` for targets that need no existence check (external, anchors, empty,
+/// `.secret`), else the cleaned path (fragment stripped).
+fn normalized_link_target(raw: &str, title_re: &Regex, external_re: &Regex) -> Option<String> {
+    let mut target = title_re.replace(raw, "").trim().to_string();
+    if target.starts_with('<') && target.ends_with('>') {
+        target = target[1..target.len() - 1].trim().to_string();
+    }
+    if target.is_empty()
+        || external_re.is_match(&target)
+        || target.starts_with('#')
+        || target.ends_with(".secret")
+    {
+        return None;
+    }
+    let path_target = target
+        .split_once('#')
+        .map_or(target.as_str(), |(path, _)| path);
+    if path_target.trim().is_empty() {
+        return None;
+    }
+    Some(path_target.trim().to_string())
+}
 
-    let mut broken = Vec::new();
-    let mut link_count = 0usize;
+/// Scan one markdown file for broken relative links, skipping fenced blocks, inline code, and
+/// HTML comments.
+fn scan_file(
+    root: &Path,
+    file: &Path,
+    patterns: &LinkPatterns,
+    link_count: &mut usize,
+    broken: &mut Vec<String>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let bytes = fs::read(file)?;
+    let text = String::from_utf8_lossy(&bytes);
+    let mut fence: Option<&str> = None;
 
-    for file in &files {
-        let bytes = fs::read(file)?;
-        let text = String::from_utf8_lossy(&bytes);
-        let mut fence: Option<&str> = None;
-
-        for (line_index, line) in text.lines().enumerate() {
-            let line_number = line_index + 1;
-            if fence.is_some() {
-                if is_fence_close(line) {
-                    fence = None;
-                }
-                continue;
+    for (line_index, line) in text.lines().enumerate() {
+        let line_number = line_index + 1;
+        if fence.is_some() {
+            if is_fence_close(line) {
+                fence = None;
             }
-            if let Some(marker) = fence_marker(line) {
-                fence = Some(marker);
+            continue;
+        }
+        if let Some(marker) = fence_marker(line) {
+            fence = Some(marker);
+            continue;
+        }
+
+        let without_code = patterns.inline_code.replace_all(line, "");
+        let stripped = patterns.comment.replace_all(&without_code, "");
+        for captures in patterns.link.captures_iter(&stripped) {
+            let Some(path_target) =
+                normalized_link_target(&captures[1], &patterns.title, &patterns.external)
+            else {
                 continue;
-            }
-
-            let without_code = inline_code_re.replace_all(line, "");
-            let stripped = comment_re.replace_all(&without_code, "");
-            for captures in link_re.captures_iter(&stripped) {
-                let mut target = captures[1].to_string();
-                target = title_re.replace(&target, "").trim().to_string();
-                if target.starts_with('<') && target.ends_with('>') {
-                    target = target[1..target.len() - 1].trim().to_string();
-                }
-                if target.is_empty()
-                    || external_re.is_match(&target)
-                    || target.starts_with('#')
-                    || target.ends_with(".secret")
-                {
-                    continue;
-                }
-
-                let path_target = target
-                    .split_once('#')
-                    .map_or(target.as_str(), |(path, _)| path);
-                if path_target.trim().is_empty() {
-                    continue;
-                }
-
-                link_count += 1;
-                let resolved = file
-                    .parent()
-                    .expect("a scanned file always has a parent")
-                    .join(path_target.trim());
-                if !exists_case_insensitively(&resolved) {
-                    broken.push(format!(
-                        "{}:{}: broken link `{}` (resolves to {})",
-                        display_path(&root, file),
-                        line_number,
-                        path_target.trim(),
-                        display_path(&root, &resolved)
-                    ));
-                }
+            };
+            *link_count += 1;
+            let resolved = file
+                .parent()
+                .expect("a scanned file always has a parent")
+                .join(&path_target);
+            if !exists_case_insensitively(&resolved) {
+                broken.push(format!(
+                    "{}:{}: broken link `{}` (resolves to {})",
+                    display_path(root, file),
+                    line_number,
+                    path_target,
+                    display_path(root, &resolved)
+                ));
             }
         }
     }
+    Ok(())
+}
 
+/// Print the scan summary and return the pass/fail verdict.
+fn report_link_check(
+    files: &[PathBuf],
+    specs: &[&str],
+    link_count: usize,
+    broken: &[String],
+) -> Result<(), Box<dyn std::error::Error>> {
     println!(
         "Docs link check: {} file(s), {} link(s) checked (paths: {})",
         files.len(),
@@ -96,12 +127,28 @@ fn check_links_in(root: PathBuf, specs: &[&str]) -> Result<(), Box<dyn std::erro
         println!("PASS: all {link_count} link(s) resolve.");
         return Ok(());
     }
-
     println!("\nBroken links:");
-    for item in &broken {
+    for item in broken {
         println!("  {item}");
     }
     Err(format!("{} broken link(s)", broken.len()).into())
+}
+
+fn check_links_in(root: PathBuf, specs: &[&str]) -> Result<(), Box<dyn std::error::Error>> {
+    let files = scanned_files(&root, specs)?;
+    if files.is_empty() {
+        return Err(format!("no markdown files matched: {}", specs.join(", ")).into());
+    }
+
+    let patterns = LinkPatterns::compile()?;
+    let mut broken = Vec::new();
+    let mut link_count = 0usize;
+
+    for file in &files {
+        scan_file(&root, file, &patterns, &mut link_count, &mut broken)?;
+    }
+
+    report_link_check(&files, specs, link_count, &broken)
 }
 
 fn scanned_files(root: &Path, specs: &[&str]) -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {

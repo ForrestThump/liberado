@@ -48,94 +48,126 @@ mod summarize_cmd;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    init_tracing();
+    let mut args = std::env::args().skip(1);
+    dispatch(&mut args).await
+}
+
+/// Install the stderr tracing subscriber. Logs go to stderr (unbuffered); stdout stays for data.
+fn init_tracing() {
     tracing_subscriber::fmt()
-        .with_writer(std::io::stderr) // logs to stderr (unbuffered); stdout stays for data
+        .with_writer(std::io::stderr)
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
         )
         .init();
+}
 
-    // First-arg dispatch: `chat` is the streaming client; `serve` (or a bare vault path, for
-    // back-compat) launches the daemon server. With no arg, fall back to `LIBERADO_VAULT`.
-    let mut args = std::env::args().skip(1);
+/// First-arg dispatch: `chat` is the streaming client; `serve` (or a bare vault path, for
+/// back-compat) launches the daemon server. With no arg, fall back to `LIBERADO_VAULT`.
+///
+/// Extracted from `main` so the argument grammar is a plain function and the binary stays a
+/// thin shell over the command modules. Each sub-command group owns its own argument match.
+async fn dispatch(
+    args: &mut impl Iterator<Item = String>,
+) -> Result<(), Box<dyn std::error::Error>> {
     match args.next().as_deref() {
         Some("chat") => chat_client::run(args.next()).await,
         // Harness observability over durable coding traces (F1–F3). Synchronous — no daemon.
         Some("coder") => coder_cmd::run(args),
-        Some("ci") => match args.next().as_deref() {
-            Some("check") => ci_cmd::check(),
-            _ => Err("usage: liberado ci check".into()),
-        },
+        Some("ci") => cmd_ci(args),
         Some("shepherd") => shepherd_cmd::run(args),
-        Some("docs") => match args.next().as_deref() {
-            Some("check-links") => docs_cmd::check_links(),
-            Some("crate-map") => {
-                let arguments: Vec<_> = args.collect();
-                let write = match arguments.as_slice() {
-                    [] => false,
-                    [flag] if flag == "--write" => true,
-                    _ => return Err("usage: liberado docs crate-map [--write]".into()),
-                };
-                crate_map_cmd::check_or_write(&crate_map_cmd::repository_root()?, write)
-            }
-            Some("metadata") => {
-                let command = args.next().ok_or(
-                    "usage: liberado docs metadata <lint|generate|check-stale-rs|self-test>",
-                )?;
-                if args.next().is_some() {
-                    return Err(
-                        "usage: liberado docs metadata <lint|generate|check-stale-rs|self-test>"
-                            .into(),
-                    );
-                }
-                docs_meta_cmd::run(&crate_map_cmd::repository_root()?, &command)
-            }
-            Some("site") => docs_site_cmd::run(args),
-            _ => Err("usage: liberado docs <check-links|crate-map|metadata|site>".into()),
-        },
-        Some("config") => match args.next().as_deref() {
-            // `config check` is synchronous (no daemon): resolve the default dir via bootstrap
-            // (passing None) and run the loader. Routed through the server so the cli keeps a single
-            // dependency.
-            Some("check") => liberado_server::config_check(None),
-            // `config explain <component> <mcp:tool> <path>` — answers "would this write be
-            // allowed, and if not, which guard stops it?" from config alone. Every guard's verdict
-            // is printed, not just the first failure: the first `no` is rarely the only one, and
-            // discovering them one deploy at a time is the slow path.
-            Some("explain") => {
-                let component = args.next();
-                let tool = args.next();
-                let path = args.next();
-                match (component, tool, path) {
-                    (Some(c), Some(t), Some(p)) => liberado_server::explain_write(None, &c, &t, &p),
-                    _ => Err(
-                        "usage: liberado config explain <component> <mcp:tool> <vault/path.md>\n  \
-                         e.g. liberado config explain dispatcher turbovault:write_note Learning/x.md"
-                            .into(),
-                    ),
-                }
-            }
-            _ => Err("usage: liberado config <check|explain>".into()),
-        },
+        Some("docs") => cmd_docs(args),
+        Some("config") => cmd_config(args),
         // `prompt [profile]` — what a chat under that profile is actually told, composed from
         // config alone. No daemon, so it runs mid-debug and in CI, which is the point: the prompt
         // and the tool list disagreeing is a class of bug that otherwise costs a deploy to see.
         // A bare `prompt` shows the no-profile case.
         Some("prompt") => liberado_server::show_prompt(None, args.next().as_deref()),
-        Some("serve") => {
-            let vault = args
-                .next()
-                .or_else(|| std::env::var("LIBERADO_VAULT").ok())
-                .ok_or("usage: liberado serve <vault-path>  (or set LIBERADO_VAULT)")?;
-            liberado_server::run(vault).await
-        }
+        Some("serve") => run_serve(args.next()).await,
         Some(vault) => liberado_server::run(vault.to_string()).await, // back-compat: bare vault == serve
-        None => {
-            let vault = std::env::var("LIBERADO_VAULT").map_err(
-                |_| "usage: liberado [serve <vault>|chat [session]]  (or set LIBERADO_VAULT)",
-            )?;
-            liberado_server::run(vault).await
-        }
+        None => run_serve_from_env().await,
     }
+}
+
+/// `liberado ci …` — the cross-platform repository ship preflight.
+fn cmd_ci(args: &mut impl Iterator<Item = String>) -> Result<(), Box<dyn std::error::Error>> {
+    match args.next().as_deref() {
+        Some("check") => ci_cmd::check(),
+        _ => Err("usage: liberado ci check".into()),
+    }
+}
+
+/// `liberado docs …`
+fn cmd_docs(args: &mut impl Iterator<Item = String>) -> Result<(), Box<dyn std::error::Error>> {
+    match args.next().as_deref() {
+        Some("check-links") => docs_cmd::check_links(),
+        Some("crate-map") => {
+            let arguments: Vec<_> = args.collect();
+            let write = match arguments.as_slice() {
+                [] => false,
+                [flag] if flag == "--write" => true,
+                _ => return Err("usage: liberado docs crate-map [--write]".into()),
+            };
+            crate_map_cmd::check_or_write(&crate_map_cmd::repository_root()?, write)
+        }
+        Some("metadata") => {
+            let command = args
+                .next()
+                .ok_or("usage: liberado docs metadata <lint|generate|check-stale-rs|self-test>")?;
+            if args.next().is_some() {
+                return Err(
+                    "usage: liberado docs metadata <lint|generate|check-stale-rs|self-test>".into(),
+                );
+            }
+            docs_meta_cmd::run(&crate_map_cmd::repository_root()?, &command)
+        }
+        Some("site") => docs_site_cmd::run(args),
+        _ => Err("usage: liberado docs <check-links|crate-map|metadata|site>".into()),
+    }
+}
+
+/// `liberado config …`
+fn cmd_config(args: &mut impl Iterator<Item = String>) -> Result<(), Box<dyn std::error::Error>> {
+    match args.next().as_deref() {
+        // `config check` is synchronous (no daemon): resolve the default dir via bootstrap
+        // (passing None) and run the loader. Routed through the server so the cli keeps a single
+        // dependency.
+        Some("check") => liberado_server::config_check(None),
+        // `config explain <component> <mcp:tool> <path>` — answers "would this write be
+        // allowed, and if not, which guard stops it?" from config alone. Every guard's verdict
+        // is printed, not just the first failure: the first `no` is rarely the only one, and
+        // discovering them one deploy at a time is the slow path.
+        Some("explain") => {
+            let component = args.next();
+            let tool = args.next();
+            let path = args.next();
+            match (component, tool, path) {
+                (Some(c), Some(t), Some(p)) => liberado_server::explain_write(None, &c, &t, &p),
+                _ => Err(
+                    "usage: liberado config explain <component> <mcp:tool> <vault/path.md>\n  \
+                     e.g. liberado config explain dispatcher turbovault:write_note Learning/x.md"
+                        .into(),
+                ),
+            }
+        }
+        _ => Err("usage: liberado config <check|explain>".into()),
+    }
+}
+
+/// `liberado serve [<vault>]` — run the daemon in the foreground, or fall back to the
+/// `LIBERADO_VAULT` environment variable.
+async fn run_serve(vault: Option<String>) -> Result<(), Box<dyn std::error::Error>> {
+    let vault = vault
+        .or_else(|| std::env::var("LIBERADO_VAULT").ok())
+        .ok_or("usage: liberado serve <vault-path>  (or set LIBERADO_VAULT)")?;
+    liberado_server::run(vault).await
+}
+
+/// No first arg — the vault must come from `LIBERADO_VAULT`.
+async fn run_serve_from_env() -> Result<(), Box<dyn std::error::Error>> {
+    let vault = std::env::var("LIBERADO_VAULT")
+        .map_err(|_| "usage: liberado [serve <vault>|chat [session]]  (or set LIBERADO_VAULT)")?;
+    liberado_server::run(vault).await
 }

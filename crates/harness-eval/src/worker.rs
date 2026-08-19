@@ -117,6 +117,12 @@ fn detach_stdio_from_children() {
 }
 
 fn executor_binary() -> Result<PathBuf, Box<dyn Error>> {
+    if let Some(explicit) = std::env::var_os("LIBERADO_HARNESS_WORKER") {
+        if explicit.is_empty() {
+            return Err("LIBERADO_HARNESS_WORKER is set but empty".into());
+        }
+        return Ok(PathBuf::from(explicit));
+    }
     let current = std::env::current_exe()?;
     Ok(current.with_file_name(if cfg!(windows) {
         "liberado-harness-worker.exe"
@@ -128,6 +134,12 @@ fn executor_binary() -> Result<PathBuf, Box<dyn Error>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::contract::{
+        HarnessRequest, JOB_SPEC_VERSION, JobSpec, ModelPins, ResourceLimits, SAMPLING_OMITTED,
+        TaskBundle, VerifierProfile,
+    };
+    use crate::journal::{JobStore, RunnerLock};
+    use chrono::Utc;
 
     #[test]
     fn run_command_rejects_unknown_commands() {
@@ -139,6 +151,105 @@ mod tests {
     fn run_job_requires_a_source_repository() {
         let error = run_command(["run-job".to_string()].into_iter()).unwrap_err();
         assert!(error.to_string().contains("--source"));
+    }
+
+    #[test]
+    fn run_command_parses_run_job_arguments() {
+        // No command at all.
+        let err = run_command([].into_iter()).unwrap_err();
+        assert!(err.to_string().contains("usage:"), "{err}");
+        // run-job without a repository.
+        let err =
+            run_command(["run-job".to_string(), "not-a-ulid".to_string()].into_iter()).unwrap_err();
+        assert!(err.to_string().contains("job id"), "{err}");
+        // run-job --help exits cleanly with usage.
+        run_command(["run-job".to_string(), "-h".to_string()].into_iter())
+            .expect("run-job -h must exit 0");
+        run_command(["-h".to_string()].into_iter()).expect("worker -h must exit 0");
+        // --source with a missing value.
+        let err = run_command(
+            [
+                "run-job".to_string(),
+                JobId::new().to_string(),
+                "--source".to_string(),
+            ]
+            .into_iter(),
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("--source requires a path"),
+            "{err}"
+        );
+        // A second positional id is an unknown-argument error.
+        let id = JobId::new().to_string();
+        let err = run_command(["run-job".to_string(), id.clone(), id].into_iter()).unwrap_err();
+        assert!(err.to_string().contains("unknown worker argument"), "{err}");
+        // An invalid ULID fails at JobId::parse.
+        let err = run_command(
+            [
+                "run-job".to_string(),
+                "not-a-ulid".to_string(),
+                "--source".to_string(),
+                ".".to_string(),
+            ]
+            .into_iter(),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("ULID"), "{err}");
+    }
+
+    #[test]
+    fn run_job_fails_the_job_when_the_runner_lock_is_held() {
+        let temp = tempfile::tempdir().unwrap();
+        let repository = temp.path().join("repo");
+        std::fs::create_dir_all(&repository).unwrap();
+        let store = JobStore::for_repository(&repository);
+        std::fs::create_dir_all(store.root()).unwrap();
+        let job_id = JobId::new();
+        store
+            .create(
+                &JobSpec {
+                    version: JOB_SPEC_VERSION,
+                    job_id: job_id.clone(),
+                    submitted_at: Utc::now(),
+                    repository: repository.clone(),
+                    base_revision: "HEAD".to_string(),
+                    task: TaskBundle::new("task.txt", "do it".to_string()).unwrap(),
+                    harnesses: vec![HarnessRequest {
+                        id: "liberado".to_string(),
+                        binary: None,
+                    }],
+                    run_order: vec!["liberado".to_string()],
+                    model: ModelPins {
+                        provider: "openrouter".to_string(),
+                        model: "deepseek/test".to_string(),
+                        base_url: "https://example.invalid".to_string(),
+                        credential_alias: "openrouter-default".to_string(),
+                        thinking: "high".to_string(),
+                        max_turns: 1,
+                        sampling: SAMPLING_OMITTED.to_string(),
+                    },
+                    limits: ResourceLimits::default(),
+                    verifier: VerifierProfile::WorkspaceTests,
+                    task_aware_context: false,
+                    acceptance: None,
+                    experiment: None,
+                    experiment_id: String::new(),
+                }
+                .finalize()
+                .unwrap(),
+            )
+            .unwrap();
+        let _lock = RunnerLock::acquire(&store).unwrap();
+        let err = run_job(&repository, &job_id).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("another comparison is already running"),
+            "{err}"
+        );
+        // The job is marked failed rather than left queued forever.
+        let state = store.load_state(&job_id).unwrap();
+        assert_eq!(state.status, JobStatus::Failed);
     }
 
     #[cfg(windows)]

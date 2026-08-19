@@ -125,3 +125,91 @@ fn draw_hint(frame: &mut Frame, area: Rect, th: &Theme) {
         area,
     );
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::api::ConvHeader;
+    use crate::app::Focus;
+    use crate::render::test_support;
+
+    fn render(app: &App, w: u16, h: u16) -> String {
+        let th = app.theme.clone();
+        test_support::render_pane(w, h, |f| draw(f, f.area(), app, &th))
+    }
+
+    fn conv(id: &str, title: &str) -> ConvHeader {
+        ConvHeader {
+            id: id.into(),
+            title: Some(title.into()),
+            created_at: "2025-06-25T12:00:00Z".into(),
+            parent_conversation: None,
+            spawned_by: None,
+        }
+    }
+
+    #[test]
+    fn empty_browser_shows_a_message() {
+        let mut app = test_support::app();
+        app.focus = Focus::SessionBrowser;
+        let out = render(&app, 80, 24);
+        assert!(out.contains("no conversations yet"), "empty state:\n{out}");
+        assert!(out.contains("0 session(s)"), "title count:\n{out}");
+        assert!(
+            out.contains("Type to search titles"),
+            "filter placeholder:\n{out}"
+        );
+    }
+
+    #[test]
+    fn rows_render_titles_short_ids_and_active_mark() {
+        let mut app = test_support::app();
+        app.focus = Focus::SessionBrowser;
+        app.conversations = vec![conv("c1", "weekly planning"), conv("c2", "capture notes")];
+        app.sidebar_selection = 1;
+        let out = render(&app, 90, 24);
+        assert!(out.contains("weekly planning"), "row 1:\n{out}");
+        assert!(out.contains("capture notes"), "row 2:\n{out}");
+        // The row for the active session carries a star.
+        app.session = Some("c1".into());
+        let out = render(&app, 90, 24);
+        let line = out
+            .lines()
+            .find(|l| l.contains("weekly planning"))
+            .expect("row renders");
+        assert!(line.contains('*'), "active marker: {line}");
+    }
+
+    #[test]
+    fn filter_and_pending_load_render() {
+        let mut app = test_support::app();
+        app.focus = Focus::SessionBrowser;
+        app.conversations = vec![conv("c1", "weekly planning"), conv("c2", "capture notes")];
+        app.sidebar_filter = "capture".into();
+        app.pending_load = Some("c2".into());
+        let out = render(&app, 90, 24);
+        assert!(out.contains("capture"), "typed filter text:\n{out}");
+        assert!(!out.contains("weekly"), "non-matching hidden:\n{out}");
+        assert!(out.contains("1 session(s)"), "filtered count:\n{out}");
+    }
+
+    #[test]
+    fn parent_child_rows_carry_tree_glyphs() {
+        use chat_client_contract::ConvHeader as C;
+        let mut app = test_support::app();
+        app.focus = Focus::SessionBrowser;
+        app.conversations = vec![
+            conv("root", "root thread"),
+            C {
+                id: "kid".into(),
+                title: Some("child".into()),
+                created_at: "2025-06-25T12:00:00Z".into(),
+                parent_conversation: Some("root".into()),
+                spawned_by: Some("msg-9".into()),
+            },
+        ];
+        let out = render(&app, 90, 24);
+        assert!(out.contains("└──"), "tree glyph:\n{out}");
+        assert!(out.contains("child"), "child row:\n{out}");
+    }
+}

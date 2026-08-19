@@ -1,0 +1,2 @@
+# cargo-crap persistent configuration (searched upward from the CWD).
+# CLI flags always take precedence over values here.

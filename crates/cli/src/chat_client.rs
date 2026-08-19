@@ -183,3 +183,136 @@ fn truncate(text: &str, max: usize) -> String {
     let head: String = text.chars().take(max).collect();
     format!("{head}...")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{dispatch, truncate};
+    use chat_client_contract::native::SseEvent;
+
+    fn ev(event: &str, data: &str) -> SseEvent {
+        SseEvent {
+            event: event.into(),
+            data: data.into(),
+        }
+    }
+
+    // ── truncate ────────────────────────────────────────────────────────
+
+    /// Short text passes through whole; the cut is on *characters*, so multi-byte text is not
+    /// split mid-codepoint the way a byte slice would.
+    #[test]
+    fn truncate_passes_short_text_through() {
+        assert_eq!(truncate("hello", 200), "hello");
+        assert_eq!(truncate("", 200), "");
+        assert_eq!(truncate("exactly", 7), "exactly");
+    }
+
+    #[test]
+    fn truncate_clamps_and_appends_an_ellipsis() {
+        assert_eq!(truncate("hello world", 5), "hello...");
+        assert_eq!(truncate("hello", 0), "...");
+        // Characters, not bytes: 5 CJK chars = 15 bytes, still cut at 5 chars.
+        assert_eq!(truncate("中中中中中中", 3), "中中中...");
+    }
+
+    // ── dispatch ────────────────────────────────────────────────────────
+
+    /// The `session` event is the conversation's identity: it folds the id back into the REPL's
+    /// `session` so the next turn continues the same conversation, and does not end the turn.
+    #[test]
+    fn session_event_updates_the_session() {
+        let mut session = None;
+        assert!(!dispatch(&ev("session", "01HZABC"), &mut session));
+        assert_eq!(session.as_deref(), Some("01HZABC"));
+    }
+
+    /// Token and tool events render but do not end the turn.
+    #[test]
+    fn mid_turn_events_do_not_end_the_turn() {
+        let mut session = Some("01A".into());
+        assert!(!dispatch(&ev("token", "hello"), &mut session));
+        assert!(!dispatch(
+            &ev("tool_started", r#"{"name":"search","args_preview":"q=x"}"#),
+            &mut session
+        ));
+        assert!(!dispatch(
+            &ev(
+                "tool_finished",
+                r#"{"name":"search","ok":true,"result_preview":"done"}"#
+            ),
+            &mut session
+        ));
+        assert_eq!(
+            session.as_deref(),
+            Some("01A"),
+            "session must survive a turn"
+        );
+    }
+
+    /// `session_finished` and `failed` are the turn's terminators — the REPL returns once either
+    /// arrives, which is what lets the next prompt appear.
+    #[test]
+    fn terminators_end_the_turn() {
+        let mut session = None;
+        assert!(dispatch(
+            &ev("session_finished", r#"{"status":"done","summary":""}"#),
+            &mut session
+        ));
+        assert!(dispatch(
+            &ev("failed", r#"{"message":"boom"}"#),
+            &mut session
+        ));
+    }
+
+    /// A session offer is informational — the chat CLI cannot focus-switch, so it prints the join
+    /// hint and keeps streaming.
+    #[test]
+    fn session_offer_does_not_end_the_turn() {
+        let mut session = None;
+        assert!(!dispatch(
+            &ev(
+                "session_offered",
+                r#"{"id":"s2","domain":"coding","description":"a goal"}"#
+            ),
+            &mut session
+        ));
+    }
+
+    /// Goal-session-only event kinds are ignored by a chat turn (they are not emitted today) but
+    /// must not end the turn or panic.
+    #[test]
+    fn goal_only_kinds_are_ignored() {
+        let mut session = None;
+        for event in [
+            ("progress", r#"{"message":"thinking"}"#),
+            ("awaiting_input", r#"{"prompt":"?"}"#),
+            ("human_input", r#"{"text":"ok"}"#),
+            (
+                "critic_verdict",
+                r#"{"reviewer":"r","kind":"fresh","approved":true}"#,
+            ),
+            ("loop_guard", r#"{"guard":"g","action":"stop"}"#),
+        ] {
+            assert!(
+                !dispatch(&ev(event.0, event.1), &mut session),
+                "{} must not end the turn",
+                event.0
+            );
+        }
+    }
+
+    /// An undecodable event is surfaced as raw data (so a protocol drift is visible rather than
+    /// silently swallowed) and does not end the turn.
+    #[test]
+    fn undecodable_events_print_raw_and_continue() {
+        let mut session = None;
+        assert!(!dispatch(&ev("tool_started", "not-json"), &mut session));
+    }
+
+    /// An unknown event *type* decodes as an empty token — forward-compatible, and never fatal.
+    #[test]
+    fn unknown_event_types_are_ignored() {
+        let mut session = None;
+        assert!(!dispatch(&ev("something_future", "whatever"), &mut session));
+    }
+}

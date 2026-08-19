@@ -93,8 +93,25 @@ impl GoalSessionStore {
             return Self::new();
         }
 
+        let map = Self::rehydrate_from_disk(&dir);
+        if !map.is_empty() {
+            tracing::info!(
+                sessions = map.len(),
+                "goal-session store: rehydrated from disk"
+            );
+        }
+
+        Self {
+            inner: Arc::new(Mutex::new(map)),
+            dir: Some(Arc::new(dir)),
+        }
+    }
+
+    /// Read every `*.jsonl` session log under `dir`, returning the replayed sessions. Unreadable
+    /// files are skipped with a warning rather than failing the store.
+    fn rehydrate_from_disk(dir: &Path) -> HashMap<String, SessionInner> {
         let mut map = HashMap::new();
-        match std::fs::read_dir(&dir) {
+        match std::fs::read_dir(dir) {
             Ok(entries) => {
                 for entry in entries.flatten() {
                     let path = entry.path();
@@ -115,17 +132,7 @@ impl GoalSessionStore {
                 warn!(error = %e, path = %dir.display(), "goal-session store: could not read dir")
             }
         }
-        if !map.is_empty() {
-            tracing::info!(
-                sessions = map.len(),
-                "goal-session store: rehydrated from disk"
-            );
-        }
-
-        Self {
-            inner: Arc::new(Mutex::new(map)),
-            dir: Some(Arc::new(dir)),
-        }
+        map
     }
 
     /// Append a line to a session's log (best-effort — a persistence failure is logged, never

@@ -76,9 +76,12 @@ jobs:
       # webui is excluded: it is a Dioxus WASM crate (shipped via `dx build --web`), and its
       # native cdylib build reports component scaffolding as dead code. Re-include once the
       # webui matures past pre-alpha or grows a wasm CI job of its own.
+      #
+      # Runs on BOTH matrix OSes on purpose: clippy lints are source-level and OS-independent,
+      # but `#[cfg(windows)]` code is only compiled — and thus only linted — on a Windows
+      # runner. `-D warnings -D clippy::cognitive_complexity` is the complexity gate.
       - name: Clippy
-        if: matrix.os == 'ubuntu-latest'
-        run: cargo clippy --workspace --exclude liberado-webui --all-targets -- -D warnings
+        run: cargo clippy --workspace --exclude liberado-webui --all-targets -- -D warnings -D clippy::cognitive_complexity
 
       # `--no-fail-fast` so the run reports EVERY failing test, not just the ones up to the
       # first failing crate. Without it cargo stops at the first broken test binary, and the

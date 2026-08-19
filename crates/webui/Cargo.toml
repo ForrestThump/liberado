@@ -32,6 +32,12 @@ wasm-bindgen-futures = "0.4"
 # unload-time incognito discard needs. See components/incognito.rs.
 js-sys = "0.3"
 
+[dev-dependencies]
+# `handle_slash_command` tests exercise the network-free command paths (`/help`, `/new`, `/clear`,
+# `/theme set`). The workspace tokio already carries the heavy features; this only names the ones
+# the tests use.
+tokio = { workspace = true, features = ["rt", "macros"] }
+
 [package.metadata.docs.rs]
 targets = ["wasm32-unknown-unknown"]
 

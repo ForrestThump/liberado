@@ -56,6 +56,15 @@ pub struct EffectRunner {
     pub stream_state: Arc<Mutex<StreamState>>,
 }
 
+/// The (id, action, past-tense label) for the park/cancel goal actions.
+fn goal_action_args(effect: Effect) -> (String, &'static str, &'static str) {
+    match effect {
+        Effect::ParkGoalSession(id) => (id, "park", "parked"),
+        Effect::CancelGoalSession(id) => (id, "cancel", "cancelled"),
+        _ => unreachable!("goal_action_args only receives park/cancel"),
+    }
+}
+
 impl EffectRunner {
     fn server_url(&self) -> String {
         self.app.lock().server.clone()
@@ -102,8 +111,10 @@ impl EffectRunner {
                 self.start_coding_goal(project, text, mode, origin_conversation)
                     .await
             }
-            Effect::ParkGoalSession(id) => self.goal_action(id, "park", "parked").await,
-            Effect::CancelGoalSession(id) => self.goal_action(id, "cancel", "cancelled").await,
+            Effect::ParkGoalSession(_) | Effect::CancelGoalSession(_) => {
+                let (id, action, past_tense) = goal_action_args(effect);
+                self.goal_action(id, action, past_tense).await
+            }
             Effect::ResumeGoalSession { id, answer } => self.resume_goal_session(id, answer).await,
             Effect::LeaveGoalSession => self.leave_goal_session(),
             Effect::Quit => self.quit(),

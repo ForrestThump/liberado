@@ -584,38 +584,55 @@ max_turns = 44
         assert!(cfg.validate().is_err());
     }
 
-    #[test]
-    fn a_schedule_targeting_the_implicit_default_pool_passes_with_no_pools_declared() {
+    /// Helper to test schedule pool validation with a given pool setup.
+    /// `pools` — optional list of declared pool names; `schedule_pool` — the pool the schedule targets;
+    /// `should_pass` — whether validation should succeed.
+    fn assert_schedule_pool_validation(
+        pools: Option<Vec<&str>>,
+        schedule_pool: &str,
+        should_pass: bool,
+    ) {
         let mut cfg = Config::default();
         cfg.topology.vault_path = PathBuf::from("/home/shiloh/vault");
+        if let Some(pool_names) = pools {
+            cfg.topology.pools = pool_names
+                .into_iter()
+                .map(|name| PoolConfig {
+                    name: name.into(),
+                    enabled: true,
+                })
+                .collect();
+        }
         let mut schedule = cron_schedule("nightly", "0 0 9 * * * *");
-        schedule.pool = Some(DEFAULT_POOL.to_string());
+        schedule.pool = Some(schedule_pool.to_string());
         cfg.topology.schedules = vec![schedule];
-        assert!(cfg.validate().is_ok());
+        let result = cfg.validate();
+        if should_pass {
+            assert!(
+                result.is_ok(),
+                "expected validation to pass, got: {result:?}"
+            );
+        } else {
+            assert!(
+                result.is_err(),
+                "expected validation to fail, got: {result:?}"
+            );
+        }
     }
 
     #[test]
-    fn a_schedule_targeting_a_declared_pool_passes_validation() {
-        let mut cfg = Config::default();
-        cfg.topology.vault_path = PathBuf::from("/home/shiloh/vault");
-        cfg.topology.pools = vec![PoolConfig {
-            name: "restricted".into(),
-            enabled: true,
-        }];
-        let mut schedule = cron_schedule("nightly", "0 0 9 * * * *");
-        schedule.pool = Some("restricted".to_string());
-        cfg.topology.schedules = vec![schedule];
-        assert!(cfg.validate().is_ok());
+    fn schedule_targeting_implicit_default_pool_passes_with_no_pools_declared() {
+        assert_schedule_pool_validation(None, DEFAULT_POOL, true);
     }
 
     #[test]
-    fn a_schedule_targeting_an_undeclared_pool_fails_validation() {
-        let mut cfg = Config::default();
-        cfg.topology.vault_path = PathBuf::from("/home/shiloh/vault");
-        let mut schedule = cron_schedule("nightly", "0 0 9 * * * *");
-        schedule.pool = Some("nonexistent".to_string());
-        cfg.topology.schedules = vec![schedule];
-        assert!(cfg.validate().is_err());
+    fn schedule_targeting_declared_pool_passes_validation() {
+        assert_schedule_pool_validation(Some(vec!["restricted"]), "restricted", true);
+    }
+
+    #[test]
+    fn schedule_targeting_undeclared_pool_fails_validation() {
+        assert_schedule_pool_validation(None, "nonexistent", false);
     }
 
     #[test]

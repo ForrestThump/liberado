@@ -74,12 +74,27 @@ fn repository_root() -> Result<PathBuf, Box<dyn std::error::Error>> {
 
 #[cfg(test)]
 mod tests {
-    use super::repository_root;
+    use super::{repository_root, run};
 
     #[test]
     fn finds_the_workspace_from_the_checkout_root() {
         let root = repository_root().expect("test runs from the workspace");
         assert!(root.join("Cargo.toml").is_file());
         assert!(root.join("crates").is_dir());
+    }
+
+    /// A program that does not exist surfaces as a start failure with the program named — the
+    /// error the user needs when the preflight environment is missing a tool.
+    #[test]
+    fn run_reports_a_missing_program() {
+        let root = repository_root().unwrap();
+        let error = run(&root, "definitely-not-a-real-program-xyz", &[])
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("could not start"), "{error}");
+        assert!(
+            error.contains("definitely-not-a-real-program-xyz"),
+            "{error}"
+        );
     }
 }

@@ -108,141 +108,51 @@ pub struct ReconstructedTurn {
     pub tools_offered: Vec<String>,
 }
 
+/// Accumulated reconstruction state as the MVL event list is walked.
+#[derive(Default)]
+struct ReconstructState {
+    /// tool_catalog sha256 -> tools array
+    catalogs: HashMap<String, Value>,
+    /// prompt.system sha256 -> text
+    systems: HashMap<String, String>,
+    messages: Vec<Value>,
+    last_params: BTreeMap<String, Value>,
+    last_tools_offered: Vec<String>,
+    last_system_sha: String,
+    last_catalog_sha: String,
+    prompt_seen: bool,
+    full_prompt_required: bool,
+}
+
+/// How the walk should proceed after ingesting one prompt.
+enum PromptAction {
+    /// Keep scanning for the target turn.
+    Continue,
+    /// Reached the target turn.
+    Found,
+    /// Passed the target turn; the log has no prompt for it.
+    Passed,
+}
+
 /// Rebuild the request view for `turn` from an MVL event list.
 ///
 /// Implements the reconstruction checklist in `model-view-log.md`: system text by hash,
 /// tool catalogue by digest, full/delta message assembly, sampling params, tools_offered.
 pub fn reconstruct_turn(events: &[JsonlEvent], turn: i64) -> Result<ReconstructedTurn, String> {
-    // Catalogues: sha256 -> tools array
-    let mut catalogs: HashMap<String, Value> = HashMap::new();
-    // System texts: sha256 -> text
-    let mut systems: HashMap<String, String> = HashMap::new();
-
-    let mut messages: Vec<Value> = Vec::new();
-    let mut last_params: BTreeMap<String, Value> = BTreeMap::new();
-    let mut last_tools_offered: Vec<String> = Vec::new();
-    let mut last_system_sha = String::new();
-    let mut last_catalog_sha = String::new();
+    let mut state = ReconstructState::default();
     let mut found = false;
-    let mut prompt_seen = false;
-    let mut full_prompt_required = true;
-
     for ev in events {
         match ev.type_name.as_str() {
-            "tool_catalog" => {
-                let sha = ev
-                    .body
-                    .get("sha256")
-                    .and_then(|x| x.as_str())
-                    .ok_or_else(|| "tool_catalog missing sha256".to_string())?
-                    .to_string();
-                let tools = ev
-                    .body
-                    .get("tools")
-                    .and_then(|value| value.as_array())
-                    .ok_or_else(|| "tool_catalog tools must be an array".to_string())?
-                    .clone();
-                catalogs.insert(sha, Value::Array(tools));
-            }
-            "context_changed" => full_prompt_required = true,
-            "prompt" => {
-                let t = ev
-                    .body
-                    .get("turn")
-                    .and_then(|x| x.as_i64())
-                    .ok_or_else(|| "prompt missing turn".to_string())?;
-                if t > turn {
-                    break;
-                }
-
-                // Each prompt carries the complete request-time metadata. Do not inherit a
-                // missing field from an earlier prompt: that would make an incomplete log look
-                // reconstructable.
-                let system = ev
-                    .body
-                    .get("system")
-                    .and_then(|value| value.as_object())
-                    .ok_or_else(|| "prompt missing system object".to_string())?;
-                let sha = system
-                    .get("sha256")
-                    .and_then(|x| x.as_str())
-                    .ok_or_else(|| "prompt.system missing sha256".to_string())?
-                    .to_string();
-                match system.get("text") {
-                    Some(Value::String(text)) => {
-                        if systems.contains_key(&sha) {
-                            return Err(format!(
-                                "system text for sha {sha} appears more than once"
-                            ));
-                        }
-                        systems.insert(sha.clone(), text.clone());
-                    }
-                    Some(Value::Null) => {}
-                    _ => return Err("prompt.system text must be a string or null".to_string()),
-                }
-                last_system_sha = sha;
-
-                last_catalog_sha = ev
-                    .body
-                    .get("tool_catalog_sha256")
-                    .and_then(|x| x.as_str())
-                    .ok_or_else(|| "prompt missing tool_catalog_sha256".to_string())?
-                    .to_string();
-
-                let params = ev
-                    .body
-                    .get("params")
-                    .and_then(|x| x.as_object())
-                    .ok_or_else(|| "prompt params must be an object".to_string())?;
-                last_params = params.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
-
-                let offered = ev
-                    .body
-                    .get("tools_offered")
-                    .and_then(|x| x.as_array())
-                    .ok_or_else(|| "prompt tools_offered must be an array".to_string())?;
-                last_tools_offered = offered
-                    .iter()
-                    .map(|value| {
-                        value.as_str().map(str::to_string).ok_or_else(|| {
-                            "prompt tools_offered entries must be strings".to_string()
-                        })
-                    })
-                    .collect::<Result<_, _>>()?;
-
-                let messages_obj = ev
-                    .body
-                    .get("messages")
-                    .ok_or_else(|| "prompt missing messages".to_string())?;
-                let mode = messages_obj
-                    .get("mode")
-                    .and_then(|x| x.as_str())
-                    .ok_or_else(|| "messages missing mode".to_string())?;
-                let items = messages_obj
-                    .get("items")
-                    .and_then(|x| x.as_array())
-                    .ok_or_else(|| "messages missing items".to_string())?;
-                if full_prompt_required && mode != "full" {
-                    let reason = if prompt_seen {
-                        "prompt after context_changed"
-                    } else {
-                        "first prompt"
-                    };
-                    return Err(format!("{reason} must use messages.mode=full"));
-                }
-                match mode {
-                    "full" => messages = items.clone(),
-                    "delta" => messages.extend(items.iter().cloned()),
-                    other => return Err(format!("unknown messages.mode: {other}")),
-                }
-                prompt_seen = true;
-                full_prompt_required = false;
-
-                if t == turn {
+            "tool_catalog" => ingest_catalog(&ev.body, &mut state.catalogs)?,
+            "context_changed" => state.full_prompt_required = true,
+            "prompt" => match ingest_prompt(ev, turn, &mut state)? {
+                PromptAction::Continue => {}
+                PromptAction::Found => {
                     found = true;
                     break;
                 }
-            }
+                PromptAction::Passed => break,
+            },
             _ => {}
         }
     }
@@ -251,25 +161,172 @@ pub fn reconstruct_turn(events: &[JsonlEvent], turn: i64) -> Result<Reconstructe
         return Err(format!("no prompt for turn {turn}"));
     }
 
-    let system_text = systems
-        .get(&last_system_sha)
+    let system_text = state
+        .systems
+        .get(&state.last_system_sha)
         .cloned()
-        .ok_or_else(|| format!("system text not recoverable for sha {last_system_sha}"))?;
-    let tool_definitions = catalogs
-        .get(&last_catalog_sha)
+        .ok_or_else(|| {
+            format!(
+                "system text not recoverable for sha {}",
+                state.last_system_sha
+            )
+        })?;
+    let tool_definitions = state
+        .catalogs
+        .get(&state.last_catalog_sha)
         .cloned()
-        .ok_or_else(|| format!("tool catalog not recoverable for sha {last_catalog_sha}"))?;
+        .ok_or_else(|| {
+            format!(
+                "tool catalog not recoverable for sha {}",
+                state.last_catalog_sha
+            )
+        })?;
 
     Ok(ReconstructedTurn {
         turn,
         system_text,
-        system_sha256: last_system_sha,
+        system_sha256: state.last_system_sha,
         tool_definitions,
-        tool_catalog_sha256: last_catalog_sha,
-        messages,
-        params: last_params,
-        tools_offered: last_tools_offered,
+        tool_catalog_sha256: state.last_catalog_sha,
+        messages: state.messages,
+        params: state.last_params,
+        tools_offered: state.last_tools_offered,
     })
+}
+
+/// Index a tool catalogue by its digest.
+fn ingest_catalog(
+    body: &BTreeMap<String, Value>,
+    catalogs: &mut HashMap<String, Value>,
+) -> Result<(), String> {
+    let sha = body
+        .get("sha256")
+        .and_then(|x| x.as_str())
+        .ok_or_else(|| "tool_catalog missing sha256".to_string())?
+        .to_string();
+    let tools = body
+        .get("tools")
+        .and_then(|value| value.as_array())
+        .ok_or_else(|| "tool_catalog tools must be an array".to_string())?
+        .clone();
+    catalogs.insert(sha, Value::Array(tools));
+    Ok(())
+}
+
+/// Read one prompt event, fold its metadata and messages into `state`, and say how the
+/// walk should continue.
+fn ingest_prompt(
+    ev: &JsonlEvent,
+    turn: i64,
+    state: &mut ReconstructState,
+) -> Result<PromptAction, String> {
+    let t = ev
+        .body
+        .get("turn")
+        .and_then(|x| x.as_i64())
+        .ok_or_else(|| "prompt missing turn".to_string())?;
+    if t > turn {
+        return Ok(PromptAction::Passed);
+    }
+
+    // Each prompt carries the complete request-time metadata. Do not inherit a
+    // missing field from an earlier prompt: that would make an incomplete log look
+    // reconstructable.
+    ingest_system(ev, state)?;
+    state.last_catalog_sha = ev
+        .body
+        .get("tool_catalog_sha256")
+        .and_then(|x| x.as_str())
+        .ok_or_else(|| "prompt missing tool_catalog_sha256".to_string())?
+        .to_string();
+
+    let params = ev
+        .body
+        .get("params")
+        .and_then(|x| x.as_object())
+        .ok_or_else(|| "prompt params must be an object".to_string())?;
+    state.last_params = params.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+
+    let offered = ev
+        .body
+        .get("tools_offered")
+        .and_then(|x| x.as_array())
+        .ok_or_else(|| "prompt tools_offered must be an array".to_string())?;
+    state.last_tools_offered = offered
+        .iter()
+        .map(|value| {
+            value
+                .as_str()
+                .map(str::to_string)
+                .ok_or_else(|| "prompt tools_offered entries must be strings".to_string())
+        })
+        .collect::<Result<_, _>>()?;
+
+    apply_messages(ev, state)?;
+
+    if t == turn {
+        Ok(PromptAction::Found)
+    } else {
+        Ok(PromptAction::Continue)
+    }
+}
+
+/// Read and record the prompt's system text (rejecting a sha that already has text).
+fn ingest_system(ev: &JsonlEvent, state: &mut ReconstructState) -> Result<(), String> {
+    let system = ev
+        .body
+        .get("system")
+        .and_then(|value| value.as_object())
+        .ok_or_else(|| "prompt missing system object".to_string())?;
+    let sha = system
+        .get("sha256")
+        .and_then(|x| x.as_str())
+        .ok_or_else(|| "prompt.system missing sha256".to_string())?
+        .to_string();
+    match system.get("text") {
+        Some(Value::String(text)) => {
+            if state.systems.contains_key(&sha) {
+                return Err(format!("system text for sha {sha} appears more than once"));
+            }
+            state.systems.insert(sha.clone(), text.clone());
+        }
+        Some(Value::Null) => {}
+        _ => return Err("prompt.system text must be a string or null".to_string()),
+    }
+    state.last_system_sha = sha;
+    Ok(())
+}
+
+/// Apply the prompt's messages — full replace or delta append — to the assembled view.
+fn apply_messages(ev: &JsonlEvent, state: &mut ReconstructState) -> Result<(), String> {
+    let messages_obj = ev
+        .body
+        .get("messages")
+        .ok_or_else(|| "prompt missing messages".to_string())?;
+    let mode = messages_obj
+        .get("mode")
+        .and_then(|x| x.as_str())
+        .ok_or_else(|| "messages missing mode".to_string())?;
+    let items = messages_obj
+        .get("items")
+        .and_then(|x| x.as_array())
+        .ok_or_else(|| "messages missing items".to_string())?;
+    if state.full_prompt_required && mode != "full" {
+        let reason = if state.prompt_seen {
+            "prompt after context_changed"
+        } else {
+            "first prompt"
+        };
+        return Err(format!("{reason} must use messages.mode=full"));
+    }
+    match mode {
+        "full" => state.messages = items.clone(),
+        "delta" => state.messages.extend(items.iter().cloned()),
+        other => return Err(format!("unknown messages.mode: {other}")),
+    }
+    state.prompt_seen = true;
+    state.full_prompt_required = false;
+    Ok(())
 }
 
 /// Every execution `call_id` for tools must match exactly one MVL completion tool call.

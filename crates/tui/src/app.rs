@@ -543,12 +543,8 @@ impl App {
         }
     }
 
-    /// Apply one goal-session stream frame to the joined view. A no-op if not joined (stray events
-    /// after `/back`) or for a different session id.
-    fn apply_goal_event(&mut self, ev: GoalUiEvent) {
-        let Some(j) = self.joined.as_mut() else {
-            return;
-        };
+    /// Started/stream/tool events: identity, token accumulation, and tool chips.
+    fn on_tool_frame(j: &mut JoinedSession, ev: GoalUiEvent) {
         match ev {
             GoalUiEvent::Started { description } => {
                 if !description.is_empty() {
@@ -565,6 +561,13 @@ impl App {
                 j.messages
                     .push(Message::ToolResult(ToolResultChip { name, ok, preview }));
             }
+            _ => {}
+        }
+    }
+
+    /// Status-line events: roles, progress, validation, gate votes, file changes, loop guards.
+    fn on_status_line(j: &mut JoinedSession, ev: GoalUiEvent) {
+        match ev {
             GoalUiEvent::Role { role, model } => {
                 Self::flush_joined_buf(j);
                 j.active_role = Some(role.clone());
@@ -642,6 +645,13 @@ impl App {
                 Self::flush_joined_buf(j);
                 j.messages.push(Message::System(format!("loop-guard: {m}")));
             }
+            _ => {}
+        }
+    }
+
+    /// Interaction events: the awaiting banner and the human's reply.
+    fn on_interaction(j: &mut JoinedSession, ev: GoalUiEvent) {
+        match ev {
             GoalUiEvent::Awaiting { prompt, options } => {
                 Self::flush_joined_buf(j);
                 j.status = "awaiting".into();
@@ -658,16 +668,45 @@ impl App {
                 }
                 j.messages.push(Message::User(text));
             }
-            GoalUiEvent::Finished { status, summary } => {
-                Self::flush_joined_buf(j);
-                j.awaiting = None;
-                j.active_role = None;
-                j.finished = true;
-                j.status = status.clone();
-                j.messages.push(Message::System(format!(
-                    "[session {status}] {summary}  —  /back to return to chat"
-                )));
-            }
+            _ => {}
+        }
+    }
+
+    /// The terminal event: mark the session finished and drop transient activity.
+    fn on_finished(j: &mut JoinedSession, ev: GoalUiEvent) {
+        if let GoalUiEvent::Finished { status, summary } = ev {
+            Self::flush_joined_buf(j);
+            j.awaiting = None;
+            j.active_role = None;
+            j.finished = true;
+            j.status = status.clone();
+            j.messages.push(Message::System(format!(
+                "[session {status}] {summary}  —  /back to return to chat"
+            )));
+        }
+    }
+
+    /// Apply one goal-session stream frame to the joined view. A no-op if not joined (stray events
+    /// after `/back`) or for a different session id.
+    fn apply_goal_event(&mut self, ev: GoalUiEvent) {
+        let Some(j) = self.joined.as_mut() else {
+            return;
+        };
+        match ev {
+            GoalUiEvent::Started { .. }
+            | GoalUiEvent::Token(_)
+            | GoalUiEvent::ToolStarted { .. }
+            | GoalUiEvent::ToolFinished { .. } => Self::on_tool_frame(j, ev),
+
+            GoalUiEvent::Role { .. }
+            | GoalUiEvent::Progress(_)
+            | GoalUiEvent::Validation { .. }
+            | GoalUiEvent::CriticVerdict { .. }
+            | GoalUiEvent::FileChanged { .. }
+            | GoalUiEvent::LoopGuard(_) => Self::on_status_line(j, ev),
+
+            GoalUiEvent::Awaiting { .. } | GoalUiEvent::Human(_) => Self::on_interaction(j, ev),
+            GoalUiEvent::Finished { .. } => Self::on_finished(j, ev),
         }
         self.scroll_offset = 0;
         self.mark_dirty();
@@ -867,159 +906,31 @@ impl App {
         let mut effects = Vec::new();
         for result in &results {
             match result {
-                liberado_commands::CommandResult::Quit => effects.push(Effect::Quit),
-                liberado_commands::CommandResult::NewConversation { was_streaming } => {
-                    effects.push(Effect::RefreshConversations);
-                    if *was_streaming {
-                        effects.push(Effect::CancelStream {
-                            conversation: session_before_dispatch.clone(),
-                        });
-                    }
+                liberado_commands::CommandResult::SessionSwitched { .. }
+                | liberado_commands::CommandResult::OpenSessionBrowser
+                | liberado_commands::CommandResult::SessionListed
+                | liberado_commands::CommandResult::OpenModelBrowser
+                | liberado_commands::CommandResult::OpenGoalSwitcher => {
+                    self.on_navigation_result(result, &mut effects);
                 }
-                liberado_commands::CommandResult::SessionSwitched { id } => {
-                    self.pending_load = Some(id.clone());
-                    self.focus = Focus::Input;
-                    effects.push(Effect::LoadConversationHistory(id.clone()));
+                liberado_commands::CommandResult::NewConversation { .. }
+                | liberado_commands::CommandResult::JoinGoalSession { .. }
+                | liberado_commands::CommandResult::BackToPrimary
+                | liberado_commands::CommandResult::SpawnGoalSession { .. }
+                | liberado_commands::CommandResult::ForkRequested { .. }
+                | liberado_commands::CommandResult::StartCodingGoal { .. } => {
+                    self.on_session_result(result, &mut effects, &session_before_dispatch);
                 }
-                liberado_commands::CommandResult::OpenSessionBrowser
-                | liberado_commands::CommandResult::SessionListed => {
-                    // Both `/session` and `/sessions` land on the one unified switcher.
-                    self.open_session_switcher();
-                    effects.push(Effect::RefreshConversations);
-                    effects.push(Effect::RefreshSessions);
+                liberado_commands::CommandResult::OpenGoalView
+                | liberado_commands::CommandResult::GoalStatus
+                | liberado_commands::CommandResult::ParkGoalSession
+                | liberado_commands::CommandResult::ResumeGoalSession { .. }
+                | liberado_commands::CommandResult::CancelGoalSession => {
+                    self.on_goal_result(result, &mut effects);
                 }
-                liberado_commands::CommandResult::OpenModelBrowser => {
-                    self.open_model_browser();
-                    effects.push(Effect::FetchModels);
-                }
-                liberado_commands::CommandResult::OpenGoalSwitcher => {
-                    self.open_session_switcher();
-                    effects.push(Effect::RefreshConversations);
-                    effects.push(Effect::RefreshSessions);
-                }
-                liberado_commands::CommandResult::JoinGoalSession { id } => {
-                    // Resolve an id prefix against the known goal sessions (full id wins).
-                    let resolved = self
-                        .sessions
-                        .iter()
-                        .find(|h| h.id == *id)
-                        .or_else(|| self.sessions.iter().find(|h| h.id.starts_with(id)))
-                        .map(|h| h.id.clone())
-                        .unwrap_or_else(|| id.clone());
-                    self.join_session(resolved.clone());
-                    effects.push(Effect::JoinGoalSession(resolved));
-                }
-                liberado_commands::CommandResult::BackToPrimary => {
-                    if self.joined.is_some() {
-                        self.leave_session();
-                        effects.push(Effect::LeaveGoalSession);
-                    } else {
-                        self.messages
-                            .push(Message::System("Already in the primary chat.".into()));
-                    }
-                }
-                liberado_commands::CommandResult::SpawnGoalSession { domain, goal } => {
-                    // Leaving a finished joined view (if any) so the new session takes the pane.
-                    if self.joined.as_ref().map(|j| j.finished).unwrap_or(false) {
-                        self.joined = None;
-                    }
-                    effects.push(Effect::SpawnGoalSession {
-                        domain: domain.clone(),
-                        goal: goal.clone(),
-                        // Link the new session back to the current conversation so its summary folds
-                        // in on terminal (S4 return handoff). `None` when there's no chat yet.
-                        origin_conversation: self.session.clone(),
-                    });
-                }
-                liberado_commands::CommandResult::ForkRequested {
-                    parent_id,
-                    after_turn,
-                } => {
-                    effects.push(Effect::ForkConversation {
-                        parent_id: parent_id.clone(),
-                        after_turn: *after_turn,
-                    });
-                }
-                liberado_commands::CommandResult::StartCodingGoal {
-                    project,
-                    text,
-                    mode,
-                } => {
-                    if self.joined.as_ref().map(|j| j.finished).unwrap_or(false) {
-                        self.joined = None;
-                    }
-                    effects.push(Effect::StartCodingGoal {
-                        project: project.clone(),
-                        text: text.clone(),
-                        mode: *mode,
-                        origin_conversation: self.session.clone(),
-                    });
-                }
-                liberado_commands::CommandResult::OpenGoalView => match &self.joined {
-                    Some(j) => {
-                        let id = j.id.clone();
-                        self.messages.push(Message::System(format!(
-                            "Goal view: {id} (you are already joined — the pane below is the view)"
-                        )));
-                    }
-                    None => self.messages.push(Message::System(
-                        "No session focused. Use /goal <text> to start one, or /sessions to join."
-                            .into(),
-                    )),
-                },
-                liberado_commands::CommandResult::GoalStatus => match &self.joined {
-                    Some(j) => {
-                        let line = format!(
-                            "{} · {} · {} message(s){}",
-                            j.id,
-                            j.status,
-                            j.messages.len(),
-                            match &j.awaiting {
-                                Some(a) => format!(" · awaiting: {}", a.prompt),
-                                None => String::new(),
-                            }
-                        );
-                        self.messages.push(Message::System(line));
-                    }
-                    None => self
-                        .messages
-                        .push(Message::System("No goal session focused.".into())),
-                },
-                liberado_commands::CommandResult::ParkGoalSession => {
-                    match self.joined.as_ref().map(|j| j.id.clone()) {
-                        Some(id) => effects.push(Effect::ParkGoalSession(id)),
-                        None => self
-                            .messages
-                            .push(Message::System("No goal session to park.".into())),
-                    }
-                }
-                liberado_commands::CommandResult::ResumeGoalSession { answer } => {
-                    match self.joined.as_ref().map(|j| j.id.clone()) {
-                        Some(id) => effects.push(Effect::ResumeGoalSession {
-                            id,
-                            answer: answer.clone(),
-                        }),
-                        None => self
-                            .messages
-                            .push(Message::System("No goal session to resume.".into())),
-                    }
-                }
-                liberado_commands::CommandResult::CancelGoalSession => {
-                    match self.joined.as_ref().map(|j| j.id.clone()) {
-                        Some(id) => effects.push(Effect::CancelGoalSession(id)),
-                        None => self
-                            .messages
-                            .push(Message::System("No goal session to cancel.".into())),
-                    }
-                }
-                liberado_commands::CommandResult::ShowOptions { title, options } => {
-                    let mut text = format!("{title}:\n");
-                    for (label, _id) in options {
-                        text.push_str("  ");
-                        text.push_str(label);
-                        text.push('\n');
-                    }
-                    self.messages.push(Message::System(text));
+                liberado_commands::CommandResult::Quit
+                | liberado_commands::CommandResult::ShowOptions { .. } => {
+                    self.on_output_result(result, &mut effects);
                 }
                 _ => {}
             }
@@ -1052,6 +963,211 @@ Keybindings:
             effects.push(Effect::None);
         }
         effects
+    }
+
+    /// Command results that open or move between the session/model switchers.
+    fn on_navigation_result(
+        &mut self,
+        result: &liberado_commands::CommandResult,
+        effects: &mut Vec<Effect>,
+    ) {
+        match result {
+            liberado_commands::CommandResult::SessionSwitched { id } => {
+                self.pending_load = Some(id.clone());
+                self.focus = Focus::Input;
+                effects.push(Effect::LoadConversationHistory(id.clone()));
+            }
+            liberado_commands::CommandResult::OpenSessionBrowser
+            | liberado_commands::CommandResult::SessionListed => {
+                // Both `/session` and `/sessions` land on the one unified switcher.
+                self.open_session_switcher();
+                effects.push(Effect::RefreshConversations);
+                effects.push(Effect::RefreshSessions);
+            }
+            liberado_commands::CommandResult::OpenModelBrowser => {
+                self.open_model_browser();
+                effects.push(Effect::FetchModels);
+            }
+            liberado_commands::CommandResult::OpenGoalSwitcher => {
+                self.open_session_switcher();
+                effects.push(Effect::RefreshConversations);
+                effects.push(Effect::RefreshSessions);
+            }
+            _ => {}
+        }
+    }
+
+    /// Command results that create, switch, or leave sessions.
+    fn on_session_result(
+        &mut self,
+        result: &liberado_commands::CommandResult,
+        effects: &mut Vec<Effect>,
+        session_before_dispatch: &Option<String>,
+    ) {
+        match result {
+            liberado_commands::CommandResult::NewConversation { was_streaming } => {
+                effects.push(Effect::RefreshConversations);
+                if *was_streaming {
+                    effects.push(Effect::CancelStream {
+                        conversation: session_before_dispatch.clone(),
+                    });
+                }
+            }
+            liberado_commands::CommandResult::JoinGoalSession { id } => {
+                // Resolve an id prefix against the known goal sessions (full id wins).
+                let resolved = self
+                    .sessions
+                    .iter()
+                    .find(|h| h.id == *id)
+                    .or_else(|| self.sessions.iter().find(|h| h.id.starts_with(id)))
+                    .map(|h| h.id.clone())
+                    .unwrap_or_else(|| id.clone());
+                self.join_session(resolved.clone());
+                effects.push(Effect::JoinGoalSession(resolved));
+            }
+            liberado_commands::CommandResult::BackToPrimary => {
+                if self.joined.is_some() {
+                    self.leave_session();
+                    effects.push(Effect::LeaveGoalSession);
+                } else {
+                    self.messages
+                        .push(Message::System("Already in the primary chat.".into()));
+                }
+            }
+            liberado_commands::CommandResult::SpawnGoalSession { domain, goal } => {
+                // Leaving a finished joined view (if any) so the new session takes the pane.
+                if self.joined.as_ref().map(|j| j.finished).unwrap_or(false) {
+                    self.joined = None;
+                }
+                effects.push(Effect::SpawnGoalSession {
+                    domain: domain.clone(),
+                    goal: goal.clone(),
+                    // Link the new session back to the current conversation so its summary folds
+                    // in on terminal (S4 return handoff). `None` when there's no chat yet.
+                    origin_conversation: self.session.clone(),
+                });
+            }
+            liberado_commands::CommandResult::ForkRequested {
+                parent_id,
+                after_turn,
+            } => {
+                effects.push(Effect::ForkConversation {
+                    parent_id: parent_id.clone(),
+                    after_turn: *after_turn,
+                });
+            }
+            liberado_commands::CommandResult::StartCodingGoal {
+                project,
+                text,
+                mode,
+            } => {
+                if self.joined.as_ref().map(|j| j.finished).unwrap_or(false) {
+                    self.joined = None;
+                }
+                effects.push(Effect::StartCodingGoal {
+                    project: project.clone(),
+                    text: text.clone(),
+                    mode: *mode,
+                    origin_conversation: self.session.clone(),
+                });
+            }
+            _ => {}
+        }
+    }
+
+    /// Command results that act on the focused goal session (or explain why there isn't one).
+    fn on_goal_result(
+        &mut self,
+        result: &liberado_commands::CommandResult,
+        effects: &mut Vec<Effect>,
+    ) {
+        match result {
+            liberado_commands::CommandResult::OpenGoalView => match &self.joined {
+                Some(j) => {
+                    let id = j.id.clone();
+                    self.messages.push(Message::System(format!(
+                        "Goal view: {id} (you are already joined — the pane below is the view)"
+                    )));
+                }
+                None => self.messages.push(Message::System(
+                    "No session focused. Use /goal <text> to start one, or /sessions to join."
+                        .into(),
+                )),
+            },
+            liberado_commands::CommandResult::GoalStatus => match &self.joined {
+                Some(j) => {
+                    let line = format!(
+                        "{} · {} · {} message(s){}",
+                        j.id,
+                        j.status,
+                        j.messages.len(),
+                        match &j.awaiting {
+                            Some(a) => format!(" · awaiting: {}", a.prompt),
+                            None => String::new(),
+                        }
+                    );
+                    self.messages.push(Message::System(line));
+                }
+                None => self
+                    .messages
+                    .push(Message::System("No goal session focused.".into())),
+            },
+            liberado_commands::CommandResult::ParkGoalSession => self.push_joined_effect(
+                effects,
+                Effect::ParkGoalSession,
+                "No goal session to park.",
+            ),
+            liberado_commands::CommandResult::ResumeGoalSession { answer } => {
+                self.push_joined_effect(
+                    effects,
+                    |id| Effect::ResumeGoalSession {
+                        id,
+                        answer: answer.clone(),
+                    },
+                    "No goal session to resume.",
+                );
+            }
+            liberado_commands::CommandResult::CancelGoalSession => self.push_joined_effect(
+                effects,
+                Effect::CancelGoalSession,
+                "No goal session to cancel.",
+            ),
+            _ => {}
+        }
+    }
+
+    /// Push an effect targeting the joined goal session, or explain that there is none.
+    fn push_joined_effect(
+        &mut self,
+        effects: &mut Vec<Effect>,
+        effect: impl FnOnce(String) -> Effect,
+        none_message: &str,
+    ) {
+        match self.joined.as_ref().map(|j| j.id.clone()) {
+            Some(id) => effects.push(effect(id)),
+            None => self.messages.push(Message::System(none_message.into())),
+        }
+    }
+
+    /// Simple output results: quit and the inline options list.
+    fn on_output_result(
+        &mut self,
+        result: &liberado_commands::CommandResult,
+        effects: &mut Vec<Effect>,
+    ) {
+        match result {
+            liberado_commands::CommandResult::Quit => effects.push(Effect::Quit),
+            liberado_commands::CommandResult::ShowOptions { title, options } => {
+                let mut text = format!("{title}:\n");
+                for (label, _id) in options {
+                    text.push_str("  ");
+                    text.push_str(label);
+                    text.push('\n');
+                }
+                self.messages.push(Message::System(text));
+            }
+            _ => {}
+        }
     }
 
     pub(crate) fn scroll_to_chat_cursor(&mut self) {
@@ -1283,7 +1399,44 @@ pub enum Effect {
 }
 
 impl App {
+    /// Route an API/SSE event to the state transition that owns it. Split into category handlers
+    /// so no single function carries all 24 arms (each is a small exhaustive match on its slice
+    /// of `Action`; the dispatcher guarantees a handler only ever sees its own actions).
     pub fn update(&mut self, action: Action) -> Vec<Effect> {
+        match action {
+            Action::StatusUpdate(_)
+            | Action::ReactionsUpdate(_)
+            | Action::ConversationsUpdate(_)
+            | Action::ModelsLoaded { .. }
+            | Action::ModelSelected { .. }
+            | Action::HistoryLoaded { .. }
+            | Action::ReloadConversationHistory(_)
+            | Action::SessionsUpdate(_) => self.update_catalog(action),
+
+            Action::SseSession(_)
+            | Action::SseToken(_)
+            | Action::SseTool { .. }
+            | Action::SseToolResult { .. }
+            | Action::SseDone
+            | Action::SseFailed(_)
+            | Action::Forked(_) => self.update_stream(action),
+
+            Action::GoalStreamEvent(_)
+            | Action::GoalOffered { .. }
+            | Action::GoalSpawned { .. }
+            | Action::GoalSpawnFailed(_)
+            | Action::GoalStreamClosed(_)
+            | Action::GoalMessageOutcome(_) => self.update_goals(action),
+
+            Action::SystemMessage(_) | Action::ConnectionStatus(_) | Action::Tick => {
+                self.update_misc(action)
+            }
+        }
+    }
+
+    /// Catalog/newsfeed transitions: daemon status, reactions, the session/conversation
+    /// switchers, the model catalog, and history loads.
+    fn update_catalog(&mut self, action: Action) -> Vec<Effect> {
         match action {
             Action::StatusUpdate(status) => {
                 if self.status.as_ref() != Some(&status) {
@@ -1321,31 +1474,33 @@ impl App {
                 model,
                 error,
                 conversation_scoped,
-            } => {
-                if let Some(err) = error {
-                    self.messages
-                        .push(Message::System(format!("Failed to switch model: {err}")));
-                } else {
-                    if conversation_scoped {
-                        self.messages.push(Message::System(format!(
-                            "Model `{model}` set for this conversation — its next turn uses it \
-                             (other chats unchanged)."
-                        )));
-                    } else {
-                        if let Some(st) = self.status.as_mut() {
-                            st.model_name = Some(model.clone());
-                        }
-                        self.messages.push(Message::System(format!(
-                            "Active model switched to `{model}` — next chat turns use it \
-                             (no daemon restart)."
-                        )));
-                    }
-                    self.close_model_browser();
-                }
-                self.scroll_offset = 0;
+            } => self.on_model_selected(model, error, conversation_scoped),
+            Action::HistoryLoaded {
+                id,
+                messages,
+                turn_running,
+                turn_unanswered,
+            } => self.on_history_loaded(id, messages, turn_running, turn_unanswered),
+            Action::ReloadConversationHistory(id) => {
+                // Same handshake every other open path uses: `HistoryLoaded` discards a response
+                // whose id is not the pending one, so claim it before asking.
+                self.pending_load = Some(id.clone());
+                self.mark_dirty();
+                vec![Effect::LoadConversationHistory(id)]
+            }
+            Action::SessionsUpdate(sessions) => {
+                self.sessions = sessions;
+                self.clamp_switcher_selection();
                 self.mark_dirty();
                 vec![Effect::None]
             }
+            _ => unreachable!("catalog handler got a non-catalog action"),
+        }
+    }
+
+    /// Streaming transitions: the SSE token/tool/done/failed pipeline and forks.
+    fn update_stream(&mut self, action: Action) -> Vec<Effect> {
+        match action {
             Action::Forked(fork) => {
                 // Land in the branch. The original is untouched and still in the switcher — say so,
                 // because "fork" sounds like it might have moved or rewritten the conversation, and
@@ -1367,89 +1522,6 @@ impl App {
                     Effect::LoadConversationHistory(fork.id.clone()),
                     Effect::RefreshSessions,
                 ]
-            }
-            Action::HistoryLoaded {
-                id,
-                messages,
-                turn_running,
-                turn_unanswered,
-            } => {
-                if self.pending_load.as_deref() != Some(&id) {
-                    return vec![Effect::None]; // stale — newer request superseded this one
-                }
-                self.session = Some(id.clone());
-                self.pending_load = None;
-                self.messages.clear();
-                self.chat_cursor = 0;
-                self.turn_offset = 0;
-                self.expanded_messages.clear();
-                for msg in messages {
-                    match msg.role.as_str() {
-                        "user" => self.messages.push(Message::User(msg.content)),
-                        "assistant" => {
-                            if let Some(tool_calls) = &msg.tool_calls {
-                                self.push_tool_history(tool_calls);
-                            }
-                            if !msg.content.is_empty() {
-                                self.messages.push(Message::Assistant(msg.content));
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-                // Enforce the message cap on history load — this is the primary source of
-                // unbounded growth (loading a conversation with thousands of messages).
-                // Normal conversation turns typically stay well under MAX_MESSAGE_COUNT,
-                // so we only prune here rather than on every user message push.
-                if self.messages.len() > MAX_MESSAGE_COUNT {
-                    let removed = self.messages.len() - MAX_MESSAGE_COUNT;
-                    // Count the human's turns being dropped *before* dropping them, so the turn
-                    // numbers rendered beside what survives still agree with the server's — which
-                    // counts from the real first turn. Otherwise `/fork 3` would branch somewhere
-                    // other than the "3" you can see on screen.
-                    self.turn_offset = self.messages[..removed]
-                        .iter()
-                        .filter(|m| matches!(m, Message::User(_)))
-                        .count();
-                    self.messages = self.messages.split_off(removed);
-                    self.messages.insert(
-                        0,
-                        Message::System(format!("... {removed} earlier messages omitted")),
-                    );
-                }
-                // Turn lifecycle: a missing reply is either still coming or permanently lost.
-                // Silence is the wrong reading of either — attach, or say the turn died.
-                let mut follow_up = Vec::new();
-                if turn_running {
-                    self.streaming = true;
-                    self.messages.push(Message::System(
-                        "A turn is still running — reattaching…".into(),
-                    ));
-                    follow_up.push(Effect::AttachConversationStream(id));
-                } else if turn_unanswered {
-                    self.streaming = false;
-                    self.messages.push(Message::System(
-                        "The last turn ended without a reply (usually the daemon restarted \
-                         mid-inference). Nothing is still running — re-send your question to \
-                         try again."
-                            .into(),
-                    ));
-                }
-                self.scroll_offset = 0;
-                self.focus = Focus::Input;
-                self.mark_dirty();
-                if follow_up.is_empty() {
-                    vec![Effect::None]
-                } else {
-                    follow_up
-                }
-            }
-            Action::ReloadConversationHistory(id) => {
-                // Same handshake every other open path uses: `HistoryLoaded` discards a response
-                // whose id is not the pending one, so claim it before asking.
-                self.pending_load = Some(id.clone());
-                self.mark_dirty();
-                vec![Effect::LoadConversationHistory(id)]
             }
             Action::SseSession(id) => {
                 if self.session.is_none() {
@@ -1494,12 +1566,13 @@ impl App {
                 self.mark_dirty();
                 vec![Effect::RefreshConversations]
             }
-            Action::SessionsUpdate(sessions) => {
-                self.sessions = sessions;
-                self.clamp_switcher_selection();
-                self.mark_dirty();
-                vec![Effect::None]
-            }
+            _ => unreachable!("stream handler got a non-stream action"),
+        }
+    }
+
+    /// Goal-session transitions: stream events, offers, spawns, and message outcomes.
+    fn update_goals(&mut self, action: Action) -> Vec<Effect> {
+        match action {
             Action::GoalStreamEvent(ev) => {
                 self.apply_goal_event(ev);
                 vec![Effect::None]
@@ -1536,12 +1609,6 @@ impl App {
                 self.join_session_with(session_id.clone(), Some(kind), Some(description));
                 vec![Effect::JoinGoalSession(session_id)]
             }
-            Action::SystemMessage(text) => {
-                self.messages.push(Message::System(text));
-                self.scroll_offset = 0;
-                self.mark_dirty();
-                vec![Effect::None]
-            }
             Action::GoalSpawnFailed(err) => {
                 self.messages
                     .push(Message::System(format!("[spawn failed] {err}")));
@@ -1564,42 +1631,18 @@ impl App {
                 }
                 vec![Effect::None]
             }
-            Action::GoalMessageOutcome(outcome) => {
-                use crate::api::GoalMessageOutcome as O;
-                match outcome {
-                    O::Accepted => {} // the echo arrives via the stream as a `human_input` event
-                    O::NotFound | O::NotPermitted | O::Parked | O::Finished | O::Error(_) => {
-                        let msg = match outcome {
-                            O::NotFound => {
-                                "[this session is gone — /back to return to chat]".into()
-                            }
-                            O::NotPermitted => {
-                                // Authority, not timing. Waiting will not help; the grant is the fix.
-                                "[this session was never allowed to be answered — its profile \
-                                 grants no AskHuman]"
-                                    .into()
-                            }
-                            O::Parked => {
-                                // It has NOT finished, and saying it had is the difference between
-                                // "start over" and "wait".
-                                "[this session is parked — it was waiting on you when the daemon \
-                                 restarted, and cannot take an answer until it is resumed]"
-                                    .into()
-                            }
-                            O::Finished => {
-                                "[this session has finished — /back to return to chat]".into()
-                            }
-                            O::Error(e) => format!("[could not deliver message: {e}]"),
-                            O::Accepted => unreachable!(),
-                        };
-                        if let Some(j) = self.joined.as_mut() {
-                            j.messages.push(Message::System(msg));
-                        } else {
-                            self.messages.push(Message::System(msg));
-                        }
-                        self.mark_dirty();
-                    }
-                }
+            Action::GoalMessageOutcome(outcome) => self.on_goal_message_outcome(outcome),
+            _ => unreachable!("goal handler got a non-goal action"),
+        }
+    }
+
+    /// Misc transitions: system lines from background effects, connectivity, and the heartbeat.
+    fn update_misc(&mut self, action: Action) -> Vec<Effect> {
+        match action {
+            Action::SystemMessage(text) => {
+                self.messages.push(Message::System(text));
+                self.scroll_offset = 0;
+                self.mark_dirty();
                 vec![Effect::None]
             }
             Action::ConnectionStatus(connected) => {
@@ -1618,9 +1661,153 @@ impl App {
                     vec![Effect::None]
                 }
             }
-            // Heartbeat only; animation frames are driven by `needs_animation` in the draw loop.
             Action::Tick => vec![Effect::None],
+            _ => unreachable!("misc handler got a non-misc action"),
         }
+    }
+
+    fn on_model_selected(
+        &mut self,
+        model: String,
+        error: Option<String>,
+        conversation_scoped: bool,
+    ) -> Vec<Effect> {
+        if let Some(err) = error {
+            self.messages
+                .push(Message::System(format!("Failed to switch model: {err}")));
+        } else {
+            if conversation_scoped {
+                self.messages.push(Message::System(format!(
+                    "Model `{model}` set for this conversation — its next turn uses it \
+                 (other chats unchanged)."
+                )));
+            } else {
+                if let Some(st) = self.status.as_mut() {
+                    st.model_name = Some(model.clone());
+                }
+                self.messages.push(Message::System(format!(
+                    "Active model switched to `{model}` — next chat turns use it \
+                 (no daemon restart)."
+                )));
+            }
+            self.close_model_browser();
+        }
+        self.scroll_offset = 0;
+        self.mark_dirty();
+        vec![Effect::None]
+    }
+
+    fn on_history_loaded(
+        &mut self,
+        id: String,
+        messages: Vec<ChatMessage>,
+        turn_running: bool,
+        turn_unanswered: bool,
+    ) -> Vec<Effect> {
+        if self.pending_load.as_deref() != Some(&id) {
+            return vec![Effect::None]; // stale — newer request superseded this one
+        }
+        self.session = Some(id.clone());
+        self.pending_load = None;
+        self.messages.clear();
+        self.chat_cursor = 0;
+        self.turn_offset = 0;
+        self.expanded_messages.clear();
+        for msg in messages {
+            match msg.role.as_str() {
+                "user" => self.messages.push(Message::User(msg.content)),
+                "assistant" => {
+                    if let Some(tool_calls) = &msg.tool_calls {
+                        self.push_tool_history(tool_calls);
+                    }
+                    if !msg.content.is_empty() {
+                        self.messages.push(Message::Assistant(msg.content));
+                    }
+                }
+                _ => {}
+            }
+        }
+        // Enforce the message cap on history load — this is the primary source of
+        // unbounded growth (loading a conversation with thousands of messages).
+        // Normal conversation turns typically stay well under MAX_MESSAGE_COUNT,
+        // so we only prune here rather than on every user message push.
+        if self.messages.len() > MAX_MESSAGE_COUNT {
+            let removed = self.messages.len() - MAX_MESSAGE_COUNT;
+            // Count the human's turns being dropped *before* dropping them, so the turn
+            // numbers rendered beside what survives still agree with the server's — which
+            // counts from the real first turn. Otherwise `/fork 3` would branch somewhere
+            // other than the "3" you can see on screen.
+            self.turn_offset = self.messages[..removed]
+                .iter()
+                .filter(|m| matches!(m, Message::User(_)))
+                .count();
+            self.messages = self.messages.split_off(removed);
+            self.messages.insert(
+                0,
+                Message::System(format!("... {removed} earlier messages omitted")),
+            );
+        }
+        // Turn lifecycle: a missing reply is either still coming or permanently lost.
+        // Silence is the wrong reading of either — attach, or say the turn died.
+        let mut follow_up = Vec::new();
+        if turn_running {
+            self.streaming = true;
+            self.messages.push(Message::System(
+                "A turn is still running — reattaching…".into(),
+            ));
+            follow_up.push(Effect::AttachConversationStream(id));
+        } else if turn_unanswered {
+            self.streaming = false;
+            self.messages.push(Message::System(
+                "The last turn ended without a reply (usually the daemon restarted \
+             mid-inference). Nothing is still running — re-send your question to \
+             try again."
+                    .into(),
+            ));
+        }
+        self.scroll_offset = 0;
+        self.focus = Focus::Input;
+        self.mark_dirty();
+        if follow_up.is_empty() {
+            vec![Effect::None]
+        } else {
+            follow_up
+        }
+    }
+
+    fn on_goal_message_outcome(&mut self, outcome: GoalMessageOutcome) -> Vec<Effect> {
+        use crate::api::GoalMessageOutcome as O;
+        match outcome {
+            O::Accepted => {} // the echo arrives via the stream as a `human_input` event
+            O::NotFound | O::NotPermitted | O::Parked | O::Finished | O::Error(_) => {
+                let msg = match outcome {
+                    O::NotFound => "[this session is gone — /back to return to chat]".into(),
+                    O::NotPermitted => {
+                        // Authority, not timing. Waiting will not help; the grant is the fix.
+                        "[this session was never allowed to be answered — its profile \
+                     grants no AskHuman]"
+                            .into()
+                    }
+                    O::Parked => {
+                        // It has NOT finished, and saying it had is the difference between
+                        // "start over" and "wait".
+                        "[this session is parked — it was waiting on you when the daemon \
+                     restarted, and cannot take an answer until it is resumed]"
+                            .into()
+                    }
+                    O::Finished => "[this session has finished — /back to return to chat]".into(),
+                    O::Error(e) => format!("[could not deliver message: {e}]"),
+                    O::Accepted => unreachable!(),
+                };
+                if let Some(j) = self.joined.as_mut() {
+                    j.messages.push(Message::System(msg));
+                } else {
+                    self.messages.push(Message::System(msg));
+                }
+                self.mark_dirty();
+            }
+        }
+        vec![Effect::None]
     }
 
     fn push_tool_history(&mut self, tool_calls: &serde_json::Value) {

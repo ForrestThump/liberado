@@ -149,3 +149,160 @@ impl CommandContext for App {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::api::ConvHeader;
+    use crate::render::test_support;
+
+    fn conv(id: &str, title: Option<&str>, parent: Option<&str>) -> ConvHeader {
+        ConvHeader {
+            id: id.into(),
+            title: title.map(str::to_string),
+            created_at: "2025-06-25T12:00:00Z".into(),
+            parent_conversation: parent.map(str::to_string),
+            spawned_by: None,
+        }
+    }
+
+    fn context_app() -> App {
+        let mut app = test_support::app();
+        app.conversations = vec![
+            conv("c1", Some("weekly planning"), None),
+            conv("c2", Some(""), Some("c1")),
+            conv("c3", None, None),
+        ];
+        app
+    }
+
+    #[test]
+    fn session_and_stream_probes_read_app_state() {
+        let mut app = context_app();
+        assert_eq!(app.active_session_id(), None);
+        assert!(!app.is_streaming());
+        app.session = Some("s1".into());
+        app.streaming = true;
+        assert_eq!(app.active_session_id(), Some("s1"));
+        assert!(app.is_streaming());
+        assert_eq!(app.conversation_count(), 3);
+        assert_eq!(app.message_count(), 0);
+        app.messages.push(Message::User("hi".into()));
+        assert_eq!(app.message_count(), 1);
+    }
+
+    #[test]
+    fn prefix_lookup_finds_or_misses() {
+        let app = context_app();
+        assert_eq!(app.find_conversation_id_by_prefix("c1"), Some("c1".into()));
+        assert_eq!(app.find_conversation_id_by_prefix("zz"), None);
+    }
+
+    #[test]
+    fn status_info_requires_a_live_status() {
+        let app = context_app();
+        assert!(app.status_info().is_none());
+        let mut app = context_app();
+        app.status = Some(crate::api::DaemonStatus {
+            running: true,
+            vault_path: "/v".into(),
+            uptime_seconds: 9,
+            watcher_active: false,
+            dispatcher_attached: false,
+            orchestrator_attached: false,
+            reactions_seen: 0,
+            model_name: Some("m".into()),
+            token_usage_total: Some(10),
+            context_window: Some(100),
+            chat_tools: 0,
+            chat_tool_names: Vec::new(),
+            enter_sends: true,
+        });
+        let info = app.status_info().unwrap();
+        assert!(info.running);
+        assert_eq!(info.vault_path, "/v");
+        assert_eq!(info.model_name.as_deref(), Some("m"));
+        assert_eq!(info.uptime_seconds, 9);
+    }
+
+    #[test]
+    fn theme_names_and_current_theme_read_the_registry() {
+        let app = context_app();
+        let names = app.theme_names();
+        assert!(!names.is_empty(), "registry ships built-ins");
+        assert!(
+            app.current_theme_name().is_empty()
+                || names.contains(&app.current_theme_name().to_string()),
+            "current theme must be one of the registry names: {names:?}"
+        );
+    }
+
+    #[test]
+    fn conversation_queries_by_exact_id() {
+        let app = context_app();
+        // c1 has a title; c2's empty title must fall back to None.
+        assert_eq!(
+            app.conversation_title_for("c1"),
+            Some("weekly planning".into())
+        );
+        assert_eq!(app.conversation_title_for("c2"), None);
+        assert_eq!(app.conversation_title_for("missing"), None);
+        // Parent lookup must be by exact id — a `==`→`!=` mutation would answer c1 here.
+        assert_eq!(app.conversation_parent_for("missing"), None);
+        assert_eq!(app.conversation_parent_for("c2"), Some("c1".into()));
+        assert_eq!(app.conversation_parent_for("c3"), None);
+    }
+
+    #[test]
+    fn conversation_list_flattens_titles_and_ids() {
+        let app = context_app();
+        let list = app.conversation_list();
+        assert_eq!(list.len(), 3);
+        assert!(list.contains(&("weekly planning".to_string(), "c1".to_string())));
+        assert!(
+            list.contains(&(String::new(), "c2".to_string())),
+            "empty titles pass through as-is: {list:?}"
+        );
+        assert!(
+            list.contains(&("(untitled)".to_string(), "c3".to_string())),
+            "missing titles fall back to (untitled): {list:?}"
+        );
+    }
+
+    #[test]
+    fn lifecycle_mutators_change_state() {
+        let mut app = context_app();
+        app.set_active_session(Some("x".into()));
+        assert_eq!(app.session.as_deref(), Some("x"));
+        app.push_system_message("note".into());
+        assert_eq!(app.messages.len(), 1);
+        app.clear_input();
+        assert!(app.input.is_empty());
+        app.streaming = true;
+        app.assistant_buf = "partial".into();
+        app.stop_streaming();
+        assert!(!app.streaming);
+        assert!(app.assistant_buf.is_empty(), "partial buffer dropped");
+        app.messages.push(Message::User("hi".into()));
+        app.clear_chat();
+        assert!(app.messages.is_empty(), "clear_chat empties the transcript");
+        app.session = Some("s".into());
+        app.streaming = true;
+        app.messages.push(Message::User("hi".into()));
+        app.reset_for_new_conversation();
+        assert!(app.session.is_none());
+        assert!(!app.streaming);
+        assert!(app.messages.is_empty());
+    }
+
+    #[test]
+    fn set_theme_accepts_registry_names_and_rejects_unknowns() {
+        let mut app = context_app();
+        let names = app.theme_names();
+        let first = names.first().cloned().unwrap_or_else(|| "dark".into());
+        let changed = app.set_theme(&first);
+        assert!(changed, "a registry theme must apply");
+        assert_eq!(app.current_theme_name(), first);
+        assert!(!app.set_theme("no-such-theme"), "unknown theme rejected");
+    }
+}

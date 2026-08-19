@@ -369,34 +369,9 @@ impl GoalSessionHub {
 
         let mut finished = 0usize;
         for rec in parked {
-            // A live host owns the session; do not steal it (defensive — cold start has none).
-            {
-                let map = self.cancels.lock().await;
-                if map.contains_key(&rec.id) {
-                    continue;
-                }
+            if self.reconcile_one_parked(&rec).await {
+                finished += 1;
             }
-
-            if self.parked_is_resumable(&rec).await {
-                debug!(
-                    session_id = %rec.id,
-                    "startup reconcile: parked session kept (resumable by a human)"
-                );
-                continue;
-            }
-
-            self.finish_parked_as_cancelled(
-                &rec.id,
-                "cancelled at startup: parked with no resume path (orphaned after restart)",
-                "reconcile_parked_startup",
-            )
-            .await;
-            info!(
-                session_id = %rec.id,
-                domain = %rec.goal.domain.as_str(),
-                "startup reconcile: cancelled orphaned parked session"
-            );
-            finished += 1;
         }
         if finished > 0 {
             info!(
@@ -405,6 +380,40 @@ impl GoalSessionHub {
             );
         }
         finished
+    }
+
+    /// Reconcile one parked session at startup. `true` means the session was finished (cancelled)
+    /// because it has no resume path; `false` means it was kept (owned by a live host, resumable
+    /// by a human, or already handled).
+    async fn reconcile_one_parked(&self, rec: &GoalSessionRecord) -> bool {
+        // A live host owns the session; do not steal it (defensive — cold start has none).
+        {
+            let map = self.cancels.lock().await;
+            if map.contains_key(&rec.id) {
+                return false;
+            }
+        }
+
+        if self.parked_is_resumable(rec).await {
+            debug!(
+                session_id = %rec.id,
+                "startup reconcile: parked session kept (resumable by a human)"
+            );
+            return false;
+        }
+
+        self.finish_parked_as_cancelled(
+            &rec.id,
+            "cancelled at startup: parked with no resume path (orphaned after restart)",
+            "reconcile_parked_startup",
+        )
+        .await;
+        info!(
+            session_id = %rec.id,
+            domain = %rec.goal.domain.as_str(),
+            "startup reconcile: cancelled orphaned parked session"
+        );
+        true
     }
 
     /// Whether a human can still productively continue this parked session via `resume`.

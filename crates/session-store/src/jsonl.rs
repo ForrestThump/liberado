@@ -133,28 +133,15 @@ impl SessionStore {
     pub async fn open(dir: impl Into<PathBuf>) -> Self {
         let dir = dir.into();
         if let Err(e) = std::fs::create_dir_all(&dir) {
-            warn!(error = %e, path = %dir.display(), "session store: could not create dir; running in-memory");
+            warn!(
+                error = %e,
+                path = %dir.display(),
+                "session store: could not create dir; running in-memory"
+            );
             return Self::new();
         }
 
-        let mut map: HashMap<Ulid, Live> = HashMap::new();
-        if let Ok(entries) = std::fs::read_dir(&dir) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
-                    continue;
-                }
-                match replay_file(&path) {
-                    Ok(Some(live)) => {
-                        map.insert(live.header.id, live);
-                    }
-                    Ok(None) => {}
-                    Err(e) => {
-                        warn!(error = %e, path = %path.display(), "session store: replay failed")
-                    }
-                }
-            }
-        }
+        let map = Self::rehydrate(&dir);
         tracing::info!(sessions = map.len(), dir = %dir.display(), "session store rehydrated");
 
         Self {
@@ -164,6 +151,31 @@ impl SessionStore {
             write_locks: Arc::new(std::sync::Mutex::new(HashMap::new())),
             ephemeral: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
         }
+    }
+
+    /// Replay every `*.jsonl` file in `dir` into the live session map. Unreadable or malformed
+    /// files are logged and skipped; the store keeps whatever replayed cleanly.
+    fn rehydrate(dir: &Path) -> HashMap<Ulid, Live> {
+        let mut map: HashMap<Ulid, Live> = HashMap::new();
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return map;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
+                continue;
+            }
+            match replay_file(&path) {
+                Ok(Some(live)) => {
+                    map.insert(live.header.id, live);
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    warn!(error = %e, path = %path.display(), "session store: replay failed")
+                }
+            }
+        }
+        map
     }
 
     /// Where this session's log lives, or `None` if it has none.

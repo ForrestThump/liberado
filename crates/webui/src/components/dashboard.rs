@@ -122,3 +122,25 @@ fn format_uptime(secs: u64) -> String {
     let sec = secs % 60;
     format!("{h}h {m}m {sec}s")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{bool_label, format_uptime};
+
+    #[test]
+    fn bool_label_reads_as_enabled_or_disabled() {
+        assert_eq!(bool_label(true), "✓ Enabled");
+        assert_eq!(bool_label(false), "✗ Disabled");
+    }
+
+    /// Uptime is rendered as `Hh Mm Ss` regardless of magnitude — the daemon reports seconds, and
+    /// the banner should not need human division.
+    #[test]
+    fn uptime_is_hours_minutes_seconds() {
+        assert_eq!(format_uptime(0), "0h 0m 0s");
+        assert_eq!(format_uptime(59), "0h 0m 59s");
+        assert_eq!(format_uptime(60), "0h 1m 0s");
+        assert_eq!(format_uptime(3661), "1h 1m 1s");
+        assert_eq!(format_uptime(90_000), "25h 0m 0s");
+    }
+}

@@ -179,6 +179,84 @@ pub fn markdown_to_lines(text: &str) -> Vec<MarkdownLine> {
     result
 }
 
+/// Try to parse a bold span (`**…**`) starting at `i`. `Some((next, span))` when found.
+fn parse_bold(text: &str, i: usize) -> Option<(usize, StyledSpan)> {
+    let bytes = text.as_bytes();
+    if bytes[i] == b'*'
+        && i + 1 < bytes.len()
+        && bytes[i + 1] == b'*'
+        && let Some(end_idx) = find_inline_end(text, i + 2, "**")
+    {
+        let inner = &text[i + 2..end_idx];
+        return Some((
+            end_idx + 2,
+            StyledSpan {
+                text: inner.to_string(),
+                style: SpanStyle::BOLD,
+            },
+        ));
+    }
+    None
+}
+
+/// Try to parse an italic span (`*…*`) starting at `i`. Only the first star of `**` is eligible.
+fn parse_italic(text: &str, i: usize) -> Option<(usize, StyledSpan)> {
+    let bytes = text.as_bytes();
+    if bytes[i] == b'*'
+        && (i == 0 || bytes[i - 1] != b'*')
+        && let Some(end_idx) = find_inline_end(text, i + 1, "*")
+    {
+        let inner = &text[i + 1..end_idx];
+        return Some((
+            end_idx + 1,
+            StyledSpan {
+                text: inner.to_string(),
+                style: SpanStyle::ITALIC,
+            },
+        ));
+    }
+    None
+}
+
+/// Try to parse a link span (`[text](url)`) starting at `i`. The URL is validated only as far as
+/// the balanced paren; it is not dereferenced here.
+fn parse_link(text: &str, i: usize) -> Option<(usize, StyledSpan)> {
+    let bytes = text.as_bytes();
+    if bytes[i] == b'['
+        && let Some(bracket_end) = find_matching_bracket(text, i)
+        && bracket_end + 1 < bytes.len()
+        && bytes[bracket_end + 1] == b'('
+        && let Some(paren_end) = find_matching_paren(text, bracket_end + 1)
+    {
+        let link_text = &text[i + 1..bracket_end];
+        return Some((
+            paren_end + 1,
+            StyledSpan {
+                text: link_text.to_string(),
+                style: SpanStyle::LINK,
+            },
+        ));
+    }
+    None
+}
+
+/// Try to parse a code span (`` `…` ``) starting at `i`.
+fn parse_code(text: &str, i: usize) -> Option<(usize, StyledSpan)> {
+    if text.as_bytes()[i] == b'`'
+        && let Some(end_idx) = find_inline_end(text, i + 1, "`")
+    {
+        let inner = &text[i + 1..end_idx];
+        return Some((
+            end_idx + 1,
+            StyledSpan {
+                text: inner.to_string(),
+                style: SpanStyle::CODE,
+            },
+        ));
+    }
+    None
+}
+
 fn parse_inline(text: &str) -> Vec<StyledSpan> {
     let mut spans = Vec::new();
     let bytes = text.as_bytes();
@@ -186,59 +264,15 @@ fn parse_inline(text: &str) -> Vec<StyledSpan> {
     let mut i = 0;
 
     while i < len {
-        if bytes[i] == b'*' && i + 1 < len && bytes[i + 1] == b'*' {
-            let end = find_inline_end(text, i + 2, "**");
-            if let Some(end_idx) = end {
-                let inner = &text[i + 2..end_idx];
-                spans.push(StyledSpan {
-                    text: inner.to_string(),
-                    style: SpanStyle::BOLD,
-                });
-                i = end_idx + 2;
-                continue;
-            }
-        }
-
-        if bytes[i] == b'*' && (i == 0 || bytes[i - 1] != b'*') {
-            let end = find_inline_end(text, i + 1, "*");
-            if let Some(end_idx) = end {
-                let inner = &text[i + 1..end_idx];
-                spans.push(StyledSpan {
-                    text: inner.to_string(),
-                    style: SpanStyle::ITALIC,
-                });
-                i = end_idx + 1;
-                continue;
-            }
-        }
-
-        if bytes[i] == b'['
-            && let Some(bracket_end) = find_matching_bracket(text, i)
-            && bracket_end + 1 < len
-            && bytes[bracket_end + 1] == b'('
-            && let Some(paren_end) = find_matching_paren(text, bracket_end + 1)
-        {
-            let link_text = &text[i + 1..bracket_end];
-            let _url = &text[bracket_end + 2..paren_end];
-            spans.push(StyledSpan {
-                text: link_text.to_string(),
-                style: SpanStyle::LINK,
-            });
-            i = paren_end + 1;
+        if let Some((next, span)) = parse_bold(text, i).or_else(|| parse_italic(text, i)) {
+            spans.push(span);
+            i = next;
             continue;
         }
-
-        if bytes[i] == b'`' {
-            let end = find_inline_end(text, i + 1, "`");
-            if let Some(end_idx) = end {
-                let inner = &text[i + 1..end_idx];
-                spans.push(StyledSpan {
-                    text: inner.to_string(),
-                    style: SpanStyle::CODE,
-                });
-                i = end_idx + 1;
-                continue;
-            }
+        if let Some((next, span)) = parse_link(text, i).or_else(|| parse_code(text, i)) {
+            spans.push(span);
+            i = next;
+            continue;
         }
 
         let start = i;
