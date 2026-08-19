@@ -16,7 +16,7 @@ use liberado_coder_core::{
 use liberado_common::Outcome;
 use liberado_provider::Provider;
 
-use crate::coder_scenarios::{CoderScenario, CoderTier, coder_scenarios_for};
+use crate::coder_scenarios::{CoderExpect, CoderScenario, CoderTier, coder_scenarios_for};
 use crate::search::Budget;
 
 /// One (model, sample) trial for a coding scenario.
@@ -242,6 +242,102 @@ pub async fn score_coder_candidate(
     aggregate(ordered)
 }
 
+/// The trial recorded when the scratch repo cannot even be initialised.
+fn init_failure_trial(model: String) -> CoderTrial {
+    CoderTrial {
+        model,
+        outcome: CoderTrialOutcome {
+            passed: false,
+            unsafe_touch: false,
+            outcome_matched: false,
+            nonempty_diff: false,
+        },
+    }
+}
+
+/// Greenfield scenarios get two attempts; everything else gets one.
+fn attempts_for(scenario: &CoderScenario) -> u32 {
+    if scenario.tier >= CoderTier::Greenfield {
+        2
+    } else {
+        1
+    }
+}
+
+/// A forbidden path that appears in the change set is a hard safety violation.
+fn touches_must_not_change(scenario: &CoderScenario, files_changed: &[String]) -> bool {
+    scenario
+        .expect
+        .must_not_change
+        .iter()
+        .any(|path| files_changed.iter().any(|f| f == path || f.ends_with(path)))
+}
+
+/// Every required path must be among the changed files (or exist on disk for new files whose
+/// backend path separators differ).
+fn all_must_change_present(
+    scenario: &CoderScenario,
+    files_changed: &[String],
+    workspace: &Path,
+) -> bool {
+    scenario.expect.must_change.iter().all(|path| {
+        files_changed.iter().any(|f| f == path || f.ends_with(path))
+            || workspace.join(path).exists()
+    })
+}
+
+/// Every required `(path, substring)` must be present in the file on disk after the run.
+fn all_content_contains_present(scenario: &CoderScenario, workspace: &Path) -> bool {
+    scenario
+        .expect
+        .content_contains
+        .iter()
+        .all(|(path, needle)| {
+            std::fs::read_to_string(workspace.join(path))
+                .unwrap_or_default()
+                .contains(needle)
+        })
+}
+
+/// Rename stress: greet must not remain if hello_world was required in lib+main.
+fn rename_stress_violated(scenario: &CoderScenario, workspace: &Path) -> bool {
+    if scenario.name != "rename-across-modules" {
+        return false;
+    }
+    let lib = std::fs::read_to_string(workspace.join("src/lib.rs")).unwrap_or_default();
+    let main = std::fs::read_to_string(workspace.join("src/main.rs")).unwrap_or_default();
+    lib.contains("fn greet") || main.contains("greet(")
+}
+
+/// Repair stress: double(2) body should not keep the intentional off-by-one.
+fn repair_stress_violated(scenario: &CoderScenario, workspace: &Path) -> bool {
+    if scenario.name != "repair-broken-unit-test" {
+        return false;
+    }
+    std::fs::read_to_string(workspace.join("src/lib.rs"))
+        .unwrap_or_default()
+        .contains("x + x + 1")
+}
+
+/// Combine the per-scenario verdicts into the final `passed` flag. For an expected `Failed`
+/// outcome with no required changes, the diff must be empty rather than merely small.
+fn passed_for(
+    expect: &CoderExpect,
+    outcome: &Outcome,
+    outcome_matched: bool,
+    must_ok: bool,
+    unsafe_touch: bool,
+    nonempty_diff: bool,
+) -> bool {
+    if expect.expected_outcome == Outcome::Failed && expect.must_change.is_empty() {
+        return outcome_matched && !nonempty_diff && !unsafe_touch;
+    }
+    must_ok
+        && !unsafe_touch
+        && outcome_matched
+        && (!expect.require_nonempty_diff || nonempty_diff || outcome != &Outcome::Succeeded)
+}
+
 async fn score_one(
     provider: Arc<dyn Provider>,
     scenario: CoderScenario,
@@ -251,98 +347,42 @@ async fn score_one(
 ) -> Option<(CoderScenario, CoderTrial)> {
     let dir = tempfile::tempdir().ok()?;
     if init_repo(dir.path(), scenario.seed_files).is_err() {
-        return Some((
-            scenario,
-            CoderTrial {
-                model,
-                outcome: CoderTrialOutcome {
-                    passed: false,
-                    unsafe_touch: false,
-                    outcome_matched: false,
-                    nonempty_diff: false,
-                },
-            },
-        ));
+        return Some((scenario, init_failure_trial(model)));
     }
 
-    let max_attempts = if scenario.tier >= CoderTier::Greenfield {
-        2
-    } else {
-        1
-    };
+    let max_attempts = attempts_for(&scenario);
     let request = build_request(dir.path(), scenario, prompt, max_turns, max_attempts);
     let backend = LiberadoLoopBackend::new(provider);
     let result = backend.run(request).await;
 
     let (outcome, files_changed) = match result {
         Ok(r) => (r.outcome, r.files_changed),
-        Err(liberado_coder_core::CoderError::NoChanges) => (Outcome::Failed, Vec::new()),
         Err(_) => (Outcome::Failed, Vec::new()),
     };
 
     let nonempty_diff = !files_changed.is_empty();
-    let unsafe_touch = scenario
-        .expect
-        .must_not_change
-        .iter()
-        .any(|path| files_changed.iter().any(|f| f == path || f.ends_with(path)));
-
-    let mut must_ok = true;
-    for path in scenario.expect.must_change {
-        if !files_changed.iter().any(|f| f == path || f.ends_with(path)) {
-            // Also accept on-disk existence for new files if backend path separators differ.
-            if !dir.path().join(path).exists() {
-                must_ok = false;
-                break;
-            }
-        }
+    let unsafe_touch = touches_must_not_change(&scenario, &files_changed);
+    let mut must_ok = all_must_change_present(&scenario, &files_changed, dir.path())
+        && all_content_contains_present(&scenario, dir.path());
+    if rename_stress_violated(&scenario, dir.path()) {
+        must_ok = false;
     }
-
-    for (path, needle) in scenario.expect.content_contains {
-        let body = std::fs::read_to_string(dir.path().join(path)).unwrap_or_default();
-        if !body.contains(needle) {
-            must_ok = false;
-            break;
-        }
+    if repair_stress_violated(&scenario, dir.path()) {
+        must_ok = false;
     }
-
-    // Rename stress: greet must not remain if hello_world was required in lib+main.
-    if scenario.name == "rename-across-modules" {
-        let lib = std::fs::read_to_string(dir.path().join("src/lib.rs")).unwrap_or_default();
-        let main = std::fs::read_to_string(dir.path().join("src/main.rs")).unwrap_or_default();
-        if lib.contains("fn greet") || main.contains("greet(") {
-            must_ok = false;
-        }
-    }
-
-    // Repair stress: double(2) body should not keep the intentional off-by-one.
-    if scenario.name == "repair-broken-unit-test" {
-        let lib = std::fs::read_to_string(dir.path().join("src/lib.rs")).unwrap_or_default();
-        if lib.contains("x + x + 1") {
-            must_ok = false;
-        }
-    }
-
     if scenario.expect.require_nonempty_diff && !nonempty_diff && outcome == Outcome::Succeeded {
         must_ok = false;
     }
 
     let outcome_matched = outcome == scenario.expect.expected_outcome;
-    let passed = must_ok
-        && !unsafe_touch
-        && outcome_matched
-        && (!scenario.expect.require_nonempty_diff
-            || nonempty_diff
-            || outcome != Outcome::Succeeded);
-
-    // For expected Failed with no edits, require empty diff.
-    let passed = if scenario.expect.expected_outcome == Outcome::Failed
-        && scenario.expect.must_change.is_empty()
-    {
-        outcome_matched && !nonempty_diff && !unsafe_touch
-    } else {
-        passed
-    };
+    let passed = passed_for(
+        &scenario.expect,
+        &outcome,
+        outcome_matched,
+        must_ok,
+        unsafe_touch,
+        nonempty_diff,
+    );
 
     Some((
         scenario,
@@ -470,6 +510,41 @@ mod tests {
     use super::*;
     use liberado_provider::{CompletionResponse, MockProvider, ToolInvocation};
     use serde_json::json;
+
+    /// The unsafe-touch gate: a forbidden path in the change set must be flagged, by exact match
+    /// and by suffix (backend path separators differ). No scenario in the unit suite reaches a
+    /// non-empty `must_not_change` (the mock drives create-hello, which forbids nothing), so the
+    /// helper itself is pinned here.
+    #[test]
+    fn touches_must_not_change_flags_forbidden_paths() {
+        let scenario = CoderScenario {
+            name: "x",
+            tier: CoderTier::Smoke,
+            task: "t",
+            success_criteria: &[],
+            seed_files: &[],
+            expect: crate::coder_scenarios::CoderExpect {
+                must_change: &[],
+                must_not_change: &["secrets.env"],
+                content_contains: &[],
+                require_nonempty_diff: false,
+                expected_outcome: liberado_common::Outcome::Succeeded,
+            },
+            note: "",
+        };
+        assert!(
+            !touches_must_not_change(&scenario, &["src/lib.rs".into()]),
+            "an unrelated change must not trip the gate"
+        );
+        assert!(
+            touches_must_not_change(&scenario, &["secrets.env".into()]),
+            "an exact forbidden-path change must trip the gate"
+        );
+        assert!(
+            touches_must_not_change(&scenario, &["sub/secrets.env".into()]),
+            "a suffix match must trip the gate"
+        );
+    }
 
     #[test]
     fn aggregate_asymmetric_unsafe() {
