@@ -179,6 +179,15 @@ impl std::fmt::Display for GoalCmd {
 }
 
 #[cfg(test)]
+/// The slash text for a coding goal: `mode in <project> <text>` when a project is named.
+fn coding_slash(mode: CodingGoalMode, project: Option<&str>, text: &str) -> String {
+    match project {
+        Some(p) => format!("{} in {p} {text}", mode.slash()),
+        None => format!("{} {text}", mode.slash()),
+    }
+}
+
+#[cfg(test)]
 impl std::fmt::Display for SlashCommand {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -199,14 +208,9 @@ impl std::fmt::Display for SlashCommand {
             SlashCommand::Goal(g) => write!(f, "/goal {g}"),
             SlashCommand::Coding {
                 mode,
-                project: Some(p),
+                project,
                 text,
-            } => write!(f, "{} in {p} {text}", mode.slash()),
-            SlashCommand::Coding {
-                mode,
-                project: None,
-                text,
-            } => write!(f, "{} {text}", mode.slash()),
+            } => write!(f, "{}", coding_slash(*mode, project.as_deref(), text)),
             SlashCommand::Back => write!(f, "/back"),
             SlashCommand::Fork { after_turn: None } => write!(f, "/fork"),
             SlashCommand::Fork {
