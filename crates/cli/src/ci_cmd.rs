@@ -206,7 +206,8 @@ fn generate_lcov(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
         "cargo install cargo-llvm-cov --locked",
     )?;
     std::fs::create_dir_all(root.join(".liberado"))?;
-    run_cmd(root, "cargo", LLVM_COV_ARGS)
+    run_cmd(root, "cargo", LLVM_COV_ARGS)?;
+    relativize_lcov(root)
 }
 
 fn compare_to_baseline(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
@@ -246,7 +247,79 @@ fn write_baseline(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
             "--output",
             BASELINE_FILE,
         ],
-    )
+    )?;
+    relativize_baseline_json(root)
+}
+
+/// Strip the workspace root from an LCOV `SF:` path so Ubuntu CI and a Windows
+/// `just ci` compare the same keys (`crates/foo.rs`, not `C:\Users\...\foo.rs`).
+fn relativize_lcov(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    let path = root.join(LCOV_FILE);
+    let text = std::fs::read_to_string(&path)?;
+    let mut out = String::with_capacity(text.len());
+    for line in text.lines() {
+        if let Some(file) = line.strip_prefix("SF:") {
+            out.push_str("SF:");
+            out.push_str(&repo_relative_source_path(root, file));
+            out.push('\n');
+        } else {
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
+    std::fs::write(path, out)?;
+    Ok(())
+}
+
+fn relativize_baseline_json(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    let path = root.join(BASELINE_FILE);
+    let mut value: Value = serde_json::from_str(&std::fs::read_to_string(&path)?)?;
+    relativize_json_paths(root, &mut value);
+    let serialized = serde_json::to_string_pretty(&value)?;
+    std::fs::write(path, format!("{serialized}\n"))?;
+    Ok(())
+}
+
+fn relativize_json_paths(root: &Path, value: &mut Value) {
+    match value {
+        Value::String(s) if looks_like_source_path(s) => {
+            *s = repo_relative_source_path(root, s);
+        }
+        Value::Array(items) => {
+            for item in items {
+                relativize_json_paths(root, item);
+            }
+        }
+        Value::Object(map) => {
+            for nested in map.values_mut() {
+                relativize_json_paths(root, nested);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn looks_like_source_path(s: &str) -> bool {
+    s.ends_with(".rs") && (s.contains('/') || s.contains('\\'))
+}
+
+fn repo_relative_source_path(root: &Path, file: &str) -> String {
+    let file_norm = PathBuf::from(file.replace('/', std::path::MAIN_SEPARATOR_STR));
+    if let Some(relative) = strip_root_prefix(root, &file_norm) {
+        return relative;
+    }
+    if let Ok(canon_root) = root.canonicalize() {
+        if let Some(relative) = strip_root_prefix(&canon_root, &file_norm) {
+            return relative;
+        }
+    }
+    file.replace('\\', "/")
+}
+
+fn strip_root_prefix(root: &Path, file: &Path) -> Option<String> {
+    file.strip_prefix(root)
+        .ok()
+        .map(|relative| relative.to_string_lossy().replace('\\', "/"))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -445,7 +518,7 @@ mod tests {
         BASELINE_FILE, CRAP_CEILING_GH, CRAP_CEILING_HINT, CRAP_REGRESSION_GH,
         CRAP_REGRESSION_HINT, LLVM_COV_ARGS, StageOutcome, USAGE, baseline_has_entries,
         crap_failure_hint, emit_crap_failure, exe_lives_in_cargo_target, git, porcelain_path,
-        repository_root, run_cmd, stage_ratcheted_baseline,
+        repo_relative_source_path, repository_root, run_cmd, stage_ratcheted_baseline,
     };
     use liberado_common::process::std_command;
     use std::fs;
@@ -516,6 +589,28 @@ mod tests {
         assert!(USAGE.contains("check"));
         assert!(USAGE.contains("crap"));
         assert!(USAGE.contains("ratchet"));
+    }
+
+    #[test]
+    fn repo_relative_path_drops_the_workspace_root_on_either_os() {
+        let root = Path::new(if cfg!(windows) {
+            r"C:\Users\Shiloh\Code\life-os"
+        } else {
+            "/home/runner/work/life-os/life-os"
+        });
+        let file = if cfg!(windows) {
+            r"C:\Users\Shiloh\Code\life-os\crates\vault\src\lib.rs"
+        } else {
+            "/home/runner/work/life-os/life-os/crates/vault/src/lib.rs"
+        };
+        assert_eq!(
+            repo_relative_source_path(root, file),
+            "crates/vault/src/lib.rs"
+        );
+        assert_eq!(
+            repo_relative_source_path(root, "crates/vault/src/lib.rs"),
+            "crates/vault/src/lib.rs"
+        );
     }
 
     #[test]
