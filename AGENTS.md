@@ -25,6 +25,7 @@ runs, and preflight mirrors it.
 ```bash
 just ci                                        # full local CI + CRAP ratchet; run before you push
 just preflight                                 # fmt / clippy / test / deny, no llvm-cov
+# a green `just ci` is a few lines. Failures are extracted. Full log: .liberado/ci.log
 cargo test --workspace --no-fail-fast          # --no-fail-fast matters; see below
 cargo clippy --workspace --exclude liberado-webui --all-targets -- -D warnings
 cargo fmt --all --check
@@ -84,7 +85,8 @@ best score for each function, scored on Ubuntu (the GitHub job's host). GitHub o
 to 60 fails, even under the 450 ceiling. New functions must land at or below 450. Linux `just ci`
 runs that same per-function compare and may rewrite the file. Windows `just ci` checks the 450
 ceiling only — coverage numbers are host-sensitive and a Windows compare false-fails. Do not raise
-the file by hand. Split the function or add tests.
+the file by hand. Split the function or add tests. A green `just ci` is a few lines; the full
+child log is always `.liberado/ci.log`.
 
 **Gates compare against the base commit, not against green.** Preflight
 (`crates/coder-sandbox/src/preflight.rs`) fails only on failures *absent from the base*, so a red
