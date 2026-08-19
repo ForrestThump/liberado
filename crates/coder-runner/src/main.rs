@@ -104,6 +104,123 @@ struct HeadlessArgs {
     session_id: Option<String>,
 }
 
+/// Build the task's context: the repo map (when enabled), the workspace summary, and any
+/// prior-round session history — plus the task id the run will be preserved under.
+async fn build_task_context(
+    prompt: &str,
+    workspace: &Path,
+    tuning: &CoderTuning,
+    session_id: Option<&str>,
+    workspace_summary: &str,
+) -> Result<(Option<String>, String), String> {
+    let repo_map = if tuning.repo_map.enabled {
+        let mentioned_terms = if tuning.repo_map.task_aware {
+            repo_map::extract_task_terms(prompt)
+        } else {
+            Vec::new()
+        };
+        repo_map::generate_repo_map(
+            workspace,
+            &RepoMapOptions {
+                max_map_tokens: tuning.repo_map.max_map_tokens,
+                min_source_files: tuning.repo_map.min_source_files,
+                mentioned_terms,
+                ..Default::default()
+            },
+        )
+        .await
+    } else {
+        None
+    };
+
+    let session_context = if let Some(sid) = session_id {
+        let prior = load_prior_rounds(workspace, sid)?;
+        if !prior.is_empty() {
+            Some(build_session_context(&prior))
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    let mut task_context = String::new();
+    if let Some(rm) = repo_map {
+        task_context.push_str(&rm);
+        task_context.push_str("\n\n");
+    }
+    task_context.push_str(workspace_summary);
+    if let Some(sc) = session_context {
+        if !task_context.is_empty() {
+            task_context.push_str("\n\n");
+        }
+        task_context.push_str(&sc);
+    }
+    let task_context = if task_context.is_empty() {
+        None
+    } else {
+        Some(task_context)
+    };
+
+    // Derive a task id once so the preservation branch carries information. Both consumers
+    // below take this value; see `derive_task_id` for why neither may hold a literal.
+    let task_id = derive_task_id(session_id, prompt);
+
+    Ok((task_context, task_id))
+}
+
+/// The provider factory behind a headless run: a config-dir profile when given, else the direct
+/// api-key/base-url path.
+fn build_providers(
+    config_dir: &Option<PathBuf>,
+    api_key: String,
+    base_url: String,
+) -> Result<Arc<dyn CoderProviderFactory>, String> {
+    match config_dir {
+        Some(dir) => {
+            let profile = provider_profile(Some(dir))?;
+            Ok(Arc::new(OpenAiProfileProviderFactory::from_profile(
+                profile,
+            )?))
+        }
+        None => Ok(Arc::new(DirectProviderFactory { api_key, base_url })),
+    }
+}
+
+/// The run finished: report the outcome, preserve the work durably, and record the round when a
+/// session id is in play.
+async fn finish_run(
+    result: liberado_coder_core::CoderRunResult,
+    workspace: PathBuf,
+    task_id: String,
+    session_id: Option<&str>,
+    prompt: &str,
+) -> Result<(), String> {
+    let json = serde_json::to_string_pretty(&result)
+        .map_err(|error| format!("serialize coder result: {error}"))?;
+    println!("{json}");
+
+    // Preserve the work before anything else can lose it. A run's output lived only as dirty
+    // files in a scratch directory, so deleting that directory destroyed it — which is exactly
+    // what happened to one completed run. A commit is durable even when the workspace is a git
+    // worktree that later disappears, because the commit and the branch ref go to the *shared*
+    // object store.
+    if let Err(error) = preserve_work(&workspace, &task_id, push_enabled()).await {
+        tracing::warn!(%error, "preserving the run's work failed; the workspace is still on disk");
+    }
+
+    if let Some(sid) = session_id
+        && result.outcome == Outcome::Succeeded
+    {
+        save_round_state(&workspace, sid, prompt, &result)?;
+    }
+
+    match result.outcome {
+        Outcome::Succeeded => Ok(()),
+        _ => Err(format!("task completed with outcome: {:?}", result.outcome)),
+    }
+}
+
 async fn run_headless(args: HeadlessArgs) -> Result<(), String> {
     let HeadlessArgs {
         prompt,
@@ -126,60 +243,15 @@ async fn run_headless(args: HeadlessArgs) -> Result<(), String> {
     ensure_git_repo(&workspace).await?;
 
     let workspace_summary = build_workspace_summary(&workspace).unwrap_or_default();
-
     let tuning = read_tuning(config_dir.as_deref())?;
-    let repo_map = if tuning.repo_map.enabled {
-        let mentioned_terms = if tuning.repo_map.task_aware {
-            repo_map::extract_task_terms(&prompt)
-        } else {
-            Vec::new()
-        };
-        repo_map::generate_repo_map(
-            &workspace,
-            &RepoMapOptions {
-                max_map_tokens: tuning.repo_map.max_map_tokens,
-                min_source_files: tuning.repo_map.min_source_files,
-                mentioned_terms,
-                ..Default::default()
-            },
-        )
-        .await
-    } else {
-        None
-    };
-
-    let session_context = if let Some(ref sid) = session_id {
-        let prior = load_prior_rounds(&workspace, sid)?;
-        if !prior.is_empty() {
-            Some(build_session_context(&prior))
-        } else {
-            None
-        }
-    } else {
-        None
-    };
-
-    let mut task_context = String::new();
-    if let Some(rm) = repo_map {
-        task_context.push_str(&rm);
-        task_context.push_str("\n\n");
-    }
-    task_context.push_str(&workspace_summary);
-    if let Some(sc) = session_context {
-        if !task_context.is_empty() {
-            task_context.push_str("\n\n");
-        }
-        task_context.push_str(&sc);
-    }
-    let task_context = if task_context.is_empty() {
-        None
-    } else {
-        Some(task_context)
-    };
-
-    // Derive a task id once so the preservation branch carries information. Both consumers
-    // below take this value; see `derive_task_id` for why neither may hold a literal.
-    let task_id = derive_task_id(session_id.as_deref(), &prompt);
+    let (task_context, task_id) = build_task_context(
+        &prompt,
+        &workspace,
+        &tuning,
+        session_id.as_deref(),
+        &workspace_summary,
+    )
+    .await?;
 
     let task = CoderTask {
         id: task_id.clone(),
@@ -211,14 +283,7 @@ async fn run_headless(args: HeadlessArgs) -> Result<(), String> {
     assembled.request.config.coder.prompt_path = None;
     let request = assembled.request;
 
-    let providers: Arc<dyn CoderProviderFactory> = match config_dir {
-        Some(ref dir) => {
-            let profile = provider_profile(Some(dir))?;
-            Arc::new(OpenAiProfileProviderFactory::from_profile(profile)?)
-        }
-        None => Arc::new(DirectProviderFactory { api_key, base_url }),
-    };
-
+    let providers = build_providers(&config_dir, api_key, base_url)?;
     let backend = LiberadoLoopBackend::with_provider_factory(providers);
 
     // Race the backend against a termination signal so an interrupted run still commits what it
@@ -242,28 +307,14 @@ async fn run_headless(args: HeadlessArgs) -> Result<(), String> {
         format!("coder backend failed: {error}")
     })?;
 
-    let json = serde_json::to_string_pretty(&result)
-        .map_err(|error| format!("serialize coder result: {error}"))?;
-    println!("{json}");
-
-    // Preserve the work before anything else can lose it. A run's output lived only as dirty
-    // files in a scratch directory, so deleting that directory destroyed it — which is exactly what
-    // happened to one completed run. A commit is durable even when the workspace is a git worktree
-    // that later disappears, because the commit and the branch ref go to the *shared* object store.
-    if let Err(error) = preserve_work(&workspace, &task_id, push_enabled()).await {
-        tracing::warn!(%error, "preserving the run's work failed; the workspace is still on disk");
-    }
-
-    if let Some(ref sid) = session_id
-        && result.outcome == Outcome::Succeeded
-    {
-        save_round_state(&workspace, sid, &prompt, &result)?;
-    }
-
-    match result.outcome {
-        Outcome::Succeeded => Ok(()),
-        _ => Err(format!("task completed with outcome: {:?}", result.outcome)),
-    }
+    finish_run(
+        result,
+        workspace.clone(),
+        task_id.clone(),
+        session_id.as_deref(),
+        &prompt,
+    )
+    .await
 }
 
 // --- workspace summary (cold-start context injection) -------------------
@@ -1309,6 +1360,64 @@ reasoning = "high"
         assert!(tuning.offered_tools.is_none());
         assert!(tuning.coder.reasoning.is_none());
     }
+
+    /// build_task_context with the repo map disabled: the workspace summary (and prior-round
+    /// history when a session id is given) is all that feeds the task context; no shell-out.
+    #[tokio::test]
+    async fn build_task_context_uses_workspace_summary_and_session_history() {
+        let dir = tempfile::tempdir().unwrap();
+        let tuning = CoderTuning::default();
+        let (ctx, task_id) = build_task_context(
+            "do the thing",
+            dir.path(),
+            &tuning,
+            None,
+            "Workspace contents:\n  (empty workspace)",
+        )
+        .await
+        .unwrap();
+        assert_eq!(task_id, derive_task_id(None, "do the thing"));
+        let ctx = ctx.expect("the workspace summary must make the context non-empty");
+        assert!(ctx.contains("Workspace contents:"), "{ctx}");
+        assert!(!ctx.contains("Session history"), "{ctx}");
+    }
+
+    /// With a session id and a prior round on disk, the task context carries the history.
+    #[tokio::test]
+    async fn build_task_context_includes_prior_rounds() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = session_state_dir(dir.path(), "sess-1");
+        std::fs::create_dir_all(&state).unwrap();
+        std::fs::write(
+            state.join("01.json"),
+            serde_json::to_vec(&SessionRound {
+                session_id: "sess-1".into(),
+                round: 0,
+                prompt: "first ask".into(),
+                summary: "did it".into(),
+                files_changed: vec!["a.txt".into()],
+            })
+            .unwrap(),
+        )
+        .unwrap();
+        let tuning = CoderTuning::default();
+        let (ctx, _) = build_task_context("second ask", dir.path(), &tuning, Some("sess-1"), "")
+            .await
+            .unwrap();
+        let ctx = ctx.expect("the session history must make the context non-empty");
+        assert!(ctx.contains("Session history"), "{ctx}");
+        assert!(ctx.contains("first ask"), "{ctx}");
+        assert!(ctx.contains("a.txt"), "{ctx}");
+    }
+
+    /// Without a config dir the direct api-key/base-url factory is used.
+    #[test]
+    fn build_providers_without_config_dir_is_direct() {
+        assert!(
+            build_providers(&None, "k".into(), "http://x".into()).is_ok(),
+            "the direct factory must construct without any config"
+        );
+    }
 }
 
 #[cfg(test)]
@@ -1679,6 +1788,68 @@ mod preserve_work_tests {
 
         result.expect("an unattended run must commit without ambient git identity");
         assert!(!is_dirty(repo.path()), "the tree must be clean afterwards");
+    }
+
+    /// finish_run: a succeeded run with a session id records the round and returns Ok.
+    #[tokio::test]
+    async fn finish_run_success_records_the_round() {
+        let dir = temp_repo();
+        let result = liberado_coder_core::CoderRunResult {
+            backend: "test".into(),
+            outcome: Outcome::Succeeded,
+            summary: "did it".into(),
+            files_changed: vec![],
+            file_changes: vec![],
+            validation_notes: None,
+            critic_verdict: None,
+            gate_votes: vec![],
+            trace_path: None,
+            diff_findings: vec![],
+            session_findings: vec![],
+            remediation: None,
+            diagnostics: serde_json::json!({}),
+        };
+        finish_run(
+            result,
+            dir.path().to_path_buf(),
+            "tid".into(),
+            Some("sess-9"),
+            "the prompt",
+        )
+        .await
+        .unwrap();
+        let state = session_state_dir(dir.path(), "sess-9");
+        let entries: Vec<_> = std::fs::read_dir(&state).expect("round dir").collect();
+        assert_eq!(
+            entries.len(),
+            1,
+            "a succeeded run with a session id must record the round"
+        );
+    }
+
+    /// finish_run: a failed outcome is an error naming the outcome.
+    #[tokio::test]
+    async fn finish_run_failed_outcome_is_an_error() {
+        let dir = temp_repo();
+        let result = liberado_coder_core::CoderRunResult {
+            backend: "test".into(),
+            outcome: Outcome::Failed,
+            summary: "no".into(),
+            files_changed: vec![],
+            file_changes: vec![],
+            validation_notes: None,
+            critic_verdict: None,
+            gate_votes: vec![],
+            trace_path: None,
+            diff_findings: vec![],
+            session_findings: vec![],
+            remediation: None,
+            diagnostics: serde_json::json!({}),
+        };
+        let err = finish_run(result, dir.path().to_path_buf(), "tid".into(), None, "p")
+            .await
+            .unwrap_err();
+        assert!(err.contains("task completed with outcome"), "{err}");
     }
 }
 
