@@ -41,10 +41,10 @@ check:
 
 # Full local CI. Same CRAP compare GitHub runs: a function whose score went
 # up fails here and is named in the cargo-crap table — fix it before you push.
-# The baseline is not rewritten while that check is red. On success, rewrite
-# `crap-baseline.json` (the ratchet). If the tree is otherwise clean, the new
-# baseline is amended onto HEAD so a later push includes it. If other files
-# are dirty, it is only staged. GitHub never writes that file.
+# The baseline is not rewritten while that check is red. On Linux success,
+# rewrite `crap-baseline.json` (the ratchet; Ubuntu is the host of truth).
+# Windows compares only. If the tree is otherwise clean, a Linux rewrite is
+# amended onto HEAD. GitHub never writes that file.
 ci:
     cargo run --locked -p liberado-cli -- ci
 

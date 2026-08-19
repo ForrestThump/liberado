@@ -2,9 +2,11 @@
 # CLI flags always take precedence over values here.
 #
 # The committed ratchet lives in `crap-baseline.json`. GitHub only compares
-# against that file (`--fail-regression`). `just ci` / `liberado ci` rewrites
-# it after a green local run. Never write the baseline from GitHub Actions:
-# coverage numbers are host-sensitive, and a bot commit fights the working tree.
+# against that file (`--fail-regression`). Coverage is host-sensitive: the
+# committed scores are Ubuntu's (the CRAP job's host). A green Linux
+# `just ci` rewrites the file. Windows compares only and does not write,
+# or a Windows fill fails Ubuntu (explain_write moved +127). Never write
+# the baseline from GitHub Actions: a bot commit races every open PR.
 #
 # `threshold` is the hard ceiling for *new* functions (`--fail-above`). The
 # per-function ratchet is `--fail-regression` against the baseline, which is

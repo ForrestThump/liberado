@@ -187,6 +187,13 @@ pub fn crap_ratchet() -> Result<(), Box<dyn std::error::Error>> {
     let root = repository_root()?;
     generate_lcov(&root)?;
     compare_to_baseline(&root)?;
+    if !cfg!(target_os = "linux") {
+        eprintln!(
+            "[liberado ci] {BASELINE_FILE} write is Linux-only \
+             (GitHub's Ubuntu job is the host of truth). Compared only."
+        );
+        return Ok(());
+    }
     write_baseline(&root)?;
     match stage_ratcheted_baseline(&root)? {
         StageOutcome::Unchanged => {
