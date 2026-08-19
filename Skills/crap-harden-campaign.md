@@ -25,27 +25,53 @@ git clone -q -b develop git@github.com:ForrestThump/turbomcp.git  turbomcp
 cargo metadata --locked          # confirm the manifest resolves
 ```
 
+Missing siblings fail llvm-cov with "The system cannot find the path
+specified" from inside `cargo clean` — the message does not name the
+siblings. Check this first.
+
 ### 2. Surface the CRAP report
+
+The LCOV file is mandatory: without `--lcov`, cargo-crap reports
+"No functions found." and exits 0. Generate it once per batch (it is a
+full instrumented rebuild + suite run, 20-40 minutes), not per site:
 
 ```bash
 cargo llvm-cov --workspace --exclude liberado-webui --lcov \
   --output-path .liberado/crap.lcov --ignore-run-fail
+
 cargo crap --workspace --lcov .liberado/crap.lcov --min 450        # ceiling
-cargo crap --workspace --lcov .liberado/crap.lcov --format json    # full table
+cargo crap --workspace --lcov .liberado/crap.lcov --format json \
+  --sort crap --output .liberado/crap-current.json                 # ranked table
+python - <<'PY'
+import json
+rows = json.load(open(".liberado/crap-current.json"))["entries"]
+for e in rows[:25]:                                    # worst offenders
+    print(f'{e["crap"]:6.0f} {e["cyclomatic"]:3.0f} {e["function"]} @ {e["file"]}:{e["line"]}')
+cc20 = [e for e in rows if e["cyclomatic"] >= 20]      # must-split band
+print(f'CC >= 20: {len(cc20)}')
+PY
 ```
 
-Rank the JSON two ways:
+Rank two ways:
 
 - Worst offenders by CRAP (the "cover or split" track)
 - The CC >= 20 band regardless of coverage (the "must split" track)
 
 cargo-crap scores a function at 0% coverage when it is absent from the
-LCOV (binary `main`s, excluded crates, test-only modules).
+LCOV (binary `main`s, excluded crates, test-only modules), and counts
+every `?` / `ok_or_else` as a branch. Prefer `let-else` over chains of
+`?` in the function you are measuring; a tail `?` is free.
 
 ### 3. Ratchet rules
 
-`crap-baseline.json` is committed. Linux CI runs the per-function
-ratchet (`--fail-regression`); local Windows is ceiling-only (450).
+`crap-baseline.json` is committed at the repo root (the last best
+per-function score). Ubuntu CI runs the per-function ratchet
+(`liberado ci crap` — `--fail-regression`); Windows and other hosts are
+ceiling-only (450). To compare locally run:
+
+```bash
+cargo run --locked --quiet -p liberado-cli -- ci crap
+```
 
 - Adding tests lowers scores — always safe
 - Splitting a function creates new names with no baseline — ceiling only
@@ -55,11 +81,16 @@ ratchet (`--fail-regression`); local Windows is ceiling-only (450).
 
 1. Read the function and its module `//!` docs
 2. Bias: add unit tests that exercise the function
-3. Binary `main`: extract args / decision logic into free functions;
-   keep `main` thin; the verbatim move is documented, not unit-asserted
-4. Mutation-verify the new tests: break a branch, the test must fail,
-   restore from `$TEMP/mut_backup` — never `git checkout` in a mutation
-   loop (it destroys uncommitted work)
+3. Binary `main`: prefer integration tests that spawn the real binary
+   via `env!("CARGO_BIN_EXE_<name>")` with `std::process::Command` — no
+   new dev-deps needed, and llvm-cov attributes the spawned run. If the
+   binary cannot run headless (a TTY loop), extract the decision logic
+   into free functions, keep `main` thin, and document the verbatim move
+4. Mutation-verify the new tests: save a backup of the CURRENT working
+   state, break a branch, the test must fail, restore from that backup.
+   Label backups per state (`file_refactored.rs`) — a backup taken before
+   the refactor will silently revert it. Never `git checkout` in a
+   mutation loop
 5. Full CI gate green
 6. One commit per site; push; re-surface at the end
 
@@ -76,15 +107,32 @@ cargo run --locked -p liberado-cli -- docs metadata self-test
 cargo run --locked -p liberado-cli -- docs metadata lint
 cargo run --locked -p liberado-cli -- docs crate-map
 cargo run --locked -p liberado-cli -- docs metadata check-stale-rs
+cargo run --locked -p liberado-cli -- docs site --out "$TEMP/docs-site"
 ```
+
+CI-only surfaces (run once per batch, not per commit):
+
+```bash
+RUSTDOCFLAGS="-D rustdoc::broken_intra_doc_links" cargo doc \
+  --workspace --no-deps --document-private-items
+cargo deny check        # needs cargo-deny; the yaml: taiki-e/install-action
+```
+
+CI runs `fmt --check` and the per-function ratchet on Ubuntu only; a
+Windows host lints the `#[cfg(windows)]` code the Ubuntu leg cannot see.
+Clippy runs on both OSes for exactly that reason.
 
 ## Rules that trip people
 
 - Mutation must actually apply: assert the old text is in the source
   before replacing; a missed needle looks like an escaped mutation
+- A mutation that does not compile is not a mutation test: labels bind
+  loops, so `'label: while let` cannot become `if let` without also
+  dropping the label and its `break 'label`
 - `cargo test` stops at the first failing binary: use `--no-fail-fast`
+- Gate against the base, not against green: a failing test that passes
+  in isolation is likely a pre-existing flake, not yours
 - Tests that shell out to git must set `user.email` / `user.name`
 - Windows is a CI target: line endings, 8.3 paths, `cmd` vs `sh`
 - A config value that parses is not a value that is read: when adding a
   `CoderTuning` field, grep every `CoderRunConfig {` initializer
-- A mutation that does not compile is not a mutation test
