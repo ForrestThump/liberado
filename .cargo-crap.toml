@@ -1,0 +1,11 @@
+# cargo-crap persistent configuration (searched upward from the CWD).
+# CLI flags always take precedence over values here.
+
+# Functions whose CRAP score is a metric artifact rather than real complexity.
+#
+# SlashCommand::fmt is a #[cfg(test)] Display impl: ~35 one-line match arms
+# with no branch interactions, no shared state, and no ordering. Flatness is
+# the correct design for a pure format table, and cargo-crap's cyclomatic
+# metric overweights big lookup matches when no coverage data is supplied.
+# Decomposing it would add indirection without removing a single decision.
+allow = ["SlashCommand::fmt"]

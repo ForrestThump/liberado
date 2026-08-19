@@ -12,6 +12,33 @@ use crate::contract::*;
 use crate::journal::{JobStore, atomic_json};
 use crate::{legacy, preflight};
 
+/// Shared execution context threaded through every stage: the store handle, the job being
+/// driven, and the progress tracker. Stages that finish the job early return the report;
+/// stages that need data hand it back via `Stage::Continue`.
+struct RunContext<'a> {
+    store: &'a JobStore,
+    job_id: &'a JobId,
+    spec: &'a JobSpec,
+    started_at: DateTime<Utc>,
+    tracker: &'a mut StateTracker<'a>,
+}
+
+/// Outcome of one `execute` stage: either produce a value to continue with, or the job
+/// finished (a failure report was already persisted and the caller must return it).
+enum Stage<T> {
+    Continue(T),
+    Finished(Box<ComparisonReport>),
+}
+
+/// Preserved per-harness results plus any cleanup diagnostics collected on the way out.
+struct PreservedResults {
+    harnesses: BTreeMap<String, HarnessResult>,
+    cleanup_diagnostics: Vec<String>,
+}
+
+/// Drive one comparison job to a terminal report. Stages are extracted so each decision
+/// boundary (input validation, preflight, preparation, preservation) is a small function;
+/// `execute` only sequences them and returns whatever stage finished the job.
 pub fn execute(
     store: &JobStore,
     job_id: &JobId,
@@ -25,120 +52,185 @@ pub fn execute(
         return finish_cancelled(store, &spec, started_at, &mut tracker);
     }
 
-    if let Err(error) = crate::transport::verify_captured_inputs(&spec, &store.job_root(job_id)) {
-        return finish_failure(
-            store,
-            &spec,
-            started_at,
-            &mut tracker,
-            FailureClass::HostInfrastructureFailure,
-            format!("captured input validation failed: {error}"),
-            BTreeMap::new(),
-            None,
-        );
-    }
-
-    tracker.advance(
-        JobStatus::Preflight,
-        "preflight",
-        "checking all unpaid prerequisites",
-    )?;
-    let (preflight, credential) = match preflight::run(&spec, policy) {
-        Ok(result) => result,
-        Err(error) => {
-            return finish_failure(
-                store,
-                &spec,
-                started_at,
-                &mut tracker,
-                FailureClass::HostInfrastructureFailure,
-                format!("preflight failed: {error}"),
-                BTreeMap::new(),
-                None,
-            );
-        }
+    let mut ctx = RunContext {
+        store,
+        job_id,
+        spec: &spec,
+        started_at,
+        tracker: &mut tracker,
     };
-    atomic_json(
-        &store.job_root(job_id).join("preflight.json"),
-        &serde_json::json!({
-            "repository": preflight.repository,
-            "base_commit": preflight.base_commit,
-            "free_bytes": preflight.free_bytes,
-            "estimated_required_bytes": preflight.estimated_required_bytes,
-            "credential_alias": spec.model.credential_alias,
-            "credential_environment": preflight.credential_environment,
-            "checked_at": Utc::now(),
-        }),
-    )?;
-    atomic_json(&store.job_root(job_id).join("experiment.json"), &spec)?;
 
-    let mut ids = harness_ids(&spec);
-    ids.sort();
-    if ids != ["liberado", "pi"] {
-        return finish_failure(
-            store,
-            &spec,
-            started_at,
-            &mut tracker,
-            FailureClass::HostInfrastructureFailure,
-            "the v1 coordinator requires the liberado and pi adapters".to_string(),
-            BTreeMap::new(),
-            Some(preflight.base_commit),
-        );
+    if let Stage::Finished(report) = verify_inputs(&mut ctx)? {
+        return Ok(*report);
     }
 
-    tracker.advance(
-        JobStatus::Preparing,
-        "prepare",
-        "creating pinned isolated worktrees",
-    )?;
-    let job_root = store.job_root(job_id);
+    let (preflight, credential) = match run_preflight(&mut ctx, policy)? {
+        Stage::Continue(ready) => ready,
+        Stage::Finished(report) => return Ok(*report),
+    };
+
+    let job_root = ctx.store.job_root(ctx.job_id);
     let execution_root = job_root.join("execution");
-    if let Err(error) = legacy::prepare_parsed(
-        &execution_root,
-        &preflight.repository,
-        &preflight.base_commit,
-        &preflight.base_commit,
-        spec.limits.compile_timeout_secs,
-    ) {
-        return finish_failure(
-            store,
-            &spec,
-            started_at,
-            &mut tracker,
-            FailureClass::HostInfrastructureFailure,
-            format!("comparison preparation failed: {error}"),
-            BTreeMap::new(),
-            Some(preflight.base_commit),
-        );
+    if let Stage::Finished(report) = prepare_worktrees(&mut ctx, &preflight, &execution_root)? {
+        return Ok(*report);
     }
 
-    tracker.advance(
+    ctx.tracker.advance(
         JobStatus::Running,
         "run",
         "running harness adapters in declared order",
     )?;
     let run_args = legacy::run_args_from_spec(
-        &spec,
+        ctx.spec,
         &job_root,
         &execution_root,
         &preflight.credential_environment,
     );
     let run_result = legacy::run_parsed(run_args, credential);
 
-    tracker.advance(
+    ctx.tracker.advance(
         JobStatus::Verifying,
         "verify",
         "common verification finished; classifying results",
     )?;
-    tracker.advance(
+    ctx.tracker.advance(
         JobStatus::Preserving,
         "preserve",
         "normalizing durable artifacts and results",
     )?;
+    let preserved = preserve_and_collect(&ctx, &job_root, &execution_root, policy)?;
+
+    finish_and_report(&mut ctx, &preflight.base_commit, run_result, preserved)
+}
+
+/// Stage 1: validate that every captured input the job needs exists before anything runs.
+fn verify_inputs(ctx: &mut RunContext<'_>) -> Result<Stage<()>, Box<dyn Error>> {
+    if let Err(error) =
+        crate::transport::verify_captured_inputs(ctx.spec, &ctx.store.job_root(ctx.job_id))
+    {
+        return Ok(Stage::Finished(Box::new(finish_failure(
+            ctx.store,
+            ctx.spec,
+            ctx.started_at,
+            ctx.tracker,
+            FailureClass::HostInfrastructureFailure,
+            format!("captured input validation failed: {error}"),
+            BTreeMap::new(),
+            None,
+        )?)));
+    }
+    Ok(Stage::Continue(()))
+}
+
+/// Stage 2: run preflight, persist its output alongside the experiment spec, and resolve
+/// the credential.
+fn run_preflight(
+    ctx: &mut RunContext<'_>,
+    policy: &WorkerPolicy,
+) -> Result<
+    Stage<(
+        crate::preflight::PreflightReport,
+        crate::preflight::ResolvedCredential,
+    )>,
+    Box<dyn Error>,
+> {
+    ctx.tracker.advance(
+        JobStatus::Preflight,
+        "preflight",
+        "checking all unpaid prerequisites",
+    )?;
+    let (preflight, credential) = match preflight::run(ctx.spec, policy) {
+        Ok(result) => result,
+        Err(error) => {
+            return Ok(Stage::Finished(Box::new(finish_failure(
+                ctx.store,
+                ctx.spec,
+                ctx.started_at,
+                ctx.tracker,
+                FailureClass::HostInfrastructureFailure,
+                format!("preflight failed: {error}"),
+                BTreeMap::new(),
+                None,
+            )?)));
+        }
+    };
+    atomic_json(
+        &ctx.store.job_root(ctx.job_id).join("preflight.json"),
+        &serde_json::json!({
+            "repository": preflight.repository,
+            "base_commit": preflight.base_commit,
+            "free_bytes": preflight.free_bytes,
+            "estimated_required_bytes": preflight.estimated_required_bytes,
+            "credential_alias": ctx.spec.model.credential_alias,
+            "credential_environment": preflight.credential_environment,
+            "checked_at": Utc::now(),
+        }),
+    )?;
+    atomic_json(
+        &ctx.store.job_root(ctx.job_id).join("experiment.json"),
+        ctx.spec,
+    )?;
+    Ok(Stage::Continue((preflight, credential)))
+}
+
+/// Stage 3: pin the adapter set and create the isolated worktrees the adapters run in.
+fn prepare_worktrees(
+    ctx: &mut RunContext<'_>,
+    preflight: &crate::preflight::PreflightReport,
+    execution_root: &Path,
+) -> Result<Stage<()>, Box<dyn Error>> {
+    let mut ids = harness_ids(ctx.spec);
+    ids.sort();
+    if ids != ["liberado", "pi"] {
+        return Ok(Stage::Finished(Box::new(finish_failure(
+            ctx.store,
+            ctx.spec,
+            ctx.started_at,
+            ctx.tracker,
+            FailureClass::HostInfrastructureFailure,
+            "the v1 coordinator requires the liberado and pi adapters".to_string(),
+            BTreeMap::new(),
+            Some(preflight.base_commit.clone()),
+        )?)));
+    }
+
+    ctx.tracker.advance(
+        JobStatus::Preparing,
+        "prepare",
+        "creating pinned isolated worktrees",
+    )?;
+    if let Err(error) = legacy::prepare_parsed(
+        execution_root,
+        &preflight.repository,
+        &preflight.base_commit,
+        &preflight.base_commit,
+        ctx.spec.limits.compile_timeout_secs,
+    ) {
+        return Ok(Stage::Finished(Box::new(finish_failure(
+            ctx.store,
+            ctx.spec,
+            ctx.started_at,
+            ctx.tracker,
+            FailureClass::HostInfrastructureFailure,
+            format!("comparison preparation failed: {error}"),
+            BTreeMap::new(),
+            Some(preflight.base_commit.clone()),
+        )?)));
+    }
+    Ok(Stage::Continue(()))
+}
+
+/// Stage 4: normalize durable harness artifacts, clean disposable build state per policy,
+/// and collect the per-harness results.
+fn preserve_and_collect(
+    ctx: &RunContext<'_>,
+    job_root: &Path,
+    execution_root: &Path,
+    policy: &WorkerPolicy,
+) -> Result<PreservedResults, Box<dyn Error>> {
     let normalized_root = job_root.join("artifacts/harnesses");
     fs::create_dir_all(&normalized_root)?;
-    for harness in &spec.harnesses {
+    for harness in &ctx.spec.harnesses {
         let source = execution_root.join("artifacts").join(&harness.id);
         let destination = normalized_root.join(&harness.id);
         if source.is_dir() && !destination.exists() {
@@ -155,34 +247,56 @@ pub fn execute(
         }
     }
     if !policy.retain_worktrees
-        && let Err(error) = legacy::remove_job_worktrees(&execution_root)
+        && let Err(error) = legacy::remove_job_worktrees(execution_root)
     {
         cleanup_diagnostics.push(format!("could not remove completed worktrees: {error}"));
     }
-    let harnesses = collect_results(&spec, &normalized_root)?;
-    let classification = classify(&run_result, &harnesses, &normalized_root, store, job_id);
+    let harnesses = collect_results(ctx.spec, &normalized_root)?;
+    Ok(PreservedResults {
+        harnesses,
+        cleanup_diagnostics,
+    })
+}
+
+/// Stage 5: classify the run, persist the terminal report (report before state, so a reader
+/// that observes the terminal state can always read report.json), and return it.
+fn finish_and_report(
+    ctx: &mut RunContext<'_>,
+    base_commit: &str,
+    run_result: Result<(), Box<dyn Error>>,
+    preserved: PreservedResults,
+) -> Result<ComparisonReport, Box<dyn Error>> {
+    let job_root = ctx.store.job_root(ctx.job_id);
+    let normalized_root = job_root.join("artifacts/harnesses");
+    let classification = classify(
+        &run_result,
+        &preserved.harnesses,
+        &normalized_root,
+        ctx.store,
+        ctx.job_id,
+    );
     match classification {
         None => {
             let report = ComparisonReport {
                 version: 1,
-                job_id: job_id.clone(),
-                experiment_id: spec.experiment_id.clone(),
+                job_id: ctx.job_id.clone(),
+                experiment_id: ctx.spec.experiment_id.clone(),
                 status: JobStatus::Succeeded,
                 failure_class: None,
-                base_commit: Some(preflight.base_commit),
-                started_at,
+                base_commit: Some(base_commit.to_string()),
+                started_at: ctx.started_at,
                 finished_at: Utc::now(),
-                harnesses,
-                run_order: spec.run_order.clone(),
-                diagnostics: cleanup_diagnostics,
+                harnesses: preserved.harnesses,
+                run_order: ctx.spec.run_order.clone(),
+                diagnostics: preserved.cleanup_diagnostics,
                 artifact_root: job_root.join("artifacts"),
             };
             // Report before terminal state: a reader that observes the terminal state must be
             // able to read report.json (the state file is what awaiters watch; the report is
             // what they read next). The old order — state then report — let a fast consumer
             // (await_terminal + load_report) see the terminal state before the report landed.
-            write_report_or_mark_host_failure(store, &mut tracker, &report)?;
-            tracker.advance(
+            write_report_or_mark_host_failure(ctx.store, ctx.tracker, &report)?;
+            ctx.tracker.advance(
                 JobStatus::Succeeded,
                 "complete",
                 "all harness results were preserved",
@@ -190,19 +304,19 @@ pub fn execute(
             Ok(report)
         }
         Some((class, mut message)) => {
-            if !cleanup_diagnostics.is_empty() {
+            if !preserved.cleanup_diagnostics.is_empty() {
                 message.push_str("; ");
-                message.push_str(&cleanup_diagnostics.join("; "));
+                message.push_str(&preserved.cleanup_diagnostics.join("; "));
             }
             finish_failure(
-                store,
-                &spec,
-                started_at,
-                &mut tracker,
+                ctx.store,
+                ctx.spec,
+                ctx.started_at,
+                ctx.tracker,
                 class,
                 message,
-                harnesses,
-                Some(preflight.base_commit),
+                preserved.harnesses,
+                Some(base_commit.to_string()),
             )
         }
     }
