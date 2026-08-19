@@ -275,58 +275,53 @@ pub fn classify_error(err: &CoderError) -> FailureClass {
     }
 }
 
+/// Rule table for messages that carry an explicit `FAILURE_CLASS:` marker. These take precedence
+/// because such messages also quote the findings that produced them — a disk-full run carries both
+/// `infrastructure` and the `CommandFailed` text that caused it.
+const CLASSED_RULES: &[(&[&str], FailureClass)] = &[
+    (&["infrastructure"], FailureClass::Infrastructure),
+    (&["no_changes"], FailureClass::NoChanges),
+    (&["missing_path"], FailureClass::MissingPath),
+    (&["content_mismatch"], FailureClass::ContentMismatch),
+    (&["command_timeout"], FailureClass::CommandTimeout),
+    (&["command_failed"], FailureClass::CommandFailed),
+    (&["empty_diff"], FailureClass::EmptyDiff),
+    (&["critic_revision"], FailureClass::CriticRevision),
+];
+
+/// Rule table for unmarked messages, matched in declaration order — the first hit wins.
+const GENERIC_RULES: &[(&[&str], FailureClass)] = &[
+    (
+        &["no real workspace changes", "no_changes"],
+        FailureClass::NoChanges,
+    ),
+    (&["missing path", "missing_path"], FailureClass::MissingPath),
+    (&["must contain", "content"], FailureClass::ContentMismatch),
+    (&["timed out"], FailureClass::CommandTimeout),
+    (&["exited", "command"], FailureClass::CommandFailed),
+    (&["critic"], FailureClass::CriticRevision),
+    (
+        &["completeness", "validation"],
+        FailureClass::ValidationOther,
+    ),
+];
+
+/// The first rule whose keyword (lower-cased) appears in `lower` is the class.
+fn match_rules(lower: &str, rules: &[(&[&str], FailureClass)]) -> Option<FailureClass> {
+    rules
+        .iter()
+        .find(|(needles, _)| needles.iter().any(|n| lower.contains(n)))
+        .map(|(_, class)| *class)
+}
+
 pub fn classify_message(msg: &str) -> FailureClass {
     let lower = msg.to_ascii_lowercase();
-    if lower.contains("failure_class:") {
-        // Before the rest: the message also quotes the findings, so a disk-full run carries both
-        // `infrastructure` and the `CommandFailed` text that produced it.
-        if lower.contains("infrastructure") {
-            return FailureClass::Infrastructure;
-        }
-        if lower.contains("no_changes") {
-            return FailureClass::NoChanges;
-        }
-        if lower.contains("missing_path") {
-            return FailureClass::MissingPath;
-        }
-        if lower.contains("content_mismatch") {
-            return FailureClass::ContentMismatch;
-        }
-        if lower.contains("command_timeout") {
-            return FailureClass::CommandTimeout;
-        }
-        if lower.contains("command_failed") {
-            return FailureClass::CommandFailed;
-        }
-        if lower.contains("empty_diff") {
-            return FailureClass::EmptyDiff;
-        }
-        if lower.contains("critic_revision") {
-            return FailureClass::CriticRevision;
-        }
+    if lower.contains("failure_class:")
+        && let Some(class) = match_rules(&lower, CLASSED_RULES)
+    {
+        return class;
     }
-    if lower.contains("no real workspace changes") || lower.contains("no_changes") {
-        return FailureClass::NoChanges;
-    }
-    if lower.contains("missing path") || lower.contains("missing_path") {
-        return FailureClass::MissingPath;
-    }
-    if lower.contains("must contain") || lower.contains("content") {
-        return FailureClass::ContentMismatch;
-    }
-    if lower.contains("timed out") {
-        return FailureClass::CommandTimeout;
-    }
-    if lower.contains("exited") || lower.contains("command") {
-        return FailureClass::CommandFailed;
-    }
-    if lower.contains("critic") {
-        return FailureClass::CriticRevision;
-    }
-    if lower.contains("completeness") || lower.contains("validation") {
-        return FailureClass::ValidationOther;
-    }
-    FailureClass::Other
+    match_rules(&lower, GENERIC_RULES).unwrap_or(FailureClass::Other)
 }
 
 /// Format prior_feedback entry for a retryable error (signature-aware).
@@ -496,6 +491,32 @@ mod tests {
                 "no repair_hint for {class:?}"
             );
         }
+    }
+
+    #[test]
+    fn classify_message_matches_marked_and_generic_keywords() {
+        // A marked class beats the generic text the same message also quotes.
+        assert_eq!(
+            classify_message("FAILURE_CLASS: infrastructure\nexited: 1"),
+            FailureClass::Infrastructure
+        );
+        assert_eq!(
+            classify_message("command timed out"),
+            FailureClass::CommandTimeout
+        );
+        assert_eq!(
+            classify_message("missing path: src/main.rs"),
+            FailureClass::MissingPath
+        );
+        assert_eq!(
+            classify_message("the critic wants revision"),
+            FailureClass::CriticRevision
+        );
+        assert_eq!(
+            classify_message("completeness check failed"),
+            FailureClass::ValidationOther
+        );
+        assert_eq!(classify_message("totally unrelated"), FailureClass::Other);
     }
 
     #[test]
