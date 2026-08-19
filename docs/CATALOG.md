@@ -77,6 +77,7 @@ Authority model: [doc-authority.md](spec/reference/doc-authority.md).
 | [docs/future-work/turbovault-modules-integration-roadmap.md](future-work/turbovault-modules-integration-roadmap.md) | plan | active | implementation | turbovault | turbovault-modules |
 | [docs/future-work/turbovault-vault-events-plugin-plan.md](future-work/turbovault-vault-events-plugin-plan.md) | plan | active | implementation | turbovault | turbovault-vault-events |
 | [docs/impl/live-conformance.md](impl/live-conformance.md) | runbook | active | implementation | conformance | live-conformance-operation |
+| [docs/roadmap.md](roadmap.md) | plan | active | advisory | product | product-roadmap |
 | [docs/spec/architecture-decisions.md](spec/architecture-decisions.md) | index | superseded | advisory | architecture | — |
 | [docs/spec/reference/doc-authority.md](spec/reference/doc-authority.md) | policy | active | normative | docs | document-authority |
 | [docs/validation/README.md](validation/README.md) | validation | active | evidence | correctness | — |
