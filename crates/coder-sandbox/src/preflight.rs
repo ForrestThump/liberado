@@ -1,9 +1,8 @@
 //! Generic **preflight** gate — ordered shell steps, fail-closed, language-agnostic.
 //!
-//! Product idea (see `docs/future-work/self-pr-quality-roadmap.md`): nothing is ready/shippable
-//! until project preflight passes. This module is the runner only; project config supplies steps
-//! (not hard-coded cargo). Do **not** re-execute GitHub Actions YAML here — share the same
-//! commands/scripts CI uses.
+//! Nothing is ready or shippable until project preflight passes. This module is the runner only;
+//! project config supplies steps (not hard-coded cargo). Do **not** re-execute GitHub Actions YAML
+//! here — share the same commands or scripts CI uses.
 //!
 //! Steps always run to completion of the profile (no fail-fast on the first required failure). A
 //! required failure sets overall `ok` false but later steps still execute so the report carries the

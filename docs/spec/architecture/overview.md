@@ -261,8 +261,8 @@ pipeline picks up the write and archives it — closed the gap where an expired-
 **Not yet built (next slice):**
 - Rust-native agentic coder crates and PR-factory integration; see
   [`rust-native-agentic-coder-plan.md`](../../future-work/rust-native-agentic-coder-plan.md).
-- Tier 2 live conformance (model-in-the-loop) — optional;
-  [`../../future-work/live-conformance-suite.md`](../../future-work/live-conformance-suite.md).
+- Tier 2 live conformance (model-in-the-loop) — optional; see the
+  [conformance runbook](../../impl/live-conformance.md).
 - Splitting `liberado-common`'s grab-bag along its natural boundaries — partially underway (`config`
   and `config-loader` have already been carved off into their own crates), but `common` still has
   eight modules (`provenance`, `capability`, `catalog`, `dispatch`, `event`, `model`,

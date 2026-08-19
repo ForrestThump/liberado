@@ -209,15 +209,12 @@ An adapter conforms when it satisfies all of:
 A shared conformance suite should own these, so an adapter is verified rather than asserted — pi's
 telemetry package does exactly this and it is the right pattern.
 
-**Fixture location (Liberado):** sample JSONL and reconstruction tests live under
-`crates/test-support` (`trace_contracts` module + `tests/mvl_conformance.rs`). They prove a reader
-can rebuild messages, system text, ordered tool definitions and sampling params for any turn from
-the log alone. They do **not** emit production logs — emission is a separate backlog item.
-
-**End-to-end conformance plan:** producer-driven integration tests (mock provider, multi-harness
-oracle over on-disk JSONL, all eight Conformance rules) are specified in
-[`docs/future-work/mvl-e2e-integration-test-plan.md`](../../future-work/mvl-e2e-integration-test-plan.md).
-That plan is implementation guidance, not part of this normative contract.
+**Liberado implementation:** sample reconstruction fixtures live in `crates/test-support` under
+`tests/mvl_conformance.rs`. The path-based oracle in `src/mvl_oracle.rs` and
+`tests/mvl_e2e_oracle.rs` judges on-disk JSONL without Liberado session types. The production
+adapter in `tests/mvl_e2e_liberado.rs` drives the real emitter with scripted completions. Together
+they exercise all eight rules above, including append-and-flush parsing, tool-result honesty,
+explicit catalogue withdrawal, and execution-log joins.
 
 ### Reconstruction checklist (normative for fixtures)
 

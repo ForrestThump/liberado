@@ -10,7 +10,9 @@ open_items: true
 # Context compaction re-architecture — viewport / side-summary model (CH3.1)
 
 **Status**: Proposed — not shipped.  
-**Depends on**: CH3 Tier 1 (persisted marker + tail re-append), shipped 2026-07-23 — see [`context-compaction-plan.md`](context-compaction-plan.md).  
+**Depends on**: CH3 Tier 1 (persisted marker + tail re-append), shipped 2026-07-23. The current
+contract is in `crates/main-agent/src/compaction.rs` and the operator settings are in
+[`tuning.md`](../spec/reference/tuning.md).
 **Motivation**: Close a known residual failure mode in the marker-before-tail design, remove tail duplication, and make “model context” an explicit viewport over an unbroken conversation log.
 
 ---
@@ -233,7 +235,7 @@ Unscheduled; order is indicative.
 | **S2** | `maybe_compact` writes summary node + updates viewport; **stops** tail re-append for new compactions |
 | **S3** | Fork / branch copies viewport; dangling `continue_from` → full history tests |
 | **S4** | Migration: dual-read CH3 markers; optional stop writing markers |
-| **S5** | Docs: update `context-compaction-plan.md` “as built”; failure-modes note; archive or mark this plan landed |
+| **S5** | Docs: update compaction Rustdoc and `tuning.md`; add a failure-modes note; retire this plan when landed |
 
 Tests should include: partial failure of summary write (no viewport advance); dangling continue_from; fork isolation; rolling second compaction; regression that history/search still see pre-viewport messages once.
 
@@ -241,7 +243,7 @@ Tests should include: partial failure of summary write (no viewport advance); da
 
 ## 8. Out of scope (unchanged from CH3 follow-ups)
 
-Still separate from this re-architecture (see original plan’s “Deliberately not built”):
+Still separate from this re-architecture:
 
 - Mid-turn precheck inside the executor loop  
 - Between-turn tool-result pruning  
@@ -254,7 +256,7 @@ Still separate from this re-architecture (see original plan’s “Deliberately 
 
 ## 9. References
 
-- Shipped design: [`context-compaction-plan.md`](context-compaction-plan.md)  
-- Code: `crates/main-agent/src/compaction.rs`, `crates/main-agent/src/sessions.rs` (`maybe_compact`, `elide_before_latest_marker`)  
+- Shipped design and code: `crates/main-agent/src/compaction.rs`,
+  `crates/main-agent/src/sessions.rs` (`maybe_compact`, `elide_before_latest_marker`)
+- Operator settings: [`tuning.md`](../spec/reference/tuning.md)
 - Reliability doctrine: [`../spec/architecture/failure-modes.md`](../spec/architecture/failure-modes.md) §1–§2 (real store tests; opt-in guards are off)  
-- Peer survey summary (OpenCode / Kilo / OpenClaw / LibreChat): same roadmap plan §“Outside research”

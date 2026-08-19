@@ -283,8 +283,8 @@ pub struct ChatSessions {
 }
 
 /// The moving parts of automatic compaction: the tunables, plus the provider used for the one
-/// summarization completion per compaction (the chat face's own provider in production — see
-/// `docs/future-work/context-compaction-plan.md` for why no dedicated summarizer model yet).
+/// summarization completion per compaction. Production uses the chat face's own provider; there is
+/// no separate summarizer role.
 ///
 /// Thresholds live in [`CompactionTriggerTable`] under a mutex: the **default** entry is updated
 /// on daemon-wide face-model hot-swap ([`ChatSessions::set_compaction_trigger_tokens`]); per-model
@@ -1832,9 +1832,9 @@ impl ChatSessions {
         (view, parent, tail_persist_failures)
     }
 
-    /// The full sequence (estimation, boundary selection, summarization, persistence) is described
-    /// in `docs/future-work/context-compaction-plan.md`. Every failure mode degrades to *running
-    /// uncompacted* — a missing summary must never cost the human their turn.
+    /// The full sequence is defined by the `crate::compaction` module and this method. Every
+    /// failure mode degrades to *running uncompacted* — a missing summary must never cost the human
+    /// their turn.
     async fn maybe_compact(
         &self,
         session: Ulid,

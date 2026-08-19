@@ -283,7 +283,7 @@ has ever sent SIGTERM to the deployed daemon mid-turn**. Tier 3 exists precisely
 tests could not see the defects that mattered, and this is the newest unexercised guarantee in the
 system. P6 (durable turn outlives its connection) landed in #31 and is the template.
 
-Spec and envelope: [`live-conformance-tier3-build-spec.md`](../live-conformance-tier3-build-spec.md).
+Current operation: [`live-conformance.md`](../../impl/live-conformance.md).
 
 **New path P7 — a turn survives, or is honestly reported, across a restart.**
 

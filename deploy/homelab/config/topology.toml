@@ -240,7 +240,7 @@ transport = { kind = "http", url = "https://mcp.deepwiki.com" }
 # =============================================================================
 # The live conformance suite (liberado-conformance) needs a named profile that is *narrower*
 # than the domain fallback, and a hook that stamps that profile onto the reaction event.
-# See docs/future-work/live-conformance-tier3-build-spec.md.
+# See docs/impl/live-conformance.md.
 
 # Pool whose ceiling is the `conformance` policy grant (name = component). Without this, the hook
 # runs on the default pool and the orchestrator intersects the session grant with `dispatcher`,

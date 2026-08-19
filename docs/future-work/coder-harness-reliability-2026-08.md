@@ -12,10 +12,10 @@ open_items: true
 **Status**: Active. Fixes through PR #119 are on `main`. The measurement is real but incomplete —
 read [Where the numbers came from](#where-the-numbers-came-from) before quoting it.
 
-Compare 3 (F12, 2026-08-13) is a later measurement of the same pack: compile and thinking
-now work; finish still fails because repair feedback is `cargo exited 101` with no excerpt.
-Record and the next pack fixes:
-[`f12-compare3-harness-failures-2026-08.md`](f12-compare3-harness-failures-2026-08.md).
+Compare 3 (F12, 2026-08-13) later showed that compile and thinking worked while repair feedback
+reduced a failing suite to `cargo exited 101`. PR #170 fixed the excerpt selection. The controlled
+multi-harness baseline remains open in the backlog; the one-task comparison is available in git
+history when incident detail is required.
 
 **Who this is for**: anyone picking up the coding pack. It records what was measured, what was
 fixed, and — more usefully — **which plausible ideas were tried and did not work**, so the next

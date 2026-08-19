@@ -74,7 +74,7 @@ authorization, new wire events, the loop scheduler).
 | G5 | **Wire events missing for the gate + diffs.** No `critic_verdict`, `file_changed`, or `checkpoint` events (kernel enum + wire mirror + SSE map + TUI decoder — all four, per failure-modes §1). | kernel + contract |
 | G6 | **`/loop` unimplemented.** Full design in `loops-plan.md` (L1–L6, slices P1–P5); zero code. | kernel + surface |
 | G7 | **Coding subagent isolation.** ~~`delegate` spawns dispatch-pack children; nothing spawns a *coding* child with its own worktree and merge-back.~~ **S6 v1 landed (#72):** `payload.subtasks` → N worktrees/branches; hub-spawned child goal sessions; parent LLM merge-back. Missing: face `delegate` → coding, parent gate over merge, TUI chrome. | pack — **mechanism done** |
-| G8 | **Goal-session context compaction.** Chat compaction landed; executor turn loops inside goal sessions don't compact yet (follow-up already noted in `context-compaction-plan.md`). | kernel, later |
+| G8 | **Goal-session context compaction.** Chat compaction landed; executor turn loops inside goal sessions do not compact yet. This remains unscheduled. | kernel, later |
 
 ## What the references teach (and exactly where each pattern lands)
 
@@ -310,7 +310,7 @@ for agent-created loops); whether a human-typed `/loop new …` may also write o
 
 Chat compaction (CH3) proved the persisted-marker pattern. Executor turn loops inside long goal
 sessions need a pack-level variant (tool-result pruning first, then marker compaction). Tracked
-as a follow-up in `context-compaction-plan.md`; not a blocker for this plan's slices.
+as separate future work; it is not a blocker for this plan's slices.
 
 ## Slices
 

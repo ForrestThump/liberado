@@ -9,8 +9,8 @@ extraction but by inversion: `config-loader` now carries `[tuning.coder]` as an 
 config stack no longer depends on the pack. Extraction into `liberado-verify` stays a
 second-domain decision per §7. See [modularity.md](modularity.md)'s extraction-trigger note.  
 **Related**: [`agentic-loops.md`](agentic-loops.md), [`coder-eval-curriculum.md`](../../future-work/coder-eval-curriculum.md),
-dispatcher `Clarify` / `success_criteria` in `liberado-common`,
-**project-level ship preflight** (complementary): [`self-pr-quality-roadmap.md`](../../future-work/self-pr-quality-roadmap.md#generic-preflight-gate).
+dispatcher `Clarify` / `success_criteria` in `liberado-common`, and project-level ship preflight in
+`crates/coder-sandbox/src/preflight.rs`.
 
 This document sketches **schema and trait boundaries** for harness-owned success checks: the “CI in
 the loop” idea — customizable criteria, force repair until green **or** hard stop, without locking
@@ -18,8 +18,16 @@ the kernel to Rust or even to coding.
 
 **Attempt verifiers vs preflight:** verifiers here are **in-loop** checks attached to a frozen
 contract (often small and fast). **Preflight** is the **project ship bar** before ready/PR — ideally
-CI-equivalent, config-driven, pack-callable, not hard-coded cargo in the coding pack. See the
-self-PR roadmap section linked above.
+CI-equivalent, config-driven, pack-callable, and not hard-coded cargo in the coding pack.
+
+The shipped preflight runner executes every step in the selected profile and fails closed when a
+required step fails. It also parses named failures. The pack hook compares those identities with a
+cached baseline of the base commit, so an existing red base does not block an unrelated repair.
+The coding pack runs the ship profile before terminal success.
+Projects declare profiles under `[projects.preflight]`; the complete example is in
+[`config.example/topology.toml`](../../../config.example/topology.toml). The runner and its failure
+parser are in `crates/coder-sandbox/src/preflight.rs`; the pack hook is in
+`crates/coder-agent/src/session_pack/preflight_hook.rs`.
 
 **Biggest product gap after the verifier machinery:** *where do the checks come from?* A vague human
 writeup is not a gate. Section 3 defines **criteria intake** — a structured planning session that

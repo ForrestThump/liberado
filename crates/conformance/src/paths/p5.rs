@@ -49,7 +49,7 @@ pub async fn run(client: &DaemonClient, cfg: &ConformanceConfig, timeout: Durati
                 serde_json::json!({
                     "parent": turn.session_id,
                     "child": child,
-                    "v1_note": "dispatcher grant arm deferred — see live-conformance-tier3-build-spec",
+                    "v1_note": "dispatcher grant arm deferred — see docs/impl/live-conformance.md",
                 }),
             );
         }

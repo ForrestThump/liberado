@@ -198,7 +198,7 @@ stopped; this is about finishing what can finish, not reviving what cannot.
 Tier 3 coverage, and Tier 3 exists precisely because in-process tests could not see the defects that
 mattered. This is the newest, least-exercised surface in the daemon.
 
-Spec and envelope: [`live-conformance-tier3-build-spec.md`](../live-conformance-tier3-build-spec.md).
+Current operation: [`live-conformance.md`](../../impl/live-conformance.md).
 Every rule there still applies — background sessions only, conformance zone only, touch only what
 the run created.
 

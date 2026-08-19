@@ -178,9 +178,9 @@ pub struct MainAgentConfig {
     /// Optional full override of the main-agent system prompt. When unset, uses the built-in
     /// human-interfacer prompt (if `delegation_mode`) or the short legacy prompt otherwise.
     pub system_prompt: Option<String>,
-    /// Automatic context compaction for long conversations (CH3 — see
-    /// `docs/future-work/context-compaction-plan.md`). All fields defaulted; an absent table is the
-    /// shipped behavior (compaction on).
+    /// Automatic context compaction for long conversations (CH3). See
+    /// `docs/spec/reference/tuning.md`. All fields defaulted; an absent table is the shipped
+    /// behavior (compaction on).
     pub compaction: CompactionSettings,
 }
 
@@ -578,7 +578,7 @@ pub struct ProjectConfig {
     #[serde(default = "default_true")]
     pub enabled: bool,
     /// Ship / fast / deep preflight profiles (language-agnostic ordered commands).
-    /// See `docs/future-work/self-pr-quality-roadmap.md` § Generic preflight gate.
+    /// See `config.example/topology.toml` and `docs/spec/architecture/verifiers.md`.
     #[serde(default)]
     pub preflight: ProjectPreflightConfig,
 }

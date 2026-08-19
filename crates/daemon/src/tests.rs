@@ -2655,7 +2655,7 @@ async fn known_session_profile_still_dispatches() {
 
 // ── L9 — cron/webhook-class event → joinable Dispatched session (T1 suite) ──
 
-/// L9 (docs/future-work/live-conformance-suite.md): a cron/webhook-class event on the **shipped**
+/// L9 (docs/impl/live-conformance.md): a cron/webhook-class event on the **shipped**
 /// daemon reaction path becomes `ReactionOutcome::Dispatched { session_id }` with a **joinable**
 /// hosted session on the hub (snapshot succeeds; domain is the reaction/dispatch pack), not an
 /// unrecorded inline-only reaction.
