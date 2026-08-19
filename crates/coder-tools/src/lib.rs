@@ -2300,114 +2300,102 @@ fn extract_symbols(path: &str, content: &str) -> Vec<String> {
     symbols
 }
 
-fn extract_rust_symbol(line: &str) -> Option<String> {
-    let line = line.trim();
-    if line.starts_with("//")
+/// `keyword` -> the characters that terminate its declaration name.
+const RUST_DECL_TERMINATORS: &[(&str, &[char])] = &[
+    ("fn", &['(', '<']),
+    ("struct", &['<', '{', '(', ';']),
+    ("enum", &['<', '{']),
+    ("trait", &['<', '{']),
+    ("mod", &['{', ';']),
+];
+
+/// True when the trimmed line is a comment or a block-comment continuation.
+fn is_comment_line(line: &str) -> bool {
+    line.starts_with("//")
         || line.starts_with("///")
         || line.starts_with("//!")
         || line.starts_with("/*")
         || line.starts_with("* ")
         || line == "*"
-    {
-        return None;
-    }
-    // Strip #[derive(...)] and other same-line attributes.
-    let line = if line.starts_with("#[") {
+}
+
+/// Strip a same-line `#[...]` attribute, leaving whatever declaration follows it (if any).
+fn strip_same_line_attribute(line: &str) -> &str {
+    if line.starts_with("#[") {
         line.split(']').nth(1).unwrap_or("").trim()
     } else {
         line
-    };
-    if line.is_empty() {
-        return None;
     }
-    // Strip visibility and qualifier prefixes, leaving just the keyword prefix.
-    // Handles: pub, pub(crate), pub(super), pub(in path), const, unsafe, async, extern "C"
-    let rest = line
-        .trim_start_matches("pub(crate) ")
+}
+
+/// Strip visibility and qualifier prefixes, leaving just the keyword prefix.
+/// Handles: pub, pub(crate), pub(super), pub(in path), const, unsafe, async, extern "C".
+fn strip_rust_prefixes(line: &str) -> &str {
+    line.trim_start_matches("pub(crate) ")
         .trim_start_matches("pub(super) ")
         .trim_start_matches("pub ")
         .trim_start_matches("const ")
         .trim_start_matches("unsafe ")
         .trim_start_matches("async ")
-        .trim_start_matches("extern \"C\" ");
-    // fn
-    if rest.starts_with("fn ") {
-        let name = rest
-            .trim_start_matches("fn ")
-            .split(['(', '<'])
-            .next()?
-            .trim()
-            .to_string();
-        if !name.is_empty() {
-            return Some(format!("fn {name}"));
-        }
+        .trim_start_matches("extern \"C\" ")
+}
+
+/// Extract `keyword <name>` from a trimmed declaration line, cutting the name at the first
+/// structural terminator. `None` when the line is not that declaration or carries no name.
+fn rust_keyword_symbol(rest: &str, keyword: &str, terminators: &[char]) -> Option<String> {
+    let prefix = format!("{keyword} ");
+    if !rest.starts_with(&prefix) {
+        return None;
     }
-    // struct
-    if rest.starts_with("struct ") {
-        let name = rest
-            .trim_start_matches("struct ")
-            .split(['<', '{', '(', ';'])
-            .next()?
-            .trim()
-            .to_string();
-        if !name.is_empty() {
-            return Some(format!("struct {name}"));
-        }
+    let name = rest
+        .trim_start_matches(&prefix)
+        .split(terminators)
+        .next()?
+        .trim()
+        .to_string();
+    (!name.is_empty()).then(|| format!("{keyword} {name}"))
+}
+
+/// Extract `impl <name>` from a declaration that may carry generic parameters.
+fn extract_impl_symbol(rest: &str) -> Option<String> {
+    let rest = rest.trim_start_matches("impl").trim_start_matches(' ');
+    let name = if rest.starts_with('<') {
+        rest.split('>')
+            .nth(1)
+            .and_then(|s| s.trim().split(' ').next())?
+            .to_string()
+    } else {
+        rest.split(['<', '{', ' ']).next()?.trim().to_string()
+    };
+    if !name.is_empty() && !name.starts_with("for") {
+        Some(format!("impl {name}"))
+    } else {
+        None
     }
-    // enum
-    if rest.starts_with("enum ") {
-        let name = rest
-            .trim_start_matches("enum ")
-            .split(['<', '{'])
-            .next()?
-            .trim()
-            .to_string();
-        if !name.is_empty() {
-            return Some(format!("enum {name}"));
-        }
+}
+
+fn extract_rust_symbol(line: &str) -> Option<String> {
+    let line = line.trim();
+    if is_comment_line(line) {
+        return None;
     }
-    // trait
-    if rest.starts_with("trait ") {
-        let name = rest
-            .trim_start_matches("trait ")
-            .split(['<', '{'])
-            .next()?
-            .trim()
-            .to_string();
-        if !name.is_empty() {
-            return Some(format!("trait {name}"));
-        }
+    let line = strip_same_line_attribute(line);
+    if line.is_empty() {
+        return None;
     }
-    // impl
+    let rest = strip_rust_prefixes(line);
+    // `impl` has its own generics/for handling; every other declaration keyword shares one
+    // name-extraction shape (keyword -> structural terminators), so it is table-driven.
     if rest.starts_with("impl<") || rest.starts_with("impl ") {
-        let rest = rest.trim_start_matches("impl").trim_start_matches(' ');
-        let name = if rest.starts_with('<') {
-            rest.split('>')
-                .nth(1)
-                .and_then(|s| s.trim().split(' ').next())?
-                .to_string()
-        } else {
-            rest.split(['<', '{', ' ']).next()?.trim().to_string()
-        };
-        if !name.is_empty() && !name.starts_with("for") {
-            return Some(format!("impl {name}"));
-        }
+        return extract_impl_symbol(rest);
     }
-    // mod
-    if rest.starts_with("mod ") {
-        let name = rest
-            .trim_start_matches("mod ")
-            .split(['{', ';'])
-            .next()?
-            .trim()
-            .to_string();
-        if !name.is_empty() {
-            return Some(format!("mod {name}"));
+    for (keyword, terminators) in RUST_DECL_TERMINATORS {
+        if let Some(sym) = rust_keyword_symbol(rest, keyword, terminators) {
+            return Some(sym);
         }
     }
     None
 }
-
 fn extract_python_symbol(line: &str) -> Option<String> {
     if line.starts_with(' ') || line.starts_with('\t') {
         return None;
