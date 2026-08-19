@@ -374,29 +374,33 @@ mod tests {
     fn repository_scans_exclude_ignored_local_notes() {
         let directory = tempfile::tempdir().expect("temp directory");
         let root = directory.path();
-        fs::create_dir(root.join("docs")).expect("create docs");
-        fs::write(root.join(".gitignore"), "docs/local-note.md\n").expect("write ignore");
-        fs::write(root.join("docs/current.md"), "current").expect("write current");
-        fs::write(root.join("docs/local-note.md"), "local").expect("write local");
+        let docs = root.join("docs");
+        fs::create_dir(&docs).expect("create docs");
+        fs::write(
+            root.join(".gitignore"),
+            format!("{}/local-note.md\n", "docs"),
+        )
+        .expect("write ignore");
+        let current = docs.join("current.md");
+        let local_note = docs.join("local-note.md");
+        fs::write(&current, "current").expect("write current");
+        fs::write(&local_note, "local").expect("write local");
         git(root, &["init", "--quiet"]);
         git(root, &["config", "user.email", "test@example.com"]);
         git(root, &["config", "user.name", "test"]);
 
-        let files = vec![
-            root.join("docs/current.md"),
-            root.join("docs/local-note.md"),
-        ];
-        let retained = retain_unignored_files(root, files);
+        let retained = retain_unignored_files(root, vec![current.clone(), local_note]);
 
-        assert_eq!(retained, vec![root.join("docs/current.md")]);
+        assert_eq!(retained, vec![current]);
     }
 
     #[test]
     fn non_git_tree_keeps_all_files() {
         let directory = tempfile::tempdir().expect("temp directory");
         let root = directory.path();
-        fs::create_dir(root.join("docs")).expect("create docs");
-        let files = vec![root.join("docs/a.md"), root.join("docs/b.md")];
+        let docs = root.join("docs");
+        fs::create_dir(&docs).expect("create docs");
+        let files = vec![docs.join("a.md"), docs.join("b.md")];
         fs::write(&files[0], "a").expect("write a");
         fs::write(&files[1], "b").expect("write b");
 
