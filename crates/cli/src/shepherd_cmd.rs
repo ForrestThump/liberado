@@ -762,6 +762,84 @@ fn cold_review_prompt(cfg: &Config, pr: &Pr, round: usize, old: &BTreeSet<String
     )
 }
 
+/// A PR with fresh CI failures: rerun once, then kick back a goal (up to the cap), then block.
+///
+/// Every arm ends the tick for this PR, so the caller does not fall through to the cold-review
+/// path while failures are new.
+fn handle_new_failures(
+    cfg: &Config,
+    pr: &mut Pr,
+    dry: bool,
+    new: &BTreeSet<String>,
+    old: &BTreeSet<String>,
+    run: &Option<Value>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let kicks = pr.count("shepherd:kickback-");
+    if !pr.has(RERUN) {
+        if !dry && let Some(id) = run.as_ref().and_then(|r| r["databaseId"].as_u64()) {
+            let id = id.to_string();
+            let _ = gh(cfg, &["run", "rerun", &id, "--failed"], false);
+            label(cfg, pr, RERUN.into())
+        }
+        return Ok(());
+    }
+    if kicks >= cfg.max_kickbacks {
+        if !dry {
+            label(cfg, pr, BLOCKED.into())
+        }
+        return Ok(());
+    }
+    if active_goals(cfg) >= cfg.max_concurrent {
+        return Ok(());
+    }
+    if !dry {
+        let prompt = kickback_prompt(pr, new, old);
+        if let Some(id) = start_goal(cfg, prompt, 0) {
+            label(cfg, pr, format!("shepherd:kickback-{}", kicks + 1));
+            remove_label(cfg, pr, RERUN);
+            log(
+                cfg,
+                "kickback_started",
+                json!({"pr":pr.number,"session":id}),
+            )
+        }
+    }
+    Ok(())
+}
+
+/// A PR whose CI is now clean: ready it once the cold-review cap is met, otherwise spend a
+/// budget slot on a cold review.
+fn handle_clean(
+    cfg: &Config,
+    pr: &mut Pr,
+    dry: bool,
+    old: &BTreeSet<String>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let reviews = pr.count("shepherd:review-");
+    if reviews >= cfg.cold_reviews {
+        if !dry {
+            label(cfg, pr, READY.into())
+        }
+        return Ok(());
+    }
+    if active_goals(cfg) >= cfg.max_concurrent {
+        return Ok(());
+    }
+    if !dry {
+        let round = reviews + 1;
+        let prompt = cold_review_prompt(cfg, pr, round, old);
+        if let Some(id) = start_goal(cfg, prompt, cfg.cold_turns) {
+            let path = pending(cfg, pr.number);
+            fs::create_dir_all(path.parent().unwrap())?;
+            fs::write(
+                path,
+                serde_json::to_vec(&json!({"session_id":id,"round":round}))?,
+            )?
+        }
+    }
+    Ok(())
+}
+
 fn tick(cfg: &Config, pr: &mut Pr, dry: bool) -> Result<(), Box<dyn std::error::Error>> {
     if pr.terminal() {
         return Ok(());
@@ -792,63 +870,13 @@ fn tick(cfg: &Config, pr: &mut Pr, dry: bool) -> Result<(), Box<dyn std::error::
         "ci_delta",
         json!({"pr":pr.number,"new":new.len(),"preexisting":old.len(),"base":provenance}),
     );
-    let kicks = pr.count("shepherd:kickback-");
+
     if !new.is_empty() {
-        if !pr.has(RERUN) {
-            if !dry && let Some(id) = run.as_ref().and_then(|r| r["databaseId"].as_u64()) {
-                let id = id.to_string();
-                let _ = gh(cfg, &["run", "rerun", &id, "--failed"], false);
-                label(cfg, pr, RERUN.into())
-            }
-            return Ok(());
-        }
-        if kicks >= cfg.max_kickbacks {
-            if !dry {
-                label(cfg, pr, BLOCKED.into())
-            }
-            return Ok(());
-        }
-        if active_goals(cfg) >= cfg.max_concurrent {
-            return Ok(());
-        }
-        if !dry {
-            let prompt = kickback_prompt(pr, &new, &old);
-            if let Some(id) = start_goal(cfg, prompt, 0) {
-                label(cfg, pr, format!("shepherd:kickback-{}", kicks + 1));
-                remove_label(cfg, pr, RERUN);
-                log(
-                    cfg,
-                    "kickback_started",
-                    json!({"pr":pr.number,"session":id}),
-                )
-            }
-        }
-        return Ok(());
+        return handle_new_failures(cfg, pr, dry, &new, &old, &run);
     }
-    let reviews = pr.count("shepherd:review-");
-    if reviews >= cfg.cold_reviews {
-        if !dry {
-            label(cfg, pr, READY.into())
-        }
-        return Ok(());
-    }
-    if active_goals(cfg) >= cfg.max_concurrent {
-        return Ok(());
-    }
-    if !dry {
-        let round = reviews + 1;
-        let prompt = cold_review_prompt(cfg, pr, round, &old);
-        if let Some(id) = start_goal(cfg, prompt, cfg.cold_turns) {
-            let path = pending(cfg, pr.number);
-            fs::create_dir_all(path.parent().unwrap())?;
-            fs::write(
-                path,
-                serde_json::to_vec(&json!({"session_id":id,"round":round}))?,
-            )?
-        }
-    }
-    Ok(())
+    handle_clean(cfg, pr, dry, &old)
 }
+
 fn seed(cfg: &Config, path: &Path, dry: bool) -> Result<(), Box<dyn std::error::Error>> {
     for task in fs::read_to_string(path)?
         .lines()
