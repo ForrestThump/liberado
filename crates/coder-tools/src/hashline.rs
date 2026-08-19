@@ -199,6 +199,71 @@ fn normalize_path(path: &str) -> String {
         .replace('\\', "/")
 }
 
+/// Handle a `PUT <locator>:` op: parse the locator, collect the following `+` body rows (with
+/// the interior-blank layout rule), and apply. Returns the next line index (which may sit on the
+/// next section/op header).
+fn parse_put(
+    edits: &mut Vec<Edit>,
+    start_line: usize,
+    lines: &[&str],
+    rest: &str,
+) -> Result<usize, String> {
+    let (locator, had_colon) = if let Some(stripped) = rest.strip_suffix(':') {
+        (stripped.trim(), true)
+    } else {
+        (rest, false)
+    };
+
+    if !had_colon {
+        return Err(format!(
+            "colonless PUT (register paste) is not supported yet; got PUT {}",
+            json_preview(locator)
+        ));
+    }
+
+    // Collect + body rows.
+    let mut i = start_line + 1;
+    let mut payloads = Vec::new();
+    while i < lines.len() {
+        let body_line = lines[i].trim_end_matches('\r');
+        let body_trim = body_line.trim_start();
+        // Next op or section?
+        if is_op_header(body_trim) || (body_trim.starts_with('[') && body_trim.ends_with(']')) {
+            break;
+        }
+        if body_trim.is_empty() {
+            // Interior blank: only keep if we already have payloads (trailing blanks discarded
+            // later).
+            if !payloads.is_empty() {
+                // Peek ahead — trailing blanks before next header are layout, not content.
+                let mut j = i + 1;
+                while j < lines.len() && lines[j].trim().is_empty() {
+                    j += 1;
+                }
+                if j >= lines.len() || is_op_header(lines[j].trim_start()) {
+                    break;
+                }
+                payloads.push(String::new());
+            }
+            i += 1;
+            continue;
+        }
+        if let Some(text) = body_line.strip_prefix('+') {
+            payloads.push(text.to_string());
+        } else if let Some(text) = body_trim.strip_prefix('+') {
+            // Indent before + is unusual; accept and keep content after +.
+            payloads.push(text.to_string());
+        } else {
+            // Bare body row: treat as payload with warning-level leniency.
+            payloads.push(strip_read_prefix(body_line));
+        }
+        i += 1;
+    }
+
+    apply_put_locator(locator, &payloads, edits)?;
+    Ok(i)
+}
+
 fn parse_section_body(lines: &[&str]) -> Result<(Vec<Edit>, FileOp), String> {
     let mut edits = Vec::new();
     let mut file_op = FileOp::Update;
@@ -238,61 +303,7 @@ fn parse_section_body(lines: &[&str]) -> Result<(Vec<Edit>, FileOp), String> {
 
         // PUT variants
         if let Some(rest) = strip_keyword(trimmed, "PUT") {
-            let rest = rest.trim();
-            let (locator, had_colon) = if let Some(stripped) = rest.strip_suffix(':') {
-                (stripped.trim(), true)
-            } else {
-                (rest, false)
-            };
-
-            if !had_colon {
-                return Err(format!(
-                    "colonless PUT (register paste) is not supported yet; got PUT {}",
-                    json_preview(locator)
-                ));
-            }
-
-            // Collect + body rows.
-            i += 1;
-            let mut payloads = Vec::new();
-            while i < lines.len() {
-                let body_line = lines[i].trim_end_matches('\r');
-                let body_trim = body_line.trim_start();
-                // Next op or section?
-                if is_op_header(body_trim)
-                    || (body_trim.starts_with('[') && body_trim.ends_with(']'))
-                {
-                    break;
-                }
-                if body_trim.is_empty() {
-                    // Interior blank: only keep if we already have payloads (trailing blanks discarded later).
-                    if !payloads.is_empty() {
-                        // Peek ahead — trailing blanks before next header are layout, not content.
-                        let mut j = i + 1;
-                        while j < lines.len() && lines[j].trim().is_empty() {
-                            j += 1;
-                        }
-                        if j >= lines.len() || is_op_header(lines[j].trim_start()) {
-                            break;
-                        }
-                        payloads.push(String::new());
-                    }
-                    i += 1;
-                    continue;
-                }
-                if let Some(text) = body_line.strip_prefix('+') {
-                    payloads.push(text.to_string());
-                } else if let Some(text) = body_trim.strip_prefix('+') {
-                    // Indent before + is unusual; accept and keep content after +.
-                    payloads.push(text.to_string());
-                } else {
-                    // Bare body row: treat as payload with warning-level leniency.
-                    payloads.push(strip_read_prefix(body_line));
-                }
-                i += 1;
-            }
-
-            apply_put_locator(locator, &payloads, &mut edits)?;
+            i = parse_put(&mut edits, i, lines, rest.trim())?;
             continue;
         }
 
