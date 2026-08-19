@@ -10,7 +10,6 @@ Superseded brainstorms, one-off research dumps, and duplicate handoff notes. **N
 | [loop_architecture_reference_article.md](loop_architecture_reference_article.md) | External-style article draft |
 | [mcp_acp_protocol_difference_conversation.md](mcp_acp_protocol_difference_conversation.md) | Conversation log |
 | [turbomcp-request-meta-issue-draft.md](turbomcp-request-meta-issue-draft.md) | Upstream issue draft |
-| [turbovault-audit-metadata-pr.md](turbovault-audit-metadata-pr.md) | Upstream PR notes |
 | [grok_take_on_hooks.md](grok_take_on_hooks.md) | Exploratory notes |
 
 Living ideas: [../README.md](../README.md).
