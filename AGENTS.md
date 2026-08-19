@@ -60,6 +60,10 @@ something rather than being in the way.
 | `docs/future-work/*/archive/` | Finished or abandoned. **Not current truth.** |
 | `docs/validation/` | Mutation-testing records. Historical evidence, not instructions. |
 
+Keep current priorities and branch state out of this file. They change faster than durable agent
+rules and become false guidance after a merge. Use `docs/future-work/backlog.md` for the next item
+and `docs/future-work/current_unmerged_work.md` for live branch dependencies.
+
 The module-level `//!` docs are unusually thorough here and explain *why*, not just what. For "how
 does X work", read `crates/<x>/src/lib.rs` before searching `docs/` — it is more likely to be right,
 because it cannot drift from the code as easily.
@@ -149,13 +153,6 @@ production entry point still reads it.
 **A `succeeded` report is not accepted while `cargo check` is red.** The coding pack refuses it
 in the same executor conversation (`WorkspaceCompileGate`, PR #163). Partial, Failed, wrap-up
 and turn exhaustion keep the dirty tree. The post-execute ship bar still runs `cargo test`.
-
-**Next harness item: 0.10 — ship-bar excerpt.** The excerpt is the last N lines of that log,
-so a red workspace suite often names a passing crate (`wire`, 61 ok, compares 4 and 9).
-Prefer `FAILED` / `error[` / `panicked`, or the first failing package. Close this class
-before the next live compare. Vary the *task*; do not leave a known class open. 0.7 is a
-report, not the next code change. `crates/coder-agent/src/repair_feedback.rs`
-(`clip_log_excerpt`).
 
 **A host failure ends the run.** Disk-full and the same infrastructure class are not a repair
 the model can make. The finish gate refuses `succeeded`, the executor files `Failed`, and the
