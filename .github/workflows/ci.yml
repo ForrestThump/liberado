@@ -180,7 +180,7 @@ jobs:
       # `.liberado/crap-current.json` (gitignored). Upload it so a Windows
       # fill that fails Ubuntu can be replaced with this host's report.
       - name: Compare CRAP scores to the committed baseline
-        run: cargo run --locked -p liberado-cli -- ci crap
+        run: cargo run --locked --quiet -p liberado-cli -- ci crap
 
       - name: Upload this host's CRAP report
         if: always()
@@ -188,6 +188,14 @@ jobs:
         with:
           name: crap-current-ubuntu
           path: .liberado/crap-current.json
+          if-no-files-found: warn
+
+      - name: Upload the quiet-CI full log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-log-ubuntu
+          path: .liberado/ci.log
           if-no-files-found: warn
 
   doc-links:

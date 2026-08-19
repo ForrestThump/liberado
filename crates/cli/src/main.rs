@@ -12,6 +12,7 @@
 //!   liberado ci check                ship preflight (fmt, clippy, tests, deny)
 //!   liberado ci crap                 compare CRAP scores to crap-baseline.json (no write)
 //!   liberado ci ratchet              check, write baseline, then stage or amend it
+//!                                    console is a summary; full child log is .liberado/ci.log
 //!   liberado shepherd --once          run the unattended PR shepherd once
 //!   liberado docs check-links         check relative Markdown links
 //!   liberado docs crate-map           check the generated crate map

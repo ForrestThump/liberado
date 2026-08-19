@@ -3,7 +3,8 @@
 //! ## CRAP ratchet
 //!
 //! `crap-baseline.json` is the last best per-function score. GitHub only *reads* it
-//! (`liberado ci crap` / `--fail-regression`). A local `liberado ci` run that stays
+//! (`liberado ci crap` / `--fail-regression`, keyed by file + function name, not
+//! line). A local `liberado ci` run that stays
 //! green *writes* it (`liberado ci ratchet`). That is the same check-vs-write split
 //! as `liberado docs crate-map` / `--write`.
 //!
@@ -25,9 +26,13 @@
 //! process still holds that path (`cargo run` waits on it). Before `cargo test`,
 //! `liberado ci` *renames* the running image to `.liberado/liberado-ci` so cargo
 //! can write a new artifact at the old path. Usage-only verbs do not move it.
+//!
+//! Child stdout/stderr go to `.liberado/ci.log`. The console prints the log path,
+//! one `ok`/`FAILED` line per gate, and (on red) extracted `error[` / `FAILED` /
+//! `panicked` / CRAP lines. The full log is always named so an agent can read it.
 
 use std::ffi::OsStr;
-use std::io;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
@@ -41,6 +46,8 @@ const LCOV_FILE: &str = ".liberado/crap.lcov";
 const CURRENT_REPORT: &str = ".liberado/crap-current.json";
 const USAGE: &str = "usage: liberado ci [check|crap|ratchet]";
 const VACATED_BIN: &str = "liberado-ci";
+const CI_LOG_FILE: &str = ".liberado/ci.log";
+const EXTRACT_MAX_LINES: usize = 80;
 
 /// llvm-cov flags live here, never after `--`. After `--` they become
 /// test-binary arguments, and libtest rejects them (`Unrecognized option`).
@@ -98,11 +105,45 @@ New functions must land at or below 450.";
 pub fn run(args: impl Iterator<Item = String>) -> Result<(), Box<dyn std::error::Error>> {
     let mut args = args.peekable();
     match args.next().as_deref() {
-        None => local_run(),
-        Some("check") if args.peek().is_none() => check(),
-        Some("crap") if args.peek().is_none() => crap_check(),
-        Some("ratchet") if args.peek().is_none() => crap_ratchet(),
+        None => with_log(local_run),
+        Some("check") if args.peek().is_none() => with_log(check),
+        Some("crap") if args.peek().is_none() => with_log(crap_check),
+        Some("ratchet") if args.peek().is_none() => with_log(crap_ratchet),
         _ => Err(USAGE.into()),
+    }
+}
+
+fn with_log(
+    body: impl FnOnce(&CiLog) -> Result<(), Box<dyn std::error::Error>>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    body(&CiLog::create(&repository_root()?)?)
+}
+
+/// One invocation's full child log. Truncated at the start of `liberado ci`.
+struct CiLog {
+    root: PathBuf,
+    path: PathBuf,
+}
+
+impl CiLog {
+    fn create(root: &Path) -> Result<Self, Box<dyn std::error::Error>> {
+        std::fs::create_dir_all(root.join(".liberado"))?;
+        let path = root.join(CI_LOG_FILE);
+        std::fs::write(
+            &path,
+            format!("# liberado ci — full log\n# {CI_LOG_FILE}\n"),
+        )?;
+        eprintln!("[liberado ci] full log: {CI_LOG_FILE}");
+        Ok(Self {
+            root: root.to_path_buf(),
+            path,
+        })
+    }
+
+    fn writeln(&self, line: &str) -> Result<(), Box<dyn std::error::Error>> {
+        let mut file = std::fs::OpenOptions::new().append(true).open(&self.path)?;
+        writeln!(file, "{line}")?;
+        Ok(())
     }
 }
 
@@ -158,12 +199,11 @@ fn exe_lives_in_cargo_target(exe: &Path) -> bool {
 ///
 /// The command list is deliberately kept here, rather than in a shell script, so the same
 /// preflight works through the native `liberado` binary on every host OS.
-pub fn check() -> Result<(), Box<dyn std::error::Error>> {
-    let root = repository_root()?;
+fn check(log: &CiLog) -> Result<(), Box<dyn std::error::Error>> {
     vacate_cargo_target_image()?;
-    run_cmd(&root, "cargo", &["fmt", "--check"])?;
+    run_cmd(log, "cargo", &["fmt", "--check"])?;
     run_cmd(
-        &root,
+        log,
         "cargo",
         &[
             "clippy",
@@ -178,15 +218,15 @@ pub fn check() -> Result<(), Box<dyn std::error::Error>> {
             "clippy::cognitive_complexity",
         ],
     )?;
-    run_cmd(&root, "cargo", &["test", "--workspace", "--no-fail-fast"])?;
-    run_cmd(&root, "cargo", &["deny", "check"])?;
+    run_cmd(log, "cargo", &["test", "--workspace", "--no-fail-fast"])?;
+    run_cmd(log, "cargo", &["deny", "check"])?;
     Ok(())
 }
 
 /// Full local CI: the ship preflight, then the CRAP check, then rewrite and stage the baseline.
-pub fn local_run() -> Result<(), Box<dyn std::error::Error>> {
-    check()?;
-    crap_ratchet()
+fn local_run(log: &CiLog) -> Result<(), Box<dyn std::error::Error>> {
+    check(log)?;
+    crap_ratchet(log)
 }
 
 /// Compare the current tree against `crap-baseline.json`. Never writes the baseline.
@@ -194,18 +234,16 @@ pub fn local_run() -> Result<(), Box<dyn std::error::Error>> {
 /// Always writes `.liberado/crap-current.json` (gitignored) so a red GitHub job
 /// still has an Ubuntu-shaped report to commit as the next baseline. Coverage is
 /// host-sensitive; a Windows-generated file fails `--fail-regression` on Ubuntu.
-pub fn crap_check() -> Result<(), Box<dyn std::error::Error>> {
-    let root = repository_root()?;
-    generate_lcov(&root)?;
-    write_crap_json(&root, CURRENT_REPORT)?;
-    compare_to_baseline(&root)
+fn crap_check(log: &CiLog) -> Result<(), Box<dyn std::error::Error>> {
+    generate_lcov(log)?;
+    write_crap_json(log, CURRENT_REPORT)?;
+    compare_to_baseline(log)
 }
 
 /// Check, then replace `crap-baseline.json` with this run's scores.
-pub fn crap_ratchet() -> Result<(), Box<dyn std::error::Error>> {
-    let root = repository_root()?;
-    generate_lcov(&root)?;
-    compare_to_baseline(&root)?;
+fn crap_ratchet(log: &CiLog) -> Result<(), Box<dyn std::error::Error>> {
+    generate_lcov(log)?;
+    compare_to_baseline(log)?;
     if !cfg!(target_os = "linux") {
         eprintln!(
             "[liberado ci] {BASELINE_FILE} write is Linux-only \
@@ -213,8 +251,8 @@ pub fn crap_ratchet() -> Result<(), Box<dyn std::error::Error>> {
         );
         return Ok(());
     }
-    write_baseline(&root)?;
-    match stage_ratcheted_baseline(&root)? {
+    write_baseline(log)?;
+    match stage_ratcheted_baseline(&log.root)? {
         StageOutcome::Unchanged => {
             eprintln!("[liberado ci] {BASELINE_FILE} unchanged");
         }
@@ -230,33 +268,37 @@ pub fn crap_ratchet() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn generate_lcov(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
+fn generate_lcov(log: &CiLog) -> Result<(), Box<dyn std::error::Error>> {
     require_tool(
-        root,
+        &log.root,
         "llvm-cov",
         &["cargo", "llvm-cov", "--version"],
         "cargo install cargo-llvm-cov --locked",
     )?;
-    std::fs::create_dir_all(root.join(".liberado"))?;
-    run_cmd(root, "cargo", LLVM_COV_ARGS)?;
-    relativize_lcov(root)
+    std::fs::create_dir_all(log.root.join(".liberado"))?;
+    run_cmd(log, "cargo", LLVM_COV_ARGS)?;
+    relativize_lcov(&log.root)
 }
 
-fn compare_to_baseline(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
-    require_crap(root)?;
-    let fail_regression = announce_compare(root);
-    run_cmd(root, "cargo", &compare_args(fail_regression))
+fn compare_to_baseline(log: &CiLog) -> Result<(), Box<dyn std::error::Error>> {
+    require_crap(&log.root)?;
+    let fail_regression = announce_compare(log)?;
+    run_cmd(log, "cargo", &compare_args(fail_regression))
         .map_err(|error| emit_crap_failure(fail_regression, error))
 }
 
-/// Print the host/baseline banners and decide whether `--fail-regression` runs.
-fn announce_compare(root: &Path) -> bool {
-    let has_entries = baseline_has_entries(&root.join(BASELINE_FILE));
+/// Record host/baseline banners in the log. Ceiling-only and empty-baseline
+/// also go to the console: they change what this run compared.
+fn announce_compare(log: &CiLog) -> Result<bool, Box<dyn std::error::Error>> {
+    let has_entries = baseline_has_entries(&log.root.join(BASELINE_FILE));
     let fail_regression = uses_per_function_ratchet(has_entries);
     for line in compare_banners(has_entries, fail_regression) {
-        eprintln!("{line}");
+        log.writeln(line)?;
+        if line == CRAP_HOST_CEILING_ONLY || line == CRAP_EMPTY_BASELINE {
+            eprintln!("{line}");
+        }
     }
-    fail_regression
+    Ok(fail_regression)
 }
 
 fn compare_banners(has_entries: bool, fail_regression: bool) -> Vec<&'static str> {
@@ -284,14 +326,14 @@ fn compare_args(fail_regression: bool) -> Vec<&'static str> {
     args
 }
 
-fn write_baseline(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
-    write_crap_json(root, BASELINE_FILE)
+fn write_baseline(log: &CiLog) -> Result<(), Box<dyn std::error::Error>> {
+    write_crap_json(log, BASELINE_FILE)
 }
 
-fn write_crap_json(root: &Path, output: &str) -> Result<(), Box<dyn std::error::Error>> {
-    require_crap(root)?;
+fn write_crap_json(log: &CiLog, output: &str) -> Result<(), Box<dyn std::error::Error>> {
+    require_crap(&log.root)?;
     run_cmd(
-        root,
+        log,
         "cargo",
         &[
             "crap",
@@ -306,7 +348,7 @@ fn write_crap_json(root: &Path, output: &str) -> Result<(), Box<dyn std::error::
             output,
         ],
     )?;
-    relativize_json_file(root, output)
+    relativize_json_file(&log.root, output)
 }
 
 /// Strip the workspace root from an LCOV `SF:` path so Ubuntu CI and a Windows
@@ -531,29 +573,167 @@ fn baseline_has_entries(path: &Path) -> bool {
 }
 
 fn run_cmd(
-    root: &Path,
+    log: &CiLog,
     program: impl AsRef<OsStr>,
     args: &[&str],
 ) -> Result<(), Box<dyn std::error::Error>> {
     let program = program.as_ref();
-    let shown = program.to_string_lossy();
-    eprintln!("[liberado ci] {shown} {}", args.join(" "));
-    let status = std_command(program)
-        .args(args)
-        .current_dir(root)
-        .stdin(Stdio::inherit())
-        .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit())
-        .status()
-        .map_err(|error| {
-            io::Error::new(error.kind(), format!("could not start {shown}: {error}"))
-        })?;
+    let gate = begin_cmd(log, program, args)?;
+    finish_cmd(log, gate, spawn_to_log(log, program, args))
+}
 
-    if status.success() {
-        Ok(())
-    } else {
-        Err(format!("{shown} {} failed with {status}", args.join(" ")).into())
+struct GateStart {
+    command: String,
+    program: String,
+    start: u64,
+}
+
+fn begin_cmd(
+    log: &CiLog,
+    program: &OsStr,
+    args: &[&str],
+) -> Result<GateStart, Box<dyn std::error::Error>> {
+    let shown = program.to_string_lossy().into_owned();
+    let command = format!("{shown} {}", args.join(" "));
+    log.writeln(&format!("=== {command} ==="))?;
+    eprint!("[liberado ci] {command} ... ");
+    let _ = io::stderr().flush();
+    Ok(GateStart {
+        command,
+        program: shown,
+        start: std::fs::metadata(&log.path)?.len(),
+    })
+}
+
+fn spawn_to_log(
+    log: &CiLog,
+    program: &OsStr,
+    args: &[&str],
+) -> io::Result<std::process::ExitStatus> {
+    let stdout = std::fs::OpenOptions::new().append(true).open(&log.path)?;
+    let stderr = std::fs::OpenOptions::new().append(true).open(&log.path)?;
+    std_command(program)
+        .args(args)
+        .current_dir(&log.root)
+        .stdin(Stdio::null())
+        .stdout(stdout)
+        .stderr(stderr)
+        .env("CARGO_TERM_COLOR", "never")
+        .status()
+}
+
+fn finish_cmd(
+    log: &CiLog,
+    gate: GateStart,
+    spawned: io::Result<std::process::ExitStatus>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    match spawned {
+        Ok(status) if status.success() => {
+            eprintln!("ok");
+            Ok(())
+        }
+        Ok(status) => gate_failed(log, &gate, format!("{} failed with {status}", gate.command)),
+        Err(error) => gate_failed(
+            log,
+            &gate,
+            format!("could not start {}: {error}", gate.program),
+        ),
     }
+}
+
+fn gate_failed(
+    log: &CiLog,
+    gate: &GateStart,
+    reason: String,
+) -> Result<(), Box<dyn std::error::Error>> {
+    eprintln!("FAILED");
+    log.writeln(&reason)?;
+    let extracted = extract_ci_failures(&read_log_since(&log.path, gate.start)?);
+    if !extracted.is_empty() {
+        eprintln!("\n{extracted}\n");
+    }
+    eprintln!("----------\nFull log: {CI_LOG_FILE}\n----------");
+    if extracted.is_empty() {
+        return Err(format!("{reason}\nFull log: {CI_LOG_FILE}").into());
+    }
+    Err(format!("{reason}\nFull log: {CI_LOG_FILE}\n\n{extracted}").into())
+}
+
+fn read_log_since(path: &Path, start: u64) -> Result<String, Box<dyn std::error::Error>> {
+    let bytes = std::fs::read(path)?;
+    let skip = (start as usize).min(bytes.len());
+    Ok(String::from_utf8_lossy(&bytes[skip..]).into_owned())
+}
+
+/// Pull compiler, test, and CRAP failures out of a child log so the agent
+/// does not have to scan compile progress or passing crates.
+fn extract_ci_failures(output: &str) -> String {
+    let text = strip_ansi(output);
+    let lines: Vec<&str> = text.lines().collect();
+    let mut picked = Vec::new();
+    let mut seen = std::collections::BTreeSet::new();
+    for (idx, line) in lines.iter().enumerate() {
+        if !is_ci_failure_line(line) {
+            continue;
+        }
+        let start = idx;
+        let end = extra_context_end(&lines, idx);
+        for (i, candidate) in lines.iter().enumerate().take(end).skip(start) {
+            if seen.insert(i) {
+                picked.push((*candidate).to_string());
+            }
+        }
+    }
+    if picked.len() > EXTRACT_MAX_LINES {
+        let more = picked.len() - EXTRACT_MAX_LINES;
+        picked.truncate(EXTRACT_MAX_LINES);
+        picked.push(format!("… {more} more matching lines in {CI_LOG_FILE}"));
+    }
+    picked.join("\n")
+}
+
+fn extra_context_end(lines: &[&str], anchor: usize) -> usize {
+    let mut end = (anchor + 1).min(lines.len());
+    while end < lines.len() && end < anchor + 8 {
+        let trimmed = lines[end].trim_start();
+        if trimmed.starts_with("-->") || trimmed.starts_with('|') || trimmed.starts_with("= ") {
+            end += 1;
+        } else {
+            break;
+        }
+    }
+    end
+}
+
+fn is_ci_failure_line(line: &str) -> bool {
+    let lower = line.to_ascii_lowercase();
+    line.contains(" FAILED")
+        || lower.contains("error[")
+        || lower.contains("error:")
+        || lower.contains("panicked at")
+        || lower.contains("test result: failed")
+        || lower.contains("could not compile")
+        || lower.contains("regressed")
+        || lower.contains("crap check failed")
+        || (line.contains('┆') && line.contains('+') && !line.contains("NEW"))
+}
+
+fn strip_ansi(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '\u{1b}' && chars.peek() == Some(&'[') {
+            chars.next();
+            for next in chars.by_ref() {
+                if next.is_ascii_alphabetic() {
+                    break;
+                }
+            }
+        } else {
+            out.push(ch);
+        }
+    }
+    out
 }
 
 fn repository_root() -> Result<PathBuf, Box<dyn std::error::Error>> {
@@ -573,12 +753,13 @@ fn repository_root() -> Result<PathBuf, Box<dyn std::error::Error>> {
 #[cfg(test)]
 mod tests {
     use super::{
-        BASELINE_FILE, CRAP_CEILING_GH, CRAP_CEILING_HINT, CRAP_COMPARE_SUMMARY,
+        BASELINE_FILE, CI_LOG_FILE, CRAP_CEILING_GH, CRAP_CEILING_HINT, CRAP_COMPARE_SUMMARY,
         CRAP_EMPTY_BASELINE, CRAP_HOST_CEILING_ONLY, CRAP_REGRESSION_GH, CRAP_REGRESSION_HINT,
-        LCOV_FILE, LLVM_COV_ARGS, StageOutcome, USAGE, baseline_has_entries, compare_args,
-        compare_banners, crap_failure_hint, emit_crap_failure, exe_lives_in_cargo_target, git,
-        porcelain_path, relativize_json_file, relativize_lcov, repo_relative_source_path,
-        repository_root, run_cmd, stage_ratcheted_baseline, uses_per_function_ratchet,
+        CiLog, EXTRACT_MAX_LINES, LCOV_FILE, LLVM_COV_ARGS, StageOutcome, USAGE, announce_compare,
+        baseline_has_entries, compare_args, compare_banners, crap_failure_hint, emit_crap_failure,
+        exe_lives_in_cargo_target, extract_ci_failures, git, porcelain_path, relativize_json_file,
+        relativize_lcov, repo_relative_source_path, repository_root, run_cmd,
+        stage_ratcheted_baseline, strip_ansi, uses_per_function_ratchet,
     };
     use liberado_common::process::std_command;
     use std::fs;
@@ -633,8 +814,9 @@ mod tests {
     /// error the user needs when the preflight environment is missing a tool.
     #[test]
     fn run_reports_a_missing_program() {
-        let root = repository_root().unwrap();
-        let error = run_cmd(&root, "definitely-not-a-real-program-xyz", &[])
+        let temp = tempdir().unwrap();
+        let log = CiLog::create(temp.path()).unwrap();
+        let error = run_cmd(&log, "definitely-not-a-real-program-xyz", &[])
             .unwrap_err()
             .to_string();
         assert!(error.contains("could not start"), "{error}");
@@ -642,6 +824,116 @@ mod tests {
             error.contains("definitely-not-a-real-program-xyz"),
             "{error}"
         );
+        assert!(error.contains(CI_LOG_FILE), "{error}");
+        let logged = std::fs::read_to_string(&log.path).unwrap();
+        assert!(
+            logged.contains("definitely-not-a-real-program-xyz"),
+            "{logged}"
+        );
+    }
+
+    #[test]
+    fn failing_cargo_command_surfaces_extracted_errors_and_the_log_path() {
+        let temp = tempdir().unwrap();
+        let log = CiLog::create(temp.path()).unwrap();
+        let error = run_cmd(&log, "cargo", &["definitely-not-a-cargo-flag-xyz"])
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains(CI_LOG_FILE), "{error}");
+        assert!(error.contains("error:"), "{error}");
+        let logged = std::fs::read_to_string(&log.path).unwrap();
+        assert!(logged.contains("error:"), "{logged}");
+    }
+
+    #[test]
+    fn extract_ci_failures_names_tests_compiler_errors_and_crap() {
+        let log = "\
+Compiling liberado-notify v0.1.0
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.5s
+running 19 tests
+test tests::channel_name_is_telegram ... ok
+test tests::from_env_reads_both_telegram_vars_and_default_base ... FAILED
+
+thread 'tests::from_env_reads_both_telegram_vars_and_default_base' panicked at crates/notify/src/lib.rs:797:29:
+both vars set -> Some
+
+test result: FAILED. 17 passed; 1 failed; 2 ignored
+
+error: test failed, to rerun pass `-p liberado-notify --lib`
+
+error[E0425]: cannot find value `foo` in this scope
+  --> crates/cli/src/ci_cmd.rs:123:5
+   |
+123 |     foo
+    |     ^^^ not found in this scope
+    = note: this error originates from a macro
+
+↑ 1 regressed  ↓ 0 improved  ★ 0 new
+│ ✓ ┆ 30.0 ┆ +18.0 ┆  5 ┆ compare_to_baseline
+";
+        let extracted = extract_ci_failures(log);
+        assert!(
+            extracted.contains("from_env_reads_both_telegram_vars_and_default_base ... FAILED"),
+            "{extracted}"
+        );
+        assert!(extracted.contains("panicked at"), "{extracted}");
+        assert!(extracted.contains("error[E0425]"), "{extracted}");
+        assert!(
+            extracted.contains("crates/cli/src/ci_cmd.rs:123:5"),
+            "{extracted}"
+        );
+        assert!(
+            extracted.contains("error: test failed, to rerun pass `-p liberado-notify --lib`"),
+            "{extracted}"
+        );
+        assert!(extracted.contains("↑ 1 regressed"), "{extracted}");
+        assert!(extracted.contains("compare_to_baseline"), "{extracted}");
+        assert!(!extracted.contains("Compiling"), "{extracted}");
+        assert!(
+            !extracted.contains("channel_name_is_telegram ... ok"),
+            "{extracted}"
+        );
+    }
+
+    #[test]
+    fn extract_ci_failures_caps_the_console_excerpt() {
+        let mut log = String::new();
+        for i in 0..(EXTRACT_MAX_LINES + 20) {
+            log.push_str(&format!("error[E0001]: boom {i}\n"));
+        }
+        let extracted = extract_ci_failures(&log);
+        let lines: Vec<_> = extracted.lines().collect();
+        assert!(lines.len() <= EXTRACT_MAX_LINES + 1, "{}", lines.len());
+        assert!(extracted.contains(CI_LOG_FILE), "{extracted}");
+        assert!(extracted.contains("more matching lines"), "{extracted}");
+    }
+
+    #[test]
+    fn strip_ansi_drops_color_codes_before_matching() {
+        let colored = "\u{1b}[31merror[E0425]\u{1b}[0m: missing\n";
+        assert_eq!(strip_ansi(colored), "error[E0425]: missing\n");
+        let extracted = extract_ci_failures(colored);
+        assert!(extracted.contains("error[E0425]"), "{extracted}");
+    }
+
+    #[test]
+    fn announce_compare_records_the_empty_baseline_banner() {
+        let temp = tempdir().unwrap();
+        let log = CiLog::create(temp.path()).unwrap();
+        assert!(!announce_compare(&log).unwrap());
+        let text = std::fs::read_to_string(&log.path).unwrap();
+        assert!(text.contains("no entries yet"), "{text}");
+    }
+
+    #[test]
+    fn ci_log_create_truncates_a_previous_run() {
+        let temp = tempdir().unwrap();
+        let first = CiLog::create(temp.path()).unwrap();
+        first.writeln("old run").unwrap();
+        let second = CiLog::create(temp.path()).unwrap();
+        let text = std::fs::read_to_string(&second.path).unwrap();
+        assert!(!text.contains("old run"), "{text}");
+        assert!(text.contains(CI_LOG_FILE), "{text}");
     }
 
     #[test]

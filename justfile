@@ -45,8 +45,10 @@ check:
 # The baseline is not rewritten while that check is red. On Linux success,
 # rewrite `crap-baseline.json`. If the tree is otherwise clean, a Linux
 # rewrite is amended onto HEAD. GitHub never writes that file.
+# Console: log path, one ok/FAILED per gate, extracted errors on red.
+# Full child output: `.liberado/ci.log`.
 ci:
-    cargo run --locked -p liberado-cli -- ci
+    cargo run --locked --quiet -p liberado-cli -- ci
 
 # Auto-format the whole workspace.
 fmt:
@@ -58,7 +60,7 @@ deny:
 
 # Full local ship preflight. Runs through the native Liberado CLI on every host OS.
 preflight:
-    cargo run --locked -p liberado-cli -- ci check
+    cargo run --locked --quiet -p liberado-cli -- ci check
 
 # Validate the Rust-native PR shepherd's failure-identity and state-machine guards.
 shepherd-self-test:
