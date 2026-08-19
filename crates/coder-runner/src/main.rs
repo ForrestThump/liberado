@@ -2167,10 +2167,21 @@ api_key_env = "CUSTOM_API_KEY"
 
     #[tokio::test]
     async fn ensure_git_repo_accepts_an_existing_repo() {
+        let _guard = ENV_LOCK.lock().await;
         let repo = temp_repo();
-        ensure_git_repo(repo.path())
-            .await
-            .expect("existing repo is fine");
+        let cfg = identity_gitconfig();
+        let prior = std::env::var_os("GIT_CONFIG_GLOBAL");
+        unsafe { std::env::set_var("GIT_CONFIG_GLOBAL", cfg.path()) };
+
+        let result = ensure_git_repo(repo.path()).await;
+
+        unsafe {
+            match prior {
+                Some(v) => std::env::set_var("GIT_CONFIG_GLOBAL", v),
+                None => std::env::remove_var("GIT_CONFIG_GLOBAL"),
+            }
+        }
+        result.expect("existing repo is fine");
         assert!(repo.path().join(".git").exists());
     }
 
@@ -2238,10 +2249,22 @@ api_key_env = "CUSTOM_API_KEY"
             before, after,
             "a second call must not append a duplicate line:\n{after}"
         );
+        assert!(
+            before.contains("directory = C:/other/work"),
+            "the foreign entry must survive:\n{before}"
+        );
+        // Git config escapes backslashes, so compare on the unique temp-dir name,
+        // not the raw `\\?\` canonical string.
+        let ours = repo
+            .path()
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
         assert_eq!(
-            before.matches("directory = ").count(),
-            2,
-            "the foreign entry plus ours must both be present:\n{before}"
+            before.matches(&ours).count(),
+            1,
+            "our path must appear once:\n{before}\nwanted {ours}"
         );
     }
 
