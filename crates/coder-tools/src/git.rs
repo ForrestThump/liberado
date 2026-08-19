@@ -141,32 +141,47 @@ pub fn status(root: &Path) -> Result<String, GitError> {
         let loc = bs_display(item.location());
         match &item {
             gix::status::Item::IndexWorktree(change) => {
-                use gix::status::index_worktree::iter::Summary as S;
-                let code = match change.summary() {
-                    Some(S::Added) => "??",
-                    Some(S::Modified) => " M",
-                    Some(S::Removed) => " D",
-                    Some(S::TypeChange) => " T",
-                    Some(S::Renamed) => " R",
-                    Some(S::Copied) => " C",
-                    Some(S::IntentToAdd) => " A",
-                    Some(S::Conflict) => "UU",
-                    None => continue, // stat-only update; not user-visible
+                // Stat-only updates are not user-visible.
+                let Some(code) = index_worktree_code(change.summary()) else {
+                    continue;
                 };
                 lines.push(format!("{code} {loc}"));
             }
             gix::status::Item::TreeIndex(change) => {
-                let code = match change {
-                    gix::diff::index::ChangeRef::Addition { .. } => "A ",
-                    gix::diff::index::ChangeRef::Deletion { .. } => "D ",
-                    gix::diff::index::ChangeRef::Modification { .. } => "M ",
-                    gix::diff::index::ChangeRef::Rewrite { .. } => "R ",
-                };
+                let code = tree_index_code(change);
                 lines.push(format!("{code} {loc}"));
             }
         }
     }
     Ok(lines.join("\n"))
+}
+
+/// The porcelain code for one IndexWorktree change; `None` for a stat-only update.
+fn index_worktree_code(
+    summary: Option<gix::status::index_worktree::iter::Summary>,
+) -> Option<&'static str> {
+    use gix::status::index_worktree::iter::Summary as S;
+    match summary {
+        Some(S::Added) => Some("??"),
+        Some(S::Modified) => Some(" M"),
+        Some(S::Removed) => Some(" D"),
+        Some(S::TypeChange) => Some(" T"),
+        Some(S::Renamed) => Some(" R"),
+        Some(S::Copied) => Some(" C"),
+        Some(S::IntentToAdd) => Some(" A"),
+        Some(S::Conflict) => Some("UU"),
+        None => None,
+    }
+}
+
+/// The porcelain code for one TreeIndex change.
+fn tree_index_code(change: &gix::diff::index::ChangeRef) -> &'static str {
+    match change {
+        gix::diff::index::ChangeRef::Addition { .. } => "A ",
+        gix::diff::index::ChangeRef::Deletion { .. } => "D ",
+        gix::diff::index::ChangeRef::Modification { .. } => "M ",
+        gix::diff::index::ChangeRef::Rewrite { .. } => "R ",
+    }
 }
 
 /// Untracked files (`git ls-files --others --exclude-standard`).
