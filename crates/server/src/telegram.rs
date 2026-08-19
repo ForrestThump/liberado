@@ -252,39 +252,33 @@ impl TelegramChatBridge {
         }
     }
 
+    /// Resolve a command result to a Telegram reply. The browser/spawn/fork results need the
+    /// live session state and are awaited; the rest is a deterministic local mapping.
     async fn apply_result(
         &self,
         result: CommandResult,
         ctx: &mut TelegramCommandContext,
     ) -> Option<String> {
         match result {
-            CommandResult::HelpShown
-            | CommandResult::StatusShown
-            | CommandResult::ModelInfoShown
-            | CommandResult::SessionInfoShown
-            | CommandResult::ProfileInfoShown
-            | CommandResult::None => None,
+            CommandResult::OpenModelBrowser
+            | CommandResult::SessionListed
+            | CommandResult::OpenSessionBrowser
+            | CommandResult::OpenGoalSwitcher
+            | CommandResult::SessionSwitched { .. }
+            | CommandResult::JoinGoalSession { .. }
+            | CommandResult::SpawnGoalSession { .. }
+            | CommandResult::ForkRequested { .. } => self.async_reply(result, ctx).await,
+            other => static_reply(other, ctx),
+        }
+    }
 
-            // Telegram has no picker widget, and a sticky Telegram chat is not the place to be
-            // re-authorising a session anyway — the switch is a deliberate, per-conversation act.
-            CommandResult::OpenProfileBrowser => Some(
-                "Session profiles are switched from the web UI or TUI with /profile.".into(),
-            ),
-
-            CommandResult::Quit => {
-                Some("I'm a long-running bot — I can't quit. Use /new for a fresh chat.".into())
-            }
-
-            CommandResult::NewConversation { .. } => {
-                ctx.session_id = None;
-                Some("Started a new conversation. Next message begins a fresh session.".into())
-            }
-
-            CommandResult::ChatCleared => Some(
-                "Telegram has no local transcript buffer to clear. Use /new for a fresh session."
-                    .into(),
-            ),
-
+    /// The awaited replies: model/session browsers, session switching, goal join/spawn, fork.
+    async fn async_reply(
+        &self,
+        result: CommandResult,
+        ctx: &mut TelegramCommandContext,
+    ) -> Option<String> {
+        match result {
             CommandResult::OpenModelBrowser => self.on_model_browser().await,
 
             CommandResult::SessionListed
@@ -293,36 +287,11 @@ impl TelegramChatBridge {
 
             CommandResult::SessionSwitched { id } => self.on_session_switched(ctx, &id).await,
 
-            CommandResult::SessionClosed { id } => {
-                ctx.session_id = None;
-                Some(match id {
-                    Some(id) => format!("Closed session {id}. Use /sessions to resume later."),
-                    None => "No active session.".into(),
-                })
-            }
-
             CommandResult::JoinGoalSession { id } => self.on_join_goal(&id).await,
-
-            CommandResult::BackToPrimary => {
-                Some("Back on primary chat (Telegram only has one input focus).".into())
-            }
 
             CommandResult::SpawnGoalSession { domain, goal } => {
                 self.on_spawn_goal_session(&domain, &goal).await
             }
-
-            // The coding-goal surface is a TUI view (role timeline, gate ballots, diffs). Telegram
-            // has no place to render it, and a half-rendered gate is worse than an honest pointer:
-            // the whole value of watching a quorum vote is seeing all of it.
-            CommandResult::StartCodingGoal { .. }
-            | CommandResult::OpenGoalView
-            | CommandResult::GoalStatus
-            | CommandResult::ParkGoalSession
-            | CommandResult::ResumeGoalSession { .. }
-            | CommandResult::CancelGoalSession => Some(
-                "Coding goals run in the TUI, which can show the role timeline, the completion                  gate's ballots, and diffs. Use /spawn here to start a non-coding session."
-                    .into(),
-            ),
 
             CommandResult::ForkRequested {
                 parent_id,
@@ -332,27 +301,7 @@ impl TelegramChatBridge {
                 Err(e) => Some(format!("Fork failed: {e}")),
             },
 
-            CommandResult::ShowOptions { title, options } => {
-                let mut lines = vec![format!("{title}:")];
-                for (label, id) in options {
-                    if id.is_empty() {
-                        lines.push(format!("  {label}"));
-                    } else {
-                        lines.push(format!("  {label}  ({id})"));
-                    }
-                }
-                Some(lines.join("\n"))
-            }
-
-            CommandResult::ThemeChanged { name } => Some(format!(
-                "Theme '{name}' is UI-only — Telegram has no theme surface."
-            )),
-            CommandResult::ThemesReloaded { .. } | CommandResult::ThemeListed { .. } => {
-                Some("Themes are UI-only on Telegram.".into())
-            }
-            // Telegram has no picker to open, and the `ShowOptions` emitted alongside this already
-            // renders the list here — so saying anything would just duplicate it.
-            CommandResult::OpenThemeBrowser => None,
+            _ => unreachable!("async_reply only receives awaited results"),
         }
     }
 
@@ -604,6 +553,87 @@ impl TelegramChatBridge {
     }
 }
 
+/// The deterministic result→reply mapping that needs no session state.
+fn static_reply(result: CommandResult, ctx: &mut TelegramCommandContext) -> Option<String> {
+    match result {
+        CommandResult::HelpShown
+        | CommandResult::StatusShown
+        | CommandResult::ModelInfoShown
+        | CommandResult::SessionInfoShown
+        | CommandResult::ProfileInfoShown
+        | CommandResult::None => None,
+
+        // Telegram has no picker widget, and a sticky Telegram chat is not the place to be
+        // re-authorising a session anyway — the switch is a deliberate, per-conversation act.
+        CommandResult::OpenProfileBrowser => {
+            Some("Session profiles are switched from the web UI or TUI with /profile.".into())
+        }
+
+        CommandResult::Quit => {
+            Some("I'm a long-running bot — I can't quit. Use /new for a fresh chat.".into())
+        }
+
+        CommandResult::NewConversation { .. } => {
+            ctx.session_id = None;
+            Some("Started a new conversation. Next message begins a fresh session.".into())
+        }
+
+        CommandResult::ChatCleared => Some(
+            "Telegram has no local transcript buffer to clear. Use /new for a fresh session."
+                .into(),
+        ),
+
+        CommandResult::SessionClosed { id } => {
+            ctx.session_id = None;
+            Some(match id {
+                Some(id) => format!("Closed session {id}. Use /sessions to resume later."),
+                None => "No active session.".into(),
+            })
+        }
+
+        CommandResult::BackToPrimary => {
+            Some("Back on primary chat (Telegram only has one input focus).".into())
+        }
+
+        // The coding-goal surface is a TUI view (role timeline, gate ballots, diffs). Telegram
+        // has no place to render it, and a half-rendered gate is worse than an honest pointer:
+        // the whole value of watching a quorum vote is seeing all of it.
+        CommandResult::StartCodingGoal { .. }
+        | CommandResult::OpenGoalView
+        | CommandResult::GoalStatus
+        | CommandResult::ParkGoalSession
+        | CommandResult::ResumeGoalSession { .. }
+        | CommandResult::CancelGoalSession => Some(
+            "Coding goals run in the TUI, which can show the role timeline, the completion \
+             gate's ballots, and diffs. Use /spawn here to start a non-coding session."
+                .into(),
+        ),
+
+        CommandResult::ShowOptions { title, options } => {
+            let mut lines = vec![format!("{title}:")];
+            for (label, id) in options {
+                if id.is_empty() {
+                    lines.push(format!("  {label}"));
+                } else {
+                    lines.push(format!("  {label}  ({id})"));
+                }
+            }
+            Some(lines.join("\n"))
+        }
+
+        CommandResult::ThemeChanged { name } => Some(format!(
+            "Theme '{name}' is UI-only — Telegram has no theme surface."
+        )),
+        CommandResult::ThemesReloaded { .. } | CommandResult::ThemeListed { .. } => {
+            Some("Themes are UI-only on Telegram.".into())
+        }
+        // Telegram has no picker to open, and the `ShowOptions` emitted alongside this already
+        // renders the list here — so saying anything would just duplicate it.
+        CommandResult::OpenThemeBrowser => None,
+        _ => unreachable!("static_reply only receives local results"),
+    }
+}
+
 /// Drain a durable-turn event stream until Done/Error. Used by free-form Telegram turns after
 /// [`ChatSessions::start_or_attach`].
 async fn collect_turn_reply(
@@ -727,6 +757,45 @@ mod tests {
     use super::*;
     use async_trait::async_trait;
     use liberado_executor::{Budget, Executor, ToolRuntime};
+
+    /// The deterministic result→reply mapping (no session state) must cover the local arms, and
+    /// the awaited browser/spawn/fork results must be routed past it (unreachable here).
+    #[test]
+    fn static_reply_maps_local_results() {
+        let mut ctx = TelegramCommandContext {
+            session_id: None,
+            messages: Vec::new(),
+            conversations: Vec::new(),
+            goals_summary: Vec::new(),
+            status: None,
+            message_count: 0,
+        };
+        assert_eq!(
+            static_reply(CommandResult::Quit, &mut ctx).unwrap(),
+            "I'm a long-running bot — I can't quit. Use /new for a fresh chat."
+        );
+        assert!(
+            static_reply(CommandResult::OpenThemeBrowser, &mut ctx).is_none(),
+            "OpenThemeBrowser must stay silent (ShowOptions already rendered the list)"
+        );
+        assert!(static_reply(CommandResult::None, &mut ctx).is_none());
+
+        let shown = static_reply(
+            CommandResult::ShowOptions {
+                title: "Pick".into(),
+                options: vec![
+                    ("Fork".into(), "f1".into()),
+                    ("Fresh".into(), String::new()),
+                ],
+            },
+            &mut ctx,
+        )
+        .unwrap();
+        assert!(shown.contains("Pick"), "{shown}");
+        assert!(shown.contains("Fork  (f1)"), "{shown}");
+        assert!(shown.contains("Fresh"), "{shown}");
+    }
+
     use liberado_messaging::ChatSurface;
     use liberado_provider::{
         CompletionRequest, CompletionResponse, MockProvider, Provider, ProviderResult, ToolDef,
