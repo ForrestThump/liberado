@@ -867,159 +867,31 @@ impl App {
         let mut effects = Vec::new();
         for result in &results {
             match result {
-                liberado_commands::CommandResult::Quit => effects.push(Effect::Quit),
-                liberado_commands::CommandResult::NewConversation { was_streaming } => {
-                    effects.push(Effect::RefreshConversations);
-                    if *was_streaming {
-                        effects.push(Effect::CancelStream {
-                            conversation: session_before_dispatch.clone(),
-                        });
-                    }
+                liberado_commands::CommandResult::SessionSwitched { .. }
+                | liberado_commands::CommandResult::OpenSessionBrowser
+                | liberado_commands::CommandResult::SessionListed
+                | liberado_commands::CommandResult::OpenModelBrowser
+                | liberado_commands::CommandResult::OpenGoalSwitcher => {
+                    self.on_navigation_result(result, &mut effects);
                 }
-                liberado_commands::CommandResult::SessionSwitched { id } => {
-                    self.pending_load = Some(id.clone());
-                    self.focus = Focus::Input;
-                    effects.push(Effect::LoadConversationHistory(id.clone()));
+                liberado_commands::CommandResult::NewConversation { .. }
+                | liberado_commands::CommandResult::JoinGoalSession { .. }
+                | liberado_commands::CommandResult::BackToPrimary
+                | liberado_commands::CommandResult::SpawnGoalSession { .. }
+                | liberado_commands::CommandResult::ForkRequested { .. }
+                | liberado_commands::CommandResult::StartCodingGoal { .. } => {
+                    self.on_session_result(result, &mut effects, &session_before_dispatch);
                 }
-                liberado_commands::CommandResult::OpenSessionBrowser
-                | liberado_commands::CommandResult::SessionListed => {
-                    // Both `/session` and `/sessions` land on the one unified switcher.
-                    self.open_session_switcher();
-                    effects.push(Effect::RefreshConversations);
-                    effects.push(Effect::RefreshSessions);
+                liberado_commands::CommandResult::OpenGoalView
+                | liberado_commands::CommandResult::GoalStatus
+                | liberado_commands::CommandResult::ParkGoalSession
+                | liberado_commands::CommandResult::ResumeGoalSession { .. }
+                | liberado_commands::CommandResult::CancelGoalSession => {
+                    self.on_goal_result(result, &mut effects);
                 }
-                liberado_commands::CommandResult::OpenModelBrowser => {
-                    self.open_model_browser();
-                    effects.push(Effect::FetchModels);
-                }
-                liberado_commands::CommandResult::OpenGoalSwitcher => {
-                    self.open_session_switcher();
-                    effects.push(Effect::RefreshConversations);
-                    effects.push(Effect::RefreshSessions);
-                }
-                liberado_commands::CommandResult::JoinGoalSession { id } => {
-                    // Resolve an id prefix against the known goal sessions (full id wins).
-                    let resolved = self
-                        .sessions
-                        .iter()
-                        .find(|h| h.id == *id)
-                        .or_else(|| self.sessions.iter().find(|h| h.id.starts_with(id)))
-                        .map(|h| h.id.clone())
-                        .unwrap_or_else(|| id.clone());
-                    self.join_session(resolved.clone());
-                    effects.push(Effect::JoinGoalSession(resolved));
-                }
-                liberado_commands::CommandResult::BackToPrimary => {
-                    if self.joined.is_some() {
-                        self.leave_session();
-                        effects.push(Effect::LeaveGoalSession);
-                    } else {
-                        self.messages
-                            .push(Message::System("Already in the primary chat.".into()));
-                    }
-                }
-                liberado_commands::CommandResult::SpawnGoalSession { domain, goal } => {
-                    // Leaving a finished joined view (if any) so the new session takes the pane.
-                    if self.joined.as_ref().map(|j| j.finished).unwrap_or(false) {
-                        self.joined = None;
-                    }
-                    effects.push(Effect::SpawnGoalSession {
-                        domain: domain.clone(),
-                        goal: goal.clone(),
-                        // Link the new session back to the current conversation so its summary folds
-                        // in on terminal (S4 return handoff). `None` when there's no chat yet.
-                        origin_conversation: self.session.clone(),
-                    });
-                }
-                liberado_commands::CommandResult::ForkRequested {
-                    parent_id,
-                    after_turn,
-                } => {
-                    effects.push(Effect::ForkConversation {
-                        parent_id: parent_id.clone(),
-                        after_turn: *after_turn,
-                    });
-                }
-                liberado_commands::CommandResult::StartCodingGoal {
-                    project,
-                    text,
-                    mode,
-                } => {
-                    if self.joined.as_ref().map(|j| j.finished).unwrap_or(false) {
-                        self.joined = None;
-                    }
-                    effects.push(Effect::StartCodingGoal {
-                        project: project.clone(),
-                        text: text.clone(),
-                        mode: *mode,
-                        origin_conversation: self.session.clone(),
-                    });
-                }
-                liberado_commands::CommandResult::OpenGoalView => match &self.joined {
-                    Some(j) => {
-                        let id = j.id.clone();
-                        self.messages.push(Message::System(format!(
-                            "Goal view: {id} (you are already joined — the pane below is the view)"
-                        )));
-                    }
-                    None => self.messages.push(Message::System(
-                        "No session focused. Use /goal <text> to start one, or /sessions to join."
-                            .into(),
-                    )),
-                },
-                liberado_commands::CommandResult::GoalStatus => match &self.joined {
-                    Some(j) => {
-                        let line = format!(
-                            "{} · {} · {} message(s){}",
-                            j.id,
-                            j.status,
-                            j.messages.len(),
-                            match &j.awaiting {
-                                Some(a) => format!(" · awaiting: {}", a.prompt),
-                                None => String::new(),
-                            }
-                        );
-                        self.messages.push(Message::System(line));
-                    }
-                    None => self
-                        .messages
-                        .push(Message::System("No goal session focused.".into())),
-                },
-                liberado_commands::CommandResult::ParkGoalSession => {
-                    match self.joined.as_ref().map(|j| j.id.clone()) {
-                        Some(id) => effects.push(Effect::ParkGoalSession(id)),
-                        None => self
-                            .messages
-                            .push(Message::System("No goal session to park.".into())),
-                    }
-                }
-                liberado_commands::CommandResult::ResumeGoalSession { answer } => {
-                    match self.joined.as_ref().map(|j| j.id.clone()) {
-                        Some(id) => effects.push(Effect::ResumeGoalSession {
-                            id,
-                            answer: answer.clone(),
-                        }),
-                        None => self
-                            .messages
-                            .push(Message::System("No goal session to resume.".into())),
-                    }
-                }
-                liberado_commands::CommandResult::CancelGoalSession => {
-                    match self.joined.as_ref().map(|j| j.id.clone()) {
-                        Some(id) => effects.push(Effect::CancelGoalSession(id)),
-                        None => self
-                            .messages
-                            .push(Message::System("No goal session to cancel.".into())),
-                    }
-                }
-                liberado_commands::CommandResult::ShowOptions { title, options } => {
-                    let mut text = format!("{title}:\n");
-                    for (label, _id) in options {
-                        text.push_str("  ");
-                        text.push_str(label);
-                        text.push('\n');
-                    }
-                    self.messages.push(Message::System(text));
+                liberado_commands::CommandResult::Quit
+                | liberado_commands::CommandResult::ShowOptions { .. } => {
+                    self.on_output_result(result, &mut effects);
                 }
                 _ => {}
             }
@@ -1052,6 +924,211 @@ Keybindings:
             effects.push(Effect::None);
         }
         effects
+    }
+
+    /// Command results that open or move between the session/model switchers.
+    fn on_navigation_result(
+        &mut self,
+        result: &liberado_commands::CommandResult,
+        effects: &mut Vec<Effect>,
+    ) {
+        match result {
+            liberado_commands::CommandResult::SessionSwitched { id } => {
+                self.pending_load = Some(id.clone());
+                self.focus = Focus::Input;
+                effects.push(Effect::LoadConversationHistory(id.clone()));
+            }
+            liberado_commands::CommandResult::OpenSessionBrowser
+            | liberado_commands::CommandResult::SessionListed => {
+                // Both `/session` and `/sessions` land on the one unified switcher.
+                self.open_session_switcher();
+                effects.push(Effect::RefreshConversations);
+                effects.push(Effect::RefreshSessions);
+            }
+            liberado_commands::CommandResult::OpenModelBrowser => {
+                self.open_model_browser();
+                effects.push(Effect::FetchModels);
+            }
+            liberado_commands::CommandResult::OpenGoalSwitcher => {
+                self.open_session_switcher();
+                effects.push(Effect::RefreshConversations);
+                effects.push(Effect::RefreshSessions);
+            }
+            _ => {}
+        }
+    }
+
+    /// Command results that create, switch, or leave sessions.
+    fn on_session_result(
+        &mut self,
+        result: &liberado_commands::CommandResult,
+        effects: &mut Vec<Effect>,
+        session_before_dispatch: &Option<String>,
+    ) {
+        match result {
+            liberado_commands::CommandResult::NewConversation { was_streaming } => {
+                effects.push(Effect::RefreshConversations);
+                if *was_streaming {
+                    effects.push(Effect::CancelStream {
+                        conversation: session_before_dispatch.clone(),
+                    });
+                }
+            }
+            liberado_commands::CommandResult::JoinGoalSession { id } => {
+                // Resolve an id prefix against the known goal sessions (full id wins).
+                let resolved = self
+                    .sessions
+                    .iter()
+                    .find(|h| h.id == *id)
+                    .or_else(|| self.sessions.iter().find(|h| h.id.starts_with(id)))
+                    .map(|h| h.id.clone())
+                    .unwrap_or_else(|| id.clone());
+                self.join_session(resolved.clone());
+                effects.push(Effect::JoinGoalSession(resolved));
+            }
+            liberado_commands::CommandResult::BackToPrimary => {
+                if self.joined.is_some() {
+                    self.leave_session();
+                    effects.push(Effect::LeaveGoalSession);
+                } else {
+                    self.messages
+                        .push(Message::System("Already in the primary chat.".into()));
+                }
+            }
+            liberado_commands::CommandResult::SpawnGoalSession { domain, goal } => {
+                // Leaving a finished joined view (if any) so the new session takes the pane.
+                if self.joined.as_ref().map(|j| j.finished).unwrap_or(false) {
+                    self.joined = None;
+                }
+                effects.push(Effect::SpawnGoalSession {
+                    domain: domain.clone(),
+                    goal: goal.clone(),
+                    // Link the new session back to the current conversation so its summary folds
+                    // in on terminal (S4 return handoff). `None` when there's no chat yet.
+                    origin_conversation: self.session.clone(),
+                });
+            }
+            liberado_commands::CommandResult::ForkRequested {
+                parent_id,
+                after_turn,
+            } => {
+                effects.push(Effect::ForkConversation {
+                    parent_id: parent_id.clone(),
+                    after_turn: *after_turn,
+                });
+            }
+            liberado_commands::CommandResult::StartCodingGoal {
+                project,
+                text,
+                mode,
+            } => {
+                if self.joined.as_ref().map(|j| j.finished).unwrap_or(false) {
+                    self.joined = None;
+                }
+                effects.push(Effect::StartCodingGoal {
+                    project: project.clone(),
+                    text: text.clone(),
+                    mode: *mode,
+                    origin_conversation: self.session.clone(),
+                });
+            }
+            _ => {}
+        }
+    }
+
+    /// Command results that act on the focused goal session (or explain why there isn't one).
+    fn on_goal_result(
+        &mut self,
+        result: &liberado_commands::CommandResult,
+        effects: &mut Vec<Effect>,
+    ) {
+        match result {
+            liberado_commands::CommandResult::OpenGoalView => match &self.joined {
+                Some(j) => {
+                    let id = j.id.clone();
+                    self.messages.push(Message::System(format!(
+                        "Goal view: {id} (you are already joined — the pane below is the view)"
+                    )));
+                }
+                None => self.messages.push(Message::System(
+                    "No session focused. Use /goal <text> to start one, or /sessions to join."
+                        .into(),
+                )),
+            },
+            liberado_commands::CommandResult::GoalStatus => match &self.joined {
+                Some(j) => {
+                    let line = format!(
+                        "{} · {} · {} message(s){}",
+                        j.id,
+                        j.status,
+                        j.messages.len(),
+                        match &j.awaiting {
+                            Some(a) => format!(" · awaiting: {}", a.prompt),
+                            None => String::new(),
+                        }
+                    );
+                    self.messages.push(Message::System(line));
+                }
+                None => self
+                    .messages
+                    .push(Message::System("No goal session focused.".into())),
+            },
+            liberado_commands::CommandResult::ParkGoalSession => self.push_joined_effect(
+                effects,
+                Effect::ParkGoalSession,
+                "No goal session to park.",
+            ),
+            liberado_commands::CommandResult::ResumeGoalSession { answer } => {
+                self.push_joined_effect(
+                    effects,
+                    |id| Effect::ResumeGoalSession {
+                        id,
+                        answer: answer.clone(),
+                    },
+                    "No goal session to resume.",
+                );
+            }
+            liberado_commands::CommandResult::CancelGoalSession => self.push_joined_effect(
+                effects,
+                Effect::CancelGoalSession,
+                "No goal session to cancel.",
+            ),
+            _ => {}
+        }
+    }
+
+    /// Push an effect targeting the joined goal session, or explain that there is none.
+    fn push_joined_effect(
+        &mut self,
+        effects: &mut Vec<Effect>,
+        effect: impl FnOnce(String) -> Effect,
+        none_message: &str,
+    ) {
+        match self.joined.as_ref().map(|j| j.id.clone()) {
+            Some(id) => effects.push(effect(id)),
+            None => self.messages.push(Message::System(none_message.into())),
+        }
+    }
+
+    /// Simple output results: quit and the inline options list.
+    fn on_output_result(
+        &mut self,
+        result: &liberado_commands::CommandResult,
+        effects: &mut Vec<Effect>,
+    ) {
+        match result {
+            liberado_commands::CommandResult::Quit => effects.push(Effect::Quit),
+            liberado_commands::CommandResult::ShowOptions { title, options } => {
+                let mut text = format!("{title}:\n");
+                for (label, _id) in options {
+                    text.push_str("  ");
+                    text.push_str(label);
+                    text.push('\n');
+                }
+                self.messages.push(Message::System(text));
+            }
+            _ => {}
+        }
     }
 
     pub(crate) fn scroll_to_chat_cursor(&mut self) {
