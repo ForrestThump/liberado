@@ -531,52 +531,82 @@ fn check_generated_index(
 
 /// Pure regression checks for the metadata rules. This is a command, rather than only Rust unit
 /// tests, because CI invokes `liberado docs metadata self-test` before linting the repository.
+/// Pure regression checks for the metadata rules. This is a command, rather than only Rust unit
+/// tests, because CI invokes `liberado docs metadata self-test` before linting the repository.
 fn self_test() -> Result<(), Box<dyn std::error::Error>> {
-    let assert_rule = |name: &str, passed: bool| -> Result<(), Box<dyn std::error::Error>> {
-        if passed {
-            Ok(())
-        } else {
-            Err(format!("docs metadata self-test failed: {name}").into())
-        }
-    };
-    let document = |path: &str, meta: &str, body: &str| Document {
+    assert_frontmatter_round_trip()?;
+    assert_missing_future_work_frontmatter()?;
+    assert_active_plan_open_items()?;
+    assert_duplicate_canonical_for()?;
+    assert_decision_status_vocabulary()?;
+    assert_normative_archive_link()?;
+    assert_generated_index_comparison()?;
+    assert_exact_case()?;
+    assert_no_stale_rs_docs()?;
+    println!("docs metadata self-test: all passed");
+    Ok(())
+}
+
+/// Fail the self-test run unless `passed` is true.
+fn assert_rule(name: &str, passed: bool) -> Result<(), Box<dyn std::error::Error>> {
+    if passed {
+        Ok(())
+    } else {
+        Err(format!("docs metadata self-test failed: {name}").into())
+    }
+}
+
+/// Build a `Document` from frontmatter YAML text and a body, for a self-test fixture.
+fn test_document(path: &str, meta: &str, body: &str) -> Document {
+    Document {
         path: path.into(),
         meta: split_frontmatter(&format!("---\n{meta}\n---\n{body}")).0,
         body: body.into(),
-    };
-    let future_work = format!("docs/{}", "future-work");
+    }
+}
 
+/// frontmatter parses back to the same kind and body.
+fn assert_frontmatter_round_trip() -> Result<(), Box<dyn std::error::Error>> {
     let (meta, body) = split_frontmatter("---\nkind: plan\nopen_items: true\n---\n# Title\n");
     assert_rule(
         "frontmatter round trip",
         meta.as_ref().and_then(|m| meta_str(m, "kind")) == Some("plan") && body == "# Title\n",
-    )?;
+    )
+}
 
+/// A root future-work document without frontmatter is flagged.
+fn assert_missing_future_work_frontmatter() -> Result<(), Box<dyn std::error::Error>> {
     let missing = lint_documents_for_test(vec![Document {
-        path: format!("{future_work}/missing.md"),
+        path: "docs/future-work/missing.md".into(),
         meta: None,
         body: String::new(),
     }])?;
     assert_rule(
         "missing future-work frontmatter",
         has_issue(&missing, "missing YAML"),
-    )?;
+    )
+}
 
-    let inactive = lint_documents_for_test(vec![document(
-        &format!("{future_work}/active.md"),
+/// An active plan must keep open_items: true.
+fn assert_active_plan_open_items() -> Result<(), Box<dyn std::error::Error>> {
+    let inactive = lint_documents_for_test(vec![test_document(
+        "docs/future-work/active.md",
         "kind: plan\nstatus: active\nauthority: implementation\nopen_items: false",
         "",
     )])?;
-    assert_rule("active plan open_items", has_issue(&inactive, "open_items"))?;
+    assert_rule("active plan open_items", has_issue(&inactive, "open_items"))
+}
 
+/// Two active plans cannot claim the same canonical_for.
+fn assert_duplicate_canonical_for() -> Result<(), Box<dyn std::error::Error>> {
     let duplicate = lint_documents_for_test(vec![
-        document(
-            &format!("{future_work}/a.md"),
+        test_document(
+            "docs/future-work/a.md",
             "kind: plan\nstatus: active\nauthority: implementation\nopen_items: true\ncanonical_for: same",
             "",
         ),
-        document(
-            &format!("{future_work}/b.md"),
+        test_document(
+            "docs/future-work/b.md",
             "kind: plan\nstatus: active\nauthority: implementation\nopen_items: true\ncanonical_for: same",
             "",
         ),
@@ -584,19 +614,25 @@ fn self_test() -> Result<(), Box<dyn std::error::Error>> {
     assert_rule(
         "duplicate canonical_for",
         has_issue(&duplicate, "duplicate active canonical_for"),
-    )?;
+    )
+}
 
-    let invalid_status = lint_documents_for_test(vec![document(
-        &format!("docs/{}/ADR-0001.md", "decisions"),
+/// A decision must use the decision-status vocabulary.
+fn assert_decision_status_vocabulary() -> Result<(), Box<dyn std::error::Error>> {
+    let invalid_status = lint_documents_for_test(vec![test_document(
+        "docs/decisions/ADR-0001.md",
         "kind: decision\nstatus: banana\nauthority: normative",
         "",
     )])?;
     assert_rule(
         "decision status vocabulary",
         has_issue(&invalid_status, "invalid status 'banana'"),
-    )?;
+    )
+}
 
-    let archive = lint_documents_for_test(vec![document(
+/// A normative document must not link to an archive path as content.
+fn assert_normative_archive_link() -> Result<(), Box<dyn std::error::Error>> {
+    let archive = lint_documents_for_test(vec![test_document(
         "docs/spec/architecture/contracts.md",
         "kind: architecture\nstatus: active\nauthority: normative",
         "See [old](../future-work/archive/old.md).",
@@ -604,8 +640,11 @@ fn self_test() -> Result<(), Box<dyn std::error::Error>> {
     assert_rule(
         "normative archive link",
         has_issue(&archive, "archive path"),
-    )?;
+    )
+}
 
+/// A committed generated index must match what the generator would produce.
+fn assert_generated_index_comparison() -> Result<(), Box<dyn std::error::Error>> {
     let generated = tempfile::tempdir()?;
     fs::create_dir_all(generated.path().join("docs").join("future-work"))?;
     fs::write(
@@ -628,33 +667,39 @@ fn self_test() -> Result<(), Box<dyn std::error::Error>> {
     assert_rule(
         "generated index comparison",
         has_issue(&lint(generated.path())?, "generated index differs"),
-    )?;
+    )
+}
 
+/// exact_file is case-sensitive and leaf-exact.
+fn assert_exact_case() -> Result<(), Box<dyn std::error::Error>> {
     let temp = tempfile::tempdir()?;
     let root = temp.path();
     fs::create_dir_all(root.join("docs/spec/reference"))?;
     fs::write(root.join("docs/spec/reference/api.md"), "# api\n")?;
     assert_rule(
         "exact case rejects wrong case",
-        !exact_file(root, &format!("docs/spec/reference/{}", "API.md")),
+        !exact_file(root, "docs/spec/reference/API.md"),
     )?;
     assert_rule(
         "exact case accepts matching path",
-        exact_file(root, &format!("docs/spec/reference/{}", "api.md")),
-    )?;
+        exact_file(root, "docs/spec/reference/api.md"),
+    )
+}
+
+/// A rust doc link to a missing docs path is flagged.
+fn assert_no_stale_rs_docs() -> Result<(), Box<dyn std::error::Error>> {
+    let temp = tempfile::tempdir()?;
+    let root = temp.path();
     fs::create_dir_all(root.join("crates/example/src"))?;
     fs::write(
         root.join("crates/example/src/lib.rs"),
-        format!("//! See docs/{}/missing.md\n", "future-work"),
+        "//! See docs/future-work/missing.md\n",
     )?;
     let stale = stale_rs_paths(root)?;
     assert_rule(
         "stale Rust docs path",
         has_issue(&stale, "missing docs path"),
-    )?;
-
-    println!("docs metadata self-test: all passed");
-    Ok(())
+    )
 }
 
 fn lint_documents_for_test(docs: Vec<Document>) -> Result<Vec<Issue>, Box<dyn std::error::Error>> {
