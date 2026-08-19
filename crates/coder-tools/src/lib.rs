@@ -376,6 +376,9 @@ impl CodingToolRuntime {
     }
 
     async fn invoke_json(&self, name: &str, args: Value) -> Result<Value, ToolError> {
+        if let Some(git_tool) = name.strip_prefix("git_") {
+            return self.invoke_git_json(git_tool, args).await;
+        }
         match name {
             "list_files" => self.list_files(args).await,
             // `search_text` is kept as an alias: a run mid-flight against an older
@@ -387,19 +390,26 @@ impl CodingToolRuntime {
             "edit_file" => self.edit_file(args).await,
             "apply_patch" => self.apply_patch(args).await,
             "hashline_edit" => self.hashline_edit(args).await,
-            "git_status" => self.git_status().await,
-            "git_diff" => self.git_diff(args).await,
-            "git_branch" => self.git_branch(args).await,
-            "git_commit" => self.git_commit(args).await,
-            "git_push" => self.git_push(args).await,
-            "git_log" => self.git_log(args).await,
-            "git_fetch" => self.git_fetch(args).await,
-            "git_merge" => self.git_merge(args).await,
             "run_command_background" => self.run_command_background(args).await,
             "check_background" => self.check_background(args).await,
             "run_command" => self.run_command(args).await,
             "validate" => self.validate().await,
             other => Err(ToolError::BadRequest(format!("unknown tool: {other}"))),
+        }
+    }
+
+    /// The git-family tools, named after the `git_` prefix.
+    async fn invoke_git_json(&self, git_tool: &str, args: Value) -> Result<Value, ToolError> {
+        match git_tool {
+            "status" => self.git_status().await,
+            "diff" => self.git_diff(args).await,
+            "branch" => self.git_branch(args).await,
+            "commit" => self.git_commit(args).await,
+            "push" => self.git_push(args).await,
+            "log" => self.git_log(args).await,
+            "fetch" => self.git_fetch(args).await,
+            "merge" => self.git_merge(args).await,
+            other => Err(ToolError::BadRequest(format!("unknown tool: git_{other}"))),
         }
     }
 
