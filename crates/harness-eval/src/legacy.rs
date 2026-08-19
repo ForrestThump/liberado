@@ -2002,6 +2002,7 @@ fn run_slug(path: &Path) -> String {
 
 #[cfg(test)]
 mod tests {
+    use super::parse_prepare_args;
     #[cfg(windows)]
     use super::run_or_record_launch_error;
     use super::{
@@ -2014,7 +2015,8 @@ mod tests {
         path_text, repairable_verifier_exit, run_args_from_spec, run_async_command, run_slug,
         save_result, toml_string, value, verifier_feedback, write_run_config, write_run_pins,
     };
-    use super::{parse_prepare_args, prepare, remove_job_worktrees};
+    #[cfg(windows)]
+    use super::{prepare, remove_job_worktrees};
     use crate::contract::{
         AcceptanceBundle, HarnessRequest, JOB_SPEC_VERSION, JobId, JobSpec, ModelPins,
         ResourceLimits, TaskBundle, VerifierProfile,
@@ -3140,16 +3142,18 @@ mod tests {
     }
 
     fn sleeping_command() -> Command {
-        #[cfg(windows)]
-        {
-            let mut cmd = Command::new("cmd");
+        // cfg! so both OS arms type-check on every runner.
+        let mut cmd = if cfg!(windows) {
+            Command::new("cmd")
+        } else {
+            Command::new("sleep")
+        };
+        if cfg!(windows) {
             cmd.args(["/c", "ping -n 30 127.0.0.1 >nul"]);
-            cmd
+        } else {
+            cmd.arg("30");
         }
-        #[cfg(not(windows))]
-        {
-            Command::new("sleep").arg("30")
-        }
+        cmd
     }
 
     #[test]
