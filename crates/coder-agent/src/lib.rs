@@ -923,166 +923,53 @@ impl LiberadoLoopBackend {
 
         // Authoritative verifier pipeline (config list and/or legacy validation_command).
         // Skipped when the worker already reported Failed (honest stop).
-        let mut validation_notes = None;
-        let mut outcome = report.outcome;
-        let mut summary = report.summary;
-        // Verifier results outlive the pipeline block: the completion gate shows them to reviewers
-        // as the deterministic floor they may not override.
-        let mut verifier_results: Vec<liberado_coder_core::NamedVerdict> = Vec::new();
-        if outcome != Outcome::Failed {
-            let specs = resolve_verifier_specs(
-                &request.config.verifiers,
-                request.config.validation_command.as_ref(),
-            );
-            if !specs.is_empty() {
-                let mut pipeline = verify_pipeline::run_pipeline(
-                    &effective_root,
-                    &specs,
-                    &request.config.verify_policy,
-                    Some(&events),
-                )
-                .await?;
-                // A test failure that already existed on the base commit is not the agent's
-                // fault. Compare named cargo-test failures against `compute_baseline` (throwaway
-                // worktree at HEAD-before-edits, cached per commit). If every failure is
-                // pre-existing, the test verifier is treated as passing.
-                if !pipeline.is_pass() && baseline_sha.is_some() {
-                    let baseline_failures = gates::baseline_test_failures(
-                        &effective_root,
-                        baseline_sha.as_deref().unwrap(),
-                    )
-                    .await
-                    .unwrap_or_else(|e| {
-                        tracing::warn!(
-                            error = %e,
-                            "baseline test comparison failed; treating all cargo-test failures as new"
-                        );
-                        std::collections::BTreeSet::new()
-                    });
-                    pipeline = soften_pre_existing_test_failures(&pipeline, &baseline_failures);
-                }
-                if !pipeline.is_pass() {
-                    // Signature-aware feedback for repair routing (scratchpad C).
-                    let feedback = repair_feedback::format_pipeline_repair(&pipeline);
-                    trace::push_event(
-                        &events,
-                        CoderEvent::LoopGuardTriggered {
-                            guard: "verifier_pipeline".to_string(),
-                            action: "fail_run".to_string(),
-                            at: Utc::now(),
-                        },
-                    );
-                    trace::push_event(
-                        &events,
-                        CoderEvent::SessionFinished {
-                            outcome: Outcome::Failed,
-                            at: Utc::now(),
-                        },
-                    );
-                    return Err(CoderError::Validation(feedback));
-                }
-                validation_notes = Some(
-                    pipeline
-                        .results
-                        .iter()
-                        .map(|r| format!("{}: {}", r.id, r.verdict.summary))
-                        .collect::<Vec<_>>()
-                        .join("; "),
-                );
-                verifier_results = pipeline.results.clone();
-            }
-        }
+        // Authoritative verifier pipeline (config list and/or legacy validation_command).
+        // Skipped when the worker already reported Failed (honest stop).
+        let VerifierOutcome {
+            notes: validation_notes,
+            results: verifier_results,
+        } = run_verifier_pipeline(
+            &request,
+            &effective_root,
+            baseline_sha.as_ref(),
+            &events,
+            report.outcome,
+        )
+        .await?;
 
-        // The judgment layer, on top of the deterministic verifiers above. Two shapes:
-        //
-        // * gate enabled  — a remembered gatekeeper plus a quorum of cold reviewers, adjudicated
-        //   by the kernel (`liberado_session::CompletionGate`). Fail-closed.
-        // * gate disabled — the legacy single critic, unchanged.
-        //
-        // Both are skipped when the worker already failed or changed nothing: there is no claim to
-        // dispute, and asking a reviewer to bless an empty diff only burns tokens.
-        let mut critic_verdict = None;
-        let mut gate_votes = Vec::new();
-        let reviewable = outcome != Outcome::Failed && !files_changed.is_empty();
-        if reviewable && request.config.gate.enabled {
-            let gate_outcome = completion_gate::run_gate(
-                self.providers.as_ref(),
-                &request,
-                &verifier_results,
-                &events,
-            )
-            .await?;
-            gate_votes = completion_gate::flatten_votes(&gate_outcome);
-            let verdict = match &gate_outcome.verdict {
-                liberado_session::GateVerdict::Approved => CriticVerdict::Acceptable,
-                liberado_session::GateVerdict::Refuted { issues } => {
-                    // Belt and braces: `run`'s attempt loop also derives Failed from a
-                    // `NeedsRevision` verdict, so this assignment is not the only thing standing
-                    // between a refutation and a Succeeded result. It is kept so `run_attempt`'s
-                    // own return value is self-consistent — a caller reading it directly (evals,
-                    // future single-attempt callers) must never see Succeeded next to a refuted
-                    // verdict. `critic_verdict`, not `outcome`, is the signal that drives retry.
-                    outcome = Outcome::Failed;
-                    summary = format!(
-                        "{summary}; completion gate refused ({} of {} votes refuting): {}",
-                        gate_outcome
-                            .votes
-                            .iter()
-                            .filter(|v| !v.vote.is_approve())
-                            .count(),
-                        gate_outcome.votes.len(),
-                        issues.join("; ")
-                    );
-                    CriticVerdict::NeedsRevision {
-                        issues: issues.clone(),
-                    }
-                }
-            };
-            critic_verdict = Some(verdict);
-        } else if reviewable && roles::critic_enabled(&request) {
-            // `None` is an abstention — the reviewer returned nothing usable. The run keeps the
-            // verdict the deterministic verifiers already gave it; `critic_verdict` stays `None`
-            // so no consumer can mistake silence for approval.
-            if let Some(verdict) =
-                critic::run_critic(self.providers.as_ref(), &request, &events).await?
-            {
-                trace::push_event(
-                    &events,
-                    CoderEvent::CriticVerdict {
-                        verdict: verdict.clone(),
-                        at: Utc::now(),
-                    },
-                );
-                if let CriticVerdict::NeedsRevision { issues } = &verdict {
-                    outcome = Outcome::Failed;
-                    summary = format!(
-                        "{summary}; critic requested revision: {}",
-                        issues.join("; ")
-                    );
-                }
-                critic_verdict = Some(verdict);
-            } else {
-                summary = format!("{summary}; critic abstained (no usable response)");
-            }
-        }
+        let mut state = VerdictState {
+            outcome: report.outcome,
+            summary: report.summary,
+            critic_verdict: None,
+            gate_votes: Vec::new(),
+        };
+        apply_judgment(
+            self.providers.as_ref(),
+            &request,
+            &verifier_results,
+            &files_changed,
+            &events,
+            &mut state,
+        )
+        .await?;
 
         trace::push_event(
             &events,
             CoderEvent::SessionFinished {
-                outcome,
+                outcome: state.outcome,
                 at: Utc::now(),
             },
         );
 
         let result = CoderRunResult {
             backend: self.name().to_string(),
-            outcome,
-            summary,
+            outcome: state.outcome,
+            summary: state.summary,
             files_changed,
             file_changes,
             validation_notes,
-            critic_verdict,
-            gate_votes,
+            critic_verdict: state.critic_verdict,
+            gate_votes: state.gate_votes,
             trace_path: None,
             diff_findings: Vec::new(),
             session_findings: Vec::new(),
@@ -1095,6 +982,184 @@ impl LiberadoLoopBackend {
         };
         Ok(result)
     }
+}
+
+/// What the authoritative verifier pipeline produced for one attempt: the human-readable note
+/// plus the per-verifier results the completion gate may show to reviewers.
+struct VerifierOutcome {
+    notes: Option<String>,
+    results: Vec<liberado_coder_core::NamedVerdict>,
+}
+
+/// The authoritative verifier pipeline (config list and/or legacy `validation_command`).
+/// Skipped when the worker already reported `Failed` (honest stop). Verifier results outlive the
+/// pipeline block: the completion gate shows them to reviewers as the deterministic floor they
+/// may not override.
+async fn run_verifier_pipeline(
+    request: &CoderRunRequest,
+    effective_root: &str,
+    baseline_sha: Option<&String>,
+    events: &trace::EventLog,
+    outcome: Outcome,
+) -> Result<VerifierOutcome, CoderError> {
+    if outcome == Outcome::Failed {
+        return Ok(VerifierOutcome {
+            notes: None,
+            results: Vec::new(),
+        });
+    }
+    let specs = resolve_verifier_specs(
+        &request.config.verifiers,
+        request.config.validation_command.as_ref(),
+    );
+    if specs.is_empty() {
+        return Ok(VerifierOutcome {
+            notes: None,
+            results: Vec::new(),
+        });
+    }
+    let mut pipeline = verify_pipeline::run_pipeline(
+        effective_root,
+        &specs,
+        &request.config.verify_policy,
+        Some(events),
+    )
+    .await?;
+    // A test failure that already existed on the base commit is not the agent's fault. Compare
+    // named cargo-test failures against `compute_baseline` (throwaway worktree at
+    // HEAD-before-edits, cached per commit). If every failure is pre-existing, the test verifier
+    // is treated as passing.
+    if !pipeline.is_pass()
+        && let Some(baseline_sha) = baseline_sha
+    {
+        let baseline_failures = gates::baseline_test_failures(effective_root, baseline_sha)
+            .await
+            .unwrap_or_else(|e| {
+                tracing::warn!(
+                    error = %e,
+                    "baseline test comparison failed; treating all cargo-test failures as new"
+                );
+                std::collections::BTreeSet::new()
+            });
+        pipeline = soften_pre_existing_test_failures(&pipeline, &baseline_failures);
+    }
+    if !pipeline.is_pass() {
+        // Signature-aware feedback for repair routing (scratchpad C).
+        let feedback = repair_feedback::format_pipeline_repair(&pipeline);
+        trace::push_event(
+            events,
+            CoderEvent::LoopGuardTriggered {
+                guard: "verifier_pipeline".to_string(),
+                action: "fail_run".to_string(),
+                at: Utc::now(),
+            },
+        );
+        trace::push_event(
+            events,
+            CoderEvent::SessionFinished {
+                outcome: Outcome::Failed,
+                at: Utc::now(),
+            },
+        );
+        return Err(CoderError::Validation(feedback));
+    }
+    let notes = Some(
+        pipeline
+            .results
+            .iter()
+            .map(|r| format!("{}: {}", r.id, r.verdict.summary))
+            .collect::<Vec<_>>()
+            .join("; "),
+    );
+    Ok(VerifierOutcome {
+        notes,
+        results: pipeline.results.clone(),
+    })
+}
+
+/// The verdict layer's working state: the outcome/summary the worker and verifiers produced, to
+/// be mutated by the gate or critic, plus their recorded outputs.
+struct VerdictState {
+    outcome: Outcome,
+    summary: String,
+    critic_verdict: Option<CriticVerdict>,
+    gate_votes: Vec<liberado_coder_core::GateVoteRecord>,
+}
+
+/// The judgment layer, on top of the deterministic verifiers above. Two shapes:
+///
+/// * gate enabled  — a remembered gatekeeper plus a quorum of cold reviewers, adjudicated by the
+///   kernel (`liberado_session::CompletionGate`). Fail-closed.
+/// * gate disabled — the legacy single critic, unchanged.
+///
+/// Both are skipped when the worker already failed or changed nothing: there is no claim to
+/// dispute, and asking a reviewer to bless an empty diff only burns tokens.
+async fn apply_judgment(
+    providers: &dyn CoderProviderFactory,
+    request: &CoderRunRequest,
+    verifier_results: &[liberado_coder_core::NamedVerdict],
+    files_changed: &[String],
+    events: &trace::EventLog,
+    state: &mut VerdictState,
+) -> Result<(), CoderError> {
+    let reviewable = state.outcome != Outcome::Failed && !files_changed.is_empty();
+    if reviewable && request.config.gate.enabled {
+        let gate_outcome =
+            completion_gate::run_gate(providers, request, verifier_results, events).await?;
+        state.gate_votes = completion_gate::flatten_votes(&gate_outcome);
+        let verdict = match &gate_outcome.verdict {
+            liberado_session::GateVerdict::Approved => CriticVerdict::Acceptable,
+            liberado_session::GateVerdict::Refuted { issues } => {
+                // Belt and braces: `run`'s attempt loop also derives Failed from a
+                // `NeedsRevision` verdict, so this assignment is not the only thing standing
+                // between a refutation and a Succeeded result. It is kept so `run_attempt`'s
+                // own return value is self-consistent — a caller reading it directly (evals,
+                // future single-attempt callers) must never see Succeeded next to a refuted
+                // verdict. `critic_verdict`, not `outcome`, is the signal that drives retry.
+                state.outcome = Outcome::Failed;
+                state.summary = format!(
+                    "{}; completion gate refused ({} of {} votes refuting): {}",
+                    state.summary,
+                    gate_outcome
+                        .votes
+                        .iter()
+                        .filter(|v| !v.vote.is_approve())
+                        .count(),
+                    gate_outcome.votes.len(),
+                    issues.join("; ")
+                );
+                CriticVerdict::NeedsRevision {
+                    issues: issues.clone(),
+                }
+            }
+        };
+        state.critic_verdict = Some(verdict);
+    } else if reviewable && roles::critic_enabled(request) {
+        // `None` is an abstention — the reviewer returned nothing usable. The run keeps the
+        // verdict the deterministic verifiers already gave it; `critic_verdict` stays `None`
+        // so no consumer can mistake silence for approval.
+        if let Some(verdict) = critic::run_critic(providers, request, events).await? {
+            trace::push_event(
+                events,
+                CoderEvent::CriticVerdict {
+                    verdict: verdict.clone(),
+                    at: Utc::now(),
+                },
+            );
+            if let CriticVerdict::NeedsRevision { issues } = &verdict {
+                state.outcome = Outcome::Failed;
+                state.summary = format!(
+                    "{}; critic requested revision: {}",
+                    state.summary,
+                    issues.join("; ")
+                );
+            }
+            state.critic_verdict = Some(verdict);
+        } else {
+            state.summary = format!("{}; critic abstained (no usable response)", state.summary);
+        }
+    }
+    Ok(())
 }
 
 /// When the pipeline fails and a cargo-test verifier is among the failures, check whether every
