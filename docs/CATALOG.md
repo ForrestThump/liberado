@@ -45,7 +45,6 @@ Authority model: [doc-authority.md](spec/reference/doc-authority.md).
 | [docs/future-work/archive/parallel-deliverables-2026-08-round-2.md](future-work/archive/parallel-deliverables-2026-08-round-2.md) | plan | implemented | advisory | process | parallel-deliverables-r2 |
 | [docs/future-work/archive/parallel-deliverables-2026-08.md](future-work/archive/parallel-deliverables-2026-08.md) | plan | implemented | advisory | process | parallel-deliverables-r1 |
 | [docs/future-work/backlog.md](future-work/backlog.md) | plan | active | implementation | product | implementation-backlog |
-| [docs/future-work/build-locally-and-ship-the-artifact.md](future-work/build-locally-and-ship-the-artifact.md) | plan | active | implementation | ops | local-build-ship |
 | [docs/future-work/cadence-triggered-maintenance-agents.md](future-work/cadence-triggered-maintenance-agents.md) | plan | draft | advisory | ops | cadence-maintenance-agents |
 | [docs/future-work/coder-eval-curriculum.md](future-work/coder-eval-curriculum.md) | plan | active | implementation | coding-harness | coder-eval-curriculum |
 | [docs/future-work/coder-harness-reliability-2026-08.md](future-work/coder-harness-reliability-2026-08.md) | finding | active | evidence | coding-harness | coder-harness-reliability-2026-08 |
@@ -53,9 +52,6 @@ Authority model: [doc-authority.md](spec/reference/doc-authority.md).
 | [docs/future-work/context-compaction-plan.md](future-work/context-compaction-plan.md) | plan | active | implementation | chat | context-compaction |
 | [docs/future-work/context-compaction-viewport-rearchitecture.md](future-work/context-compaction-viewport-rearchitecture.md) | plan | active | implementation | chat | context-compaction-viewport |
 | [docs/future-work/delegation-failure-modes.md](future-work/delegation-failure-modes.md) | finding | historical | evidence | delegation | delegation-failure-modes |
-| [docs/future-work/f12-compare3-harness-failures-2026-08.md](future-work/f12-compare3-harness-failures-2026-08.md) | finding | active | evidence | coding-harness | f12-compare3-harness-failures |
-| [docs/future-work/harness-baseline-0.7-c3-2026-08.md](future-work/harness-baseline-0.7-c3-2026-08.md) | finding | active | evidence | coding-harness | harness-baseline-0.7-c3 |
-| [docs/future-work/harness-bench-gaps-and-levers.md](future-work/harness-bench-gaps-and-levers.md) | finding | active | advisory | coding-harness | harness-bench-gaps |
 | [docs/future-work/harness-study-2026-08.md](future-work/harness-study-2026-08.md) | finding | active | advisory | coding-harness | harness-study-2026-08 |
 | [docs/future-work/heuristics-tuning-engine-plan.md](future-work/heuristics-tuning-engine-plan.md) | plan | active | implementation | tuning | heuristics-tuning-engine |
 | [docs/future-work/latency-and-routing-observability-plan.md](future-work/latency-and-routing-observability-plan.md) | plan | active | implementation | observability | latency-routing-observability |
@@ -72,7 +68,6 @@ Authority model: [doc-authority.md](spec/reference/doc-authority.md).
 | [docs/future-work/self-pr-quality-roadmap.md](future-work/self-pr-quality-roadmap.md) | plan | active | implementation | coding-harness | self-pr-quality |
 | [docs/future-work/token-cost-accounting-plan.md](future-work/token-cost-accounting-plan.md) | plan | active | implementation | token-economics | token-cost-accounting |
 | [docs/future-work/token-economics-findings-2026-08.md](future-work/token-economics-findings-2026-08.md) | finding | active | evidence | token-economics | token-economics-findings |
-| [docs/future-work/tool-result-hint-hooks.md](future-work/tool-result-hint-hooks.md) | finding | active | advisory | coding-harness | tool-result-hint-hooks |
 | [docs/future-work/tui-maturity-roadmap.md](future-work/tui-maturity-roadmap.md) | plan | active | implementation | tui | tui-maturity |
 | [docs/future-work/turbovault-modules-integration-roadmap.md](future-work/turbovault-modules-integration-roadmap.md) | plan | active | implementation | turbovault | turbovault-modules |
 | [docs/future-work/turbovault-vault-events-plugin-plan.md](future-work/turbovault-vault-events-plugin-plan.md) | plan | active | implementation | turbovault | turbovault-vault-events |
