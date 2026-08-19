@@ -19,8 +19,15 @@ fn usage() -> ! {
     std::process::exit(2);
 }
 
-#[tokio::main]
-async fn main() -> ExitCode {
+/// Parsed CLI arguments for the conformance runner.
+struct ConformanceArgs {
+    config_path: Option<PathBuf>,
+    path_filter: Option<Vec<PathId>>,
+    advisory_counts: bool,
+}
+
+/// Parse argv; any unknown or malformed input prints the usage and exits.
+fn parse_args() -> ConformanceArgs {
     let mut args = env::args().skip(1);
     let mut config_path: Option<PathBuf> = None;
     let mut path_filter: Option<Vec<PathId>> = None;
@@ -54,7 +61,28 @@ async fn main() -> ExitCode {
         }
     }
 
-    let config_path = config_path.unwrap_or_else(|| {
+    ConformanceArgs {
+        config_path,
+        path_filter,
+        advisory_counts,
+    }
+}
+
+/// The path set to run: the filter when given, else the config list, else all defaults.
+fn resolve_paths(filter: Option<Vec<PathId>>, cfg: &ConformanceConfig) -> Vec<PathId> {
+    filter.unwrap_or_else(|| {
+        if cfg.paths.is_empty() {
+            PathId::all_default()
+        } else {
+            cfg.paths.iter().filter_map(|s| PathId::parse(s)).collect()
+        }
+    })
+}
+
+#[tokio::main]
+async fn main() -> ExitCode {
+    let args = parse_args();
+    let config_path = args.config_path.unwrap_or_else(|| {
         eprintln!("--config is required");
         usage();
     });
@@ -66,17 +94,11 @@ async fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    if advisory_counts {
+    if args.advisory_counts {
         cfg.advisory_counts = true;
     }
 
-    let paths = path_filter.unwrap_or_else(|| {
-        if cfg.paths.is_empty() {
-            PathId::all_default()
-        } else {
-            cfg.paths.iter().filter_map(|s| PathId::parse(s)).collect()
-        }
-    });
+    let paths = resolve_paths(args.path_filter, &cfg);
 
     let client = match DaemonClient::new(&cfg.base_url) {
         Ok(c) => c,
