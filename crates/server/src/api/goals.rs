@@ -424,6 +424,57 @@ pub struct GoalRewindRequest {
     pub checkpoint_id: Option<String>,
 }
 
+/// Resolve the rewind workspace: a durable session worktree wins, the payload's
+/// `workspace_root` is the fallback. Pure so the two failure messages are unit-tested.
+fn rewind_workspace(
+    durable: Option<std::path::PathBuf>,
+    payload_root: Option<&str>,
+) -> Result<std::path::PathBuf, String> {
+    match durable {
+        Some(path) if path.exists() => Ok(path),
+        Some(_) => payload_root.map(std::path::PathBuf::from).ok_or_else(|| {
+            "coding session has no workspace_root and no durable session worktree — cannot rewind"
+                .to_string()
+        }),
+        None => payload_root
+            .map(std::path::PathBuf::from)
+            .ok_or_else(|| "coding session has no workspace_root in payload".to_string()),
+    }
+}
+
+/// Latest-or-explicit checkpoint for a rewind: an explicit id that names a checkpoint event wins
+/// (with the event's label + tree hash); otherwise the most recent checkpoint event is used; a
+/// missing explicit id falls back to the id alone with an "explicit" label.
+fn rewind_checkpoint(
+    events: &[liberado_session::SessionEvent],
+    want: Option<&str>,
+) -> Result<(String, String, String), String> {
+    use liberado_session::SessionEventKind;
+    if let Some(id) = want {
+        let from_ev = events.iter().rev().find_map(|e| match &e.kind {
+            SessionEventKind::Checkpoint {
+                id: cid,
+                label,
+                tree_hash,
+            } if cid == id => Some((cid.clone(), label.clone(), tree_hash.clone())),
+            _ => None,
+        });
+        return Ok(from_ev.unwrap_or_else(|| (id.to_string(), "explicit".into(), String::new())));
+    }
+    events
+        .iter()
+        .rev()
+        .find_map(|e| match &e.kind {
+            SessionEventKind::Checkpoint {
+                id,
+                label,
+                tree_hash,
+            } => Some((id.clone(), label.clone(), tree_hash.clone())),
+            _ => None,
+        })
+        .ok_or_else(|| "no checkpoint events on this session — cannot rewind".to_string())
+}
+
 /// `POST /api/goals/{id}/rewind` — restore workspace files from a shadow-git checkpoint (S4).
 /// Conversation/transcript is untouched. Coding sessions only (needs `workspace_root` +
 /// checkpoint events). Returns the restored checkpoint id.
@@ -455,84 +506,23 @@ pub async fn goals_rewind(
             .into_response();
     }
     // Prefer durable session worktree (where attempt checkpoints are taken) when present.
-    let workspace = if let Some(sess) = liberado_coder_agent::durable_session_workspace(&id) {
-        if sess.exists() {
-            sess
-        } else {
-            match snap
-                .session
-                .goal
-                .payload
-                .get("workspace_root")
-                .and_then(|v| v.as_str())
-            {
-                Some(w) => std::path::PathBuf::from(w),
-                None => {
-                    return (
-                        StatusCode::BAD_REQUEST,
-                        Json(ApiError {
-                            error: "coding session has no workspace_root and no durable \
-                                    session worktree — cannot rewind"
-                                .into(),
-                        }),
-                    )
-                        .into_response();
-                }
-            }
-        }
-    } else {
-        match snap
-            .session
+    let workspace = match rewind_workspace(
+        liberado_coder_agent::durable_session_workspace(&id),
+        snap.session
             .goal
             .payload
             .get("workspace_root")
-            .and_then(|v| v.as_str())
-        {
-            Some(w) => std::path::PathBuf::from(w),
-            None => {
-                return (
-                    StatusCode::BAD_REQUEST,
-                    Json(ApiError {
-                        error: "coding session has no workspace_root in payload".into(),
-                    }),
-                )
-                    .into_response();
-            }
+            .and_then(|v| v.as_str()),
+    ) {
+        Ok(w) => w,
+        Err(error) => {
+            return (StatusCode::BAD_REQUEST, Json(ApiError { error })).into_response();
         }
     };
-    let (cp_id, label, tree_hash) = if let Some(id) = want {
-        // Prefer matching event for label; fall back to id alone.
-        let from_ev = snap.events.iter().rev().find_map(|e| match &e.kind {
-            liberado_session::SessionEventKind::Checkpoint {
-                id: cid,
-                label,
-                tree_hash,
-            } if cid == &id => Some((cid.clone(), label.clone(), tree_hash.clone())),
-            _ => None,
-        });
-        match from_ev {
-            Some(t) => t,
-            None => (id, "explicit".into(), String::new()),
-        }
-    } else {
-        match snap.events.iter().rev().find_map(|e| match &e.kind {
-            liberado_session::SessionEventKind::Checkpoint {
-                id,
-                label,
-                tree_hash,
-            } => Some((id.clone(), label.clone(), tree_hash.clone())),
-            _ => None,
-        }) {
-            Some(t) => t,
-            None => {
-                return (
-                    StatusCode::CONFLICT,
-                    Json(ApiError {
-                        error: "no checkpoint events on this session — cannot rewind".into(),
-                    }),
-                )
-                    .into_response();
-            }
+    let (cp_id, label, tree_hash) = match rewind_checkpoint(&snap.events, want.as_deref()) {
+        Ok(cp) => cp,
+        Err(error) => {
+            return (StatusCode::CONFLICT, Json(ApiError { error })).into_response();
         }
     };
 
@@ -1956,5 +1946,95 @@ mod project_auth_http_tests {
         )
         .await;
         assert_eq!(status, StatusCode::ACCEPTED, "{body}");
+    }
+}
+
+#[cfg(test)]
+mod rewind_tests {
+    use super::*;
+    use liberado_session::{SessionEvent, SessionEventKind};
+
+    fn checkpoint(id: &str, label: &str, hash: &str) -> SessionEvent {
+        SessionEvent {
+            session_id: "s1".into(),
+            at: chrono::Utc::now(),
+            kind: SessionEventKind::Checkpoint {
+                id: id.into(),
+                label: label.into(),
+                tree_hash: hash.into(),
+            },
+        }
+    }
+
+    fn token_event() -> SessionEvent {
+        SessionEvent {
+            session_id: "s1".into(),
+            at: chrono::Utc::now(),
+            kind: SessionEventKind::Token { text: "hi".into() },
+        }
+    }
+
+    #[test]
+    fn rewind_workspace_prefers_an_existing_durable_dir() {
+        let durable = tempfile::tempdir().unwrap();
+        let got = rewind_workspace(Some(durable.path().to_path_buf()), Some("/payload")).unwrap();
+        assert_eq!(got, durable.path());
+    }
+
+    #[test]
+    fn rewind_workspace_falls_back_to_payload_when_durable_is_missing() {
+        let gone = std::path::PathBuf::from("C:\\definitely-not-here-rewind-test");
+        let got = rewind_workspace(Some(gone), Some("/payload")).unwrap();
+        assert_eq!(got, std::path::PathBuf::from("/payload"));
+    }
+
+    #[test]
+    fn rewind_workspace_uses_payload_when_no_durable_dir_exists() {
+        let got = rewind_workspace(None, Some("/payload")).unwrap();
+        assert_eq!(got, std::path::PathBuf::from("/payload"));
+    }
+
+    #[test]
+    fn rewind_workspace_reports_both_missing_sources() {
+        let err = rewind_workspace(None, None).unwrap_err();
+        assert!(err.contains("no workspace_root in payload"), "{err}");
+        let gone = std::path::PathBuf::from("C:\\definitely-not-here-rewind-test");
+        let err = rewind_workspace(Some(gone), None).unwrap_err();
+        assert!(err.contains("no durable session worktree"), "{err}");
+    }
+
+    #[test]
+    fn rewind_checkpoint_explicit_id_wins_with_event_label() {
+        let events = vec![
+            checkpoint("c1", "first", "h1"),
+            token_event(),
+            checkpoint("c2", "second", "h2"),
+        ];
+        let got = rewind_checkpoint(&events, Some("c1")).unwrap();
+        assert_eq!(got, ("c1".into(), "first".into(), "h1".into()));
+    }
+
+    #[test]
+    fn rewind_checkpoint_unknown_explicit_id_falls_back_to_explicit_label() {
+        let events = vec![checkpoint("c1", "first", "h1")];
+        let got = rewind_checkpoint(&events, Some("nope")).unwrap();
+        assert_eq!(got, ("nope".into(), "explicit".into(), String::new()));
+    }
+
+    #[test]
+    fn rewind_checkpoint_no_id_uses_the_most_recent_checkpoint() {
+        let events = vec![
+            checkpoint("c1", "first", "h1"),
+            token_event(),
+            checkpoint("c2", "second", "h2"),
+        ];
+        let got = rewind_checkpoint(&events, None).unwrap();
+        assert_eq!(got, ("c2".into(), "second".into(), "h2".into()));
+    }
+
+    #[test]
+    fn rewind_checkpoint_no_checkpoints_errors() {
+        let err = rewind_checkpoint(&[token_event()], None).unwrap_err();
+        assert!(err.contains("no checkpoint events"), "{err}");
     }
 }
