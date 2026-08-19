@@ -1265,28 +1265,16 @@ fn state_branch(workspace: &std::path::Path) -> String {
 /// becomes text, because inventing richer ACP shapes for guard trips and validation results
 /// would be guessing at a UI nobody has asked for yet. What matters is that a watcher can tell
 /// the difference between working, stuck, and finished — which previously they could not, at all.
-fn render_coding_event(
+/// Emit the text-chunk ACP update for one text-shaped event (tokens, file changes, progress,
+/// guards, validation, critic verdicts, roles).
+fn emit_text_event(
     sink: &dyn WireSink,
     sid: &str,
     event: &liberado_session::SessionEvent,
-    pending_tool_ids: &mut Vec<(String, String)>,
 ) -> Result<(), String> {
     use liberado_session::SessionEventKind as K;
     match &event.kind {
         K::Token { text } => emit_agent_text_chunk(sink, sid, text)?,
-        K::ToolStarted { name, args_preview } => {
-            let id = push_tool_call_id(pending_tool_ids, name);
-            emit_tool_call(sink, sid, &id, name, args_preview, "pending")?;
-        }
-        K::ToolFinished {
-            name,
-            ok,
-            result_preview,
-        } => {
-            let id = pop_tool_call_id(pending_tool_ids, name);
-            let status = if *ok { "completed" } else { "failed" };
-            emit_tool_call_update(sink, sid, &id, name, status, result_preview)?;
-        }
         K::FileChanged { path, change } => {
             emit_agent_text_chunk(sink, sid, &format!("\n`{change}` {path}\n"))?;
         }
@@ -1319,6 +1307,64 @@ fn render_coding_event(
         K::RoleStarted { role, model } => {
             emit_agent_text_chunk(sink, sid, &format!("\n_{role} ({model})_\n"))?;
         }
+        _ => unreachable!("emit_text_event only receives text-shaped events"),
+    }
+    Ok(())
+}
+
+/// Emit the `tool_call` / `tool_call_update` ACP entries for tool start/finish, tracking the
+/// open ids so the editor can render them as cards.
+fn emit_tool_activity(
+    sink: &dyn WireSink,
+    sid: &str,
+    event: &liberado_session::SessionEvent,
+    pending_tool_ids: &mut Vec<(String, String)>,
+) -> Result<(), String> {
+    use liberado_session::SessionEventKind as K;
+    match &event.kind {
+        K::ToolStarted { name, args_preview } => {
+            let id = push_tool_call_id(pending_tool_ids, name);
+            emit_tool_call(sink, sid, &id, name, args_preview, "pending")?;
+        }
+        K::ToolFinished {
+            name,
+            ok,
+            result_preview,
+        } => {
+            let id = pop_tool_call_id(pending_tool_ids, name);
+            let status = if *ok { "completed" } else { "failed" };
+            emit_tool_call_update(sink, sid, &id, name, status, result_preview)?;
+        }
+        _ => unreachable!("emit_tool_activity only receives tool events"),
+    }
+    Ok(())
+}
+
+/// Turn one live pack event into the ACP updates Paseo renders.
+///
+/// The mapping is deliberately narrow. Tool activity becomes real `tool_call` /
+/// `tool_call_update` entries so the editor can render them as tool cards; everything else
+/// becomes text, because inventing richer ACP shapes for guard trips and validation results
+/// would be guessing at a UI nobody has asked for yet. What matters is that a watcher can tell
+/// the difference between working, stuck, and finished — which previously they could not, at all.
+fn render_coding_event(
+    sink: &dyn WireSink,
+    sid: &str,
+    event: &liberado_session::SessionEvent,
+    pending_tool_ids: &mut Vec<(String, String)>,
+) -> Result<(), String> {
+    use liberado_session::SessionEventKind as K;
+    match &event.kind {
+        K::ToolStarted { .. } | K::ToolFinished { .. } => {
+            emit_tool_activity(sink, sid, event, pending_tool_ids)?;
+        }
+        K::Token { .. }
+        | K::FileChanged { .. }
+        | K::Progress { .. }
+        | K::LoopGuard { .. }
+        | K::ValidationFinished { .. }
+        | K::CriticVerdict { .. }
+        | K::RoleStarted { .. } => emit_text_event(sink, sid, event)?,
         // Deliberately silent. Checkpoints fire often and mean nothing to a reader; role-finished
         // is implied by whatever comes next; the terminal events are already covered by the
         // rendered result the caller emits when the run returns. Adding them would be noise
@@ -2627,6 +2673,86 @@ mod tests {
         assert!(
             sink2.lines.lock().unwrap().is_empty(),
             "re-loading an already-loaded session must not re-emit messages"
+        );
+    }
+
+    /// render_coding_event maps tool activity to tool_call entries and everything else to text.
+    #[test]
+    fn render_coding_event_emits_text_and_tool_entries() {
+        use liberado_session::{SessionEvent, SessionEventKind};
+
+        let sink = CaptureSink {
+            lines: std::sync::Mutex::new(Vec::new()),
+        };
+        let mk = |kind| SessionEvent::new("s", kind);
+
+        render_coding_event(
+            &sink,
+            "s",
+            &mk(SessionEventKind::Token { text: "hi".into() }),
+            &mut Vec::new(),
+        )
+        .unwrap();
+        let mut pending = Vec::new();
+        render_coding_event(
+            &sink,
+            "s",
+            &mk(SessionEventKind::ToolStarted {
+                name: "read".into(),
+                args_preview: "\"a.json\"".into(),
+            }),
+            &mut pending,
+        )
+        .unwrap();
+        assert!(!pending.is_empty(), "an open tool call must be tracked");
+        render_coding_event(
+            &sink,
+            "s",
+            &mk(SessionEventKind::ToolFinished {
+                name: "read".into(),
+                ok: true,
+                result_preview: "ok".into(),
+            }),
+            &mut pending,
+        )
+        .unwrap();
+        assert!(pending.is_empty(), "a finished tool call must be popped");
+        render_coding_event(
+            &sink,
+            "s",
+            &mk(SessionEventKind::ValidationFinished {
+                ok: false,
+                summary: "tests broke".into(),
+            }),
+            &mut Vec::new(),
+        )
+        .unwrap();
+
+        let lines = sink.lines.lock().unwrap();
+        let updates: Vec<String> = lines
+            .iter()
+            .map(|(_, p)| {
+                p["update"]["sessionUpdate"]
+                    .as_str()
+                    .unwrap_or("")
+                    .to_string()
+            })
+            .collect();
+        assert!(
+            updates.contains(&"agent_message_chunk".into()),
+            "tokens and validation must render as text chunks: {updates:?}"
+        );
+        assert!(
+            lines.iter().any(|(_, p)| {
+                p["update"]["content"]["text"]
+                    .as_str()
+                    .is_some_and(|t| t.contains("hi"))
+            }),
+            "the token text must be emitted"
+        );
+        assert!(
+            updates.contains(&"tool_call".into()) && updates.contains(&"tool_call_update".into()),
+            "tool start/finish must render as tool entries: {updates:?}"
         );
     }
 }
