@@ -44,7 +44,7 @@
 //!
 //! Findings annotate a run; they never block one. This is not timidity about accuracy — it is that
 //! gating on trace content puts the implementer under pressure to write a cleaner trace, and the
-//! trace is the primary debugging artefact in this repo (`CLAUDE.md`: "read its trace, do not
+//! trace is the primary debugging artefact in this repo (`AGENTS.md`: "read its trace, do not
 //! re-derive it"). A gate here would teach the agent to stop thinking out loud in the one place
 //! that makes its failures diagnosable. The finding belongs in the report, in front of a human.
 

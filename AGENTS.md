@@ -4,7 +4,9 @@ Liberado is a personal AI operating layer: a daemon that runs agent sessions aga
 vault, with chat surfaces (TUI, WebUI, Telegram) and domain **packs** (coding first).
 
 This file is the orientation an agent needs before touching anything. It is deliberately short —
-everything else is a pointer, because 150+ docs read in full is worse than none.
+everything else is a pointer, because 150+ docs read in full is worse than none. Run `just ci`
+before you push: that is the same set GitHub runs, plus the CRAP ratchet. A green local run is how
+you keep GitHub from sending the work back.
 
 ## Build and test
 

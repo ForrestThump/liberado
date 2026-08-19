@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use regex::Regex;
 
-const DEFAULT_PATHS: &[&str] = &["docs", "README.md", "CLAUDE.md", "crates/*/ARCHITECTURE.md"];
+const DEFAULT_PATHS: &[&str] = &["docs", "README.md", "AGENTS.md", "crates/*/ARCHITECTURE.md"];
 
 /// Check the repository's default Markdown paths for broken relative links.
 pub fn check_links() -> Result<(), Box<dyn std::error::Error>> {

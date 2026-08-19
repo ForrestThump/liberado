@@ -44,7 +44,7 @@
 //! **Copied, never linked.** A junction is the obvious cheap alternative and it is a trap: in
 //! this repo `git worktree remove --force` once followed `mklink /J` and deleted the *contents
 //! of the originals*, leaving two empty directories and a workspace that could not resolve its
-//! own manifest. `CLAUDE.md` records it. Copying costs ~13 MB per worktree and cannot do that.
+//! own manifest. `AGENTS.md` records it. Copying costs ~13 MB per worktree and cannot do that.
 //! `.git` and `target` are skipped, which is most of the bulk and none of the value.
 
 use std::path::{Path, PathBuf};

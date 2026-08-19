@@ -8,7 +8,7 @@
 //!
 //! - **Line endings.** A model emits `\n`. A file checked out on Windows with `core.autocrlf` on
 //!   holds `\r\n`. Every exact match then fails with "old text was not found", and the model has
-//!   no way to see why. `CLAUDE.md` already names autocrlf as a Windows CI hazard; this is the
+//!   no way to see why. `AGENTS.md` already names autocrlf as a Windows CI hazard; this is the
 //!   same hazard reaching the coding tools.
 //! - **A byte-order mark.** A leading `\u{feff}` shifts the first line, so an anchor on line one
 //!   never matches, and a naive rewrite drops the BOM from a file that needs it.

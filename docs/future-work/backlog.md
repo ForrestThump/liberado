@@ -202,7 +202,7 @@ crate, often a passing `wire` crate, so the model never sees the failing package
 
 **The bar only runs if the config is loaded.** 0.1 gates on the declared `[[projects]]` entry that
 contains the run's root, so a bridge that resolved no config dir has no project and no bar. That was
-the state for the whole dogfood period — see the config-dir note in `CLAUDE.md`. The bridge now logs
+the state for the whole dogfood period — see the config-dir note in `AGENTS.md`. The bridge now logs
 its resolved config directory at startup; check that line before concluding the gate is broken.
 
 **Not in this band, deliberately:** per-model knob profiles and the SQL tuning ledger

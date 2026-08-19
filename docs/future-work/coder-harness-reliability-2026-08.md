@@ -62,7 +62,7 @@ believes "compiles" means "works" will keep filing successful-looking failures, 
 will catch it.
 
 **It reintroduced the exact race it had just avoided.** It built a `#[cfg(test)]` global to redirect
-the sessions directory *specifically* to dodge the `LIBERADO_DATA_DIR` env-var race that `CLAUDE.md`
+the sessions directory *specifically* to dodge the `LIBERADO_DATA_DIR` env-var race that `AGENTS.md`
 warns about — and then let every test overwrite that global concurrently. The tests passed alone and
 failed as a suite. It had internalised the rule and missed the principle.
 
