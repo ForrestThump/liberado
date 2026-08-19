@@ -44,7 +44,7 @@ Three things follow:
 
 A knob is only a knob if changing it changes behaviour **without a rebuild**. We have shipped ten
 settings that parsed, validated and reached nobody because a consumer hardcoded a literal — the
-config-shadow class in `CLAUDE.md`. That failure mode is an irritation today and would be fatal to
+config-shadow class in `AGENTS.md`. That failure mode is an irritation today and would be fatal to
 this system, because a profile that silently does not apply produces measurements that look valid
 and describe nothing.
 

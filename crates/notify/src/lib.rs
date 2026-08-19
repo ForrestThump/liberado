@@ -784,10 +784,9 @@ mod tests {
     }
 
     #[test]
-    fn from_env_reads_both_telegram_vars_and_default_base() {
-        // One test pins the production env entry point (repo convention). No other test in this
-        // binary touches these vars, and from_env is synchronous, so the set/read/clear window is
-        // effectively closed.
+    fn from_env_reads_both_telegram_vars_and_is_none_when_a_var_is_missing() {
+        // One test pins the production env entry point (repo convention). Two tests that
+        // set/clear the same process-global vars race on Windows CI.
         unsafe { std::env::set_var("LIBERADO_TELEGRAM_BOT_TOKEN", "tok-1") };
         unsafe { std::env::set_var("LIBERADO_TELEGRAM_CHAT_ID", "42") };
         let constructed = TelegramNotifier::from_env();
@@ -800,12 +799,6 @@ mod tests {
             n.api_url("sendMessage"),
             "https://api.telegram.org/bottok-1/sendMessage"
         );
-    }
-
-    #[test]
-    fn from_env_is_none_when_a_var_is_missing() {
-        unsafe { std::env::remove_var("LIBERADO_TELEGRAM_BOT_TOKEN") };
-        unsafe { std::env::remove_var("LIBERADO_TELEGRAM_CHAT_ID") };
         assert!(TelegramNotifier::from_env().is_none());
     }
 

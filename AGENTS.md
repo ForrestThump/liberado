@@ -4,7 +4,9 @@ Liberado is a personal AI operating layer: a daemon that runs agent sessions aga
 vault, with chat surfaces (TUI, WebUI, Telegram) and domain **packs** (coding first).
 
 This file is the orientation an agent needs before touching anything. It is deliberately short —
-everything else is a pointer, because 150+ docs read in full is worse than none.
+everything else is a pointer, because 150+ docs read in full is worse than none. Run `just ci`
+before you push: that is the same set GitHub runs, plus the CRAP ratchet. A green local run is how
+you keep GitHub from sending the work back.
 
 ## Build and test
 
@@ -79,9 +81,10 @@ complete failure set — comparing a branch against its base is meaningless with
 **Run `just ci` before you push — CRAP is a per-function ratchet.** `crap-baseline.json` is the last
 best score for each function, scored on Ubuntu (the GitHub job's host). GitHub only *reads* it
 (`liberado ci crap` / job `CRAP regression`); it never writes the file. A function at 50 that goes
-to 60 fails, even under the 450 ceiling. New functions must land at or below 450. `just ci` runs
-the same compare locally and prints the functions that rose. A green Linux run may rewrite the
-file; Windows compares only. Do not raise the file by hand. Split the function or add tests.
+to 60 fails, even under the 450 ceiling. New functions must land at or below 450. Linux `just ci`
+runs that same per-function compare and may rewrite the file. Windows `just ci` checks the 450
+ceiling only — coverage numbers are host-sensitive and a Windows compare false-fails. Do not raise
+the file by hand. Split the function or add tests.
 
 **Gates compare against the base commit, not against green.** Preflight
 (`crates/coder-sandbox/src/preflight.rs`) fails only on failures *absent from the base*, so a red
