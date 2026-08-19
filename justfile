@@ -39,12 +39,12 @@ check:
     cargo fmt --all -- --check
     cargo clippy --locked --workspace --exclude liberado-webui --all-targets -- -D warnings -D clippy::cognitive_complexity
 
-# Full local CI. Same CRAP compare GitHub runs: a function whose score went
-# up fails here and is named in the cargo-crap table — fix it before you push.
+# Full local CI. Linux runs the same per-function CRAP compare GitHub runs
+# (a score that went up fails and is named — fix it before you push).
+# Windows checks the 450 ceiling only; coverage is host-sensitive.
 # The baseline is not rewritten while that check is red. On Linux success,
-# rewrite `crap-baseline.json` (the ratchet; Ubuntu is the host of truth).
-# Windows compares only. If the tree is otherwise clean, a Linux rewrite is
-# amended onto HEAD. GitHub never writes that file.
+# rewrite `crap-baseline.json`. If the tree is otherwise clean, a Linux
+# rewrite is amended onto HEAD. GitHub never writes that file.
 ci:
     cargo run --locked -p liberado-cli -- ci
 

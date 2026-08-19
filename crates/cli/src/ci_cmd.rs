@@ -10,10 +10,15 @@
 //! GitHub must not rewrite the file. Coverage is host-sensitive, and a bot commit
 //! on `main` races every open PR.
 //!
-//! After a green write, `just ci` stages `crap-baseline.json`. If that is the only
-//! change, it amends HEAD (`--no-verify`, because this process just ran the suite)
-//! so a subsequent `git push` includes the ratchet. If the tree already has other
-//! dirty files, it only stages — the agent is about to commit its own work.
+//! After a green *Linux* write, `just ci` stages `crap-baseline.json`. If that
+//! is the only change, it amends HEAD (`--no-verify`, because this process just
+//! ran the suite) so a subsequent `git push` includes the ratchet. If the tree
+//! already has other dirty files, it only stages — the agent is about to commit
+//! its own work.
+//!
+//! Coverage is host-sensitive. Non-Linux `just ci` / `liberado ci crap` checks
+//! the 450 ceiling only (`--fail-above`). The per-function ratchet
+//! (`--fail-regression`) runs on Linux, which is GitHub's Ubuntu job.
 //!
 //! `just ci` is `cargo run -p liberado-cli -- ci`. On Windows, `cargo test` cannot
 //! overwrite a running `target/debug/liberado.exe` (Access is denied). A second
@@ -69,7 +74,13 @@ Split it or add tests. New functions must land at or below 450.";
 /// One-line GitHub Actions annotation (newlines are not legal in `::error`).
 const CRAP_REGRESSION_GH: &str = "\
 A function CRAP score went up vs crap-baseline.json (per-function ratchet). \
-Split the function or add tests. Do not raise the baseline. Run `just ci` locally.";
+Split the function or add tests. Do not raise the baseline. \
+Linux `just ci` or this Ubuntu job is the check that matches the file.";
+
+/// Banner when this host is not Linux: do not run `--fail-regression` here.
+const CRAP_HOST_CEILING_ONLY: &str = "\
+[liberado ci] this host is not Linux — ceiling only (450). \
+GitHub's Ubuntu job runs the per-function ratchet.";
 
 const CRAP_CEILING_GH: &str = "\
 A function is above the 450 CRAP ceiling. Split it or add tests. \
@@ -225,22 +236,36 @@ fn generate_lcov(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
 
 fn compare_to_baseline(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
     require_crap(root)?;
-    let baseline = root.join(BASELINE_FILE);
-    let mut args = vec!["crap", "--workspace", "--lcov", LCOV_FILE, "--fail-above"];
-    let has_ratchet = baseline_has_entries(&baseline);
-    if has_ratchet {
-        args.extend_from_slice(&["--baseline", BASELINE_FILE, "--fail-regression"]);
-    } else {
+    let has_entries = baseline_has_entries(&root.join(BASELINE_FILE));
+    let fail_regression = uses_per_function_ratchet(has_entries);
+    if has_entries && !fail_regression {
+        eprintln!("{CRAP_HOST_CEILING_ONLY}");
+    } else if !has_entries {
         eprintln!(
             "[liberado ci] {BASELINE_FILE} has no entries yet — ceiling only (`--fail-above`). \
-             A green `liberado ci ratchet` fills the per-function ratchet."
+             A green Linux `liberado ci ratchet` fills the per-function ratchet."
         );
     }
     eprintln!(
         "[liberado ci] CRAP compare against {BASELINE_FILE} \
-         (per-function ratchet; 450 is the new-function ceiling only)"
+         (per-function ratchet on Linux; 450 is the new-function ceiling)"
     );
-    run_cmd(root, "cargo", &args).map_err(|error| emit_crap_failure(has_ratchet, error))
+    run_cmd(root, "cargo", &compare_args(fail_regression))
+        .map_err(|error| emit_crap_failure(fail_regression, error))
+}
+
+/// `--fail-regression` only on Linux. Coverage numbers are host-sensitive;
+/// a Windows compare against the Ubuntu baseline false-fails (`explain_write` +127).
+fn uses_per_function_ratchet(baseline_has_entries: bool) -> bool {
+    baseline_has_entries && cfg!(target_os = "linux")
+}
+
+fn compare_args(fail_regression: bool) -> Vec<&'static str> {
+    let mut args = vec!["crap", "--workspace", "--lcov", LCOV_FILE, "--fail-above"];
+    if fail_regression {
+        args.extend_from_slice(&["--baseline", BASELINE_FILE, "--fail-regression"]);
+    }
+    args
 }
 
 fn write_baseline(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
@@ -532,11 +557,12 @@ fn repository_root() -> Result<PathBuf, Box<dyn std::error::Error>> {
 #[cfg(test)]
 mod tests {
     use super::{
-        BASELINE_FILE, CRAP_CEILING_GH, CRAP_CEILING_HINT, CRAP_REGRESSION_GH,
-        CRAP_REGRESSION_HINT, LCOV_FILE, LLVM_COV_ARGS, StageOutcome, USAGE, baseline_has_entries,
-        crap_failure_hint, emit_crap_failure, exe_lives_in_cargo_target, git, porcelain_path,
-        relativize_json_file, relativize_lcov, repo_relative_source_path, repository_root, run_cmd,
-        stage_ratcheted_baseline,
+        BASELINE_FILE, CRAP_CEILING_GH, CRAP_CEILING_HINT, CRAP_HOST_CEILING_ONLY,
+        CRAP_REGRESSION_GH, CRAP_REGRESSION_HINT, LCOV_FILE, LLVM_COV_ARGS, StageOutcome, USAGE,
+        baseline_has_entries, compare_args, crap_failure_hint, emit_crap_failure,
+        exe_lives_in_cargo_target, git, porcelain_path, relativize_json_file, relativize_lcov,
+        repo_relative_source_path, repository_root, run_cmd, stage_ratcheted_baseline,
+        uses_per_function_ratchet,
     };
     use liberado_common::process::std_command;
     use std::fs;
@@ -695,13 +721,40 @@ mod tests {
         assert!(CRAP_REGRESSION_HINT.contains("just ci"));
         assert!(CRAP_REGRESSION_HINT.contains("Do not raise the baseline"));
         assert!(CRAP_CEILING_HINT.contains("450"));
-        assert!(CRAP_REGRESSION_GH.contains("just ci"));
+        assert!(CRAP_REGRESSION_GH.contains("Ubuntu"));
         assert!(CRAP_CEILING_GH.contains("450"));
+        assert!(CRAP_HOST_CEILING_ONLY.contains("ceiling only"));
         assert_eq!(crap_failure_hint(true), CRAP_REGRESSION_HINT);
         assert_eq!(crap_failure_hint(false), CRAP_CEILING_HINT);
         let error = emit_crap_failure(true, "cargo crap failed".into()).to_string();
         assert!(error.contains("cargo crap failed"), "{error}");
         assert!(error.contains("Do not raise the baseline"), "{error}");
+    }
+
+    #[test]
+    fn compare_args_always_enforce_the_450_ceiling() {
+        let ceiling = compare_args(false);
+        assert!(ceiling.contains(&"--fail-above"));
+        assert!(!ceiling.contains(&"--fail-regression"));
+        let ratchet = compare_args(true);
+        assert!(ratchet.contains(&"--fail-above"));
+        assert!(ratchet.contains(&"--fail-regression"));
+        assert!(ratchet.contains(&"--baseline"));
+    }
+
+    #[test]
+    fn per_function_ratchet_runs_only_on_linux_with_a_filled_baseline() {
+        assert!(!uses_per_function_ratchet(false));
+        assert_eq!(
+            uses_per_function_ratchet(true),
+            cfg!(target_os = "linux"),
+            "a filled baseline still does not run --fail-regression off Linux"
+        );
+        let args = compare_args(uses_per_function_ratchet(true));
+        assert_eq!(
+            args.contains(&"--fail-regression"),
+            cfg!(target_os = "linux")
+        );
     }
 
     #[test]

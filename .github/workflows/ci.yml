@@ -173,8 +173,8 @@ jobs:
       # Read-only git. A red job means a function's CRAP score went up vs
       # crap-baseline.json (per-function; 50 cannot become 60) or a new
       # function is above 450. The log names the functions. Do not raise
-      # the baseline — split the function or add tests. `just ci` is the
-      # same compare locally and will not rewrite the file while red.
+      # the baseline — split the function or add tests. Linux `just ci` is
+      # the same compare. Windows `just ci` is 450 only.
       #
       # Coverage is host-sensitive. The job also writes
       # `.liberado/crap-current.json` (gitignored). Upload it so a Windows
