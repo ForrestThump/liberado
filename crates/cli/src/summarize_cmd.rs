@@ -129,144 +129,193 @@ fn liberado(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn mvl(path: &Path, heading: bool) -> Result<(), Box<dyn std::error::Error>> {
-    let mut usage = BTreeMap::<String, f64>::new();
-    let mut tools = BTreeMap::new();
-    let mut cargo = Vec::new();
-    let mut last_text = String::new();
-    let mut finish = String::new();
-    let mut completions = 0;
-    let mut first_edit_turn = None;
-    let mut first_edit_path = String::new();
-    let error = Regex::new(r"error\[E\d+\]|test \S+ \.\.\. FAILED")?;
-    for object in records(path)? {
-        let kind = object.get("type").and_then(Value::as_str).unwrap_or("");
-        if kind == "completion" {
-            completions += 1;
-            if let Some(values) = object.get("usage").and_then(Value::as_object) {
-                for (key, value) in values {
-                    if let Some(number) = value.as_f64() {
-                        *usage.entry(key.clone()).or_default() += number;
-                    }
-                }
-            }
-            if let Some(value) = object
-                .get("text")
-                .and_then(Value::as_str)
-                .filter(|s| !s.trim().is_empty())
-            {
-                last_text = value.into();
-            }
-            if let Some(value) = object.get("finish_reason").and_then(Value::as_str) {
-                finish = value.into();
-            }
-            for call in object
-                .get("tool_calls")
-                .and_then(Value::as_array)
-                .into_iter()
-                .flatten()
-            {
-                let name = text(call.get("name"));
-                *tools
-                    .entry(if name.is_empty() {
-                        "?".into()
-                    } else {
-                        name.clone()
-                    })
-                    .or_insert(0) += 1;
-                let args = call.get("arguments").and_then(Value::as_object);
-                if ["edit_file", "write_file", "edit", "write"].contains(&name.as_str())
-                    && first_edit_turn.is_none()
-                {
-                    first_edit_turn = Some(text(object.get("turn")));
-                    first_edit_path = text(
-                        args.and_then(|a| a.get("path"))
-                            .or_else(|| args.and_then(|a| a.get("file_path"))),
-                    );
-                }
-                if name == "run_command" {
-                    let program = text(args.and_then(|a| a.get("program")));
-                    if program == "cargo" || program == "git" {
-                        cargo.push(format!(
-                            "t{} {program} {}",
-                            text(object.get("turn")),
-                            text(args.and_then(|a| a.get("args")))
-                        ));
-                    }
-                }
-                if name == "bash" {
-                    let command = text(args.and_then(|a| a.get("command")));
-                    if command.contains("cargo") {
-                        cargo.push(format!(
-                            "t{} {}",
-                            text(object.get("turn")),
-                            command.chars().take(140).collect::<String>()
-                        ));
-                    }
-                }
-            }
-        }
-        if kind == "tool_result" {
-            let shown = text(
-                object
-                    .get("content_shown")
-                    .or_else(|| object.get("full_content")),
-            )
-            .replace("\\n", "\n");
-            for line in shown.lines() {
-                if error.is_match(line) {
-                    cargo.push(format!(
-                        "  fail t{}: {}",
-                        text(object.get("turn")),
-                        line.trim().chars().take(160).collect::<String>()
-                    ));
-                }
+/// Aggregated counters and extracts from one MVL file (a tolerant, one-pass renderer).
+struct MvlStats {
+    usage: BTreeMap<String, f64>,
+    tools: BTreeMap<String, usize>,
+    cargo: Vec<String>,
+    last_text: String,
+    finish: String,
+    completions: usize,
+    first_edit_turn: Option<String>,
+    first_edit_path: String,
+}
+
+fn mvl_stats() -> MvlStats {
+    MvlStats {
+        usage: BTreeMap::new(),
+        tools: BTreeMap::new(),
+        cargo: Vec::new(),
+        last_text: String::new(),
+        finish: String::new(),
+        completions: 0,
+        first_edit_turn: None,
+        first_edit_path: String::new(),
+    }
+}
+
+/// Fold one `completion` record into the running stats: usage, first and last model text,
+/// finish reason, and per-call tool counts with the first edit and cargo commands.
+fn ingest_completion(stats: &mut MvlStats, object: &Value) {
+    stats.completions += 1;
+    if let Some(values) = object.get("usage").and_then(Value::as_object) {
+        for (key, value) in values {
+            if let Some(number) = value.as_f64() {
+                *stats.usage.entry(key.clone()).or_default() += number;
             }
         }
     }
+    if let Some(value) = object
+        .get("text")
+        .and_then(Value::as_str)
+        .filter(|s| !s.trim().is_empty())
+    {
+        stats.last_text = value.into();
+    }
+    if let Some(value) = object.get("finish_reason").and_then(Value::as_str) {
+        stats.finish = value.into();
+    }
+    for call in object
+        .get("tool_calls")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        let name = text(call.get("name"));
+        *stats
+            .tools
+            .entry(if name.is_empty() {
+                "?".into()
+            } else {
+                name.clone()
+            })
+            .or_insert(0) += 1;
+        let args = call.get("arguments").and_then(Value::as_object);
+        if ["edit_file", "write_file", "edit", "write"].contains(&name.as_str())
+            && stats.first_edit_turn.is_none()
+        {
+            stats.first_edit_turn = Some(text(object.get("turn")));
+            stats.first_edit_path = text(
+                args.and_then(|a| a.get("path"))
+                    .or_else(|| args.and_then(|a| a.get("file_path"))),
+            );
+        }
+        if name == "run_command" {
+            let program = text(args.and_then(|a| a.get("program")));
+            if program == "cargo" || program == "git" {
+                stats.cargo.push(format!(
+                    "t{} {program} {}",
+                    text(object.get("turn")),
+                    text(args.and_then(|a| a.get("args")))
+                ));
+            }
+        }
+        if name == "bash" {
+            let command = text(args.and_then(|a| a.get("command")));
+            if command.contains("cargo") {
+                stats.cargo.push(format!(
+                    "t{} {}",
+                    text(object.get("turn")),
+                    command.chars().take(140).collect::<String>()
+                ));
+            }
+        }
+    }
+}
+
+/// Fold one `tool_result` record: match named failures and cargo-line spans against `error`.
+fn ingest_tool_result(stats: &mut MvlStats, object: &Value, error: &Regex) {
+    let shown = text(
+        object
+            .get("content_shown")
+            .or_else(|| object.get("full_content")),
+    )
+    .replace("\\n", "\n");
+    for line in shown.lines() {
+        if error.is_match(line) {
+            stats.cargo.push(format!(
+                "  fail t{}: {}",
+                text(object.get("turn")),
+                line.trim().chars().take(160).collect::<String>()
+            ));
+        }
+    }
+}
+
+/// Render the collected MVL stats as a human summary (what `mvl` prints).
+fn render_mvl_summary(stats: &MvlStats, path: &Path, heading: bool) -> String {
+    let mut out = String::new();
     if heading {
-        println!(
-            "## MVL  {}",
+        out.push_str(&format!(
+            "## MVL  {}\n",
             path.file_name().unwrap_or_default().to_string_lossy()
-        );
+        ));
     }
-    println!(
-        "- mvl completions: {completions}   finish: {finish}   first edit turn: {}",
-        first_edit_turn.unwrap_or_else(|| "None".into())
-    );
-    if !usage.is_empty() {
-        println!(
-            "- usage: {}",
-            usage
+    out.push_str(&format!(
+        "- mvl completions: {}   finish: {}   first edit turn: {}\n",
+        stats.completions,
+        stats.finish,
+        stats
+            .first_edit_turn
+            .clone()
+            .unwrap_or_else(|| "None".into())
+    ));
+    if !stats.usage.is_empty() {
+        out.push_str(&format!(
+            "- usage: {}\n",
+            stats
+                .usage
                 .iter()
                 .map(|(k, v)| format!("{k}={v:.0}"))
                 .collect::<Vec<_>>()
                 .join(", ")
-        );
+        ));
     }
-    if !tools.is_empty() {
-        println!("- tool calls: {}", counts(&tools));
+    if !stats.tools.is_empty() {
+        out.push_str(&format!("- tool calls: {}\n", counts(&stats.tools)));
     }
-    if !first_edit_path.is_empty() {
-        println!("- first edit path: {first_edit_path}");
+    if !stats.first_edit_path.is_empty() {
+        out.push_str(&format!("- first edit path: {}\n", stats.first_edit_path));
     }
-    if !cargo.is_empty() {
-        println!("- cargo / named failures:");
-        for line in cargo.iter().take(40) {
-            println!("  {line}");
+    if !stats.cargo.is_empty() {
+        out.push_str("- cargo / named failures:\n");
+        for line in stats.cargo.iter().take(40) {
+            out.push_str(&format!("  {line}\n"));
         }
     }
-    if !last_text.trim().is_empty() {
-        println!(
-            "- last completion: {}",
-            last_text
+    if !stats.last_text.trim().is_empty() {
+        out.push_str(&format!(
+            "- last completion: {}\n",
+            stats
+                .last_text
                 .trim()
                 .replace('\n', " ")
                 .chars()
                 .take(280)
                 .collect::<String>()
-        );
+        ));
     }
+    out
+}
+
+/// Ingest one MVL file and render its summary. Tolerant: malformed lines are skipped by
+/// [`records`], an empty file renders an empty summary.
+fn summarize_mvl(path: &Path, heading: bool) -> Result<String, Box<dyn std::error::Error>> {
+    let error = Regex::new(r"error\[E\d+\]|test \S+ \.\.\. FAILED")?;
+    let mut stats = mvl_stats();
+    for object in records(path)? {
+        let kind = object.get("type").and_then(Value::as_str).unwrap_or("");
+        if kind == "completion" {
+            ingest_completion(&mut stats, &object);
+        } else if kind == "tool_result" {
+            ingest_tool_result(&mut stats, &object, &error);
+        }
+    }
+    Ok(render_mvl_summary(&stats, path, heading))
+}
+
+fn mvl(path: &Path, heading: bool) -> Result<(), Box<dyn std::error::Error>> {
+    print!("{}", summarize_mvl(path, heading)?);
     Ok(())
 }
 
@@ -656,6 +705,32 @@ mod tests {
         )
         .unwrap();
         assert!(pi(&pi_path).is_ok(), "partial pi session must not fail");
+    }
+
+    /// `summarize_mvl` aggregates a real file: usage sums, per-tool counts, the first edit's
+    /// turn and path, cargo commands, named failures from `tool_result`, and the last completion
+    /// text. This pins the ingest wiring that the empty-input test above cannot reach.
+    #[test]
+    fn mvl_aggregates_completions_tools_and_failures() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("run.mvl.jsonl");
+        fs::write(
+            &path,
+            "{\"type\":\"completion\",\"turn\":1,\"text\":\" I will look.\",\"finish_reason\":\"stop\",\"usage\":{\"prompt_tokens\":120,\"completion_tokens\":40},\"tool_calls\":[{\"name\":\"read_file\",\"arguments\":{\"path\":\"src/lib.rs\"}},{\"name\":\"edit_file\",\"arguments\":{\"file_path\":\"src/lib.rs\"}},{\"name\":\"run_command\",\"arguments\":{\"program\":\"cargo\",\"args\":\"build --release\"}},{\"name\":\"bash\",\"arguments\":{\"command\":\"cargo test\"}}]}\n{\"type\":\"tool_result\",\"turn\":1,\"content_shown\":\"error[E0001]: bad thing\\n\"}\n",
+        )
+        .unwrap();
+        let text = summarize_mvl(&path, false).unwrap();
+        assert!(text.contains("mvl completions: 1"), "{text}");
+        assert!(text.contains("finish: stop"), "{text}");
+        assert!(text.contains("first edit turn: 1"), "{text}");
+        assert!(text.contains("prompt_tokens=120"), "{text}");
+        assert!(text.contains("read_file: 1"), "{text}");
+        assert!(text.contains("edit_file: 1"), "{text}");
+        assert!(text.contains("first edit path: src/lib.rs"), "{text}");
+        assert!(text.contains("t1 cargo build --release"), "{text}");
+        assert!(text.contains("t1 cargo test"), "{text}");
+        assert!(text.contains("fail t1: error[E0001]"), "{text}");
+        assert!(text.contains("last completion: I will look."), "{text}");
     }
 
     /// `walk` dispatches by kind; an unrecognised path is an explicit error, not a silent no-op.
