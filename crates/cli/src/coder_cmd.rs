@@ -53,7 +53,10 @@ fn usage() -> &'static str {
   liberado coder smoke              validate the coder runner process boundary"
 }
 
-fn cmd_smoke(args: &mut dyn Iterator<Item = String>) -> Result<(), Box<dyn std::error::Error>> {
+/// Handle the `-h`/`--help`/unknown-arg cases of `coder smoke`.
+fn smoke_arg_check(
+    args: &mut dyn Iterator<Item = String>,
+) -> Result<(), Box<dyn std::error::Error>> {
     if let Some(arg) = args.next() {
         if arg == "-h" || arg == "--help" {
             println!("usage: liberado coder smoke");
@@ -61,6 +64,11 @@ fn cmd_smoke(args: &mut dyn Iterator<Item = String>) -> Result<(), Box<dyn std::
         }
         return Err("usage: liberado coder smoke".into());
     }
+    Ok(())
+}
+
+fn cmd_smoke(args: &mut dyn Iterator<Item = String>) -> Result<(), Box<dyn std::error::Error>> {
+    smoke_arg_check(args)?;
 
     let root = crate::crate_map_cmd::repository_root()?;
     println!("== building liberado-coder-runner ==");
@@ -114,22 +122,26 @@ fn cmd_smoke(args: &mut dyn Iterator<Item = String>) -> Result<(), Box<dyn std::
         return Ok(());
     }
 
-    let combined = format!("{stdout}\n{stderr}").to_lowercase();
-    if ["api key", "required for", "provider"]
-        .iter()
-        .any(|marker| combined.contains(marker))
-    {
+    if smoke_boundary_reached(&stdout, &stderr) {
         println!("OK: runner reached the provider boundary without credentials");
         println!("  exit status: {}", output.status);
         return Ok(());
     }
 
-    Err(format!(
-        "coder smoke failed with {}:\n{}",
-        output.status,
-        combined.trim()
-    )
-    .into())
+    let combined = format!("{stdout}\n{stderr}")
+        .to_lowercase()
+        .trim()
+        .to_string();
+    Err(format!("coder smoke failed with {}:\n{}", output.status, combined).into())
+}
+
+/// Classify a failed runner invocation: did it reach the provider boundary without
+/// credentials (a pass for smoke), or die earlier (a real failure)?
+fn smoke_boundary_reached(stdout: &str, stderr: &str) -> bool {
+    let combined = format!("{stdout}\n{stderr}").to_lowercase();
+    ["api key", "required for", "provider"]
+        .iter()
+        .any(|marker| combined.contains(marker))
 }
 
 fn initialize_smoke_repository(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
@@ -493,7 +505,8 @@ fn cmd_import(args: &mut dyn Iterator<Item = String>) -> Result<(), Box<dyn std:
 mod tests {
     use super::{
         cmd_compare, cmd_compare_reset, cmd_diff, cmd_import, cmd_trace, default_trace_dirs,
-        reject_sibling_links, run_git_capture, smoke_request,
+        reject_sibling_links, run_git_capture, smoke_arg_check, smoke_boundary_reached,
+        smoke_request,
     };
     use std::fs;
     use std::path::{Path, PathBuf};
@@ -512,6 +525,37 @@ mod tests {
             0
         );
         assert_eq!(request["config"]["path_policy"]["deny_globs"][0], ".git/**");
+    }
+
+    #[test]
+    fn smoke_arg_check_accepts_help_and_rejects_unknown_args() {
+        assert!(smoke_arg_check(&mut vec!["-h".to_owned()].into_iter()).is_ok());
+        assert!(smoke_arg_check(&mut vec!["--help".to_owned()].into_iter()).is_ok());
+        assert!(smoke_arg_check(&mut vec!["extra".to_owned()].into_iter()).is_err());
+        assert!(smoke_arg_check(&mut vec![].into_iter()).is_ok());
+    }
+
+    #[test]
+    fn smoke_boundary_reached_flags_provider_credential_messages() {
+        assert!(smoke_boundary_reached("", "API key required for provider"));
+        assert!(smoke_boundary_reached("no provider key found", ""));
+        assert!(smoke_boundary_reached(
+            "Please configure a Provider first",
+            ""
+        ));
+    }
+
+    #[test]
+    fn smoke_boundary_reached_is_case_insensitive() {
+        assert!(smoke_boundary_reached("", "Api Key"));
+        assert!(smoke_boundary_reached("PROVIDER", ""));
+    }
+
+    #[test]
+    fn smoke_boundary_reached_ignores_unrelated_failures() {
+        assert!(!smoke_boundary_reached("", "segmentation fault"));
+        assert!(!smoke_boundary_reached("", ""));
+        assert!(!smoke_boundary_reached("build failed", ""));
     }
 
     #[test]
