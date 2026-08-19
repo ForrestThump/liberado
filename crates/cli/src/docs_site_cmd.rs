@@ -63,14 +63,10 @@ impl CreateDirAll for Path {
 fn load_docs(root: &Path) -> Result<Vec<Document>, Box<dyn std::error::Error>> {
     let mut paths = Vec::new();
     collect_markdown(&root.join("docs"), &mut paths)?;
+    paths = crate::docs_cmd::retain_unignored_files(root, paths)?;
     paths.sort();
     let mut docs = Vec::new();
     for path in paths {
-        if path.file_name().and_then(|name| name.to_str())
-            == Some("session-profiles-next-actions.md")
-        {
-            continue;
-        }
         let text = String::from_utf8_lossy(&fs::read(&path)?).replace("\r\n", "\n");
         let (meta, body) = split_frontmatter(&text);
         docs.push(Document {

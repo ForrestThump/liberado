@@ -1,7 +1,9 @@
 //! Documentation maintenance commands.
 
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 
 use regex::Regex;
 
@@ -167,9 +169,73 @@ fn scanned_files(root: &Path, specs: &[&str]) -> Result<Vec<PathBuf>, Box<dyn st
             }
         }
     }
+    files = retain_unignored_files(root, files)?;
     files.sort();
     files.dedup();
     Ok(files)
+}
+
+/// Remove files ignored by the repository from generated documentation inputs.
+///
+/// Local scratch notes can live below `docs/`, including through `.git/info/exclude`. They must
+/// not enter generated indexes or link checks because another clone cannot resolve them. Outside a
+/// git worktree, such as a temporary docs-site fixture, this keeps the filesystem input unchanged.
+pub(crate) fn retain_unignored_files(
+    root: &Path,
+    files: Vec<PathBuf>,
+) -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
+    if files.is_empty() {
+        return Ok(files);
+    }
+
+    let mut child = match Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["check-ignore", "--stdin", "-z"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+    {
+        Ok(child) => child,
+        Err(_) => return Ok(files),
+    };
+
+    {
+        let stdin = child
+            .stdin
+            .as_mut()
+            .ok_or("git check-ignore stdin unavailable")?;
+        for file in &files {
+            let relative = file
+                .strip_prefix(root)?
+                .to_string_lossy()
+                .replace('\\', "/");
+            stdin.write_all(relative.as_bytes())?;
+            stdin.write_all(&[0])?;
+        }
+    }
+
+    let output = child.wait_with_output()?;
+    if !matches!(output.status.code(), Some(0 | 1)) {
+        return Ok(files);
+    }
+
+    let ignored = output
+        .stdout
+        .split(|byte| *byte == 0)
+        .filter(|entry| !entry.is_empty())
+        .map(|entry| String::from_utf8_lossy(entry).replace('\\', "/"))
+        .collect::<std::collections::HashSet<_>>();
+
+    Ok(files
+        .into_iter()
+        .filter(|file| {
+            file.strip_prefix(root)
+                .map(|relative| !ignored.contains(&relative.to_string_lossy().replace('\\', "/")))
+                .unwrap_or(true)
+        })
+        .collect())
 }
 
 fn collect_markdown_files(
@@ -259,8 +325,9 @@ fn repository_root() -> Result<PathBuf, Box<dyn std::error::Error>> {
 #[cfg(test)]
 mod tests {
     use std::fs;
+    use std::process::Command;
 
-    use super::{check_links_in, fence_marker, is_fence_close};
+    use super::{check_links_in, fence_marker, is_fence_close, retain_unignored_files};
 
     #[test]
     fn recognizes_fence_boundaries_but_not_fenced_language_text() {
@@ -288,5 +355,29 @@ mod tests {
         fs::write(directory.path().join("README.md"), "[broken](missing.md)\n")
             .expect("write broken README");
         assert!(check_links_in(directory.path().to_path_buf(), &["README.md"]).is_err());
+    }
+
+    #[test]
+    fn repository_scans_exclude_ignored_local_notes() {
+        let directory = tempfile::tempdir().expect("temp directory");
+        let root = directory.path();
+        fs::create_dir(root.join("docs")).expect("create docs");
+        fs::write(root.join(".gitignore"), "docs/local-note.md\n").expect("write ignore");
+        fs::write(root.join("docs/current.md"), "current").expect("write current");
+        fs::write(root.join("docs/local-note.md"), "local").expect("write local");
+        let init = Command::new("git")
+            .args(["init", "--quiet"])
+            .current_dir(root)
+            .status()
+            .expect("run git init");
+        assert!(init.success());
+
+        let files = vec![
+            root.join("docs/current.md"),
+            root.join("docs/local-note.md"),
+        ];
+        let retained = retain_unignored_files(root, files).expect("filter ignored files");
+
+        assert_eq!(retained, vec![root.join("docs/current.md")]);
     }
 }
