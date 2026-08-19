@@ -1098,6 +1098,42 @@ async fn run_session_prompt(
 }
 
 /// Full coding pack path: LiberadoLoopBackend + durable worktree (same engine as goals).
+/// Cancel the run: preserve the dirty tree, say so, and end the turn.
+async fn cancel_and_preserve(sink: &dyn WireSink, sid: &str, workspace: &std::path::Path) -> Value {
+    let note = match coding_run::preserve_worktree(workspace, "cancelled").await {
+        Ok(Some(sha)) => format!("\n*(cancelled — work committed as `{sha}`)*\n"),
+        Ok(None) => "\n*(cancelled)*\n".to_string(),
+        Err(e) => format!("\n*(cancelled — could not preserve work: {e})*\n"),
+    };
+    let _ = emit_agent_text_chunk(sink, sid, &note);
+    json!({ "stopReason": "cancelled" })
+}
+
+/// Preserve the worktree under the given label and emit the outcome (or error) to the surface.
+async fn finish_coding_run(
+    sink: &dyn WireSink,
+    sid: &str,
+    workspace: &std::path::Path,
+    label: &str,
+    outcome: Option<String>,
+) -> Result<(), String> {
+    let preserved = match coding_run::preserve_worktree(workspace, label).await {
+        Ok(Some(sha)) => format!(
+            "\n**Committed:** `{sha}` on `{}`\n",
+            state_branch(workspace)
+        ),
+        Ok(None) => String::new(),
+        Err(e) => format!("\n**Could not preserve work:** {e}\n"),
+    };
+    if let Some(report) = outcome {
+        emit_agent_text_chunk(sink, sid, &report)?;
+        emit_agent_text_chunk(sink, sid, &preserved)?;
+    } else {
+        emit_agent_text_chunk(sink, sid, &preserved)?;
+    }
+    Ok(())
+}
+
 async fn run_coding_prompt(
     bridge: Arc<Bridge>,
     sink: &dyn WireSink,
@@ -1188,14 +1224,7 @@ async fn run_coding_prompt(
     };
 
     let Some(joined) = joined else {
-        // Cancel is the case F6 exists for: the tree is dirty and nothing else will save it.
-        let note = match coding_run::preserve_worktree(&workspace, "cancelled").await {
-            Ok(Some(sha)) => format!("\n*(cancelled — work committed as `{sha}`)*\n"),
-            Ok(None) => "\n*(cancelled)*\n".to_string(),
-            Err(e) => format!("\n*(cancelled — could not preserve work: {e})*\n"),
-        };
-        let _ = emit_agent_text_chunk(sink, sid, &note);
-        return Ok(json!({ "stopReason": "cancelled" }));
+        return Ok(cancel_and_preserve(sink, sid, &workspace).await);
     };
 
     // Events buffered between the task finishing and the join landing would otherwise be lost —
@@ -1214,30 +1243,16 @@ async fn run_coding_prompt(
     // Preserve before reporting, and on the failure path too: a failed run's diff is the
     // evidence for why it failed, and it is just as lost if nobody commits it.
     let label = if outcome.is_ok() { "done" } else { "failed" };
-    let preserved = match coding_run::preserve_worktree(&workspace, label).await {
-        Ok(Some(sha)) => format!(
-            "\n**Committed:** `{sha}` on `{}`\n",
-            state_branch(&workspace)
-        ),
-        Ok(None) => String::new(),
-        Err(e) => format!("\n**Could not preserve work:** {e}\n"),
-    };
-
-    match outcome {
-        Ok(result) => {
-            let report = result.render();
-            emit_agent_text_chunk(sink, sid, &report)?;
-            emit_agent_text_chunk(sink, sid, &preserved)?;
-            Ok(json!({ "stopReason": "end_turn" }))
-        }
+    let verdict = match outcome {
+        Ok(result) => Some(result.render()),
         Err(e) => {
             emit_agent_text_chunk(sink, sid, &format!("\n**Coding pack error:** {e}\n"))?;
-            emit_agent_text_chunk(sink, sid, &preserved)?;
-            Ok(json!({ "stopReason": "end_turn" }))
+            None
         }
-    }
+    };
+    finish_coding_run(sink, sid, &workspace, label, verdict).await?;
+    Ok(json!({ "stopReason": "end_turn" }))
 }
-
 /// Best-effort branch name for the report line. Cosmetic only — never fails the run.
 fn state_branch(workspace: &std::path::Path) -> String {
     // `std_command`, not `std::process::Command::new` — this is the ACP bridge, whose stdin is
