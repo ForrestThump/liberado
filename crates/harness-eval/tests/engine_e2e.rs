@@ -211,24 +211,27 @@ fn detached_worker_runs_a_queued_job_to_terminal() {
     .unwrap();
 
     unsafe { std::env::set_var("LIBERADO_HARNESS_E2E_KEY_B", "dummy-nonempty") };
-    let store = JobStore::for_repository(&repository);
-    // The production dispatch contract requires the worker binary as a sibling of the executable
-    // that spawns it. Under cargo test the sibling directory is a hashed deps dir, so stage it.
-    let worker_name = if cfg!(windows) {
-        "liberado-harness-worker.exe"
-    } else {
-        "liberado-harness-worker"
+    // Point at cargo's finished worker. Copying it next to this test binary races rustc
+    // on `target/debug/deps/liberado-harness-worker` and fails Linux with ETXTBSY.
+    unsafe {
+        std::env::set_var(
+            "LIBERADO_HARNESS_WORKER",
+            env!("CARGO_BIN_EXE_liberado-harness-worker"),
+        )
     };
-    let sibling = std::env::current_exe().unwrap().with_file_name(worker_name);
-    if !sibling.exists() {
-        fs::copy(env!("CARGO_BIN_EXE_liberado-harness-worker"), &sibling).unwrap();
-    }
-    liberado_harness_eval::worker::spawn_executor(&repository, &spec.job_id)
-        .expect("spawn must succeed");
-    let terminal =
+    let store = JobStore::for_repository(&repository);
+    let spawned = liberado_harness_eval::worker::spawn_executor(&repository, &spec.job_id);
+    let waited = spawned.as_ref().ok().map(|_| {
         liberado_harness_eval::transport::await_terminal(&repository, &spec.job_id, None, None)
-            .expect("job must reach a terminal state");
-    unsafe { std::env::remove_var("LIBERADO_HARNESS_E2E_KEY_B") };
+    });
+    unsafe {
+        std::env::remove_var("LIBERADO_HARNESS_E2E_KEY_B");
+        std::env::remove_var("LIBERADO_HARNESS_WORKER");
+    }
+    spawned.expect("spawn must succeed");
+    let terminal = waited
+        .expect("spawn succeeded")
+        .expect("job must reach a terminal state");
 
     // The detached worker ran the same offline pipeline and classified the harness failures.
     assert_eq!(terminal.status, JobStatus::Failed);

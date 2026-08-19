@@ -117,6 +117,12 @@ fn detach_stdio_from_children() {
 }
 
 fn executor_binary() -> Result<PathBuf, Box<dyn Error>> {
+    if let Some(explicit) = std::env::var_os("LIBERADO_HARNESS_WORKER") {
+        if explicit.is_empty() {
+            return Err("LIBERADO_HARNESS_WORKER is set but empty".into());
+        }
+        return Ok(PathBuf::from(explicit));
+    }
     let current = std::env::current_exe()?;
     Ok(current.with_file_name(if cfg!(windows) {
         "liberado-harness-worker.exe"
