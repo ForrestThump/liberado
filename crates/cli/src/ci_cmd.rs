@@ -36,8 +36,11 @@ const LCOV_FILE: &str = ".liberado/crap.lcov";
 const USAGE: &str = "usage: liberado ci [check|crap|ratchet]";
 const VACATED_BIN: &str = "liberado-ci";
 
-/// `--no-fail-fast` is a cargo-llvm-cov flag. After `--` it is a test-binary
-/// argument, and libtest rejects it (`Unrecognized option: 'no-fail-fast'`).
+/// llvm-cov flags live here, never after `--`. After `--` they become
+/// test-binary arguments, and libtest rejects them (`Unrecognized option`).
+/// `--ignore-run-fail` still writes the LCOV when a test is red (the test
+/// job already owns pass/fail). That is how a host-local `config check`
+/// failure cannot block the baseline write.
 const LLVM_COV_ARGS: &[&str] = &[
     "llvm-cov",
     "--workspace",
@@ -46,7 +49,7 @@ const LLVM_COV_ARGS: &[&str] = &[
     "--lcov",
     "--output-path",
     LCOV_FILE,
-    "--no-fail-fast",
+    "--ignore-run-fail",
 ];
 
 /// Printed after `cargo crap` exits non-zero when a per-function score rose.
@@ -516,11 +519,11 @@ mod tests {
     }
 
     #[test]
-    fn llvm_cov_no_fail_fast_is_not_a_test_binary_arg() {
-        assert!(LLVM_COV_ARGS.contains(&"--no-fail-fast"));
+    fn llvm_cov_flags_are_not_test_binary_args() {
+        assert!(LLVM_COV_ARGS.contains(&"--ignore-run-fail"));
         assert!(
             !LLVM_COV_ARGS.contains(&"--"),
-            "a `--` would send `--no-fail-fast` to libtest, which rejects it"
+            "a `--` would send llvm-cov flags to libtest, which rejects them"
         );
     }
 
