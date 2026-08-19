@@ -24,77 +24,96 @@ use crate::source::ConfigLoadError;
 ///
 /// Returns the first violation found. Each error message names the offending entry so
 /// the user can fix it without a debugger.
-pub fn validate_merged_config(config: &Config) -> Result<(), ConfigLoadError> {
-    let invalid = |msg: String| ConfigLoadError::Validation(msg);
+fn validation_error(msg: String) -> ConfigLoadError {
+    ConfigLoadError::Validation(msg)
+}
 
+/// Validate that a zone capability names a zone declared in `policy.zones`.
+fn validate_zone_capability(config: &Config, zone: &Zone) -> Result<(), ConfigLoadError> {
+    let name = zone_name(zone);
+    if !config.policy.zones.iter().any(|z| z.zone == name) {
+        return Err(validation_error(format!(
+            "grant references undeclared zone '{name}'"
+        )));
+    }
+    Ok(())
+}
+
+/// Validate that an `ExecuteMcp` capability names an MCP present in `topology.mcps`.
+fn validate_execute_mcp(config: &Config, mcp: &String) -> Result<(), ConfigLoadError> {
+    if !config.topology.mcps.iter().any(|c| &c.name == mcp) {
+        return Err(validation_error(format!(
+            "grant references unknown MCP '{mcp}' (not in topology.mcps)"
+        )));
+    }
+    Ok(())
+}
+
+/// Validate an `ExecuteTool("<mcp>:<tool>")` capability.
+///
+/// Only the server half is checkable: `topology.mcps` is wiring, and an MCP's tool names are not
+/// known until it connects. So validate the prefix and, above all, insist there *is* one.
+///
+/// A missing `:` is the trap worth catching here. `ExecuteTool("read_note")` parses fine and then
+/// means "the MCP named read_note" everywhere downstream — a grant that authorizes nothing,
+/// silently, in a file whose whole job is to authorize things.
+fn validate_execute_tool(config: &Config, qualified: &String) -> Result<(), ConfigLoadError> {
+    let Some((mcp, tool)) = qualified.split_once(':') else {
+        return Err(validation_error(format!(
+            "grant has ExecuteTool '{qualified}' with no ':' — it must be '<mcp>:<tool>' (e.g. \
+             'turbovault:read_note'), or it silently grants nothing. Use ExecuteMcp to grant a \
+             whole server."
+        )));
+    };
+    if tool.is_empty() {
+        return Err(validation_error(format!(
+            "grant has ExecuteTool '{qualified}' with an empty tool name — use ExecuteMcp = \
+             '{mcp}' to grant the whole server"
+        )));
+    }
+    if !config.topology.mcps.iter().any(|c| c.name == mcp) {
+        return Err(validation_error(format!(
+            "grant references unknown MCP '{mcp}' in ExecuteTool '{qualified}' (not in \
+             topology.mcps)"
+        )));
+    }
+    Ok(())
+}
+
+/// Validate that every capability in every grant resolves: zones declared, MCPs present, tool
+/// names well-formed.
+fn validate_grants(config: &Config) -> Result<(), ConfigLoadError> {
     for grant in &config.policy.grants {
         for cap in &grant.capabilities {
             match cap {
                 Capability::Read(zone)
                 | Capability::Write(zone)
-                | Capability::ReadSummary(zone) => {
-                    let name = zone_name(zone);
-                    if !config.policy.zones.iter().any(|z| z.zone == name) {
-                        return Err(invalid(format!(
-                            "grant references undeclared zone '{name}'"
-                        )));
-                    }
-                }
-                Capability::ExecuteMcp(mcp) => {
-                    if !config.topology.mcps.iter().any(|c| &c.name == mcp) {
-                        return Err(invalid(format!(
-                            "grant references unknown MCP '{mcp}' (not in topology.mcps)"
-                        )));
-                    }
-                }
-                // Only the server half is checkable: `topology.mcps` is wiring, and an MCP's tool
-                // names are not known until it connects. So validate the prefix and, above all,
-                // insist there *is* one.
-                //
-                // A missing `:` is the trap worth catching here. `ExecuteTool("read_note")` parses
-                // fine and then means "the MCP named read_note" everywhere downstream — a grant that
-                // authorizes nothing, silently, in a file whose whole job is to authorize things.
-                Capability::ExecuteTool(qualified) => {
-                    let Some((mcp, tool)) = qualified.split_once(':') else {
-                        return Err(invalid(format!(
-                            "grant has ExecuteTool '{qualified}' with no ':' — it must be \
-                             '<mcp>:<tool>' (e.g. 'turbovault:read_note'), or it silently grants \
-                             nothing. Use ExecuteMcp to grant a whole server."
-                        )));
-                    };
-                    if tool.is_empty() {
-                        return Err(invalid(format!(
-                            "grant has ExecuteTool '{qualified}' with an empty tool name — use \
-                             ExecuteMcp = '{mcp}' to grant the whole server"
-                        )));
-                    }
-                    if !config.topology.mcps.iter().any(|c| c.name == mcp) {
-                        return Err(invalid(format!(
-                            "grant references unknown MCP '{mcp}' in ExecuteTool '{qualified}' \
-                             (not in topology.mcps)"
-                        )));
-                    }
-                }
+                | Capability::ReadSummary(zone) => validate_zone_capability(config, zone)?,
+                Capability::ExecuteMcp(mcp) => validate_execute_mcp(config, mcp)?,
+                Capability::ExecuteTool(qualified) => validate_execute_tool(config, qualified)?,
                 // Self-contained: names no zone and no MCP, so there is nothing to resolve.
                 Capability::AskHuman => {}
             }
         }
     }
+    Ok(())
+}
 
-    // 5. An MCP that can change something must say WHAT it changes (F1, 2026-07-14).
-    //
-    // Zone declaration used to be opt-in, and the consequences were not theoretical: with no MCP in
-    // `topology.toml` declaring a zone, `resolve_zone` returned `None` for every tool, so the
-    // zone-write-class guard never fired *once* — and the `Capability::Write` check that now sits
-    // beside it would have been equally inert. A dispatch session granted `Read` and no `Write`
-    // wrote a vault note, live.
-    //
-    // So zone joins `description`, `consequence` and `transport` in the rule this config already
-    // states: **declaring an MCP means rating it, wiring it, and saying what it touches.** Failing
-    // here — loudly, at boot, naming the MCP — rather than at the tool call is deliberate: a
-    // refusal mid-conversation is discovered three turns into something you cared about, with an
-    // error that does not explain itself. `read_only` MCPs are exempt: they write nothing, so
-    // there is no zone to name.
+/// 5. An MCP that can change something must say WHAT it changes (F1, 2026-07-14).
+///
+/// Zone declaration used to be opt-in, and the consequences were not theoretical: with no MCP in
+/// `topology.toml` declaring a zone, `resolve_zone` returned `None` for every tool, so the
+/// zone-write-class guard never fired *once* — and the `Capability::Write` check that now sits
+/// beside it would have been equally inert. A dispatch session granted `Read` and no `Write`
+/// wrote a vault note, live.
+///
+/// So zone joins `description`, `consequence` and `transport` in the rule this config already
+/// states: **declaring an MCP means rating it, wiring it, and saying what it touches.** Failing
+/// here — loudly, at boot, naming the MCP — rather than at the tool call is deliberate: a
+/// refusal mid-conversation is discovered three turns into something you cared about, with an
+/// error that does not explain itself. `read_only` MCPs are exempt: they write nothing, so
+/// there is no zone to name.
+fn validate_mcp_zones(config: &Config) -> Result<(), ConfigLoadError> {
     for mcp in config.topology.mcps.iter().filter(|m| m.enabled) {
         if mcp.consequence == liberado_common::Consequence::ReadOnly {
             continue;
@@ -106,7 +125,7 @@ pub fn validate_merged_config(config: &Config) -> Result<(), ConfigLoadError> {
         let fixed_zone = mcp.default_zone.is_some() || mcp.tools.iter().any(|t| t.zone.is_some());
         let path_addressed = mcp.zone_from_arg.is_some();
         if path_addressed && mcp.write_tools.is_empty() {
-            return Err(invalid(format!(
+            return Err(validation_error(format!(
                 "MCP '{}' sets `zone_from_arg` but lists no `write_tools`. A path argument alone \
                  cannot tell a read from a write (`read_note` and `write_note` both have one), so \
                  without this list either every read would demand a Write capability, or no write \
@@ -115,7 +134,7 @@ pub fn validate_merged_config(config: &Config) -> Result<(), ConfigLoadError> {
             )));
         }
         if !fixed_zone && !path_addressed {
-            return Err(invalid(format!(
+            return Err(validation_error(format!(
                 "MCP '{}' is '{:?}' (not read_only) but declares no write zone, so the capability \
                  guard cannot tell what its writes touch — meaning ANY grant holding \
                  ExecuteMcp(\"{}\") could write anything this MCP can reach, whatever its Write \
@@ -130,31 +149,34 @@ pub fn validate_merged_config(config: &Config) -> Result<(), ConfigLoadError> {
             )));
         }
     }
+    Ok(())
+}
 
-    // 6. A declared report sink must actually be able to write (Decision 14).
-    //
-    // The whole point of `Delivery::Vault` is that no model is in the loop: the orchestrator makes
-    // one deterministic tool call and reports where the note went. That leaves nothing to notice a
-    // sink pointing at a missing MCP, a disabled one, or — worst — a *read* tool, which would
-    // return happily and write nothing while the receipt claimed a path. The report would simply
-    // not exist, and the human would find out by opening the file. So the sink is checked here,
-    // where the failure is a daemon that refuses to start and says why.
+/// 6. A declared report sink must actually be able to write (Decision 14).
+///
+/// The whole point of `Delivery::Vault` is that no model is in the loop: the orchestrator makes
+/// one deterministic tool call and reports where the note went. That leaves nothing to notice a
+/// sink pointing at a missing MCP, a disabled one, or — worst — a *read* tool, which would
+/// return happily and write nothing while the receipt claimed a path. The report would simply
+/// not exist, and the human would find out by opening the file. So the sink is checked here,
+/// where the failure is a daemon that refuses to start and says why.
+fn validate_report_sink(config: &Config) -> Result<(), ConfigLoadError> {
     if let Some(sink) = &config.topology.report_sink {
         let Some(mcp) = config.topology.mcps.iter().find(|m| m.name == sink.mcp) else {
-            return Err(invalid(format!(
+            return Err(validation_error(format!(
                 "topology.report_sink.mcp '{}' is not in topology.mcps",
                 sink.mcp
             )));
         };
         if !mcp.enabled {
-            return Err(invalid(format!(
+            return Err(validation_error(format!(
                 "topology.report_sink.mcp '{}' is disabled — a report delivered to it would be \
                  silently lost. Enable it or remove the sink.",
                 sink.mcp
             )));
         }
         if mcp.consequence == liberado_common::Consequence::ReadOnly {
-            return Err(invalid(format!(
+            return Err(validation_error(format!(
                 "topology.report_sink.mcp '{}' is rated read_only, so it cannot write the report. \
                  Point the sink at the vault MCP.",
                 sink.mcp
@@ -162,42 +184,61 @@ pub fn validate_merged_config(config: &Config) -> Result<(), ConfigLoadError> {
         }
         // Only checkable for a path-addressed MCP — a fixed-zone MCP doesn't enumerate its writers.
         if !mcp.write_tools.is_empty() && !mcp.write_tools.contains(&sink.tool) {
-            return Err(invalid(format!(
-                "topology.report_sink.tool '{}' is not among MCP '{}'s `write_tools` ({}). A sink \
-                 that is really a read would return success and write nothing.",
+            return Err(validation_error(format!(
+                "topology.report_sink.tool '{}' is not among MCP '{}'s `write_tools` ({}). A \
+                 sink that is really a read would return success and write nothing.",
                 sink.tool,
                 sink.mcp,
                 mcp.write_tools.join(", ")
             )));
         }
         if sink.path_arg.trim().is_empty() || sink.content_arg.trim().is_empty() {
-            return Err(invalid(
+            return Err(validation_error(
                 "topology.report_sink.path_arg and .content_arg must be non-empty argument names"
                     .to_string(),
             ));
         }
     }
+    Ok(())
+}
 
+/// 3. Every `policy.secret_refs` entry must be set as an environment variable.
+fn validate_policy_secrets(config: &Config) -> Result<(), ConfigLoadError> {
     for secret in &config.policy.secret_refs {
         if std::env::var_os(secret).is_none() {
-            return Err(invalid(format!(
+            return Err(validation_error(format!(
                 "secret_ref '{secret}' has no corresponding environment variable"
             )));
         }
     }
+    Ok(())
+}
 
+/// 4. Every `topology.hooks[].secret_ref` must be set as an environment variable, same as #3.
+fn validate_hook_secrets(config: &Config) -> Result<(), ConfigLoadError> {
     for hook in &config.topology.hooks {
         if std::env::var_os(&hook.secret_ref).is_none() {
-            return Err(invalid(format!(
+            return Err(validation_error(format!(
                 "topology.hooks['{}'].secret_ref '{}' has no corresponding environment variable",
                 hook.name, hook.secret_ref
             )));
         }
     }
-
     Ok(())
 }
 
+/// Validate cross-cutting invariants that span [`Config`] sections.
+///
+/// Returns the first violation found. Each error message names the offending entry so the user
+/// can fix it without a debugger.
+pub fn validate_merged_config(config: &Config) -> Result<(), ConfigLoadError> {
+    validate_grants(config)?;
+    validate_mcp_zones(config)?;
+    validate_report_sink(config)?;
+    validate_policy_secrets(config)?;
+    validate_hook_secrets(config)?;
+    Ok(())
+}
 /// The bare name a zone capability references, regardless of vault/named kind — both
 /// are matched against `policy.zones` by name (zones are declared by name, not by kind).
 fn zone_name(zone: &Zone) -> &str {
@@ -310,6 +351,48 @@ mod tests {
         let msg = err.to_string();
         assert!(msg.contains("unknown MCP"), "got: {msg}");
         assert!(msg.contains("ghost-mcp"), "should name the MCP: {msg}");
+    }
+
+    /// `ExecuteTool` grants must be qualified: a missing `:` would silently authorize nothing (the
+    /// whole string becomes an MCP name), an empty tool name is equally meaningless, and a prefix
+    /// naming an undeclared MCP is dead weight. All three are refused at load time.
+    #[test]
+    fn rejects_malformed_execute_tool_capabilities() {
+        let cfg = |cap: Capability| {
+            config(
+                topology_with_mcp("memory-mcp"),
+                Policy {
+                    zones: vec![],
+                    grants: vec![Grant {
+                        component: "agent".into(),
+                        capabilities: vec![cap],
+                    }],
+                    secret_refs: vec![],
+                },
+            )
+        };
+
+        let bare = cfg(Capability::ExecuteTool("read_note".into()));
+        let msg = validate_merged_config(&bare).unwrap_err().to_string();
+        assert!(
+            msg.contains("no ':'"),
+            "bare tool name must be refused: {msg}"
+        );
+
+        let empty = cfg(Capability::ExecuteTool("memory-mcp:".into()));
+        let msg = validate_merged_config(&empty).unwrap_err().to_string();
+        assert!(msg.contains("empty tool name"), "got: {msg}");
+
+        let ghost = cfg(Capability::ExecuteTool("ghost-mcp:read_note".into()));
+        let msg = validate_merged_config(&ghost).unwrap_err().to_string();
+        assert!(msg.contains("unknown MCP"), "got: {msg}");
+        assert!(msg.contains("ghost-mcp"), "should name the MCP: {msg}");
+
+        let ok = cfg(Capability::ExecuteTool("memory-mcp:read_note".into()));
+        assert!(
+            validate_merged_config(&ok).is_ok(),
+            "a well-formed, resolvable tool grant must pass"
+        );
     }
 
     #[test]
