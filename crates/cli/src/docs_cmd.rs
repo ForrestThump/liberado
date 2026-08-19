@@ -3,7 +3,7 @@
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 
 use regex::Regex;
 
@@ -169,7 +169,7 @@ fn scanned_files(root: &Path, specs: &[&str]) -> Result<Vec<PathBuf>, Box<dyn st
             }
         }
     }
-    files = retain_unignored_files(root, files)?;
+    files = retain_unignored_files(root, files);
     files.sort();
     files.dedup();
     Ok(files)
@@ -178,47 +178,51 @@ fn scanned_files(root: &Path, specs: &[&str]) -> Result<Vec<PathBuf>, Box<dyn st
 /// Remove files ignored by the repository from generated documentation inputs.
 ///
 /// Local scratch notes can live below `docs/`, including through `.git/info/exclude`. They must
-/// not enter generated indexes or link checks because another clone cannot resolve them. Outside a
-/// git worktree, such as a temporary docs-site fixture, this keeps the filesystem input unchanged.
-pub(crate) fn retain_unignored_files(
-    root: &Path,
-    files: Vec<PathBuf>,
-) -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
+/// not enter generated indexes or link checks because another clone cannot resolve them. Git
+/// missing, a non-worktree fixture, or a closed stdin must leave the input unchanged: a docs
+/// command must not fail because ignore filtering could not run.
+pub(crate) fn retain_unignored_files(root: &Path, files: Vec<PathBuf>) -> Vec<PathBuf> {
     if files.is_empty() {
-        return Ok(files);
+        return files;
     }
 
-    let mut child = match Command::new("git")
-        .arg("-C")
+    let mut cmd = liberado_common::process::std_command("git");
+    cmd.arg("-C")
         .arg(root)
         .args(["check-ignore", "--stdin", "-z"])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-    {
+        .stderr(Stdio::null());
+
+    let mut child = match cmd.spawn() {
         Ok(child) => child,
-        Err(_) => return Ok(files),
+        Err(_) => return files,
     };
 
-    {
-        let stdin = child
-            .stdin
-            .as_mut()
-            .ok_or("git check-ignore stdin unavailable")?;
-        for file in &files {
-            let relative = file
-                .strip_prefix(root)?
-                .to_string_lossy()
-                .replace('\\', "/");
-            stdin.write_all(relative.as_bytes())?;
-            stdin.write_all(&[0])?;
-        }
+    let Some(mut stdin) = child.stdin.take() else {
+        let _ = child.wait();
+        return files;
+    };
+
+    let write_failed = files.iter().any(|file| {
+        let Ok(relative) = file.strip_prefix(root) else {
+            return false;
+        };
+        let relative = relative.to_string_lossy().replace('\\', "/");
+        stdin.write_all(relative.as_bytes()).is_err() || stdin.write_all(&[0]).is_err()
+    });
+    drop(stdin);
+    if write_failed {
+        let _ = child.wait();
+        return files;
     }
 
-    let output = child.wait_with_output()?;
+    let output = match child.wait_with_output() {
+        Ok(output) => output,
+        Err(_) => return files,
+    };
     if !matches!(output.status.code(), Some(0 | 1)) {
-        return Ok(files);
+        return files;
     }
 
     let ignored = output
@@ -228,14 +232,14 @@ pub(crate) fn retain_unignored_files(
         .map(|entry| String::from_utf8_lossy(entry).replace('\\', "/"))
         .collect::<std::collections::HashSet<_>>();
 
-    Ok(files
+    files
         .into_iter()
         .filter(|file| {
             file.strip_prefix(root)
                 .map(|relative| !ignored.contains(&relative.to_string_lossy().replace('\\', "/")))
                 .unwrap_or(true)
         })
-        .collect())
+        .collect()
 }
 
 fn collect_markdown_files(
@@ -329,6 +333,15 @@ mod tests {
 
     use super::{check_links_in, fence_marker, is_fence_close, retain_unignored_files};
 
+    fn git(root: &std::path::Path, args: &[&str]) {
+        let status = Command::new("git")
+            .args(args)
+            .current_dir(root)
+            .status()
+            .unwrap_or_else(|error| panic!("git {args:?}: {error}"));
+        assert!(status.success(), "git {args:?} failed");
+    }
+
     #[test]
     fn recognizes_fence_boundaries_but_not_fenced_language_text() {
         assert_eq!(fence_marker("```rust"), Some("```"));
@@ -365,19 +378,30 @@ mod tests {
         fs::write(root.join(".gitignore"), "docs/local-note.md\n").expect("write ignore");
         fs::write(root.join("docs/current.md"), "current").expect("write current");
         fs::write(root.join("docs/local-note.md"), "local").expect("write local");
-        let init = Command::new("git")
-            .args(["init", "--quiet"])
-            .current_dir(root)
-            .status()
-            .expect("run git init");
-        assert!(init.success());
+        git(root, &["init", "--quiet"]);
+        git(root, &["config", "user.email", "test@example.com"]);
+        git(root, &["config", "user.name", "test"]);
 
         let files = vec![
             root.join("docs/current.md"),
             root.join("docs/local-note.md"),
         ];
-        let retained = retain_unignored_files(root, files).expect("filter ignored files");
+        let retained = retain_unignored_files(root, files);
 
         assert_eq!(retained, vec![root.join("docs/current.md")]);
+    }
+
+    #[test]
+    fn non_git_tree_keeps_all_files() {
+        let directory = tempfile::tempdir().expect("temp directory");
+        let root = directory.path();
+        fs::create_dir(root.join("docs")).expect("create docs");
+        let files = vec![root.join("docs/a.md"), root.join("docs/b.md")];
+        fs::write(&files[0], "a").expect("write a");
+        fs::write(&files[1], "b").expect("write b");
+
+        let retained = retain_unignored_files(root, files.clone());
+
+        assert_eq!(retained, files);
     }
 }

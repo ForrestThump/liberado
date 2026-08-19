@@ -62,7 +62,7 @@ something rather than being in the way.
 
 Keep current priorities and branch state out of this file. They change faster than durable agent
 rules and become false guidance after a merge. Use `docs/future-work/backlog.md` for the next item
-and `docs/future-work/current_unmerged_work.md` for live branch dependencies.
+and the local `current_unmerged_work.md` (repo root, never committed) for live branch dependencies.
 
 The module-level `//!` docs are unusually thorough here and explain *why*, not just what. For "how
 does X work", read `crates/<x>/src/lib.rs` before searching `docs/` — it is more likely to be right,

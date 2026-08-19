@@ -39,8 +39,6 @@ ongoing findings, and current evidence. Implemented and superseded plans are arc
 | [paseo-liberado-integration-roadmap.md](paseo-liberado-integration-roadmap.md) | plan | acp | implementation |
 | [pr-dispatch-vtcode-no-write-finding.md](pr-dispatch-vtcode-no-write-finding.md) | finding | coding-harness | evidence |
 | [rust-native-agentic-coder-plan.md](rust-native-agentic-coder-plan.md) | plan | coding-harness | implementation |
-| [self-host-coding-dogfood-2026-08.md](self-host-coding-dogfood-2026-08.md) | finding | coding-harness | evidence |
-| [self-pr-quality-roadmap.md](self-pr-quality-roadmap.md) | plan | coding-harness | implementation |
 | [token-cost-accounting-plan.md](token-cost-accounting-plan.md) | plan | token-economics | implementation |
 | [token-economics-findings-2026-08.md](token-economics-findings-2026-08.md) | finding | token-economics | evidence |
 | [tui-maturity-roadmap.md](tui-maturity-roadmap.md) | plan | tui | implementation |

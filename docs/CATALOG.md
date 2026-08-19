@@ -61,8 +61,6 @@ Authority model: [doc-authority.md](spec/reference/doc-authority.md).
 | [docs/future-work/paseo-liberado-integration-roadmap.md](future-work/paseo-liberado-integration-roadmap.md) | plan | active | implementation | acp | paseo-liberado-integration |
 | [docs/future-work/pr-dispatch-vtcode-no-write-finding.md](future-work/pr-dispatch-vtcode-no-write-finding.md) | finding | active | evidence | coding-harness | vtcode-no-write |
 | [docs/future-work/rust-native-agentic-coder-plan.md](future-work/rust-native-agentic-coder-plan.md) | plan | active | implementation | coding-harness | agentic-mesh-coding-pack |
-| [docs/future-work/self-host-coding-dogfood-2026-08.md](future-work/self-host-coding-dogfood-2026-08.md) | finding | active | evidence | coding-harness | self-host-dogfood-2026-08 |
-| [docs/future-work/self-pr-quality-roadmap.md](future-work/self-pr-quality-roadmap.md) | plan | active | implementation | coding-harness | self-pr-quality |
 | [docs/future-work/token-cost-accounting-plan.md](future-work/token-cost-accounting-plan.md) | plan | active | implementation | token-economics | token-cost-accounting |
 | [docs/future-work/token-economics-findings-2026-08.md](future-work/token-economics-findings-2026-08.md) | finding | active | evidence | token-economics | token-economics-findings |
 | [docs/future-work/tui-maturity-roadmap.md](future-work/tui-maturity-roadmap.md) | plan | active | implementation | tui | tui-maturity |

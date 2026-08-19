@@ -578,7 +578,7 @@ pub struct ProjectConfig {
     #[serde(default = "default_true")]
     pub enabled: bool,
     /// Ship / fast / deep preflight profiles (language-agnostic ordered commands).
-    /// See `docs/future-work/self-pr-quality-roadmap.md` § Generic preflight gate.
+    /// See `config.example/topology.toml` and `docs/spec/architecture/verifiers.md`.
     #[serde(default)]
     pub preflight: ProjectPreflightConfig,
 }

@@ -63,7 +63,7 @@ impl CreateDirAll for Path {
 fn load_docs(root: &Path) -> Result<Vec<Document>, Box<dyn std::error::Error>> {
     let mut paths = Vec::new();
     collect_markdown(&root.join("docs"), &mut paths)?;
-    paths = crate::docs_cmd::retain_unignored_files(root, paths)?;
+    paths = crate::docs_cmd::retain_unignored_files(root, paths);
     paths.sort();
     let mut docs = Vec::new();
     for path in paths {

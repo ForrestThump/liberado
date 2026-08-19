@@ -165,8 +165,7 @@ pub async fn rev_parse(workspace_root: &str, rev: &str) -> Result<String, CoderE
 /// Files changed by commits after `baseline_sha` (exclusive) through `HEAD`.
 ///
 /// Used when the working tree is clean after `git_commit`: porcelain status is empty, but the
-/// attempt still produced real work. Dogfood finding #3
-/// (`docs/future-work/self-host-coding-dogfood-2026-08.md`).
+/// attempt still produced real work. The baseline comparison preserves that progress signal.
 pub async fn committed_files_since(
     workspace_root: &str,
     baseline_sha: &str,

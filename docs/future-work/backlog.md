@@ -17,8 +17,8 @@ Take the first open, unblocked item. Do not choose a later item because it is ea
 per PR. Before implementation, verify the item against current code and recent git history.
 
 If an item is blocked only by elapsed time, another repository, or an external service, record the
-exact blocker in [`current_unmerged_work.md`](current_unmerged_work.md) and take the next unblocked
-item. Do not skip a code dependency.
+exact blocker in the local `current_unmerged_work.md` (repo root, never committed) and take the next
+unblocked item. Do not skip a code dependency.
 
 ## Implementation order
 
@@ -112,8 +112,8 @@ keep goal-context ranking in the kernel and source-tree or symbol-graph work in 
 
 ## Branch and integration rule
 
-Before creating a branch, record these fields in
-[`current_unmerged_work.md`](current_unmerged_work.md):
+Before creating a branch, record these fields in the local `current_unmerged_work.md` at the repo
+root (listed in `.git/info/exclude`, never committed):
 
 - Base commit.
 - Predecessor.
