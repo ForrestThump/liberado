@@ -16,29 +16,133 @@ use crate::render::kind_color;
 use crate::tuning::*;
 use crate::ui::c;
 
+/// The joined view, snapshot as owned clones so the render loop can borrow `app.md_cache`
+/// mutably below. The primary-chat path stays zero-copy (borrows `app.messages`); only the cold
+/// joined path clones, and a specialist transcript is small.
+struct JoinedSnapshot {
+    joined_active: bool,
+    joined_finished: bool,
+    messages_owned: Option<Vec<Message>>,
+    stream_buf: String,
+    awaiting: Option<(String, Vec<String>)>,
+}
+
+fn snapshot_joined_view(app: &App) -> JoinedSnapshot {
+    JoinedSnapshot {
+        joined_active: app.joined.is_some(),
+        joined_finished: app.joined.as_ref().map(|j| j.finished).unwrap_or(false),
+        messages_owned: app.joined.as_ref().map(|j| j.messages.clone()),
+        stream_buf: app
+            .joined
+            .as_ref()
+            .map(|j| j.stream_buf.clone())
+            .unwrap_or_default(),
+        awaiting: app.joined.as_ref().and_then(|j| {
+            j.awaiting
+                .as_ref()
+                .map(|a| (a.prompt.clone(), a.options.clone()))
+        }),
+    }
+}
+
+/// Selection/expansion only applies to the primary conversation view (chat-history focus
+/// navigates `app.messages`); the joined transcript renders read-only.
+fn selection_for(app: &App, i: usize, joined_active: bool) -> (bool, bool) {
+    let is_selected = !joined_active && app.focus == Focus::ChatMessages && i == app.chat_cursor;
+    let is_expanded = app.expanded_messages.contains(&i);
+    (is_selected, is_expanded)
+}
+
+fn selection_colors(is_selected: bool, th: &Theme, pane_bg: Color) -> (Color, Color) {
+    if is_selected {
+        (
+            c(&th.sidebar_selected_bg, "#00ffff"),
+            c(&th.sidebar_selected_fg, "#000000"),
+        )
+    } else {
+        (pane_bg, Color::Reset)
+    }
+}
+
+/// Joined session: render any buffered stream tokens, then the "awaiting your reply" prompt as a
+/// highlighted banner so it's unmistakable that the input box is now feeding this session.
+fn push_joined_tail(lines: &mut Vec<Line>, th: &Theme, snap: &JoinedSnapshot) {
+    if !snap.stream_buf.is_empty() {
+        lines.push(Line::from(Span::styled(
+            snap.stream_buf.clone(),
+            Style::default()
+                .fg(c(&th.chat_assistant_text, "#c0c0c0"))
+                .add_modifier(Modifier::ITALIC),
+        )));
+    }
+    if let Some((prompt, options)) = &snap.awaiting {
+        lines.push(Line::from(""));
+        // One `Line` per source line: a ratatui `Line` does not break on `\n`, and prompts are
+        // not always one-liners — an intake draft contract (S7) is a whole block of criteria and
+        // verifiers. Cramming it into a single Line would run it all together.
+        let accent = Style::default()
+            .fg(c(&th.accent, "#00ffff"))
+            .add_modifier(Modifier::BOLD);
+        for (n, raw) in prompt.lines().enumerate() {
+            let text = if n == 0 {
+                format!("❓ {raw}")
+            } else {
+                format!("   {raw}")
+            };
+            lines.push(Line::from(Span::styled(text, accent)));
+        }
+        for (n, opt) in options.iter().enumerate() {
+            lines.push(Line::from(Span::styled(
+                format!("   {}. {opt}", n + 1),
+                Style::default().fg(c(&th.md_bullet, "#00ffff")),
+            )));
+        }
+        lines.push(Line::from(Span::styled(
+            "   › type your answer below and press Enter",
+            Style::default()
+                .fg(c(&th.chat_system_text, "#808080"))
+                .add_modifier(Modifier::ITALIC),
+        )));
+    } else if snap.joined_finished {
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "— session finished · /back to return to the primary chat —",
+            Style::default()
+                .fg(c(&th.chat_system_text, "#808080"))
+                .add_modifier(Modifier::ITALIC),
+        )));
+    }
+}
+
+/// Primary conversation: the streaming assistant buffer (italic) plus the blinking cursor.
+fn push_primary_tail(lines: &mut Vec<Line>, th: &Theme, app: &App) {
+    if app.streaming || !app.assistant_buf.is_empty() {
+        if !app.assistant_buf.is_empty() {
+            lines.push(Line::from(Span::styled(
+                app.assistant_buf.clone(),
+                Style::default()
+                    .fg(c(&th.chat_assistant_text, "#c0c0c0"))
+                    .add_modifier(Modifier::ITALIC),
+            )));
+        }
+        if app.streaming {
+            lines.push(Line::from(Span::styled(
+                "▌",
+                Style::default()
+                    .fg(c(&th.chat_streaming_cursor, "#00ffff"))
+                    .add_modifier(Modifier::SLOW_BLINK),
+            )));
+        }
+    }
+}
+
 pub(super) fn draw(frame: &mut Frame, area: Rect, app: &mut App, th: &Theme, spinner_tick: u8) {
     // Unified-Session view: when joined to a goal session, the chat pane renders *that* session's
     // (separate-but-linked) transcript and identity; otherwise the primary conversation.
     let joined = app.joined.as_ref();
-
     let block = pane_block(joined, app, th);
-
-    // Snapshot the joined view up front (owned clones) so the render loop can still borrow
-    // `app.md_cache` mutably below. The primary-chat path stays zero-copy (borrows `app.messages`);
-    // only the cold joined path clones, and a specialist transcript is small.
-    let joined_active = app.joined.is_some();
-    let joined_finished = app.joined.as_ref().map(|j| j.finished).unwrap_or(false);
-    let messages_owned: Option<Vec<Message>> = app.joined.as_ref().map(|j| j.messages.clone());
-    let joined_stream_buf: String = app
-        .joined
-        .as_ref()
-        .map(|j| j.stream_buf.clone())
-        .unwrap_or_default();
-    let awaiting: Option<(String, Vec<String>)> = app.joined.as_ref().and_then(|j| {
-        j.awaiting
-            .as_ref()
-            .map(|a| (a.prompt.clone(), a.options.clone()))
-    });
+    let snapshot = snapshot_joined_view(app);
+    let joined_active = snapshot.joined_active;
 
     // If a conversation is being loaded and we have no messages yet, show a spinner.
     if !joined_active && app.pending_load.is_some() && app.messages.is_empty() {
@@ -58,7 +162,7 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &mut App, th: &Theme, spi
     let pane_bg = c(&th.app_bg, "#0d0d1a");
     let chip_body_bg = c(&th.code_block_bg, "#303030");
 
-    let messages: &[Message] = match &messages_owned {
+    let messages: &[Message] = match &snapshot.messages_owned {
         Some(m) => m,
         None => &app.messages,
     };
@@ -70,21 +174,8 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &mut App, th: &Theme, spi
     let mut user_turn = app.turn_offset;
 
     for (i, msg) in messages.iter().enumerate() {
-        // Selection/expansion only applies to the primary conversation view (chat-history focus
-        // navigates `app.messages`); the joined transcript renders read-only.
-        let is_selected =
-            !joined_active && app.focus == Focus::ChatMessages && i == app.chat_cursor;
-        let is_expanded = app.expanded_messages.contains(&i);
-        let sel_bg = if is_selected {
-            c(&th.sidebar_selected_bg, "#00ffff")
-        } else {
-            pane_bg
-        };
-        let sel_fg = if is_selected {
-            c(&th.sidebar_selected_fg, "#000000")
-        } else {
-            Color::Reset
-        };
+        let (is_selected, is_expanded) = selection_for(app, i, joined_active);
+        let (sel_bg, sel_fg) = selection_colors(is_selected, th, pane_bg);
 
         match msg {
             Message::User(text) => push_user_message(
@@ -134,70 +225,9 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &mut App, th: &Theme, spi
     }
 
     if joined_active {
-        // Joined session: render any buffered stream tokens, then the "awaiting your reply" prompt
-        // as a highlighted banner so it's unmistakable that the input box is now feeding this session.
-        if !joined_stream_buf.is_empty() {
-            lines.push(Line::from(Span::styled(
-                joined_stream_buf.clone(),
-                Style::default()
-                    .fg(c(&th.chat_assistant_text, "#c0c0c0"))
-                    .add_modifier(Modifier::ITALIC),
-            )));
-        }
-        if let Some((prompt, options)) = &awaiting {
-            lines.push(Line::from(""));
-            // One `Line` per source line: a ratatui `Line` does not break on `\n`, and prompts are
-            // not always one-liners — an intake draft contract (S7) is a whole block of criteria and
-            // verifiers. Cramming it into a single Line would run it all together.
-            let accent = Style::default()
-                .fg(c(&th.accent, "#00ffff"))
-                .add_modifier(Modifier::BOLD);
-            for (n, raw) in prompt.lines().enumerate() {
-                let text = if n == 0 {
-                    format!("❓ {raw}")
-                } else {
-                    format!("   {raw}")
-                };
-                lines.push(Line::from(Span::styled(text, accent)));
-            }
-            for (n, opt) in options.iter().enumerate() {
-                lines.push(Line::from(Span::styled(
-                    format!("   {}. {opt}", n + 1),
-                    Style::default().fg(c(&th.md_bullet, "#00ffff")),
-                )));
-            }
-            lines.push(Line::from(Span::styled(
-                "   › type your answer below and press Enter",
-                Style::default()
-                    .fg(c(&th.chat_system_text, "#808080"))
-                    .add_modifier(Modifier::ITALIC),
-            )));
-        } else if joined_finished {
-            lines.push(Line::from(""));
-            lines.push(Line::from(Span::styled(
-                "— session finished · /back to return to the primary chat —",
-                Style::default()
-                    .fg(c(&th.chat_system_text, "#808080"))
-                    .add_modifier(Modifier::ITALIC),
-            )));
-        }
-    } else if app.streaming || !app.assistant_buf.is_empty() {
-        if !app.assistant_buf.is_empty() {
-            lines.push(Line::from(Span::styled(
-                app.assistant_buf.clone(),
-                Style::default()
-                    .fg(c(&th.chat_assistant_text, "#c0c0c0"))
-                    .add_modifier(Modifier::ITALIC),
-            )));
-        }
-        if app.streaming {
-            lines.push(Line::from(Span::styled(
-                "▌",
-                Style::default()
-                    .fg(c(&th.chat_streaming_cursor, "#00ffff"))
-                    .add_modifier(Modifier::SLOW_BLINK),
-            )));
-        }
+        push_joined_tail(&mut lines, th, &snapshot);
+    } else {
+        push_primary_tail(&mut lines, th, app);
     }
 
     let paragraph = Paragraph::new(Text::from(lines))
@@ -692,5 +722,69 @@ mod tests {
         app.messages = vec![Message::User("x".into())];
         let out = render(&mut app, 100, 16);
         assert!(out.contains("j/k"), "nav hint:\n{out}");
+    }
+
+    /// The awaiting banner body — the prompt, its numbered options, and the answer hint — is a
+    /// separate concern from the "⏳ awaiting" title hint; pin it so a dropped banner still fails.
+    #[test]
+    fn awaiting_banner_body_renders_prompt_options_and_hint() {
+        use crate::api::SessionKind;
+        let mut app = test_support::app();
+        app.joined = Some(crate::app::JoinedSession {
+            id: "g1".into(),
+            kind: SessionKind::Coding,
+            status: "running".into(),
+            finished: false,
+            description: "d".into(),
+            messages: vec![],
+            stream_buf: String::new(),
+            awaiting: Some(crate::app::AwaitingPrompt {
+                prompt: "pick one".into(),
+                options: vec!["Left".into(), "Right".into()],
+            }),
+            gate_votes: Vec::new(),
+            active_role: None,
+            last_validation: None,
+        });
+        let out = render(&mut app, 100, 20);
+        assert!(out.contains("pick one"), "prompt:\n{out}");
+        assert!(out.contains("1. Left"), "option:\n{out}");
+        assert!(out.contains("2. Right"), "option:\n{out}");
+        assert!(out.contains("type your answer"), "hint:\n{out}");
+    }
+
+    /// A joined session that has finished shows the /back note instead of an awaiting banner.
+    #[test]
+    fn joined_finished_session_shows_back_note() {
+        use crate::api::SessionKind;
+        let mut app = test_support::app();
+        app.joined = Some(crate::app::JoinedSession {
+            id: "g1".into(),
+            kind: SessionKind::Coding,
+            status: "finished".into(),
+            finished: true,
+            description: "d".into(),
+            messages: vec![],
+            stream_buf: String::new(),
+            awaiting: None,
+            gate_votes: Vec::new(),
+            active_role: None,
+            last_validation: None,
+        });
+        let out = render(&mut app, 100, 20);
+        assert!(out.contains("session finished"), "note:\n{out}");
+        assert!(!out.contains("type your answer"), "no banner:\n{out}");
+    }
+
+    /// The streaming cursor and the in-flight assistant buffer render at the tail of the primary
+    /// conversation view.
+    #[test]
+    fn primary_tail_renders_streaming_cursor_and_buffer() {
+        let mut app = test_support::app();
+        app.streaming = true;
+        app.assistant_buf = "almost done".into();
+        let out = render(&mut app, 100, 16);
+        assert!(out.contains("almost done"), "buffer:\n{out}");
+        assert!(out.contains("▌"), "cursor:\n{out}");
     }
 }
