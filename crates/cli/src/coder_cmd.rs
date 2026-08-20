@@ -67,19 +67,21 @@ fn smoke_arg_check(
     Ok(())
 }
 
-fn cmd_smoke(args: &mut dyn Iterator<Item = String>) -> Result<(), Box<dyn std::error::Error>> {
-    smoke_arg_check(args)?;
-
-    let root = crate::crate_map_cmd::repository_root()?;
+/// Build the coder runner binary. The build failure names itself.
+fn smoke_build_runner(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
     println!("== building liberado-coder-runner ==");
     let build = std_command("cargo")
         .args(["build", "--locked", "-p", "liberado-coder-runner"])
-        .current_dir(&root)
+        .current_dir(root)
         .status()?;
     if !build.success() {
         return Err("liberado-coder-runner build failed".into());
     }
+    Ok(())
+}
 
+/// Resolve the built runner binary, erroring when it is absent.
+fn smoke_runner_path(root: &Path) -> Result<PathBuf, Box<dyn std::error::Error>> {
     let runner = root.join("target").join("debug").join(if cfg!(windows) {
         "liberado-coder-run.exe"
     } else {
@@ -93,6 +95,15 @@ fn cmd_smoke(args: &mut dyn Iterator<Item = String>) -> Result<(), Box<dyn std::
         .into());
     }
     println!("binary: {}", runner.display());
+    Ok(runner)
+}
+
+fn cmd_smoke(args: &mut dyn Iterator<Item = String>) -> Result<(), Box<dyn std::error::Error>> {
+    smoke_arg_check(args)?;
+
+    let root = crate::crate_map_cmd::repository_root()?;
+    smoke_build_runner(&root)?;
+    let runner = smoke_runner_path(&root)?;
 
     let temp = tempfile::tempdir()?;
     initialize_smoke_repository(temp.path())?;
