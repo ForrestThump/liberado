@@ -29,6 +29,8 @@ pub use preflight_baseline::{
 };
 // Durable session worktree helpers are defined below next to WorktreeWorkspace.
 
+use liberado_common::offload::{OffloadConfig, OffloadResult, spill_bytes};
+
 use std::{
     collections::{BTreeMap, HashSet},
     path::{Component, Path, PathBuf},
@@ -305,18 +307,19 @@ impl CommandRunner for DockerWorkspace {
             .output_max_bytes
             .unwrap_or(self.host.command_policy().output_max_bytes);
         let id = offload_id();
-        let (stdout, stdout_offload) = preview_or_offload(
-            stdout,
-            max,
-            request.offload_dir.as_deref(),
-            &format!("cmd-{id}-stdout.txt"),
-        );
-        let (stderr, stderr_offload) = preview_or_offload(
-            stderr,
-            max,
-            request.offload_dir.as_deref(),
-            &format!("cmd-{id}-stderr.txt"),
-        );
+        let config = OffloadConfig {
+            max_bytes: max,
+            spill_dir: request.offload_dir.clone(),
+            file_prefix: format!("cmd-{id}"),
+        };
+        let OffloadResult {
+            text: stdout,
+            spill_path: stdout_offload,
+        } = spill_bytes(&stdout, &config, "stdout");
+        let OffloadResult {
+            text: stderr,
+            spill_path: stderr_offload,
+        } = spill_bytes(&stderr, &config, "stderr");
 
         Ok(CommandOutput {
             exit_code,
@@ -455,18 +458,19 @@ impl CommandRunner for HostWorkspace {
             .output_max_bytes
             .unwrap_or(self.command_policy.output_max_bytes);
         let id = offload_id();
-        let (stdout, stdout_offload) = preview_or_offload(
-            stdout,
-            max,
-            request.offload_dir.as_deref(),
-            &format!("cmd-{id}-stdout.txt"),
-        );
-        let (stderr, stderr_offload) = preview_or_offload(
-            stderr,
-            max,
-            request.offload_dir.as_deref(),
-            &format!("cmd-{id}-stderr.txt"),
-        );
+        let config = OffloadConfig {
+            max_bytes: max,
+            spill_dir: request.offload_dir.clone(),
+            file_prefix: format!("cmd-{id}"),
+        };
+        let OffloadResult {
+            text: stdout,
+            spill_path: stdout_offload,
+        } = spill_bytes(&stdout, &config, "stdout");
+        let OffloadResult {
+            text: stderr,
+            spill_path: stderr_offload,
+        } = spill_bytes(&stderr, &config, "stderr");
 
         Ok(CommandOutput {
             exit_code,

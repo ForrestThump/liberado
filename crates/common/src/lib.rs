@@ -51,6 +51,7 @@ pub mod process;
 pub mod proposal;
 pub mod provenance;
 pub mod session_grants;
+pub mod offload;
 
 pub use capability::CONSEQUENCE_GATE;
 pub use capability::{
@@ -83,3 +84,4 @@ pub use proposal::{
     ProposedAction, SignedProposal,
 };
 pub use provenance::{HUMAN_SOURCE, PROVENANCE_KEY, WriteProvenance};
+pub use offload::{OffloadConfig, OffloadResult, spill_text, spill_bytes, sanitize_label};

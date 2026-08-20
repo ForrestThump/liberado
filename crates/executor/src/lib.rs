@@ -35,7 +35,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use futures::StreamExt;
-use liberado_common::{Outcome, Report, ToolCall, WriteProvenance};
+use liberado_common::{Outcome, Report, ToolCall, WriteProvenance, offload::{spill_text, OffloadConfig}};
 use liberado_provider::{
     CompletionRequest, CompletionResponse, Message, Provider, ProviderError, Role, StreamItem,
     ToolDef, ToolInvocation,
@@ -79,94 +79,6 @@ fn preview(text: &str) -> String {
         let cut: String = text.chars().take(MAX).collect();
         format!("{cut}…")
     }
-}
-
-fn sanitize_spill_label(label: &str) -> String {
-    let mut out: String = label
-        .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
-                c
-            } else {
-                '_'
-            }
-        })
-        .take(64)
-        .collect();
-    if out.is_empty() {
-        out.push_str("call");
-    }
-    out
-}
-
-/// Path the model should `read_file`, workspace-relative when `.liberado/offload` is in use.
-fn spill_preview_path(spill_dir: &std::path::Path, file_name: &str) -> String {
-    if spill_dir.file_name().is_some_and(|n| n == "offload") {
-        format!(".liberado/offload/{file_name}")
-    } else {
-        spill_dir
-            .join(file_name)
-            .to_string_lossy()
-            .replace('\\', "/")
-    }
-}
-
-fn char_boundary_at_or_before(text: &str, mut idx: usize) -> usize {
-    idx = idx.min(text.len());
-    while idx > 0 && !text.is_char_boundary(idx) {
-        idx -= 1;
-    }
-    idx
-}
-
-fn truncate_head(text: &str, max: usize) -> String {
-    let end = char_boundary_at_or_before(text, max);
-    text[..end].to_string()
-}
-
-/// Spill an oversized tool result: write the full body and return a head+tail preview.
-///
-/// Under the threshold, returns `text` unchanged. A second pack needs this — it lives
-/// in the kernel, not in a coding-only clip.
-fn spill_oversized_result(
-    text: &str,
-    max_bytes: usize,
-    spill_dir: &std::path::Path,
-    label: &str,
-) -> (String, Option<String>) {
-    if text.len() <= max_bytes {
-        return (text.to_string(), None);
-    }
-    let file_name = format!("tool-spill-{}.txt", sanitize_spill_label(label));
-    let path = spill_dir.join(&file_name);
-    let _ = std::fs::create_dir_all(spill_dir);
-    if std::fs::write(&path, text).is_err() {
-        let head = truncate_head(text, 2048);
-        return (
-            format!("{head}\n\n··· (truncated, {} total bytes) ···", text.len()),
-            None,
-        );
-    }
-    let preview_path = spill_preview_path(spill_dir, &file_name);
-    const HEAD: usize = 2048;
-    const TAIL: usize = 1024;
-    let head_end = char_boundary_at_or_before(text, HEAD);
-    let tail_start = char_boundary_at_or_before(text, text.len().saturating_sub(TAIL));
-    let preview = if head_end >= tail_start {
-        format!(
-            "{}\n\n··· (truncated, {} total bytes; full body at `{preview_path}`) ···",
-            &text[..head_end],
-            text.len()
-        )
-    } else {
-        format!(
-            "{}\n\n··· (truncated, {} total bytes; full body at `{preview_path}`) ···\n\n{}",
-            &text[..head_end],
-            text.len(),
-            &text[tail_start..]
-        )
-    };
-    (preview, Some(preview_path))
 }
 
 /// Name of the synthetic finish-tool the engine injects in report mode. A real [`ToolRuntime`]
@@ -2129,10 +2041,12 @@ fn run_tool_spill(
     spill_max_bytes: usize,
     label: &str,
 ) -> String {
-    match spill_dir {
-        Some(dir) => spill_oversized_result(result, spill_max_bytes, dir, label).0,
-        None => result.to_string(),
-    }
+    let config = OffloadConfig {
+        max_bytes: spill_max_bytes,
+        spill_dir: spill_dir.map(|p| p.to_path_buf()),
+        file_prefix: format!("tool-spill-{}", label),
+    };
+    spill_text(result, &config).text
 }
 
 async fn run_tool(
@@ -5198,39 +5112,37 @@ mod tests {
     }
 
     #[test]
-    fn spill_oversized_result_under_threshold_passes_through() {
+    fn spill_text_under_threshold_passes_through() {
         let dir = tempfile::tempdir().unwrap();
         let text = "small result";
-        let (shown, path) = spill_oversized_result(text, 1024, dir.path(), "test");
+        let shown = run_tool_spill(text, Some(dir.path()), 1024, "test");
         assert_eq!(shown, text);
-        assert!(path.is_none());
     }
 
     #[test]
-    fn spill_oversized_result_writes_file_and_keeps_the_tail() {
+    fn spill_text_writes_file_and_keeps_the_tail() {
         let dir = tempfile::tempdir().unwrap();
         let spill = dir.path().join(".liberado").join("offload");
         let text = format!("{}MID{}", "A".repeat(3000), "Z".repeat(2000));
-        let (shown, path) = spill_oversized_result(&text, 100, &spill, "call-1");
+        let shown = run_tool_spill(&text, Some(&spill), 100, "call-1");
         assert!(shown.len() < text.len(), "preview shorter than body");
         assert!(shown.contains("truncated"));
         assert!(shown.contains("AAAA"), "head present");
         assert!(shown.contains("ZZZZ"), "tail present");
-        let rel = path.expect("must return a path");
-        assert_eq!(rel, ".liberado/offload/tool-spill-call-1.txt");
+        assert!(spill.join("tool-spill-call-1.txt").exists());
         let spilled = std::fs::read_to_string(spill.join("tool-spill-call-1.txt")).unwrap();
         assert_eq!(spilled, text);
     }
 
     #[test]
-    fn spill_oversized_result_distinct_labels_do_not_collide() {
+    fn spill_text_distinct_labels_do_not_collide() {
         let dir = tempfile::tempdir().unwrap();
+        let spill = dir.path().join(".liberado").join("offload");
         let text = "oversized content".repeat(1000);
-        let (_, a) = spill_oversized_result(&text, 10, dir.path(), "call-a");
-        let (_, b) = spill_oversized_result(&text, 10, dir.path(), "call-b");
-        assert_ne!(a, b);
-        assert!(dir.path().join("tool-spill-call-a.txt").exists());
-        assert!(dir.path().join("tool-spill-call-b.txt").exists());
+        run_tool_spill(&text, Some(&spill), 10, "call-a");
+        run_tool_spill(&text, Some(&spill), 10, "call-b");
+        assert!(spill.join("tool-spill-call-a.txt").exists());
+        assert!(spill.join("tool-spill-call-b.txt").exists());
     }
 
     #[test]
