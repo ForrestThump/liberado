@@ -41,7 +41,7 @@ check:
 
 # Full local CI. Linux runs the same per-function CRAP compare GitHub runs
 # (a score that went up fails and is named — fix it before you push).
-# Windows checks the 450 ceiling only; coverage is host-sensitive.
+# Windows checks the 150 ceiling only; coverage is host-sensitive.
 # The baseline is not rewritten while that check is red. On Linux success,
 # rewrite `crap-baseline.json`. If the tree is otherwise clean, a Linux
 # rewrite is amended onto HEAD. GitHub never writes that file.

@@ -120,14 +120,15 @@ fn initialize_and_session_new_over_stdio() {
     );
     assert_eq!(
         session["modes"]["currentModeId"], "coding",
-        "default mode is Liberado coding pack"
+        "default mode is interactive coding"
     );
     let modes = session["modes"]["availableModes"]
         .as_array()
         .expect("availableModes");
-    assert_eq!(modes.len(), 3, "coding · chat · face: {modes:?}");
+    assert_eq!(modes.len(), 4, "coding · goal · chat · face: {modes:?}");
     let mode_ids: Vec<&str> = modes.iter().filter_map(|m| m["id"].as_str()).collect();
     assert!(mode_ids.contains(&"coding"));
+    assert!(mode_ids.contains(&"goal"));
     assert!(mode_ids.contains(&"chat"));
     assert!(mode_ids.contains(&"face"));
 

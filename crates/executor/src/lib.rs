@@ -440,6 +440,13 @@ pub trait ToolRuntime: Send + Sync {
     fn is_read_only(&self, _tool_name: &str) -> bool {
         false
     }
+
+    /// After this tool returns, stop the conversational loop and wait for the
+    /// human's next message. The tool result is *not* written until that answer
+    /// arrives (ACP cannot overlap two `session/prompt`s).
+    fn parks_for_human(&self, _tool_name: &str) -> bool {
+        false
+    }
 }
 
 /// Failure building a [`ToolRuntime`] for an execution (connection/handshake/etc.).
@@ -557,6 +564,11 @@ pub enum ExecError {
     BudgetExceeded { resource: &'static str, turns: u32 },
     #[error("internal executor invariant violated: {0}")]
     Internal(&'static str),
+    /// Conversational loop stopped because a tool asked the human. The assistant
+    /// tool-call is already in `messages`; do not append a tool result until the
+    /// next user message arrives, then resume.
+    #[error("awaiting a human answer for tool call {call_id}")]
+    AwaitingHuman { call_id: String },
 }
 
 /// How a run terminates internally; each public mode yields exactly one variant.
@@ -1331,35 +1343,12 @@ impl Executor {
                 }
 
                 for call in &response.tool_calls {
-                    // A dropped receiver (client disconnected) just means no one is listening.
-                    let _ = events
-                        .send(AgentEvent::ToolStarted {
-                            name: call.name.clone(),
-                            args: preview(&call.arguments.to_string()),
-                        })
-                        .await;
-                    // Invoke directly (not via `run_tool`) so the outcome's ok/err is legible as its own
-                    // event; the history still gets the same string `run_tool` would have produced.
-                    self.mvl_tool_started(turn, call);
-                    let (ok, result) = match runtime.invoke(call).await {
-                        Ok(content) => (true, content),
-                        Err(message) => (false, format!("tool error: {message}")),
-                    };
-                    self.mvl_tool_result(turn, call, ok, &result);
-                    let shown = run_tool_spill(
-                        &result,
-                        self.spill_dir.as_deref(),
-                        self.spill_max_bytes,
-                        &call.id,
-                    );
-                    let _ = events
-                        .send(AgentEvent::ToolFinished {
-                            name: call.name.clone(),
-                            ok,
-                            preview: preview(&shown),
-                        })
-                        .await;
-                    messages.push(Message::tool_result(&call.id, shown));
+                    if let Some(call_id) = self
+                        .invoke_stream_tool(runtime, call, turn, events, messages)
+                        .await?
+                    {
+                        return Err(ExecError::AwaitingHuman { call_id });
+                    }
                 }
                 tracing::info!(turn, tools = response.tool_calls.len(), "turn used tools");
             }
@@ -1374,11 +1363,57 @@ impl Executor {
         }
         .await;
         if let Err(error) = &result
-            && !matches!(error, ExecError::BudgetExceeded { .. })
+            && !matches!(
+                error,
+                ExecError::BudgetExceeded { .. } | ExecError::AwaitingHuman { .. }
+            )
         {
             self.mvl_end("aborted", &error.to_string());
         }
         result
+    }
+
+    /// Run one streamed tool call. `Some(call_id)` means the tool parked for a human
+    /// and the result must *not* be appended until the next message.
+    async fn invoke_stream_tool(
+        &self,
+        runtime: &dyn ToolRuntime,
+        call: &ToolInvocation,
+        turn: u32,
+        events: &Sender<AgentEvent>,
+        messages: &mut Vec<Message>,
+    ) -> Result<Option<String>, ExecError> {
+        let _ = events
+            .send(AgentEvent::ToolStarted {
+                name: call.name.clone(),
+                args: preview(&call.arguments.to_string()),
+            })
+            .await;
+        self.mvl_tool_started(turn, call);
+        let (ok, result) = match runtime.invoke(call).await {
+            Ok(content) => (true, content),
+            Err(message) => (false, format!("tool error: {message}")),
+        };
+        let shown = run_tool_spill(
+            &result,
+            self.spill_dir.as_deref(),
+            self.spill_max_bytes,
+            &call.id,
+        );
+        let _ = events
+            .send(AgentEvent::ToolFinished {
+                name: call.name.clone(),
+                ok,
+                preview: preview(&shown),
+            })
+            .await;
+        if runtime.parks_for_human(&call.name) {
+            self.mvl_end("awaiting_human", &call.id);
+            return Ok(Some(call.id.clone()));
+        }
+        self.mvl_tool_result(turn, call, ok, &result);
+        messages.push(Message::tool_result(&call.id, shown));
+        Ok(None)
     }
 
     /// The turn loop shared by [`drive`](Self::drive) and
@@ -4940,6 +4975,78 @@ mod tests {
         assert!(
             msg.contains("BudgetExceeded") || msg.contains("turns"),
             "got: {msg}"
+        );
+    }
+
+    struct ParkOnAsk {
+        inner: MockToolRuntime,
+    }
+
+    #[async_trait]
+    impl ToolRuntime for ParkOnAsk {
+        fn catalog(&self) -> Vec<ToolDef> {
+            self.inner.catalog()
+        }
+        async fn invoke(&self, call: &ToolInvocation) -> Result<String, String> {
+            self.inner.invoke(call).await
+        }
+        fn parks_for_human(&self, name: &str) -> bool {
+            name == "ask_human"
+        }
+    }
+
+    #[tokio::test]
+    async fn converse_stream_parks_without_a_tool_result() {
+        let (_provider, exec) = executor(vec![call_tool("ask_human")], Budget::default());
+        let runtime = ParkOnAsk {
+            inner: MockToolRuntime::new(&["ask_human"], Ok("which crate?".into())),
+        };
+        let (tx, _rx) = tokio::sync::mpsc::channel(64);
+        let mut messages = vec![Message::system("sys"), Message::user("split this")];
+        let err = exec
+            .converse_stream(&runtime, &mut messages, &tx)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, ExecError::AwaitingHuman { ref call_id } if call_id == "c"),
+            "got {err:?}"
+        );
+        assert_eq!(messages.len(), 3, "no tool result until the human answers");
+        assert_eq!(messages[2].role, Role::Assistant);
+        assert!(
+            !messages.iter().any(|m| m.role == Role::Tool),
+            "parking must not invent a tool result"
+        );
+    }
+
+    #[tokio::test]
+    async fn converse_stream_resumes_after_the_human_answer() {
+        let (_provider, exec) = executor(
+            vec![
+                call_tool("ask_human"),
+                CompletionResponse::text("ok, crate A"),
+            ],
+            Budget::default(),
+        );
+        let runtime = ParkOnAsk {
+            inner: MockToolRuntime::new(&["ask_human"], Ok("which crate?".into())),
+        };
+        let (tx, _rx) = tokio::sync::mpsc::channel(64);
+        let mut messages = vec![Message::system("sys"), Message::user("split this")];
+        let err = exec
+            .converse_stream(&runtime, &mut messages, &tx)
+            .await
+            .unwrap_err();
+        let ExecError::AwaitingHuman { call_id } = err else {
+            panic!("expected park, got {err:?}");
+        };
+        messages.push(Message::tool_result(call_id, "crate A"));
+        exec.converse_stream(&runtime, &mut messages, &tx)
+            .await
+            .unwrap();
+        assert_eq!(
+            messages.last().map(|m| m.content.as_str()),
+            Some("ok, crate A")
         );
     }
 

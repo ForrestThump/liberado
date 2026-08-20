@@ -18,7 +18,7 @@
 //! its own work.
 //!
 //! Coverage is host-sensitive. Non-Linux `just ci` / `liberado ci crap` checks
-//! the 450 ceiling only (`--fail-above`). The per-function ratchet
+//! the 150 ceiling only (`--fail-above`). The per-function ratchet
 //! (`--fail-regression`) runs on Linux, which is GitHub's Ubuntu job.
 //!
 //! `just ci` is `cargo run -p liberado-cli -- ci`. On Windows, `cargo test` cannot
@@ -49,6 +49,9 @@ const VACATED_BIN: &str = "liberado-ci";
 const CI_LOG_FILE: &str = ".liberado/ci.log";
 const EXTRACT_MAX_LINES: usize = 80;
 
+/// New-function / `--fail-above` ceiling. Must match `.cargo-crap.toml` `threshold`.
+const CRAP_CEILING: &str = "150";
+
 /// llvm-cov flags live here, never after `--`. After `--` they become
 /// test-binary arguments, and libtest rejects them (`Unrecognized option`).
 /// `--ignore-run-fail` still writes the LCOV when a test is red (the test
@@ -68,15 +71,15 @@ const LLVM_COV_ARGS: &[&str] = &[
 /// Printed after `cargo crap` exits non-zero when a per-function score rose.
 const CRAP_REGRESSION_HINT: &str = "\
 CRAP check failed. A function's score went up vs crap-baseline.json \
-(per-function ratchet: 50 cannot become 60, even under the 450 ceiling). \
+(per-function ratchet: 50 cannot become 60, even under the 150 ceiling). \
 cargo-crap named the functions above. Split the function or add tests until \
 each score is at or below its baseline. Do not raise the baseline. \
 `just ci` will not rewrite it while this check is red. Fix locally, then push.";
 
 /// Printed after `cargo crap` exits non-zero when the baseline is still empty.
 const CRAP_CEILING_HINT: &str = "\
-CRAP check failed. A function is above the 450 ceiling (`--fail-above`). \
-Split it or add tests. New functions must land at or below 450.";
+CRAP check failed. A function is above the 150 ceiling (`--fail-above`). \
+Split it or add tests. New functions must land at or below 150.";
 
 /// One-line GitHub Actions annotation (newlines are not legal in `::error`).
 const CRAP_REGRESSION_GH: &str = "\
@@ -86,7 +89,7 @@ Linux `just ci` or this Ubuntu job is the check that matches the file.";
 
 /// Banner when this host is not Linux: do not run `--fail-regression` here.
 const CRAP_HOST_CEILING_ONLY: &str = "\
-[liberado ci] this host is not Linux — ceiling only (450). \
+[liberado ci] this host is not Linux — ceiling only (150). \
 GitHub's Ubuntu job runs the per-function ratchet.";
 
 const CRAP_EMPTY_BASELINE: &str = "\
@@ -95,11 +98,11 @@ A green Linux `liberado ci ratchet` fills the per-function ratchet.";
 
 const CRAP_COMPARE_SUMMARY: &str = "\
 [liberado ci] CRAP compare against crap-baseline.json \
-(per-function ratchet on Linux; 450 is the new-function ceiling)";
+(per-function ratchet on Linux; 150 is the new-function ceiling)";
 
 const CRAP_CEILING_GH: &str = "\
-A function is above the 450 CRAP ceiling. Split it or add tests. \
-New functions must land at or below 450.";
+A function is above the 150 CRAP ceiling. Split it or add tests. \
+New functions must land at or below 150.";
 
 /// Dispatch `liberado ci …`. No subcommand means the local full run (gates + ratchet).
 pub fn run(args: impl Iterator<Item = String>) -> Result<(), Box<dyn std::error::Error>> {
@@ -319,7 +322,15 @@ fn uses_per_function_ratchet(baseline_has_entries: bool) -> bool {
 }
 
 fn compare_args(fail_regression: bool) -> Vec<&'static str> {
-    let mut args = vec!["crap", "--workspace", "--lcov", LCOV_FILE, "--fail-above"];
+    let mut args = vec![
+        "crap",
+        "--workspace",
+        "--lcov",
+        LCOV_FILE,
+        "--fail-above",
+        "--threshold",
+        CRAP_CEILING,
+    ];
     if fail_regression {
         args.extend_from_slice(&["--baseline", BASELINE_FILE, "--fail-regression"]);
     }
@@ -753,13 +764,13 @@ fn repository_root() -> Result<PathBuf, Box<dyn std::error::Error>> {
 #[cfg(test)]
 mod tests {
     use super::{
-        BASELINE_FILE, CI_LOG_FILE, CRAP_CEILING_GH, CRAP_CEILING_HINT, CRAP_COMPARE_SUMMARY,
-        CRAP_EMPTY_BASELINE, CRAP_HOST_CEILING_ONLY, CRAP_REGRESSION_GH, CRAP_REGRESSION_HINT,
-        CiLog, EXTRACT_MAX_LINES, LCOV_FILE, LLVM_COV_ARGS, StageOutcome, USAGE, announce_compare,
-        baseline_has_entries, compare_args, compare_banners, crap_failure_hint, emit_crap_failure,
-        exe_lives_in_cargo_target, extract_ci_failures, git, porcelain_path, relativize_json_file,
-        relativize_lcov, repo_relative_source_path, repository_root, run_cmd,
-        stage_ratcheted_baseline, strip_ansi, uses_per_function_ratchet,
+        BASELINE_FILE, CI_LOG_FILE, CRAP_CEILING, CRAP_CEILING_GH, CRAP_CEILING_HINT,
+        CRAP_COMPARE_SUMMARY, CRAP_EMPTY_BASELINE, CRAP_HOST_CEILING_ONLY, CRAP_REGRESSION_GH,
+        CRAP_REGRESSION_HINT, CiLog, EXTRACT_MAX_LINES, LCOV_FILE, LLVM_COV_ARGS, StageOutcome,
+        USAGE, announce_compare, baseline_has_entries, compare_args, compare_banners,
+        crap_failure_hint, emit_crap_failure, exe_lives_in_cargo_target, extract_ci_failures, git,
+        porcelain_path, relativize_json_file, relativize_lcov, repo_relative_source_path,
+        repository_root, run_cmd, stage_ratcheted_baseline, strip_ansi, uses_per_function_ratchet,
     };
     use liberado_common::process::std_command;
     use std::fs;
@@ -1028,9 +1039,9 @@ error[E0425]: cannot find value `foo` in this scope
         assert!(CRAP_REGRESSION_HINT.contains("per-function"));
         assert!(CRAP_REGRESSION_HINT.contains("just ci"));
         assert!(CRAP_REGRESSION_HINT.contains("Do not raise the baseline"));
-        assert!(CRAP_CEILING_HINT.contains("450"));
+        assert!(CRAP_CEILING_HINT.contains(CRAP_CEILING));
         assert!(CRAP_REGRESSION_GH.contains("Ubuntu"));
-        assert!(CRAP_CEILING_GH.contains("450"));
+        assert!(CRAP_CEILING_GH.contains(CRAP_CEILING));
         assert!(CRAP_HOST_CEILING_ONLY.contains("ceiling only"));
         assert_eq!(crap_failure_hint(true), CRAP_REGRESSION_HINT);
         assert_eq!(crap_failure_hint(false), CRAP_CEILING_HINT);
@@ -1040,14 +1051,35 @@ error[E0425]: cannot find value `foo` in this scope
     }
 
     #[test]
-    fn compare_args_always_enforce_the_450_ceiling() {
+    fn compare_args_always_enforce_the_150_ceiling() {
         let ceiling = compare_args(false);
         assert!(ceiling.contains(&"--fail-above"));
+        assert!(ceiling.contains(&"--threshold"));
+        assert!(ceiling.contains(&CRAP_CEILING));
         assert!(!ceiling.contains(&"--fail-regression"));
         let ratchet = compare_args(true);
         assert!(ratchet.contains(&"--fail-above"));
+        assert!(ratchet.contains(&"--threshold"));
+        assert!(ratchet.contains(&CRAP_CEILING));
         assert!(ratchet.contains(&"--fail-regression"));
         assert!(ratchet.contains(&"--baseline"));
+    }
+
+    /// A toml that still names a higher ceiling would let `cargo crap` (no flags)
+    /// and this check disagree. The CI argv is explicit; the file must still
+    /// match so a bare `cargo crap --fail-above` is the same gate.
+    #[test]
+    fn cargo_crap_toml_threshold_matches_the_ci_ceiling() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(Path::parent)
+            .expect("crate is crates/cli");
+        let toml = std::fs::read_to_string(root.join(".cargo-crap.toml")).expect("toml");
+        let expected = format!("threshold = {CRAP_CEILING}.0");
+        assert!(
+            toml.contains(&expected),
+            ".cargo-crap.toml must set {expected}; got:\n{toml}"
+        );
     }
 
     #[test]

@@ -4,7 +4,7 @@
 # The committed ratchet lives in `crap-baseline.json`. GitHub only compares
 # against that file (`--fail-regression`). Coverage is host-sensitive: the
 # committed scores are Ubuntu's (the CRAP job's host). A green Linux
-# `just ci` rewrites the file. Windows checks the 450 ceiling only and
+# `just ci` rewrites the file. Windows checks the 150 ceiling only and
 # does not write: a Windows `--fail-regression` false-fails (explain_write
 # moved +127). Never write the baseline from GitHub Actions: a bot commit
 # races every open PR.
@@ -20,7 +20,7 @@
 #
 # `sort = file` keeps baseline diffs reviewable: a score change touches one
 # entry instead of reshuffling the whole file.
-threshold = 450.0
+threshold = 150.0
 fail-above = true
 missing = "skip"
 sort = "file"

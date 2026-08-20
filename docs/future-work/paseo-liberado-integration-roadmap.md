@@ -243,7 +243,7 @@ Only after P0–P3 feel good.
 
 | # | Slice | Notes |
 |---|--------|--------|
-| **P7.1** | Coding-pack path through ACP | Swap or dual-path `Conversation` → coder-agent session (goals, gates, worktrees). Large; may need ACP modes for goal lifecycle. |
+| **P7.1** | Coding-pack path through ACP | **Landed as a second mode, not a swap.** ACP `coding` is interactive `Conversation` + coding tools. ACP `goal` is the existing `LiberadoLoopBackend` one-shot. HTTP `POST /api/goals` is unchanged. |
 | **P7.2** | Checkpoints / preflight surface | Expose only if Paseo UX can show them; otherwise keep inside Liberado. |
 | **P7.3** | Vault MCP / face-agent | Explicitly out of ACP bridge v1; do not smuggle vault grants into coding cwd tools. |
 

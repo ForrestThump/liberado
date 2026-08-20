@@ -10,11 +10,12 @@
 //! | `session/prompt` | User turn; streams `session/update` chunks |
 //! | `session/cancel` | Abort the in-flight turn (notification) |
 //! | `session/load` | Advertised (`loadSession: true`); restores stored history into model conversation |
-//! | `session/set_mode` | Switch coding / chat / face (Liberado-owned; one Paseo provider) |
+//! | `session/set_mode` | Switch coding / goal / chat / face (Liberado-owned; one Paseo provider) |
 //! | `session/set_model` | Hot-swap the active model (must be in the live catalog) |
 //!
 //! Modes (same process; switch via ACP or `--mode` / `LIBERADO_ACP_MODE`):
-//! - **coding** — full coding pack + durable worktrees (default)
+//! - **coding** — interactive conversation + coding tools on a durable worktree (default)
+//! - **goal** — one-shot coding pack (`LiberadoLoopBackend`) to a terminal
 //! - **chat** — in-process conversation (no tools, no daemon)
 //! - **face** — daemon face agent (`liberado serve`; vault + delegate)
 //!
@@ -22,12 +23,13 @@
 //! ```text
 //! liberado-acp
 //! liberado-acp --mode chat
+//! liberado-acp --mode goal
 //! liberado-acp --mode face
 //! ```
 //!
 //! Environment:
 //! - `OPENROUTER_API_KEY` / `DEEPSEEK_API_KEY` / `OPENAI_API_KEY`
-//! - `LIBERADO_ACP_MODE` — default mode (`coding` \| `chat` \| `face`)
+//! - `LIBERADO_ACP_MODE` — default mode (`coding` \| `goal` \| `chat` \| `face`)
 //! - `LIBERADO_ACP_MODEL` — initial model id
 //! - `LIBERADO_ACP_MAX_TURNS` — per-launch override of `[acp] max_turns`
 //! - `LIBERADO_CONFIG_DIR` — optional Liberado config (topology + `[coder]` tuning)
@@ -37,7 +39,9 @@
 
 use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
+mod ask_human;
 mod coding_run;
+mod interactive;
 mod provider;
 mod session_store;
 mod stdin_guard;
@@ -54,9 +58,9 @@ use provider::{
 mod face_client;
 mod mode;
 
-use liberado_executor::{AgentEvent, Budget, Executor, ToolRuntime};
+use liberado_executor::{AgentEvent, Budget, ExecError, Executor, ToolRuntime};
 use liberado_main_agent::{Conversation, DEFAULT_SYSTEM_PROMPT};
-use liberado_provider::Provider;
+use liberado_provider::{Provider, Role};
 use mode::AgentMode;
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, BufReader};
@@ -85,9 +89,10 @@ const METHOD_NOT_FOUND_PREFIX: &str = "Method not found: ";
 struct AcpSession {
     mode: AgentMode,
     cwd: PathBuf,
+    /// One-shot pack state (mode=goal). Unused in interactive coding.
     coding: coding_run::CodingSessionState,
-    /// In-process chat (mode=chat).
-    chat: Option<Arc<SessionHandle>>,
+    /// In-process conversation (mode=coding with tools, or mode=chat without).
+    converse: Option<Arc<SessionHandle>>,
     /// Daemon conversation id (mode=face).
     face_daemon_session: Option<String>,
     /// Cooperative cancel for the in-flight turn (coding / chat / face).
@@ -134,6 +139,10 @@ struct SessionHandle {
     conversation: Mutex<Conversation>,
     executor: Executor,
     tools: Arc<dyn ToolRuntime>,
+    /// True when [`liberado_coder_tools::CodingToolRuntime`] is attached (interactive coding).
+    coding_tools: bool,
+    /// `ask_human` call id waiting for the next `session/prompt`, if any.
+    pending_ask: std::sync::Mutex<Option<String>>,
     cancel_tx: watch::Sender<bool>,
     cancel_rx: watch::Receiver<bool>,
 }
@@ -201,7 +210,10 @@ where
             "--mode" | "-m" => {
                 let val = args.get(i + 1).map(|s| s.as_str()).unwrap_or("");
                 if AgentMode::parse(val).is_none() {
-                    eprintln!("liberado-acp: unknown mode '{val}' (expected coding|chat|face)");
+                    eprintln!(
+                        "liberado-acp: unknown mode '{val}' (expected {})",
+                        AgentMode::EXPECTED
+                    );
                     return Some(2);
                 }
                 // SAFETY: `#[tokio::main]` has already started the multi-threaded runtime by
@@ -218,7 +230,10 @@ where
             other if other.starts_with("--mode=") => {
                 let val = other.trim_start_matches("--mode=");
                 if AgentMode::parse(val).is_none() {
-                    eprintln!("liberado-acp: unknown mode '{val}' (expected coding|chat|face)");
+                    eprintln!(
+                        "liberado-acp: unknown mode '{val}' (expected {})",
+                        AgentMode::EXPECTED
+                    );
                     return Some(2);
                 }
                 unsafe {
@@ -243,16 +258,17 @@ fn print_help() {
     println!(
         "liberado-acp {} — Liberado multi-mode ACP agent for Paseo\n\n\
          Usage:\n\
-           liberado-acp [--mode coding|chat|face]   ACP on stdin/stdout\n\
+           liberado-acp [--mode coding|goal|chat|face]   ACP on stdin/stdout\n\
            liberado-acp --version\n\
            liberado-acp --help\n\n\
          Modes (Liberado-owned; also switchable via ACP session/set_mode):\n\
-           coding  Full coding pack + worktrees (default)\n\
-           chat    In-process conversation (no daemon)\n\
+           coding  Interactive conversation + coding tools (default)\n\
+           goal    One-shot /goal coding pack (run to a terminal)\n\
+           chat    In-process conversation, no file tools\n\
            face    Daemon face agent — needs liberado serve (LIBERADO_SERVER)\n\n\
          Environment:\n\
            OPENROUTER_API_KEY / DEEPSEEK_API_KEY / OPENAI_API_KEY\n\
-           LIBERADO_ACP_MODE           default mode (coding|chat|face)\n\
+           LIBERADO_ACP_MODE           default mode (coding|goal|chat|face)\n\
            LIBERADO_ACP_MODEL          initial model id\n\
            LIBERADO_ACP_MAX_TURNS      coder turns per prompt (default 50)\n\
            LIBERADO_CONFIG_DIR         Liberado config ([coder] tuning)\n\
@@ -647,8 +663,8 @@ async fn request_session_cancel(bridge: &Bridge, sid: &str) {
     let sessions = bridge.acp_sessions.lock().await;
     if let Some(sess) = sessions.get(sid) {
         let _ = sess.cancel_tx.send(true);
-        if let Some(chat) = &sess.chat {
-            let _ = chat.cancel_tx.send(true);
+        if let Some(converse) = &sess.converse {
+            let _ = converse.cancel_tx.send(true);
         }
         tracing::info!(
             session_id = %sid,
@@ -766,20 +782,6 @@ async fn handle_session_new(bridge: &Bridge, params: &Value) -> Result<Value, St
     let sid = new_session_id();
     let mode = bridge.default_mode;
     let (cancel_tx, cancel_rx) = watch::channel(false);
-    let chat = if mode == AgentMode::Chat {
-        open_chat_session(
-            &sid,
-            cwd.clone(),
-            Arc::clone(&bridge.provider),
-            bridge.max_turns,
-            bridge.system_prompt.clone(),
-            &[],
-        )
-        .ok()
-        .map(Arc::new)
-    } else {
-        None
-    };
     let model = bridge.current_model.lock().await.clone();
     bridge.acp_sessions.lock().await.insert(
         sid.clone(),
@@ -793,7 +795,7 @@ async fn handle_session_new(bridge: &Bridge, params: &Value) -> Result<Value, St
                 last_summary: None,
                 rounds: 0,
             },
-            chat,
+            converse: None,
             face_daemon_session: None,
             cancel_tx,
             cancel_rx,
@@ -874,22 +876,6 @@ async fn handle_session_load(
     *bridge.current_model.lock().await = record.model.clone();
 
     let (cancel_tx, cancel_rx) = watch::channel(false);
-    let chat = if mode == AgentMode::Chat {
-        open_chat_session(
-            sid,
-            record.cwd.clone(),
-            Arc::clone(&bridge.provider),
-            bridge.max_turns,
-            bridge.system_prompt.clone(),
-            // The one call site where history is not empty. Everything else about a load
-            // is cosmetic if this argument is.
-            &record.messages,
-        )
-        .ok()
-        .map(Arc::new)
-    } else {
-        None
-    };
 
     let cwd = record.cwd.clone();
     bridge.acp_sessions.lock().await.insert(
@@ -904,21 +890,14 @@ async fn handle_session_load(
                 last_summary: None,
                 rounds: 0,
             },
-            chat,
+            converse: None,
             face_daemon_session: None,
             cancel_tx,
             cancel_rx,
         },
     );
-
-    // Replay the stored transcript so the editor shows the conversation.
-    for msg in &record.messages {
-        match msg.role.as_str() {
-            "user" => emit_user_message_chunk(sink, sid, &msg.content)?,
-            "assistant" => emit_agent_text_chunk(sink, sid, &msg.content)?,
-            _ => {}
-        }
-    }
+    restore_loaded_converse(bridge, sid, mode).await;
+    replay_loaded_messages(sink, sid, &record.messages)?;
 
     tracing::info!(
         session_id = %sid,
@@ -937,6 +916,30 @@ async fn handle_session_load(
     ))
 }
 
+async fn restore_loaded_converse(bridge: &Bridge, sid: &str, mode: AgentMode) {
+    if !mode.is_converse() {
+        return;
+    }
+    if let Err(e) = ensure_converse(bridge, sid).await {
+        tracing::warn!(session_id = %sid, error = %e, "session/load: failed to restore converse");
+    }
+}
+
+fn replay_loaded_messages(
+    sink: &dyn WireSink,
+    sid: &str,
+    messages: &[session_store::StoredMessage],
+) -> Result<(), String> {
+    for msg in messages {
+        match msg.role.as_str() {
+            "user" => emit_user_message_chunk(sink, sid, &msg.content)?,
+            "assistant" => emit_agent_text_chunk(sink, sid, &msg.content)?,
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
 /// `session/set_mode`: switch a live session's agent mode, lazy-initializing the chat handle when
 /// entering chat, and persisting the change (soft).
 async fn handle_set_mode(bridge: &Bridge, params: &Value) -> Result<Value, String> {
@@ -949,33 +952,32 @@ async fn handle_set_mode(bridge: &Bridge, params: &Value) -> Result<Value, Strin
         .and_then(|v| v.as_str())
         .ok_or("missing modeId")?;
     let mode = AgentMode::parse(mode_id)
-        .ok_or_else(|| format!("unknown modeId '{mode_id}' (coding|chat|face)"))?;
-    let mut map = bridge.acp_sessions.lock().await;
-    let sess = map
-        .get_mut(sid)
-        .ok_or_else(|| format!("unknown sessionId '{sid}'"))?;
-    if sess.mode != mode {
-        tracing::info!(session_id = %sid, from = %sess.mode.id(), to = %mode.id(), "session/set_mode");
-        sess.mode = mode;
-        // Lazy-init chat handle when switching into chat.
-        if mode == AgentMode::Chat && sess.chat.is_none() {
-            sess.chat = open_chat_session(
-                sid,
-                sess.cwd.clone(),
-                Arc::clone(&bridge.provider),
-                bridge.max_turns,
-                bridge.system_prompt.clone(),
-                &[],
-            )
-            .ok()
-            .map(Arc::new);
-        }
-        // Persist the mode change (soft - failure never fails the turn).
-        if let Err(e) = session_store::update_mode(sid, mode.id()) {
-            tracing::warn!(session_id = %sid, error = %e, "session/set_mode: failed to update persisted mode");
+        .ok_or_else(|| format!("unknown modeId '{mode_id}' ({})", AgentMode::EXPECTED))?;
+    apply_live_mode(bridge, sid, mode).await?;
+    Ok(json!({}))
+}
+
+async fn apply_live_mode(bridge: &Bridge, sid: &str, mode: AgentMode) -> Result<(), String> {
+    {
+        let mut map = bridge.acp_sessions.lock().await;
+        let sess = map
+            .get_mut(sid)
+            .ok_or_else(|| format!("unknown sessionId '{sid}'"))?;
+        if sess.mode != mode {
+            tracing::info!(session_id = %sid, from = %sess.mode.id(), to = %mode.id(), "session/set_mode");
+            sess.mode = mode;
+            if !mode.is_converse() {
+                sess.converse = None;
+            }
+            if let Err(e) = session_store::update_mode(sid, mode.id()) {
+                tracing::warn!(session_id = %sid, error = %e, "session/set_mode: failed to update persisted mode");
+            }
         }
     }
-    Ok(json!({}))
+    if mode.is_converse() {
+        ensure_converse(bridge, sid).await?;
+    }
+    Ok(())
 }
 
 /// `session/set_model`: validate the model against the live catalog (extending it when the id is
@@ -1070,8 +1072,8 @@ async fn run_session_prompt(
             .get(&sid)
             .ok_or_else(|| format!("unknown sessionId '{sid}'"))?;
         let _ = sess.cancel_tx.send(false);
-        if let Some(chat) = &sess.chat {
-            let _ = chat.cancel_tx.send(false);
+        if let Some(converse) = &sess.converse {
+            let _ = converse.cancel_tx.send(false);
         }
         sess.mode
     };
@@ -1083,8 +1085,10 @@ async fn run_session_prompt(
     };
 
     let result = match mode {
-        AgentMode::Coding => run_coding_prompt(Arc::clone(&bridge), &capturing, &sid, &text).await,
-        AgentMode::Chat => run_chat_prompt(Arc::clone(&bridge), &capturing, &sid, &text).await,
+        AgentMode::Coding | AgentMode::Chat => {
+            run_converse_prompt(Arc::clone(&bridge), &capturing, &sid, &text).await
+        }
+        AgentMode::Goal => run_goal_prompt(Arc::clone(&bridge), &capturing, &sid, &text).await,
         AgentMode::Face => run_face_prompt(Arc::clone(&bridge), &capturing, &sid, &text).await,
     };
 
@@ -1097,7 +1101,7 @@ async fn run_session_prompt(
     result
 }
 
-/// Full coding pack path: LiberadoLoopBackend + durable worktree (same engine as goals).
+/// One-shot `/goal` path: LiberadoLoopBackend + durable worktree (ACP mode `goal`).
 /// Cancel the run: preserve the dirty tree, say so, and end the turn.
 async fn cancel_and_preserve(sink: &dyn WireSink, sid: &str, workspace: &std::path::Path) -> Value {
     let note = match coding_run::preserve_worktree(workspace, "cancelled").await {
@@ -1134,7 +1138,7 @@ async fn finish_coding_run(
     Ok(())
 }
 
-async fn run_coding_prompt(
+async fn run_goal_prompt(
     bridge: Arc<Bridge>,
     sink: &dyn WireSink,
     sid: &str,
@@ -1415,35 +1419,14 @@ fn render_coding_event(
     Ok(())
 }
 
-/// In-process chat: Conversation + Executor, no coding tools.
-async fn run_chat_prompt(
+/// Interactive coding or chat: lasting Conversation + Executor. Coding attaches tools.
+async fn run_converse_prompt(
     bridge: Arc<Bridge>,
     sink: &dyn WireSink,
     sid: &str,
     text: &str,
 ) -> Result<Value, String> {
-    let session = {
-        let mut map = bridge.acp_sessions.lock().await;
-        let sess = map
-            .get_mut(sid)
-            .ok_or_else(|| format!("unknown sessionId '{sid}'"))?;
-        if sess.chat.is_none() {
-            sess.chat = open_chat_session(
-                sid,
-                sess.cwd.clone(),
-                Arc::clone(&bridge.provider),
-                bridge.max_turns,
-                bridge.system_prompt.clone(),
-                &[],
-            )
-            .ok()
-            .map(Arc::new);
-        }
-        sess.chat
-            .clone()
-            .ok_or_else(|| "failed to open chat session".to_string())?
-    };
-
+    let session = ensure_converse(&bridge, sid).await?;
     let stop = run_prompt_turn(session, text.to_string(), sink).await?;
     Ok(json!({ "stopReason": stop }))
 }
@@ -1493,33 +1476,139 @@ async fn run_face_prompt(
     }
 }
 
-/// Pure chat session: conversation + executor, no coding tools.
-/// Open a chat session, optionally seeded with a stored transcript.
+/// Open or rebuild the converse handle so it matches the session's current mode.
+///
+/// Interactive coding and chat share this handle. A mode switch that changes whether
+/// coding tools are attached rebuilds the conversation, keeping user/assistant turns.
+async fn ensure_converse(bridge: &Bridge, sid: &str) -> Result<Arc<SessionHandle>, String> {
+    let (mode, cwd, reuse, live_history) = {
+        let map = bridge.acp_sessions.lock().await;
+        let sess = map
+            .get(sid)
+            .ok_or_else(|| format!("unknown sessionId '{sid}'"))?;
+        if !sess.mode.is_converse() {
+            return Err(format!(
+                "mode '{}' is not a conversation (coding|chat)",
+                sess.mode.id()
+            ));
+        }
+        let want_tools = sess.mode.uses_coding_tools();
+        match &sess.converse {
+            Some(handle) if handle.coding_tools == want_tools => (
+                sess.mode,
+                sess.cwd.clone(),
+                Some(Arc::clone(handle)),
+                Vec::new(),
+            ),
+            Some(handle) => {
+                let history = snapshot_turns(&handle.conversation);
+                (sess.mode, sess.cwd.clone(), None, history)
+            }
+            None => (sess.mode, sess.cwd.clone(), None, Vec::new()),
+        }
+    };
+    if let Some(handle) = reuse {
+        return Ok(handle);
+    }
+
+    let stored = if live_history.is_empty() {
+        session_store::load(sid)
+            .ok()
+            .flatten()
+            .map(|r| r.messages)
+            .unwrap_or_default()
+    } else {
+        live_history
+    };
+
+    let handle = if mode.uses_coding_tools() {
+        let parts = interactive::prepare_coding_converse(
+            &cwd,
+            sid,
+            &bridge.coder_tuning,
+            ask_human::may_ask_human(&bridge.local_grant),
+        )
+        .await?;
+        open_handle(
+            sid,
+            Arc::clone(&bridge.provider),
+            bridge.max_turns,
+            parts.system,
+            &stored,
+            parts.tools,
+            true,
+        )
+    } else {
+        open_handle(
+            sid,
+            Arc::clone(&bridge.provider),
+            bridge.max_turns,
+            chat_system_prompt(&cwd, bridge.system_prompt.as_deref()),
+            &stored,
+            Arc::new(NoTools),
+            false,
+        )
+    };
+    let handle = Arc::new(handle);
+    if let Some(sess) = bridge.acp_sessions.lock().await.get_mut(sid) {
+        sess.converse = Some(Arc::clone(&handle));
+    }
+    Ok(handle)
+}
+
+fn snapshot_turns(conversation: &Mutex<Conversation>) -> Vec<session_store::StoredMessage> {
+    let Ok(convo) = conversation.try_lock() else {
+        return Vec::new();
+    };
+    convo
+        .messages()
+        .iter()
+        .filter(|m| matches!(m.role, Role::User | Role::Assistant) && !m.content.is_empty())
+        .map(|m| session_store::StoredMessage {
+            role: match m.role {
+                Role::User => "user".into(),
+                Role::Assistant => "assistant".into(),
+                _ => "assistant".into(),
+            },
+            content: m.content.clone(),
+        })
+        .collect()
+}
+
+fn chat_system_prompt(cwd: &std::path::Path, configured: Option<&str>) -> String {
+    configured
+        .map(str::to_string)
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| {
+            format!(
+                "{DEFAULT_SYSTEM_PROMPT}\n\n\
+                 You are Liberado chat (ACP). Workspace context path: {}.\n\
+                 This mode is conversational only — no file tools. For interactive coding, switch \
+                 mode to **coding**. For an unattended /goal run, switch to **goal**. For \
+                 vault/delegate, switch to **face** (daemon required).",
+                cwd.display()
+            )
+        })
+}
+
+/// Open a converse session, optionally seeded with a stored transcript.
 ///
 /// `history` is what makes a resume a resume. Replaying the transcript to the *client* only
 /// repaints the editor; if the conversation the model sees starts empty, the user is looking at
 /// their own history while the agent has none of it. That is the exact failure `loadSession:
 /// false` was chosen to avoid — and it is worse once the flag says `true`, because the interface
 /// now claims the memory is there.
-fn open_chat_session(
+fn open_handle(
     session_id: &str,
-    cwd: PathBuf,
     provider: Arc<dyn Provider>,
     max_turns: u32,
-    system_prompt: Option<String>,
+    system: String,
     history: &[session_store::StoredMessage],
-) -> Result<SessionHandle, String> {
-    let system = system_prompt.unwrap_or_else(|| {
-        format!(
-            "{DEFAULT_SYSTEM_PROMPT}\n\n\
-             You are Liberado chat (ACP). Workspace context path: {}.\n\
-             This mode is conversational only — no file tools. For coding work, switch mode to \
-             **coding**. For vault/delegate face agent, switch to **face** (daemon required).",
-            cwd.display()
-        )
-    });
+    tools: Arc<dyn ToolRuntime>,
+    coding_tools: bool,
+) -> SessionHandle {
     let (cancel_tx, cancel_rx) = watch::channel(false);
-    Ok(SessionHandle {
+    SessionHandle {
         id: session_id.to_string(),
         conversation: Mutex::new(if history.is_empty() {
             Conversation::new(system)
@@ -1537,12 +1626,13 @@ fn open_chat_session(
             }
             Conversation::from_history(messages)
         }),
-        // Chat uses executor budget = max_turns (not the hardcoded default of 8).
         executor: Executor::new(provider, Budget::new(max_turns)),
-        tools: Arc::new(NoTools),
+        tools,
+        coding_tools,
+        pending_ask: std::sync::Mutex::new(None),
         cancel_tx,
         cancel_rx,
-    })
+    }
 }
 
 fn session_state_payload(
@@ -1711,23 +1801,8 @@ async fn run_prompt_turn(
     let turn_session = Arc::clone(&session);
 
     let turn = tokio::spawn(async move {
-        let mut convo = turn_session.conversation.lock().await;
-        let result = convo
-            .turn_stream(
-                &turn_session.executor,
-                turn_session.tools.as_ref(),
-                &text,
-                &event_tx,
-            )
-            .await;
-        match &result {
-            Ok(()) => {
-                let _ = event_tx.send(AgentEvent::Done).await;
-            }
-            Err(e) => {
-                let _ = event_tx.send(AgentEvent::Error(e.to_string())).await;
-            }
-        }
+        let result = drive_converse_turn(&turn_session, &text, &event_tx).await;
+        let _ = event_tx.send(converse_terminal_event(&result)).await;
         result
     });
 
@@ -1780,8 +1855,62 @@ async fn run_prompt_turn(
         }
     }
 
-    let _ = turn.await;
+    remember_parked_ask(&session, turn.await);
     Ok(stop_reason)
+}
+
+fn converse_terminal_event(result: &Result<(), ExecError>) -> AgentEvent {
+    match result {
+        Ok(()) | Err(ExecError::AwaitingHuman { .. }) => AgentEvent::Done,
+        Err(e) => AgentEvent::Error(e.to_string()),
+    }
+}
+
+fn remember_parked_ask(
+    session: &SessionHandle,
+    joined: Result<Result<(), ExecError>, tokio::task::JoinError>,
+) {
+    let Ok(Err(ExecError::AwaitingHuman { call_id })) = joined else {
+        return;
+    };
+    if let Ok(mut pending) = session.pending_ask.lock() {
+        *pending = Some(call_id);
+    }
+}
+
+/// One converse drive: either a fresh user turn or the answer to a parked `ask_human`.
+async fn drive_converse_turn(
+    session: &SessionHandle,
+    text: &str,
+    events: &tokio::sync::mpsc::Sender<AgentEvent>,
+) -> Result<(), ExecError> {
+    let pending = session.pending_ask.lock().ok().and_then(|mut g| g.take());
+    let mut convo = session.conversation.lock().await;
+    let result = if let Some(call_id) = pending.as_ref() {
+        convo
+            .resume_stream(
+                &session.executor,
+                session.tools.as_ref(),
+                call_id,
+                text,
+                events,
+            )
+            .await
+    } else {
+        convo
+            .turn_stream(&session.executor, session.tools.as_ref(), text, events)
+            .await
+    };
+    if let Err(ExecError::AwaitingHuman { .. }) = &result {
+        return result;
+    }
+    if result.is_err()
+        && let Some(call_id) = pending
+        && let Ok(mut g) = session.pending_ask.lock()
+    {
+        *g = Some(call_id);
+    }
+    result
 }
 
 /// Allocate a stable `toolCallId` for a started tool and record it for the matching finish.
@@ -2018,7 +2147,14 @@ mod tests {
             "deepseek/deepseek-v4-flash"
         );
         assert_eq!(v["modes"]["currentModeId"], "coding");
-        assert_eq!(v["modes"]["availableModes"].as_array().unwrap().len(), 3);
+        assert_eq!(v["modes"]["availableModes"].as_array().unwrap().len(), 4);
+        let ids: Vec<&str> = v["modes"]["availableModes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|m| m["id"].as_str())
+            .collect();
+        assert_eq!(ids, ["coding", "goal", "chat", "face"]);
     }
 
     #[test]
@@ -2058,8 +2194,12 @@ mod tests {
     /// A Bridge with a scripted provider — enough to drive `handle_request` in tests.
     fn test_bridge() -> Arc<Bridge> {
         use liberado_provider::MockProvider;
+        test_bridge_with(Arc::new(MockProvider::with_script("mock", [])))
+    }
+
+    fn test_bridge_with(provider: Arc<dyn Provider>) -> Arc<Bridge> {
         Arc::new(Bridge {
-            provider: Arc::new(MockProvider::with_script("mock", [])),
+            provider,
             backend: "mock".into(),
             catalog: Mutex::new(Vec::new()),
             current_model: Mutex::new("mock-model".into()),
@@ -2187,6 +2327,8 @@ mod tests {
         assert_eq!(handle_cli_args(["--mode", "chat"]), None);
         assert_eq!(handle_cli_args(["--mode=face"]), None);
         assert_eq!(handle_cli_args(["-m", "coding"]), None);
+        assert_eq!(handle_cli_args(["--mode", "goal"]), None);
+        assert_eq!(handle_cli_args(["--mode=goal"]), None);
     }
 
     #[test]
@@ -2237,6 +2379,8 @@ mod tests {
             conversation: Mutex::new(Conversation::new("test system")),
             executor: Executor::new(provider, Budget::new(8)),
             tools: Arc::new(NoTools),
+            coding_tools: false,
+            pending_ask: std::sync::Mutex::new(None),
             cancel_tx: cancel_tx.clone(),
             cancel_rx,
         });
@@ -2328,6 +2472,8 @@ mod tests {
             conversation: Mutex::new(Conversation::new("test system")),
             executor: Executor::new(provider, Budget::new(8)),
             tools: Arc::new(EchoTool),
+            coding_tools: false,
+            pending_ask: std::sync::Mutex::new(None),
             cancel_tx,
             cancel_rx,
         });
@@ -2627,8 +2773,8 @@ mod tests {
         let sessions = bridge.acp_sessions.lock().await;
         let chat = sessions
             .get("lib-memory")
-            .and_then(|s| s.chat.clone())
-            .expect("chat mode must have a live chat session after load");
+            .and_then(|s| s.converse.clone())
+            .expect("chat mode must have a live converse session after load");
         let convo = chat.conversation.lock().await;
         // `transient` is 0 on a freshly built conversation, so this is every message it holds.
         let messages = convo.turn_tail(0);
@@ -2789,5 +2935,389 @@ mod tests {
             updates.contains(&"tool_call".into()) && updates.contains(&"tool_call_update".into()),
             "tool start/finish must render as tool entries: {updates:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn two_converse_turns_keep_prior_replies() {
+        use liberado_provider::{CompletionResponse, MockProvider};
+        let provider = Arc::new(MockProvider::with_script(
+            "mock",
+            [
+                CompletionResponse::text("first reply"),
+                CompletionResponse::text("second reply"),
+            ],
+        ));
+        let (cancel_tx, cancel_rx) = watch::channel(false);
+        let session = Arc::new(SessionHandle {
+            id: "sess-turns".into(),
+            conversation: Mutex::new(Conversation::new("sys")),
+            executor: Executor::new(provider, Budget::new(8)),
+            tools: Arc::new(NoTools),
+            coding_tools: false,
+            pending_ask: std::sync::Mutex::new(None),
+            cancel_tx,
+            cancel_rx,
+        });
+        let sink = CaptureSink {
+            lines: std::sync::Mutex::new(Vec::new()),
+        };
+        let stop1 = run_prompt_turn(Arc::clone(&session), "one".into(), &sink)
+            .await
+            .unwrap();
+        let stop2 = run_prompt_turn(Arc::clone(&session), "two".into(), &sink)
+            .await
+            .unwrap();
+        assert_eq!(stop1, "end_turn");
+        assert_eq!(stop2, "end_turn");
+        let convo = session.conversation.lock().await;
+        let text: String = convo
+            .messages()
+            .iter()
+            .map(|m| m.content.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            text.contains("one") && text.contains("first reply"),
+            "first turn must remain: {text}"
+        );
+        assert!(
+            text.contains("two") && text.contains("second reply"),
+            "second turn must append, not replace: {text}"
+        );
+    }
+
+    #[tokio::test]
+    async fn ask_human_parks_and_the_next_prompt_is_the_answer() {
+        use liberado_provider::{CompletionResponse, MockProvider, ToolInvocation};
+        let provider = Arc::new(MockProvider::with_script(
+            "mock",
+            [
+                CompletionResponse::tool_calls(vec![ToolInvocation::new(
+                    "ask-1",
+                    ask_human::ASK_HUMAN_TOOL,
+                    json!({ "question": "Which crate?" }),
+                )]),
+                CompletionResponse::text("using acp-bridge"),
+            ],
+        ));
+        let (cancel_tx, cancel_rx) = watch::channel(false);
+        let session = Arc::new(SessionHandle {
+            id: "sess-ask".into(),
+            conversation: Mutex::new(Conversation::new("sys")),
+            executor: Executor::new(provider, Budget::new(8)),
+            tools: ask_human::wrap(Arc::new(EchoTool), true),
+            coding_tools: true,
+            pending_ask: std::sync::Mutex::new(None),
+            cancel_tx,
+            cancel_rx,
+        });
+        let sink = CaptureSink {
+            lines: std::sync::Mutex::new(Vec::new()),
+        };
+        let stop1 = run_prompt_turn(Arc::clone(&session), "split this".into(), &sink)
+            .await
+            .unwrap();
+        assert_eq!(stop1, "end_turn");
+        let parked = session.pending_ask.lock().unwrap().clone();
+        assert_eq!(parked.as_deref(), Some("ask-1"));
+        let stop2 = run_prompt_turn(Arc::clone(&session), "acp-bridge".into(), &sink)
+            .await
+            .unwrap();
+        assert_eq!(stop2, "end_turn");
+        assert!(session.pending_ask.lock().unwrap().is_none());
+        let convo = session.conversation.lock().await;
+        let text: String = convo
+            .messages()
+            .iter()
+            .map(|m| format!("{:?}:{}", m.role, m.content))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            text.contains("acp-bridge"),
+            "answer must land as the tool result: {text}"
+        );
+        assert!(
+            text.contains("using acp-bridge"),
+            "model must continue after the answer: {text}"
+        );
+    }
+
+    #[tokio::test]
+    async fn coding_prompt_is_a_converse_turn_not_a_pack_run() {
+        use liberado_provider::{CompletionResponse, MockProvider};
+        let store = TempDir::new().unwrap();
+        let _guards = lock_sessions_dir(&store);
+        let cwd = TempDir::new().unwrap();
+        let bridge = test_bridge_with(Arc::new(MockProvider::with_script(
+            "mock",
+            [CompletionResponse::text("hello from converse")],
+        )));
+        let created = handle_session_new(&bridge, &json!({ "cwd": cwd.path() }))
+            .await
+            .unwrap();
+        let sid = created["sessionId"].as_str().unwrap().to_string();
+        let sink: Arc<dyn WireSink> = Arc::new(CaptureSink {
+            lines: std::sync::Mutex::new(Vec::new()),
+        });
+        let result = run_session_prompt(
+            Arc::clone(&bridge),
+            sink,
+            json!({ "sessionId": sid, "prompt": [{ "type": "text", "text": "hi" }] }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(result["stopReason"], "end_turn");
+        // Persistence captures agent_message_chunk text. The pack path announces itself;
+        // converse does not.
+        let stored = session_store::load(&sid)
+            .ok()
+            .flatten()
+            .expect("prompt persists");
+        let assistant: String = stored
+            .messages
+            .iter()
+            .filter(|m| m.role == "assistant")
+            .map(|m| m.content.as_str())
+            .collect::<Vec<_>>()
+            .join("");
+        assert!(
+            assistant.contains("hello from converse"),
+            "the model reply must reach the wire: {assistant:?}"
+        );
+        assert!(
+            !assistant.contains("Starting Liberado coding pack"),
+            "coding mode must not fire the one-shot pack: {assistant:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn coding_mode_attaches_coding_tools_on_a_real_workspace() {
+        let store = TempDir::new().unwrap();
+        let _guards = lock_sessions_dir(&store);
+        let cwd = TempDir::new().unwrap();
+        let bridge = test_bridge();
+        let created = handle_session_new(&bridge, &json!({ "cwd": cwd.path() }))
+            .await
+            .unwrap();
+        let sid = created["sessionId"].as_str().unwrap().to_string();
+        assert_eq!(created["modes"]["currentModeId"], "coding");
+        let handle = ensure_converse(&bridge, &sid).await.unwrap();
+        assert!(
+            handle.coding_tools,
+            "interactive coding must attach the pack's tools"
+        );
+        let names: Vec<String> = handle.tools.catalog().into_iter().map(|t| t.name).collect();
+        assert!(names.contains(&"read_file".into()), "{names:?}");
+        assert!(
+            !names.contains(&"submit_report".into()),
+            "converse must not offer the pack terminator: {names:?}"
+        );
+    }
+
+    #[test]
+    fn snapshot_turns_keeps_user_and_assistant_prose() {
+        let convo = Mutex::new(Conversation::from_history(vec![
+            liberado_provider::Message::system("sys"),
+            liberado_provider::Message::user("hello"),
+            liberado_provider::Message::assistant("hi"),
+            liberado_provider::Message::tool_result("t1", "ignored"),
+            liberado_provider::Message::user(""),
+        ]));
+        let turns = snapshot_turns(&convo);
+        assert_eq!(
+            turns
+                .iter()
+                .map(|m| (m.role.as_str(), m.content.as_str()))
+                .collect::<Vec<_>>(),
+            vec![("user", "hello"), ("assistant", "hi")]
+        );
+    }
+
+    #[test]
+    fn chat_system_prompt_uses_configured_text_when_present() {
+        assert_eq!(
+            chat_system_prompt(PathBuf::from("/ws").as_path(), Some("custom chat")),
+            "custom chat"
+        );
+        let fallback = chat_system_prompt(PathBuf::from("/ws").as_path(), Some("  "));
+        assert!(
+            fallback.contains("no file tools"),
+            "whitespace-only config must fall back: {fallback}"
+        );
+        assert!(fallback.contains("/ws"), "{fallback}");
+    }
+
+    #[tokio::test]
+    async fn ensure_converse_refuses_goal_mode() {
+        let store = TempDir::new().unwrap();
+        let _guards = lock_sessions_dir(&store);
+        let cwd = TempDir::new().unwrap();
+        let bridge = test_bridge();
+        let created = handle_session_new(&bridge, &json!({ "cwd": cwd.path() }))
+            .await
+            .unwrap();
+        let sid = created["sessionId"].as_str().unwrap().to_string();
+        handle_set_mode(&bridge, &json!({ "sessionId": sid, "modeId": "goal" }))
+            .await
+            .unwrap();
+        let err = ensure_converse(&bridge, &sid)
+            .await
+            .err()
+            .expect("goal is not converse");
+        assert!(
+            err.contains("not a conversation"),
+            "must refuse the pack mode, got: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn set_mode_chat_rebuilds_without_tools_and_keeps_turns() {
+        use liberado_provider::{CompletionResponse, MockProvider};
+        let store = TempDir::new().unwrap();
+        let _guards = lock_sessions_dir(&store);
+        let cwd = TempDir::new().unwrap();
+        let bridge = test_bridge_with(Arc::new(MockProvider::with_script(
+            "mock",
+            [CompletionResponse::text("working on it")],
+        )));
+        let created = handle_session_new(&bridge, &json!({ "cwd": cwd.path() }))
+            .await
+            .unwrap();
+        let sid = created["sessionId"].as_str().unwrap().to_string();
+        let sink: Arc<dyn WireSink> = Arc::new(CaptureSink {
+            lines: std::sync::Mutex::new(Vec::new()),
+        });
+        run_session_prompt(
+            Arc::clone(&bridge),
+            sink,
+            json!({
+                "sessionId": sid,
+                "prompt": [{ "type": "text", "text": "fix the test" }]
+            }),
+        )
+        .await
+        .unwrap();
+
+        handle_set_mode(&bridge, &json!({ "sessionId": sid, "modeId": "chat" }))
+            .await
+            .unwrap();
+
+        let map = bridge.acp_sessions.lock().await;
+        let sess = map.get(&sid).unwrap();
+        assert_eq!(sess.mode, AgentMode::Chat);
+        let handle = sess
+            .converse
+            .clone()
+            .expect("chat mode must keep a converse handle");
+        assert!(
+            !handle.coding_tools,
+            "chat must not keep the coding tool runtime"
+        );
+        let convo = handle.conversation.lock().await;
+        let text: String = convo
+            .messages()
+            .iter()
+            .map(|m| m.content.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(text.contains("fix the test"), "{text}");
+        assert!(text.contains("working on it"), "{text}");
+    }
+
+    #[tokio::test]
+    async fn set_mode_goal_drops_converse() {
+        let store = TempDir::new().unwrap();
+        let _guards = lock_sessions_dir(&store);
+        let cwd = TempDir::new().unwrap();
+        let bridge = test_bridge();
+        let created = handle_session_new(&bridge, &json!({ "cwd": cwd.path() }))
+            .await
+            .unwrap();
+        let sid = created["sessionId"].as_str().unwrap().to_string();
+        ensure_converse(&bridge, &sid).await.unwrap();
+        handle_set_mode(&bridge, &json!({ "sessionId": sid, "modeId": "goal" }))
+            .await
+            .unwrap();
+        let map = bridge.acp_sessions.lock().await;
+        let sess = map.get(&sid).unwrap();
+        assert_eq!(sess.mode, AgentMode::Goal);
+        assert!(
+            sess.converse.is_none(),
+            "goal mode must not keep a converse handle"
+        );
+    }
+
+    #[tokio::test]
+    async fn set_mode_rejects_unknown_id_with_expected_list() {
+        let store = TempDir::new().unwrap();
+        let _guards = lock_sessions_dir(&store);
+        let cwd = TempDir::new().unwrap();
+        let bridge = test_bridge();
+        let created = handle_session_new(&bridge, &json!({ "cwd": cwd.path() }))
+            .await
+            .unwrap();
+        let sid = created["sessionId"].as_str().unwrap();
+        let err = handle_set_mode(&bridge, &json!({ "sessionId": sid, "modeId": "banana" }))
+            .await
+            .expect_err("unknown mode");
+        assert!(
+            err.contains(AgentMode::EXPECTED),
+            "error must list parseable modes, got: {err}"
+        );
+        assert!(err.contains("goal"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn load_coding_session_restores_tools_and_history() {
+        let store = TempDir::new().unwrap();
+        let _guards = lock_sessions_dir(&store);
+        let cwd = TempDir::new().unwrap();
+        session_store::save(&session_store::SessionRecord {
+            id: "lib-coding-memory".into(),
+            mode: "coding".into(),
+            cwd: cwd.path().to_path_buf(),
+            model: "mock-model".into(),
+            messages: vec![
+                session_store::StoredMessage {
+                    role: "user".into(),
+                    content: "fix the test".into(),
+                },
+                session_store::StoredMessage {
+                    role: "assistant".into(),
+                    content: "working on it".into(),
+                },
+            ],
+            updated_at: session_store::new_timestamp(),
+        })
+        .unwrap();
+
+        let bridge = test_bridge();
+        let sink = CaptureSink {
+            lines: std::sync::Mutex::new(Vec::new()),
+        };
+        handle_request(
+            Arc::clone(&bridge),
+            "session/load",
+            json!({ "sessionId": "lib-coding-memory" }),
+            &sink,
+        )
+        .await
+        .unwrap();
+
+        let sessions = bridge.acp_sessions.lock().await;
+        let handle = sessions
+            .get("lib-coding-memory")
+            .and_then(|s| s.converse.clone())
+            .expect("coding load must restore a converse handle");
+        assert!(handle.coding_tools);
+        let convo = handle.conversation.lock().await;
+        let text: String = convo
+            .messages()
+            .iter()
+            .map(|m| m.content.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(text.contains("fix the test"), "{text}");
+        assert!(text.contains("working on it"), "{text}");
     }
 }
