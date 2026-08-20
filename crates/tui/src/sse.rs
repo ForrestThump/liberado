@@ -264,4 +264,204 @@ mod tests {
         let events = decoder.push("event: role_finished\ndata: {\"role\":\"worker\"}\n\n");
         assert!(to_goal_event(&events[0]).unwrap().is_none());
     }
+
+    #[test]
+    fn goal_session_started_maps_to_started() {
+        let ev = to_goal_event(&SseEvent {
+            event: "session_started".into(),
+            data: "{\"domain\":\"g\",\"description\":\"build the crate\"}".into(),
+        })
+        .unwrap()
+        .unwrap();
+        assert!(matches!(
+            ev,
+            GoalUiEvent::Started { description, .. } if description == "build the crate"
+        ));
+    }
+
+    #[test]
+    fn goal_token_maps_to_token() {
+        let ev = to_goal_event(&SseEvent {
+            event: "token".into(),
+            data: "hello".into(),
+        })
+        .unwrap()
+        .unwrap();
+        assert!(matches!(ev, GoalUiEvent::Token(t) if t == "hello"));
+    }
+
+    #[test]
+    fn goal_tool_started_maps_to_tool_started() {
+        let ev = to_goal_event(&SseEvent {
+            event: "tool_started".into(),
+            data: "{\"name\":\"search\",\"args_preview\":\"q=test\"}".into(),
+        })
+        .unwrap()
+        .unwrap();
+        assert!(matches!(
+            ev,
+            GoalUiEvent::ToolStarted { name, args, .. } if name == "search" && args == "q=test"
+        ));
+    }
+
+    #[test]
+    fn goal_tool_finished_maps_to_tool_finished() {
+        let ev = to_goal_event(&SseEvent {
+            event: "tool_finished".into(),
+            data: "{\"name\":\"search\",\"ok\":true,\"result_preview\":\"3 results\"}".into(),
+        })
+        .unwrap()
+        .unwrap();
+        assert!(matches!(
+            ev,
+            GoalUiEvent::ToolFinished { name, ok: true, preview, .. } if name == "search" && preview == "3 results"
+        ));
+    }
+
+    #[test]
+    fn goal_role_started_maps_to_role() {
+        let ev = to_goal_event(&SseEvent {
+            event: "role_started".into(),
+            data: "{\"role\":\"worker\",\"model\":\"deepseek\"}".into(),
+        })
+        .unwrap()
+        .unwrap();
+        assert!(matches!(
+            ev,
+            GoalUiEvent::Role { role, model } if role == "worker" && model == Some("deepseek".into())
+        ));
+    }
+
+    #[test]
+    fn goal_progress_maps_to_progress() {
+        let ev = to_goal_event(&SseEvent {
+            event: "progress".into(),
+            data: "{\"message\":\"indexing vault\"}".into(),
+        })
+        .unwrap()
+        .unwrap();
+        assert!(matches!(ev, GoalUiEvent::Progress(m) if m == "indexing vault"));
+    }
+
+    #[test]
+    fn goal_validation_finished_maps_to_validation() {
+        let ev = to_goal_event(&SseEvent {
+            event: "validation_finished".into(),
+            data: "{\"ok\":true,\"summary\":\"gates passed\"}".into(),
+        })
+        .unwrap()
+        .unwrap();
+        assert!(matches!(
+            ev,
+            GoalUiEvent::Validation { ok: true, summary, .. } if summary == "gates passed"
+        ));
+    }
+
+    #[test]
+    fn goal_critic_verdict_maps_to_critic_verdict() {
+        let ev = to_goal_event(&SseEvent {
+            event: "critic_verdict".into(),
+            data: "{\"reviewer\":\"strategist\",\"kind\":\"strategist\",\"approved\":false,\"issues\":[\"a\"],\"coerced\":true}".into(),
+        })
+            .unwrap()
+            .unwrap();
+        assert!(matches!(
+            ev,
+            GoalUiEvent::CriticVerdict {
+                reviewer,
+                kind,
+                approved: false,
+                issues,
+                coerced: true,
+            } if reviewer == "strategist" && kind == "strategist" && issues.len() == 1
+        ));
+    }
+
+    #[test]
+    fn goal_file_changed_maps_to_file_changed() {
+        let ev = to_goal_event(&SseEvent {
+            event: "file_changed".into(),
+            data: "{\"path\":\"note.md\",\"change\":\"modified\"}".into(),
+        })
+        .unwrap()
+        .unwrap();
+        assert!(matches!(
+            ev,
+            GoalUiEvent::FileChanged { path, change } if path == "note.md" && change == "modified"
+        ));
+    }
+
+    #[test]
+    fn goal_checkpoint_maps_to_progress_note() {
+        let ev = to_goal_event(&SseEvent {
+            event: "checkpoint".into(),
+            data: "{\"id\":\"c1\",\"label\":\"midway\"}".into(),
+        })
+        .unwrap()
+        .unwrap();
+        assert!(matches!(
+            ev,
+            GoalUiEvent::Progress(m) if m == "checkpoint midway (c1)"
+        ));
+    }
+
+    #[test]
+    fn goal_loop_guard_maps_to_loop_guard() {
+        let ev = to_goal_event(&SseEvent {
+            event: "loop_guard".into(),
+            data: "{\"guard\":\"doom-loop\",\"action\":\"halted\"}".into(),
+        })
+        .unwrap()
+        .unwrap();
+        assert!(matches!(ev, GoalUiEvent::LoopGuard(m) if m == "doom-loop → halted"));
+    }
+
+    #[test]
+    fn goal_session_is_benign_none() {
+        let ev = to_goal_event(&SseEvent {
+            event: "session".into(),
+            data: "chat-s1".into(),
+        })
+        .unwrap();
+        assert!(
+            ev.is_none(),
+            "session is a chat-stream event, not a goal view"
+        );
+    }
+
+    #[test]
+    fn goal_session_offered_is_benign_none() {
+        let ev = to_goal_event(&SseEvent {
+            event: "session_offered".into(),
+            data: "{\"id\":\"s2\",\"domain\":\"h\",\"description\":\"join me\"}".into(),
+        })
+        .unwrap();
+        assert!(ev.is_none(), "session_offered is a chat-stream affordance");
+    }
+
+    #[test]
+    fn goal_failed_maps_to_finished_failed() {
+        let ev = to_goal_event(&SseEvent {
+            event: "failed".into(),
+            data: "{\"message\":\"agent crashed\"}".into(),
+        })
+        .unwrap()
+        .unwrap();
+        assert!(matches!(
+            ev,
+            GoalUiEvent::Finished { status, summary } if status == "failed" && summary == "agent crashed"
+        ));
+    }
+
+    #[test]
+    fn goal_malformed_json_returns_err() {
+        let result = to_goal_event(&SseEvent {
+            event: "tool_started".into(),
+            data: "{broken}".into(),
+        });
+        assert!(
+            result.is_err(),
+            "malformed JSON for a structured kind must surface as Err"
+        );
+    }
 }
