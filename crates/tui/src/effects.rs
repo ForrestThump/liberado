@@ -12,7 +12,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use crossterm::execute;
 use crossterm::terminal::SetTitle;
-use futures::StreamExt;
+use futures::{Stream, StreamExt};
 use tokio::sync::mpsc;
 use tokio::task::AbortHandle;
 
@@ -200,6 +200,68 @@ impl EffectRunner {
         (actions, terminal)
     }
 
+    /// Send a goal-stream close (or plain end) and clear the active handle. Collapses the four
+    /// duplicated error blocks that used to inline `try_send(GoalStreamClosed)` + handle clear.
+    async fn close_goal_stream(
+        tx: &mpsc::Sender<Action>,
+        state: &Arc<Mutex<StreamState>>,
+        msg: Option<String>,
+    ) {
+        let _ = tx.try_send(Action::GoalStreamClosed(msg));
+        state.lock().goal_handle = None;
+    }
+
+    /// Drain one goal-session SSE stream into the action channel. Split out of `join_goal_session`
+    /// (which keeps only the spawn/abort lifecycle) so the loop is testable: the stream type is
+    /// generic, so tests feed scripted chunk sequences and assert the emitted actions.
+    ///
+    /// A `Finished` event is terminal — the view is done and the server closes the stream, so the
+    /// loop drops without a trailing close. EOF, stream errors, and timeouts each close with a
+    /// message (or none for clean EOF).
+    async fn run_goal_stream<C, E>(
+        tx: &mpsc::Sender<Action>,
+        state: &Arc<Mutex<StreamState>>,
+        stream: impl Stream<Item = Result<C, E>>,
+        decoder: &mut SseDecoder,
+    ) where
+        C: AsRef<[u8]>,
+        E: std::fmt::Display,
+    {
+        let mut stream = Box::pin(stream);
+        loop {
+            match tokio::time::timeout(crate::tuning::SSE_STREAM_TIMEOUT, stream.next()).await {
+                Ok(Some(Ok(chunk))) => {
+                    let text = String::from_utf8_lossy(chunk.as_ref());
+                    let (actions, terminal) = EffectRunner::goal_actions_from_chunk(decoder, &text);
+                    for action in actions {
+                        if tx.try_send(action).is_err() {
+                            tracing::warn!("action channel full, dropping goal event");
+                        }
+                    }
+                    if terminal {
+                        state.lock().goal_handle = None;
+                        return;
+                    }
+                }
+                Ok(Some(Err(e))) => {
+                    Self::close_goal_stream(tx, state, Some(format!("stream error: {e}"))).await;
+                    return;
+                }
+                Ok(None) => break, // stream ended (server closed after a terminal event)
+                Err(_elapsed) => {
+                    Self::close_goal_stream(
+                        tx,
+                        state,
+                        Some("stream timeout — no data for 60s".into()),
+                    )
+                    .await;
+                    return;
+                }
+            }
+        }
+        Self::close_goal_stream(tx, state, None).await;
+    }
+
     async fn join_goal_session(&self, id: String) {
         // Replace any existing subscription (re-`/join` or switching sessions).
         if let Some(prev) = self.stream_state.lock().goal_handle.take() {
@@ -214,58 +276,28 @@ impl EffectRunner {
             let response = match api::open_goal_stream(&client, &server, &id).await {
                 Ok(r) => r,
                 Err(e) => {
-                    let _ = tx.try_send(Action::GoalStreamClosed(Some(format!(
-                        "could not reach daemon: {e}"
-                    ))));
-                    state.lock().goal_handle = None;
+                    Self::close_goal_stream(
+                        &tx,
+                        &state,
+                        Some(format!("could not reach daemon: {e}")),
+                    )
+                    .await;
                     return;
                 }
             };
             if !response.status().is_success() {
                 let status = response.status();
-                let _ = tx.try_send(Action::GoalStreamClosed(Some(format!(
-                    "server returned {status}"
-                ))));
-                state.lock().goal_handle = None;
+                Self::close_goal_stream(&tx, &state, Some(format!("server returned {status}")))
+                    .await;
                 return;
             }
-
-            let mut decoder = SseDecoder::default();
-            let mut stream = response.bytes_stream();
-            loop {
-                match tokio::time::timeout(crate::tuning::SSE_STREAM_TIMEOUT, stream.next()).await {
-                    Ok(Some(Ok(chunk))) => {
-                        let text = String::from_utf8_lossy(&chunk);
-                        let (actions, terminal) =
-                            EffectRunner::goal_actions_from_chunk(&mut decoder, &text);
-                        for action in actions {
-                            if tx.try_send(action).is_err() {
-                                tracing::warn!("action channel full, dropping goal event");
-                            }
-                        }
-                        if terminal {
-                            state.lock().goal_handle = None;
-                            return;
-                        }
-                    }
-                    Ok(Some(Err(e))) => {
-                        let _ = tx
-                            .try_send(Action::GoalStreamClosed(Some(format!("stream error: {e}"))));
-                        state.lock().goal_handle = None;
-                        return;
-                    }
-                    Ok(None) => break, // stream ended (server closed after a terminal event)
-                    Err(_elapsed) => {
-                        let _ = tx.try_send(Action::GoalStreamClosed(Some(
-                            "stream timeout — no data for 60s".into(),
-                        )));
-                        state.lock().goal_handle = None;
-                        return;
-                    }
-                }
-            }
-            let _ = tx.try_send(Action::GoalStreamClosed(None));
-            state.lock().goal_handle = None;
+            Self::run_goal_stream(
+                &tx,
+                &state,
+                response.bytes_stream(),
+                &mut SseDecoder::default(),
+            )
+            .await;
         });
 
         self.stream_state.lock().goal_handle = Some(handle.abort_handle());
@@ -1362,5 +1394,130 @@ data: not-json
         // The chat wire decodes unknown event types to an empty Token no-op (never an error).
         assert_eq!(actions.len(), 1);
         assert!(matches!(actions[0], Action::GoalStreamEvent(_)));
+    }
+
+    // ── run_goal_stream (goal-session SSE drain) ───────────────────────────────
+
+    #[tokio::test]
+    async fn run_goal_stream_emits_chunk_tokens_then_closes_on_eof() {
+        let (action_tx, mut action_rx) = mpsc::channel(256);
+        let state = Arc::new(Mutex::new(StreamState::default()));
+        let dummy = tokio::spawn(async {
+            tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+        });
+        state.lock().goal_handle = Some(dummy.abort_handle());
+
+        let stream = futures::stream::iter(vec![
+            Ok::<_, String>(
+                b"event: session_started\ndata: {\"domain\":\"g\",\"description\":\"d\"}\n\n"
+                    .to_vec(),
+            ),
+            Ok::<_, String>(b"event: token\ndata: hello\n\n".to_vec()),
+        ]);
+        EffectRunner::run_goal_stream(
+            &action_tx,
+            &state,
+            stream,
+            &mut crate::sse::SseDecoder::default(),
+        )
+        .await;
+
+        let mut msgs = Vec::new();
+        while let Ok(m) = action_rx.try_recv() {
+            msgs.push(m);
+        }
+        // Started + one token, then the trailing close on clean EOF.
+        assert!(matches!(
+            msgs[0].clone(),
+            Action::GoalStreamEvent(crate::app::GoalUiEvent::Started { .. })
+        ));
+        assert!(
+            matches!(msgs[1].clone(), Action::GoalStreamEvent(crate::app::GoalUiEvent::Token(t)) if t == "hello")
+        );
+        assert!(matches!(
+            msgs[2].clone(),
+            Action::GoalStreamClosed(end) if end.is_none(),
+        ));
+        assert!(
+            state.lock().goal_handle.is_none(),
+            "handle cleared once the stream drains"
+        );
+
+        dummy.abort();
+    }
+
+    #[tokio::test]
+    async fn run_goal_stream_terminal_event_clears_handle_without_close() {
+        let (action_tx, mut action_rx) = mpsc::channel(256);
+        let state = Arc::new(Mutex::new(StreamState::default()));
+        let dummy = tokio::spawn(async {
+            tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+        });
+        state.lock().goal_handle = Some(dummy.abort_handle());
+
+        let stream = futures::stream::iter(vec![Ok::<_, String>(
+            b"event: session_finished\ndata: {\"status\":\"done\",\"summary\":\"\"}\n\n".to_vec(),
+        )]);
+        EffectRunner::run_goal_stream(
+            &action_tx,
+            &state,
+            stream,
+            &mut crate::sse::SseDecoder::default(),
+        )
+        .await;
+
+        let mut msgs = Vec::new();
+        while let Ok(m) = action_rx.try_recv() {
+            msgs.push(m);
+        }
+        // A terminal Finished short-circuits: the event arrives, no trailing close follows.
+        assert!(matches!(
+            msgs[0].clone(),
+            Action::GoalStreamEvent(crate::app::GoalUiEvent::Finished { .. })
+        ));
+        // The terminal short-circuit means no trailing close ever appears on the wire.
+        assert_eq!(
+            msgs.len(),
+            1,
+            "only the terminal event is emitted (no trailing close)"
+        );
+        assert!(
+            state.lock().goal_handle.is_none(),
+            "handle cleared at terminal"
+        );
+        dummy.abort();
+    }
+
+    #[tokio::test]
+    async fn run_goal_stream_stream_error_sends_error_close() {
+        let (action_tx, mut action_rx) = mpsc::channel(256);
+        let state = Arc::new(Mutex::new(StreamState::default()));
+        let dummy = tokio::spawn(async {
+            tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+        });
+        state.lock().goal_handle = Some(dummy.abort_handle());
+
+        let stream = futures::stream::iter(vec![Err::<Vec<u8>, _>("boom")]);
+        EffectRunner::run_goal_stream(
+            &action_tx,
+            &state,
+            stream,
+            &mut crate::sse::SseDecoder::default(),
+        )
+        .await;
+
+        let mut msgs = Vec::new();
+        while let Ok(m) = action_rx.try_recv() {
+            msgs.push(m);
+        }
+        assert!(matches!(
+            msgs[0].clone(),
+            Action::GoalStreamClosed(message) if message == Some("stream error: boom".into())
+        ));
+        assert!(
+            state.lock().goal_handle.is_none(),
+            "handle cleared after stream error"
+        );
+        dummy.abort();
     }
 }
