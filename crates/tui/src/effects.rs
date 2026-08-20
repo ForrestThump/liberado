@@ -638,14 +638,11 @@ impl EffectRunner {
             let response = match api::attach_conversation_stream(&client, &server, &id).await {
                 Ok(r) => r,
                 Err(e) => {
-                    if tx
-                        .try_send(Action::SseFailed(format!(
-                            "could not attach to running turn: {e}"
-                        )))
-                        .is_err()
-                    {
-                        tracing::warn!("action channel full, dropping SseFailed");
-                    }
+                    send_or_warn(
+                        &tx,
+                        Action::SseFailed(format!("could not attach to running turn: {e}")),
+                        "SseFailed",
+                    );
                     state.lock().handle = None;
                     return;
                 }
@@ -657,29 +654,23 @@ impl EffectRunner {
             // Reporting it as `[error]` would blame the user's own answer arriving on time.
             if response.status() == reqwest::StatusCode::CONFLICT {
                 state.lock().handle = None;
-                if tx.try_send(Action::SseDone).is_err() {
-                    tracing::warn!("action channel full, dropping SseDone");
-                }
-                if tx
-                    .try_send(Action::ReloadConversationHistory(id.clone()))
-                    .is_err()
-                {
-                    tracing::warn!("action channel full, dropping history reload after 409");
-                }
+                send_or_warn(&tx, Action::SseDone, "SseDone");
+                send_or_warn(
+                    &tx,
+                    Action::ReloadConversationHistory(id.clone()),
+                    "history reload after 409",
+                );
                 return;
             }
 
             if !response.status().is_success() {
                 let status = response.status();
                 let body = response.text().await.unwrap_or_default();
-                if tx
-                    .try_send(Action::SseFailed(format!(
-                        "attach refused ({status}): {body}"
-                    )))
-                    .is_err()
-                {
-                    tracing::warn!("action channel full, dropping SseFailed");
-                }
+                send_or_warn(
+                    &tx,
+                    Action::SseFailed(format!("attach refused ({status}): {body}")),
+                    "SseFailed",
+                );
                 state.lock().handle = None;
                 return;
             }
@@ -693,9 +684,7 @@ impl EffectRunner {
                         let (actions, terminal) = sse_actions_from_text(&mut decoder, &text);
                         for action in actions {
                             // Shared decode: same `ToAction` / `from_sse_data` as chat stream.
-                            if tx.try_send(action).is_err() {
-                                tracing::warn!("action channel full, dropping attach SSE action");
-                            }
+                            let _ = send_or_warn(&tx, action, "attach SSE action");
                         }
                         if terminal {
                             state.lock().handle = None;
@@ -703,34 +692,30 @@ impl EffectRunner {
                         }
                     }
                     Ok(Some(Err(e))) => {
-                        if tx
-                            .try_send(Action::SseFailed(format!("attach stream error: {e}")))
-                            .is_err()
-                        {
-                            tracing::warn!("action channel full, dropping SseFailed");
-                        }
+                        send_or_warn(
+                            &tx,
+                            Action::SseFailed(format!("attach stream error: {e}")),
+                            "SseFailed",
+                        );
                         state.lock().handle = None;
                         return;
                     }
                     Ok(None) => break,
                     Err(_elapsed) => {
-                        if tx
-                            .try_send(Action::SseFailed(
+                        send_or_warn(
+                            &tx,
+                            Action::SseFailed(
                                 "attach stream timeout — no data for 60s".to_string(),
-                            ))
-                            .is_err()
-                        {
-                            tracing::warn!("action channel full, dropping SseFailed");
-                        }
+                            ),
+                            "SseFailed",
+                        );
                         state.lock().handle = None;
                         return;
                     }
                 }
             }
 
-            if tx.try_send(Action::SseDone).is_err() {
-                tracing::warn!("action channel full, dropping SseDone");
-            }
+            send_or_warn(&tx, Action::SseDone, "SseDone");
             state.lock().handle = None;
         });
 
