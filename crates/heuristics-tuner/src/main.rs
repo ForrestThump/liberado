@@ -95,18 +95,25 @@ async fn save_dispatcher_result(
     Ok(result.rubric)
 }
 
+/// Resolve the run's output directory from the loaded config, creating it (and any parents) up
+/// front. Kept out of `main` so the binary's entry is a flat sequence of two calls and the setup
+/// (which carries a config load + fs create, each a `?` branch) is separately understandable.
+async fn prepare_run_dir() -> Result<std::path::PathBuf, Box<dyn std::error::Error>> {
+    let run_timestamp = chrono::Utc::now().format("%Y-%m-%dT%H-%M-%SZ").to_string();
+    let out_dir = liberado_config::data_dir()
+        .join("tuner")
+        .join(&run_timestamp);
+    tokio::fs::create_dir_all(&out_dir).await?;
+    Ok(out_dir)
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt::init();
 
     let config = TunerConfig::load()?;
     let layer = config.layer;
-
-    let run_timestamp = chrono::Utc::now().format("%Y-%m-%dT%H-%M-%SZ").to_string();
-    let out_dir = liberado_config::data_dir()
-        .join("tuner")
-        .join(&run_timestamp);
-    tokio::fs::create_dir_all(&out_dir).await?;
+    let out_dir = prepare_run_dir().await?;
 
     let final_rubric = match layer {
         Layer::Dispatcher => save_dispatcher_result(run_tuner(config).await, &out_dir).await?,
@@ -119,14 +126,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Layer::Coder => save_coder_result(run_coder_tuner(config).await, &out_dir).await?,
     };
 
-    // A stable, obvious filename for "the answer" — the same content as the last generation's
-    // file, so a human doesn't have to know how many generations ran to find the final result.
-    let final_path = out_dir.join("final.txt");
-    tokio::fs::write(&final_path, &final_rubric).await?;
+    write_final_result(&final_rubric, &out_dir).await
+}
 
-    println!("\n=== Final result: {} ===\n", final_path.display());
-    println!("{}", final_rubric);
-    println!("\nAll files saved under {}", out_dir.display());
+/// Write the session's final answer under a stable filename and print the result summary - the
+/// tail `main` used to inline, whose two `?` (write) and three prints carried decision weight.
+async fn write_final_result(
+    final_rubric: &str,
+    out_dir: &Path,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let final_path = out_dir.join("final.txt");
+    tokio::fs::write(&final_path, final_rubric).await?;
+
+    println!(
+        "
+=== Final result: {} ===
+",
+        final_path.display()
+    );
+    println!("{final_rubric}");
+    println!(
+        "
+All files saved under {}",
+        out_dir.display()
+    );
 
     Ok(())
 }
