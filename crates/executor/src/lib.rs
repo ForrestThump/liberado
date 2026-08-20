@@ -2041,12 +2041,15 @@ fn run_tool_spill(
     spill_max_bytes: usize,
     label: &str,
 ) -> String {
+    let Some(spill_dir) = spill_dir else {
+        return result.to_string();
+    };
     let config = OffloadConfig {
         max_bytes: spill_max_bytes,
-        spill_dir: spill_dir.map(|p| p.to_path_buf()),
-        file_prefix: format!("tool-spill-{}", label),
+        spill_dir: Some(spill_dir.to_path_buf()),
+        file_prefix: "tool-spill".to_string(),
     };
-    spill_text(result, &config).text
+    spill_text(result, &config, label).text
 }
 
 async fn run_tool(

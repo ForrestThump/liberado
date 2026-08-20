@@ -134,9 +134,11 @@ fn decode_utf16_units(buf: &[u8], from_bytes: fn([u8; 2]) -> u16) -> String {
 ///
 /// If `text.len() <= config.max_bytes`, returns it unchanged with no spill path.
 /// Otherwise, writes the full text to a file in `config.spill_dir` (if set) and
-/// returns a head+tail preview. If the spill dir is not set or write fails,
-/// degrades to head-only truncation.
-pub fn spill_text(text: &str, config: &OffloadConfig) -> OffloadResult {
+/// returns a head+tail preview that includes the spill file path. If the spill dir
+/// is not set or write fails, degrades to head-only truncation.
+///
+/// The `label` is used to generate a unique filename for this specific tool call.
+pub fn spill_text(text: &str, config: &OffloadConfig, label: &str) -> OffloadResult {
     if text.len() <= config.max_bytes {
         return OffloadResult {
             text: text.to_string(),
@@ -149,7 +151,7 @@ pub fn spill_text(text: &str, config: &OffloadConfig) -> OffloadResult {
             spill_path: None,
         };
     };
-    let file_name = format!("{}-{}.txt", config.file_prefix, sanitize_label("result"));
+    let file_name = format!("{}-{}.txt", config.file_prefix, sanitize_label(label));
     let path = spill_dir.join(&file_name);
     if std::fs::create_dir_all(spill_dir).is_err() || std::fs::write(&path, text).is_err() {
         return OffloadResult {
@@ -157,10 +159,33 @@ pub fn spill_text(text: &str, config: &OffloadConfig) -> OffloadResult {
             spill_path: None,
         };
     }
+    let preview = spill_preview_with_path(text, config.max_bytes, &path);
     OffloadResult {
-        text: head_tail_preview(text, config.max_bytes),
+        text: preview,
         spill_path: Some(path),
     }
+}
+
+/// Generate a head+tail preview that includes the spill file path.
+fn spill_preview_with_path(text: &str, max_bytes: usize, spill_path: &Path) -> String {
+    let preview_path = spill_path.to_string_lossy().replace('\\', "/");
+    let head = max_bytes / 2;
+    let tail = max_bytes - head;
+    let head_end = char_boundary_at_or_before(text, head);
+    let tail_start = char_boundary_at_or_before(text, text.len().saturating_sub(tail));
+    if head_end >= tail_start {
+        return format!(
+            "{}\n\n··· (truncated, {} total bytes; full body at `{preview_path}`) ···",
+            truncate_head(text, max_bytes),
+            text.len()
+        );
+    }
+    format!(
+        "{}\n\n··· (truncated, {} total bytes; full body at `{preview_path}`) ···\n\n{}",
+        &text[..head_end],
+        text.len(),
+        &text[tail_start..],
+    )
 }
 
 /// Spill an oversized **raw bytes** result (e.g., command stdout/stderr).
@@ -208,7 +233,7 @@ mod tests {
             spill_dir: None,
             ..Default::default()
         };
-        let result = spill_text("hello", &config);
+        let result = spill_text("hello", &config, "test");
         assert_eq!(result.text, "hello");
         assert!(result.spill_path.is_none());
     }
@@ -220,7 +245,7 @@ mod tests {
             spill_dir: None,
             ..Default::default()
         };
-        let result = spill_text("hello world", &config);
+        let result = spill_text("hello world", &config, "test");
         assert_eq!(result.text.len(), 10);
         assert!(result.spill_path.is_none());
     }
@@ -234,7 +259,7 @@ mod tests {
             ..Default::default()
         };
         let long = "0123456789abcdefghijklmnop"; // 26 chars > 20 bytes
-        let result = spill_text(long, &config);
+        let result = spill_text(long, &config, "test");
         assert!(result.spill_path.is_some());
         let written = std::fs::read_to_string(result.spill_path.unwrap()).unwrap();
         assert_eq!(written, long);
