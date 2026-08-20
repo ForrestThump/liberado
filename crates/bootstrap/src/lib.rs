@@ -37,7 +37,7 @@ use liberado_dispatch_pack::DispatchPack;
 use liberado_dispatcher::Dispatcher;
 use liberado_mcp::{McpPoolSettings, McpRegistry};
 use liberado_notify::Notifier;
-use liberado_orchestrator::{OrchestratorInfra, ReportSink};
+use liberado_orchestrator::{Orchestrator, OrchestratorInfra, ReportSink};
 use liberado_provider::{AgentRole, LatencyRecorder, MeteredProvider, Provider};
 use liberado_provider_openai_compat::OpenAiCompatibleProvider;
 
@@ -595,11 +595,10 @@ fn wire_dispatch_stack(
         peers = mcp.len(),
         "orchestrator enabled (live MCP registry; empty set is decide-until-reload)"
     );
-    let orchestrator = orchestrator_infra.for_pool(mcp.clone(), capabilities, DEFAULT_POOL);
-    let orchestrator = match &notifier {
-        Some(n) => orchestrator.with_notifier(n.clone()),
-        None => orchestrator,
-    };
+    let orchestrator = with_orchestrator_notifier(
+        orchestrator_infra.for_pool(mcp.clone(), capabilities, DEFAULT_POOL),
+        &notifier,
+    );
     let daemon = daemon.with_orchestrator(orchestrator);
     attach_pools(
         daemon,
@@ -740,6 +739,17 @@ fn wire_extra_pool(
     daemon.with_pool_orchestrator(pool_name.to_string(), orchestrator)
 }
 
+/// Apply the optional notifier to an orchestrator, or return it unchanged.
+fn with_orchestrator_notifier(
+    orchestrator: Orchestrator,
+    notifier: &Option<Arc<dyn Notifier>>,
+) -> Orchestrator {
+    match notifier {
+        Some(n) => orchestrator.with_notifier(n.clone()),
+        None => orchestrator,
+    }
+}
+
 /// Build the [`DispatchPack`] that hosts dispatcher+orchestrator as a goal-session pack (E2/E3).
 ///
 /// Parallel construction to [`configure_daemon`]: same pools, same capability ceilings, and the
@@ -761,32 +771,12 @@ pub fn build_dispatch_pack(
     let dispatcher_provider = providers.dispatcher.as_ref()?;
     let sp = providers.subagent.as_ref()?;
     let guard = guard_context(&catalog, &config.policy, vault_path);
-    let mut orchestrator_infra = OrchestratorInfra::new(
-        sp.orchestrator.clone(),
-        catalog.clone(),
-        guard.zone_write_classes.clone(),
-        guard.proposals_dir.clone(),
-        guard.signer.clone(),
-    )
-    .with_subagent_provider(sp.worker.clone());
-    if let Some(max_turns) = config.topology.research_max_turns {
-        orchestrator_infra = orchestrator_infra.with_research_max_turns(max_turns);
-    }
-    if let Some(sink) = report_sink(&config.topology) {
-        orchestrator_infra = orchestrator_infra.with_report_sink(sink);
-    }
+    let orchestrator_infra = build_orchestrator_infra(sp, config, &catalog, &guard);
     let notifier: Option<Arc<dyn Notifier>> =
         liberado_notify::TelegramNotifier::from_env().map(|n| Arc::new(n) as Arc<dyn Notifier>);
 
     let capabilities = config.policy.capabilities_for("dispatcher");
-    let mut dispatcher = Dispatcher::new(
-        dispatcher_provider.clone(),
-        config.tuning.dispatch.clone(),
-        config.tuning.concurrency.max_reaction_depth,
-    );
-    if let Some(g) = &guidance {
-        dispatcher = dispatcher.with_guidance(g.clone());
-    }
+    let dispatcher = build_dispatcher(dispatcher_provider, config, guidance.as_ref());
 
     let mut pack = DispatchPack::new(
         catalog.clone(),
@@ -814,20 +804,11 @@ pub fn build_dispatch_pack(
     // Additional named pools — same shared registry clone.
     for pool_cfg in config.topology.pools.iter().filter(|p| p.enabled) {
         let pool_capabilities = config.policy.capabilities_for(&pool_cfg.name);
-        let mut pool_dispatcher = Dispatcher::new(
-            dispatcher_provider.clone(),
-            config.tuning.dispatch.clone(),
-            config.tuning.concurrency.max_reaction_depth,
+        let pool_dispatcher = build_dispatcher(dispatcher_provider, config, guidance.as_ref());
+        let orchestrator = with_orchestrator_notifier(
+            orchestrator_infra.for_pool(mcp.clone(), pool_capabilities, pool_cfg.name.clone()),
+            &notifier,
         );
-        if let Some(g) = &guidance {
-            pool_dispatcher = pool_dispatcher.with_guidance(g.clone());
-        }
-        let orchestrator =
-            orchestrator_infra.for_pool(mcp.clone(), pool_capabilities, pool_cfg.name.clone());
-        let orchestrator = match &notifier {
-            Some(n) => orchestrator.with_notifier(n.clone()),
-            None => orchestrator,
-        };
         pack = pack.with_pool(pool_cfg.name.clone(), pool_dispatcher, orchestrator);
     }
 
