@@ -1233,6 +1233,26 @@ async fn run_coding_prompt(
         render_coding_event(sink, sid, &event, &mut pending_tool_ids)?;
     }
 
+    return finish_coding_tail(bridge, sink, sid, &workspace, joined).await;
+}
+
+/// Persist the finished round's coding state, report the outcome, and write the run artifact.
+///
+/// Persist only after the pack finished (not mid-cancel). Preserve the workspace on failure
+/// too: a failed run's diff is the evidence, and it is lost if nobody commits it.
+async fn finish_coding_tail(
+    bridge: Arc<Bridge>,
+    sink: &dyn WireSink,
+    sid: &str,
+    workspace: &std::path::Path,
+    joined: Result<
+        (
+            coding_run::CodingSessionState,
+            Result<coding_run::CodingRoundOutcome, String>,
+        ),
+        tokio::task::JoinError,
+    >,
+) -> Result<Value, String> {
     let (state, outcome) = joined.map_err(|e| format!("coding task panicked: {e}"))?;
 
     // Persist coding state only when the pack finished (not mid-cancel).
@@ -1250,7 +1270,7 @@ async fn run_coding_prompt(
             None
         }
     };
-    finish_coding_run(sink, sid, &workspace, label, verdict).await?;
+    finish_coding_run(sink, sid, workspace, label, verdict).await?;
     Ok(json!({ "stopReason": "end_turn" }))
 }
 /// Best-effort branch name for the report line. Cosmetic only — never fails the run.

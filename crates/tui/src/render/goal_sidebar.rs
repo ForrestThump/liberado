@@ -19,7 +19,7 @@ use ratatui::{
     widgets::{Block, BorderType, Borders, Paragraph},
 };
 
-use crate::app::App;
+use crate::app::{App, GateVote};
 use crate::ui::c;
 
 pub fn draw(frame: &mut Frame, area: Rect, app: &App, th: &liberado_theme::Theme) {
@@ -118,34 +118,8 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &App, th: &liberado_theme::Theme
             lines.push(muted(format!(" … {hidden} earlier")));
         }
         for vote in j.gate_votes.iter().skip(hidden) {
-            let (mark, style) = if vote.coerced {
-                (
-                    "?",
-                    Style::default()
-                        .fg(c(&th.md_bullet, "#ffff00"))
-                        .add_modifier(Modifier::BOLD),
-                )
-            } else if vote.approved {
-                (
-                    "✓",
-                    Style::default()
-                        .fg(c(&th.tool_ok, "#00ff00"))
-                        .add_modifier(Modifier::BOLD),
-                )
-            } else {
-                (
-                    "✗",
-                    Style::default()
-                        .fg(c(&th.tool_err, "#ff0000"))
-                        .add_modifier(Modifier::BOLD),
-                )
-            };
-            let kind_short = match vote.kind.as_str() {
-                "gatekeeper" => "G",
-                "fresh" => "F",
-                "strategist" => "S",
-                other => other,
-            };
+            let (mark, style) = vote_mark(vote, th);
+            let kind_short = kind_short(&vote.kind);
             lines.push(Line::from(vec![
                 Span::styled(mark, style),
                 Span::raw(" "),
@@ -179,4 +153,71 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &App, th: &liberado_theme::Theme
 
     let para = Paragraph::new(lines).block(block);
     frame.render_widget(para, area);
+}
+
+/// The mark and its style for one gate vote: coerced ?, approved ✓, else ✗.
+fn vote_mark(vote: &GateVote, th: &liberado_theme::Theme) -> (&'static str, Style) {
+    if vote.coerced {
+        (
+            "?",
+            Style::default()
+                .fg(c(&th.md_bullet, "#ffff00"))
+                .add_modifier(Modifier::BOLD),
+        )
+    } else if vote.approved {
+        (
+            "✓",
+            Style::default()
+                .fg(c(&th.tool_ok, "#00ff00"))
+                .add_modifier(Modifier::BOLD),
+        )
+    } else {
+        (
+            "✗",
+            Style::default()
+                .fg(c(&th.tool_err, "#ff0000"))
+                .add_modifier(Modifier::BOLD),
+        )
+    }
+}
+
+/// The one-character tag for a gate vote kind (unknown kinds pass through).
+fn kind_short(kind: &str) -> &str {
+    match kind {
+        "gatekeeper" => "G",
+        "fresh" => "F",
+        "strategist" => "S",
+        other => other,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app::GateVote;
+
+    fn vote(kind: &str, approved: bool, coerced: bool) -> GateVote {
+        GateVote {
+            reviewer: "rv".into(),
+            kind: kind.into(),
+            approved,
+            coerced,
+        }
+    }
+
+    #[test]
+    fn vote_mark_marks_coerced_approved_and_rejected() {
+        let th = liberado_theme::Theme::default();
+        assert_eq!(vote_mark(&vote("gatekeeper", true, true), &th).0, "?");
+        assert_eq!(vote_mark(&vote("gatekeeper", true, false), &th).0, "✓");
+        assert_eq!(vote_mark(&vote("gatekeeper", false, false), &th).0, "✗");
+    }
+
+    #[test]
+    fn kind_short_maps_known_kinds_and_passes_others_through() {
+        assert_eq!(kind_short("gatekeeper"), "G");
+        assert_eq!(kind_short("fresh"), "F");
+        assert_eq!(kind_short("strategist"), "S");
+        assert_eq!(kind_short("reviewer"), "reviewer");
+    }
 }

@@ -2446,48 +2446,79 @@ fn extract_ts_symbol(line: &str) -> Option<String> {
     if is_comment_line(trimmed) {
         return None;
     }
-    if let Some(name) = symbol_after(trimmed, "function ", &['(']) {
-        return Some(format!("function {name}"));
+    if let Some(s) = ts_plain_function(trimmed) {
+        return Some(s);
     }
-    if trimmed.starts_with("export function ")
+    if let Some(s) = ts_export_function(trimmed) {
+        return Some(s);
+    }
+    if let Some(s) = ts_class(trimmed) {
+        return Some(s);
+    }
+    if let Some(s) = ts_interface(trimmed) {
+        return Some(s);
+    }
+    ts_const(trimmed)
+}
+
+/// A plain `function name(` at line start.
+fn ts_plain_function(trimmed: &str) -> Option<String> {
+    let name = symbol_after(trimmed, "function ", &['('])?;
+    Some(format!("function {name}"))
+}
+
+/// An exported function, with or without `default` / `async` qualifiers.
+fn ts_export_function(trimmed: &str) -> Option<String> {
+    if !(trimmed.starts_with("export function ")
         || trimmed.starts_with("export default function ")
-        || trimmed.starts_with("export default async function ")
+        || trimmed.starts_with("export default async function "))
     {
-        let rest = strip_prefixes(
-            trimmed,
-            &["export default async ", "export default ", "export "],
-        );
-        if let Some(name) = symbol_after(rest, "function ", &['(']) {
-            return Some(format!("export function {name}"));
-        }
+        return None;
     }
-    if trimmed.contains(" class ") || trimmed.starts_with("class ") {
-        let rest = strip_prefixes(
-            trimmed,
-            if trimmed.starts_with("export ") {
-                &["export ", "default ", "abstract "]
-            } else {
-                &["abstract "]
-            },
-        );
-        if let Some(name) = symbol_after(rest, "class ", &['<', '{', ' ', ':'])
-            && name != "extends"
-            && name != "implements"
-        {
-            return Some(format!("class {name}"));
-        }
+    let rest = strip_prefixes(
+        trimmed,
+        &["export default async ", "export default ", "export "],
+    );
+    let name = symbol_after(rest, "function ", &['('])?;
+    Some(format!("export function {name}"))
+}
+
+/// A `class Name` (optionally exported / default / abstract).
+fn ts_class(trimmed: &str) -> Option<String> {
+    if !(trimmed.contains(" class ") || trimmed.starts_with("class ")) {
+        return None;
     }
+    let rest = strip_prefixes(
+        trimmed,
+        if trimmed.starts_with("export ") {
+            &["export ", "default ", "abstract "]
+        } else {
+            &["abstract "]
+        },
+    );
+    let name = symbol_after(rest, "class ", &['<', '{', ' ', ':'])?;
+    if name != "extends" && name != "implements" {
+        return Some(format!("class {name}"));
+    }
+    None
+}
+
+/// An `interface` declaration (optionally exported).
+fn ts_interface(trimmed: &str) -> Option<String> {
     if trimmed.starts_with("interface ") || trimmed.starts_with("export interface ") {
         let rest = strip_prefixes(trimmed, &["export "]);
-        if let Some(name) = symbol_after(rest, "interface ", &['<', '{']) {
-            return Some(format!("interface {name}"));
-        }
+        let name = symbol_after(rest, "interface ", &['<', '{'])?;
+        return Some(format!("interface {name}"));
     }
+    None
+}
+
+/// A `const` arrow binding.
+fn ts_const(trimmed: &str) -> Option<String> {
     if trimmed.starts_with("export const ") || trimmed.starts_with("const ") {
         let rest = strip_prefixes(trimmed, &["export "]);
-        if let Some(name) = symbol_after(rest, "const ", &[':', '='])
-            && rest.contains("=>")
-        {
+        let name = symbol_after(rest, "const ", &[':', '='])?;
+        if rest.contains("=>") {
             return Some(format!("const {name}"));
         }
     }
@@ -5804,5 +5835,49 @@ beta
             .env("GIT_COMMITTER_EMAIL", "test@test")
             .output()
             .unwrap();
+    }
+
+    #[test]
+    fn extract_ts_plain_and_exported_functions() {
+        assert_eq!(
+            extract_ts_symbol("function foo(a) {"),
+            Some("function foo".into())
+        );
+        assert_eq!(
+            extract_ts_symbol("export function bar(a) {"),
+            Some("export function bar".into())
+        );
+        assert_eq!(
+            extract_ts_symbol("export default async function baz(a) {"),
+            Some("export function baz".into()),
+        );
+    }
+
+    #[test]
+    fn extract_ts_classes_interfaces_and_consts() {
+        assert_eq!(extract_ts_symbol("class Foo {"), Some("class Foo".into()));
+        assert_eq!(
+            extract_ts_symbol("export abstract class Bar implements X {"),
+            Some("class Bar".into()),
+        );
+        assert_eq!(
+            extract_ts_symbol("interface IFoo {"),
+            Some("interface IFoo".into())
+        );
+        assert_eq!(
+            extract_ts_symbol("export interface IFoo {"),
+            Some("interface IFoo".into()),
+        );
+        assert_eq!(
+            extract_ts_symbol("const pick = (a) => a[0]"),
+            Some("const pick".into()),
+        );
+    }
+
+    #[test]
+    fn extract_ts_ignores_comments_and_non_declarations() {
+        assert_eq!(extract_ts_symbol("// comment"), None);
+        assert_eq!(extract_ts_symbol("const plain = 42"), None);
+        assert_eq!(extract_ts_symbol("not a symbol"), None);
     }
 }

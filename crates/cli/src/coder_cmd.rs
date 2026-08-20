@@ -53,7 +53,10 @@ fn usage() -> &'static str {
   liberado coder smoke              validate the coder runner process boundary"
 }
 
-fn cmd_smoke(args: &mut dyn Iterator<Item = String>) -> Result<(), Box<dyn std::error::Error>> {
+/// Handle the `-h`/`--help`/unknown-arg cases of `coder smoke`.
+fn smoke_arg_check(
+    args: &mut dyn Iterator<Item = String>,
+) -> Result<(), Box<dyn std::error::Error>> {
     if let Some(arg) = args.next() {
         if arg == "-h" || arg == "--help" {
             println!("usage: liberado coder smoke");
@@ -61,17 +64,24 @@ fn cmd_smoke(args: &mut dyn Iterator<Item = String>) -> Result<(), Box<dyn std::
         }
         return Err("usage: liberado coder smoke".into());
     }
+    Ok(())
+}
 
-    let root = crate::crate_map_cmd::repository_root()?;
+/// Build the coder runner binary. The build failure names itself.
+fn smoke_build_runner(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
     println!("== building liberado-coder-runner ==");
     let build = std_command("cargo")
         .args(["build", "--locked", "-p", "liberado-coder-runner"])
-        .current_dir(&root)
+        .current_dir(root)
         .status()?;
     if !build.success() {
         return Err("liberado-coder-runner build failed".into());
     }
+    Ok(())
+}
 
+/// Resolve the built runner binary, erroring when it is absent.
+fn smoke_runner_path(root: &Path) -> Result<PathBuf, Box<dyn std::error::Error>> {
     let runner = root.join("target").join("debug").join(if cfg!(windows) {
         "liberado-coder-run.exe"
     } else {
@@ -85,7 +95,21 @@ fn cmd_smoke(args: &mut dyn Iterator<Item = String>) -> Result<(), Box<dyn std::
         .into());
     }
     println!("binary: {}", runner.display());
+    Ok(runner)
+}
 
+/// Provider name for the probe, from `LIBERADO_CODER_PROVIDER` (default `openrouter`).
+fn smoke_provider() -> String {
+    std::env::var("LIBERADO_CODER_PROVIDER").unwrap_or_else(|_| "openrouter".to_owned())
+}
+
+/// Run the smoke probe: build the smoke request in a fresh temp repository, invoke the runner
+/// against it, and capture its verdict. Returns (did the run succeed, stdout, stderr, exit text).
+/// The real binary is the exercise; `cmd_smoke` only classifies the captured verdict.
+fn run_smoke_probe(
+    root: &Path,
+    runner: &Path,
+) -> Result<(bool, String, String, String), Box<dyn std::error::Error>> {
     let temp = tempfile::tempdir()?;
     initialize_smoke_repository(temp.path())?;
     let request_path = temp.path().join("request.json");
@@ -93,43 +117,61 @@ fn cmd_smoke(args: &mut dyn Iterator<Item = String>) -> Result<(), Box<dyn std::
         &request_path,
         serde_json::to_vec_pretty(&smoke_request(temp.path()))?,
     )?;
-
-    println!("== process boundary smoke (expects provider key or clean failure) ==");
-    let provider =
-        std::env::var("LIBERADO_CODER_PROVIDER").unwrap_or_else(|_| "openrouter".to_owned());
-    let output = std_command(&runner)
+    let provider = smoke_provider();
+    let output = std_command(runner)
         .args([
             "--request",
             request_path.to_str().ok_or("request path is not UTF-8")?,
         ])
         .env("LIBERADO_CODER_PROVIDER", provider)
-        .current_dir(&root)
+        .current_dir(root)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .output()?;
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    if output.status.success() {
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    Ok((
+        output.status.success(),
+        stdout,
+        stderr,
+        format!("{}", output.status),
+    ))
+}
+
+fn cmd_smoke(args: &mut dyn Iterator<Item = String>) -> Result<(), Box<dyn std::error::Error>> {
+    smoke_arg_check(args)?;
+
+    let root = crate::crate_map_cmd::repository_root()?;
+    smoke_build_runner(&root)?;
+    let runner = smoke_runner_path(&root)?;
+
+    println!("== process boundary smoke (expects provider key or clean failure) ==");
+    let (success, stdout, stderr, status) = run_smoke_probe(&root, &runner)?;
+    if success {
         println!("OK: live provider completed a coding run");
         return Ok(());
     }
 
-    let combined = format!("{stdout}\n{stderr}").to_lowercase();
-    if ["api key", "required for", "provider"]
-        .iter()
-        .any(|marker| combined.contains(marker))
-    {
+    if smoke_boundary_reached(stdout.as_str(), stderr.as_str()) {
         println!("OK: runner reached the provider boundary without credentials");
-        println!("  exit status: {}", output.status);
+        println!("  exit status: {status}");
         return Ok(());
     }
 
-    Err(format!(
-        "coder smoke failed with {}:\n{}",
-        output.status,
-        combined.trim()
-    )
-    .into())
+    let combined = format!("{stdout}\n{stderr}")
+        .to_lowercase()
+        .trim()
+        .to_string();
+    Err(format!("coder smoke failed with {status}:\n{combined}").into())
+}
+
+/// Classify a failed runner invocation: did it reach the provider boundary without
+/// credentials (a pass for smoke), or die earlier (a real failure)?
+fn smoke_boundary_reached(stdout: &str, stderr: &str) -> bool {
+    let combined = format!("{stdout}\n{stderr}").to_lowercase();
+    ["api key", "required for", "provider"]
+        .iter()
+        .any(|marker| combined.contains(marker))
 }
 
 fn initialize_smoke_repository(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
@@ -493,7 +535,8 @@ fn cmd_import(args: &mut dyn Iterator<Item = String>) -> Result<(), Box<dyn std:
 mod tests {
     use super::{
         cmd_compare, cmd_compare_reset, cmd_diff, cmd_import, cmd_trace, default_trace_dirs,
-        reject_sibling_links, run_git_capture, smoke_request,
+        reject_sibling_links, run_git_capture, smoke_arg_check, smoke_boundary_reached,
+        smoke_request,
     };
     use std::fs;
     use std::path::{Path, PathBuf};
@@ -512,6 +555,37 @@ mod tests {
             0
         );
         assert_eq!(request["config"]["path_policy"]["deny_globs"][0], ".git/**");
+    }
+
+    #[test]
+    fn smoke_arg_check_accepts_help_and_rejects_unknown_args() {
+        assert!(smoke_arg_check(&mut vec!["-h".to_owned()].into_iter()).is_ok());
+        assert!(smoke_arg_check(&mut vec!["--help".to_owned()].into_iter()).is_ok());
+        assert!(smoke_arg_check(&mut vec!["extra".to_owned()].into_iter()).is_err());
+        assert!(smoke_arg_check(&mut vec![].into_iter()).is_ok());
+    }
+
+    #[test]
+    fn smoke_boundary_reached_flags_provider_credential_messages() {
+        assert!(smoke_boundary_reached("", "API key required for provider"));
+        assert!(smoke_boundary_reached("no provider key found", ""));
+        assert!(smoke_boundary_reached(
+            "Please configure a Provider first",
+            ""
+        ));
+    }
+
+    #[test]
+    fn smoke_boundary_reached_is_case_insensitive() {
+        assert!(smoke_boundary_reached("", "Api Key"));
+        assert!(smoke_boundary_reached("PROVIDER", ""));
+    }
+
+    #[test]
+    fn smoke_boundary_reached_ignores_unrelated_failures() {
+        assert!(!smoke_boundary_reached("", "segmentation fault"));
+        assert!(!smoke_boundary_reached("", ""));
+        assert!(!smoke_boundary_reached("build failed", ""));
     }
 
     #[test]

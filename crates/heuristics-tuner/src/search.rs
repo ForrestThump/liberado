@@ -172,63 +172,11 @@ pub async fn run_tuner(config: TunerConfig) -> TunerResult {
             break;
         }
 
-        let mut pool: Vec<Candidate> = Vec::new();
-
-        for (parent_index, (parent, parent_fitness)) in beam.iter().enumerate() {
-            for _ in 0..config.mutations_per_candidate {
-                if budget.exhausted() {
-                    break;
-                }
-                let failing = parent_fitness.failing();
-                match mutate(
-                    config.meta_provider.as_ref(),
-                    &parent.prompt,
-                    &failing,
-                    &budget,
-                )
-                .await
-                {
-                    Ok(prompt) => pool.push(Candidate {
-                        prompt,
-                        origin: CandidateOrigin::MutatedFrom {
-                            parent_index,
-                            parent_accuracy: parent_fitness.accuracy,
-                        },
-                    }),
-                    Err(_) => continue, // logged inside mutate(); skip this slot, not the run
-                }
-            }
-        }
-
-        for _ in 0..config.cold_starts_per_generation {
-            if budget.exhausted() {
-                break;
-            }
-            if let Ok(prompt) = cold_start(config.meta_provider.as_ref(), &budget).await {
-                pool.push(Candidate {
-                    prompt,
-                    origin: CandidateOrigin::ColdStart,
-                });
-            }
-        }
-
+        let pool = gather_generation_candidates(&beam, &config, &budget).await;
         if pool.is_empty() {
             break; // budget ran out before a single candidate could be produced this generation
         }
-
-        let mut scored = Vec::with_capacity(pool.len());
-        for candidate in pool {
-            let fitness = score_candidate(
-                &candidate.prompt,
-                &config.scoring_providers,
-                config.samples_per_scenario,
-                config.max_scenarios,
-                &budget,
-            )
-            .await;
-            scored.push((candidate, fitness));
-        }
-
+        let scored = score_pool(pool, &config, &budget).await;
         beam = advance_beam(&beam, scored, config.beam_width);
 
         // Record this generation's best-so-far, with its own justification call — a human
@@ -240,7 +188,7 @@ pub async fn run_tuner(config: TunerConfig) -> TunerResult {
             &budget,
         )
         .await;
-        let rubric = format_rubric(
+        let record_rubric = format_rubric(
             best_candidate,
             best_fitness,
             &baseline_fitness,
@@ -250,17 +198,12 @@ pub async fn run_tuner(config: TunerConfig) -> TunerResult {
             generation: generation_index + 1,
             candidate: best_candidate.clone(),
             fitness: best_fitness.clone(),
-            rubric,
+            rubric: record_rubric,
         });
     }
 
     let (winner, winner_fitness) = beam.into_iter().next().expect("beam is never empty");
-    // The final generation's record already carries the same candidate + a rubric against the
-    // baseline — reuse it rather than spending another justification call on an identical prompt.
-    let rubric = generations
-        .last()
-        .map(|g| g.rubric.clone())
-        .unwrap_or_else(|| format_rubric(&winner, &winner_fitness, &baseline_fitness, None));
+    let rubric = finalize_result(&winner, &winner_fitness, &baseline_fitness, &generations);
 
     TunerResult {
         winner,
@@ -269,6 +212,91 @@ pub async fn run_tuner(config: TunerConfig) -> TunerResult {
         rubric,
         generations,
     }
+}
+
+/// Produce one generation's candidate pool: mutations from every beam parent plus independent cold
+/// starts, stopping when the shared budget is exhausted.
+async fn gather_generation_candidates(
+    beam: &[(Candidate, CandidateFitness)],
+    config: &TunerConfig,
+    budget: &Budget,
+) -> Vec<Candidate> {
+    let mut pool: Vec<Candidate> = Vec::new();
+
+    for (parent_index, (parent, parent_fitness)) in beam.iter().enumerate() {
+        for _ in 0..config.mutations_per_candidate {
+            if budget.exhausted() {
+                break;
+            }
+            let failing = parent_fitness.failing();
+            if let Ok(prompt) = mutate(
+                config.meta_provider.as_ref(),
+                &parent.prompt,
+                &failing,
+                budget,
+            )
+            .await
+            {
+                pool.push(Candidate {
+                    prompt,
+                    origin: CandidateOrigin::MutatedFrom {
+                        parent_index,
+                        parent_accuracy: parent_fitness.accuracy,
+                    },
+                });
+            } // Err logged inside mutate(); skip this slot, not the run
+        }
+    }
+
+    for _ in 0..config.cold_starts_per_generation {
+        if budget.exhausted() {
+            break;
+        }
+        if let Ok(prompt) = cold_start(config.meta_provider.as_ref(), budget).await {
+            pool.push(Candidate {
+                prompt,
+                origin: CandidateOrigin::ColdStart,
+            });
+        }
+    }
+
+    pool
+}
+
+/// Score every candidate in a pool against the scenario set.
+async fn score_pool(
+    pool: Vec<Candidate>,
+    config: &TunerConfig,
+    budget: &Budget,
+) -> Vec<(Candidate, CandidateFitness)> {
+    let mut scored = Vec::with_capacity(pool.len());
+    for candidate in pool {
+        let fitness = score_candidate(
+            &candidate.prompt,
+            &config.scoring_providers,
+            config.samples_per_scenario,
+            config.max_scenarios,
+            budget,
+        )
+        .await;
+        scored.push((candidate, fitness));
+    }
+    scored
+}
+
+/// The final result's rubric: the winner + the last generation's rubric (same candidate), falling
+/// back to a fresh one when no generation finished (e.g. the budget died during the first). Pure —
+/// no model call — so the reuse-vs-fallback decision is directly testable.
+fn finalize_result(
+    winner: &Candidate,
+    winner_fitness: &CandidateFitness,
+    baseline_fitness: &CandidateFitness,
+    generations: &[GenerationRecord],
+) -> String {
+    generations
+        .last()
+        .map(|g| g.rubric.clone())
+        .unwrap_or_else(|| format_rubric(winner, winner_fitness, baseline_fitness, None))
 }
 
 /// Request a justification unless the budget is already exhausted — a best-effort call, not one
@@ -413,6 +441,51 @@ mod tests {
         let next = advance_beam(&beam, pool, 1);
         assert_eq!(next.len(), 1);
         assert_eq!(next[0].0.prompt, "unsafe-incumbent");
+    }
+
+    #[test]
+    fn finalize_result_reuses_the_last_generation_rubric_when_generations_exist() {
+        let winner = candidate("best");
+        let winner_fit = fitness(0.9, 1.0, 0);
+        let baseline = fitness(0.5, 1.0, 0);
+        let generations = vec![
+            GenerationRecord {
+                generation: 1,
+                candidate: candidate("first"),
+                fitness: fitness(0.6, 1.0, 0),
+                rubric: "record-1".to_string(),
+            },
+            GenerationRecord {
+                generation: 2,
+                candidate: winner.clone(),
+                fitness: winner_fit.clone(),
+                rubric: "record-2 (already the winner)".to_string(),
+            },
+        ];
+        // Non-empty generations: the last generation's rubric (same candidate, already formatted
+        // against the baseline) is reused verbatim rather than re-formatted.
+        assert_eq!(
+            finalize_result(&winner, &winner_fit, &baseline, &generations),
+            "record-2 (already the winner)",
+        );
+    }
+
+    #[test]
+    fn finalize_result_formats_a_fresh_rubric_when_no_generation_finished() {
+        let winner = candidate("only");
+        let winner_fit = fitness(0.9, 1.0, 0);
+        let baseline = fitness(0.5, 1.0, 0);
+        // Empty generations (the budget died before the first generation could be scored): the
+        // final rubric must be computed fresh, with no justification.
+        let rubric = finalize_result(&winner, &winner_fit, &baseline, &[]);
+        assert!(
+            rubric.contains("Heuristics Tuner Proposal"),
+            "a fresh rubric is formatted"
+        );
+        assert!(
+            rubric.contains("0.9") && rubric.contains("0.5"),
+            "the rubric names both the winner and the baseline accuracy\n{rubric}"
+        );
     }
 
     #[tokio::test]

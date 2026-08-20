@@ -1745,11 +1745,18 @@ mod preserve_work_tests {
         let repo = temp_repo();
         std::fs::write(repo.path().join("work.txt"), "agent output\n").expect("write");
 
-        let empty_cfg = tempfile::NamedTempFile::new().expect("cfg");
+        // An empty config file that survives the test: a config that was deleted mid-run would
+        // take a concurrent git down with ``unknown error occurred while reading the
+        // configuration files`` (the AGENTS.md deletion-mid-read race). Keep it alive so the
+        // var, while it names this path, always names something readable.
+        let (_kept, empty_cfg_path) = tempfile::NamedTempFile::new()
+            .expect("cfg")
+            .keep()
+            .expect("keep");
         let prior = std::env::var_os("GIT_CONFIG_GLOBAL");
         // SAFETY: ENV_LOCK excludes every other git-touching test in this binary, and the
         // previous value is restored below rather than blindly removed.
-        unsafe { std::env::set_var("GIT_CONFIG_GLOBAL", empty_cfg.path()) };
+        unsafe { std::env::set_var("GIT_CONFIG_GLOBAL", &empty_cfg_path) };
 
         let result = preserve_work(repo.path(), "no-identity", false).await;
 
@@ -2109,14 +2116,20 @@ api_key_env = "CUSTOM_API_KEY"
     // ── ensure_git_repo / configure_git_safe_directory ─────────────────────────
 
     /// A gitconfig with an identity, so `git commit` works without ambient config (CI-style).
-    fn identity_gitconfig() -> tempfile::NamedTempFile {
+    fn identity_gitconfig() -> std::path::PathBuf {
         let f = tempfile::NamedTempFile::new().unwrap();
         std::fs::write(
             f.path(),
             "[user]\n\tname = test-runner\n\temail = runner@test.local\n",
         )
         .unwrap();
-        f
+        // Keep the file alive for the whole test binary: a *deleted* config that a concurrent
+        // git still holds by path (captured before the env restore) fails with ``unknown error
+        // occurred while reading the configuration files``. This is the same deletion-mid-read
+        // race AGENTS.md documents; keeping avoids the window entirely. The leak is one tiny
+        // file per run in the OS temp dir, which CI runners wipe per-job.
+        let (_, path) = f.keep().expect("keep the test gitconfig");
+        path
     }
 
     fn temp_repo() -> tempfile::TempDir {
@@ -2171,7 +2184,7 @@ api_key_env = "CUSTOM_API_KEY"
         let repo = temp_repo();
         let cfg = identity_gitconfig();
         let prior = std::env::var_os("GIT_CONFIG_GLOBAL");
-        unsafe { std::env::set_var("GIT_CONFIG_GLOBAL", cfg.path()) };
+        unsafe { std::env::set_var("GIT_CONFIG_GLOBAL", &cfg) };
 
         let result = ensure_git_repo(repo.path()).await;
 
@@ -2191,7 +2204,7 @@ api_key_env = "CUSTOM_API_KEY"
         let dir = tempfile::tempdir().unwrap();
         let cfg = identity_gitconfig();
         let prior = std::env::var_os("GIT_CONFIG_GLOBAL");
-        unsafe { std::env::set_var("GIT_CONFIG_GLOBAL", cfg.path()) };
+        unsafe { std::env::set_var("GIT_CONFIG_GLOBAL", &cfg) };
 
         let result = ensure_git_repo(dir.path()).await;
 
@@ -2219,21 +2232,21 @@ api_key_env = "CUSTOM_API_KEY"
         let cfg = identity_gitconfig();
         // A foreign entry from an earlier machine config: must not short-circuit the add.
         std::fs::write(
-            cfg.path(),
+            &cfg,
             format!(
                 "{}\n[safe]\n\tdirectory = C:/other/work\n",
-                std::fs::read_to_string(cfg.path()).unwrap()
+                std::fs::read_to_string(&cfg).unwrap()
             ),
         )
         .unwrap();
 
         let prior = std::env::var_os("GIT_CONFIG_GLOBAL");
-        unsafe { std::env::set_var("GIT_CONFIG_GLOBAL", cfg.path()) };
+        unsafe { std::env::set_var("GIT_CONFIG_GLOBAL", &cfg) };
 
         let first = configure_git_safe_directory(repo.path());
-        let before = std::fs::read_to_string(cfg.path()).unwrap();
+        let before = std::fs::read_to_string(&cfg).unwrap();
         let second = configure_git_safe_directory(repo.path());
-        let after = std::fs::read_to_string(cfg.path()).unwrap();
+        let after = std::fs::read_to_string(&cfg).unwrap();
 
         // Restore the env before any assertion, so a failed assert can't leave it poisoned.
         unsafe {

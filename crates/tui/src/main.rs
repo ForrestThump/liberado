@@ -79,14 +79,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         stream_state: stream_state.clone(),
     };
 
-    run_loop(&mut terminal, &runner, &mut action_rx, &action_tx).await
+    run_loop(&mut terminal, &runner, &mut action_rx).await
 }
 
 async fn run_loop(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     runner: &EffectRunner,
     action_rx: &mut mpsc::Receiver<Action>,
-    _action_tx: &mpsc::Sender<Action>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // Spinner phase is wall-clock based so reconnect/stream glyphs advance at a fixed
     // human-readable rate (~SPINNER_FRAME_MS each), not once per ~16 ms redraw.
@@ -97,63 +96,109 @@ async fn run_loop(
         }
 
         if event::poll(POLL_INTERVAL)? {
-            match event::read()? {
-                CEvent::Key(key) => {
-                    if key.kind == KeyEventKind::Press || key.kind == KeyEventKind::Repeat {
-                        let effects = {
-                            let mut app_guard = runner.app.lock();
-                            app_guard.handle_key(key)
-                        };
-                        for effect in effects {
-                            runner.run(effect).await;
-                        }
-                    }
-                }
-                CEvent::Mouse(mouse) => {
-                    let effects = {
-                        let mut app_guard = runner.app.lock();
-                        app_guard.handle_mouse(mouse)
-                    };
-                    for effect in effects {
-                        runner.run(effect).await;
-                    }
-                }
-                CEvent::Resize(_, _) => {
-                    // Layout is recomputed from frame.area() on the next draw.
-                    runner.app.lock().mark_dirty();
-                }
-                _ => {}
-            }
+            handle_terminal_event(runner, event::read()?).await;
         }
 
-        'action_loop: while let Ok(action) = action_rx.try_recv() {
-            let effects = {
-                let mut app_guard = runner.app.lock();
-                app_guard.update(action)
-            };
-            for effect in effects {
-                if matches!(effect, Effect::Quit) {
-                    runner.should_quit.store(true, Ordering::Relaxed);
-                    break 'action_loop;
-                }
-                runner.run(effect).await;
-            }
-        }
+        drain_actions(runner, action_rx).await;
 
         // T1.3: skip full redraw when state is unchanged and nothing is animating.
-        let should_draw = runner.app.lock().should_draw();
-        if should_draw {
-            let spinner_tick =
-                (spinner_origin.elapsed().as_millis() / u128::from(SPINNER_FRAME_MS)) as u8;
-            terminal.draw(|frame| {
-                let mut app_guard = runner.app.lock();
-                ui::draw(frame, &mut app_guard, spinner_tick);
-                app_guard.clear_dirty();
-            })?;
-        }
+        draw_if_needed(terminal, runner, &spinner_origin).await?;
     }
 
     Ok(())
+}
+
+/// Dispatch one terminal event into the app and run the effects it produced.
+async fn handle_terminal_event(runner: &EffectRunner, event: CEvent) {
+    match event {
+        CEvent::Key(key) => {
+            if key.kind == KeyEventKind::Press || key.kind == KeyEventKind::Repeat {
+                let effects = {
+                    let mut app_guard = runner.app.lock();
+                    app_guard.handle_key(key)
+                };
+                for effect in effects {
+                    runner.run(effect).await;
+                }
+            }
+        }
+        CEvent::Mouse(mouse) => {
+            let effects = {
+                let mut app_guard = runner.app.lock();
+                app_guard.handle_mouse(mouse)
+            };
+            for effect in effects {
+                runner.run(effect).await;
+            }
+        }
+        CEvent::Resize(_, _) => {
+            // Layout is recomputed from frame.area() on the next draw.
+            runner.app.lock().mark_dirty();
+        }
+        _ => {}
+    }
+}
+
+/// Drain queued actions into the app until the queue is empty or a Quit effect stops the loop.
+async fn drain_actions(runner: &EffectRunner, action_rx: &mut mpsc::Receiver<Action>) {
+    'action_loop: while let Ok(action) = action_rx.try_recv() {
+        let effects = {
+            let mut app_guard = runner.app.lock();
+            app_guard.update(action)
+        };
+        for effect in effects {
+            if matches!(effect, Effect::Quit) {
+                runner.should_quit.store(true, Ordering::Relaxed);
+                break 'action_loop;
+            }
+            runner.run(effect).await;
+        }
+    }
+}
+
+/// Redraw when state changed or something is animating.
+async fn draw_if_needed(
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    runner: &EffectRunner,
+    spinner_origin: &Instant,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if runner.app.lock().should_draw() {
+        let spinner_tick =
+            (spinner_origin.elapsed().as_millis() / u128::from(SPINNER_FRAME_MS)) as u8;
+        terminal.draw(|frame| {
+            let mut app_guard = runner.app.lock();
+            ui::draw(frame, &mut app_guard, spinner_tick);
+            app_guard.clear_dirty();
+        })?;
+    }
+    Ok(())
+}
+
+/// Fold one status-poll result into the connection state machine and return the actions to
+/// enqueue. Pure, so the failure threshold and reconnect logic are unit-testable without tokio.
+fn poll_step<E>(
+    connected: bool,
+    failures: u32,
+    status: Result<Option<api::DaemonStatus>, E>,
+) -> (bool, u32, Vec<Action>) {
+    match status {
+        Ok(Some(status)) => {
+            let mut actions = Vec::new();
+            if !connected {
+                actions.push(Action::ConnectionStatus(true));
+            }
+            actions.push(Action::StatusUpdate(status));
+            (true, 0, actions)
+        }
+        Ok(None) | Err(_) => {
+            let failures = failures + 1;
+            if failures >= MAX_POLL_FAILURES && connected {
+                (false, failures, vec![Action::ConnectionStatus(false)])
+            } else {
+                (connected, failures, Vec::new())
+            }
+        }
+    }
 }
 
 fn spawn_poller(tx: mpsc::Sender<Action>, server: String, client: reqwest::Client) {
@@ -165,36 +210,15 @@ fn spawn_poller(tx: mpsc::Sender<Action>, server: String, client: reqwest::Clien
             interval.tick().await;
 
             let status_result = api::fetch_status(&client, &server).await;
-            match status_result {
-                Ok(Some(status)) => {
-                    if !connected && tx.try_send(Action::ConnectionStatus(true)).is_err() {
-                        tracing::warn!("action channel full, dropping ConnectionStatus");
-                    }
-                    connected = true;
-                    failures = 0;
-                    if tx.try_send(Action::StatusUpdate(status)).is_err() {
-                        tracing::warn!("action channel full, dropping StatusUpdate");
-                    }
-                }
-                Ok(None) => {
-                    failures += 1;
-                    if failures >= MAX_POLL_FAILURES && connected {
-                        connected = false;
-                        if tx.try_send(Action::ConnectionStatus(false)).is_err() {
-                            tracing::warn!("action channel full, dropping ConnectionStatus");
-                        }
-                    }
-                }
-                Err(_) => {
-                    failures += 1;
-                    if failures >= MAX_POLL_FAILURES && connected {
-                        connected = false;
-                        if tx.try_send(Action::ConnectionStatus(false)).is_err() {
-                            tracing::warn!("action channel full, dropping ConnectionStatus");
-                        }
-                    }
+            let (new_connected, new_failures, status_actions) =
+                poll_step(connected, failures, status_result);
+            for action in status_actions {
+                if tx.try_send(action).is_err() {
+                    tracing::warn!("action channel full, dropping status action");
                 }
             }
+            connected = new_connected;
+            failures = new_failures;
 
             // Reactions feed is intentionally not shown in the sparse layout.
             // Conversations still poll so /session browser stays fresh.
@@ -214,4 +238,126 @@ fn spawn_poller(tx: mpsc::Sender<Action>, server: String, client: reqwest::Clien
             }
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use liberado_theme::ThemeRegistry;
+    use liberado_tui::api::DaemonStatus;
+    use liberado_tui::effects::{EffectRunner, StreamState};
+
+    fn test_runner() -> (EffectRunner, mpsc::Sender<Action>, mpsc::Receiver<Action>) {
+        let app = Arc::new(Mutex::new(App::new(
+            "http://127.0.0.1:4201".to_string(),
+            ThemeRegistry::new(),
+        )));
+        let should_quit = Arc::new(AtomicBool::new(false));
+        let (action_tx, action_rx) = mpsc::channel::<Action>(32);
+        let runner = EffectRunner {
+            app: app.clone(),
+            should_quit: should_quit.clone(),
+            action_tx: action_tx.clone(),
+            client: reqwest::Client::new(),
+            stream_state: Arc::new(Mutex::new(StreamState::default())),
+        };
+        (runner, action_tx, action_rx)
+    }
+
+    /// Queued actions are drained until the queue is empty.
+    #[tokio::test]
+    async fn drain_actions_empties_the_queue() {
+        let (runner, action_tx, mut action_rx) = test_runner();
+        action_tx.send(Action::SseDone).await.unwrap();
+        action_tx.send(Action::SseDone).await.unwrap();
+        drain_actions(&runner, &mut action_rx).await;
+        assert!(
+            action_rx.try_recv().is_err(),
+            "queue should be empty after drain_actions"
+        );
+    }
+
+    fn test_status(running: bool) -> DaemonStatus {
+        DaemonStatus {
+            running,
+            vault_path: "/vault".into(),
+            uptime_seconds: 0,
+            watcher_active: false,
+            dispatcher_attached: false,
+            orchestrator_attached: false,
+            reactions_seen: 0,
+            model_name: None,
+            token_usage_total: None,
+            context_window: None,
+            chat_tools: 0,
+            chat_tool_names: Vec::new(),
+            enter_sends: true,
+        }
+    }
+
+    #[test]
+    fn poll_step_connects_and_reports_status() {
+        let (connected, failures, actions) =
+            poll_step::<std::io::Error>(false, 0, Ok(Some(test_status(true))));
+        assert!(connected);
+        assert_eq!(failures, 0);
+        assert_eq!(actions.len(), 2);
+        assert!(matches!(actions[0], Action::ConnectionStatus(true)));
+        assert!(matches!(actions[1], Action::StatusUpdate(_)));
+    }
+
+    #[test]
+    fn poll_step_stays_connected_without_duplicate_connect_event() {
+        let (connected, failures, actions) =
+            poll_step::<std::io::Error>(true, 0, Ok(Some(test_status(false))));
+        assert!(connected);
+        assert_eq!(failures, 0);
+        assert_eq!(actions.len(), 1);
+        assert!(matches!(actions[0], Action::StatusUpdate(_)));
+    }
+
+    #[test]
+    fn poll_step_ignores_a_single_missed_poll() {
+        let (connected, failures, actions) = poll_step::<std::io::Error>(true, 0, Ok(None));
+        assert!(connected);
+        assert_eq!(failures, 1);
+        assert!(actions.is_empty());
+    }
+
+    #[test]
+    fn poll_step_disconnects_at_the_failure_threshold() {
+        let (connected, failures, actions) = poll_step::<std::io::Error>(true, 1, Ok(None));
+        assert!(!connected);
+        assert_eq!(failures, 2);
+        assert_eq!(actions.len(), 1);
+        assert!(matches!(actions[0], Action::ConnectionStatus(false)));
+    }
+
+    #[test]
+    fn poll_step_error_counts_like_a_missed_poll() {
+        let err = std::io::Error::other("poll failed");
+        let (connected, failures, actions) = poll_step(true, 1, Err(err));
+        assert!(!connected);
+        assert_eq!(failures, 2);
+        assert_eq!(actions.len(), 1);
+        assert!(matches!(actions[0], Action::ConnectionStatus(false)));
+    }
+
+    #[test]
+    fn poll_step_reconnects_after_being_disconnected() {
+        let (connected, failures, actions) =
+            poll_step::<std::io::Error>(false, 2, Ok(Some(test_status(true))));
+        assert!(connected);
+        assert_eq!(failures, 0);
+        assert_eq!(actions.len(), 2);
+        assert!(matches!(actions[0], Action::ConnectionStatus(true)));
+    }
+
+    #[test]
+    fn poll_step_disconnected_none_does_not_resend_disconnect() {
+        let (connected, failures, actions) = poll_step::<std::io::Error>(false, 0, Ok(None));
+        assert!(!connected);
+        assert_eq!(failures, 1);
+        assert!(actions.is_empty());
+    }
 }

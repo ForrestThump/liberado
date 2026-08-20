@@ -840,13 +840,21 @@ fn handle_clean(
     Ok(())
 }
 
+/// Pure gate: whether the CI signal is too weak for `tick` to act. `pending` and `none` both mean
+/// the checks have not produced a settled outcome, so `tick` returns without touching the PR. Kept
+/// separate from `settle`, which has side effects (it may wait or label) and must not run on a nil
+/// signal. The terminal-PR short-circuit stays inline in `tick` because it also guards the
+/// `ci_status` network call below.
+fn tick_idle(status: &str) -> bool {
+    status == "pending" || status == "none"
+}
+
 fn tick(cfg: &Config, pr: &mut Pr, dry: bool) -> Result<(), Box<dyn std::error::Error>> {
     if pr.terminal() {
         return Ok(());
     }
-    match ci_status(cfg, pr)? {
-        "pending" | "none" => return Ok(()),
-        _ => {}
+    if tick_idle(ci_status(cfg, pr)?) {
+        return Ok(());
     }
     if settle(cfg, pr, dry)? == ReviewTransition::Waiting {
         return Ok(());
@@ -1220,6 +1228,13 @@ mod tests {
         assert!(seed(&cfg, &task, true).is_ok());
         // A missing file is still an error in dry mode.
         assert!(seed(&cfg, &temp.path().join("nope.txt"), true).is_err());
+    }
+
+    #[test]
+    fn tick_idle_gates_pending_and_none_but_not_settled() {
+        assert!(tick_idle("pending"), "pending CI is not a settled signal");
+        assert!(tick_idle("none"), "no CI run is not a settled signal");
+        assert!(!tick_idle("completed"), "settled CI lets tick proceed");
     }
 
     /// The baseline cache is read without touching the network: a `baselines/<short>.json` file

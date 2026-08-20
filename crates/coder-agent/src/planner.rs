@@ -221,4 +221,213 @@ mod tests {
         assert_eq!(plan.steps.len(), 1);
         assert!(plan.as_context_block().contains("hello.txt"));
     }
+
+    #[test]
+    fn parses_embedded_json_with_surrounding_text() {
+        let raw = "thinking: ok. {\"summary\":\"s\",\"steps\":[\"a\",\"b\"]} done";
+        let plan = parse_plan(raw).unwrap();
+        assert_eq!(plan.summary, "s");
+        assert_eq!(plan.steps, vec!["a".to_string(), "b".to_string()]);
+    }
+
+    #[test]
+    fn missing_closing_brace_is_an_error() {
+        let err = parse_plan(r#"{"summary":"oops"#).unwrap_err();
+        assert!(err.contains("no closing brace"), "{err}");
+    }
+
+    #[test]
+    fn invalid_json_is_an_error() {
+        let err = parse_plan("not json at all").unwrap_err();
+        assert!(!err.is_empty());
+    }
+
+    #[test]
+    fn missing_fields_default_to_empty() {
+        let plan = parse_plan(r#"{"summary":"only"}"#).unwrap();
+        assert_eq!(plan.summary, "only");
+        assert!(plan.steps.is_empty());
+        assert!(plan.likely_files.is_empty());
+        assert!(plan.risks.is_empty());
+    }
+
+    #[test]
+    fn non_string_fields_and_items_are_ignored() {
+        let raw =
+            r#"{"summary":123,"steps":"not-an-array","likely_files":[1,"x",null],"risks":[true]}"#;
+        let plan = parse_plan(raw).unwrap();
+        assert_eq!(plan.summary, "");
+        assert!(plan.steps.is_empty());
+        assert_eq!(plan.likely_files, vec!["x".to_string()]);
+        assert!(plan.risks.is_empty());
+    }
+
+    #[test]
+    fn context_block_lists_every_section() {
+        let plan = PlanOutput {
+            summary: "Add auth".to_string(),
+            steps: vec!["Write handler".to_string(), "Add test".to_string()],
+            likely_files: vec!["src/auth.rs".to_string()],
+            risks: vec!["Token expiry".to_string()],
+        };
+        let block = plan.as_context_block();
+        assert!(block.contains("Summary: Add auth"));
+        assert!(block.contains("1. Write handler"));
+        assert!(block.contains("2. Add test"));
+        assert!(block.contains("- src/auth.rs"));
+        assert!(block.contains("Token expiry"));
+        assert!(block.starts_with("## Planner plan"));
+    }
+
+    #[test]
+    fn context_block_omits_empty_sections_and_trims_summary() {
+        let plan = PlanOutput {
+            summary: "   padded  ".to_string(),
+            steps: vec![],
+            likely_files: vec![],
+            risks: vec![],
+        };
+        let block = plan.as_context_block();
+        assert!(block.contains("Summary: padded"));
+        assert!(!block.contains("Steps:"));
+        assert!(!block.contains("Likely files:"));
+        assert!(!block.contains("Risks:"));
+    }
+
+    #[test]
+    fn parse_plan_skips_json_with_no_leading_brace() {
+        // No `{` anywhere: the whole string is handed to the parser and fails cleanly.
+        let err = parse_plan("plain prose, no braces").unwrap_err();
+        assert!(!err.is_empty());
+    }
+
+    async fn run_with_prompt(plan_json: &str, criteria: &[&str], with_verifiers: bool) -> String {
+        use liberado_coder_core::{CoderTask, CoderTuning, VerifierSpec, WorkspaceRef};
+        use liberado_provider::{CompletionResponse, MockProvider};
+        use std::sync::{Arc, Mutex};
+
+        let provider = Arc::new(MockProvider::with_script(
+            "planner",
+            [CompletionResponse::text(plan_json)],
+        ));
+        let factory = crate::SingleProviderFactory::new(provider.clone());
+
+        let mut request = CoderRunRequest {
+            task: CoderTask::new("t", "build the thing"),
+            workspace: WorkspaceRef::new("/tmp", "HEAD"),
+            config: CoderTuning::default().run_config(),
+            attempt: 1,
+            prior_feedback: vec![],
+            strategist_directive: None,
+        };
+        request.config.planner.prompt = Some("plan it".into());
+        request.task.success_criteria = criteria.iter().map(|s| s.to_string()).collect();
+        if with_verifiers {
+            request.config.verifiers = vec![VerifierSpec::PathsExist {
+                id: "paths".into(),
+                paths: vec!["src/main.rs".into()],
+            }];
+        }
+
+        let events: EventLog = Arc::new(Mutex::new(Vec::new()));
+        run_planner(&factory, &request, &events)
+            .await
+            .expect("planner produced a plan");
+        let received = provider.received_requests();
+        assert!(
+            !received.is_empty(),
+            "planner must send a completion request"
+        );
+        let user = received[0]
+            .messages
+            .iter()
+            .find(|m| m.content.contains("Produce the Plan JSON"))
+            .expect("planner must send a user prompt");
+        user.content.clone()
+    }
+
+    #[tokio::test]
+    async fn run_planner_includes_success_criteria_when_present() {
+        let user = run_with_prompt(
+            r#"{"summary":"add hello","steps":["write hello.txt"]}"#,
+            &["must compile"],
+            false,
+        )
+        .await;
+        assert!(
+            user.contains("Success criteria (prose)"),
+            "prompt must list non-empty success criteria: {user}"
+        );
+    }
+
+    #[tokio::test]
+    async fn run_planner_omits_success_criteria_when_empty() {
+        let user = run_with_prompt(
+            r#"{"summary":"add hello","steps":["write hello.txt"]}"#,
+            &[],
+            false,
+        )
+        .await;
+        assert!(
+            !user.contains("Success criteria (prose)"),
+            "prompt must omit empty success criteria: {user}"
+        );
+    }
+
+    #[tokio::test]
+    async fn run_planner_includes_verifier_ids_when_configured() {
+        let user = run_with_prompt(
+            r#"{"summary":"add hello","steps":["write hello.txt"]}"#,
+            &[],
+            true,
+        )
+        .await;
+        assert!(
+            user.contains("Frozen verifier check ids") && user.contains("paths"),
+            "prompt must list frozen verifier ids: {user}"
+        );
+    }
+
+    #[tokio::test]
+    async fn run_planner_omits_verifier_ids_when_none() {
+        let user = run_with_prompt(
+            r#"{"summary":"add hello","steps":["write hello.txt"]}"#,
+            &[],
+            false,
+        )
+        .await;
+        assert!(
+            !user.contains("Frozen verifier check ids"),
+            "prompt must omit verifiers when none configured: {user}"
+        );
+    }
+
+    #[tokio::test]
+    async fn run_planner_returns_plan_when_steps_exist_but_summary_is_blank() {
+        use liberado_coder_core::{CoderTask, CoderTuning, WorkspaceRef};
+        use liberado_provider::{CompletionResponse, MockProvider};
+        use std::sync::{Arc, Mutex};
+
+        let provider = Arc::new(MockProvider::with_script(
+            "planner",
+            [CompletionResponse::text(r#"{"summary":"","steps":["a"]}"#)],
+        ));
+        let factory = crate::SingleProviderFactory::new(provider.clone());
+        let mut request = CoderRunRequest {
+            task: CoderTask::new("t", "build the thing"),
+            workspace: WorkspaceRef::new("/tmp", "HEAD"),
+            config: CoderTuning::default().run_config(),
+            attempt: 1,
+            prior_feedback: vec![],
+            strategist_directive: None,
+        };
+        request.config.planner.prompt = Some("plan it".into());
+        let events: EventLog = Arc::new(Mutex::new(Vec::new()));
+        let plan = run_planner(&factory, &request, &events).await.unwrap();
+        assert!(
+            plan.is_some(),
+            "a plan with steps but no summary is not an empty plan"
+        );
+        assert_eq!(plan.unwrap().steps, vec!["a".to_string()]);
+    }
 }

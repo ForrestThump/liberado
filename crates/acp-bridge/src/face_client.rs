@@ -159,3 +159,141 @@ fn truncate(s: &str, max: usize) -> String {
         head
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chat_client_contract::native::SseEvent;
+    use std::sync::{Arc, Mutex};
+
+    fn sse(event: &str, data: &str) -> SseEvent {
+        SseEvent {
+            event: event.into(),
+            data: data.into(),
+        }
+    }
+
+    fn dispatch(
+        event: &SseEvent,
+        daemon_session: &mut Option<String>,
+    ) -> (bool, Vec<(String, Value)>) {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let sink = calls.clone();
+        let emit = move |name: &str, value: Value| {
+            sink.lock().unwrap().push((name.to_string(), value));
+            Ok::<_, String>(())
+        };
+        let finished = dispatch_sse(event, daemon_session, "acp-1", &emit).unwrap();
+        (finished, calls.lock().unwrap().clone())
+    }
+
+    #[test]
+    fn dispatch_session_sets_daemon_session() {
+        let mut daemon_session = None;
+        let (finished, calls) = dispatch(&sse("session", "sess-1"), &mut daemon_session);
+        assert!(!finished);
+        assert_eq!(daemon_session.as_deref(), Some("sess-1"));
+        assert!(calls.is_empty());
+    }
+
+    #[test]
+    fn dispatch_token_emits_a_text_chunk() {
+        let mut daemon_session = Some("sess-1".into());
+        let (finished, calls) = dispatch(&sse("token", "hello"), &mut daemon_session);
+        assert!(!finished);
+        assert_eq!(calls.len(), 1);
+        let (name, value) = &calls[0];
+        assert_eq!(name, "session/update");
+        assert_eq!(value["update"]["sessionUpdate"], "agent_message_chunk");
+        assert_eq!(value["update"]["content"]["type"], "text");
+        assert_eq!(value["update"]["content"]["text"], "hello");
+        assert_eq!(value["sessionId"], "acp-1");
+    }
+
+    #[test]
+    fn dispatch_tool_started_formats_the_preview() {
+        let mut daemon_session = None;
+        let data = r#"{"name":"bash","args_preview":"ls -la"}"#;
+        let (finished, calls) = dispatch(&sse("tool_started", data), &mut daemon_session);
+        assert!(!finished);
+        assert_eq!(calls.len(), 1);
+        let text = calls[0].1["update"]["content"]["text"].as_str().unwrap();
+        assert!(text.contains("[tool] bash(ls -la)"), "{text}");
+    }
+
+    #[test]
+    fn dispatch_tool_finished_marks_ok_and_err() {
+        let mut daemon_session = None;
+        let (_, calls) = dispatch(
+            &sse(
+                "tool_finished",
+                r#"{"name":"bash","ok":true,"result_preview":"fine"}"#,
+            ),
+            &mut daemon_session,
+        );
+        let text = calls[0].1["update"]["content"]["text"].as_str().unwrap();
+        assert!(text.contains("[tool] bash ok fine"), "{text}");
+
+        let mut daemon_session = None;
+        let (_, calls) = dispatch(
+            &sse(
+                "tool_finished",
+                r#"{"name":"bash","ok":false,"result_preview":"boom"}"#,
+            ),
+            &mut daemon_session,
+        );
+        let text = calls[0].1["update"]["content"]["text"].as_str().unwrap();
+        assert!(text.contains("[tool] bash err boom"), "{text}");
+    }
+
+    #[test]
+    fn dispatch_session_offered_emits_the_offer() {
+        let mut daemon_session = None;
+        let data = r#"{"id":"g1","domain":"coding","description":"fix the tests"}"#;
+        let (finished, calls) = dispatch(&sse("session_offered", data), &mut daemon_session);
+        assert!(!finished);
+        let text = calls[0].1["update"]["content"]["text"].as_str().unwrap();
+        assert!(text.contains("[offered coding session g1]"), "{text}");
+        assert!(text.contains("fix the tests"), "{text}");
+    }
+
+    #[test]
+    fn dispatch_session_finished_ends_the_turn() {
+        let mut daemon_session = None;
+        let (finished, calls) = dispatch(
+            &sse("session_finished", r#"{"status":"ok","summary":"done"}"#),
+            &mut daemon_session,
+        );
+        assert!(finished);
+        assert!(calls.is_empty());
+    }
+
+    #[test]
+    fn dispatch_failed_ends_the_turn_with_an_error_line() {
+        let mut daemon_session = None;
+        let (finished, calls) =
+            dispatch(&sse("failed", r#"{"message":"boom"}"#), &mut daemon_session);
+        assert!(finished);
+        let text = calls[0].1["update"]["content"]["text"].as_str().unwrap();
+        assert!(text.contains("[error] boom"), "{text}");
+    }
+
+    #[test]
+    fn dispatch_unparseable_payload_is_non_fatal() {
+        let mut daemon_session = None;
+        let (finished, calls) = dispatch(
+            &sse("tool_started", "this is not json"),
+            &mut daemon_session,
+        );
+        assert!(!finished);
+        assert!(calls.is_empty());
+    }
+
+    #[test]
+    fn dispatch_unknown_event_kind_is_a_noop() {
+        let mut daemon_session = None;
+        let (finished, calls) = dispatch(&sse("no_such_event", "x"), &mut daemon_session);
+        assert!(!finished);
+        assert!(calls.is_empty());
+    }
+}

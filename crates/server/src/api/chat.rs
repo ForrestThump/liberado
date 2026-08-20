@@ -22,6 +22,7 @@ use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 
 use chat_client_contract::{ApiError, ChatMessage, ConversationHistoryResponse};
+use liberado_bootstrap::Config;
 
 use crate::state::AppState;
 #[derive(Deserialize)]
@@ -143,6 +144,92 @@ pub(super) fn keep_alive() -> axum::response::sse::KeepAlive {
 /// nothing else in the system would notice.
 pub(super) const KEEP_ALIVE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(15);
 
+/// Resolve a named chat session profile into the grant a session would run under, or `None` when no
+/// profile was asked for. Fails closed on an unknown/disabled name — an empty grant must not silently
+/// become the default (wider) one. Pure: the caller owns the error response.
+fn resolve_chat_grant(
+    config: &Config,
+    profile: Option<&str>,
+) -> Result<Option<liberado_session::SessionGrant>, String> {
+    match profile {
+        None => Ok(None),
+        Some(name) => match config.resolve_session_profile(Some(name), "") {
+            Ok(resolved) => {
+                let parts = resolved.grant_parts();
+                Ok(Some(liberado_session::SessionGrant {
+                    capabilities: parts.capabilities,
+                    profile: parts.profile,
+                    overrides: serde_json::to_value(&resolved.overrides)
+                        .unwrap_or(serde_json::Value::Null),
+                    delegation: parts.delegation,
+                    model: parts.model.map(str::to_string),
+                    prompt_append: parts.prompt_append.map(str::to_string),
+                }))
+            }
+            Err(e) => Err(e.to_string()),
+        },
+    }
+}
+
+/// Which creation path a chat request takes, chosen by flags before any I/O. `incognito` wins over
+/// `background` (RAM-only already never lists); a present grant routes through the profile-aware
+/// constructor. Kept as a separate enum decision so the four-way branch is testable without a session store.
+enum ChatCreation {
+    Incognito,
+    Background(liberado_session::SessionGrant),
+    Granted(liberado_session::SessionGrant),
+    Default,
+}
+
+fn pick_chat_creation(
+    incognito: bool,
+    background: bool,
+    grant: Option<liberado_session::SessionGrant>,
+) -> ChatCreation {
+    if incognito {
+        return ChatCreation::Incognito;
+    }
+    if background {
+        return ChatCreation::Background(grant.unwrap_or_default());
+    }
+    match grant {
+        Some(grant) => ChatCreation::Granted(grant),
+        None => ChatCreation::Default,
+    }
+}
+
+/// Build a single-`failed`-event stream response: the shape every "the stream cannot start" path
+/// returns (chat disabled, profile resolution failure, creation failure). Sends the error on the
+/// channel and destroys `tx` so a successful start owns the only remaining sender.
+fn fail_stream_response(
+    tx: mpsc::Sender<AgentEvent>,
+    rx: mpsc::Receiver<AgentEvent>,
+    msg: String,
+) -> axum::response::Response {
+    tokio::spawn(async move {
+        let _ = tx.send(AgentEvent::Error(msg)).await;
+    });
+    Sse::new(stream_with_session(None, rx))
+        .keep_alive(keep_alive())
+        .into_response()
+}
+
+/// Create the conversation for a first-token chat, dispatching the incognito / background /
+/// granted / default branch decision (made in `pick_chat_creation`) onto the store.
+async fn create_chat_session(
+    sessions: &liberado_main_agent::ChatSessions,
+    incognito: bool,
+    background: bool,
+    grant: Option<liberado_session::SessionGrant>,
+) -> liberado_main_agent::SessionResult<Ulid> {
+    match pick_chat_creation(incognito, background, grant) {
+        ChatCreation::Incognito => sessions.create_incognito(None).await,
+        ChatCreation::Background(grant) => sessions.create_background(None, grant).await,
+        ChatCreation::Granted(grant) => sessions.create_with_grant(None, grant).await,
+        ChatCreation::Default => sessions.create(None).await,
+    }
+}
+
 async fn chat_stream_core(
     state: Arc<AppState>,
     message: String,
@@ -156,16 +243,7 @@ async fn chat_stream_core(
 
     let Some(sessions) = state.chat.clone() else {
         // No chat configured: a single `failed` event, and no `session` head (there's no session).
-        tokio::spawn(async move {
-            let _ = tx
-                .send(AgentEvent::Error(
-                    "chat is disabled â€” set DEEPSEEK_API_KEY".into(),
-                ))
-                .await;
-        });
-        return Sse::new(stream_with_session(None, rx))
-            .keep_alive(keep_alive())
-            .into_response();
+        return fail_stream_response(tx, rx, "chat is disabled â€” set DEEPSEEK_API_KEY".into());
     };
 
     // Resolve the session up front (creating one on the first message), so we can announce it to the
@@ -173,31 +251,9 @@ async fn chat_stream_core(
     // Resolve the requested profile before creating anything: an unknown name must fail the request
     // rather than quietly open a chat on the default grant, which is wider than whatever was asked
     // for. Same fail-closed rule the switch endpoint follows.
-    let grant = match profile.as_deref() {
-        None => None,
-        Some(name) => match state.config.resolve_session_profile(Some(name), "") {
-            Ok(resolved) => {
-                let parts = resolved.grant_parts();
-                Some(liberado_session::SessionGrant {
-                    capabilities: parts.capabilities,
-                    profile: parts.profile,
-                    overrides: serde_json::to_value(&resolved.overrides)
-                        .unwrap_or(serde_json::Value::Null),
-                    delegation: parts.delegation,
-                    model: parts.model.map(str::to_string),
-                    prompt_append: parts.prompt_append.map(str::to_string),
-                })
-            }
-            Err(e) => {
-                let msg = e.to_string();
-                tokio::spawn(async move {
-                    let _ = tx.send(AgentEvent::Error(msg)).await;
-                });
-                return Sse::new(stream_with_session(None, rx))
-                    .keep_alive(keep_alive())
-                    .into_response();
-            }
-        },
+    let grant = match resolve_chat_grant(state.config.as_ref(), profile.as_deref()) {
+        Ok(grant) => grant,
+        Err(msg) => return fail_stream_response(tx, rx, msg),
     };
 
     let session = match session {
@@ -205,27 +261,11 @@ async fn chat_stream_core(
         None => {
             // Incognito wins over background when both are set: RAM-only already never lists.
             // Background + grant is the conformance path (durable, out of sidebar, scoped).
-            let created = if incognito {
-                sessions.create_incognito(None).await
-            } else if background {
-                sessions
-                    .create_background(None, grant.unwrap_or_default())
-                    .await
-            } else if let Some(grant) = grant {
-                sessions.create_with_grant(None, grant).await
-            } else {
-                sessions.create(None).await
-            };
-            match created {
+            match create_chat_session(&sessions, incognito, background, grant).await {
                 Ok(id) => id,
                 Err(e) => {
                     tracing::warn!(error = %e, "chat stream could not create a conversation");
-                    tokio::spawn(async move {
-                        let _ = tx.send(AgentEvent::Error(e.to_string())).await;
-                    });
-                    return Sse::new(stream_with_session(None, rx))
-                        .keep_alive(keep_alive())
-                        .into_response();
+                    return fail_stream_response(tx, rx, e.to_string());
                 }
             }
         }
@@ -857,6 +897,7 @@ fn chat_message_from_node(n: liberado_conversation_store::MessageNode) -> ChatMe
 #[cfg(test)]
 mod tests {
     use super::ChatRequest;
+    use std::str::FromStr;
 
     /// The WebUI reaches the chat stream through `EventSource`, which can only issue a `GET` — so
     /// `incognito` crosses the wire as a query parameter, and axum deserializes it with
@@ -1314,5 +1355,67 @@ mod tests {
 
         assert_eq!(status, StatusCode::NO_CONTENT);
         assert!(h.chat.history(durable).await.is_err());
+    }
+
+    // ── chat-stream session resolution (resolve_chat_grant, pick_chat_creation) ──────────────
+
+    #[test]
+    fn pick_chat_creation_prefers_incognito_then_background_then_grant() {
+        let grant = liberado_session::SessionGrant {
+            profile: Some("research".into()),
+            ..liberado_session::SessionGrant::default()
+        };
+
+        // Incognito wins over background when both are set.
+        assert!(matches!(
+            pick_chat_creation(true, true, None),
+            ChatCreation::Incognito
+        ));
+        // Background without a grant falls back to an empty grant.
+        assert!(matches!(
+            pick_chat_creation(false, true, None),
+            ChatCreation::Background(g) if g.profile.is_none()
+        ));
+        // A present grant routes through the profile-aware constructor.
+        assert!(matches!(
+            pick_chat_creation(false, false, Some(grant.clone())),
+            ChatCreation::Granted(g) if g.profile.as_deref() == Some("research")
+        ));
+        assert!(matches!(
+            pick_chat_creation(false, false, None),
+            ChatCreation::Default
+        ));
+    }
+
+    #[test]
+    fn resolve_chat_grant_returns_none_for_no_profile() {
+        let config = liberado_bootstrap::Config::default();
+        assert!(resolve_chat_grant(&config, None).unwrap().is_none());
+    }
+
+    #[test]
+    fn resolve_chat_grant_fails_closed_on_unknown_profile() {
+        let config = liberado_bootstrap::Config::from_str(
+            r#"
+[topology]
+vault_path = "/tmp/vault"
+
+[[topology.session_profiles]]
+name = "research"
+
+[[policy.grants]]
+component = "research"
+capabilities = []
+"#,
+        )
+        .unwrap();
+        // A named enabled profile resolves to a grant carrying its name.
+        let Some(grant) = resolve_chat_grant(&config, Some("research")).unwrap() else {
+            panic!("enabled profile must resolve");
+        };
+        assert_eq!(grant.profile.as_deref(), Some("research"));
+        // Unknown name fails closed, naming the profile rather than silently downgrading.
+        let err = resolve_chat_grant(&config, Some("nosuch")).unwrap_err();
+        assert!(err.contains("nosuch"), "error must name the profile: {err}");
     }
 }

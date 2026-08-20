@@ -820,6 +820,39 @@ mod tests {
     }
 
     #[test]
+    fn subtasks_payload_rejects_when_absent_or_empty() {
+        assert!(subtasks_from_payload(&json!({})).is_none());
+        assert!(subtasks_from_payload(&json!({"subtasks": []})).is_none());
+    }
+
+    #[test]
+    fn subtasks_payload_defaults_label_and_criteria() {
+        let p = json!({
+            "subtasks": [
+                {"description": "no label", "goal": "x"},
+                {"description": "no criteria"}
+            ]
+        });
+        let t = subtasks_from_payload(&p).unwrap();
+        assert_eq!(t[0].label, "task0");
+        assert!(t[0].success_criteria.is_empty());
+        assert_eq!(t[1].label, "task1");
+    }
+
+    #[test]
+    fn subtasks_payload_rejects_when_any_entry_lacks_a_description() {
+        let p = json!({
+            "subtasks": [
+                {"label": "ok", "description": "real"},
+                {"label": "broken"}
+            ]
+        });
+        // The `?` on the description means one malformed entry aborts the whole fan-out plan
+        // rather than silently dropping a task the parent expected to spawn.
+        assert!(subtasks_from_payload(&p).is_none());
+    }
+
+    #[test]
     fn sanitize_label_preserves_alphanumeric_and_dash() {
         assert_eq!(sanitize_label("hello-world"), "hello-world");
         assert_eq!(sanitize_label("api_v2"), "api_v2");
@@ -1026,6 +1059,11 @@ mod tests {
         // Child grant must strip AskHuman
         let child = child_session_grant(&grant);
         assert!(!child.grants_ask_human());
+        assert_eq!(
+            child.delegation,
+            Some(false),
+            "children must not fan out further"
+        );
 
         let merger: Arc<dyn Provider> = Arc::new(MockProvider::with_script(
             "merge",

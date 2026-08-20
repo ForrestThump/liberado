@@ -84,6 +84,101 @@ pub struct CoderTunerResult {
     pub generations: Vec<CoderGenerationRecord>,
 }
 
+/// The final result's rubric for the coder tuner: reuse the last generation's record (same
+/// candidate, already formatted against the baseline) or format a fresh one when no generation
+/// finished. Pure — no model call — so the reuse-vs-fallback decision is directly testable.
+fn finalize_result_coder(
+    winner: &Candidate,
+    winner_fitness: &CoderFitness,
+    baseline_fitness: &CoderFitness,
+    seed_prompt: &str,
+    generations: &[CoderGenerationRecord],
+) -> String {
+    generations
+        .last()
+        .map(|g| g.rubric.clone())
+        .unwrap_or_else(|| {
+            format_coder_rubric(winner, winner_fitness, baseline_fitness, seed_prompt, None)
+        })
+}
+
+/// Produce one generation's candidate pool: mutations from every beam parent plus independent cold
+/// starts, stopping when the shared budget is exhausted.
+async fn gather_generation_candidates_coder(
+    beam: &[(Candidate, CoderFitness)],
+    config: &TunerConfig,
+    budget: &Budget,
+) -> Vec<Candidate> {
+    let mut pool: Vec<Candidate> = Vec::new();
+
+    for (parent_index, (parent, parent_fitness)) in beam.iter().enumerate() {
+        for _ in 0..config.mutations_per_candidate {
+            if budget.exhausted() {
+                break;
+            }
+            let failing = parent_fitness.failing();
+            if let Ok(prompt) = mutate_coder(
+                config.meta_provider.as_ref(),
+                &parent.prompt,
+                &failing,
+                budget,
+            )
+            .await
+            {
+                pool.push(Candidate {
+                    prompt,
+                    origin: CandidateOrigin::MutatedFrom {
+                        parent_index,
+                        parent_accuracy: parent_fitness.accuracy,
+                    },
+                });
+            } // Err logged inside mutate_coder(); skip this slot, not the run
+        }
+    }
+
+    for _ in 0..config.cold_starts_per_generation {
+        if budget.exhausted() {
+            break;
+        }
+        if let Ok(prompt) = cold_start_coder(config.meta_provider.as_ref(), budget).await {
+            pool.push(Candidate {
+                prompt,
+                origin: CandidateOrigin::ColdStart,
+            });
+        }
+    }
+
+    pool
+}
+
+/// Score every candidate in a pool against the coding curriculum.
+async fn score_pool_coder(
+    pool: Vec<Candidate>,
+    config: &TunerConfig,
+    budget: &Budget,
+) -> Vec<(Candidate, CoderFitness)> {
+    let tier = config.coder_tier;
+    let max_turns = max_turns_for_tier(tier);
+    let name_filter = config.coder_scenario_filter.as_deref();
+
+    let mut scored = Vec::with_capacity(pool.len());
+    for candidate in pool {
+        let fitness = score_coder_candidate(
+            &candidate.prompt,
+            &config.scoring_providers,
+            config.samples_per_scenario,
+            tier,
+            config.max_scenarios,
+            name_filter,
+            max_turns,
+            budget,
+        )
+        .await;
+        scored.push((candidate, fitness));
+    }
+    scored
+}
+
 /// Tune the Liberado coder role system prompt against real workspace coding scenarios.
 pub async fn run_coder_tuner(config: TunerConfig) -> CoderTunerResult {
     let seed_prompt = DEFAULT_CODER_SYSTEM_PROMPT;
@@ -121,69 +216,15 @@ pub async fn run_coder_tuner(config: TunerConfig) -> CoderTunerResult {
         if budget.exhausted() {
             break;
         }
-
-        let mut pool: Vec<Candidate> = Vec::new();
-
-        for (parent_index, (parent, parent_fitness)) in beam.iter().enumerate() {
-            for _ in 0..config.mutations_per_candidate {
-                if budget.exhausted() {
-                    break;
-                }
-                let failing = parent_fitness.failing();
-                match mutate_coder(
-                    config.meta_provider.as_ref(),
-                    &parent.prompt,
-                    &failing,
-                    &budget,
-                )
-                .await
-                {
-                    Ok(prompt) => pool.push(Candidate {
-                        prompt,
-                        origin: CandidateOrigin::MutatedFrom {
-                            parent_index,
-                            parent_accuracy: parent_fitness.accuracy,
-                        },
-                    }),
-                    Err(_) => continue,
-                }
-            }
-        }
-
-        for _ in 0..config.cold_starts_per_generation {
-            if budget.exhausted() {
-                break;
-            }
-            if let Ok(prompt) = cold_start_coder(config.meta_provider.as_ref(), &budget).await {
-                pool.push(Candidate {
-                    prompt,
-                    origin: CandidateOrigin::ColdStart,
-                });
-            }
-        }
-
+        let pool = gather_generation_candidates_coder(&beam, &config, &budget).await;
         if pool.is_empty() {
-            break;
+            break; // budget ran out before a single candidate could be produced this generation
         }
-
-        let mut scored = Vec::with_capacity(pool.len());
-        for candidate in pool {
-            let fitness = score_coder_candidate(
-                &candidate.prompt,
-                &config.scoring_providers,
-                config.samples_per_scenario,
-                tier,
-                config.max_scenarios,
-                name_filter,
-                max_turns,
-                &budget,
-            )
-            .await;
-            scored.push((candidate, fitness));
-        }
-
+        let scored = score_pool_coder(pool, &config, &budget).await;
         beam = advance_beam_coder(&beam, scored, config.beam_width);
 
+        // Record this generation's best-so-far, with its own justification call — a human
+        // reviewing later gets the search's progression, not just where it ended up.
         let (best_candidate, best_fitness) = &beam[0];
         let justification = request_justification_if_budget_allows(
             config.meta_provider.as_ref(),
@@ -207,18 +248,13 @@ pub async fn run_coder_tuner(config: TunerConfig) -> CoderTunerResult {
     }
 
     let (winner, winner_fitness) = beam.into_iter().next().expect("beam is never empty");
-    let rubric = generations
-        .last()
-        .map(|g| g.rubric.clone())
-        .unwrap_or_else(|| {
-            format_coder_rubric(
-                &winner,
-                &winner_fitness,
-                &baseline_fitness,
-                seed_prompt,
-                None,
-            )
-        });
+    let rubric = finalize_result_coder(
+        &winner,
+        &winner_fitness,
+        &baseline_fitness,
+        seed_prompt,
+        &generations,
+    );
 
     CoderTunerResult {
         winner,
@@ -285,5 +321,41 @@ mod tests {
         let next = advance_beam_coder(&beam, pool, 1);
         assert_eq!(next[0].0.prompt, "best");
         let _ = Outcome::Succeeded;
+    }
+
+    #[test]
+    fn finalize_result_coder_reuses_the_last_generation_rubric() {
+        let winner = Candidate {
+            prompt: "best".into(),
+            origin: CandidateOrigin::ColdStart,
+        };
+        let winner_fit = fit(0.9, 0);
+        let baseline = fit(0.5, 0);
+        let generations = vec![CoderGenerationRecord {
+            generation: 1,
+            candidate: winner.clone(),
+            fitness: winner_fit.clone(),
+            rubric: "already-the-winner".to_string(),
+        }];
+        // Non-empty generations: reuse the last record's rubric verbatim (same candidate).
+        assert_eq!(
+            finalize_result_coder(&winner, &winner_fit, &baseline, "seed", &generations),
+            "already-the-winner",
+        );
+    }
+
+    #[test]
+    fn finalize_result_coder_formats_fresh_when_no_generation_finished() {
+        let winner = Candidate {
+            prompt: "best".into(),
+            origin: CandidateOrigin::ColdStart,
+        };
+        let winner_fit = fit(0.9, 0);
+        let baseline = fit(0.5, 0);
+        let rubric = finalize_result_coder(&winner, &winner_fit, &baseline, "seed", &[]);
+        assert!(
+            rubric.contains("Heuristics Tuner Proposal (coder layer)"),
+            "a fresh coder rubric is formatted on the empty-generations path"
+        );
     }
 }

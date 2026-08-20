@@ -973,6 +973,36 @@ async fn ship_preflight_green_allows_succeeded() {
     );
 }
 
+/// Restores `LIBERADO_DATA_DIR` on drop. Declare after `DATA_DIR_ENV_LOCK` so Drop
+/// runs while the lock is still held (reverse declaration order).
+struct RestoreLiberadoDataDir {
+    prior: Option<std::ffi::OsString>,
+}
+
+impl RestoreLiberadoDataDir {
+    fn set_to(path: impl AsRef<std::ffi::OsStr>) -> Self {
+        let prior = std::env::var_os("LIBERADO_DATA_DIR");
+        // SAFETY: caller holds `DATA_DIR_ENV_LOCK` for the life of this guard.
+        unsafe {
+            std::env::set_var("LIBERADO_DATA_DIR", path);
+        }
+        Self { prior }
+    }
+}
+
+impl Drop for RestoreLiberadoDataDir {
+    fn drop(&mut self) {
+        // SAFETY: same lock the constructor required; Drop runs before `_env` is
+        // released when the test declares the lock first.
+        unsafe {
+            match &self.prior {
+                Some(v) => std::env::set_var("LIBERADO_DATA_DIR", v),
+                None => std::env::remove_var("LIBERADO_DATA_DIR"),
+            }
+        }
+    }
+}
+
 #[tokio::test]
 async fn an_external_workspace_gets_durable_session_isolation() {
     use std::process::Command;
@@ -996,10 +1026,7 @@ async fn an_external_workspace_gets_durable_session_isolation() {
     // `LIBERADO_DATA_DIR` is process-global and the fanout tests set it too; hold the guard for
     // as long as this test depends on the value.
     let _env = crate::DATA_DIR_ENV_LOCK.lock().await;
-    // SAFETY: test-only env mutation, serialized by the guard above; restored below.
-    unsafe {
-        std::env::set_var("LIBERADO_DATA_DIR", data.path());
-    }
+    let _restore = RestoreLiberadoDataDir::set_to(data.path());
 
     let mut g = goal("edit README.md");
     g.payload = serde_json::json!({
@@ -1053,10 +1080,6 @@ async fn an_external_workspace_gets_durable_session_isolation() {
         "init_git_repo must run so session worktree can proceed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-
-    unsafe {
-        std::env::remove_var("LIBERADO_DATA_DIR");
-    }
 }
 
 /// `[tuning.coder.gate]` reaches the `CoderRunConfig` the pack actually hands the backend.
@@ -1308,5 +1331,244 @@ async fn the_configured_coder_role_reaches_the_backends_run_config() {
         coder.max_turns,
         Some(30),
         "the configured ceiling must reach the run, not the pack's 12-turn constant"
+    );
+}
+
+// ── Builder defaults and workspace-selection helpers ─────────────────────────
+
+#[test]
+fn the_concurrency_builder_clamps_to_at_least_one() {
+    let provider = Arc::new(MockProvider::with_script("mock", vec![]));
+    let default = CodingSessionPack::new(provider.clone(), std::env::temp_dir());
+    assert_eq!(default.max_concurrent_coding_subagents, 3, "default cap");
+    let clamped = CodingSessionPack::new(provider.clone(), std::env::temp_dir())
+        .with_max_concurrent_coding_subagents(0);
+    assert_eq!(
+        clamped.max_concurrent_coding_subagents, 1,
+        "a zero cap must be clamped up, not allowed to disable fan-out"
+    );
+    let raised = CodingSessionPack::new(provider, std::env::temp_dir())
+        .with_max_concurrent_coding_subagents(8);
+    assert_eq!(raised.max_concurrent_coding_subagents, 8);
+}
+
+#[test]
+fn new_and_with_backend_agree_on_defaults() {
+    let provider = Arc::new(MockProvider::with_script("mock", vec![]));
+    let backend = Arc::new(crate::LiberadoLoopBackend::new(provider.clone()));
+    let a = CodingSessionPack::new(provider.clone(), std::env::temp_dir());
+    let b = CodingSessionPack::with_backend(backend, provider, std::env::temp_dir());
+    assert_eq!(
+        a.max_concurrent_coding_subagents,
+        b.max_concurrent_coding_subagents
+    );
+    assert_eq!(a.gate.enabled, b.gate.enabled);
+    assert_eq!(a.trace_dir, b.trace_dir);
+    assert_eq!(a.trace_formats, b.trace_formats);
+}
+
+#[test]
+fn with_tuning_mirrors_every_shared_knob_onto_the_convenience_fields() {
+    use liberado_coder_core::{CoderGateConfig, ProgressPolicy, TraceFormat};
+
+    let provider = Arc::new(MockProvider::with_script("mock", vec![]));
+    let tuning = liberado_coder_core::CoderTuning {
+        trace_dir: Some("traces".into()),
+        trace_formats: vec![TraceFormat::OpenaiMessages],
+        gate: CoderGateConfig {
+            enabled: true,
+            fresh_reviewers: 2,
+            ..CoderGateConfig::default()
+        },
+        progress: ProgressPolicy {
+            read_only_turn_limit: 11,
+            ..ProgressPolicy::default()
+        },
+        hashline: liberado_coder_core::HashlineConfig {
+            enabled: true,
+            ..liberado_coder_core::HashlineConfig::default()
+        },
+        ..liberado_coder_core::CoderTuning::default()
+    };
+    let pack = CodingSessionPack::new(provider, std::env::temp_dir()).with_tuning(tuning.clone());
+
+    assert_eq!(pack.trace_dir, tuning.trace_dir);
+    assert_eq!(pack.trace_formats, tuning.trace_formats);
+    assert!(pack.gate.enabled);
+    assert_eq!(pack.gate.fresh_reviewers, 2);
+    assert_eq!(pack.progress.read_only_turn_limit, 11);
+    assert!(pack.hashline.enabled);
+    assert_eq!(
+        pack.tuning.trace_dir, tuning.trace_dir,
+        "mirror stays in lockstep"
+    );
+}
+
+#[test]
+fn last_checkpoint_returns_the_most_recent_one() {
+    use liberado_session::SessionEventKind;
+    let events = vec![
+        SessionEvent::new(
+            "s",
+            SessionEventKind::Checkpoint {
+                id: "cp-old".into(),
+                label: "first".into(),
+                tree_hash: "h1".into(),
+            },
+        ),
+        SessionEvent::new(
+            "s",
+            SessionEventKind::Checkpoint {
+                id: "cp-new".into(),
+                label: "second".into(),
+                tree_hash: "h2".into(),
+            },
+        ),
+    ];
+    assert_eq!(
+        last_checkpoint(&events).unwrap(),
+        ("cp-new".into(), "second".into())
+    );
+    assert_eq!(last_checkpoint(&[]), None);
+}
+
+#[test]
+fn checkpoint_workspace_prefers_the_payload_root_over_the_default() {
+    let payload = CodingGoalPayload::parse(&serde_json::json!({
+        "workspace_root": "/tmp/some/project"
+    }))
+    .unwrap();
+    let got = coding_checkpoint_workspace("s1", &payload, std::path::Path::new("/tmp/defaults"));
+    assert_eq!(got, std::path::PathBuf::from("/tmp/some/project"));
+}
+
+#[test]
+fn checkpoint_workspace_falls_back_to_the_goal_default_dir() {
+    let payload = CodingGoalPayload::default();
+    let got = coding_checkpoint_workspace("abc", &payload, std::path::Path::new("/tmp/defaults"));
+    assert_eq!(got, std::path::PathBuf::from("/tmp/defaults/goal-abc"));
+}
+
+#[tokio::test]
+async fn checkpoint_workspace_prefers_the_durable_session_worktree_when_it_exists() {
+    let _env = crate::DATA_DIR_ENV_LOCK.lock().await;
+    let data = tempfile::tempdir().unwrap();
+    let prior = std::env::var_os("LIBERADO_DATA_DIR");
+    let durable = data.path().join("coding-worktrees").join("session-9");
+    std::fs::create_dir_all(&durable).unwrap();
+
+    let payload = CodingGoalPayload::parse(&serde_json::json!({
+        "workspace_root": "/tmp/ignored"
+    }))
+    .unwrap();
+    let got = {
+        let _restore = RestoreLiberadoDataDir::set_to(data.path());
+        coding_checkpoint_workspace("session-9", &payload, std::path::Path::new("/tmp/d"))
+    };
+    assert_eq!(got, durable);
+    assert_eq!(
+        std::env::var_os("LIBERADO_DATA_DIR"),
+        prior,
+        "LIBERADO_DATA_DIR must be restored before the lock is released"
+    );
+}
+
+#[test]
+fn domain_id_is_the_coding_domain() {
+    let provider = Arc::new(MockProvider::with_script("mock", vec![]));
+    let pack = CodingSessionPack::new(provider, std::env::temp_dir());
+    assert_eq!(pack.domain_id(), "coding");
+}
+
+#[tokio::test]
+async fn attach_hub_records_the_hub_for_child_sessions() {
+    let root = tempfile::tempdir().unwrap();
+    let store_dir = root.path().join("sessions");
+    std::fs::create_dir_all(&store_dir).unwrap();
+    let store = liberado_session::GoalSessionStore::open(&store_dir).await;
+    let hub = Arc::new(liberado_session::GoalSessionHub::new(store));
+
+    let provider = Arc::new(MockProvider::with_script("mock", vec![]));
+    let pack = CodingSessionPack::new(provider, std::env::temp_dir());
+    assert!(pack.hub().is_none(), "hub must start detached");
+    pack.attach_hub(hub.clone());
+    let attached = pack.hub();
+    assert!(attached.is_some(), "attach_hub must record the hub");
+    assert!(Arc::ptr_eq(&hub, &attached.expect("hub present")));
+}
+
+/// Runs the pack's `run` with a grant that lacks AskHuman, returning the events it emitted.
+async fn run_with_grant(intake_enabled: bool) -> (GoalResult, Vec<SessionEvent>) {
+    let backend = Arc::new(ScriptedBackend {
+        seen: Arc::new(std::sync::Mutex::new(Vec::new())),
+        fail_attempts: 0,
+    });
+    let provider = Arc::new(MockProvider::with_script("mock", vec![]));
+    let pack = CodingSessionPack::with_backend(backend, provider, std::env::temp_dir());
+
+    let (ev_tx, mut ev_rx) = mpsc::channel::<SessionEvent>(64);
+    let (in_tx, in_rx) = mpsc::channel::<HumanInput>(16);
+    drop(in_tx);
+    let inputs = InputChannel::new(in_rx, None);
+    let (_c_tx, cancel) = tokio::sync::watch::channel(false);
+
+    let workspace = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(workspace.path()).unwrap();
+    let mut g = goal("build a thing");
+    g.payload = serde_json::json!({
+        "workspace_root": workspace.path().to_string_lossy(),
+        "intake": { "enabled": intake_enabled },
+        "force_host_local": true,
+    });
+
+    let store = Arc::new(liberado_session::GoalSessionStore::new());
+    let mut spec = g.clone();
+    spec.id = Some("s1".into());
+    liberado_session::SessionRecordStore::insert(
+        store.as_ref(),
+        liberado_session::GoalSessionRecord::new(spec),
+    )
+    .await;
+    let grant = liberado_session::SessionGrant::default();
+    let ctx = PackContext::new(&grant, store.clone(), "s1");
+
+    let out = pack
+        .run("s1", &g, &ctx, ev_tx, inputs, cancel)
+        .await
+        .unwrap();
+    let mut events = Vec::new();
+    while let Ok(e) = ev_rx.try_recv() {
+        events.push(e);
+    }
+    (out, events)
+}
+
+fn has_intake_skipped(events: &[SessionEvent]) -> bool {
+    events.iter().any(|e| {
+        matches!(
+            &e.kind,
+            SessionEventKind::Progress { message }
+                if message.contains("intake skipped")
+        )
+    })
+}
+
+#[tokio::test]
+async fn intake_skipped_is_reported_when_enabled_without_ask_human() {
+    // enabled=true, grant lacks AskHuman (may_ask=false) → the else branch reports it.
+    let (_out, events) = run_with_grant(true).await;
+    assert!(
+        has_intake_skipped(&events),
+        "intake enabled + no AskHuman must announce the skip: {events:?}"
+    );
+}
+
+#[tokio::test]
+async fn intake_skipped_is_not_reported_when_intake_is_disabled() {
+    // enabled=false, no AskHuman → nothing is announced (the `&&` must hold).
+    let (_out, events) = run_with_grant(false).await;
+    assert!(
+        !has_intake_skipped(&events),
+        "disabled intake must not announce a skip: {events:?}"
     );
 }

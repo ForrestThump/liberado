@@ -12,7 +12,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use crossterm::execute;
 use crossterm::terminal::SetTitle;
-use futures::StreamExt;
+use futures::{Stream, StreamExt};
 use tokio::sync::mpsc;
 use tokio::task::AbortHandle;
 
@@ -27,6 +27,34 @@ use crate::sse::{SseDecoder, ToAction};
 pub struct StreamState {
     pub handle: Option<AbortHandle>,
     pub goal_handle: Option<AbortHandle>,
+}
+
+/// Try-send an action. Returns true when the channel is full so the caller can decide
+/// whether to keep reading.
+fn send_or_warn(tx: &mpsc::Sender<Action>, action: Action, label: &str) -> bool {
+    let failed = tx.try_send(action).is_err();
+    if failed {
+        tracing::warn!("action channel full, dropping {label}");
+    }
+    failed
+}
+
+/// Decode one SSE text chunk into the actions to forward, stopping at a terminal action
+/// (`SseDone` / `SseFailed`). Returns the actions and whether a terminal was seen.
+fn sse_actions_from_text(decoder: &mut SseDecoder, text: &str) -> (Vec<Action>, bool) {
+    let mut actions = Vec::new();
+    let mut terminal = false;
+    for event in decoder.push(text) {
+        let action = event.to_action().unwrap_or_else(Action::SseFailed);
+        if matches!(action, Action::SseDone | Action::SseFailed(_)) {
+            terminal = true;
+        }
+        actions.push(action);
+        if terminal {
+            break;
+        }
+    }
+    (actions, terminal)
 }
 
 /// Executes [`Effect`] commands by spawning tokio tasks (SSE streaming, HTTP fetches)
@@ -74,6 +102,33 @@ impl EffectRunner {
     /// the caller should `.await` the returned future.
     pub async fn run(&self, effect: Effect) {
         match effect {
+            Effect::SetWindowTitle(title) => self.set_window_title(&title),
+            Effect::Quit => self.quit(),
+            Effect::None => {}
+            Effect::StartChatStream { .. }
+            | Effect::CancelStream { .. }
+            | Effect::RefreshConversations
+            | Effect::LoadConversationHistory(_)
+            | Effect::FetchModels
+            | Effect::SelectModel { .. }
+            | Effect::AttachConversationStream(_)
+            | Effect::ForkConversation { .. }
+            | Effect::RefreshSessions
+            | Effect::JoinGoalSession(_)
+            | Effect::SendGoalMessage { .. }
+            | Effect::SpawnGoalSession { .. }
+            | Effect::StartCodingGoal { .. }
+            | Effect::ParkGoalSession(_)
+            | Effect::CancelGoalSession(_)
+            | Effect::ResumeGoalSession { .. }
+            | Effect::LeaveGoalSession => self.run_async(effect).await,
+        }
+    }
+
+    /// Dispatch the async (network / streaming) effects. The terminal and sync side-effects live
+    /// in [`run`](Self::run), which routes everything else here.
+    async fn run_async(&self, effect: Effect) {
+        match effect {
             Effect::StartChatStream { message, session } => {
                 self.start_chat_stream(message, session).await
             }
@@ -90,7 +145,6 @@ impl EffectRunner {
                 parent_id,
                 after_turn,
             } => self.fork_conversation(parent_id, after_turn).await,
-            Effect::SetWindowTitle(title) => self.set_window_title(&title),
             Effect::RefreshSessions => self.refresh_sessions().await,
             Effect::JoinGoalSession(id) => self.join_goal_session(id).await,
             Effect::SendGoalMessage { id, text } => self.send_goal_message(id, text).await,
@@ -117,8 +171,9 @@ impl EffectRunner {
             }
             Effect::ResumeGoalSession { id, answer } => self.resume_goal_session(id, answer).await,
             Effect::LeaveGoalSession => self.leave_goal_session(),
-            Effect::Quit => self.quit(),
-            Effect::None => {}
+            Effect::SetWindowTitle(_) | Effect::Quit | Effect::None => {
+                unreachable!("run_async only receives the async effect kinds")
+            }
         }
     }
 
@@ -139,6 +194,89 @@ impl EffectRunner {
         });
     }
 
+    /// Decode one goal-session SSE text chunk into the actions to forward, stopping at a
+    /// terminal `Finished` event. Returns the actions and whether a terminal was seen.
+    fn goal_actions_from_chunk(decoder: &mut SseDecoder, text: &str) -> (Vec<Action>, bool) {
+        let mut actions = Vec::new();
+        let mut terminal = false;
+        for event in decoder.push(text) {
+            match crate::sse::to_goal_event(&event) {
+                Ok(Some(ui)) => {
+                    if matches!(ui, crate::app::GoalUiEvent::Finished { .. }) {
+                        terminal = true;
+                    }
+                    actions.push(Action::GoalStreamEvent(ui));
+                }
+                Ok(None) => {}
+                Err(e) => tracing::warn!(error = %e, "goal stream decode error"),
+            }
+            if terminal {
+                break;
+            }
+        }
+        (actions, terminal)
+    }
+
+    /// Send a goal-stream close (or plain end) and clear the active handle.
+    async fn close_goal_stream(
+        tx: &mpsc::Sender<Action>,
+        state: &Arc<Mutex<StreamState>>,
+        msg: Option<String>,
+    ) {
+        let _ = tx.try_send(Action::GoalStreamClosed(msg));
+        state.lock().goal_handle = None;
+    }
+
+    /// Drain one goal-session SSE stream into the action channel. The stream type is generic so
+    /// tests feed scripted chunk sequences and assert the emitted actions.
+    ///
+    /// A `Finished` event is terminal — the view is done and the server closes the stream, so the
+    /// loop drops without a trailing close. EOF, stream errors, and timeouts each close with a
+    /// message (or none for clean EOF).
+    async fn run_goal_stream<C, E>(
+        tx: &mpsc::Sender<Action>,
+        state: &Arc<Mutex<StreamState>>,
+        stream: impl Stream<Item = Result<C, E>>,
+        decoder: &mut SseDecoder,
+    ) where
+        C: AsRef<[u8]>,
+        E: std::fmt::Display,
+    {
+        let mut stream = Box::pin(stream);
+        loop {
+            match tokio::time::timeout(crate::tuning::SSE_STREAM_TIMEOUT, stream.next()).await {
+                Ok(Some(Ok(chunk))) => {
+                    let text = String::from_utf8_lossy(chunk.as_ref());
+                    let (actions, terminal) = EffectRunner::goal_actions_from_chunk(decoder, &text);
+                    for action in actions {
+                        if tx.try_send(action).is_err() {
+                            tracing::warn!("action channel full, dropping goal event");
+                        }
+                    }
+                    if terminal {
+                        state.lock().goal_handle = None;
+                        return;
+                    }
+                }
+                Ok(Some(Err(e))) => {
+                    Self::close_goal_stream(tx, state, Some(format!("stream error: {e}"))).await;
+                    return;
+                }
+                Ok(None) => break, // stream ended (server closed after a terminal event)
+                Err(_elapsed) => {
+                    Self::close_goal_stream(
+                        tx,
+                        state,
+                        Some("stream timeout — no data for 60s".into()),
+                    )
+                    .await;
+                    return;
+                }
+            }
+        }
+        Self::close_goal_stream(tx, state, None).await;
+    }
+
     /// Abort any prior goal stream and open a fresh SSE subscription to `GET /api/goals/{id}/stream`,
     /// mapping each frame to a [`Action::GoalStreamEvent`]. Catch-up history arrives first, then live
     /// events (the server replays the transcript before tailing).
@@ -156,64 +294,28 @@ impl EffectRunner {
             let response = match api::open_goal_stream(&client, &server, &id).await {
                 Ok(r) => r,
                 Err(e) => {
-                    let _ = tx.try_send(Action::GoalStreamClosed(Some(format!(
-                        "could not reach daemon: {e}"
-                    ))));
-                    state.lock().goal_handle = None;
+                    Self::close_goal_stream(
+                        &tx,
+                        &state,
+                        Some(format!("could not reach daemon: {e}")),
+                    )
+                    .await;
                     return;
                 }
             };
             if !response.status().is_success() {
                 let status = response.status();
-                let _ = tx.try_send(Action::GoalStreamClosed(Some(format!(
-                    "server returned {status}"
-                ))));
-                state.lock().goal_handle = None;
+                Self::close_goal_stream(&tx, &state, Some(format!("server returned {status}")))
+                    .await;
                 return;
             }
-
-            let mut decoder = SseDecoder::default();
-            let mut stream = response.bytes_stream();
-            loop {
-                match tokio::time::timeout(crate::tuning::SSE_STREAM_TIMEOUT, stream.next()).await {
-                    Ok(Some(Ok(chunk))) => {
-                        let text = String::from_utf8_lossy(&chunk);
-                        for event in decoder.push(&text) {
-                            match crate::sse::to_goal_event(&event) {
-                                Ok(Some(ui)) => {
-                                    let terminal =
-                                        matches!(ui, crate::app::GoalUiEvent::Finished { .. });
-                                    if tx.try_send(Action::GoalStreamEvent(ui)).is_err() {
-                                        tracing::warn!("action channel full, dropping goal event");
-                                    }
-                                    if terminal {
-                                        state.lock().goal_handle = None;
-                                        return;
-                                    }
-                                }
-                                Ok(None) => {}
-                                Err(e) => tracing::warn!(error = %e, "goal stream decode error"),
-                            }
-                        }
-                    }
-                    Ok(Some(Err(e))) => {
-                        let _ = tx
-                            .try_send(Action::GoalStreamClosed(Some(format!("stream error: {e}"))));
-                        state.lock().goal_handle = None;
-                        return;
-                    }
-                    Ok(None) => break, // stream ended (server closed after a terminal event)
-                    Err(_elapsed) => {
-                        let _ = tx.try_send(Action::GoalStreamClosed(Some(
-                            "stream timeout — no data for 60s".into(),
-                        )));
-                        state.lock().goal_handle = None;
-                        return;
-                    }
-                }
-            }
-            let _ = tx.try_send(Action::GoalStreamClosed(None));
-            state.lock().goal_handle = None;
+            Self::run_goal_stream(
+                &tx,
+                &state,
+                response.bytes_stream(),
+                &mut SseDecoder::default(),
+            )
+            .await;
         });
 
         self.stream_state.lock().goal_handle = Some(handle.abort_handle());
@@ -445,14 +547,11 @@ impl EffectRunner {
                 match api::post_chat_stream(&client, &server, &message, session.as_deref()).await {
                     Ok(r) => r,
                     Err(e) => {
-                        if tx
-                            .try_send(Action::SseFailed(format!(
-                                "could not reach daemon at {server}: {e}"
-                            )))
-                            .is_err()
-                        {
-                            tracing::warn!("action channel full, dropping SseFailed");
-                        }
+                        send_or_warn(
+                            &tx,
+                            Action::SseFailed(format!("could not reach daemon at {server}: {e}")),
+                            "SseFailed",
+                        );
                         state.lock().handle = None;
                         return;
                     }
@@ -461,14 +560,11 @@ impl EffectRunner {
             if !response.status().is_success() {
                 let status = response.status();
                 let body = response.text().await.unwrap_or_default();
-                if tx
-                    .try_send(Action::SseFailed(format!(
-                        "server returned {status}: {body}"
-                    )))
-                    .is_err()
-                {
-                    tracing::warn!("action channel full, dropping SseFailed");
-                }
+                send_or_warn(
+                    &tx,
+                    Action::SseFailed(format!("server returned {status}: {body}")),
+                    "SseFailed",
+                );
                 state.lock().handle = None;
                 return;
             }
@@ -479,29 +575,21 @@ impl EffectRunner {
                 match tokio::time::timeout(crate::tuning::SSE_STREAM_TIMEOUT, stream.next()).await {
                     Ok(Some(Ok(chunk))) => {
                         let text = String::from_utf8_lossy(&chunk);
-                        for event in decoder.push(&text) {
-                            let action = event.to_action().unwrap_or_else(Action::SseFailed);
-                            let is_terminal =
-                                matches!(action, Action::SseDone | Action::SseFailed(_));
-                            if tx.try_send(action).is_err() {
-                                tracing::warn!("action channel full, dropping SSE action");
-                                // SseDone/SseFailed are important — skip is_terminal check since the
-                                // message may not have been delivered; the next chunk will retry
-                                // (or timeout). For terminal events, continue to clean up handle.
-                            }
-                            if is_terminal {
-                                state.lock().handle = None;
-                                return;
-                            }
+                        let (actions, terminal) = sse_actions_from_text(&mut decoder, &text);
+                        for action in actions {
+                            send_or_warn(&tx, action, "SSE action");
+                        }
+                        if terminal {
+                            state.lock().handle = None;
+                            return;
                         }
                     }
                     Ok(Some(Err(e))) => {
-                        if tx
-                            .try_send(Action::SseFailed(format!("stream error: {e}")))
-                            .is_err()
-                        {
-                            tracing::warn!("action channel full, dropping SseFailed");
-                        }
+                        send_or_warn(
+                            &tx,
+                            Action::SseFailed(format!("stream error: {e}")),
+                            "SseFailed",
+                        );
                         state.lock().handle = None;
                         return;
                     }
@@ -510,23 +598,18 @@ impl EffectRunner {
                         break;
                     }
                     Err(_elapsed) => {
-                        if tx
-                            .try_send(Action::SseFailed(
-                                "stream timeout — no data for 60s".to_string(),
-                            ))
-                            .is_err()
-                        {
-                            tracing::warn!("action channel full, dropping SseFailed");
-                        }
+                        send_or_warn(
+                            &tx,
+                            Action::SseFailed("stream timeout — no data for 60s".to_string()),
+                            "SseFailed",
+                        );
                         state.lock().handle = None;
                         return;
                     }
                 }
             }
 
-            if tx.try_send(Action::SseDone).is_err() {
-                tracing::warn!("action channel full, dropping SseDone");
-            }
+            send_or_warn(&tx, Action::SseDone, "SseDone");
             state.lock().handle = None;
         });
 
@@ -602,14 +685,11 @@ impl EffectRunner {
             let response = match api::attach_conversation_stream(&client, &server, &id).await {
                 Ok(r) => r,
                 Err(e) => {
-                    if tx
-                        .try_send(Action::SseFailed(format!(
-                            "could not attach to running turn: {e}"
-                        )))
-                        .is_err()
-                    {
-                        tracing::warn!("action channel full, dropping SseFailed");
-                    }
+                    send_or_warn(
+                        &tx,
+                        Action::SseFailed(format!("could not attach to running turn: {e}")),
+                        "SseFailed",
+                    );
                     state.lock().handle = None;
                     return;
                 }
@@ -621,29 +701,23 @@ impl EffectRunner {
             // Reporting it as `[error]` would blame the user's own answer arriving on time.
             if response.status() == reqwest::StatusCode::CONFLICT {
                 state.lock().handle = None;
-                if tx.try_send(Action::SseDone).is_err() {
-                    tracing::warn!("action channel full, dropping SseDone");
-                }
-                if tx
-                    .try_send(Action::ReloadConversationHistory(id.clone()))
-                    .is_err()
-                {
-                    tracing::warn!("action channel full, dropping history reload after 409");
-                }
+                send_or_warn(&tx, Action::SseDone, "SseDone");
+                send_or_warn(
+                    &tx,
+                    Action::ReloadConversationHistory(id.clone()),
+                    "history reload after 409",
+                );
                 return;
             }
 
             if !response.status().is_success() {
                 let status = response.status();
                 let body = response.text().await.unwrap_or_default();
-                if tx
-                    .try_send(Action::SseFailed(format!(
-                        "attach refused ({status}): {body}"
-                    )))
-                    .is_err()
-                {
-                    tracing::warn!("action channel full, dropping SseFailed");
-                }
+                send_or_warn(
+                    &tx,
+                    Action::SseFailed(format!("attach refused ({status}): {body}")),
+                    "SseFailed",
+                );
                 state.lock().handle = None;
                 return;
             }
@@ -654,49 +728,41 @@ impl EffectRunner {
                 match tokio::time::timeout(crate::tuning::SSE_STREAM_TIMEOUT, stream.next()).await {
                     Ok(Some(Ok(chunk))) => {
                         let text = String::from_utf8_lossy(&chunk);
-                        for event in decoder.push(&text) {
+                        let (actions, terminal) = sse_actions_from_text(&mut decoder, &text);
+                        for action in actions {
                             // Shared decode: same `ToAction` / `from_sse_data` as chat stream.
-                            let action = event.to_action().unwrap_or_else(Action::SseFailed);
-                            let is_terminal =
-                                matches!(action, Action::SseDone | Action::SseFailed(_));
-                            if tx.try_send(action).is_err() {
-                                tracing::warn!("action channel full, dropping attach SSE action");
-                            }
-                            if is_terminal {
-                                state.lock().handle = None;
-                                return;
-                            }
+                            let _ = send_or_warn(&tx, action, "attach SSE action");
+                        }
+                        if terminal {
+                            state.lock().handle = None;
+                            return;
                         }
                     }
                     Ok(Some(Err(e))) => {
-                        if tx
-                            .try_send(Action::SseFailed(format!("attach stream error: {e}")))
-                            .is_err()
-                        {
-                            tracing::warn!("action channel full, dropping SseFailed");
-                        }
+                        send_or_warn(
+                            &tx,
+                            Action::SseFailed(format!("attach stream error: {e}")),
+                            "SseFailed",
+                        );
                         state.lock().handle = None;
                         return;
                     }
                     Ok(None) => break,
                     Err(_elapsed) => {
-                        if tx
-                            .try_send(Action::SseFailed(
+                        send_or_warn(
+                            &tx,
+                            Action::SseFailed(
                                 "attach stream timeout — no data for 60s".to_string(),
-                            ))
-                            .is_err()
-                        {
-                            tracing::warn!("action channel full, dropping SseFailed");
-                        }
+                            ),
+                            "SseFailed",
+                        );
                         state.lock().handle = None;
                         return;
                     }
                 }
             }
 
-            if tx.try_send(Action::SseDone).is_err() {
-                tracing::warn!("action channel full, dropping SseDone");
-            }
+            send_or_warn(&tx, Action::SseDone, "SseDone");
             state.lock().handle = None;
         });
 
@@ -1238,5 +1304,235 @@ mod tests {
             should_quit.load(Ordering::Relaxed),
             "should_quit should be true after Quit"
         );
+    }
+
+    #[test]
+    fn sse_text_chunk_decodes_events_into_actions() {
+        let mut decoder = SseDecoder::default();
+        let (actions, terminal) = sse_actions_from_text(
+            &mut decoder,
+            "event: token
+data: hello
+
+",
+        );
+        assert!(!terminal);
+        assert_eq!(actions.len(), 1);
+        assert!(matches!(actions[0], Action::SseToken(_)));
+    }
+
+    #[test]
+    fn sse_text_chunk_stops_at_session_finished() {
+        let mut decoder = SseDecoder::default();
+        let text = "event: token\ndata: hi\n\nevent: session_finished\ndata: {\"status\":\"ok\",\"summary\":\"done\"}\n\n";
+        let (actions, terminal) = sse_actions_from_text(&mut decoder, text);
+        assert!(terminal);
+        assert_eq!(actions.len(), 2);
+        assert!(matches!(actions[0], Action::SseToken(_)));
+        assert!(matches!(actions[1], Action::SseDone));
+    }
+
+    #[test]
+    fn sse_text_chunk_flags_failed_as_terminal() {
+        let mut decoder = SseDecoder::default();
+        let (actions, terminal) = sse_actions_from_text(
+            &mut decoder,
+            "event: failed
+data: {\"message\":\"boom\"}
+
+",
+        );
+        assert!(terminal);
+        assert_eq!(actions.len(), 1);
+        assert!(matches!(actions[0], Action::SseFailed(_)));
+    }
+
+    #[test]
+    fn sse_text_chunk_unknown_kind_is_a_benign_noop() {
+        let mut decoder = SseDecoder::default();
+        let (actions, terminal) = sse_actions_from_text(
+            &mut decoder,
+            "event: no_such_event
+data: x
+
+",
+        );
+        assert!(!terminal);
+        assert_eq!(actions.len(), 1);
+        assert!(matches!(actions[0], Action::SseToken(_)));
+    }
+
+    #[test]
+    fn sse_text_chunk_malformed_known_event_yields_sse_failed() {
+        let mut decoder = SseDecoder::default();
+        let (actions, terminal) = sse_actions_from_text(
+            &mut decoder,
+            "event: tool_started
+data: not-json
+
+",
+        );
+        assert!(terminal);
+        assert_eq!(actions.len(), 1);
+        assert!(matches!(actions[0], Action::SseFailed(_)));
+    }
+
+    #[test]
+    fn goal_chunk_forwards_token_and_finished() {
+        let mut decoder = SseDecoder::default();
+        let text = "event: session_started\ndata: {\"domain\":\"coding\",\"description\":\"fix tests\"}\n\nevent: session_finished\ndata: {\"status\":\"ok\",\"summary\":\"done\"}\n\n";
+        let (actions, terminal) = EffectRunner::goal_actions_from_chunk(&mut decoder, text);
+        assert!(terminal);
+        assert_eq!(actions.len(), 2);
+        assert!(matches!(actions[0], Action::GoalStreamEvent(_)));
+        assert!(matches!(actions[1], Action::GoalStreamEvent(_)));
+    }
+
+    #[test]
+    fn goal_chunk_token_is_not_terminal() {
+        let mut decoder = SseDecoder::default();
+        let (actions, terminal) =
+            EffectRunner::goal_actions_from_chunk(&mut decoder, "event: token\ndata: hello\n\n");
+        assert!(!terminal);
+        assert_eq!(actions.len(), 1);
+        assert!(matches!(actions[0], Action::GoalStreamEvent(_)));
+    }
+
+    #[test]
+    fn goal_chunk_unknown_kind_is_benign() {
+        let mut decoder = SseDecoder::default();
+        let (actions, terminal) = EffectRunner::goal_actions_from_chunk(
+            &mut decoder,
+            "event: no_such_event\ndata: x\n\n",
+        );
+        assert!(!terminal);
+        // The chat wire decodes unknown event types to an empty Token no-op (never an error).
+        assert_eq!(actions.len(), 1);
+        assert!(matches!(actions[0], Action::GoalStreamEvent(_)));
+    }
+
+    // ── run_goal_stream (goal-session SSE drain) ───────────────────────────────
+
+    #[tokio::test]
+    async fn run_goal_stream_emits_chunk_tokens_then_closes_on_eof() {
+        let (action_tx, mut action_rx) = mpsc::channel(256);
+        let state = Arc::new(Mutex::new(StreamState::default()));
+        let dummy = tokio::spawn(async {
+            tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+        });
+        state.lock().goal_handle = Some(dummy.abort_handle());
+
+        let stream = futures::stream::iter(vec![
+            Ok::<_, String>(
+                b"event: session_started\ndata: {\"domain\":\"g\",\"description\":\"d\"}\n\n"
+                    .to_vec(),
+            ),
+            Ok::<_, String>(b"event: token\ndata: hello\n\n".to_vec()),
+        ]);
+        EffectRunner::run_goal_stream(
+            &action_tx,
+            &state,
+            stream,
+            &mut crate::sse::SseDecoder::default(),
+        )
+        .await;
+
+        let mut msgs = Vec::new();
+        while let Ok(m) = action_rx.try_recv() {
+            msgs.push(m);
+        }
+        // Started + one token, then the trailing close on clean EOF.
+        assert!(matches!(
+            msgs[0].clone(),
+            Action::GoalStreamEvent(crate::app::GoalUiEvent::Started { .. })
+        ));
+        assert!(
+            matches!(msgs[1].clone(), Action::GoalStreamEvent(crate::app::GoalUiEvent::Token(t)) if t == "hello")
+        );
+        assert!(matches!(
+            msgs[2].clone(),
+            Action::GoalStreamClosed(end) if end.is_none(),
+        ));
+        assert!(
+            state.lock().goal_handle.is_none(),
+            "handle cleared once the stream drains"
+        );
+
+        dummy.abort();
+    }
+
+    #[tokio::test]
+    async fn run_goal_stream_terminal_event_clears_handle_without_close() {
+        let (action_tx, mut action_rx) = mpsc::channel(256);
+        let state = Arc::new(Mutex::new(StreamState::default()));
+        let dummy = tokio::spawn(async {
+            tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+        });
+        state.lock().goal_handle = Some(dummy.abort_handle());
+
+        let stream = futures::stream::iter(vec![Ok::<_, String>(
+            b"event: session_finished\ndata: {\"status\":\"done\",\"summary\":\"\"}\n\n".to_vec(),
+        )]);
+        EffectRunner::run_goal_stream(
+            &action_tx,
+            &state,
+            stream,
+            &mut crate::sse::SseDecoder::default(),
+        )
+        .await;
+
+        let mut msgs = Vec::new();
+        while let Ok(m) = action_rx.try_recv() {
+            msgs.push(m);
+        }
+        // A terminal Finished short-circuits: the event arrives, no trailing close follows.
+        assert!(matches!(
+            msgs[0].clone(),
+            Action::GoalStreamEvent(crate::app::GoalUiEvent::Finished { .. })
+        ));
+        // The terminal short-circuit means no trailing close ever appears on the wire.
+        assert_eq!(
+            msgs.len(),
+            1,
+            "only the terminal event is emitted (no trailing close)"
+        );
+        assert!(
+            state.lock().goal_handle.is_none(),
+            "handle cleared at terminal"
+        );
+        dummy.abort();
+    }
+
+    #[tokio::test]
+    async fn run_goal_stream_stream_error_sends_error_close() {
+        let (action_tx, mut action_rx) = mpsc::channel(256);
+        let state = Arc::new(Mutex::new(StreamState::default()));
+        let dummy = tokio::spawn(async {
+            tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+        });
+        state.lock().goal_handle = Some(dummy.abort_handle());
+
+        let stream = futures::stream::iter(vec![Err::<Vec<u8>, _>("boom")]);
+        EffectRunner::run_goal_stream(
+            &action_tx,
+            &state,
+            stream,
+            &mut crate::sse::SseDecoder::default(),
+        )
+        .await;
+
+        let mut msgs = Vec::new();
+        while let Ok(m) = action_rx.try_recv() {
+            msgs.push(m);
+        }
+        assert!(matches!(
+            msgs[0].clone(),
+            Action::GoalStreamClosed(message) if message == Some("stream error: boom".into())
+        ));
+        assert!(
+            state.lock().goal_handle.is_none(),
+            "handle cleared after stream error"
+        );
+        dummy.abort();
     }
 }
