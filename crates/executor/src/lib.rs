@@ -1343,54 +1343,12 @@ impl Executor {
                 }
 
                 for call in &response.tool_calls {
-                    // A dropped receiver (client disconnected) just means no one is listening.
-                    let _ = events
-                        .send(AgentEvent::ToolStarted {
-                            name: call.name.clone(),
-                            args: preview(&call.arguments.to_string()),
-                        })
-                        .await;
-                    // Invoke directly (not via `run_tool`) so the outcome's ok/err is legible as its own
-                    // event; the history still gets the same string `run_tool` would have produced.
-                    self.mvl_tool_started(turn, call);
-                    let (ok, result) = match runtime.invoke(call).await {
-                        Ok(content) => (true, content),
-                        Err(message) => (false, format!("tool error: {message}")),
-                    };
-                    if runtime.parks_for_human(&call.name) {
-                        let shown = run_tool_spill(
-                            &result,
-                            self.spill_dir.as_deref(),
-                            self.spill_max_bytes,
-                            &call.id,
-                        );
-                        let _ = events
-                            .send(AgentEvent::ToolFinished {
-                                name: call.name.clone(),
-                                ok,
-                                preview: preview(&shown),
-                            })
-                            .await;
-                        self.mvl_end("awaiting_human", &call.id);
-                        return Err(ExecError::AwaitingHuman {
-                            call_id: call.id.clone(),
-                        });
+                    if let Some(call_id) = self
+                        .invoke_stream_tool(runtime, call, turn, events, messages)
+                        .await?
+                    {
+                        return Err(ExecError::AwaitingHuman { call_id });
                     }
-                    self.mvl_tool_result(turn, call, ok, &result);
-                    let shown = run_tool_spill(
-                        &result,
-                        self.spill_dir.as_deref(),
-                        self.spill_max_bytes,
-                        &call.id,
-                    );
-                    let _ = events
-                        .send(AgentEvent::ToolFinished {
-                            name: call.name.clone(),
-                            ok,
-                            preview: preview(&shown),
-                        })
-                        .await;
-                    messages.push(Message::tool_result(&call.id, shown));
                 }
                 tracing::info!(turn, tools = response.tool_calls.len(), "turn used tools");
             }
@@ -1413,6 +1371,49 @@ impl Executor {
             self.mvl_end("aborted", &error.to_string());
         }
         result
+    }
+
+    /// Run one streamed tool call. `Some(call_id)` means the tool parked for a human
+    /// and the result must *not* be appended until the next message.
+    async fn invoke_stream_tool(
+        &self,
+        runtime: &dyn ToolRuntime,
+        call: &ToolInvocation,
+        turn: u32,
+        events: &Sender<AgentEvent>,
+        messages: &mut Vec<Message>,
+    ) -> Result<Option<String>, ExecError> {
+        let _ = events
+            .send(AgentEvent::ToolStarted {
+                name: call.name.clone(),
+                args: preview(&call.arguments.to_string()),
+            })
+            .await;
+        self.mvl_tool_started(turn, call);
+        let (ok, result) = match runtime.invoke(call).await {
+            Ok(content) => (true, content),
+            Err(message) => (false, format!("tool error: {message}")),
+        };
+        let shown = run_tool_spill(
+            &result,
+            self.spill_dir.as_deref(),
+            self.spill_max_bytes,
+            &call.id,
+        );
+        let _ = events
+            .send(AgentEvent::ToolFinished {
+                name: call.name.clone(),
+                ok,
+                preview: preview(&shown),
+            })
+            .await;
+        if runtime.parks_for_human(&call.name) {
+            self.mvl_end("awaiting_human", &call.id);
+            return Ok(Some(call.id.clone()));
+        }
+        self.mvl_tool_result(turn, call, ok, &result);
+        messages.push(Message::tool_result(&call.id, shown));
+        Ok(None)
     }
 
     /// The turn loop shared by [`drive`](Self::drive) and

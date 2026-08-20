@@ -12,8 +12,44 @@
 
 use serde_json::{Value, json};
 
+struct ModeInfo {
+    id: &'static str,
+    name: &'static str,
+    description: &'static str,
+    aliases: &'static [&'static str],
+}
+
+/// Order matches [`AgentMode`] discriminants (`#[repr(usize)]`).
+const MODE_INFO: [ModeInfo; 4] = [
+    ModeInfo {
+        id: "coding",
+        name: "Coding",
+        description: "Interactive coding: conversation + tools on a durable worktree (like Claude Code)",
+        aliases: &["coding", "code", "coder", "interactive"],
+    },
+    ModeInfo {
+        id: "goal",
+        name: "Goal",
+        description: "One-shot /goal: coding pack runs to a terminal (intake, worker, gate, ship bar)",
+        aliases: &["goal", "pack", "unattended", "oneshot", "one-shot"],
+    },
+    ModeInfo {
+        id: "chat",
+        name: "Chat",
+        description: "In-process conversational chat (no coding tools, no daemon). Multi-turn Q&A.",
+        aliases: &["chat", "talk", "conversation"],
+    },
+    ModeInfo {
+        id: "face",
+        name: "Face agent",
+        description: "Daemon face agent: vault tools + delegate (requires liberado serve; LIBERADO_SERVER)",
+        aliases: &["face", "delegate", "main", "daemon"],
+    },
+];
+
 /// Which Liberado engine an ACP session uses.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(usize)]
 pub enum AgentMode {
     /// Interactive coding: lasting `Conversation` + coding tools on a durable worktree.
     Coding,
@@ -37,38 +73,19 @@ impl AgentMode {
     pub const EXPECTED: &'static str = "coding|goal|chat|face";
 
     pub fn id(self) -> &'static str {
-        match self {
-            Self::Coding => "coding",
-            Self::Goal => "goal",
-            Self::Chat => "chat",
-            Self::Face => "face",
-        }
+        self.info().id
     }
 
     pub fn name(self) -> &'static str {
-        match self {
-            Self::Coding => "Coding",
-            Self::Goal => "Goal",
-            Self::Chat => "Chat",
-            Self::Face => "Face agent",
-        }
+        self.info().name
     }
 
     pub fn description(self) -> &'static str {
-        match self {
-            Self::Coding => {
-                "Interactive coding: conversation + tools on a durable worktree (like Claude Code)"
-            }
-            Self::Goal => {
-                "One-shot /goal: coding pack runs to a terminal (intake, worker, gate, ship bar)"
-            }
-            Self::Chat => {
-                "In-process conversational chat (no coding tools, no daemon). Multi-turn Q&A."
-            }
-            Self::Face => {
-                "Daemon face agent: vault tools + delegate (requires liberado serve; LIBERADO_SERVER)"
-            }
-        }
+        self.info().description
+    }
+
+    fn info(self) -> &'static ModeInfo {
+        &MODE_INFO[self as usize]
     }
 
     /// Conversation + executor (coding tools or none). Not a pack run and not the daemon face.
@@ -82,13 +99,11 @@ impl AgentMode {
     }
 
     pub fn parse(s: &str) -> Option<Self> {
-        match s.trim().to_ascii_lowercase().as_str() {
-            "coding" | "code" | "coder" | "interactive" => Some(Self::Coding),
-            "goal" | "pack" | "unattended" | "oneshot" | "one-shot" => Some(Self::Goal),
-            "chat" | "talk" | "conversation" => Some(Self::Chat),
-            "face" | "delegate" | "main" | "daemon" => Some(Self::Face),
-            _ => None,
-        }
+        let key = s.trim().to_ascii_lowercase();
+        Self::ALL
+            .iter()
+            .copied()
+            .find(|mode| mode.info().aliases.iter().any(|alias| *alias == key))
     }
 
     /// Process default: `--mode` / `LIBERADO_ACP_MODE`, else coding (interactive).
@@ -157,6 +172,17 @@ mod tests {
         assert_eq!(modes.len(), 4);
         let ids: Vec<&str> = modes.iter().filter_map(|m| m["id"].as_str()).collect();
         assert_eq!(ids, ["coding", "goal", "chat", "face"]);
+    }
+
+    #[test]
+    fn info_table_matches_enum_order() {
+        for (i, mode) in AgentMode::ALL.iter().enumerate() {
+            assert_eq!(
+                mode.id(),
+                MODE_INFO[i].id,
+                "AgentMode discriminant {i} must match MODE_INFO"
+            );
+        }
     }
 
     #[test]

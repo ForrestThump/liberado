@@ -896,22 +896,8 @@ async fn handle_session_load(
             cancel_rx,
         },
     );
-    // Restore the model-visible conversation for coding and chat. Goal/face do not
-    // keep a converse handle; their history is cosmetic replay to the editor only.
-    if mode.is_converse()
-        && let Err(e) = ensure_converse(bridge, sid).await
-    {
-        tracing::warn!(session_id = %sid, error = %e, "session/load: failed to restore converse");
-    }
-
-    // Replay the stored transcript so the editor shows the conversation.
-    for msg in &record.messages {
-        match msg.role.as_str() {
-            "user" => emit_user_message_chunk(sink, sid, &msg.content)?,
-            "assistant" => emit_agent_text_chunk(sink, sid, &msg.content)?,
-            _ => {}
-        }
-    }
+    restore_loaded_converse(bridge, sid, mode).await;
+    replay_loaded_messages(sink, sid, &record.messages)?;
 
     tracing::info!(
         session_id = %sid,
@@ -930,6 +916,30 @@ async fn handle_session_load(
     ))
 }
 
+async fn restore_loaded_converse(bridge: &Bridge, sid: &str, mode: AgentMode) {
+    if !mode.is_converse() {
+        return;
+    }
+    if let Err(e) = ensure_converse(bridge, sid).await {
+        tracing::warn!(session_id = %sid, error = %e, "session/load: failed to restore converse");
+    }
+}
+
+fn replay_loaded_messages(
+    sink: &dyn WireSink,
+    sid: &str,
+    messages: &[session_store::StoredMessage],
+) -> Result<(), String> {
+    for msg in messages {
+        match msg.role.as_str() {
+            "user" => emit_user_message_chunk(sink, sid, &msg.content)?,
+            "assistant" => emit_agent_text_chunk(sink, sid, &msg.content)?,
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
 /// `session/set_mode`: switch a live session's agent mode, lazy-initializing the chat handle when
 /// entering chat, and persisting the change (soft).
 async fn handle_set_mode(bridge: &Bridge, params: &Value) -> Result<Value, String> {
@@ -943,6 +953,11 @@ async fn handle_set_mode(bridge: &Bridge, params: &Value) -> Result<Value, Strin
         .ok_or("missing modeId")?;
     let mode = AgentMode::parse(mode_id)
         .ok_or_else(|| format!("unknown modeId '{mode_id}' ({})", AgentMode::EXPECTED))?;
+    apply_live_mode(bridge, sid, mode).await?;
+    Ok(json!({}))
+}
+
+async fn apply_live_mode(bridge: &Bridge, sid: &str, mode: AgentMode) -> Result<(), String> {
     {
         let mut map = bridge.acp_sessions.lock().await;
         let sess = map
@@ -962,7 +977,7 @@ async fn handle_set_mode(bridge: &Bridge, params: &Value) -> Result<Value, Strin
     if mode.is_converse() {
         ensure_converse(bridge, sid).await?;
     }
-    Ok(json!({}))
+    Ok(())
 }
 
 /// `session/set_model`: validate the model against the live catalog (extending it when the id is
@@ -1787,14 +1802,7 @@ async fn run_prompt_turn(
 
     let turn = tokio::spawn(async move {
         let result = drive_converse_turn(&turn_session, &text, &event_tx).await;
-        match &result {
-            Ok(()) | Err(ExecError::AwaitingHuman { .. }) => {
-                let _ = event_tx.send(AgentEvent::Done).await;
-            }
-            Err(e) => {
-                let _ = event_tx.send(AgentEvent::Error(e.to_string())).await;
-            }
-        }
+        let _ = event_tx.send(converse_terminal_event(&result)).await;
         result
     });
 
@@ -1847,12 +1855,27 @@ async fn run_prompt_turn(
         }
     }
 
-    if let Ok(Err(ExecError::AwaitingHuman { call_id })) = turn.await
-        && let Ok(mut pending) = session.pending_ask.lock()
-    {
+    remember_parked_ask(&session, turn.await);
+    Ok(stop_reason)
+}
+
+fn converse_terminal_event(result: &Result<(), ExecError>) -> AgentEvent {
+    match result {
+        Ok(()) | Err(ExecError::AwaitingHuman { .. }) => AgentEvent::Done,
+        Err(e) => AgentEvent::Error(e.to_string()),
+    }
+}
+
+fn remember_parked_ask(
+    session: &SessionHandle,
+    joined: Result<Result<(), ExecError>, tokio::task::JoinError>,
+) {
+    let Ok(Err(ExecError::AwaitingHuman { call_id })) = joined else {
+        return;
+    };
+    if let Ok(mut pending) = session.pending_ask.lock() {
         *pending = Some(call_id);
     }
-    Ok(stop_reason)
 }
 
 /// One converse drive: either a fresh user turn or the answer to a parked `ask_human`.
