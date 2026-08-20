@@ -98,13 +98,19 @@ fn smoke_runner_path(root: &Path) -> Result<PathBuf, Box<dyn std::error::Error>>
     Ok(runner)
 }
 
-fn cmd_smoke(args: &mut dyn Iterator<Item = String>) -> Result<(), Box<dyn std::error::Error>> {
-    smoke_arg_check(args)?;
+/// Provider name for the probe, from `LIBERADO_CODER_PROVIDER` (default `openrouter`).
+fn smoke_provider() -> String {
+    std::env::var("LIBERADO_CODER_PROVIDER").unwrap_or_else(|_| "openrouter".to_owned())
+}
 
-    let root = crate::crate_map_cmd::repository_root()?;
-    smoke_build_runner(&root)?;
-    let runner = smoke_runner_path(&root)?;
-
+/// Run the smoke probe: build the smoke request in a fresh temp repository, invoke the runner
+/// against it, and capture its verdict. Returns (did the run succeed, stdout, stderr, exit text).
+/// The real binary is the exercise (the runner's own boundary) — kept out of `cmd_smoke` so the
+/// command's decision triage stays flat and the many `?`s live in one place.
+fn run_smoke_probe(
+    root: &Path,
+    runner: &Path,
+) -> Result<(bool, String, String, String), Box<dyn std::error::Error>> {
     let temp = tempfile::tempdir()?;
     initialize_smoke_repository(temp.path())?;
     let request_path = temp.path().join("request.json");
@@ -112,30 +118,44 @@ fn cmd_smoke(args: &mut dyn Iterator<Item = String>) -> Result<(), Box<dyn std::
         &request_path,
         serde_json::to_vec_pretty(&smoke_request(temp.path()))?,
     )?;
-
-    println!("== process boundary smoke (expects provider key or clean failure) ==");
-    let provider =
-        std::env::var("LIBERADO_CODER_PROVIDER").unwrap_or_else(|_| "openrouter".to_owned());
-    let output = std_command(&runner)
+    let provider = smoke_provider();
+    let output = std_command(runner)
         .args([
             "--request",
             request_path.to_str().ok_or("request path is not UTF-8")?,
         ])
         .env("LIBERADO_CODER_PROVIDER", provider)
-        .current_dir(&root)
+        .current_dir(root)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .output()?;
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    if output.status.success() {
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    Ok((
+        output.status.success(),
+        stdout,
+        stderr,
+        format!("{}", output.status),
+    ))
+}
+
+fn cmd_smoke(args: &mut dyn Iterator<Item = String>) -> Result<(), Box<dyn std::error::Error>> {
+    smoke_arg_check(args)?;
+
+    let root = crate::crate_map_cmd::repository_root()?;
+    smoke_build_runner(&root)?;
+    let runner = smoke_runner_path(&root)?;
+
+    println!("== process boundary smoke (expects provider key or clean failure) ==");
+    let (success, stdout, stderr, status) = run_smoke_probe(&root, &runner)?;
+    if success {
         println!("OK: live provider completed a coding run");
         return Ok(());
     }
 
-    if smoke_boundary_reached(&stdout, &stderr) {
+    if smoke_boundary_reached(stdout.as_str(), stderr.as_str()) {
         println!("OK: runner reached the provider boundary without credentials");
-        println!("  exit status: {}", output.status);
+        println!("  exit status: {status}");
         return Ok(());
     }
 
@@ -143,7 +163,7 @@ fn cmd_smoke(args: &mut dyn Iterator<Item = String>) -> Result<(), Box<dyn std::
         .to_lowercase()
         .trim()
         .to_string();
-    Err(format!("coder smoke failed with {}:\n{}", output.status, combined).into())
+    Err(format!("coder smoke failed with {status}:\n{combined}").into())
 }
 
 /// Classify a failed runner invocation: did it reach the provider boundary without
