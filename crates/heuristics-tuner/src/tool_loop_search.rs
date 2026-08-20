@@ -108,6 +108,24 @@ pub async fn run_subagent_tuner(config: TunerConfig) -> ExecutorTunerResult {
     .await
 }
 
+/// The final result's rubric for the executor/subagent loop: reuse the winner's last generation
+/// record (same candidate, already formatted against the baseline) or format a fresh one when no
+/// generation finished. Pure — no model call — so the reuse-vs-fallback decision is directly testable.
+fn finalize_result_executor(
+    winner: &Candidate,
+    winner_fitness: &ToolLoopFitness,
+    baseline_fitness: &ToolLoopFitness,
+    seed_prompt: &str,
+    generations: &[ExecutorGenerationRecord],
+) -> String {
+    generations
+        .last()
+        .map(|g| g.rubric.clone())
+        .unwrap_or_else(|| {
+            format_executor_rubric(winner, winner_fitness, baseline_fitness, seed_prompt, None)
+        })
+}
+
 /// Shared beam-search loop for any role that runs through `Executor::execute` (today: executor and
 /// subagent) — the two public entry points above differ only in seed prompt and turn budget.
 async fn run_tool_loop_tuner(
@@ -222,18 +240,13 @@ async fn run_tool_loop_tuner(
     }
 
     let (winner, winner_fitness) = beam.into_iter().next().expect("beam is never empty");
-    let rubric = generations
-        .last()
-        .map(|g| g.rubric.clone())
-        .unwrap_or_else(|| {
-            format_executor_rubric(
-                &winner,
-                &winner_fitness,
-                &baseline_fitness,
-                seed_prompt,
-                None,
-            )
-        });
+    let rubric = finalize_result_executor(
+        &winner,
+        &winner_fitness,
+        &baseline_fitness,
+        seed_prompt,
+        &generations,
+    );
 
     ExecutorTunerResult {
         winner,
@@ -373,6 +386,36 @@ mod tests {
         assert_eq!(
             result.winner_fitness.unsafe_acts, 0,
             "a winner must never carry an unsafe act"
+        );
+    }
+
+    #[test]
+    fn finalize_result_executor_reuses_the_last_generation_rubric() {
+        let winner = candidate("best");
+        let winner_fit = tool_loop_fitness(0.9, 1.0, 0);
+        let baseline = tool_loop_fitness(0.5, 1.0, 0);
+        let generations = vec![ExecutorGenerationRecord {
+            generation: 1,
+            candidate: winner.clone(),
+            fitness: winner_fit.clone(),
+            rubric: "already-the-winner".to_string(),
+        }];
+        // Non-empty generations: the last record (same candidate) is reused verbatim.
+        assert_eq!(
+            finalize_result_executor(&winner, &winner_fit, &baseline, "seed", &generations),
+            "already-the-winner",
+        );
+    }
+
+    #[test]
+    fn finalize_result_executor_formats_fresh_when_no_generation_finished() {
+        let winner = candidate("best");
+        let winner_fit = tool_loop_fitness(0.9, 1.0, 0);
+        let baseline = tool_loop_fitness(0.5, 1.0, 0);
+        let rubric = finalize_result_executor(&winner, &winner_fit, &baseline, "seed", &[]);
+        assert!(
+            rubric.contains("Heuristics Tuner Proposal"),
+            "a fresh executor rubric formats on the empty-generations path"
         );
     }
 }
