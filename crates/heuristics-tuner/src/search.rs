@@ -215,8 +215,7 @@ pub async fn run_tuner(config: TunerConfig) -> TunerResult {
 }
 
 /// Produce one generation's candidate pool: mutations from every beam parent plus independent cold
-/// starts, halting on the shared budget. The only model-bound part of a generation — the loop and
-/// budget bookkeeping live here so `run_tuner`'s driver reads as a flat sequence of decisions.
+/// starts, stopping when the shared budget is exhausted.
 async fn gather_generation_candidates(
     beam: &[(Candidate, CandidateFitness)],
     config: &TunerConfig,
@@ -264,9 +263,7 @@ async fn gather_generation_candidates(
     pool
 }
 
-/// Score every candidate in a pool against the scenario set — a tight loop whose only work is
-/// waiting on the shared scoring calls. Kept separate so the beam advance that consumes its output
-/// reads as a decision, and so the per-generation driver stays free of the loop shape.
+/// Score every candidate in a pool against the scenario set.
 async fn score_pool(
     pool: Vec<Candidate>,
     config: &TunerConfig,

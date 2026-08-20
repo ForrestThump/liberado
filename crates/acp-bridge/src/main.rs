@@ -1238,8 +1238,8 @@ async fn run_coding_prompt(
 
 /// Persist the finished round's coding state, report the outcome, and write the run artifact.
 ///
-/// Split out of run_coding_prompt so the join tail reads as one decision (persist -> label ->
-/// verdict -> finish) instead of a six-step inline block.
+/// Persist only after the pack finished (not mid-cancel). Preserve the workspace on failure
+/// too: a failed run's diff is the evidence, and it is lost if nobody commits it.
 async fn finish_coding_tail(
     bridge: Arc<Bridge>,
     sink: &dyn WireSink,

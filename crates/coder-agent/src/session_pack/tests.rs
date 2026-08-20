@@ -973,6 +973,36 @@ async fn ship_preflight_green_allows_succeeded() {
     );
 }
 
+/// Restores `LIBERADO_DATA_DIR` on drop. Declare after `DATA_DIR_ENV_LOCK` so Drop
+/// runs while the lock is still held (reverse declaration order).
+struct RestoreLiberadoDataDir {
+    prior: Option<std::ffi::OsString>,
+}
+
+impl RestoreLiberadoDataDir {
+    fn set_to(path: impl AsRef<std::ffi::OsStr>) -> Self {
+        let prior = std::env::var_os("LIBERADO_DATA_DIR");
+        // SAFETY: caller holds `DATA_DIR_ENV_LOCK` for the life of this guard.
+        unsafe {
+            std::env::set_var("LIBERADO_DATA_DIR", path);
+        }
+        Self { prior }
+    }
+}
+
+impl Drop for RestoreLiberadoDataDir {
+    fn drop(&mut self) {
+        // SAFETY: same lock the constructor required; Drop runs before `_env` is
+        // released when the test declares the lock first.
+        unsafe {
+            match &self.prior {
+                Some(v) => std::env::set_var("LIBERADO_DATA_DIR", v),
+                None => std::env::remove_var("LIBERADO_DATA_DIR"),
+            }
+        }
+    }
+}
+
 #[tokio::test]
 async fn an_external_workspace_gets_durable_session_isolation() {
     use std::process::Command;
@@ -996,10 +1026,7 @@ async fn an_external_workspace_gets_durable_session_isolation() {
     // `LIBERADO_DATA_DIR` is process-global and the fanout tests set it too; hold the guard for
     // as long as this test depends on the value.
     let _env = crate::DATA_DIR_ENV_LOCK.lock().await;
-    // SAFETY: test-only env mutation, serialized by the guard above; restored below.
-    unsafe {
-        std::env::set_var("LIBERADO_DATA_DIR", data.path());
-    }
+    let _restore = RestoreLiberadoDataDir::set_to(data.path());
 
     let mut g = goal("edit README.md");
     g.payload = serde_json::json!({
@@ -1053,10 +1080,6 @@ async fn an_external_workspace_gets_durable_session_isolation() {
         "init_git_repo must run so session worktree can proceed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-
-    unsafe {
-        std::env::remove_var("LIBERADO_DATA_DIR");
-    }
 }
 
 /// `[tuning.coder.gate]` reaches the `CoderRunConfig` the pack actually hands the backend.
@@ -1430,10 +1453,7 @@ fn checkpoint_workspace_falls_back_to_the_goal_default_dir() {
 async fn checkpoint_workspace_prefers_the_durable_session_worktree_when_it_exists() {
     let _env = crate::DATA_DIR_ENV_LOCK.lock().await;
     let data = tempfile::tempdir().unwrap();
-    // SAFETY: test-only env mutation, serialized by the lock above.
-    unsafe {
-        std::env::set_var("LIBERADO_DATA_DIR", data.path());
-    }
+    let prior = std::env::var_os("LIBERADO_DATA_DIR");
     let durable = data.path().join("coding-worktrees").join("session-9");
     std::fs::create_dir_all(&durable).unwrap();
 
@@ -1441,8 +1461,16 @@ async fn checkpoint_workspace_prefers_the_durable_session_worktree_when_it_exist
         "workspace_root": "/tmp/ignored"
     }))
     .unwrap();
-    let got = coding_checkpoint_workspace("session-9", &payload, std::path::Path::new("/tmp/d"));
+    let got = {
+        let _restore = RestoreLiberadoDataDir::set_to(data.path());
+        coding_checkpoint_workspace("session-9", &payload, std::path::Path::new("/tmp/d"))
+    };
     assert_eq!(got, durable);
+    assert_eq!(
+        std::env::var_os("LIBERADO_DATA_DIR"),
+        prior,
+        "LIBERADO_DATA_DIR must be restored before the lock is released"
+    );
 }
 
 #[test]

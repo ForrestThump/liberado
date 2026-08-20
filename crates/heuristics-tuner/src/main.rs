@@ -95,9 +95,9 @@ async fn save_dispatcher_result(
     Ok(result.rubric)
 }
 
-/// Resolve the run's output directory from the loaded config, creating it (and any parents) up
-/// front. Kept out of `main` so the binary's entry is a flat sequence of two calls and the setup
-/// (which carries a config load + fs create, each a `?` branch) is separately understandable.
+/// Resolve the run's output directory and create it (and any parents) before any tuner work
+/// writes there. `data_dir()` is the same resolver the daemon uses, so results land where
+/// operators already look.
 async fn prepare_run_dir() -> Result<std::path::PathBuf, Box<dyn std::error::Error>> {
     let run_timestamp = chrono::Utc::now().format("%Y-%m-%dT%H-%M-%SZ").to_string();
     let out_dir = liberado_config::data_dir()
@@ -129,8 +129,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     write_final_result(&final_rubric, &out_dir).await
 }
 
-/// Write the session's final answer under a stable filename and print the result summary - the
-/// tail `main` used to inline, whose two `?` (write) and three prints carried decision weight.
+/// Write `final.txt` — the operator-facing result, always at the same name under the run dir —
+/// and print the path plus the rubric to stdout.
 async fn write_final_result(
     final_rubric: &str,
     out_dir: &Path,

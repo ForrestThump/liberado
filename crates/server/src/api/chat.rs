@@ -200,8 +200,7 @@ fn pick_chat_creation(
 
 /// Build a single-`failed`-event stream response: the shape every "the stream cannot start" path
 /// returns (chat disabled, profile resolution failure, creation failure). Sends the error on the
-/// channel and destroys `tx` so a successful start owns the only remaining sender. The three
-/// duplicated spawn-and-wrap tails used to be inline in `chat_stream_core`.
+/// channel and destroys `tx` so a successful start owns the only remaining sender.
 fn fail_stream_response(
     tx: mpsc::Sender<AgentEvent>,
     rx: mpsc::Receiver<AgentEvent>,
@@ -216,8 +215,7 @@ fn fail_stream_response(
 }
 
 /// Create the conversation for a first-token chat, dispatching the incognito / background /
-/// granted / default branch decision (made in `pick_chat_creation`) onto the store. Kept out of
-/// `chat_stream_core` so the driver reads as a flat sequence and the branch is one call.
+/// granted / default branch decision (made in `pick_chat_creation`) onto the store.
 async fn create_chat_session(
     sessions: &liberado_main_agent::ChatSessions,
     incognito: bool,

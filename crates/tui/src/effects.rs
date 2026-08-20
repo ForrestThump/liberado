@@ -29,6 +29,34 @@ pub struct StreamState {
     pub goal_handle: Option<AbortHandle>,
 }
 
+/// Try-send an action. Returns true when the channel is full so the caller can decide
+/// whether to keep reading.
+fn send_or_warn(tx: &mpsc::Sender<Action>, action: Action, label: &str) -> bool {
+    let failed = tx.try_send(action).is_err();
+    if failed {
+        tracing::warn!("action channel full, dropping {label}");
+    }
+    failed
+}
+
+/// Decode one SSE text chunk into the actions to forward, stopping at a terminal action
+/// (`SseDone` / `SseFailed`). Returns the actions and whether a terminal was seen.
+fn sse_actions_from_text(decoder: &mut SseDecoder, text: &str) -> (Vec<Action>, bool) {
+    let mut actions = Vec::new();
+    let mut terminal = false;
+    for event in decoder.push(text) {
+        let action = event.to_action().unwrap_or_else(Action::SseFailed);
+        if matches!(action, Action::SseDone | Action::SseFailed(_)) {
+            terminal = true;
+        }
+        actions.push(action);
+        if terminal {
+            break;
+        }
+    }
+    (actions, terminal)
+}
+
 /// Executes [`Effect`] commands by spawning tokio tasks (SSE streaming, HTTP fetches)
 /// or performing synchronous side-effects (cancel, quit, set title).
 ///
@@ -48,32 +76,6 @@ pub struct StreamState {
 /// The runner reads the server URL and other context from `app` — effects that carry
 /// data payloads (e.g. `StartChatStream { message, session }`) use those payloads
 /// directly; the runner never re-reads App state for effect-specific data.
-/// Decode one SSE text chunk into the actions to forward, stopping at a terminal action
-/// (`SseDone` / `SseFailed`). Returns the actions and whether a terminal was seen.
-fn send_or_warn(tx: &mpsc::Sender<Action>, action: Action, label: &str) -> bool {
-    let failed = tx.try_send(action).is_err();
-    if failed {
-        tracing::warn!("action channel full, dropping {label}");
-    }
-    failed
-}
-
-fn sse_actions_from_text(decoder: &mut SseDecoder, text: &str) -> (Vec<Action>, bool) {
-    let mut actions = Vec::new();
-    let mut terminal = false;
-    for event in decoder.push(text) {
-        let action = event.to_action().unwrap_or_else(Action::SseFailed);
-        if matches!(action, Action::SseDone | Action::SseFailed(_)) {
-            terminal = true;
-        }
-        actions.push(action);
-        if terminal {
-            break;
-        }
-    }
-    (actions, terminal)
-}
-
 pub struct EffectRunner {
     pub app: Arc<Mutex<App>>,
     pub should_quit: Arc<AtomicBool>,
@@ -103,7 +105,23 @@ impl EffectRunner {
             Effect::SetWindowTitle(title) => self.set_window_title(&title),
             Effect::Quit => self.quit(),
             Effect::None => {}
-            _ => self.run_async(effect).await,
+            Effect::StartChatStream { .. }
+            | Effect::CancelStream { .. }
+            | Effect::RefreshConversations
+            | Effect::LoadConversationHistory(_)
+            | Effect::FetchModels
+            | Effect::SelectModel { .. }
+            | Effect::AttachConversationStream(_)
+            | Effect::ForkConversation { .. }
+            | Effect::RefreshSessions
+            | Effect::JoinGoalSession(_)
+            | Effect::SendGoalMessage { .. }
+            | Effect::SpawnGoalSession { .. }
+            | Effect::StartCodingGoal { .. }
+            | Effect::ParkGoalSession(_)
+            | Effect::CancelGoalSession(_)
+            | Effect::ResumeGoalSession { .. }
+            | Effect::LeaveGoalSession => self.run_async(effect).await,
         }
     }
 
@@ -153,7 +171,9 @@ impl EffectRunner {
             }
             Effect::ResumeGoalSession { id, answer } => self.resume_goal_session(id, answer).await,
             Effect::LeaveGoalSession => self.leave_goal_session(),
-            _ => unreachable!("run_async only receives the async effect kinds"),
+            Effect::SetWindowTitle(_) | Effect::Quit | Effect::None => {
+                unreachable!("run_async only receives the async effect kinds")
+            }
         }
     }
 
@@ -174,9 +194,6 @@ impl EffectRunner {
         });
     }
 
-    /// Abort any prior goal stream and open a fresh SSE subscription to `GET /api/goals/{id}/stream`,
-    /// mapping each frame to a [`Action::GoalStreamEvent`]. Catch-up history arrives first, then live
-    /// events (the server replays the transcript before tailing).
     /// Decode one goal-session SSE text chunk into the actions to forward, stopping at a
     /// terminal `Finished` event. Returns the actions and whether a terminal was seen.
     fn goal_actions_from_chunk(decoder: &mut SseDecoder, text: &str) -> (Vec<Action>, bool) {
@@ -200,8 +217,7 @@ impl EffectRunner {
         (actions, terminal)
     }
 
-    /// Send a goal-stream close (or plain end) and clear the active handle. Collapses the four
-    /// duplicated error blocks that used to inline `try_send(GoalStreamClosed)` + handle clear.
+    /// Send a goal-stream close (or plain end) and clear the active handle.
     async fn close_goal_stream(
         tx: &mpsc::Sender<Action>,
         state: &Arc<Mutex<StreamState>>,
@@ -211,9 +227,8 @@ impl EffectRunner {
         state.lock().goal_handle = None;
     }
 
-    /// Drain one goal-session SSE stream into the action channel. Split out of `join_goal_session`
-    /// (which keeps only the spawn/abort lifecycle) so the loop is testable: the stream type is
-    /// generic, so tests feed scripted chunk sequences and assert the emitted actions.
+    /// Drain one goal-session SSE stream into the action channel. The stream type is generic so
+    /// tests feed scripted chunk sequences and assert the emitted actions.
     ///
     /// A `Finished` event is terminal — the view is done and the server closes the stream, so the
     /// loop drops without a trailing close. EOF, stream errors, and timeouts each close with a
@@ -262,6 +277,9 @@ impl EffectRunner {
         Self::close_goal_stream(tx, state, None).await;
     }
 
+    /// Abort any prior goal stream and open a fresh SSE subscription to `GET /api/goals/{id}/stream`,
+    /// mapping each frame to a [`Action::GoalStreamEvent`]. Catch-up history arrives first, then live
+    /// events (the server replays the transcript before tailing).
     async fn join_goal_session(&self, id: String) {
         // Replace any existing subscription (re-`/join` or switching sessions).
         if let Some(prev) = self.stream_state.lock().goal_handle.take() {
@@ -559,9 +577,6 @@ impl EffectRunner {
                         let text = String::from_utf8_lossy(&chunk);
                         let (actions, terminal) = sse_actions_from_text(&mut decoder, &text);
                         for action in actions {
-                            // SseDone/SseFailed are important — skip is_terminal check since the
-                            // message may not have been delivered; the next chunk will retry
-                            // (or timeout). For terminal events, continue to clean up handle.
                             send_or_warn(&tx, action, "SSE action");
                         }
                         if terminal {

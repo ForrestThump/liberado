@@ -127,8 +127,7 @@ fn finalize_result_executor(
 }
 
 /// Produce one generation's candidate pool: mutations from every beam parent plus independent cold
-/// starts, halting on the shared budget. The only model-bound part of a generation — the loop and
-/// budget bookkeeping live here so `run_tool_loop_tuner`'s driver reads as a flat sequence of decisions.
+/// starts, stopping when the shared budget is exhausted.
 async fn gather_generation_candidates_executor(
     beam: &[(Candidate, ToolLoopFitness)],
     config: &TunerConfig,
@@ -176,9 +175,7 @@ async fn gather_generation_candidates_executor(
     pool
 }
 
-/// Score every candidate in a pool against the executor scenario set — a tight loop whose only work
-/// is waiting on the shared scoring calls. Kept separate so the beam advance that consumes its
-/// output reads as a decision, and so the per-generation driver stays free of the loop shape.
+/// Score every candidate in a pool against the executor scenario set.
 async fn score_pool_executor(
     pool: Vec<Candidate>,
     config: &TunerConfig,

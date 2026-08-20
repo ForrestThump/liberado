@@ -105,8 +105,7 @@ fn smoke_provider() -> String {
 
 /// Run the smoke probe: build the smoke request in a fresh temp repository, invoke the runner
 /// against it, and capture its verdict. Returns (did the run succeed, stdout, stderr, exit text).
-/// The real binary is the exercise (the runner's own boundary) — kept out of `cmd_smoke` so the
-/// command's decision triage stays flat and the many `?`s live in one place.
+/// The real binary is the exercise; `cmd_smoke` only classifies the captured verdict.
 fn run_smoke_probe(
     root: &Path,
     runner: &Path,
