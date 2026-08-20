@@ -470,4 +470,135 @@ mod tests {
         assert!(clipped.ends_with("…[truncated]"), "{clipped}");
         assert!(clipped.len() <= 4_000, "{} bytes", clipped.len());
     }
+
+    #[test]
+    fn short_log_is_left_untouched() {
+        let input = "short line";
+        assert_eq!(truncate_log(input), input);
+    }
+
+    #[test]
+    fn prefix_splits_at_char_boundary() {
+        // "🎉" is 4 bytes; slicing at an interior byte must not panic.
+        let s = "a🎉b";
+        let p = prefix_at_char_boundary(s, 3);
+        assert!(s.starts_with(p));
+        assert!(s.is_char_boundary(p.len()));
+    }
+
+    #[tokio::test]
+    async fn absent_paths_pass_when_forbidden_files_are_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let specs = vec![VerifierSpec::PathsAbsent {
+            id: "forbid".into(),
+            paths: vec!["should-not-exist.rs".into()],
+        }];
+        let result = run_pipeline(
+            &dir.path().to_string_lossy(),
+            &specs,
+            &PipelinePolicy::default(),
+            None,
+        )
+        .await
+        .unwrap();
+        assert!(result.is_pass(), "{:?}", result.overall);
+    }
+
+    #[tokio::test]
+    async fn absent_paths_fail_when_forbidden_file_exists() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("forbidden.rs"), "x").unwrap();
+        let specs = vec![VerifierSpec::PathsAbsent {
+            id: "forbid".into(),
+            paths: vec!["forbidden.rs".into()],
+        }];
+        let result = run_pipeline(
+            &dir.path().to_string_lossy(),
+            &specs,
+            &PipelinePolicy::default(),
+            None,
+        )
+        .await
+        .unwrap();
+        assert!(!result.is_pass());
+        assert!(
+            result
+                .combined_findings
+                .iter()
+                .any(|f| f.kind == FindingKind::UnexpectedChange),
+            "{:?}",
+            result.combined_findings
+        );
+    }
+
+    #[tokio::test]
+    async fn content_check_fails_when_file_is_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let specs = vec![VerifierSpec::ContentContains {
+            id: "c".into(),
+            path: "nope.txt".into(),
+            must_include: vec!["anything".into()],
+        }];
+        let result = run_pipeline(
+            &dir.path().to_string_lossy(),
+            &specs,
+            &PipelinePolicy::default(),
+            None,
+        )
+        .await
+        .unwrap();
+        assert!(!result.is_pass());
+        assert!(
+            result
+                .combined_findings
+                .iter()
+                .any(|f| f.kind == FindingKind::MissingPath),
+            "{:?}",
+            result.combined_findings
+        );
+    }
+
+    #[tokio::test]
+    async fn content_check_fails_when_needle_is_absent() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a.txt"), "alpha beta\n").unwrap();
+        let specs = vec![VerifierSpec::ContentContains {
+            id: "c".into(),
+            path: "a.txt".into(),
+            must_include: vec!["gamma".into()],
+        }];
+        let result = run_pipeline(
+            &dir.path().to_string_lossy(),
+            &specs,
+            &PipelinePolicy::default(),
+            None,
+        )
+        .await
+        .unwrap();
+        assert!(!result.is_pass());
+        assert!(
+            result
+                .combined_findings
+                .iter()
+                .any(|f| f.kind == FindingKind::ContentMismatch),
+            "{:?}",
+            result.combined_findings
+        );
+    }
+
+    #[tokio::test]
+    async fn workspace_must_be_a_directory() {
+        let missing = tempfile::tempdir().unwrap().path().join("no-such-dir");
+        let result = run_pipeline(
+            &missing.to_string_lossy(),
+            &[],
+            &PipelinePolicy::default(),
+            None,
+        )
+        .await;
+        assert!(
+            result.is_err(),
+            "expected Setup error for non-directory root"
+        );
+    }
 }

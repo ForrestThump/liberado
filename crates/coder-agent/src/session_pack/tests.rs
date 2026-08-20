@@ -1310,3 +1310,137 @@ async fn the_configured_coder_role_reaches_the_backends_run_config() {
         "the configured ceiling must reach the run, not the pack's 12-turn constant"
     );
 }
+
+// ── Builder defaults and workspace-selection helpers ─────────────────────────
+
+#[test]
+fn the_concurrency_builder_clamps_to_at_least_one() {
+    let provider = Arc::new(MockProvider::with_script("mock", vec![]));
+    let default = CodingSessionPack::new(provider.clone(), std::env::temp_dir());
+    assert_eq!(default.max_concurrent_coding_subagents, 3, "default cap");
+    let clamped = CodingSessionPack::new(provider.clone(), std::env::temp_dir())
+        .with_max_concurrent_coding_subagents(0);
+    assert_eq!(
+        clamped.max_concurrent_coding_subagents, 1,
+        "a zero cap must be clamped up, not allowed to disable fan-out"
+    );
+    let raised = CodingSessionPack::new(provider, std::env::temp_dir())
+        .with_max_concurrent_coding_subagents(8);
+    assert_eq!(raised.max_concurrent_coding_subagents, 8);
+}
+
+#[test]
+fn new_and_with_backend_agree_on_defaults() {
+    let provider = Arc::new(MockProvider::with_script("mock", vec![]));
+    let backend = Arc::new(crate::LiberadoLoopBackend::new(provider.clone()));
+    let a = CodingSessionPack::new(provider.clone(), std::env::temp_dir());
+    let b = CodingSessionPack::with_backend(backend, provider, std::env::temp_dir());
+    assert_eq!(
+        a.max_concurrent_coding_subagents,
+        b.max_concurrent_coding_subagents
+    );
+    assert_eq!(a.gate.enabled, b.gate.enabled);
+    assert_eq!(a.trace_dir, b.trace_dir);
+    assert_eq!(a.trace_formats, b.trace_formats);
+}
+
+#[test]
+fn with_tuning_mirrors_every_shared_knob_onto_the_convenience_fields() {
+    use liberado_coder_core::{CoderGateConfig, ProgressPolicy, TraceFormat};
+
+    let provider = Arc::new(MockProvider::with_script("mock", vec![]));
+    let tuning = liberado_coder_core::CoderTuning {
+        trace_dir: Some("traces".into()),
+        trace_formats: vec![TraceFormat::OpenaiMessages],
+        gate: CoderGateConfig {
+            enabled: true,
+            fresh_reviewers: 2,
+            ..CoderGateConfig::default()
+        },
+        progress: ProgressPolicy {
+            read_only_turn_limit: 11,
+            ..ProgressPolicy::default()
+        },
+        hashline: liberado_coder_core::HashlineConfig {
+            enabled: true,
+            ..liberado_coder_core::HashlineConfig::default()
+        },
+        ..liberado_coder_core::CoderTuning::default()
+    };
+    let pack = CodingSessionPack::new(provider, std::env::temp_dir()).with_tuning(tuning.clone());
+
+    assert_eq!(pack.trace_dir, tuning.trace_dir);
+    assert_eq!(pack.trace_formats, tuning.trace_formats);
+    assert!(pack.gate.enabled);
+    assert_eq!(pack.gate.fresh_reviewers, 2);
+    assert_eq!(pack.progress.read_only_turn_limit, 11);
+    assert!(pack.hashline.enabled);
+    assert_eq!(
+        pack.tuning.trace_dir, tuning.trace_dir,
+        "mirror stays in lockstep"
+    );
+}
+
+#[test]
+fn last_checkpoint_returns_the_most_recent_one() {
+    use liberado_session::SessionEventKind;
+    let events = vec![
+        SessionEvent::new(
+            "s",
+            SessionEventKind::Checkpoint {
+                id: "cp-old".into(),
+                label: "first".into(),
+                tree_hash: "h1".into(),
+            },
+        ),
+        SessionEvent::new(
+            "s",
+            SessionEventKind::Checkpoint {
+                id: "cp-new".into(),
+                label: "second".into(),
+                tree_hash: "h2".into(),
+            },
+        ),
+    ];
+    assert_eq!(
+        last_checkpoint(&events).unwrap(),
+        ("cp-new".into(), "second".into())
+    );
+    assert_eq!(last_checkpoint(&[]), None);
+}
+
+#[test]
+fn checkpoint_workspace_prefers_the_payload_root_over_the_default() {
+    let payload = CodingGoalPayload::parse(&serde_json::json!({
+        "workspace_root": "/tmp/some/project"
+    }))
+    .unwrap();
+    let got = coding_checkpoint_workspace("s1", &payload, std::path::Path::new("/tmp/defaults"));
+    assert_eq!(got, std::path::PathBuf::from("/tmp/some/project"));
+}
+
+#[test]
+fn checkpoint_workspace_falls_back_to_the_goal_default_dir() {
+    let payload = CodingGoalPayload::default();
+    let got = coding_checkpoint_workspace("abc", &payload, std::path::Path::new("/tmp/defaults"));
+    assert_eq!(got, std::path::PathBuf::from("/tmp/defaults/goal-abc"));
+}
+
+#[tokio::test]
+async fn checkpoint_workspace_prefers_the_durable_session_worktree_when_it_exists() {
+    let _env = crate::DATA_DIR_ENV_LOCK.lock().await;
+    let data = tempfile::tempdir().unwrap();
+    // SAFETY: test-only env mutation, serialized by the lock above.
+    unsafe {
+        std::env::set_var("LIBERADO_DATA_DIR", data.path());
+    }
+    let durable = data.path().join("coding-worktrees").join("session-9");
+    std::fs::create_dir_all(&durable).unwrap();
+
+    let payload = CodingGoalPayload::parse(&serde_json::json!({
+        "workspace_root": "/tmp/ignored"
+    }))
+    .unwrap();
+    let got = coding_checkpoint_workspace("session-9", &payload, std::path::Path::new("/tmp/d"));
+    assert_eq!(got, durable);
+}

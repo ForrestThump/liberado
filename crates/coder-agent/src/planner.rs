@@ -221,4 +221,83 @@ mod tests {
         assert_eq!(plan.steps.len(), 1);
         assert!(plan.as_context_block().contains("hello.txt"));
     }
+
+    #[test]
+    fn parses_embedded_json_with_surrounding_text() {
+        let raw = "thinking: ok. {\"summary\":\"s\",\"steps\":[\"a\",\"b\"]} done";
+        let plan = parse_plan(raw).unwrap();
+        assert_eq!(plan.summary, "s");
+        assert_eq!(plan.steps, vec!["a".to_string(), "b".to_string()]);
+    }
+
+    #[test]
+    fn missing_closing_brace_is_an_error() {
+        let err = parse_plan(r#"{"summary":"oops"#).unwrap_err();
+        assert!(err.contains("no closing brace"), "{err}");
+    }
+
+    #[test]
+    fn invalid_json_is_an_error() {
+        let err = parse_plan("not json at all").unwrap_err();
+        assert!(!err.is_empty());
+    }
+
+    #[test]
+    fn missing_fields_default_to_empty() {
+        let plan = parse_plan(r#"{"summary":"only"}"#).unwrap();
+        assert_eq!(plan.summary, "only");
+        assert!(plan.steps.is_empty());
+        assert!(plan.likely_files.is_empty());
+        assert!(plan.risks.is_empty());
+    }
+
+    #[test]
+    fn non_string_fields_and_items_are_ignored() {
+        let raw =
+            r#"{"summary":123,"steps":"not-an-array","likely_files":[1,"x",null],"risks":[true]}"#;
+        let plan = parse_plan(raw).unwrap();
+        assert_eq!(plan.summary, "");
+        assert!(plan.steps.is_empty());
+        assert_eq!(plan.likely_files, vec!["x".to_string()]);
+        assert!(plan.risks.is_empty());
+    }
+
+    #[test]
+    fn context_block_lists_every_section() {
+        let plan = PlanOutput {
+            summary: "Add auth".to_string(),
+            steps: vec!["Write handler".to_string(), "Add test".to_string()],
+            likely_files: vec!["src/auth.rs".to_string()],
+            risks: vec!["Token expiry".to_string()],
+        };
+        let block = plan.as_context_block();
+        assert!(block.contains("Summary: Add auth"));
+        assert!(block.contains("1. Write handler"));
+        assert!(block.contains("2. Add test"));
+        assert!(block.contains("- src/auth.rs"));
+        assert!(block.contains("Token expiry"));
+        assert!(block.starts_with("## Planner plan"));
+    }
+
+    #[test]
+    fn context_block_omits_empty_sections_and_trims_summary() {
+        let plan = PlanOutput {
+            summary: "   padded  ".to_string(),
+            steps: vec![],
+            likely_files: vec![],
+            risks: vec![],
+        };
+        let block = plan.as_context_block();
+        assert!(block.contains("Summary: padded"));
+        assert!(!block.contains("Steps:"));
+        assert!(!block.contains("Likely files:"));
+        assert!(!block.contains("Risks:"));
+    }
+
+    #[test]
+    fn parse_plan_skips_json_with_no_leading_brace() {
+        // No `{` anywhere: the whole string is handed to the parser and fails cleanly.
+        let err = parse_plan("plain prose, no braces").unwrap_err();
+        assert!(!err.is_empty());
+    }
 }

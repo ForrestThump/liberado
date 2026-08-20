@@ -52,3 +52,69 @@ pub(crate) fn emit(kind: SessionEventKind) {
     };
     let _ = tx.try_send(SessionEvent::new(session_id, kind));
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use liberado_session::SessionEvent;
+    use tokio::sync::mpsc;
+
+    #[tokio::test]
+    async fn scoped_sink_streams_every_emitted_event() {
+        let (tx, mut rx) = mpsc::channel::<SessionEvent>(16);
+        with_live_events(tx, "s1", async {
+            emit(SessionEventKind::Progress {
+                message: "hello".into(),
+            });
+            emit(SessionEventKind::Progress {
+                message: "world".into(),
+            });
+        })
+        .await;
+
+        let mut got = Vec::new();
+        while let Ok(e) = rx.try_recv() {
+            match e.kind {
+                SessionEventKind::Progress { message } => got.push(message),
+                _ => panic!("unexpected event kind"),
+            }
+        }
+        assert_eq!(got, vec!["hello".to_string(), "world".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn events_carry_the_scoped_session_id() {
+        let (tx, mut rx) = mpsc::channel::<SessionEvent>(4);
+        with_live_events(tx, "goal-42", async {
+            emit(SessionEventKind::Token { text: "x".into() });
+        })
+        .await;
+
+        let event = rx.recv().await.unwrap();
+        assert_eq!(event.session_id, "goal-42");
+    }
+
+    #[tokio::test]
+    async fn unscoped_emit_is_a_silent_noop() {
+        // No `with_live_events` scope is installed: the task-local lookup fails and emit must
+        // neither panic nor deliver anything.
+        emit(SessionEventKind::Progress {
+            message: "dropped".into(),
+        });
+    }
+
+    #[tokio::test]
+    async fn full_consumer_drops_the_frame_without_blocking_the_run() {
+        let (tx, _rx) = mpsc::channel::<SessionEvent>(1);
+        with_live_events(tx, "s", async {
+            emit(SessionEventKind::Progress {
+                message: "will be dropped".into(),
+            });
+            // The run keeps going even though the sink has no room.
+            emit(SessionEventKind::Token {
+                text: "still alive".into(),
+            });
+        })
+        .await;
+    }
+}
