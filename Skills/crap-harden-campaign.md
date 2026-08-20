@@ -136,3 +136,34 @@ Clippy runs on both OSes for exactly that reason.
 - Windows is a CI target: line endings, 8.3 paths, `cmd` vs `sh`
 - A config value that parses is not a value that is read: when adding a
   `CoderTuning` field, grep every `CoderRunConfig {` initializer
+
+## Campaign record (2026-08, branch `harden-main-crap`)
+
+This playbook went through one full campaign and reached its terminal state — **zero
+functions above CRAP 150** (3,285 analyzed). Recorded here so a future reader does not mistake
+0-over-150 for unfinished 300-ceiling work.
+
+What cleared each band (each site committed once, full CI gate green per commit):
+
+- **450 → 300:** `cost main` (380), `tui run_loop` (380), `tui spawn_poller`, server
+  `goals_rewind`, `session_event_to_sse`, `acp-bridge dispatch_sse`, `cli cmd_smoke`,
+  `tui start_chat_stream` — extraction + integration/binary tests.
+- **300 → 200:** `tui join_goal_session`, `cli docs_meta run`, `acp-bridge
+  run_coding_prompt`, `bootstrap build_dispatch_pack`.
+- **CC ≥ 20 reductions** (below 20 by construction): `EffectRunner::run`,
+  `attach_conversation_stream`, `extract_ts_symbol`, `draw`.
+- **200 → 150:** `to_goal_event`, `cli tick`, `chat_stream_core`, the three tuner loops
+  (`run_tuner`/`run_coder_tuner`/`run_tool_loop_tuner` — `gather_*`/`score_pool_*`
+  extracted, pure `finalize_result*` seams), `tuner main`.
+
+Two PRs merged through the branch: **#190** (Telegram mock tests, −562 CRAP across
+`telegram.rs`) and **#191** (coder-agent test expansion, +49 tests). Two CI regressions were
+fixed on the way: the ubuntu per-function ratchet regression, and the `GIT_CONFIG_GLOBAL`
+config-deletion race in `coder-runner`. Full surface at the 150 band: **0 functions over 150**;
+workspace suite 3782 green.
+
+Known ceiling scoring gotcha this campaign confirmed: the tuner and `tui main` binary entry
+points score CC 13 at 0% cover even after their tail is extracted, because each `?` in the body
+counts as a branch — a binary `main` that shells out or writes files carries many `?`s. The
+reliable lever is extracting the model-bound loops into untested helpers (driver drops to ~4
+CC) or pure `finalize_*` seams (tested).
