@@ -392,6 +392,10 @@ mod tests {
         .await
         .unwrap();
         assert!(result.is_pass());
+        assert!(
+            result.combined_signature.is_none(),
+            "a passing pipeline must not produce a combined signature"
+        );
     }
 
     #[tokio::test]
@@ -484,6 +488,9 @@ mod tests {
         let p = prefix_at_char_boundary(s, 3);
         assert!(s.starts_with(p));
         assert!(s.is_char_boundary(p.len()));
+        // The backward scan must not overshoot the byte budget.
+        assert_eq!(p, "a");
+        assert!(p.len() <= 3, "{p:?}");
     }
 
     #[tokio::test]
@@ -600,5 +607,197 @@ mod tests {
             result.is_err(),
             "expected Setup error for non-directory root"
         );
+    }
+
+    #[test]
+    fn command_without_exit_code_is_treated_as_failure() {
+        let output = CommandOutput {
+            exit_code: None,
+            stdout: String::new(),
+            stderr: String::new(),
+            timed_out: false,
+            stdout_offload: None,
+            stderr_offload: None,
+        };
+        let verdict = command_output_to_verdict("probe", "probe", &output);
+        assert!(!verdict.is_pass());
+        assert!(
+            verdict.summary.contains("exited -1"),
+            "{:?}",
+            verdict.summary
+        );
+    }
+
+    #[test]
+    fn signature_pipeline_is_deterministic_sha256_hex() {
+        let mk = || NamedVerdict {
+            id: "check".into(),
+            kind: "paths".into(),
+            verdict: Verdict::pass("ok"),
+        };
+        let s = signature_pipeline(&[mk(), mk()]);
+        assert_eq!(s.len(), 64, "{s}");
+        assert!(s.chars().all(|c| c.is_ascii_hexdigit()), "{s}");
+        assert_ne!(s, "");
+        assert_ne!(s, "xyzzy");
+        assert_eq!(
+            signature_pipeline(&[mk(), mk()]),
+            s,
+            "must be deterministic"
+        );
+    }
+
+    #[tokio::test]
+    async fn error_verdict_is_not_failure_when_errors_are_tolerated() {
+        let dir = tempfile::tempdir().unwrap();
+        let specs = vec![VerifierSpec::GitNonemptyDiff { id: "diff".into() }];
+        let policy = PipelinePolicy {
+            errors_are_failures: false,
+            ..PipelinePolicy::default()
+        };
+        let result = run_pipeline(&dir.path().to_string_lossy(), &specs, &policy, None)
+            .await
+            .unwrap();
+        assert_eq!(result.overall, VerdictStatus::Pass, "{:?}", result.overall);
+    }
+
+    #[tokio::test]
+    async fn error_verdict_is_failure_by_default() {
+        let dir = tempfile::tempdir().unwrap();
+        let specs = vec![VerifierSpec::GitNonemptyDiff { id: "diff".into() }];
+        let result = run_pipeline(
+            &dir.path().to_string_lossy(),
+            &specs,
+            &PipelinePolicy::default(),
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(result.overall, VerdictStatus::Fail, "{:?}", result.overall);
+    }
+
+    #[tokio::test]
+    async fn fail_fast_does_not_stop_when_all_specs_pass() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a.txt"), "a").unwrap();
+        std::fs::write(dir.path().join("b.txt"), "b").unwrap();
+        let specs = vec![
+            VerifierSpec::PathsExist {
+                id: "a".into(),
+                paths: vec!["a.txt".into()],
+            },
+            VerifierSpec::PathsExist {
+                id: "b".into(),
+                paths: vec!["b.txt".into()],
+            },
+        ];
+        let policy = PipelinePolicy {
+            fail_fast: true,
+            ..PipelinePolicy::default()
+        };
+        let result = run_pipeline(&dir.path().to_string_lossy(), &specs, &policy, None)
+            .await
+            .unwrap();
+        assert_eq!(
+            result.results.len(),
+            2,
+            "fail_fast must not stop while specs keep passing"
+        );
+        assert!(result.is_pass());
+    }
+
+    fn init_git_only(dir: &std::path::Path) {
+        std::fs::create_dir_all(dir).unwrap();
+        for args in [
+            ["init", "--quiet"].as_slice(),
+            ["config", "user.email", "test@liberado.local"].as_slice(),
+            ["config", "user.name", "test"].as_slice(),
+        ] {
+            assert!(
+                std::process::Command::new("git")
+                    .args(args)
+                    .current_dir(dir)
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+        }
+    }
+
+    fn init_repo(dir: &std::path::Path) {
+        init_git_only(dir);
+        std::fs::write(dir.join("README.md"), "base\n").unwrap();
+        assert!(
+            std::process::Command::new("git")
+                .args(["add", "README.md"])
+                .current_dir(dir)
+                .status()
+                .unwrap()
+                .success()
+        );
+        assert!(
+            std::process::Command::new("git")
+                .args(["commit", "-m", "base", "--quiet"])
+                .current_dir(dir)
+                .status()
+                .unwrap()
+                .success()
+        );
+    }
+
+    #[tokio::test]
+    async fn git_nonempty_diff_passes_on_uncommitted_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        init_git_only(dir.path());
+        std::fs::write(dir.path().join("new.rs"), "fn main(){}\n").unwrap();
+        let verdict = git_nonempty_diff(dir.path(), "diff").await;
+        assert!(verdict.is_pass(), "{:?}", verdict.summary);
+    }
+
+    #[tokio::test]
+    async fn git_nonempty_diff_fails_on_an_empty_repo() {
+        let dir = tempfile::tempdir().unwrap();
+        init_git_only(dir.path());
+        let verdict = git_nonempty_diff(dir.path(), "diff").await;
+        assert_eq!(verdict.status, VerdictStatus::Fail, "{:?}", verdict.summary);
+    }
+
+    #[tokio::test]
+    async fn git_nonempty_diff_passes_on_last_commit_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path());
+        let verdict = git_nonempty_diff(dir.path(), "diff").await;
+        assert!(verdict.is_pass(), "{:?}", verdict.summary);
+    }
+
+    #[tokio::test]
+    async fn git_nonempty_diff_errors_outside_repo() {
+        let dir = tempfile::tempdir().unwrap();
+        let verdict = git_nonempty_diff(dir.path(), "diff").await;
+        assert_eq!(
+            verdict.status,
+            VerdictStatus::Error,
+            "{:?}",
+            verdict.summary
+        );
+    }
+
+    #[tokio::test]
+    async fn last_commit_returns_committed_paths_and_filters_blank_lines() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path());
+        let files = changed_files_in_last_commit(&dir.path().to_string_lossy())
+            .await
+            .unwrap();
+        assert_eq!(files, vec!["README.md"], "{files:?}");
+    }
+
+    #[tokio::test]
+    async fn last_commit_is_empty_when_git_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        let files = changed_files_in_last_commit(&dir.path().to_string_lossy())
+            .await
+            .unwrap();
+        assert!(files.is_empty());
     }
 }

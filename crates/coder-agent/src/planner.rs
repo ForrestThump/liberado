@@ -300,4 +300,134 @@ mod tests {
         let err = parse_plan("plain prose, no braces").unwrap_err();
         assert!(!err.is_empty());
     }
+
+    async fn run_with_prompt(plan_json: &str, criteria: &[&str], with_verifiers: bool) -> String {
+        use liberado_coder_core::{CoderTask, CoderTuning, VerifierSpec, WorkspaceRef};
+        use liberado_provider::{CompletionResponse, MockProvider};
+        use std::sync::{Arc, Mutex};
+
+        let provider = Arc::new(MockProvider::with_script(
+            "planner",
+            [CompletionResponse::text(plan_json)],
+        ));
+        let factory = crate::SingleProviderFactory::new(provider.clone());
+
+        let mut request = CoderRunRequest {
+            task: CoderTask::new("t", "build the thing"),
+            workspace: WorkspaceRef::new("/tmp", "HEAD"),
+            config: CoderTuning::default().run_config(),
+            attempt: 1,
+            prior_feedback: vec![],
+            strategist_directive: None,
+        };
+        request.config.planner.prompt = Some("plan it".into());
+        request.task.success_criteria = criteria.iter().map(|s| s.to_string()).collect();
+        if with_verifiers {
+            request.config.verifiers = vec![VerifierSpec::PathsExist {
+                id: "paths".into(),
+                paths: vec!["src/main.rs".into()],
+            }];
+        }
+
+        let events: EventLog = Arc::new(Mutex::new(Vec::new()));
+        run_planner(&factory, &request, &events)
+            .await
+            .expect("planner produced a plan");
+        let received = provider.received_requests();
+        assert!(
+            !received.is_empty(),
+            "planner must send a completion request"
+        );
+        let user = received[0]
+            .messages
+            .iter()
+            .find(|m| m.content.contains("Produce the Plan JSON"))
+            .expect("planner must send a user prompt");
+        user.content.clone()
+    }
+
+    #[tokio::test]
+    async fn run_planner_includes_success_criteria_when_present() {
+        let user = run_with_prompt(
+            r#"{"summary":"add hello","steps":["write hello.txt"]}"#,
+            &["must compile"],
+            false,
+        )
+        .await;
+        assert!(
+            user.contains("Success criteria (prose)"),
+            "prompt must list non-empty success criteria: {user}"
+        );
+    }
+
+    #[tokio::test]
+    async fn run_planner_omits_success_criteria_when_empty() {
+        let user = run_with_prompt(
+            r#"{"summary":"add hello","steps":["write hello.txt"]}"#,
+            &[],
+            false,
+        )
+        .await;
+        assert!(
+            !user.contains("Success criteria (prose)"),
+            "prompt must omit empty success criteria: {user}"
+        );
+    }
+
+    #[tokio::test]
+    async fn run_planner_includes_verifier_ids_when_configured() {
+        let user = run_with_prompt(
+            r#"{"summary":"add hello","steps":["write hello.txt"]}"#,
+            &[],
+            true,
+        )
+        .await;
+        assert!(
+            user.contains("Frozen verifier check ids") && user.contains("paths"),
+            "prompt must list frozen verifier ids: {user}"
+        );
+    }
+
+    #[tokio::test]
+    async fn run_planner_omits_verifier_ids_when_none() {
+        let user = run_with_prompt(
+            r#"{"summary":"add hello","steps":["write hello.txt"]}"#,
+            &[],
+            false,
+        )
+        .await;
+        assert!(
+            !user.contains("Frozen verifier check ids"),
+            "prompt must omit verifiers when none configured: {user}"
+        );
+    }
+
+    #[tokio::test]
+    async fn run_planner_returns_plan_when_steps_exist_but_summary_is_blank() {
+        use liberado_coder_core::{CoderTask, CoderTuning, WorkspaceRef};
+        use liberado_provider::{CompletionResponse, MockProvider};
+        use std::sync::{Arc, Mutex};
+
+        let provider = Arc::new(MockProvider::with_script(
+            "planner",
+            [CompletionResponse::text(r#"{"summary":"","steps":["a"]}"#)],
+        ));
+        let factory = crate::SingleProviderFactory::new(provider.clone());
+        let mut request = CoderRunRequest {
+            task: CoderTask::new("t", "build the thing"),
+            workspace: WorkspaceRef::new("/tmp", "HEAD"),
+            config: CoderTuning::default().run_config(),
+            attempt: 1,
+            prior_feedback: vec![],
+            strategist_directive: None,
+        };
+        request.config.planner.prompt = Some("plan it".into());
+        let events: EventLog = Arc::new(Mutex::new(Vec::new()));
+        let plan = run_planner(&factory, &request, &events).await.unwrap();
+        assert!(
+            plan.is_some(),
+            "a plan with steps but no summary is not an empty plan"
+        );
+        assert_eq!(plan.unwrap().steps, vec!["a".to_string()]);
+    }
 }

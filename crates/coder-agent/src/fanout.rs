@@ -1059,6 +1059,11 @@ mod tests {
         // Child grant must strip AskHuman
         let child = child_session_grant(&grant);
         assert!(!child.grants_ask_human());
+        assert_eq!(
+            child.delegation,
+            Some(false),
+            "children must not fan out further"
+        );
 
         let merger: Arc<dyn Provider> = Arc::new(MockProvider::with_script(
             "merge",
