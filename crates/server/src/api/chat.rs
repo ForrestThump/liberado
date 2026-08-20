@@ -198,6 +198,40 @@ fn pick_chat_creation(
     }
 }
 
+/// Build a single-`failed`-event stream response: the shape every "the stream cannot start" path
+/// returns (chat disabled, profile resolution failure, creation failure). Sends the error on the
+/// channel and destroys `tx` so a successful start owns the only remaining sender. The three
+/// duplicated spawn-and-wrap tails used to be inline in `chat_stream_core`.
+fn fail_stream_response(
+    tx: mpsc::Sender<AgentEvent>,
+    rx: mpsc::Receiver<AgentEvent>,
+    msg: String,
+) -> axum::response::Response {
+    tokio::spawn(async move {
+        let _ = tx.send(AgentEvent::Error(msg)).await;
+    });
+    Sse::new(stream_with_session(None, rx))
+        .keep_alive(keep_alive())
+        .into_response()
+}
+
+/// Create the conversation for a first-token chat, dispatching the incognito / background /
+/// granted / default branch decision (made in `pick_chat_creation`) onto the store. Kept out of
+/// `chat_stream_core` so the driver reads as a flat sequence and the branch is one call.
+async fn create_chat_session(
+    sessions: &liberado_main_agent::ChatSessions,
+    incognito: bool,
+    background: bool,
+    grant: Option<liberado_session::SessionGrant>,
+) -> liberado_main_agent::SessionResult<Ulid> {
+    match pick_chat_creation(incognito, background, grant) {
+        ChatCreation::Incognito => sessions.create_incognito(None).await,
+        ChatCreation::Background(grant) => sessions.create_background(None, grant).await,
+        ChatCreation::Granted(grant) => sessions.create_with_grant(None, grant).await,
+        ChatCreation::Default => sessions.create(None).await,
+    }
+}
+
 async fn chat_stream_core(
     state: Arc<AppState>,
     message: String,
@@ -211,16 +245,7 @@ async fn chat_stream_core(
 
     let Some(sessions) = state.chat.clone() else {
         // No chat configured: a single `failed` event, and no `session` head (there's no session).
-        tokio::spawn(async move {
-            let _ = tx
-                .send(AgentEvent::Error(
-                    "chat is disabled â€” set DEEPSEEK_API_KEY".into(),
-                ))
-                .await;
-        });
-        return Sse::new(stream_with_session(None, rx))
-            .keep_alive(keep_alive())
-            .into_response();
+        return fail_stream_response(tx, rx, "chat is disabled â€” set DEEPSEEK_API_KEY".into());
     };
 
     // Resolve the session up front (creating one on the first message), so we can announce it to the
@@ -230,14 +255,7 @@ async fn chat_stream_core(
     // for. Same fail-closed rule the switch endpoint follows.
     let grant = match resolve_chat_grant(state.config.as_ref(), profile.as_deref()) {
         Ok(grant) => grant,
-        Err(msg) => {
-            tokio::spawn(async move {
-                let _ = tx.send(AgentEvent::Error(msg)).await;
-            });
-            return Sse::new(stream_with_session(None, rx))
-                .keep_alive(keep_alive())
-                .into_response();
-        }
+        Err(msg) => return fail_stream_response(tx, rx, msg),
     };
 
     let session = match session {
@@ -245,22 +263,11 @@ async fn chat_stream_core(
         None => {
             // Incognito wins over background when both are set: RAM-only already never lists.
             // Background + grant is the conformance path (durable, out of sidebar, scoped).
-            let created = match pick_chat_creation(incognito, background, grant) {
-                ChatCreation::Incognito => sessions.create_incognito(None).await,
-                ChatCreation::Background(grant) => sessions.create_background(None, grant).await,
-                ChatCreation::Granted(grant) => sessions.create_with_grant(None, grant).await,
-                ChatCreation::Default => sessions.create(None).await,
-            };
-            match created {
+            match create_chat_session(&sessions, incognito, background, grant).await {
                 Ok(id) => id,
                 Err(e) => {
                     tracing::warn!(error = %e, "chat stream could not create a conversation");
-                    tokio::spawn(async move {
-                        let _ = tx.send(AgentEvent::Error(e.to_string())).await;
-                    });
-                    return Sse::new(stream_with_session(None, rx))
-                        .keep_alive(keep_alive())
-                        .into_response();
+                    return fail_stream_response(tx, rx, e.to_string());
                 }
             }
         }
