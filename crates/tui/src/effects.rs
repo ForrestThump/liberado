@@ -168,6 +168,29 @@ impl EffectRunner {
     /// Abort any prior goal stream and open a fresh SSE subscription to `GET /api/goals/{id}/stream`,
     /// mapping each frame to a [`Action::GoalStreamEvent`]. Catch-up history arrives first, then live
     /// events (the server replays the transcript before tailing).
+    /// Decode one goal-session SSE text chunk into the actions to forward, stopping at a
+    /// terminal `Finished` event. Returns the actions and whether a terminal was seen.
+    fn goal_actions_from_chunk(decoder: &mut SseDecoder, text: &str) -> (Vec<Action>, bool) {
+        let mut actions = Vec::new();
+        let mut terminal = false;
+        for event in decoder.push(text) {
+            match crate::sse::to_goal_event(&event) {
+                Ok(Some(ui)) => {
+                    if matches!(ui, crate::app::GoalUiEvent::Finished { .. }) {
+                        terminal = true;
+                    }
+                    actions.push(Action::GoalStreamEvent(ui));
+                }
+                Ok(None) => {}
+                Err(e) => tracing::warn!(error = %e, "goal stream decode error"),
+            }
+            if terminal {
+                break;
+            }
+        }
+        (actions, terminal)
+    }
+
     async fn join_goal_session(&self, id: String) {
         // Replace any existing subscription (re-`/join` or switching sessions).
         if let Some(prev) = self.stream_state.lock().goal_handle.take() {
@@ -204,22 +227,16 @@ impl EffectRunner {
                 match tokio::time::timeout(crate::tuning::SSE_STREAM_TIMEOUT, stream.next()).await {
                     Ok(Some(Ok(chunk))) => {
                         let text = String::from_utf8_lossy(&chunk);
-                        for event in decoder.push(&text) {
-                            match crate::sse::to_goal_event(&event) {
-                                Ok(Some(ui)) => {
-                                    let terminal =
-                                        matches!(ui, crate::app::GoalUiEvent::Finished { .. });
-                                    if tx.try_send(Action::GoalStreamEvent(ui)).is_err() {
-                                        tracing::warn!("action channel full, dropping goal event");
-                                    }
-                                    if terminal {
-                                        state.lock().goal_handle = None;
-                                        return;
-                                    }
-                                }
-                                Ok(None) => {}
-                                Err(e) => tracing::warn!(error = %e, "goal stream decode error"),
+                        let (actions, terminal) =
+                            EffectRunner::goal_actions_from_chunk(&mut decoder, &text);
+                        for action in actions {
+                            if tx.try_send(action).is_err() {
+                                tracing::warn!("action channel full, dropping goal event");
                             }
+                        }
+                        if terminal {
+                            state.lock().goal_handle = None;
+                            return;
                         }
                     }
                     Ok(Some(Err(e))) => {
@@ -1319,5 +1336,39 @@ data: not-json
         assert!(terminal);
         assert_eq!(actions.len(), 1);
         assert!(matches!(actions[0], Action::SseFailed(_)));
+    }
+
+    #[test]
+    fn goal_chunk_forwards_token_and_finished() {
+        let mut decoder = SseDecoder::default();
+        let text = "event: session_started\ndata: {\"domain\":\"coding\",\"description\":\"fix tests\"}\n\nevent: session_finished\ndata: {\"status\":\"ok\",\"summary\":\"done\"}\n\n";
+        let (actions, terminal) = EffectRunner::goal_actions_from_chunk(&mut decoder, text);
+        assert!(terminal);
+        assert_eq!(actions.len(), 2);
+        assert!(matches!(actions[0], Action::GoalStreamEvent(_)));
+        assert!(matches!(actions[1], Action::GoalStreamEvent(_)));
+    }
+
+    #[test]
+    fn goal_chunk_token_is_not_terminal() {
+        let mut decoder = SseDecoder::default();
+        let (actions, terminal) =
+            EffectRunner::goal_actions_from_chunk(&mut decoder, "event: token\ndata: hello\n\n");
+        assert!(!terminal);
+        assert_eq!(actions.len(), 1);
+        assert!(matches!(actions[0], Action::GoalStreamEvent(_)));
+    }
+
+    #[test]
+    fn goal_chunk_unknown_kind_is_benign() {
+        let mut decoder = SseDecoder::default();
+        let (actions, terminal) = EffectRunner::goal_actions_from_chunk(
+            &mut decoder,
+            "event: no_such_event\ndata: x\n\n",
+        );
+        assert!(!terminal);
+        // The chat wire decodes unknown event types to an empty Token no-op (never an error).
+        assert_eq!(actions.len(), 1);
+        assert!(matches!(actions[0], Action::GoalStreamEvent(_)));
     }
 }
