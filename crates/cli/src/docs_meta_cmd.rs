@@ -735,44 +735,53 @@ fn has_issue(issues: &[Issue], needle: &str) -> bool {
 pub fn run(root: &Path, command: &str) -> Result<(), Box<dyn std::error::Error>> {
     match command {
         "self-test" => self_test(),
-        "generate" => {
-            let docs = load_docs(root)?;
-            fs::write(
-                root.join("docs/future-work/README.md"),
-                generate_future_work_readme(&docs),
-            )?;
-            fs::write(root.join("docs/CATALOG.md"), generate_catalog(&docs))?;
-            println!("wrote docs/future-work/README.md");
-            println!("wrote docs/CATALOG.md");
-            Ok(())
-        }
-        "lint" => {
-            let issues = lint(root)?;
-            if issues.is_empty() {
-                println!("docs metadata lint: OK");
-                Ok(())
-            } else {
-                for i in &issues {
-                    eprintln!("  {}: {}", i.path, i.message);
-                }
-                Err(format!("docs metadata lint failed ({} issue(s))", issues.len()).into())
-            }
-        }
-        "check-stale-rs" => {
-            let issues = stale_rs_paths(root)?;
-            if issues.is_empty() {
-                println!(
-                    "stale-rs-paths: OK (no obsolete prefixes; all docs/*.md references in crates resolve on disk)"
-                );
-                Ok(())
-            } else {
-                for i in issues.iter().take(50) {
-                    eprintln!("  {}: {}", i.path, i.message);
-                }
-                Err(format!("stale-rs-paths: FAILED ({} issue(s))", issues.len()).into())
-            }
-        }
+        "generate" => run_generate(root),
+        "lint" => run_lint(root),
+        "check-stale-rs" => run_check_stale_rs(root),
         _ => Err(format!("unknown docs metadata command: {command}").into()),
+    }
+}
+
+/// Regenerate the future-work README and the catalog from the on-disk docs.
+fn run_generate(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    let docs = load_docs(root)?;
+    fs::write(
+        root.join("docs/future-work/README.md"),
+        generate_future_work_readme(&docs),
+    )?;
+    fs::write(root.join("docs/CATALOG.md"), generate_catalog(&docs))?;
+    println!("wrote docs/future-work/README.md");
+    println!("wrote docs/CATALOG.md");
+    Ok(())
+}
+
+/// Lint the docs metadata, printing the issue list on failure.
+fn run_lint(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    let issues = lint(root)?;
+    if issues.is_empty() {
+        println!("docs metadata lint: OK");
+        Ok(())
+    } else {
+        for i in &issues {
+            eprintln!("  {}: {}", i.path, i.message);
+        }
+        Err(format!("docs metadata lint failed ({} issue(s))", issues.len()).into())
+    }
+}
+
+/// Scan Rust sources for stale docs paths, printing the offenders on failure.
+fn run_check_stale_rs(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    let issues = stale_rs_paths(root)?;
+    if issues.is_empty() {
+        println!(
+            "stale-rs-paths: OK (no obsolete prefixes; all docs/*.md references in crates resolve on disk)"
+        );
+        Ok(())
+    } else {
+        for i in issues.iter().take(50) {
+            eprintln!("  {}: {}", i.path, i.message);
+        }
+        Err(format!("stale-rs-paths: FAILED ({} issue(s))", issues.len()).into())
     }
 }
 
@@ -783,6 +792,11 @@ mod tests {
     #[test]
     fn self_test_exercises_metadata_rules() {
         self_test().unwrap();
+    }
+    #[test]
+    fn run_dispatches_the_metadata_commands() {
+        assert!(run(Path::new("."), "self-test").is_ok());
+        assert!(run(Path::new("."), "frobnicate").is_err());
     }
 
     #[test]
