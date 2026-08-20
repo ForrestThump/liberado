@@ -8,11 +8,12 @@
 
 - Paseo detects **Liberado** as an agent (provider list / diagnostics).
 - Starting a session in Paseo runs `liberado-acp`, which speaks ACP JSON-RPC 2.0 and
-  exposes three **modes** on the same process:
+  exposes four **modes** on the same process:
 
 | Mode | Engine | Needs daemon? |
 |---|---|---|
-| **coding** (default) | Full coding pack ([`LiberadoLoopBackend`](../../crates/coder-agent/)) + durable worktrees | No |
+| **coding** (default) | Interactive conversation + coding tools on a durable worktree | No |
+| **goal** | One-shot coding pack ([`LiberadoLoopBackend`](../../crates/coder-agent/)) to a terminal | No |
 | **chat** | In-process `Conversation` + executor (no file tools) | No |
 | **face** | HTTP SSE to `liberado serve` (`POST /api/chat/stream`) — vault tools + `delegate` | Yes (`liberado serve`) |
 
@@ -20,9 +21,13 @@
   or set the process default:
   - `liberado-acp --mode chat`
   - `LIBERADO_ACP_MODE=face`
-- Coding mode: durable worktree under `coding-worktrees/<session>` when `cwd` is a git repo;
-  respects `[coder]` tuning from the resolved config dir, and runs the project's **ship preflight**
-  before a round may report success (PR #134).
+- Coding mode: lasting conversation with the same coding tools and durable worktree
+  (`coding-worktrees/<session>` when `cwd` is a git repo). One prompt is one turn. It does
+  **not** run the pack's outer attempt/repair/ship-bar loop. Switch to **goal** for that.
+- Goal mode: the previous default — one prompt is one `CoderRunRequest` through
+  [`LiberadoLoopBackend`](../../crates/coder-agent/), with ship preflight before a success
+  claim (PR #134). Same `[coder]` tuning. HTTP `POST /api/goals` remains the GUI/agent
+  one-shot API on the daemon.
 
 > **Set `LIBERADO_CONFIG_DIR` in the Paseo provider entry.** The bridge resolves through
 > `liberado_config::config_dir()`, but `liberado-acp` is installed to `~/.cargo/bin`, so the
@@ -39,7 +44,7 @@
 > provider stayed at its `deepseek` default, and Paseo diagnostics reported only three models even
 > though the file appeared to select OpenRouter. Current builds reject the misplaced key during
 > config load. `liberado config check` catches it without starting Paseo.
-- Face mode is the **only** path that tunnels into a running daemon. Coding and chat are
+- Face mode is the **only** path that tunnels into a running daemon. Coding, goal, and chat are
   self-contained agent processes (same pattern as Claude Code / Gemini / Grok on Paseo).
 
 ### Residual
@@ -82,7 +87,7 @@
    Coding maps this to `CoderRoleConfig::max_turns`; chat uses it as the executor budget.
    Raise it for large refactors; lower it for cheap probes.
 
-6. Optional: `LIBERADO_ACP_MODE` / `liberado-acp --mode coding|chat|face` — process default mode
+6. Optional: `LIBERADO_ACP_MODE` / `liberado-acp --mode coding|goal|chat|face` — process default mode
    for new sessions (ACP `session/set_mode` can still switch later).
 
 7. Face mode only: `liberado serve <vault>` running, and optional `LIBERADO_SERVER`
@@ -175,7 +180,7 @@ you want green rows for launcher binary, ACP `initialize`, and ACP `session/new`
 | Client → agent | `initialize` | Negotiate `protocolVersion: 1` |
 | Client → agent | `session/new` | `{ cwd, mcpServers }` → `{ sessionId, models, modes }` |
 | Client → agent | `session/prompt` | `{ sessionId, prompt: ContentBlock[] }` → `{ stopReason }` |
-| Client → agent | `session/set_mode` | `{ sessionId, modeId: coding\|chat\|face }` |
+| Client → agent | `session/set_mode` | `{ sessionId, modeId: coding\|goal\|chat\|face }` |
 | Client → agent | `session/set_model` | Hot-swap model id from catalog |
 | Agent → client | `session/update` | `agent_message_chunk`, `tool_call`, `tool_call_update` |
 | Client → agent | `session/cancel` | Notification; chat turns return `stopReason: "cancelled"` |

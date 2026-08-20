@@ -1,16 +1,24 @@
-//! Liberado-owned ACP agent modes (coding pack / pure chat / face-via-daemon).
+//! Liberado-owned ACP agent modes.
 //!
 //! Paseo registers **one** provider (`liberado-acp`). Mode selection is ACP
 //! `session/set_mode` (and process default via `--mode` / `LIBERADO_ACP_MODE`),
-//! not three different launch commands.
+//! not four different launch commands.
+//!
+//! Two coding drivers share the same pack pieces (tools, worktree, `[coder]` tuning).
+//! They differ only in the outer loop:
+//!
+//! - [`AgentMode::Coding`] — interactive conversation (one prompt = one turn).
+//! - [`AgentMode::Goal`] — unattended pack run (one prompt = one `/goal` to a terminal).
 
 use serde_json::{Value, json};
 
 /// Which Liberado engine an ACP session uses.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AgentMode {
-    /// Full coding pack (`LiberadoLoopBackend` + durable worktrees).
+    /// Interactive coding: lasting `Conversation` + coding tools on a durable worktree.
     Coding,
+    /// One-shot coding pack (`LiberadoLoopBackend`) — the unattended `/goal` driver.
+    Goal,
     /// In-process multi-turn chat (no vault/delegate; pure conversation).
     Chat,
     /// Face / human-interface path against a running `liberado serve` daemon.
@@ -18,11 +26,20 @@ pub enum AgentMode {
 }
 
 impl AgentMode {
-    pub const ALL: [AgentMode; 3] = [AgentMode::Coding, AgentMode::Chat, AgentMode::Face];
+    pub const ALL: [AgentMode; 4] = [
+        AgentMode::Coding,
+        AgentMode::Goal,
+        AgentMode::Chat,
+        AgentMode::Face,
+    ];
+
+    /// Help / error listing so CLI and JSON-RPC cannot drift from [`Self::parse`].
+    pub const EXPECTED: &'static str = "coding|goal|chat|face";
 
     pub fn id(self) -> &'static str {
         match self {
             Self::Coding => "coding",
+            Self::Goal => "goal",
             Self::Chat => "chat",
             Self::Face => "face",
         }
@@ -30,7 +47,8 @@ impl AgentMode {
 
     pub fn name(self) -> &'static str {
         match self {
-            Self::Coding => "Coding pack",
+            Self::Coding => "Coding",
+            Self::Goal => "Goal",
             Self::Chat => "Chat",
             Self::Face => "Face agent",
         }
@@ -39,10 +57,13 @@ impl AgentMode {
     pub fn description(self) -> &'static str {
         match self {
             Self::Coding => {
-                "Full Liberado coding pack: worktrees, tools, progress/gate, traces (like Claude Code)"
+                "Interactive coding: conversation + tools on a durable worktree (like Claude Code)"
+            }
+            Self::Goal => {
+                "One-shot /goal: coding pack runs to a terminal (intake, worker, gate, ship bar)"
             }
             Self::Chat => {
-                "In-process conversational chat (no coding pack, no daemon). Multi-turn Q&A."
+                "In-process conversational chat (no coding tools, no daemon). Multi-turn Q&A."
             }
             Self::Face => {
                 "Daemon face agent: vault tools + delegate (requires liberado serve; LIBERADO_SERVER)"
@@ -50,16 +71,27 @@ impl AgentMode {
         }
     }
 
+    /// Conversation + executor (coding tools or none). Not a pack run and not the daemon face.
+    pub fn is_converse(self) -> bool {
+        matches!(self, Self::Coding | Self::Chat)
+    }
+
+    /// Interactive coding attaches [`liberado_coder_tools::CodingToolRuntime`].
+    pub fn uses_coding_tools(self) -> bool {
+        matches!(self, Self::Coding)
+    }
+
     pub fn parse(s: &str) -> Option<Self> {
         match s.trim().to_ascii_lowercase().as_str() {
-            "coding" | "code" | "coder" | "pack" => Some(Self::Coding),
+            "coding" | "code" | "coder" | "interactive" => Some(Self::Coding),
+            "goal" | "pack" | "unattended" | "oneshot" | "one-shot" => Some(Self::Goal),
             "chat" | "talk" | "conversation" => Some(Self::Chat),
             "face" | "delegate" | "main" | "daemon" => Some(Self::Face),
             _ => None,
         }
     }
 
-    /// Process default: `--mode` / `LIBERADO_ACP_MODE`, else coding.
+    /// Process default: `--mode` / `LIBERADO_ACP_MODE`, else coding (interactive).
     pub fn from_env_or_default() -> Self {
         if let Ok(s) = std::env::var("LIBERADO_ACP_MODE")
             && let Some(m) = Self::parse(&s)
@@ -96,6 +128,10 @@ mod tests {
     fn parse_aliases() {
         assert_eq!(AgentMode::parse("coding"), Some(AgentMode::Coding));
         assert_eq!(AgentMode::parse("CODE"), Some(AgentMode::Coding));
+        assert_eq!(AgentMode::parse("interactive"), Some(AgentMode::Coding));
+        assert_eq!(AgentMode::parse("goal"), Some(AgentMode::Goal));
+        assert_eq!(AgentMode::parse("pack"), Some(AgentMode::Goal));
+        assert_eq!(AgentMode::parse("unattended"), Some(AgentMode::Goal));
         assert_eq!(AgentMode::parse("chat"), Some(AgentMode::Chat));
         assert_eq!(AgentMode::parse("face"), Some(AgentMode::Face));
         assert_eq!(AgentMode::parse("delegate"), Some(AgentMode::Face));
@@ -103,9 +139,33 @@ mod tests {
     }
 
     #[test]
-    fn mode_state_lists_all_three() {
+    fn coding_is_converse_with_tools_goal_is_not() {
+        assert!(AgentMode::Coding.is_converse());
+        assert!(AgentMode::Coding.uses_coding_tools());
+        assert!(AgentMode::Chat.is_converse());
+        assert!(!AgentMode::Chat.uses_coding_tools());
+        assert!(!AgentMode::Goal.is_converse());
+        assert!(!AgentMode::Goal.uses_coding_tools());
+        assert!(!AgentMode::Face.is_converse());
+    }
+
+    #[test]
+    fn mode_state_lists_all_four() {
         let v = mode_state_json(AgentMode::Chat);
         assert_eq!(v["currentModeId"], "chat");
-        assert_eq!(v["availableModes"].as_array().unwrap().len(), 3);
+        let modes = v["availableModes"].as_array().unwrap();
+        assert_eq!(modes.len(), 4);
+        let ids: Vec<&str> = modes.iter().filter_map(|m| m["id"].as_str()).collect();
+        assert_eq!(ids, ["coding", "goal", "chat", "face"]);
+    }
+
+    #[test]
+    fn expected_string_matches_parseable_ids() {
+        for id in AgentMode::EXPECTED.split('|') {
+            assert!(
+                AgentMode::parse(id).is_some(),
+                "{id} is listed in EXPECTED but parse rejects it"
+            );
+        }
     }
 }

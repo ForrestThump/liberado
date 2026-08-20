@@ -43,6 +43,8 @@ pub const SESSION_CRITIC: &str = include_str!("../../../prompts/coder/session-cr
 pub const SESSION_PACK_CODER: &str = include_str!("../../../prompts/coder/session-pack-coder.md");
 /// The criteria-intake planner that turns a rough writeup into an acceptance contract.
 pub const INTAKE: &str = include_str!("../../../prompts/coder/intake.md");
+/// Interactive ACP coding: conversation + tools, no `submit_report`.
+pub const INTERACTIVE: &str = include_str!("../../../prompts/coder/interactive.md");
 
 /// Where prompt files live relative to a checkout root.
 pub const PROMPT_DIR: &str = "prompts/coder";
@@ -54,6 +56,7 @@ pub const COLD_PR_REVIEWER_FILE: &str = "cold-pr-reviewer.md";
 pub const SESSION_CRITIC_FILE: &str = "session-critic.md";
 pub const SESSION_PACK_CODER_FILE: &str = "session-pack-coder.md";
 pub const INTAKE_FILE: &str = "intake.md";
+pub const INTERACTIVE_FILE: &str = "interactive.md";
 
 /// Where to look for prompt files for a run on `workspace_root`.
 ///
@@ -144,6 +147,7 @@ mod tests {
             ("session-critic", SESSION_CRITIC),
             ("session-pack-coder", SESSION_PACK_CODER),
             ("intake", INTAKE),
+            ("interactive", INTERACTIVE),
         ] {
             assert!(
                 text.trim().len() > 200,
@@ -168,6 +172,7 @@ mod tests {
             SESSION_CRITIC_FILE,
             SESSION_PACK_CODER_FILE,
             INTAKE_FILE,
+            INTERACTIVE_FILE,
         ] {
             let path = root.join(PROMPT_DIR).join(file);
             assert!(
@@ -176,6 +181,25 @@ mod tests {
                 path.display()
             );
         }
+    }
+
+    /// Interactive ACP coding must not tell the model to `submit_report`: that tool is the
+    /// one-shot pack's terminator, and offering the instruction without the tool is how a
+    /// conversation tries to file a report it cannot file.
+    #[test]
+    fn interactive_prompt_does_not_offer_submit_report() {
+        let text = INTERACTIVE.to_ascii_lowercase();
+        assert!(
+            text.contains("do **not** have `submit_report`")
+                || text.contains("do not have `submit_report`")
+                || text.contains("you do **not** have `submit_report`"),
+            "interactive.md must tell the model it has no submit_report; got {} chars",
+            INTERACTIVE.len()
+        );
+        assert!(
+            !INTERACTIVE.contains("then submit_report"),
+            "must not instruct the model to call submit_report"
+        );
     }
 
     #[test]

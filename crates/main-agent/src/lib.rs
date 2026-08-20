@@ -196,10 +196,18 @@ impl Conversation {
         result
     }
 
+    /// Ordered history the model sees, including the system prompt.
+    ///
+    /// Used to rebuild a converse session when ACP switches mode (chat ↔ interactive coding)
+    /// without dropping the turns the human already had.
+    pub fn messages(&self) -> &[Message] {
+        &self.messages
+    }
+
     /// The model-visible view, for tests asserting where a message landed.
     #[cfg(test)]
     pub(crate) fn messages_for_test(&self) -> &[Message] {
-        &self.messages
+        self.messages()
     }
 
     /// Add a session profile's extra prompt text for this turn, if it has any.
