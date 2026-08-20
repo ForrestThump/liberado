@@ -297,7 +297,16 @@ impl TelegramChatBridge {
                 parent_id,
                 after_turn,
             } => match self.fork_session(&parent_id, after_turn).await {
-                Ok(msg) => Some(msg),
+                Ok(msg) => {
+                    // `fork_session` moved the sticky onto the fork; carry that into `ctx` so
+                    // `handle_slash`'s trailing `session_id.set` keeps the fork instead of
+                    // clobbering it back to the parent (the reply promises "You are now on the
+                    // fork" — the sticky must land there too).
+                    if let Some(fork_id) = self.session_id.get().await {
+                        ctx.session_id = Some(fork_id.to_string());
+                    }
+                    Some(msg)
+                }
                 Err(e) => Some(format!("Fork failed: {e}")),
             },
 
@@ -796,12 +805,18 @@ mod tests {
         assert!(shown.contains("Fresh"), "{shown}");
     }
 
+    use liberado_common::Capability;
+    use liberado_config::Grant;
+    use liberado_executor::AgentEvent;
     use liberado_messaging::ChatSurface;
+    use liberado_provider::ProviderError;
     use liberado_provider::{
         CompletionRequest, CompletionResponse, MockProvider, Provider, ProviderResult, ToolDef,
         ToolInvocation,
     };
+    use liberado_session::{DomainHint, GoalSessionHub, GoalSpec, LifeOpsDemoRunner, SessionGrant};
     use liberado_session_store::SessionStore;
+    use std::str::FromStr;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::time::Duration;
 
@@ -897,6 +912,58 @@ mod tests {
             session_id: StickySession::ephemeral(),
         };
         (bridge, chat, provider)
+    }
+
+    /// Same as [`bridge_with_provider`] but with an explicit config — the `/spawn` refusal branches
+    /// depend on which profiles and grants are configured.
+    async fn bridge_with_config(
+        root: &std::path::Path,
+        provider: Arc<dyn Provider>,
+        config: Arc<liberado_bootstrap::Config>,
+    ) -> (TelegramChatBridge, Arc<ChatSessions>, Arc<dyn Provider>) {
+        let store = Arc::new(SessionStore::open(root).await);
+        let executor = Executor::new(Arc::clone(&provider), Budget::default());
+        let chat = Arc::new(ChatSessions::new(
+            store.clone(),
+            executor,
+            Arc::new(NoTools),
+        ));
+        let mut state =
+            crate::state::AppState::for_test(store, Some(Arc::clone(&chat)), root.into());
+        state.provider = Some(Arc::clone(&provider));
+        state.config = config;
+        let bridge = TelegramChatBridge {
+            state: Arc::new(state),
+            session_id: StickySession::ephemeral(),
+        };
+        (bridge, chat, provider)
+    }
+
+    /// Like [`bridge_with_provider`] but with a goal-session hub that has the life demo pack
+    /// registered, so a test can start a real goal session and exercise `/join`.
+    async fn bridge_with_goal_pack(
+        root: &std::path::Path,
+        provider: Arc<dyn Provider>,
+    ) -> (TelegramChatBridge, Arc<ChatSessions>, Arc<GoalSessionHub>) {
+        let store = Arc::new(SessionStore::open(root).await);
+        let executor = Executor::new(Arc::clone(&provider), Budget::default());
+        let chat = Arc::new(ChatSessions::new(
+            store.clone(),
+            executor,
+            Arc::new(NoTools),
+        ));
+        let mut hub = GoalSessionHub::new(SessionStore::clone(&store));
+        hub.register_pack(Arc::new(LifeOpsDemoRunner));
+        let goals = Arc::new(hub);
+        let mut state =
+            crate::state::AppState::for_test(store, Some(Arc::clone(&chat)), root.into());
+        state.provider = Some(provider);
+        state.goals = goals.clone();
+        let bridge = TelegramChatBridge {
+            state: Arc::new(state),
+            session_id: StickySession::ephemeral(),
+        };
+        (bridge, chat, goals)
     }
 
     /// R3: `/model <id>` with a sticky chat sets the **next turn's user-node model stamp**, not
@@ -1187,5 +1254,509 @@ mod tests {
             !reply.contains("switch to model"),
             "descriptions come from COMMAND_CATALOG, not hardcoded"
         );
+    }
+
+    // --- Mutation-hardening tests: the branches the 2026-07-30 report left uncovered. ---
+
+    #[tokio::test]
+    async fn spawn_naming_an_unknown_profile_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let mock = Arc::new(MockProvider::new("m"));
+        let (bridge, _chat, _) = bridge_with_provider(dir.path(), mock).await;
+        let reply = bridge
+            .reply("/spawn nosuchprofile write a report")
+            .await
+            .unwrap();
+        assert!(reply.contains("Unknown session profile"), "{reply}");
+    }
+
+    #[tokio::test]
+    async fn spawn_a_chat_only_profile_is_refused_not_fallback() {
+        let dir = tempfile::tempdir().unwrap();
+        let mock = Arc::new(MockProvider::new("m"));
+        // `chatpack` is an enabled profile with no domain — a chat-only hat `/spawn` must refuse.
+        // Built through TOML so `Config::validate` runs (the profile's component needs a grant).
+        let config = liberado_bootstrap::Config::from_str(
+            r#"
+[topology]
+vault_path = "/tmp/vault"
+
+[[topology.session_profiles]]
+name = "chatpack"
+
+[[policy.grants]]
+component = "chatpack"
+capabilities = []
+"#,
+        )
+        .unwrap();
+        let (bridge, _chat, _) = bridge_with_config(dir.path(), mock, Arc::new(config)).await;
+        let reply = bridge
+            .reply("/spawn chatpack write a report")
+            .await
+            .unwrap();
+        assert!(reply.contains("is a chat profile"), "{reply}");
+    }
+
+    #[tokio::test]
+    async fn spawn_a_domain_with_no_grant_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let mock = Arc::new(MockProvider::new("m"));
+        // Config::default() has no grants, so "coding" resolves to zero authority.
+        let (bridge, _chat, _) = bridge_with_provider(dir.path(), mock).await;
+        let reply = bridge.reply("/spawn coding write a report").await.unwrap();
+        assert!(reply.contains("no capability grant"), "{reply}");
+    }
+
+    #[tokio::test]
+    async fn spawn_passes_refusals_then_surfaces_a_start_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let mock = Arc::new(MockProvider::new("m"));
+        let mut config = liberado_bootstrap::Config::default();
+        config.policy.grants.push(Grant {
+            component: "coding".into(),
+            capabilities: vec![Capability::AskHuman],
+        });
+        let (bridge, _chat, _) = bridge_with_config(dir.path(), mock, Arc::new(config)).await;
+        let reply = bridge.reply("/spawn coding write a report").await.unwrap();
+        // No pack is registered for "coding" in the test hub, so the start must fail loudly.
+        assert!(reply.contains("Spawn failed"), "{reply}");
+    }
+
+    #[tokio::test]
+    async fn fork_without_an_active_session_explains() {
+        let dir = tempfile::tempdir().unwrap();
+        let mock = Arc::new(MockProvider::new("m"));
+        let (bridge, _chat, _) = bridge_with_provider(dir.path(), mock).await;
+        let reply = bridge.reply("/fork").await.unwrap();
+        assert!(reply.contains("No conversation to fork"), "{reply}");
+    }
+
+    #[tokio::test]
+    async fn fork_after_turn_zero_is_rejected_as_1_based() {
+        let dir = tempfile::tempdir().unwrap();
+        let mock = Arc::new(MockProvider::with_script(
+            "m",
+            [CompletionResponse::text("ok")],
+        ));
+        let (bridge, _chat, _) = bridge_with_provider(dir.path(), mock).await;
+        assert_eq!(bridge.reply("hello").await.unwrap(), "ok");
+        let reply = bridge.reply("/fork 0").await.unwrap();
+        assert!(reply.contains("Turns are numbered from 1"), "{reply}");
+    }
+
+    #[tokio::test]
+    async fn fork_branches_the_sticky_conversation_and_switches_to_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let mock = Arc::new(MockProvider::with_script(
+            "m",
+            [CompletionResponse::text("ok")],
+        ));
+        let (bridge, chat, _) = bridge_with_provider(dir.path(), mock).await;
+        assert_eq!(bridge.reply("hello").await.unwrap(), "ok");
+        let sticky = bridge.session_id.get().await.expect("sticky after turn");
+
+        let reply = bridge.reply("/fork").await.unwrap();
+        assert!(reply.contains("Forked"), "{reply}");
+        let fork_id = bridge.session_id.get().await.expect("switched to the fork");
+        assert_ne!(fork_id, sticky, "the fork must be a new conversation");
+
+        // The fork copied the transcript — one user turn, its reply, and the original untouched.
+        let nodes = chat.history_nodes(fork_id).await.unwrap();
+        assert_eq!(
+            nodes
+                .iter()
+                .filter(|n| matches!(n.author, Author::User))
+                .count(),
+            1,
+            "fork must carry the user turn"
+        );
+        assert!(
+            !chat.turn_running(sticky),
+            "forking must not disturb the original conversation"
+        );
+
+        // /fork 1 keeps through the first turn — same single-turn transcript, fresh id.
+        let before = bridge.session_id.get().await.unwrap();
+        let reply = bridge.reply("/fork 1").await.unwrap();
+        assert!(reply.contains("kept_turns=1/1"), "{reply}");
+        assert_ne!(bridge.session_id.get().await.unwrap(), before);
+    }
+
+    #[tokio::test]
+    async fn join_snapshot_renders_a_live_goal_session() {
+        let dir = tempfile::tempdir().unwrap();
+        let mock = Arc::new(MockProvider::new("m"));
+        let (bridge, _chat, goals) = bridge_with_goal_pack(dir.path(), mock).await;
+        let id = goals
+            .start_with_grant(
+                GoalSpec {
+                    id: None,
+                    description: "review the week".into(),
+                    success_criteria: vec![],
+                    domain: DomainHint::from("life"),
+                    max_turns: 0,
+                    max_idle_secs: None,
+                    origin: None,
+                    profile: None,
+                    payload: serde_json::json!({}),
+                },
+                SessionGrant::default(),
+            )
+            .await
+            .unwrap();
+
+        let reply = bridge.reply(&format!("/join {id}")).await.unwrap();
+        assert!(reply.contains(&format!("Goal session {id}")), "{reply}");
+    }
+
+    #[tokio::test]
+    async fn join_by_id_prefix_falls_back_to_the_listing() {
+        let dir = tempfile::tempdir().unwrap();
+        let mock = Arc::new(MockProvider::new("m"));
+        let (bridge, _chat, goals) = bridge_with_goal_pack(dir.path(), mock).await;
+        let id = goals
+            .start_with_grant(
+                GoalSpec {
+                    id: None,
+                    description: "plan the quarter".into(),
+                    success_criteria: vec![],
+                    domain: DomainHint::from("life"),
+                    max_turns: 0,
+                    max_idle_secs: None,
+                    origin: None,
+                    profile: None,
+                    payload: serde_json::json!({}),
+                },
+                SessionGrant::default(),
+            )
+            .await
+            .unwrap();
+        let prefix: String = id.to_string().chars().take(8).collect();
+
+        let reply = bridge.reply(&format!("/join {prefix}")).await.unwrap();
+        assert!(reply.contains(&format!("Goal session {id}")), "{reply}");
+    }
+
+    #[tokio::test]
+    async fn join_an_unknown_goal_session_says_so() {
+        let dir = tempfile::tempdir().unwrap();
+        let mock = Arc::new(MockProvider::new("m"));
+        let (bridge, _chat, _goals) = bridge_with_goal_pack(dir.path(), mock).await;
+        let reply = bridge.reply("/join zzzzz").await.unwrap();
+        assert!(
+            reply.contains("No goal session matching 'zzzzz'"),
+            "{reply}"
+        );
+    }
+
+    #[tokio::test]
+    async fn session_switch_by_exact_ulid_moves_the_sticky_chat() {
+        let dir = tempfile::tempdir().unwrap();
+        let mock = Arc::new(MockProvider::new("m"));
+        let (bridge, chat, _) = bridge_with_provider(dir.path(), mock).await;
+        let conv = chat.create(None).await.unwrap();
+
+        let reply = bridge
+            .reply(&format!("/session switch {conv}"))
+            .await
+            .unwrap();
+        assert!(
+            reply.contains(&format!("Switched to session {conv}")),
+            "{reply}"
+        );
+        assert_eq!(bridge.session_id.get().await.unwrap(), conv);
+    }
+
+    #[tokio::test]
+    async fn session_switch_resolves_by_prefix_and_reports_no_match() {
+        let dir = tempfile::tempdir().unwrap();
+        let mock = Arc::new(MockProvider::new("m"));
+        let (bridge, chat, _) = bridge_with_provider(dir.path(), mock).await;
+        let conv = chat.create(None).await.unwrap();
+        let prefix: String = conv.to_string().chars().take(8).collect();
+
+        let reply = bridge
+            .reply(&format!("/session switch {prefix}"))
+            .await
+            .unwrap();
+        assert!(reply.contains("Switched to session"), "{reply}");
+        assert_eq!(bridge.session_id.get().await.unwrap(), conv);
+
+        let reply = bridge.reply("/session switch zzzzz").await.unwrap();
+        assert!(reply.contains("No session matching 'zzzzz'"), "{reply}");
+    }
+
+    #[tokio::test]
+    async fn sessions_browser_lists_chats_and_goal_sessions() {
+        let dir = tempfile::tempdir().unwrap();
+        let mock = Arc::new(MockProvider::new("m"));
+        let (bridge, chat, _) = bridge_with_provider(dir.path(), mock).await;
+        let conv = chat.create(None).await.unwrap();
+
+        let reply = bridge.reply("/sessions").await.unwrap();
+        assert!(reply.contains("Sessions (chat):"), "{reply}");
+        assert!(reply.contains(&conv.to_string()), "{reply}");
+        assert!(reply.contains("Goal sessions:"), "{reply}");
+        assert!(reply.contains("(none)"), "{reply}");
+    }
+
+    #[tokio::test]
+    async fn unknown_slash_command_is_reported() {
+        let dir = tempfile::tempdir().unwrap();
+        let mock = Arc::new(MockProvider::new("m"));
+        let (bridge, _chat, _) = bridge_with_provider(dir.path(), mock).await;
+        let reply = bridge.reply("/definitely-not-a-command").await;
+        assert!(
+            matches!(reply, Err(ref e) if e.contains("Unknown command")),
+            "{reply:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn chat_turn_refuses_when_chat_is_disabled() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(SessionStore::open(dir.path()).await);
+        let state = crate::state::AppState::for_test(store, None, dir.path().into());
+        let bridge = TelegramChatBridge {
+            state: Arc::new(state),
+            session_id: StickySession::ephemeral(),
+        };
+        let reply = bridge.reply("hello").await;
+        assert!(
+            matches!(reply, Err(ref e) if e == "chat is disabled"),
+            "{reply:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn model_browser_renders_current_and_listed_models() {
+        let dir = tempfile::tempdir().unwrap();
+        let mock = Arc::new(MockProvider::new("m"));
+        mock.set_models(["alpha", "beta"]);
+        let (bridge, _chat, _) = bridge_with_provider(dir.path(), mock).await;
+
+        let reply = bridge.reply("/model").await.unwrap();
+        assert!(reply.contains("Current model: m"), "{reply}");
+        assert!(reply.contains("alpha"), "{reply}");
+        assert!(reply.contains("beta"), "{reply}");
+    }
+
+    #[tokio::test]
+    async fn model_browser_with_no_provider_says_so() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(SessionStore::open(dir.path()).await);
+        let executor = Executor::new(Arc::new(MockProvider::new("m")), Budget::default());
+        let chat = Arc::new(ChatSessions::new(
+            store.clone(),
+            executor,
+            Arc::new(NoTools),
+        ));
+        let mut state = crate::state::AppState::for_test(store, Some(chat), dir.path().into());
+        state.provider = None;
+        let bridge = TelegramChatBridge {
+            state: Arc::new(state),
+            session_id: StickySession::ephemeral(),
+        };
+        let reply = bridge.reply("/model").await.unwrap();
+        assert!(reply.contains("No provider configured"), "{reply}");
+    }
+
+    struct ModelListErrorProvider;
+    #[async_trait]
+    impl Provider for ModelListErrorProvider {
+        fn model(&self) -> String {
+            "m".into()
+        }
+        fn set_model(&self, _: String) {}
+        async fn complete(&self, _: CompletionRequest) -> ProviderResult<CompletionResponse> {
+            Ok(CompletionResponse::text("ok"))
+        }
+        async fn list_models(&self) -> ProviderResult<Vec<String>> {
+            Err(ProviderError::Transport("list failed".into()))
+        }
+    }
+
+    #[tokio::test]
+    async fn model_browser_surfaces_a_list_models_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let (bridge, _chat, _) =
+            bridge_with_provider(dir.path(), Arc::new(ModelListErrorProvider)).await;
+        let reply = bridge.reply("/model").await.unwrap();
+        assert!(reply.contains("Could not list models"), "{reply}");
+        assert!(reply.contains("list failed"), "{reply}");
+    }
+
+    // collect_turn_reply is a free function fed a broadcast stream; unit-driving it directly
+    // covers the event variants the end-to-end turns never reach (Lagged, Closed-with-empty).
+    #[tokio::test]
+    async fn collect_turn_reply_surfaces_error_and_discards_stream() {
+        let (tx, rx) = tokio::sync::broadcast::channel(8);
+        tx.send(AgentEvent::Token("partial".into())).ok();
+        tx.send(AgentEvent::Error("boom".into())).ok();
+        assert_eq!(collect_turn_reply(rx).await, Err("boom".into()));
+    }
+
+    #[tokio::test]
+    async fn collect_turn_reply_skips_lagged_and_returns_latest() {
+        let (tx, rx) = tokio::sync::broadcast::channel(2);
+        tx.send(AgentEvent::Token("a".into())).ok();
+        tx.send(AgentEvent::Token("b".into())).ok();
+        tx.send(AgentEvent::Token("c".into())).ok();
+        tx.send(AgentEvent::Done).ok();
+        let reply = collect_turn_reply(rx).await;
+        assert_eq!(reply, Ok("c".into()));
+    }
+
+    #[tokio::test]
+    async fn collect_turn_reply_closed_with_empty_stream_errors() {
+        let (tx, rx) = tokio::sync::broadcast::channel(8);
+        drop(tx);
+        assert_eq!(
+            collect_turn_reply(rx).await,
+            Err("turn ended without a reply".into())
+        );
+    }
+
+    #[tokio::test]
+    async fn collect_turn_reply_closed_after_partial_returns_partial() {
+        let (tx, rx) = tokio::sync::broadcast::channel(8);
+        tx.send(AgentEvent::Token("partial".into())).ok();
+        drop(tx);
+        assert_eq!(collect_turn_reply(rx).await, Ok("partial".into()));
+    }
+
+    #[tokio::test]
+    async fn collect_turn_reply_done_returns_stream() {
+        let (tx, rx) = tokio::sync::broadcast::channel(8);
+        tx.send(AgentEvent::Token("hi".into())).ok();
+        tx.send(AgentEvent::Done).ok();
+        assert_eq!(collect_turn_reply(rx).await, Ok("hi".into()));
+    }
+
+    #[tokio::test]
+    async fn collect_turn_reply_ignores_non_token_events() {
+        let (tx, rx) = tokio::sync::broadcast::channel(8);
+        tx.send(AgentEvent::ToolStarted {
+            name: "x".into(),
+            args: "y".into(),
+        })
+        .ok();
+        tx.send(AgentEvent::Done).ok();
+        assert_eq!(collect_turn_reply(rx).await, Ok(String::new()));
+    }
+
+    /// The deterministic result→reply mapping must cover every surface-local arm, including the
+    /// lifecycle verbs that reset the sticky session. (Browser/fork/spawn results are routed past
+    /// `static_reply` and asserted via the end-to-end tests above.)
+    #[test]
+    fn static_reply_covers_surface_local_arms() {
+        let ctx = || TelegramCommandContext {
+            session_id: Some("sess-1".into()),
+            messages: Vec::new(),
+            conversations: Vec::new(),
+            goals_summary: Vec::new(),
+            status: None,
+            message_count: 0,
+        };
+
+        let mut c = ctx();
+        let r = static_reply(
+            CommandResult::NewConversation {
+                was_streaming: false,
+            },
+            &mut c,
+        )
+        .unwrap();
+        assert!(r.contains("Started a new conversation"), "{r}");
+        assert!(c.session_id.is_none(), "/new must clear the sticky session");
+
+        let r = static_reply(CommandResult::ChatCleared, &mut ctx()).unwrap();
+        assert!(r.contains("no local transcript buffer"), "{r}");
+
+        let mut c = ctx();
+        let r = static_reply(
+            CommandResult::SessionClosed {
+                id: Some("abc".into()),
+            },
+            &mut c,
+        )
+        .unwrap();
+        assert!(r.contains("Closed session abc"), "{r}");
+        assert!(
+            c.session_id.is_none(),
+            "/close must clear the sticky session"
+        );
+
+        let r = static_reply(CommandResult::SessionClosed { id: None }, &mut ctx()).unwrap();
+        assert!(r.contains("No active session"), "{r}");
+
+        let r = static_reply(CommandResult::BackToPrimary, &mut ctx()).unwrap();
+        assert!(r.contains("Back on primary chat"), "{r}");
+
+        let r = static_reply(CommandResult::OpenProfileBrowser, &mut ctx()).unwrap();
+        assert!(
+            r.contains("Session profiles are switched from the web UI"),
+            "{r}"
+        );
+
+        for coding in [
+            CommandResult::StartCodingGoal {
+                project: None,
+                text: "x".into(),
+                mode: None,
+            },
+            CommandResult::OpenGoalView,
+            CommandResult::GoalStatus,
+            CommandResult::ParkGoalSession,
+            CommandResult::ResumeGoalSession { answer: "y".into() },
+            CommandResult::CancelGoalSession,
+        ] {
+            let r = static_reply(coding, &mut ctx()).unwrap();
+            assert!(r.contains("Coding goals run in the TUI"), "{r}");
+        }
+
+        let r = static_reply(
+            CommandResult::ThemeChanged {
+                name: "dark".into(),
+            },
+            &mut ctx(),
+        )
+        .unwrap();
+        assert!(r.contains("Theme 'dark' is UI-only"), "{r}");
+
+        let r = static_reply(
+            CommandResult::ThemesReloaded {
+                count: 1,
+                errors: vec![],
+            },
+            &mut ctx(),
+        )
+        .unwrap();
+        assert!(r.contains("Themes are UI-only on Telegram"), "{r}");
+
+        let r = static_reply(
+            CommandResult::ThemeListed {
+                names: vec!["a".into()],
+                active: "a".into(),
+            },
+            &mut ctx(),
+        )
+        .unwrap();
+        assert!(r.contains("Themes are UI-only on Telegram"), "{r}");
+
+        for silent in [
+            CommandResult::HelpShown,
+            CommandResult::StatusShown,
+            CommandResult::ModelInfoShown,
+            CommandResult::SessionInfoShown,
+            CommandResult::ProfileInfoShown,
+            CommandResult::OpenThemeBrowser,
+        ] {
+            assert!(
+                static_reply(silent.clone(), &mut ctx()).is_none(),
+                "{silent:?}"
+            );
+        }
     }
 }

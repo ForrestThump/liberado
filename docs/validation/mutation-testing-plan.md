@@ -42,7 +42,7 @@ mutants timed out (retried in Phase 4 with `-- --lib`).
 | coder-sandbox | 13 | 35 | 34 | **97%** | Single file, well tested |
 | coder-tools | 21 | 59 | 55 | **93%** | 11 new tests patched 14 survivors |
 | daemon | 47 | 67 | 34 | **51%** | 16 TIMEOUTs (24%) — event pipeline hangs |
-| server | 57 | 184 | 50 | **27%** | 60% of survivors in telegram.rs (live API) |
+| server | 57 | 184 | 50 | **27%** | 60% of survivors in telegram.rs at the time (now mock-tested — see `mutation-testing-report-server.md` update) |
 | coder-agent | 64 (lib) | 328 | 176 | **54%** | Ran with `-- --lib`; mock_intake_e2e hangs in cargo-mutants env |
 
 ### End-to-End Wiring Tests Added (T1 Conformance + Daemon)
