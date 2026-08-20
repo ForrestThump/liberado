@@ -102,6 +102,86 @@ fn finalize_result_coder(
         })
 }
 
+/// Produce one generation's candidate pool: mutations from every beam parent plus independent cold
+/// starts, halting on the shared budget. The only model-bound part of a generation — the loop and
+/// budget bookkeeping live here so `run_coder_tuner`'s driver reads as a flat sequence of decisions.
+async fn gather_generation_candidates_coder(
+    beam: &[(Candidate, CoderFitness)],
+    config: &TunerConfig,
+    budget: &Budget,
+) -> Vec<Candidate> {
+    let mut pool: Vec<Candidate> = Vec::new();
+
+    for (parent_index, (parent, parent_fitness)) in beam.iter().enumerate() {
+        for _ in 0..config.mutations_per_candidate {
+            if budget.exhausted() {
+                break;
+            }
+            let failing = parent_fitness.failing();
+            if let Ok(prompt) = mutate_coder(
+                config.meta_provider.as_ref(),
+                &parent.prompt,
+                &failing,
+                budget,
+            )
+            .await
+            {
+                pool.push(Candidate {
+                    prompt,
+                    origin: CandidateOrigin::MutatedFrom {
+                        parent_index,
+                        parent_accuracy: parent_fitness.accuracy,
+                    },
+                });
+            } // Err logged inside mutate_coder(); skip this slot, not the run
+        }
+    }
+
+    for _ in 0..config.cold_starts_per_generation {
+        if budget.exhausted() {
+            break;
+        }
+        if let Ok(prompt) = cold_start_coder(config.meta_provider.as_ref(), budget).await {
+            pool.push(Candidate {
+                prompt,
+                origin: CandidateOrigin::ColdStart,
+            });
+        }
+    }
+
+    pool
+}
+
+/// Score every candidate in a pool against the coding curriculum — a tight loop whose only work is
+/// waiting on the shared scoring calls. Kept separate so the beam advance that consumes its output
+/// reads as a decision, and so the per-generation driver stays free of the loop shape.
+async fn score_pool_coder(
+    pool: Vec<Candidate>,
+    config: &TunerConfig,
+    budget: &Budget,
+) -> Vec<(Candidate, CoderFitness)> {
+    let tier = config.coder_tier;
+    let max_turns = max_turns_for_tier(tier);
+    let name_filter = config.coder_scenario_filter.as_deref();
+
+    let mut scored = Vec::with_capacity(pool.len());
+    for candidate in pool {
+        let fitness = score_coder_candidate(
+            &candidate.prompt,
+            &config.scoring_providers,
+            config.samples_per_scenario,
+            tier,
+            config.max_scenarios,
+            name_filter,
+            max_turns,
+            budget,
+        )
+        .await;
+        scored.push((candidate, fitness));
+    }
+    scored
+}
+
 /// Tune the Liberado coder role system prompt against real workspace coding scenarios.
 pub async fn run_coder_tuner(config: TunerConfig) -> CoderTunerResult {
     let seed_prompt = DEFAULT_CODER_SYSTEM_PROMPT;
@@ -139,69 +219,15 @@ pub async fn run_coder_tuner(config: TunerConfig) -> CoderTunerResult {
         if budget.exhausted() {
             break;
         }
-
-        let mut pool: Vec<Candidate> = Vec::new();
-
-        for (parent_index, (parent, parent_fitness)) in beam.iter().enumerate() {
-            for _ in 0..config.mutations_per_candidate {
-                if budget.exhausted() {
-                    break;
-                }
-                let failing = parent_fitness.failing();
-                match mutate_coder(
-                    config.meta_provider.as_ref(),
-                    &parent.prompt,
-                    &failing,
-                    &budget,
-                )
-                .await
-                {
-                    Ok(prompt) => pool.push(Candidate {
-                        prompt,
-                        origin: CandidateOrigin::MutatedFrom {
-                            parent_index,
-                            parent_accuracy: parent_fitness.accuracy,
-                        },
-                    }),
-                    Err(_) => continue,
-                }
-            }
-        }
-
-        for _ in 0..config.cold_starts_per_generation {
-            if budget.exhausted() {
-                break;
-            }
-            if let Ok(prompt) = cold_start_coder(config.meta_provider.as_ref(), &budget).await {
-                pool.push(Candidate {
-                    prompt,
-                    origin: CandidateOrigin::ColdStart,
-                });
-            }
-        }
-
+        let pool = gather_generation_candidates_coder(&beam, &config, &budget).await;
         if pool.is_empty() {
-            break;
+            break; // budget ran out before a single candidate could be produced this generation
         }
-
-        let mut scored = Vec::with_capacity(pool.len());
-        for candidate in pool {
-            let fitness = score_coder_candidate(
-                &candidate.prompt,
-                &config.scoring_providers,
-                config.samples_per_scenario,
-                tier,
-                config.max_scenarios,
-                name_filter,
-                max_turns,
-                &budget,
-            )
-            .await;
-            scored.push((candidate, fitness));
-        }
-
+        let scored = score_pool_coder(pool, &config, &budget).await;
         beam = advance_beam_coder(&beam, scored, config.beam_width);
 
+        // Record this generation's best-so-far, with its own justification call — a human
+        // reviewing later gets the search's progression, not just where it ended up.
         let (best_candidate, best_fitness) = &beam[0];
         let justification = request_justification_if_budget_allows(
             config.meta_provider.as_ref(),

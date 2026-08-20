@@ -7,8 +7,8 @@
 
 use liberado_heuristics_tuner::{
     CoderTunerResult, DEFAULT_CODER_PROMPT_PATH, DEFAULT_CODER_SYSTEM_PROMPT, ExecutorTunerResult,
-    Layer, TunerConfig, build_coder_draft_proposal, run_coder_tuner, run_executor_tuner,
-    run_subagent_tuner, run_tuner, write_coder_draft_proposal,
+    Layer, TunerConfig, TunerResult, build_coder_draft_proposal, run_coder_tuner,
+    run_executor_tuner, run_subagent_tuner, run_tuner, write_coder_draft_proposal,
 };
 use std::path::Path;
 
@@ -73,6 +73,28 @@ async fn save_coder_result(
     Ok(result.rubric)
 }
 
+/// Save a dispatcher tuner session's per-generation records, mirroring `save_tool_loop_result` /
+/// `save_coder_result` below. Lives here (not in `search.rs`) because only the binary persists —
+/// the library returns the result for a caller to render as it likes.
+async fn save_dispatcher_result(
+    result: TunerResult,
+    out_dir: &Path,
+) -> Result<String, Box<dyn std::error::Error>> {
+    for record in &result.generations {
+        let path = out_dir.join(format!("generation-{}.txt", record.generation));
+        tokio::fs::write(&path, &record.rubric).await?;
+        println!(
+            "Generation {} — accuracy {:.2}, safe-default {:.2}, unsafe acts {} -> {}",
+            record.generation,
+            record.fitness.accuracy,
+            record.fitness.safe_default_rate,
+            record.fitness.unsafe_acts,
+            path.display()
+        );
+    }
+    Ok(result.rubric)
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt::init();
@@ -87,22 +109,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tokio::fs::create_dir_all(&out_dir).await?;
 
     let final_rubric = match layer {
-        Layer::Dispatcher => {
-            let result = run_tuner(config).await;
-            for record in &result.generations {
-                let path = out_dir.join(format!("generation-{}.txt", record.generation));
-                tokio::fs::write(&path, &record.rubric).await?;
-                println!(
-                    "Generation {} — accuracy {:.2}, safe-default {:.2}, unsafe acts {} -> {}",
-                    record.generation,
-                    record.fitness.accuracy,
-                    record.fitness.safe_default_rate,
-                    record.fitness.unsafe_acts,
-                    path.display()
-                );
-            }
-            result.rubric
-        }
+        Layer::Dispatcher => save_dispatcher_result(run_tuner(config).await, &out_dir).await?,
         Layer::Executor => {
             save_tool_loop_result(run_executor_tuner(config).await, &out_dir).await?
         }
