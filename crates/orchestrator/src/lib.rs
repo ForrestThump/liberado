@@ -3191,6 +3191,23 @@ mod tests {
                     let _ = orch
                         .run(decision, "goal", "trigger", &CapabilitySet::empty())
                         .await;
+                    // The build line is traced by the run's own task; under load the span close /
+                    // runtime teardown can deliver the event a moment after `run` returns, and an
+                    // immediate read of `seen` raced it (intermittent "build line must be emitted"
+                    // in full-suite runs). Poll a short window *inside* the with_default closure,
+                    // while the capturing subscriber is still installed; the final assert below
+                    // still requires the line (and its level) unconditionally.
+                    for _ in 0..100 {
+                        if seen
+                            .lock()
+                            .unwrap()
+                            .iter()
+                            .any(|(_, m)| m.contains("building execute-direct task"))
+                        {
+                            break;
+                        }
+                        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                    }
                 });
         });
 
