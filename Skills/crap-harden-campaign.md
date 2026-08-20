@@ -39,7 +39,7 @@ full instrumented rebuild + suite run, 20-40 minutes), not per site:
 cargo llvm-cov --workspace --exclude liberado-webui --lcov \
   --output-path .liberado/crap.lcov --ignore-run-fail
 
-cargo crap --workspace --lcov .liberado/crap.lcov --min 450        # ceiling
+cargo crap --workspace --lcov .liberado/crap.lcov --min 150        # ceiling
 cargo crap --workspace --lcov .liberado/crap.lcov --format json \
   --sort crap --output .liberado/crap-current.json                 # ranked table
 python - <<'PY'
@@ -67,7 +67,7 @@ every `?` / `ok_or_else` as a branch. Prefer `let-else` over chains of
 `crap-baseline.json` is committed at the repo root (the last best
 per-function score). Ubuntu CI runs the per-function ratchet
 (`liberado ci crap` — `--fail-regression`); Windows and other hosts are
-ceiling-only (450). To compare locally run:
+ceiling-only (150). To compare locally run:
 
 ```bash
 cargo run --locked --quiet -p liberado-cli -- ci crap
@@ -140,8 +140,9 @@ Clippy runs on both OSes for exactly that reason.
 ## Campaign record (2026-08, branch `harden-main-crap`)
 
 This playbook went through one full campaign and reached its terminal state — **zero
-functions above CRAP 150** (3,285 analyzed). Recorded here so a future reader does not mistake
-0-over-150 for unfinished 300-ceiling work.
+functions above CRAP 150** (3,285 analyzed). The committed `--fail-above` ceiling is now
+**150** (`.cargo-crap.toml` `threshold`, `liberado ci crap`). Recorded here so a future
+reader does not mistake 0-over-150 for unfinished 300-ceiling work.
 
 What cleared each band (each site committed once, full CI gate green per commit):
 
