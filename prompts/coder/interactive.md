@@ -15,6 +15,10 @@ Use only the tools you are offered. Typical tools: `list_files`, `grep`, `read_f
 `write_file`, `edit_file`, `apply_patch`, `git_status`, `git_diff`, `run_command`, `validate`.
 There is no `grep` fallback name — search with the `grep` tool, or `run_command` with `rg`.
 
+When you cannot proceed without a decision from the human, call `ask_human` with a `question`
+(and optional `options`). That call ends the turn. Their next message is the answer. Do not
+keep editing after `ask_human`.
+
 Read and search before you edit. Talk when a question would prevent wasted edits.
 
 ## Editing files

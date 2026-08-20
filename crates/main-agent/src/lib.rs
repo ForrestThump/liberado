@@ -196,6 +196,23 @@ impl Conversation {
         result
     }
 
+    /// Resume after [`liberado_executor::ExecError::AwaitingHuman`]: append the
+    /// human's answer as the tool result and drive until the model speaks again.
+    pub async fn resume_stream(
+        &mut self,
+        executor: &Executor,
+        runtime: &dyn ToolRuntime,
+        tool_call_id: &str,
+        answer: &str,
+        events: &Sender<AgentEvent>,
+    ) -> Result<(), ExecError> {
+        self.messages
+            .push(Message::tool_result(tool_call_id, answer));
+        executor
+            .converse_stream(runtime, &mut self.messages, events)
+            .await
+    }
+
     /// Ordered history the model sees, including the system prompt.
     ///
     /// Used to rebuild a converse session when ACP switches mode (chat ↔ interactive coding)

@@ -27,9 +27,10 @@ pub async fn prepare_coding_converse(
     cwd: &Path,
     session_id: &str,
     tuning: &CoderTuning,
+    ask_human: bool,
 ) -> Result<CodingConverse, String> {
     let workspace = coding_run::prepare_workspace(cwd, session_id).await?;
-    let tools = Arc::new(coding_runtime(&workspace, tuning)?);
+    let tools = crate::ask_human::wrap(Arc::new(coding_runtime(&workspace, tuning)?), ask_human);
     let system = system_prompt(cwd, &workspace, tuning);
     Ok(CodingConverse { tools, system })
 }
@@ -188,10 +189,14 @@ mod tests {
     #[tokio::test]
     async fn prepare_on_non_git_uses_cwd() {
         let dir = TempDir::new().unwrap();
-        let prepared =
-            prepare_coding_converse(dir.path(), "sess-interactive", &CoderTuning::default())
-                .await
-                .unwrap();
+        let prepared = prepare_coding_converse(
+            dir.path(),
+            "sess-interactive",
+            &CoderTuning::default(),
+            false,
+        )
+        .await
+        .unwrap();
         let names: Vec<String> = prepared
             .tools
             .catalog()
@@ -204,5 +209,29 @@ mod tests {
             "tools must be rooted at the client cwd when it is not a git repo: {}",
             prepared.system
         );
+        assert!(
+            !names.iter().any(|n| n == "ask_human"),
+            "ask_human=false must not offer the tool: {names:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn prepare_can_offer_ask_human() {
+        let dir = TempDir::new().unwrap();
+        let prepared =
+            prepare_coding_converse(dir.path(), "sess-ask", &CoderTuning::default(), true)
+                .await
+                .unwrap();
+        let names: Vec<String> = prepared
+            .tools
+            .catalog()
+            .into_iter()
+            .map(|t| t.name)
+            .collect();
+        assert!(
+            names.iter().any(|n| n == "ask_human"),
+            "ask_human=true must offer the tool: {names:?}"
+        );
+        assert!(prepared.tools.parks_for_human("ask_human"));
     }
 }

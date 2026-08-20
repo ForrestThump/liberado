@@ -39,6 +39,7 @@
 
 use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
+mod ask_human;
 mod coding_run;
 mod interactive;
 mod provider;
@@ -57,7 +58,7 @@ use provider::{
 mod face_client;
 mod mode;
 
-use liberado_executor::{AgentEvent, Budget, Executor, ToolRuntime};
+use liberado_executor::{AgentEvent, Budget, ExecError, Executor, ToolRuntime};
 use liberado_main_agent::{Conversation, DEFAULT_SYSTEM_PROMPT};
 use liberado_provider::{Provider, Role};
 use mode::AgentMode;
@@ -140,6 +141,8 @@ struct SessionHandle {
     tools: Arc<dyn ToolRuntime>,
     /// True when [`liberado_coder_tools::CodingToolRuntime`] is attached (interactive coding).
     coding_tools: bool,
+    /// `ask_human` call id waiting for the next `session/prompt`, if any.
+    pending_ask: std::sync::Mutex<Option<String>>,
     cancel_tx: watch::Sender<bool>,
     cancel_rx: watch::Receiver<bool>,
 }
@@ -1504,7 +1507,13 @@ async fn ensure_converse(bridge: &Bridge, sid: &str) -> Result<Arc<SessionHandle
     };
 
     let handle = if mode.uses_coding_tools() {
-        let parts = interactive::prepare_coding_converse(&cwd, sid, &bridge.coder_tuning).await?;
+        let parts = interactive::prepare_coding_converse(
+            &cwd,
+            sid,
+            &bridge.coder_tuning,
+            ask_human::may_ask_human(&bridge.local_grant),
+        )
+        .await?;
         open_handle(
             sid,
             Arc::clone(&bridge.provider),
@@ -1605,6 +1614,7 @@ fn open_handle(
         executor: Executor::new(provider, Budget::new(max_turns)),
         tools,
         coding_tools,
+        pending_ask: std::sync::Mutex::new(None),
         cancel_tx,
         cancel_rx,
     }
@@ -1776,17 +1786,9 @@ async fn run_prompt_turn(
     let turn_session = Arc::clone(&session);
 
     let turn = tokio::spawn(async move {
-        let mut convo = turn_session.conversation.lock().await;
-        let result = convo
-            .turn_stream(
-                &turn_session.executor,
-                turn_session.tools.as_ref(),
-                &text,
-                &event_tx,
-            )
-            .await;
+        let result = drive_converse_turn(&turn_session, &text, &event_tx).await;
         match &result {
-            Ok(()) => {
+            Ok(()) | Err(ExecError::AwaitingHuman { .. }) => {
                 let _ = event_tx.send(AgentEvent::Done).await;
             }
             Err(e) => {
@@ -1845,8 +1847,47 @@ async fn run_prompt_turn(
         }
     }
 
-    let _ = turn.await;
+    if let Ok(Err(ExecError::AwaitingHuman { call_id })) = turn.await
+        && let Ok(mut pending) = session.pending_ask.lock()
+    {
+        *pending = Some(call_id);
+    }
     Ok(stop_reason)
+}
+
+/// One converse drive: either a fresh user turn or the answer to a parked `ask_human`.
+async fn drive_converse_turn(
+    session: &SessionHandle,
+    text: &str,
+    events: &tokio::sync::mpsc::Sender<AgentEvent>,
+) -> Result<(), ExecError> {
+    let pending = session.pending_ask.lock().ok().and_then(|mut g| g.take());
+    let mut convo = session.conversation.lock().await;
+    let result = if let Some(call_id) = pending.as_ref() {
+        convo
+            .resume_stream(
+                &session.executor,
+                session.tools.as_ref(),
+                call_id,
+                text,
+                events,
+            )
+            .await
+    } else {
+        convo
+            .turn_stream(&session.executor, session.tools.as_ref(), text, events)
+            .await
+    };
+    if let Err(ExecError::AwaitingHuman { .. }) = &result {
+        return result;
+    }
+    if result.is_err()
+        && let Some(call_id) = pending
+        && let Ok(mut g) = session.pending_ask.lock()
+    {
+        *g = Some(call_id);
+    }
+    result
 }
 
 /// Allocate a stable `toolCallId` for a started tool and record it for the matching finish.
@@ -2316,6 +2357,7 @@ mod tests {
             executor: Executor::new(provider, Budget::new(8)),
             tools: Arc::new(NoTools),
             coding_tools: false,
+            pending_ask: std::sync::Mutex::new(None),
             cancel_tx: cancel_tx.clone(),
             cancel_rx,
         });
@@ -2408,6 +2450,7 @@ mod tests {
             executor: Executor::new(provider, Budget::new(8)),
             tools: Arc::new(EchoTool),
             coding_tools: false,
+            pending_ask: std::sync::Mutex::new(None),
             cancel_tx,
             cancel_rx,
         });
@@ -2888,6 +2931,7 @@ mod tests {
             executor: Executor::new(provider, Budget::new(8)),
             tools: Arc::new(NoTools),
             coding_tools: false,
+            pending_ask: std::sync::Mutex::new(None),
             cancel_tx,
             cancel_rx,
         });
@@ -2916,6 +2960,62 @@ mod tests {
         assert!(
             text.contains("two") && text.contains("second reply"),
             "second turn must append, not replace: {text}"
+        );
+    }
+
+    #[tokio::test]
+    async fn ask_human_parks_and_the_next_prompt_is_the_answer() {
+        use liberado_provider::{CompletionResponse, MockProvider, ToolInvocation};
+        let provider = Arc::new(MockProvider::with_script(
+            "mock",
+            [
+                CompletionResponse::tool_calls(vec![ToolInvocation::new(
+                    "ask-1",
+                    ask_human::ASK_HUMAN_TOOL,
+                    json!({ "question": "Which crate?" }),
+                )]),
+                CompletionResponse::text("using acp-bridge"),
+            ],
+        ));
+        let (cancel_tx, cancel_rx) = watch::channel(false);
+        let session = Arc::new(SessionHandle {
+            id: "sess-ask".into(),
+            conversation: Mutex::new(Conversation::new("sys")),
+            executor: Executor::new(provider, Budget::new(8)),
+            tools: ask_human::wrap(Arc::new(EchoTool), true),
+            coding_tools: true,
+            pending_ask: std::sync::Mutex::new(None),
+            cancel_tx,
+            cancel_rx,
+        });
+        let sink = CaptureSink {
+            lines: std::sync::Mutex::new(Vec::new()),
+        };
+        let stop1 = run_prompt_turn(Arc::clone(&session), "split this".into(), &sink)
+            .await
+            .unwrap();
+        assert_eq!(stop1, "end_turn");
+        let parked = session.pending_ask.lock().unwrap().clone();
+        assert_eq!(parked.as_deref(), Some("ask-1"));
+        let stop2 = run_prompt_turn(Arc::clone(&session), "acp-bridge".into(), &sink)
+            .await
+            .unwrap();
+        assert_eq!(stop2, "end_turn");
+        assert!(session.pending_ask.lock().unwrap().is_none());
+        let convo = session.conversation.lock().await;
+        let text: String = convo
+            .messages()
+            .iter()
+            .map(|m| format!("{:?}:{}", m.role, m.content))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            text.contains("acp-bridge"),
+            "answer must land as the tool result: {text}"
+        );
+        assert!(
+            text.contains("using acp-bridge"),
+            "model must continue after the answer: {text}"
         );
     }
 

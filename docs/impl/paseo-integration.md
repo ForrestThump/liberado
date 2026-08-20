@@ -53,7 +53,7 @@
 |---|---|
 | Live hub `/goal` list in Paseo UI | Separate (daemon HTTP bridge) |
 | Token-by-token tool events mid-coding-run | Follow-up (pack currently reports at end) |
-| Intake clarify questions via ACP | Follow-up (`AskHuman` grant + `session/prompt` answers) |
+| Intake clarify questions via ACP | Interactive coding offers `ask_human`; the next `session/prompt` is the answer. Goal-mode intake still uses the pack's `InputChannel` (not ACP). |
 | Face-mode cancel mid-stream | Cooperative cancel wired (drops SSE future); daemon may still finish its turn |
 
 ## Prerequisites (Windows)
