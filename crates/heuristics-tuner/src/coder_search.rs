@@ -84,6 +84,24 @@ pub struct CoderTunerResult {
     pub generations: Vec<CoderGenerationRecord>,
 }
 
+/// The final result's rubric for the coder tuner: reuse the last generation's record (same
+/// candidate, already formatted against the baseline) or format a fresh one when no generation
+/// finished. Pure — no model call — so the reuse-vs-fallback decision is directly testable.
+fn finalize_result_coder(
+    winner: &Candidate,
+    winner_fitness: &CoderFitness,
+    baseline_fitness: &CoderFitness,
+    seed_prompt: &str,
+    generations: &[CoderGenerationRecord],
+) -> String {
+    generations
+        .last()
+        .map(|g| g.rubric.clone())
+        .unwrap_or_else(|| {
+            format_coder_rubric(winner, winner_fitness, baseline_fitness, seed_prompt, None)
+        })
+}
+
 /// Tune the Liberado coder role system prompt against real workspace coding scenarios.
 pub async fn run_coder_tuner(config: TunerConfig) -> CoderTunerResult {
     let seed_prompt = DEFAULT_CODER_SYSTEM_PROMPT;
@@ -207,18 +225,13 @@ pub async fn run_coder_tuner(config: TunerConfig) -> CoderTunerResult {
     }
 
     let (winner, winner_fitness) = beam.into_iter().next().expect("beam is never empty");
-    let rubric = generations
-        .last()
-        .map(|g| g.rubric.clone())
-        .unwrap_or_else(|| {
-            format_coder_rubric(
-                &winner,
-                &winner_fitness,
-                &baseline_fitness,
-                seed_prompt,
-                None,
-            )
-        });
+    let rubric = finalize_result_coder(
+        &winner,
+        &winner_fitness,
+        &baseline_fitness,
+        seed_prompt,
+        &generations,
+    );
 
     CoderTunerResult {
         winner,
@@ -285,5 +298,41 @@ mod tests {
         let next = advance_beam_coder(&beam, pool, 1);
         assert_eq!(next[0].0.prompt, "best");
         let _ = Outcome::Succeeded;
+    }
+
+    #[test]
+    fn finalize_result_coder_reuses_the_last_generation_rubric() {
+        let winner = Candidate {
+            prompt: "best".into(),
+            origin: CandidateOrigin::ColdStart,
+        };
+        let winner_fit = fit(0.9, 0);
+        let baseline = fit(0.5, 0);
+        let generations = vec![CoderGenerationRecord {
+            generation: 1,
+            candidate: winner.clone(),
+            fitness: winner_fit.clone(),
+            rubric: "already-the-winner".to_string(),
+        }];
+        // Non-empty generations: reuse the last record's rubric verbatim (same candidate).
+        assert_eq!(
+            finalize_result_coder(&winner, &winner_fit, &baseline, "seed", &generations),
+            "already-the-winner",
+        );
+    }
+
+    #[test]
+    fn finalize_result_coder_formats_fresh_when_no_generation_finished() {
+        let winner = Candidate {
+            prompt: "best".into(),
+            origin: CandidateOrigin::ColdStart,
+        };
+        let winner_fit = fit(0.9, 0);
+        let baseline = fit(0.5, 0);
+        let rubric = finalize_result_coder(&winner, &winner_fit, &baseline, "seed", &[]);
+        assert!(
+            rubric.contains("Heuristics Tuner Proposal (coder layer)"),
+            "a fresh coder rubric is formatted on the empty-generations path"
+        );
     }
 }
