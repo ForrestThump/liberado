@@ -100,6 +100,17 @@ impl EffectRunner {
     /// the caller should `.await` the returned future.
     pub async fn run(&self, effect: Effect) {
         match effect {
+            Effect::SetWindowTitle(title) => self.set_window_title(&title),
+            Effect::Quit => self.quit(),
+            Effect::None => {}
+            _ => self.run_async(effect).await,
+        }
+    }
+
+    /// Dispatch the async (network / streaming) effects. The terminal and sync side-effects live
+    /// in [`run`](Self::run), which routes everything else here.
+    async fn run_async(&self, effect: Effect) {
+        match effect {
             Effect::StartChatStream { message, session } => {
                 self.start_chat_stream(message, session).await
             }
@@ -116,7 +127,6 @@ impl EffectRunner {
                 parent_id,
                 after_turn,
             } => self.fork_conversation(parent_id, after_turn).await,
-            Effect::SetWindowTitle(title) => self.set_window_title(&title),
             Effect::RefreshSessions => self.refresh_sessions().await,
             Effect::JoinGoalSession(id) => self.join_goal_session(id).await,
             Effect::SendGoalMessage { id, text } => self.send_goal_message(id, text).await,
@@ -143,8 +153,7 @@ impl EffectRunner {
             }
             Effect::ResumeGoalSession { id, answer } => self.resume_goal_session(id, answer).await,
             Effect::LeaveGoalSession => self.leave_goal_session(),
-            Effect::Quit => self.quit(),
-            Effect::None => {}
+            _ => unreachable!("run_async only receives the async effect kinds"),
         }
     }
 
