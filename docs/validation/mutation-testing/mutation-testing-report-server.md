@@ -17,14 +17,22 @@
 The server is a composition crate that wires together daemon, dispatcher, orchestrator,
 main-agent, session-store, mcp, notifier, and 15+ other crate types. Most of its code
 is glue. The 27% catch rate is expected for this profile — comparable to `config` (52%)
-and `session` (80%) but lower because telegram.rs (80/134 missed) has no unit test
-coverage.
+and `session` (80%) but lower because telegram.rs (80/134 missed) had no unit test
+coverage at the time of this run.
+
+> **Update (2026-08-19):** the "no API key → cannot test" note below is **stale**.
+> `crates/server/src/telegram.rs` now carries 9 mock-based tests (`MockProvider` from
+> `liberado_provider`, plus `PendingProvider`/`HangOnceProvider`) that run with no
+> Telegram API key and no network — in-memory `SessionStore` + `AppState::for_test`.
+> They cover the lifecycle surface (free-form turns, /stop, /model scoping, the
+> unanswered-turn note, /help). A re-run of the mutant campaign on telegram.rs would
+> move its current catch rate well above the 27% crate figure.
 
 ## Survivors by Module
 
 | Module | Missed | Profile | Action |
 |--------|:------:|---------|--------|
-| `telegram.rs` | ~80 | `TelegramChatBridge` + `TelegramCommandContext` trait impls for live Telegram. ~60% of all survivors. No Telegram API key → cannot test. | Accept as infrastructure-gapped |
+| `telegram.rs` | ~80 | `TelegramChatBridge` + `TelegramCommandContext` trait impls for live Telegram. ~60% of all survivors at the time of this run. | **Revisit with mock-based tests** — see Overview update; the no-API-key blocker is gone |
 | `lib.rs` | ~20 | `build_chat`, `explain_write`, `config_check` — daemon boot path, CLI commands | Partial: low-hanging operators in `build_chat` |
 | `api/goals.rs` | 5 | SSE event conversion, goal validation | Accept |
 | `state.rs` | 6 | `NoTools` trait impl (thin), `reaction_tx` operator | Accept |
@@ -41,9 +49,10 @@ coverage.
   prevented hangs.
 - **42 unviable mutants** — indicates ~22% of the crate is not exercised by any test,
   consistent with a composition crate.
-- **Telegram gap** dominates: the `TelegramChatBridge` and `TelegramCommandContext`
-  together account for 60% of survivors. Only a live integration test with a real
-  Telegram API key would exercise these.
+- **Telegram gap** dominated: the `TelegramChatBridge` and `TelegramCommandContext`
+  accounted for 60% of survivors at this run. That is no longer an infrastructure blocker —
+  see the Overview update: the bridge is tested today via scripted providers that need no
+  live Telegram API.
 
 ## Remediation
 
