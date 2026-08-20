@@ -17,8 +17,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use liberado_coder_core::{
-    CoderBackend, CoderError, CoderRoleConfig, CoderRunConfig, CoderRunRequest, CoderTask,
-    CommandPolicy, LIBERADO_LOOP_BACKEND, PathPolicy, ProgressPolicy, SandboxSpec, WorkspaceRef,
+    CoderBackend, CoderError, CoderRoleConfig, CoderRunRequest, CoderTask,
 };
 use liberado_coder_sandbox::{
     MergeAttempt, add_worktree_on_branch, branch_tip, commit_merge, merge_branch,
@@ -150,6 +149,7 @@ pub async fn run_coding_fanout(
     tasks: Vec<CodingSubtask>,
     max_concurrent: usize,
     model: &str,
+    tuning: &liberado_coder_core::CoderTuning,
 ) -> Result<FanoutReport, CoderError> {
     if tasks.is_empty() {
         return Err(CoderError::Setup(
@@ -167,9 +167,10 @@ pub async fn run_coding_fanout(
         let parent = parent_root.to_path_buf();
         let wt_base = worktrees_base.clone();
         let model = model.to_string();
+        let tuning = tuning.clone();
         handles.push(tokio::spawn(async move {
             let _permit = sem.acquire().await.expect("semaphore closed unexpectedly");
-            run_one_child_backend(backend, &parent, &wt_base, &task, i, &model).await
+            run_one_child_backend(backend, &parent, &wt_base, &task, i, &model, &tuning).await
         }));
     }
 
@@ -339,6 +340,7 @@ async fn run_one_child_backend(
     task: &CodingSubtask,
     index: usize,
     model: &str,
+    tuning: &liberado_coder_core::CoderTuning,
 ) -> ChildOutcome {
     let label = sanitize_label(&task.label);
     let branch = format!("fanout/{label}-{index}");
@@ -368,7 +370,7 @@ async fn run_one_child_backend(
         "coding fan-out (backend): child worktree ready"
     );
 
-    let request = child_request(&wt_path, task, model);
+    let request = child_request(&wt_path, task, model, tuning);
     let run = backend.run(request).await;
 
     let tip = branch_tip(parent_root, &branch).await.ok();
@@ -524,7 +526,12 @@ async fn run_one_child_hub(
     }
 }
 
-fn child_request(worktree_root: &Path, task: &CodingSubtask, model: &str) -> CoderRunRequest {
+fn child_request(
+    worktree_root: &Path,
+    task: &CodingSubtask,
+    model: &str,
+    tuning: &liberado_coder_core::CoderTuning,
+) -> CoderRunRequest {
     let prompt = format!(
         "You are a Liberado coding subagent working on an isolated git worktree/branch.\n\
          Complete ONLY this subtask; do not expand scope.\n\
@@ -541,55 +548,30 @@ fn child_request(worktree_root: &Path, task: &CodingSubtask, model: &str) -> Cod
         max_turns: Some(12),
         reasoning: None,
     };
-    let disabled = CoderRoleConfig {
-        model: model.into(),
-        prompt_path: None,
-        prompt: None,
-        temperature: None,
-        max_tokens: None,
-        max_turns: Some(2),
-        reasoning: None,
-    };
     let mut task_dto = CoderTask::new(
         format!("fanout-{}", sanitize_label(&task.label)),
         &task.description,
     );
     task_dto.success_criteria = task.success_criteria.clone();
 
-    CoderRunRequest {
-        task: task_dto,
-        workspace: WorkspaceRef::new(worktree_root.to_string_lossy(), "HEAD"),
-        config: CoderRunConfig {
-            backend: LIBERADO_LOOP_BACKEND.into(),
-            trace_dir: None,
-            trace_formats: Vec::new(),
-            planner: disabled.clone(),
-            coder: role.clone(),
-            critic: disabled,
-            gate: Default::default(),
-            repair: Some(role),
-            // Already on a dedicated worktree — HostLocal inside it.
-            sandbox: SandboxSpec::HostLocal,
-            command_policy: CommandPolicy::default(),
-            validation_command: None,
-            verifiers: Vec::new(),
-            verify_policy: Default::default(),
-            path_policy: PathPolicy::default(),
-            progress: ProgressPolicy {
-                max_attempts: 2,
-                ..ProgressPolicy::default()
-            },
-            hashline: liberado_coder_core::HashlineConfig::default(),
-            session_critic: Default::default(),
-            prompt_dir: None,
-            edit: Default::default(),
-            workspace_build: Default::default(),
-            offered_tools: None,
-        },
-        attempt: 0,
-        prior_feedback: Vec::new(),
-        strategist_directive: None,
-    }
+    // Shared production assembly (same path as CodingSessionPack, ACP, and headless runner).
+    // Fan-out subagents have a dedicated worktree, 12-turn budget, repair mirrors coder,
+    // critic/planner disabled, no gate. Progress max_attempts=2 is set after assembly.
+    let assembled = crate::assemble_production_run(
+        tuning,
+        crate::assemble::entry::fanout_surface(
+            task_dto,
+            worktree_root.to_path_buf(),
+            model.to_string(),
+            Some(role),
+        ),
+    );
+    let mut request = assembled.request;
+
+    // Fan-out children get a tighter attempt budget (2) than the default tuning.
+    request.config.progress.max_attempts = 2;
+
+    request
 }
 
 async fn merge_one_branch(merger: &dyn Provider, parent_root: &Path, branch: &str) -> MergeStep {
@@ -709,7 +691,7 @@ mod tests {
     use super::*;
     use std::path::PathBuf;
 
-    use liberado_coder_core::{CoderError, CoderRunRequest, CoderRunResult};
+    use liberado_coder_core::{CoderError, CoderRunRequest, CoderRunResult, CoderTuning};
     use liberado_common::Outcome;
     use liberado_provider::{CompletionResponse, MockProvider};
 
@@ -946,6 +928,7 @@ mod tests {
             ],
             2,
             "mock",
+            &CoderTuning::default(),
         )
         .await
         .unwrap();
@@ -1164,6 +1147,7 @@ mod tests {
             // both branch from same parent HEAD at start, so both change README from base
             // → first merge clean, second conflicts. Use concurrent 2.
             "mock",
+            &CoderTuning::default(),
         )
         .await
         .unwrap();

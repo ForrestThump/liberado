@@ -703,6 +703,31 @@ pub mod entry {
             ..ProductionSurface::default()
         }
     }
+
+    /// Fan-out coding subagent: dedicated worktree, fixed 12-turn budget, repair mirrors coder,
+    /// critic/planner disabled, no gate.
+    pub fn fanout_surface(
+        task: CoderTask,
+        workspace_path: PathBuf,
+        model: String,
+        coder_role: Option<CoderRoleConfig>,
+    ) -> ProductionSurface {
+        ProductionSurface {
+            task,
+            workspace: WorkspaceRef::new(workspace_path.to_string_lossy(), "HEAD"),
+            workspace_path,
+            sandbox: SandboxSpec::HostLocal,
+            model_override: Some(model),
+            max_turns: Some(12),
+            coder_role,
+            critic: CriticPolicy::Disabled,
+            repair: RepairPolicy::MirrorCoder,
+            empty_verifiers: EmptyVerifiersPolicy::LeaveEmpty,
+            trace_dir: TraceDirPolicy::AsConfigured,
+            disable_planner: true,
+            ..ProductionSurface::default()
+        }
+    }
 }
 
 #[cfg(test)]

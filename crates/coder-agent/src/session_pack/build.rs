@@ -419,6 +419,7 @@ impl CodingSessionPack {
                 subtasks,
                 max_concurrent,
                 model,
+                &self.tuning,
             )
             .await
         }
