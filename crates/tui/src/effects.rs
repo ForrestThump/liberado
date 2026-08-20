@@ -690,18 +690,16 @@ impl EffectRunner {
                 match tokio::time::timeout(crate::tuning::SSE_STREAM_TIMEOUT, stream.next()).await {
                     Ok(Some(Ok(chunk))) => {
                         let text = String::from_utf8_lossy(&chunk);
-                        for event in decoder.push(&text) {
+                        let (actions, terminal) = sse_actions_from_text(&mut decoder, &text);
+                        for action in actions {
                             // Shared decode: same `ToAction` / `from_sse_data` as chat stream.
-                            let action = event.to_action().unwrap_or_else(Action::SseFailed);
-                            let is_terminal =
-                                matches!(action, Action::SseDone | Action::SseFailed(_));
                             if tx.try_send(action).is_err() {
                                 tracing::warn!("action channel full, dropping attach SSE action");
                             }
-                            if is_terminal {
-                                state.lock().handle = None;
-                                return;
-                            }
+                        }
+                        if terminal {
+                            state.lock().handle = None;
+                            return;
                         }
                     }
                     Ok(Some(Err(e))) => {
