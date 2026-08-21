@@ -52,7 +52,7 @@ pub fn scan_repository_with(
     namespace: &str,
     opts: ScanOptions,
 ) -> Result<Vec<MapNode>> {
-    let metadata = MetadataCommand::new()
+    let metadata = MetadataCommand::default()
         .manifest_path(root.join("Cargo.toml"))
         .no_deps()
         .exec()
