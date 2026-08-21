@@ -1606,6 +1606,7 @@ fn permission_attach(
         ask: Arc::clone(&bridge.permissions) as Arc<dyn permission::PermissionAsk>,
         session_id: session_id.to_string(),
         client_cwd: cwd.to_path_buf(),
+        global_grant_dir: None,
         policy: bridge.coder_tuning.command_policy.clone(),
     })
 }
