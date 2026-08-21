@@ -25,6 +25,8 @@ runs, and preflight mirrors it.
 ```bash
 just ci                                        # full local CI + CRAP ratchet; run before you push
 just preflight                                 # fmt / clippy / test / deny, no llvm-cov
+just ready                                     # fast Windows/Debian gate + HEAD/tree receipt
+just crap-linux                                # exact Debian CRAP; uses Debian WSL on Windows
 # a green `just ci` is a few lines. Failures are extracted. Full log: .liberado/ci.log
 cargo test --workspace --no-fail-fast          # --no-fail-fast matters; see below
 cargo clippy --workspace --exclude liberado-webui --all-targets -- -D warnings
@@ -93,6 +95,13 @@ the file by hand. Split the function or add tests. cargo-crap matches **file + f
 not line number: adding a line above a function does not reset its score. Adding branches
 inside it does, and GitHub will fail. A green `just ci` is a few lines; the full child log
 is always `.liberado/ci.log`.
+
+**A rebase invalidates every earlier check.** A merge, rebase, conflict resolution, amend, or base
+update changes the artifact under review. Run `just ready` after the final commit. If Rust control
+flow changed, also run `just crap-linux`; it runs natively on Debian and through Debian under WSL
+on Windows. `just ready` writes a gitignored receipt bound to HEAD and the complete tracked and
+untracked tree. Install the committed pre-push verifier once with `just setup-hooks`; `just push`
+also refuses a missing or stale receipt. Do not treat validation from before a rebase as evidence.
 
 **Gates compare against the base commit, not against green.** Preflight
 (`crates/coder-sandbox/src/preflight.rs`) fails only on failures *absent from the base*, so a red

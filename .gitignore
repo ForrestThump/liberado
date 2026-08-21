@@ -31,6 +31,9 @@ crates/*/config/*.toml
 
 .kilo
 .codex/
+.claude/
+.worktrees/
+.pytest_cache/
 
 # Ad-hoc daemon run logs from dev scripts (start-dev-stack.ps1 etc.)
 tmp-liberado-*.log

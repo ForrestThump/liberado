@@ -1,0 +1,12 @@
+# Host-stable per-function cyclomatic complexity ratchet.
+# Existing functions may not gain complexity. New functions must stay at or
+# below this boundary. Exact coverage-sensitive CRAP remains an Ubuntu gate.
+new_function_ceiling = 20
+
+# A reviewed exception is exact and expires when its file or function changes.
+# [[waiver]]
+# file = "crates/example/src/table.rs"
+# function = "declarative_table"
+# ceiling = 30
+# reason = "One static protocol table is clearer than split authorities."
+# reviewed_on = "2026-08-21"

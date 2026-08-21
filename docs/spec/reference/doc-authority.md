@@ -5,7 +5,7 @@ authority: normative
 domain: docs
 canonical_for: document-authority
 open_items: false
-last_verified: 2026-08-12
+last_verified: 2026-08-21
 ---
 
 # Document authority and metadata
@@ -74,6 +74,28 @@ and required fields are enforced on **all** managed documents, not only root pla
 5. An **active** plan with `open_items` not set to `true`.
 6. A **normative** document that links into `archive/` as content authority.
 7. A generated index (`docs/future-work/README.md`, `docs/CATALOG.md`) that differs from the generator output.
+
+`just docs-audit` adds contracts that metadata cannot express:
+
+1. `docs-audit.toml` binds implementation sources to their current reference document and required vocabulary in both directions.
+2. Pull-request CI compares the branch with its base. Contract-bearing source changes require a mapped documentation change or a narrow reviewed waiver.
+3. Active documents cannot use vocabulary listed as obsolete in `docs-audit.toml`.
+4. Fenced `toml check`, `json check`, and `yaml check` examples must parse. Ordinary illustrative fragments remain unchecked.
+
+For example, this policy fragment is executable documentation:
+
+```toml check
+[[contract]]
+name = "example"
+source = "Cargo.toml"
+document = "docs/README.md"
+source_terms = ["workspace"]
+document_terms = ["documentation"]
+```
+
+A waiver is not a general exclusion. It names one exact source file and records
+the reason and review date. Directory-wide waivers are invalid because they
+would hide later behavioral changes.
 
 ## Plan completion rule
 

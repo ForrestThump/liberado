@@ -11,6 +11,9 @@
 //!   liberado ci                      full local CI; ratchet and stage/amend crap-baseline.json
 //!   liberado ci check                ship preflight (fmt, clippy, tests, deny)
 //!   liberado ci crap                 compare CRAP scores to crap-baseline.json (no write)
+//!   liberado ci ready                fast Windows/Debian checks + readiness receipt
+//!   liberado ci verify-ready         reject a stale readiness receipt
+//!   liberado ci crap-linux           native Debian CRAP; Debian WSL on Windows
 //!   liberado ci ratchet              check, write baseline, then stage or amend it
 //!                                    console is a summary; full child log is .liberado/ci.log
 //!   liberado shepherd --once          run the unattended PR shepherd once
@@ -45,10 +48,13 @@ mod coder_cmd;
 mod compare_cmd;
 mod crate_map_cmd;
 mod dependency_security_cmd;
+mod docs_audit_cmd;
 mod docs_cmd;
 mod docs_meta_cmd;
 mod docs_site_cmd;
+mod function_complexity_cmd;
 mod module_health_cmd;
+mod readiness_cmd;
 mod shepherd_cmd;
 mod summarize_cmd;
 
@@ -126,8 +132,18 @@ fn cmd_docs(args: &mut impl Iterator<Item = String>) -> Result<(), Box<dyn std::
             }
             docs_meta_cmd::run(&crate_map_cmd::repository_root()?, &command)
         }
+        command => cmd_docs_auxiliary(command, args),
+    }
+}
+
+fn cmd_docs_auxiliary(
+    command: Option<&str>,
+    args: &mut impl Iterator<Item = String>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    match command {
+        Some("audit") => docs_audit_cmd::run(&crate_map_cmd::repository_root()?, args),
         Some("site") => docs_site_cmd::run(args),
-        _ => Err("usage: liberado docs <check-links|crate-map|metadata|site>".into()),
+        _ => Err("usage: liberado docs <audit|check-links|crate-map|metadata|site>".into()),
     }
 }
 
