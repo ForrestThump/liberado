@@ -57,7 +57,13 @@ fmt:
 
 # Dependency security + license gate.
 deny:
-    cargo deny check
+    cargo deny --locked check
+
+# Resolve and inspect dependencies without compiling them.
+dependency-security:
+    cargo metadata --locked --format-version=1
+    cargo deny --locked check
+    cargo vet --locked
 
 # Full local ship preflight. Runs through the native Liberado CLI on every host OS.
 preflight:

@@ -1,0 +1,8 @@
+# Supply-chain policy changes require an explicit maintainer review.
+/Cargo.toml @ForrestThump
+/Cargo.lock @ForrestThump
+/deny.toml @ForrestThump
+/supply-chain/ @ForrestThump
+/.github/workflows/ @ForrestThump
+/.github/actions/ @ForrestThump
+/.github/dependabot.yml @ForrestThump
