@@ -1,0 +1,413 @@
+//! File-level structural health ratchet backed by Mozilla rust-code-analysis.
+
+use liberado_common::process::std_command;
+use serde::{Deserialize, Serialize};
+use std::collections::{BTreeMap, BTreeSet};
+use std::path::{Path, PathBuf};
+
+const TOOL: &str = "rust-code-analysis-cli";
+const TOOL_VERSION: &str = "0.0.25";
+const CONFIG_FILE: &str = "module-health.toml";
+const BASELINE_FILE: &str = "module-health-baseline.json";
+const CURRENT_FILE: &str = ".liberado/module-health-current.json";
+const ANALYSIS_DIR: &str = ".liberado/rust-code-analysis";
+
+#[derive(Debug, Deserialize)]
+struct Config {
+    thresholds: Thresholds,
+    #[serde(default)]
+    waiver: Vec<Waiver>,
+}
+
+#[derive(Debug, Deserialize)]
+struct Thresholds {
+    ploc_review: u64,
+    ploc_new: u64,
+    lloc_review: u64,
+    lloc_new: u64,
+    functions_review: u64,
+    functions_new: u64,
+    cyclomatic_review: u64,
+    cyclomatic_new: u64,
+}
+
+#[derive(Debug, Deserialize)]
+struct Waiver {
+    path: String,
+    metric: Metric,
+    ceiling: u64,
+    reason: String,
+    reviewed_on: String,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd)]
+#[serde(rename_all = "snake_case")]
+enum Metric {
+    Ploc,
+    Lloc,
+    Functions,
+    Cyclomatic,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+struct FileMetrics {
+    ploc: u64,
+    lloc: u64,
+    functions: u64,
+    cyclomatic: u64,
+}
+
+type Report = BTreeMap<String, FileMetrics>;
+
+#[derive(Deserialize)]
+struct Analysis {
+    metrics: AnalysisMetrics,
+}
+
+#[derive(Deserialize)]
+struct AnalysisMetrics {
+    loc: Loc,
+    nom: Nom,
+    cyclomatic: Aggregate,
+}
+
+#[derive(Deserialize)]
+struct Loc {
+    ploc: f64,
+    lloc: f64,
+}
+
+#[derive(Deserialize)]
+struct Nom {
+    total: f64,
+}
+
+#[derive(Deserialize)]
+struct Aggregate {
+    sum: f64,
+}
+
+pub fn check(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    let config = load_config(root)?;
+    let current = analyze(root)?;
+    write_report(&root.join(CURRENT_FILE), &current)?;
+    let baseline: Report = serde_json::from_slice(&std::fs::read(root.join(BASELINE_FILE))?)?;
+    compare(&config, &baseline, &current)?;
+    eprintln!(
+        "[module health] ok: {} production Rust files",
+        current.len()
+    );
+    Ok(())
+}
+
+pub fn ratchet(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    let current = if root.join(BASELINE_FILE).is_file() {
+        check(root)?;
+        serde_json::from_slice(&std::fs::read(root.join(CURRENT_FILE))?)?
+    } else {
+        load_config(root)?;
+        let report = analyze(root)?;
+        write_report(&root.join(CURRENT_FILE), &report)?;
+        eprintln!("[module health] creating initial baseline");
+        report
+    };
+    write_report(&root.join(BASELINE_FILE), &current)?;
+    eprintln!("[module health] ratcheted {BASELINE_FILE}");
+    Ok(())
+}
+
+fn load_config(root: &Path) -> Result<Config, Box<dyn std::error::Error>> {
+    let config: Config = toml::from_str(&std::fs::read_to_string(root.join(CONFIG_FILE))?)?;
+    for metric in [
+        Metric::Ploc,
+        Metric::Lloc,
+        Metric::Functions,
+        Metric::Cyclomatic,
+    ] {
+        let (review, new_limit) = limits(&config.thresholds, metric);
+        if review >= new_limit {
+            return Err(format!(
+                "{metric:?} review boundary {review} must be below new-file ceiling {new_limit}"
+            )
+            .into());
+        }
+    }
+    validate_waivers(root, &config)?;
+    Ok(config)
+}
+
+fn validate_waivers(root: &Path, config: &Config) -> Result<(), Box<dyn std::error::Error>> {
+    let mut seen = BTreeSet::new();
+    for waiver in &config.waiver {
+        if waiver.reason.trim().is_empty() || waiver.reviewed_on.trim().is_empty() {
+            return Err(format!(
+                "waiver for {} must include reason and reviewed_on",
+                waiver.path
+            )
+            .into());
+        }
+        if !root.join(&waiver.path).is_file() {
+            return Err(
+                format!("stale module-health waiver: {} does not exist", waiver.path).into(),
+            );
+        }
+        if !seen.insert((waiver.path.clone(), waiver.metric)) {
+            return Err(
+                format!("duplicate waiver for {} / {:?}", waiver.path, waiver.metric).into(),
+            );
+        }
+        let review = limits(&config.thresholds, waiver.metric).0;
+        if waiver.ceiling <= review {
+            return Err(format!("waiver for {} / {:?} is unnecessary: ceiling {} is not above review boundary {review}", waiver.path, waiver.metric, waiver.ceiling).into());
+        }
+    }
+    Ok(())
+}
+
+fn analyze(root: &Path) -> Result<Report, Box<dyn std::error::Error>> {
+    verify_tool()?;
+    let output = root.join(ANALYSIS_DIR);
+    if output.exists() {
+        std::fs::remove_dir_all(&output)?;
+    }
+    std::fs::create_dir_all(&output)?;
+    let mut command = std_command(TOOL);
+    let status = command
+        .current_dir(root)
+        .args([
+            "--metrics",
+            "--paths",
+            "crates",
+            "--output-format",
+            "json",
+            "--output",
+            ANALYSIS_DIR,
+        ])
+        .status()?;
+    if !status.success() {
+        return Err(format!("{TOOL} failed with {status}").into());
+    }
+    let mut files = Vec::new();
+    collect_json(&output, &mut files)?;
+    let mut report = Report::new();
+    for file in files {
+        let rel = file
+            .strip_prefix(&output)?
+            .to_string_lossy()
+            .replace('\\', "/");
+        let source = rel.strip_suffix(".json").unwrap_or(&rel);
+        if !is_production_source(source) {
+            continue;
+        }
+        let analysis: Analysis = serde_json::from_slice(&std::fs::read(&file)?)?;
+        report.insert(
+            source.to_owned(),
+            FileMetrics {
+                ploc: exact(analysis.metrics.loc.ploc, source, "ploc")?,
+                lloc: exact(analysis.metrics.loc.lloc, source, "lloc")?,
+                functions: exact(analysis.metrics.nom.total, source, "functions")?,
+                cyclomatic: exact(analysis.metrics.cyclomatic.sum, source, "cyclomatic")?,
+            },
+        );
+    }
+    Ok(report)
+}
+
+fn verify_tool() -> Result<(), Box<dyn std::error::Error>> {
+    let mut command = std_command(TOOL);
+    let output = command.arg("--version").output().map_err(|_| {
+        format!("missing {TOOL} {TOOL_VERSION}; install with `cargo install {TOOL} --version {TOOL_VERSION} --locked`")
+    })?;
+    let version = String::from_utf8_lossy(&output.stdout);
+    if !output.status.success() || !version.split_whitespace().any(|part| part == TOOL_VERSION) {
+        return Err(format!("expected {TOOL} {TOOL_VERSION}, got `{}`", version.trim()).into());
+    }
+    Ok(())
+}
+
+fn collect_json(dir: &Path, out: &mut Vec<PathBuf>) -> std::io::Result<()> {
+    for entry in std::fs::read_dir(dir)? {
+        let path = entry?.path();
+        if path.is_dir() {
+            collect_json(&path, out)?;
+        } else if path.extension().and_then(|v| v.to_str()) == Some("json") {
+            out.push(path);
+        }
+    }
+    Ok(())
+}
+
+fn is_production_source(path: &str) -> bool {
+    let parts: Vec<_> = path.split('/').collect();
+    parts.len() >= 4 && parts[0] == "crates" && parts[2] == "src" && path.ends_with(".rs")
+}
+
+fn exact(value: f64, path: &str, metric: &str) -> Result<u64, Box<dyn std::error::Error>> {
+    if !value.is_finite() || value < 0.0 || value.fract() != 0.0 {
+        return Err(format!("non-integer {metric} value {value} for {path}").into());
+    }
+    Ok(value as u64)
+}
+
+fn compare(
+    config: &Config,
+    baseline: &Report,
+    current: &Report,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut failures = Vec::new();
+    for (path, now) in current {
+        for metric in [
+            Metric::Ploc,
+            Metric::Lloc,
+            Metric::Functions,
+            Metric::Cyclomatic,
+        ] {
+            let current_value = value(now, metric);
+            let (review, new_limit) = limits(&config.thresholds, metric);
+            let waiver = config
+                .waiver
+                .iter()
+                .find(|w| w.path == *path && w.metric == metric);
+            let limit = waiver.map_or(new_limit, |w| w.ceiling);
+            match baseline.get(path) {
+                None if current_value > limit => {
+                    failures.push(format!("{path}: new-file {metric:?} {current_value} > {limit}"))
+                }
+                Some(_old) if waiver.is_some() && current_value > limit => failures.push(format!(
+                    "{path}: waived {metric:?} {current_value} > ceiling {limit}"
+                )),
+                Some(old) if current_value > value(old, metric) && current_value > review => {
+                    failures.push(format!(
+                        "{path}: {metric:?} regressed {} -> {current_value} (review boundary {review})",
+                        value(old, metric)
+                    ))
+                }
+                _ => {}
+            }
+        }
+    }
+    if failures.is_empty() {
+        return Ok(());
+    }
+    failures.sort();
+    Err(format!("module-health regression:\n{}\nSplit the file or add a metric-specific reviewed waiver; do not raise the baseline.", failures.join("\n")).into())
+}
+
+fn value(metrics: &FileMetrics, metric: Metric) -> u64 {
+    match metric {
+        Metric::Ploc => metrics.ploc,
+        Metric::Lloc => metrics.lloc,
+        Metric::Functions => metrics.functions,
+        Metric::Cyclomatic => metrics.cyclomatic,
+    }
+}
+
+fn limits(t: &Thresholds, metric: Metric) -> (u64, u64) {
+    match metric {
+        Metric::Ploc => (t.ploc_review, t.ploc_new),
+        Metric::Lloc => (t.lloc_review, t.lloc_new),
+        Metric::Functions => (t.functions_review, t.functions_new),
+        Metric::Cyclomatic => (t.cyclomatic_review, t.cyclomatic_new),
+    }
+}
+
+fn write_report(path: &Path, report: &Report) -> Result<(), Box<dyn std::error::Error>> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let mut json = serde_json::to_string_pretty(report)?;
+    json.push('\n');
+    std::fs::write(path, json)?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn config() -> Config {
+        Config {
+            thresholds: Thresholds {
+                ploc_review: 100,
+                ploc_new: 150,
+                lloc_review: 70,
+                lloc_new: 100,
+                functions_review: 10,
+                functions_new: 15,
+                cyclomatic_review: 20,
+                cyclomatic_new: 30,
+            },
+            waiver: vec![],
+        }
+    }
+
+    #[test]
+    fn healthy_growth_is_allowed_but_over_boundary_regression_fails() {
+        let old = FileMetrics {
+            ploc: 80,
+            ..Default::default()
+        };
+        let healthy = FileMetrics {
+            ploc: 90,
+            ..Default::default()
+        };
+        let regressed = FileMetrics {
+            ploc: 101,
+            ..Default::default()
+        };
+        let baseline = BTreeMap::from([("crates/a/src/lib.rs".into(), old.clone())]);
+        assert!(
+            compare(
+                &config(),
+                &baseline,
+                &BTreeMap::from([("crates/a/src/lib.rs".into(), healthy)])
+            )
+            .is_ok()
+        );
+        assert!(
+            compare(
+                &config(),
+                &baseline,
+                &BTreeMap::from([("crates/a/src/lib.rs".into(), regressed)])
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn new_file_has_a_hard_ceiling() {
+        let current = BTreeMap::from([(
+            "crates/a/src/new.rs".into(),
+            FileMetrics {
+                functions: 16,
+                ..Default::default()
+            },
+        )]);
+        assert!(compare(&config(), &Report::new(), &current).is_err());
+    }
+
+    #[test]
+    fn waiver_applies_only_to_its_metric_and_ceiling() {
+        let mut cfg = config();
+        cfg.waiver.push(Waiver {
+            path: "crates/a/src/table.rs".into(),
+            metric: Metric::Ploc,
+            ceiling: 300,
+            reason: "declarative table".into(),
+            reviewed_on: "2026-08-21".into(),
+        });
+        let current = BTreeMap::from([(
+            "crates/a/src/table.rs".into(),
+            FileMetrics {
+                ploc: 250,
+                functions: 16,
+                ..Default::default()
+            },
+        )]);
+        let error = compare(&cfg, &Report::new(), &current)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("Functions"));
+        assert!(!error.contains("Ploc"));
+    }
+}

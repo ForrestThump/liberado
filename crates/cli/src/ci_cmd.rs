@@ -44,7 +44,7 @@ const CARGO_CRAP_VERSION: &str = "0.4.3";
 const BASELINE_FILE: &str = "crap-baseline.json";
 const LCOV_FILE: &str = ".liberado/crap.lcov";
 const CURRENT_REPORT: &str = ".liberado/crap-current.json";
-const USAGE: &str = "usage: liberado ci [check|crap|ratchet]";
+const USAGE: &str = "usage: liberado ci [check|crap|ratchet|modules|modules-ratchet]";
 const VACATED_BIN: &str = "liberado-ci";
 const CI_LOG_FILE: &str = ".liberado/ci.log";
 const EXTRACT_MAX_LINES: usize = liberado_coder_core::FAILURE_EXTRACT_MAX_LINES;
@@ -112,6 +112,12 @@ pub fn run(args: impl Iterator<Item = String>) -> Result<(), Box<dyn std::error:
         Some("check") if args.peek().is_none() => with_log(check),
         Some("crap") if args.peek().is_none() => with_log(crap_check),
         Some("ratchet") if args.peek().is_none() => with_log(crap_ratchet),
+        Some("modules") if args.peek().is_none() => {
+            crate::module_health_cmd::check(&repository_root()?)
+        }
+        Some("modules-ratchet") if args.peek().is_none() => {
+            crate::module_health_cmd::ratchet(&repository_root()?)
+        }
         _ => Err(USAGE.into()),
     }
 }
@@ -229,7 +235,9 @@ fn check(log: &CiLog) -> Result<(), Box<dyn std::error::Error>> {
 /// Full local CI: the ship preflight, then the CRAP check, then rewrite and stage the baseline.
 fn local_run(log: &CiLog) -> Result<(), Box<dyn std::error::Error>> {
     check(log)?;
-    crap_ratchet(log)
+    crate::module_health_cmd::check(&log.root)?;
+    crap_ratchet(log)?;
+    crate::module_health_cmd::ratchet(&log.root)
 }
 
 /// Compare the current tree against `crap-baseline.json`. Never writes the baseline.

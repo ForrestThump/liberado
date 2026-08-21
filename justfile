@@ -39,7 +39,8 @@ check:
     cargo fmt --all -- --check
     cargo clippy --locked --workspace --exclude liberado-webui --all-targets -- -D warnings -D clippy::cognitive_complexity
 
-# Full local CI. Linux runs the same per-function CRAP compare GitHub runs
+# Full local CI. Includes the host-stable module-health ratchet on every OS.
+# Linux also runs the same per-function CRAP compare GitHub runs
 # (a score that went up fails and is named — fix it before you push).
 # Windows checks the 150 ceiling only; coverage is host-sensitive.
 # The baseline is not rewritten while that check is red. On Linux success,
@@ -61,6 +62,14 @@ deny:
 # Full local ship preflight. Runs through the native Liberado CLI on every host OS.
 preflight:
     cargo run --locked --quiet -p liberado-cli -- ci check
+
+# Compare production Rust files with the committed structural-health baseline.
+module-health:
+    cargo run --locked --quiet -p liberado-cli -- ci modules
+
+# Check first, then replace the structural-health baseline with current values.
+module-health-ratchet:
+    cargo run --locked --quiet -p liberado-cli -- ci modules-ratchet
 
 # Validate the Rust-native PR shepherd's failure-identity and state-machine guards.
 shepherd-self-test:
