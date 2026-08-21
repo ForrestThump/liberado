@@ -162,6 +162,19 @@ fn docs_metadata_rejects_extra_arguments() {
 }
 
 #[test]
+fn docs_audit_rejects_extra_arguments() {
+    let temp = tempdir().unwrap();
+    fs::create_dir(temp.path().join("crates")).unwrap();
+    fs::write(
+        temp.path().join("Cargo.toml"),
+        "[workspace]\nmembers = []\n",
+    )
+    .unwrap();
+    let stderr = run_usage(temp.path(), &["docs", "audit", "extra"]);
+    assert!(stderr.contains("usage: liberado docs audit"), "{stderr}");
+}
+
+#[test]
 fn ci_rejects_an_unknown_subcommand() {
     let temp = tempdir().unwrap();
     let stderr = run_usage(temp.path(), &["ci", "bogus"]);

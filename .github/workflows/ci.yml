@@ -183,6 +183,7 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
+          fetch-depth: 0
 
       - name: Checkout pinned sibling dependencies
         uses: ./.github/actions/checkout-siblings
@@ -197,6 +198,13 @@ jobs:
 
       - name: Check docs links
         run: cargo run --locked -p liberado-cli -- docs check-links
+
+      - name: Documentation contracts and executable examples
+        run: cargo run --locked -p liberado-cli -- docs audit
+
+      - name: Documentation impact since PR base
+        if: github.event_name == 'pull_request'
+        run: cargo run --locked -p liberado-cli -- docs audit --base ${{ github.event.pull_request.base.sha }}
 
       - name: Document metadata self-test
         run: cargo run --locked -p liberado-cli -- docs metadata self-test

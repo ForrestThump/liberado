@@ -45,6 +45,7 @@ mod coder_cmd;
 mod compare_cmd;
 mod crate_map_cmd;
 mod dependency_security_cmd;
+mod docs_audit_cmd;
 mod docs_cmd;
 mod docs_meta_cmd;
 mod docs_site_cmd;
@@ -126,8 +127,9 @@ fn cmd_docs(args: &mut impl Iterator<Item = String>) -> Result<(), Box<dyn std::
             }
             docs_meta_cmd::run(&crate_map_cmd::repository_root()?, &command)
         }
+        Some("audit") => docs_audit_cmd::run(&crate_map_cmd::repository_root()?, args),
         Some("site") => docs_site_cmd::run(args),
-        _ => Err("usage: liberado docs <check-links|crate-map|metadata|site>".into()),
+        _ => Err("usage: liberado docs <audit|check-links|crate-map|metadata|site>".into()),
     }
 }
 

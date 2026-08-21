@@ -1,0 +1,57 @@
+# Machine-checkable links between implementation authorities and documentation.
+# Keep each rule narrow. A broad rule creates noise and teaches people to ignore it.
+
+[[contract]]
+name = "module health"
+source = "module-health.toml"
+document = "docs/spec/reference/module-health.md"
+source_terms = ["ploc_review", "cyclomatic_new"]
+document_terms = ["rust-code-analysis-cli", "module-health-baseline.json"]
+
+[[contract]]
+name = "dependency admission"
+source = "deny.toml"
+document = "docs/spec/reference/dependency-security.md"
+source_terms = ["[advisories]", "[licenses]"]
+document_terms = ["cargo-deny", "cargo vet"]
+
+[[contract]]
+name = "document authority"
+source = "crates/cli/src/docs_meta_cmd.rs"
+document = "docs/spec/reference/doc-authority.md"
+source_terms = ["canonical_for", "check_generated_index"]
+document_terms = ["canonical_for", "generated index"]
+
+[[impact]]
+name = "documentation policy"
+sources = ["crates/cli/src/docs_meta_cmd.rs", "crates/cli/src/docs_audit_cmd.rs", "docs-audit.toml"]
+documents = ["docs/spec/reference/doc-authority.md"]
+
+[[impact]]
+name = "configuration contract"
+sources = ["crates/config/", "crates/config-loader/", "config/"]
+documents = ["docs/spec/config-spec.md", "docs/spec/reference/tuning.md"]
+
+[[impact]]
+name = "dependency security policy"
+sources = ["deny.toml", "supply-chain/", "crates/cli/src/dependency_security_cmd.rs"]
+documents = ["docs/spec/reference/dependency-security.md"]
+
+[[impact]]
+name = "module health policy"
+sources = ["module-health.toml", "crates/cli/src/module_health_cmd.rs", "crates/cli/src/module_health_cmd/"]
+documents = ["docs/spec/reference/module-health.md"]
+
+# Narrow, persistent exceptions are allowed only for a source path and must carry
+# review evidence. Add these only after a human confirms that no prose changed.
+#
+# [[waiver]]
+# source = "crates/example/src/static_table.rs"
+# reason = "Declarative table update does not change documented behavior."
+# reviewed_on = "2026-08-21"
+
+# Obsolete vocabulary is rejected in active documentation. Historical and archive
+# material is intentionally excluded from this scan.
+[[obsolete]]
+term = "isometric system map"
+replacement = "2D system map"

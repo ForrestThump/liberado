@@ -131,6 +131,14 @@ docs-meta-check:
     cargo run --locked -p liberado-cli -- docs metadata lint
     cargo run --locked -p liberado-cli -- docs metadata check-stale-rs
 
+# Check source-to-doc contracts, vocabulary, and opt-in executable examples.
+docs-audit:
+    cargo run --locked -p liberado-cli -- docs audit
+
+# Require docs review for contract-bearing source changes since a git revision.
+docs-impact base:
+    cargo run --locked -p liberado-cli -- docs audit --base "{{base}}"
+
 # Generate the searchable documentation site.
 docs-site out="":
     cargo run --locked -p liberado-cli -- docs site {{if out == "" { "" } else { "--out " + out }}}
