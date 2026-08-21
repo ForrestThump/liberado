@@ -47,6 +47,7 @@ mod crate_map_cmd;
 mod docs_cmd;
 mod docs_meta_cmd;
 mod docs_site_cmd;
+mod module_health_cmd;
 mod shepherd_cmd;
 mod summarize_cmd;
 

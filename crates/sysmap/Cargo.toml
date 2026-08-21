@@ -1,0 +1,23 @@
+[package]
+name = "liberado-sysmap"
+version = "0.1.0"
+description = "Liberado profile and topology adapter for sysmap-core: supplies system vocabulary and runtime nodes while the generic core scans Cargo metadata and builds the graph."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+liberado-common = { workspace = true }
+liberado-config-loader = { workspace = true }
+sysmap-core = { workspace = true }
+toml = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[package.metadata.liberado]
+# Layer role for the layer-rules test + crate-map generator (docs/architecture/contracts.md).
+# Tooling: meta tooling that inspects the workspace/config — not a build dependency of the system.
+role = "tooling"

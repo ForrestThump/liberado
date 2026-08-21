@@ -132,6 +132,50 @@ jobs:
       - name: Deny check
         run: cargo deny check
 
+  module-health:
+    name: Module health regression (ubuntu-latest)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout liberado
+        uses: actions/checkout@v4
+
+      - name: Checkout turbovault (sibling path dep)
+        uses: actions/checkout@v4
+        with:
+          repository: ForrestThump/turbovault
+          ref: develop
+          path: turbovault
+          token: ${{ secrets.SIBLINGS_TOKEN || github.token }}
+
+      - name: Checkout turbomcp (sibling path dep)
+        uses: actions/checkout@v4
+        with:
+          repository: ForrestThump/turbomcp
+          ref: develop
+          path: turbomcp
+          token: ${{ secrets.SIBLINGS_TOKEN || github.token }}
+
+      - name: Rust toolchain (from rust-toolchain.toml)
+        run: rustup show
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      # An external, pinned CI tool. Its MPL-2.0 code is not linked into Liberado.
+      - name: Install rust-code-analysis-cli
+        run: cargo install rust-code-analysis-cli --version 0.0.25 --locked
+
+      - name: Compare file metrics to the committed baseline
+        run: cargo run --locked --quiet -p liberado-cli -- ci modules
+
+      - name: Upload current module-health report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: module-health-current-ubuntu
+          path: .liberado/module-health-current.json
+          if-no-files-found: warn
+
   # Read-only CRAP gate. The committed `crap-baseline.json` is the last best
   # per-function score; this job never rewrites it. Local `just ci` is what
   # ratchets the file after a green run. Ubuntu only: coverage numbers are

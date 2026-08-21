@@ -1,0 +1,21 @@
+# File-level review boundaries. Existing files above a review boundary may not
+# get worse. New production files must stay under the larger hard ceiling.
+[thresholds]
+ploc_review = 1000
+ploc_new = 1500
+lloc_review = 700
+lloc_new = 1000
+functions_review = 40
+functions_new = 60
+cyclomatic_review = 100
+cyclomatic_new = 150
+
+# A reviewed exception is narrow: one file, one metric, one explicit ceiling.
+# It must describe why the file is cohesive despite its size.
+#
+# [[waiver]]
+# path = "crates/example/src/declarative_table.rs"
+# metric = "ploc"
+# ceiling = 2000
+# reason = "Static protocol table; splitting it would hide the single authority."
+# reviewed_on = "2026-08-21"

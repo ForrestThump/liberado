@@ -44,7 +44,7 @@ const CARGO_CRAP_VERSION: &str = "0.4.3";
 const BASELINE_FILE: &str = "crap-baseline.json";
 const LCOV_FILE: &str = ".liberado/crap.lcov";
 const CURRENT_REPORT: &str = ".liberado/crap-current.json";
-const USAGE: &str = "usage: liberado ci [check|crap|ratchet]";
+const USAGE: &str = "usage: liberado ci [check|crap|ratchet|modules|modules-ratchet]";
 const VACATED_BIN: &str = "liberado-ci";
 const CI_LOG_FILE: &str = ".liberado/ci.log";
 const EXTRACT_MAX_LINES: usize = liberado_coder_core::FAILURE_EXTRACT_MAX_LINES;
@@ -105,16 +105,9 @@ A function is above the 150 CRAP ceiling. Split it or add tests. \
 New functions must land at or below 150.";
 
 /// Dispatch `liberado ci …`. No subcommand means the local full run (gates + ratchet).
-pub fn run(args: impl Iterator<Item = String>) -> Result<(), Box<dyn std::error::Error>> {
-    let mut args = args.peekable();
-    match args.next().as_deref() {
-        None => with_log(local_run),
-        Some("check") if args.peek().is_none() => with_log(check),
-        Some("crap") if args.peek().is_none() => with_log(crap_check),
-        Some("ratchet") if args.peek().is_none() => with_log(crap_ratchet),
-        _ => Err(USAGE.into()),
-    }
-}
+mod dispatch;
+
+pub use dispatch::run;
 
 fn with_log(
     body: impl FnOnce(&CiLog) -> Result<(), Box<dyn std::error::Error>>,
@@ -227,11 +220,6 @@ fn check(log: &CiLog) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 /// Full local CI: the ship preflight, then the CRAP check, then rewrite and stage the baseline.
-fn local_run(log: &CiLog) -> Result<(), Box<dyn std::error::Error>> {
-    check(log)?;
-    crap_ratchet(log)
-}
-
 /// Compare the current tree against `crap-baseline.json`. Never writes the baseline.
 ///
 /// Always writes `.liberado/crap-current.json` (gitignored) so a red GitHub job

@@ -1,0 +1,17 @@
+[package]
+name = "liberado-sysmap-gui"
+version = "0.1.0"
+description = "Project-agnostic 2D system-map renderer with pan, zoom, directed edges, selection, and egui detail panels."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+sysmap-core = { workspace = true }
+eframe = "0.34"
+
+[package.metadata.liberado]
+# Layer role for the layer-rules test + crate-map generator (docs/architecture/contracts.md).
+role = "tooling"
