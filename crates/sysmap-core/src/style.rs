@@ -127,7 +127,7 @@ pub fn edge_color(kind: EdgeKind) -> Rgb {
 
 /// Background color for the scene.
 pub const SCENE_BACKGROUND: Rgb = Rgb::new(0x10, 0x13, 0x18);
-/// Grid-line color under the buildings.
+/// Grid-line color under the nodes.
 pub const GRID_LINE: Rgb = Rgb::new(0x2a, 0x30, 0x3a);
 /// Label color.
 pub const LABEL: Rgb = Rgb::new(0xd6, 0xdc, 0xe6);

@@ -1,6 +1,6 @@
 //! `liberado-sysmap` — the Liberado system-map CLI.
 //!
-//! Builds the map (Liberado profile + topology) and either opens it in the three-d window or
+//! Builds the map (Liberado profile + topology) and either opens it in the interactive 2D window or
 //! writes the JSON export. This is the thin launcher; the renderer is `liberado-sysmap-gui` and
 //! the data is `liberado-sysmap` + `sysmap-core`.
 //!

@@ -1,649 +1,490 @@
-//! The three-d renderer: a true 3D scene (orbit/pan/zoom camera). This crate renders any
-//! [`sysmap_core::model::SystemMap`] — it depends only on `sysmap-core` (plus three-d/egui), so it
-//! is liftable out of Liberado. The legend, explainer and detail panels are egui, overlaid on the
-//! 3D view via three-d's egui `GUI`.
+//! Interactive 2D renderer for any [`sysmap_core::model::SystemMap`].
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
-use three_d::*;
-
+use eframe::egui::{self, Color32, Pos2, Rect, Sense, Stroke, StrokeKind, Vec2};
 use sysmap_core::layout::{PlacedNode, layout};
-use sysmap_core::model::{EdgeKind, SystemMap};
+use sysmap_core::model::{EdgeKind, MapEdge, SystemMap};
 use sysmap_core::style::{self, Rgb};
 
+const WORLD_SCALE: f32 = 70.0;
+const NODE_HALF: f32 = 30.0;
+const MIN_ZOOM: f32 = 0.16;
+const MAX_ZOOM: f32 = 4.0;
+const PANEL_BG: Color32 = Color32::from_rgb(0x1a, 0x1e, 0x26);
+
 pub fn launch(map: SystemMap, repo: PathBuf) -> Result<(), String> {
-    let window = Window::new(WindowSettings {
-        title: "Liberado — 3D system map".to_string(),
-        max_size: Some((1600, 1000)),
-        min_size: (960, 600),
+    let options = eframe::NativeOptions {
+        viewport: egui::ViewportBuilder::default()
+            .with_inner_size([1400.0, 900.0])
+            .with_min_inner_size([960.0, 600.0]),
         ..Default::default()
-    })
-    .map_err(|e| e.to_string())?;
-
-    let context = window.gl();
-    let mut app = App::new(&context, map, repo);
-    let (eye, target) = app.camera_pose();
-
-    let mut camera = Camera::new_perspective(
-        window.viewport(),
-        eye,
-        target,
-        vec3(0.0, 1.0, 0.0),
-        degrees(45.0),
-        0.1,
-        2000.0,
-    );
-    let mut control = OrbitControl::new(target, 2.0, 500.0);
-    let mut gui = three_d::GUI::new(&context);
-
-    window.render_loop(move |mut frame_input| {
-        camera.set_viewport(frame_input.viewport);
-
-        // Rebuild the instanced buffers from current state (selection, toggles). 48 buildings and
-        // a few hundred edges is a tiny upload; doing it every frame keeps state handling simple.
-        app.rebuild_instances();
-
-        // Panels consume events first, so dragging on a panel does not orbit the scene.
-        gui.update(
-            &mut frame_input.events,
-            frame_input.accumulated_time,
-            frame_input.viewport,
-            frame_input.device_pixel_ratio,
-            |ui| {
-                app.panels_ui(
-                    ui,
-                    &camera,
-                    frame_input.viewport,
-                    frame_input.device_pixel_ratio,
-                );
-            },
-        );
-
-        // Camera: orbit + zoom (left-drag / wheel), then pan (right-drag) and click-to-select.
-        control.handle_events(&mut camera, &mut frame_input.events);
-        app.handle_pan(&mut camera, &mut frame_input.events);
-        app.handle_pick(&context, &camera, &mut frame_input.events);
-
-        let screen = frame_input.screen();
-        let result = screen
-            .clear(ClearState::color_and_depth(0.05, 0.06, 0.09, 1.0, 1.0))
-            .write(|| {
-                app.render_objects(&screen, &camera);
-                gui.render()
-            });
-        if let Err(e) = result {
-            eprintln!("render error: {e}");
-        }
-
-        FrameOutput::default()
-    });
-
-    Ok(())
+    };
+    eframe::run_native(
+        "Liberado - system map",
+        options,
+        Box::new(move |_cc| Ok(Box::new(App::new(map, repo)))),
+    )
+    .map_err(|error| error.to_string())
 }
 
 struct App {
     map: SystemMap,
     repo: PathBuf,
     placed: BTreeMap<String, PlacedNode>,
-    /// Building instance order; index == instance id.
-    node_ids: Vec<String>,
-
-    building_transforms: Vec<Mat4>,
-    building_base_colors: Vec<Srgba>,
-    buildings: Gm<InstancedMesh, PhysicalMaterial>,
-
-    /// Edge data for all edges whose endpoints are both placed (parallel vectors).
-    edge_transforms: Vec<Mat4>,
-    edge_colors: Vec<Srgba>,
-    edge_kinds: Vec<EdgeKind>,
-    edges: Gm<InstancedMesh, PhysicalMaterial>,
-
-    ground: Gm<Mesh, PhysicalMaterial>,
-    grid: Gm<InstancedMesh, PhysicalMaterial>,
-    light: DirectionalLight,
-    ambient: AmbientLight,
-
     selected: Option<String>,
     show_deps: bool,
     show_runtime: bool,
+    include_second_hop: bool,
+    zoom: f32,
+    pan: Vec2,
+    needs_fit: bool,
 }
 
 impl App {
-    fn new(context: &Context, map: SystemMap, repo: PathBuf) -> Self {
-        let layout = layout(&map, &map.vocabulary);
-        let placed: BTreeMap<String, PlacedNode> = layout
+    fn new(map: SystemMap, repo: PathBuf) -> Self {
+        let placed = layout(&map, &map.vocabulary)
             .placed
-            .iter()
-            .map(|p| (p.id.clone(), p.clone()))
+            .into_iter()
+            .map(|node| (node.id.clone(), node))
             .collect();
-        let node_ids: Vec<String> = placed.keys().cloned().collect();
-
-        // Buildings: one instanced cube per node, colored by layer/kind, height by hub-ness.
-        let mut building_transforms = Vec::with_capacity(node_ids.len());
-        let mut building_base_colors = Vec::with_capacity(node_ids.len());
-        for id in &node_ids {
-            let p = &placed[id];
-            let node = map.node(id).expect("placed node in map");
-            building_transforms.push(building_transform(p));
-            building_base_colors.push(srgba(style::node_color(
-                &map.vocabulary,
-                node.layer.as_str(),
-                node.kind.as_str(),
-            )));
-        }
-        let buildings = Gm::new(
-            InstancedMesh::new(
-                context,
-                &Instances {
-                    transformations: building_transforms.clone(),
-                    colors: Some(building_base_colors.clone()),
-                    ..Default::default()
-                },
-                &CpuMesh::cube(),
-            ),
-            lit_white(context),
-        );
-
-        // Edges: one instanced cylinder per edge (skipping self-loops), colored by kind.
-        let mut edge_transforms = Vec::new();
-        let mut edge_colors = Vec::new();
-        let mut edge_kinds = Vec::new();
-        for edge in &map.edges {
-            let (Some(a), Some(b)) = (placed.get(&edge.from), placed.get(&edge.to)) else {
-                continue;
-            };
-            if edge.from == edge.to {
-                continue;
-            }
-            let a = base(a);
-            let b = base(b);
-            if let Some(t) = segment_transform(a, b, edge_thickness(edge.kind)) {
-                edge_transforms.push(t);
-                edge_colors.push(srgba(style::edge_color(edge.kind)));
-                edge_kinds.push(edge.kind);
-            }
-        }
-        let edges = Gm::new(
-            InstancedMesh::new(
-                context,
-                &Instances {
-                    transformations: edge_transforms.clone(),
-                    colors: Some(edge_colors.clone()),
-                    ..Default::default()
-                },
-                &CpuMesh::cylinder(10),
-            ),
-            lit_white(context),
-        );
-
-        // Ground plane + grid.
-        let mut ground_mesh = Mesh::new(context, &CpuMesh::cube());
-        ground_mesh.set_transformation(
-            Mat4::from_translation(vec3(0.0, -0.03, 0.0))
-                * Mat4::from_nonuniform_scale(400.0, 0.03, 400.0),
-        );
-        let ground = Gm::new(
-            ground_mesh,
-            PhysicalMaterial::new_opaque(
-                context,
-                &CpuMaterial {
-                    albedo: Srgba::new(0x12, 0x16, 0x1d, 255),
-                    ..Default::default()
-                },
-            ),
-        );
-
-        let grid_transforms = grid_transforms(&placed);
-        let grid_n = grid_transforms.len();
-        let grid = Gm::new(
-            InstancedMesh::new(
-                context,
-                &Instances {
-                    transformations: grid_transforms,
-                    colors: Some(vec![Srgba::new(0x24, 0x2a, 0x34, 255); grid_n]),
-                    ..Default::default()
-                },
-                &CpuMesh::cylinder(6),
-            ),
-            lit_white(context),
-        );
-
-        let light = DirectionalLight::new(context, 1.0, Srgba::WHITE, vec3(-0.4, -1.0, -0.6));
-        let ambient = AmbientLight::new(context, 0.35, Srgba::WHITE);
-
         Self {
             map,
             repo,
             placed,
-            node_ids,
-            building_transforms,
-            building_base_colors,
-            buildings,
-            edge_transforms,
-            edge_colors,
-            edge_kinds,
-            edges,
-            ground,
-            grid,
-            light,
-            ambient,
             selected: None,
             show_deps: true,
             show_runtime: true,
+            include_second_hop: false,
+            zoom: 1.0,
+            pan: Vec2::ZERO,
+            needs_fit: true,
         }
     }
 
-    fn camera_pose(&self) -> (Vec3, Vec3) {
-        let (center, extent) = self.bounds();
-        let d = (extent * 0.9).max(5.0);
-        let eye = center + vec3(d, d * 0.8, d);
-        (eye, center)
-    }
-
-    fn bounds(&self) -> (Vec3, f32) {
-        let mut min_x = f32::INFINITY;
-        let mut max_x = f32::NEG_INFINITY;
-        let mut min_z = f32::INFINITY;
-        let mut max_z = f32::NEG_INFINITY;
-        for p in self.placed.values() {
-            min_x = min_x.min(p.wx - p.half);
-            max_x = max_x.max(p.wx + p.half);
-            min_z = min_z.min(p.wy - p.half);
-            max_z = max_z.max(p.wy + p.half);
-        }
-        let center = vec3((min_x + max_x) * 0.5, 0.0, (min_z + max_z) * 0.5);
-        let extent = (max_x - min_x).max(max_z - min_z).max(1.0);
-        (center, extent)
-    }
-
-    fn rebuild_instances(&mut self) {
-        // Buildings: recolor by selection (selected + neighbors highlighted).
-        let colors: Vec<Srgba> = self
-            .node_ids
-            .iter()
-            .enumerate()
-            .map(|(i, id)| self.highlight_color(id, self.building_base_colors[i]))
-            .collect();
-        self.buildings.set_instances(&Instances {
-            transformations: self.building_transforms.clone(),
-            colors: Some(colors),
-            ..Default::default()
-        });
-
-        // Edges: filter by toggles.
-        let mut transforms = Vec::new();
-        let mut colors = Vec::new();
-        for (i, kind) in self.edge_kinds.iter().enumerate() {
-            let visible = match kind {
-                EdgeKind::Dependency => self.show_deps,
-                EdgeKind::Control | EdgeKind::Data => self.show_runtime,
-            };
-            if visible {
-                transforms.push(self.edge_transforms[i]);
-                colors.push(self.edge_colors[i]);
-            }
-        }
-        self.edges.set_instances(&Instances {
-            transformations: transforms,
-            colors: Some(colors),
-            ..Default::default()
-        });
-    }
-
-    fn highlight_color(&self, id: &str, base: Srgba) -> Srgba {
-        if self.selected.as_deref() == Some(id) {
-            Srgba::new(0xff, 0xd8, 0x5a, 255)
-        } else if self
-            .selected
-            .as_deref()
-            .is_some_and(|s| self.map.neighbors(s).contains(&id))
-        {
-            Srgba::new(0x8f, 0xd0, 0xff, 255)
-        } else {
-            base
-        }
-    }
-
-    fn handle_pan(&self, camera: &mut Camera, events: &mut [Event]) {
-        for event in events.iter_mut() {
-            if let Event::MouseMotion {
-                button: Some(MouseButton::Right),
-                delta,
-                handled: false,
-                ..
-            } = event
-            {
-                let d = *delta;
-                let dist = camera.target().distance(camera.position());
-                let scale = dist * 0.0015;
-                let change = camera.right_direction() * (-d.0 * scale)
-                    + camera.up_orthogonal() * (d.1 * scale);
-                camera.translate(change);
-            }
-        }
-    }
-
-    fn handle_pick(&mut self, context: &Context, camera: &Camera, events: &mut [Event]) {
-        for event in events.iter_mut() {
-            if let Event::MousePress {
-                button: MouseButton::Left,
-                position,
-                handled: false,
-                ..
-            } = event
-            {
-                let hit =
-                    pick(context, camera, *position, [&self.buildings], Cull::Back).unwrap_or(None);
-                self.selected = hit.map(|r| self.node_ids[r.instance_id as usize].clone());
-            }
-        }
-    }
-
-    fn render_objects(&self, screen: &RenderTarget, camera: &Camera) {
-        let objects = self
-            .ground
-            .into_iter()
-            .chain(&self.grid)
-            .chain(&self.edges)
-            .chain(&self.buildings);
-        screen.render(camera, objects, &[&self.light, &self.ambient]);
-    }
-
-    // ── egui panels (overlaid on the 3D scene) ────────────────────────────
-
-    fn panels_ui(&mut self, ui: &mut egui::Ui, camera: &Camera, viewport: Viewport, dpr: f32) {
+    fn toolbar(&mut self, root: &mut egui::Ui) {
         egui::Panel::top("toolbar")
-            .exact_size(36.0)
-            .frame(
-                egui::Frame::NONE
-                    .fill(PANEL_BG)
-                    .inner_margin(egui::Margin::symmetric(10, 6)),
-            )
-            .show_inside(ui, |ui| self.toolbar_ui(ui));
+            .frame(egui::Frame::NONE.fill(PANEL_BG).inner_margin(8.0))
+            .show_inside(root, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new("Liberado system map (2D)").strong());
+                    ui.separator();
+                    ui.toggle_value(&mut self.show_deps, "dependencies");
+                    ui.toggle_value(&mut self.show_runtime, "runtime paths");
+                    ui.add_enabled_ui(self.selected.is_some(), |ui| {
+                        ui.toggle_value(&mut self.include_second_hop, "include second hop");
+                    });
+                    if ui.button("fit").clicked() {
+                        self.needs_fit = true;
+                    }
+                    if ui.button("clear selection").clicked() {
+                        self.selected = None;
+                    }
+                    ui.label(
+                        egui::RichText::new("drag to pan - wheel to zoom - click to inspect")
+                            .weak()
+                            .small(),
+                    );
+                });
+            });
+    }
 
+    fn side_panel(&self, root: &mut egui::Ui) {
+        egui::Panel::right("legend")
+            .resizable(true)
+            .default_size(350.0)
+            .min_size(260.0)
+            .frame(egui::Frame::NONE.fill(PANEL_BG).inner_margin(10.0))
+            .show_inside(root, |ui| {
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    ui.heading("Legend");
+                    ui.label(
+                        egui::RichText::new(
+                            "Every edge has an arrow. It points from the dependent or sender to the dependency or receiver.",
+                        )
+                        .weak(),
+                    );
+                    ui.add_space(8.0);
+                    ui.label(egui::RichText::new("Layers").strong());
+                    for layer in &self.map.vocabulary.layers {
+                        swatch_row(
+                            ui,
+                            style::layer_color(&self.map.vocabulary, &layer.id),
+                            &layer.label,
+                            &layer.blurb,
+                        );
+                    }
+                    ui.add_space(8.0);
+                    ui.label(egui::RichText::new("Runtime infrastructure").strong());
+                    for kind in &self.map.vocabulary.kinds {
+                        swatch_row(
+                            ui,
+                            style::kind_color(&self.map.vocabulary, &kind.id),
+                            &kind.label,
+                            &kind.blurb,
+                        );
+                    }
+                    ui.add_space(8.0);
+                    ui.label(egui::RichText::new("Edges").strong());
+                    edge_row(ui, EdgeKind::Dependency, "depends on");
+                    edge_row(ui, EdgeKind::Control, "control flow");
+                    edge_row(ui, EdgeKind::Data, "data flow");
+                    ui.separator();
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "{} nodes - {} edges",
+                            self.map.nodes.len(),
+                            self.map.edges.len()
+                        ))
+                        .weak(),
+                    );
+                    ui.label(
+                        egui::RichText::new(self.repo.display().to_string())
+                            .weak()
+                            .small(),
+                    );
+                });
+            });
+    }
+
+    fn details(&self, root: &mut egui::Ui) {
         egui::Panel::bottom("details")
             .resizable(true)
             .default_size(180.0)
             .min_size(80.0)
-            .frame(
-                egui::Frame::NONE
-                    .fill(PANEL_BG)
-                    .inner_margin(egui::Margin::symmetric(10, 6)),
-            )
-            .show_inside(ui, |ui| self.details_ui(ui));
-
-        egui::Panel::right("legend")
-            .resizable(true)
-            .default_size(400.0)
-            .min_size(260.0)
-            .frame(
-                egui::Frame::NONE
-                    .fill(PANEL_BG)
-                    .inner_margin(egui::Margin::symmetric(10, 6)),
-            )
-            .show_inside(ui, |ui| self.legend_ui(ui));
-
-        egui::CentralPanel::default()
-            .frame(egui::Frame::NONE)
-            .show_inside(ui, |ui| self.labels_ui(ui, camera, viewport, dpr));
+            .frame(egui::Frame::NONE.fill(PANEL_BG).inner_margin(10.0))
+            .show_inside(root, |ui| {
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    if let Some(id) = self.selected.as_deref() {
+                        self.node_detail(ui, id);
+                    } else {
+                        ui.label(
+                            egui::RichText::new(
+                                "Click a node to isolate its directed relationships and inspect it.",
+                            )
+                            .weak(),
+                        );
+                    }
+                });
+            });
     }
 
-    fn labels_ui(&self, ui: &mut egui::Ui, camera: &Camera, viewport: Viewport, dpr: f32) {
-        let painter = ui.painter();
-        for id in &self.node_ids {
-            let Some(p) = self.placed.get(id) else {
-                continue;
-            };
-            let top = vec3(p.wx, p.height + 0.15, p.wy);
-            let px = camera.pixel_at_position(top);
-            let logical = egui::pos2(px.x / dpr, (viewport.height as f32 - px.y) / dpr);
-            if !logical.x.is_finite() || !logical.y.is_finite() {
-                continue;
-            }
-            let label = self
-                .map
-                .node(id)
-                .map(|n| n.label.clone())
-                .unwrap_or_else(|| id.clone());
-            painter.text(
-                logical,
-                egui::Align2::CENTER_BOTTOM,
-                label,
-                egui::FontId::proportional(11.0),
-                color32(style::LABEL),
+    fn canvas(&mut self, root: &mut egui::Ui) {
+        egui::CentralPanel::default()
+            .frame(egui::Frame::NONE.fill(color32(style::SCENE_BACKGROUND)))
+            .show_inside(root, |ui| {
+                let (response, painter) =
+                    ui.allocate_painter(ui.available_size(), Sense::click_and_drag());
+                if self.needs_fit {
+                    self.fit(response.rect);
+                    self.needs_fit = false;
+                }
+                if response.dragged() {
+                    self.pan += ui.input(|input| input.pointer.delta());
+                }
+                if response.hovered() {
+                    let scroll = ui.input(|input| input.smooth_scroll_delta.y);
+                    if scroll.abs() > f32::EPSILON {
+                        let pointer = ui
+                            .input(|input| input.pointer.hover_pos())
+                            .unwrap_or(response.rect.center());
+                        self.zoom_at(pointer, (scroll * 0.0015).exp());
+                    }
+                }
+
+                self.draw_grid(&painter, response.rect);
+                let scope =
+                    visible_scope(&self.map, self.selected.as_deref(), self.include_second_hop);
+                for edge in &self.map.edges {
+                    if self.edge_visible(edge, &scope) {
+                        self.draw_edge(&painter, edge);
+                    }
+                }
+                for node in self.placed.values() {
+                    self.draw_node(&painter, node, scope.as_ref());
+                }
+
+                if response.clicked() {
+                    self.selected = response
+                        .interact_pointer_pos()
+                        .and_then(|pos| self.pick(pos));
+                }
+            });
+    }
+
+    fn fit(&mut self, rect: Rect) {
+        let Some((min, max)) = world_bounds(&self.placed) else {
+            return;
+        };
+        let size = max - min;
+        let usable = rect.size() * 0.84;
+        self.zoom = (usable.x / size.x.max(1.0))
+            .min(usable.y / size.y.max(1.0))
+            .clamp(MIN_ZOOM, MAX_ZOOM);
+        self.pan = rect.center().to_vec2() - (min + size * 0.5) * self.zoom;
+    }
+
+    fn zoom_at(&mut self, pointer: Pos2, factor: f32) {
+        let old = self.zoom;
+        self.zoom = (self.zoom * factor).clamp(MIN_ZOOM, MAX_ZOOM);
+        let world = (pointer.to_vec2() - self.pan) / old;
+        self.pan = pointer.to_vec2() - world * self.zoom;
+    }
+
+    fn screen(&self, node: &PlacedNode) -> Pos2 {
+        Pos2::new(node.wx * WORLD_SCALE, -node.wy * WORLD_SCALE) * self.zoom + self.pan
+    }
+
+    fn node_rect(&self, node: &PlacedNode) -> Rect {
+        Rect::from_center_size(self.screen(node), Vec2::splat(NODE_HALF * self.zoom * 2.0))
+    }
+
+    fn pick(&self, pos: Pos2) -> Option<String> {
+        self.placed
+            .values()
+            .find(|node| self.node_rect(node).contains(pos))
+            .map(|node| node.id.clone())
+    }
+
+    fn edge_visible(&self, edge: &MapEdge, scope: &Option<BTreeSet<String>>) -> bool {
+        let kind_visible = match edge.kind {
+            EdgeKind::Dependency => self.show_deps,
+            EdgeKind::Control | EdgeKind::Data => self.show_runtime,
+        };
+        kind_visible
+            && edge_in_selection(
+                edge,
+                self.selected.as_deref(),
+                self.include_second_hop,
+                scope.as_ref(),
+            )
+    }
+
+    fn draw_grid(&self, painter: &egui::Painter, rect: Rect) {
+        let step = WORLD_SCALE * self.zoom;
+        if step < 12.0 {
+            return;
+        }
+        let color = color32(style::GRID_LINE);
+        let mut x = self.pan.x.rem_euclid(step) + rect.left();
+        while x < rect.right() {
+            painter.line_segment(
+                [Pos2::new(x, rect.top()), Pos2::new(x, rect.bottom())],
+                Stroke::new(1.0, color),
             );
+            x += step;
+        }
+        let mut y = self.pan.y.rem_euclid(step) + rect.top();
+        while y < rect.bottom() {
+            painter.line_segment(
+                [Pos2::new(rect.left(), y), Pos2::new(rect.right(), y)],
+                Stroke::new(1.0, color),
+            );
+            y += step;
         }
     }
 
-    fn toolbar_ui(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal(|ui| {
-            ui.label(egui::RichText::new("Liberado system map (3D)").strong());
-            ui.separator();
-            ui.toggle_value(&mut self.show_deps, "dependencies");
-            ui.toggle_value(&mut self.show_runtime, "runtime paths");
-            ui.separator();
-            ui.label(
-                egui::RichText::new("left-drag orbit · wheel zoom · right-drag pan · click select")
-                    .weak()
-                    .small(),
-            );
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.label(
-                    egui::RichText::new(format!(
-                        "{} nodes · {} edges · {}",
-                        self.map.nodes.len(),
-                        self.map.edges.len(),
-                        self.repo.display()
-                    ))
-                    .weak()
-                    .small(),
-                );
-            });
-        });
+    fn draw_edge(&self, painter: &egui::Painter, edge: &MapEdge) {
+        let (Some(from), Some(to)) = (self.placed.get(&edge.from), self.placed.get(&edge.to))
+        else {
+            return;
+        };
+        let a = self.screen(from);
+        let b = self.screen(to);
+        let delta = b - a;
+        let length = delta.length();
+        if length < 1.0 {
+            return;
+        }
+        let direction = delta / length;
+        let start = a + direction * NODE_HALF * self.zoom;
+        let tip = b - direction * NODE_HALF * self.zoom;
+        let color = color32(style::edge_color(edge.kind));
+        let width = if edge.kind == EdgeKind::Dependency {
+            1.4
+        } else {
+            2.2
+        };
+        painter.line_segment([start, tip], Stroke::new(width, color));
+
+        // Direction is always visible. Selection filters edges but never removes arrowheads.
+        painter.add(egui::Shape::convex_polygon(
+            arrow_points(tip, direction, self.zoom).to_vec(),
+            color,
+            Stroke::NONE,
+        ));
     }
 
-    fn legend_ui(&self, ui: &mut egui::Ui) {
-        egui::ScrollArea::vertical().show(ui, |ui| {
-            ui.heading("Legend");
-            ui.add_space(4.0);
-            ui.label(
-                egui::RichText::new(
-                    "Buildings are colored by architectural layer; height is dependency hub-ness.",
-                )
-                .small()
-                .weak(),
+    fn draw_node(
+        &self,
+        painter: &egui::Painter,
+        placed: &PlacedNode,
+        scope: Option<&BTreeSet<String>>,
+    ) {
+        let Some(node) = self.map.node(&placed.id) else {
+            return;
+        };
+        let base = style::node_color(
+            &self.map.vocabulary,
+            node.layer.as_str(),
+            node.kind.as_str(),
+        );
+        let fill = if self.selected.as_deref() == Some(&placed.id) {
+            Color32::from_rgb(0xff, 0xd8, 0x5a)
+        } else if scope.is_some_and(|nodes| nodes.contains(&placed.id)) {
+            color32(base.tint(0.2))
+        } else if self.selected.is_some() {
+            color32(base.shade(0.65))
+        } else {
+            color32(base)
+        };
+        let rect = self.node_rect(placed);
+        painter.rect(
+            rect,
+            5.0 * self.zoom,
+            fill,
+            Stroke::new((1.2 * self.zoom).max(0.5), color32(base.tint(0.35))),
+            StrokeKind::Outside,
+        );
+
+        // Labels scale with their nodes. Very small labels disappear instead of overlapping.
+        let font_size = (13.0 * self.zoom).clamp(3.0, 28.0);
+        if font_size >= 6.0 {
+            painter.text(
+                rect.center(),
+                egui::Align2::CENTER_CENTER,
+                &node.label,
+                egui::FontId::proportional(font_size),
+                Color32::WHITE,
             );
-            ui.add_space(8.0);
-
-            ui.label(egui::RichText::new("Layers").strong());
-            for layer in &self.map.vocabulary.layers {
-                swatch_row(
-                    ui,
-                    style::layer_color(&self.map.vocabulary, &layer.id),
-                    &layer.label,
-                    &layer.blurb,
-                );
-            }
-
-            ui.add_space(8.0);
-            ui.label(egui::RichText::new("Runtime infrastructure").strong());
-            for kind in &self.map.vocabulary.kinds {
-                swatch_row(
-                    ui,
-                    style::kind_color(&self.map.vocabulary, &kind.id),
-                    &kind.label,
-                    &kind.blurb,
-                );
-            }
-
-            ui.add_space(8.0);
-            ui.label(egui::RichText::new("Edges").strong());
-            edge_row(
-                ui,
-                EdgeKind::Dependency,
-                "build-time dependency (Cargo.toml)",
-            );
-            edge_row(ui, EdgeKind::Control, "runtime control flow");
-            edge_row(ui, EdgeKind::Data, "runtime data / payload flow");
-
-            ui.add_space(8.0);
-            explainer_ui(ui);
-        });
-    }
-
-    fn details_ui(&self, ui: &mut egui::Ui) {
-        egui::ScrollArea::vertical().show(ui, |ui| {
-            match &self.selected {
-                Some(id) => self.node_detail(ui, id),
-                None => {
-                    ui.label(
-                        egui::RichText::new(
-                            "Click a building to inspect it. Left-drag to orbit, wheel to zoom, right-drag to pan.",
-                        )
-                        .weak(),
-                    );
-                }
-            }
-        });
+        }
     }
 
     fn node_detail(&self, ui: &mut egui::Ui, id: &str) {
         let Some(node) = self.map.node(id) else {
             return;
         };
-        let color = style::node_color(
-            &self.map.vocabulary,
-            node.layer.as_str(),
-            node.kind.as_str(),
-        );
-        ui.horizontal(|ui| {
-            let (rect, _) = ui.allocate_exact_size(egui::vec2(14.0, 14.0), egui::Sense::hover());
-            ui.painter().rect_filled(rect, 2.0, color32(color));
-            ui.heading(&node.label);
-        });
-        let kind_label = self
-            .map
-            .vocabulary
-            .kind(node.kind.as_str())
-            .map(|k| k.label.as_str())
-            .unwrap_or_else(|| node.kind.as_str());
-        ui.label(egui::RichText::new(format!("{kind_label} · layer: {}", node.layer)).weak());
+        ui.heading(&node.label);
+        ui.label(egui::RichText::new(format!("{} - layer: {}", node.kind, node.layer)).weak());
         if !node.description.is_empty() {
-            ui.add_space(4.0);
             ui.label(&node.description);
         }
-        if !node.deps.is_empty() {
-            ui.add_space(4.0);
-            ui.label(egui::RichText::new("Depends on").strong());
-            ui.label(node.deps.join(", "));
-        }
-        if !node.meta.is_empty() {
-            ui.add_space(4.0);
-            ui.label(egui::RichText::new("Runtime metadata").strong());
-            for (k, v) in &node.meta {
-                ui.label(format!("{k}: {v}"));
-            }
-        }
-        if !node.enabled {
-            ui.add_space(4.0);
-            ui.label(
-                egui::RichText::new("disabled (declared but not enabled)")
-                    .italics()
-                    .weak(),
+        let outgoing: Vec<_> = self
+            .map
+            .edges
+            .iter()
+            .filter(|edge| edge.from == id)
+            .collect();
+        let incoming: Vec<_> = self.map.edges.iter().filter(|edge| edge.to == id).collect();
+        ui.columns(2, |columns| {
+            relationship_list(
+                &mut columns[0],
+                "Outgoing - this node depends on or sends to",
+                &outgoing,
+                true,
             );
+            relationship_list(
+                &mut columns[1],
+                "Incoming - these nodes depend on or send to this",
+                &incoming,
+                false,
+            );
+        });
+    }
+}
+
+impl eframe::App for App {
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        self.toolbar(ui);
+        self.side_panel(ui);
+        self.details(ui);
+        self.canvas(ui);
+    }
+}
+
+fn visible_scope(
+    map: &SystemMap,
+    selected: Option<&str>,
+    second_hop: bool,
+) -> Option<BTreeSet<String>> {
+    let selected = selected?;
+    let mut scope = BTreeSet::from([selected.to_string()]);
+    let first: Vec<String> = map
+        .neighbors(selected)
+        .into_iter()
+        .map(str::to_string)
+        .collect();
+    scope.extend(first.iter().cloned());
+    if second_hop {
+        for neighbor in first {
+            scope.extend(map.neighbors(&neighbor).into_iter().map(str::to_string));
         }
     }
+    Some(scope)
 }
 
-// ── helpers ────────────────────────────────────────────────────────────────
-
-fn base(p: &PlacedNode) -> Vec3 {
-    vec3(p.wx, 0.0, p.wy)
+fn edge_in_selection(
+    edge: &MapEdge,
+    selected: Option<&str>,
+    second_hop: bool,
+    scope: Option<&BTreeSet<String>>,
+) -> bool {
+    let Some(selected) = selected else {
+        return true;
+    };
+    if !second_hop {
+        return edge.from == selected || edge.to == selected;
+    }
+    scope.is_some_and(|nodes| nodes.contains(&edge.from) && nodes.contains(&edge.to))
 }
 
-fn building_transform(p: &PlacedNode) -> Mat4 {
-    Mat4::from_translation(vec3(p.wx, p.height * 0.5, p.wy))
-        * Mat4::from_nonuniform_scale(p.half, p.height * 0.5, p.half)
+fn world_bounds(placed: &BTreeMap<String, PlacedNode>) -> Option<(Vec2, Vec2)> {
+    let mut points = placed
+        .values()
+        .map(|node| Vec2::new(node.wx * WORLD_SCALE, -node.wy * WORLD_SCALE));
+    let first = points.next()?;
+    let (mut min, mut max) = (first, first);
+    for point in points {
+        min = min.min(point);
+        max = max.max(point);
+    }
+    Some((min - Vec2::splat(NODE_HALF), max + Vec2::splat(NODE_HALF)))
 }
 
-fn edge_thickness(kind: EdgeKind) -> f32 {
-    match kind {
-        EdgeKind::Dependency => 0.03,
-        EdgeKind::Control | EdgeKind::Data => 0.05,
+fn arrow_points(tip: Pos2, direction: Vec2, zoom: f32) -> [Pos2; 3] {
+    let size = (8.0 * zoom.sqrt()).clamp(5.0, 13.0);
+    let normal = Vec2::new(-direction.y, direction.x);
+    [
+        tip,
+        tip - direction * size + normal * size * 0.55,
+        tip - direction * size - normal * size * 0.55,
+    ]
+}
+
+fn relationship_list(ui: &mut egui::Ui, heading: &str, edges: &[&MapEdge], outgoing: bool) {
+    ui.label(egui::RichText::new(heading).strong());
+    if edges.is_empty() {
+        ui.label(egui::RichText::new("None").weak());
+    }
+    for edge in edges {
+        let other = if outgoing { &edge.to } else { &edge.from };
+        let text = if edge.label.is_empty() {
+            format!("{} -> {other}", edge.kind)
+        } else {
+            format!("{} -> {other}: {}", edge.kind, edge.label)
+        };
+        ui.label(text);
     }
 }
 
-/// Transform for a cylinder (unit radius around +X, spanning x in [0,1]) placed from `a` to `b`.
-fn segment_transform(a: Vec3, b: Vec3, thickness: f32) -> Option<Mat4> {
-    let dir = b - a;
-    let len = dir.magnitude();
-    if len < 1e-3 {
-        return None;
-    }
-    let d = dir / len;
-    let rot = rotation_matrix_from_dir_to_dir(vec3(1.0, 0.0, 0.0), d);
-    Some(Mat4::from_translation(a) * rot * Mat4::from_nonuniform_scale(len, thickness, thickness))
+fn color32(color: Rgb) -> Color32 {
+    Color32::from_rgb(color.r, color.g, color.b)
 }
-
-fn grid_transforms(placed: &BTreeMap<String, PlacedNode>) -> Vec<Mat4> {
-    let mut min_x = f32::INFINITY;
-    let mut max_x = f32::NEG_INFINITY;
-    let mut min_z = f32::INFINITY;
-    let mut max_z = f32::NEG_INFINITY;
-    for p in placed.values() {
-        min_x = min_x.min(p.wx - p.half);
-        max_x = max_x.max(p.wx + p.half);
-        min_z = min_z.min(p.wy - p.half);
-        max_z = max_z.max(p.wy + p.half);
-    }
-    if !min_x.is_finite() {
-        return Vec::new();
-    }
-    let step = 2.0;
-    let mut out = Vec::new();
-    let t = 0.012;
-    let mut x = (min_x / step).floor() * step;
-    while x <= max_x {
-        if let Some(m) = segment_transform(vec3(x, 0.0, min_z), vec3(x, 0.0, max_z), t) {
-            out.push(m);
-        }
-        x += step;
-    }
-    let mut z = (min_z / step).floor() * step;
-    while z <= max_z {
-        if let Some(m) = segment_transform(vec3(min_x, 0.0, z), vec3(max_x, 0.0, z), t) {
-            out.push(m);
-        }
-        z += step;
-    }
-    out
-}
-
-fn srgba(c: Rgb) -> Srgba {
-    Srgba::new(c.r, c.g, c.b, 255)
-}
-
-/// A white, opaque, lit material — per-instance colors multiply onto this.
-fn lit_white(context: &Context) -> PhysicalMaterial {
-    PhysicalMaterial::new_opaque(
-        context,
-        &CpuMaterial {
-            albedo: Srgba::WHITE,
-            ..Default::default()
-        },
-    )
-}
-
-fn color32(c: Rgb) -> egui::Color32 {
-    egui::Color32::from_rgb(c.r, c.g, c.b)
-}
-
-const PANEL_BG: egui::Color32 = egui::Color32::from_rgb(0x1a, 0x1e, 0x26);
 
 fn swatch_row(ui: &mut egui::Ui, color: Rgb, name: &str, blurb: &str) {
     ui.horizontal(|ui| {
-        let (rect, _) = ui.allocate_exact_size(egui::vec2(12.0, 12.0), egui::Sense::hover());
+        let (rect, _) = ui.allocate_exact_size(Vec2::splat(12.0), Sense::hover());
         ui.painter().rect_filled(rect, 2.0, color32(color));
         ui.label(egui::RichText::new(name).strong().small());
         ui.label(egui::RichText::new(blurb).weak().small());
@@ -652,32 +493,106 @@ fn swatch_row(ui: &mut egui::Ui, color: Rgb, name: &str, blurb: &str) {
 
 fn edge_row(ui: &mut egui::Ui, kind: EdgeKind, label: &str) {
     ui.horizontal(|ui| {
-        let (rect, _) = ui.allocate_exact_size(egui::vec2(24.0, 3.0), egui::Sense::hover());
-        let c = style::edge_color(kind);
-        ui.painter().rect_filled(rect, 1.0, color32(c));
+        let (rect, _) = ui.allocate_exact_size(Vec2::new(24.0, 3.0), Sense::hover());
+        ui.painter()
+            .rect_filled(rect, 1.0, color32(style::edge_color(kind)));
         ui.label(egui::RichText::new(label).weak().small());
     });
 }
 
-fn explainer_ui(ui: &mut egui::Ui) {
-    ui.add_space(4.0);
-    ui.separator();
-    ui.heading("About this map");
-    ui.label(
-        "Liberado is a Rust-native personal AI life OS: a daemon that watches an Obsidian vault, \
-         reasons with an LLM, and acts through tools — safely. This map is generated from source, \
-         not hand-drawn:",
-    );
-    ui.label("• every building is a workspace crate (colored by architectural layer), or a runtime component declared in topology.toml.");
-    ui.label("• gray edges are build-time dependencies from Cargo.toml.");
-    ui.label("• orange/green edges are runtime control and data paths — the perceive → decide → act loop, surfaces, inference, and notification.");
-    ui.label(
-        "• building height is hub-ness: how many crates depend on it plus how many it depends on.",
-    );
-    ui.add_space(4.0);
-    ui.label(
-        "Runtime paths are declared by each crate under [[package.metadata.liberado.flows]] in its \
-         Cargo.toml, so the map grows with the codebase, not with this tool. The map is rebuilt on \
-         every launch; run `liberado-sysmap --write-json out.json` for the serialized graph.",
-    );
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sysmap_core::vocab::Vocabulary;
+
+    fn map() -> SystemMap {
+        SystemMap {
+            generated_at: String::new(),
+            repository_root: String::new(),
+            config_dir: None,
+            vocabulary: Vocabulary {
+                layers: vec![],
+                kinds: vec![],
+            },
+            nodes: vec![],
+            edges: vec![
+                MapEdge {
+                    from: "a".into(),
+                    to: "b".into(),
+                    kind: EdgeKind::Dependency,
+                    label: String::new(),
+                },
+                MapEdge {
+                    from: "a".into(),
+                    to: "c".into(),
+                    kind: EdgeKind::Dependency,
+                    label: String::new(),
+                },
+                MapEdge {
+                    from: "b".into(),
+                    to: "c".into(),
+                    kind: EdgeKind::Dependency,
+                    label: String::new(),
+                },
+                MapEdge {
+                    from: "c".into(),
+                    to: "d".into(),
+                    kind: EdgeKind::Dependency,
+                    label: String::new(),
+                },
+            ],
+        }
+    }
+
+    #[test]
+    fn selection_scope_stops_at_requested_distance() {
+        assert_eq!(
+            visible_scope(&map(), Some("a"), false).unwrap(),
+            BTreeSet::from(["a".into(), "b".into(), "c".into()])
+        );
+        assert_eq!(
+            visible_scope(&map(), Some("a"), true).unwrap(),
+            BTreeSet::from(["a".into(), "b".into(), "c".into(), "d".into()])
+        );
+    }
+
+    #[test]
+    fn no_selection_has_no_edge_scope_filter() {
+        assert!(visible_scope(&map(), None, false).is_none());
+    }
+
+    #[test]
+    fn direct_selection_shows_only_incident_edges() {
+        let map = map();
+        let scope = visible_scope(&map, Some("a"), false);
+        assert!(edge_in_selection(
+            &map.edges[0],
+            Some("a"),
+            false,
+            scope.as_ref()
+        ));
+        assert!(!edge_in_selection(
+            &map.edges[2],
+            Some("a"),
+            false,
+            scope.as_ref()
+        ));
+        let two_hop_scope = visible_scope(&map, Some("a"), true);
+        assert!(edge_in_selection(
+            &map.edges[2],
+            Some("a"),
+            true,
+            two_hop_scope.as_ref()
+        ));
+    }
+
+    #[test]
+    fn arrowhead_points_in_edge_direction_at_every_zoom_level() {
+        for zoom in [MIN_ZOOM, 1.0, MAX_ZOOM] {
+            let points = arrow_points(Pos2::new(100.0, 50.0), Vec2::X, zoom);
+            assert_eq!(points[0], Pos2::new(100.0, 50.0));
+            assert!(points[1].x < points[0].x);
+            assert!(points[2].x < points[0].x);
+        }
+    }
 }

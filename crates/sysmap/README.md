@@ -1,10 +1,9 @@
 # liberado-sysmap
 
-An **interactive 3D system map** of Liberado, shipped as a native window. It renders the
-workspace's crates as 3D buildings on a grid — colored by architectural layer, sized by dependency
-hub-ness — with build-time dependencies and the runtime control/data paths drawn as edges. A legend
-and an explainer panel make it legible; left-drag to orbit, the wheel to zoom, right-drag to pan,
-click any building to inspect it.
+An **interactive 2D system map** of Liberado, shipped as a native window. It renders the
+workspace's crates and runtime components on a grid, colored by architectural layer or kind.
+Build-time dependencies and runtime control/data paths are directed edges. Drag to pan, use the
+wheel to zoom, and click a node to isolate and inspect its relationships.
 
 ## Run it
 
@@ -84,7 +83,7 @@ tool.
   engine. No Liberado dependency.
 * `liberado-sysmap` (this crate) — the Liberado profile (`sysmap.toml`) and the `topology.toml` →
   runtime-node adapter.
-* `liberado-sysmap-gui` — the project-agnostic three-d renderer **library** (`launch(map, repo)`);
-  depends on `sysmap-core` only (plus three-d/egui), so it renders any `SystemMap`.
+* `liberado-sysmap-gui` — the project-agnostic 2D renderer **library** (`launch(map, repo)`);
+  depends on `sysmap-core` only (plus eframe), so it renders any `SystemMap`.
 * `liberado-sysmap-cli` — the `liberado-sysmap` binary: builds the map (Liberado profile +
   topology) and opens the window, or writes the JSON export.

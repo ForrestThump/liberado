@@ -33,7 +33,7 @@ fn real_workspace_map_is_well_formed() {
     for p in &layout.placed {
         assert!(p.wx.is_finite() && p.wy.is_finite() && p.height.is_finite());
         assert!(p.height > 0.0);
-        // No two buildings share a ground position.
+        // No two nodes share a ground position.
         assert!(
             positions.insert((p.wx.to_bits(), p.wy.to_bits())),
             "duplicate ground position for {}",
