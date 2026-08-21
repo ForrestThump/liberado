@@ -45,6 +45,12 @@ vault_path = "/home/shiloh/vault"
 #   { name = "test", run = "cargo test --workspace" },
 #   { name = "deny", run = "cargo deny check" },
 # ]
+# # Interactive ACP `done` bar. Same runner as ship; typically a lighter subset.
+# # Omit the table to offer no `done` tool (the model replies in prose).
+# [projects.preflight.interactive]
+# steps = [
+#   { name = "compile", run = "cargo check --workspace --all-targets", timeout_secs = 900 },
+# ]
 #
 # [[projects]]
 # name = "notes-site"

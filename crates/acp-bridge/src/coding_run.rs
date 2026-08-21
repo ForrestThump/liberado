@@ -13,7 +13,7 @@ use std::sync::Arc;
 use liberado_coder_agent::assemble_production_run;
 use liberado_coder_agent::{CoderProviderFactory, LiberadoLoopBackend};
 use liberado_coder_core::{CoderBackend, CoderRoleConfig, CoderTask, CoderTuning};
-use liberado_coder_sandbox::ensure_session_worktree;
+use liberado_coder_sandbox::{PreflightSpec, PreflightStep, ensure_session_worktree};
 use liberado_coder_tools::coding_worktrees_base;
 use liberado_provider::{
     CompletionRequest, CompletionResponse, CompletionStream, Provider, ProviderResult,
@@ -77,30 +77,7 @@ pub fn load_acp_config(config_dir: Option<&Path>) -> liberado_config::AcpConfig 
 ///
 /// [`ship_preflight_required_for`]: liberado_coder_agent::ship_preflight::ship_preflight_required_for
 pub fn ship_preflight_payload(config_dir: Option<&Path>, project_root: &Path) -> serde_json::Value {
-    let Some(dir) = config_dir else {
-        return serde_json::json!({});
-    };
-    let config = match liberado_config::load_config(Some(dir)) {
-        Ok((config, _)) => config,
-        Err(e) => {
-            tracing::warn!(error = %e, "loading topology for the ship bar failed; no preflight");
-            return serde_json::json!({});
-        }
-    };
-    // Canonicalized on both sides before comparing. A declared root and a client's cwd routinely
-    // name the same directory in different spellings — a trailing separator, a symlink, or on
-    // Windows the 8.3 short form — and a literal comparison then finds no project and silently
-    // drops the bar, which is the failure this whole change exists to end.
-    let root = canonical(project_root);
-    let Some(project) = config
-        .enabled_projects()
-        .into_iter()
-        .find(|p| root.starts_with(canonical(&p.root)))
-    else {
-        tracing::info!(
-            root = %project_root.display(),
-            "no declared project covers this workspace; no ship preflight will run"
-        );
+    let Some(project) = covering_project(config_dir, project_root) else {
         return serde_json::json!({});
     };
 
@@ -112,6 +89,88 @@ pub fn ship_preflight_payload(config_dir: Option<&Path>, project_root: &Path) ->
         payload.insert("preflight".into(), preflight);
     }
     serde_json::Value::Object(payload)
+}
+
+/// Interactive ACP `done` spec for a run rooted at `project_root`.
+///
+/// `None` when nothing matches — no config dir, an undeclared directory, or a project with
+/// no interactive profile. Unlike ship, a project named `liberado` does **not** acquire
+/// built-in steps: the commands live in the project file or there is no `done` tool.
+pub fn interactive_preflight_spec(
+    config_dir: Option<&Path>,
+    project_root: &Path,
+) -> Option<PreflightSpec> {
+    let project = covering_project(config_dir, project_root)?;
+    spec_from_payload(project.interactive_preflight_payload()?)
+}
+
+/// The declared project whose root contains `project_root`, if this deployment has one.
+///
+/// Identity for preflight: the client's cwd, not a durable worktree under
+/// `LIBERADO_DATA_DIR`. Those worktrees are not under the project root, so matching on
+/// them would silently drop every configured bar.
+fn covering_project(
+    config_dir: Option<&Path>,
+    project_root: &Path,
+) -> Option<liberado_config::ProjectConfig> {
+    let dir = config_dir?;
+    let config = match liberado_config::load_config(Some(dir)) {
+        Ok((config, _)) => config,
+        Err(e) => {
+            tracing::warn!(error = %e, "loading topology for project preflight failed; no preflight");
+            return None;
+        }
+    };
+    // Canonicalized on both sides before comparing. A declared root and a client's cwd routinely
+    // name the same directory in different spellings — a trailing separator, a symlink, or on
+    // Windows the 8.3 short form — and a literal comparison then finds no project and silently
+    // drops the bar, which is the failure this whole change exists to end.
+    let root = canonical(project_root);
+    let project = config
+        .enabled_projects()
+        .into_iter()
+        .find(|p| root.starts_with(canonical(&p.root)));
+    match project {
+        Some(p) => Some(p.clone()),
+        None => {
+            tracing::info!(
+                root = %project_root.display(),
+                "no declared project covers this workspace; no preflight will run"
+            );
+            None
+        }
+    }
+}
+
+fn spec_from_payload(payload: serde_json::Value) -> Option<PreflightSpec> {
+    let id = payload
+        .get("profile")
+        .and_then(|v| v.as_str())
+        .unwrap_or("interactive")
+        .to_string();
+    let steps_val = payload.get("steps")?.as_array()?;
+    let steps: Vec<PreflightStep> = steps_val.iter().filter_map(step_from_json).collect();
+    if steps.is_empty() {
+        None
+    } else {
+        Some(PreflightSpec::new(id, steps))
+    }
+}
+
+fn step_from_json(value: &serde_json::Value) -> Option<PreflightStep> {
+    let name = value.get("name")?.as_str()?.to_string();
+    let run = value.get("run")?.as_str()?.to_string();
+    if name.is_empty() || run.is_empty() {
+        return None;
+    }
+    let mut step = PreflightStep::new(name, run);
+    if let Some(t) = value.get("timeout_secs").and_then(|v| v.as_u64()) {
+        step.timeout_secs = Some(t);
+    }
+    if let Some(r) = value.get("required").and_then(|v| v.as_bool()) {
+        step.required = r;
+    }
+    Some(step)
 }
 
 fn canonical(path: &Path) -> PathBuf {
@@ -1480,5 +1539,110 @@ mod ship_bar_tests {
         .await;
         assert_eq!(outcome, Outcome::Succeeded);
         assert_eq!(summary, "done");
+    }
+}
+
+#[cfg(test)]
+mod interactive_spec_tests {
+    use super::*;
+
+    fn toml_path(p: &Path) -> String {
+        let escaped = p.display().to_string().replace('\\', "\\\\");
+        format!("\"{escaped}\"")
+    }
+
+    fn write_topology(root: &Path, body: &str) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            dir.path().join("topology.toml"),
+            format!(
+                "vault_path = \"/tmp/vault\"\n\n\
+                 [[projects]]\n\
+                 name = \"{name}\"\n\
+                 root = {root}\n\n\
+                 {body}\n",
+                name = "fixture",
+                root = toml_path(root),
+            ),
+        )
+        .expect("write topology");
+        dir
+    }
+
+    #[test]
+    fn interactive_spec_is_the_interactive_steps_not_ship() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let cfg = write_topology(
+            root.path(),
+            "[projects.preflight.ship]\n\
+             steps = [{ name = \"full\", run = \"echo ship-only\" }]\n\
+             [projects.preflight.interactive]\n\
+             steps = [{ name = \"light\", run = \"echo from-config\", timeout_secs = 30, required = false }]\n",
+        );
+
+        let spec = interactive_preflight_spec(Some(cfg.path()), root.path()).expect("spec");
+        assert_eq!(spec.id, "interactive");
+        assert_eq!(spec.steps.len(), 1);
+        assert_eq!(spec.steps[0].name, "light");
+        assert_eq!(spec.steps[0].run, "echo from-config");
+        assert_eq!(spec.steps[0].timeout_secs, Some(30));
+        assert!(!spec.steps[0].required);
+        assert!(
+            !spec.steps.iter().any(|s| s.run.contains("ship-only")),
+            "done must not run the ship profile: {spec:?}"
+        );
+    }
+
+    #[test]
+    fn ship_only_project_has_no_interactive_spec() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let cfg = write_topology(
+            root.path(),
+            "[projects.preflight.ship]\n\
+             steps = [{ name = \"full\", run = \"echo ship-only\" }]\n",
+        );
+        assert!(
+            interactive_preflight_spec(Some(cfg.path()), root.path()).is_none(),
+            "a ship bar must not silently become the interactive bar"
+        );
+    }
+
+    #[test]
+    fn a_liberado_named_project_without_interactive_steps_has_no_spec() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let dir = tempfile::tempdir().expect("config");
+        std::fs::write(
+            dir.path().join("topology.toml"),
+            format!(
+                "vault_path = \"/tmp/vault\"\n\n\
+                 [[projects]]\n\
+                 name = \"liberado\"\n\
+                 root = {root}\n",
+                root = toml_path(root.path()),
+            ),
+        )
+        .expect("write topology");
+        assert!(
+            interactive_preflight_spec(Some(dir.path()), root.path()).is_none(),
+            "interactive must not invent cargo (or any) steps from the project name"
+        );
+    }
+
+    #[test]
+    fn undeclared_directory_has_no_interactive_spec() {
+        let declared = tempfile::tempdir().expect("declared");
+        let elsewhere = tempfile::tempdir().expect("elsewhere");
+        let cfg = write_topology(
+            declared.path(),
+            "[projects.preflight.interactive]\n\
+             steps = [{ name = \"light\", run = \"echo x\" }]\n",
+        );
+        assert!(interactive_preflight_spec(Some(cfg.path()), elsewhere.path()).is_none());
+    }
+
+    #[test]
+    fn no_config_dir_has_no_interactive_spec() {
+        let root = tempfile::tempdir().expect("tempdir");
+        assert!(interactive_preflight_spec(None, root.path()).is_none());
     }
 }

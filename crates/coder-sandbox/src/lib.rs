@@ -30,8 +30,9 @@ pub use preflight_baseline::{
 // Durable session worktree helpers are defined below next to WorktreeWorkspace.
 
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, HashSet},
     path::{Component, Path, PathBuf},
+    sync::{Arc, Mutex},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
@@ -121,12 +122,56 @@ pub trait CommandRunner: Send + Sync {
 pub trait Workspace: CommandRunner {
     fn root(&self) -> &Path;
     fn resolve_path(&self, rel_path: &str) -> Result<PathBuf, SandboxError>;
+    /// Extra program stems allowed despite [`CommandPolicy::deny`]. Shared with ACP permission.
+    fn command_grants(&self) -> CommandGrantSet {
+        CommandGrantSet::default()
+    }
 }
 
-#[derive(Debug, Clone)]
+/// Program stems the operator has allowed after a permission prompt (session, workspace, or global).
+#[derive(Clone, Default)]
+pub struct CommandGrantSet {
+    stems: Arc<Mutex<HashSet<String>>>,
+}
+
+impl CommandGrantSet {
+    pub fn allow(&self, program: &str) {
+        let stem = program_file_stem(program).to_ascii_lowercase();
+        if stem.is_empty() {
+            return;
+        }
+        if let Ok(mut g) = self.stems.lock() {
+            g.insert(stem);
+        }
+    }
+
+    pub fn revoke(&self, program: &str) {
+        let stem = program_file_stem(program).to_ascii_lowercase();
+        if let Ok(mut g) = self.stems.lock() {
+            g.remove(&stem);
+        }
+    }
+
+    pub fn contains(&self, program: &str) -> bool {
+        let stem = program_file_stem(program).to_ascii_lowercase();
+        self.stems
+            .lock()
+            .map(|g| g.contains(&stem))
+            .unwrap_or(false)
+    }
+}
+
+impl std::fmt::Debug for CommandGrantSet {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("CommandGrantSet")
+    }
+}
+
+#[derive(Clone, Debug)]
 pub struct HostWorkspace {
     root: PathBuf,
     command_policy: CommandPolicy,
+    grants: CommandGrantSet,
 }
 
 impl HostWorkspace {
@@ -144,11 +189,17 @@ impl HostWorkspace {
         Ok(Self {
             root,
             command_policy,
+            grants: CommandGrantSet::default(),
         })
     }
 
     pub fn command_policy(&self) -> &CommandPolicy {
         &self.command_policy
+    }
+
+    pub fn with_command_grants(mut self, grants: CommandGrantSet) -> Self {
+        self.grants = grants;
+        self
     }
 }
 
@@ -171,7 +222,11 @@ impl DockerWorkspace {
     }
 
     pub fn docker_run_args(&self, request: &CommandRequest) -> Result<Vec<String>, SandboxError> {
-        ensure_command_allowed(self.host.command_policy(), request)?;
+        ensure_granted_or_allowed(
+            &self.host.command_grants(),
+            self.host.command_policy(),
+            request,
+        )?;
         if self.spec.image.trim().is_empty() {
             return Err(SandboxError::InvalidDockerConfig(
                 "docker image must not be empty".to_string(),
@@ -221,6 +276,10 @@ impl Workspace for DockerWorkspace {
 
     fn resolve_path(&self, rel_path: &str) -> Result<PathBuf, SandboxError> {
         self.host.resolve_path(rel_path)
+    }
+
+    fn command_grants(&self) -> CommandGrantSet {
+        self.host.command_grants()
     }
 }
 
@@ -273,6 +332,10 @@ impl CommandRunner for DockerWorkspace {
 impl Workspace for HostWorkspace {
     fn root(&self) -> &Path {
         &self.root
+    }
+
+    fn command_grants(&self) -> CommandGrantSet {
+        self.grants.clone()
     }
 
     fn resolve_path(&self, rel_path: &str) -> Result<PathBuf, SandboxError> {
@@ -369,7 +432,7 @@ pub async fn run_git_best_effort(current_dir: &Path, args: &[&str]) {
 #[async_trait]
 impl CommandRunner for HostWorkspace {
     async fn run_command(&self, request: CommandRequest) -> Result<CommandOutput, SandboxError> {
-        ensure_command_allowed(&self.command_policy, &request)?;
+        ensure_granted_or_allowed(&self.grants, &self.command_policy, &request)?;
 
         let mut command = liberado_common::process::command(&request.program);
         command.args(&request.args).current_dir(&self.root);
@@ -414,6 +477,17 @@ impl CommandRunner for HostWorkspace {
             stderr_offload,
         })
     }
+}
+
+fn ensure_granted_or_allowed(
+    grants: &CommandGrantSet,
+    policy: &CommandPolicy,
+    request: &CommandRequest,
+) -> Result<(), SandboxError> {
+    if grants.contains(&request.program) {
+        return Ok(());
+    }
+    ensure_command_allowed(policy, request)
 }
 
 pub fn ensure_command_allowed(
@@ -824,6 +898,10 @@ impl Workspace for WorktreeWorkspace {
     fn resolve_path(&self, rel_path: &str) -> Result<PathBuf, SandboxError> {
         self.inner.resolve_path(rel_path)
     }
+
+    fn command_grants(&self) -> CommandGrantSet {
+        self.inner.command_grants()
+    }
 }
 
 #[async_trait]
@@ -929,6 +1007,35 @@ mod tests {
     /// Backlog item C1: an empty `allow` list means "allow all", so without a default deny
     /// `run_command` could invoke git with no capability check at all. The default policy must
     /// refuse git, in every argv spelling — including the Windows binary name.
+    #[test]
+    fn a_grant_lets_a_denied_program_run_the_policy_check() {
+        let grants = CommandGrantSet::default();
+        grants.allow("git");
+        assert!(grants.contains("git"));
+        assert!(grants.contains("git.exe"));
+        assert!(grants.contains(r"C:\Program Files\Git\cmd\git.exe"));
+        grants.revoke("GIT.EXE");
+        assert!(!grants.contains("git"));
+    }
+
+    #[tokio::test]
+    async fn granting_git_bypasses_the_default_deny_on_the_workspace() {
+        let dir = tempfile::tempdir().unwrap();
+        let grants = CommandGrantSet::default();
+        grants.allow("git");
+        let ws = HostWorkspace::new(dir.path(), CommandPolicy::default())
+            .unwrap()
+            .with_command_grants(grants);
+        // `git --version` is a no-op for the repo; we only care that policy did not refuse it.
+        let mut request = CommandRequest::new("git");
+        request.args = vec!["--version".into()];
+        let out = ws
+            .run_command(request)
+            .await
+            .expect("a granted git must pass the deny list");
+        assert_eq!(out.exit_code, Some(0), "git --version should run: {out:?}");
+    }
+
     #[test]
     fn default_policy_denies_git() {
         let policy = CommandPolicy::default();

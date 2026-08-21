@@ -18,6 +18,11 @@ pub(crate) struct JsonRpcIncoming {
     pub(crate) method: Option<String>,
     #[serde(default)]
     pub(crate) params: Value,
+    /// Present on JSON-RPC *responses* (client answering an agent request).
+    #[serde(default)]
+    pub(crate) result: Option<Value>,
+    #[serde(default)]
+    pub(crate) error: Option<Value>,
 }
 
 #[derive(Debug, Serialize)]
@@ -39,6 +44,14 @@ pub(crate) struct JsonRpcErrorBody {
 #[derive(Debug, Serialize)]
 pub(crate) struct JsonRpcNotification {
     pub(crate) jsonrpc: &'static str,
+    pub(crate) method: String,
+    pub(crate) params: Value,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct JsonRpcRequest {
+    pub(crate) jsonrpc: &'static str,
+    pub(crate) id: Value,
     pub(crate) method: String,
     pub(crate) params: Value,
 }
@@ -77,6 +90,24 @@ impl StdoutWire {
                 result: None,
                 error: Some(error),
             },
+        };
+        let json = serde_json::to_string(&body).map_err(|e| e.to_string())?;
+        self.write_line(&json)
+    }
+
+    /// Agent → client request (permission). Ids are strings so they cannot collide with
+    /// Paseo's numeric client ids. Digit-only strings are coerced to numbers by Paseo.
+    pub(crate) fn write_rpc_request(
+        &self,
+        id: Value,
+        method: &str,
+        params: Value,
+    ) -> Result<(), String> {
+        let body = JsonRpcRequest {
+            jsonrpc: "2.0",
+            id,
+            method: method.to_string(),
+            params,
         };
         let json = serde_json::to_string(&body).map_err(|e| e.to_string())?;
         self.write_line(&json)

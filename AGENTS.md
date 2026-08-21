@@ -154,6 +154,10 @@ production entry point still reads it.
 in the same executor conversation (`WorkspaceCompileGate`, PR #163). Partial, Failed, wrap-up
 and turn exhaustion keep the dirty tree. The post-execute ship bar still runs `cargo test`.
 
+Interactive ACP `done` is the converse analog: it runs `[projects.preflight.interactive]`
+through the same `run_preflight` runner. Do not hard-code a compile command in the feature;
+the project file names the steps. No table means no `done` tool.
+
 **A host failure ends the run.** Disk-full and the same infrastructure class are not a repair
 the model can make. The finish gate refuses `succeeded`, the executor files `Failed`, and the
 model does not get another turn (PR #166).

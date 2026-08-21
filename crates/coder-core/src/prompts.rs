@@ -200,6 +200,10 @@ mod tests {
             !INTERACTIVE.contains("then submit_report"),
             "must not instruct the model to call submit_report"
         );
+        assert!(
+            text.contains("`done`"),
+            "interactive.md must tell the model about `done` when the project configured checks"
+        );
     }
 
     #[test]

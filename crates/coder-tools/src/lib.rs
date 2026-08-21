@@ -267,6 +267,10 @@ impl CodingToolRuntime {
         }
     }
 
+    pub fn command_grants(&self) -> liberado_coder_sandbox::CommandGrantSet {
+        self.workspace.command_grants()
+    }
+
     pub fn from_workspace(workspace: impl Workspace + 'static, path_policy: PathPolicy) -> Self {
         let offload_dir = workspace.root().join(".liberado").join("offload");
         Self {

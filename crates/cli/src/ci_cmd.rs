@@ -47,7 +47,7 @@ const CURRENT_REPORT: &str = ".liberado/crap-current.json";
 const USAGE: &str = "usage: liberado ci [check|crap|ratchet]";
 const VACATED_BIN: &str = "liberado-ci";
 const CI_LOG_FILE: &str = ".liberado/ci.log";
-const EXTRACT_MAX_LINES: usize = 80;
+const EXTRACT_MAX_LINES: usize = liberado_coder_core::FAILURE_EXTRACT_MAX_LINES;
 
 /// New-function / `--fail-above` ceiling. Must match `.cargo-crap.toml` `threshold`.
 const CRAP_CEILING: &str = "150";
@@ -679,72 +679,7 @@ fn read_log_since(path: &Path, start: u64) -> Result<String, Box<dyn std::error:
 /// Pull compiler, test, and CRAP failures out of a child log so the agent
 /// does not have to scan compile progress or passing crates.
 fn extract_ci_failures(output: &str) -> String {
-    let text = strip_ansi(output);
-    let lines: Vec<&str> = text.lines().collect();
-    let mut picked = Vec::new();
-    let mut seen = std::collections::BTreeSet::new();
-    for (idx, line) in lines.iter().enumerate() {
-        if !is_ci_failure_line(line) {
-            continue;
-        }
-        let start = idx;
-        let end = extra_context_end(&lines, idx);
-        for (i, candidate) in lines.iter().enumerate().take(end).skip(start) {
-            if seen.insert(i) {
-                picked.push((*candidate).to_string());
-            }
-        }
-    }
-    if picked.len() > EXTRACT_MAX_LINES {
-        let more = picked.len() - EXTRACT_MAX_LINES;
-        picked.truncate(EXTRACT_MAX_LINES);
-        picked.push(format!("… {more} more matching lines in {CI_LOG_FILE}"));
-    }
-    picked.join("\n")
-}
-
-fn extra_context_end(lines: &[&str], anchor: usize) -> usize {
-    let mut end = (anchor + 1).min(lines.len());
-    while end < lines.len() && end < anchor + 8 {
-        let trimmed = lines[end].trim_start();
-        if trimmed.starts_with("-->") || trimmed.starts_with('|') || trimmed.starts_with("= ") {
-            end += 1;
-        } else {
-            break;
-        }
-    }
-    end
-}
-
-fn is_ci_failure_line(line: &str) -> bool {
-    let lower = line.to_ascii_lowercase();
-    line.contains(" FAILED")
-        || lower.contains("error[")
-        || lower.contains("error:")
-        || lower.contains("panicked at")
-        || lower.contains("test result: failed")
-        || lower.contains("could not compile")
-        || lower.contains("regressed")
-        || lower.contains("crap check failed")
-        || (line.contains('┆') && line.contains('+') && !line.contains("NEW"))
-}
-
-fn strip_ansi(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    let mut chars = text.chars().peekable();
-    while let Some(ch) = chars.next() {
-        if ch == '\u{1b}' && chars.peek() == Some(&'[') {
-            chars.next();
-            for next in chars.by_ref() {
-                if next.is_ascii_alphabetic() {
-                    break;
-                }
-            }
-        } else {
-            out.push(ch);
-        }
-    }
-    out
+    liberado_coder_core::extract_failures_capped(output, EXTRACT_MAX_LINES, Some(CI_LOG_FILE))
 }
 
 fn repository_root() -> Result<PathBuf, Box<dyn std::error::Error>> {
@@ -770,7 +705,7 @@ mod tests {
         USAGE, announce_compare, baseline_has_entries, compare_args, compare_banners,
         crap_failure_hint, emit_crap_failure, exe_lives_in_cargo_target, extract_ci_failures, git,
         porcelain_path, relativize_json_file, relativize_lcov, repo_relative_source_path,
-        repository_root, run_cmd, stage_ratcheted_baseline, strip_ansi, uses_per_function_ratchet,
+        repository_root, run_cmd, stage_ratcheted_baseline, uses_per_function_ratchet,
     };
     use liberado_common::process::std_command;
     use std::fs;
@@ -920,9 +855,8 @@ error[E0425]: cannot find value `foo` in this scope
     }
 
     #[test]
-    fn strip_ansi_drops_color_codes_before_matching() {
+    fn extract_ci_failures_strips_color_codes_before_matching() {
         let colored = "\u{1b}[31merror[E0425]\u{1b}[0m: missing\n";
-        assert_eq!(strip_ansi(colored), "error[E0425]: missing\n");
         let extracted = extract_ci_failures(colored);
         assert!(extracted.contains("error[E0425]"), "{extracted}");
     }

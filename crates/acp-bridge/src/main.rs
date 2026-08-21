@@ -41,7 +41,9 @@ use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
 mod ask_human;
 mod coding_run;
+mod done;
 mod interactive;
+mod permission;
 mod provider;
 mod session_store;
 mod stdin_guard;
@@ -125,6 +127,8 @@ struct Bridge {
     system_prompt: Option<String>,
     /// ACP session id → mode + engine state.
     acp_sessions: Mutex<HashMap<String, AcpSession>>,
+    /// Outbound `session/request_permission` waiters (denied commands).
+    permissions: Arc<permission::PermissionBroker>,
 }
 
 /// One `session/prompt` running while the stdin loop stays free for `session/cancel`.
@@ -282,6 +286,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     // Single writer for JSON-RPC responses *and* session/update notifications.
     // Required once prompts run concurrent with stdin (cancel mid-turn).
     let wire = Arc::new(StdoutWire);
+    bridge.permissions.bind_wire(Arc::clone(&wire));
 
     // Take a private handle on the JSON-RPC wire and point the process-level stdin at the null
     // device, so no child can inherit the wire even if some future spawn site forgets to null
@@ -468,6 +473,7 @@ async fn resolve_bridge_startup() -> Result<Arc<Bridge>, Box<dyn std::error::Err
         local_grant,
         system_prompt,
         acp_sessions: Mutex::new(HashMap::new()),
+        permissions: Arc::new(permission::PermissionBroker::new()),
     }))
 }
 
@@ -581,13 +587,27 @@ async fn handle_stdin_line(
         }
     };
 
+    dispatch_stdin_message(bridge, wire, msg, in_flight).await?;
+    Ok(true)
+}
+
+async fn dispatch_stdin_message(
+    bridge: &Arc<Bridge>,
+    wire: &Arc<StdoutWire>,
+    msg: JsonRpcIncoming,
+    in_flight: &mut Option<InFlightPrompt>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if apply_client_rpc_reply(bridge, &msg) {
+        return Ok(());
+    }
+
     let method = msg.method.unwrap_or_default();
     // Notifications have no id (or null id) and expect no response.
     let is_notification = msg.id.is_none() || msg.id.as_ref().is_some_and(|id| id.is_null());
 
     if is_notification {
         dispatch_notification(bridge, &method, msg.params, in_flight).await;
-        return Ok(true);
+        return Ok(());
     }
 
     let id = msg.id.unwrap_or(Value::Null);
@@ -595,7 +615,7 @@ async fn handle_stdin_line(
     // session/prompt runs in a task so session/cancel can be read mid-turn.
     if method == "session/prompt" {
         spawn_prompt_if_free(bridge, wire, &msg.params, id, in_flight)?;
-        return Ok(true);
+        return Ok(());
     }
 
     match handle_request(Arc::clone(bridge), &method, msg.params, wire.as_ref()).await {
@@ -612,7 +632,7 @@ async fn handle_stdin_line(
             }),
         )?,
     }
-    Ok(true)
+    Ok(())
 }
 
 /// Route a notification: `session/cancel` asks the live session to stop cooperatively and
@@ -636,6 +656,7 @@ async fn dispatch_notification(
         return;
     }
     request_session_cancel(bridge, &sid).await;
+    bridge.permissions.cancel_all();
     // Hard-stop backup if the turn is stuck outside cooperative points.
     if let Some(inf) = in_flight
         && inf.session_id == sid
@@ -672,6 +693,23 @@ async fn request_session_cancel(bridge: &Bridge, sid: &str) {
             "session/cancel requested"
         );
     }
+}
+
+fn apply_client_rpc_reply(bridge: &Bridge, msg: &JsonRpcIncoming) -> bool {
+    // Client answers to agent-initiated `session/request_permission` (no method, has id).
+    let has_id = msg.id.as_ref().is_some_and(|id| !id.is_null());
+    let is_reply = msg.method.as_ref().is_none_or(|m| m.is_empty())
+        && has_id
+        && (msg.result.is_some() || msg.error.is_some());
+    if !is_reply {
+        return false;
+    }
+    bridge.permissions.complete(
+        msg.id.as_ref().unwrap_or(&Value::Null),
+        msg.result.clone(),
+        msg.error.clone(),
+    );
+    true
 }
 
 async fn handle_notification(method: &str, _params: Value) {
@@ -1522,11 +1560,14 @@ async fn ensure_converse(bridge: &Bridge, sid: &str) -> Result<Arc<SessionHandle
     };
 
     let handle = if mode.uses_coding_tools() {
+        let permission = permission_attach(bridge, sid, &cwd);
         let parts = interactive::prepare_coding_converse(
             &cwd,
             sid,
             &bridge.coder_tuning,
             ask_human::may_ask_human(&bridge.local_grant),
+            bridge.config_dir.as_deref(),
+            permission,
         )
         .await?;
         open_handle(
@@ -1554,6 +1595,19 @@ async fn ensure_converse(bridge: &Bridge, sid: &str) -> Result<Arc<SessionHandle
         sess.converse = Some(Arc::clone(&handle));
     }
     Ok(handle)
+}
+
+fn permission_attach(
+    bridge: &Bridge,
+    session_id: &str,
+    cwd: &std::path::Path,
+) -> Option<permission::PermissionAttach> {
+    Some(permission::PermissionAttach {
+        ask: Arc::clone(&bridge.permissions) as Arc<dyn permission::PermissionAsk>,
+        session_id: session_id.to_string(),
+        client_cwd: cwd.to_path_buf(),
+        policy: bridge.coder_tuning.command_policy.clone(),
+    })
 }
 
 fn snapshot_turns(conversation: &Mutex<Conversation>) -> Vec<session_store::StoredMessage> {
@@ -2210,7 +2264,37 @@ mod tests {
             local_grant: liberado_common::CapabilitySet::empty(),
             system_prompt: None,
             acp_sessions: Mutex::new(HashMap::new()),
+            permissions: Arc::new(permission::PermissionBroker::new()),
         })
+    }
+
+    #[tokio::test]
+    async fn a_permission_reply_wakes_the_waiter() {
+        let bridge = test_bridge();
+        let rx = bridge.permissions.register_waiter("lib-perm-1");
+        let msg: JsonRpcIncoming = serde_json::from_str(
+            r#"{"jsonrpc":"2.0","id":"lib-perm-1","result":{"outcome":{"outcome":"selected","optionId":"once"}}}"#,
+        )
+        .unwrap();
+        assert!(
+            apply_client_rpc_reply(&bridge, &msg),
+            "a JSON-RPC result with no method is a client reply"
+        );
+        let reply = rx.await.expect("waiter").expect("ok");
+        assert_eq!(
+            permission::parse_decision(&reply),
+            permission::PermissionDecision::Once
+        );
+    }
+
+    #[test]
+    fn a_session_prompt_is_not_a_permission_reply() {
+        let bridge = test_bridge();
+        let msg: JsonRpcIncoming = serde_json::from_str(
+            r#"{"jsonrpc":"2.0","id":1,"method":"session/prompt","params":{}}"#,
+        )
+        .unwrap();
+        assert!(!apply_client_rpc_reply(&bridge, &msg));
     }
 
     /// A method the agent does not implement must answer -32601, not -32603.
@@ -3111,6 +3195,10 @@ mod tests {
         assert!(
             !names.contains(&"submit_report".into()),
             "converse must not offer the pack terminator: {names:?}"
+        );
+        assert!(
+            !names.contains(&"done".into()),
+            "test bridge has no topology, so done must not appear: {names:?}"
         );
     }
 
