@@ -1,5 +1,7 @@
 //! File-level structural health ratchet backed by Mozilla rust-code-analysis.
 
+mod analysis;
+
 use liberado_common::process::std_command;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -59,37 +61,9 @@ struct FileMetrics {
 
 type Report = BTreeMap<String, FileMetrics>;
 
-#[derive(Deserialize)]
-struct Analysis {
-    metrics: AnalysisMetrics,
-}
-
-#[derive(Deserialize)]
-struct AnalysisMetrics {
-    loc: Loc,
-    nom: Nom,
-    cyclomatic: Aggregate,
-}
-
-#[derive(Deserialize)]
-struct Loc {
-    ploc: f64,
-    lloc: f64,
-}
-
-#[derive(Deserialize)]
-struct Nom {
-    total: f64,
-}
-
-#[derive(Deserialize)]
-struct Aggregate {
-    sum: f64,
-}
-
 pub fn check(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
     let config = load_config(root)?;
-    let current = analyze(root)?;
+    let current = analysis::analyze(root)?;
     write_report(&root.join(CURRENT_FILE), &current)?;
     let baseline: Report = serde_json::from_slice(&std::fs::read(root.join(BASELINE_FILE))?)?;
     compare(&config, &baseline, &current)?;
@@ -106,7 +80,7 @@ pub fn ratchet(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
         serde_json::from_slice(&std::fs::read(root.join(CURRENT_FILE))?)?
     } else {
         load_config(root)?;
-        let report = analyze(root)?;
+        let report = analysis::analyze(root)?;
         write_report(&root.join(CURRENT_FILE), &report)?;
         eprintln!("[module health] creating initial baseline");
         report
@@ -162,55 +136,6 @@ fn validate_waivers(root: &Path, config: &Config) -> Result<(), Box<dyn std::err
         }
     }
     Ok(())
-}
-
-fn analyze(root: &Path) -> Result<Report, Box<dyn std::error::Error>> {
-    verify_tool()?;
-    let output = root.join(ANALYSIS_DIR);
-    if output.exists() {
-        std::fs::remove_dir_all(&output)?;
-    }
-    std::fs::create_dir_all(&output)?;
-    let mut command = std_command(TOOL);
-    let status = command
-        .current_dir(root)
-        .args([
-            "--metrics",
-            "--paths",
-            "crates",
-            "--output-format",
-            "json",
-            "--output",
-            ANALYSIS_DIR,
-        ])
-        .status()?;
-    if !status.success() {
-        return Err(format!("{TOOL} failed with {status}").into());
-    }
-    let mut files = Vec::new();
-    collect_json(&output, &mut files)?;
-    let mut report = Report::new();
-    for file in files {
-        let rel = file
-            .strip_prefix(&output)?
-            .to_string_lossy()
-            .replace('\\', "/");
-        let source = rel.strip_suffix(".json").unwrap_or(&rel);
-        if !is_production_source(source) {
-            continue;
-        }
-        let analysis: Analysis = serde_json::from_slice(&std::fs::read(&file)?)?;
-        report.insert(
-            source.to_owned(),
-            FileMetrics {
-                ploc: exact(analysis.metrics.loc.ploc, source, "ploc")?,
-                lloc: exact(analysis.metrics.loc.lloc, source, "lloc")?,
-                functions: exact(analysis.metrics.nom.total, source, "functions")?,
-                cyclomatic: exact(analysis.metrics.cyclomatic.sum, source, "cyclomatic")?,
-            },
-        );
-    }
-    Ok(report)
 }
 
 fn verify_tool() -> Result<(), Box<dyn std::error::Error>> {

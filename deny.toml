@@ -9,6 +9,10 @@ yanked = "warn"
 # revisit when an upstream dependency drops it.
 ignore = [
     "RUSTSEC-2024-0436",
+    # `ttf-parser` is unmaintained with no safe upgrade. It is pulled in by
+    # eframe's Linux window integration through winit/sctk-adwaita. Revisit
+    # when that upstream GUI stack replaces it.
+    "RUSTSEC-2026-0192",
 ]
 
 [licenses]
@@ -26,6 +30,10 @@ allow = [
     "NCSA",
     "CC0-1.0",
     "CDLA-Permissive-2.0",
+    # GUI clipboard and bundled-font assets used by eframe/egui.
+    "BSL-1.0",
+    "OFL-1.1",
+    "Ubuntu-font-1.0",
 ]
 # The workspace's own crates carry their licenses in Cargo.toml; don't double-check them.
 private = { ignore = true }
