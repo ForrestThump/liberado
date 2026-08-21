@@ -127,6 +127,15 @@ fn cmd_docs(args: &mut impl Iterator<Item = String>) -> Result<(), Box<dyn std::
             }
             docs_meta_cmd::run(&crate_map_cmd::repository_root()?, &command)
         }
+        command => cmd_docs_auxiliary(command, args),
+    }
+}
+
+fn cmd_docs_auxiliary(
+    command: Option<&str>,
+    args: &mut impl Iterator<Item = String>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    match command {
         Some("audit") => docs_audit_cmd::run(&crate_map_cmd::repository_root()?, args),
         Some("site") => docs_site_cmd::run(args),
         _ => Err("usage: liberado docs <audit|check-links|crate-map|metadata|site>".into()),
