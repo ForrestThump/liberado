@@ -74,8 +74,16 @@ fn workflow_has_no_privileged_compilation_path() {
         .expect("read CI workflow");
     assert!(!text.contains("pull_request_target"));
     assert!(text.contains("permissions:\n  contents: read"));
+    assert!(text.contains("cancel-in-progress: true"));
 
-    for job in ["test", "module-health", "crap", "doc-links", "rustdoc"] {
+    for job in [
+        "early-lint",
+        "test",
+        "module-health",
+        "crap",
+        "doc-links",
+        "rustdoc",
+    ] {
         let marker = format!("  {job}:\n");
         let start = text
             .find(&marker)
@@ -86,7 +94,7 @@ fn workflow_has_no_privileged_compilation_path() {
             .collect::<Vec<_>>()
             .join("\n");
         assert!(
-            body.contains("needs: dependency-security"),
+            body.contains("needs:") && body.contains("dependency-security"),
             "compiling job {job} bypasses dependency admission"
         );
     }
@@ -94,6 +102,29 @@ fn workflow_has_no_privileged_compilation_path() {
     assert!(text.contains("cargo metadata --locked"));
     assert!(text.contains("cargo deny --locked check"));
     assert!(text.contains("cargo vet --locked"));
+}
+
+#[test]
+fn pre_push_hook_requires_a_current_readiness_receipt() {
+    let root = repository_root();
+    let hook = std::fs::read_to_string(root.join(".githooks/pre-push"))
+        .expect("read committed pre-push hook");
+    let justfile = std::fs::read_to_string(root.join("justfile")).expect("read justfile");
+    assert!(hook.contains("ci verify-ready"));
+    assert!(justfile.contains("git config core.hooksPath .githooks"));
+    assert!(justfile.contains("push: verify-ready"));
+}
+
+#[test]
+fn early_complexity_ceiling_matches_the_committed_policy() {
+    let root = repository_root();
+    let workflow =
+        std::fs::read_to_string(root.join(".github/workflows/ci.yml")).expect("read CI workflow");
+    let policy = std::fs::read_to_string(root.join("function-complexity.toml"))
+        .expect("read complexity policy");
+    assert!(policy.contains("new_function_ceiling = 20"));
+    assert!(workflow.contains("--threshold 420"));
+    assert!(workflow.contains("--fail-regression --fail-above"));
 }
 
 #[test]

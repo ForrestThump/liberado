@@ -71,6 +71,7 @@ Authority model: [doc-authority.md](spec/reference/doc-authority.md).
 | [docs/roadmap.md](roadmap.md) | plan | active | advisory | product | product-roadmap |
 | [docs/spec/architecture-decisions.md](spec/architecture-decisions.md) | index | superseded | advisory | architecture | — |
 | [docs/spec/reference/doc-authority.md](spec/reference/doc-authority.md) | policy | active | normative | docs | document-authority |
+| [docs/spec/reference/local-readiness.md](spec/reference/local-readiness.md) | reference | active | normative | ci | local-readiness |
 | [docs/validation/README.md](validation/README.md) | validation | active | evidence | correctness | — |
 | [docs/validation/mutation-testing-plan.md](validation/mutation-testing-plan.md) | validation | historical | evidence | correctness | — |
 | [docs/validation/mutation-testing/mutation-testing-report-common.md](validation/mutation-testing/mutation-testing-report-common.md) | validation | historical | evidence | correctness | — |

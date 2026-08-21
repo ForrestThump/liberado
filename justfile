@@ -36,7 +36,7 @@ test-t1:
 
 # CI gate: fmt + clippy. Green is required before every commit.
 check:
-    cargo fmt --all -- --check
+    cargo fmt --check
     cargo clippy --locked --workspace --exclude liberado-webui --all-targets -- -D warnings -D clippy::cognitive_complexity
 
 # Full local CI. Includes the host-stable module-health ratchet on every OS.
@@ -68,6 +68,33 @@ dependency-security:
 # Full local ship preflight. Runs through the native Liberado CLI on every host OS.
 preflight:
     cargo run --locked --quiet -p liberado-cli -- ci check
+
+# Fast cross-platform pre-push gate. Writes a receipt bound to HEAD and the tree.
+ready:
+    cargo run --locked --quiet -p liberado-cli -- ci ready
+
+# Refuse when HEAD or any tracked/untracked source changed after `just ready`.
+verify-ready:
+    cargo run --locked --quiet -p liberado-cli -- ci verify-ready
+
+# Push the current branch only when its readiness receipt is current.
+push: verify-ready
+    git push
+
+# Install the committed cross-platform pre-push receipt verifier.
+setup-hooks:
+    git config core.hooksPath .githooks
+
+# Exact Debian CRAP comparison: native on Debian/Linux, Debian under WSL on Windows.
+crap-linux:
+    cargo run --locked --quiet -p liberado-cli -- ci crap-linux
+
+# Host-stable per-function cyclomatic-complexity ratchet.
+function-complexity:
+    cargo run --locked --quiet -p liberado-cli -- ci complexity
+
+function-complexity-ratchet:
+    cargo run --locked --quiet -p liberado-cli -- ci complexity-ratchet
 
 # Compare production Rust files with the committed structural-health baseline.
 module-health:

@@ -1,0 +1,4 @@
+#!/bin/sh
+set -eu
+
+cargo run --locked --quiet -p liberado-cli -- ci verify-ready

@@ -11,6 +11,9 @@
 //!   liberado ci                      full local CI; ratchet and stage/amend crap-baseline.json
 //!   liberado ci check                ship preflight (fmt, clippy, tests, deny)
 //!   liberado ci crap                 compare CRAP scores to crap-baseline.json (no write)
+//!   liberado ci ready                fast Windows/Debian checks + readiness receipt
+//!   liberado ci verify-ready         reject a stale readiness receipt
+//!   liberado ci crap-linux           native Debian CRAP; Debian WSL on Windows
 //!   liberado ci ratchet              check, write baseline, then stage or amend it
 //!                                    console is a summary; full child log is .liberado/ci.log
 //!   liberado shepherd --once          run the unattended PR shepherd once
@@ -49,7 +52,9 @@ mod docs_audit_cmd;
 mod docs_cmd;
 mod docs_meta_cmd;
 mod docs_site_cmd;
+mod function_complexity_cmd;
 mod module_health_cmd;
+mod readiness_cmd;
 mod shepherd_cmd;
 mod summarize_cmd;
 

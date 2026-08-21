@@ -6,6 +6,10 @@ on:
   pull_request:
   workflow_dispatch:
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 # CI compiles untrusted dependencies. It never needs repository write access.
 permissions:
   contents: read
@@ -48,9 +52,49 @@ jobs:
       - name: Audited dependency graph
         run: cargo vet --locked
 
+  early-lint:
+    name: early readiness lint (ubuntu-latest)
+    needs: dependency-security
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout liberado without credentials
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Checkout pinned sibling dependencies
+        uses: ./.github/actions/checkout-siblings
+        with:
+          token: ${{ secrets.SIBLINGS_TOKEN || github.token }}
+
+      - name: Rust toolchain (from rust-toolchain.toml)
+        run: rustup show
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
+
+      - name: Install pinned complexity tool
+        uses: taiki-e/install-action@a2a5f6e99e1a31540baa0468acfa302cff0f359f # v2
+        with:
+          tool: cargo-crap@0.4.3
+
+      - name: Format and workflow-security lint
+        run: |
+          cargo fmt --check
+          cargo clippy --locked -p liberado-test-support --all-targets -- -D warnings -D clippy::cognitive_complexity
+          cargo test --locked -p liberado-test-support --test workflow_security_rules
+
+      - name: Host-stable function complexity
+        # CRAP at 0% coverage is c²+c. The configured cyclomatic ceiling is 20,
+        # so 420 is the equivalent cargo-crap ceiling for new functions.
+        run: >-
+          cargo crap --workspace --missing pessimistic --threshold 420
+          --baseline function-complexity-baseline.json --fail-regression --fail-above
+          --format human --sort file
+
   test:
     name: test (${{ matrix.os }})
-    needs: dependency-security
+    needs: [dependency-security, early-lint]
     strategy:
       fail-fast: false
       matrix:
@@ -127,7 +171,7 @@ jobs:
 
   crap:
     name: CRAP regression (ubuntu-latest)
-    needs: dependency-security
+    needs: [dependency-security, early-lint]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout liberado without credentials

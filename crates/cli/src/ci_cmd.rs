@@ -44,7 +44,7 @@ const CARGO_CRAP_VERSION: &str = "0.4.3";
 const BASELINE_FILE: &str = "crap-baseline.json";
 const LCOV_FILE: &str = ".liberado/crap.lcov";
 const CURRENT_REPORT: &str = ".liberado/crap-current.json";
-const USAGE: &str = "usage: liberado ci [check|crap|ratchet|modules|modules-ratchet]";
+const USAGE: &str = "usage: liberado ci [check|crap|crap-linux|ratchet|modules|modules-ratchet|complexity|complexity-ratchet|ready|verify-ready]";
 const VACATED_BIN: &str = "liberado-ci";
 const CI_LOG_FILE: &str = ".liberado/ci.log";
 const EXTRACT_MAX_LINES: usize = liberado_coder_core::FAILURE_EXTRACT_MAX_LINES;
@@ -150,7 +150,7 @@ impl CiLog {
 /// original process stays alive until the child exits, so the path stays locked.
 /// Rename vacates the cargo artifact path; this process keeps running from the
 /// new name.
-fn vacate_cargo_target_image() -> Result<(), Box<dyn std::error::Error>> {
+pub(crate) fn vacate_cargo_target_image() -> Result<(), Box<dyn std::error::Error>> {
     let exe = std::env::current_exe().map_err(|error| {
         io::Error::new(
             error.kind(),
@@ -229,6 +229,10 @@ fn crap_check(log: &CiLog) -> Result<(), Box<dyn std::error::Error>> {
     generate_lcov(log)?;
     write_crap_json(log, CURRENT_REPORT)?;
     compare_to_baseline(log)
+}
+
+pub(crate) fn crap_for_root(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    crap_check(&CiLog::create(root)?)
 }
 
 /// Check, then replace `crap-baseline.json` with this run's scores.
@@ -370,7 +374,10 @@ fn relativize_lcov(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn relativize_json_file(root: &Path, relative: &str) -> Result<(), Box<dyn std::error::Error>> {
+pub(crate) fn relativize_json_file(
+    root: &Path,
+    relative: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
     let path = root.join(relative);
     let mut value: Value = serde_json::from_str(&std::fs::read_to_string(&path)?)?;
     relativize_json_paths(root, &mut value);

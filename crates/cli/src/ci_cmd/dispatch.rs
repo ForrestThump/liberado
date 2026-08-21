@@ -13,9 +13,14 @@ enum CiCommand {
     Local,
     Check,
     Crap,
+    CrapLinux,
     Ratchet,
     Modules,
     ModulesRatchet,
+    Complexity,
+    ComplexityRatchet,
+    Ready,
+    VerifyReady,
 }
 
 fn parse_command(
@@ -26,9 +31,14 @@ fn parse_command(
         None => CiCommand::Local,
         Some("check") if has_no_extra_args => CiCommand::Check,
         Some("crap") if has_no_extra_args => CiCommand::Crap,
+        Some("crap-linux") if has_no_extra_args => CiCommand::CrapLinux,
         Some("ratchet") if has_no_extra_args => CiCommand::Ratchet,
         Some("modules") if has_no_extra_args => CiCommand::Modules,
         Some("modules-ratchet") if has_no_extra_args => CiCommand::ModulesRatchet,
+        Some("complexity") if has_no_extra_args => CiCommand::Complexity,
+        Some("complexity-ratchet") if has_no_extra_args => CiCommand::ComplexityRatchet,
+        Some("ready") if has_no_extra_args => CiCommand::Ready,
+        Some("verify-ready") if has_no_extra_args => CiCommand::VerifyReady,
         _ => return Err(USAGE.into()),
     };
     Ok(command)
@@ -42,6 +52,26 @@ fn execute(command: CiCommand) -> Result<(), Box<dyn std::error::Error>> {
         CiCommand::Ratchet => with_log(crap_ratchet),
         CiCommand::Modules => crate::module_health_cmd::check(&repository_root()?),
         CiCommand::ModulesRatchet => crate::module_health_cmd::ratchet(&repository_root()?),
+        command => execute_readiness(command),
+    }
+}
+
+fn execute_readiness(command: CiCommand) -> Result<(), Box<dyn std::error::Error>> {
+    match command {
+        CiCommand::CrapLinux => crate::readiness_cmd::crap_linux(&repository_root()?),
+        CiCommand::Ready => crate::readiness_cmd::ready(&repository_root()?),
+        CiCommand::VerifyReady => crate::readiness_cmd::verify(&repository_root()?),
+        command => execute_complexity(command),
+    }
+}
+
+fn execute_complexity(command: CiCommand) -> Result<(), Box<dyn std::error::Error>> {
+    match command {
+        CiCommand::Complexity => crate::function_complexity_cmd::check(&repository_root()?),
+        CiCommand::ComplexityRatchet => {
+            crate::function_complexity_cmd::ratchet(&repository_root()?)
+        }
+        _ => unreachable!("core CI commands are handled by execute"),
     }
 }
 
@@ -66,9 +96,14 @@ mod tests {
             (None, CiCommand::Local),
             (Some("check"), CiCommand::Check),
             (Some("crap"), CiCommand::Crap),
+            (Some("crap-linux"), CiCommand::CrapLinux),
             (Some("ratchet"), CiCommand::Ratchet),
             (Some("modules"), CiCommand::Modules),
             (Some("modules-ratchet"), CiCommand::ModulesRatchet),
+            (Some("complexity"), CiCommand::Complexity),
+            (Some("complexity-ratchet"), CiCommand::ComplexityRatchet),
+            (Some("ready"), CiCommand::Ready),
+            (Some("verify-ready"), CiCommand::VerifyReady),
         ] {
             assert_eq!(parse_command(verb, true).unwrap(), expected);
         }
