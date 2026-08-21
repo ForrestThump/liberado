@@ -154,14 +154,18 @@ fn generate(root: &Path) -> std::io::Result<(String, usize)> {
         }
     }
 
-    let untagged: Vec<&CrateInfo> = crates.iter().filter(|c| c.role.is_empty()).collect();
+    append_untagged(&mut out, &crates);
+    Ok((out, crates.len()))
+}
+
+fn append_untagged(out: &mut String, crates: &[CrateInfo]) {
+    let untagged: Vec<_> = crates.iter().filter(|c| c.role.is_empty()).collect();
     if !untagged.is_empty() {
         out.push_str("\n## ⚠ untagged (fix these - layer_rules.rs will fail)\n");
         for c in untagged {
             out.push_str(&format!("- {}\n", c.name));
         }
     }
-    Ok((out, crates.len()))
 }
 
 pub fn check_or_write(root: &Path, write: bool) -> Result<(), Box<dyn std::error::Error>> {

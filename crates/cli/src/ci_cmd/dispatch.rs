@@ -47,6 +47,10 @@ fn execute(command: CiCommand) -> Result<(), Box<dyn std::error::Error>> {
 
 fn local_run(log: &CiLog) -> Result<(), Box<dyn std::error::Error>> {
     check(log)?;
+    ratchet_quality(log)
+}
+
+fn ratchet_quality(log: &CiLog) -> Result<(), Box<dyn std::error::Error>> {
     crate::module_health_cmd::check(&log.root)?;
     crap_ratchet(log)?;
     crate::module_health_cmd::ratchet(&log.root)
