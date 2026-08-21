@@ -8,8 +8,13 @@ use sysmap_core::layout::{PlacedNode, layout};
 use sysmap_core::model::{EdgeKind, MapEdge, SystemMap};
 use sysmap_core::style::{self, Rgb};
 
-const WORLD_SCALE: f32 = 70.0;
-const NODE_HALF: f32 = 30.0;
+const WORLD_X_SCALE: f32 = 190.0;
+const WORLD_Y_SCALE: f32 = 65.0;
+const GRID_PIXEL_STEP: f32 = 65.0;
+const MIN_NODE_WIDTH: f32 = 110.0;
+const MIN_NODE_HEIGHT: f32 = 58.0;
+const BASE_LABEL_FONT: f32 = 14.0;
+const MIN_READABLE_LABEL_FONT: f32 = 11.0;
 const MIN_ZOOM: f32 = 0.16;
 const MAX_ZOOM: f32 = 4.0;
 const PANEL_BG: Color32 = Color32::from_rgb(0x1a, 0x1e, 0x26);
@@ -214,7 +219,7 @@ impl App {
     }
 
     fn fit(&mut self, rect: Rect) {
-        let Some((min, max)) = world_bounds(&self.placed) else {
+        let Some((min, max)) = world_bounds(&self.map, &self.placed) else {
             return;
         };
         let size = max - min;
@@ -233,11 +238,18 @@ impl App {
     }
 
     fn screen(&self, node: &PlacedNode) -> Pos2 {
-        Pos2::new(node.wx * WORLD_SCALE, -node.wy * WORLD_SCALE) * self.zoom + self.pan
+        Pos2::new(node.wx * WORLD_X_SCALE, -node.wy * WORLD_Y_SCALE) * self.zoom + self.pan
     }
 
     fn node_rect(&self, node: &PlacedNode) -> Rect {
-        Rect::from_center_size(self.screen(node), Vec2::splat(NODE_HALF * self.zoom * 2.0))
+        Rect::from_center_size(self.screen(node), self.node_size(node) * self.zoom)
+    }
+
+    fn node_size(&self, placed: &PlacedNode) -> Vec2 {
+        let Some(node) = self.map.node(&placed.id) else {
+            return Vec2::new(MIN_NODE_WIDTH, MIN_NODE_HEIGHT);
+        };
+        node_world_size(&self.map, &node.id, &node.label)
     }
 
     fn pick(&self, pos: Pos2) -> Option<String> {
@@ -262,7 +274,7 @@ impl App {
     }
 
     fn draw_grid(&self, painter: &egui::Painter, rect: Rect) {
-        let step = WORLD_SCALE * self.zoom;
+        let step = GRID_PIXEL_STEP * self.zoom;
         if step < 12.0 {
             return;
         }
@@ -298,8 +310,10 @@ impl App {
             return;
         }
         let direction = delta / length;
-        let start = a + direction * NODE_HALF * self.zoom;
-        let tip = b - direction * NODE_HALF * self.zoom;
+        let start =
+            a + direction * ray_rect_distance(direction, self.node_size(from) * self.zoom * 0.5);
+        let tip =
+            b - direction * ray_rect_distance(-direction, self.node_size(to) * self.zoom * 0.5);
         let color = color32(style::edge_color(edge.kind));
         let width = if edge.kind == EdgeKind::Dependency {
             1.4
@@ -311,7 +325,7 @@ impl App {
         // Direction is always visible. Selection filters edges but never removes arrowheads.
         painter.add(egui::Shape::convex_polygon(
             arrow_points(tip, direction, self.zoom).to_vec(),
-            color,
+            color32(style::arrow_color(edge.kind)),
             Stroke::NONE,
         ));
     }
@@ -348,11 +362,15 @@ impl App {
             StrokeKind::Outside,
         );
 
-        // Labels scale with their nodes. Very small labels disappear instead of overlapping.
-        let font_size = (13.0 * self.zoom).clamp(3.0, 28.0);
+        let label_rect = rect.shrink(6.0 * self.zoom);
+        painter.rect_filled(label_rect, 3.0 * self.zoom, Color32::from_black_alpha(215));
+
+        // The dark inset gives every label the same contrast. Font size follows node size and is
+        // capped by the available inset, so it cannot spill across the box.
+        let font_size = fitted_label_font(&node.label, self.node_size(placed)) * self.zoom;
         if font_size >= 6.0 {
             painter.text(
-                rect.center(),
+                label_rect.center(),
                 egui::Align2::CENTER_CENTER,
                 &node.label,
                 egui::FontId::proportional(font_size),
@@ -439,17 +457,22 @@ fn edge_in_selection(
     scope.is_some_and(|nodes| nodes.contains(&edge.from) && nodes.contains(&edge.to))
 }
 
-fn world_bounds(placed: &BTreeMap<String, PlacedNode>) -> Option<(Vec2, Vec2)> {
-    let mut points = placed
-        .values()
-        .map(|node| Vec2::new(node.wx * WORLD_SCALE, -node.wy * WORLD_SCALE));
-    let first = points.next()?;
-    let (mut min, mut max) = (first, first);
-    for point in points {
-        min = min.min(point);
-        max = max.max(point);
+fn world_bounds(map: &SystemMap, placed: &BTreeMap<String, PlacedNode>) -> Option<(Vec2, Vec2)> {
+    let mut bounds = placed.values().filter_map(|placed_node| {
+        let node = map.node(&placed_node.id)?;
+        let center = Vec2::new(
+            placed_node.wx * WORLD_X_SCALE,
+            -placed_node.wy * WORLD_Y_SCALE,
+        );
+        let half = node_world_size(map, &node.id, &node.label) * 0.5;
+        Some((center - half, center + half))
+    });
+    let (mut min, mut max) = bounds.next()?;
+    for (node_min, node_max) in bounds {
+        min = min.min(node_min);
+        max = max.max(node_max);
     }
-    Some((min - Vec2::splat(NODE_HALF), max + Vec2::splat(NODE_HALF)))
+    Some((min, max))
 }
 
 fn arrow_points(tip: Pos2, direction: Vec2, zoom: f32) -> [Pos2; 3] {
@@ -460,6 +483,40 @@ fn arrow_points(tip: Pos2, direction: Vec2, zoom: f32) -> [Pos2; 3] {
         tip - direction * size + normal * size * 0.55,
         tip - direction * size - normal * size * 0.55,
     ]
+}
+
+fn node_world_size(map: &SystemMap, id: &str, label: &str) -> Vec2 {
+    let label_width = label.chars().count() as f32 * MIN_READABLE_LABEL_FONT * 0.58 + 24.0;
+    let load_scale = 1.0 + (map.dependency_fan_in(id) as f32).ln_1p() * 0.16;
+    Vec2::new(
+        MIN_NODE_WIDTH.max(label_width) * load_scale,
+        MIN_NODE_HEIGHT * load_scale,
+    )
+}
+
+fn fitted_label_font(label: &str, node_size: Vec2) -> f32 {
+    let character_units = label.chars().count().max(1) as f32 * 0.58;
+    let width_limit = (node_size.x - 24.0) / character_units;
+    let height_limit = (node_size.y - 16.0) * 0.55;
+    let growth = (node_size.y / MIN_NODE_HEIGHT).sqrt();
+    (BASE_LABEL_FONT * growth)
+        .min(width_limit)
+        .min(height_limit)
+        .max(MIN_READABLE_LABEL_FONT)
+}
+
+fn ray_rect_distance(direction: Vec2, half_size: Vec2) -> f32 {
+    let x = if direction.x.abs() > f32::EPSILON {
+        half_size.x / direction.x.abs()
+    } else {
+        f32::INFINITY
+    };
+    let y = if direction.y.abs() > f32::EPSILON {
+        half_size.y / direction.y.abs()
+    } else {
+        f32::INFINITY
+    };
+    x.min(y)
 }
 
 fn relationship_list(ui: &mut egui::Ui, heading: &str, edges: &[&MapEdge], outgoing: bool) {
@@ -493,9 +550,17 @@ fn swatch_row(ui: &mut egui::Ui, color: Rgb, name: &str, blurb: &str) {
 
 fn edge_row(ui: &mut egui::Ui, kind: EdgeKind, label: &str) {
     ui.horizontal(|ui| {
-        let (rect, _) = ui.allocate_exact_size(Vec2::new(24.0, 3.0), Sense::hover());
-        ui.painter()
-            .rect_filled(rect, 1.0, color32(style::edge_color(kind)));
+        let (rect, _) = ui.allocate_exact_size(Vec2::new(30.0, 8.0), Sense::hover());
+        ui.painter().line_segment(
+            [rect.left_center(), rect.right_center()],
+            Stroke::new(3.0, color32(style::edge_color(kind))),
+        );
+        let tip = rect.right_center();
+        ui.painter().add(egui::Shape::convex_polygon(
+            arrow_points(tip, Vec2::X, 0.5).to_vec(),
+            color32(style::arrow_color(kind)),
+            Stroke::NONE,
+        ));
         ui.label(egui::RichText::new(label).weak().small());
     });
 }
@@ -594,5 +659,28 @@ mod tests {
             assert!(points[1].x < points[0].x);
             assert!(points[2].x < points[0].x);
         }
+    }
+
+    #[test]
+    fn only_dependency_fan_in_grows_a_node() {
+        let map = map();
+        let hub = node_world_size(&map, "c", "same label");
+        let outgoing = node_world_size(&map, "a", "same label");
+        assert!(hub.x > outgoing.x);
+        assert!(hub.y > outgoing.y);
+    }
+
+    #[test]
+    fn label_font_fits_the_dark_inset() {
+        for label in ["short", "liberado-provider-openai-compat"] {
+            let size = node_world_size(&map(), "a", label);
+            let font = fitted_label_font(label, size);
+            let estimated_width = label.chars().count() as f32 * font * 0.58;
+            assert!(estimated_width <= size.x - 24.0 + 0.01);
+            assert!(font <= (size.y - 16.0) * 0.55 + 0.01);
+        }
+        let long = "liberado-provider-openai-compat";
+        let size = node_world_size(&map(), "a", long);
+        assert!(fitted_label_font(long, size) < BASE_LABEL_FONT);
     }
 }

@@ -20,16 +20,18 @@ Arguments: `--repo PATH` (repository root; default walks up from the cwd), `--co
 
 ## What it shows
 
-* **Buildings** are workspace crates (via `cargo metadata`) plus runtime components declared in
+* **Nodes** are workspace crates (via `cargo metadata`) plus runtime components declared in
   `topology.toml`: providers, MCP servers, pools, session profiles, coding projects, cron
   schedules, webhooks, the vault, and the notifier.
 * **Layer colors** follow each crate's `[package.metadata.liberado] role` — the same vocabulary
-  `crates/test-support/tests/layer_rules.rs` enforces. Height is fan-in + fan-out (dependency
-  hub-ness).
+  `crates/test-support/tests/layer_rules.rs` enforces. A dark inset keeps every name readable.
+  Node area grows with dependency fan-in, so load-bearing dependencies stand out.
 * **Gray edges** are workspace-internal build-time dependencies (workspace membership decides
   what is internal; dev/build-dependencies are excluded by default).
 * **Orange/green arrows** are runtime control and data paths — the perceive → decide → act →
-  loop-break loop, surfaces, inference, and notification. Edge labels name the payload.
+  loop-break loop, surfaces, inference, and notification. Brighter arrowheads show direction.
+* **Layout order** stays within layer and runtime-kind groups. Four deterministic starting orders
+  and pair-swap local search reduce crossings, with total edge length as the tie-breaker.
 
 ## Regeneration (the point)
 

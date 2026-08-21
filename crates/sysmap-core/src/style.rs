@@ -125,6 +125,13 @@ pub fn edge_color(kind: EdgeKind) -> Rgb {
     }
 }
 
+/// High-contrast arrowhead color for a directed edge.
+///
+/// It keeps the edge kind's hue but is intentionally brighter than the shaft.
+pub fn arrow_color(kind: EdgeKind) -> Rgb {
+    edge_color(kind).tint(0.55)
+}
+
 /// Background color for the scene.
 pub const SCENE_BACKGROUND: Rgb = Rgb::new(0x10, 0x13, 0x18);
 /// Grid-line color under the nodes.
@@ -177,5 +184,18 @@ mod tests {
         // Undeclared ids get the same fallback color on every call.
         assert_eq!(layer_color(&vocab, "novel"), fallback_color("novel"));
         assert_eq!(layer_color(&vocab, "novel"), layer_color(&vocab, "novel"));
+    }
+
+    #[test]
+    fn arrowheads_are_brighter_than_their_edge_shafts() {
+        for kind in [EdgeKind::Dependency, EdgeKind::Control, EdgeKind::Data] {
+            let shaft = edge_color(kind);
+            let arrow = arrow_color(kind);
+            assert_ne!(arrow, shaft);
+            assert!(
+                u16::from(arrow.r) + u16::from(arrow.g) + u16::from(arrow.b)
+                    > u16::from(shaft.r) + u16::from(shaft.g) + u16::from(shaft.b)
+            );
+        }
     }
 }

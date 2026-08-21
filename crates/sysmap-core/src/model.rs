@@ -235,4 +235,61 @@ impl SystemMap {
         out.dedup();
         out
     }
+
+    /// Number of workspace crates that directly depend on this node.
+    ///
+    /// Fan-out is intentionally excluded: this measures how load-bearing the node is, not how many
+    /// services it consumes.
+    pub fn dependency_fan_in(&self, id: &str) -> usize {
+        self.edges
+            .iter()
+            .filter(|edge| edge.kind == EdgeKind::Dependency && edge.to == id && edge.from != id)
+            .count()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dependency_fan_in_excludes_outgoing_and_runtime_edges() {
+        let map = SystemMap {
+            generated_at: String::new(),
+            repository_root: String::new(),
+            config_dir: None,
+            vocabulary: Vocabulary {
+                layers: vec![],
+                kinds: vec![],
+            },
+            nodes: vec![],
+            edges: vec![
+                MapEdge {
+                    from: "a".into(),
+                    to: "hub".into(),
+                    kind: EdgeKind::Dependency,
+                    label: String::new(),
+                },
+                MapEdge {
+                    from: "b".into(),
+                    to: "hub".into(),
+                    kind: EdgeKind::Dependency,
+                    label: String::new(),
+                },
+                MapEdge {
+                    from: "hub".into(),
+                    to: "leaf".into(),
+                    kind: EdgeKind::Dependency,
+                    label: String::new(),
+                },
+                MapEdge {
+                    from: "runtime".into(),
+                    to: "hub".into(),
+                    kind: EdgeKind::Control,
+                    label: String::new(),
+                },
+            ],
+        };
+        assert_eq!(map.dependency_fan_in("hub"), 2);
+    }
 }
