@@ -236,9 +236,24 @@ serde = { workspace = true }
             )
             .unwrap();
         }
+        let untagged_dir = dir.path().join("crates/untagged");
+        fs::create_dir_all(&untagged_dir).unwrap();
+        fs::write(
+            untagged_dir.join("Cargo.toml"),
+            "[package]\nname = \"liberado-untagged\"\n",
+        )
+        .unwrap();
+        let undescribed_dir = dir.path().join("crates/undescribed");
+        fs::create_dir_all(&undescribed_dir).unwrap();
+        fs::write(
+            undescribed_dir.join("Cargo.toml"),
+            "[package]\nname = \"liberado-undescribed\"\n\
+             [package.metadata.liberado]\nrole = \"tooling\"\n",
+        )
+        .unwrap();
         fs::create_dir_all(dir.path().join("docs/spec/reference")).unwrap();
         let (text, count) = generate(dir.path()).unwrap();
-        assert_eq!(count, 3);
+        assert_eq!(count, 5);
         assert!(text.contains("## tooling"));
         let demo_row = text
             .lines()
@@ -248,7 +263,9 @@ serde = { workspace = true }
         assert!(demo_row.contains("`sysmap-core`"));
         assert!(!demo_row.contains("`serde`"));
         assert!(text.contains("A demo \\| crate"));
-        assert!(text.contains("3 workspace crates."));
+        assert!(text.contains("5 workspace crates."));
+        assert!(text.contains("untagged (fix these"));
+        assert!(text.contains("*(no description in Cargo.toml)*"));
         assert!(
             !text.contains(" as of "),
             "generated output must not change when the UTC date changes"
