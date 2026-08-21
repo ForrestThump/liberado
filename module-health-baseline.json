@@ -144,10 +144,16 @@
     "cyclomatic": 46
   },
   "crates/cli/src/ci_cmd.rs": {
-    "ploc": 942,
-    "lloc": 312,
-    "functions": 75,
-    "cyclomatic": 200
+    "ploc": 928,
+    "lloc": 307,
+    "functions": 74,
+    "cyclomatic": 183
+  },
+  "crates/cli/src/ci_cmd/dispatch.rs": {
+    "ploc": 101,
+    "lloc": 13,
+    "functions": 8,
+    "cyclomatic": 57
   },
   "crates/cli/src/coder_cmd.rs": {
     "ploc": 706,
@@ -162,10 +168,22 @@
     "cyclomatic": 4
   },
   "crates/cli/src/crate_map_cmd.rs": {
-    "ploc": 258,
+    "ploc": 278,
+    "lloc": 100,
+    "functions": 20,
+    "cyclomatic": 73
+  },
+  "crates/cli/src/dependency_security_cmd.rs": {
+    "ploc": 10,
+    "lloc": 2,
+    "functions": 1,
+    "cyclomatic": 4
+  },
+  "crates/cli/src/docs_audit_cmd.rs": {
+    "ploc": 345,
     "lloc": 91,
-    "functions": 19,
-    "cyclomatic": 72
+    "functions": 33,
+    "cyclomatic": 114
   },
   "crates/cli/src/docs_cmd.rs": {
     "ploc": 352,
@@ -185,17 +203,35 @@
     "functions": 29,
     "cyclomatic": 91
   },
+  "crates/cli/src/function_complexity_cmd.rs": {
+    "ploc": 256,
+    "lloc": 65,
+    "functions": 13,
+    "cyclomatic": 47
+  },
   "crates/cli/src/main.rs": {
-    "ploc": 102,
-    "lloc": 17,
-    "functions": 11,
-    "cyclomatic": 42
+    "ploc": 115,
+    "lloc": 18,
+    "functions": 12,
+    "cyclomatic": 46
   },
   "crates/cli/src/module_health_cmd.rs": {
-    "ploc": 381,
-    "lloc": 95,
-    "functions": 22,
-    "cyclomatic": 104
+    "ploc": 311,
+    "lloc": 76,
+    "functions": 21,
+    "cyclomatic": 87
+  },
+  "crates/cli/src/module_health_cmd/analysis.rs": {
+    "ploc": 94,
+    "lloc": 21,
+    "functions": 5,
+    "cyclomatic": 26
+  },
+  "crates/cli/src/readiness_cmd.rs": {
+    "ploc": 320,
+    "lloc": 98,
+    "functions": 28,
+    "cyclomatic": 88
   },
   "crates/cli/src/shepherd_cmd.rs": {
     "ploc": 1358,
@@ -1638,10 +1674,10 @@
     "cyclomatic": 27
   },
   "crates/sysmap-core/src/build.rs": {
-    "ploc": 136,
-    "lloc": 42,
-    "functions": 13,
-    "cyclomatic": 24
+    "ploc": 221,
+    "lloc": 57,
+    "functions": 17,
+    "cyclomatic": 29
   },
   "crates/sysmap-core/src/iso.rs": {
     "ploc": 125,
@@ -1650,7 +1686,7 @@
     "cyclomatic": 23
   },
   "crates/sysmap-core/src/layout.rs": {
-    "ploc": 412,
+    "ploc": 414,
     "lloc": 142,
     "functions": 44,
     "cyclomatic": 80
@@ -1662,28 +1698,28 @@
     "cyclomatic": 1
   },
   "crates/sysmap-core/src/model.rs": {
-    "ploc": 209,
-    "lloc": 13,
-    "functions": 24,
-    "cyclomatic": 53
+    "ploc": 376,
+    "lloc": 52,
+    "functions": 40,
+    "cyclomatic": 77
   },
   "crates/sysmap-core/src/profile.rs": {
-    "ploc": 298,
+    "ploc": 302,
     "lloc": 66,
     "functions": 17,
     "cyclomatic": 42
   },
   "crates/sysmap-core/src/scan.rs": {
-    "ploc": 211,
-    "lloc": 45,
-    "functions": 27,
-    "cyclomatic": 48
+    "ploc": 284,
+    "lloc": 73,
+    "functions": 37,
+    "cyclomatic": 60
   },
   "crates/sysmap-core/src/style.rs": {
-    "ploc": 156,
-    "lloc": 38,
+    "ploc": 165,
+    "lloc": 37,
     "functions": 23,
-    "cyclomatic": 35
+    "cyclomatic": 32
   },
   "crates/sysmap-core/src/vocab.rs": {
     "ploc": 33,
@@ -1692,13 +1728,25 @@
     "cyclomatic": 8
   },
   "crates/sysmap-gui/src/app.rs": {
-    "ploc": 636,
-    "lloc": 215,
-    "functions": 61,
-    "cyclomatic": 108
+    "ploc": 656,
+    "lloc": 217,
+    "functions": 57,
+    "cyclomatic": 95
+  },
+  "crates/sysmap-gui/src/insights.rs": {
+    "ploc": 36,
+    "lloc": 9,
+    "functions": 6,
+    "cyclomatic": 10
+  },
+  "crates/sysmap-gui/src/interaction.rs": {
+    "ploc": 73,
+    "lloc": 16,
+    "functions": 6,
+    "cyclomatic": 19
   },
   "crates/sysmap-gui/src/lib.rs": {
-    "ploc": 2,
+    "ploc": 4,
     "lloc": 0,
     "functions": 0,
     "cyclomatic": 1
@@ -1716,7 +1764,7 @@
     "cyclomatic": 6
   },
   "crates/sysmap/src/scan.rs": {
-    "ploc": 356,
+    "ploc": 374,
     "lloc": 72,
     "functions": 17,
     "cyclomatic": 64

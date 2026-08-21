@@ -8,7 +8,7 @@ use std::collections::BTreeSet;
 use std::fmt;
 use std::path::Path;
 
-use cargo_metadata::{Dependency, DependencyKind, MetadataCommand, Package};
+use cargo_metadata::{DependencyKind, Metadata, MetadataCommand, Package};
 
 use crate::model::{DeclaredFlow, EdgeKind, Layer, MapNode, NodeKind};
 
@@ -17,12 +17,21 @@ use crate::model::{DeclaredFlow, EdgeKind, Layer, MapNode, NodeKind};
 pub enum ScanError {
     /// `cargo metadata` failed (missing cargo, malformed workspace, …).
     Cargo { source: cargo_metadata::Error },
+    /// A caller supplied malformed `cargo metadata` JSON.
+    MetadataJson { source: serde_json::Error },
 }
 
 impl fmt::Display for ScanError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.message())
+    }
+}
+
+impl ScanError {
+    fn message(&self) -> String {
         match self {
-            ScanError::Cargo { source } => write!(f, "cargo metadata: {source}"),
+            ScanError::Cargo { source } => format!("cargo metadata: {source}"),
+            ScanError::MetadataJson { source } => format!("cargo metadata JSON: {source}"),
         }
     }
 }
@@ -58,6 +67,13 @@ pub fn scan_repository_with(
         .exec()
         .map_err(|e| ScanError::Cargo { source: e })?;
 
+    Ok(scan_metadata(&metadata, namespace, opts))
+}
+
+/// Scan metadata supplied by a caller that already ran `cargo metadata`.
+///
+/// This is the subprocess-free composition seam for IDEs, CI tools, and alternate front ends.
+pub fn scan_metadata(metadata: &Metadata, namespace: &str, opts: ScanOptions) -> Vec<MapNode> {
     // Workspace members are the "internal" packages: an internal dependency edge is any direct
     // dependency that resolves to one of these. This is the real workspace-membership relation, so
     // any workspace layout and any crate naming convention works.
@@ -74,7 +90,14 @@ pub fn scan_repository_with(
         }
     }
     nodes.sort_by(|a, b| a.id.cmp(&b.id));
-    Ok(nodes)
+    nodes
+}
+
+/// Parse and scan a `cargo metadata --format-version 1 --no-deps` JSON document.
+pub fn scan_metadata_json(json: &str, namespace: &str, opts: ScanOptions) -> Result<Vec<MapNode>> {
+    let metadata =
+        serde_json::from_str(json).map_err(|source| ScanError::MetadataJson { source })?;
+    Ok(scan_metadata(&metadata, namespace, opts))
 }
 
 fn node_from_package(
@@ -91,15 +114,29 @@ fn node_from_package(
         .unwrap_or_default();
     let description = package.description.clone().unwrap_or_default();
 
-    let mut deps: Vec<String> = package
-        .dependencies
+    let deps = internal_dependencies(package, members, DependencyKind::Normal, true);
+    let dev_deps = internal_dependencies(
+        package,
+        members,
+        DependencyKind::Development,
+        opts.include_dev,
+    );
+    let build_deps =
+        internal_dependencies(package, members, DependencyKind::Build, opts.include_build);
+
+    let mut meta = BTreeMap::from([("version".to_string(), package.version.to_string())]);
+    insert_optional(&mut meta, "license", package.license.as_deref());
+    insert_list(&mut meta, "keywords", &package.keywords);
+    insert_list(&mut meta, "categories", &package.categories);
+    let mut targets: Vec<String> = package
+        .targets
         .iter()
-        .filter(|d| include_dep(d, opts))
-        .filter(|d| members.contains(d.name.as_str()))
-        .map(|d| d.name.clone())
+        .flat_map(|target| target.kind.iter())
+        .map(|kind| format!("{kind:?}").to_ascii_lowercase())
         .collect();
-    deps.sort();
-    deps.dedup();
+    targets.sort();
+    targets.dedup();
+    insert_list(&mut meta, "targets", &targets);
 
     let layer = if role_str.is_empty() {
         Layer::unknown()
@@ -114,10 +151,45 @@ fn node_from_package(
         layer,
         description,
         deps,
+        dev_deps,
+        build_deps,
         flows: parse_flows(package, namespace),
-        meta: BTreeMap::new(),
+        meta,
         enabled: true,
     })
+}
+
+fn internal_dependencies(
+    package: &Package,
+    members: &BTreeSet<String>,
+    kind: DependencyKind,
+    include: bool,
+) -> Vec<String> {
+    if !include {
+        return Vec::new();
+    }
+    let mut dependencies: Vec<String> = package
+        .dependencies
+        .iter()
+        .filter(|dependency| dependency.kind == kind)
+        .filter(|dependency| members.contains(dependency.name.as_str()))
+        .map(|dependency| dependency.name.clone())
+        .collect();
+    dependencies.sort();
+    dependencies.dedup();
+    dependencies
+}
+
+fn insert_optional(meta: &mut BTreeMap<String, String>, key: &str, value: Option<&str>) {
+    if let Some(value) = value.filter(|value| !value.is_empty()) {
+        meta.insert(key.to_string(), value.to_string());
+    }
+}
+
+fn insert_list(meta: &mut BTreeMap<String, String>, key: &str, values: &[String]) {
+    if !values.is_empty() {
+        meta.insert(key.to_string(), values.join(", "));
+    }
 }
 
 /// Declared runtime wiring: `[[package.metadata.<namespace>.flows]]`. A crate states its own
@@ -146,15 +218,6 @@ fn parse_flows(package: &Package, namespace: &str) -> Vec<DeclaredFlow> {
                 .collect()
         })
         .unwrap_or_default()
-}
-
-fn include_dep(dep: &Dependency, opts: &ScanOptions) -> bool {
-    match dep.kind {
-        DependencyKind::Normal => true,
-        DependencyKind::Development => opts.include_dev,
-        DependencyKind::Build => opts.include_build,
-        DependencyKind::Unknown => false,
-    }
 }
 
 #[cfg(test)]
@@ -198,7 +261,7 @@ mod tests {
         fs::write(
             dir.join("Cargo.toml"),
             format!(
-                "[package]\nname = \"{name}\"\nversion = \"0.1.0\"\nedition = \"2024\"\ndescription = \"{name} crate\"\n{role_toml}[dependencies]\n{deps_toml}{dev_deps_toml}"
+                "[package]\nname = \"{name}\"\nversion = \"0.1.0\"\nedition = \"2024\"\nlicense = \"MIT\"\nkeywords = [\"agent\"]\ncategories = [\"development-tools\"]\ndescription = \"{name} crate\"\n{role_toml}[dependencies]\n{deps_toml}{dev_deps_toml}"
             ),
         )
         .unwrap();
@@ -226,6 +289,11 @@ mod tests {
         assert_eq!(n.layer, Layer::from("kernel"));
         assert_eq!(n.description, "demo crate");
         assert_eq!(n.deps, vec!["demo-common".to_string()]);
+        assert_eq!(n.meta["version"], "0.1.0");
+        assert_eq!(n.meta["license"], "MIT");
+        assert_eq!(n.meta["keywords"], "agent");
+        assert_eq!(n.meta["categories"], "development-tools");
+        assert_eq!(n.meta["targets"], "lib");
         // A member with no role maps to "unknown" and is still present.
         assert!(
             nodes
@@ -251,6 +319,24 @@ mod tests {
         )
         .unwrap();
         let n = nodes.iter().find(|n| n.id == "demo").unwrap();
-        assert_eq!(n.deps, vec!["demo-common".to_string()]);
+        assert_eq!(n.dev_deps, vec!["demo-common".to_string()]);
+    }
+
+    #[test]
+    fn metadata_json_seam_matches_direct_metadata_scan() {
+        let dir = tempdir().unwrap();
+        write_workspace(dir.path());
+        add_crate(dir.path(), "demo", Some("kernel"), &[], &[]);
+        let metadata = MetadataCommand::default()
+            .manifest_path(dir.path().join("Cargo.toml"))
+            .no_deps()
+            .exec()
+            .unwrap();
+        let json = serde_json::to_string(&metadata).unwrap();
+
+        assert_eq!(
+            scan_metadata_json(&json, "liberado", ScanOptions::default()).unwrap(),
+            scan_metadata(&metadata, "liberado", ScanOptions::default())
+        );
     }
 }

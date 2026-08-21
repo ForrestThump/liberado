@@ -132,6 +132,8 @@ impl Profile {
                 },
                 description: n.description.clone(),
                 deps: Vec::new(),
+                dev_deps: Vec::new(),
+                build_deps: Vec::new(),
                 flows: Vec::new(),
                 meta: n.meta.clone(),
                 enabled: n.enabled,
@@ -254,6 +256,8 @@ mod tests {
             layer: Layer::unknown(),
             description: String::new(),
             deps: Vec::new(),
+            dev_deps: Vec::new(),
+            build_deps: Vec::new(),
             flows: Vec::new(),
             meta: meta
                 .iter()

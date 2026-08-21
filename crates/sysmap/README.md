@@ -26,19 +26,24 @@ Arguments: `--repo PATH` (repository root; default walks up from the cwd), `--co
 * **Layer colors** follow each crate's `[package.metadata.liberado] role` — the same vocabulary
   `crates/test-support/tests/layer_rules.rs` enforces. A dark inset keeps every name readable.
   Node area grows with dependency fan-in, so load-bearing dependencies stand out.
-* **Gray edges** are workspace-internal build-time dependencies (workspace membership decides
-  what is internal; dev/build-dependencies are excluded by default).
+* **Gray edges** are normal workspace-internal dependencies (workspace membership decides what is
+  internal). Muted blue development dependencies and violet build dependencies have separate
+  toolbar toggles and stay hidden by default to keep the production graph readable.
 * **Orange/green arrows** are runtime control and data paths — the perceive → decide → act →
   loop-break loop, surfaces, inference, and notification. Brighter arrowheads show direction.
 * **Layout order** stays within layer and runtime-kind groups. Four deterministic starting orders
   and pair-swap local search reduce crossings, with total edge length as the tie-breaker.
+* **Red node outlines** identify strongly connected components in the normal dependency graph.
+  Development and build edges do not create cycle warnings because they often cross production
+  layers intentionally.
 
 ## Regeneration (the point)
 
 The map is **generated from source, never hand-drawn**. On every launch the model crate re-scans:
 
-1. `cargo metadata` for the workspace members — name, description, dependencies — plus each
-   crate's `[package.metadata.liberado] role` and declared runtime `flows`, and
+1. `cargo metadata` for the workspace members — name, version, license, categories, target kinds,
+   dependency kinds, and description — plus each crate's `[package.metadata.liberado] role` and
+   declared runtime `flows`, and
 2. `topology.toml` (when a config dir resolves) for the runtime instances,
 
 then applies a **deterministic layout** (a pure function of the node set). A dependency change
@@ -81,8 +86,9 @@ tool.
 ## Crates
 
 * `sysmap-core` — the project-agnostic core: `cargo metadata` scanner, map assembly, graph model,
-  deterministic layout, isometric projection, color styling, and the `sysmap.toml` profile/rule
-  engine. No Liberado dependency.
+  production-cycle detection, deterministic layout, isometric projection, color styling, and the
+  `sysmap.toml` profile/rule engine. It also accepts caller-supplied metadata JSON so IDE and CI
+  consumers do not need it to spawn Cargo. No Liberado dependency.
 * `liberado-sysmap` (this crate) — the Liberado profile (`sysmap.toml`) and the `topology.toml` →
   runtime-node adapter.
 * `liberado-sysmap-gui` — the project-agnostic 2D renderer **library** (`launch(map, repo)`);

@@ -118,11 +118,14 @@ pub fn node_color(vocab: &Vocabulary, layer_id: &str, kind_id: &str) -> Rgb {
 
 /// Edge stroke color by kind (generic semantics — build vs control vs data).
 pub fn edge_color(kind: EdgeKind) -> Rgb {
-    match kind {
-        EdgeKind::Dependency => Rgb::new(0x6b, 0x74, 0x82), // neutral gray
-        EdgeKind::Control => Rgb::new(0xe0, 0x8a, 0x3c),    // orange
-        EdgeKind::Data => Rgb::new(0x3d, 0xb0, 0x6b),       // green
-    }
+    const COLORS: [Rgb; 5] = [
+        Rgb::new(0x6b, 0x74, 0x82), // normal dependency: neutral gray
+        Rgb::new(0x56, 0x8a, 0xa6), // development dependency: muted blue
+        Rgb::new(0x8a, 0x6a, 0xa6), // build dependency: muted violet
+        Rgb::new(0xe0, 0x8a, 0x3c), // control: orange
+        Rgb::new(0x3d, 0xb0, 0x6b), // data: green
+    ];
+    COLORS[kind.index()]
 }
 
 /// High-contrast arrowhead color for a directed edge.
@@ -188,7 +191,13 @@ mod tests {
 
     #[test]
     fn arrowheads_are_brighter_than_their_edge_shafts() {
-        for kind in [EdgeKind::Dependency, EdgeKind::Control, EdgeKind::Data] {
+        for kind in [
+            EdgeKind::Dependency,
+            EdgeKind::DevelopmentDependency,
+            EdgeKind::BuildDependency,
+            EdgeKind::Control,
+            EdgeKind::Data,
+        ] {
             let shaft = edge_color(kind);
             let arrow = arrow_color(kind);
             assert_ne!(arrow, shaft);

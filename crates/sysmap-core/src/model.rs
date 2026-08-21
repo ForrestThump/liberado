@@ -5,7 +5,7 @@
 //! their colors, blurbs, and layout order) lives in [`crate::vocab::Vocabulary`], not here — so
 //! this crate stays reusable across projects with different architectures.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
@@ -96,9 +96,14 @@ impl fmt::Display for NodeKind {
 /// What an edge represents.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[repr(usize)]
 pub enum EdgeKind {
     /// A build-time dependency (`[dependencies]` in a `Cargo.toml`).
     Dependency,
+    /// A test-only dependency (`[dev-dependencies]`).
+    DevelopmentDependency,
+    /// A build-script dependency (`[build-dependencies]`).
+    BuildDependency,
     /// Runtime control flow: one component *decides* that another should act.
     Control,
     /// Runtime data flow: payloads (requests, writes, events) moving between components.
@@ -107,11 +112,26 @@ pub enum EdgeKind {
 
 impl EdgeKind {
     pub const fn as_str(self) -> &'static str {
-        match self {
-            EdgeKind::Dependency => "dependency",
-            EdgeKind::Control => "control",
-            EdgeKind::Data => "data",
-        }
+        const NAMES: [&str; 5] = [
+            "dependency",
+            "development dependency",
+            "build dependency",
+            "control",
+            "data",
+        ];
+        NAMES[self.index()]
+    }
+
+    pub(crate) const fn index(self) -> usize {
+        self as usize
+    }
+
+    /// Whether this is any Cargo dependency edge.
+    pub const fn is_dependency(self) -> bool {
+        matches!(
+            self,
+            EdgeKind::Dependency | EdgeKind::DevelopmentDependency | EdgeKind::BuildDependency
+        )
     }
 }
 
@@ -152,6 +172,12 @@ pub struct MapNode {
     /// Internal crate dependencies (crates only).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub deps: Vec<String>,
+    /// Internal test-only dependencies (crates only).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub dev_deps: Vec<String>,
+    /// Internal build-script dependencies (crates only).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub build_deps: Vec<String>,
     /// Outbound runtime flows the crate declares about itself (see [`DeclaredFlow`]). When
     /// non-empty, these *replace* the built-in seed wiring for this crate.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -246,11 +272,129 @@ impl SystemMap {
             .filter(|edge| edge.kind == EdgeKind::Dependency && edge.to == id && edge.from != id)
             .count()
     }
+
+    /// Strongly connected components in the production dependency graph.
+    ///
+    /// Development and build dependencies are excluded: they do not form the shipped layering
+    /// relation and often cross it intentionally. Components are sorted for stable display and
+    /// tests. A one-node component is returned only when it has a self-loop.
+    pub fn dependency_cycles(&self) -> Vec<Vec<String>> {
+        let graph: BTreeMap<String, Vec<String>> = self
+            .nodes
+            .iter()
+            .filter(|node| node.kind.is_crate())
+            .map(|node| (node.id.clone(), node.deps.clone()))
+            .collect();
+        let mut tarjan = Tarjan::new(&graph);
+        tarjan.run();
+
+        let mut cycles: Vec<Vec<String>> = tarjan
+            .components
+            .into_iter()
+            .filter(|component| {
+                component.len() > 1
+                    || graph
+                        .get(component[0])
+                        .is_some_and(|deps| deps.iter().any(|dep| dep == component[0]))
+            })
+            .map(|component| {
+                let mut component: Vec<String> =
+                    component.into_iter().map(str::to_string).collect();
+                component.sort();
+                component
+            })
+            .collect();
+        cycles.sort();
+        cycles
+    }
+}
+
+struct Tarjan<'graph> {
+    graph: &'graph BTreeMap<String, Vec<String>>,
+    next_index: usize,
+    indices: HashMap<&'graph str, usize>,
+    low_links: HashMap<&'graph str, usize>,
+    stack: Vec<&'graph str>,
+    on_stack: HashSet<&'graph str>,
+    components: Vec<Vec<&'graph str>>,
+}
+
+impl<'graph> Tarjan<'graph> {
+    fn new(graph: &'graph BTreeMap<String, Vec<String>>) -> Self {
+        Self {
+            graph,
+            next_index: 0,
+            indices: HashMap::new(),
+            low_links: HashMap::new(),
+            stack: Vec::new(),
+            on_stack: HashSet::new(),
+            components: Vec::new(),
+        }
+    }
+
+    fn run(&mut self) {
+        for node in self.graph.keys().map(String::as_str) {
+            if !self.indices.contains_key(node) {
+                self.visit(node);
+            }
+        }
+    }
+
+    fn visit(&mut self, node: &'graph str) {
+        let index = self.next_index;
+        self.next_index += 1;
+        self.indices.insert(node, index);
+        self.low_links.insert(node, index);
+        self.stack.push(node);
+        self.on_stack.insert(node);
+
+        if let Some(neighbors) = self.graph.get(node) {
+            for neighbor in neighbors.iter().map(String::as_str) {
+                if !self.indices.contains_key(neighbor) {
+                    self.visit(neighbor);
+                    self.low_links
+                        .insert(node, self.low_links[node].min(self.low_links[neighbor]));
+                } else if self.on_stack.contains(neighbor) {
+                    self.low_links
+                        .insert(node, self.low_links[node].min(self.indices[neighbor]));
+                }
+            }
+        }
+
+        if self.low_links[node] == self.indices[node] {
+            let mut component = Vec::new();
+            loop {
+                let member = self.stack.pop().expect("SCC root keeps a non-empty stack");
+                self.on_stack.remove(member);
+                component.push(member);
+                if member == node {
+                    break;
+                }
+            }
+            self.components.push(component);
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn node(id: &str, deps: &[&str]) -> MapNode {
+        MapNode {
+            id: id.into(),
+            label: id.into(),
+            kind: NodeKind::crate_kind(),
+            layer: Layer::from("kernel"),
+            description: String::new(),
+            deps: deps.iter().map(|dep| dep.to_string()).collect(),
+            dev_deps: Vec::new(),
+            build_deps: Vec::new(),
+            flows: Vec::new(),
+            meta: BTreeMap::new(),
+            enabled: true,
+        }
+    }
 
     #[test]
     fn dependency_fan_in_excludes_outgoing_and_runtime_edges() {
@@ -291,5 +435,53 @@ mod tests {
             ],
         };
         assert_eq!(map.dependency_fan_in("hub"), 2);
+    }
+
+    #[test]
+    fn dependency_cycles_find_mutual_and_self_cycles() {
+        let map = SystemMap {
+            generated_at: String::new(),
+            repository_root: String::new(),
+            config_dir: None,
+            vocabulary: Vocabulary {
+                layers: vec![],
+                kinds: vec![],
+            },
+            nodes: vec![
+                node("a", &["b"]),
+                node("b", &["a"]),
+                node("self", &["self"]),
+            ],
+            edges: vec![],
+        };
+
+        assert_eq!(
+            map.dependency_cycles(),
+            vec![
+                vec!["a".to_string(), "b".to_string()],
+                vec!["self".to_string()]
+            ]
+        );
+    }
+
+    #[test]
+    fn dependency_cycles_ignore_development_and_build_dependencies() {
+        let mut a = node("a", &[]);
+        a.dev_deps.push("b".into());
+        let mut b = node("b", &[]);
+        b.build_deps.push("a".into());
+        let map = SystemMap {
+            generated_at: String::new(),
+            repository_root: String::new(),
+            config_dir: None,
+            vocabulary: Vocabulary {
+                layers: vec![],
+                kinds: vec![],
+            },
+            nodes: vec![a, b],
+            edges: vec![],
+        };
+
+        assert!(map.dependency_cycles().is_empty());
     }
 }
