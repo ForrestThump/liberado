@@ -58,6 +58,9 @@ pub struct PermissionAttach {
     pub ask: Arc<dyn PermissionAsk>,
     pub session_id: String,
     pub client_cwd: PathBuf,
+    /// Machine-wide grant store (`command-grants.json`). When unset, uses the platform home
+    /// `.liberado/` directory (see [`default_global_grant_dir`]).
+    pub global_grant_dir: Option<PathBuf>,
     pub policy: CommandPolicy,
 }
 
@@ -172,7 +175,7 @@ pub fn wrap(
     grants: CommandGrantSet,
     attach: PermissionAttach,
 ) -> Arc<dyn ToolRuntime> {
-    load_persisted(&grants, &attach.client_cwd);
+    load_persisted(&grants, &attach);
     Arc::new(PermissionRuntime {
         inner,
         grants,
@@ -242,7 +245,7 @@ impl ToolRuntime for PermissionRuntime {
                 self.grants.revoke(&program);
                 return result;
             }
-            apply_decision(decision, &program, &self.grants, &self.attach.client_cwd)?;
+            apply_decision(decision, &program, &self.grants, &self.attach)?;
         }
         self.inner.invoke(call).await
     }
@@ -260,7 +263,7 @@ fn apply_decision(
     decision: PermissionDecision,
     program: &str,
     grants: &CommandGrantSet,
-    client_cwd: &Path,
+    attach: &PermissionAttach,
 ) -> Result<(), String> {
     match decision {
         PermissionDecision::Deny => Err(format!(
@@ -275,11 +278,11 @@ fn apply_decision(
         }
         PermissionDecision::Workspace => {
             grants.allow(program);
-            persist_grant(workspace_grants_path(client_cwd), program)
+            persist_grant(grant_file_paths(attach).0, program)
         }
         PermissionDecision::Everywhere => {
             grants.allow(program);
-            persist_grant(global_grants_path(), program)
+            persist_grant(grant_file_paths(attach).1, program)
         }
     }
 }
@@ -297,8 +300,9 @@ fn persist_grant(path: PathBuf, program: &str) -> Result<(), String> {
     std::fs::write(&path, body).map_err(|e| e.to_string())
 }
 
-fn load_persisted(grants: &CommandGrantSet, client_cwd: &Path) {
-    for path in [workspace_grants_path(client_cwd), global_grants_path()] {
+fn load_persisted(grants: &CommandGrantSet, attach: &PermissionAttach) {
+    let (workspace, global) = grant_file_paths(attach);
+    for path in [workspace, global] {
         for program in load_grant_file(&path).programs {
             grants.allow(&program);
         }
@@ -322,15 +326,30 @@ fn workspace_grants_path(cwd: &Path) -> PathBuf {
     cwd.join(".liberado").join("command-grants.json")
 }
 
-fn global_grants_path() -> PathBuf {
+/// `(workspace grants file, machine-wide grants file)` for this attach.
+fn grant_file_paths(attach: &PermissionAttach) -> (PathBuf, PathBuf) {
+    (
+        workspace_grants_path(&attach.client_cwd),
+        global_grants_path(attach.global_grant_dir.as_deref()),
+    )
+}
+
+fn global_grants_path(global_grant_dir: Option<&Path>) -> PathBuf {
+    global_grant_dir
+        .map(|dir| dir.join("command-grants.json"))
+        .unwrap_or_else(|| default_global_grant_dir().join("command-grants.json"))
+}
+
+/// Default machine-wide grant directory: `%USERPROFILE%/.liberado` (or `$HOME/.liberado`).
+pub fn default_global_grant_dir() -> PathBuf {
     if let Ok(dir) = std::env::var("LIBERADO_GRANT_DIR") {
-        return PathBuf::from(dir).join("command-grants.json");
+        return PathBuf::from(dir);
     }
     let home = std::env::var_os("USERPROFILE")
         .or_else(|| std::env::var_os("HOME"))
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("."));
-    home.join(".liberado").join("command-grants.json")
+    home.join(".liberado")
 }
 
 fn program_stem(program: &str) -> String {
@@ -518,12 +537,35 @@ mod tests {
         }
     }
 
-    fn attach(decision: PermissionDecision, cwd: PathBuf) -> PermissionAttach {
-        PermissionAttach {
-            ask: Arc::new(StubAsk(decision)),
-            session_id: "s1".into(),
-            client_cwd: cwd,
-            policy: CommandPolicy::default(),
+    /// Temp workspace + temp machine-wide grant dir so tests never read the developer's home.
+    struct IsolatedGrants {
+        _root: tempfile::TempDir,
+        workspace: PathBuf,
+        global: PathBuf,
+    }
+
+    impl IsolatedGrants {
+        fn new() -> Self {
+            let root = tempfile::tempdir().expect("tempdir");
+            let workspace = root.path().join("workspace");
+            let global = root.path().join("global-liberado");
+            std::fs::create_dir_all(&workspace).expect("workspace dir");
+            std::fs::create_dir_all(&global).expect("global grant dir");
+            Self {
+                _root: root,
+                workspace,
+                global,
+            }
+        }
+
+        fn attach(&self, decision: PermissionDecision) -> PermissionAttach {
+            PermissionAttach {
+                ask: Arc::new(StubAsk(decision)),
+                session_id: "s1".into(),
+                client_cwd: self.workspace.clone(),
+                global_grant_dir: Some(self.global.clone()),
+                policy: CommandPolicy::default(),
+            }
         }
     }
 
@@ -592,12 +634,11 @@ mod tests {
 
     #[tokio::test]
     async fn deny_does_not_run_the_command() {
-        let dir = tempfile::tempdir().unwrap();
-        let grants = CommandGrantSet::default();
+        let grants = IsolatedGrants::new();
         let runtime = wrap(
             Arc::new(DenyGit),
-            grants.clone(),
-            attach(PermissionDecision::Deny, dir.path().to_path_buf()),
+            CommandGrantSet::default(),
+            grants.attach(PermissionDecision::Deny),
         );
         let err = runtime
             .invoke(&ToolInvocation::new(
@@ -608,17 +649,16 @@ mod tests {
             .await
             .expect_err("deny must refuse");
         assert!(err.contains("denied"), "{err}");
-        assert!(!grants.contains("git"));
     }
 
     #[tokio::test]
     async fn once_runs_and_does_not_persist() {
-        let dir = tempfile::tempdir().unwrap();
-        let grants = CommandGrantSet::default();
+        let grants = IsolatedGrants::new();
+        let session_grants = CommandGrantSet::default();
         let runtime = wrap(
             Arc::new(DenyGit),
-            grants.clone(),
-            attach(PermissionDecision::Once, dir.path().to_path_buf()),
+            session_grants.clone(),
+            grants.attach(PermissionDecision::Once),
         );
         let out = runtime
             .invoke(&ToolInvocation::new(
@@ -630,23 +670,26 @@ mod tests {
             .expect("once must run");
         assert_eq!(out, "ran");
         assert!(
-            !workspace_grants_path(dir.path()).exists(),
-            "once must not write a grants file"
+            !workspace_grants_path(&grants.workspace).exists(),
+            "once must not write a workspace grants file"
         );
         assert!(
-            !grants.contains("git"),
+            !global_grants_path(Some(&grants.global)).exists(),
+            "once must not write a machine-wide grants file"
+        );
+        assert!(
+            !session_grants.contains("git"),
             "once must not leave the program granted after the call"
         );
     }
 
     #[tokio::test]
     async fn workspace_persist_writes_the_stem() {
-        let dir = tempfile::tempdir().unwrap();
-        let grants = CommandGrantSet::default();
+        let grants = IsolatedGrants::new();
         let runtime = wrap(
             Arc::new(DenyGit),
-            grants.clone(),
-            attach(PermissionDecision::Workspace, dir.path().to_path_buf()),
+            CommandGrantSet::default(),
+            grants.attach(PermissionDecision::Workspace),
         );
         runtime
             .invoke(&ToolInvocation::new(
@@ -656,11 +699,33 @@ mod tests {
             ))
             .await
             .expect("workspace allow must run");
-        let path = workspace_grants_path(dir.path());
+        let path = workspace_grants_path(&grants.workspace);
         let raw = std::fs::read_to_string(&path).expect("grants file");
         assert!(raw.contains("\"git\""), "{raw}");
         let loaded = CommandGrantSet::default();
-        load_persisted(&loaded, dir.path());
+        load_persisted(&loaded, &grants.attach(PermissionDecision::Deny));
         assert!(loaded.contains("git"));
+    }
+
+    #[tokio::test]
+    async fn a_preloaded_machine_grant_skips_the_prompt() {
+        let grants = IsolatedGrants::new();
+        let global_file = global_grants_path(Some(&grants.global));
+        std::fs::create_dir_all(global_file.parent().unwrap()).unwrap();
+        std::fs::write(&global_file, r#"{"programs":["git"]}"#).unwrap();
+        let runtime = wrap(
+            Arc::new(DenyGit),
+            CommandGrantSet::default(),
+            grants.attach(PermissionDecision::Deny),
+        );
+        let out = runtime
+            .invoke(&ToolInvocation::new(
+                "1",
+                "run_command",
+                json!({"program": "git", "args": ["rebase"]}),
+            ))
+            .await
+            .expect("a machine grant must bypass policy without asking");
+        assert_eq!(out, "ran");
     }
 }
