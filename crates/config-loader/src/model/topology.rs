@@ -594,35 +594,48 @@ impl ProjectConfig {
     /// payload for a dispatched run. A second hand-rolled copy is how one path silently acquires
     /// a different bar from the other.
     pub fn ship_preflight_payload(&self) -> Option<serde_json::Value> {
-        let ship = self.preflight.ship.as_ref()?;
-        let mut steps = Vec::new();
-        // A shared script first, when declared: it is the entrypoint CI is meant to call too, so
-        // running it is the closest thing to running CI itself.
-        if let Some(script) = &ship.script
-            && !script.is_empty()
-        {
-            steps.push(serde_json::json!({ "name": "script", "run": script }));
-        }
-        for s in &ship.steps {
-            steps.push(serde_json::json!({
-                "name": s.name,
-                "run": s.run,
-                "timeout_secs": s.timeout_secs,
-                "required": s.required,
-            }));
-        }
-        if steps.is_empty() {
-            return None;
-        }
-        Some(serde_json::json!({
-            "required": true,
-            "profile": "ship",
-            "steps": steps,
-        }))
+        profile_payload("ship", self.preflight.ship.as_ref()?)
+    }
+
+    /// Interactive ACP `done` steps in the same payload shape as [`Self::ship_preflight_payload`].
+    ///
+    /// `None` when the project declares no interactive profile (or an empty one). The converse
+    /// path must not invent commands — unlike ship, there is no built-in default for `liberado`.
+    pub fn interactive_preflight_payload(&self) -> Option<serde_json::Value> {
+        profile_payload("interactive", self.preflight.interactive.as_ref()?)
     }
 }
 
-/// Project-level preflight profiles (`ship` is the merge bar).
+/// Flatten a profile's script (if any) plus ordered steps into the JSON the pack and ACP read.
+///
+/// A shared script is the first step when declared: it is the entrypoint CI is meant to call too,
+/// so running it is the closest thing to running CI itself.
+fn profile_payload(profile: &str, cfg: &PreflightProfileConfig) -> Option<serde_json::Value> {
+    let mut steps = Vec::new();
+    if let Some(script) = &cfg.script
+        && !script.is_empty()
+    {
+        steps.push(serde_json::json!({ "name": "script", "run": script }));
+    }
+    for s in &cfg.steps {
+        steps.push(serde_json::json!({
+            "name": s.name,
+            "run": s.run,
+            "timeout_secs": s.timeout_secs,
+            "required": s.required,
+        }));
+    }
+    if steps.is_empty() {
+        return None;
+    }
+    Some(serde_json::json!({
+        "required": true,
+        "profile": profile,
+        "steps": steps,
+    }))
+}
+
+/// Project-level preflight profiles (`ship` is the merge bar; `interactive` is the ACP `done` bar).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct ProjectPreflightConfig {
     /// CI-equivalent (or stricter) steps before ready / PR.
@@ -631,6 +644,10 @@ pub struct ProjectPreflightConfig {
     /// Optional short profile (docs-only / explicit opt-in).
     #[serde(default)]
     pub fast: Option<PreflightProfileConfig>,
+    /// Same-session checks when the interactive agent calls `done`. Commands live in the
+    /// project file; the pack does not invent them.
+    #[serde(default)]
+    pub interactive: Option<PreflightProfileConfig>,
 }
 
 /// One named profile: either a single script or an ordered step list.
@@ -1752,5 +1769,63 @@ mod session_profile_tests {
     fn default_project_write_class_is_agent_writable() {
         let wc = super::default_project_write_class();
         assert_eq!(wc, liberado_common::WriteClass::AgentWritable);
+    }
+}
+
+#[cfg(test)]
+mod preflight_profile_tests {
+    use super::*;
+
+    #[test]
+    fn interactive_payload_comes_from_that_profile_not_ship() {
+        let project: ProjectConfig = toml::from_str(
+            r#"
+name = "x"
+root = "/tmp/x"
+[preflight.ship]
+steps = [{ name = "full", run = "echo ship" }]
+[preflight.interactive]
+steps = [{ name = "light", run = "echo interactive" }]
+"#,
+        )
+        .expect("parse");
+        let interactive = project
+            .interactive_preflight_payload()
+            .expect("interactive");
+        assert_eq!(interactive["profile"], "interactive");
+        assert_eq!(interactive["steps"][0]["name"], "light");
+        assert_eq!(interactive["steps"][0]["run"], "echo interactive");
+        let ship = project.ship_preflight_payload().expect("ship");
+        assert_eq!(ship["profile"], "ship");
+        assert_eq!(ship["steps"][0]["name"], "full");
+    }
+
+    #[test]
+    fn missing_interactive_profile_is_none() {
+        let project: ProjectConfig = toml::from_str(
+            r#"
+name = "x"
+root = "/tmp/x"
+[preflight.ship]
+steps = [{ name = "full", run = "echo ship" }]
+"#,
+        )
+        .expect("parse");
+        assert!(project.interactive_preflight_payload().is_none());
+        assert!(project.ship_preflight_payload().is_some());
+    }
+
+    #[test]
+    fn empty_interactive_steps_are_none() {
+        let project: ProjectConfig = toml::from_str(
+            r#"
+name = "x"
+root = "/tmp/x"
+[preflight.interactive]
+steps = []
+"#,
+        )
+        .expect("parse");
+        assert!(project.interactive_preflight_payload().is_none());
     }
 }

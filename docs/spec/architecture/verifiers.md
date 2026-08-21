@@ -24,10 +24,14 @@ The shipped preflight runner executes every step in the selected profile and fai
 required step fails. It also parses named failures. The pack hook compares those identities with a
 cached baseline of the base commit, so an existing red base does not block an unrelated repair.
 The coding pack runs the ship profile before terminal success.
+Interactive ACP coding uses the same runner for `done`: `[projects.preflight.interactive]`.
+That profile is opt-in. Absent or empty steps mean the model has no `done` tool and replies in
+prose. Do not invent commands from the project name.
 Projects declare profiles under `[projects.preflight]`; the complete example is in
 [`config.example/topology.toml`](../../../config.example/topology.toml). The runner and its failure
 parser are in `crates/coder-sandbox/src/preflight.rs`; the pack hook is in
-`crates/coder-agent/src/session_pack/preflight_hook.rs`.
+`crates/coder-agent/src/session_pack/preflight_hook.rs`. The interactive tool is
+`crates/acp-bridge/src/done.rs`.
 
 **Biggest product gap after the verifier machinery:** *where do the checks come from?* A vague human
 writeup is not a gate. Section 3 defines **criteria intake** — a structured planning session that

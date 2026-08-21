@@ -41,7 +41,9 @@ use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
 mod ask_human;
 mod coding_run;
+mod done;
 mod interactive;
+mod permission;
 mod provider;
 mod session_store;
 mod stdin_guard;
@@ -125,6 +127,8 @@ struct Bridge {
     system_prompt: Option<String>,
     /// ACP session id → mode + engine state.
     acp_sessions: Mutex<HashMap<String, AcpSession>>,
+    /// Outbound `session/request_permission` waiters (denied commands).
+    permissions: Arc<permission::PermissionBroker>,
 }
 
 /// One `session/prompt` running while the stdin loop stays free for `session/cancel`.
@@ -468,6 +472,7 @@ async fn resolve_bridge_startup() -> Result<Arc<Bridge>, Box<dyn std::error::Err
         local_grant,
         system_prompt,
         acp_sessions: Mutex::new(HashMap::new()),
+        permissions: Arc::new(permission::PermissionBroker::new()),
     }))
 }
 
@@ -1527,6 +1532,7 @@ async fn ensure_converse(bridge: &Bridge, sid: &str) -> Result<Arc<SessionHandle
             sid,
             &bridge.coder_tuning,
             ask_human::may_ask_human(&bridge.local_grant),
+            bridge.config_dir.as_deref(),
         )
         .await?;
         open_handle(
@@ -3111,6 +3117,10 @@ mod tests {
         assert!(
             !names.contains(&"submit_report".into()),
             "converse must not offer the pack terminator: {names:?}"
+        );
+        assert!(
+            !names.contains(&"done".into()),
+            "test bridge has no topology, so done must not appear: {names:?}"
         );
     }
 

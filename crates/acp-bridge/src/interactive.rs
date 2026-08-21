@@ -10,7 +10,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use liberado_coder_core::{CoderCommandConfig, CoderTuning};
-use liberado_coder_sandbox::CommandRequest;
+use liberado_coder_sandbox::{CommandRequest, PreflightSpec};
 use liberado_coder_tools::CodingToolRuntime;
 use liberado_executor::ToolRuntime;
 
@@ -28,10 +28,23 @@ pub async fn prepare_coding_converse(
     session_id: &str,
     tuning: &CoderTuning,
     ask_human: bool,
+    config_dir: Option<&Path>,
+    permission: Option<crate::permission::PermissionAttach>,
 ) -> Result<CodingConverse, String> {
     let workspace = coding_run::prepare_workspace(cwd, session_id).await?;
-    let tools = crate::ask_human::wrap(Arc::new(coding_runtime(&workspace, tuning)?), ask_human);
-    let system = system_prompt(cwd, &workspace, tuning);
+    // Project identity is the client's cwd. The durable worktree is not under the
+    // declared root, so matching on it would drop the configured bar.
+    let spec = coding_run::interactive_preflight_spec(config_dir, cwd);
+    let runtime = coding_runtime(&workspace, tuning)?;
+    let tools: Arc<dyn ToolRuntime> = if let Some(attach) = permission {
+        let grants = runtime.command_grants();
+        crate::permission::wrap(Arc::new(runtime), grants, attach)
+    } else {
+        Arc::new(runtime)
+    };
+    let tools = crate::done::wrap(tools, workspace.clone(), spec.clone());
+    let tools = crate::ask_human::wrap(tools, ask_human);
+    let system = system_prompt(cwd, &workspace, tuning, spec.as_ref());
     Ok(CodingConverse { tools, system })
 }
 
@@ -64,21 +77,43 @@ fn validation_request(cmd: &CoderCommandConfig) -> CommandRequest {
 }
 
 /// System prompt for interactive coding: baked `interactive.md`, plus the workspace path.
-pub fn system_prompt(cwd: &Path, workspace: &Path, tuning: &CoderTuning) -> String {
+pub fn system_prompt(
+    cwd: &Path,
+    workspace: &Path,
+    tuning: &CoderTuning,
+    spec: Option<&PreflightSpec>,
+) -> String {
     let dir = tuning.prompt_dir.as_deref().map(Path::new);
     let body = liberado_coder_core::prompts::load(
         dir,
         liberado_coder_core::prompts::INTERACTIVE_FILE,
         liberado_coder_core::prompts::INTERACTIVE,
     );
-    format!(
+    let mut text = format!(
         "{body}\n\n\
          Client cwd: {}\n\
          Workspace (tools are rooted here): {}\n\
          For an unattended run-to-terminal, switch ACP mode to **goal**.",
         cwd.display(),
         workspace.display()
-    )
+    );
+    append_done_steps(&mut text, spec);
+    text
+}
+
+fn append_done_steps(text: &mut String, spec: Option<&PreflightSpec>) {
+    let Some(spec) = spec.filter(|s| !s.is_empty()) else {
+        return;
+    };
+    let names = spec
+        .steps
+        .iter()
+        .map(|s| s.name.as_str())
+        .collect::<Vec<_>>()
+        .join(", ");
+    text.push_str(&format!(
+        "\n\nThis project configured `done` to run: {names}."
+    ));
 }
 
 #[cfg(test)]
@@ -155,6 +190,7 @@ mod tests {
             Path::new("/client"),
             Path::new("/work/tree"),
             &CoderTuning::default(),
+            None,
         );
         assert!(text.contains("/client"), "cwd must be visible: {text}");
         assert!(
@@ -169,6 +205,31 @@ mod tests {
             !text.contains("then submit_report"),
             "must not instruct submit_report: {text}"
         );
+        assert!(
+            !text.contains("This project configured `done`"),
+            "no spec means no done ritual in the prompt: {text}"
+        );
+    }
+
+    #[test]
+    fn system_prompt_names_configured_done_steps() {
+        let spec = PreflightSpec::new(
+            "interactive",
+            vec![liberado_coder_sandbox::PreflightStep::new(
+                "light", "echo x",
+            )],
+        );
+        let text = system_prompt(
+            Path::new("/c"),
+            Path::new("/w"),
+            &CoderTuning::default(),
+            Some(&spec),
+        );
+        assert!(text.contains("light"), "{text}");
+        assert!(
+            !text.to_ascii_lowercase().contains("cargo"),
+            "prompt must not invent cargo: {text}"
+        );
     }
 
     #[test]
@@ -179,7 +240,7 @@ mod tests {
             prompt_dir: Some(dir.path().display().to_string()),
             ..CoderTuning::default()
         };
-        let text = system_prompt(Path::new("/c"), Path::new("/w"), &tuning);
+        let text = system_prompt(Path::new("/c"), Path::new("/w"), &tuning, None);
         assert!(
             text.contains("DISK OVERRIDE PROMPT"),
             "prompt_dir must win over the baked copy: {text}"
@@ -194,6 +255,8 @@ mod tests {
             "sess-interactive",
             &CoderTuning::default(),
             false,
+            None,
+            None,
         )
         .await
         .unwrap();
@@ -213,13 +276,24 @@ mod tests {
             !names.iter().any(|n| n == "ask_human"),
             "ask_human=false must not offer the tool: {names:?}"
         );
+        assert!(
+            !names.iter().any(|n| n == "done"),
+            "no interactive profile means no done tool: {names:?}"
+        );
     }
 
     #[tokio::test]
     async fn prepare_can_offer_ask_human() {
         let dir = TempDir::new().unwrap();
         let prepared =
-            prepare_coding_converse(dir.path(), "sess-ask", &CoderTuning::default(), true)
+            prepare_coding_converse(
+                dir.path(),
+                "sess-ask",
+                &CoderTuning::default(),
+                true,
+                None,
+                None,
+            )
                 .await
                 .unwrap();
         let names: Vec<String> = prepared
@@ -233,5 +307,93 @@ mod tests {
             "ask_human=true must offer the tool: {names:?}"
         );
         assert!(prepared.tools.parks_for_human("ask_human"));
+    }
+
+    fn toml_path(p: &Path) -> String {
+        let escaped = p.display().to_string().replace('\\', "\\\\");
+        format!("\"{escaped}\"")
+    }
+
+    #[tokio::test]
+    async fn prepare_offers_done_when_interactive_preflight_is_configured() {
+        let cwd = TempDir::new().unwrap();
+        let cfg = TempDir::new().unwrap();
+        std::fs::write(
+            cfg.path().join("topology.toml"),
+            format!(
+                "vault_path = \"/tmp/vault\"\n\n\
+                 [[projects]]\n\
+                 name = \"fixture\"\n\
+                 root = {root}\n\n\
+                 [projects.preflight.interactive]\n\
+                 steps = [{{ name = \"only\", run = \"exit 0\" }}]\n",
+                root = toml_path(cwd.path()),
+            ),
+        )
+        .unwrap();
+        let prepared = prepare_coding_converse(
+            cwd.path(),
+            "sess-done",
+            &CoderTuning::default(),
+            false,
+            Some(cfg.path()),
+            None,
+        )
+        .await
+        .unwrap();
+        let names: Vec<String> = prepared
+            .tools
+            .catalog()
+            .into_iter()
+            .map(|t| t.name)
+            .collect();
+        assert!(
+            names.iter().any(|n| n == "done"),
+            "configured interactive preflight must offer done: {names:?}"
+        );
+        assert!(
+            prepared.system.contains("only"),
+            "prompt must name the configured step: {}",
+            prepared.system
+        );
+    }
+
+    #[tokio::test]
+    async fn prepare_does_not_offer_done_for_a_ship_only_project() {
+        let cwd = TempDir::new().unwrap();
+        let cfg = TempDir::new().unwrap();
+        std::fs::write(
+            cfg.path().join("topology.toml"),
+            format!(
+                "vault_path = \"/tmp/vault\"\n\n\
+                 [[projects]]\n\
+                 name = \"fixture\"\n\
+                 root = {root}\n\n\
+                 [projects.preflight.ship]\n\
+                 steps = [{{ name = \"full\", run = \"exit 0\" }}]\n",
+                root = toml_path(cwd.path()),
+            ),
+        )
+        .unwrap();
+        let prepared = prepare_coding_converse(
+            cwd.path(),
+            "sess-ship-only",
+            &CoderTuning::default(),
+            false,
+            Some(cfg.path()),
+            None,
+        )
+        .await
+        .unwrap();
+        let names: Vec<String> = prepared
+            .tools
+            .catalog()
+            .into_iter()
+            .map(|t| t.name)
+            .collect();
+        assert!(
+            !names.iter().any(|n| n == "done"),
+            "ship steps must not become the interactive done bar: {names:?}"
+        );
     }
 }

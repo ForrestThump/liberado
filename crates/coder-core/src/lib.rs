@@ -9,6 +9,7 @@
 //! first consumed by the coding pack; see `docs/spec/architecture/verifiers.md`.
 
 mod coherence;
+mod failure_excerpt;
 mod intake;
 mod trace_view;
 mod tuning;
@@ -34,6 +35,10 @@ pub use intake::{
 mod acceptance;
 pub mod prompts;
 pub use acceptance::{VERIFY_CMD_ENV, default_verifiers};
+pub use failure_excerpt::{
+    EXTRACT_MAX_LINES as FAILURE_EXTRACT_MAX_LINES, extract_failures, extract_failures_capped,
+    log_tail,
+};
 pub use verify::{
     Finding, FindingKind, NamedVerdict, PipelinePolicy, PipelineResult, Verdict, VerdictStatus,
     VerifierSpec, resolve_verifier_specs,
