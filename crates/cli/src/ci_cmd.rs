@@ -116,7 +116,7 @@ fn with_log(
 }
 
 /// One invocation's full child log. Truncated at the start of `liberado ci`.
-struct CiLog {
+pub(crate) struct CiLog {
     root: PathBuf,
     path: PathBuf,
 }
@@ -198,6 +198,7 @@ fn exe_lives_in_cargo_target(exe: &Path) -> bool {
 fn check(log: &CiLog) -> Result<(), Box<dyn std::error::Error>> {
     vacate_cargo_target_image()?;
     run_cmd(log, "cargo", &["fmt", "--check"])?;
+    crate::dependency_security_cmd::run(log)?;
     run_cmd(
         log,
         "cargo",
@@ -215,7 +216,6 @@ fn check(log: &CiLog) -> Result<(), Box<dyn std::error::Error>> {
         ],
     )?;
     run_cmd(log, "cargo", &["test", "--workspace", "--no-fail-fast"])?;
-    run_cmd(log, "cargo", &["deny", "check"])?;
     Ok(())
 }
 
@@ -571,7 +571,7 @@ fn baseline_has_entries(path: &Path) -> bool {
         .is_some_and(|entries| !entries.is_empty())
 }
 
-fn run_cmd(
+pub(crate) fn run_cmd(
     log: &CiLog,
     program: impl AsRef<OsStr>,
     args: &[&str],

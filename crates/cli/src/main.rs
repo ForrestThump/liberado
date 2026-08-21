@@ -44,6 +44,7 @@ mod ci_cmd;
 mod coder_cmd;
 mod compare_cmd;
 mod crate_map_cmd;
+mod dependency_security_cmd;
 mod docs_cmd;
 mod docs_meta_cmd;
 mod docs_site_cmd;

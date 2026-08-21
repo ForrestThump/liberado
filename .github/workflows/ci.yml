@@ -1,17 +1,3 @@
-# Liberado CI — fmt, clippy, tests, and the layer-rules gate.
-#
-# Sibling repos: the workspace consumes `turbovault/` and `turbomcp/` as path dependencies
-# (Decision 7 co-development), so CI checks them out into the same layout the dev machine uses.
-# If the ForrestThump forks are private, add a classic PAT with `repo` scope as the
-# `SIBLINGS_TOKEN` repository secret; for public forks the default token suffices.
-#
-# The layer-rules test (crates/test-support/tests/layer_rules.rs) runs as part of the normal
-# test suite — a dependency-layering violation fails CI, not just an audit.
-#
-# Toolchain: pinned by `rust-toolchain.toml`, not named here. Tracking floating `stable` meant a
-# Rust release could redden CI with no code change, and the resulting lint failures could not be
-# reproduced on the dev machine at all. See that file for the details.
-
 name: CI
 
 on:
@@ -20,42 +6,67 @@ on:
   pull_request:
   workflow_dispatch:
 
+# CI compiles untrusted dependencies. It never needs repository write access.
+permissions:
+  contents: read
+
 env:
   CARGO_TERM_COLOR: always
-  # Path deps + lockfile: build exactly what's checked in.
   CARGO_NET_GIT_FETCH_WITH_CLI: "true"
 
 jobs:
+  # Resolve and inspect the graph without compiling it. Every job that can
+  # execute a build script or proc macro waits for this job.
+  dependency-security:
+    name: dependency admission (locked + deny + vet)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout liberado without credentials
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Checkout pinned sibling dependencies
+        uses: ./.github/actions/checkout-siblings
+        with:
+          token: ${{ secrets.SIBLINGS_TOKEN || github.token }}
+
+      - name: Rust toolchain (from rust-toolchain.toml)
+        run: rustup show
+
+      - name: Install pinned security tools
+        uses: taiki-e/install-action@a2a5f6e99e1a31540baa0468acfa302cff0f359f # v2
+        with:
+          tool: cargo-deny@0.19.4,cargo-vet@0.10.0
+
+      - name: Locked dependency graph
+        run: cargo metadata --locked --format-version=1 > /dev/null
+
+      - name: Advisories, yanks, sources, licenses, and build scripts
+        run: cargo deny --locked check
+
+      - name: Audited dependency graph
+        run: cargo vet --locked
+
   test:
     name: test (${{ matrix.os }})
+    needs: dependency-security
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - name: Checkout liberado
-        uses: actions/checkout@v4
-
-      - name: Checkout turbovault (sibling path dep)
-        uses: actions/checkout@v4
+      - name: Checkout liberado without credentials
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          repository: ForrestThump/turbovault
-          ref: develop
-          path: turbovault
+          persist-credentials: false
+
+      - name: Checkout pinned sibling dependencies
+        uses: ./.github/actions/checkout-siblings
+        with:
           token: ${{ secrets.SIBLINGS_TOKEN || github.token }}
 
-      - name: Checkout turbomcp (sibling path dep)
-        uses: actions/checkout@v4
-        with:
-          repository: ForrestThump/turbomcp
-          ref: develop
-          path: turbomcp
-          token: ${{ secrets.SIBLINGS_TOKEN || github.token }}
-
-      # No version here on purpose: `rust-toolchain.toml` is the single source of truth, and
-      # rustup installs what it names (plus its components) on first use. Naming a toolchain in
-      # both places is how CI and the dev machine drift apart again.
       - name: Rust toolchain (from rust-toolchain.toml)
         run: |
           rustup show
@@ -64,7 +75,7 @@ jobs:
           cargo fmt --version
 
       - name: Cache cargo
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
 
       - name: PR shepherd self-test
         run: cargo run --locked -p liberado-cli -- shepherd --self-test
@@ -73,71 +84,26 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
         run: cargo fmt --check
 
-      # webui is excluded: it is a Dioxus WASM crate (shipped via `dx build --web`), and its
-      # native cdylib build reports component scaffolding as dead code. Re-include once the
-      # webui matures past pre-alpha or grows a wasm CI job of its own.
-      #
-      # Runs on BOTH matrix OSes on purpose: clippy lints are source-level and OS-independent,
-      # but `#[cfg(windows)]` code is only compiled — and thus only linted — on a Windows
-      # runner. `-D warnings -D clippy::cognitive_complexity` is the complexity gate.
       - name: Clippy
-        run: cargo clippy --workspace --exclude liberado-webui --all-targets -- -D warnings -D clippy::cognitive_complexity
+        run: cargo clippy --locked --workspace --exclude liberado-webui --all-targets -- -D warnings -D clippy::cognitive_complexity
 
-      # `--no-fail-fast` so the run reports EVERY failing test, not just the ones up to the
-      # first failing crate. Without it cargo stops at the first broken test binary, and the
-      # failure set CI reports is truncated — which is fine for a human reading a red build,
-      # but breaks any tooling that compares a branch's failures against its base: fixing an
-      # early failure lets cargo reach later ones, and they then look like new regressions
-      # introduced by the fix. Observed exactly that on PR #80.
-      - name: Tests (includes layer-rules gate)
-        run: cargo test --workspace --no-fail-fast
-
-  audit:
-    name: cargo-deny (advisories + licenses)
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout liberado
-        uses: actions/checkout@v4
-
-      # The siblings are checked out here for the same reason as in `test`, and it is easy to miss
-      # why: cargo-deny resolves the *whole* dependency graph, so it needs the path deps present
-      # even though it compiles nothing. Without these the job fails inside `cargo metadata`
-      # ("failed to load source for dependency `turbomcp`") before reading a single advisory — a
-      # red that looks like a dependency problem and is not one.
-      - name: Checkout turbovault (sibling path dep)
-        uses: actions/checkout@v4
-        with:
-          repository: ForrestThump/turbovault
-          ref: develop
-          path: turbovault
-          token: ${{ secrets.SIBLINGS_TOKEN || github.token }}
-
-      - name: Checkout turbomcp (sibling path dep)
-        uses: actions/checkout@v4
-        with:
-          repository: ForrestThump/turbomcp
-          ref: develop
-          path: turbomcp
-          token: ${{ secrets.SIBLINGS_TOKEN || github.token }}
-
-      # Deliberately not EmbarkStudios/cargo-deny-action: it runs inside a `rust:1.85-alpine`
-      # container, where `rust-toolchain.toml`'s 1.94.1 pin is an uninstalled override and rustup
-      # refuses to proceed. Installing the binary on the runner keeps every job on the one pinned
-      # toolchain, which is the whole point of that file.
-      - name: Install cargo-deny
-        uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-deny
-
-      - name: Deny check
-        run: cargo deny check
+      - name: Tests (includes architecture and workflow-security rules)
+        run: cargo test --locked --workspace --no-fail-fast
 
   module-health:
     name: Module health regression (ubuntu-latest)
+    needs: dependency-security
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout liberado
-        uses: actions/checkout@v4
+      - name: Checkout liberado without credentials
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Checkout pinned sibling dependencies
+        uses: ./.github/actions/checkout-siblings
+        with:
+          token: ${{ secrets.SIBLINGS_TOKEN || github.token }}
 
       - name: Checkout turbovault (sibling path dep)
         uses: actions/checkout@v4
@@ -159,9 +125,8 @@ jobs:
         run: rustup show
 
       - name: Cache cargo
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
 
-      # An external, pinned CI tool. Its MPL-2.0 code is not linked into Liberado.
       - name: Install rust-code-analysis-cli
         run: cargo install rust-code-analysis-cli --version 0.0.25 --locked
 
@@ -170,65 +135,44 @@ jobs:
 
       - name: Upload current module-health report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: module-health-current-ubuntu
           path: .liberado/module-health-current.json
           if-no-files-found: warn
 
-  # Read-only CRAP gate. The committed `crap-baseline.json` is the last best
-  # per-function score; this job never rewrites it. Local `just ci` is what
-  # ratchets the file after a green run. Ubuntu only: coverage numbers are
-  # host-sensitive, and fmt already treats Ubuntu as the source of truth.
   crap:
     name: CRAP regression (ubuntu-latest)
+    needs: dependency-security
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout liberado
-        uses: actions/checkout@v4
-
-      - name: Checkout turbovault (sibling path dep)
-        uses: actions/checkout@v4
+      - name: Checkout liberado without credentials
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          repository: ForrestThump/turbovault
-          ref: develop
-          path: turbovault
-          token: ${{ secrets.SIBLINGS_TOKEN || github.token }}
+          persist-credentials: false
 
-      - name: Checkout turbomcp (sibling path dep)
-        uses: actions/checkout@v4
+      - name: Checkout pinned sibling dependencies
+        uses: ./.github/actions/checkout-siblings
         with:
-          repository: ForrestThump/turbomcp
-          ref: develop
-          path: turbomcp
           token: ${{ secrets.SIBLINGS_TOKEN || github.token }}
 
       - name: Rust toolchain (from rust-toolchain.toml)
         run: rustup show
 
       - name: Cache cargo
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
 
       - name: Install cargo-llvm-cov and cargo-crap
-        uses: taiki-e/install-action@v2
+        uses: taiki-e/install-action@a2a5f6e99e1a31540baa0468acfa302cff0f359f # v2
         with:
           tool: cargo-llvm-cov,cargo-crap@0.4.3
 
-      # Read-only git. A red job means a function's CRAP score went up vs
-      # crap-baseline.json (per-function; 50 cannot become 60) or a new
-      # function is above 450. The log names the functions. Do not raise
-      # the baseline — split the function or add tests. Linux `just ci` is
-      # the same compare. Windows `just ci` is 450 only.
-      #
-      # Coverage is host-sensitive. The job also writes
-      # `.liberado/crap-current.json` (gitignored). Upload it so a Windows
-      # fill that fails Ubuntu can be replaced with this host's report.
       - name: Compare CRAP scores to the committed baseline
         run: cargo run --locked --quiet -p liberado-cli -- ci crap
 
       - name: Upload this host's CRAP report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: crap-current-ubuntu
           path: .liberado/crap-current.json
@@ -236,7 +180,7 @@ jobs:
 
       - name: Upload the quiet-CI full log
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: ci-log-ubuntu
           path: .liberado/ci.log
@@ -244,42 +188,32 @@ jobs:
 
   doc-links:
     name: Docs link check (${{ matrix.os }})
+    needs: dependency-security
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Checkout turbovault (sibling path dep)
-        uses: actions/checkout@v4
+      - name: Checkout liberado without credentials
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          repository: ForrestThump/turbovault
-          ref: develop
-          path: turbovault
-          token: ${{ secrets.SIBLINGS_TOKEN || github.token }}
+          persist-credentials: false
 
-      - name: Checkout turbomcp (sibling path dep)
-        uses: actions/checkout@v4
+      - name: Checkout pinned sibling dependencies
+        uses: ./.github/actions/checkout-siblings
         with:
-          repository: ForrestThump/turbomcp
-          ref: develop
-          path: turbomcp
           token: ${{ secrets.SIBLINGS_TOKEN || github.token }}
 
       - name: Rust toolchain (from rust-toolchain.toml)
         run: rustup show
 
       - name: Cache cargo
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
 
-      # Native checker for relative Markdown links. Skips external URLs and .secret files.
       - name: Check docs links
         run: cargo run --locked -p liberado-cli -- docs check-links
 
-      # Authority metadata, generated indexes, and obsolete path guards.
-      # See docs/spec/reference/doc-authority.md. These checks run in the native CLI on both OSes.
       - name: Document metadata self-test
         run: cargo run --locked -p liberado-cli -- docs metadata self-test
 
@@ -297,35 +231,26 @@ jobs:
 
   rustdoc:
     name: cargo doc (broken intra-doc links denied)
+    needs: dependency-security
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout liberado
-        uses: actions/checkout@v4
-
-      - name: Checkout turbovault (sibling path dep)
-        uses: actions/checkout@v4
+      - name: Checkout liberado without credentials
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          repository: ForrestThump/turbovault
-          ref: develop
-          path: turbovault
-          token: ${{ secrets.SIBLINGS_TOKEN || github.token }}
+          persist-credentials: false
 
-      - name: Checkout turbomcp (sibling path dep)
-        uses: actions/checkout@v4
+      - name: Checkout pinned sibling dependencies
+        uses: ./.github/actions/checkout-siblings
         with:
-          repository: ForrestThump/turbomcp
-          ref: develop
-          path: turbomcp
           token: ${{ secrets.SIBLINGS_TOKEN || github.token }}
 
       - name: Rust toolchain (from rust-toolchain.toml)
         run: rustup show
 
       - name: Cache cargo
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
 
-      # Deny broken intra-doc links so crate Rustdoc stays a reliable authority surface.
       - name: Workspace docs
         env:
           RUSTDOCFLAGS: -D rustdoc::broken_intra_doc_links
-        run: cargo doc --workspace --no-deps --document-private-items
+        run: cargo doc --locked --workspace --no-deps --document-private-items

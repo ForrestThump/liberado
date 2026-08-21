@@ -1,0 +1,12 @@
+version: 2
+updates:
+  # Keep immutable Action SHAs current through reviewed PRs. Dependabot keeps
+  # the human-readable major-version comments while changing the SHA.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      github-actions:
+        patterns: ["*"]
