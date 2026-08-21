@@ -1,7 +1,7 @@
 [package]
 name = "liberado-sysmap"
 version = "0.1.0"
-description = "Data model for Liberado's isometric system map: scans Cargo manifests and topology.toml into a deterministic, serializable graph (crate DAG + runtime control/data paths)."
+description = "Liberado profile and topology adapter for sysmap-core: supplies system vocabulary and runtime nodes while the generic core scans Cargo metadata and builds the graph."
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true

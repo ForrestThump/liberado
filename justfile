@@ -105,7 +105,7 @@ sysmap:
 
 # Write the generated system-map graph as JSON (headless; proves the map is data-driven).
 sysmap-json path:
-    cargo run --locked -p liberado-sysmap-cli -- --write-json {{path}}
+    cargo run --locked -p liberado-sysmap-cli -- --write-json "{{path}}"
 
 # Run the native documentation metadata self-test.
 docs-meta-test:

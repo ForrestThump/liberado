@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::Path;
 
@@ -75,10 +76,7 @@ fn read_crate(path: &Path) -> std::io::Result<Option<CrateInfo>> {
             }
         } else if section == "package.metadata.liberado" && trimmed.starts_with("role") {
             info.role = value(trimmed).unwrap_or_default().to_owned();
-        } else if section == "dependencies"
-            && (trimmed.starts_with("liberado-") || trimmed.starts_with("chat-client-contract"))
-            && trimmed.contains('=')
-        {
+        } else if section == "dependencies" && trimmed.contains('=') {
             let dep = trimmed.split('=').next().unwrap_or_default().trim();
             if dep
                 .chars()
@@ -107,6 +105,14 @@ fn generate(root: &Path) -> std::io::Result<(String, usize)> {
         }
     }
     crates.sort_by(|a, b| a.name.cmp(&b.name));
+    let workspace_names = crates
+        .iter()
+        .map(|info| info.name.clone())
+        .collect::<BTreeSet<_>>();
+    for info in &mut crates {
+        info.deps
+            .retain(|dependency| workspace_names.contains(dependency));
+    }
 
     let mut out = String::new();
     out.push_str("# Crate map\n\n");
@@ -210,16 +216,39 @@ description = "A demo | crate"
 role = "tooling"
 [dependencies]
 liberado-common = { workspace = true }
+sysmap-core = { workspace = true }
+serde = { workspace = true }
 "#,
         )
         .unwrap();
+        for (directory, name) in [
+            ("common", "liberado-common"),
+            ("sysmap-core", "sysmap-core"),
+        ] {
+            let dependency_dir = dir.path().join("crates").join(directory);
+            fs::create_dir_all(&dependency_dir).unwrap();
+            fs::write(
+                dependency_dir.join("Cargo.toml"),
+                format!(
+                    "[package]\nname = \"{name}\"\ndescription = \"dependency\"\n\
+                     [package.metadata.liberado]\nrole = \"tooling\"\n"
+                ),
+            )
+            .unwrap();
+        }
         fs::create_dir_all(dir.path().join("docs/spec/reference")).unwrap();
         let (text, count) = generate(dir.path()).unwrap();
-        assert_eq!(count, 1);
+        assert_eq!(count, 3);
         assert!(text.contains("## tooling"));
-        assert!(text.contains("`liberado-common`"));
+        let demo_row = text
+            .lines()
+            .find(|line| line.starts_with("| [`liberado-demo`]"))
+            .expect("generated demo row");
+        assert!(demo_row.contains("`liberado-common`"));
+        assert!(demo_row.contains("`sysmap-core`"));
+        assert!(!demo_row.contains("`serde`"));
         assert!(text.contains("A demo \\| crate"));
-        assert!(text.contains("1 workspace crates."));
+        assert!(text.contains("3 workspace crates."));
         assert!(
             !text.contains(" as of "),
             "generated output must not change when the UTC date changes"

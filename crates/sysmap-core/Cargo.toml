@@ -1,7 +1,7 @@
 [package]
 name = "sysmap-core"
 version = "0.1.0"
-description = "Project-agnostic system-map core: serializable graph model, deterministic layout, isometric projection, and color styling. No project-specific vocabulary — layers, kinds, colors, and wiring come from outside."
+description = "Project-agnostic system-map core: cargo-metadata scanning, profile-driven graph assembly, deterministic layout, projection, and styling. Project vocabulary and wiring come from data."
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true

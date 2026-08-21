@@ -21,7 +21,7 @@
 //! 6. **Every crate is tagged** — a new crate without a role fails here, forcing a conscious
 //!    layering decision at birth.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
 #[derive(Debug)]
@@ -67,12 +67,7 @@ fn load_crates() -> BTreeMap<String, CrateInfo> {
         let internal_deps = manifest
             .get("dependencies")
             .and_then(|d| d.as_table())
-            .map(|deps| {
-                deps.keys()
-                    .filter(|k| is_internal(k))
-                    .cloned()
-                    .collect::<Vec<_>>()
-            })
+            .map(|deps| deps.keys().cloned().collect::<Vec<_>>())
             .unwrap_or_default();
 
         crates.insert(
@@ -84,18 +79,18 @@ fn load_crates() -> BTreeMap<String, CrateInfo> {
             },
         );
     }
+    let workspace_names = crates.keys().cloned().collect::<BTreeSet<_>>();
+    for crate_info in crates.values_mut() {
+        crate_info
+            .internal_deps
+            .retain(|dependency| workspace_names.contains(dependency));
+    }
     assert!(
         crates.len() >= 30,
         "expected the full workspace, found only {} crates — wrong directory?",
         crates.len()
     );
     crates
-}
-
-fn is_internal(dep: &str) -> bool {
-    // `sysmap-core` is the one workspace crate without the `liberado-` prefix (the liftable
-    // system-map core); the prefix heuristic here is a name match until the cargo-metadata phase.
-    dep.starts_with("liberado-") || dep == "chat-client-contract" || dep == "sysmap-core"
 }
 
 const ROLES: &[&str] = &[
