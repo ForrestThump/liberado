@@ -35,7 +35,7 @@ pub fn wrap(inner: Arc<dyn ToolRuntime>, enabled: bool) -> Arc<dyn ToolRuntime> 
     wrap_with_client(inner, enabled, None)
 }
 
-/// Same as [`wrap`], and optioned questions wait on the ACP client chooser.
+/// Wrap a coding runtime with `ask_human` when `enabled`, and optioned questions wait on the ACP client chooser.
 pub fn wrap_with_client(
     inner: Arc<dyn ToolRuntime>,
     enabled: bool,

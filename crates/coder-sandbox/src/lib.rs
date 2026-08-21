@@ -222,9 +222,11 @@ impl DockerWorkspace {
     }
 
     pub fn docker_run_args(&self, request: &CommandRequest) -> Result<Vec<String>, SandboxError> {
-        if !self.host.command_grants().contains(&request.program) {
-            ensure_command_allowed(self.host.command_policy(), request)?;
-        }
+        ensure_granted_or_allowed(
+            &self.host.command_grants(),
+            self.host.command_policy(),
+            request,
+        )?;
         if self.spec.image.trim().is_empty() {
             return Err(SandboxError::InvalidDockerConfig(
                 "docker image must not be empty".to_string(),
@@ -430,9 +432,7 @@ pub async fn run_git_best_effort(current_dir: &Path, args: &[&str]) {
 #[async_trait]
 impl CommandRunner for HostWorkspace {
     async fn run_command(&self, request: CommandRequest) -> Result<CommandOutput, SandboxError> {
-        if !self.grants.contains(&request.program) {
-            ensure_command_allowed(&self.command_policy, &request)?;
-        }
+        ensure_granted_or_allowed(&self.grants, &self.command_policy, &request)?;
 
         let mut command = liberado_common::process::command(&request.program);
         command.args(&request.args).current_dir(&self.root);
@@ -477,6 +477,17 @@ impl CommandRunner for HostWorkspace {
             stderr_offload,
         })
     }
+}
+
+fn ensure_granted_or_allowed(
+    grants: &CommandGrantSet,
+    policy: &CommandPolicy,
+    request: &CommandRequest,
+) -> Result<(), SandboxError> {
+    if grants.contains(&request.program) {
+        return Ok(());
+    }
+    ensure_command_allowed(policy, request)
 }
 
 pub fn ensure_command_allowed(

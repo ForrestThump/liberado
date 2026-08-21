@@ -587,8 +587,18 @@ async fn handle_stdin_line(
         }
     };
 
+    dispatch_stdin_message(bridge, wire, msg, in_flight).await?;
+    Ok(true)
+}
+
+async fn dispatch_stdin_message(
+    bridge: &Arc<Bridge>,
+    wire: &Arc<StdoutWire>,
+    msg: JsonRpcIncoming,
+    in_flight: &mut Option<InFlightPrompt>,
+) -> Result<(), Box<dyn std::error::Error>> {
     if apply_client_rpc_reply(bridge, &msg) {
-        return Ok(true);
+        return Ok(());
     }
 
     let method = msg.method.unwrap_or_default();
@@ -597,7 +607,7 @@ async fn handle_stdin_line(
 
     if is_notification {
         dispatch_notification(bridge, &method, msg.params, in_flight).await;
-        return Ok(true);
+        return Ok(());
     }
 
     let id = msg.id.unwrap_or(Value::Null);
@@ -605,7 +615,7 @@ async fn handle_stdin_line(
     // session/prompt runs in a task so session/cancel can be read mid-turn.
     if method == "session/prompt" {
         spawn_prompt_if_free(bridge, wire, &msg.params, id, in_flight)?;
-        return Ok(true);
+        return Ok(());
     }
 
     match handle_request(Arc::clone(bridge), &method, msg.params, wire.as_ref()).await {
@@ -622,7 +632,7 @@ async fn handle_stdin_line(
             }),
         )?,
     }
-    Ok(true)
+    Ok(())
 }
 
 /// Route a notification: `session/cancel` asks the live session to stop cooperatively and
