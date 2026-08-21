@@ -9,10 +9,10 @@ open_items: true
 
 # Paseo ↔ Liberado integration — ordered gap plan
 
-**Status:** Living plan (2026-08-09). Core ACP path **shipped** on
-`feat/paseo-liberado-integration`; this doc is the ordered backlog for making Liberado
-reliably usable through the [ForrestThump/paseo](https://github.com/ForrestThump/paseo) fork
-(and stock Generic ACP), then for optional productization and remote access.
+**Status:** Living plan (2026-08-09, updated 2026-08-20). **Track A (local ACP) is
+dogfood-ready:** interactive coding, durable sessions, and Paseo permission prompts for
+`run_command` / `ask_human` landed in PRs #127, #192, and #193. Remaining work is wire polish
+(P4.1), fork productization (Phase 5), and Track B remote access (Phase 6).
 
 **Not a single PR.** One PR-sized slice at a time; mutation evidence for behaviour claims per
 [`backlog.md`](backlog.md).
@@ -67,7 +67,7 @@ clear path to remote attach and fuller Liberado parity.
 
 | Track | What it is | State |
 |-------|------------|--------|
-| **A — ACP coding agent** | Paseo spawns `liberado-acp` over stdio (`extends: "acp"`). Same pattern as Gemini/Hermes. Session `cwd` = coding folder. | Core path landed; gaps below |
+| **A — ACP coding agent** | Paseo spawns `liberado-acp` over stdio (`extends: "acp"`). Same pattern as Gemini/Hermes. Session `cwd` = coding folder. | Dogfood-ready (P0–P4.4, P7.1); fork polish + remote remain |
 | **B — Remote daemon** | Paseo detects/attaches to a deployed `liberado serve` (tunnel / host access, HTTP/SSE). | Not started; required for full “daemon already up” deliverable |
 
 Stale `paseo/packages/server/dist/.../liberado-*.js` artifacts are from an earlier experiment
@@ -90,6 +90,11 @@ first-class Liberado provider in source; registration is user `~/.paseo/config.j
 - Provider from `DEEPSEEK_API_KEY` / OpenRouter / OpenAI or `LIBERADO_CONFIG_DIR`
 - Install + config merge script; example provider block with `supportsMcpServers: false`
 - Unit tests for prompt extraction + session payload shape
+- **Interactive coding** mode: lasting `Conversation` + coding tools (PR #192); not the pack's
+  outer attempt/repair loop — switch to **goal** for that
+- **`session/request_permission`** for denied `run_command` (deny / once / workspace / everywhere)
+  and for `ask_human` option choosers (PR #193); dogfood confirmed in Paseo (2026-08-20)
+- Durable session store + `session/load` with history replay (PR #127)
 
 ---
 
@@ -205,7 +210,7 @@ landed. Background, including what the second run still got wrong:
 | **P4.1** | **Error stop reasons** — ⚠️ **open, but the acceptance below is unachievable as written** | Provider/turn failures still return `stopReason: "end_turn"` with an “Error:” text prefix (three sites in `main.rs`). | ACP's `StopReason` is a **closed set** — `end_turn`, `max_tokens`, `max_turn_requests`, `refusal`, `cancelled` — with **no error variant** (confirmed against `zed-industries/agent-client-protocol`, 2026-08-10). So "use a distinct stop reason where ACP allows" has no answer. The real choice is between returning a JSON-RPC error for harness failures and documenting the `end_turn` mapping deliberately. **Decide that first**; do not dispatch this as an agent task until it is decided, because the done-condition is a judgement call. |
 | **P4.2** | ~~**Stdout serialization**~~ | — | ✅ **Landed.** `StdoutWire` in `crates/acp-bridge/src/wire.rs` is a single write path under one lock; responses and notifications both go through it. |
 | **P4.3** | ~~**Richer prompt blocks**~~ | — | ✅ **Implemented in PR #169.** Embedded text resources keep their source URI and content; resource links and binary blobs keep useful metadata; image/audio remain unsupported and are not decoded into fake text. |
-| **P4.4** | **Permission mapping** | Optional: Paseo `requestPermission` for Liberado write/execute gates. | Only if dogfood shows Paseo-mediated approvals are needed; default remains Liberado-internal policy. |
+| **P4.4** | ~~**Permission mapping**~~ | — | ✅ **Landed in PR #193.** Denied `run_command` and `ask_human` option prompts use `session/request_permission` (deny / once / workspace / everywhere). Dogfood confirmed in Paseo (2026-08-20). Write gates outside command policy remain Liberado-internal. |
 
 ---
 
@@ -287,32 +292,25 @@ P0.3 --version ───────┘         │
 
 ---
 
-## Operator checklist (until P0 is done)
+## Operator checklist
 
 ```powershell
 # Liberado repo
 cargo install --path crates/acp-bridge --force
 powershell -File scripts/install-paseo-liberado.ps1
 # Restart Paseo; provider Liberado; diagnostics: binary, initialize, session/new
-# Prompt only after DEEPSEEK_API_KEY (or peer) is in the env that starts Paseo
+# Prompt only after OPENROUTER_API_KEY (or peer) is in the env that starts Paseo
+# Interactive coding: mode picker → coding; denied shell commands show a permission chooser
 ```
-
-Known dogfood friction until fixed:
-
-- Tool rows may not complete cleanly in UI (P0.1)
-- Version diagnostic row may fail (P0.3)
-
-> Resume clarity: `loadSession: true` with history replay landed in PR #127;
-> session load is no longer a false promise. Remove this note when P0.1 and P0.3 are also shipped.
 
 ---
 
 ## Done when
 
-**Minimum (integration “usable”):** P0.1–P0.3 + P1.1 green; install script dogfood on Windows
-with Paseo fork; tool timeline pairs; no false resume promise.
+**Minimum (integration “usable”):** ✅ met — P0–P1, P2 modes, P3 durable load, P4.4 permission
+mapping, and interactive coding (P7.1) are landed; install script dogfood on Windows is green.
 
-**Comfortable:** + P2 modes, P3 durable load, P5 first-class provider on fork.
+**Comfortable:** + P5 first-class provider on fork.
 
 **Remote story:** P6 complete — separate from ACP comfort.
 

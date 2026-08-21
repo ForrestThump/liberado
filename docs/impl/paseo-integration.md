@@ -24,6 +24,10 @@
 - Coding mode: lasting conversation with the same coding tools and durable worktree
   (`coding-worktrees/<session>` when `cwd` is a git repo). One prompt is one turn. It does
   **not** run the pack's outer attempt/repair/ship-bar loop. Switch to **goal** for that.
+- Interactive coding in Paseo: denied `run_command` calls surface a
+  `session/request_permission` chooser (deny / once / workspace / everywhere). The `ask_human`
+  tool uses the same wire for named options; free-text questions park until the next
+  `session/prompt`. Dogfood confirmed on Windows (2026-08).
 - Goal mode: the previous default — one prompt is one `CoderRunRequest` through
   [`LiberadoLoopBackend`](../../crates/coder-agent/), with ship preflight before a success
   claim (PR #134). Same `[coder]` tuning. HTTP `POST /api/goals` remains the GUI/agent
@@ -53,7 +57,7 @@
 |---|---|
 | Live hub `/goal` list in Paseo UI | Separate (daemon HTTP bridge) |
 | Token-by-token tool events mid-coding-run | Follow-up (pack currently reports at end) |
-| Intake clarify questions via ACP | Interactive coding offers `ask_human`. Named `options` become Paseo `session/request_permission` buttons. A free-text question parks; the next `session/prompt` is the answer. Denied `run_command` uses the same chooser (once / workspace / everywhere). Goal-mode intake still uses the pack's `InputChannel`. |
+| Goal-mode intake clarify questions | Uses the pack's `InputChannel`, not ACP `ask_human` |
 | Face-mode cancel mid-stream | Cooperative cancel wired (drops SSE future); daemon may still finish its turn |
 
 ## Prerequisites (Windows)
@@ -186,17 +190,17 @@ you want green rows for launcher binary, ACP `initialize`, and ACP `session/new`
 | Agent → client | `session/request_permission` | Command-policy and `ask_human` option chooser |
 | Client → agent | JSON-RPC **response** (no method) | Answer to `session/request_permission` |
 | Client → agent | `session/cancel` | Notification; chat turns return `stopReason: "cancelled"` |
-| Client → agent | `session/load` | Not advertised (`loadSession: false`) until durable history |
+| Client → agent | `session/load` | Restore mode, model, cwd, and replay stored messages (`loadSession: true`) |
 
 ## Limits (honest)
 
-- Session history is **process-local** today. Durable resume across restarts is future work.
+- Session history persists under `<LIBERADO_DATA_DIR>/acp-sessions/` and survives bridge
+  restarts when the client calls `session/load`.
 - **Coding / chat** are self-contained. **Face** requires a running `liberado serve` and
   streams its events into ACP; cancel mid-face-stream is not wired yet.
 - Coding pack live tool streaming mid-run is a follow-up (report streams at end today).
 
-**Ordered residual work** (tool-call ids, resume honesty, diagnostics, modes, durable load, fork
-polish, remote track):
+**Ordered residual work** (error stop reasons, fork productization, remote track):
 [`future-work/paseo-liberado-integration-roadmap.md`](../future-work/paseo-liberado-integration-roadmap.md).
 
 ## Troubleshooting

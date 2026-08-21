@@ -41,8 +41,9 @@ Open outcomes:
   Follow [`session-surface-contract.md`](spec/architecture/session-surface-contract.md).
 - **TurboVault modules:** finish `vault_events` and upstream the reusable module changes. See the
   [`TurboVault integration roadmap`](future-work/turbovault-modules-integration-roadmap.md).
-- **Remote access:** finish the remaining Paseo integration work without coupling remote transport
-  to the ACP coding agent. See the
+- **Remote access:** finish Track B (daemon tunnel / remote attach) without coupling remote
+  transport to the ACP coding agent. Local ACP interactive coding — tools, durable sessions,
+  and Paseo permission prompts — is dogfood-ready. See the
   [`Paseo integration roadmap`](future-work/paseo-liberado-integration-roadmap.md).
 
 Use the [conformance runbook](impl/live-conformance.md) for deterministic and deployed-daemon
