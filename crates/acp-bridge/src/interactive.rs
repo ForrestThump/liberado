@@ -36,6 +36,9 @@ pub async fn prepare_coding_converse(
     // declared root, so matching on it would drop the configured bar.
     let spec = coding_run::interactive_preflight_spec(config_dir, cwd);
     let runtime = coding_runtime(&workspace, tuning)?;
+    let question_client = permission
+        .as_ref()
+        .map(|a| (Arc::clone(&a.ask), a.session_id.clone()));
     let tools: Arc<dyn ToolRuntime> = if let Some(attach) = permission {
         let grants = runtime.command_grants();
         crate::permission::wrap(Arc::new(runtime), grants, attach)
@@ -43,7 +46,7 @@ pub async fn prepare_coding_converse(
         Arc::new(runtime)
     };
     let tools = crate::done::wrap(tools, workspace.clone(), spec.clone());
-    let tools = crate::ask_human::wrap(tools, ask_human);
+    let tools = crate::ask_human::wrap_with_client(tools, ask_human, question_client);
     let system = system_prompt(cwd, &workspace, tuning, spec.as_ref());
     Ok(CodingConverse { tools, system })
 }
@@ -285,17 +288,16 @@ mod tests {
     #[tokio::test]
     async fn prepare_can_offer_ask_human() {
         let dir = TempDir::new().unwrap();
-        let prepared =
-            prepare_coding_converse(
-                dir.path(),
-                "sess-ask",
-                &CoderTuning::default(),
-                true,
-                None,
-                None,
-            )
-                .await
-                .unwrap();
+        let prepared = prepare_coding_converse(
+            dir.path(),
+            "sess-ask",
+            &CoderTuning::default(),
+            true,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
         let names: Vec<String> = prepared
             .tools
             .catalog()

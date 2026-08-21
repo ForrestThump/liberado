@@ -41,6 +41,17 @@ pub trait PermissionAsk: Send + Sync {
         program: &str,
         args: &[String],
     ) -> Result<PermissionDecision, String>;
+
+    /// Show a question with buttons on the ACP client. The selected option name is the answer.
+    async fn ask_question(
+        &self,
+        session_id: &str,
+        question: &str,
+        options: &[String],
+    ) -> Result<String, String> {
+        let _ = (session_id, question, options);
+        Err("this session cannot show a question on the client".into())
+    }
 }
 
 pub struct PermissionAttach {
@@ -96,16 +107,8 @@ impl PermissionBroker {
             let _ = tx.send(Ok(json!({ "outcome": { "outcome": "cancelled" } })));
         }
     }
-}
 
-#[async_trait]
-impl PermissionAsk for PermissionBroker {
-    async fn ask(
-        &self,
-        session_id: &str,
-        program: &str,
-        args: &[String],
-    ) -> Result<PermissionDecision, String> {
+    async fn rpc(&self, params: Value) -> Result<Value, String> {
         let id_num = self.next_id.fetch_add(1, Ordering::Relaxed);
         let id = format!("lib-perm-{id_num}");
         let (tx, rx) = oneshot::channel();
@@ -122,12 +125,45 @@ impl PermissionAsk for PermissionBroker {
             .ok()
             .and_then(|g| g.clone())
             .ok_or_else(|| "permission wire is not bound".to_string())?;
-        let params = permission_params(session_id, program, args);
         wire.write_rpc_request(json!(id), "session/request_permission", params)?;
-        let reply = rx
-            .await
-            .map_err(|_| "permission waiter dropped".to_string())??;
+        rx.await
+            .map_err(|_| "permission waiter dropped".to_string())?
+    }
+
+    #[cfg(test)]
+    pub fn register_waiter(&self, id: &str) -> oneshot::Receiver<Result<Value, String>> {
+        let (tx, rx) = oneshot::channel();
+        if let Ok(mut pending) = self.pending.lock() {
+            pending.insert(id.to_string(), tx);
+        }
+        rx
+    }
+}
+
+#[async_trait]
+impl PermissionAsk for PermissionBroker {
+    async fn ask(
+        &self,
+        session_id: &str,
+        program: &str,
+        args: &[String],
+    ) -> Result<PermissionDecision, String> {
+        let reply = self
+            .rpc(permission_params(session_id, program, args))
+            .await?;
         Ok(parse_decision(&reply))
+    }
+
+    async fn ask_question(
+        &self,
+        session_id: &str,
+        question: &str,
+        options: &[String],
+    ) -> Result<String, String> {
+        let reply = self
+            .rpc(question_params(session_id, question, options))
+            .await?;
+        parse_question_answer(&reply, options)
     }
 }
 
@@ -171,7 +207,12 @@ fn program_from(call: &ToolInvocation) -> Option<(String, Vec<String>)> {
     Some((program, args))
 }
 
-fn would_deny(policy: &CommandPolicy, grants: &CommandGrantSet, program: &str, args: &[String]) -> bool {
+fn would_deny(
+    policy: &CommandPolicy,
+    grants: &CommandGrantSet,
+    program: &str,
+    args: &[String],
+) -> bool {
     if grants.contains(program) {
         return false;
     }
@@ -201,12 +242,7 @@ impl ToolRuntime for PermissionRuntime {
                 self.grants.revoke(&program);
                 return result;
             }
-            apply_decision(
-                decision,
-                &program,
-                &self.grants,
-                &self.attach.client_cwd,
-            )?;
+            apply_decision(decision, &program, &self.grants, &self.attach.client_cwd)?;
         }
         self.inner.invoke(call).await
     }
@@ -342,6 +378,78 @@ pub fn permission_params(session_id: &str, program: &str, args: &[String]) -> Va
     })
 }
 
+/// `ask_human` chooser. Two `allow_always` kinds put Paseo into the same button sheet
+/// as a denied command, with the question in `toolCall.content`.
+pub fn question_params(session_id: &str, question: &str, options: &[String]) -> Value {
+    let mut opts: Vec<Value> = options
+        .iter()
+        .enumerate()
+        .map(|(i, name)| {
+            json!({
+                "optionId": format!("opt-{i}"),
+                "name": name,
+                "kind": "allow_always"
+            })
+        })
+        .collect();
+    if opts.len() < 2 {
+        opts.push(json!({
+            "optionId": "other",
+            "name": "Something else",
+            "kind": "allow_always"
+        }));
+    }
+    opts.push(json!({
+        "optionId": "skip",
+        "name": "Skip",
+        "kind": "reject_once"
+    }));
+    json!({
+        "sessionId": session_id,
+        "options": opts,
+        "toolCall": {
+            "toolCallId": "ask-human",
+            "title": "Question",
+            "kind": "other",
+            "status": "pending",
+            "rawInput": { "question": question, "options": options },
+            "content": [{
+                "type": "content",
+                "content": { "type": "text", "text": question }
+            }]
+        }
+    })
+}
+
+pub fn parse_question_answer(reply: &Value, options: &[String]) -> Result<String, String> {
+    let outcome = reply.get("outcome").unwrap_or(reply);
+    let kind = outcome
+        .get("outcome")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    if kind.eq_ignore_ascii_case("cancelled") {
+        return Err("the human dismissed the question".into());
+    }
+    let option = outcome
+        .get("optionId")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    if option == "skip" {
+        return Err("the human skipped the question".into());
+    }
+    if option == "other" {
+        return Ok("the human chose something else; they may type it in the next message".into());
+    }
+    if let Some(idx) = option
+        .strip_prefix("opt-")
+        .and_then(|s| s.parse::<usize>().ok())
+        && let Some(name) = options.get(idx)
+    {
+        return Ok(name.clone());
+    }
+    Err(format!("unrecognised permission option `{option}`"))
+}
+
 pub fn parse_decision(reply: &Value) -> PermissionDecision {
     let outcome = reply.get("outcome").unwrap_or(reply);
     let kind = outcome
@@ -434,6 +542,34 @@ mod tests {
     }
 
     #[test]
+    fn question_params_are_a_paseo_chooser() {
+        let params = question_params(
+            "sid",
+            "Which crate?",
+            &["acp-bridge".into(), "coder-agent".into()],
+        );
+        let options = params["options"].as_array().expect("options");
+        let always: Vec<_> = options
+            .iter()
+            .filter(|o| o["kind"] == "allow_always")
+            .collect();
+        assert_eq!(
+            always.len(),
+            2,
+            "two allow_always kinds show the question text"
+        );
+        assert_eq!(
+            params["toolCall"]["content"][0]["content"]["text"],
+            "Which crate?"
+        );
+        let selected = json!({"outcome": {"outcome": "selected", "optionId": "opt-1"}});
+        assert_eq!(
+            parse_question_answer(&selected, &["acp-bridge".into(), "coder-agent".into()]).unwrap(),
+            "coder-agent"
+        );
+    }
+
+    #[test]
     fn permission_params_are_a_paseo_chooser() {
         let params = permission_params("sid", "git", &["rebase".into(), "main".into()]);
         let options = params["options"].as_array().expect("options");
@@ -458,7 +594,11 @@ mod tests {
     async fn deny_does_not_run_the_command() {
         let dir = tempfile::tempdir().unwrap();
         let grants = CommandGrantSet::default();
-        let runtime = wrap(Arc::new(DenyGit), grants.clone(), attach(PermissionDecision::Deny, dir.path().to_path_buf()));
+        let runtime = wrap(
+            Arc::new(DenyGit),
+            grants.clone(),
+            attach(PermissionDecision::Deny, dir.path().to_path_buf()),
+        );
         let err = runtime
             .invoke(&ToolInvocation::new(
                 "1",

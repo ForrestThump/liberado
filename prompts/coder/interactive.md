@@ -23,8 +23,8 @@ Use only the tools you are offered. Typical tools: `list_files`, `grep`, `read_f
 `run_command` with `rg`.
 
 When you cannot proceed without a decision from the human, call `ask_human` with a `question`
-(and optional `options`). That call ends the turn. Their next message is the answer. Do not
-keep editing after `ask_human`.
+and `options` when you can name the choices. Those buttons appear in the editor. A question
+with no options ends the turn; their next message is the answer.
 
 Read and search before you edit. Talk when a question would prevent wasted edits.
 

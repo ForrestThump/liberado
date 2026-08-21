@@ -53,7 +53,7 @@
 |---|---|
 | Live hub `/goal` list in Paseo UI | Separate (daemon HTTP bridge) |
 | Token-by-token tool events mid-coding-run | Follow-up (pack currently reports at end) |
-| Intake clarify questions via ACP | Interactive coding offers `ask_human`; the next `session/prompt` is the answer. Goal-mode intake still uses the pack's `InputChannel` (not ACP). |
+| Intake clarify questions via ACP | Interactive coding offers `ask_human`. Named `options` become Paseo `session/request_permission` buttons. A free-text question parks; the next `session/prompt` is the answer. Denied `run_command` uses the same chooser (once / workspace / everywhere). Goal-mode intake still uses the pack's `InputChannel`. |
 | Face-mode cancel mid-stream | Cooperative cancel wired (drops SSE future); daemon may still finish its turn |
 
 ## Prerequisites (Windows)
@@ -183,6 +183,8 @@ you want green rows for launcher binary, ACP `initialize`, and ACP `session/new`
 | Client → agent | `session/set_mode` | `{ sessionId, modeId: coding\|goal\|chat\|face }` |
 | Client → agent | `session/set_model` | Hot-swap model id from catalog |
 | Agent → client | `session/update` | `agent_message_chunk`, `tool_call`, `tool_call_update` |
+| Agent → client | `session/request_permission` | Command-policy and `ask_human` option chooser |
+| Client → agent | JSON-RPC **response** (no method) | Answer to `session/request_permission` |
 | Client → agent | `session/cancel` | Notification; chat turns return `stopReason: "cancelled"` |
 | Client → agent | `session/load` | Not advertised (`loadSession: false`) until durable history |
 
