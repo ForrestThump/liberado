@@ -54,10 +54,10 @@ fn workflow_dependencies_are_immutable() {
     for file in files {
         let text = std::fs::read_to_string(&file).expect("read workflow");
         for (index, line) in text.lines().enumerate() {
-            if let Some(reference) = remote_action_ref(line) {
-                if !is_full_sha(reference) {
-                    offenders.push(format!("{}:{} `{reference}`", file.display(), index + 1));
-                }
+            if let Some(reference) = remote_action_ref(line)
+                && !is_full_sha(reference)
+            {
+                offenders.push(format!("{}:{} `{reference}`", file.display(), index + 1));
             }
         }
     }

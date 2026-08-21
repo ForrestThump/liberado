@@ -105,22 +105,6 @@ jobs:
         with:
           token: ${{ secrets.SIBLINGS_TOKEN || github.token }}
 
-      - name: Checkout turbovault (sibling path dep)
-        uses: actions/checkout@v4
-        with:
-          repository: ForrestThump/turbovault
-          ref: develop
-          path: turbovault
-          token: ${{ secrets.SIBLINGS_TOKEN || github.token }}
-
-      - name: Checkout turbomcp (sibling path dep)
-        uses: actions/checkout@v4
-        with:
-          repository: ForrestThump/turbomcp
-          ref: develop
-          path: turbomcp
-          token: ${{ secrets.SIBLINGS_TOKEN || github.token }}
-
       - name: Rust toolchain (from rust-toolchain.toml)
         run: rustup show
 
