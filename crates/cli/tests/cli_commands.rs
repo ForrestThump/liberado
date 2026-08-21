@@ -12,6 +12,19 @@ fn run_cli(cwd: &Path, args: &[&str]) -> std::process::Output {
         .expect("liberado CLI should start")
 }
 
+/// Run the CLI with an empty `LIBERADO_CONFIG_DIR` so resolution cannot walk up from the
+/// test binary into this checkout's `config/`. The empty dir is kept for the child process only
+/// (set on the command, not in the test process env).
+fn run_cli_no_config(cwd: &Path, args: &[&str]) -> std::process::Output {
+    let config_dir = tempdir().expect("empty config dir");
+    std_command(env!("CARGO_BIN_EXE_liberado"))
+        .env("LIBERADO_CONFIG_DIR", config_dir.path())
+        .args(args)
+        .current_dir(cwd)
+        .output()
+        .expect("liberado CLI should start")
+}
+
 #[test]
 fn docs_site_command_generates_searchable_catalog_and_mirrored_pages() {
     let temp = tempdir().expect("temporary repository");
@@ -185,7 +198,7 @@ fn shepherd_requires_a_mode_flag() {
 #[test]
 fn config_check_runs_the_loader() {
     let temp = tempdir().unwrap();
-    let output = run_cli(temp.path(), &["config", "check"]);
+    let output = run_cli_no_config(temp.path(), &["config", "check"]);
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         !stderr.contains("usage: liberado config"),
@@ -213,7 +226,7 @@ fn docs_crate_map_reads_by_default() {
 #[test]
 fn config_explain_reaches_the_explain_arm() {
     let temp = tempdir().unwrap();
-    let output = run_cli(
+    let output = run_cli_no_config(
         temp.path(),
         &[
             "config",
