@@ -149,7 +149,7 @@ production entry point still reads it.
 - `crates/coder-tools/` — the tools the model actually calls.
 - `crates/coder-sandbox/` — workspaces, worktrees, checkpoints, preflight.
 - `crates/executor/` — the bounded decide/act loop shared by all agents.
-- `Skills/` — task playbooks (e.g. `cold-review-pr.md`).
+- `Skills/` — task playbooks (e.g. `cold-review-pr.md`, `mutants-campaign.md`).
 - `liberado shepherd` — drives agent PRs to ready-or-blocked on the same differential rule.
 - `crates/harness-eval/` and `liberado coder compare prepare|run|save|submit|await` — own durable Liberado/Pi comparisons: pinned
   worktrees, separate Cargo caches, 30-minute compile ceilings, spawn-on-submit dispatch behind a
@@ -222,7 +222,9 @@ relying on care.
 free. `target/` reached 71.6 GB in one checkout, and `cargo-mutants` copies the whole workspace into
 `%TEMP%` per run and leaves it there when killed (~23 GB in leaked clones). Check free space before
 a long dispatch and sweep `%TEMP%\cargo-mutants-*`. The harness now reports this honestly instead of
-telling the model to fix it (PR #119), but it cannot prevent it.
+telling the model to fix it (PR #119), but it cannot prevent it. For mutation campaigns, read
+`Skills/mutants-campaign.md`: builds use `target/mutants/`, and `just mutants-report` reads
+`mutants-ledger.json` for survivor counts and commit drift.
 
 **Reinstall `liberado-acp` after merging anything the bridge links.** A dispatched run tests the
 installed binary, not your working tree. A run once silently tested a stale build; it was caught

@@ -1,0 +1,6 @@
+# Shared cargo-mutants defaults for `liberado mutants run` and manual runs.
+# Per-mutant timeout is passed on the CLI (--timeout); cargo-mutants 27.x removed the config key.
+
+minimum_test_timeout = 120
+gitignore = true
+exclude_globs = ["paseo/**", "**/node_modules/**"]

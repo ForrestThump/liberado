@@ -75,6 +75,8 @@ Thin wrappers only — no logic in `justfile`:
 - `just mutants-record <name>` → `liberado mutants record <name>`
 - `just mutants-report` / `just mutants-next`
 
+Agent playbook: [`Skills/mutants-campaign.md`](../../Skills/mutants-campaign.md).
+
 **Not** wired into `just ci`, `just preflight`, or `just ready`.
 
 ## Health report rules

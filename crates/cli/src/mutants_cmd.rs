@@ -13,6 +13,7 @@ use std::path::Path;
 
 pub const LEDGER_FILE: &str = "mutants-ledger.json";
 const OUTCOMES_FILE: &str = "mutants.out/outcomes.json";
+const MUTANTS_TARGET_DIR: &str = "target/mutants";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Counts {
@@ -68,10 +69,16 @@ pub fn run(args: &mut impl Iterator<Item = String>) -> Result<(), Box<dyn std::e
     }
     let crate_info = resolve_crate(&root, crate_dir)?;
     let command = build_mutants_command(&crate_info.name, profile);
+    let mutants_target = root.join(MUTANTS_TARGET_DIR);
     eprintln!("[mutants] running: {command}");
+    eprintln!(
+        "[mutants] artifact dir: {} (isolated from target/debug)",
+        mutants_target.display()
+    );
     let status = std_command("cargo")
         .args(command.split_whitespace().skip(1))
         .current_dir(&root)
+        .env("CARGO_TARGET_DIR", &mutants_target)
         .status()?;
     match record_campaign(&root, Some(crate_dir), Some(&command), profile)? {
         RecordOutcome::Appended { package, commit } => {
@@ -169,6 +176,12 @@ enum RecordOutcome {
 }
 
 fn build_mutants_command(package: &str, profile: RunProfile) -> String {
+    let (test_timeout, min_test_timeout) = match (package, profile) {
+        // liberado-cli pulls most of the workspace; baseline + integration tests exceed 3s.
+        ("liberado-cli", _) => ("120", "120"),
+        (_, RunProfile::LibOnly) => ("90", "90"),
+        _ => ("3.0", "30"),
+    };
     let mut parts = vec![
         "cargo".to_string(),
         "mutants".to_string(),
@@ -177,7 +190,9 @@ fn build_mutants_command(package: &str, profile: RunProfile) -> String {
         "--cap-lints".to_string(),
         "true".to_string(),
         "--timeout".to_string(),
-        "3.0".to_string(),
+        test_timeout.to_string(),
+        "--minimum-test-timeout".to_string(),
+        min_test_timeout.to_string(),
     ];
     // cargo-mutants copies the workspace into %TEMP%; paseo/node_modules symlinks fail on
     // Windows without elevation (os error 1314). In-place avoids the copy. Restore risk is
@@ -185,18 +200,8 @@ fn build_mutants_command(package: &str, profile: RunProfile) -> String {
     if cfg!(windows) {
         parts.extend(["--in-place".into()]);
     }
-    match profile {
-        RunProfile::Default => {
-            parts.extend(["--minimum-test-timeout".into(), "30".into()]);
-        }
-        RunProfile::LibOnly => {
-            parts.extend([
-                "--minimum-test-timeout".into(),
-                "90".into(),
-                "--".into(),
-                "--lib".into(),
-            ]);
-        }
+    if profile == RunProfile::LibOnly && package != "liberado-cli" {
+        parts.extend(["--".into(), "--lib".into()]);
     }
     parts.join(" ")
 }
@@ -760,6 +765,17 @@ mod tests {
             health.most_drift[0].drift_note.as_deref(),
             Some("commit not in this history")
         );
+    }
+
+    #[test]
+    fn build_mutants_command_uses_longer_timeout_for_cli() {
+        let cli = build_mutants_command("liberado-cli", RunProfile::Default);
+        assert!(cli.contains("--timeout 120"));
+        assert!(cli.contains("--minimum-test-timeout 120"));
+
+        let tui = build_mutants_command("liberado-tui", RunProfile::Default);
+        assert!(tui.contains("--timeout 3.0"));
+        assert!(tui.contains("--minimum-test-timeout 30"));
     }
 
     #[test]
