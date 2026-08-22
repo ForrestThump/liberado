@@ -17,7 +17,7 @@ repository.workspace = true
 # point in the same class as `daemon` and `server`.
 role = "root"
 
-# Runtime wiring for the isometric system map (crates/sysmap). Outbound edges: `to` names
+# Runtime wiring for the 2D system map (crates/sysmap). Outbound edges: `to` names
 # a crate or runtime id (`vault`, `notifier:telegram`); `kind` is control|data. Declaring
 # any flow replaces the tool's seed wiring for this crate, so the map grows with the code.
 [[package.metadata.liberado.flows]]

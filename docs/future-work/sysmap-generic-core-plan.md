@@ -4,16 +4,19 @@ status: active
 authority: implementation
 domain: tooling
 open_items: true
+last_verified: 2026-08-21
+verified_against: e1ab936
 ---
 
 # sysmap — split into a generic core + a Liberado profile
 
-**Status**: active, 2026-08-15. **Phases 1–5 done** — `sysmap-core` extracted with an open layer/kind
+**Status**: active, verified 2026-08-21. **Phases 1–5 done** — `sysmap-core` extracted with an open layer/kind
 vocabulary (Phase 1); the scanner reads `cargo metadata` + `[package.metadata]` (Phase 2); the
 profile vocabulary, seed edge, and topology wiring live in `sysmap.toml` and a core rule engine
 applies them (Phase 3); the scanner and assembly moved into `sysmap-core` (Phase 4); the renderer
-became a `sysmap-core`-only library with a thin launcher bin (Phase 5). **Phase 6 open** (publish).
-This plan records the split of the isometric/3D system map (`liberado-sysmap` +
+became a `sysmap-core`-only library with a thin launcher bin (Phase 5). The active renderer is now
+an interactive 2D map. **Phase 6 remains open** (publish or port the generic core).
+This plan records the split of the system map (`liberado-sysmap` +
 `liberado-sysmap-gui`, see [`crates/sysmap/README.md`](../../crates/sysmap/README.md)) into a
 **project-agnostic** core crate plus a thin **Liberado-specific** profile, so the map becomes
 portable to other Rust projects.
@@ -28,14 +31,15 @@ portable to other Rust projects.
    per-project adapter. For Liberado that adapter is the `topology.toml` reader (~150 lines); for a
    project with no runtime config it is zero lines.
 
-Today `liberado-sysmap` mixes all three. The plan separates them into three crates:
+The implemented design separates them into four crates:
 
 * **`sysmap-core`** — generic, liftable, publishable. Cargo derivation + layout + projection +
   the `sysmap.toml` rule engine. **No `liberado-` dependency.**
 * **`liberado-sysmap`** — the Liberado adapter: reads `topology.toml`, emits extra nodes/edges and
   supplies the profile (layers, kinds, colors, edge rules).
-* **`liberado-sysmap-gui`** — the renderer. Already generic (it only touches the model); it should
-  compile against `sysmap-core` alone as the proof of decoupling.
+* **`liberado-sysmap-gui`** — the generic interactive 2D renderer. It compiles against
+  `sysmap-core` alone as the proof of decoupling.
+* **`liberado-sysmap-cli`** — the thin Liberado launcher and headless JSON-export command.
 
 ## Where every current hardcode goes
 
@@ -128,7 +132,7 @@ label = "domain pack"
 and `layer_rules` and the crate-map generator keep reading `[package.metadata.liberado] role`
 untouched (see [`../spec/architecture/contracts.md`](../spec/architecture/contracts.md)).
 
-## What `cargo metadata` buys over the current toml parse
+## What `cargo metadata` bought over the old TOML parser
 
 * Internal-dep detection = *workspace membership*, not a name prefix (the real portability win).
 * Dep *kinds*: dev/build/target-specific, with an include/exclude switch instead of silently
@@ -139,10 +143,18 @@ untouched (see [`../spec/architecture/contracts.md`](../spec/architecture/contra
   versions.
 * `workspace_root` discovery (replaces the walk-up).
 
-Cost, stated honestly: the core starts shelling out to `cargo` (`cargo_metadata` crate, ~100–300
-ms), and `scan.rs`'s test fixtures — currently fake manifests with non-resolving `workspace = true`
-deps — must become **valid cargo workspaces**. That is the one real migration cost; everything else
-is relocation.
+Cost, stated honestly: the default scanner shells out to Cargo through `cargo_metadata`. Callers
+that already have metadata can use the subprocess-free JSON scanning entry point. The scanner's
+tests use valid Cargo workspaces rather than fake manifests with unresolved workspace dependencies.
+
+## Current interaction and dependency-health behavior
+
+The 2D renderer keeps labels inside readable node rectangles and grows nodes by dependency fan-in.
+It always shows edge direction. Normal dependencies are visible by default; development and build
+dependencies use distinct styles and opt-in toggles. Selecting a node hides unrelated edges, with
+an optional second-hop scope. Normal-dependency strongly connected components receive red outlines
+and detail-panel warnings. Package details include version, license, keywords, categories, and
+target kinds when Cargo supplies them.
 
 ## Why not derive semantics from rustdoc
 

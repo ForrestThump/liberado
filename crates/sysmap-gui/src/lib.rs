@@ -6,5 +6,7 @@
 //! [`SystemMap`]: sysmap_core::model::SystemMap
 
 pub mod app;
+mod insights;
+mod interaction;
 
 pub use app::launch;

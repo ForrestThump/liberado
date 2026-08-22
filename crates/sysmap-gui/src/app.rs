@@ -8,6 +8,11 @@ use sysmap_core::layout::{PlacedNode, layout};
 use sysmap_core::model::{EdgeKind, MapEdge, SystemMap};
 use sysmap_core::style::{self, Rgb};
 
+use crate::insights::{outline_color, show_cycle_warning, show_metadata};
+use crate::interaction::{
+    arrow_points, edge_in_selection, edge_kind_visible, ray_rect_distance, visible_scope,
+};
+
 const WORLD_X_SCALE: f32 = 190.0;
 const WORLD_Y_SCALE: f32 = 65.0;
 const GRID_PIXEL_STEP: f32 = 65.0;
@@ -40,7 +45,11 @@ struct App {
     placed: BTreeMap<String, PlacedNode>,
     selected: Option<String>,
     show_deps: bool,
+    show_dev_deps: bool,
+    show_build_deps: bool,
     show_runtime: bool,
+    dependency_cycles: Vec<Vec<String>>,
+    cycle_nodes: BTreeSet<String>,
     include_second_hop: bool,
     zoom: f32,
     pan: Vec2,
@@ -49,6 +58,8 @@ struct App {
 
 impl App {
     fn new(map: SystemMap, repo: PathBuf) -> Self {
+        let dependency_cycles = map.dependency_cycles();
+        let cycle_nodes = dependency_cycles.iter().flatten().cloned().collect();
         let placed = layout(&map, &map.vocabulary)
             .placed
             .into_iter()
@@ -60,7 +71,11 @@ impl App {
             placed,
             selected: None,
             show_deps: true,
+            show_dev_deps: false,
+            show_build_deps: false,
             show_runtime: true,
+            dependency_cycles,
+            cycle_nodes,
             include_second_hop: false,
             zoom: 1.0,
             pan: Vec2::ZERO,
@@ -76,6 +91,8 @@ impl App {
                     ui.label(egui::RichText::new("Liberado system map (2D)").strong());
                     ui.separator();
                     ui.toggle_value(&mut self.show_deps, "dependencies");
+                    ui.toggle_value(&mut self.show_dev_deps, "dev dependencies");
+                    ui.toggle_value(&mut self.show_build_deps, "build dependencies");
                     ui.toggle_value(&mut self.show_runtime, "runtime paths");
                     ui.add_enabled_ui(self.selected.is_some(), |ui| {
                         ui.toggle_value(&mut self.include_second_hop, "include second hop");
@@ -133,6 +150,16 @@ impl App {
                     ui.add_space(8.0);
                     ui.label(egui::RichText::new("Edges").strong());
                     edge_row(ui, EdgeKind::Dependency, "depends on");
+                    edge_row(
+                        ui,
+                        EdgeKind::DevelopmentDependency,
+                        "dev dependency (hidden by default)",
+                    );
+                    edge_row(
+                        ui,
+                        EdgeKind::BuildDependency,
+                        "build dependency (hidden by default)",
+                    );
                     edge_row(ui, EdgeKind::Control, "control flow");
                     edge_row(ui, EdgeKind::Data, "data flow");
                     ui.separator();
@@ -144,6 +171,15 @@ impl App {
                         ))
                         .weak(),
                     );
+                    let cycle_text = if self.dependency_cycles.is_empty() {
+                        "No production dependency cycles".to_string()
+                    } else {
+                        format!(
+                            "{} production dependency cycle(s) - red node outlines",
+                            self.dependency_cycles.len()
+                        )
+                    };
+                    ui.label(egui::RichText::new(cycle_text).weak());
                     ui.label(
                         egui::RichText::new(self.repo.display().to_string())
                             .weak()
@@ -260,10 +296,13 @@ impl App {
     }
 
     fn edge_visible(&self, edge: &MapEdge, scope: &Option<BTreeSet<String>>) -> bool {
-        let kind_visible = match edge.kind {
-            EdgeKind::Dependency => self.show_deps,
-            EdgeKind::Control | EdgeKind::Data => self.show_runtime,
-        };
+        let kind_visible = edge_kind_visible(
+            edge.kind,
+            self.show_deps,
+            self.show_dev_deps,
+            self.show_build_deps,
+            self.show_runtime,
+        );
         kind_visible
             && edge_in_selection(
                 edge,
@@ -315,11 +354,7 @@ impl App {
         let tip =
             b - direction * ray_rect_distance(-direction, self.node_size(to) * self.zoom * 0.5);
         let color = color32(style::edge_color(edge.kind));
-        let width = if edge.kind == EdgeKind::Dependency {
-            1.4
-        } else {
-            2.2
-        };
+        let width = if edge.kind.is_dependency() { 1.4 } else { 2.2 };
         painter.line_segment([start, tip], Stroke::new(width, color));
 
         // Direction is always visible. Selection filters edges but never removes arrowheads.
@@ -354,11 +389,12 @@ impl App {
             color32(base)
         };
         let rect = self.node_rect(placed);
+        let outline = color32(outline_color(self.cycle_nodes.contains(&node.id), base));
         painter.rect(
             rect,
             5.0 * self.zoom,
             fill,
-            Stroke::new((1.2 * self.zoom).max(0.5), color32(base.tint(0.35))),
+            Stroke::new((1.8 * self.zoom).max(0.7), outline),
             StrokeKind::Outside,
         );
 
@@ -388,6 +424,8 @@ impl App {
         if !node.description.is_empty() {
             ui.label(&node.description);
         }
+        show_cycle_warning(ui, &self.dependency_cycles, id);
+        show_metadata(ui, node);
         let outgoing: Vec<_> = self
             .map
             .edges
@@ -421,42 +459,6 @@ impl eframe::App for App {
     }
 }
 
-fn visible_scope(
-    map: &SystemMap,
-    selected: Option<&str>,
-    second_hop: bool,
-) -> Option<BTreeSet<String>> {
-    let selected = selected?;
-    let mut scope = BTreeSet::from([selected.to_string()]);
-    let first: Vec<String> = map
-        .neighbors(selected)
-        .into_iter()
-        .map(str::to_string)
-        .collect();
-    scope.extend(first.iter().cloned());
-    if second_hop {
-        for neighbor in first {
-            scope.extend(map.neighbors(&neighbor).into_iter().map(str::to_string));
-        }
-    }
-    Some(scope)
-}
-
-fn edge_in_selection(
-    edge: &MapEdge,
-    selected: Option<&str>,
-    second_hop: bool,
-    scope: Option<&BTreeSet<String>>,
-) -> bool {
-    let Some(selected) = selected else {
-        return true;
-    };
-    if !second_hop {
-        return edge.from == selected || edge.to == selected;
-    }
-    scope.is_some_and(|nodes| nodes.contains(&edge.from) && nodes.contains(&edge.to))
-}
-
 fn world_bounds(map: &SystemMap, placed: &BTreeMap<String, PlacedNode>) -> Option<(Vec2, Vec2)> {
     let mut bounds = placed.values().filter_map(|placed_node| {
         let node = map.node(&placed_node.id)?;
@@ -473,16 +475,6 @@ fn world_bounds(map: &SystemMap, placed: &BTreeMap<String, PlacedNode>) -> Optio
         max = max.max(node_max);
     }
     Some((min, max))
-}
-
-fn arrow_points(tip: Pos2, direction: Vec2, zoom: f32) -> [Pos2; 3] {
-    let size = (8.0 * zoom.sqrt()).clamp(5.0, 13.0);
-    let normal = Vec2::new(-direction.y, direction.x);
-    [
-        tip,
-        tip - direction * size + normal * size * 0.55,
-        tip - direction * size - normal * size * 0.55,
-    ]
 }
 
 fn node_world_size(map: &SystemMap, id: &str, label: &str) -> Vec2 {
@@ -503,20 +495,6 @@ fn fitted_label_font(label: &str, node_size: Vec2) -> f32 {
         .min(width_limit)
         .min(height_limit)
         .max(MIN_READABLE_LABEL_FONT)
-}
-
-fn ray_rect_distance(direction: Vec2, half_size: Vec2) -> f32 {
-    let x = if direction.x.abs() > f32::EPSILON {
-        half_size.x / direction.x.abs()
-    } else {
-        f32::INFINITY
-    };
-    let y = if direction.y.abs() > f32::EPSILON {
-        half_size.y / direction.y.abs()
-    } else {
-        f32::INFINITY
-    };
-    x.min(y)
 }
 
 fn relationship_list(ui: &mut egui::Ui, heading: &str, edges: &[&MapEdge], outgoing: bool) {
@@ -659,6 +637,46 @@ mod tests {
             assert!(points[1].x < points[0].x);
             assert!(points[2].x < points[0].x);
         }
+    }
+
+    #[test]
+    fn dependency_kind_toggles_are_independent() {
+        assert!(edge_kind_visible(
+            EdgeKind::Dependency,
+            true,
+            false,
+            false,
+            false
+        ));
+        assert!(!edge_kind_visible(
+            EdgeKind::DevelopmentDependency,
+            true,
+            false,
+            false,
+            false
+        ));
+        assert!(edge_kind_visible(
+            EdgeKind::DevelopmentDependency,
+            false,
+            true,
+            false,
+            false
+        ));
+        assert!(edge_kind_visible(
+            EdgeKind::BuildDependency,
+            false,
+            false,
+            true,
+            false
+        ));
+        assert!(edge_kind_visible(
+            EdgeKind::Control,
+            false,
+            false,
+            false,
+            true
+        ));
+        assert!(edge_kind_visible(EdgeKind::Data, false, false, false, true));
     }
 
     #[test]

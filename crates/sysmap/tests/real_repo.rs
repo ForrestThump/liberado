@@ -71,6 +71,20 @@ fn real_workspace_map_includes_runtime_overlay_from_example_topology() {
     assert!(map.edges.iter().any(|e| e.kind == EdgeKind::Control));
     assert!(map.edges.iter().any(|e| e.kind == EdgeKind::Data));
     assert!(map.edges.iter().any(|e| e.kind == EdgeKind::Dependency));
+    assert!(
+        map.edges
+            .iter()
+            .any(|e| e.kind == EdgeKind::DevelopmentDependency),
+        "the workspace has internal dev-dependencies, so the optional review layer must be populated"
+    );
+    assert!(
+        map.dependency_cycles().is_empty(),
+        "normal workspace dependencies must remain acyclic: {:?}",
+        map.dependency_cycles()
+    );
+    let gui = map.node("liberado-sysmap-gui").unwrap();
+    assert_eq!(gui.meta.get("license").map(String::as_str), Some("MIT"));
+    assert_eq!(gui.meta.get("targets").map(String::as_str), Some("lib"));
     // The core loop edge is declared by the dispatcher crate's own `[[package.metadata.liberado.flows]]`,
     // proving the runtime wiring is read from the codebase rather than hardcoded in the tool.
     assert!(map.edges.iter().any(|e| e.from == "liberado-dispatcher"

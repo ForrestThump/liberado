@@ -374,6 +374,8 @@ mod tests {
             layer: layer.into(),
             description: String::new(),
             deps: Vec::new(),
+            dev_deps: Vec::new(),
+            build_deps: Vec::new(),
             flows: Vec::new(),
             meta: BTreeMap::new(),
             enabled: true,

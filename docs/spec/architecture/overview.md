@@ -100,6 +100,12 @@ of reacting. Proven end-to-end in `crates/vault/tests/provenance_e2e.rs`.
 
 ## Crate map
 
+Use `just sysmap` to inspect the generated dependency and runtime-flow graph in an interactive 2D
+window. The map derives workspace crates and dependency kinds from `cargo metadata`, adds declared
+runtime flows, shows direction on every edge, and isolates a selected node's relationships. See the
+[`liberado-sysmap` guide](../../../crates/sysmap/README.md) for controls, dependency-health signals,
+and headless JSON export.
+
 Bottom-up (each depends roughly on those above it):
 
 | Layer | Crate | Role |

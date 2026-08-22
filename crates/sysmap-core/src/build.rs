@@ -7,7 +7,7 @@ use std::path::Path;
 
 use crate::model::{EdgeKind, MapEdge, MapNode, SystemMap};
 use crate::profile::Profile;
-use crate::scan::{self, ScanError};
+use crate::scan::{self, ScanError, ScanOptions};
 
 /// Build a system map.
 ///
@@ -21,7 +21,14 @@ pub fn build(
     extra_nodes: Vec<MapNode>,
     config_dir: Option<String>,
 ) -> Result<SystemMap, ScanError> {
-    let mut nodes = scan::scan_repository(root, &profile.manifest_namespace)?;
+    let mut nodes = scan::scan_repository_with(
+        root,
+        &profile.manifest_namespace,
+        ScanOptions {
+            include_dev: true,
+            include_build: true,
+        },
+    )?;
     nodes.extend(profile.map_nodes());
     nodes.extend(extra_nodes);
 
@@ -37,16 +44,27 @@ pub fn build(
         if !node.kind.is_crate() {
             continue;
         }
-        for dep in &node.deps {
-            if existing.contains(dep) {
-                edges.push(MapEdge {
-                    from: node.id.clone(),
-                    to: dep.clone(),
-                    kind: EdgeKind::Dependency,
-                    label: String::new(),
-                });
-            }
-        }
+        push_dependency_edges(
+            &mut edges,
+            node,
+            &node.deps,
+            EdgeKind::Dependency,
+            &existing,
+        );
+        push_dependency_edges(
+            &mut edges,
+            node,
+            &node.dev_deps,
+            EdgeKind::DevelopmentDependency,
+            &existing,
+        );
+        push_dependency_edges(
+            &mut edges,
+            node,
+            &node.build_deps,
+            EdgeKind::BuildDependency,
+            &existing,
+        );
     }
 
     // Declared per-crate runtime flows (each crate states its own outbound wiring).
@@ -81,6 +99,25 @@ pub fn build(
     })
 }
 
+fn push_dependency_edges(
+    edges: &mut Vec<MapEdge>,
+    node: &MapNode,
+    dependencies: &[String],
+    kind: EdgeKind,
+    existing: &BTreeSet<String>,
+) {
+    for dependency in dependencies {
+        if existing.contains(dependency) {
+            edges.push(MapEdge {
+                from: node.id.clone(),
+                to: dependency.clone(),
+                kind,
+                label: String::new(),
+            });
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -97,7 +134,14 @@ mod tests {
         .unwrap();
     }
 
-    fn add_crate(root: &Path, name: &str, role: &str, deps: &[&str]) {
+    fn add_crate(
+        root: &Path,
+        name: &str,
+        role: &str,
+        deps: &[&str],
+        dev_deps: &[&str],
+        build_deps: &[&str],
+    ) {
         let dir = root.join("crates").join(name);
         fs::create_dir_all(dir.join("src")).unwrap();
         fs::write(dir.join("src/lib.rs"), "// test fixture\n").unwrap();
@@ -105,13 +149,26 @@ mod tests {
             .iter()
             .map(|d| format!("{d} = {{ path = \"../{d}\" }}\n"))
             .collect::<String>();
+        let dev_deps_toml = dependency_table("dev-dependencies", dev_deps);
+        let build_deps_toml = dependency_table("build-dependencies", build_deps);
         fs::write(
             dir.join("Cargo.toml"),
             format!(
-                "[package]\nname = \"{name}\"\nversion = \"0.1.0\"\nedition = \"2024\"\ndescription = \"{name} crate\"\n[package.metadata.liberado]\nrole = \"{role}\"\n[dependencies]\n{deps_toml}"
+                "[package]\nname = \"{name}\"\nversion = \"0.1.0\"\nedition = \"2024\"\ndescription = \"{name} crate\"\n[package.metadata.liberado]\nrole = \"{role}\"\n[dependencies]\n{deps_toml}{dev_deps_toml}{build_deps_toml}"
             ),
         )
         .unwrap();
+    }
+
+    fn dependency_table(name: &str, dependencies: &[&str]) -> String {
+        if dependencies.is_empty() {
+            return String::new();
+        }
+        let entries = dependencies
+            .iter()
+            .map(|dependency| format!("{dependency} = {{ path = \"../{dependency}\" }}\n"))
+            .collect::<String>();
+        format!("[{name}]\n{entries}")
     }
 
     fn profile_with_edge() -> Profile {
@@ -135,8 +192,15 @@ mod tests {
     fn builds_crates_dependency_edges_and_profile_edges() {
         let dir = tempdir().unwrap();
         write_workspace(dir.path());
-        add_crate(dir.path(), "liberado-common", "foundation", &[]);
-        add_crate(dir.path(), "liberado-daemon", "root", &["liberado-common"]);
+        add_crate(dir.path(), "liberado-common", "foundation", &[], &[], &[]);
+        add_crate(
+            dir.path(),
+            "liberado-daemon",
+            "root",
+            &["liberado-common"],
+            &[],
+            &[],
+        );
 
         let profile = profile_with_edge();
         let map = build(dir.path(), &profile, vec![], None).unwrap();
@@ -152,10 +216,35 @@ mod tests {
     }
 
     #[test]
+    fn builds_distinct_development_and_build_dependency_edges() {
+        let dir = tempdir().unwrap();
+        write_workspace(dir.path());
+        add_crate(dir.path(), "common", "foundation", &[], &[], &[]);
+        add_crate(
+            dir.path(),
+            "consumer",
+            "kernel",
+            &[],
+            &["common"],
+            &["common"],
+        );
+
+        let map = build(dir.path(), &profile_with_edge(), vec![], None).unwrap();
+        assert!(map.edges.iter().any(|edge| {
+            edge.from == "consumer"
+                && edge.to == "common"
+                && edge.kind == EdgeKind::DevelopmentDependency
+        }));
+        assert!(map.edges.iter().any(|edge| {
+            edge.from == "consumer" && edge.to == "common" && edge.kind == EdgeKind::BuildDependency
+        }));
+    }
+
+    #[test]
     fn drops_edges_to_missing_nodes() {
         let dir = tempdir().unwrap();
         write_workspace(dir.path());
-        add_crate(dir.path(), "liberado-common", "foundation", &[]);
+        add_crate(dir.path(), "liberado-common", "foundation", &[], &[], &[]);
 
         let profile = profile_with_edge();
         // The profile edge's target (liberado-common) exists, but its source (liberado-daemon)
