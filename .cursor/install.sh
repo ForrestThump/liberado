@@ -53,8 +53,15 @@ ACTION=".github/actions/checkout-siblings/action.yml"
 sync_sibling() {
     local repo="$1" ref="$2" dir="$3"
     if [ -d "$dir/.git" ]; then
+        # Already at the pinned ref (e.g. restored from a snapshot)? Do nothing — no network,
+        # no mtime churn, so a warm rebuild stays incremental.
+        if [ "$(git -C "$dir" rev-parse HEAD 2>/dev/null || true)" = "$ref" ]; then
+            log "$dir already at $ref"
+            return 0
+        fi
         log "Updating $dir -> $ref"
-        git -C "$dir" fetch --quiet origin "$ref" 2>/dev/null || git -C "$dir" fetch --quiet origin
+        git -C "$dir" fetch --quiet origin "$ref" 2>/dev/null \
+            || git -C "$dir" fetch --quiet origin 2>/dev/null || true
     else
         log "Cloning $repo -> $dir"
         rm -rf "$dir"
