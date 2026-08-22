@@ -738,6 +738,21 @@
         "timeout": 0,
         "unviable": 2
       }
+    },
+    {
+      "package": "liberado-session-store",
+      "commit": "5b95cc4d5f3a6703c762f2902a7b7d187d6dfbff",
+      "recorded_at": "2026-08-22",
+      "command": "cargo mutants -p liberado-session-store --cap-lints true --timeout 3.0 --minimum-test-timeout 30",
+      "tool_version": "27.1.0",
+      "scope": "package",
+      "counts": {
+        "viable": 53,
+        "caught": 50,
+        "survived": 3,
+        "timeout": 0,
+        "unviable": 79
+      }
     }
   ]
 }
