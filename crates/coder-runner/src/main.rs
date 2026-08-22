@@ -1385,6 +1385,49 @@ reasoning = "high"
         assert!(ctx.contains("a.txt"), "{ctx}");
     }
 
+    /// When both workspace summary and session history are present, they must be separated
+    /// by a double newline — not concatenated without a boundary.
+    #[tokio::test]
+    async fn build_task_context_separates_workspace_summary_from_session_history() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = session_state_dir(dir.path(), "sess-2");
+        std::fs::create_dir_all(&state).unwrap();
+        std::fs::write(
+            state.join("01.json"),
+            serde_json::to_vec(&SessionRound {
+                session_id: "sess-2".into(),
+                round: 0,
+                prompt: "prior question".into(),
+                summary: "did stuff".into(),
+                files_changed: vec![],
+            })
+            .unwrap(),
+        )
+        .unwrap();
+        let tuning = CoderTuning::default();
+        let (ctx, _) = build_task_context(
+            "new task",
+            dir.path(),
+            &tuning,
+            Some("sess-2"),
+            "Workspace:\n  src/main.rs",
+        )
+        .await
+        .unwrap();
+        let ctx = ctx.unwrap();
+        // Both sections must appear...
+        assert!(ctx.contains("Workspace:"), "{ctx}");
+        assert!(ctx.contains("Session history"), "{ctx}");
+        // ...and be separated by a blank line, not smashed together.
+        let ws_end = ctx.find("src/main.rs").unwrap() + "src/main.rs".len();
+        let session_start = ctx.find("Session history").unwrap();
+        let between = &ctx[ws_end..session_start];
+        assert!(
+            between.contains("\n\n"),
+            "workspace summary and session history must be separated by a blank line, got: {between:?}"
+        );
+    }
+
     /// Without a config dir the direct api-key/base-url factory is used.
     #[test]
     fn build_providers_without_config_dir_is_direct() {
