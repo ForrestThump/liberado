@@ -1,7 +1,7 @@
 use liberado_common::process::std_command;
 use serde_json::Value;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use tempfile::tempdir;
 
 fn run_cli(cwd: &Path, args: &[&str]) -> std::process::Output {
@@ -1094,4 +1094,126 @@ fn coder_summarize_command_dispatches_and_reports_native_trace() {
     assert!(stdout.contains("turns: 1"));
     assert!(stdout.contains("edit_file: 1"));
     assert!(stdout.contains("session_finished: done"));
+}
+
+fn checkout_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("crates directory")
+        .parent()
+        .expect("repository root")
+        .to_path_buf()
+}
+
+#[test]
+fn mutants_requires_a_subcommand() {
+    let temp = tempdir().unwrap();
+    let stderr = run_usage(temp.path(), &["mutants"]);
+    assert!(stderr.contains("usage: liberado mutants"), "{stderr}");
+}
+
+#[test]
+fn mutants_report_runs_from_the_checkout() {
+    let root = checkout_root();
+    let output = run_cli(&root, &["mutants", "report"]);
+    assert!(
+        output.status.success(),
+        "mutants report failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Never campaigned"));
+    assert!(stdout.contains("Historical only"));
+    assert!(stdout.contains("Most drift"));
+}
+
+#[test]
+fn mutants_next_suggests_a_never_campaigned_crate_first() {
+    let root = checkout_root();
+    let output = run_cli(&root, &["mutants", "next"]);
+    assert!(
+        output.status.success(),
+        "mutants next failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let name = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    assert!(!name.is_empty(), "expected a crate directory name");
+    assert!(
+        root.join("crates").join(&name).is_dir(),
+        "{name} is not a crate directory"
+    );
+}
+
+#[test]
+fn mutants_record_ingests_outcomes_json() {
+    let temp = tempdir().expect("temporary repository");
+    let root = temp.path();
+    fs::create_dir_all(root.join("crates/markdown")).expect("crate directory");
+    fs::write(root.join("Cargo.toml"), "[workspace]\nmembers = []\n").expect("workspace");
+    fs::write(
+        root.join("crates/markdown/Cargo.toml"),
+        "[package]\nname = \"liberado-markdown\"\n\n[package.metadata.liberado]\nrole = \"client\"\n",
+    )
+    .expect("manifest");
+    fs::write(
+        root.join("mutants-ledger.json"),
+        "{\"schema\":1,\"campaigns\":[]}\n",
+    )
+    .expect("ledger");
+    fs::create_dir_all(root.join("mutants.out")).expect("mutants output");
+    fs::write(
+        root.join("mutants.out/outcomes.json"),
+        r#"{
+  "outcomes": [{"scenario": {"Mutant": {"package": "liberado-markdown"}}}],
+  "caught": 2,
+  "missed": 1,
+  "timeout": 0,
+  "unviable": 0,
+  "cargo_mutants_version": "27.1.0"
+}"#,
+    )
+    .expect("outcomes");
+    std::process::Command::new("git")
+        .args(["init"])
+        .current_dir(root)
+        .status()
+        .expect("git init");
+    std::process::Command::new("git")
+        .args(["config", "user.email", "test@example.com"])
+        .current_dir(root)
+        .status()
+        .expect("git identity");
+    std::process::Command::new("git")
+        .args(["config", "user.name", "Test"])
+        .current_dir(root)
+        .status()
+        .expect("git identity");
+    std::process::Command::new("git")
+        .args(["add", "."])
+        .current_dir(root)
+        .status()
+        .expect("git add");
+    std::process::Command::new("git")
+        .args(["commit", "-m", "seed"])
+        .current_dir(root)
+        .status()
+        .expect("git commit");
+
+    let output = run_cli(root, &["mutants", "record", "markdown"]);
+    assert!(
+        output.status.success(),
+        "mutants record failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let ledger: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(root.join("mutants-ledger.json")).expect("ledger file"),
+    )
+    .expect("ledger json");
+    let campaigns = ledger["campaigns"].as_array().expect("campaigns");
+    assert_eq!(campaigns.len(), 1);
+    assert_eq!(campaigns[0]["package"], "liberado-markdown");
+    assert_eq!(campaigns[0]["counts"]["caught"], 2);
+    assert_eq!(campaigns[0]["counts"]["survived"], 1);
+    assert!(campaigns[0]["commit"].as_str().is_some());
 }

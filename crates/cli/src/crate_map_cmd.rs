@@ -37,13 +37,13 @@ fn role_blurb(role: &str) -> &'static str {
     }
 }
 
-#[derive(Debug, Default)]
-struct CrateInfo {
-    name: String,
-    dir: String,
-    description: String,
-    role: String,
-    deps: Vec<String>,
+#[derive(Debug, Default, Clone)]
+pub struct CrateInfo {
+    pub name: String,
+    pub dir: String,
+    pub description: String,
+    pub role: String,
+    pub deps: Vec<String>,
 }
 
 fn value(line: &str) -> Option<&str> {
@@ -93,7 +93,7 @@ fn escape_table(value: &str) -> String {
     value.replace('|', "\\|")
 }
 
-fn generate(root: &Path) -> std::io::Result<(String, usize)> {
+fn collect_crates(root: &Path) -> std::io::Result<Vec<CrateInfo>> {
     let mut crates = Vec::new();
     let crates_dir = root.join("crates");
     for entry in fs::read_dir(crates_dir)? {
@@ -113,7 +113,15 @@ fn generate(root: &Path) -> std::io::Result<(String, usize)> {
         info.deps
             .retain(|dependency| workspace_names.contains(dependency));
     }
+    Ok(crates)
+}
 
+pub fn list_crates(root: &Path) -> Result<Vec<CrateInfo>, Box<dyn std::error::Error>> {
+    Ok(collect_crates(root)?)
+}
+
+fn generate(root: &Path) -> std::io::Result<(String, usize)> {
+    let crates = collect_crates(root)?;
     let mut out = String::new();
     out.push_str("# Crate map\n\n");
     out.push_str(

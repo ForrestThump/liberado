@@ -184,15 +184,26 @@ compare-reset path commit="":
 
 # ── Mutation testing ─────────────────────────────────────────────────────────
 
-# Mutation-test one crate with hung-test protection:
-#   `just mutants daemon`        → per-mutant timeout 60s floor
-#   `just mutants coder-agent`   → short floor, lib tests only (integration tests hang)
+# Run cargo-mutants on one crate and append results to mutants-ledger.json.
+# Example: `just mutants executor`
 mutants name:
-    cargo mutants -p liberado-{{name}} --cap-lints true --timeout 3.0 --minimum-test-timeout 30
+    cargo run --locked --quiet -p liberado-cli -- mutants run {{name}}
 
-# coder-agent: run lib tests only (mock_intake_e2e hangs in cargo-mutants temp env).
+# coder-agent: lib tests only (mock_intake_e2e hangs in cargo-mutants temp env).
 mutants-agent:
-    cargo mutants -p liberado-coder-agent --cap-lints true --timeout 3.0 --minimum-test-timeout 90 -- --lib
+    cargo run --locked --quiet -p liberado-cli -- mutants run --lib-only coder-agent
+
+# Ingest an existing mutants.out without re-running cargo mutants.
+mutants-record name:
+    cargo run --locked --quiet -p liberado-cli -- mutants record {{name}}
+
+# Health report: never campaigned, historical-only, most drift since last SHA run.
+mutants-report:
+    cargo run --locked --quiet -p liberado-cli -- mutants report
+
+# Print one crate directory name to mutation-test next.
+mutants-next:
+    cargo run --locked --quiet -p liberado-cli -- mutants next
 
 # ── Run ──────────────────────────────────────────────────────────────────────
 

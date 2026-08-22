@@ -33,7 +33,10 @@
 //!   liberado coder compare await     wait locally for one comparison job
 //!   liberado coder summarize <path>  summarize a cross-harness compare run
 //!   liberado coder smoke              validate the coder runner process boundary
-//!   liberado coder import <file>     foreign (Kilo / OpenHands) → `.messages.json`
+//!   liberado mutants run <crate-dir>   run cargo-mutants and append to mutants-ledger.json
+//!   liberado mutants record [crate-dir] ingest mutants.out/outcomes.json into the ledger
+//!   liberado mutants report [--all]    print never/historical/drift campaign health
+//!   liberado mutants next [--all]        suggest the next crate to mutation-test
 //!
 //! `serve` runs in the foreground, hosting the vault watch loop and the chat/HTTP/SSE API until
 //! killed. `chat` is a thin HTTP/SSE client of a separately-running daemon (see [`chat_client`]).
@@ -54,6 +57,7 @@ mod docs_meta_cmd;
 mod docs_site_cmd;
 mod function_complexity_cmd;
 mod module_health_cmd;
+mod mutants_cmd;
 mod readiness_cmd;
 mod shepherd_cmd;
 mod summarize_cmd;
@@ -88,6 +92,7 @@ async fn dispatch(
         Some("chat") => chat_client::run(args.next()).await,
         // Harness observability over durable coding traces (F1–F3). Synchronous — no daemon.
         Some("coder") => coder_cmd::run(args),
+        Some("mutants") => cmd_mutants(args),
         Some("ci") => cmd_ci(args),
         Some("shepherd") => shepherd_cmd::run(args),
         Some("docs") => cmd_docs(args),
@@ -106,6 +111,24 @@ async fn dispatch(
 /// `liberado ci …` — ship preflight, CRAP check, or the local check-then-ratchet run.
 fn cmd_ci(args: &mut impl Iterator<Item = String>) -> Result<(), Box<dyn std::error::Error>> {
     ci_cmd::run(args)
+}
+
+/// `liberado mutants …` — campaign ledger run/record/report/next.
+fn cmd_mutants(args: &mut impl Iterator<Item = String>) -> Result<(), Box<dyn std::error::Error>> {
+    match args.next().as_deref() {
+        Some("run") => mutants_cmd::run(args),
+        Some("record") => mutants_cmd::record(args),
+        Some("report") => mutants_cmd::report(args),
+        Some("next") => mutants_cmd::next_crate(args),
+        _ => Err(
+            "usage: liberado mutants <run|record|report|next> …\n\
+             run:    liberado mutants run [--lib-only] <crate-dir>\n\
+             record: liberado mutants record [crate-dir]\n\
+             report: liberado mutants report [--all]\n\
+             next:   liberado mutants next [--all]"
+                .into(),
+        ),
+    }
 }
 
 /// `liberado docs …`

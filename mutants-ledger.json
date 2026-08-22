@@ -1,0 +1,203 @@
+{
+  "schema": 1,
+  "campaigns": [
+    {
+      "package": "liberado-dispatcher",
+      "recorded_at": "2026-07-29",
+      "tool_version": "27.1.0",
+      "scope": "package",
+      "counts": {
+        "viable": 55,
+        "caught": 53,
+        "survived": 2,
+        "timeout": 0,
+        "unviable": 17
+      },
+      "source": "markdown-seed"
+    },
+    {
+      "package": "liberado-provider",
+      "recorded_at": "2026-07-29",
+      "tool_version": "27.1.0",
+      "scope": "package",
+      "counts": {
+        "viable": 97,
+        "caught": 86,
+        "survived": 11,
+        "timeout": 0,
+        "unviable": 83
+      },
+      "source": "markdown-seed"
+    },
+    {
+      "package": "liberado-common",
+      "recorded_at": "2026-07-29",
+      "tool_version": "27.1.0",
+      "scope": "package",
+      "counts": {
+        "viable": 203,
+        "caught": 191,
+        "survived": 12,
+        "timeout": 0,
+        "unviable": 36
+      },
+      "source": "markdown-seed"
+    },
+    {
+      "package": "liberado-config-loader",
+      "recorded_at": "2026-07-29",
+      "tool_version": "27.1.0",
+      "scope": "package",
+      "counts": {
+        "viable": 139,
+        "caught": 121,
+        "survived": 18,
+        "timeout": 0,
+        "unviable": 15
+      },
+      "source": "markdown-seed"
+    },
+    {
+      "package": "liberado-session",
+      "recorded_at": "2026-07-29",
+      "tool_version": "27.1.0",
+      "scope": "package",
+      "counts": {
+        "viable": 149,
+        "caught": 119,
+        "survived": 30,
+        "timeout": 0,
+        "unviable": 47
+      },
+      "source": "markdown-seed"
+    },
+    {
+      "package": "liberado-config",
+      "recorded_at": "2026-07-29",
+      "tool_version": "27.1.0",
+      "scope": "package",
+      "counts": {
+        "viable": 46,
+        "caught": 24,
+        "survived": 22,
+        "timeout": 0,
+        "unviable": 7
+      },
+      "source": "markdown-seed"
+    },
+    {
+      "package": "liberado-executor",
+      "recorded_at": "2026-07-29",
+      "tool_version": "27.1.0",
+      "scope": "package",
+      "counts": {
+        "viable": 168,
+        "caught": 139,
+        "survived": 29,
+        "timeout": 0,
+        "unviable": 30
+      },
+      "source": "markdown-seed"
+    },
+    {
+      "package": "liberado-orchestrator",
+      "recorded_at": "2026-07-29",
+      "tool_version": "27.1.0",
+      "scope": "package",
+      "counts": {
+        "viable": 84,
+        "caught": 78,
+        "survived": 6,
+        "timeout": 0,
+        "unviable": 19
+      },
+      "source": "markdown-seed"
+    },
+    {
+      "package": "liberado-coder-sandbox",
+      "recorded_at": "2026-07-30",
+      "tool_version": "27.1.0",
+      "scope": "package",
+      "counts": {
+        "viable": 35,
+        "caught": 34,
+        "survived": 1,
+        "timeout": 0,
+        "unviable": 0
+      },
+      "source": "markdown-seed"
+    },
+    {
+      "package": "liberado-coder-tools",
+      "recorded_at": "2026-07-30",
+      "tool_version": "27.1.0",
+      "scope": "package",
+      "counts": {
+        "viable": 59,
+        "caught": 55,
+        "survived": 4,
+        "timeout": 0,
+        "unviable": 0
+      },
+      "source": "markdown-seed"
+    },
+    {
+      "package": "liberado-daemon",
+      "recorded_at": "2026-07-30",
+      "tool_version": "27.1.0",
+      "scope": "package",
+      "counts": {
+        "viable": 67,
+        "caught": 34,
+        "survived": 17,
+        "timeout": 16,
+        "unviable": 0
+      },
+      "source": "markdown-seed"
+    },
+    {
+      "package": "liberado-server",
+      "recorded_at": "2026-07-30",
+      "tool_version": "27.1.0",
+      "scope": "package",
+      "counts": {
+        "viable": 184,
+        "caught": 50,
+        "survived": 134,
+        "timeout": 0,
+        "unviable": 42
+      },
+      "source": "markdown-seed"
+    },
+    {
+      "package": "liberado-coder-agent",
+      "recorded_at": "2026-07-30",
+      "command": "cargo mutants -p liberado-coder-agent --cap-lints true --timeout 3.0 --minimum-test-timeout 90 -- --lib",
+      "tool_version": "27.1.0",
+      "scope": "package",
+      "counts": {
+        "viable": 328,
+        "caught": 176,
+        "survived": 150,
+        "timeout": 2,
+        "unviable": 51
+      },
+      "source": "markdown-seed"
+    },
+    {
+      "package": "liberado-markdown",
+      "commit": "90b98e3c55aa5e6da6af8dc17fb9e92aa08c673b",
+      "recorded_at": "2026-08-22",
+      "command": "cargo mutants -p liberado-markdown --cap-lints true --timeout 3.0 --in-place --minimum-test-timeout 30",
+      "tool_version": "27.1.0",
+      "scope": "package",
+      "counts": {
+        "viable": 126,
+        "caught": 48,
+        "survived": 33,
+        "timeout": 45,
+        "unviable": 20
+      }
+    }
+  ]
+}
