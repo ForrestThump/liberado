@@ -130,8 +130,7 @@ pub trait MessagingChannel: Send + Sync {
     /// second, now-meaningless tap. `message_ref` is the id carried on the
     /// [`InboundEvent::Action`] the tap produced. Default is a no-op for channels without message
     /// editing (they keep the buttons; harmless — a repeat tap hits the "already decided" guard).
-    async fn edit_message(&self, message_ref: &str, text: &str) -> Result<(), MessagingError> {
-        let _ = (message_ref, text);
+    async fn edit_message(&self, _message_ref: &str, _text: &str) -> Result<(), MessagingError> {
         Ok(())
     }
 
@@ -142,8 +141,10 @@ pub trait MessagingChannel: Send + Sync {
 
     /// Register slash-command autocomplete entries `(command, description)` without a leading `/`.
     /// Default is a no-op for channels that lack a command menu.
-    async fn register_commands(&self, commands: &[(String, String)]) -> Result<(), MessagingError> {
-        let _ = commands;
+    async fn register_commands(
+        &self,
+        _commands: &[(String, String)],
+    ) -> Result<(), MessagingError> {
         Ok(())
     }
 
