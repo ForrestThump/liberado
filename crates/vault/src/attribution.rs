@@ -433,6 +433,26 @@ mod tests {
         );
     }
 
+    /// Human-sourced front matter must not be attributed as Agent via the MCP fallback path.
+    /// The `!prov.is_human()` guard on the front matter branch must reject human-sourced entries,
+    /// not just the audit entry branch. This is the regression test for the mutation that replaces
+    /// the guard with `true`.
+    #[tokio::test]
+    async fn mcp_tool_write_with_human_front_matter_is_external_not_agent() {
+        let (vault, dir) = temp_vault().await;
+        let note = "---\nliberado_source: human\n---\n\napproved by hand\n";
+
+        write_like_an_mcp_tool(&vault, &dir, "proposals/approved.md", note).await;
+
+        // The front matter says `human`, so even though the audit entry has no metadata
+        // (MCP path), the `!prov.is_human()` guard must reject it and fall through to External.
+        assert_eq!(
+            vault.attribute("proposals/approved.md").await.unwrap(),
+            Attribution::External,
+            "human-sourced front matter via MCP path must be External, not Agent"
+        );
+    }
+
     #[test]
     fn front_matter_parsing_edge_cases() {
         // Unterminated block: refuse to mine the body for provenance.
