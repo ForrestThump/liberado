@@ -120,14 +120,12 @@ fn cmd_mutants(args: &mut impl Iterator<Item = String>) -> Result<(), Box<dyn st
         Some("record") => mutants_cmd::record(args),
         Some("report") => mutants_cmd::report(args),
         Some("next") => mutants_cmd::next_crate(args),
-        _ => Err(
-            "usage: liberado mutants <run|record|report|next> …\n\
+        _ => Err("usage: liberado mutants <run|record|report|next> …\n\
              run:    liberado mutants run [--lib-only] <crate-dir>\n\
              record: liberado mutants record [crate-dir]\n\
              report: liberado mutants report [--all]\n\
              next:   liberado mutants next [--all]"
-                .into(),
-        ),
+            .into()),
     }
 }
 
