@@ -1,7 +1,7 @@
 //! # liberado-sysmap
 //!
-//! The data model behind Liberado's **isometric system map**: a deterministic, serializable graph
-//! of (a) the workspace's crates and their build-time dependencies, and (b) the runtime
+//! The Liberado adapter behind its **interactive 2D system map**: a deterministic, serializable
+//! graph of (a) the workspace's crates and their build-time dependencies, and (b) the runtime
 //! control/data paths that connect the daemon, dispatcher, orchestrator, executor, MCP servers,
 //! vault, providers, schedules, hooks, and surfaces.
 //!

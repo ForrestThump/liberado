@@ -31,11 +31,17 @@ Arguments: `--repo PATH` (repository root; default walks up from the cwd), `--co
   toolbar toggles and stay hidden by default to keep the production graph readable.
 * **Orange/green arrows** are runtime control and data paths — the perceive → decide → act →
   loop-break loop, surfaces, inference, and notification. Brighter arrowheads show direction.
+  Every edge points from the dependent or sender to the dependency or receiver.
 * **Layout order** stays within layer and runtime-kind groups. Four deterministic starting orders
   and pair-swap local search reduce crossings, with total edge length as the tie-breaker.
 * **Red node outlines** identify strongly connected components in the normal dependency graph.
   Development and build edges do not create cycle warnings because they often cross production
   layers intentionally.
+
+Selecting a node hides unrelated edges and keeps its direct relationships visible. Enable
+**second hop** in the toolbar to include relationships one node farther away. The detail panel
+shows the node description, direction-aware incoming and outgoing relationships, and Cargo package
+facts such as version, license, keywords, categories, and target kinds when they are available.
 
 ## Regeneration (the point)
 
@@ -86,9 +92,9 @@ tool.
 ## Crates
 
 * `sysmap-core` — the project-agnostic core: `cargo metadata` scanner, map assembly, graph model,
-  production-cycle detection, deterministic layout, isometric projection, color styling, and the
-  `sysmap.toml` profile/rule engine. It also accepts caller-supplied metadata JSON so IDE and CI
-  consumers do not need it to spawn Cargo. No Liberado dependency.
+  production-cycle detection, deterministic 2D layout, legacy projection helpers, color styling,
+  and the `sysmap.toml` profile/rule engine. It also accepts caller-supplied metadata JSON so IDE
+  and CI consumers do not need it to spawn Cargo. No Liberado dependency.
 * `liberado-sysmap` (this crate) — the Liberado profile (`sysmap.toml`) and the `topology.toml` →
   runtime-node adapter.
 * `liberado-sysmap-gui` — the project-agnostic 2D renderer **library** (`launch(map, repo)`);
