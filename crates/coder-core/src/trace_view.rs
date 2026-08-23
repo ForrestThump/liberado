@@ -3280,6 +3280,8 @@ mod importer_survivor_tests {
     //! Survivor tests for the foreign-import path and the divergence report.
 
     use super::*;
+    use crate::{CoderRunRequest, CoderTask, WorkspaceRef};
+    use chrono::Utc;
 
     fn export(messages: Value) -> MessagesExport {
         MessagesExport {
@@ -3400,6 +3402,119 @@ mod importer_survivor_tests {
             ok,
             output: output.into(),
         }
+    }
+
+    #[test]
+    fn divergence_short_tails_do_not_claim_skipped_turns() {
+        // Two turns after the divergence point is within the shown window: the
+        // report must not print a "more turn(s)" line for zero skipped turns.
+        let a = run_of(
+            "A",
+            vec![
+                tv(1, vec![cv("read", Some(true), "", "")]),
+                tv(2, vec![cv("edit", Some(true), "", "")]),
+                tv(3, Vec::new()),
+            ],
+        );
+        let b = run_of(
+            "B",
+            vec![
+                tv(1, vec![cv("read", Some(true), "", "")]),
+                tv(4, vec![cv("other", None, "", "")]),
+            ],
+        );
+        let s = format_divergence(&a, &b);
+        assert!(!s.contains("more turn(s)"), "nothing was skipped: {s}");
+
+        // Long tails compress: three shown, then an exact skip count.
+        let mut long_tail = vec![tv(1, vec![cv("read", Some(true), "", "")])];
+        for i in 2..=5 {
+            long_tail.push(tv(i, vec![cv(&format!("step{i}"), Some(true), "", "")]));
+        }
+        let e = run_of("E", long_tail);
+        let f = run_of(
+            "F",
+            vec![
+                tv(1, vec![cv("read", Some(true), "", "")]),
+                tv(2, vec![cv("other", Some(true), "", "")]),
+            ],
+        );
+        let s4 = format_divergence(&e, &f);
+        assert!(s4.contains("… 1 more turn(s)"), "{s4}");
+        // Guard annotations emit a per-harness interventions section; without
+        // guards there is none.
+        assert!(
+            !s4.contains("harness interventions"),
+            "no guards, no interventions section: {s4}"
+        );
+
+        let mut guarded = tv(2, Vec::new());
+        guarded.annotations = vec!["guard loop → halt".into()];
+        let g = run_of(
+            "G",
+            vec![tv(1, vec![cv("read", Some(true), "", "")]), guarded],
+        );
+        let s5 = format_divergence(&g, &g.clone());
+        assert!(s5.contains("## A harness interventions"), "{s5}");
+        assert!(s5.contains("turn 2: guard loop → halt"));
+    }
+
+    #[test]
+    fn load_run_view_prefers_native_then_messages_export() {
+        let dir = tempfile::tempdir().unwrap();
+
+        // A native trace wins even when it could also parse as messages.
+        let native = CoderTrace {
+            session_id: "native-1".into(),
+            request: CoderRunRequest {
+                task: CoderTask::new("t1", "d"),
+                workspace: WorkspaceRef::new("/w", "HEAD"),
+                config: crate::CoderRunConfig {
+                    backend: crate::LIBERADO_LOOP_BACKEND.into(),
+                    ..serde_json::from_value(json!({
+                        "backend": "liberado-loop",
+                        "planner": {"model": "m"},
+                        "coder": {"model": "m"},
+                        "critic": {"model": "m"},
+                        "sandbox": {"backend": "host_local"},
+                        "command_policy": {"timeout_secs": 10, "output_max_bytes": 1024}
+                    }))
+                    .unwrap()
+                },
+                attempt: 0,
+                prior_feedback: Vec::new(),
+                strategist_directive: None,
+            },
+            events: vec![CoderEvent::ModelTurnFinished {
+                role: "coder".into(),
+                turn: 1,
+                tools_offered: Vec::new(),
+                message_count: 1,
+                content: Some("native text".into()),
+                finish_reason: "prose".into(),
+                tool_calls: Vec::new(),
+                prompt_tokens: 1,
+                completion_tokens: 1,
+                at: Utc::now(),
+            }],
+            result: None,
+        };
+        let native_path = dir.path().join("run.json");
+        std::fs::write(&native_path, serde_json::to_vec(&native).unwrap()).unwrap();
+        let view = load_run_view(&native_path).unwrap();
+        assert_eq!(view.source, "liberado");
+        assert_eq!(view.turns[0].text.as_deref(), Some("native text"));
+
+        // Our own export shape loads through the messages path.
+        let ex = MessagesExport {
+            session_id: "exp".into(),
+            messages: vec![json!({"role": "user", "content": "exported task"})],
+        };
+        let exp_path = dir.path().join("exp.messages.json");
+        write_messages_export(&exp_path, &ex).unwrap();
+        let view = load_run_view(&exp_path).unwrap();
+        assert_eq!(view.source, "liberado-messages");
+        assert_eq!(view.task.as_deref(), Some("exported task"));
     }
 
     #[test]

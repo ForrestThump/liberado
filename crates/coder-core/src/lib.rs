@@ -2130,6 +2130,37 @@ mod mode_scope_survivor_tests {
     }
 
     #[test]
+    fn findings_closed_section_requires_at_least_one_fixed_issue() {
+        // Outstanding AND fixed together: the closed count is len - outstanding,
+        // and the Closed section appears only when that difference exceeds zero.
+        let r = result_with(
+            vec![
+                finding("open one", Disposition::Outstanding),
+                finding("done one", Disposition::Fixed),
+            ],
+            vec![],
+            None,
+        );
+        let md = render_findings_markdown(&r);
+        assert!(md.contains("### Open — from the diff review"), "{md}");
+        assert!(md.contains("### Closed"), "{md}");
+        assert!(md.contains("1 diff-review issue(s)"), "{md}");
+
+        // Only outstanding: no Closed section, no zero-count line.
+        let r2 = result_with(
+            vec![finding("only open", Disposition::Outstanding)],
+            vec![],
+            None,
+        );
+        let md2 = render_findings_markdown(&r2);
+        assert!(md2.contains("not addressed"), "{md2}");
+        assert!(
+            !md2.contains("Closed"),
+            "no fixed issues, no Closed section: {md2}"
+        );
+    }
+
+    #[test]
     fn session_review_is_clean_iff_no_findings() {
         let clean = SessionReview::default();
         assert!(clean.is_clean());
