@@ -187,6 +187,9 @@ fn build_mutants_command(package: &str, profile: RunProfile) -> String {
         // Same cold-cache effect for conversation-store: the baseline test phase also
         // compiles doctests, which alone exceeds the 3s floor on a cold cache.
         ("liberado-conversation-store", _) => ("60", "60"),
+        // coder-core's suite is simply large; a cold cache pushes the baseline test
+        // phase well past 3s before any mutant runs.
+        ("liberado-coder-core", _) => ("90", "90"),
         // acp-bridge spawns child processes in its smoke test; a cold baseline exceeds 3s.
         ("liberado-acp-bridge", _) => ("10.0", "120"),
         (_, RunProfile::LibOnly) => ("90", "90"),
