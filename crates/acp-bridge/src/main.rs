@@ -208,7 +208,7 @@ where
                 return Some(0);
             }
             "--help" | "-h" | "help" => {
-                print_help();
+                println!("{}", help_text());
                 return Some(0);
             }
             "--mode" | "-m" => {
@@ -258,8 +258,9 @@ where
     None
 }
 
-fn print_help() {
-    println!(
+/// The `--help` text, built rather than printed so tests can pin what a client sees.
+fn help_text() -> String {
+    format!(
         "liberado-acp {} — Liberado multi-mode ACP agent for Paseo\n\n\
          Usage:\n\
            liberado-acp [--mode coding|goal|chat|face]   ACP on stdin/stdout\n\
@@ -278,7 +279,7 @@ fn print_help() {
            LIBERADO_CONFIG_DIR         Liberado config ([coder] tuning)\n\
            LIBERADO_SERVER             face mode daemon URL (default http://127.0.0.1:4201)",
         env!("CARGO_PKG_VERSION")
-    );
+    )
 }
 
 async fn run() -> Result<(), Box<dyn std::error::Error>> {
@@ -296,6 +297,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     // which of the two readers is running.
     let (stdin_tx, mut stdin_rx) = mpsc::channel::<std::io::Result<Option<String>>>(64);
     spawn_stdin_reader(stdin_tx);
+    // One sink object serves responses and notifications for the whole loop.
+    let wire_dyn: Arc<dyn WireSink> = wire.clone();
     let mut in_flight: Option<InFlightPrompt> = None;
 
     loop {
@@ -310,11 +313,11 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                     None => std::future::pending().await,
                 }
             } => {
-                handle_prompt_join(&wire, join, &mut in_flight)?;
+                handle_prompt_join(wire_dyn.as_ref(), join, &mut in_flight)?;
             }
             line = stdin_rx.recv() => {
                 // A closed channel means the reader ended — same as EOF on stdin.
-                if !handle_stdin_line(&bridge, &wire, line, &mut in_flight).await? {
+                if !handle_stdin_line(&bridge, &wire_dyn, line, &mut in_flight).await? {
                     break;
                 }
             }
@@ -376,50 +379,69 @@ fn apply_shared_target_dir(shared_target_dir: &Option<String>) {
 /// Returns once the task is registered in `in_flight`.
 fn spawn_prompt_if_free(
     bridge: &Arc<Bridge>,
-    wire: &Arc<StdoutWire>,
+    wire: &Arc<dyn WireSink>,
     params: &Value,
     id: Value,
     in_flight: &mut Option<InFlightPrompt>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    if in_flight.is_some() {
-        wire.write_rpc_response(
+    match prompt_slot_check(in_flight.is_some(), params) {
+        PromptSlot::Busy => wire.write_rpc_response(
             id,
             Err(JsonRpcErrorBody {
-                code: -32603,
+                code: JSONRPC_INTERNAL_ERROR,
                 message: "another session/prompt is already in flight".into(),
             }),
-        )?;
-        return Ok(());
+        )?,
+        PromptSlot::MissingSessionId => {
+            wire.write_rpc_response(id, Err(missing_session_error()))?;
+        }
+        PromptSlot::Ready(sid) => {
+            let bridge_p = Arc::clone(bridge);
+            let sink: Arc<dyn WireSink> = Arc::clone(wire);
+            let params = params.clone();
+            let handle =
+                tokio::spawn(async move { run_session_prompt(bridge_p, sink, params).await });
+            *in_flight = Some(InFlightPrompt {
+                session_id: sid,
+                request_id: id,
+                handle,
+            });
+        }
     }
-    let sid = match params
+    Ok(())
+}
+
+/// Whether another `session/prompt` may start, and the session id it would run for.
+///
+/// One prompt at a time keeps `session/cancel` meaningful; a missing or empty session
+/// id is invalid params, not an internal error.
+enum PromptSlot {
+    Busy,
+    MissingSessionId,
+    Ready(String),
+}
+
+fn prompt_slot_check(in_flight: bool, params: &Value) -> PromptSlot {
+    if in_flight {
+        return PromptSlot::Busy;
+    }
+    match params
         .get("sessionId")
         .and_then(|v| v.as_str())
         .map(str::to_string)
     {
-        Some(s) if !s.is_empty() => s,
-        _ => {
-            wire.write_rpc_response(
-                id,
-                Err(JsonRpcErrorBody {
-                    // -32602 Invalid params: the request is well-formed and the
-                    // method exists, the arguments are wrong.
-                    code: JSONRPC_INVALID_PARAMS,
-                    message: "missing sessionId".into(),
-                }),
-            )?;
-            return Ok(());
-        }
-    };
-    let bridge_p = Arc::clone(bridge);
-    let sink: Arc<dyn WireSink> = Arc::clone(wire) as Arc<dyn WireSink>;
-    let params = params.clone();
-    let handle = tokio::spawn(async move { run_session_prompt(bridge_p, sink, params).await });
-    *in_flight = Some(InFlightPrompt {
-        session_id: sid,
-        request_id: id,
-        handle,
-    });
-    Ok(())
+        Some(s) if !s.is_empty() => PromptSlot::Ready(s),
+        _ => PromptSlot::MissingSessionId,
+    }
+}
+
+/// -32602 Invalid params: the request is well-formed and the method exists, the arguments
+/// are wrong.
+fn missing_session_error() -> JsonRpcErrorBody {
+    JsonRpcErrorBody {
+        code: JSONRPC_INVALID_PARAMS,
+        message: "missing sessionId".into(),
+    }
 }
 
 /// Resolve every piece of startup state the bridge needs: provider, catalog, config (with the
@@ -497,7 +519,7 @@ fn spawn_stdin_reader(stdin_tx: mpsc::Sender<std::io::Result<Option<String>>>) {
                         Ok(_) => Ok(Some(buf.trim_end_matches(['\r', '\n']).to_string())),
                         Err(e) => Err(e),
                     };
-                    let done = matches!(msg, Ok(None) | Err(_));
+                    let done = stdin_read_done(&msg);
                     if stdin_tx.blocking_send(msg).is_err() || done {
                         break;
                     }
@@ -512,7 +534,7 @@ fn spawn_stdin_reader(stdin_tx: mpsc::Sender<std::io::Result<Option<String>>>) {
                 let mut lines = BufReader::new(tokio::io::stdin()).lines();
                 loop {
                     let msg = lines.next_line().await;
-                    let done = matches!(msg, Ok(None) | Err(_));
+                    let done = stdin_read_done(&msg);
                     if stdin_tx.send(msg).await.is_err() || done {
                         break;
                     }
@@ -520,6 +542,13 @@ fn spawn_stdin_reader(stdin_tx: mpsc::Sender<std::io::Result<Option<String>>>) {
             });
         }
     }
+}
+
+/// A read is *done* when it reports EOF or an error — either ends the reader loop. A
+/// successful line keeps it running; mistaking one for the other either drops the wire
+/// mid-session or spins forever after EOF.
+fn stdin_read_done(msg: &std::io::Result<Option<String>>) -> bool {
+    matches!(msg, Ok(None) | Err(_))
 }
 
 /// Complete an in-flight prompt: clear the slot, map the join result onto a JSON-RPC response
@@ -532,8 +561,30 @@ type PromptJoin = (
     Result<Result<Value, String>, tokio::task::JoinError>,
 );
 
+/// Map one finished prompt task onto its JSON-RPC outcome.
+///
+/// A cancelled task is a *cancelled turn*, not an error: `session/cancel` aborts as a hard
+/// backup after the cooperative path, and the client must see `stopReason: "cancelled"`.
+fn prompt_join_outcome(
+    join_result: Result<Result<Value, String>, tokio::task::JoinError>,
+) -> Result<Value, JsonRpcErrorBody> {
+    match join_result {
+        Ok(Ok(v)) => Ok(v),
+        Ok(Err(message)) => Err(JsonRpcErrorBody {
+            code: JSONRPC_INTERNAL_ERROR,
+            message,
+        }),
+        // Task abort (hard cancel backup) → cancelled turn.
+        Err(je) if je.is_cancelled() => Ok(json!({ "stopReason": "cancelled" })),
+        Err(je) => Err(JsonRpcErrorBody {
+            code: JSONRPC_INTERNAL_ERROR,
+            message: format!("prompt task failed: {je}"),
+        }),
+    }
+}
+
 fn handle_prompt_join(
-    wire: &StdoutWire,
+    wire: &dyn WireSink,
     join: Option<PromptJoin>,
     in_flight: &mut Option<InFlightPrompt>,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -541,20 +592,7 @@ fn handle_prompt_join(
         return Ok(());
     };
     *in_flight = None;
-    let outcome = match join_result {
-        Ok(Ok(v)) => Ok(v),
-        Ok(Err(message)) => Err(JsonRpcErrorBody {
-            code: -32603,
-            message,
-        }),
-        // Task abort (hard cancel backup) → cancelled turn.
-        Err(je) if je.is_cancelled() => Ok(json!({ "stopReason": "cancelled" })),
-        Err(je) => Err(JsonRpcErrorBody {
-            code: -32603,
-            message: format!("prompt task failed: {je}"),
-        }),
-    };
-    wire.write_rpc_response(id, outcome)?;
+    wire.write_rpc_response(id, prompt_join_outcome(join_result))?;
     Ok(())
 }
 
@@ -563,7 +601,7 @@ fn handle_prompt_join(
 /// no response — returns `true`.
 async fn handle_stdin_line(
     bridge: &Arc<Bridge>,
-    wire: &Arc<StdoutWire>,
+    wire: &Arc<dyn WireSink>,
     line: Option<std::io::Result<Option<String>>>,
     in_flight: &mut Option<InFlightPrompt>,
 ) -> Result<bool, Box<dyn std::error::Error>> {
@@ -593,7 +631,7 @@ async fn handle_stdin_line(
 
 async fn dispatch_stdin_message(
     bridge: &Arc<Bridge>,
-    wire: &Arc<StdoutWire>,
+    wire: &Arc<dyn WireSink>,
     msg: JsonRpcIncoming,
     in_flight: &mut Option<InFlightPrompt>,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -1087,6 +1125,14 @@ impl WireSink for CapturingSink {
             }
         }
         self.inner.emit(method, params)
+    }
+
+    fn write_rpc_response(
+        &self,
+        id: Value,
+        outcome: Result<Value, JsonRpcErrorBody>,
+    ) -> Result<(), String> {
+        self.inner.write_rpc_response(id, outcome)
     }
 }
 
@@ -2494,7 +2540,8 @@ mod tests {
         );
     }
 
-    /// Captures ACP notifications instead of writing stdout (for MockProvider turns).
+    /// Captures ACP notifications and JSON-RPC responses instead of writing stdout
+    /// (for MockProvider turns and dispatch-loop tests).
     struct CaptureSink {
         lines: std::sync::Mutex<Vec<(String, Value)>>,
     }
@@ -2505,6 +2552,24 @@ mod tests {
                 .lock()
                 .map_err(|e| e.to_string())?
                 .push((method.to_string(), params));
+            Ok(())
+        }
+
+        fn write_rpc_response(
+            &self,
+            id: Value,
+            outcome: Result<Value, JsonRpcErrorBody>,
+        ) -> Result<(), String> {
+            let body = match outcome {
+                Ok(result) => json!({ "id": id, "result": result }),
+                Err(error) => {
+                    json!({ "id": id, "error": { "code": error.code, "message": error.message } })
+                }
+            };
+            self.lines
+                .lock()
+                .map_err(|e| e.to_string())?
+                .push(("response".into(), body));
             Ok(())
         }
     }
@@ -3408,5 +3473,341 @@ mod tests {
             .join("\n");
         assert!(text.contains("fix the test"), "{text}");
         assert!(text.contains("working on it"), "{text}");
+    }
+
+    // ── Dispatch-loop and CLI survivors (mutation campaign) ────────────────────
+
+    /// Serializes tests that touch process-global env vars.
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[test]
+    fn positional_args_are_ignored_not_errors() {
+        // A bare word is not a flag: it must neither exit nor trip the `--mode=` /
+        // unknown-option arms. Guards that widen to `true` turn this into exit 2.
+        assert_eq!(handle_cli_args(["extra"]), None);
+        assert_eq!(handle_cli_args(["one", "two", "three"]), None);
+        // A real flag after positionals is still validated.
+        assert_eq!(handle_cli_args(["positional", "--later-flag"]), Some(2));
+    }
+
+    #[test]
+    fn help_text_names_the_modes_and_the_exit_free_flags() {
+        let text = help_text();
+        for mode in ["coding", "goal", "chat", "face"] {
+            assert!(text.contains(mode), "help must list mode {mode}: {text}");
+        }
+        assert!(text.contains("--version"));
+        assert!(text.contains("--mode"));
+        assert!(text.contains("LIBERADO_ACP_MODE"));
+        assert!(text.contains("Usage:"));
+    }
+
+    #[test]
+    fn apply_shared_target_dir_sets_trimmed_and_ignores_blank() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let saved = std::env::var("CARGO_TARGET_DIR").ok();
+
+        apply_shared_target_dir(&None);
+        assert_eq!(
+            std::env::var("CARGO_TARGET_DIR").ok(),
+            saved,
+            "no setting must leave the environment alone"
+        );
+        apply_shared_target_dir(&Some("   ".into()));
+        assert_eq!(
+            std::env::var("CARGO_TARGET_DIR").ok(),
+            saved,
+            "a whitespace-only setting must be ignored, not blank out the cache"
+        );
+        apply_shared_target_dir(&Some("  target/shared  ".into()));
+        assert_eq!(
+            std::env::var("CARGO_TARGET_DIR").as_deref(),
+            Ok("target/shared"),
+            "a real setting must reach children trimmed"
+        );
+
+        match saved {
+            Some(v) => unsafe { std::env::set_var("CARGO_TARGET_DIR", v) },
+            None => unsafe { std::env::remove_var("CARGO_TARGET_DIR") },
+        }
+    }
+
+    #[tokio::test]
+    async fn no_tools_offers_nothing_and_refuses_invocation() {
+        assert!(NoTools.catalog().is_empty(), "chat has no file tools");
+        let call = liberado_provider::ToolInvocation::new("1", "anything", json!({}));
+        let err = NoTools
+            .invoke(&call)
+            .await
+            .expect_err("chat must refuse tool calls, not answer them");
+        assert!(err.contains("no coding tools"), "{err}");
+    }
+
+    #[test]
+    fn stdin_read_ends_only_on_eof_or_error() {
+        assert!(!stdin_read_done(&Ok(Some("{}".into()))));
+        assert!(stdin_read_done(&Ok(None)), "EOF ends the reader");
+        assert!(
+            stdin_read_done(&Err(std::io::Error::other("broken pipe"))),
+            "a read error ends the reader"
+        );
+    }
+
+    #[test]
+    fn prompt_slot_check_routes_busy_missing_and_ready() {
+        assert!(matches!(
+            prompt_slot_check(true, &json!({ "sessionId": "s1" })),
+            PromptSlot::Busy
+        ));
+        assert!(matches!(
+            prompt_slot_check(false, &json!({})),
+            PromptSlot::MissingSessionId
+        ));
+        assert!(
+            matches!(
+                prompt_slot_check(false, &json!({ "sessionId": 7 })),
+                PromptSlot::MissingSessionId
+            ),
+            "a non-string id is invalid params"
+        );
+        assert!(
+            matches!(
+                prompt_slot_check(false, &json!({ "sessionId": "" })),
+                PromptSlot::MissingSessionId
+            ),
+            "an empty session id is invalid params"
+        );
+        assert!(
+            matches!(
+                prompt_slot_check(false, &json!({ "sessionId": "   " })),
+                PromptSlot::Ready(s) if s == "   "
+            ),
+            "only truly empty ids are rejected here; garbage reaches unknown-session"
+        );
+        assert!(
+            matches!(
+                prompt_slot_check(false, &json!({ "sessionId": "s1" })),
+                PromptSlot::Ready(s) if s == "s1"
+            ),
+            "a valid id registers ready with the id carried through"
+        );
+    }
+
+    /// A sink + bridge harness for the spawn path; no stdout is touched.
+    struct SpawnHarness {
+        bridge: Arc<Bridge>,
+        sink: Arc<CaptureSink>,
+    }
+
+    impl SpawnHarness {
+        fn new() -> Self {
+            Self {
+                bridge: test_bridge(),
+                sink: Arc::new(CaptureSink {
+                    lines: std::sync::Mutex::new(Vec::new()),
+                }),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn a_second_prompt_while_busy_is_an_internal_error_response() {
+        let h = SpawnHarness::new();
+        let mut in_flight: Option<InFlightPrompt> = None;
+        spawn_prompt_if_free(
+            &h.bridge,
+            &(Arc::clone(&h.sink) as Arc<dyn WireSink>),
+            &json!({ "sessionId": "s1" }),
+            json!(1),
+            &mut in_flight,
+        )
+        .expect("first prompt spawns");
+        assert!(in_flight.is_some());
+
+        spawn_prompt_if_free(
+            &h.bridge,
+            &(Arc::clone(&h.sink) as Arc<dyn WireSink>),
+            &json!({ "sessionId": "s2" }),
+            json!(2),
+            &mut in_flight,
+        )
+        .expect("the busy refusal itself must not fail");
+        {
+            let lines = h.sink.lines.lock().unwrap();
+            assert_eq!(lines.len(), 1, "busy writes a response, spawns nothing");
+            assert_eq!(lines[0].0, "response");
+            assert_eq!(lines[0].1["error"]["code"], JSONRPC_INTERNAL_ERROR);
+        }
+        if let Some(inf) = in_flight.as_mut() {
+            inf.handle.abort();
+            let _ = (&mut inf.handle).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn a_prompt_without_a_session_id_is_invalid_params() {
+        let h = SpawnHarness::new();
+        let mut in_flight: Option<InFlightPrompt> = None;
+        for params in [
+            json!({}),
+            json!({ "sessionId": "" }),
+            json!({ "sessionId": null }),
+        ] {
+            spawn_prompt_if_free(
+                &h.bridge,
+                &(Arc::clone(&h.sink) as Arc<dyn WireSink>),
+                &params,
+                json!("req-1"),
+                &mut in_flight,
+            )
+            .unwrap();
+        }
+        let lines = h.sink.lines.lock().unwrap();
+        assert_eq!(lines.len(), 3);
+        for (method, body) in lines.iter() {
+            assert_eq!(method, "response");
+            assert_eq!(body["error"]["code"], JSONRPC_INVALID_PARAMS);
+            assert_eq!(body["error"]["message"], "missing sessionId");
+            assert_eq!(body["id"], "req-1");
+        }
+        assert!(in_flight.is_none());
+    }
+
+    #[tokio::test]
+    async fn a_ready_prompt_registers_its_session_and_request_id() {
+        let h = SpawnHarness::new();
+        let mut in_flight: Option<InFlightPrompt> = None;
+        spawn_prompt_if_free(
+            &h.bridge,
+            &(Arc::clone(&h.sink) as Arc<dyn WireSink>),
+            &json!({ "sessionId": "lib-spawn-ready" }),
+            json!("req-9"),
+            &mut in_flight,
+        )
+        .expect("ready spawns");
+        let inf = in_flight.as_ref().expect("registered");
+        assert_eq!(inf.session_id, "lib-spawn-ready");
+        assert_eq!(inf.request_id, json!("req-9"));
+        if let Some(inf) = in_flight.as_mut() {
+            inf.handle.abort();
+            let _ = (&mut inf.handle).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn prompt_join_maps_success_error_cancel_and_panic() {
+        // Plain success passes through untouched.
+        let ok = prompt_join_outcome(Ok(Ok(json!({ "stopReason": "end_turn" })))).unwrap();
+        assert_eq!(ok["stopReason"], "end_turn");
+
+        // A prompt task's own Err becomes -32603 with the message kept.
+        let err = prompt_join_outcome(Ok(Err("model exploded".into()))).unwrap_err();
+        assert_eq!(err.code, JSONRPC_INTERNAL_ERROR);
+        assert_eq!(err.message, "model exploded");
+
+        // An aborted task is a cancelled turn, not an error.
+        let cancelled = tokio::spawn(async { std::future::pending::<()>().await });
+        cancelled.abort();
+        let join_err = cancelled.await.unwrap_err();
+        assert!(join_err.is_cancelled());
+        let stop = prompt_join_outcome(Err(join_err)).unwrap();
+        assert_eq!(stop["stopReason"], "cancelled");
+
+        // Any other join failure (a panic) is an internal error, not a cancel.
+        let panicked = tokio::spawn(async move { panic!("prompt task boom") });
+        let join_err = panicked.await.unwrap_err();
+        assert!(
+            !join_err.is_cancelled(),
+            "a panic must not be classified as a cancel"
+        );
+        let err = prompt_join_outcome(Err(join_err)).unwrap_err();
+        assert_eq!(err.code, JSONRPC_INTERNAL_ERROR);
+        assert!(err.message.contains("prompt task failed"));
+    }
+
+    #[tokio::test]
+    async fn dispatch_answers_unknown_methods_with_method_not_found_code() {
+        let bridge = test_bridge();
+        let sink = Arc::new(CaptureSink {
+            lines: std::sync::Mutex::new(Vec::new()),
+        });
+        let wire: Arc<dyn WireSink> = Arc::clone(&sink) as Arc<dyn WireSink>;
+        let msg: JsonRpcIncoming =
+            serde_json::from_str(r#"{"jsonrpc":"2.0","id":5,"method":"session/nope"}"#).unwrap();
+        let mut in_flight: Option<InFlightPrompt> = None;
+        dispatch_stdin_message(&bridge, &wire, msg, &mut in_flight)
+            .await
+            .expect("routing must succeed even when the method does not exist");
+        let captured = sink.lines.lock().unwrap();
+        assert_eq!(captured.len(), 1);
+        assert_eq!(captured[0].0, "response");
+        assert_eq!(captured[0].1["id"], 5);
+        assert_eq!(captured[0].1["error"]["code"], JSONRPC_METHOD_NOT_FOUND);
+        assert!(
+            captured[0].1["error"]["message"]
+                .as_str()
+                .unwrap()
+                .starts_with(METHOD_NOT_FOUND_PREFIX)
+        );
+    }
+
+    #[tokio::test]
+    async fn dispatch_maps_handler_failures_to_internal_error_code() {
+        let bridge = test_bridge();
+        let sink = Arc::new(CaptureSink {
+            lines: std::sync::Mutex::new(Vec::new()),
+        });
+        let wire: Arc<dyn WireSink> = Arc::clone(&sink) as Arc<dyn WireSink>;
+        let msg: JsonRpcIncoming = serde_json::from_str(
+            r#"{"jsonrpc":"2.0","id":"r1","method":"session/load","params":{}}"#,
+        )
+        .unwrap();
+        let mut in_flight: Option<InFlightPrompt> = None;
+        dispatch_stdin_message(&bridge, &wire, msg, &mut in_flight)
+            .await
+            .expect("routing succeeds; the handler's failure rides the response");
+        let captured = sink.lines.lock().unwrap();
+        assert_eq!(captured.len(), 1);
+        assert_eq!(captured[0].1["error"]["code"], JSONRPC_INTERNAL_ERROR);
+        assert_eq!(captured[0].1["error"]["message"], "missing sessionId");
+    }
+
+    #[tokio::test]
+    async fn stdin_lines_end_on_eof_and_survive_blanks_and_garbage() {
+        let bridge = test_bridge();
+        let wire: Arc<dyn WireSink> = Arc::new(CaptureSink {
+            lines: std::sync::Mutex::new(Vec::new()),
+        });
+        let mut in_flight: Option<InFlightPrompt> = None;
+
+        assert!(
+            !handle_stdin_line(&bridge, &wire, None, &mut in_flight)
+                .await
+                .unwrap(),
+            "a closed channel is EOF"
+        );
+        assert!(
+            !handle_stdin_line(&bridge, &wire, Some(Ok(None)), &mut in_flight)
+                .await
+                .unwrap(),
+            "an explicit EOF line ends the loop"
+        );
+        assert!(
+            handle_stdin_line(&bridge, &wire, Some(Ok(Some("   ".into()))), &mut in_flight)
+                .await
+                .unwrap(),
+            "blank lines are ignored, not fatal"
+        );
+        assert!(
+            handle_stdin_line(
+                &bridge,
+                &wire,
+                Some(Ok(Some("{not json".into()))),
+                &mut in_flight
+            )
+            .await
+            .unwrap(),
+            "an unparseable line is logged and skipped"
+        );
     }
 }

@@ -728,4 +728,107 @@ mod tests {
             .expect("a machine grant must bypass policy without asking");
         assert_eq!(out, "ran");
     }
+
+    #[test]
+    fn only_command_invocations_carry_a_program() {
+        // Other tools pass straight through to the inner runtime.
+        assert!(program_from(&ToolInvocation::new("1", "read_file", json!({}))).is_none());
+        // A command without a program (or with a blank one) is not askable.
+        assert!(
+            program_from(&ToolInvocation::new("1", "run_command", json!({}))).is_none(),
+            "no program key"
+        );
+        // A command with an empty program is not askable.
+        assert!(
+            program_from(&ToolInvocation::new(
+                "1",
+                "run_command",
+                json!({ "program": "" })
+            ))
+            .is_none(),
+            "empty program"
+        );
+        // Only truly empty is rejected here; a whitespace name flows through and fails
+        // downstream, where the policy lookup cannot match it.
+        let (program, _) = program_from(&ToolInvocation::new(
+            "1",
+            "run_command",
+            json!({ "program": "  " }),
+        ))
+        .expect("whitespace is passed through untouched");
+        assert_eq!(program, "  ");
+        // Args are optional; non-string entries are dropped rather than crashing.
+        let (program, args) = program_from(&ToolInvocation::new(
+            "1",
+            "run_command_background",
+            json!({ "program": "git", "args": ["log", 7, null] }),
+        ))
+        .expect("background commands are permissioned too");
+        assert_eq!(program, "git");
+        assert_eq!(args, vec!["log".to_string()]);
+    }
+
+    #[test]
+    fn grant_stems_are_basenames_without_exe_and_lowercase() {
+        assert_eq!(program_stem("git"), "git");
+        assert_eq!(program_stem("C:\\Tools\\Git.EXE"), "git");
+        assert_eq!(program_stem("/usr/local/bin/hg"), "hg");
+        assert_eq!(
+            program_stem(""),
+            "",
+            "an empty program stems to empty, never panics"
+        );
+    }
+
+    #[test]
+    fn reply_ids_key_the_same_whatever_the_json_type() {
+        assert_eq!(id_key(&json!("lib-perm-1")), "lib-perm-1");
+        assert_eq!(
+            id_key(&json!(42)),
+            "42",
+            "numeric client ids match string keys"
+        );
+        assert_eq!(id_key(&json!(null)), "null");
+    }
+
+    #[test]
+    fn question_answers_cover_skip_other_out_of_range_and_cancelled() {
+        let opts = vec!["alpha".to_string(), "beta".to_string()];
+        assert_eq!(
+            parse_question_answer(
+                &json!({"outcome": {"outcome": "selected", "optionId": "opt-0"}}),
+                &opts
+            )
+            .unwrap(),
+            "alpha"
+        );
+        assert_eq!(
+            parse_question_answer(
+                &json!({"outcome": {"outcome": "selected", "optionId": "other"}}),
+                &opts
+            )
+            .unwrap(),
+            "the human chose something else; they may type it in the next message"
+        );
+        for (reply, why) in [
+            (
+                json!({"outcome": {"outcome": "cancelled"}}),
+                "cancelled dismisses",
+            ),
+            (
+                json!({"outcome": {"outcome": "selected", "optionId": "skip"}}),
+                "skip refuses",
+            ),
+            (
+                json!({"outcome": {"outcome": "selected", "optionId": "opt-9"}}),
+                "an out-of-range index is not a choice",
+            ),
+            (json!({"outcome": {}}), "no optionId is unrecognised"),
+            (json!({}), "a bare reply is unrecognised"),
+        ] {
+            let err =
+                parse_question_answer(&reply, &opts).expect_err(&format!("{why} must not answer"));
+            assert!(!err.is_empty(), "{why}");
+        }
+    }
 }
