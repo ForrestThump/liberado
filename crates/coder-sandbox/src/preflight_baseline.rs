@@ -93,7 +93,7 @@ pub async fn compute_baseline(
     // A leftover from an interrupted run would be checked out at the right commit anyway, but
     // git refuses to re-add an existing path, so clear the registration first.
     let _ = std::fs::remove_dir_all(&worktree);
-    run_git_best_effort(opts.project_root, &["worktree", "prune"]).await;
+    let _ = run_git_best_effort(opts.project_root, &["worktree", "prune"]).await;
 
     let wt_cli = path_for_cli(&worktree);
     run_git(
@@ -120,8 +120,8 @@ pub async fn compute_baseline(
     // `remove` rather than `remove --force`, and never a recursive delete of the parent: a
     // force-remove follows directory links out of the worktree and can take real checkouts with
     // it. Leaving a stray temp dir is the cheaper failure.
-    run_git_best_effort(opts.project_root, &["worktree", "remove", &wt_cli]).await;
-    run_git_best_effort(opts.project_root, &["worktree", "prune"]).await;
+    let _ = run_git_best_effort(opts.project_root, &["worktree", "remove", &wt_cli]).await;
+    let _ = run_git_best_effort(opts.project_root, &["worktree", "prune"]).await;
 
     let report = report.map_err(|e| format!("baseline preflight: {e}"))?;
     let mut failures = FailureSet::new();
