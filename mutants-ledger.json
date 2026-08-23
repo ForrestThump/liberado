@@ -828,6 +828,36 @@
         "timeout": 1,
         "unviable": 52
       }
+    },
+    {
+      "package": "liberado-conversation-store",
+      "commit": "dc9bd0c37232c1d251f425da81f819031e8dfdb2",
+      "recorded_at": "2026-08-23",
+      "command": "cargo mutants -p liberado-conversation-store --cap-lints true --timeout 3.0 --minimum-test-timeout 30 --in-place",
+      "tool_version": "27.1.0",
+      "scope": "package",
+      "counts": {
+        "viable": 2,
+        "caught": 0,
+        "survived": 2,
+        "timeout": 0,
+        "unviable": 1
+      }
+    },
+    {
+      "package": "liberado-conversation-store",
+      "commit": "dc9bd0c37232c1d251f425da81f819031e8dfdb2",
+      "recorded_at": "2026-08-23",
+      "command": "cargo mutants -p liberado-conversation-store --cap-lints true --timeout 60 --minimum-test-timeout 60 --in-place",
+      "tool_version": "27.1.0",
+      "scope": "package",
+      "counts": {
+        "viable": 2,
+        "caught": 2,
+        "survived": 0,
+        "timeout": 0,
+        "unviable": 1
+      }
     }
   ]
 }
