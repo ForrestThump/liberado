@@ -840,25 +840,6 @@ mod wire_seam {
         provider_at(&server).complete(one_turn()).await.unwrap();
         // `expect(1)` is verified on drop — an unauthenticated request would not have matched.
     }
-
-    #[tokio::test]
-    async fn list_models_returns_error_on_non_success_status() {
-        let server = MockServer::start().await;
-        Mock::given(method("GET"))
-            .and(path("/models"))
-            .respond_with(ResponseTemplate::new(401).set_body_json(json!({
-                "error": { "message": "unauthorized", "type": "invalid_request_error" }
-            })))
-            .mount(&server)
-            .await;
-
-        let provider = provider_at(&server);
-        let err = provider.list_models().await.unwrap_err();
-        assert!(
-            matches!(err, ProviderError::InvalidRequest(_)),
-            "expected InvalidRequest for 401, got {err:?}"
-        );
-    }
 }
 
 /// CH4: a session profile's model must reach the wire without mutating the shared provider.
@@ -919,3 +900,6 @@ mod per_request_model {
         assert_eq!(bodies.lock().unwrap()[0]["model"], json!("profile-model"));
     }
 }
+
+#[cfg(test)]
+mod list_models_tests;

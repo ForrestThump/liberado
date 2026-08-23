@@ -211,3 +211,28 @@ async fn run_serve_from_env() -> Result<(), Box<dyn std::error::Error>> {
         .map_err(|_| "usage: liberado [serve <vault>|chat [session]]  (or set LIBERADO_VAULT)")?;
     liberado_server::run(vault).await
 }
+
+#[cfg(test)]
+mod dispatch_tests {
+    use super::*;
+
+    /// The router exists so the argument grammar stays a plain function (see its doc comment).
+    /// This pins the fail-fast contract: every named subcommand must reject an unknown
+    /// sub-argument with its usage text instead of falling through to the bare-vault
+    /// back-compat arm. Only pure, side-effect-free arms are exercised — the serve/chat/prompt
+    /// arms reach for a daemon or network and stay out of unit tests.
+    #[tokio::test]
+    async fn named_subcommands_reject_unknown_subarguments_with_usage() {
+        for command in ["ci", "coder", "mutants", "shepherd", "docs", "config"] {
+            let args = [command.to_string(), "not-a-real-subcommand".to_string()];
+            let err = dispatch(&mut args.into_iter())
+                .await
+                .expect_err("an unknown sub-argument must be rejected");
+            let err = err.to_string();
+            assert!(
+                err.to_lowercase().contains("usage"),
+                "{command}: expected usage text, got: {err}"
+            );
+        }
+    }
+}
