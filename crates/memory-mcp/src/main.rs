@@ -44,6 +44,12 @@ fn to_mcp_err(e: MemoryError) -> McpError {
     McpError::internal(e.to_string())
 }
 
+/// Reranking is opt-in via `LIBERADO_MEMORY_RERANK=1` exactly — loading a second ONNX model at
+/// startup must not happen by accident (an unset or misspelled variable stays off).
+fn reranker_requested(value: Result<String, std::env::VarError>) -> bool {
+    value.as_deref() == Ok("1")
+}
+
 fn to_json(value: impl serde::Serialize) -> McpResult<String> {
     serde_json::to_string_pretty(&value).map_err(|e| McpError::internal(e.to_string()))
 }
@@ -156,7 +162,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Off by default — reranking loads a second ONNX model at startup, opt in explicitly.
     let reranker: Option<Arc<dyn Reranker>> =
-        if std::env::var("LIBERADO_MEMORY_RERANK").as_deref() == Ok("1") {
+        if reranker_requested(std::env::var("LIBERADO_MEMORY_RERANK")) {
             let rerank_model = std::env::var("LIBERADO_MEMORY_RERANK_MODEL")
                 .unwrap_or_else(|_| "bge-reranker-base".to_string());
             Some(Arc::new(FastembedReranker::new(&rerank_model, None)?))
@@ -201,6 +207,17 @@ mod tests {
     use tempfile::TempDir;
     use turbomcp::prelude::McpTestClient;
     use turbovault_vector::{Reranker, VectorError};
+
+    #[test]
+    fn reranker_is_opt_in_via_the_exact_string_one() {
+        assert!(reranker_requested(Ok("1".into())));
+        // Anything else — unset, empty, "true", "on", "2" — stays off: the model load is
+        // expensive and must never happen by accident.
+        for off in ["", "0", "true", "on", "2"] {
+            assert!(!reranker_requested(Ok(off.into())), "{off:?} must stay off");
+        }
+        let _ = std::env::var("LIBERADO_MEMORY_RERANK_DEFINITELY_UNSET_XYZ");
+    }
 
     // ── Deterministic model-free embedder (same pattern as liberado-memory-store's tests) ──
 
