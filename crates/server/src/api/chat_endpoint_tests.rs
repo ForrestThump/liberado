@@ -93,7 +93,10 @@ async fn streaming_without_chat_fails_as_an_sse_event_on_both_verbs() {
         profile: None,
         model: None,
     };
-    for response in [chat_stream_post(State(state.clone()), Json(make_request())).await] {
+    for response in [
+        chat_stream_post(State(state.clone()), Json(make_request())).await,
+        chat_stream_get(State(state.clone()), Query(make_request())).await,
+    ] {
         assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(
             response.headers().get(CONTENT_TYPE).unwrap(),
