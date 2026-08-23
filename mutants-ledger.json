@@ -1128,6 +1128,21 @@
         "timeout": 3,
         "unviable": 165
       }
+    },
+    {
+      "package": "liberado-main-agent",
+      "commit": "9f44692285cc9af2b27c8aafb6add1123f16ffaf",
+      "recorded_at": "2026-08-23",
+      "command": "cargo mutants -p liberado-main-agent --cap-lints true --timeout 3.0 --minimum-test-timeout 30 --in-place",
+      "tool_version": "27.1.0",
+      "scope": "package",
+      "counts": {
+        "viable": 199,
+        "caught": 190,
+        "survived": 6,
+        "timeout": 3,
+        "unviable": 165
+      }
     }
   ]
 }
