@@ -194,4 +194,28 @@ mod tests {
             );
         }
     }
+
+    /// Names and descriptions are pinned as literals: an accessor replaced by "" or a
+    /// placeholder must fail here, not just fail to be empty.
+    #[test]
+    fn names_and_descriptions_are_pinned() {
+        use AgentMode::*;
+        assert_eq!(Coding.name(), "Coding");
+        assert_eq!(Goal.name(), "Goal");
+        assert_eq!(Chat.name(), "Chat");
+        assert_eq!(Face.name(), "Face agent");
+
+        let descriptions = [
+            (Coding.description(), "Interactive coding"),
+            (Goal.description(), "One-shot /goal"),
+            (Chat.description(), "conversational chat"),
+            (Face.description(), "Daemon face agent"),
+        ];
+        for (text, needle) in descriptions {
+            assert!(
+                text.contains(needle),
+                "description must mention {needle}: {text}"
+            );
+        }
+    }
 }

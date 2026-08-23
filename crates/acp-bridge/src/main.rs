@@ -520,7 +520,7 @@ fn spawn_stdin_reader(stdin_tx: mpsc::Sender<std::io::Result<Option<String>>>) {
                         Err(e) => Err(e),
                     };
                     let done = stdin_read_done(&msg);
-                    if stdin_tx.blocking_send(msg).is_err() || done {
+                    if reader_should_stop(stdin_tx.blocking_send(msg).is_err(), done) {
                         break;
                     }
                 }
@@ -535,13 +535,19 @@ fn spawn_stdin_reader(stdin_tx: mpsc::Sender<std::io::Result<Option<String>>>) {
                 loop {
                     let msg = lines.next_line().await;
                     let done = stdin_read_done(&msg);
-                    if stdin_tx.send(msg).await.is_err() || done {
+                    if reader_should_stop(stdin_tx.send(msg).await.is_err(), done) {
                         break;
                     }
                 }
             });
         }
     }
+}
+
+/// Either condition ends the loop: a dead receiver means nobody is listening, and EOF or a
+/// read error means the wire is gone. Requiring *both* would spin forever after either one.
+fn reader_should_stop(send_failed: bool, done: bool) -> bool {
+    send_failed || done
 }
 
 /// A read is *done* when it reports EOF or an error — either ends the reader loop. A
@@ -2029,6 +2035,7 @@ fn new_session_id() -> String {
 mod tests {
     use super::*;
     use crate::provider::catalog_model_ids;
+    use liberado_provider::MockProvider;
     use tempfile::TempDir;
 
     #[test]
@@ -3636,7 +3643,10 @@ mod tests {
             let lines = h.sink.lines.lock().unwrap();
             assert_eq!(lines.len(), 1, "busy writes a response, spawns nothing");
             assert_eq!(lines[0].0, "response");
-            assert_eq!(lines[0].1["error"]["code"], JSONRPC_INTERNAL_ERROR);
+            assert_eq!(
+                lines[0].1["error"]["code"], -32603,
+                "wire code pinned as a literal so mutating the constant cannot satisfy its own assertion"
+            );
         }
         if let Some(inf) = in_flight.as_mut() {
             inf.handle.abort();
@@ -3666,7 +3676,7 @@ mod tests {
         assert_eq!(lines.len(), 3);
         for (method, body) in lines.iter() {
             assert_eq!(method, "response");
-            assert_eq!(body["error"]["code"], JSONRPC_INVALID_PARAMS);
+            assert_eq!(body["error"]["code"], -32602);
             assert_eq!(body["error"]["message"], "missing sessionId");
             assert_eq!(body["id"], "req-1");
         }
@@ -3702,7 +3712,7 @@ mod tests {
 
         // A prompt task's own Err becomes -32603 with the message kept.
         let err = prompt_join_outcome(Ok(Err("model exploded".into()))).unwrap_err();
-        assert_eq!(err.code, JSONRPC_INTERNAL_ERROR);
+        assert_eq!(err.code, -32603);
         assert_eq!(err.message, "model exploded");
 
         // An aborted task is a cancelled turn, not an error.
@@ -3721,7 +3731,7 @@ mod tests {
             "a panic must not be classified as a cancel"
         );
         let err = prompt_join_outcome(Err(join_err)).unwrap_err();
-        assert_eq!(err.code, JSONRPC_INTERNAL_ERROR);
+        assert_eq!(err.code, -32603);
         assert!(err.message.contains("prompt task failed"));
     }
 
@@ -3742,7 +3752,7 @@ mod tests {
         assert_eq!(captured.len(), 1);
         assert_eq!(captured[0].0, "response");
         assert_eq!(captured[0].1["id"], 5);
-        assert_eq!(captured[0].1["error"]["code"], JSONRPC_METHOD_NOT_FOUND);
+        assert_eq!(captured[0].1["error"]["code"], -32601);
         assert!(
             captured[0].1["error"]["message"]
                 .as_str()
@@ -3768,7 +3778,7 @@ mod tests {
             .expect("routing succeeds; the handler's failure rides the response");
         let captured = sink.lines.lock().unwrap();
         assert_eq!(captured.len(), 1);
-        assert_eq!(captured[0].1["error"]["code"], JSONRPC_INTERNAL_ERROR);
+        assert_eq!(captured[0].1["error"]["code"], -32603);
         assert_eq!(captured[0].1["error"]["message"], "missing sessionId");
     }
 
@@ -3808,6 +3818,537 @@ mod tests {
             .await
             .unwrap(),
             "an unparseable line is logged and skipped"
+        );
+    }
+
+    /// Every text-shaped pack event must render its marker. Deleting a match arm would
+    /// otherwise silence that event on the ACP wire with no test the wiser.
+    #[test]
+    fn each_text_event_renders_its_marker() {
+        use liberado_session::{SessionEvent, SessionEventKind as K};
+        let cases: Vec<(SessionEvent, &str)> = vec![
+            (
+                SessionEvent::new(
+                    "s",
+                    K::FileChanged {
+                        path: "src/lib.rs".into(),
+                        change: "modified".into(),
+                    },
+                ),
+                "`modified` src/lib.rs",
+            ),
+            (
+                SessionEvent::new(
+                    "s",
+                    K::Progress {
+                        message: "step 2".into(),
+                    },
+                ),
+                "_step 2_",
+            ),
+            (
+                SessionEvent::new(
+                    "s",
+                    K::LoopGuard {
+                        guard: "same-diff".into(),
+                        action: "pause".into(),
+                    },
+                ),
+                "**guard** same-diff -> pause",
+            ),
+            (
+                SessionEvent::new(
+                    "s",
+                    K::CriticVerdict {
+                        reviewer: "fresh-eyes".into(),
+                        kind: "fresh".into(),
+                        approved: false,
+                        issues: vec!["test X binds wrong".into()],
+                        coerced: false,
+                    },
+                ),
+                "**fresh-eyes** rejected (test X binds wrong)",
+            ),
+            (
+                SessionEvent::new(
+                    "s",
+                    K::RoleStarted {
+                        role: "implementer".into(),
+                        model: "m1".into(),
+                    },
+                ),
+                "_implementer (m1)_",
+            ),
+            (
+                SessionEvent::new(
+                    "s",
+                    K::ValidationFinished {
+                        ok: true,
+                        summary: "all green".into(),
+                    },
+                ),
+                "**validation passed:** all green",
+            ),
+        ];
+        for (event, needle) in cases {
+            let sink = CaptureSink {
+                lines: std::sync::Mutex::new(Vec::new()),
+            };
+            emit_text_event(&sink, "s", &event).expect("rendering must not fail");
+            let lines = sink.lines.lock().unwrap();
+            assert_eq!(lines.len(), 1, "{needle}");
+            let text = lines[0].1["update"]["content"]["text"]
+                .as_str()
+                .unwrap_or("");
+            assert!(text.contains(needle), "expected {needle:?} in {text:?}");
+        }
+    }
+
+    #[test]
+    fn extract_prompt_drops_image_and_audio_blocks_without_error() {
+        // The bridge advertises image/audio false. Their dedicated arm drops every such block —
+        // even one carrying a uri — before the unknown-type fallback could render a marker.
+        let media_only = json!({
+            "prompt": [
+                { "type": "image", "data": "aGVsbG8=" },
+                { "type": "audio", "data": "aGVsbG8=" }
+            ]
+        });
+        let err = extract_prompt_text(&media_only)
+            .expect_err("media with no text leaves nothing to send");
+        assert!(err.contains("no text content"), "{err}");
+
+        let mixed = json!({
+            "prompt": [
+                { "type": "text", "text": "real words" },
+                { "type": "image", "data": "aGVsbG8=" },
+                { "type": "image", "uri": "file:///img.png", "name": "img.png" }
+            ]
+        });
+        let out = extract_prompt_text(&mixed).unwrap();
+        assert_eq!(
+            out, "real words",
+            "media contributes neither payload nor marker"
+        );
+    }
+
+    #[tokio::test]
+    async fn handle_request_serves_the_ack_and_set_model_methods() {
+        let bridge = test_bridge();
+        let ack_sink = CaptureSink::new_test();
+        // Deleting any of these arms would answer -32601; each must acknowledge instead.
+        assert_eq!(
+            handle_request(
+                Arc::clone(&bridge),
+                "session/set_config_option",
+                json!({}),
+                &ack_sink
+            )
+            .await
+            .unwrap(),
+            json!({})
+        );
+        assert_eq!(
+            handle_request(Arc::clone(&bridge), "authenticate", json!({}), &ack_sink)
+                .await
+                .unwrap(),
+            json!({})
+        );
+        assert_eq!(
+            handle_request(Arc::clone(&bridge), "logout", json!({}), &ack_sink)
+                .await
+                .unwrap(),
+            json!({})
+        );
+    }
+
+    impl CaptureSink {
+        fn new_test() -> Self {
+            Self {
+                lines: std::sync::Mutex::new(Vec::new()),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn set_model_validates_then_applies_to_provider_and_state() {
+        let provider = Arc::new(MockProvider::with_script("start/model", []));
+        let bridge = test_bridge_with(provider.clone());
+        let ack_sink = CaptureSink::new_test();
+
+        let err = handle_set_model(&bridge, &json!({}))
+            .await
+            .expect_err("missing modelId is refused");
+        assert!(err.contains("missing modelId"), "{err}");
+
+        let err = handle_set_model(&bridge, &json!({ "modelId": "   " }))
+            .await
+            .expect_err("a whitespace modelId must not blank the model");
+        assert!(err.contains("non-empty"), "{err}");
+        assert_eq!(
+            provider.model(),
+            "start/model",
+            "refusal leaves state alone"
+        );
+
+        handle_request(
+            Arc::clone(&bridge),
+            "session/set_model",
+            json!({ "modelId": "  next/model " }),
+            &ack_sink,
+        )
+        .await
+        .expect("valid model accepted");
+        assert_eq!(
+            provider.model(),
+            "next/model",
+            "applied trimmed to the provider"
+        );
+        assert_eq!(*bridge.current_model.lock().await, "next/model");
+    }
+
+    #[tokio::test]
+    async fn refresh_catalog_keeps_old_on_empty_and_installs_fresh() {
+        use crate::provider::CatalogModel;
+        let provider = Arc::new(MockProvider::with_script("m", []));
+        let bridge = test_bridge_with(provider.clone());
+        bridge.catalog.lock().await.push(CatalogModel {
+            model_id: "old/model".into(),
+            name: "old/model".into(),
+            description: String::new(),
+        });
+
+        // Live fetch empty (or failed): the static fallback list for the backend installs,
+        // with the session's own model appended so the picker still shows it.
+        refresh_catalog_from_live(&bridge).await;
+        assert_eq!(
+            catalog_model_ids_owned(&bridge).await,
+            vec![
+                "deepseek/deepseek-v4-flash".to_string(),
+                "deepseek/deepseek-v4-pro".to_string(),
+                "mock-model".to_string(),
+            ]
+        );
+
+        provider.set_models(["zeta/b", "alpha/a"]);
+        refresh_catalog_from_live(&bridge).await;
+        let ids = catalog_model_ids_owned(&bridge).await;
+        assert_eq!(
+            ids,
+            vec![
+                "alpha/a".to_string(),
+                "mock-model".to_string(),
+                "zeta/b".to_string()
+            ],
+            "a non-empty live catalog replaces the fallbacks, sorted, current kept"
+        );
+    }
+
+    async fn catalog_model_ids_owned(bridge: &Bridge) -> Vec<String> {
+        bridge
+            .catalog
+            .lock()
+            .await
+            .iter()
+            .map(|m| m.model_id.clone())
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn extend_catalog_appends_unknown_and_never_duplicates() {
+        use crate::provider::CatalogModel;
+        let provider = Arc::new(MockProvider::with_script("m", []));
+        let bridge = test_bridge_with(provider);
+        bridge.catalog.lock().await.push(CatalogModel {
+            model_id: "beta/2".into(),
+            name: "beta/2".into(),
+            description: String::new(),
+        });
+
+        extend_catalog_with_model(&bridge, "alpha/1").await;
+        extend_catalog_with_model(&bridge, "alpha/1").await;
+        let ids = catalog_model_ids_owned(&bridge).await;
+        assert_eq!(
+            ids,
+            vec!["alpha/1".to_string(), "beta/2".to_string()],
+            "unknown ids are appended and sorted; known ids are never duplicated"
+        );
+    }
+
+    #[test]
+    fn model_state_pins_current_or_falls_back_to_first() {
+        use crate::provider::CatalogModel;
+        let mk = |id: &str| CatalogModel {
+            model_id: id.into(),
+            name: id.into(),
+            description: String::new(),
+        };
+        let catalog = vec![mk("a/one"), mk("b/two")];
+
+        assert_eq!(
+            model_state(&catalog, "b/two")["currentModelId"],
+            "b/two",
+            "the session's own model stays selected"
+        );
+        assert_eq!(
+            model_state(&catalog, "ghost")["currentModelId"],
+            "a/one",
+            "an unknown current falls back to the first pickable entry"
+        );
+        assert_eq!(
+            model_state(&[], "solo")["currentModelId"],
+            "solo",
+            "an empty catalog cannot lie about the live model"
+        );
+    }
+
+    #[test]
+    fn authority_summary_distinguishes_standalone_from_declared() {
+        let standalone = authority_summary(&liberado_common::CapabilitySet::empty());
+        assert_eq!(standalone["declared"], false);
+
+        let mut grant = liberado_common::CapabilitySet::empty();
+        grant.grant(liberado_common::Capability::AskHuman);
+        grant.grant(liberado_common::Capability::Read(
+            liberado_common::Zone::named("work"),
+        ));
+        let declared = authority_summary(&grant);
+        assert_eq!(declared["declared"], true);
+        assert_eq!(declared["askHuman"], true);
+        assert_eq!(declared["capabilities"], 2);
+    }
+
+    #[test]
+    fn new_session_ids_are_prefixed_unique_and_path_safe() {
+        let a = new_session_id();
+        let b = new_session_id();
+        assert!(a.starts_with("lib-"), "{a}");
+        assert_ne!(a, b);
+        assert!(!a.contains(['/', '\\', ':']), "ids become filenames: {a}");
+    }
+
+    #[tokio::test]
+    async fn capturing_sink_delegates_responses_not_just_notifications() {
+        let inner = Arc::new(CaptureSink::new_test());
+        let outer = CapturingSink {
+            inner: inner.clone() as Arc<dyn WireSink>,
+            captured: std::sync::Mutex::new(String::new()),
+        };
+        outer
+            .write_rpc_response(
+                json!("r1"),
+                Err(JsonRpcErrorBody {
+                    code: -32603,
+                    message: "boom".into(),
+                }),
+            )
+            .expect("delegation must not fail");
+        let lines = inner.lines.lock().unwrap();
+        assert_eq!(
+            lines.len(),
+            1,
+            "a swallowed response would strand the client"
+        );
+        assert_eq!(lines[0].0, "response");
+    }
+
+    #[tokio::test]
+    async fn finishing_a_prompt_clears_the_slot_and_answers() {
+        let wire = CaptureSink::new_test();
+        let task = tokio::spawn(async { Ok::<Value, String>(json!({ "stopReason": "end_turn" })) });
+        let result = task.await.expect("task completes");
+        let mut in_flight = Some(InFlightPrompt {
+            session_id: "s1".into(),
+            request_id: json!(9),
+            handle: tokio::spawn(async { Ok::<Value, String>(json!({})) }),
+        });
+        handle_prompt_join(
+            &wire,
+            Some(("s1".into(), json!(9), Ok(result))),
+            &mut in_flight,
+        )
+        .expect("join handling must not fail");
+        assert!(
+            in_flight.is_none(),
+            "the slot must free for the next prompt"
+        );
+        let lines = wire.lines.lock().unwrap();
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].1["result"]["stopReason"], "end_turn");
+    }
+
+    #[test]
+    fn the_reader_stops_on_either_a_dead_receiver_or_a_dead_wire() {
+        assert!(!reader_should_stop(false, false));
+        assert!(reader_should_stop(true, false), "closed receiver ends it");
+        assert!(reader_should_stop(false, true), "EOF/error ends it");
+        assert!(reader_should_stop(true, true));
+    }
+
+    /// A live session with a pending prompt task whose abort we can observe: when the task
+    /// dies, its receiver drops and the kept sender reports closed.
+    async fn session_with_pending_prompt(
+        bridge: &Bridge,
+        sid: &str,
+    ) -> (InFlightPrompt, tokio::sync::oneshot::Sender<()>) {
+        let (cancel_tx, _cancel_rx) = watch::channel(false);
+        bridge.acp_sessions.lock().await.insert(
+            sid.to_string(),
+            AcpSession {
+                mode: AgentMode::Coding,
+                cwd: std::env::current_dir().unwrap_or_else(|_| ".".into()),
+                coding: coding_run::CodingSessionState {
+                    cwd: ".".into(),
+                    coding_session_id: sid.into(),
+                    prior_feedback: Vec::new(),
+                    last_summary: None,
+                    rounds: 0,
+                },
+                converse: None,
+                face_daemon_session: None,
+                cancel_tx,
+                cancel_rx: watch::channel(false).1,
+            },
+        );
+        let (liveness_tx, liveness_rx) = tokio::sync::oneshot::channel::<()>();
+        let handle = tokio::spawn(async move {
+            let _still_alive = liveness_rx.await;
+            std::future::pending::<Result<Value, String>>().await
+        });
+        (
+            InFlightPrompt {
+                session_id: sid.to_string(),
+                request_id: json!(1),
+                handle,
+            },
+            liveness_tx,
+        )
+    }
+
+    #[tokio::test]
+    async fn cancel_notification_aborts_only_the_matching_in_flight_prompt() {
+        let bridge = test_bridge();
+        let (in_flight, liveness) = session_with_pending_prompt(&bridge, "s1").await;
+        let mut in_flight = Some(in_flight);
+
+        // An unrelated method must not touch the slot.
+        dispatch_notification(
+            &bridge,
+            "session/other",
+            json!({ "sessionId": "s1" }),
+            &in_flight,
+        )
+        .await;
+        assert!(
+            !liveness.is_closed(),
+            "non-cancel notifications are ignored"
+        );
+
+        // Cancel for a DIFFERENT session does not abort this task.
+        dispatch_notification(
+            &bridge,
+            "session/cancel",
+            json!({ "sessionId": "other" }),
+            &in_flight,
+        )
+        .await;
+        assert!(
+            !liveness.is_closed(),
+            "another session's cancel must not stop this prompt"
+        );
+
+        // Cancel for THIS session hard-stops it and wakes permission waiters.
+        let waiter = bridge.permissions.register_waiter("lib-perm-x");
+        dispatch_notification(
+            &bridge,
+            "session/cancel",
+            json!({ "sessionId": "s1" }),
+            &in_flight,
+        )
+        .await;
+        // Abort is asynchronous; joining settles the task (and drops its receiver).
+        if let Some(inf) = in_flight.as_mut() {
+            let _ = (&mut inf.handle).await;
+        }
+        assert!(
+            liveness.is_closed(),
+            "the matching in-flight prompt is aborted"
+        );
+        let reply = waiter.await.expect("waiter woken").expect("ok");
+        assert_eq!(
+            reply["outcome"]["outcome"], "cancelled",
+            "a cancelled command prompt reports cancellation, not silence"
+        );
+    }
+
+    #[tokio::test]
+    async fn cooperative_cancel_flag_is_raised_by_request_session_cancel() {
+        let bridge = test_bridge();
+        let (cancel_tx, mut cancel_rx) = watch::channel(false);
+        let session_rx = cancel_rx.clone();
+        bridge.acp_sessions.lock().await.insert(
+            "s9".into(),
+            AcpSession {
+                mode: AgentMode::Chat,
+                cwd: ".".into(),
+                coding: coding_run::CodingSessionState {
+                    cwd: ".".into(),
+                    coding_session_id: "s9".into(),
+                    prior_feedback: Vec::new(),
+                    last_summary: None,
+                    rounds: 0,
+                },
+                converse: None,
+                face_daemon_session: None,
+                cancel_tx,
+                cancel_rx: session_rx,
+            },
+        );
+        request_session_cancel(&bridge, "s9").await;
+        assert!(
+            *cancel_rx.borrow_and_update(),
+            "the turn loop's watch flag must read true after cancel"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_bare_jsonrpc_frame_with_an_id_is_dispatched_not_swallowed_as_a_reply() {
+        // No method, no result, no error: not a client reply, so the dispatcher must answer
+        // it (unknown method -> -32601). An over-broad reply check would swallow it silently.
+        let bridge = test_bridge();
+        let sink = Arc::new(CaptureSink::new_test());
+        let wire: Arc<dyn WireSink> = Arc::clone(&sink) as Arc<dyn WireSink>;
+        let msg: JsonRpcIncoming = serde_json::from_str(r#"{"jsonrpc":"2.0","id":42}"#).unwrap();
+        let mut in_flight: Option<InFlightPrompt> = None;
+        dispatch_stdin_message(&bridge, &wire, msg, &mut in_flight)
+            .await
+            .expect("routing succeeds");
+        let captured = sink.lines.lock().unwrap();
+        assert_eq!(captured.len(), 1, "the frame deserves an answer");
+        assert_eq!(captured[0].1["error"]["code"], -32601);
+    }
+
+    #[test]
+    fn state_branch_names_the_branch_or_admits_detachment() {
+        let repo = tempfile::TempDir::new().unwrap();
+        let git = |args: &[&str]| {
+            liberado_common::process::std_command("git")
+                .args(args)
+                .current_dir(repo.path())
+                .output()
+                .expect("git runs")
+        };
+        assert!(git(&["init", "-b", "feature-x"]).status.success());
+        git(&["config", "user.email", "test@example.com"]);
+        git(&["config", "user.name", "Test"]);
+
+        assert_eq!(state_branch(repo.path()), "feature-x");
+
+        let plain = tempfile::TempDir::new().unwrap();
+        assert_eq!(
+            state_branch(plain.path()),
+            "(detached)",
+            "outside a repo the helper says so instead of inventing a branch"
         );
     }
 }
