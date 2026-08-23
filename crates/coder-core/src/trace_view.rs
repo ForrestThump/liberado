@@ -2804,6 +2804,10 @@ mod survivor_tests {
                 role: "coder".into(),
                 at: at(),
             },
+            CoderEvent::SessionFinished {
+                outcome: Outcome::Succeeded,
+                at: at(),
+            },
             CoderEvent::SessionAborted {
                 error: "disk full".into(),
                 at: at(),
@@ -2849,6 +2853,8 @@ mod survivor_tests {
         check("outcome: PartiallySucceeded");
         check("summary: mostly there");
         check("-- role finished: coder");
+        check("== session finished ==");
+        check("outcome: Succeeded");
         check("== session ABORTED (unhandled error) ==");
         check("error: disk full");
         check("# Coder trace: sess-view");
