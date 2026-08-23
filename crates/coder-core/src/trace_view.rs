@@ -1770,6 +1770,7 @@ mod tests {
             turn: n,
             tools_offered: offered.iter().map(|s| s.to_string()).collect(),
             message_count: 3,
+            content: content.map(str::to_string),
             finish_reason: if calls.is_empty() {
                 "prose".into()
             } else {
