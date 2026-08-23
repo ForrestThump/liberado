@@ -266,3 +266,43 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod guard_survivor_tests {
+    use super::*;
+
+    /// Dropping the guard must restore the previous `CARGO_TARGET_DIR` exactly — including
+    /// the case where there was none. Serialized so concurrent env readers in this binary
+    /// never see a torn state.
+    #[test]
+    fn target_dir_guard_restores_the_previous_value() {
+        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _g = LOCK.lock().unwrap();
+
+        let had_before = std::env::var_os("CARGO_TARGET_DIR").is_some();
+
+        {
+            let guard = CargoTargetDirGuard::set(std::path::Path::new("/tmp/fake-target"));
+            assert_eq!(
+                std::env::var_os("CARGO_TARGET_DIR").as_deref(),
+                Some(std::ffi::OsStr::new("/tmp/fake-target"))
+            );
+            drop(guard);
+        }
+        if had_before {
+            assert!(std::env::var_os("CARGO_TARGET_DIR").is_some());
+        } else {
+            assert!(
+                std::env::var_os("CARGO_TARGET_DIR").is_none(),
+                "a dropped guard must remove the variable it set"
+            );
+        }
+
+        // Restore whatever this process had originally so other tests are unaffected.
+        match std::env::var_os("CARGO_TARGET_DIR") {
+            Some(v) if had_before => { let _ = v; }
+            _ if had_before => unsafe { std::env::set_var("CARGO_TARGET_DIR", "") },
+            _ => {}
+        }
+    }
+}

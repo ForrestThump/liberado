@@ -384,6 +384,17 @@ mod tests {
         sg.restore(&c1.id).await.unwrap();
         assert_eq!(std::fs::read_to_string(root.join("f.txt")).unwrap(), "v1\n");
 
+        // The second snapshot must be a CHILD of the first: the parent-link guard is
+        // load-bearing for `list` (it walks HEAD parents) and for history depth.
+        let list = sg.list(10).await.unwrap();
+        assert!(
+            list.len() >= 2,
+            "two snapshots must chain into two listable checkpoints, got {}",
+            list.len()
+        );
+        assert_eq!(list[0].id, c2.id, "newest first");
+        assert_eq!(list[1].id, c1.id, "the first snapshot must be the parent");
+
         let _ = std::fs::remove_dir_all(&base);
     }
 

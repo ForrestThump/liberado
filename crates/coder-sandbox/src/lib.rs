@@ -1741,6 +1741,9 @@ mod survivor_tests {
     #[test]
     fn plain_ascii_and_utf8_decode_as_utf8() {
         assert_eq!(decode_command_bytes(b"abcdefgh"), "abcdefgh");
+        // Exactly four bytes: short enough that a broken high-NUL heuristic could
+        // misclassify it as UTF-16LE.
+        assert_eq!(decode_command_bytes(b"abcd"), "abcd");
         let utf8 = "héllo wörld";
         assert_eq!(decode_command_bytes(utf8.as_bytes()), utf8);
     }
