@@ -1113,6 +1113,21 @@
         "timeout": 6,
         "unviable": 59
       }
+    },
+    {
+      "package": "liberado-markdown",
+      "commit": "0e14ecc1c7521034c9142782a0306861584acb29",
+      "recorded_at": "2026-08-23",
+      "command": "cargo mutants -p liberado-markdown --cap-lints true --timeout 3.0 --minimum-test-timeout 30 --in-place",
+      "tool_version": "27.1.0",
+      "scope": "package",
+      "counts": {
+        "viable": 126,
+        "caught": 48,
+        "survived": 33,
+        "timeout": 45,
+        "unviable": 20
+      }
     }
   ]
 }
