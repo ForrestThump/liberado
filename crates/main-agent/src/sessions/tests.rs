@@ -4305,3 +4305,135 @@ async fn incoming_user_message_counts_toward_the_compaction_trigger() {
         "the turn then runs on the compacted view"
     );
 }
+
+/// The streamed face turn keeps the human-interface prompt — an inverted `!face_agent` guard
+/// would swap it for the direct-agent prompt exactly when the session IS a face agent.
+#[tokio::test]
+async fn streamed_face_turn_keeps_the_face_prompt() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Arc::new(SessionStore::open(dir.path()).await);
+    let chat_provider = Arc::new(MockProvider::with_script(
+        "chat",
+        [CompletionResponse::text("hello from your face agent")],
+    ));
+    let executor = Executor::new(chat_provider.clone(), Budget::default());
+    let sessions = ChatSessions::new(store, executor, Arc::new(NoTools))
+        .with_goal_hub(Arc::new(liberado_session::GoalSessionHub::new(
+            liberado_session::GoalSessionStore::new(),
+        )))
+        .with_delegation_mode(true);
+    let id = sessions.create(None).await.unwrap();
+
+    let (tx, mut rx) = tokio::sync::mpsc::channel(64);
+    sessions.turn_stream(id, "hi", &tx).await.unwrap();
+    drop(tx);
+
+    let sent = &chat_provider.received_requests()[0];
+    let system = sent
+        .messages
+        .iter()
+        .find(|m| m.role == Role::System)
+        .expect("a system prompt is sent");
+    assert_eq!(
+        system.content,
+        crate::HUMAN_INTERFACE_SYSTEM_PROMPT,
+        "a face session must run the face prompt on the streaming path too"
+    );
+    while rx.try_recv().is_ok() {}
+}
+
+/// The pre-turn dispatch hands the hosted session its capability ceiling with AskHuman
+/// stripped (D-e) — not an empty grant, and not AskHuman-only.
+#[tokio::test]
+async fn pre_turn_dispatch_grant_strips_askhuman_keeps_the_rest() {
+    use liberado_orchestrator::Orchestrator;
+
+    let dir = tempfile::tempdir().unwrap();
+    let decision = DispatchDecision {
+        action: DispatchAction::Clarify {
+            questions: vec!["which list?".into()],
+            what_blocked: BlockReason::Ambiguous,
+        },
+        confidence: 0.9,
+        rationale: "test".into(),
+    };
+    // One scripted classifier serves both the chat-side dispatcher and the pack's own.
+    let decision_json = serde_json::to_string(&decision).unwrap();
+    let dispatcher = Dispatcher::new(
+        Arc::new(MockProvider::with_script(
+            "dispatch",
+            [CompletionResponse::text(decision_json.clone())],
+        )),
+        DispatchTuning::default(),
+        4,
+    );
+    let pack_dispatcher = Dispatcher::new(
+        Arc::new(MockProvider::with_script(
+            "pack-dispatch",
+            [CompletionResponse::text(decision_json)],
+        )),
+        DispatchTuning::default(),
+        4,
+    );
+    let pack_orchestrator = Orchestrator::new(
+        Arc::new(MockProvider::with_script(
+            "pack-exec",
+            [CompletionResponse::text("done")],
+        )),
+        NoopFactory,
+        CapabilitySet::empty(),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        std::env::temp_dir(),
+        liberado_common::ProposalSigner::random(),
+        "default",
+    );
+    let pack = liberado_dispatch_pack::DispatchPack::new(
+        Arc::new(CapabilityCatalog::new()),
+        Vec::new(),
+        1,
+        dir.path().join("proposals"),
+    )
+    .with_pool("default", pack_dispatcher, pack_orchestrator);
+    let mut goal_hub =
+        liberado_session::GoalSessionHub::new(liberado_session::GoalSessionStore::new());
+    goal_hub.register_pack(Arc::new(pack));
+    let hub = Arc::new(goal_hub);
+
+    let store = Arc::new(SessionStore::open(dir.path()).await);
+    let executor = Executor::new(
+        Arc::new(MockProvider::with_script(
+            "chat",
+            [CompletionResponse::text("relay")],
+        )),
+        Budget::default(),
+    );
+    let sessions = ChatSessions::new(store, executor, Arc::new(NoTools))
+        .with_goal_hub(hub.clone())
+        .with_dispatcher_capabilities(CapabilitySet::from_iter([
+            Capability::ExecuteMcp("tasks-mcp".into()),
+            Capability::AskHuman,
+        ]))
+        .with_dispatch(dispatcher, Arc::new(CapabilityCatalog::new()));
+
+    let id = sessions.create(None).await.unwrap();
+    sessions.turn(id, "add something").await.unwrap();
+
+    let rows = hub.list().await;
+    assert_eq!(rows.len(), 1, "the pre-turn dispatch hosted one session");
+    let grant = &rows[0].grant;
+    assert!(
+        grant
+            .capabilities
+            .capabilities
+            .iter()
+            .any(|c| matches!(c, Capability::ExecuteMcp(m) if m == "tasks-mcp")),
+        "the real ceiling reaches the hosted session: {:?}",
+        grant.capabilities
+    );
+    assert!(
+        !grant.grants_ask_human(),
+        "AskHuman must be stripped from pre-turn dispatch too"
+    );
+}
