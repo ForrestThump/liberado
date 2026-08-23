@@ -279,30 +279,24 @@ mod guard_survivor_tests {
         static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
         let _g = LOCK.lock().unwrap();
 
-        let had_before = std::env::var_os("CARGO_TARGET_DIR").is_some();
+        // Compare against the captured previous value instead of presence/absence:
+        // under cargo-mutants the variable is already set (target/mutants), so a
+        // presence check would pass even with a dead `drop`.
+        let before = std::env::var_os("CARGO_TARGET_DIR");
 
         {
-            let guard = CargoTargetDirGuard::set(std::path::Path::new("/tmp/fake-target"));
+            let guard = CargoTargetDirGuard::set(std::path::Path::new("/tmp/liberado-guard-probe"));
             assert_eq!(
                 std::env::var_os("CARGO_TARGET_DIR").as_deref(),
-                Some(std::ffi::OsStr::new("/tmp/fake-target"))
+                Some(std::path::Path::new("/tmp/liberado-guard-probe").as_os_str())
             );
             drop(guard);
         }
-        if had_before {
-            assert!(std::env::var_os("CARGO_TARGET_DIR").is_some());
-        } else {
-            assert!(
-                std::env::var_os("CARGO_TARGET_DIR").is_none(),
-                "a dropped guard must remove the variable it set"
-            );
-        }
 
-        // Restore whatever this process had originally so other tests are unaffected.
-        match std::env::var_os("CARGO_TARGET_DIR") {
-            Some(v) if had_before => { let _ = v; }
-            _ if had_before => unsafe { std::env::set_var("CARGO_TARGET_DIR", "") },
-            _ => {}
-        }
+        assert_eq!(
+            std::env::var_os("CARGO_TARGET_DIR"),
+            before,
+            "a dropped guard must restore the previous value exactly"
+        );
     }
 }

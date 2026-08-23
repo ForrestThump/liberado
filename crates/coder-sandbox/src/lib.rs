@@ -1679,7 +1679,7 @@ mod survivor_tests {
     #[test]
     fn granted_stems_surface_through_every_workspace_kind() {
         let dir = tempfile::tempdir().unwrap();
-        let mut grants = CommandGrantSet::default();
+        let grants = CommandGrantSet::default();
         grants.allow("python");
         assert!(grants.contains("python"));
 
@@ -1755,6 +1755,9 @@ mod survivor_tests {
         assert_eq!(decode_command_bytes(b"a\0b\0"), "ab");
         // Odd byte count cannot be UTF-16.
         assert_eq!(decode_command_bytes(b"abc"), "abc");
+        // Short even buffers are rejected before the NUL heuristic: a lone "a\0" pair
+        // must stay raw UTF-8, not decode as a one-unit UTF-16 string.
+        assert_eq!(decode_command_bytes(b"a\0"), "a\0");
     }
 
     #[test]
@@ -1808,6 +1811,17 @@ mod survivor_tests {
         assert!(preview.starts_with("HEAD"), "{preview:?}");
         assert!(preview.ends_with("TAIL"), "{preview:?}");
         assert!(preview.contains("middle omitted"), "{preview:?}");
+
+        // Exact split: head gets ceil? No — head = max/2, tail = max - head, and the
+        // tail window starts exactly `tail` bytes from the end. Pin the whole string so
+        // any drift in the head/tail arithmetic changes this assertion.
+        let text2 = "0123456789abcdefghij"; // 20 bytes
+        let expected = format!(
+            "{}\n\n\u{2026} [output truncated to 10 bytes of 20; middle omitted] \u{2026}\n\n{}",
+            &text2[..5],
+            &text2[15..]
+        );
+        assert_eq!(head_tail_preview(text2, 10), expected);
     }
 
     // ── durable session worktrees ────────────────────────────────────────────
@@ -1822,22 +1836,31 @@ mod survivor_tests {
             ["add", "."].as_slice(),
             ["commit", "--quiet", "-m", "seed"].as_slice(),
         ] {
-            assert!(std::process::Command::new(GIT)
-                .args(args)
-                .current_dir(&parent)
-                .status()
-                .unwrap()
-                .success());
+            assert!(
+                std::process::Command::new(GIT)
+                    .args(args)
+                    .current_dir(&parent)
+                    .status()
+                    .unwrap()
+                    .success()
+            );
         }
         let base = temp.path().join("worktrees");
 
-        let first = ensure_session_worktree(&parent, "sess1", &base).await.unwrap();
-        assert!(first.join(".git").exists(), "linked worktree has git metadata");
+        let first = ensure_session_worktree(&parent, "sess1", &base)
+            .await
+            .unwrap();
+        assert!(
+            first.join(".git").exists(),
+            "linked worktree has git metadata"
+        );
         assert_eq!(first.file_name().unwrap(), "sess1");
 
         // Reuse: mid-build park/resume lands on the same files, marker included.
         std::fs::write(first.join("marker.txt"), "parked").unwrap();
-        let second = ensure_session_worktree(&parent, "sess1", &base).await.unwrap();
+        let second = ensure_session_worktree(&parent, "sess1", &base)
+            .await
+            .unwrap();
         assert_eq!(
             second.canonicalize().unwrap(),
             first.canonicalize().unwrap(),
@@ -1851,14 +1874,20 @@ mod survivor_tests {
 
         // A directory without `.git` is a broken leftover: recreate, don't reuse.
         std::fs::remove_file(second.join(".git")).unwrap();
-        let third = ensure_session_worktree(&parent, "sess1", &base).await.unwrap();
+        let third = ensure_session_worktree(&parent, "sess1", &base)
+            .await
+            .unwrap();
         assert!(
             third.join(".git").exists(),
             "broken leftover must be recreated with fresh git metadata"
         );
 
         // Unsafe ids are refused before any path is touched.
-        assert!(ensure_session_worktree(&parent, "bad/id", &base).await.is_err());
+        assert!(
+            ensure_session_worktree(&parent, "bad/id", &base)
+                .await
+                .is_err()
+        );
     }
 
     // ── best-effort git is observable ────────────────────────────────────────

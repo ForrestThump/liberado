@@ -928,7 +928,9 @@ mod survivor_tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn run_step_shell_joins_stdout_and_stderr_with_one_newline() {
-        let both = run_step_shell(".", "printf out; printf err 1>&2", 30).await.unwrap();
+        let both = run_step_shell(".", "printf out; printf err 1>&2", 30)
+            .await
+            .unwrap();
         assert!(!both.timed_out);
         assert_eq!(both.exit_code, Some(0));
         assert_eq!(both.combined, "out\nerr");
