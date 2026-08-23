@@ -1765,8 +1765,6 @@ capabilities = []
 mod context_tests {
     use super::*;
 
-    use liberado_session_store::SessionHeader;
-
     fn header(
         id: Ulid,
         title: &str,
@@ -1796,27 +1794,6 @@ mod context_tests {
             status: None,
             message_count: 7,
         }
-    }
-
-    fn fixture_ctx() -> TelegramCommandContext {
-        let a = Ulid::new();
-        let b = Ulid::new();
-        let c = Ulid::new();
-        let mut conversations = vec![header(a, "First chat", None), header(b, "", Some(a))];
-        conversations.push(header(c, "Goal-adjacent", None));
-        let mut ctx = ctx_with(conversations);
-        ctx.status = Some(StatusInfo {
-            running: true,
-            vault_path: "/v".into(),
-            uptime_seconds: 1,
-            model_name: Some("m".into()),
-            token_usage_total: None,
-            context_window: None,
-            dispatcher_attached: false,
-            orchestrator_attached: false,
-            reactions_seen: 0,
-        });
-        ctx
     }
 
     /// Every CommandContext accessor answers from the real snapshot fields — stubs here would
