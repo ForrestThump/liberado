@@ -693,6 +693,21 @@
         "timeout": 0,
         "unviable": 0
       }
+    },
+    {
+      "package": "liberado-server",
+      "commit": "5b95cc4d5f3a6703c762f2902a7b7d187d6dfbff",
+      "recorded_at": "2026-08-23",
+      "command": "cargo mutants -p liberado-server --cap-lints true --timeout 3.0 --minimum-test-timeout 30",
+      "tool_version": "27.1.0",
+      "scope": "package",
+      "counts": {
+        "viable": 345,
+        "caught": 182,
+        "survived": 158,
+        "timeout": 5,
+        "unviable": 59
+      }
     }
   ]
 }
