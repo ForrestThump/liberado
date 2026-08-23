@@ -1764,28 +1764,12 @@ mod tests {
         }
     }
 
-
-    fn result_with(
-        outcome: Outcome,
-        summary: &str,
-        files_changed: Vec<String>,
-    ) -> crate::CoderRunResult {
-        serde_json::from_value(serde_json::json!({
-            "backend": "liberado-loop",
-            "outcome": outcome,
-            "summary": summary,
-            "files_changed": files_changed,
-        }))
-        .expect("result fixture")
-    }
-
     fn turn(n: u32, content: Option<&str>, offered: &[&str], calls: &[&str]) -> CoderEvent {
         CoderEvent::ModelTurnFinished {
             role: "coder".into(),
             turn: n,
             tools_offered: offered.iter().map(|s| s.to_string()).collect(),
             message_count: 3,
-            content: content.map(str::to_string),
             finish_reason: if calls.is_empty() {
                 "prose".into()
             } else {
@@ -2814,7 +2798,7 @@ mod survivor_tests {
             },
         ];
         let t = render_transcript(&bare_trace(events));
-        let mut check = |needle: &str| {
+        let check = |needle: &str| {
             assert!(t.contains(needle), "transcript missing {needle:?}:\n{t}");
         };
         check("== session started ==");
@@ -2861,17 +2845,15 @@ mod survivor_tests {
         check("task: t1 — describe");
 
         // A later request with no verbatim prompt prints nothing (hash-only arm).
-        let repeat_only = vec![
-            CoderEvent::ModelRequestSent {
-                role: "coder".into(),
-                turn: 2,
-                tools_offered: Vec::new(),
-                message_count: 5,
-                system_prompt_sha256: "deadbeef".into(),
-                system_prompt: None,
-                at: at(),
-            },
-        ];
+        let repeat_only = vec![CoderEvent::ModelRequestSent {
+            role: "coder".into(),
+            turn: 2,
+            tools_offered: Vec::new(),
+            message_count: 5,
+            system_prompt_sha256: "deadbeef".into(),
+            system_prompt: None,
+            at: at(),
+        }];
         let t2 = render_transcript(&bare_trace(repeat_only));
         assert!(
             !t2.contains("system prompt"),
@@ -2955,7 +2937,11 @@ mod survivor_tests {
             },
         ];
         let m = metrics(&bare_trace(ev));
-        assert!(m.terminal.cause.starts_with("report filed"), "{}", m.terminal.cause);
+        assert!(
+            m.terminal.cause.starts_with("report filed"),
+            "{}",
+            m.terminal.cause
+        );
         assert_eq!(m.terminal.outcome.as_deref(), Some("Failed"));
 
         // Guard alone: its text is the best available cause.
@@ -3025,7 +3011,6 @@ mod survivor_tests {
         }
     }
 
-
     fn result_with(
         outcome: Outcome,
         summary: &str,
@@ -3047,7 +3032,11 @@ mod survivor_tests {
             tools_offered: offered.iter().map(|s| s.to_string()).collect(),
             message_count: 3,
             content: content.map(str::to_string),
-            finish_reason: if calls.is_empty() { "prose".into() } else { "tool_calls".into() },
+            finish_reason: if calls.is_empty() {
+                "prose".into()
+            } else {
+                "tool_calls".into()
+            },
             tool_calls: calls.iter().map(|s| s.to_string()).collect(),
             prompt_tokens: 10,
             completion_tokens: 2,
@@ -3128,7 +3117,10 @@ mod survivor_tests {
                 }],
                 b: Vec::new(),
             },
-            first_successful_mutation_turn: SideBySide { a: Some(1), b: None },
+            first_successful_mutation_turn: SideBySide {
+                a: Some(1),
+                b: None,
+            },
             files_changed: SideBySide { a: 5, b: 4 },
             terminal: SideBySide {
                 a: TerminalSummary {
@@ -3190,7 +3182,10 @@ mod survivor_tests {
 
         // An explicit existing path passes through untouched.
         let direct = dir.join("other1.json");
-        assert_eq!(resolve_trace_path(direct.to_str().unwrap(), &[&dir]).unwrap(), direct);
+        assert_eq!(
+            resolve_trace_path(direct.to_str().unwrap(), &[&dir]).unwrap(),
+            direct
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }

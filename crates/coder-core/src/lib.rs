@@ -1952,7 +1952,10 @@ mod mode_scope_survivor_tests {
 
     #[test]
     fn from_payload_reads_every_wire_spelling_and_rejects_unknowns() {
-        assert_eq!(CodingMode::from_payload(&json!({"mode": "plan"})), Some(CodingMode::Plan));
+        assert_eq!(
+            CodingMode::from_payload(&json!({"mode": "plan"})),
+            Some(CodingMode::Plan)
+        );
         assert_eq!(
             CodingMode::from_payload(&json!({"mode": "EXPLORE"})),
             Some(CodingMode::Explore)
@@ -1961,8 +1964,14 @@ mod mode_scope_survivor_tests {
             CodingMode::from_payload(&json!({"mode": "normal"})),
             Some(CodingMode::Normal)
         );
-        assert_eq!(CodingMode::from_payload(&json!({"explore_mode": true})), Some(CodingMode::Explore));
-        assert_eq!(CodingMode::from_payload(&json!({"plan_mode": true})), Some(CodingMode::Plan));
+        assert_eq!(
+            CodingMode::from_payload(&json!({"explore_mode": true})),
+            Some(CodingMode::Explore)
+        );
+        assert_eq!(
+            CodingMode::from_payload(&json!({"plan_mode": true})),
+            Some(CodingMode::Plan)
+        );
         // Explore wins when both legacy booleans are set.
         assert_eq!(
             CodingMode::from_payload(&json!({"plan_mode": true, "explore_mode": true})),
@@ -1998,8 +2007,14 @@ mod mode_scope_survivor_tests {
         assert_ne!(CommandPolicy::default(), CommandPolicy::none_allowed());
 
         assert_eq!(CodingMode::Normal.coder_prompt(), None);
-        assert_eq!(CodingMode::Plan.coder_prompt(), Some(PLAN_MODE_CODER_PROMPT));
-        assert_eq!(CodingMode::Explore.coder_prompt(), Some(EXPLORE_MODE_CODER_PROMPT));
+        assert_eq!(
+            CodingMode::Plan.coder_prompt(),
+            Some(PLAN_MODE_CODER_PROMPT)
+        );
+        assert_eq!(
+            CodingMode::Explore.coder_prompt(),
+            Some(EXPLORE_MODE_CODER_PROMPT)
+        );
 
         assert!(!CodingMode::Normal.is_restricted());
         assert!(CodingMode::Plan.is_restricted());
@@ -2028,28 +2043,48 @@ mod mode_scope_survivor_tests {
         let empty = DispatchWriteScope::default();
         assert!(!empty.is_active(), "no globs = no scope change");
 
-        let mut deny_only = DispatchWriteScope::default();
-        deny_only.deny_globs = vec!["secrets/**".into()];
+        let deny_only = DispatchWriteScope {
+            deny_globs: vec!["secrets/**".into()],
+            ..DispatchWriteScope::default()
+        };
         assert!(deny_only.is_active());
-        assert!(!deny_only.permits("secrets/key.txt"), "deny list refuses matches");
-        assert!(deny_only.permits("src/main.rs"), "deny-only permits everything else");
+        assert!(
+            !deny_only.permits("secrets/key.txt"),
+            "deny list refuses matches"
+        );
+        assert!(
+            deny_only.permits("src/main.rs"),
+            "deny-only permits everything else"
+        );
 
-        let mut allow_only = DispatchWriteScope::default();
-        allow_only.allow_globs = vec!["docs/**".into()];
+        let allow_only = DispatchWriteScope {
+            allow_globs: vec!["docs/**".into()],
+            ..DispatchWriteScope::default()
+        };
         assert!(allow_only.is_active());
         assert!(allow_only.permits("docs/readme.md"));
-        assert!(!allow_only.permits("src/main.rs"), "allow list is exclusive");
+        assert!(
+            !allow_only.permits("src/main.rs"),
+            "allow list is exclusive"
+        );
 
         // `**` permits the whole workspace.
-        let mut all = DispatchWriteScope::default();
-        all.allow_globs = vec!["**".into()];
+        let all = DispatchWriteScope {
+            allow_globs: vec!["**".into()],
+            ..DispatchWriteScope::default()
+        };
         assert!(all.permits("deeply/nested/file.rs"));
 
         // Directory-prefix form and backslash normalization.
-        let mut prefix = DispatchWriteScope::default();
-        prefix.allow_globs = vec!["crates/**".into()];
+        let prefix = DispatchWriteScope {
+            allow_globs: vec!["crates/**".into()],
+            ..DispatchWriteScope::default()
+        };
         assert!(prefix.permits("crates/foo/lib.rs"));
-        assert!(prefix.permits(r"crates\foo\lib.rs"), "backslashes normalize to slashes");
+        assert!(
+            prefix.permits(r"crates\foo\lib.rs"),
+            "backslashes normalize to slashes"
+        );
         assert!(!prefix.permits("crates_other/x"));
     }
 
@@ -2159,13 +2194,20 @@ mod mode_scope_survivor_tests {
         let disputed = md.find("not addressed").unwrap();
         let session = md.find("Open — from the session review").unwrap();
         let spec = md.find("A speculative fix exists").unwrap();
-        assert!(open_diff < disputed && disputed < session && session < spec, "{md}");
+        assert!(
+            open_diff < disputed && disputed < session && session < spec,
+            "{md}"
+        );
         assert!(md.contains("**silent_reversal** (Repair) — the test still fails"));
         assert!(md.contains("> all good now"));
         assert!(md.contains("Branch `fix/speculatively`"));
 
         // A disputed finding gets its own label.
-        let r2 = result_with(vec![finding("wrong claim", Disposition::Disputed)], vec![], None);
+        let r2 = result_with(
+            vec![finding("wrong claim", Disposition::Disputed)],
+            vec![],
+            None,
+        );
         let md2 = render_findings_markdown(&r2);
         assert!(md2.contains("disputed by the implementer"), "{md2}");
 
