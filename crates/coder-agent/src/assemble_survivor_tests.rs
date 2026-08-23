@@ -6,7 +6,6 @@
 //! the *values* those bindings must carry.)
 
 use super::*;
-use liberado_coder_core::CoderGateConfig;
 
 #[test]
 fn the_surface_hashline_overrides_tuning() {
