@@ -362,6 +362,25 @@
     }
 
     #[test]
+    fn lone_star_before_later_bold_stays_literal() {
+        let spans = paragraph_spans("x * y **z**");
+        assert_eq!(
+            spans
+                .iter()
+                .map(|s| (s.text.as_str(), s.style))
+                .collect::<Vec<_>>(),
+            vec![
+                ("x ", SpanStyle::NONE),
+                (" y ", SpanStyle::ITALIC),
+                ("*", SpanStyle::NONE),
+                ("z", SpanStyle::NONE),
+                ("*", SpanStyle::NONE),
+                ("*", SpanStyle::NONE),
+            ]
+        );
+    }
+
+    #[test]
     fn empty_markup_spans_render_literally() {
         let cases = [
             ("**", vec!["*", "*"]),
