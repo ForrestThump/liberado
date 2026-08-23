@@ -3235,6 +3235,10 @@ mod survivor_tests {
         assert_eq!(t.index, 1);
         assert_eq!(t.finish_reason.as_deref(), Some("tool_calls"));
         assert_eq!(t.calls.len(), 2);
+        // Results arrived read_file-first; the call LIST keeps the model's issue order.
+        // A pairing mutant that grabs the first pending slot instead swaps this order.
+        assert_eq!(t.calls[0].name, "write_file");
+        assert_eq!(t.calls[1].name, "read_file");
         // Pairing is BY NAME oldest-first, not positional-inverted: read_file's result
         // must pick up read_file's arguments, not write_file's.
         let wf = t.calls.iter().find(|c| c.name == "write_file").unwrap();
@@ -3446,6 +3450,38 @@ mod importer_survivor_tests {
         let s2 = format_divergence(&a, &a.clone());
         assert!(s2.contains("Both runs stopped calling tools at the same point."));
 
+        // Long tails show at most three turns and then say how many were skipped;
+        // guard annotations surface as a per-harness interventions section.
+        let mut long_tail = vec![tv(1, vec![cv("read", Some(true), "", "")])];
+        for i in 2..=5 {
+            long_tail.push(tv(i, vec![cv(&format!("step{i}"), Some(true), "", "")]));
+        }
+        let e = run_of("E", long_tail);
+        let f = run_of(
+            "F",
+            vec![
+                tv(1, vec![cv("read", Some(true), "", "")]),
+                tv(2, vec![cv("other", Some(true), "", "")]),
+            ],
+        );
+        let s4 = format_divergence(&e, &f);
+        assert!(s4.contains("… 1 more turn(s)"), "{s4}");
+        assert!(
+            !s4.contains("harness interventions"),
+            "no guards, no interventions section: {s4}"
+        );
+
+        // With a guard annotation present the section appears, tied to its turn.
+        let mut guarded = tv(2, Vec::new());
+        guarded.annotations = vec!["guard loop → halt".into()];
+        let g = run_of(
+            "G",
+            vec![tv(1, vec![cv("read", Some(true), "", "")]), guarded],
+        );
+        let s5 = format_divergence(&g, &g.clone());
+        assert!(s5.contains("## A harness interventions"), "{s5}");
+        assert!(s5.contains("turn 2: guard loop → halt"));
+
         // Two runs whose first calls disagree share nothing.
         let c = run_of("C", vec![tv(1, vec![cv("zzz", None, "", "")])]);
         let d = run_of("D", vec![tv(1, vec![cv("yyy", None, "", "")])]);
@@ -3473,6 +3509,11 @@ mod importer_survivor_tests {
             {"info": {"role": "user"}, "parts": [{"type": "text", "text": "hello"}]}
         ]});
         assert_eq!(detect_foreign_format(&kilo_cli).unwrap(), KiloCli);
+
+        // An envelope with only one of the two keys is NOT the CLI shape: it falls
+        // through to the plain message-list branch instead.
+        let info_only = json!({"messages": [{"info": {"role": "user"}, "text": "x"}]});
+        assert_ne!(detect_foreign_format(&info_only).unwrap(), KiloCli);
 
         for key in ["trajectory", "history", "agent_events"] {
             let oh = json!({ key: [] });
@@ -3545,6 +3586,32 @@ mod importer_survivor_tests {
     }
 
     // ── OpenHands event mapping ──────────────────────────────────────────────
+
+    #[test]
+    fn kilo_status_and_openhands_success_flag_drive_is_error() {
+        // Kilo tool message with status:"error" and no explicit is_error: the
+        // normalizer must infer is_error=true. An assistant message carrying a
+        // stray `error` key must NOT be flagged.
+        let raw = json!({"messages": [
+            {"role": "assistant", "content": "note", "error": "unrelated"},
+            {"role": "tool", "name": "t", "content": "out", "status": "error"}
+        ]});
+        let ex = import_foreign_messages(&raw, ForeignTraceFormat::Kilo, "s").unwrap();
+        assert!(
+            ex.messages[0].get("is_error").and_then(|v| v.as_bool()) != Some(true),
+            "assistant prose must not inherit an error flag"
+        );
+        assert_eq!(ex.messages[1]["is_error"], json!(true));
+
+        // OpenHands: success=true means the tool SUCCEEDED.
+        let raw = json!({"trajectory": [
+            {"action": "observation", "tool_name": "ls", "content": "a", "success": true},
+            {"action": "observation", "tool_name": "ls", "content": "b", "success": false}
+        ]});
+        let (_, ex2) = import_foreign_auto(&raw, "oh").unwrap();
+        assert_eq!(ex2.messages[0]["is_error"], json!(false));
+        assert_eq!(ex2.messages[1]["is_error"], json!(true));
+    }
 
     #[test]
     fn openhands_actions_map_onto_our_message_shapes() {

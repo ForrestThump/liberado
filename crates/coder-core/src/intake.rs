@@ -1148,7 +1148,7 @@ mod survivor_tests {
 
         let d: GoalContractDraft = serde_json::from_value(json!({
             "description": "d",
-            "success_criteria": [42, true, null, {"o": []}],
+            "success_criteria": [42, -3, true, null, {"o": []}],
             "verifiers": [],
         }))
         .unwrap();
@@ -1156,6 +1156,7 @@ mod survivor_tests {
             d.success_criteria,
             vec![
                 "42".to_string(),
+                "-3".to_string(),
                 "true".to_string(),
                 "{\"o\":[]}".to_string()
             ]
