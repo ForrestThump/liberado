@@ -828,6 +828,21 @@
         "timeout": 1,
         "unviable": 52
       }
+    },
+    {
+      "package": "liberado-coder-sandbox",
+      "commit": "dc9bd0c37232c1d251f425da81f819031e8dfdb2",
+      "recorded_at": "2026-08-23",
+      "command": "cargo mutants -p liberado-coder-sandbox --cap-lints true --timeout 3.0 --minimum-test-timeout 30 --in-place",
+      "tool_version": "27.1.0",
+      "scope": "package",
+      "counts": {
+        "viable": 261,
+        "caught": 220,
+        "survived": 40,
+        "timeout": 1,
+        "unviable": 32
+      }
     }
   ]
 }
