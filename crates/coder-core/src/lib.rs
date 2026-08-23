@@ -2077,6 +2077,23 @@ mod mode_scope_survivor_tests {
 
     // ── SessionReview ────────────────────────────────────────────────────────
 
+    /// `include_tool_names` defaults to TRUE when omitted from config — the serde default
+    /// function, not the bool's own Default. Dropping tool names measurably produced a
+    /// false accusation, so the omission must keep them on.
+    #[test]
+    fn critic_config_keeps_tool_names_by_default_when_omitted() {
+        let cfg: SessionCriticConfig =
+            serde_json::from_value(json!({"enabled": true})).expect("minimal critic config");
+        assert!(cfg.include_tool_names);
+        // And an explicit false still wins over the default.
+        let cfg: SessionCriticConfig = serde_json::from_value(json!({
+            "enabled": true,
+            "include_tool_names": false
+        }))
+        .unwrap();
+        assert!(!cfg.include_tool_names);
+    }
+
     #[test]
     fn session_review_is_clean_iff_no_findings() {
         let clean = SessionReview::default();
