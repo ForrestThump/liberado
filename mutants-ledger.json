@@ -873,6 +873,36 @@
         "timeout": 0,
         "unviable": 44
       }
+    },
+    {
+      "package": "liberado-dispatcher",
+      "commit": "dc9bd0c37232c1d251f425da81f819031e8dfdb2",
+      "recorded_at": "2026-08-23",
+      "command": "cargo mutants -p liberado-dispatcher --cap-lints true --timeout 3.0 --minimum-test-timeout 30 --in-place",
+      "tool_version": "27.1.0",
+      "scope": "package",
+      "counts": {
+        "viable": 59,
+        "caught": 53,
+        "survived": 6,
+        "timeout": 0,
+        "unviable": 17
+      }
+    },
+    {
+      "package": "liberado-dispatcher",
+      "commit": "dc9bd0c37232c1d251f425da81f819031e8dfdb2",
+      "recorded_at": "2026-08-23",
+      "command": "cargo mutants -p liberado-dispatcher --cap-lints true --timeout 3.0 --minimum-test-timeout 30 --in-place",
+      "tool_version": "27.1.0",
+      "scope": "package",
+      "counts": {
+        "viable": 59,
+        "caught": 59,
+        "survived": 0,
+        "timeout": 0,
+        "unviable": 17
+      }
     }
   ]
 }
