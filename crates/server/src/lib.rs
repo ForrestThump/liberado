@@ -1688,7 +1688,6 @@ mod boot_helper_tests {
     #[tokio::test]
     async fn face_tool_surface_follows_delegation_and_grants() {
         let runtime = runtime_with(&["delegate", "memory:search", "vault:write", "plain_tool"]);
-        use liberado_common::Capability;
 
         // Full surface outside delegation.
         let (names, count) = face_tool_surface(&runtime, false, &CapabilitySet::empty());
