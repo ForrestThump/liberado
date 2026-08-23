@@ -638,7 +638,12 @@ pub mod entry {
             workspace: WorkspaceRef::new(args.workspace_path.to_string_lossy(), "HEAD"),
             workspace_path: args.workspace_path,
             sandbox: args.sandbox,
+            attempt: 0,
+            prior_feedback: Vec::new(),
+            strategist_directive: None,
             coder_role: Some(args.coder_role),
+            model_override: None,
+            max_turns: None,
             mode: args.mode,
             command_policy: Some(args.command_policy),
             path_policy: Some(args.path_policy),
@@ -647,8 +652,8 @@ pub mod entry {
             repair: RepairPolicy::MirrorCoder,
             empty_verifiers: EmptyVerifiersPolicy::LeaveEmpty,
             trace_dir: TraceDirPolicy::AsConfigured,
+            default_empty_path_policy: false,
             disable_planner: true,
-            ..ProductionSurface::default()
         }
     }
 
@@ -666,17 +671,22 @@ pub mod entry {
             workspace: WorkspaceRef::new(workspace_path.to_string_lossy(), "HEAD"),
             workspace_path,
             sandbox: SandboxSpec::HostLocal,
-            model_override,
-            max_turns,
             attempt,
             prior_feedback,
+            strategist_directive: None,
+            coder_role: None,
+            model_override,
+            max_turns,
+            mode: CodingMode::Normal,
+            command_policy: None,
+            path_policy: None,
+            hashline: None,
             critic: CriticPolicy::ReviewerWithLoadedPrompt,
             repair: RepairPolicy::FromTuning,
             empty_verifiers: EmptyVerifiersPolicy::DefaultForWorkspace,
             trace_dir: TraceDirPolicy::DataDirFallback,
             default_empty_path_policy: true,
             disable_planner: true,
-            ..ProductionSurface::default()
         }
     }
 
@@ -693,14 +703,22 @@ pub mod entry {
             workspace: WorkspaceRef::new(workspace_path.to_string_lossy(), "HEAD"),
             workspace_path,
             sandbox: SandboxSpec::HostLocal,
+            attempt: 0,
+            prior_feedback: Vec::new(),
+            strategist_directive: None,
+            coder_role: None,
             model_override: model,
             max_turns,
+            mode: CodingMode::Normal,
+            command_policy: None,
+            path_policy: None,
+            hashline: None,
             critic: CriticPolicy::Disabled,
             repair: RepairPolicy::None,
             empty_verifiers: EmptyVerifiersPolicy::DefaultForWorkspace,
             trace_dir: TraceDirPolicy::RelativeToWorkspace,
+            default_empty_path_policy: false,
             disable_planner: true,
-            ..ProductionSurface::default()
         }
     }
 }
@@ -1321,6 +1339,10 @@ mod tests {
             timeout_secs: 11,
             ..Default::default()
         };
+        let path_policy = PathPolicy {
+            allow_write_globs: vec!["custom/**".to_string()],
+            ..Default::default()
+        };
         let surface = entry::pack_surface(entry::PackSurfaceArgs {
             task: CoderTask::new("t1", "desc"),
             workspace_path: ws.clone(),
@@ -1331,16 +1353,14 @@ mod tests {
             },
             mode: CodingMode::Normal,
             command_policy: command_policy.clone(),
-            path_policy: PathPolicy {
-                read_max_bytes: 222,
-                ..Default::default()
-            },
+            path_policy: path_policy.clone(),
             hashline: hashline.clone(),
         });
         assert_eq!(surface.workspace_path, ws);
         assert_eq!(surface.workspace.root, ws.to_string_lossy());
         assert_eq!(surface.sandbox, SandboxSpec::HostLocal);
         assert_eq!(surface.command_policy, Some(command_policy));
+        assert_eq!(surface.path_policy, Some(path_policy));
         assert_eq!(surface.hashline, Some(hashline));
         assert_eq!(surface.empty_verifiers, EmptyVerifiersPolicy::LeaveEmpty);
         assert_eq!(surface.trace_dir, TraceDirPolicy::AsConfigured);

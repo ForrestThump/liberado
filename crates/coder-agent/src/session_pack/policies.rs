@@ -360,3 +360,48 @@ mod tests {
         assert_eq!(p.hashline.hash_length, 5);
     }
 }
+
+#[cfg(test)]
+mod parse_tests {
+    use super::*;
+
+    #[test]
+    fn a_non_default_path_policy_is_parsed_and_a_default_one_is_not() {
+        let custom = serde_json::json!({
+            "path_policy": { "allow_write_globs": ["custom/**"] }
+        });
+        let parsed = parse_path_policy(&serde_json::json!({}), &custom)
+            .expect("a real override must resolve");
+        assert_eq!(parsed.allow_write_globs, vec!["custom/**".to_string()]);
+
+        // Nothing overridden: None, not a redundant default.
+        assert!(parse_path_policy(&serde_json::json!({}), &serde_json::json!({})).is_none());
+    }
+
+    /// A write_scope alone counts as an override even when the rest of the policy is default.
+    #[test]
+    fn a_write_scope_alone_resolves_to_a_policy() {
+        let payload = serde_json::json!({
+            "write_scope": { "allow_globs": ["src/**"], "deny_globs": [] }
+        });
+        let parsed = parse_path_policy(&serde_json::json!({}), &payload)
+            .expect("an explicit scope is an override");
+        assert_eq!(parsed.write_scope.allow_globs, vec!["src/**".to_string()]);
+    }
+
+    #[test]
+    fn command_policy_parses_when_present_and_stays_none_when_absent() {
+        let payload = serde_json::json!({
+            "command_policy": { "timeout_secs": 55, "output_max_bytes": 4096 }
+        });
+        let parsed =
+            parse_command_policy(&serde_json::json!({}), &payload).expect("override resolves");
+        assert_eq!(parsed.timeout_secs, 55);
+        assert_eq!(parsed.output_max_bytes, 4096);
+
+        assert!(
+            parse_command_policy(&serde_json::json!({}), &serde_json::json!({})).is_none(),
+            "absent means absent, not a fabricated default"
+        );
+    }
+}

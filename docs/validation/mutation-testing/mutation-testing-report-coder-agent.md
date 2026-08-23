@@ -1,52 +1,85 @@
 # coder-agent — Mutation Testing Report
 
-**Date:** 2026-07-30
+**Date:** 2026-08-23
+**Status:** historical
+**Authority:** evidence
+**Ledger rows:** 2026-07-30 (markdown-era, `commit: null`), 2026-08-22/23 at `dc9bd0c`
+(216 survived / 739 viable), and 2026-08-23 at `78c7a6d` (29 survived / 739 viable).
+The ledger is the scoreboard; this file is the triage record for the campaign that took the
+crate from 216 to 29 survivors.
 
-| Metric | Value |
-|--------|:-----:|
-| Source files | 16 |
-| Tests | 64 unit + 12 completion_gate_e2e + 8 mock_intake* |
-| Viable mutants | 328 |
-| Caught | 176 |
-| **Catch rate** | **53.7%** |
-| Unviable | 51 |
-| TIMEOUT | 2 |
+| Metric | 2026-07-30 | dc9bd0c (before) | 78c7a6d (after) |
+|--------|:---------:|:----------------:|:---------------:|
+| Viable | 328 | 739 | 739 |
+| Caught | 176 | 519* | 706* |
+| **Survived** | **150** | **216** | **29** |
+| Timeout | 2 | 4 | 4 |
 
-\* Run with `-- --lib` (`mock_intake_e2e` hangs under cargo-mutants temp dir, likely I/O race).
+\* Plus 4 timeouts counted in viable. Scope is lib-only both runs (`-- --lib`);
+`mock_intake_e2e` still hangs under cargo-mutants.
 
-## Survivors by Module
+## What was done
 
-| Module | Actionable | False Positive | Profile |
-|--------|:----------:|:--------------:|---------|
-| `session_pack/intake.rs` | ~10 | ~4 | Operator inversions (`+=`, `>`, `==`) in draft/render logic; string gets |
-| `session_pack/build.rs` | ~8 | ~2 | `is_stuck` match guard, `!init_git_repo`, `>` boundary checks |
-| `progress.rs` | ~8 | ~6 | `&&`/`||`, `>=`/<` inversions; guard names, messages |
-| `repair_feedback.rs` | ~9 | ~5 | Match arm deletion, `||`→`&&`, `>`→`>=`; `repair_hint`/`first_line` gets |
-| `roles.rs` | ~6 | ~2 | `>` operators in truncation logic; `truncate_chars` gets |
-| `verify_pipeline.rs` | ~8 | ~4 | `&&`/`||`, `==`/`!=` inversions; `truncate_log`, `signature_pipeline` gets |
-| `completion_gate.rs` | ~10 | ~7 | `workspace_diff`, `run_strategist` returns; `flatten_votes`, `contract_summary` gets |
-| `critic.rs` | ~3 | ~1 | `git_diff_for_critic` returns; `!` negation |
-| `trace.rs` | ~4 | ~2 | `||`→`&&`, `==`→`!=` in `safe_segment`; getter returns |
-| `lib.rs` | ~8 | ~4 | `&&`/`||`, `<`/`<=`, `+=` operators in run/retry logic |
-| Others | ~5 | ~5 | `intake_session.rs`, `gates.rs`, `planner.rs`, `runtime.rs` |
+Test modules only — no production behavior changed except one structural edit:
+`entry::{pack,acp,runner}_surface` now enumerate every `ProductionSurface` field instead of
+relying on `..ProductionSurface::default()`. Ten "delete field" mutants were unkillable while
+the functional-update syntax stood in for fields whose values happened to equal the default;
+explicit bindings make those deletions compile errors (unviable), which is the honest state.
 
-## Key Takeaways
+Per-mutant kills were spot-verified by hand where the reasoning was subtle (apply → watch the
+new test fail → restore), and the full campaign re-run verified all of them at once.
 
-- **This run succeeded** where Phase 3 timed out, using `--timeout 3.0 --minimum-test-timeout 90 -- --lib`.
-- **53.7% catch rate** is a solid baseline for the crate's first mutant run.
-- Most survivors are operator inversions (`&&`/`||`, `>`/`<`, `+=`/`*=`) and string constant
-  replacements — the standard false-positive classes from earlier phases.
-- The 12 `completion_gate_e2e` integration tests are NOT included in this run (they run through
-  `cargo test` normally but cargo-mutants' temp dir environment caused `mock_intake_e2e` to hang).
-  Their 12 pass/fail verdicts are not reflected in the mutant catch rate.
+## Accepted survivors (equivalent mutants)
 
-## Remediation
+Each was analyzed and left; a test cannot exist for these without changing what production does.
 
-- The high-value survivors are in `session_pack/intake.rs` and `session_pack/build.rs` —
-  operator inversions in the draft/render/intake loop. These guard the intake→freeze→build pipeline
-  and mutations there could corrupt a proposal draft. Priority for a targeted follow-up.
-- The `progress.rs` survivors guard the doom-loop and same-tool-limit logic — worth a focused
-  patch pass if these operators have caused real bugs.
-- The remaining ~100 survivors are split between string constants (~40%), operator inversions
-  that would require specific boundary-value tests (~35%), and `match arm` deletions that are
-  safely caught by enums (~25%).
+| Location | Mutation | Why it is equivalent |
+|---|---|---|
+| `lib.rs` run_attempts `attempt_offset + 1` | `+`→`*`, `<`→`<=` | The retry arm records `last_retryable = err` before `continue`, so falling out of the loop returns the same error the direct `Err(err)` arm would have returned. |
+| `lib.rs` run_session_review `!review.is_clean()` | delete `!` | Gates only a `tracing::info!`; result state is identical either way. |
+| `lib.rs` is_retryable `NoChanges` arm | delete arm | The catch-all `_ => false` returns the same value; the arm exists as documentation. |
+| `lib.rs` run_verifier_pipeline `!pipeline.is_pass()` | delete `!` | `soften_pre_existing_test_failures` no-ops on a passing pipeline, so running it unconditionally changes nothing observable (only wasted work). |
+| `progress.rs` same-tool/read-only nudge guards `==` `&&` | `&&`→`\|\|` | A `< limit` early return precedes the condition, and every reset of `*_nudged` also resets the counter below the limit — the flipped predicate is unreachable with a different truth value. |
+| `repair_feedback.rs` clip anchor window via fence strip | `+`→`*` in `llm_resolve_file` | The fence-stripping expression ends in `.trim()`, which erases the one-character difference. |
+| `session_critic.rs` parse brace guard `end > start` | `>`→`>=` | `find('{') == rfind('}')` requires one character to be two different ones; the equal case is unreachable. (The reversed-braces case IS killable and now has a test.) |
+| `preflight_hook.rs` pre-existing count `-` | `-`→`+`, `-`→`/` | The count is only interpolated when `new.is_empty()`, i.e. subtracting `describe_failures(&empty) == 0`. `x ± 0 = x` and `x / 1 = x`. |
+| `verify_pipeline.rs` git_nonempty_diff second `Err` arm | delete arm | Reachable only if `git log` fails to spawn while `git status` spawned fine moments earlier with the same cwd and PATH. |
+| `verify_pipeline.rs` prefix_at_char_boundary `end > 0` | `>`→`>=` | On `usize`, `end >= 0` is always true, but `is_char_boundary(0)` is too, so the loop stops in the same place. |
+
+## Killed by this campaign (highlights)
+
+- **gates** — `parse_status_path` four-byte porcelain boundary.
+- **finish_gate** — a red `cargo check` refuses `succeeded` with the change-failure message,
+  not the host-failure one (drives real cargo against a broken temp crate).
+- **remediation** — actionable findings actually dispatch exactly one recorded run.
+- **intake_session** — the wire carries the real intake prompt; blank context/answers add no sections.
+- **cold_review** — excerpt rendering, blank-blob isolation, post-fix green/red decisions.
+- **repair_feedback** — per-marker clipping, kind fallbacks, classify_error routing,
+  marked-message round-trip, earlier-attempt listing, signature hashing, per-class hints.
+- **trace** — sanitized session ids, `on_turn` events + live Token mirroring.
+- **roles** — repair/coder switching, criteria rendering, feedback routing by attempt,
+  truncation marks, empty-file fallback.
+- **preflight_hook** — plan-mode skips, baseline cache dir, merge-base resolution, passing-run
+  purity, failing-step naming in failure detail.
+- **progress** — fatal names/messages, latch draining, failed-write vs churn semantics,
+  validate counting toward read-only, distinct-signature reset, nudge/fatal boundaries.
+- **completion_gate** — reviewer name/kind labels, vote flattening, trace+fanout observers,
+  contract summary, refutation history, strategist directive verbatim + best-effort.
+- **session_critic** — reversed braces error not panic, transcript text verbatim, end-to-end
+  review over a scripted provider (system prompt equality, three auditable combinations).
+- **fanout** — branchless-child marking, overall fail-over, child attempt budget, LLM conflict
+  resolution staging/committing end-to-end, empty-content refusal, exact fence stripping.
+- **coding_goal** — dispatch flags round-trip.
+- **assemble** — every surface argument survives into the surface; surface hashline overrides tuning.
+- **lib.rs** — backend name, `ended_in_trace`, trace round-trip fail-closed, session critic
+  enabled/disabled wiring, softened-pipeline signature drop, checkpoint live event,
+  untracked-section budget formatting, judgment gating on outcome+files, and the whole
+  attempt loop: retry-within-budget, final-refutation suffix once, retryable-error recovery,
+  single-attempt error identity, last-attempt error identity, strategist threshold and its
+  gate-only scope.
+- **session_pack/build** — mode turn budgets, bare-repo detection, abort synonyms, restricted-mode
+  notices, contract stamping, nested-fan-out refusal, terminal/wire agreement, red ship bar
+  fails a green fan-out.
+- **session_pack/intake** — intake context assembly, verifier provenance tags,
+  contradiction/warning separation, clarify/revise/coherence budgets, resume notice.
+- **session_pack/policies** — path/command policy parse-or-none semantics.

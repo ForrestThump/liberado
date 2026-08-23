@@ -3153,6 +3153,58 @@ __main__) intact.\n"
         assert_eq!(result.outcome, Outcome::Succeeded, "{}", result.summary);
     }
 
+    /// Judgment runs only when there is something to judge: a real verdict on a change that
+    /// exists. Neither half is optional — a failed attempt or an empty tree skips the critic
+    /// entirely instead of asking a reviewer to bless nothing.
+    #[tokio::test]
+    async fn judgment_skips_a_failed_outcome_and_an_empty_tree() {
+        for (outcome, files, label) in [
+            (Outcome::Succeeded, Vec::<String>::new(), "an empty change"),
+            (
+                Outcome::Failed,
+                vec!["f.rs".to_string()],
+                "a failed attempt",
+            ),
+        ] {
+            let provider = Arc::new(MockProvider::with_script(
+                "mock",
+                [CompletionResponse::text(r#"{"quality":"acceptable"}"#)],
+            ));
+            let providers: Arc<dyn CoderProviderFactory> =
+                Arc::new(SingleProviderFactory::new(provider.clone()));
+            let mut request =
+                loop_request(std::env::temp_dir().as_path(), 1, gate_config(false, 0, 0));
+            request.config.critic.prompt = Some("review".into());
+
+            let events: trace::EventLog = Arc::new(Mutex::new(Vec::new()));
+            let mut state = VerdictState {
+                outcome,
+                summary: "worker said its piece".into(),
+                critic_verdict: None,
+                gate_votes: Vec::new(),
+            };
+            apply_judgment(
+                providers.as_ref(),
+                &request,
+                &[],
+                &files,
+                &events,
+                &mut state,
+            )
+            .await
+            .unwrap();
+            assert!(state.critic_verdict.is_none(), "{label} must not be judged");
+            assert_eq!(
+                state.summary, "worker said its piece",
+                "{label} keeps its summary"
+            );
+            assert!(
+                provider.received_requests().is_empty(),
+                "{label}: the reviewer was never consulted"
+            );
+        }
+    }
+
     /// The backend is named after the loop it drives; surfaces key traces and events on it.
     #[test]
     fn the_backend_reports_its_own_name() {

@@ -951,6 +951,17 @@ mod tests {
         );
     }
 
+    /// A single prior attempt gets no "earlier attempts" section — there is nothing earlier.
+    #[test]
+    fn a_single_prior_attempt_adds_no_earlier_section() {
+        let prior = vec![format_error_feedback(&CoderError::NoChanges)];
+        let block = repair_focus_block(&prior).unwrap();
+        assert!(
+            !block.contains("Earlier attempts"),
+            "one attempt has no history to list:\n{block}"
+        );
+    }
+
     /// Signatures hash the message: two different failures cannot share one, or churn
     /// detection mistakes a new failure for a repeat.
     #[test]
