@@ -273,6 +273,10 @@ fn parse_delegate_goal(arguments: &serde_json::Value) -> Result<String, String> 
 }
 
 #[cfg(test)]
+#[path = "face/tests.rs"]
+mod survivor_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 

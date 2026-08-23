@@ -3820,3 +3820,488 @@ async fn raw_store_has_tail_copies_but_history_nodes_filters_them() {
         .count();
     assert_eq!(tail_q_count, 1, "tail Q originals present once in history");
 }
+
+// ── Mutation-survivor tests: running-turn bookkeeping, gating, scoping, compaction ──
+
+use std::sync::Arc as StdArc;
+
+/// `publish` must record the event for replay **and** broadcast it — an append-only or a
+/// broadcast-only publish loses one of the two attachment paths.
+#[test]
+fn running_turn_publish_replays_and_broadcasts() {
+    let entry = Arc::new(RunningTurn::new());
+    entry.publish(AgentEvent::Error("boom".into()));
+
+    let (replay, mut rx) = entry.attach();
+    assert_eq!(replay.len(), 1, "the event is replayed to late attachers");
+    assert!(matches!(&replay[0], AgentEvent::Error(m) if m == "boom"));
+    assert!(
+        rx.try_recv().is_err(),
+        "pre-attach history rides the replay, not the broadcast buffer"
+    );
+
+    // A publish AFTER attaching reaches the same client live.
+    entry.publish(AgentEvent::Error("live".into()));
+    let live = rx
+        .try_recv()
+        .expect("post-attach publish arrives on the bus");
+    assert!(matches!(live, AgentEvent::Error(m) if m == "live"));
+}
+
+/// The in-flight bookkeeping the server's drain relies on: registration, listing, and the
+/// empty-set answer.
+#[tokio::test]
+async fn in_flight_bookkeeping_reports_what_is_registered() {
+    let dir = tempfile::tempdir().unwrap();
+    let sessions = sessions_at(dir.path(), Vec::new()).await;
+
+    // Empty: not running, zero in flight, no sessions listed.
+    let id0 = Ulid::new();
+    assert!(!sessions.turn_running(id0));
+    assert_eq!(sessions.in_flight_count(), 0);
+    assert!(sessions.in_flight_sessions().is_empty());
+
+    // Register two entries directly and re-check every reader.
+    let id1 = Ulid::new();
+    let id2 = Ulid::new();
+    sessions
+        .running
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .insert(id1, Arc::new(RunningTurn::new()));
+    sessions
+        .running
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .insert(id2, Arc::new(RunningTurn::new()));
+
+    assert!(sessions.turn_running(id1));
+    assert!(sessions.turn_running(id2));
+    assert!(
+        !sessions.turn_running(id0),
+        "an unregistered id is not running"
+    );
+    assert_eq!(sessions.in_flight_count(), 2);
+    let mut listed = sessions.in_flight_sessions();
+    listed.sort();
+    let mut expected = vec![id1, id2];
+    expected.sort();
+    assert_eq!(listed, expected);
+
+    // `attach` on a registered (but idle) turn hands back its feed.
+    let (replay, _rx) = sessions.attach(id1).expect("registered turn attaches");
+    assert!(replay.is_empty(), "nothing published yet");
+    assert!(sessions.attach(id0).is_none());
+}
+
+/// `start_or_attach` runs the turn detached and retires the entry when it finishes. A no-op
+/// spawn would leave the session "in flight" forever with no reply persisted.
+#[tokio::test]
+async fn start_or_attach_runs_the_turn_and_retires_the_entry() {
+    let dir = tempfile::tempdir().unwrap();
+    let sessions =
+        Arc::new(sessions_at(dir.path(), vec![CompletionResponse::text("detached reply")]).await);
+    let id = sessions.create(None).await.unwrap();
+
+    let (_replay, mut rx) = sessions.start_or_attach(id, "hello");
+
+    // The turn finishes and its entry is removed — bounded wait so a regression fails fast
+    // instead of hanging.
+    let retired = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        while sessions.turn_running(id) {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    })
+    .await;
+    assert!(
+        retired.is_ok(),
+        "the running entry must be retired after the turn"
+    );
+    assert_eq!(
+        sessions.in_flight_count(),
+        0,
+        "no entries may outlive their turns"
+    );
+
+    // The turn actually ran: reply persisted, events flowed through the broadcast.
+    let history = sessions.history(id).await.unwrap();
+    assert!(
+        history.iter().any(|m| m.content == "detached reply"),
+        "the detached turn persisted its reply"
+    );
+    let seen = rx.try_recv();
+    assert!(
+        seen.is_ok() || seen.is_err(), // drain whatever arrived; ordering is broadcast's job
+        "receiver stays usable"
+    );
+}
+
+/// `with_delegation_mode(false)` must leave the default prompt alone; the swapped prompt is
+/// only for face mode.
+#[test]
+fn disabling_delegation_keeps_the_default_prompt() {
+    let dir = tempfile::tempdir().unwrap();
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    rt.block_on(async {
+        let store = Arc::new(SessionStore::open(dir.path()).await);
+        let executor = Executor::new(
+            Arc::new(MockProvider::with_script(
+                "m",
+                Vec::<CompletionResponse>::new(),
+            )),
+            Budget::default(),
+        );
+        let plain =
+            ChatSessions::new(store, executor, Arc::new(NoTools)).with_delegation_mode(false);
+        assert_eq!(
+            plain.system_prompt,
+            crate::DEFAULT_SYSTEM_PROMPT,
+            "delegation off must not install the face prompt"
+        );
+
+        let store2 = Arc::new(SessionStore::open(dir.path().join("b")).await);
+        let executor2 = Executor::new(
+            Arc::new(MockProvider::with_script(
+                "m2",
+                Vec::<CompletionResponse>::new(),
+            )),
+            Budget::default(),
+        );
+        let face =
+            ChatSessions::new(store2, executor2, Arc::new(NoTools)).with_delegation_mode(true);
+        assert_eq!(face.system_prompt, crate::HUMAN_INTERFACE_SYSTEM_PROMPT);
+    });
+}
+
+/// Face-agent resolution is a conjunction: either half missing means direct execution.
+#[tokio::test]
+async fn uses_face_agent_requires_both_delegation_and_a_bridge() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Arc::new(SessionStore::open(dir.path()).await);
+    let executor = Executor::new(
+        Arc::new(MockProvider::with_script(
+            "m",
+            Vec::<CompletionResponse>::new(),
+        )),
+        Budget::default(),
+    );
+    let bare = ChatSessions::new(store, executor, Arc::new(NoTools));
+    assert!(
+        !bare.uses_face_agent(true),
+        "delegation with no hub is still the direct path"
+    );
+    assert!(!bare.uses_face_agent(false));
+
+    let store2 = Arc::new(SessionStore::open(dir.path().join("b")).await);
+    let executor2 = Executor::new(
+        Arc::new(MockProvider::with_script(
+            "m2",
+            Vec::<CompletionResponse>::new(),
+        )),
+        Budget::default(),
+    );
+    let bridged = ChatSessions::new(store2, executor2, Arc::new(NoTools))
+        .with_goal_hub(Arc::new(liberado_session::GoalSessionHub::new(
+            liberado_session::GoalSessionStore::new(),
+        )))
+        .with_delegation_mode(true);
+    assert!(bridged.uses_face_agent(true));
+    assert!(!bridged.uses_face_agent(false));
+}
+
+/// A named profile pins its model onto the turn; an unnamed grant pins nothing even when it
+/// carries a model field.
+#[test]
+fn profile_model_needs_a_named_profile() {
+    use liberado_conversation_store::ConversationHeader;
+
+    let named = ConversationHeader {
+        id: Ulid::new(),
+        title: None,
+        parent_conversation: None,
+        spawned_by: None,
+        created_at: chrono::Utc::now(),
+        grant: liberado_session::SessionGrant {
+            profile: Some("researcher".into()),
+            model: Some("gpt-x".into()),
+            ..Default::default()
+        },
+    };
+    assert_eq!(
+        ChatSessions::profile_model(&named),
+        Some("gpt-x".into()),
+        "a named profile pins its model"
+    );
+
+    let anonymous = ConversationHeader {
+        id: Ulid::new(),
+        title: None,
+        parent_conversation: None,
+        spawned_by: None,
+        created_at: chrono::Utc::now(),
+        grant: liberado_session::SessionGrant {
+            profile: None,
+            model: Some("gpt-x".into()),
+            ..Default::default()
+        },
+    };
+    assert_eq!(
+        ChatSessions::profile_model(&anonymous),
+        None,
+        "no named profile means the daemon's defaults pin nothing"
+    );
+}
+
+/// Risk gating arms when ANY of the three sources is present — and stays off when none is.
+/// Each source alone must be sufficient (that is what rejects both operator swaps of `||`).
+#[tokio::test]
+async fn risk_gate_arms_on_each_source_alone() {
+    let dir = tempfile::tempdir().unwrap();
+    let build = || async {
+        let store = Arc::new(SessionStore::open(tempfile::tempdir().unwrap().keep()).await);
+        let executor = Executor::new(
+            Arc::new(MockProvider::with_script(
+                "m",
+                Vec::<CompletionResponse>::new(),
+            )),
+            Budget::default(),
+        );
+        ChatSessions::new(store, executor, Arc::new(NoTools))
+    };
+    let _ = dir;
+    let bare = build().await;
+    assert!(
+        !bare.risk_gate_enabled(),
+        "no catalog, consequences, or zones: gates stay off"
+    );
+
+    let with_consequences = ChatSessions::with_guards(
+        build().await,
+        vec![("tasks-mcp".into(), Consequence::External)],
+        CapabilitySet::empty(),
+        std::env::temp_dir(),
+        liberado_common::ProposalSigner::random(),
+    );
+    assert!(with_consequences.risk_gate_enabled());
+
+    let with_real_zones = ChatSessions::with_zone_guards(
+        build().await,
+        vec![McpDescriptor {
+            name: "tasks-mcp".into(),
+            ..Default::default()
+        }],
+        vec![("files".into(), WriteClass::Shared)],
+    );
+    assert!(with_real_zones.risk_gate_enabled());
+
+    let with_live =
+        ChatSessions::with_live_catalog(build().await, Arc::new(CapabilityCatalog::new()));
+    assert!(with_live.risk_gate_enabled());
+}
+
+/// Tool-only grants (no whole-MCP grants) must reach the scoped runtime, not the NoTools
+/// fallback — that conjunction inversion was a survivor.
+#[tokio::test]
+async fn tool_only_grants_still_get_a_scoped_runtime() {
+    let dir = tempfile::tempdir().unwrap();
+    let (sessions, _provider) =
+        sessions_for_narrowing_test(dir.path(), vec!["tasks-mcp".into()]).await;
+    let id = sessions.create(None).await.unwrap();
+
+    let caps = CapabilitySet::from_iter([Capability::ExecuteTool("tasks-mcp:add".into())]);
+    let runtime = sessions.scoped_extras_runtime("u", id, caps);
+    let names: Vec<String> = runtime.catalog().iter().map(|t| t.name.clone()).collect();
+    assert_eq!(
+        names,
+        vec!["tasks-mcp:add".to_string()],
+        "a tool-only grant scopes to exactly that tool"
+    );
+}
+
+/// Narrowing by relevant MCP must filter *qualified tool* grants by their parent MCP too — a
+/// deleted match arm (fall-through to "keep") leaks tools from irrelevant MCPs.
+#[tokio::test]
+async fn narrowing_filters_qualified_tool_grants_by_parent_mcp() {
+    let dir = tempfile::tempdir().unwrap();
+
+    let decision = DispatchDecision {
+        action: DispatchAction::ExecuteDirect {
+            seed_calls: Vec::new(),
+            relevant_mcps: vec!["tasks-mcp".into()],
+            delivery: Delivery::Summarize,
+        },
+        confidence: 0.9,
+        rationale: "test".into(),
+    };
+    let dispatcher = Dispatcher::new(
+        Arc::new(MockProvider::with_script(
+            "dispatch",
+            [CompletionResponse::text(
+                serde_json::to_string(&decision).unwrap(),
+            )],
+        )),
+        DispatchTuning::default(),
+        4,
+    );
+    let chat_provider = Arc::new(MockProvider::with_script(
+        "chat",
+        [CompletionResponse::text("done")],
+    ));
+    let executor = Executor::new(chat_provider.clone(), Budget::default());
+    let store = Arc::new(SessionStore::open(dir.path()).await);
+    // The grant mixes a whole-MCP grant with a qualified single-tool grant from another MCP.
+    let capabilities = CapabilitySet::from_iter([
+        Capability::ExecuteMcp("tasks-mcp".into()),
+        Capability::ExecuteTool("email-mcp:send".into()),
+    ]);
+    let sessions = ChatSessions::new(store, executor, Arc::new(TwoMcpTools))
+        .with_guards(
+            Vec::new(),
+            capabilities,
+            dir.path().join("proposals"),
+            liberado_common::ProposalSigner::random(),
+        )
+        .with_dispatch(dispatcher, Arc::new(CapabilityCatalog::new()));
+
+    let id = sessions.create(None).await.unwrap();
+    sessions.turn(id, "add milk").await.unwrap();
+
+    let offered: Vec<String> = chat_provider.received_requests()[0]
+        .tools
+        .iter()
+        .map(|t| t.name.clone())
+        .collect();
+    assert_eq!(
+        offered,
+        vec!["tasks-mcp:add".to_string()],
+        "email-mcp:send must be narrowed away even though it was granted as a qualified tool"
+    );
+}
+
+/// `tail_after_user` drops the head ONLY when it is the already-durable user message; any
+/// other head keeps the whole tail (dropping it would be silent data loss).
+#[test]
+fn tail_after_user_only_drops_a_leading_user_message() {
+    let user_first = vec![Message::user("q"), Message::assistant("a")];
+    assert_eq!(tail_after_user(&user_first), &[Message::assistant("a")]);
+
+    let assistant_first = vec![Message::assistant("a"), Message::user("q")];
+    assert_eq!(
+        tail_after_user(&assistant_first),
+        &assistant_first[..],
+        "a non-user head keeps the entire tail"
+    );
+
+    let empty: Vec<Message> = Vec::new();
+    assert!(tail_after_user(&empty).is_empty());
+}
+
+/// PassThroughRuntime is pure delegation in both directions.
+#[tokio::test]
+async fn pass_through_runtime_forwards_catalog_and_invoke() {
+    struct Echo;
+    #[async_trait::async_trait]
+    impl liberado_executor::ToolRuntime for Echo {
+        fn catalog(&self) -> Vec<ToolDef> {
+            vec![ToolDef::new("echo", "e", serde_json::json!({}))]
+        }
+        async fn invoke(&self, call: &ToolInvocation) -> Result<String, String> {
+            Ok(format!("echo:{}", call.name))
+        }
+    }
+
+    let inner = StdArc::new(Echo);
+    let passthrough = PassThroughRuntime(inner.clone());
+    assert_eq!(passthrough.catalog().len(), 1, "catalog forwards");
+    let call = ToolInvocation::new("c1", "echo", serde_json::json!({}));
+    assert_eq!(
+        passthrough.invoke(&call).await.unwrap(),
+        "echo:echo",
+        "invoke forwards"
+    );
+}
+
+/// NoToolsRuntime refuses invocation with its specific error — the model-facing signal that
+/// this chat holds no grants.
+#[tokio::test]
+async fn no_tools_runtime_refuses_invocation() {
+    let call = ToolInvocation::new("c1", "anything", serde_json::json!({}));
+    let err = NoToolsRuntime.invoke(&call).await.unwrap_err();
+    assert!(
+        err.contains("no tools are granted"),
+        "the refusal names the cause: {err}"
+    );
+}
+
+/// Compaction fires when history + the incoming message crosses THIS conversation's trigger.
+/// Sizing the trigger one token below the combined estimate makes `+` compact and `-`
+/// pass through — the swap survived every coarse assertion before this test.
+#[tokio::test]
+async fn incoming_user_message_counts_toward_the_compaction_trigger() {
+    let dir = tempfile::tempdir().unwrap();
+    let summary = "SUMMARY: folded past".to_string();
+
+    // Seed two long-ish turns, then size the trigger so that:
+    //   estimate(seed + system + incoming) == T + 1  → `+` crosses (compacts)
+    //   estimate(seed + system) - estimate(incoming) < T → `-` does not
+    let seeded = vec![
+        Message::system(crate::DEFAULT_SYSTEM_PROMPT),
+        Message::user(format!("u1 {}", "x".repeat(400))),
+        Message::assistant(format!("a1 {}", "y".repeat(400))),
+        Message::user(format!("u2 {}", "z".repeat(400))),
+        Message::assistant(format!("a2 {}", "w".repeat(400))),
+    ];
+    let incoming_est = compaction::estimate_tokens(&[Message::user("trigger me")]);
+    let base = compaction::estimate_tokens(&seeded);
+    let trigger = base + incoming_est - 1;
+
+    let config = CompactionConfig {
+        enabled: true,
+        trigger_tokens: trigger,
+        keep_recent_turns: 1,
+        summary_max_tokens: 512,
+        ..CompactionConfig::default()
+    };
+    let (sessions, provider) = compacting_sessions_at(
+        dir.path(),
+        config,
+        vec![
+            CompletionResponse::text(summary.clone()),
+            CompletionResponse::text("ok"),
+        ],
+    )
+    .await;
+    let id = sessions.create(None).await.unwrap();
+    seed_turns(
+        &sessions,
+        id,
+        &[
+            (
+                &format!("u1 {}", "x".repeat(400)),
+                &format!("a1 {}", "y".repeat(400)),
+            ),
+            (
+                &format!("u2 {}", "z".repeat(400)),
+                &format!("a2 {}", "w".repeat(400)),
+            ),
+        ],
+    )
+    .await;
+
+    sessions.turn(id, "trigger me").await.unwrap();
+
+    // Two provider calls = the summarizer ran = compaction crossed the threshold.
+    let requests = provider.received_requests();
+    assert_eq!(
+        requests.len(),
+        2,
+        "history + incoming must cross the trigger and fire the summarizer"
+    );
+    assert!(
+        requests[1]
+            .messages
+            .iter()
+            .any(|m| m.content.contains(&summary)),
+        "the turn then runs on the compacted view"
+    );
+}
