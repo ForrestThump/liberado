@@ -184,6 +184,10 @@ fn scan_file(path: &Path, query: &ParsedQuery) -> Result<Option<ConversationMatc
 }
 
 #[cfg(test)]
+#[path = "scan/tests.rs"]
+mod survivor_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use std::io::Write;

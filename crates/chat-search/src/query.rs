@@ -112,6 +112,10 @@ fn tokenize_literal(raw: &str) -> Vec<String> {
 }
 
 #[cfg(test)]
+#[path = "query/tests.rs"]
+mod survivor_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
