@@ -81,7 +81,8 @@ PY
 ```
 
 **Trust a row only when `counts.viable > 0`.** A row with all zeros is a crashed or partial
-run that still appended — treat it as no campaign.
+run that still appended — treat it as no campaign. (The CLI now refuses to record zero-viable
+runs, so new rows should always be real; older rows predate the guard.)
 
 ### 3. Commits ahead (independent check)
 
@@ -139,12 +140,28 @@ CARGO_TARGET_DIR=target/liberado-invoke cargo run --locked --quiet -p liberado-c
   disk does not refill to hundreds of GB when using `target/mutants/` and cleaning after each crate.
 - Bulk baseline (local only): `.liberado/mutants-baseline-campaign.ps1` — one crate at a time,
   deletes `target/mutants/` after each crate. Not for CI.
-- **`--in-place` is needed on Linux too** when `turbovault/` or `turbomcp/` are path dependencies
-  inside the repo. `cargo-mutants` copies the workspace to a temp dir and the sibling paths break.
-  Pass `--in-place` alongside the timeout flags (same as Windows).
+- **`--in-place` is required everywhere now** — `liberado mutants run` passes it unconditionally
+  (it used to be Windows-only). On any host, cargo-mutants' temp-dir copy drops the gitignored
+  sibling checkouts (`turbovault/`, `turbomcp/`), so manifest resolution fails and the run dies
+  at the baseline build. If you invoke `cargo mutants` by hand, pass `--in-place` yourself.
+- **An interrupted in-place run leaves live mutations.** Kill a run mid-test and the mutated
+  source may stay on disk (found: `describe_failures` replaced by `vec!["xyzzy"]`, plus stray
+  test files under the crate dir). After any interruption: `git status --short crates/`, restore
+  modified files from git, delete untracked litter, and re-run clippy before trusting the tree.
+- **Linux disk dies quietly too**: a fresh `target/mutants/` plus baseline builds consumed
+  ~12 GB of headroom mid-campaign and hit 100% full, which surfaces only as
+  `cargo build failed in an unmutated tree`. Check `df -h .` before a batch; `rm -rf
+  target/mutants target/debug/incremental` reclaims the bulk (the latter costs warm-rebuild time).
+- **First `just mutants-*` call per session is slow**: every recipe builds the CLI into its own
+  `CARGO_TARGET_DIR=target/liberado-invoke`, which starts cold even when `target/debug` is warm
+  (~5 min here). Read-only recipes (`mutants-report`, `mutants-next`) pay it too. Subsequent
+  calls are instant until the CLI changes.
 
 Config: `.cargo/mutants.toml` — do **not** put `timeout` there (removed in cargo-mutants 27.x);
-timeouts come from the CLI (`--timeout 3.0` in `mutants_cmd.rs`).
+timeouts come from the CLI (`--timeout 3.0` in `mutants_cmd.rs`). Crates whose integration tests
+need longer than 3s on a cold cache get an entry in the timeout table there (`liberado-cli`,
+`liberado-memory-mcp`); without one, the *unmutated baseline* times out and the whole campaign
+dies before any mutant runs.
 
 ## List survivors (for fixing)
 
