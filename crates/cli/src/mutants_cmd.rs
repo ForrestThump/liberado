@@ -184,6 +184,9 @@ fn build_mutants_command(package: &str, profile: RunProfile) -> String {
         // memory-mcp's stdio integration tests exceed 3s on a cold target/mutants cache,
         // which times out the unmutated baseline and kills the whole campaign.
         ("liberado-memory-mcp", _) => ("60", "60"),
+        // Same cold-cache effect for conversation-store: the baseline test phase also
+        // compiles doctests, which alone exceeds the 3s floor on a cold cache.
+        ("liberado-conversation-store", _) => ("60", "60"),
         (_, RunProfile::LibOnly) => ("90", "90"),
         _ => ("3.0", "30"),
     };
