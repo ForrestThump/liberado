@@ -55,6 +55,7 @@ async fn command_context_accessors_answer_from_their_fields() {
     assert!(!ctx.is_streaming());
     assert_eq!(ctx.conversation_count(), 2);
     assert_eq!(ctx.message_count, 7);
+    assert_eq!(ctx.message_count(), 7, "the accessor reads the same field");
     assert_eq!(ctx.active_session_id(), Some("active-1"));
 
     // Prefix lookup: full id works, a short prefix resolves, a miss is None.
