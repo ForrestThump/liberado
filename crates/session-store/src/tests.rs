@@ -937,3 +937,46 @@ async fn a_foreground_child_still_lists_as_a_conversation() {
         "being spawned is not what disqualifies a session — being unattended is"
     );
 }
+
+/// `set_status` must persist the new status so it survives a replay. A mutation that turns the
+/// method into a no-op would leave the status at its default (`Pending`), which is invisible until
+/// the next `open` — but the in-memory map is also stale, so a direct read catches it too.
+///
+/// **Mutant campaign note (Debian):** `cargo mutants` on Debian finds 3 misses (50 caught,
+/// 53 viable): `write_lock_for` (line 244), `sweep_ephemeral` `delete !` (line 356), and the
+/// `delete` guard (line 778). The `set_status` timeout is now caught by this test. The
+/// Windows ledger entry (commit `82b2855`) reports 2 survived — the `write_lock_for` miss
+/// appears to be platform-dependent (cargo-mutants may classify it differently across hosts).
+#[tokio::test]
+async fn set_status_persists_the_new_status() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = SessionStore::open(dir.path()).await;
+    let goal = store
+        .create_session(NewSession {
+            goal: Some(goal_spec("track status changes")),
+            ..Default::default()
+        })
+        .await;
+
+    assert_eq!(
+        store.session(goal.id).await.unwrap().status,
+        SessionStatus::Pending
+    );
+
+    SessionRecordStore::set_status(&store, &goal.id.to_string(), SessionStatus::Running).await;
+
+    assert_eq!(
+        store.session(goal.id).await.unwrap().status,
+        SessionStatus::Running
+    );
+
+    // A terminal status survives a reopen — the Status record was appended to the JSONL log.
+    // (Non-terminal statuses are coerced to Failed on replay for goal sessions.)
+    SessionRecordStore::set_status(&store, &goal.id.to_string(), SessionStatus::Succeeded).await;
+    drop(store);
+    let store = SessionStore::open(dir.path()).await;
+    assert_eq!(
+        store.session(goal.id).await.unwrap().status,
+        SessionStatus::Succeeded
+    );
+}

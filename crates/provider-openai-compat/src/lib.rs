@@ -900,3 +900,6 @@ mod per_request_model {
         assert_eq!(bodies.lock().unwrap()[0]["model"], json!("profile-model"));
     }
 }
+
+#[cfg(test)]
+mod list_models_tests;

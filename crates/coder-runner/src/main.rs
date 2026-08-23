@@ -1336,55 +1336,6 @@ reasoning = "high"
         assert!(tuning.coder.reasoning.is_none());
     }
 
-    /// build_task_context with the repo map disabled: the workspace summary (and prior-round
-    /// history when a session id is given) is all that feeds the task context; no shell-out.
-    #[tokio::test]
-    async fn build_task_context_uses_workspace_summary_and_session_history() {
-        let dir = tempfile::tempdir().unwrap();
-        let tuning = CoderTuning::default();
-        let (ctx, task_id) = build_task_context(
-            "do the thing",
-            dir.path(),
-            &tuning,
-            None,
-            "Workspace contents:\n  (empty workspace)",
-        )
-        .await
-        .unwrap();
-        assert_eq!(task_id, derive_task_id(None, "do the thing"));
-        let ctx = ctx.expect("the workspace summary must make the context non-empty");
-        assert!(ctx.contains("Workspace contents:"), "{ctx}");
-        assert!(!ctx.contains("Session history"), "{ctx}");
-    }
-
-    /// With a session id and a prior round on disk, the task context carries the history.
-    #[tokio::test]
-    async fn build_task_context_includes_prior_rounds() {
-        let dir = tempfile::tempdir().unwrap();
-        let state = session_state_dir(dir.path(), "sess-1");
-        std::fs::create_dir_all(&state).unwrap();
-        std::fs::write(
-            state.join("01.json"),
-            serde_json::to_vec(&SessionRound {
-                session_id: "sess-1".into(),
-                round: 0,
-                prompt: "first ask".into(),
-                summary: "did it".into(),
-                files_changed: vec!["a.txt".into()],
-            })
-            .unwrap(),
-        )
-        .unwrap();
-        let tuning = CoderTuning::default();
-        let (ctx, _) = build_task_context("second ask", dir.path(), &tuning, Some("sess-1"), "")
-            .await
-            .unwrap();
-        let ctx = ctx.expect("the session history must make the context non-empty");
-        assert!(ctx.contains("Session history"), "{ctx}");
-        assert!(ctx.contains("first ask"), "{ctx}");
-        assert!(ctx.contains("a.txt"), "{ctx}");
-    }
-
     /// Without a config dir the direct api-key/base-url factory is used.
     #[test]
     fn build_providers_without_config_dir_is_direct() {
@@ -1834,6 +1785,9 @@ mod preserve_work_tests {
         assert!(err.contains("task completed with outcome"), "{err}");
     }
 }
+
+#[cfg(test)]
+mod task_context_tests;
 
 #[cfg(test)]
 mod impl_tests {

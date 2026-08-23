@@ -127,6 +127,8 @@ Manual ingest when `mutants.out/` already exists:
 
 ```bash
 just mutants-record <crate-dir>
+# or without just:
+CARGO_TARGET_DIR=target/liberado-invoke cargo run --locked --quiet -p liberado-cli -- mutants record <crate-dir>
 ```
 
 ### Disk and Windows (read before long runs)
@@ -137,6 +139,9 @@ just mutants-record <crate-dir>
   disk does not refill to hundreds of GB when using `target/mutants/` and cleaning after each crate.
 - Bulk baseline (local only): `.liberado/mutants-baseline-campaign.ps1` — one crate at a time,
   deletes `target/mutants/` after each crate. Not for CI.
+- **`--in-place` is needed on Linux too** when `turbovault/` or `turbomcp/` are path dependencies
+  inside the repo. `cargo-mutants` copies the workspace to a temp dir and the sibling paths break.
+  Pass `--in-place` alongside the timeout flags (same as Windows).
 
 Config: `.cargo/mutants.toml` — do **not** put `timeout` there (removed in cargo-mutants 27.x);
 timeouts come from the CLI (`--timeout 3.0` in `mutants_cmd.rs`).

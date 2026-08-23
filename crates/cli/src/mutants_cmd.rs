@@ -142,7 +142,9 @@ pub fn report(args: &mut impl Iterator<Item = String>) -> Result<(), Box<dyn std
     Ok(())
 }
 
-pub fn next_crate(args: &mut impl Iterator<Item = String>) -> Result<(), Box<dyn std::error::Error>> {
+pub fn next_crate(
+    args: &mut impl Iterator<Item = String>,
+) -> Result<(), Box<dyn std::error::Error>> {
     let root = crate_map_cmd::repository_root()?;
     let include_all = args.next().is_some_and(|flag| flag == "--all");
     if args.next().is_some() {
@@ -222,9 +224,7 @@ fn record_campaign(
         return Ok(RecordOutcome::SkippedIncomplete);
     }
     let package = package_from_outcomes_bytes(&bytes)
-        .or_else(|| {
-            crate_dir.and_then(|dir| resolve_crate(root, dir).ok().map(|info| info.name))
-        })
+        .or_else(|| crate_dir.and_then(|dir| resolve_crate(root, dir).ok().map(|info| info.name)))
         .ok_or("could not determine package name from outcomes or crate directory")?;
     if let Some(dir) = crate_dir {
         let expected = resolve_crate(root, dir)?;
@@ -291,7 +291,9 @@ fn resolve_crate(root: &Path, crate_dir: &str) -> Result<CrateInfo, Box<dyn std:
     crate_map_cmd::list_crates(root)?
         .into_iter()
         .find(|info| info.dir == crate_dir)
-        .ok_or_else(|| format!("unknown crate directory {crate_dir:?}; use the crates/ folder name").into())
+        .ok_or_else(|| {
+            format!("unknown crate directory {crate_dir:?}; use the crates/ folder name").into()
+        })
 }
 
 fn current_commit(root: &Path) -> Result<String, Box<dyn std::error::Error>> {
@@ -370,7 +372,10 @@ fn build_health(
         if !include_all && matches!(info.role.as_str(), "testing" | "tooling") {
             continue;
         }
-        let campaigns = package_campaigns.get(&info.name).cloned().unwrap_or_default();
+        let campaigns = package_campaigns
+            .get(&info.name)
+            .cloned()
+            .unwrap_or_default();
         let entry = base_entry(info);
         if campaigns.is_empty() {
             never_campaigned.push(entry);
@@ -431,13 +436,13 @@ fn base_entry(info: &CrateInfo) -> CrateHealthEntry {
     }
 }
 
-fn enrich_historical(
-    mut entry: CrateHealthEntry,
-    latest: Option<&&Campaign>,
-) -> CrateHealthEntry {
+fn enrich_historical(mut entry: CrateHealthEntry, latest: Option<&&Campaign>) -> CrateHealthEntry {
     if let Some(campaign) = latest {
         entry.latest_counts = Some(campaign.counts.clone());
-        entry.drift_note = campaign.source.clone().or_else(|| Some("historical".into()));
+        entry.drift_note = campaign
+            .source
+            .clone()
+            .or_else(|| Some("historical".into()));
     }
     entry
 }
@@ -474,7 +479,11 @@ fn commit_is_ancestor(root: &Path, commit: &str) -> Result<bool, Box<dyn std::er
     Ok(output.status.success())
 }
 
-fn rev_list_count(root: &Path, commit: &str, path: &str) -> Result<u64, Box<dyn std::error::Error>> {
+fn rev_list_count(
+    root: &Path,
+    commit: &str,
+    path: &str,
+) -> Result<u64, Box<dyn std::error::Error>> {
     let range = format!("{commit}..HEAD");
     let output = std_command("git")
         .args(["rev-list", "--count", &range, "--", path])
@@ -490,7 +499,11 @@ fn rev_list_count(root: &Path, commit: &str, path: &str) -> Result<u64, Box<dyn 
     Ok(String::from_utf8(output.stdout)?.trim().parse()?)
 }
 
-fn git_shortstat(root: &Path, commit: &str, path: &str) -> Result<String, Box<dyn std::error::Error>> {
+fn git_shortstat(
+    root: &Path,
+    commit: &str,
+    path: &str,
+) -> Result<String, Box<dyn std::error::Error>> {
     let range = format!("{commit}..HEAD");
     let output = std_command("git")
         .args(["diff", "--shortstat", &range, "--", path])
@@ -518,7 +531,10 @@ fn print_report(health: &HealthReport) {
         }
     }
 
-    println!("\nHistorical only — no commit SHA ({}):", health.historical_only.len());
+    println!(
+        "\nHistorical only — no commit SHA ({}):",
+        health.historical_only.len()
+    );
     if health.historical_only.is_empty() {
         println!("  (none)");
     } else {
@@ -532,7 +548,10 @@ fn print_report(health: &HealthReport) {
         }
     }
 
-    println!("\nMost drift since last SHA campaign ({}):", health.most_drift.len());
+    println!(
+        "\nMost drift since last SHA campaign ({}):",
+        health.most_drift.len()
+    );
     if health.most_drift.is_empty() {
         println!("  (none)");
     } else {
@@ -577,8 +596,10 @@ mod tests {
     use std::process::Command;
 
     fn init_git_repo(root: &Path) {
-        for (dir, name) in [("crates/alpha", "liberado-alpha"), ("crates/beta", "liberado-beta")]
-        {
+        for (dir, name) in [
+            ("crates/alpha", "liberado-alpha"),
+            ("crates/beta", "liberado-beta"),
+        ] {
             fs::create_dir_all(root.join(dir)).unwrap();
             fs::write(
                 root.join(dir).join("Cargo.toml"),
@@ -587,7 +608,11 @@ mod tests {
                 ),
             )
             .unwrap();
-            fs::write(root.join(dir).join("lib.rs"), "pub fn value() -> i32 { 1 }\n").unwrap();
+            fs::write(
+                root.join(dir).join("lib.rs"),
+                "pub fn value() -> i32 { 1 }\n",
+            )
+            .unwrap();
         }
         run_git(root, &["init"]);
         run_git(root, &["config", "user.email", "test@example.com"]);
@@ -683,7 +708,11 @@ mod tests {
         let root = dir.path();
         init_git_repo(root);
         let base = current_commit(root).unwrap();
-        fs::write(root.join("crates/beta/lib.rs"), "pub fn value() -> i32 { 2 }\n").unwrap();
+        fs::write(
+            root.join("crates/beta/lib.rs"),
+            "pub fn value() -> i32 { 2 }\n",
+        )
+        .unwrap();
         run_git(root, &["add", "crates/beta/lib.rs"]);
         run_git(root, &["commit", "-m", "change beta"]);
 
@@ -783,6 +812,9 @@ mod tests {
         let root = crate_map_cmd::repository_root().expect("repository root");
         let ledger = load_ledger(&root).expect("ledger should parse");
         assert_eq!(ledger.schema, 1);
-        assert!(!ledger.campaigns.is_empty(), "seed ledger should not be empty");
+        assert!(
+            !ledger.campaigns.is_empty(),
+            "seed ledger should not be empty"
+        );
     }
 }
