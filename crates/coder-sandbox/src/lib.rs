@@ -554,36 +554,6 @@ fn deny_matches_program_stem(rule: &str, program: &str) -> bool {
     program_file_stem(program).eq_ignore_ascii_case(rule)
 }
 
-fn decode_command_bytes(buf: &[u8]) -> String {
-    if buf.starts_with(&[0xFF, 0xFE]) {
-        return decode_utf16_units(&buf[2..], u16::from_le_bytes);
-    }
-    if buf.starts_with(&[0xFE, 0xFF]) {
-        return decode_utf16_units(&buf[2..], u16::from_be_bytes);
-    }
-    if looks_like_utf16_le(buf) {
-        return decode_utf16_units(buf, u16::from_le_bytes);
-    }
-    String::from_utf8_lossy(buf).into_owned()
-}
-
-fn looks_like_utf16_le(buf: &[u8]) -> bool {
-    if buf.len() < 4 || !buf.len().is_multiple_of(2) {
-        return false;
-    }
-    let pairs = buf.len() / 2;
-    let high_nul = buf.chunks_exact(2).filter(|c| c[1] == 0).count();
-    high_nul * 2 >= pairs
-}
-
-fn decode_utf16_units(buf: &[u8], from_bytes: fn([u8; 2]) -> u16) -> String {
-    let units: Vec<u16> = buf
-        .chunks_exact(2)
-        .map(|c| from_bytes([c[0], c[1]]))
-        .collect();
-    String::from_utf16_lossy(&units)
-}
-
 /// Unique per-command suffix for offload file names.
 ///
 /// Nanosecond resolution makes two concurrent commands colliding effectively impossible.
@@ -592,63 +562,6 @@ fn offload_id() -> String {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_nanos().to_string())
         .unwrap_or_default()
-}
-
-/// First `max` bytes of `text`, never splitting a UTF-8 character.
-fn truncate_head(text: &str, max: usize) -> String {
-    let mut end = max.min(text.len());
-    while end > 0 && !text.is_char_boundary(end) {
-        end -= 1;
-    }
-    text[..end].to_string()
-}
-
-fn char_boundary_at_or_before(text: &str, mut idx: usize) -> usize {
-    idx = idx.min(text.len());
-    while idx > 0 && !text.is_char_boundary(idx) {
-        idx -= 1;
-    }
-    idx
-}
-
-/// Head + tail preview totalling about `max` bytes with a marker between.
-fn head_tail_preview(text: &str, max: usize) -> String {
-    let head = max / 2;
-    let tail = max - head;
-    let head_end = char_boundary_at_or_before(text, head);
-    let tail_start = char_boundary_at_or_before(text, text.len().saturating_sub(tail));
-    if head_end >= tail_start {
-        return truncate_head(text, max);
-    }
-    format!(
-        "{}\n\n… [output truncated to {max} bytes of {}; middle omitted] …\n\n{}",
-        &text[..head_end],
-        text.len(),
-        &text[tail_start..],
-    )
-}
-
-/// When the decoded text fits in `max_bytes`, return it unchanged. When it exceeds
-/// the threshold and `offload_dir` is set, write the full body and return a
-/// head+tail preview. No directory, or a failed write, degrades to head truncation.
-fn preview_or_offload(
-    buf: Vec<u8>,
-    max_bytes: usize,
-    offload_dir: Option<&Path>,
-    file_name: &str,
-) -> (String, Option<PathBuf>) {
-    let text = decode_command_bytes(&buf);
-    if text.len() <= max_bytes {
-        return (text, None);
-    }
-    let Some(dir) = offload_dir else {
-        return (truncate_head(&text, max_bytes), None);
-    };
-    let path = dir.join(file_name);
-    if std::fs::create_dir_all(dir).is_err() || std::fs::write(&path, &text).is_err() {
-        return (truncate_head(&text, max_bytes), None);
-    }
-    (head_tail_preview(&text, max_bytes), Some(path))
 }
 
 // ── WorktreeWorkspace — git-worktree isolation ──────────────────────────────
@@ -1107,108 +1020,6 @@ mod tests {
         assert_eq!(program_file_stem("/usr/bin/git"), "git");
         assert_eq!(program_file_stem("GIT.EXE"), "GIT");
         assert_eq!(program_file_stem("gitty"), "gitty");
-    }
-
-    #[test]
-    fn preview_or_offload_writes_full_output_and_returns_head_tail() {
-        let dir = tempfile::tempdir().unwrap();
-        let big = "0123456789abcdef".repeat(8); // 128 chars
-        let (preview, offload) = preview_or_offload(
-            big.clone().into_bytes(),
-            32,
-            Some(dir.path()),
-            "cmd-x-stdout.txt",
-        );
-        let path = offload.expect("must return an offload path");
-        let written = std::fs::read_to_string(&path).unwrap();
-        assert_eq!(written, big, "offload file must hold the full body");
-        assert!(
-            preview.starts_with(&big[..16]),
-            "preview must start with the head half, got: {preview:?}"
-        );
-        assert!(
-            preview.ends_with(&big[112..]),
-            "preview must end with the tail half, got: {preview:?}"
-        );
-        assert!(
-            preview.contains("truncated"),
-            "preview must name the omission"
-        );
-    }
-
-    #[test]
-    fn preview_or_offload_passes_through_at_exact_boundary() {
-        let dir = tempfile::tempdir().unwrap();
-        let text = "abc".to_string();
-        let (preview, offload) =
-            preview_or_offload(text.clone().into_bytes(), 3, Some(dir.path()), "f.txt");
-        assert_eq!(preview, text);
-        assert!(offload.is_none(), "no offload file for in-bounds output");
-    }
-
-    #[test]
-    fn preview_or_offload_passes_through_below_boundary() {
-        let dir = tempfile::tempdir().unwrap();
-        let text = "ab".to_string();
-        let (preview, offload) =
-            preview_or_offload(text.clone().into_bytes(), 3, Some(dir.path()), "f.txt");
-        assert_eq!(preview, text);
-        assert!(offload.is_none(), "no offload file for in-bounds output");
-    }
-
-    #[test]
-    fn preview_or_offload_falls_back_to_head_truncation_without_dir() {
-        let text = "abcdef".to_string();
-        let (preview, offload) = preview_or_offload(text.clone().into_bytes(), 3, None, "f.txt");
-        assert_eq!(preview, "abc", "no offload dir -> head truncation");
-        assert!(offload.is_none());
-    }
-
-    #[test]
-    fn preview_or_offload_falls_back_when_dir_write_fails() {
-        // A *file* occupying the offload path makes `create_dir_all` fail on every platform.
-        let dir = tempfile::tempdir().unwrap();
-        let blocker = dir.path().join("blocker");
-        std::fs::write(&blocker, "file, not dir").unwrap();
-
-        let text = "abcdef".to_string();
-        let (preview, offload) =
-            preview_or_offload(text.clone().into_bytes(), 3, Some(&blocker), "f.txt");
-        assert_eq!(preview, "abc", "write failure -> head truncation");
-        assert!(offload.is_none());
-    }
-
-    #[test]
-    fn preview_or_offload_decodes_utf16_le_without_nuls() {
-        // PowerShell / some cmd builtins emit UTF-16 LE. `from_utf8_lossy` keeps the NULs
-        // (`W\0i\0n\0d\0o\0w\0s`) and the model cannot read the tool result.
-        let mut utf16 = Vec::new();
-        for unit in "Windows PowerShell".encode_utf16() {
-            utf16.extend_from_slice(&unit.to_le_bytes());
-        }
-        let (text, offload) = preview_or_offload(utf16, 1024, None, "f.txt");
-        assert_eq!(text, "Windows PowerShell");
-        assert!(
-            !text.contains('\0'),
-            "decoded command output must not keep UTF-16 NULs: {text:?}"
-        );
-        assert!(offload.is_none(), "under threshold -> no offload");
-    }
-
-    #[test]
-    fn preview_or_offload_decodes_utf16_le_bom() {
-        let mut utf16 = vec![0xFF, 0xFE];
-        for unit in "hi".encode_utf16() {
-            utf16.extend_from_slice(&unit.to_le_bytes());
-        }
-        let (text, _) = preview_or_offload(utf16, 1024, None, "f.txt");
-        assert_eq!(text, "hi");
-    }
-
-    #[test]
-    fn preview_or_offload_keeps_utf8() {
-        let (text, _) = preview_or_offload("café".as_bytes().to_vec(), 1024, None, "f.txt");
-        assert_eq!(text, "café");
     }
 
     #[test]

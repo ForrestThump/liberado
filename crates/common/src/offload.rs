@@ -167,8 +167,24 @@ pub fn spill_text(text: &str, config: &OffloadConfig, label: &str) -> OffloadRes
 }
 
 /// Generate a head+tail preview that includes the spill file path.
+/// Path the model should `read_file`, workspace-relative when `.liberado/offload` is in use.
+fn spill_preview_path(spill_path: &Path) -> String {
+    if spill_path
+        .parent()
+        .and_then(|dir| dir.file_name())
+        .is_some_and(|name| name == "offload")
+    {
+        format!(
+            ".liberado/offload/{}",
+            spill_path.file_name().unwrap_or_default().to_string_lossy()
+        )
+    } else {
+        spill_path.to_string_lossy().replace('\\', "/")
+    }
+}
+
 fn spill_preview_with_path(text: &str, max_bytes: usize, spill_path: &Path) -> String {
-    let preview_path = spill_path.to_string_lossy().replace('\\', "/");
+    let preview_path = spill_preview_path(spill_path);
     let head = max_bytes / 2;
     let tail = max_bytes - head;
     let head_end = char_boundary_at_or_before(text, head);
@@ -266,6 +282,73 @@ mod tests {
         assert!(result.text.contains("truncated"));
         assert!(result.text.starts_with("01234"));
         assert!(result.text.ends_with("klmnop"));
+    }
+
+    #[test]
+    fn spill_bytes_passes_through_at_exact_boundary() {
+        let config = OffloadConfig {
+            max_bytes: 3,
+            spill_dir: None,
+            ..Default::default()
+        };
+        let result = spill_bytes(b"abc", &config, "f");
+        assert_eq!(result.text, "abc");
+        assert!(result.spill_path.is_none(), "len == max is in bounds");
+    }
+
+    #[test]
+    fn spill_bytes_falls_back_when_spill_dir_write_fails() {
+        // A *file* occupying the offload path makes `create_dir_all` fail on every platform.
+        let dir = tempdir().unwrap();
+        let blocker = dir.path().join("blocker");
+        std::fs::write(&blocker, "file, not dir").unwrap();
+        let config = OffloadConfig {
+            max_bytes: 3,
+            spill_dir: Some(blocker),
+            ..Default::default()
+        };
+        let result = spill_bytes(b"abcdef", &config, "f");
+        assert_eq!(result.text, "abc", "write failure -> head truncation");
+        assert!(result.spill_path.is_none());
+    }
+
+    #[test]
+    fn preview_names_an_offload_dir_workspace_relative() {
+        let dir = tempdir().unwrap();
+        let spill = dir.path().join(".liberado").join("offload");
+        let config = OffloadConfig {
+            max_bytes: 20,
+            spill_dir: Some(spill),
+            file_prefix: "tool-spill".into(),
+        };
+        let result = spill_text(&"x".repeat(40), &config, "call-1");
+        let text = result.text;
+        assert!(
+            text.contains("full body at `.liberado/offload/tool-spill-call-1.txt`"),
+            "model-facing path must be workspace-relative, got: {text}"
+        );
+    }
+
+    #[test]
+    fn preview_outside_offload_dirs_stays_absolute() {
+        let dir = tempdir().unwrap();
+        let config = OffloadConfig {
+            max_bytes: 20,
+            spill_dir: Some(dir.path().to_path_buf()),
+            file_prefix: "spill".into(),
+        };
+        let result = spill_text(&"x".repeat(40), &config, "call-1");
+        let expected = result
+            .spill_path
+            .clone()
+            .unwrap()
+            .to_string_lossy()
+            .replace('\\', "/");
+        assert!(
+            result.text.contains(&format!("full body at `{expected}`")),
+            "non-offload dirs keep the full path, got: {}",
+            result.text
+        );
     }
 
     #[test]

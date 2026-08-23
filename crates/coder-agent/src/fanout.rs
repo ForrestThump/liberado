@@ -16,9 +16,7 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use liberado_coder_core::{
-    CoderBackend, CoderError, CoderRoleConfig, CoderRunRequest, CoderTask,
-};
+use liberado_coder_core::{CoderBackend, CoderError, CoderRoleConfig, CoderRunRequest, CoderTask};
 use liberado_coder_sandbox::{
     MergeAttempt, add_worktree_on_branch, branch_tip, commit_merge, merge_branch,
     read_conflict_sides, remove_worktree, stage_resolution,

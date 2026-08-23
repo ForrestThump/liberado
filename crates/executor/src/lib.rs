@@ -35,7 +35,10 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use futures::StreamExt;
-use liberado_common::{Outcome, Report, ToolCall, WriteProvenance, offload::{spill_text, OffloadConfig}};
+use liberado_common::{
+    Outcome, Report, ToolCall, WriteProvenance,
+    offload::{OffloadConfig, spill_text},
+};
 use liberado_provider::{
     CompletionRequest, CompletionResponse, Message, Provider, ProviderError, Role, StreamItem,
     ToolDef, ToolInvocation,
@@ -5132,6 +5135,10 @@ mod tests {
         assert!(shown.contains("truncated"));
         assert!(shown.contains("AAAA"), "head present");
         assert!(shown.contains("ZZZZ"), "tail present");
+        assert!(
+            shown.contains(".liberado/offload/tool-spill-call-1.txt"),
+            "model-facing path must be workspace-relative"
+        );
         assert!(spill.join("tool-spill-call-1.txt").exists());
         let spilled = std::fs::read_to_string(spill.join("tool-spill-call-1.txt")).unwrap();
         assert_eq!(spilled, text);

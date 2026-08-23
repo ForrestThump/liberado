@@ -46,12 +46,12 @@ pub mod frontmatter;
 pub mod guidance;
 pub mod local_time;
 pub mod model;
+pub mod offload;
 pub mod path;
 pub mod process;
 pub mod proposal;
 pub mod provenance;
 pub mod session_grants;
-pub mod offload;
 
 pub use capability::CONSEQUENCE_GATE;
 pub use capability::{
@@ -79,9 +79,9 @@ pub use local_time::{
 pub use model::{
     ModelChoice, ModelProfile, ModelRole, ModelTier, ModelTokenPrices, ReasoningLevel, RequiredCaps,
 };
+pub use offload::{OffloadConfig, OffloadResult, sanitize_label, spill_bytes, spill_text};
 pub use proposal::{
     GrantScope, PROPOSALS_DIR, Proposal, ProposalNoteError, ProposalSigner, ProposalStatus,
     ProposedAction, SignedProposal,
 };
 pub use provenance::{HUMAN_SOURCE, PROVENANCE_KEY, WriteProvenance};
-pub use offload::{OffloadConfig, OffloadResult, spill_text, spill_bytes, sanitize_label};
