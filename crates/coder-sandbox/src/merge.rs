@@ -416,6 +416,57 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn remove_worktree_deletes_the_directory_and_clears_the_registration() {
+        let root = std::env::temp_dir().join(format!("lib-rmwt-ok-{}", unique()));
+        let wt_base = root.join("wts");
+        init_repo(&root);
+
+        let wt = add_worktree_on_branch(&root, &wt_base, "child-b", "fanout/b")
+            .await
+            .unwrap();
+        assert!(wt.exists());
+        remove_worktree(&root, &wt).await.unwrap();
+        assert!(!wt.exists(), "the worktree directory must be gone");
+        let list = std::process::Command::new("git")
+            .args(["-C"])
+            .arg(&root)
+            .args(["worktree", "list", "--porcelain"])
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&list.stdout);
+        assert!(
+            !stdout.contains("child-b"),
+            "registration must be pruned, got: {stdout}"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A *locked* worktree makes `git worktree remove --force` refuse; the fallback must
+    /// still delete the directory and prune, or failed attempts leak worktrees forever.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn remove_worktree_falls_back_when_git_refuses() {
+        let root = std::env::temp_dir().join(format!("lib-rmwt-lock-{}", unique()));
+        let wt_base = root.join("wts");
+        init_repo(&root);
+
+        let wt = add_worktree_on_branch(&root, &wt_base, "child-c", "fanout/c")
+            .await
+            .unwrap();
+        git(&wt, &["worktree", "lock", "."]);
+
+        remove_worktree(&root, &wt).await.unwrap();
+        assert!(
+            !wt.exists(),
+            "fallback must delete the directory when git refuses"
+        );
+        // Note: `git worktree prune` deliberately keeps a *locked* worktree's registration
+        // even after its directory disappears, so only the directory is asserted here.
+        // Unlocking first is the operator's escape hatch, not this function's job.
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
     async fn conflicting_merge_lists_paths_and_resolves() {
         let root = std::env::temp_dir().join(format!("lib-merge-conflict-{}", unique()));
         let wt_base = root.join("wts");

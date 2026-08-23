@@ -384,6 +384,17 @@ mod tests {
         sg.restore(&c1.id).await.unwrap();
         assert_eq!(std::fs::read_to_string(root.join("f.txt")).unwrap(), "v1\n");
 
+        // The second snapshot must be a CHILD of the first: the parent-link guard is
+        // load-bearing for `list` (it walks HEAD parents) and for history depth.
+        let list = sg.list(10).await.unwrap();
+        assert!(
+            list.len() >= 2,
+            "two snapshots must chain into two listable checkpoints, got {}",
+            list.len()
+        );
+        assert_eq!(list[0].id, c2.id, "newest first");
+        assert_eq!(list[1].id, c1.id, "the first snapshot must be the parent");
+
         let _ = std::fs::remove_dir_all(&base);
     }
 
@@ -406,6 +417,51 @@ mod tests {
         assert!(!root.join("extra.txt").exists());
         let list = sg.list(5).await.unwrap();
         assert_eq!(list[0].id, cp.id);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Parent directories of a nested side repo must survive `git clean`: the exclusion
+    /// list includes every parent segment of `git_dir`, not just the leaf. A sentinel file
+    /// in the *intermediate* directory is the only thing that distinguishes that from an
+    /// exclude of the leaf alone.
+    #[tokio::test]
+    async fn restore_preserves_intermediate_dirs_of_a_nested_side_repo() {
+        let root = std::env::temp_dir().join(format!("lib-ckpt-deep-{}", unique()));
+        let root = root.join("ws");
+        // Two levels deep: rel = "data/checkpoints/sess".
+        let data = root.join("data").join("checkpoints");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("f.txt"), "keep\n").unwrap();
+        let sg = ShadowGit::open_or_init_at(&data, &root, "sess").unwrap();
+        assert!(
+            sg.git_dir().strip_prefix(&root).is_ok(),
+            "side repo must sit under the work tree for this scenario"
+        );
+
+        let cp = sg.snapshot("base").await.unwrap();
+
+        // Sentinel in the INTERMEDIATE directory (not inside git_dir itself).
+        std::fs::write(root.join("data").join("sentinel.txt"), "operator data\n").unwrap();
+        std::fs::write(root.join("f.txt"), "mut\n").unwrap();
+        std::fs::write(root.join("extra.txt"), "junk\n").unwrap();
+
+        sg.restore(&cp.id).await.unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(root.join("f.txt")).unwrap(),
+            "keep\n"
+        );
+        assert!(!root.join("extra.txt").exists(), "untracked junk must go");
+        assert_eq!(
+            std::fs::read_to_string(root.join("data").join("sentinel.txt")).unwrap(),
+            "operator data\n",
+            "the intermediate directory of git_dir must be excluded from clean"
+        );
+        assert!(
+            !sg.list(5).await.unwrap().is_empty(),
+            "checkpoint history must survive its own restore"
+        );
+
         let _ = std::fs::remove_dir_all(&root);
     }
 

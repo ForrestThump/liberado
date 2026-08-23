@@ -93,7 +93,7 @@ pub async fn compute_baseline(
     // A leftover from an interrupted run would be checked out at the right commit anyway, but
     // git refuses to re-add an existing path, so clear the registration first.
     let _ = std::fs::remove_dir_all(&worktree);
-    run_git_best_effort(opts.project_root, &["worktree", "prune"]).await;
+    let _ = run_git_best_effort(opts.project_root, &["worktree", "prune"]).await;
 
     let wt_cli = path_for_cli(&worktree);
     run_git(
@@ -120,8 +120,8 @@ pub async fn compute_baseline(
     // `remove` rather than `remove --force`, and never a recursive delete of the parent: a
     // force-remove follows directory links out of the worktree and can take real checkouts with
     // it. Leaving a stray temp dir is the cheaper failure.
-    run_git_best_effort(opts.project_root, &["worktree", "remove", &wt_cli]).await;
-    run_git_best_effort(opts.project_root, &["worktree", "prune"]).await;
+    let _ = run_git_best_effort(opts.project_root, &["worktree", "remove", &wt_cli]).await;
+    let _ = run_git_best_effort(opts.project_root, &["worktree", "prune"]).await;
 
     let report = report.map_err(|e| format!("baseline preflight: {e}"))?;
     let mut failures = FailureSet::new();
@@ -263,6 +263,40 @@ mod tests {
             load_baseline(&cache, &sha).as_ref(),
             Some(&set),
             "second call must be a cache hit"
+        );
+    }
+}
+
+#[cfg(test)]
+mod guard_survivor_tests {
+    use super::*;
+
+    /// Dropping the guard must restore the previous `CARGO_TARGET_DIR` exactly — including
+    /// the case where there was none. Serialized so concurrent env readers in this binary
+    /// never see a torn state.
+    #[test]
+    fn target_dir_guard_restores_the_previous_value() {
+        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _g = LOCK.lock().unwrap();
+
+        // Compare against the captured previous value instead of presence/absence:
+        // under cargo-mutants the variable is already set (target/mutants), so a
+        // presence check would pass even with a dead `drop`.
+        let before = std::env::var_os("CARGO_TARGET_DIR");
+
+        {
+            let guard = CargoTargetDirGuard::set(std::path::Path::new("/tmp/liberado-guard-probe"));
+            assert_eq!(
+                std::env::var_os("CARGO_TARGET_DIR").as_deref(),
+                Some(std::path::Path::new("/tmp/liberado-guard-probe").as_os_str())
+            );
+            drop(guard);
+        }
+
+        assert_eq!(
+            std::env::var_os("CARGO_TARGET_DIR"),
+            before,
+            "a dropped guard must restore the previous value exactly"
         );
     }
 }

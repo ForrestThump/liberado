@@ -903,6 +903,36 @@
         "timeout": 0,
         "unviable": 17
       }
+    },
+    {
+      "package": "liberado-coder-sandbox",
+      "commit": "d2e4d328c3e1151fa05f4b175caa4425a6626f61",
+      "recorded_at": "2026-08-23",
+      "command": "cargo mutants -p liberado-coder-sandbox --cap-lints true --timeout 3.0 --minimum-test-timeout 30 --in-place",
+      "tool_version": "27.1.0",
+      "scope": "package",
+      "counts": {
+        "viable": 262,
+        "caught": 244,
+        "survived": 13,
+        "timeout": 5,
+        "unviable": 32
+      }
+    },
+    {
+      "package": "liberado-coder-sandbox",
+      "commit": "d2e4d328c3e1151fa05f4b175caa4425a6626f61",
+      "recorded_at": "2026-08-23",
+      "command": "cargo mutants -p liberado-coder-sandbox --cap-lints true --timeout 3.0 --minimum-test-timeout 30 --in-place",
+      "tool_version": "27.1.0",
+      "scope": "package",
+      "counts": {
+        "viable": 262,
+        "caught": 248,
+        "survived": 9,
+        "timeout": 5,
+        "unviable": 32
+      }
     }
   ]
 }
