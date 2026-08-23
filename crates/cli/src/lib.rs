@@ -44,7 +44,7 @@
 //!   liberado mutants next [--all]        suggest the next crate to mutation-test
 //!
 //! `serve` runs in the foreground, hosting the vault watch loop and the chat/HTTP/SSE API until
-//! killed. `chat` is a thin HTTP/SSE client of a separately-running daemon (see [`chat_client`]).
+//! killed. `chat` is a thin HTTP/SSE client of a separately-running daemon (see `chat_client`).
 //! `config check` resolves the config dir (`LIBERADO_CONFIG_DIR` or the platform default) and runs
 //! the loader, reporting what it found or the first actionable error. `prompt` composes the system
 //! prompt a chat would actually be given from that same config — the model's-eye view, without a
@@ -67,8 +67,9 @@ mod readiness_cmd;
 mod shepherd_cmd;
 mod summarize_cmd;
 
-/// Install the stderr tracing subscriber, then route `args` (argv minus argv[0]). The binary's
-/// `main` is exactly this — every decision above the sub-command modules happens in [`dispatch`].
+/// Install the stderr tracing subscriber, then route `args` (argv without the program name). The
+/// binary's `main` is exactly this — every decision above the sub-command modules happens in
+/// `dispatch`.
 pub async fn run(
     args: &mut impl Iterator<Item = String>,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -91,28 +92,53 @@ fn init_tracing() {
 /// back-compat) launches the daemon server. With no arg, fall back to `LIBERADO_VAULT`.
 ///
 /// Extracted from `main` so the argument grammar is a plain function and the binary stays a
-/// thin shell over the command modules. Each sub-command group owns its own argument match.
+/// thin shell over the command modules. The daemon-adjacent arms stay here; the synchronous
+/// sub-command groups route through `route_named`, so the router's branch count stays flat as
+/// commands are added.
 async fn dispatch(
     args: &mut impl Iterator<Item = String>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     match args.next().as_deref() {
         Some("chat") => chat_client::run(args.next()).await,
-        // Harness observability over durable coding traces (F1–F3). Synchronous — no daemon.
-        Some("coder") => coder_cmd::run(args),
-        Some("mutants") => cmd_mutants(args),
-        Some("ci") => cmd_ci(args),
-        Some("shepherd") => shepherd_cmd::run(args),
-        Some("docs") => cmd_docs(args),
-        Some("config") => cmd_config(args),
         // `prompt [profile]` — what a chat under that profile is actually told, composed from
         // config alone. No daemon, so it runs mid-debug and in CI, which is the point: the prompt
         // and the tool list disagreeing is a class of bug that otherwise costs a deploy to see.
         // A bare `prompt` shows the no-profile case.
         Some("prompt") => liberado_server::show_prompt(None, args.next().as_deref()),
         Some("serve") => run_serve(args.next()).await,
-        Some(vault) => liberado_server::run(vault.to_string()).await, // back-compat: bare vault == serve
         None => run_serve_from_env().await,
+        Some(named) => route_named(named, args).await,
     }
+}
+
+/// A named first argument that is not one of dispatch's own arms: either one of the synchronous
+/// sub-command groups, or the bare-vault back-compat alias for `serve`.
+async fn route_named(
+    name: &str,
+    args: &mut impl Iterator<Item = String>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    match route_sync(name, args) {
+        Some(result) => result,
+        None => liberado_server::run(name.to_string()).await,
+    }
+}
+
+/// The six synchronous sub-command groups, by first argument. Each wrapper owns its own
+/// argument match; `None` means "not a known group", leaving the caller free to fall back.
+fn route_sync(
+    name: &str,
+    args: &mut impl Iterator<Item = String>,
+) -> Option<Result<(), Box<dyn std::error::Error>>> {
+    let route = match name {
+        "coder" => coder_cmd::run(args),
+        "mutants" => cmd_mutants(args),
+        "ci" => cmd_ci(args),
+        "shepherd" => shepherd_cmd::run(args),
+        "docs" => cmd_docs(args),
+        "config" => cmd_config(args),
+        _ => return None,
+    };
+    Some(route)
 }
 
 /// `liberado ci …` — ship preflight, CRAP check, or the local check-then-ratchet run.
