@@ -337,10 +337,6 @@ mod unit_tests {
     async fn resync_updates_the_default_chat_trigger() {
         let dir = tempfile::tempdir().unwrap();
         let store = Arc::new(liberado_session_store::SessionStore::open(dir.path()).await);
-        let executor = liberado_executor::Executor::new(
-            Arc::new(liberado_provider::MockProvider::new("m")),
-            liberado_executor::Budget::default(),
-        );
         let provider = Arc::new(liberado_provider::MockProvider::new("m"));
         let executor = liberado_executor::Executor::new(
             provider.clone(),
