@@ -3459,6 +3459,21 @@ mod importer_survivor_tests {
         assert!(s5.contains("turn 2: guard loop → halt"));
     }
 
+    /// An export written to a bare filename (empty parent) must skip `create_dir_all`
+    /// rather than fail on it.
+    #[test]
+    fn write_messages_export_accepts_a_bare_filename() {
+        let name = format!("lib-tv-bare-export-{}.json", std::process::id());
+        let ex = MessagesExport {
+            session_id: "bare".into(),
+            messages: vec![json!({"role": "user", "content": "x"})],
+        };
+        let result = write_messages_export(std::path::Path::new(&name), &ex);
+        assert!(result.is_ok(), "{result:?}");
+        assert!(std::path::Path::new(&name).exists(), "file written to cwd");
+        let _ = std::fs::remove_file(&name);
+    }
+
     #[test]
     fn load_run_view_prefers_native_then_messages_export() {
         let dir = tempfile::tempdir().unwrap();
@@ -3690,6 +3705,10 @@ mod importer_survivor_tests {
             ["user", "assistant", "tool", "assistant", "tool"],
             "{ex:?}"
         );
+
+        // The user's text part survives as content — an inverted emptiness guard
+        // would blank every text message.
+        assert_eq!(ex.messages[0]["content"], json!("go"));
 
         // The errored call carries state.error as its output body.
         let err_tool = ex
