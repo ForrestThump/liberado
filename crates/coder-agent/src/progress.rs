@@ -505,3 +505,7 @@ mod tests {
         ));
     }
 }
+
+#[cfg(test)]
+#[path = "progress_survivor_tests.rs"]
+mod survivor_tests;
