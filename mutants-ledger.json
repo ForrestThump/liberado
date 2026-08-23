@@ -993,6 +993,36 @@
         "timeout": 5,
         "unviable": 59
       }
+    },
+    {
+      "package": "liberado-server",
+      "commit": "551321ade6eefd630c674bbf7cc2096a49a22c37",
+      "recorded_at": "2026-08-23",
+      "command": "cargo mutants -p liberado-server --cap-lints true --timeout 3.0 --minimum-test-timeout 30 --in-place",
+      "tool_version": "27.0.0",
+      "scope": "package",
+      "counts": {
+        "viable": 345,
+        "caught": 257,
+        "survived": 82,
+        "timeout": 6,
+        "unviable": 59
+      }
+    },
+    {
+      "package": "liberado-server",
+      "commit": "0e39205e0fb48545b9ade9968cf22bda4d1e7e53",
+      "recorded_at": "2026-08-23",
+      "command": "cargo mutants -p liberado-server --cap-lints true --timeout 3.0 --minimum-test-timeout 30 --in-place",
+      "tool_version": "27.0.0",
+      "scope": "package",
+      "counts": {
+        "viable": 345,
+        "caught": 263,
+        "survived": 76,
+        "timeout": 6,
+        "unviable": 59
+      }
     }
   ]
 }
