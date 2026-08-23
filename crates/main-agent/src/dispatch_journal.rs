@@ -113,4 +113,4 @@ pub fn journal_display_path(correlation_id: &str) -> String {
 
 #[cfg(test)]
 #[path = "dispatch_journal/tests.rs"]
-mod survivor_tests;
+pub(crate) mod survivor_tests;

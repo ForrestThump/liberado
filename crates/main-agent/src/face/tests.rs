@@ -82,6 +82,12 @@ async fn hub_with_succeeding_pack() -> Arc<GoalSessionHub> {
 /// AskHuman (a chat-turn that can block on a human it cannot relay) and strips its real powers.
 #[tokio::test]
 async fn delegate_strips_askhuman_but_keeps_the_rest_of_the_grant() {
+    // `delegate` writes its journal via `LIBERADO_DATA_DIR`; pin it to a tempdir under the
+    // shared process-wide lock so nothing lands in the crate directory.
+    let _env = crate::dispatch_journal::survivor_tests::data_dir_lock().await;
+    let data = tempfile::tempdir().unwrap();
+    unsafe { std::env::set_var("LIBERADO_DATA_DIR", data.path()) };
+
     let hub = hub_with_succeeding_pack().await;
     let bridge = DispatchBridge {
         hub: hub.clone(),
@@ -139,4 +145,6 @@ async fn delegate_strips_askhuman_but_keeps_the_rest_of_the_grant() {
             .starts_with("chat-delegate-"),
         "journal stitching survives"
     );
+
+    unsafe { std::env::remove_var("LIBERADO_DATA_DIR") };
 }

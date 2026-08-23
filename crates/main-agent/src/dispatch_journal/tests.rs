@@ -8,16 +8,13 @@
 
 use super::*;
 use serde_json::Value;
-use std::sync::{Mutex, MutexGuard, OnceLock};
+use std::sync::OnceLock;
 
-fn env_lock() -> MutexGuard<'static, ()> {
-    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-    LOCK.get_or_init(|| Mutex::new(()))
-        .lock()
-        .unwrap_or_else(|p| p.into_inner())
-}
-
-async fn env_lock_async() -> tokio::sync::MutexGuard<'static, ()> {
+/// One process-wide lock for every test that touches `LIBERADO_DATA_DIR`, including the
+/// face-bridge delegation test in `face/tests.rs`. A single tokio mutex (not one std + one
+/// tokio): two locks over one process-global env var do not exclude each other, which is
+/// precisely the interleaving AGENTS.md warns about.
+pub(crate) async fn data_dir_lock() -> tokio::sync::MutexGuard<'static, ()> {
     static LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
     LOCK.get_or_init(|| tokio::sync::Mutex::new(()))
         .lock()
@@ -33,9 +30,9 @@ fn clear_data_dir() {
     unsafe { std::env::remove_var("LIBERADO_DATA_DIR") };
 }
 
-#[test]
-fn journal_paths_follow_the_data_dir() {
-    let _g = env_lock();
+#[tokio::test]
+async fn journal_paths_follow_the_data_dir() {
+    let _g = data_dir_lock().await;
     let dir = tempfile::tempdir().unwrap();
     set_data_dir(dir.path());
 
@@ -54,7 +51,7 @@ fn journal_paths_follow_the_data_dir() {
 
 #[tokio::test]
 async fn append_writes_one_jsonl_line() {
-    let _g = env_lock_async().await;
+    let _g = data_dir_lock().await;
     let dir = tempfile::tempdir().unwrap();
     set_data_dir(dir.path());
 
@@ -79,7 +76,7 @@ async fn append_writes_one_jsonl_line() {
 
 #[tokio::test]
 async fn append_abandons_when_the_parent_cannot_be_created() {
-    let _g = env_lock_async().await;
+    let _g = data_dir_lock().await;
     let dir = tempfile::tempdir().unwrap();
     // The data-dir "path" is an existing FILE: create_dir_all must fail, and append must give
     // up without writing anything anywhere.
