@@ -1158,6 +1158,21 @@
         "timeout": 0,
         "unviable": 4
       }
+    },
+    {
+      "package": "liberado-chat-search",
+      "commit": "094209117fbd02a31fa7fbef324b91fe821fdff1",
+      "recorded_at": "2026-08-23",
+      "command": "cargo mutants -p liberado-chat-search --cap-lints true --timeout 60 --minimum-test-timeout 60 --in-place",
+      "tool_version": "27.1.0",
+      "scope": "package",
+      "counts": {
+        "viable": 29,
+        "caught": 29,
+        "survived": 0,
+        "timeout": 0,
+        "unviable": 4
+      }
     }
   ]
 }
