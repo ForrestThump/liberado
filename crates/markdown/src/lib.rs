@@ -349,7 +349,6 @@ fn find_matching_paren(text: &str, open: usize) -> Option<usize> {
     None
 }
 
-
 #[cfg(test)]
 #[path = "lib_tests.rs"]
 mod tests;
