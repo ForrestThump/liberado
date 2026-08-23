@@ -539,8 +539,21 @@ fn emit_crap_failure(
     has_ratchet: bool,
     error: Box<dyn std::error::Error>,
 ) -> Box<dyn std::error::Error> {
+    emit_crap_failure_to(
+        std::env::var_os("GITHUB_ACTIONS").is_some(),
+        has_ratchet,
+        error,
+    )
+}
+
+/// Same, with the CI flag supplied by the caller so tests never touch process env.
+fn emit_crap_failure_to(
+    on_ci: bool,
+    has_ratchet: bool,
+    error: Box<dyn std::error::Error>,
+) -> Box<dyn std::error::Error> {
     let hint = crap_failure_hint(has_ratchet);
-    if std::env::var_os("GITHUB_ACTIONS").is_some() {
+    if on_ci {
         let title = if has_ratchet {
             "CRAP regression"
         } else {
@@ -698,9 +711,10 @@ mod tests {
         CRAP_COMPARE_SUMMARY, CRAP_EMPTY_BASELINE, CRAP_HOST_CEILING_ONLY, CRAP_REGRESSION_GH,
         CRAP_REGRESSION_HINT, CiLog, EXTRACT_MAX_LINES, LCOV_FILE, LLVM_COV_ARGS, StageOutcome,
         USAGE, announce_compare, baseline_has_entries, compare_args, compare_banners,
-        crap_failure_hint, emit_crap_failure, exe_lives_in_cargo_target, extract_ci_failures, git,
-        porcelain_path, relativize_json_file, relativize_lcov, repo_relative_source_path,
-        repository_root, run_cmd, stage_ratcheted_baseline, uses_per_function_ratchet,
+        crap_failure_hint, emit_crap_failure, emit_crap_failure_to, exe_lives_in_cargo_target,
+        extract_ci_failures, git, porcelain_path, relativize_json_file, relativize_lcov,
+        repo_relative_source_path, repository_root, run_cmd, stage_ratcheted_baseline,
+        uses_per_function_ratchet,
     };
     use liberado_common::process::std_command;
     use std::fs;
@@ -977,6 +991,30 @@ error[E0425]: cannot find value `foo` in this scope
         let error = emit_crap_failure(true, "cargo crap failed".into()).to_string();
         assert!(error.contains("cargo crap failed"), "{error}");
         assert!(error.contains("Do not raise the baseline"), "{error}");
+    }
+
+    /// The wrapper reads `GITHUB_ACTIONS`; the inner function takes the flag so these
+    /// branches stay covered without any test touching process env.
+    #[test]
+    fn crap_failure_annotation_branches_cover_both_gates() {
+        for (on_ci, has_ratchet) in [(true, true), (true, false), (false, true), (false, false)] {
+            let error =
+                emit_crap_failure_to(on_ci, has_ratchet, "cargo crap failed".into()).to_string();
+            assert!(error.contains("cargo crap failed"), "{error}");
+            if has_ratchet {
+                assert!(error.contains("Do not raise the baseline"), "{error}");
+            } else {
+                assert!(error.contains(CRAP_CEILING), "{error}");
+            }
+        }
+    }
+
+    /// Pin that the production entry point still reads the env var itself.
+    #[test]
+    fn emit_crap_failure_wraps_the_inner_emitter() {
+        let error = emit_crap_failure(false, "gate".into()).to_string();
+        assert!(error.contains("gate"), "{error}");
+        assert!(error.contains(CRAP_CEILING_HINT.trim()), "{error}");
     }
 
     #[test]
