@@ -401,6 +401,10 @@ fn short_sig(s: &str) -> String {
 }
 
 #[cfg(test)]
+#[path = "repair_feedback_survivor_tests.rs"]
+mod survivor_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use liberado_coder_core::{Finding, FindingKind, NamedVerdict, Verdict, VerdictStatus};
