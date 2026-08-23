@@ -13,6 +13,22 @@ cyclomatic_new = 150
 # A reviewed exception is narrow: one file, one metric, one explicit ceiling.
 # It must describe why the file is cohesive despite its size.
 #
+# NOT ALL WAIVERS ARE ACCEPTED. A waiver is a reviewed exception for a file whose
+# size is load-bearing — not a permit to skip work. Before proposing one:
+#
+#   1. Move test modules out of src files first (#[path] siblings). Test growth is
+#      never waiver material; the split pattern is all over this branch already.
+#   2. Check the equivalent-mutant / cohesion argument: name what the file IS and
+#      why splitting it would actively hide something (single authority, protocol
+#      table, generated code).
+#   3. Put a real ceiling on it with a review date. "A bit more room" is not a
+#      ceiling.
+#
+# Reasons that read as laziness — "tests are long", "splitting is churn", "it grew" —
+# get the whole contribution pushed back for rework, not edited into shape here.
+#
+# Accepted example of the shape (kept commented out; copy, fill in, uncomment):
+#
 # [[waiver]]
 # path = "crates/example/src/declarative_table.rs"
 # metric = "ploc"

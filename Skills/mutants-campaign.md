@@ -318,6 +318,10 @@ Parallel agents appending to one ledger guarantee conflicts:
 - Merge order matters; coordinate through the integrating agent.
 - **Never push the shared ledger branch directly.** Land on a feature branch and let the
   integrator apply module-health treatment (inline test mods regress file metrics) and gates.
+- **Keep new tests out of `src/*.rs`** — use `#[path]` sibling files like the ones already on
+  the branch. Module-health waivers exist for load-bearing size only; a waiver reason that
+  reads as laziness gets the whole contribution pushed back for rework. See the acceptance
+  bar in `module-health.toml`.
 - Push after every verified batch. On push rejection: fetch, merge immediately, re-run the
   crate's tests, then push again.
 
