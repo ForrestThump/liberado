@@ -183,10 +183,8 @@ pub fn markdown_to_lines(text: &str) -> Vec<MarkdownLine> {
 fn parse_bold(text: &str, i: usize) -> Option<(usize, StyledSpan)> {
     let bytes = text.as_bytes();
     if bytes[i] == b'*'
-        && i + 1 < bytes.len()
-        && bytes[i + 1] == b'*'
-        && let Some(end_idx) = find_inline_end(text, i + 2, "**")
-        && end_idx > i + 2
+        && bytes.get(i + 1) == Some(&b'*')
+        && let Some(end_idx) = closed_from(text, i + 2, "**")
     {
         let inner = &text[i + 2..end_idx];
         return Some((
@@ -204,9 +202,8 @@ fn parse_bold(text: &str, i: usize) -> Option<(usize, StyledSpan)> {
 fn parse_italic(text: &str, i: usize) -> Option<(usize, StyledSpan)> {
     let bytes = text.as_bytes();
     if bytes[i] == b'*'
-        && (i == 0 || bytes[i - 1] != b'*')
-        && let Some(end_idx) = find_inline_end(text, i + 1, "*")
-        && end_idx > i + 1
+        && !text[..i].ends_with('*')
+        && let Some(end_idx) = closed_from(text, i + 1, "*")
     {
         let inner = &text[i + 1..end_idx];
         return Some((
@@ -227,8 +224,7 @@ fn parse_link(text: &str, i: usize) -> Option<(usize, StyledSpan)> {
     if bytes[i] == b'['
         && let Some(bracket_end) = find_matching_bracket(text, i)
         && bracket_end > i + 1
-        && bracket_end + 1 < bytes.len()
-        && bytes[bracket_end + 1] == b'('
+        && bytes.get(bracket_end + 1) == Some(&b'(')
         && let Some(paren_end) = find_matching_paren(text, bracket_end + 1)
     {
         let link_text = &text[i + 1..bracket_end];
@@ -245,9 +241,9 @@ fn parse_link(text: &str, i: usize) -> Option<(usize, StyledSpan)> {
 
 /// Try to parse a code span (`` `…` ``) starting at `i`.
 fn parse_code(text: &str, i: usize) -> Option<(usize, StyledSpan)> {
-    if text.as_bytes()[i] == b'`'
-        && let Some(end_idx) = find_inline_end(text, i + 1, "`")
-        && end_idx > i + 1
+    let bytes = text.as_bytes();
+    if bytes.get(i) == Some(&b'`')
+        && let Some(end_idx) = closed_from(text, i + 1, "`")
     {
         let inner = &text[i + 1..end_idx];
         return Some((
@@ -319,6 +315,15 @@ fn find_inline_end(text: &str, start: usize, marker: &str) -> Option<usize> {
             }
         })
         .map(|k| k + start)
+}
+
+/// Close a span opened at `start`: the first unescaped `marker`, provided at least one
+/// byte of content separates opener and closer. An adjacent closer closes nothing.
+fn closed_from(text: &str, start: usize, marker: &str) -> Option<usize> {
+    match find_inline_end(text, start, marker) {
+        Some(end) if end > start => Some(end),
+        _ => None,
+    }
 }
 
 fn find_matching_bracket(text: &str, open: usize) -> Option<usize> {

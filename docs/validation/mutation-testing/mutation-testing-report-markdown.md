@@ -1,17 +1,17 @@
 # markdown — Mutation Testing Report
 
 **Date:** 2026-08-23
-**Status:** current · **Authority:** ledger rows at `0e14ecc` (baseline) and `93645e4` (final), branch `fix/markdown-mutant-survivors`
+**Status:** current · **Authority:** ledger rows at `0e14ecc` (baseline) and `c23c9ca7` (final), branch `fix/markdown-mutant-survivors`
 
 ## Summary
 
 | Metric | Baseline (`0e14ecc`) | Final (`93645e4`) |
 |--------|:-----:|:-----:|
-| Viable mutants | 126 | 139 |
-| Caught | 48 | **135** |
+| Viable mutants | 126 | 118 |
+| Caught | 48 | **114** |
 | Missed | 33 | **2** |
 | Timeouts | 45 | **2** |
-| Unviable | 20 | 26 |
+| Unviable | 20 | 21 |
 | Tests | 11 | 33 |
 
 The headline finding was not weak tests — it was a **termination bug in the production
@@ -48,8 +48,8 @@ Fixes applied to `crates/markdown/src/lib.rs`:
    renders literally instead of stalling the caller.
 2. **Non-advancing cursors rejected.** Span dispatch requires `next > i`; a mutated parser
    returning a degenerate cursor falls through to literal consumption instead of looping.
-3. **Empty spans rejected.** `parse_bold`/`parse_italic`/`parse_code`/`parse_link` require
-   non-empty inner text; `"a **b"` used to emit a zero-width italic span where the second
+3. **Empty spans rejected.** `closed_from` wraps `find_inline_end`, refusing an adjacent closer;
+   `parse_bold`/`parse_italic`/`parse_code`/`parse_link` therefore never emit empty inner text; `"a **b"` used to emit a zero-width italic span where the second
    star closed against nothing.
 4. `find_inline_end` rewritten over `windows()` (escape handling preserved), removing the
    manual index arithmetic whose mutation could only ever hang.
@@ -87,8 +87,13 @@ the progress guarantee is the *only* remaining unguarded liveness dependency.
 ```text
 baseline: cargo mutants -p liberado-markdown --cap-lints true --timeout 3.0 --minimum-test-timeout 30 --in-place
           at 0e14ecc1c7521034c9142782a0306861584acb29 → viable 126, caught 48, missed 33, timeout 45
-final:    same command at 93645e4856260b7173e03ce0c6a4887953f8cdf5
-          → viable 139, caught 135, missed 2, timeout 2
+final:    same command at c23c9ca7bd71313c416550882012084fa0ff5882
+          → viable 118, caught 114, missed 2, timeout 2
+
+An intermediate row at `93645e4` (viable 139, caught 135) preceded a complexity-budget
+refactor: the non-empty-span rule moved into a named `closed_from` helper and raw index
+bounds became `get()` comparisons, keeping every parser at or below its CRAP baseline while
+shrinking the mutable-arithmetic surface (139→118 viable). Residues unchanged.
 ```
 
 Ledger rows appended (never edited); raw `mutants.out/` discarded after triage per the
