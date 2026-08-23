@@ -993,6 +993,96 @@
         "timeout": 5,
         "unviable": 59
       }
+    },
+    {
+      "package": "liberado-coder-core",
+      "commit": "2153b7a4f0ec7182522cc02fa2d7949e70283835",
+      "recorded_at": "2026-08-23",
+      "command": "cargo mutants -p liberado-coder-core --cap-lints true --timeout 3.0 --minimum-test-timeout 30 --in-place",
+      "tool_version": "27.1.0",
+      "scope": "package",
+      "counts": {
+        "viable": 469,
+        "caught": 341,
+        "survived": 127,
+        "timeout": 1,
+        "unviable": 41
+      }
+    },
+    {
+      "package": "liberado-coder-core",
+      "commit": "b1775e5853b74afe7a1a3f61be2d51f56a63d075",
+      "recorded_at": "2026-08-23",
+      "command": "cargo mutants -p liberado-coder-core --cap-lints true --timeout 3.0 --minimum-test-timeout 30 --in-place",
+      "tool_version": "27.1.0",
+      "scope": "package",
+      "counts": {
+        "viable": 469,
+        "caught": 431,
+        "survived": 37,
+        "timeout": 1,
+        "unviable": 41
+      }
+    },
+    {
+      "package": "liberado-coder-core",
+      "commit": "f0de431c3f9690687b0dc9dbc03bdaba0eda4a71",
+      "recorded_at": "2026-08-23",
+      "command": "cargo mutants -p liberado-coder-core --cap-lints true --timeout 3.0 --minimum-test-timeout 30 --in-place",
+      "tool_version": "27.1.0",
+      "scope": "package",
+      "counts": {
+        "viable": 469,
+        "caught": 449,
+        "survived": 19,
+        "timeout": 1,
+        "unviable": 41
+      }
+    },
+    {
+      "package": "liberado-coder-core",
+      "commit": "b57957194a6bb24d9051ee6fee632293a782622f",
+      "recorded_at": "2026-08-23",
+      "command": "cargo mutants -p liberado-coder-core --cap-lints true --timeout 90 --minimum-test-timeout 90 --in-place",
+      "tool_version": "27.1.0",
+      "scope": "package",
+      "counts": {
+        "viable": 469,
+        "caught": 453,
+        "survived": 15,
+        "timeout": 1,
+        "unviable": 41
+      }
+    },
+    {
+      "package": "liberado-coder-core",
+      "commit": "390446a44f7af45e0278c534f2cda2fc25f4dc58",
+      "recorded_at": "2026-08-23",
+      "command": "cargo mutants -p liberado-coder-core --cap-lints true --timeout 90 --minimum-test-timeout 90 --in-place",
+      "tool_version": "27.1.0",
+      "scope": "package",
+      "counts": {
+        "viable": 469,
+        "caught": 457,
+        "survived": 11,
+        "timeout": 1,
+        "unviable": 41
+      }
+    },
+    {
+      "package": "liberado-coder-core",
+      "commit": "4857a35f8da33d1258308d6f0d14c48ed83be55f",
+      "recorded_at": "2026-08-23",
+      "command": "cargo mutants -p liberado-coder-core --cap-lints true --timeout 90 --minimum-test-timeout 90 --in-place",
+      "tool_version": "27.1.0",
+      "scope": "package",
+      "counts": {
+        "viable": 469,
+        "caught": 458,
+        "survived": 10,
+        "timeout": 1,
+        "unviable": 41
+      }
     }
   ]
 }
