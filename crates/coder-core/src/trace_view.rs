@@ -3270,3 +3270,269 @@ mod survivor_tests {
         assert_eq!(view.turns[1].calls.len(), 0);
     }
 }
+
+#[cfg(test)]
+mod importer_survivor_tests {
+    //! Survivor tests for the foreign-import path and the divergence report.
+
+    use super::*;
+
+    fn export(messages: Value) -> MessagesExport {
+        MessagesExport {
+            session_id: "foreign-1".into(),
+            messages: messages.as_array().cloned().unwrap(),
+        }
+    }
+
+    // ── run_view_from_messages ───────────────────────────────────────────────
+
+    #[test]
+    fn user_messages_become_task_then_annotations_and_assistant_turns_index_from_one() {
+        let ex = export(json!([
+            {"role": "user", "content": "the task itself"},
+            {"role": "assistant", "content": "working"},
+            {"role": "user", "content": "env: build finished"},
+            {"role": "assistant", "tool_calls": [
+                {"function": {"name": "read_file", "arguments": "{\"path\":\"a\"}"}}
+            ]},
+            {"role": "tool", "tool_call_id": "", "name": "read_file", "content": "contents", "is_error": false},
+            {"role": "assistant", "tool_calls": [
+                {"function": {"name": "write_file", "arguments": "{}"}}
+            ]},
+            {"role": "tool", "name": "write_file", "content": "wrote", "is_error": true}
+        ]));
+        let view = run_view_from_messages(&ex, "Kilo");
+
+        assert_eq!(view.source, "Kilo");
+        assert_eq!(view.run_id, "foreign-1");
+        assert_eq!(view.task.as_deref(), Some("the task itself"));
+        assert_eq!(view.turns.len(), 3, "{view:#?}");
+
+        // Turns number from ONE.
+        assert_eq!(view.turns[0].index, 1);
+        assert_eq!(view.turns[0].text.as_deref(), Some("working"));
+        assert!(
+            view.turns[0]
+                .annotations
+                .iter()
+                .any(|a| a.contains("user/env") && a.contains("build finished")),
+            "later user messages become annotations on the open turn: {view:#?}"
+        );
+
+        // The tool result pairs with the call by name and flips ok; is_error=true → FAILED.
+        let rf = &view.turns[1].calls[0];
+        assert_eq!(rf.name, "read_file");
+        assert_eq!(rf.ok, Some(true));
+        assert_eq!(rf.output, "contents");
+        let wf = &view.turns[2].calls[0];
+        assert_eq!(wf.ok, Some(false), "is_error=true must mark FAILED");
+
+        // An assistant message with no content records text: None, not empty string.
+        let ex2 = export(json!([
+            {"role": "assistant", "tool_calls": [
+                {"function": {"name": "x", "arguments": ""}}
+            ]}
+        ]));
+        let v2 = run_view_from_messages(&ex2, "Kilo");
+        assert_eq!(v2.task, None);
+        assert_eq!(v2.turns[0].text, None);
+    }
+
+    // ── diverge + format_divergence ──────────────────────────────────────────
+
+    fn run_of(id: &str, turns: Vec<TurnView>) -> RunView {
+        RunView {
+            source: "test".into(),
+            run_id: id.into(),
+            task: Some(format!("task-{id}")),
+            turns,
+        }
+    }
+
+    fn tv(index: u32, calls: Vec<CallView>) -> TurnView {
+        TurnView {
+            index,
+            text: None,
+            calls,
+            finish_reason: None,
+            annotations: Vec::new(),
+        }
+    }
+
+    fn cv(name: &str, ok: Option<bool>, args: &str, output: &str) -> CallView {
+        CallView {
+            name: name.into(),
+            arguments: args.into(),
+            ok,
+            output: output.into(),
+        }
+    }
+
+    #[test]
+    fn divergence_finds_the_first_disagreeing_call_and_formats_both_tails() {
+        let a = run_of(
+            "A",
+            vec![
+                tv(1, vec![cv("read", Some(true), "{}", "ok")]),
+                tv(
+                    2,
+                    vec![
+                        cv("edit", Some(true), "{}", "ok"),
+                        cv("test", Some(true), "{}", "ok"),
+                    ],
+                ),
+            ],
+        );
+        let b = run_of(
+            "B",
+            vec![
+                tv(1, vec![cv("read", Some(false), "{}", "denied")]),
+                tv(9, vec![cv("bash", Some(true), "{}", "ran")]),
+            ],
+        );
+
+        let d = diverge(&a, &b);
+        assert_eq!(d.common_calls, 1, "only `read` agrees by name");
+        assert_eq!(d.a_call.as_deref(), Some("edit"));
+        assert_eq!(d.b_call.as_deref(), Some("bash"));
+        assert_eq!(d.a_turn, Some(2));
+        assert_eq!(d.b_turn, Some(9));
+
+        let s = format_divergence(&a, &b);
+        assert!(s.contains("# Run divergence"));
+        assert!(s.contains("A: A [test] — 2 model turns, 3 tool calls"));
+        assert!(
+            s.contains("task: task-A") && s.contains("task: task-B"),
+            "actual:\n{s}"
+        );
+        assert!(s.contains("## Agreed for 1 call(s)"));
+        assert!(s.contains("read (A turn 1 ok, B FAILED)"));
+        assert!(s.contains("after call 1: A did `edit`, B did `bash`"));
+        assert!(s.contains("### A from the divergence"));
+        assert!(s.contains("turn 2"));
+        assert!(!s.contains("nothing in common"));
+
+        // Identical runs agree fully and say so at the end.
+        let s2 = format_divergence(&a, &a.clone());
+        assert!(s2.contains("Both runs stopped calling tools at the same point."));
+
+        // Two runs whose first calls disagree share nothing.
+        let c = run_of("C", vec![tv(1, vec![cv("zzz", None, "", "")])]);
+        let d = run_of("D", vec![tv(1, vec![cv("yyy", None, "", "")])]);
+        let s3 = format_divergence(&c, &d);
+        assert!(
+            s3.contains("(nothing in common — check these are the same task)"),
+            "{s3}"
+        );
+        assert!(s3.contains("A did `zzz`, B did `yyy`"));
+    }
+
+    #[test]
+    fn fmt_ok_renders_all_three_states() {
+        assert_eq!(fmt_ok(Some(true)), " ok");
+        assert_eq!(fmt_ok(Some(false)), " FAILED");
+        assert_eq!(fmt_ok(None), "");
+    }
+
+    // ── foreign-format detection ─────────────────────────────────────────────
+
+    #[test]
+    fn detection_prefers_kilo_cli_then_openhands_keys_then_kilo_shapes() {
+        use ForeignTraceFormat::*;
+        let kilo_cli = json!({"messages": [
+            {"info": {"role": "user"}, "parts": [{"type": "text", "text": "hello"}]}
+        ]});
+        assert_eq!(detect_foreign_format(&kilo_cli).unwrap(), KiloCli);
+
+        for key in ["trajectory", "history", "agent_events"] {
+            let oh = json!({ key: [] });
+            assert_eq!(detect_foreign_format(&oh).unwrap(), OpenHands, "{key}");
+        }
+        for key in ["apiConversationHistory", "api_conversation_history"] {
+            let k = json!({ key: [] });
+            assert_eq!(detect_foreign_format(&k).unwrap(), Kilo, "{key}");
+        }
+        assert_eq!(
+            detect_foreign_format(&json!([{"role": "user"}])).unwrap(),
+            Kilo
+        );
+        assert_eq!(
+            detect_foreign_format(&json!({"messages": [{"role":"u"}]})).unwrap(),
+            Kilo
+        );
+        assert!(detect_foreign_format(&json!({"neither": 1})).is_err());
+
+        // Auto round-trips each shape through its importer without error.
+        assert!(import_foreign_auto(&kilo_cli, "s").is_ok());
+        assert!(
+            import_foreign_auto(
+                &json!({"trajectory": [
+                    {"action": "message", "args": {"content": "x"}}
+                ]}),
+                "s"
+            )
+            .is_ok()
+        );
+    }
+
+    // ── Kilo CLI part expansion ──────────────────────────────────────────────
+
+    #[test]
+    fn kilo_cli_tool_part_expands_to_call_plus_synthesized_result() {
+        let raw = json!({
+            "messages": [
+                {"info": {"role": "user"}, "parts": [{"type": "text", "text": "go"}]},
+                {"info": {"role": "assistant"}, "parts": [
+                    {"type": "tool", "tool": "read_file", "callID": "c1",
+                     "state": {"status": "completed", "input": {"path": "a"}, "output": "bytes"}}
+                ]},
+                {"info": {"role": "assistant"}, "parts": [
+                    {"type": "tool", "tool": "run_command", "callID": "c2",
+                     "state": {"status": "error", "input": {}, "error": "denied"}}
+                ]}
+            ]
+        });
+        let (_, ex) = import_foreign_auto(&raw, "kc").unwrap();
+        let roles: Vec<&str> = ex
+            .messages
+            .iter()
+            .filter_map(|m| m.get("role").and_then(|r| r.as_str()))
+            .collect();
+        // One part becomes an assistant call plus a synthesized role:"tool" reply.
+        assert_eq!(
+            roles,
+            ["user", "assistant", "tool", "assistant", "tool"],
+            "{ex:?}"
+        );
+
+        // The errored call carries state.error as its output body.
+        let err_tool = ex
+            .messages
+            .iter()
+            .find(|m| m.get("is_error").and_then(|v| v.as_bool()) == Some(true))
+            .expect("errored part flagged");
+        assert_eq!(err_tool["content"], "denied");
+    }
+
+    // ── OpenHands event mapping ──────────────────────────────────────────────
+
+    #[test]
+    fn openhands_actions_map_onto_our_message_shapes() {
+        let raw = json!({"trajectory": [
+            {"action": "message", "args": {"content": "do it"}},
+            {"action": "CmdRunAction", "args": {"command": "ls"}},
+            {"action": "observation", "tool_name": "ls", "content": "a.txt", "success": true},
+            {"action": "agent", "args": {"thought": "thinking"}}
+        ]});
+        let (fmt, ex) = import_foreign_auto(&raw, "oh").unwrap();
+        assert_eq!(fmt, ForeignTraceFormat::OpenHands);
+        let roles: Vec<String> = ex
+            .messages
+            .iter()
+            .map(|m| m["role"].as_str().unwrap_or("?").to_string())
+            .collect();
+        assert_eq!(roles, ["user", "assistant", "tool", "assistant"]);
+        assert!(ex.messages[1]["tool_calls"][0]["function"]["name"] == "ls");
+        assert_eq!(ex.messages[2]["content"], "a.txt");
+    }
+}
