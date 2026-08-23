@@ -3327,6 +3327,36 @@ mod importer_survivor_tests {
         let wf = &view.turns[2].calls[0];
         assert_eq!(wf.ok, Some(false), "is_error=true must mark FAILED");
 
+        // With a tool_call_id present, pairing goes BY NAME against unanswered calls:
+        // read_file's answer must not land on the still-pending write_file slot.
+        let ex3 = export(json!([
+            {"role": "assistant", "content": "", "tool_calls": [
+                {"function": {"name": "write_file", "arguments": "{}"}},
+                {"function": {"name": "read_file", "arguments": "{}"}}
+            ]},
+            {"role": "tool", "tool_call_id": "c9", "name": "read_file", "content": "rf-out"}
+        ]));
+        let v3 = run_view_from_messages(&ex3, "Kilo");
+        assert_eq!(v3.turns[0].calls[0].ok, None, "write_file still awaits");
+        assert_eq!(
+            v3.turns[0].calls[1].ok,
+            Some(true),
+            "read_file answered by name"
+        );
+        assert_eq!(v3.turns[0].calls[1].output, "rf-out");
+
+        // An answered call is never re-answered: a duplicate result is dropped
+        // rather than overwriting the first outcome.
+        let ex4 = export(json!([
+            {"role": "assistant", "content": "", "tool_calls": [
+                {"function": {"name": "solo", "arguments": "{}"}}
+            ]},
+            {"role": "tool", "name": "solo", "content": "first"},
+            {"role": "tool", "name": "solo", "content": "second"}
+        ]));
+        let v4 = run_view_from_messages(&ex4, "Kilo");
+        assert_eq!(v4.turns[0].calls[0].output, "first");
+
         // An assistant message with no content records text: None, not empty string.
         let ex2 = export(json!([
             {"role": "assistant", "tool_calls": [
