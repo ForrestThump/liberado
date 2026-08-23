@@ -56,6 +56,85 @@ async fn deliver_cron_appends_to_the_sticky_session_and_sends() {
     let _ = NoTools;
 }
 
+/// Plain notifications and proposals pass straight through to the inner notifier,
+/// untouched by the quiet-wait machinery.
+#[tokio::test]
+async fn plain_notifications_bypass_the_quiet_wait() {
+    static SENT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    struct Counting;
+    #[async_trait]
+    impl Notifier for Counting {
+        async fn notify(&self, _m: &str) -> Result<(), NotifyError> {
+            SENT.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let store = Arc::new(SessionStore::open(dir.path()).await);
+    let provider = Arc::new(liberado_provider::MockProvider::new("m"));
+    let executor =
+        liberado_executor::Executor::new(provider.clone(), liberado_executor::Budget::default());
+    let chat = Arc::new(ChatSessions::new(store, executor, Arc::new(NoTools)));
+    let notifier = ChatDeliveringNotifier::new(
+        Arc::new(Counting),
+        chat,
+        StickySession::ephemeral(),
+        Arc::new(Mutex::new(Some(std::time::Instant::now()))), // ACTIVE chat
+        Duration::from_secs(3600),
+        Duration::from_secs(7200),
+    );
+    Notifier::notify(&notifier, "plain").await.unwrap();
+    Notifier::notify_proposal(&notifier, "p1", "proposal")
+        .await
+        .unwrap();
+    assert_eq!(
+        SENT.load(Ordering::SeqCst),
+        2,
+        "both pass through immediately"
+    );
+}
+
+/// An active chat holds the brief until quiet (or the cap): wait_for_quiet must actually
+/// wait rather than returning immediately.
+#[tokio::test]
+async fn an_active_chat_holds_the_brief_until_quiet() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Arc::new(SessionStore::open(dir.path()).await);
+    let provider = Arc::new(liberado_provider::MockProvider::new("m"));
+    let executor =
+        liberado_executor::Executor::new(provider.clone(), liberado_executor::Budget::default());
+    let chat = Arc::new(ChatSessions::new(store, executor, Arc::new(NoTools)));
+    let notifier = ChatDeliveringNotifier::new(
+        Arc::new(Passthrough),
+        chat,
+        StickySession::ephemeral(),
+        Arc::new(Mutex::new(Some(std::time::Instant::now()))),
+        Duration::from_millis(150),
+        Duration::from_secs(3600),
+    );
+    let started = std::time::Instant::now();
+    Notifier::deliver_cron(&notifier, "held brief")
+        .await
+        .unwrap();
+    let waited = started.elapsed();
+    assert!(
+        waited >= Duration::from_millis(140),
+        "delivery must hold until the chat goes quiet: waited {waited:?}"
+    );
+    assert!(
+        waited < Duration::from_secs(5),
+        "the hold is bounded by quiet_delay, not the cap: waited {waited:?}"
+    );
+}
+
+struct Passthrough;
+#[async_trait]
+impl Notifier for Passthrough {
+    async fn notify(&self, _m: &str) -> Result<(), NotifyError> {
+        Ok(())
+    }
+}
+
 struct NoTools;
 
 #[async_trait]
@@ -66,73 +145,4 @@ impl liberado_executor::ToolRuntime for NoTools {
     async fn invoke(&self, _: &liberado_provider::ToolInvocation) -> Result<String, String> {
         Err("no tools".into())
     }
-}
-
-/// Plain notifications and proposals pass straight through to the inner notifier,
-/// untouched by the quiet-wait machinery.
-#[tokio::test]
-async fn plain_notifications_bypass_the_quiet_wait() {
-    static SENT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-    struct PassthroughNotifier;
-    #[async_trait]
-    impl Notifier for PassthroughNotifier {
-        async fn notify(&self, _m: &str) -> Result<(), NotifyError> {
-            SENT.fetch_add(1, Ordering::SeqCst);
-            Ok(())
-        }
-    }
-    let dir = tempfile::tempdir().unwrap();
-    let store = Arc::new(SessionStore::open(dir.path()).await);
-    let provider = Arc::new(liberado_provider::MockProvider::new("m"));
-    let executor =
-        liberado_executor::Executor::new(provider.clone(), Budget::default());
-    let chat = Arc::new(ChatSessions::new(store, executor, Arc::new(NoTools)));
-    let notifier = ChatDeliveringNotifier::new(
-        Arc::new(PassthroughNotifier),
-        chat,
-        StickySession::ephemeral(),
-        Arc::new(Mutex::new(Some(std::time::Instant::now()))), // ACTIVE chat
-        Duration::from_secs(3600),
-        Duration::from_secs(7200),
-    );
-    Notifier::notify(&notifier, "plain").await.unwrap();
-    Notifier::notify_proposal(&notifier, "p1", "proposal").await.unwrap();
-    assert_eq!(SENT.load(Ordering::SeqCst), 2, "both pass through immediately");
-}
-
-/// An active chat holds the brief until quiet: wait_for_quiet must actually wait.
-#[tokio::test]
-async fn an_active_chat_holds_the_brief_until_quiet() {
-    struct Silent;
-    #[async_trait]
-    impl Notifier for Silent {
-        async fn notify(&self, _m: &str) -> Result<(), NotifyError> {
-            Ok(())
-        }
-    }
-    let dir = tempfile::tempdir().unwrap();
-    let store = Arc::new(SessionStore::open(dir.path()).await);
-    let provider = Arc::new(liberado_provider::MockProvider::new("m"));
-    let executor =
-        liberado_executor::Executor::new(provider.clone(), Budget::default());
-    let chat = Arc::new(ChatSessions::new(store, executor, Arc::new(NoTools)));
-    let notifier = ChatDeliveringNotifier::new(
-        Arc::new(Silent),
-        chat,
-        StickySession::ephemeral(),
-        Arc::new(Mutex::new(Some(std::time::Instant::now()))),
-        Duration::from_millis(150),
-        Duration::from_secs(3600),
-    );
-    let started = std::time::Instant::now();
-    Notifier::deliver_cron(&notifier, "held brief").await.unwrap();
-    let waited = started.elapsed();
-    assert!(
-        waited >= Duration::from_millis(140),
-        "delivery must hold until the chat goes quiet: waited {waited:?}"
-    );
-    assert!(
-        waited < Duration::from_secs(5),
-        "the hold is bounded by quiet_delay, not the cap: waited {waited:?}"
-    );
 }

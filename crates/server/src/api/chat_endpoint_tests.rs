@@ -103,7 +103,6 @@ async fn streaming_without_chat_fails_as_an_sse_event_on_both_verbs() {
             "text/event-stream",
             "a failed start is still an SSE stream"
         );
-        let _ = state.clone();
         let body = body_string(response).await;
         assert!(body.contains("chat is disabled"), "{body}");
         assert!(
