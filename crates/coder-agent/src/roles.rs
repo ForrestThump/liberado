@@ -246,4 +246,129 @@ mod tests {
         .expect("inline");
         assert_eq!(resolved, "INLINE");
     }
+
+    /// An existing but empty prompt_path file is "unconfigured", not "the prompt is blank":
+    /// the baked copy must win.
+    #[tokio::test]
+    async fn an_empty_prompt_file_falls_back_to_the_baked_prompt() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("empty.md");
+        std::fs::write(&path, "   \n").unwrap();
+        let resolved = role_instructions(&role(None, Some(&path.to_string_lossy())), "coder")
+            .await
+            .expect("an empty file is not an error");
+        assert_eq!(
+            resolved,
+            liberado_coder_core::prompts::CODER,
+            "blank override falls back to the built-in prompt"
+        );
+    }
+
+    fn request(
+        attempt: u32,
+        repair: Option<liberado_coder_core::CoderRoleConfig>,
+        criteria: &[&str],
+        feedback: Vec<String>,
+        directive: Option<&str>,
+    ) -> CoderRunRequest {
+        let mut config: liberado_coder_core::CoderRunConfig =
+            serde_json::from_value(serde_json::json!({
+                "backend": "liberado-loop",
+                "planner": {"model": "m"},
+                "coder": {"model": "m", "prompt": "CODER-PROMPT-MARKER"},
+                "critic": {"model": "m"}
+            }))
+            .expect("config fixture");
+        config.repair = repair;
+        let mut task = liberado_coder_core::CoderTask::new("t", "do the thing");
+        task.success_criteria = criteria.iter().map(|s| s.to_string()).collect();
+        CoderRunRequest {
+            task,
+            workspace: liberado_coder_core::WorkspaceRef::new("/w", "HEAD"),
+            config,
+            attempt,
+            prior_feedback: feedback,
+            strategist_directive: directive.map(str::to_string),
+        }
+    }
+
+    const REPAIR_PROMPT: &str = "REPAIR-PROMPT-MARKER";
+
+    /// Repair attempts read the repair role's config, first attempts the coder's.
+    #[test]
+    fn worker_role_config_switches_on_attempt_and_repair_presence() {
+        let repair = role(Some(REPAIR_PROMPT), None);
+        let with = request(1, Some(repair), &[], vec![], None);
+        assert_eq!(
+            worker_role_config(&with).prompt.as_deref(),
+            Some(REPAIR_PROMPT),
+            "a retry with a repair role uses it"
+        );
+        // Attempt 0 never uses repair, even when configured.
+        let fresh = request(0, Some(role(Some(REPAIR_PROMPT), None)), &[], vec![], None);
+        assert_ne!(
+            worker_role_config(&fresh).prompt.as_deref(),
+            Some(REPAIR_PROMPT),
+            "attempt 0 is the coder role even with repair configured"
+        );
+        // A retry without a configured repair stays on the coder role.
+        let bare = request(1, None, &[], vec![], None);
+        assert!(worker_role_config(&bare).prompt.is_some());
+    }
+
+    /// The goal text carries description, criteria, and routing of prior feedback by attempt:
+    /// retries get signature-routed focus, first attempts a plain list.
+    #[test]
+    fn coder_goal_renders_criteria_and_routes_feedback_by_attempt() {
+        // Success criteria render as a list; without them there is no empty section.
+        let with = request(0, None, &["tests pass"], vec![], None);
+        let goal = coder_goal(&with);
+        assert!(goal.contains("Success criteria:"), "{goal}");
+        assert!(goal.contains("- tests pass"), "{goal}");
+        let without = request(0, None, &[], vec![], None);
+        assert!(
+            !coder_goal(&without).contains("Success criteria:"),
+            "no criteria, no section:\n{}",
+            coder_goal(&without)
+        );
+
+        // Retry: feedback becomes a repair-focus block.
+        let retry = request(
+            1,
+            None,
+            &[],
+            vec!["FAILURE_CLASS: command_failed\nDETAIL".into()],
+            None,
+        );
+        let goal = coder_goal(&retry);
+        assert!(
+            goal.contains("## Repair focus"),
+            "retries route through failure-signature focus:\n{goal}"
+        );
+        assert!(!goal.contains("Prior feedback (from earlier"), "{goal}");
+
+        // First attempt: feedback renders as a plain list.
+        let first = request(0, None, &[], vec!["earlier note".into()], None);
+        let goal = coder_goal(&first);
+        assert!(goal.contains("Prior feedback (from earlier"), "{goal}");
+        assert!(goal.contains("- earlier note"), "{goal}");
+        assert!(!goal.contains("## Repair focus"), "{goal}");
+
+        // No feedback on a first attempt: neither section appears.
+        let clean = coder_goal(&request(0, None, &[], vec![], None));
+        assert!(
+            !clean.contains("Prior feedback") && !clean.contains("Repair focus"),
+            "{clean}"
+        );
+    }
+
+    /// Truncation keeps the head, marks the cut, and leaves short text untouched.
+    #[test]
+    fn truncate_chars_keeps_head_marks_cut_passes_short_through() {
+        assert_eq!(truncate_chars("short", 10), "short");
+        let long = "abcdefgh".to_string();
+        let cut = truncate_chars(&long, 5);
+        assert!(cut.starts_with("abcde"), "{cut}");
+        assert!(cut.ends_with("…[truncated]"), "{cut}");
+    }
 }

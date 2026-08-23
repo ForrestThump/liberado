@@ -149,6 +149,7 @@ pub async fn run_remediation(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use liberado_coder_core::CoderRunResult;
 
     fn finding(kind: &str, remedy: Remedy) -> SessionFinding {
         SessionFinding {
@@ -252,6 +253,66 @@ mod tests {
         let branch = remediation_branch("lib-18ca-4321");
         assert!(branch.starts_with("agent/remediation-"), "{branch}");
         assert!(branch.contains("lib-18ca-4321"), "{branch}");
+    }
+
+    struct RecordingBackend {
+        seen: std::sync::Mutex<Vec<CoderRunRequest>>,
+    }
+
+    #[async_trait::async_trait]
+    impl CoderBackend for RecordingBackend {
+        fn name(&self) -> &str {
+            "recording"
+        }
+        async fn run(&self, request: CoderRunRequest) -> Result<CoderRunResult, CoderError> {
+            self.seen.lock().unwrap().push(request);
+            Ok(CoderRunResult {
+                backend: "recording".into(),
+                outcome: liberado_common::Outcome::Succeeded,
+                summary: "concern addressed".into(),
+                files_changed: vec![],
+                file_changes: Vec::new(),
+                validation_notes: None,
+                critic_verdict: None,
+                gate_votes: Vec::new(),
+                trace_path: None,
+                diff_findings: Vec::new(),
+                session_findings: Vec::new(),
+                remediation: None,
+                diagnostics: serde_json::Value::Null,
+            })
+        }
+    }
+
+    /// End to end: actionable findings produce exactly one run whose request carries the
+    /// derived task, and the record reports what was run and what it targeted.
+    #[tokio::test]
+    async fn a_run_happens_and_its_record_carries_the_outcome() {
+        let backend = RecordingBackend {
+            seen: std::sync::Mutex::new(Vec::new()),
+        };
+        let base = base_request();
+        let record = run_remediation(
+            &backend,
+            &base,
+            &[finding("abandoned_finding", Remedy::Repair)],
+            "agent/remediation-t".to_string(),
+        )
+        .await
+        .expect("the backend succeeds")
+        .expect("an actionable finding must produce a run");
+
+        let seen = backend.seen.lock().unwrap();
+        assert_eq!(seen.len(), 1, "one finding, one combined run");
+        assert!(
+            seen[0].task.description.contains("abandoned_finding"),
+            "the run must carry the findings: {}",
+            seen[0].task.description
+        );
+        assert_eq!(record.branch, "agent/remediation-t");
+        assert_eq!(record.outcome, liberado_common::Outcome::Succeeded);
+        assert_eq!(record.summary, "concern addressed");
+        assert_eq!(record.addressed, vec!["abandoned_finding".to_string()]);
     }
 
     fn base_request() -> CoderRunRequest {

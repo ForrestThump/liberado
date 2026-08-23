@@ -888,6 +888,202 @@ mod tests {
         assert!(out.chars().all(|c| c == 'a'));
     }
 
+    fn child_outcome(branch: &str, tip: Option<&str>, outcome: Outcome) -> ChildOutcome {
+        ChildOutcome {
+            label: "l".into(),
+            branch: branch.into(),
+            tip_sha: tip.map(str::to_string),
+            outcome,
+            summary: String::new(),
+            files_changed: vec![],
+            session_id: None,
+            error: None,
+        }
+    }
+
+    /// A child with no branch (or no tip) is recorded as a failed merge step with the
+    /// pack's own explanation — never silently merged or dropped.
+    #[tokio::test]
+    async fn finish_fanout_marks_a_branchless_child_as_failed() {
+        let merger = MockProvider::new("merge");
+        let report = finish_fanout(
+            &merger,
+            Path::new("/tmp/nonexistent-fanout-parent"),
+            vec![child_outcome("", Some("deadbeef"), Outcome::Succeeded)],
+        )
+        .await
+        .unwrap();
+        let step = &report.merges[0];
+        assert!(!step.clean);
+        assert_eq!(
+            step.error.as_deref(),
+            Some("child produced no branch tip"),
+            "the pack's own reason, not an incidental git message: {:?}",
+            step.error
+        );
+    }
+
+    /// Merge failures fail the fan-out even when every child run succeeded; child failures do
+    /// too. Either alone must turn the overall outcome red.
+    #[tokio::test]
+    async fn finish_fanout_fails_overall_on_merge_failure_alone() {
+        // No branch + no tip → the failed-merge path, without touching git.
+        let merger = MockProvider::new("merge");
+        let report = finish_fanout(
+            &merger,
+            Path::new("/tmp/nonexistent-fanout-parent"),
+            vec![child_outcome("", None, Outcome::Succeeded)],
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            report.overall,
+            Outcome::Failed,
+            "a failed merge cannot ship as success: {:?}",
+            report.merges
+        );
+    }
+
+    /// Children get a tighter attempt budget than the parent default.
+    #[test]
+    fn child_requests_carry_a_reduced_attempt_budget() {
+        let task = CodingSubtask {
+            label: "api".into(),
+            description: "do api".into(),
+            success_criteria: vec![],
+        };
+        let req = child_request(Path::new("/wt"), &task, "mock");
+        assert_eq!(
+            req.config.progress.max_attempts,
+            2,
+            "a child is capped below the parent's {}",
+            liberado_coder_core::ProgressPolicy::default().max_attempts
+        );
+    }
+
+    /// The LLM resolution loop really stages and commits: after it returns Ok the working
+    /// tree is clean, the file holds the model's answer, and a merge commit exists.
+    #[tokio::test]
+    async fn resolve_conflicts_with_llm_stages_and_commits_the_resolution() {
+        let root = tempfile::tempdir().unwrap();
+        init_repo(root.path());
+        let git = |args: &[&str]| {
+            assert!(
+                std::process::Command::new("git")
+                    .args(args)
+                    .current_dir(root.path())
+                    .status()
+                    .unwrap()
+                    .success(),
+                "git {args:?} failed"
+            );
+        };
+        // Side branch changes README one way; the base branch changes it another way.
+        let base_branch = String::from_utf8(
+            std::process::Command::new("git")
+                .args(["rev-parse", "--abbrev-ref", "HEAD"])
+                .current_dir(root.path())
+                .output()
+                .unwrap()
+                .stdout,
+        )
+        .unwrap()
+        .trim()
+        .to_string();
+        git(&["checkout", "-q", "-b", "fanout/x"]);
+        std::fs::write(root.path().join("README.md"), "b-side\n").unwrap();
+        git(&["commit", "-aqm", "b", "--quiet"]);
+        git(&["checkout", "-q", base_branch.as_str()]);
+        std::fs::write(root.path().join("README.md"), "a-side\n").unwrap();
+        git(&["commit", "-aqm", "a", "--quiet"]);
+        // A conflicted merge exits 1 on purpose; anything else is a setup bug.
+        let merged = std::process::Command::new("git")
+            .args(["merge", "--no-commit", "--no-ff", "fanout/x"])
+            .current_dir(root.path())
+            .status()
+            .unwrap();
+        assert!(
+            merged.success() || merged.code() == Some(1),
+            "merge exited unexpectedly: {merged}"
+        );
+        let conflicted = std::fs::read_to_string(root.path().join("README.md")).unwrap();
+        assert!(
+            conflicted.contains("<<<<<<<"),
+            "precondition: a real conflict exists\n{conflicted}"
+        );
+
+        let merger =
+            MockProvider::with_script("merge", [CompletionResponse::text("resolved-by-model\n")]);
+        let commit = resolve_conflicts_with_llm(
+            &merger,
+            root.path(),
+            "fanout/x",
+            &["README.md".to_string()],
+        )
+        .await
+        .expect("resolution commits");
+        assert!(!commit.is_empty(), "a merge commit sha comes back");
+
+        let readme = std::fs::read_to_string(root.path().join("README.md")).unwrap();
+        // The resolver trims the model's reply while stripping fences.
+        assert_eq!(
+            readme, "resolved-by-model",
+            "the model's answer lands verbatim"
+        );
+        let status = std::process::Command::new("git")
+            .args(["status", "--porcelain"])
+            .current_dir(root.path())
+            .output()
+            .unwrap()
+            .stdout;
+        let status = String::from_utf8(status).unwrap();
+        assert!(
+            status.trim().is_empty(),
+            "staged and committed, nothing left dangling: {status:?}"
+        );
+    }
+
+    /// The resolver refuses an empty model answer instead of staging emptiness.
+    #[tokio::test]
+    async fn llm_resolve_file_rejects_empty_content() {
+        let merger = MockProvider::with_script("merge", [CompletionResponse::text("")]);
+        let sides = liberado_coder_sandbox::ConflictSides {
+            path: "README.md".into(),
+            ours: "a\n".into(),
+            theirs: "b\n".into(),
+            combined: "<<<<<<<\na\n=======\nb\n>>>>>>>\n".into(),
+        };
+        let err = llm_resolve_file(&merger, "fanout/x", &sides)
+            .await
+            .expect_err("empty content must be an error, not a staged wipe");
+        assert!(err.contains("empty content"), "{err}");
+    }
+
+    #[test]
+    fn llm_resolve_file_strips_fenced_answers_exactly() {
+        let cases = [
+            ("```rust\nfn x() {}\n```", "fn x() {}"),
+            ("```\nplain answer\n```", "plain answer"),
+            ("bare text stays", "bare text stays"),
+        ];
+        for (reply, expected) in cases {
+            // Synchronous body via block_on: the function is async but does no real I/O beyond
+            // the provider call.
+            let merger = MockProvider::with_script("merge", [CompletionResponse::text(reply)]);
+            let sides = liberado_coder_sandbox::ConflictSides {
+                path: "f.rs".into(),
+                ours: "a".into(),
+                theirs: "b".into(),
+                combined: "c".into(),
+            };
+            let resolved = tokio::runtime::Runtime::new()
+                .unwrap()
+                .block_on(llm_resolve_file(&merger, "br", &sides))
+                .expect("resolution");
+            assert_eq!(resolved, expected, "reply was {reply:?}");
+        }
+    }
+
     #[tokio::test]
     async fn fanout_two_children_clean_merge() {
         let root = tempfile::tempdir().unwrap();

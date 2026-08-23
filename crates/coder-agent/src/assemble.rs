@@ -1306,4 +1306,117 @@ mod tests {
         assert_eq!(p.source_of("missing"), None);
         assert_eq!(p.entries().count(), 1);
     }
+
+    /// Every surface field a caller passes must survive into the surface. A dropped field
+    /// silently falls back to `Default` — the run then reads the wrong workspace, policy, or
+    /// trace location with nothing visibly wrong.
+    #[test]
+    fn pack_surface_carries_every_argument() {
+        let ws = PathBuf::from("/tmp/pack-ws");
+        let hashline = HashlineConfig {
+            enabled: false,
+            hash_length: 3,
+        };
+        let command_policy = CommandPolicy {
+            timeout_secs: 11,
+            ..Default::default()
+        };
+        let surface = entry::pack_surface(entry::PackSurfaceArgs {
+            task: CoderTask::new("t1", "desc"),
+            workspace_path: ws.clone(),
+            sandbox: SandboxSpec::HostLocal,
+            coder_role: CoderRoleConfig {
+                model: "m".into(),
+                ..CoderRoleConfig::default()
+            },
+            mode: CodingMode::Normal,
+            command_policy: command_policy.clone(),
+            path_policy: PathPolicy {
+                read_max_bytes: 222,
+                ..Default::default()
+            },
+            hashline: hashline.clone(),
+        });
+        assert_eq!(surface.workspace_path, ws);
+        assert_eq!(surface.workspace.root, ws.to_string_lossy());
+        assert_eq!(surface.sandbox, SandboxSpec::HostLocal);
+        assert_eq!(surface.command_policy, Some(command_policy));
+        assert_eq!(surface.hashline, Some(hashline));
+        assert_eq!(surface.empty_verifiers, EmptyVerifiersPolicy::LeaveEmpty);
+        assert_eq!(surface.trace_dir, TraceDirPolicy::AsConfigured);
+        assert!(surface.disable_planner);
+        assert_eq!(surface.critic, CriticPolicy::Disabled);
+        assert_eq!(surface.repair, RepairPolicy::MirrorCoder);
+    }
+
+    #[test]
+    fn acp_surface_carries_every_argument() {
+        let surface = entry::acp_surface(
+            CoderTask::new("t2", "desc"),
+            PathBuf::from("/tmp/acp-ws"),
+            Some("model-x".into()),
+            Some(9),
+            4,
+            vec!["earlier".into()],
+        );
+        assert_eq!(surface.workspace_path, PathBuf::from("/tmp/acp-ws"));
+        assert_eq!(surface.workspace.root, "/tmp/acp-ws");
+        assert_eq!(surface.sandbox, SandboxSpec::HostLocal);
+        assert_eq!(surface.model_override.as_deref(), Some("model-x"));
+        assert_eq!(surface.max_turns, Some(9));
+        assert_eq!(surface.attempt, 4);
+        assert_eq!(surface.prior_feedback, vec!["earlier".to_string()]);
+        assert_eq!(surface.repair, RepairPolicy::FromTuning);
+        assert_eq!(
+            surface.empty_verifiers,
+            EmptyVerifiersPolicy::DefaultForWorkspace
+        );
+        assert_eq!(surface.trace_dir, TraceDirPolicy::DataDirFallback);
+        assert!(surface.default_empty_path_policy);
+        assert!(surface.disable_planner);
+    }
+
+    #[test]
+    fn runner_surface_carries_every_argument() {
+        let surface = entry::runner_surface(
+            CoderTask::new("t3", "desc"),
+            PathBuf::from("/tmp/runner-ws"),
+            Some("runner-model".into()),
+            Some(7),
+        );
+        assert_eq!(surface.workspace_path, PathBuf::from("/tmp/runner-ws"));
+        assert_eq!(surface.workspace.root, "/tmp/runner-ws");
+        assert_eq!(surface.sandbox, SandboxSpec::HostLocal);
+        assert_eq!(surface.model_override.as_deref(), Some("runner-model"));
+        assert_eq!(surface.max_turns, Some(7));
+        assert_eq!(surface.repair, RepairPolicy::None);
+        assert_eq!(
+            surface.empty_verifiers,
+            EmptyVerifiersPolicy::DefaultForWorkspace
+        );
+        assert_eq!(surface.trace_dir, TraceDirPolicy::RelativeToWorkspace);
+        assert!(surface.disable_planner);
+    }
+
+    /// A surface-supplied hashline wins even when it differs from tuning — that is the whole
+    /// point of the override (explore mode forces hashing off).
+    #[test]
+    fn a_surface_hashline_overrides_tuning() {
+        let tuning = twisted_tuning(); // hashline enabled / length 8
+        let mut assembly = AssemblyState {
+            config: tuning.run_config(),
+            provenance: AssemblyProvenance::default(),
+        };
+        let forced_off = HashlineConfig {
+            enabled: false,
+            hash_length: 1,
+        };
+        apply_hashline(Some(forced_off.clone()), &mut assembly);
+        assert_eq!(assembly.config.hashline, forced_off);
+        apply_hashline(None, &mut assembly);
+        assert_eq!(
+            assembly.config.hashline, forced_off,
+            "None means leave what is there"
+        );
+    }
 }

@@ -529,6 +529,84 @@ mod tests {
         assert!(err.contains("outside the change surface"), "{err}");
     }
 
+    /// Excerpts that ARE in the change surface render into the user message; with no excerpts
+    /// the section is absent entirely.
+    #[test]
+    fn file_excerpts_render_only_when_present() {
+        let diff = "diff --git a/a.rs b/a.rs\n--- a/a.rs\n+++ b/a.rs\n@@\n+x\n";
+        let with = ChangeSurface {
+            diff: diff.into(),
+            file_excerpts: vec![("a.rs".into(), "fn kept() {}".into())],
+        };
+        let req = build_cold_review_request(&with, &ForbiddenAuthorContext::default(), None, ".")
+            .expect("excerpt path is in the surface");
+        assert!(
+            req.user_message.contains("## File excerpts"),
+            "an excerpt must reach the reviewer:\n{}",
+            req.user_message
+        );
+        assert!(
+            req.user_message.contains("### a.rs"),
+            "{}",
+            req.user_message
+        );
+        assert!(
+            req.user_message.contains("fn kept()"),
+            "{}",
+            req.user_message
+        );
+
+        let without = build_cold_review_request(
+            &surface(diff),
+            &ForbiddenAuthorContext::default(),
+            None,
+            ".",
+        )
+        .expect("clean");
+        assert!(
+            !without.user_message.contains("## File excerpts"),
+            "no excerpts, no section:\n{}",
+            without.user_message
+        );
+    }
+
+    /// Blank author blobs are "not present", not "present and leaked": the isolation guard
+    /// must not fire on them.
+    #[test]
+    fn an_empty_forbidden_blob_is_not_a_leak() {
+        let forbidden = ForbiddenAuthorContext {
+            goal_narrative: Some(String::new()),
+            tool_trace: Some("   ".into()),
+            prior_agent_chat: None,
+        };
+        let req =
+            build_cold_review_request(&surface("diff --git a/x b/x\n+ok\n"), &forbidden, None, ".")
+                .expect("blank blobs carry nothing to isolate");
+        assert!(req.user_message.contains("diff --git"));
+    }
+
+    /// The post-fix decision separates a green re-verify from a red one; findings left after a
+    /// passing re-verify are still escalation, not silence.
+    #[test]
+    fn decide_after_fix_round_distinguishes_green_from_red_reverify() {
+        match decide_after_fix_round(1, true, 0) {
+            StageDecision::NoFixNeeded => {}
+            other => panic!("green re-verify with nothing outstanding is done: {other:?}"),
+        }
+        // Retained findings survive the re-verify: never NoFixNeeded.
+        match decide_after_fix_round(1, true, 2) {
+            StageDecision::EscalateToHuman { reason } => {
+                assert!(reason.contains("remain"), "{reason}");
+            }
+            other => panic!("findings left behind must escalate: {other:?}"),
+        }
+        // A red re-verify escalates even when the filter retained nothing new.
+        match decide_after_fix_round(1, false, 0) {
+            StageDecision::EscalateToHuman { .. } => {}
+            other => panic!("failed re-verify still escalates: {other:?}"),
+        }
+    }
+
     #[test]
     fn one_fix_round_then_escalate() {
         let retained = vec![finding(Severity::High, Some("a.rs"), Some("L1"))];

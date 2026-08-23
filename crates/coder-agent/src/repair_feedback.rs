@@ -762,4 +762,215 @@ mod tests {
         );
         assert_eq!(classify_message("no tags here"), FailureClass::Other);
     }
+
+    /// Hints are per-class guidance, not one string for everything: the no-changes hint names
+    /// workspace mutation, the infrastructure hint forbids self-repair.
+    #[test]
+    fn repair_hints_differ_per_class() {
+        assert!(
+            FailureClass::NoChanges
+                .repair_hint()
+                .contains("workspace mutation"),
+            "{}",
+            FailureClass::NoChanges.repair_hint()
+        );
+        assert!(
+            FailureClass::Infrastructure
+                .repair_hint()
+                .contains("Do not try to repair"),
+            "{}",
+            FailureClass::Infrastructure.repair_hint()
+        );
+        assert_ne!(
+            FailureClass::CommandTimeout.repair_hint(),
+            FailureClass::EmptyDiff.repair_hint()
+        );
+    }
+
+    /// With combined findings absent, the fallback lists only *failing* results — a green
+    /// verifier is not a finding.
+    #[test]
+    fn passing_results_are_not_listed_as_findings_in_the_fallback() {
+        let pipeline = PipelineResult {
+            overall: VerdictStatus::Fail,
+            results: vec![
+                NamedVerdict {
+                    id: "ok-check".into(),
+                    kind: "command".into(),
+                    verdict: Verdict::pass("cargo exited 0"),
+                },
+                NamedVerdict {
+                    id: "bad-check".into(),
+                    kind: "command".into(),
+                    verdict: Verdict::fail("cargo exited 101", vec![], None),
+                },
+            ],
+            combined_findings: vec![],
+            combined_signature: Some("sig".into()),
+        };
+        let fb = format_pipeline_repair(&pipeline);
+        assert!(fb.contains("bad-check"), "{fb}");
+        assert!(
+            !fb.contains("exited 0"),
+            "a passing verifier must not read as a finding: {fb}"
+        );
+    }
+
+    /// A package-failure marker on the very first line must survive clipping with context;
+    /// the anchor window is [anchor-2, anchor+3), never an empty range.
+    #[test]
+    fn a_marker_on_the_first_line_is_kept_with_context() {
+        let mut log = vec!["error: test failed, to rerun pass `-p mycrate --lib`".to_string()];
+        log.extend((0..20).map(|n| format!("ordinary line {n}")));
+        let clipped = clip_log_excerpt(&log.join("\n"), 5);
+        assert!(clipped.contains("-p mycrate"), "{clipped}");
+    }
+
+    /// `could not compile` is a package failure without being a generic failure marker; it
+    /// must still win its excerpt against a long tail of passing output.
+    #[test]
+    fn could_not_compile_is_a_package_failure_marker_on_its_own() {
+        let mut log = vec!["could not compile `mycrate` (bin \"mycrate\")".to_string()];
+        log.extend((0..20).map(|n| format!("ordinary line {n}")));
+        let clipped = clip_log_excerpt(&log.join("\n"), 5);
+        assert!(clipped.contains("could not compile"), "{clipped}");
+    }
+
+    /// Each generic failure-marker kind selects its own line when it is the only marker in
+    /// the log; losing any one kind silently degrades repair feedback for that failure.
+    #[test]
+    fn each_generic_failure_marker_selects_its_line() {
+        for (marker_line, needle) in [
+            ("test wire::alpha ... FAILED", "wire::alpha"),
+            ("error[E0425]: cannot find value `x`", "E0425"),
+            ("error: linking with cc failed", "linking with cc"),
+            ("panicked at src/lib.rs:7:5:", "panicked at"),
+            ("test result: failed. 2 passed; 1 failed", "result: failed"),
+        ] {
+            let mut log = vec![marker_line.to_string()];
+            log.extend((0..15).map(|n| format!("filler {n}")));
+            let clipped = clip_log_excerpt(&log.join("\n"), 4);
+            assert!(
+                clipped.contains(needle),
+                "marker lost from the excerpt: {marker_line}\n{clipped}"
+            );
+        }
+    }
+
+    /// Result-kind fallback mapping: with no combined findings, each verifier kind routes to
+    /// its class.
+    #[test]
+    fn classify_pipeline_maps_result_kinds_without_findings() {
+        fn fail_of_kind(kind: &str) -> PipelineResult {
+            PipelineResult {
+                overall: VerdictStatus::Fail,
+                results: vec![NamedVerdict {
+                    id: "v".into(),
+                    kind: kind.into(),
+                    verdict: Verdict::fail("nope", vec![], None),
+                }],
+                combined_findings: vec![],
+                combined_signature: Some("sig".into()),
+            }
+        }
+        assert_eq!(
+            classify_pipeline(&fail_of_kind("paths_exist")),
+            FailureClass::MissingPath
+        );
+        assert_eq!(
+            classify_pipeline(&fail_of_kind("paths_absent")),
+            FailureClass::MissingPath
+        );
+        assert_eq!(
+            classify_pipeline(&fail_of_kind("content_contains")),
+            FailureClass::ContentMismatch
+        );
+        assert_eq!(
+            classify_pipeline(&fail_of_kind("command")),
+            FailureClass::CommandFailed
+        );
+    }
+
+    #[test]
+    fn classify_error_routes_no_changes_validation_and_noncritic_backend() {
+        assert_eq!(
+            classify_error(&CoderError::NoChanges),
+            FailureClass::NoChanges
+        );
+        assert_eq!(
+            classify_error(&CoderError::Validation("missing path: src/main.rs".into())),
+            FailureClass::MissingPath,
+            "a validation message is classified by its text"
+        );
+        assert_eq!(
+            classify_error(&CoderError::Backend("cargo exited 101".into())),
+            FailureClass::Other,
+            "a backend error that never mentions the critic is not a critic revision"
+        );
+    }
+
+    /// An already-marked message round-trips byte-for-byte — re-formatting it would grow the
+    /// feedback block on every attempt.
+    #[test]
+    fn marked_validation_messages_pass_through_untouched() {
+        let marked =
+            format_pipeline_repair(&cargo_failure_with_log("stderr:\nNo space left on device"));
+        let out = format_error_feedback(&CoderError::Validation(marked.clone()));
+        assert_eq!(out, marked, "marked messages must pass through unchanged");
+    }
+
+    #[test]
+    fn unmarked_validation_messages_get_enriched() {
+        let out =
+            format_error_feedback(&CoderError::Validation("missing path: src/main.rs".into()));
+        assert!(out.contains("FAILURE_CLASS: missing_path"), "{out}");
+        assert!(out.contains("FAILURE_SIGNATURE:"), "{out}");
+        assert!(out.contains("REPAIR_HINT:"), "{out}");
+    }
+
+    /// Earlier attempts list every entry except the latest, and only their first lines.
+    #[test]
+    fn repair_focus_lists_earlier_attempts_but_not_the_latest_twice() {
+        let prior = vec![
+            format_error_feedback(&CoderError::Validation("command timed out".into())),
+            format_error_feedback(&CoderError::NoChanges),
+        ];
+        let block = repair_focus_block(&prior).unwrap();
+        assert!(
+            block.contains("- attempt 1: FAILURE_CLASS"),
+            "earlier entries render by their first line:\n{block}"
+        );
+        assert!(
+            !block.contains("- attempt 2:"),
+            "the latest failure belongs to the detail section only, never to the earlier list:\n{block}"
+        );
+        assert_eq!(
+            block.matches("FAILURE_SIGNATURE: no_changes").count(),
+            1,
+            "the latest failure appears once, as the detail:\n{block}"
+        );
+    }
+
+    /// Signatures hash the message: two different failures cannot share one, or churn
+    /// detection mistakes a new failure for a repeat.
+    #[test]
+    fn signatures_differ_between_different_messages() {
+        let a = format_error_feedback(&CoderError::Backend("first failure".into()));
+        let b = format_error_feedback(&CoderError::Backend("second failure".into()));
+        let sig = |s: &str| {
+            s.lines()
+                .find(|l| l.starts_with("FAILURE_SIGNATURE:"))
+                .unwrap_or_else(|| panic!("no signature in {s}"))
+                .to_string()
+        };
+        let (sa, sb) = (sig(&a), sig(&b));
+        assert_ne!(sa, sb);
+        // A sha256 hex digest, not a placeholder.
+        let hex = sa
+            .split_once(": ")
+            .map(|(_, h)| h)
+            .unwrap_or_else(|| panic!("malformed signature line {sa}"));
+        assert_eq!(hex.len(), 64, "{sa}");
+        assert!(hex.chars().all(|c| c.is_ascii_hexdigit()), "{sa}");
+    }
 }

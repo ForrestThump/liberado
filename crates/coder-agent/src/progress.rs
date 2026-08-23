@@ -504,4 +504,252 @@ mod tests {
             ProgressAction::Fatal(ProgressFatal::SameToolChurn { .. })
         ));
     }
+
+    /// Every fatal names its guard and speaks to the model in its own words — the strings are
+    /// the whole interface between this module and a stuck run.
+    #[test]
+    fn fatal_guards_name_themselves_and_address_the_model() {
+        let cases = [
+            (
+                ProgressFatal::ReadOnlyStall { consecutive: 4 },
+                "read_only_stall",
+                "consecutive inspect/tool calls",
+            ),
+            (
+                ProgressFatal::ValidationChurn {
+                    signature: "sig".into(),
+                    repeats: 3,
+                },
+                "validation_churn",
+                "same signature",
+            ),
+            (
+                ProgressFatal::SameToolChurn {
+                    tool: "search_text".into(),
+                    consecutive: 5,
+                },
+                "same_tool_churn",
+                "in a row",
+            ),
+        ];
+        for (fatal, name, phrase) in cases {
+            assert_eq!(fatal.guard_name(), name);
+            let message = fatal.message();
+            assert!(message.contains(phrase), "{message}");
+            assert!(message.contains("PROGRESS GUARD (fatal)"), "{message}");
+        }
+    }
+
+    /// take_fatal drains the latch exactly once.
+    #[test]
+    fn take_fatal_drains_the_latch() {
+        let mut policy = policy();
+        policy.read_only_turn_limit = 1;
+        policy.same_tool_limit = 100;
+        let mut guard = ProgressGuard::new(policy);
+        // limit 1 → nudge at 1, fatal at 2
+        guard.observe("list_files", true, "{}");
+        guard.observe("read_file", true, "{}");
+        assert!(
+            guard.take_fatal().is_some(),
+            "the latched fatal is handed over"
+        );
+        assert!(guard.fatal().is_none());
+        assert!(guard.take_fatal().is_none(), "drained once, gone");
+    }
+
+    /// A FAILED write does not end a read-only stall — only a successful mutation does.
+    #[test]
+    fn a_failed_write_does_not_clear_a_latched_stall() {
+        let mut guard = ProgressGuard::new(policy());
+        for t in ["list_files", "read_file", "git_status", "search_text"] {
+            guard.observe(t, true, "{}");
+        }
+        let action = guard.observe("write_file", false, "permission denied");
+        assert!(
+            matches!(action, ProgressAction::Continue { nudge: None }),
+            "the remedy attempt still goes through"
+        );
+        assert!(guard.fatal().is_some(), "a failed edit proves nothing");
+        assert!(
+            matches!(
+                guard.observe("read_file", true, "{}"),
+                ProgressAction::Fatal(_)
+            ),
+            "exploration stays blocked after a failed edit"
+        );
+    }
+
+    /// A successful write ends a read-only stall but not churn latches — a write does not
+    /// prove a new approach.
+    #[test]
+    fn a_successful_write_leaves_churn_latches_in_place() {
+        // Drive SameToolChurn with read_file while read-only stays quiet via an early mutation.
+        let mut guard = ProgressGuard::new(policy());
+        guard.observe("write_file", true, "{}"); // saw_successful_mutation = true
+        guard.observe("read_file", true, "{}");
+        guard.observe("read_file", true, "{}"); // nudge
+        let action = guard.observe("read_file", true, "{}"); // 3rd consecutive... need 2x limit=4
+        assert!(matches!(action, ProgressAction::Continue { nudge: None }));
+        let action = guard.observe("read_file", true, "{}"); // 4th → fatal
+        assert!(matches!(
+            action,
+            ProgressAction::Fatal(ProgressFatal::SameToolChurn { .. })
+        ));
+        // The write that would clear a ReadOnlyStall must NOT clear this latch.
+        let action = guard.observe("write_file", true, r#"{"ok":true}"#);
+        assert!(matches!(action, ProgressAction::Continue { nudge: None }));
+        assert!(
+            guard.fatal().is_some(),
+            "churn stays latched across a successful write"
+        );
+    }
+
+    /// validate advances the read-only counter like any other non-mutating call.
+    #[test]
+    fn validate_counts_toward_the_read_only_limit() {
+        let mut policy = policy(); // read_only_turn_limit 2
+        policy.validation_repeat_limit = 100;
+        policy.same_tool_limit = 100;
+        let mut guard = ProgressGuard::new(policy);
+        let fail = r#"{"passed":false,"exit_code":1,"stdout":"","stderr":"boom"}"#;
+        let first = guard.observe("validate", true, fail);
+        assert!(matches!(first, ProgressAction::Continue { nudge: None }));
+        let second = guard.observe("validate", true, fail);
+        assert!(
+            matches!(second, ProgressAction::Continue { nudge: Some(_) }),
+            "two validates without a mutation hit the read-only nudge: {second:?}"
+        );
+    }
+
+    /// Distinct failure signatures never accumulate into churn; only repetition does.
+    #[test]
+    fn changing_approach_resets_validation_churn() {
+        let mut policy = policy();
+        policy.same_tool_limit = 100;
+        policy.read_only_turn_limit = 100;
+        policy.validation_repeat_limit = 2;
+        let mut guard = ProgressGuard::new(policy);
+        for i in 0..3 {
+            let fail = format!(r#"{{"passed":false,"exit_code":{i},"stdout":"","stderr":""}}"#);
+            let action = guard.observe("validate", true, &fail);
+            assert!(
+                matches!(action, ProgressAction::Continue { nudge: None }),
+                "a new failure signature is attempt {i}, not churn: {action:?}"
+            );
+        }
+    }
+
+    /// Same-tool nudging starts at the limit, not before it.
+    #[test]
+    fn the_same_tool_nudge_fires_at_the_limit_not_before() {
+        let mut policy = policy(); // same_tool_limit 2
+        policy.read_only_turn_limit = 100;
+        let mut guard = ProgressGuard::new(policy);
+        guard.observe("write_file", true, "{}"); // silence read-only
+        let first = guard.observe("read_file", true, "{}");
+        assert!(
+            matches!(first, ProgressAction::Continue { nudge: None }),
+            "one call below the limit gets no nudge: {first:?}"
+        );
+    }
+
+    /// Between the nudge and twice-the-limit there is grace; the fatal comes at 2×limit.
+    #[test]
+    fn same_tool_fatal_arrives_at_twice_the_limit_not_sooner() {
+        let mut policy = policy(); // same_tool_limit 2
+        policy.read_only_turn_limit = 100;
+        let mut guard = ProgressGuard::new(policy);
+        guard.observe("write_file", true, "{}");
+        guard.observe("read_file", true, "{}"); // 1
+        guard.observe("read_file", true, "{}"); // 2 → nudge
+        let third = guard.observe("read_file", true, "{}"); // 3 < 4
+        assert!(
+            matches!(third, ProgressAction::Continue { nudge: None }),
+            "grace period between nudge and fatal: {third:?}"
+        );
+    }
+
+    /// The read-only nudge fires at the limit, not on the first call below it.
+    #[test]
+    fn the_read_only_nudge_fires_at_the_limit_not_before() {
+        let mut guard = ProgressGuard::new(policy()); // read_only_turn_limit 2
+        let first = guard.observe("list_files", true, "{}");
+        assert!(
+            matches!(first, ProgressAction::Continue { nudge: None }),
+            "one inspect call below the limit gets no nudge: {first:?}"
+        );
+    }
+
+    /// Unknown tools are neither mutating nor inspecting: they cannot walk the run into a
+    /// read-only stall by themselves.
+    #[test]
+    fn unknown_tools_do_not_count_as_inspection() {
+        let mut policy = policy();
+        policy.read_only_turn_limit = 1;
+        let mut guard = ProgressGuard::new(policy);
+        let action = guard.observe("mystery_custom_tool", true, "{}");
+        assert!(
+            matches!(action, ProgressAction::Continue { nudge: None }),
+            "an unclassified tool must not trip the read-only guard: {action:?}"
+        );
+    }
+
+    /// A passing validation resets churn even at the tightest repeat limit.
+    #[test]
+    fn passing_validations_never_accumulate_churn() {
+        let mut policy = policy();
+        policy.validation_repeat_limit = 1;
+        policy.same_tool_limit = 100;
+        policy.read_only_turn_limit = 100;
+        let mut guard = ProgressGuard::new(policy);
+        for _ in 0..3 {
+            let action = guard.observe("validate", true, r#"{"passed":true,"exit_code":0}"#);
+            assert!(
+                matches!(action, ProgressAction::Continue { nudge: None }),
+                "repeated green validations are not churn: {action:?}"
+            );
+        }
+    }
+
+    /// Plain-text previews carry pass markers too; either spelling counts as green.
+    #[test]
+    fn plain_text_pass_markers_count_as_green() {
+        let mut policy = policy();
+        policy.validation_repeat_limit = 1;
+        policy.same_tool_limit = 100;
+        policy.read_only_turn_limit = 100;
+        for preview in [
+            r#"noise "passed":true noise"#,
+            r#"noise "passed": true noise"#,
+        ] {
+            let mut guard = ProgressGuard::new(policy.clone());
+            guard.observe("validate", true, preview); // streak 1 if misread as failure
+            let second = guard.observe("validate", true, preview);
+            assert!(
+                matches!(second, ProgressAction::Continue { nudge: None }),
+                "`{preview}` must read as passed, not feed churn: {second:?}"
+            );
+        }
+    }
+
+    /// The churn fatal carries the exact signature the model must change: exit code plus
+    /// captured output, not a placeholder string.
+    #[test]
+    fn the_validation_churn_signature_is_built_from_the_preview() {
+        let mut policy = policy();
+        policy.same_tool_limit = 100;
+        policy.read_only_turn_limit = 100;
+        policy.validation_repeat_limit = 1;
+        let mut guard = ProgressGuard::new(policy);
+        let preview = r#"{"exit_code":7,"stdout":"OUT","stderr":"ERR"}"#;
+        guard.observe("validate", true, preview);
+        guard.observe("validate", true, preview); // streak 2 > limit 1
+        match guard.fatal() {
+            Some(ProgressFatal::ValidationChurn { signature, .. }) => {
+                assert_eq!(signature, "exit=7|stdout=OUT|stderr=ERR");
+            }
+            other => panic!("expected a latched ValidationChurn, got {other:?}"),
+        }
+    }
 }

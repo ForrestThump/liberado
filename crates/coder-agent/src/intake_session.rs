@@ -282,4 +282,63 @@ mod tests {
         assert_eq!(req.task.success_criteria, vec!["c1".to_string()]);
         assert_eq!(req.config.verifiers.len(), 1);
     }
+
+    /// What goes on the wire is the real intake prompt plus a trimmed writeup; blank context
+    /// and an empty answer list must not add their sections.
+    #[tokio::test]
+    async fn run_intake_sends_the_real_prompt_and_skips_empty_sections() {
+        let body = r#"{"status":"needs_clarification","questions":[]}"#;
+        let provider = MockProvider::with_script(
+            "mock",
+            [
+                CompletionResponse::text(body),
+                CompletionResponse::text(body),
+            ],
+        );
+        run_intake(&provider, "  build a todo app  ", &[], Some("   "))
+            .await
+            .expect("clarification outcome parses");
+        let first = provider.received_requests();
+        assert_eq!(first.len(), 1);
+        let expected_system = liberado_coder_core::prompts::load(
+            None,
+            liberado_coder_core::prompts::INTAKE_FILE,
+            liberado_coder_core::prompts::INTAKE,
+        );
+        assert_eq!(
+            first[0].messages[0].content, expected_system,
+            "the system message is the intake planner prompt from prompts/coder/intake.md"
+        );
+        let user = &first[0].messages[1].content;
+        assert!(
+            user.contains("build a todo app"),
+            "writeup is trimmed in: {user}"
+        );
+        assert!(
+            !user.contains("Additional context"),
+            "a blank context adds nothing: {user}"
+        );
+        assert!(
+            !user.contains("Human answers to prior questions"),
+            "an empty answer list adds no answers section: {user}"
+        );
+
+        // Second round: real context and one answer both land in the user message.
+        run_intake(
+            &provider,
+            "build a todo app",
+            &[IntakeAnswer {
+                question_id: "stack".into(),
+                answer: "Rust".into(),
+            }],
+            Some("existing notes about the vault"),
+        )
+        .await
+        .unwrap_or_else(|_| panic!("scripted second response"));
+        let second = provider.last_request().unwrap();
+        let user = &second.messages[1].content;
+        assert!(user.contains("Additional context"), "{user}");
+        assert!(user.contains("existing notes about the vault"), "{user}");
+        assert!(user.contains("stack: Rust"), "{user}");
+    }
 }

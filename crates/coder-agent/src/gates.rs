@@ -552,6 +552,44 @@ mod status_change_tests {
 }
 
 #[cfg(test)]
+mod parse_status_path_tests {
+    use super::parse_status_path;
+
+    /// The shortest porcelain line is exactly four bytes: XY + space + a one-char path.
+    /// The length guard must admit it, or every one-letter root file vanishes.
+    #[test]
+    fn minimum_porcelain_line_is_a_one_char_path() {
+        assert_eq!(parse_status_path(" M a").as_deref(), Some("a"));
+        assert_eq!(parse_status_path("?? b").as_deref(), Some("b"));
+    }
+
+    #[test]
+    fn short_lines_are_none() {
+        assert!(parse_status_path("").is_none());
+        assert!(
+            parse_status_path(" M ").is_none(),
+            "three bytes: no path yet"
+        );
+    }
+
+    #[test]
+    fn renames_resolve_to_the_new_path_and_quotes_are_stripped() {
+        assert_eq!(
+            parse_status_path("R  old.rs -> new.rs").as_deref(),
+            Some("new.rs")
+        );
+        assert_eq!(
+            parse_status_path("?? \"weird name.rs\"").as_deref(),
+            Some("weird name.rs")
+        );
+        assert_eq!(
+            parse_status_path(" M src/lib.rs").as_deref(),
+            Some("src/lib.rs")
+        );
+    }
+}
+
+#[cfg(test)]
 mod name_status_line_tests {
     use super::parse_name_status_line;
 

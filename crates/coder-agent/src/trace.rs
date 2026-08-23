@@ -307,6 +307,7 @@ pub fn to_openai_messages(trace: &CoderTrace) -> Value {
 mod tests {
     use super::*;
     use liberado_coder_core::{CoderRunConfig, CoderTask, WorkspaceRef};
+    use liberado_executor::TurnObserver;
 
     fn trace_with(events: Vec<CoderEvent>) -> CoderTrace {
         CoderTrace {
@@ -420,6 +421,108 @@ mod tests {
         assert!(
             !rendered.contains("tools_offered") && !rendered.contains("write_file"),
             "offered-tool state must not leak into the message export: {rendered}"
+        );
+    }
+
+    /// session_id is a filesystem-safe rendering of the task id: alphanumerics, `-` and `_`
+    /// survive; everything else becomes a dash. A stub or empty segment here would collide
+    /// every run's traces into one file.
+    #[test]
+    fn session_id_sanitizes_the_task_id() {
+        let mut t = trace_with(vec![]);
+        t.request.task = CoderTask::new("goal 42/fix_the_thing", "x");
+        t.request.attempt = 3;
+        let sid = session_id(&t.request);
+        assert!(
+            sid.starts_with("goal-42-fix_the_thing-attempt-3-"),
+            "task id must be sanitized, not dropped: {sid}"
+        );
+        assert!(
+            !sid.contains([' ', '/']),
+            "a session id must be filesystem safe: {sid}"
+        );
+    }
+
+    /// The observer is how the model's own words reach the trace at all; dropping the event
+    /// silently empties every future trace.
+    #[test]
+    fn on_turn_records_a_model_turn_finished_event() {
+        let events: EventLog = Arc::new(Mutex::new(Vec::new()));
+        let tracer = TurnTracer::new(events.clone(), "coder");
+        tracer.on_turn(liberado_executor::TurnRecord {
+            turn: 7,
+            tools_offered: vec!["read_file".into()],
+            message_count: 4,
+            content: Some("I will edit main.rs now.".into()),
+            finish_reason: "tool_calls",
+            tool_calls: vec!["edit_file".into()],
+            prompt_tokens: 100,
+            completion_tokens: 9,
+        });
+        let snap = snapshot_events(&events);
+        match snap.as_slice() {
+            [
+                CoderEvent::ModelTurnFinished {
+                    role,
+                    turn,
+                    content,
+                    tool_calls,
+                    ..
+                },
+            ] => {
+                assert_eq!(role, "coder");
+                assert_eq!(*turn, 7);
+                assert_eq!(content.as_deref(), Some("I will edit main.rs now."));
+                assert_eq!(tool_calls, &vec!["edit_file".to_string()]);
+            }
+            other => panic!("expected one ModelTurnFinished, got {other:?}"),
+        }
+    }
+
+    /// Words reach the live bus verbatim; a turn that said nothing emits nothing. This is what
+    /// a watcher reads while the run is still going, so silence must stay meaningful.
+    #[tokio::test]
+    async fn on_turn_mirrors_real_words_to_the_live_bus_but_not_blank_turns() {
+        use liberado_session::SessionEventKind;
+        let (tx, mut rx) = tokio::sync::mpsc::channel(16);
+        let events: EventLog = Arc::new(Mutex::new(Vec::new()));
+        let spoken = TurnTracer::new(events.clone(), "coder");
+        let spoken = Arc::new(spoken);
+        let silent = spoken.clone();
+        crate::live::with_live_events(tx, "s1", async move {
+            spoken.on_turn(liberado_executor::TurnRecord {
+                turn: 1,
+                tools_offered: vec![],
+                message_count: 1,
+                content: Some("Editing main.rs next.".into()),
+                finish_reason: "prose",
+                tool_calls: vec![],
+                prompt_tokens: 5,
+                completion_tokens: 4,
+            });
+            silent.on_turn(liberado_executor::TurnRecord {
+                turn: 2,
+                tools_offered: vec![],
+                message_count: 1,
+                content: Some("   ".into()),
+                finish_reason: "prose",
+                tool_calls: vec![],
+                prompt_tokens: 5,
+                completion_tokens: 0,
+            });
+        })
+        .await;
+
+        let mut texts = Vec::new();
+        while let Ok(event) = rx.try_recv() {
+            if let SessionEventKind::Token { text } = event.kind {
+                texts.push(text);
+            }
+        }
+        assert_eq!(
+            texts,
+            vec!["Editing main.rs next.".to_string()],
+            "exactly the real words are mirrored: {texts:?}"
         );
     }
 }

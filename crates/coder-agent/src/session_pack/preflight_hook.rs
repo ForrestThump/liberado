@@ -388,6 +388,140 @@ mod tests {
         assert!(!ship_preflight_required(&g));
     }
 
+    /// Plan mode is research like explore mode; either flag alone must be enough to skip.
+    #[test]
+    fn plan_mode_and_plan_profile_skip_ship_preflight() {
+        let g = goal_with(json!({
+            "project": "liberado",
+            "plan_mode": true
+        }));
+        assert!(
+            !ship_preflight_required(&g),
+            "plan_mode alone skips the ship bar"
+        );
+        let by_mode = goal_with(json!({
+            "project": "liberado",
+            "mode": "PLAN"
+        }));
+        assert!(
+            !ship_preflight_required(&by_mode),
+            "mode=plan is matched case-insensitively"
+        );
+    }
+
+    /// The baseline cache lives beside the coding worktrees under LIBERADO_DATA_DIR.
+    #[tokio::test]
+    async fn baseline_cache_dir_follows_the_data_dir_env() {
+        let _guard = crate::DATA_DIR_ENV_LOCK.lock().await;
+        // SAFETY: serialized by the guard above; restored before it drops.
+        unsafe {
+            std::env::set_var("LIBERADO_DATA_DIR", "/tmp/liberado-baseline-test");
+        }
+        assert_eq!(
+            baseline_cache_dir(),
+            std::path::PathBuf::from("/tmp/liberado-baseline-test/preflight-baselines")
+        );
+        unsafe {
+            std::env::remove_var("LIBERADO_DATA_DIR");
+        }
+        assert_eq!(
+            baseline_cache_dir(),
+            std::path::PathBuf::from(".liberado/preflight-baselines")
+        );
+    }
+
+    /// merge-base against the default branch names the commit the work started from — the
+    /// thing "already broken" is measured against.
+    #[tokio::test]
+    async fn base_commit_resolves_the_merge_base_with_main() {
+        use liberado_common::process as proc;
+        let dir = tempfile::tempdir().unwrap();
+        let git = |args: &[&str]| -> String {
+            let out = proc::std_command("git")
+                .args(args)
+                .current_dir(dir.path())
+                .output()
+                .expect("git runs");
+            assert!(out.status.success(), "git {args:?} failed");
+            String::from_utf8_lossy(&out.stdout).trim().to_string()
+        };
+        git(&["init", "--quiet"]);
+        git(&["config", "user.email", "test@liberado.local"]);
+        git(&["config", "user.name", "test"]);
+        std::fs::write(dir.path().join("seed.txt"), "seed\n").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-qm", "seed"]);
+        if git(&["rev-parse", "--abbrev-ref", "HEAD"]) != "main" {
+            git(&["branch", "-m", "main"]);
+        }
+
+        let base = base_commit(dir.path()).await.expect("main exists");
+        let head = git(&["rev-parse", "HEAD"]);
+        assert_eq!(base, head, "one commit: the merge base is HEAD itself");
+        assert_ne!(base, "xyzzy");
+    }
+
+    /// A passing preflight stays exactly that: no baseline comparison rewrites its summary,
+    /// and no failure detail is emitted for steps that did not fail.
+    #[tokio::test]
+    async fn a_passing_preflight_is_not_rerouted_through_the_baseline_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let spec = PreflightSpec::new("t", vec![PreflightStep::new("ok-step", "exit 0")]);
+        let (tx, mut rx) = tokio::sync::mpsc::channel(16);
+        let report = run_ship_preflight("s", dir.path(), &spec, &tx)
+            .await
+            .expect("preflight runs");
+        assert!(report.ok);
+        assert!(
+            !report.summary.contains("no new failures"),
+            "a clean run needs no baseline comparison: {}",
+            report.summary
+        );
+        assert!(
+            !report.summary.contains("no base commit found"),
+            "a clean run never consults a base commit: {}",
+            report.summary
+        );
+        drop(tx);
+        while let Some(event) = rx.recv().await {
+            let rendered = format!("{:?}", event.kind);
+            assert!(
+                !rendered.contains("preflight failed"),
+                "nothing failed; no failure detail may be emitted: {rendered}"
+            );
+        }
+    }
+
+    /// A failing required step emits its name and exit code in the failure detail — the model
+    /// reads that message to know what to fix.
+    #[tokio::test]
+    async fn a_failing_step_is_named_in_the_failure_detail() {
+        let dir = tempfile::tempdir().unwrap();
+        let spec = PreflightSpec::new("t", vec![PreflightStep::new("boom-step", "exit 2")]);
+        let (tx, mut rx) = tokio::sync::mpsc::channel(16);
+        let report = run_ship_preflight("s", dir.path(), &spec, &tx)
+            .await
+            .expect("preflight runs even when a step fails");
+        assert!(!report.ok);
+        drop(tx);
+        let mut failure_messages = 0;
+        while let Some(event) = rx.recv().await {
+            if let SessionEventKind::Progress { message } = event.kind
+                && message.contains("ship preflight failed")
+            {
+                failure_messages += 1;
+                assert!(
+                    message.contains("boom-step") && message.contains("exit=Some(2)"),
+                    "the failing step and its exit code must be named: {message}"
+                );
+            }
+        }
+        assert_eq!(
+            failure_messages, 1,
+            "exactly one failure detail event, naming the step that broke"
+        );
+    }
+
     #[test]
     fn payload_steps_override_defaults() {
         let g = goal_with(json!({

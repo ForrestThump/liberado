@@ -407,4 +407,180 @@ mod tests {
         parse_session_review(r#"{"findings": "lots"}"#)
             .expect_err("a wrong-shaped answer must not read as a pass");
     }
+
+    /// A closing brace before an opening one has no object to slice. The guard exists so this
+    /// is a graceful error, not a panic.
+    #[test]
+    fn reversed_braces_are_an_error_not_a_panic() {
+        let err =
+            parse_session_review("}{").expect_err("no JSON object can start after its own end");
+        assert!(format!("{err}").contains("no JSON"), "got: {err}");
+    }
+
+    /// The transcript is what the reviewer reads; losing turn text turns every audit into
+    /// reviewing tool names alone.
+    #[test]
+    fn turn_text_renders_verbatim() {
+        let t = build_transcript(
+            &[turn(1, Some("I verified the mutation myself."))],
+            ToolVisibility::NamesOnly,
+        );
+        assert!(t.contains("I verified the mutation myself."), "{t}");
+    }
+
+    struct ScriptedProvider {
+        scripted: std::sync::Mutex<std::collections::VecDeque<String>>,
+        received: std::sync::Mutex<Vec<liberado_provider::CompletionRequest>>,
+    }
+
+    impl ScriptedProvider {
+        fn with_responses(responses: &[&str]) -> Self {
+            Self {
+                scripted: std::sync::Mutex::new(responses.iter().map(|s| s.to_string()).collect()),
+                received: std::sync::Mutex::new(Vec::new()),
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl liberado_provider::Provider for ScriptedProvider {
+        fn model(&self) -> String {
+            "scripted".into()
+        }
+        fn set_model(&self, _model: String) {}
+        async fn complete(
+            &self,
+            request: liberado_provider::CompletionRequest,
+        ) -> Result<liberado_provider::CompletionResponse, liberado_provider::ProviderError>
+        {
+            self.received.lock().unwrap().push(request);
+            match self.scripted.lock().unwrap().pop_front() {
+                Some(body) => Ok(liberado_provider::CompletionResponse::text(body)),
+                None => Err(liberado_provider::ProviderError::MockExhausted),
+            }
+        }
+        async fn list_models(&self) -> Result<Vec<String>, liberado_provider::ProviderError> {
+            Ok(Vec::new())
+        }
+    }
+
+    struct FixedFactory(std::sync::Arc<ScriptedProvider>);
+
+    impl CoderProviderFactory for FixedFactory {
+        fn provider_for(
+            &self,
+            _role: &str,
+            _config: &CoderRoleConfig,
+        ) -> Result<std::sync::Arc<dyn liberado_provider::Provider>, CoderError> {
+            Ok(self.0.clone())
+        }
+    }
+
+    fn critic_request() -> CoderRunRequest {
+        CoderRunRequest {
+            task: liberado_coder_core::CoderTask::new("t", "fix the leak"),
+            workspace: liberado_coder_core::WorkspaceRef::new("/w", "HEAD"),
+            config: serde_json::from_value(serde_json::json!({
+                "backend": "liberado-loop",
+                "planner": {"model": "m"},
+                "coder": {"model": "m"},
+                "critic": {"model": "m"},
+                "sandbox": {"backend": "host_local"}
+            }))
+            .expect("config fixture"),
+            attempt: 0,
+            prior_feedback: Vec::new(),
+            strategist_directive: None,
+        }
+    }
+
+    fn critic_role() -> CoderRoleConfig {
+        CoderRoleConfig {
+            model: "mock".into(),
+            prompt_path: None,
+            prompt: None,
+            temperature: None,
+            max_tokens: None,
+            max_turns: Some(2),
+            reasoning: None,
+        }
+    }
+
+    /// End to end over a scripted reviewer: the system prompt is the retunable session-critic
+    /// prompt, the user message carries task + turns + filed report, and the reply's findings
+    /// survive parsing.
+    #[tokio::test]
+    async fn review_session_sends_the_real_prompt_and_parses_findings() {
+        const FINDING: &str = concat!(
+            r#"{"findings":[{"kind":"abandoned_finding","#,
+            r#""quote":"passes even when I break run_headless","why":"shipped it"}]}"#
+        );
+        let provider = std::sync::Arc::new(ScriptedProvider::with_responses(&[
+            FINDING, FINDING, FINDING,
+        ]));
+        let providers = FixedFactory(provider.clone());
+        let request = critic_request();
+        let role = critic_role();
+        let events = vec![turn(1, Some("I ran the ship bar myself."))];
+
+        // Call 1: transcript and report both present.
+        let review = review_session(
+            &providers,
+            &request,
+            &role,
+            &events,
+            Some("Mutation 1: FAILED then PASS."),
+            ToolVisibility::NamesOnly,
+        )
+        .await
+        .expect("review parses");
+        assert_eq!(review.findings.len(), 1, "{review:?}");
+        assert!(!review.is_clean(), "a finding must not read as clean");
+        // Call 2: blank report — still auditable on the turns alone.
+        let review = review_session(
+            &providers,
+            &request,
+            &role,
+            &events,
+            Some("   "),
+            ToolVisibility::NamesOnly,
+        )
+        .await
+        .expect("blank report still reviews the turns");
+        assert_eq!(review.findings.len(), 1);
+        // Call 3: silent run but a filed report — still worth reading.
+        let review = review_session(
+            &providers,
+            &request,
+            &role,
+            &[],
+            Some("Mutation 1: FAILED then PASS."),
+            ToolVisibility::NamesOnly,
+        )
+        .await
+        .expect("a silent run with a report still gets reviewed");
+        assert_eq!(review.findings.len(), 1);
+
+        let sent = provider.received.lock().unwrap();
+        assert_eq!(
+            sent.len(),
+            3,
+            "every auditable combination must reach the reviewer"
+        );
+        let expected_system = liberado_coder_core::prompts::load(
+            Some(&liberado_coder_core::prompts::dir_for(None, "/w")),
+            liberado_coder_core::prompts::SESSION_CRITIC_FILE,
+            liberado_coder_core::prompts::SESSION_CRITIC,
+        );
+        for req in sent.iter() {
+            assert_eq!(
+                req.messages[0].content, expected_system,
+                "system message is prompts/coder/session-critic.md"
+            );
+        }
+        let user = &sent[0].messages[1].content;
+        assert!(user.contains("fix the leak"), "{user}");
+        assert!(user.contains("I ran the ship bar myself."), "{user}");
+        assert!(user.contains("Mutation 1: FAILED then PASS."), "{user}");
+    }
 }

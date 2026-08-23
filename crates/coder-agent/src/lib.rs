@@ -2808,6 +2808,605 @@ __main__) intact.\n"
             }
         }
     }
+    // ── run_attempts loop harness ─────────────────────────────────────────────
+    //
+    // The attempt loop is where retries, refutation counting, and strategist
+    // consultation live. Driving it needs a scripted worker plus a git workspace;
+    // everything else (verifiers, gate, critic) is configured per test.
+
+    fn loop_repo() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        let run = |args: &[&str]| {
+            let out = std::process::Command::new("git")
+                .args(args)
+                .current_dir(dir.path())
+                .output()
+                .expect("git available");
+            assert!(out.status.success(), "git {args:?} failed");
+        };
+        run(&["init", "--quiet"]);
+        run(&["config", "user.email", "test@liberado.local"]);
+        run(&["config", "user.name", "Test"]);
+        std::fs::write(dir.path().join("README.md"), "base\n").unwrap();
+        run(&["add", "."]);
+        run(&["commit", "-qm", "base"]);
+        dir
+    }
+
+    fn loop_role(prompt: &str) -> CoderRoleConfig {
+        CoderRoleConfig {
+            model: "mock".into(),
+            prompt_path: None,
+            prompt: Some(prompt.into()),
+            temperature: None,
+            max_tokens: None,
+            max_turns: Some(8),
+            reasoning: None,
+        }
+    }
+
+    const WORKER_PROMPT: &str = "Implement the task with tools, then submit_report.";
+    /// Distinctive so a summary assertion can pin the worker's own words.
+    const CRITICISH_SUMMARY: &str = "critic pre-approved this change";
+
+    fn loop_request(
+        root: &std::path::Path,
+        max_attempts: u32,
+        gate: liberado_coder_core::CoderGateConfig,
+    ) -> CoderRunRequest {
+        CoderRunRequest {
+            task: CoderTask::new("loop-t", "do the loop thing"),
+            workspace: WorkspaceRef::new(root.to_string_lossy(), "HEAD"),
+            config: CoderRunConfig {
+                backend: LIBERADO_LOOP_BACKEND.into(),
+                trace_dir: None,
+                trace_formats: Vec::new(),
+                planner: CoderRoleConfig {
+                    model: "mock".into(),
+                    prompt_path: None,
+                    prompt: None,
+                    temperature: None,
+                    max_tokens: None,
+                    max_turns: Some(2),
+                    reasoning: None,
+                },
+                coder: loop_role(WORKER_PROMPT),
+                critic: loop_role("Review the diff; answer in JSON only."),
+                gate,
+                repair: None,
+                sandbox: SandboxSpec::HostLocal,
+                command_policy: CommandPolicy::default(),
+                validation_command: None,
+                verifiers: Vec::new(),
+                verify_policy: Default::default(),
+                path_policy: PathPolicy::default(),
+                progress: ProgressPolicy {
+                    max_attempts,
+                    ..ProgressPolicy::default()
+                },
+                hashline: liberado_coder_core::HashlineConfig::default(),
+                session_critic: Default::default(),
+                prompt_dir: None,
+                edit: Default::default(),
+                workspace_build: Default::default(),
+                offered_tools: None,
+            },
+            attempt: 0,
+            prior_feedback: Vec::new(),
+            strategist_directive: None,
+        }
+    }
+
+    fn write_and_report(
+        summary: &str,
+        extra_writes: &[(&str, &str)],
+    ) -> Vec<liberado_provider::CompletionResponse> {
+        use liberado_provider::{CompletionResponse, ToolInvocation};
+        let mut script = Vec::new();
+        for (i, (path, content)) in extra_writes.iter().enumerate() {
+            script.push(CompletionResponse::tool_calls(vec![ToolInvocation::new(
+                format!("w{i}"),
+                "write_file",
+                json!({"path": path, "content": content}),
+            )]));
+        }
+        script.push(liberado_provider::CompletionResponse::tool_calls(vec![
+            liberado_provider::ToolInvocation::new(
+                "report",
+                liberado_executor::SUBMIT_REPORT_TOOL,
+                json!({
+                    "outcome": "succeeded",
+                    "summary": summary,
+                    "artifacts": [],
+                    "new_high_signal_facts": [],
+                    "follow_up": null
+                }),
+            ),
+        ]));
+        script
+    }
+
+    fn scaffold() -> Vec<liberado_provider::CompletionResponse> {
+        write_and_report("Scaffolded.", &[("src/lib.rs", "fn stub() {}\n")])
+    }
+
+    fn gate_config(
+        enabled: bool,
+        fresh: u8,
+        strategist_after: u32,
+    ) -> liberado_coder_core::CoderGateConfig {
+        liberado_coder_core::CoderGateConfig {
+            enabled,
+            fresh_reviewers: fresh,
+            strategist_after,
+            gatekeeper: None,
+            fresh: None,
+            strategist: None,
+        }
+    }
+
+    fn approve() -> liberado_provider::CompletionResponse {
+        liberado_provider::CompletionResponse::text(r#"{"quality":"acceptable"}"#)
+    }
+
+    fn refute(issue: &str) -> liberado_provider::CompletionResponse {
+        liberado_provider::CompletionResponse::text(format!(
+            r#"{{"quality":"needs_revision","issues":["{issue}"]}}"#
+        ))
+    }
+
+    fn received_prompts(provider: &MockProvider) -> Vec<String> {
+        provider
+            .received_requests()
+            .iter()
+            .flat_map(|r| r.messages.iter().map(|m| m.content.clone()))
+            .collect()
+    }
+
+    const STRATEGIST_MARKER: &str = "strategist on a stuck software goal";
+    const STRATEGIST_DIRECTIVE: &str = "Move validation out of the request builder.";
+
+    /// With the gate on and one refutation in, the strategist is consulted exactly where the
+    /// refutation counter says it should be — and its directive reaches the next worker.
+    #[tokio::test]
+    async fn the_strategist_is_consulted_when_the_refutation_count_reaches_the_threshold() {
+        let dir = loop_repo();
+        let mut script = scaffold(); // attempt 0 worker
+        script.push(refute("same defect")); // gatekeeper veto (majority of fresh)
+        script.push(liberado_provider::CompletionResponse::text(
+            STRATEGIST_DIRECTIVE,
+        )); // strategist
+        script.extend(scaffold()); // attempt 1 worker
+        script.push(approve()); // gatekeeper
+        script.push(approve()); // fresh-0
+        let provider = Arc::new(MockProvider::with_script("mock", script));
+        let backend = LiberadoLoopBackend::new(provider.clone());
+
+        let result = backend
+            .run(loop_request(dir.path(), 2, gate_config(true, 1, 1)))
+            .await;
+        assert!(
+            result.is_ok(),
+            "the scripted run should complete: {:?}",
+            result.err()
+        );
+        assert_eq!(result.unwrap().outcome, Outcome::Succeeded);
+        let prompts = received_prompts(&provider);
+        assert!(
+            prompts.iter().any(|p| p.contains(STRATEGIST_MARKER)),
+            "the strategist must be consulted once the threshold is reached"
+        );
+    }
+
+    /// The legacy critic path never summons a strategist — the count belongs to the gate.
+    #[tokio::test]
+    async fn the_legacy_critic_path_does_not_consult_the_strategist() {
+        let dir = loop_repo();
+        let mut script = scaffold(); // attempt 0 worker
+        script.push(refute("wrong approach")); // legacy critic
+        script.extend(scaffold()); // attempt 1 worker
+        script.push(approve()); // legacy critic accepts
+        let provider = Arc::new(MockProvider::with_script("mock", script));
+        let backend = LiberadoLoopBackend::new(provider.clone());
+
+        let result = backend
+            .run(loop_request(dir.path(), 2, gate_config(false, 0, 1)))
+            .await
+            .unwrap();
+        assert_eq!(result.outcome, Outcome::Succeeded, "{}", result.summary);
+        let prompts = received_prompts(&provider);
+        assert!(
+            !prompts.iter().any(|p| p.contains(STRATEGIST_MARKER)),
+            "no gate, no strategist: {}",
+            prompts.len()
+        );
+    }
+
+    /// A refuted attempt is retried when budget remains, and approval on the retry succeeds.
+    #[tokio::test]
+    async fn a_refuted_attempt_is_retried_within_budget() {
+        let dir = loop_repo();
+        let mut script = scaffold(); // attempt 0 worker
+        script.push(refute("the stub is wrong")); // legacy critic veto
+        script.extend(scaffold()); // attempt 1 worker
+        script.push(approve()); // legacy critic accepts
+        let provider = Arc::new(MockProvider::with_script("mock", script));
+        let backend = LiberadoLoopBackend::new(provider);
+
+        let result = backend
+            .run(loop_request(dir.path(), 2, gate_config(false, 0, 0)))
+            .await
+            .unwrap();
+        assert_eq!(result.outcome, Outcome::Succeeded, "{}", result.summary);
+    }
+
+    /// When the FINAL attempt fails retryably, the returned error is that attempt's own
+    /// failure — not a stale one carried over from an earlier try.
+    #[tokio::test]
+    async fn a_final_retryable_failure_reports_its_own_error() {
+        let dir = loop_repo();
+        let mut request = loop_request(dir.path(), 2, gate_config(false, 0, 0));
+        request.config.verifiers = vec![liberado_coder_core::VerifierSpec::ContentContains {
+            id: "note".into(),
+            path: "note.txt".into(),
+            must_include: vec!["wanted".into()],
+        }];
+
+        // Attempt 0: no note.txt at all → "cannot read ..." feedback.
+        let first = write_and_report("forgot the note entirely", &[("other.txt", "x\n")]);
+        // Attempt 1 (last): wrong content → "must contain \"wanted\"" feedback.
+        let second = write_and_report("wrote it wrong", &[("note.txt", "not what was asked\n")]);
+
+        let mut script = first;
+        script.extend(second);
+        let provider = Arc::new(MockProvider::with_script("mock", script));
+        let backend = LiberadoLoopBackend::new(provider);
+
+        let err = backend
+            .run(request)
+            .await
+            .expect_err("both attempts fail; the run ends in the last failure");
+        let rendered = err.to_string();
+        assert!(
+            rendered.contains("must contain"),
+            "the LAST attempt's own failure must be reported, got: {rendered}"
+        );
+    }
+
+    /// With a single attempt, a retryable failure surfaces as that failure itself — never as
+    /// the generic "attempts exhausted" placeholder.
+    #[tokio::test]
+    async fn a_single_attempt_reports_its_validation_failure_directly() {
+        let dir = loop_repo();
+        let mut request = loop_request(dir.path(), 1, gate_config(false, 0, 0));
+        request.config.verifiers = vec![liberado_coder_core::VerifierSpec::ContentContains {
+            id: "note".into(),
+            path: "note.txt".into(),
+            must_include: vec!["the-real-needle".into()],
+        }];
+        let script = write_and_report("wrote the wrong thing", &[("note.txt", "unrelated text\n")]);
+        let provider = Arc::new(MockProvider::with_script("mock", script));
+        let backend = LiberadoLoopBackend::new(provider);
+
+        let err = backend
+            .run(request)
+            .await
+            .expect_err("the only attempt failed");
+        let rendered = err.to_string();
+        assert!(
+            rendered.contains("must contain"),
+            "the validation failure itself must come back: {rendered}"
+        );
+        assert!(
+            !rendered.contains("exhausted"),
+            "one attempt that failed is not 'attempts exhausted': {rendered}"
+        );
+    }
+
+    /// A refutation on the final attempt fails the run, and the suffix is added once — even
+    /// when the worker's own summary already mentions the critic.
+    #[tokio::test]
+    async fn a_final_refutation_fails_the_run_and_the_suffix_appears_once() {
+        let dir = loop_repo();
+        let mut script = write_and_report(CRITICISH_SUMMARY, &[("src/lib.rs", "fn s() {}\n")]);
+        script.push(refute("still wrong"));
+        let provider = Arc::new(MockProvider::with_script("mock", script));
+        let backend = LiberadoLoopBackend::new(provider);
+
+        let result = backend
+            .run(loop_request(dir.path(), 1, gate_config(false, 0, 0)))
+            .await
+            .unwrap();
+        assert_eq!(result.outcome, Outcome::Failed);
+        assert_eq!(
+            result
+                .summary
+                .matches("; critic requested revision:")
+                .count(),
+            1,
+            "the revision notice must appear exactly once: {}",
+            result.summary
+        );
+        assert!(result.summary.starts_with(CRITICISH_SUMMARY));
+    }
+
+    /// A retryable validation error consumes an attempt and a later attempt still succeeds.
+    #[tokio::test]
+    async fn a_retryable_validation_error_still_leaves_room_to_succeed() {
+        let dir = loop_repo();
+        let mut request = loop_request(dir.path(), 3, gate_config(false, 0, 0));
+        request.config.verifiers = vec![liberado_coder_core::VerifierSpec::PathsExist {
+            id: "required".into(),
+            paths: vec!["required.txt".into()],
+        }];
+
+        let fail_attempt = write_and_report("Wrote everything but one.", &[("other.txt", "x\n")]);
+        let ok_attempt = write_and_report("Complete now.", &[("required.txt", "done\n")]);
+
+        let mut script = fail_attempt.clone();
+        script.extend(fail_attempt);
+        script.extend(ok_attempt);
+        let provider = Arc::new(MockProvider::with_script("mock", script));
+        let backend = LiberadoLoopBackend::new(provider);
+
+        let result = backend.run(request).await.unwrap();
+        assert_eq!(result.outcome, Outcome::Succeeded, "{}", result.summary);
+    }
+
+    /// The backend is named after the loop it drives; surfaces key traces and events on it.
+    #[test]
+    fn the_backend_reports_its_own_name() {
+        let backend = LiberadoLoopBackend::new(Arc::new(MockProvider::new("mock")));
+        assert_eq!(backend.name(), LIBERADO_LOOP_BACKEND);
+        assert!(!backend.name().is_empty());
+    }
+
+    /// Only a trace that already says how the attempt ended counts; an empty log does not.
+    #[test]
+    fn ended_in_trace_requires_a_terminal_event() {
+        let empty: trace::EventLog = Arc::new(Mutex::new(Vec::new()));
+        assert!(!ended_in_trace(&empty));
+
+        let finished: trace::EventLog = Arc::new(Mutex::new(vec![CoderEvent::SessionFinished {
+            outcome: Outcome::Failed,
+            at: Utc::now(),
+        }]));
+        assert!(ended_in_trace(&finished));
+
+        let aborted: trace::EventLog = Arc::new(Mutex::new(vec![CoderEvent::SessionAborted {
+            error: "provider error".into(),
+            at: Utc::now(),
+        }]));
+        assert!(ended_in_trace(&aborted));
+    }
+
+    fn trace_fixture_path(dir: &std::path::Path) -> std::path::PathBuf {
+        let request = CoderRunRequest {
+            task: CoderTask::new("t", "fix the thing"),
+            workspace: WorkspaceRef::new("/w", "HEAD"),
+            config: serde_json::from_value(json!({
+                "backend": "liberado-loop",
+                "planner": {"model": "m"},
+                "coder": {"model": "m"},
+                "critic": {"model": "m"}
+            }))
+            .unwrap(),
+            attempt: 0,
+            prior_feedback: Vec::new(),
+            strategist_directive: None,
+        };
+        let events = vec![CoderEvent::SessionStarted {
+            session_id: "s-1".into(),
+            backend: LIBERADO_LOOP_BACKEND.into(),
+            task_id: "t".into(),
+            at: Utc::now(),
+        }];
+        let trace = CoderTrace {
+            session_id: "s-1".into(),
+            request,
+            events,
+            result: None,
+        };
+        let path = dir.join("trace.json");
+        std::fs::write(
+            &path,
+            serde_json::to_string(&trace).expect("trace serializes"),
+        )
+        .unwrap();
+        path
+    }
+
+    /// A written trace reads back with its events; garbage yields None (unreviewed), never a
+    /// fake-empty review.
+    #[tokio::test]
+    async fn read_trace_events_round_trips_and_fails_closed() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = trace_fixture_path(dir.path());
+        let events = LiberadoLoopBackend::read_trace_events(&path.to_string_lossy())
+            .await
+            .expect("a written trace parses");
+        assert_eq!(events.len(), 1);
+
+        assert!(
+            LiberadoLoopBackend::read_trace_events("/nonexistent/trace.json")
+                .await
+                .is_none(),
+            "a missing trace leaves the run unreviewed"
+        );
+        let junk = tempfile::tempdir().unwrap();
+        let junk_path = junk.path().join("junk.json");
+        std::fs::write(&junk_path, "not json").unwrap();
+        assert!(
+            LiberadoLoopBackend::read_trace_events(&junk_path.to_string_lossy())
+                .await
+                .is_none(),
+            "an unreadable trace leaves the run unreviewed"
+        );
+    }
+
+    const SESSION_CRITIC_FINDING: &str =
+        r#"{"findings":[{"kind":"abandoned_finding","quote":"q","why":"w"}]}"#;
+
+    /// An enabled critic reads the trace and attaches findings; a disabled one never runs —
+    /// its findings stay absent even when a trace exists.
+    #[tokio::test]
+    async fn the_session_critic_reviews_only_when_enabled() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = trace_fixture_path(dir.path());
+
+        let make_config = |enabled: bool| -> liberado_coder_core::CoderRunConfig {
+            let mut config: liberado_coder_core::CoderRunConfig = serde_json::from_value(json!({
+                "backend": "liberado-loop",
+                "planner": {"model": "m"},
+                "coder": {"model": "m"},
+                "critic": {"model": "m"}
+            }))
+            .unwrap();
+            config.session_critic.enabled = enabled;
+            config
+        };
+
+        // Enabled: findings land on the result.
+        let provider = Arc::new(MockProvider::with_script(
+            "mock",
+            [CompletionResponse::text(SESSION_CRITIC_FINDING)],
+        ));
+        let backend = LiberadoLoopBackend::new(provider.clone());
+        let mut result = CoderRunResult {
+            backend: "liberado-loop".into(),
+            outcome: Outcome::Succeeded,
+            summary: "I fixed everything".into(),
+            files_changed: vec![],
+            file_changes: Vec::new(),
+            validation_notes: None,
+            critic_verdict: None,
+            gate_votes: Vec::new(),
+            trace_path: Some(path.to_string_lossy().to_string()),
+            diff_findings: Vec::new(),
+            session_findings: Vec::new(),
+            remediation: None,
+            diagnostics: json!({}),
+        };
+        backend
+            .review_session_after_run(&make_config(true), &mut result)
+            .await;
+        assert_eq!(
+            result.session_findings.len(),
+            1,
+            "the critic's finding must reach the result"
+        );
+        assert_eq!(
+            provider.received_requests().len(),
+            1,
+            "the reviewer was consulted once"
+        );
+
+        // Disabled: no review call, no findings.
+        let provider = Arc::new(MockProvider::with_script(
+            "mock",
+            [CompletionResponse::text(SESSION_CRITIC_FINDING)],
+        ));
+        let backend = LiberadoLoopBackend::new(provider);
+        let mut quiet = CoderRunResult {
+            trace_path: Some(path.to_string_lossy().to_string()),
+            ..result.clone()
+        };
+        quiet.session_findings.clear();
+        backend
+            .review_session_after_run(&make_config(false), &mut quiet)
+            .await;
+        assert!(
+            quiet.session_findings.is_empty(),
+            "a disabled critic must stay silent"
+        );
+    }
+
+    /// Ignoring a fatal still drains it: the report wins exactly once.
+    #[tokio::test]
+    async fn an_ignored_fatal_is_drained_not_retained() {
+        let _guard = DATA_DIR_ENV_LOCK.lock().await;
+        let policy = ProgressPolicy {
+            read_only_turn_limit: 1,
+            same_tool_limit: 100,
+            validation_repeat_limit: 100,
+            max_attempts: 3,
+            event_preview_max_chars: 100,
+        };
+        let guard = Arc::new(Mutex::new(ProgressGuard::new(policy)));
+        {
+            let mut g = guard.lock().unwrap();
+            g.observe("list_files", true, "{}");
+            g.observe("read_file", true, "{}"); // limit 1 → nudge then fatal on next
+            g.observe("search_text", true, "{}");
+        }
+        log_ignored_fatal(&guard, Outcome::Succeeded);
+        assert!(
+            guard.lock().unwrap().fatal().is_none(),
+            "the ignored fatal must be consumed"
+        );
+    }
+
+    /// A checkpoint reaches the live bus with its label.
+    #[tokio::test]
+    async fn a_workspace_checkpoint_emits_a_live_event() {
+        use tokio::sync::mpsc;
+        let data = tempfile::tempdir().unwrap();
+        let repo = reviewable_repo();
+        let _env = DATA_DIR_ENV_LOCK.lock().await;
+        // SAFETY: serialized by the guard above; restored before it drops.
+        unsafe {
+            std::env::set_var("LIBERADO_DATA_DIR", data.path());
+        }
+        let (tx, mut rx) = mpsc::channel(4);
+        crate::live::with_live_events(tx, "sess-1", async {
+            take_workspace_checkpoint(repo.path(), "sess-1", "attempt-start").await;
+        })
+        .await;
+        unsafe {
+            std::env::remove_var("LIBERADO_DATA_DIR");
+        }
+        drop(_env);
+        let mut seen = false;
+        while let Ok(event) = rx.try_recv() {
+            if let liberado_session::SessionEventKind::Checkpoint { label, .. } = event.kind {
+                assert_eq!(label, "attempt-start");
+                seen = true;
+            }
+        }
+        assert!(seen, "the checkpoint event must reach the live bus");
+    }
+
+    /// The untracked section has a stable shape: header first, full small-file content, one
+    /// truncation marker per clipped file, newlines between sections.
+    #[tokio::test]
+    async fn the_untracked_section_formats_and_budgets_itself() {
+        let dir = reviewable_repo(); // clean tree → no tracked diff
+        let big = "A".repeat(59_990); // just under budget, no trailing newline
+        std::fs::write(dir.path().join("big.txt"), &big).unwrap();
+        std::fs::write(dir.path().join("small.txt"), "B".repeat(100)).unwrap();
+
+        let diff = workspace_diff(&dir.path().to_string_lossy()).await.unwrap();
+        assert!(
+            diff.starts_with("# untracked files"),
+            "clean tree: the section opens the diff, without a leading newline:\n{:.80}",
+            diff
+        );
+        assert_eq!(
+            diff.matches("… truncated").count(),
+            1,
+            "exactly the over-budget file is marked truncated:\n{}",
+            diff.matches("… truncated").count()
+        );
+        assert!(
+            diff.contains(&format!("{}\n--- new file small.txt", &"A".repeat(64))),
+            "a fully shown file gets its newline before the next header"
+        );
+        assert!(
+            diff.contains("\n… truncated"),
+            "the truncation marker starts on its own line"
+        );
+        assert!(diff.contains("--- new file big.txt"), "{diff}");
+    }
 }
 
 #[cfg(test)]
@@ -3060,6 +3659,34 @@ mod disposition_tests {
             adjusted.results[2].verdict.status,
             VerdictStatus::Pass,
             "cargo-test was softened, but cargo-check was not"
+        );
+    }
+
+    /// A fully softened pipeline must drop its failure signature and findings — stale ones
+    /// would route the run into repair for a failure it does not have.
+    #[test]
+    fn a_fully_softened_pipeline_drops_its_failure_signature() {
+        let log = test_failure_log(&["foo::only_test"]);
+        let mut pipeline = pipeline_with_test_verdict(VerdictStatus::Fail, Some(&log));
+        pipeline.combined_signature = Some("stale-sig".to_string());
+        pipeline.combined_findings = vec![Finding {
+            check_id: "cargo-test".into(),
+            kind: FindingKind::CommandFailed,
+            message: "cargo test exited 101".into(),
+            detail: None,
+        }];
+
+        let baseline = bset(&["foo::only_test"]);
+        let adjusted = soften_pre_existing_test_failures(&pipeline, &baseline);
+
+        assert!(adjusted.is_pass());
+        assert_eq!(
+            adjusted.combined_signature, None,
+            "a pass carries no failure signature"
+        );
+        assert!(
+            adjusted.combined_findings.is_empty(),
+            "a pass carries no findings"
         );
     }
 }

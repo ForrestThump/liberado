@@ -613,6 +613,7 @@ mod tests {
 
     use super::*;
     use liberado_coder_core::{Verdict, VerdictStatus};
+    use std::sync::{Arc, Mutex};
 
     fn named(id: &str, status: VerdictStatus, summary: &str) -> NamedVerdict {
         NamedVerdict {
@@ -728,5 +729,270 @@ mod tests {
             "the most recent complaint must survive truncation"
         );
         assert_eq!(kept.first().unwrap(), "issue-18");
+    }
+
+    #[test]
+    fn the_reviewer_reports_its_own_name() {
+        assert_eq!(reviewer().name(), "r");
+    }
+
+    #[test]
+    fn kind_labels_are_the_config_vocabulary() {
+        use liberado_session::ReviewerKind;
+        assert_eq!(kind_label(ReviewerKind::Gatekeeper), "gatekeeper");
+        assert_eq!(kind_label(ReviewerKind::Fresh), "fresh");
+        assert_eq!(kind_label(ReviewerKind::Strategist), "strategist");
+    }
+
+    /// Votes ride the run result; flattening must preserve who, what, and why.
+    #[test]
+    fn flatten_votes_preserves_every_field() {
+        use liberado_session::{GateOutcome, GateVerdict, RecordedVote, ReviewVote, ReviewerKind};
+        let outcome = GateOutcome {
+            verdict: GateVerdict::Refuted { issues: vec![] },
+            votes: vec![
+                RecordedVote {
+                    reviewer: "skeptic-0".into(),
+                    kind: ReviewerKind::Gatekeeper,
+                    vote: ReviewVote::Approve,
+                    coerced_from: None,
+                },
+                RecordedVote {
+                    reviewer: "fresh-1".into(),
+                    kind: ReviewerKind::Fresh,
+                    vote: ReviewVote::Refute {
+                        issues: vec!["no tests".into()],
+                    },
+                    coerced_from: Some("error".into()),
+                },
+            ],
+        };
+        let flat = flatten_votes(&outcome);
+        assert_eq!(flat.len(), 2);
+        assert_eq!(flat[0].reviewer, "skeptic-0");
+        assert_eq!(flat[0].kind, "gatekeeper");
+        assert!(flat[0].approved);
+        assert!(flat[0].issues.is_empty());
+        assert!(!flat[0].coerced);
+        assert_eq!(flat[1].reviewer, "fresh-1");
+        assert_eq!(flat[1].kind, "fresh");
+        assert!(!flat[1].approved);
+        assert_eq!(flat[1].issues, vec!["no tests".to_string()]);
+        assert!(flat[1].coerced, "a substituted vote must say so");
+    }
+
+    /// Votes land in the trace as they are cast, and a coerced vote is marked as such.
+    #[test]
+    fn trace_observer_records_votes_and_coercions() {
+        use liberado_session::{RecordedVote, ReviewVote, ReviewerKind};
+        let events: EventLog = Arc::new(Mutex::new(Vec::new()));
+        let obs = TraceObserver { events: &events };
+        obs.on_vote(&RecordedVote {
+            reviewer: "fresh-0".into(),
+            kind: ReviewerKind::Fresh,
+            vote: ReviewVote::Approve,
+            coerced_from: None,
+        });
+        obs.on_vote(&RecordedVote {
+            reviewer: "fresh-1".into(),
+            kind: ReviewerKind::Fresh,
+            vote: ReviewVote::Refute {
+                issues: vec!["late".into()],
+            },
+            coerced_from: Some("timeout".into()),
+        });
+
+        let snap = trace::snapshot_events(&events);
+        assert_eq!(
+            snap.iter()
+                .filter(|e| matches!(e, CoderEvent::CriticVerdict { .. }))
+                .count(),
+            2,
+            "one event per vote"
+        );
+        // The coerced refutation is distinguishable from a genuine one.
+        assert!(
+            snap.iter()
+                .any(|e| matches!(e, CoderEvent::LoopGuardTriggered { guard, .. }
+                            if guard.starts_with("gate_reviewer_unavailable:fresh-1"))),
+            "a coerced refutation must be marked in the trace"
+        );
+    }
+
+    /// The fan-out reaches both sinks — trace and live bus — not either-or.
+    #[test]
+    fn fanout_observer_reaches_both_sinks() {
+        use liberado_session::{RecordedVote, ReviewVote, ReviewerKind};
+        let a: EventLog = Arc::new(Mutex::new(Vec::new()));
+        let b: EventLog = Arc::new(Mutex::new(Vec::new()));
+        let obs_a = TraceObserver { events: &a };
+        let obs_b = TraceObserver { events: &b };
+        let fan = FanoutObserver {
+            a: &obs_a,
+            b: &obs_b,
+        };
+        fan.on_vote(&RecordedVote {
+            reviewer: "r".into(),
+            kind: ReviewerKind::Gatekeeper,
+            vote: ReviewVote::Approve,
+            coerced_from: None,
+        });
+        for log in [&a, &b] {
+            assert_eq!(
+                trace::snapshot_events(log)
+                    .iter()
+                    .filter(|e| matches!(e, CoderEvent::CriticVerdict { .. }))
+                    .count(),
+                1,
+                "both observers see the same vote"
+            );
+        }
+    }
+
+    #[test]
+    fn contract_summary_carries_task_criteria_and_context() {
+        let mut request = request_fixture();
+        request.task.success_criteria = vec!["criterion one".into(), "criterion two".into()];
+        request.task.context = Some("the vault notes".into());
+        let summary = contract_summary(&request);
+        assert!(summary.contains("Task:\nfix the leak"), "{summary}");
+        assert!(summary.contains("- criterion one"), "{summary}");
+        assert!(summary.contains("- criterion two"), "{summary}");
+        assert!(
+            summary.contains("Task context:\nthe vault notes"),
+            "{summary}"
+        );
+
+        request.task.success_criteria.clear();
+        let summary = contract_summary(&request);
+        assert!(
+            summary.contains("(none listed)"),
+            "an empty criteria list is stated, never blank:\n{summary}"
+        );
+    }
+
+    #[test]
+    fn refutation_history_renders_capped_and_marks_empty() {
+        assert_eq!(format_refutation_history(&[]), "(none recorded)");
+        let history: Vec<String> = (0..20).map(|i| format!("issue-{i}")).collect();
+        let rendered = format_refutation_history(&history);
+        let lines: Vec<&str> = rendered.lines().collect();
+        assert_eq!(lines.len(), PRIOR_REFUTATIONS_MAX);
+        assert_eq!(lines[0], "- issue-8", "oldest of the kept window first");
+        assert_eq!(
+            lines.last().unwrap(),
+            &"- issue-19",
+            "the newest complaint ends the list"
+        );
+    }
+
+    struct ScriptedCriticProvider {
+        scripted: std::sync::Mutex<std::collections::VecDeque<Result<String, String>>>,
+    }
+
+    impl ScriptedCriticProvider {
+        fn new(script: &[Result<&str, ()>]) -> Self {
+            let scripted = script
+                .iter()
+                .map(|entry| match entry {
+                    Ok(body) => Ok(body.to_string()),
+                    Err(()) => Err("scripted failure".to_string()),
+                })
+                .collect();
+            Self {
+                scripted: std::sync::Mutex::new(scripted),
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl liberado_provider::Provider for ScriptedCriticProvider {
+        fn model(&self) -> String {
+            "scripted".into()
+        }
+        fn set_model(&self, _model: String) {}
+        async fn complete(
+            &self,
+            _request: liberado_provider::CompletionRequest,
+        ) -> Result<liberado_provider::CompletionResponse, liberado_provider::ProviderError>
+        {
+            match self.scripted.lock().unwrap().pop_front() {
+                Some(Ok(body)) => Ok(liberado_provider::CompletionResponse::text(body)),
+                Some(Err(_)) => Err(liberado_provider::ProviderError::Transport("down".into())),
+                None => Err(liberado_provider::ProviderError::MockExhausted),
+            }
+        }
+        async fn list_models(&self) -> Result<Vec<String>, liberado_provider::ProviderError> {
+            Ok(Vec::new())
+        }
+    }
+
+    struct FixedFactory(std::sync::Arc<ScriptedCriticProvider>);
+
+    impl CoderProviderFactory for FixedFactory {
+        fn provider_for(
+            &self,
+            _role: &str,
+            _config: &CoderRoleConfig,
+        ) -> Result<std::sync::Arc<dyn liberado_provider::Provider>, CoderError> {
+            Ok(self.0.clone())
+        }
+    }
+
+    fn request_fixture() -> CoderRunRequest {
+        CoderRunRequest {
+            task: liberado_coder_core::CoderTask::new("t", "fix the leak"),
+            workspace: liberado_coder_core::WorkspaceRef::new("/w", "HEAD"),
+            config: serde_json::from_value(serde_json::json!({
+                "backend": "liberado-loop",
+                "planner": {"model": "m"},
+                "coder": {"model": "m"},
+                "critic": {"model": "m"}
+            }))
+            .expect("config fixture"),
+            attempt: 2,
+            prior_feedback: Vec::new(),
+            strategist_directive: None,
+        }
+    }
+
+    /// The strategist's directive is the model's own words, verbatim — a placeholder or an
+    /// invented directive here would steer real runs with advice nobody gave.
+    #[tokio::test]
+    async fn run_strategist_returns_the_model_directive_verbatim() {
+        async fn directive_of(script: &[Result<&str, ()>]) -> Option<String> {
+            let providers = FixedFactory(std::sync::Arc::new(ScriptedCriticProvider::new(script)));
+            run_strategist(&providers, &request_fixture(), &["refusal one".into()])
+                .await
+                .expect("strategist failures are best-effort, never errors")
+        }
+
+        assert_eq!(
+            directive_of(&[Ok("  Move retry out of the request builder.  ")])
+                .await
+                .as_deref(),
+            Some("Move retry out of the request builder."),
+            "the directive is the trimmed reply"
+        );
+        // A blank reply means no directive — not a blank string to inject.
+        assert_eq!(
+            directive_of(&[Ok("   ")]).await,
+            None,
+            "a whitespace reply carries nothing usable"
+        );
+        // A failed call is best-effort: continue without a directive.
+        assert_eq!(
+            directive_of(&[Err(())]).await,
+            None,
+            "an outage must not error the run"
+        );
+
+        // The strategist reads contract + attempt count + refusal history.
+        let providers = FixedFactory(std::sync::Arc::new(ScriptedCriticProvider::new(&[Ok(
+            "any",
+        )])));
+        let _ = run_strategist(&providers, &request_fixture(), &["refusal one".into()])
+            .await
+            .unwrap();
     }
 }

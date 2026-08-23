@@ -585,3 +585,153 @@ fn verifier_label(v: &VerifierSpec) -> String {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use liberado_coder_core::VerifierSpec;
+
+    fn goal_with(payload: serde_json::Value) -> GoalSpec {
+        GoalSpec {
+            id: Some("t".into()),
+            domain: liberado_session::DomainHint::Coding,
+            description: "x".into(),
+            success_criteria: vec![],
+            max_turns: 0,
+            max_idle_secs: None,
+            origin: None,
+            profile: None,
+            payload,
+        }
+    }
+
+    #[test]
+    fn intake_context_carries_authorized_paths_and_context() {
+        let goal = goal_with(serde_json::json!({
+            "context": "vault notes live here",
+            "project": "life-os",
+            "workspace_root": "/approved/root",
+        }));
+        let ctx = build_intake_context(&goal).expect("parts exist");
+        assert!(ctx.contains("vault notes live here"), "{ctx}");
+        assert!(
+            ctx.contains("Authorized coding project name: `life-os`"),
+            "{ctx}"
+        );
+        assert!(
+            ctx.contains("Authorized workspace_root (absolute, already injected by the daemon): `/approved/root`"),
+            "{ctx}"
+        );
+
+        // Nothing supplied → nothing to say.
+        assert!(build_intake_context(&goal_with(serde_json::json!({}))).is_none());
+        // A blank context is not a part.
+        assert!(
+            build_intake_context(&goal_with(serde_json::json!({ "context": "   " }))).is_none(),
+            "whitespace-only context must not become an empty section"
+        );
+    }
+
+    fn draft_with_profile() -> GoalContractDraft {
+        GoalContractDraft {
+            description: "build it".into(),
+            success_criteria: vec!["works".into()],
+            verifiers: vec![
+                VerifierSpec::PathsExist {
+                    id: "mine".into(),
+                    paths: vec!["src/main.rs".into()],
+                },
+                VerifierSpec::Command {
+                    id: "cargo-check".into(),
+                    program: "cargo".into(),
+                    args: vec!["check".into()],
+                    env: Default::default(),
+                    timeout_secs: None,
+                    output_max_bytes: None,
+                    network: false,
+                },
+            ],
+            out_of_scope: vec![],
+            assumed_defaults: vec![],
+            domain_hint: None,
+            verify_profile: Some("rust-check".into()),
+        }
+    }
+
+    /// Profile-injected gates are labelled as such — provenance is what lets a human see that
+    /// the prose and the gate list disagree.
+    #[test]
+    fn render_draft_marks_profile_injected_verifiers_only() {
+        let rendered = render_draft(&draft_with_profile(), "clear enough");
+        let tagged = rendered.matches("[added by verify_profile").count();
+        assert_eq!(
+            tagged, 1,
+            "exactly the injected gate is marked:\n{rendered}"
+        );
+        let line = rendered
+            .lines()
+            .find(|l| l.contains("[added by verify_profile"))
+            .expect("a tag exists");
+        assert!(
+            line.contains("cargo-check"),
+            "the tag sits on the injected gate: {line}"
+        );
+        assert!(
+            !line.contains("mine"),
+            "the hand-written gate stays untagged: {line}"
+        );
+        assert!(
+            rendered.contains("(1 of these came from the profile"),
+            "the summary explains how to drop them:\n{rendered}"
+        );
+    }
+
+    #[test]
+    fn render_draft_without_a_profile_has_no_provenance_noise() {
+        let mut draft = draft_with_profile();
+        draft.verify_profile = None;
+        let rendered = render_draft(&draft, "");
+        assert!(!rendered.contains("verify_profile"), "{rendered}");
+    }
+
+    /// A self-contradicting draft is flagged as blocking; a mere warning is advisory. The two
+    /// headings are different decisions for the human.
+    #[test]
+    fn render_draft_separates_contradictions_from_warnings() {
+        let mut contradictory = draft_with_profile();
+        contradictory.verify_profile = None;
+        contradictory.verifiers = vec![
+            VerifierSpec::Command {
+                id: "test-a".into(),
+                program: "cargo".into(),
+                args: vec!["test".into(), "--all".into()],
+                env: Default::default(),
+                timeout_secs: None,
+                output_max_bytes: None,
+                network: false,
+            },
+            VerifierSpec::Command {
+                id: "test-b".into(),
+                program: "cargo".into(),
+                args: vec!["test".into(), "--all".into()],
+                env: Default::default(),
+                timeout_secs: None,
+                output_max_bytes: None,
+                network: false,
+            },
+        ];
+        let rendered = render_draft(&contradictory, "");
+        assert!(rendered.contains("⛔"), "contradictions block:\n{rendered}");
+        assert!(!rendered.contains("⚠"), "{rendered}");
+
+        let mut warning = draft_with_profile();
+        warning.verify_profile = None;
+        warning.verifiers = vec![VerifierSpec::PathsExist {
+            id: "binary".into(),
+            paths: vec!["target/release/todo".into()],
+        }];
+        let rendered = render_draft(&warning, "");
+        assert!(rendered.contains("⚠"), "warnings advise:\n{rendered}");
+        assert!(!rendered.contains("⛔"), "{rendered}");
+    }
+}

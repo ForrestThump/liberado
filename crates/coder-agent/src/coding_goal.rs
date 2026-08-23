@@ -144,4 +144,29 @@ mod tests {
         .expect_err("write_scope must use its typed fields");
         assert!(error.contains("unknown field `allow`"), "error: {error}");
     }
+
+    /// Every dispatch flag survives the boundary with its real value — a stub here would
+    /// silently flip interactivity, fan-out nesting, or write policy for every goal.
+    #[test]
+    fn dispatch_flags_round_trip_with_their_real_values() {
+        let payload = CodingGoalPayload::parse(&json!({
+            "interactive": true,
+            "fanout_child": true,
+            "force_host_local": true,
+            "write_scope": { "allow_globs": ["src/**"], "deny_globs": ["docs/**"] },
+        }))
+        .expect("valid payload");
+        assert_eq!(payload.interactive(), Some(true));
+        assert!(payload.fanout_child());
+        assert!(payload.force_host_local());
+        let scope = payload.write_scope().expect("scope present");
+        assert_eq!(scope.allow_globs, vec!["src/**".to_string()]);
+        assert_eq!(scope.deny_globs, vec!["docs/**".to_string()]);
+
+        let empty = CodingGoalPayload::parse(&json!({})).expect("valid empty");
+        assert_eq!(empty.interactive(), None);
+        assert!(!empty.fanout_child());
+        assert!(!empty.force_host_local());
+        assert!(empty.write_scope().is_none());
+    }
 }

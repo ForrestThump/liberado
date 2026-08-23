@@ -947,3 +947,686 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod resolve_tests {
+    use super::*;
+    use liberado_coder_core::{CoderRoleConfig, CommandPolicy, HashlineConfig, PathPolicy};
+
+    fn policies(mode: CodingMode) -> WorkspacePolicies {
+        WorkspacePolicies {
+            path_policy: PathPolicy::default(),
+            command_policy: CommandPolicy::default(),
+            mode,
+            hashline: HashlineConfig::default(),
+        }
+    }
+
+    fn goal(max_turns: u32) -> GoalSpec {
+        GoalSpec {
+            id: Some("t".into()),
+            domain: liberado_session::DomainHint::Coding,
+            description: "d".into(),
+            success_criteria: vec![],
+            max_turns,
+            max_idle_secs: None,
+            origin: None,
+            profile: None,
+            payload: serde_json::json!({}),
+        }
+    }
+
+    fn pack_with_turns(turns: Option<u32>) -> CodingSessionPack {
+        let role = CoderRoleConfig {
+            model: "m".into(),
+            prompt_path: None,
+            prompt: None,
+            temperature: None,
+            max_tokens: None,
+            max_turns: turns,
+            reasoning: None,
+        };
+        CodingSessionPack::new(
+            Arc::new(liberado_provider::MockProvider::new("mock")),
+            std::env::temp_dir(),
+        )
+        .with_coder_role(role)
+    }
+
+    /// Mode presets bound the goal's own budget; an explicit goal budget wins in normal mode;
+    /// the coder role's configured ceiling is the last resort, never a hardcoded constant.
+    #[test]
+    fn max_turns_resolution_follows_mode_then_goal_then_config() {
+        let pack = pack_with_turns(Some(30));
+
+        // Explore: bounded research, capped at 10.
+        assert_eq!(
+            pack.resolve_max_turns(&policies(CodingMode::Explore), &goal(0)),
+            10
+        );
+        assert_eq!(
+            pack.resolve_max_turns(&policies(CodingMode::Explore), &goal(4)),
+            4
+        );
+        assert_eq!(
+            pack.resolve_max_turns(&policies(CodingMode::Explore), &goal(50)),
+            10
+        );
+
+        // Plan: tighter, capped at 8.
+        assert_eq!(
+            pack.resolve_max_turns(&policies(CodingMode::Plan), &goal(0)),
+            8
+        );
+        assert_eq!(
+            pack.resolve_max_turns(&policies(CodingMode::Plan), &goal(3)),
+            3
+        );
+        assert_eq!(
+            pack.resolve_max_turns(&policies(CodingMode::Plan), &goal(50)),
+            8
+        );
+
+        // Normal: the goal's own budget; the role ceiling only fills an absent one.
+        assert_eq!(
+            pack.resolve_max_turns(&policies(CodingMode::Normal), &goal(7)),
+            7
+        );
+        assert_eq!(
+            pack.resolve_max_turns(&policies(CodingMode::Normal), &goal(0)),
+            30
+        );
+        assert_eq!(
+            pack_with_turns(None).resolve_max_turns(&policies(CodingMode::Normal), &goal(0)),
+            12,
+            "no config, no goal budget: the documented default"
+        );
+    }
+
+    // ── direct-call harness for the pack's interactive helpers ────────────────
+
+    struct Transcript {
+        store: Arc<liberado_session::GoalSessionStore>,
+        grant: liberado_session::SessionGrant,
+    }
+
+    impl Transcript {
+        async fn open() -> Self {
+            let store = Arc::new(liberado_session::GoalSessionStore::new());
+            let mut spec = GoalSpec {
+                id: Some("s1".into()),
+                domain: liberado_session::DomainHint::Coding,
+                description: "d".into(),
+                success_criteria: vec![],
+                max_turns: 0,
+                max_idle_secs: None,
+                origin: None,
+                profile: None,
+                payload: serde_json::json!({}),
+            };
+            spec.id = Some("s1".into());
+            liberado_session::SessionRecordStore::insert(
+                store.as_ref(),
+                liberado_session::GoalSessionRecord::new(spec),
+            )
+            .await;
+            Self {
+                store,
+                grant: liberado_session::SessionGrant::default(),
+            }
+        }
+        fn ctx(&self) -> PackContext<'_> {
+            PackContext::new(&self.grant, self.store.clone(), "s1")
+        }
+    }
+
+    fn unique_tag() -> String {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .subsec_nanos()
+            .to_string()
+    }
+
+    fn git_repo_with_base() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        for args in [
+            vec!["init", "--quiet"],
+            vec!["config", "user.email", "t@l"],
+            vec!["config", "user.name", "t"],
+        ] {
+            std::process::Command::new("git")
+                .args(&args)
+                .current_dir(dir.path())
+                .status()
+                .unwrap();
+        }
+        std::fs::write(dir.path().join("base.txt"), "b").unwrap();
+        std::process::Command::new("git")
+            .args(["add", "-A"])
+            .current_dir(dir.path())
+            .status()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["commit", "-qm", "base"])
+            .current_dir(dir.path())
+            .status()
+            .unwrap();
+        dir
+    }
+
+    fn answer_channel(text: Option<&str>) -> InputChannel {
+        use liberado_session::HumanInput;
+        let (tx, rx) = tokio::sync::mpsc::channel::<HumanInput>(4);
+        if let Some(t) = text {
+            tx.try_send(HumanInput::new(t)).unwrap();
+        }
+        drop(tx);
+        InputChannel::new(rx, None)
+    }
+
+    /// "stop" and "cancel" mean stop just as much as "abort" does — a human typing a synonym
+    /// must not find the session still running.
+    #[tokio::test]
+    async fn the_human_can_abort_with_any_of_the_stop_words() {
+        let pack = CodingSessionPack::new(
+            Arc::new(liberado_provider::MockProvider::new("mock")),
+            std::env::temp_dir(),
+        );
+        for word in ["abort", "STOP", "Cancel", "  abort  "] {
+            let t = Transcript::open().await;
+            let (ev_tx, _ev_rx) = tokio::sync::mpsc::channel(8);
+            let (_c_tx, mut cancel) = tokio::sync::watch::channel(false);
+            let mut inputs = answer_channel(Some(word));
+            let answer = pack
+                .ask_for_guidance("s1", &t.ctx(), &ev_tx, &mut inputs, &mut cancel, "stuck")
+                .await
+                .unwrap();
+            assert!(
+                matches!(answer, HumanAnswer::Aborted),
+                "`{word}` must read as an abort"
+            );
+        }
+        // Anything else is guidance, folded into the next attempt.
+        let t = Transcript::open().await;
+        let (ev_tx, _ev_rx) = tokio::sync::mpsc::channel(8);
+        let (_c_tx, mut cancel) = tokio::sync::watch::channel(false);
+        let mut inputs = answer_channel(Some("try pinning the dependency"));
+        let answer = pack
+            .ask_for_guidance("s1", &t.ctx(), &ev_tx, &mut inputs, &mut cancel, "stuck")
+            .await
+            .unwrap();
+        assert!(
+            matches!(answer, HumanAnswer::Guidance(_)),
+            "free text is guidance"
+        );
+    }
+
+    /// A frozen contract stamps its gates onto the worker's request and announces it — the
+    /// human accepted those exact gates, and the run must build against them.
+    #[tokio::test]
+    async fn a_frozen_contract_stamps_its_gates_onto_the_request() {
+        let draft = liberado_coder_core::GoalContractDraft {
+            description: "build".into(),
+            success_criteria: vec![],
+            verifiers: vec![liberado_coder_core::VerifierSpec::PathsExist {
+                id: "paths".into(),
+                paths: vec!["src/main.rs".into()],
+            }],
+            out_of_scope: vec![],
+            assumed_defaults: vec![],
+            domain_hint: None,
+            verify_profile: None,
+        };
+        let contract = liberado_coder_core::GoalContract::freeze(
+            "c1",
+            draft,
+            liberado_coder_core::FreezeAuthority::Human,
+        )
+        .unwrap();
+
+        let mut request: CoderRunRequest = serde_json::from_value(serde_json::json!({
+            "task": {"id": "t", "description": "d"},
+            "workspace": {"root": "/w", "base_ref": "HEAD"},
+            "config": {
+                "backend": "liberado-loop",
+                "planner": {"model": "m"},
+                "coder": {"model": "m"},
+                "critic": {"model": "m"}
+            }
+        }))
+        .unwrap();
+        assert!(request.config.verifiers.is_empty(), "precondition");
+
+        let (ev_tx, mut ev_rx) = tokio::sync::mpsc::channel(8);
+        apply_contract_if_any(&Some(Box::new(contract)), &mut request, "s1", &ev_tx)
+            .await
+            .expect("a freshly frozen contract verifies");
+        assert!(
+            !request.config.verifiers.is_empty(),
+            "the contract's gates must reach the request"
+        );
+        drop(ev_tx);
+        let announced = ev_rx.recv().await.expect("an announcement");
+        match announced.kind {
+            SessionEventKind::Progress { message } => {
+                assert!(message.contains("contract frozen"), "{message}");
+            }
+            other => panic!("expected progress, got {other:?}"),
+        }
+
+        // No contract: nothing stamped, nothing sent.
+        let mut bare: CoderRunRequest = serde_json::from_value(serde_json::json!({
+            "task": {"id": "t", "description": "d"},
+            "workspace": {"root": "/w", "base_ref": "HEAD"},
+            "config": {
+                "backend": "liberado-loop",
+                "planner": {"model": "m"},
+                "coder": {"model": "m"},
+                "critic": {"model": "m"}
+            }
+        }))
+        .unwrap();
+        let (ev_tx, mut ev_rx) = tokio::sync::mpsc::channel(8);
+        apply_contract_if_any(&None, &mut bare, "s1", &ev_tx)
+            .await
+            .unwrap();
+        drop(ev_tx);
+        assert!(ev_rx.recv().await.is_none(), "no contract, no announcement");
+    }
+
+    /// A fan-out child may not carry its own subtasks — nesting is refused before any child
+    /// runs. A child without subtasks simply builds single-agent.
+    #[tokio::test]
+    async fn a_fanout_child_cannot_nest_subtasks_but_builds_alone_without_them() {
+        use crate::coding_goal::CodingGoalPayload;
+        let t = Transcript::open().await;
+        let pack = CodingSessionPack::new(
+            Arc::new(liberado_provider::MockProvider::new("mock")),
+            std::env::temp_dir(),
+        );
+        let (ev_tx, _ev_rx) = tokio::sync::mpsc::channel(8);
+        let goal = GoalSpec {
+            id: Some("s1".into()),
+            domain: liberado_session::DomainHint::Coding,
+            description: "d".into(),
+            success_criteria: vec![],
+            max_turns: 0,
+            max_idle_secs: None,
+            origin: None,
+            profile: None,
+            payload: serde_json::json!({}),
+        };
+
+        // Child flag alone: no subtasks, so the pack builds single-agent.
+        let payload = CodingGoalPayload::parse(&serde_json::json!({"fanout_child": true})).unwrap();
+        let payload_json = serde_json::json!({"fanout_child": true});
+        let out = pack
+            .maybe_run_fanout(
+                "s1",
+                &goal,
+                &payload,
+                &payload_json,
+                &t.ctx(),
+                std::path::Path::new("/tmp"),
+                "mock",
+                &ev_tx,
+            )
+            .await
+            .unwrap();
+        assert!(out.is_none(), "no subtasks means no fan-out: {out:?}");
+
+        // Child flag WITH subtasks: refused outright.
+        let payload_json = serde_json::json!({
+            "fanout_child": true,
+            "subtasks": [ { "label": &format!("a{}", unique_tag()), "description": "x" } ]
+        });
+        let payload = CodingGoalPayload::parse(&payload_json).unwrap();
+        let err = pack
+            .maybe_run_fanout(
+                "s1",
+                &goal,
+                &payload,
+                &payload_json,
+                &t.ctx(),
+                std::path::Path::new("/tmp"),
+                "mock",
+                &ev_tx,
+            )
+            .await
+            .expect_err("nested subtasks are refused");
+        assert!(err.to_string().contains("cannot nest"), "{err}");
+    }
+
+    /// A single in-process child: the fan-out's terminal kind and wire flag must agree with
+    /// the report, in both directions.
+    #[tokio::test]
+    async fn fanout_terminal_and_wire_flag_agree_with_the_report() {
+        use crate::coding_goal::CodingGoalPayload;
+        struct OkBackend;
+        #[async_trait::async_trait]
+        impl liberado_coder_core::CoderBackend for OkBackend {
+            fn name(&self) -> &str {
+                "ok-fan"
+            }
+            async fn run(
+                &self,
+                request: CoderRunRequest,
+            ) -> Result<liberado_coder_core::CoderRunResult, liberado_coder_core::CoderError>
+            {
+                let root = std::path::PathBuf::from(&request.workspace.root);
+                std::fs::write(root.join("child.txt"), "hi").unwrap();
+                for args in [
+                    vec!["config", "user.email", "t@l"],
+                    vec!["config", "user.name", "t"],
+                    vec!["add", "-A"],
+                    vec!["commit", "-qm", "child"],
+                ] {
+                    let _ = std::process::Command::new("git")
+                        .args(args)
+                        .current_dir(&root)
+                        .status();
+                }
+                Ok(liberado_coder_core::CoderRunResult {
+                    backend: self.name().into(),
+                    outcome: Outcome::Succeeded,
+                    summary: "wrote".into(),
+                    files_changed: vec!["child.txt".into()],
+                    file_changes: Vec::new(),
+                    validation_notes: None,
+                    critic_verdict: None,
+                    gate_votes: Vec::new(),
+                    trace_path: None,
+                    diff_findings: Vec::new(),
+                    session_findings: Vec::new(),
+                    remediation: None,
+                    diagnostics: serde_json::json!({}),
+                })
+            }
+        }
+
+        let repo = git_repo_with_base();
+        let tag = unique_tag();
+        let make_payloads = |subtasks: bool| {
+            let payload_json = if subtasks {
+                serde_json::json!({
+                    "subtasks": [ { "label": &format!("b{tag}"), "description": "x" } ],
+                    "max_concurrent_subagents": 1
+                })
+            } else {
+                serde_json::json!({})
+            };
+            (
+                CodingGoalPayload::parse(&payload_json).unwrap(),
+                payload_json,
+            )
+        };
+        let goal = GoalSpec {
+            id: Some("s1".into()),
+            domain: liberado_session::DomainHint::Coding,
+            description: "d".into(),
+            success_criteria: vec![],
+            max_turns: 0,
+            max_idle_secs: None,
+            origin: None,
+            profile: None,
+            payload: serde_json::json!({}),
+        };
+
+        // Success path.
+        let pack = CodingSessionPack::with_backend(
+            Arc::new(OkBackend),
+            Arc::new(liberado_provider::MockProvider::new("merge")),
+            std::env::temp_dir(),
+        );
+        let t = Transcript::open().await;
+        let (payload, payload_json) = make_payloads(true);
+        let (ev_tx, mut ev_rx) = tokio::sync::mpsc::channel(32);
+        let out = pack
+            .maybe_run_fanout(
+                "s1",
+                &goal,
+                &payload,
+                &payload_json,
+                &t.ctx(),
+                repo.path(),
+                "mock",
+                &ev_tx,
+            )
+            .await
+            .unwrap()
+            .expect("fan-out ran");
+        assert_eq!(out.terminal, TerminalKind::Succeeded, "{}", out.summary);
+        drop(ev_tx);
+        let mut events = Vec::new();
+        while let Some(e) = ev_rx.recv().await {
+            events.push(e);
+        }
+        let ok_flags = events
+            .iter()
+            .filter_map(|e| match &e.kind {
+                SessionEventKind::ValidationFinished { ok, .. } => Some(*ok),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(ok_flags, vec![true], "the wire flag mirrors the report");
+
+        // Failure path: the child fails, so both the kind and the flag read failure.
+        struct NoopBackend;
+        #[async_trait::async_trait]
+        impl liberado_coder_core::CoderBackend for NoopBackend {
+            fn name(&self) -> &str {
+                "noop"
+            }
+            async fn run(
+                &self,
+                _request: CoderRunRequest,
+            ) -> Result<liberado_coder_core::CoderRunResult, liberado_coder_core::CoderError>
+            {
+                Ok(liberado_coder_core::CoderRunResult {
+                    backend: self.name().into(),
+                    outcome: Outcome::Failed,
+                    summary: "did nothing".into(),
+                    files_changed: vec![],
+                    file_changes: Vec::new(),
+                    validation_notes: None,
+                    critic_verdict: None,
+                    gate_votes: Vec::new(),
+                    trace_path: None,
+                    diff_findings: Vec::new(),
+                    session_findings: Vec::new(),
+                    remediation: None,
+                    diagnostics: serde_json::json!({}),
+                })
+            }
+        }
+        let pack = CodingSessionPack::with_backend(
+            Arc::new(NoopBackend),
+            Arc::new(liberado_provider::MockProvider::new("merge")),
+            std::env::temp_dir(),
+        );
+        let t = Transcript::open().await;
+        let (payload, payload_json) = make_payloads(true);
+        let (ev_tx, mut ev_rx) = tokio::sync::mpsc::channel(32);
+        let out = pack
+            .maybe_run_fanout(
+                "s1",
+                &goal,
+                &payload,
+                &payload_json,
+                &t.ctx(),
+                repo.path(),
+                "mock",
+                &ev_tx,
+            )
+            .await
+            .unwrap()
+            .expect("fan-out ran");
+        assert_eq!(out.terminal, TerminalKind::Failed);
+        drop(ev_tx);
+        let mut flags = Vec::new();
+        while let Some(e) = ev_rx.recv().await {
+            if let SessionEventKind::ValidationFinished { ok, .. } = e.kind {
+                flags.push(ok);
+            }
+        }
+        assert_eq!(flags, vec![false]);
+    }
+
+    /// A green fan-out still has to survive its ship preflight: a failing step fails the
+    /// goal, even though every child succeeded.
+    #[tokio::test]
+    async fn a_failing_ship_preflight_fails_a_green_fanout() {
+        use crate::coding_goal::CodingGoalPayload;
+        struct OkBackend;
+        #[async_trait::async_trait]
+        impl liberado_coder_core::CoderBackend for OkBackend {
+            fn name(&self) -> &str {
+                "ok-fan"
+            }
+            async fn run(
+                &self,
+                request: CoderRunRequest,
+            ) -> Result<liberado_coder_core::CoderRunResult, liberado_coder_core::CoderError>
+            {
+                let root = std::path::PathBuf::from(&request.workspace.root);
+                std::fs::write(root.join("child.txt"), "hi").unwrap();
+                for args in [
+                    vec!["config", "user.email", "t@l"],
+                    vec!["config", "user.name", "t"],
+                    vec!["add", "-A"],
+                    vec!["commit", "-qm", "child"],
+                ] {
+                    let _ = std::process::Command::new("git")
+                        .args(&args)
+                        .current_dir(&root)
+                        .status();
+                }
+                Ok(liberado_coder_core::CoderRunResult {
+                    backend: self.name().into(),
+                    outcome: Outcome::Succeeded,
+                    summary: "wrote".into(),
+                    files_changed: vec!["child.txt".into()],
+                    file_changes: Vec::new(),
+                    validation_notes: None,
+                    critic_verdict: None,
+                    gate_votes: Vec::new(),
+                    trace_path: None,
+                    diff_findings: Vec::new(),
+                    session_findings: Vec::new(),
+                    remediation: None,
+                    diagnostics: serde_json::json!({}),
+                })
+            }
+        }
+
+        let repo = git_repo_with_base();
+        let pack = CodingSessionPack::with_backend(
+            Arc::new(OkBackend),
+            Arc::new(liberado_provider::MockProvider::new("merge")),
+            std::env::temp_dir(),
+        );
+        let t = Transcript::open().await;
+        let payload_json = serde_json::json!({
+            "subtasks": [ { "label": &format!("c{}", unique_tag()), "description": "x" } ],
+            "max_concurrent_subagents": 1
+        });
+        let payload = CodingGoalPayload::parse(&payload_json).unwrap();
+        // The ship bar is read from the GOAL payload, not the coding payload.
+        let goal = GoalSpec {
+            id: Some("s1".into()),
+            domain: liberado_session::DomainHint::Coding,
+            description: "d".into(),
+            success_criteria: vec![],
+            max_turns: 0,
+            max_idle_secs: None,
+            origin: None,
+            profile: None,
+            payload: serde_json::json!({
+                "preflight": { "required": true, "steps": [
+                    { "name": "boom", "run": "exit 2" }
+                ] }
+            }),
+        };
+        let (ev_tx, _ev_rx) = tokio::sync::mpsc::channel(32);
+        let out = pack
+            .maybe_run_fanout(
+                "s1",
+                &goal,
+                &payload,
+                &payload_json,
+                &t.ctx(),
+                repo.path(),
+                "mock",
+                &ev_tx,
+            )
+            .await
+            .unwrap()
+            .expect("fan-out ran");
+        assert_eq!(
+            out.terminal,
+            TerminalKind::Failed,
+            "a red ship bar fails a green fan-out: {}",
+            out.summary
+        );
+    }
+
+    /// Restricted tiers announce themselves on the bus; normal mode says nothing.
+    #[tokio::test]
+    async fn restricted_modes_announce_themselves_and_normal_mode_is_quiet() {
+        for (mode, needle) in [
+            (CodingMode::Plan, Some("plan mode")),
+            (CodingMode::Explore, Some("explore mode")),
+            (CodingMode::Normal, None),
+        ] {
+            let policies = policies(mode);
+            let (ev_tx, mut ev_rx) = tokio::sync::mpsc::channel(8);
+            send_mode_notice("s1", &policies, &ev_tx).await;
+            drop(ev_tx);
+            let mut notices = Vec::new();
+            while let Some(event) = ev_rx.recv().await {
+                if let SessionEventKind::Progress { message } = event.kind {
+                    notices.push(message);
+                }
+            }
+            match needle {
+                Some(n) => {
+                    assert_eq!(notices.len(), 1, "{n} mode announces once");
+                    assert!(notices[0].contains(n), "{}", notices[0]);
+                }
+                None => assert!(
+                    notices.is_empty(),
+                    "normal mode is not a restriction; no notice: {notices:?}"
+                ),
+            }
+        }
+    }
+
+    /// A bare repository answers `--is-inside-work-tree` with "false" and exit 0 — that is not
+    /// a usable workspace repo, and must not read as one.
+    #[test]
+    fn a_bare_repo_is_not_a_workspace_repo() {
+        let bare = tempfile::tempdir().unwrap();
+        let ok = std::process::Command::new("git")
+            .args(["init", "--quiet", "--bare"])
+            .current_dir(bare.path())
+            .status()
+            .unwrap();
+        assert!(ok.success());
+        assert!(!is_git_repo(bare.path()));
+
+        let real = tempfile::tempdir().unwrap();
+        std::process::Command::new("git")
+            .args(["init", "--quiet"])
+            .current_dir(real.path())
+            .status()
+            .unwrap()
+            .success()
+            .then_some(())
+            .expect("init");
+        assert!(is_git_repo(real.path()));
+
+        let empty = tempfile::tempdir().unwrap();
+        assert!(!is_git_repo(empty.path()));
+    }
+}

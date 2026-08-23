@@ -1572,3 +1572,236 @@ async fn intake_skipped_is_not_reported_when_intake_is_disabled() {
         "disabled intake must not announce a skip: {events:?}"
     );
 }
+
+fn contradictory_ready_json() -> String {
+    let cmd = |id: &str| VerifierSpec::Command {
+        id: id.into(),
+        program: "cargo".into(),
+        args: vec!["test".into(), "--all".into()],
+        env: Default::default(),
+        timeout_secs: None,
+        output_max_bytes: None,
+        network: false,
+    };
+    serde_json::to_string(&IntakeOutcome::ReadyForFreeze {
+        draft: GoalContractDraft {
+            description: "Build a todo CLI".into(),
+            success_criteria: vec!["works".into()],
+            verifiers: vec![cmd("test-a"), cmd("test-b")],
+            out_of_scope: vec![],
+            assumed_defaults: vec![],
+            domain_hint: None,
+            verify_profile: None,
+        },
+        rationale: "r".into(),
+    })
+    .unwrap()
+}
+
+/// The human's clarify budget counts every round; the session gives up one round AFTER the
+/// budget, not one before.
+#[tokio::test]
+async fn clarify_rounds_stop_one_round_after_the_budget() {
+    let (pack, ev_tx, mut ev_rx, mut inputs, mut cancel, _cancel_tx) = harness(
+        vec![CLARIFY_JSON, CLARIFY_JSON, CLARIFY_JSON],
+        vec!["Rust", "Rust", "Rust"],
+    );
+    let tr = Transcript::open().await;
+    let ctx = tr.ctx();
+    let phase = pack
+        .run_intake_phase(
+            "s1",
+            &goal("g"),
+            &ctx,
+            &settings(2),
+            &ev_tx,
+            &mut inputs,
+            &mut cancel,
+        )
+        .await
+        .unwrap();
+    assert!(
+        matches!(phase, IntakePhase::NeedsReview(_)),
+        "out of clarify rounds, the negotiation defers to a human: {phase:?}"
+    );
+    drop(ev_tx);
+    // The round counter is checked when a clarification ARRIVES: two answered rounds fit in
+    // the budget of two; the third clarification ends the phase without another ask.
+    let asks = prompts(&mut ev_rx)
+        .into_iter()
+        .filter(|p| p.contains("Rust or Node?"))
+        .count();
+    assert_eq!(asks, 2, "the budget bounds the asks exactly");
+}
+
+/// A revision request is another round on the same clock; three revises against a budget of
+/// two ends the phase with the draft for a human.
+#[tokio::test]
+async fn revise_rounds_stop_one_round_after_the_budget() {
+    let (pack, ev_tx, mut ev_rx, mut inputs, mut cancel, _cancel_tx) = harness(
+        vec![&ready_json("v1"), &ready_json("v2"), &ready_json("v3")],
+        vec!["make it blue", "make it red", "no more edits"],
+    );
+    let tr = Transcript::open().await;
+    let ctx = tr.ctx();
+    let phase = pack
+        .run_intake_phase(
+            "s1",
+            &goal("g"),
+            &ctx,
+            &settings(2),
+            &ev_tx,
+            &mut inputs,
+            &mut cancel,
+        )
+        .await
+        .unwrap();
+    assert!(
+        matches!(phase, IntakePhase::NeedsReview(Some(_))),
+        "revisions past the budget hand the draft to a human: {phase:?}"
+    );
+    drop(ev_tx);
+    let freezes = prompts(&mut ev_rx)
+        .into_iter()
+        .filter(|p| p.contains("Draft contract"))
+        .count();
+    assert_eq!(freezes, 3, "three drafts shown, then the budget bites");
+}
+
+/// Coherence redrafts are the model's own budget. Two strikes and the draft goes to the
+/// human exactly as it stands — a stubborn model cannot loop forever.
+#[tokio::test]
+async fn coherence_redrafts_are_bounded_separately_from_the_human_budget() {
+    let (pack, ev_tx, _ev_rx, mut inputs, mut cancel, _cancel_tx) = harness(
+        vec![
+            &contradictory_ready_json(),
+            &contradictory_ready_json(),
+            &contradictory_ready_json(),
+        ],
+        vec!["reject"],
+    );
+    let tr = Transcript::open().await;
+    let ctx = tr.ctx();
+    let phase = pack
+        .run_intake_phase(
+            "s1",
+            &goal("g"),
+            &ctx,
+            &settings(5),
+            &ev_tx,
+            &mut inputs,
+            &mut cancel,
+        )
+        .await
+        .unwrap();
+    assert!(
+        matches!(phase, IntakePhase::Rejected),
+        "the human saw the still-contradictory draft and rejected it: {phase:?}"
+    );
+    drop(ev_tx);
+    // Bounded completion is the assertion: the run ended Rejected instead of grinding the
+    // script dry, which is what an unbounded redraft loop would do.
+}
+
+/// A fresh negotiation does not announce a resume; a resumed one does.
+#[tokio::test]
+async fn only_a_resumed_negotiation_announces_itself() {
+    use liberado_session::TurnAuthor;
+
+    // Fresh: no prior turns, so no resume notice on the bus.
+    let (pack, ev_tx, mut ev_rx, mut inputs, mut cancel, _ct) =
+        harness(vec![&ready_json("Build it")], vec!["accept"]);
+    {
+        let tr = Transcript::open().await;
+        let ctx = tr.ctx();
+        let phase = pack
+            .run_intake_phase(
+                "s1",
+                &goal("g"),
+                &ctx,
+                &settings(3),
+                &ev_tx,
+                &mut inputs,
+                &mut cancel,
+            )
+            .await
+            .unwrap();
+        assert!(matches!(phase, IntakePhase::Frozen(_)));
+    }
+    drop(ev_tx);
+    let progress: Vec<String> = std::iter::from_fn(|| ev_rx.try_recv().ok())
+        .filter_map(|e| match e.kind {
+            SessionEventKind::Progress { message } => Some(message),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        !progress.iter().any(|m| m.contains("resumed:")),
+        "a fresh session must not claim to resume: {progress:?}"
+    );
+
+    // Resumed: the transcript already carries a question and an answer, so the pack says it is
+    // picking the negotiation back up.
+    let (pack, ev_tx, mut ev_rx, mut inputs, mut cancel, _ct) =
+        harness(vec![&ready_json("Build it")], vec!["accept"]);
+    let tr = Transcript::open().await;
+    {
+        let seed = tr.ctx();
+        seed.record_turn(TurnAuthor::User, "the goal itself".to_string())
+            .await;
+        seed.record_turn(TurnAuthor::Assistant, "What language?".to_string())
+            .await;
+        seed.record_turn(TurnAuthor::User, "Rust".to_string()).await;
+    }
+    let ctx = tr.ctx();
+    let phase = pack
+        .run_intake_phase(
+            "s1",
+            &goal("g"),
+            &ctx,
+            &settings(3),
+            &ev_tx,
+            &mut inputs,
+            &mut cancel,
+        )
+        .await
+        .unwrap();
+    assert!(matches!(phase, IntakePhase::Frozen(_)));
+    drop(ev_tx);
+    let progress: Vec<String> = std::iter::from_fn(|| ev_rx.try_recv().ok())
+        .filter_map(|e| match e.kind {
+            SessionEventKind::Progress { message } => Some(message),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        progress.iter().any(|m| m.contains("resumed:")),
+        "picking up prior answers must be announced: {progress:?}"
+    );
+}
+
+/// A fresh negotiation does not announce a resume.
+#[tokio::test]
+async fn a_fresh_intake_does_not_claim_to_resume() {
+    let (pack, ev_tx, mut ev_rx, mut inputs, mut cancel, _cancel_tx) =
+        harness(vec![&ready_json("Build it")], vec!["accept"]);
+    let tr = Transcript::open().await;
+    let ctx = tr.ctx();
+    let phase = pack
+        .run_intake_phase(
+            "s1",
+            &goal("g"),
+            &ctx,
+            &settings(3),
+            &ev_tx,
+            &mut inputs,
+            &mut cancel,
+        )
+        .await
+        .unwrap();
+    assert!(matches!(phase, IntakePhase::Frozen(_)));
+    drop(ev_tx);
+    for p in prompts(&mut ev_rx) {
+        assert!(!p.contains("resumed:"), "nothing was resumed: {p}");
+    }
+}

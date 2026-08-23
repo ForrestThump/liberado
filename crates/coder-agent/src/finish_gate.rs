@@ -140,6 +140,35 @@ mod tests {
             .expect("a non-Rust workspace has no compile gate");
     }
 
+    /// A live `succeeded` over a red compile must come back as the regular refusal — the
+    /// model's change is broken, not the host, so it gets the fix-it-here message.
+    #[tokio::test]
+    async fn a_red_compile_refuses_succeeded_as_a_change_failure() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            dir.path().join("Cargo.toml"),
+            "[package]\nname = \"gate-red\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        )
+        .unwrap();
+        std::fs::create_dir_all(dir.path().join("src")).unwrap();
+        std::fs::write(
+            dir.path().join("src/main.rs"),
+            "fn main() { let x: i32 = \"not an int\"; }\n",
+        )
+        .unwrap();
+
+        let gate = WorkspaceCompileGate::new(dir.path().to_string_lossy());
+        let err = gate
+            .accept(&report(Outcome::Succeeded), false)
+            .await
+            .expect_err("a red cargo check must refuse outcome=succeeded");
+        assert!(err.contains("NOT accepted"), "{err}");
+        assert!(
+            !err.contains("host failed"),
+            "a type error is the model's to fix, not infrastructure: {err}"
+        );
+    }
+
     #[tokio::test]
     async fn wrap_up_and_partial_accept_without_looking_at_the_tree() {
         let dir = tempfile::tempdir().expect("tempdir");
