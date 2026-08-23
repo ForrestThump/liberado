@@ -1790,6 +1790,9 @@ mod preserve_work_tests {
 mod task_context_tests;
 
 #[cfg(test)]
+mod cli_entry_tests;
+
+#[cfg(test)]
 mod impl_tests {
     use super::*;
     use liberado_coder_core::CoderRunResult;

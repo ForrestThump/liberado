@@ -433,8 +433,12 @@ mod tests {
         std::fs::create_dir_all(&root).unwrap();
         std::fs::write(root.join("f.txt"), "keep\n").unwrap();
         let sg = ShadowGit::open_or_init_at(&data, &root, "sess").unwrap();
+        // `git_dir` is canonicalized (and stripped of the `\\?\` prefix) inside ShadowGit, so
+        // the comparison must use the same spelling — a raw `std::env::temp_dir()` path is the
+        // 8.3 short form on a Windows runner (`RUNNER~1`) and never prefixes-matches.
+        let root_canonical = strip_extended_path_prefix(&root.canonicalize().unwrap());
         assert!(
-            sg.git_dir().strip_prefix(&root).is_ok(),
+            sg.git_dir().strip_prefix(&root_canonical).is_ok(),
             "side repo must sit under the work tree for this scenario"
         );
 
