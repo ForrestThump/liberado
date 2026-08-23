@@ -187,6 +187,8 @@ fn build_mutants_command(package: &str, profile: RunProfile) -> String {
         // Same cold-cache effect for conversation-store: the baseline test phase also
         // compiles doctests, which alone exceeds the 3s floor on a cold cache.
         ("liberado-conversation-store", _) => ("60", "60"),
+        // acp-bridge spawns child processes in its smoke test; a cold baseline exceeds 3s.
+        ("liberado-acp-bridge", _) => ("10.0", "120"),
         (_, RunProfile::LibOnly) => ("90", "90"),
         _ => ("3.0", "30"),
     };
@@ -846,6 +848,10 @@ mod tests {
         let tui = build_mutants_command("liberado-tui", RunProfile::Default);
         assert!(tui.contains("--timeout 3.0"));
         assert!(tui.contains("--minimum-test-timeout 30"));
+
+        let acp = build_mutants_command("liberado-acp-bridge", RunProfile::Default);
+        assert!(acp.contains("--timeout 10.0"));
+        assert!(acp.contains("--minimum-test-timeout 120"));
     }
 
     #[test]

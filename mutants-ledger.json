@@ -963,6 +963,21 @@
         "timeout": 0,
         "unviable": 1
       }
+    },
+    {
+      "package": "liberado-acp-bridge",
+      "commit": "dc4b210eb020beb52da12bb9bf1da4e2a5cf6460",
+      "recorded_at": "2026-08-23",
+      "command": "cargo mutants -p liberado-acp-bridge --cap-lints true --timeout 10.0 --minimum-test-timeout 120 --in-place",
+      "tool_version": "27.1.0",
+      "scope": "package",
+      "counts": {
+        "viable": 453,
+        "caught": 324,
+        "survived": 120,
+        "timeout": 9,
+        "unviable": 90
+      }
     }
   ]
 }
