@@ -18,20 +18,54 @@ use tokio::io::{AsyncBufReadExt, BufReader, stdin};
 /// Where to find the daemon server when `LIBERADO_SERVER` is unset.
 const DEFAULT_SERVER: &str = "http://127.0.0.1:4201";
 
+/// What the REPL should do with one line of standard input.
+///
+/// Kept separate from `run`'s loop so the trimming/quitting rules are pinned by tests instead of
+/// living behind a live stdin handle.
+#[derive(Debug, PartialEq, Eq)]
+enum LineAction<'a> {
+    /// Blank or whitespace-only input — reprompt without sending anything.
+    Skip,
+    /// `exit` / `quit` — leave the REPL.
+    Quit,
+    /// Anything else — send this (trimmed) text as one chat message.
+    Send(&'a str),
+}
+
+fn classify_line(line: &str) -> LineAction<'_> {
+    let message = line.trim();
+    if message.is_empty() {
+        LineAction::Skip
+    } else if message == "exit" || message == "quit" {
+        LineAction::Quit
+    } else {
+        LineAction::Send(message)
+    }
+}
+
+/// Where to find the daemon server: `LIBERADO_SERVER`, else the default local endpoint.
+fn resolve_base() -> String {
+    std::env::var("LIBERADO_SERVER").unwrap_or_else(|_| DEFAULT_SERVER.to_string())
+}
+
+fn print_banner(base: &str, session: &Option<String>) {
+    println!("liberado chat -> {base}");
+    println!("type 'exit' or Ctrl-D to quit");
+    if let Some(id) = session {
+        println!("(resuming session {id})");
+    }
+}
+
 /// Run the interactive chat client against a running daemon server. `resume` is an optional
 /// conversation id to continue; without it, the first message starts a new conversation (the id is
 /// learned from the `session` event and reused for the rest of the REPL).
 pub async fn run(resume: Option<String>) -> Result<(), Box<dyn std::error::Error>> {
-    let base = std::env::var("LIBERADO_SERVER").unwrap_or_else(|_| DEFAULT_SERVER.to_string());
+    let base = resolve_base();
     let endpoint = format!("{base}/api/chat/stream");
     let client = reqwest::Client::new();
     let mut session: Option<String> = resume;
 
-    println!("liberado chat -> {base}");
-    println!("type 'exit' or Ctrl-D to quit");
-    if let Some(id) = &session {
-        println!("(resuming session {id})");
-    }
+    print_banner(&base, &session);
 
     // stdout is the conversation; stderr carries logs and errors. Read prompts one line at a time.
     let mut lines = BufReader::new(stdin()).lines();
@@ -39,25 +73,32 @@ pub async fn run(resume: Option<String>) -> Result<(), Box<dyn std::error::Error
         print!("> ");
         std::io::stdout().flush()?;
 
-        let line = match lines.next_line().await? {
-            Some(line) => line,
-            None => break, // EOF (Ctrl-D)
+        let Some(line) = lines.next_line().await? else {
+            break; // EOF (Ctrl-D)
         };
-        let message = line.trim();
-        if message.is_empty() {
-            continue;
-        }
-        if message == "exit" || message == "quit" {
-            break;
-        }
-
-        if let Err(err) = turn(&client, &endpoint, &base, &mut session, message).await {
-            // A turn-level error (not a connection error, which `turn` reports itself) — surface it
-            // and keep the REPL alive.
-            eprintln!("\n[error] {err}");
+        match classify_line(&line) {
+            LineAction::Skip => {}
+            LineAction::Quit => break,
+            LineAction::Send(message) => {
+                send_turn(&client, &endpoint, &base, &mut session, message).await
+            }
         }
     }
     Ok(())
+}
+
+/// Send one message; a turn-level error (not a connection error, which `turn` reports itself)
+/// is surfaced and the REPL stays alive.
+async fn send_turn(
+    client: &reqwest::Client,
+    endpoint: &str,
+    base: &str,
+    session: &mut Option<String>,
+    message: &str,
+) {
+    if let Err(err) = turn(client, endpoint, base, session, message).await {
+        eprintln!("\n[error] {err}");
+    }
 }
 
 /// One REPL turn: POST the message (with the current session, if any), stream the SSE response, and
@@ -186,7 +227,7 @@ fn truncate(text: &str, max: usize) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{dispatch, truncate, turn};
+    use super::{LineAction, classify_line, dispatch, truncate, turn};
     use chat_client_contract::native::SseEvent;
 
     fn ev(event: &str, data: &str) -> SseEvent {
@@ -417,5 +458,25 @@ mod tests {
             "a failed turn must not change the session"
         );
         server.await.unwrap();
+    }
+
+    // ── classify_line ───────────────────────────────────────────────────
+
+    /// Blank input reprompts; exit and quit leave; everything else is one message. The trim is
+    /// load-bearing: a stray trailing space must not turn "exit " into a chat message.
+    #[test]
+    fn classify_line_skips_blank_and_quits_on_exit_words() {
+        assert_eq!(classify_line(""), LineAction::Skip);
+        assert_eq!(classify_line("   \t "), LineAction::Skip);
+        assert_eq!(classify_line("exit"), LineAction::Quit);
+        assert_eq!(classify_line("  quit  "), LineAction::Quit);
+    }
+
+    #[test]
+    fn classify_line_sends_the_trimmed_message() {
+        assert_eq!(
+            classify_line("  hello there \n"),
+            LineAction::Send("hello there")
+        );
     }
 }

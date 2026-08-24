@@ -12,7 +12,7 @@ use liberado_provider::{CompletionResponse, MockProvider};
 use liberado_session::HumanInput;
 use tokio::sync::mpsc;
 
-fn ready_json(description: &str) -> String {
+pub(crate) fn ready_json(description: &str) -> String {
     serde_json::to_string(&IntakeOutcome::ReadyForFreeze {
         draft: GoalContractDraft {
             description: description.into(),
@@ -31,7 +31,7 @@ fn ready_json(description: &str) -> String {
     .unwrap()
 }
 
-const CLARIFY_JSON: &str = r#"{
+pub(crate) const CLARIFY_JSON: &str = r#"{
         "status": "needs_clarification",
         "questions": [{"id":"stack","prompt":"Rust or Node?","options":["Rust","Node"],"affects":"verify profile"}]
     }"#;
@@ -72,7 +72,7 @@ fn harness(
     (pack, ev_tx, ev_rx, inputs, c_rx, c_tx)
 }
 
-fn goal(description: &str) -> GoalSpec {
+pub(crate) fn goal(description: &str) -> GoalSpec {
     GoalSpec {
         id: None,
         description: description.into(),
@@ -127,9 +127,9 @@ impl Transcript {
 /// A backend that fails the first attempt and succeeds on the next, recording every request it
 /// was handed. The recording is the point: it is the only way to prove a human's mid-build
 /// answer actually reaches the *backend* rather than merely being narrated to the event bus.
-struct ScriptedBackend {
-    seen: Arc<std::sync::Mutex<Vec<CoderRunRequest>>>,
-    fail_attempts: u32,
+pub(crate) struct ScriptedBackend {
+    pub(crate) seen: Arc<std::sync::Mutex<Vec<CoderRunRequest>>>,
+    pub(crate) fail_attempts: u32,
 }
 
 #[async_trait]

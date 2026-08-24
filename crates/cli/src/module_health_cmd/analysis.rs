@@ -104,3 +104,50 @@ fn read_source_metrics(
     };
     Ok(Some((source.to_owned(), metrics)))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `read_source_metrics` maps one analyzer JSON file back to its crate-relative source path
+    /// and its integer metrics; a path outside production sources is skipped, not an error.
+    #[test]
+    fn reads_metrics_for_production_sources_and_skips_the_rest() {
+        let root = tempfile::tempdir().unwrap();
+        let output = root.path();
+
+        // A production source: crates/<name>/src/<file>.rs — via its .rs.json analysis artifact.
+        let analysis = r#"{
+            "metrics": {
+                "loc": {"ploc": 120.0, "lloc": 100.0},
+                "nom": {"total": 12.0},
+                "cyclomatic": {"sum": 34.0}
+            }
+        }"#;
+        let good = output.join("crates/demo/src/lib.rs.json");
+        std::fs::create_dir_all(good.parent().unwrap()).unwrap();
+        std::fs::write(&good, analysis).unwrap();
+        let got = read_source_metrics(output, &good).unwrap().unwrap();
+        assert_eq!(got.0, "crates/demo/src/lib.rs");
+        assert_eq!(
+            (got.1.ploc, got.1.lloc, got.1.functions, got.1.cyclomatic),
+            (120, 100, 12, 34)
+        );
+
+        // A test file is not production source: skipped.
+        let test_json = output.join("crates/demo/tests/it.rs.json");
+        std::fs::create_dir_all(test_json.parent().unwrap()).unwrap();
+        std::fs::write(&test_json, analysis).unwrap();
+        assert!(read_source_metrics(output, &test_json).unwrap().is_none());
+
+        // A fractional metric from the analyzer is refused, not truncated.
+        let bad = output.join("crates/demo/src/broken.rs.json");
+        std::fs::write(
+            &bad,
+            r#"{"metrics":{"loc":{"ploc":1.5,"lloc":1.0},"nom":{"total":1.0},"cyclomatic":{"sum":2.0}}}"#,
+        )
+        .unwrap();
+        let err = read_source_metrics(output, &bad).unwrap_err().to_string();
+        assert!(err.contains("non-integer"), "{err}");
+    }
+}

@@ -74,17 +74,27 @@ pub fn check(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-pub fn ratchet(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
-    let current = if root.join(BASELINE_FILE).is_file() {
+/// The current report for a ratchet: compare against the existing baseline when there is one,
+/// otherwise produce an initial report from a fresh analysis. Split from [`ratchet`] so the
+/// driver stays under the complexity ceiling; the analysis half runs the real tool and is
+/// covered by `just ci` itself.
+fn current_report(root: &Path) -> Result<Report, Box<dyn std::error::Error>> {
+    if root.join(BASELINE_FILE).is_file() {
         check(root)?;
-        serde_json::from_slice(&std::fs::read(root.join(CURRENT_FILE))?)?
+        Ok(serde_json::from_slice(&std::fs::read(
+            root.join(CURRENT_FILE),
+        )?)?)
     } else {
         load_config(root)?;
         let report = analysis::analyze(root)?;
         write_report(&root.join(CURRENT_FILE), &report)?;
         eprintln!("[module health] creating initial baseline");
-        report
-    };
+        Ok(report)
+    }
+}
+
+pub fn ratchet(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    let current = current_report(root)?;
     write_report(&root.join(BASELINE_FILE), &current)?;
     eprintln!("[module health] ratcheted {BASELINE_FILE}");
     Ok(())
