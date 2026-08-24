@@ -462,3 +462,32 @@ fn short_question_sheets_gain_a_free_text_option_and_long_ones_do_not() {
         "two real choices need no padding"
     );
 }
+
+/// A bound wire must carry the request and the completed reply must come
+/// back as a decision. The first rpc id is deterministic (`lib-perm-1`) on a
+/// fresh broker, so the test completes it directly; the retry loop only
+/// covers the spawn race between ask() registering its waiter and complete()
+/// firing. Under a deleted bind the ask fails with "wire is not bound".
+#[tokio::test]
+async fn a_bound_wire_carries_a_permission_request_to_a_decision() {
+    let broker = Arc::new(PermissionBroker::new());
+    broker.bind_wire(Arc::new(StdoutWire));
+
+    let asker = Arc::clone(&broker);
+    let handle = tokio::spawn(async move { asker.ask("s1", "git", &["push".to_string()]).await });
+
+    let reply = json!({ "outcome": { "outcome": "allow_once", "optionId": OPT_ONCE } });
+    for _ in 0..400 {
+        broker.complete(&json!("lib-perm-1"), Some(reply.clone()), None);
+        if handle.is_finished() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+    let decision = tokio::time::timeout(std::time::Duration::from_secs(2), handle)
+        .await
+        .expect("ask must finish once the reply is delivered")
+        .expect("join")
+        .expect("a bound wire must deliver the ask");
+    assert_eq!(decision, PermissionDecision::Once, "{decision:?}");
+}

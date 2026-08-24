@@ -236,3 +236,221 @@ fn load_acp_config_reads_the_declared_section_and_defaults_on_failure() {
     let cfg = load_acp_config(Some(empty.path()));
     assert_eq!(cfg.max_turns, None);
 }
+
+// ── commit_and_branch ────────────────────────────────────────────────────────
+
+fn listed_branches(repo: &std::path::Path) -> Vec<String> {
+    let out = liberado_common::process::std_command("git")
+        .args([
+            "-C",
+            &repo.to_string_lossy(),
+            "for-each-ref",
+            "refs/heads",
+            "--format",
+            "%(refname:short)",
+        ])
+        .output()
+        .expect("git for-each-ref");
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .map(str::to_string)
+        .collect()
+}
+
+/// A successful `checkout -b` must be reported as success: the remediation
+/// path only proceeds when isolation actually happened.
+#[tokio::test]
+async fn commit_and_branch_reports_success_and_creates_the_branch() {
+    let _guard = ENV_LOCK.lock().await;
+    let repo = temp_repo();
+    commit_and_branch(repo.path(), "agent/isolated-ok")
+        .await
+        .expect("checkout -b on a clean repo must succeed");
+    assert!(
+        listed_branches(repo.path())
+            .iter()
+            .any(|b| b == "agent/isolated-ok"),
+        "the isolated branch must exist after the call"
+    );
+}
+
+/// Outside a git repo there is no isolation, and pretending otherwise would
+/// put a speculative fix on uncommitted work.
+#[tokio::test]
+async fn commit_and_branch_fails_outside_a_git_repo() {
+    let _guard = ENV_LOCK.lock().await;
+    let dir = tempfile::tempdir().expect("plain dir");
+    let err = commit_and_branch(dir.path(), "agent/nowhere")
+        .await
+        .expect_err("a non-repo cannot host the branch");
+    assert!(
+        err.contains("not a git repository"),
+        "the error must name the missing repo: {err}"
+    );
+}
+
+// ── warm_workspace_if_configured ─────────────────────────────────────────────
+
+/// A manifest cargo rejects immediately — no compilation, fails in well under
+/// a second, and proves whether the tree was consulted at all.
+fn broken_manifest_workspace() -> tempfile::TempDir {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(dir.path().join("Cargo.toml"), "not [valid toml").expect("write manifest");
+    dir
+}
+
+/// With warmup off the workspace is never touched. Pointing it at a broken
+/// manifest proves that: had the mutant run cargo, the baseline check would
+/// refuse and this would return Err.
+#[tokio::test]
+async fn a_disabled_warmup_never_consults_the_tree() {
+    let dir = broken_manifest_workspace();
+    let mut tuning = CoderTuning::default();
+    tuning.workspace_build.warmup = false;
+    warm_workspace_if_configured(&tuning, dir.path())
+        .await
+        .expect("warmup=false must return without inspecting anything");
+}
+
+/// With warmup on, a baseline that does not compile refuses the run before
+/// the model spends a token.
+#[tokio::test]
+async fn an_enabled_warmup_refuses_a_tree_that_does_not_compile() {
+    let dir = broken_manifest_workspace();
+    let mut tuning = CoderTuning::default();
+    tuning.workspace_build.warmup = true;
+    let err = warm_workspace_if_configured(&tuning, dir.path())
+        .await
+        .expect_err("a broken baseline must refuse the run");
+    assert!(
+        err.contains("does not compile"),
+        "the refusal must say why: {err}"
+    );
+}
+
+// ── remediate_if_needed ──────────────────────────────────────────────────────
+
+use liberado_coder_core::{Remedy, SessionFinding};
+
+fn actionable_finding() -> SessionFinding {
+    SessionFinding {
+        kind: "abandoned_finding".into(),
+        quote: "all checks pass".into(),
+        why: "no check was ever run".into(),
+        remedy: Remedy::Repair,
+    }
+}
+
+fn remediation_backend() -> LiberadoLoopBackend {
+    LiberadoLoopBackend::new(Arc::new(liberado_provider::MockProvider::new("mock")))
+}
+
+fn base_request_for(workspace: &std::path::Path) -> liberado_coder_core::CoderRunRequest {
+    let task = CoderTask::new("remediation-guard-test", "fix the findings");
+    let surface = assemble_production_run(
+        &CoderTuning::default(),
+        liberado_coder_agent::assemble::entry::acp_surface(
+            task,
+            workspace.to_path_buf(),
+            None,
+            Some(1),
+            0,
+            Vec::new(),
+        ),
+    );
+    surface.request
+}
+
+fn has_remediation_branch(repo: &std::path::Path) -> bool {
+    listed_branches(repo)
+        .iter()
+        .any(|b| b.starts_with("agent/remediation-"))
+}
+
+/// Remediation switched on with something actionable must isolate first:
+/// the branch existing (even though the mock provider immediately runs dry)
+/// is the observable half of the guard. A body that returns early never
+/// creates one.
+#[tokio::test]
+async fn enabled_remediation_with_findings_isolates_a_branch() {
+    let _guard = ENV_LOCK.lock().await;
+    let repo = temp_repo();
+    let mut tuning = CoderTuning::default();
+    tuning.session_critic.remediation = true;
+    let request = base_request_for(repo.path());
+    let record = remediate_if_needed(
+        &remediation_backend(),
+        &tuning,
+        "sess-iso-on",
+        repo.path(),
+        &request,
+        &[actionable_finding()],
+    )
+    .await;
+    assert!(
+        record.is_none(),
+        "an exhausted mock produces no record; got {record:?}"
+    );
+    assert!(
+        has_remediation_branch(repo.path()),
+        "the isolation branch must exist even when the fix itself failed: {:?}",
+        listed_branches(repo.path())
+    );
+}
+
+/// Remediation switched off must not touch the tree at all. Under the
+/// inverted guard a disabled pass still isolates a branch.
+#[tokio::test]
+async fn disabled_remediation_never_isolates_a_branch() {
+    let _guard = ENV_LOCK.lock().await;
+    let repo = temp_repo();
+    let mut tuning = CoderTuning::default();
+    tuning.session_critic.remediation = false;
+    let request = base_request_for(repo.path());
+    let record = remediate_if_needed(
+        &remediation_backend(),
+        &tuning,
+        "sess-iso-off",
+        repo.path(),
+        &request,
+        &[actionable_finding()],
+    )
+    .await;
+    assert!(record.is_none(), "disabled means no record: {record:?}");
+    assert!(
+        !has_remediation_branch(repo.path()),
+        "disabled remediation must not create branches: {:?}",
+        listed_branches(repo.path())
+    );
+}
+
+/// Enabled but nothing to act on: skipping happens before any isolation,
+/// so no branch may appear.
+#[tokio::test]
+async fn enabled_remediation_without_findings_skips_before_isolation() {
+    let _guard = ENV_LOCK.lock().await;
+    let repo = temp_repo();
+    let mut tuning = CoderTuning::default();
+    tuning.session_critic.remediation = true;
+    let request = base_request_for(repo.path());
+    let record = remediate_if_needed(
+        &remediation_backend(),
+        &tuning,
+        "sess-iso-empty",
+        repo.path(),
+        &request,
+        &[],
+    )
+    .await;
+    assert!(record.is_none(), "nothing to act on: {record:?}");
+    assert!(
+        !has_remediation_branch(repo.path()),
+        "an empty finding list must not reach the branch step: {:?}",
+        listed_branches(repo.path())
+    );
+}

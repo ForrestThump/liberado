@@ -817,3 +817,23 @@ async fn a_notification_through_dispatch_gets_no_response_and_still_cancels() {
         "notifications expect no response at all: {captured:?}"
     );
 }
+
+/// `session/new` with an empty `cwd` string must fall back to the process
+/// cwd: the filter exists so a blank string never becomes the workspace.
+#[tokio::test]
+async fn session_new_falls_back_when_cwd_is_an_empty_string() {
+    let bridge = test_bridge();
+    let resp = handle_session_new(&bridge, &json!({ "cwd": "" }))
+        .await
+        .expect("session/new succeeds");
+    let sid = resp["sessionId"]
+        .as_str()
+        .expect("sessionId in the payload")
+        .to_string();
+    let sessions = bridge.acp_sessions.lock().await;
+    let cwd = &sessions.get(&sid).expect("live session").cwd;
+    assert!(
+        !cwd.as_os_str().is_empty(),
+        "an empty cwd string must fall back, got {cwd:?}"
+    );
+}

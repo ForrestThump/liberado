@@ -1368,6 +1368,36 @@
         "timeout": 1,
         "unviable": 7
       }
+    },
+    {
+      "package": "liberado-acp-bridge",
+      "commit": "862224478106eb226334fbb3eb766e722dd3b7dc",
+      "recorded_at": "2026-08-24",
+      "command": "cargo mutants -p liberado-acp-bridge --cap-lints true --timeout 10.0 --minimum-test-timeout 120 --in-place",
+      "tool_version": "27.1.0",
+      "scope": "package",
+      "counts": {
+        "viable": 292,
+        "caught": 259,
+        "survived": 27,
+        "timeout": 6,
+        "unviable": 61
+      }
+    },
+    {
+      "package": "liberado-acp-bridge",
+      "commit": "862224478106eb226334fbb3eb766e722dd3b7dc",
+      "recorded_at": "2026-08-24",
+      "command": "cargo mutants -p liberado-acp-bridge --cap-lints true --timeout 10.0 --minimum-test-timeout 120 --in-place",
+      "tool_version": "27.1.0",
+      "scope": "package",
+      "counts": {
+        "viable": 354,
+        "caught": 321,
+        "survived": 25,
+        "timeout": 8,
+        "unviable": 71
+      }
     }
   ]
 }
