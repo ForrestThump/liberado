@@ -1881,3 +1881,7 @@ id: prop-1
         assert_eq!(proposal.status, ProposalStatus::Approved);
     }
 }
+
+#[cfg(test)]
+#[path = "telegram_approvals_survivor_tests.rs"]
+mod survivor_tests;

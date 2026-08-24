@@ -1443,6 +1443,36 @@
         "timeout": 0,
         "unviable": 2
       }
+    },
+    {
+      "package": "liberado-telegram-approvals",
+      "commit": "862224478106eb226334fbb3eb766e722dd3b7dc",
+      "recorded_at": "2026-08-24",
+      "command": "cargo mutants -p liberado-telegram-approvals --cap-lints true --timeout 3.0 --minimum-test-timeout 30 --in-place",
+      "tool_version": "27.0.0",
+      "scope": "package",
+      "counts": {
+        "viable": 70,
+        "caught": 56,
+        "survived": 13,
+        "timeout": 1,
+        "unviable": 15
+      }
+    },
+    {
+      "package": "liberado-telegram-approvals",
+      "commit": "ab712bbd61d50c6ca5e98f2df98a959636c6e480",
+      "recorded_at": "2026-08-24",
+      "command": "cargo mutants -p liberado-telegram-approvals --cap-lints true --timeout 3.0 --minimum-test-timeout 30 --in-place",
+      "tool_version": "27.0.0",
+      "scope": "package",
+      "counts": {
+        "viable": 70,
+        "caught": 68,
+        "survived": 1,
+        "timeout": 1,
+        "unviable": 15
+      }
     }
   ]
 }
