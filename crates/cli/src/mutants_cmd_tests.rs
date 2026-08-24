@@ -141,6 +141,92 @@ fn ledger_append_preserves_prior_rows() {
     assert_eq!(ledger.campaigns[1].commit.as_deref(), Some("abc123"));
 }
 
+/// A partial outcomes file (killed mid-campaign) must be refused even though
+/// every count is plausible: accounted != declared total.
+#[test]
+fn record_refuses_partial_outcomes_below_the_declared_total() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    init_git_repo(root);
+    fs::create_dir_all(root.join("mutants.out")).unwrap();
+    fs::write(
+        root.join(OUTCOMES_FILE),
+        r#"{
+  "total_mutants": 10,
+  "caught": 3,
+  "missed": 2,
+  "timeout": 0,
+  "unviable": 1,
+  "cargo_mutants_version": "27.1.0"
+}"#,
+    )
+    .unwrap();
+
+    let outcome = record_campaign(root, Some("alpha"), None, RunProfile::Default).unwrap();
+    assert!(matches!(outcome, RecordOutcome::SkippedIncomplete));
+    assert!(load_ledger(root).unwrap().campaigns.is_empty());
+}
+
+/// A complete file records normally: caught+survived+timeout+unviable == total.
+#[test]
+fn record_accepts_outcomes_that_account_for_every_mutant() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    init_git_repo(root);
+    fs::create_dir_all(root.join("mutants.out")).unwrap();
+    fs::write(
+        root.join(OUTCOMES_FILE),
+        r#"{
+  "total_mutants": 6,
+  "caught": 4,
+  "missed": 1,
+  "timeout": 0,
+  "unviable": 1,
+  "cargo_mutants_version": "27.1.0"
+}"#,
+    )
+    .unwrap();
+
+    let outcome = record_campaign(root, Some("alpha"), None, RunProfile::Default).unwrap();
+    assert!(matches!(outcome, RecordOutcome::Appended { .. }));
+    let ledger = load_ledger(root).unwrap();
+    assert_eq!(ledger.campaigns.len(), 1);
+    assert_eq!(ledger.campaigns[0].counts.survived, 1);
+}
+
+/// The zero-viable row is skipped when grouping for health/next: an older
+/// crash row must not shadow the crate's real campaign.
+#[test]
+fn grouping_skips_zero_viable_rows_so_a_real_campaign_stays_visible() {
+    let mk = |survived: u32, viable: u32| Campaign {
+        package: "liberado-alpha".into(),
+        commit: Some("0e14ecc1c7521034c9142782a0306861584acb29".into()),
+        recorded_at: "2026-08-23".into(),
+        command: None,
+        tool_version: Some("27.1.0".into()),
+        scope: "package".into(),
+        counts: Counts {
+            viable,
+            caught: viable - survived,
+            survived,
+            timeout: 0,
+            unviable: 0,
+        },
+        source: None,
+    };
+    let ledger = Ledger {
+        schema: 1,
+        campaigns: vec![mk(0, 0), mk(3, 5)],
+    };
+    let scratch = tempfile::tempdir().unwrap();
+    save_ledger(scratch.path(), &ledger).unwrap();
+    let ledger_on_disk = load_ledger(scratch.path()).unwrap();
+    let grouped = package_campaigns_by_package(&ledger_on_disk);
+    let rows = grouped.get("liberado-alpha").unwrap();
+    assert_eq!(rows.len(), 1, "the zero-viable crash row is skipped");
+    assert_eq!(rows[0].counts.survived, 3);
+}
+
 #[test]
 fn report_groups_never_historical_and_drift() {
     let dir = tempfile::tempdir().unwrap();
