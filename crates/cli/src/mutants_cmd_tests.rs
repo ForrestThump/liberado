@@ -536,3 +536,162 @@ fn most_drift_prefers_the_drift_note_over_commit_detail() {
          viable 1 caught 0 survived 1 timeout 0\n"
     );
 }
+
+// ── record_campaign: the remaining skip/append arms ────────────────────────────────
+
+fn write_outcomes(root: &Path, body: &str) {
+    fs::create_dir_all(root.join("mutants.out")).unwrap();
+    fs::write(root.join(OUTCOMES_FILE), body).unwrap();
+}
+
+const FULL_OUTCOMES: &str = r#"{
+  "total_mutants": 4,
+  "outcomes": [
+{"scenario": "Baseline"},
+{"scenario": {"Mutant": {"package": "liberado-alpha"}}},
+{"scenario": {"Mutant": {"package": "liberado-alpha"}}},
+{"scenario": {"Mutant": {"package": "liberado-alpha"}}},
+{"scenario": {"Mutant": {"package": "liberado-alpha"}}}
+  ],
+  "caught": 3,
+  "missed": 1,
+  "timeout": 0,
+  "unviable": 0,
+  "cargo_mutants_version": "27.1.0"
+}"#;
+
+#[test]
+fn a_complete_campaign_appends_and_names_the_commit() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    init_git_repo(root);
+    write_outcomes(root, FULL_OUTCOMES);
+
+    let outcome = record_campaign(
+        root,
+        None,
+        Some("cargo mutants -p liberado-alpha --file x"),
+        RunProfile::Default,
+    )
+    .unwrap();
+    match outcome {
+        RecordOutcome::Appended { package, commit } => {
+            assert_eq!(package, "liberado-alpha");
+            assert!(!commit.is_empty(), "the commit is recorded");
+        }
+        other => panic!("expected Appended, got {other:?}"),
+    }
+    let ledger = load_ledger(root).unwrap();
+    assert_eq!(ledger.campaigns.len(), 1);
+    // A `--file` command records file scope, not package scope.
+    assert_eq!(ledger.campaigns[0].scope, "file");
+    assert_eq!(
+        ledger.campaigns[0].command.as_deref(),
+        Some("cargo mutants -p liberado-alpha --file x")
+    );
+}
+
+#[test]
+fn a_partial_campaign_is_not_recorded() {
+    // cargo-mutants writes outcomes incrementally: fewer accounted outcomes than the
+    // declared total means the run died mid-campaign.
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    init_git_repo(root);
+    write_outcomes(
+        root,
+        r#"{
+  "total_mutants": 9,
+  "outcomes": [
+{"scenario": "Baseline"},
+{"scenario": {"Mutant": {"package": "liberado-alpha"}}}
+  ],
+  "caught": 1,
+  "missed": 0,
+  "timeout": 0,
+  "unviable": 0,
+  "cargo_mutants_version": "27.1.0"
+}"#,
+    );
+    let outcome = record_campaign(root, None, None, RunProfile::Default).unwrap();
+    assert!(matches!(outcome, RecordOutcome::SkippedIncomplete));
+    assert!(load_ledger(root).unwrap().campaigns.is_empty());
+}
+
+#[test]
+fn an_outcomes_file_without_a_version_is_skipped() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    init_git_repo(root);
+    write_outcomes(
+        root,
+        r#"{ "caught": 1, "missed": 0, "timeout": 0, "unviable": 0, "cargo_mutants_version": "" }"#,
+    );
+    let outcome = record_campaign(root, None, None, RunProfile::Default).unwrap();
+    assert!(matches!(outcome, RecordOutcome::SkippedIncomplete));
+}
+
+#[test]
+fn a_mistyped_outcomes_file_is_an_error_not_a_skip() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    init_git_repo(root);
+    write_outcomes(root, "not json at all");
+    assert!(record_campaign(root, None, None, RunProfile::Default).is_err());
+}
+
+#[test]
+fn an_explicit_crate_dir_that_disagrees_with_outcomes_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    init_git_repo(root);
+    write_outcomes(root, FULL_OUTCOMES);
+
+    let outcome = record_campaign(root, Some("beta"), None, RunProfile::Default);
+    let err = outcome.unwrap_err().to_string();
+    assert!(
+        err.contains("does not match crate directory"),
+        "the mismatch must be named: {err}"
+    );
+}
+
+// ── package_campaigns_by_package: the grouping rule ─────────────────────────────────
+
+#[test]
+fn grouping_keeps_only_viable_package_scope_rows() {
+    let campaign = |package: &str, viable: u32| Campaign {
+        package: package.into(),
+        commit: None,
+        recorded_at: "2026-08-24".into(),
+        command: None,
+        tool_version: None,
+        scope: "package".into(),
+        counts: Counts {
+            viable,
+            caught: viable,
+            survived: 0,
+            timeout: 0,
+            unviable: 0,
+        },
+        source: None,
+    };
+    let workspace_row = Campaign {
+        scope: "workspace".into(),
+        ..campaign("liberado-alpha", 5)
+    };
+    let ledger = Ledger {
+        schema: 1,
+        campaigns: vec![
+            campaign("liberado-alpha", 4),
+            campaign("liberado-beta", 2),
+            workspace_row,
+            // A crashed/partial run from before the zero-viable refusal existed.
+            campaign("liberado-gamma", 0),
+        ],
+    };
+
+    let grouped = package_campaigns_by_package(&ledger);
+    assert_eq!(grouped.len(), 2, "gamma's zero-viable row must not appear");
+    assert_eq!(grouped["liberado-alpha"].len(), 1);
+    assert_eq!(grouped["liberado-beta"].len(), 1);
+}

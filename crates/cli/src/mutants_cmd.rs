@@ -184,6 +184,7 @@ pub fn next_crate(
     Err("no crates matched the selection filters".into())
 }
 
+#[derive(Debug)]
 enum RecordOutcome {
     Appended { package: String, commit: String },
     SkippedIncomplete,
