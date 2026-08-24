@@ -204,6 +204,9 @@ fn build_mutants_command(package: &str, profile: RunProfile) -> String {
         ("liberado-coder-core", _) => ("90", "90"),
         // acp-bridge spawns child processes in its smoke test; a cold baseline exceeds 3s.
         ("liberado-acp-bridge", _) => ("10.0", "120"),
+        // chat-search pulls the Tantivy index stack; its cold-cache baseline test phase
+        // exceeds 3s before any mutant runs (same signature as conversation-store).
+        ("liberado-chat-search", _) => ("60", "60"),
         (_, RunProfile::LibOnly) => ("90", "90"),
         _ => ("3.0", "30"),
     };

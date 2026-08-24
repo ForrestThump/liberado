@@ -110,3 +110,7 @@ pub fn journal_display_path(correlation_id: &str) -> String {
         .display()
         .to_string()
 }
+
+#[cfg(test)]
+#[path = "dispatch_journal/tests.rs"]
+pub(crate) mod survivor_tests;

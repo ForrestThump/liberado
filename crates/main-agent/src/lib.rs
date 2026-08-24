@@ -387,6 +387,10 @@ impl Drop for Rollback<'_> {
 }
 
 #[cfg(test)]
+#[path = "lib_tests.rs"]
+mod survivor_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use async_trait::async_trait;
