@@ -28,11 +28,7 @@ fn event(correlation: &str) -> LatencyEvent {
 #[tokio::test]
 async fn recorded_events_land_in_the_jsonl_journal() {
     let dir = tempfile::tempdir().unwrap();
-    // SAFETY(test): the recorder reads this once at spawn; restored before the test ends.
-    unsafe {
-        std::env::set_var("LIBERADO_DATA_DIR", dir.path());
-    }
-    let recorder = JsonlLatencyRecorder::spawn();
+    let recorder = JsonlLatencyRecorder::spawn_at(dir.path().join("latency"));
     recorder.record(event("corr-marker-1"));
     recorder.record(event("corr-marker-2"));
 
@@ -44,9 +40,6 @@ async fn recorded_events_land_in_the_jsonl_journal() {
         if contents.matches("corr-marker").count() == 2 {
             break;
         }
-    }
-    unsafe {
-        std::env::remove_var("LIBERADO_DATA_DIR");
     }
     assert_eq!(
         contents.matches("corr-marker").count(),

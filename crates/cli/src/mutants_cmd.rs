@@ -70,6 +70,11 @@ pub fn run(args: &mut impl Iterator<Item = String>) -> Result<(), Box<dyn std::e
     let crate_info = resolve_crate(&root, crate_dir)?;
     let command = build_mutants_command(&crate_info.name, profile);
     let mutants_target = root.join(MUTANTS_TARGET_DIR);
+    // outcomes.json is persistent scratch. If this run dies before cargo-mutants rewrites it,
+    // the file still holds the previous campaign of (often) this same crate; recording would
+    // then append those stale counts under today's commit and reset the drift clock. Remove
+    // it first so a row can only ever come from the run that just finished.
+    let _ = fs::remove_file(root.join(OUTCOMES_FILE));
     eprintln!("[mutants] running: {command}");
     eprintln!(
         "[mutants] artifact dir: {} (isolated from target/debug)",
@@ -300,8 +305,12 @@ pub fn load_ledger(root: &Path) -> Result<Ledger, Box<dyn std::error::Error>> {
 
 fn save_ledger(root: &Path, ledger: &Ledger) -> Result<(), Box<dyn std::error::Error>> {
     let path = root.join(LEDGER_FILE);
-    fs::write(path, serde_json::to_string_pretty(ledger)? + "\n")?;
-    Ok(())
+    // Temp file + rename: the ledger is append-only history, and a crash mid-write must
+    // not leave a truncated file that would read as "all campaigns lost". A failed rename
+    // may leave a stray `.tmp` beside it; that is inert scratch, unlike a truncated ledger.
+    let tmp = path.with_extension("json.tmp");
+    fs::write(&tmp, serde_json::to_string_pretty(ledger)? + "\n")?;
+    fs::rename(tmp, path).map_err(Into::into)
 }
 
 fn resolve_crate(root: &Path, crate_dir: &str) -> Result<CrateInfo, Box<dyn std::error::Error>> {
@@ -537,67 +546,82 @@ fn git_shortstat(
 }
 
 fn print_report(health: &HealthReport) {
-    println!("=== Mutants campaign health ===\n");
-
-    println!("Never campaigned ({}):", health.never_campaigned.len());
-    if health.never_campaigned.is_empty() {
-        println!("  (none)");
-    } else {
-        for entry in &health.never_campaigned {
-            println!("  {} [{}]", entry.dir, entry.role);
-        }
-    }
-
-    println!(
-        "\nHistorical only — no commit SHA ({}):",
-        health.historical_only.len()
+    println!("=== Mutants campaign health ===");
+    print!(
+        "{}{}{}",
+        render_never_campaigned(&health.never_campaigned),
+        render_historical_only(&health.historical_only),
+        render_most_drift(&health.most_drift)
     );
-    if health.historical_only.is_empty() {
-        println!("  (none)");
-    } else {
-        for entry in &health.historical_only {
-            let counts = entry
-                .latest_counts
-                .as_ref()
-                .map(format_counts)
-                .unwrap_or_default();
-            println!("  {} [{}]{}", entry.dir, entry.role, counts);
-        }
-    }
+}
 
-    println!(
-        "\nMost drift since last SHA campaign ({}):",
-        health.most_drift.len()
-    );
-    if health.most_drift.is_empty() {
-        println!("  (none)");
-    } else {
-        for entry in &health.most_drift {
-            if let Some(note) = &entry.drift_note {
-                println!("  {} [{}] — {}", entry.dir, entry.role, note);
-                continue;
-            }
-            let lines = entry
-                .lines_changed
-                .as_deref()
-                .filter(|value| !value.is_empty())
-                .unwrap_or("0 files changed");
-            let counts = entry
-                .latest_counts
-                .as_ref()
-                .map(format_counts)
-                .unwrap_or_default();
-            println!(
-                "  {} [{}] — {} commits since {} — {}{}",
-                entry.dir,
-                entry.role,
-                entry.commits_since.unwrap_or(0),
-                entry.latest_commit.as_deref().unwrap_or("?"),
-                lines,
-                counts
-            );
-        }
+/// Render the "never campaigned" section.
+fn render_never_campaigned(entries: &[CrateHealthEntry]) -> String {
+    let mut out = format!("\nNever campaigned ({}):\n", entries.len());
+    if entries.is_empty() {
+        out.push_str("  (none)\n");
+        return out;
     }
+    for entry in entries {
+        out.push_str(&format!("  {} [{}]\n", entry.dir, entry.role));
+    }
+    out
+}
+
+/// Render the "historical only" section.
+fn render_historical_only(entries: &[CrateHealthEntry]) -> String {
+    let mut out = format!("\nHistorical only — no commit SHA ({}):\n", entries.len());
+    if entries.is_empty() {
+        out.push_str("  (none)\n");
+        return out;
+    }
+    for entry in entries {
+        let counts = entry
+            .latest_counts
+            .as_ref()
+            .map(format_counts)
+            .unwrap_or_default();
+        out.push_str(&format!("  {} [{}]{}\n", entry.dir, entry.role, counts));
+    }
+    out
+}
+
+/// Render the "most drift" section.
+fn render_most_drift(entries: &[CrateHealthEntry]) -> String {
+    let mut out = format!(
+        "\nMost drift since last SHA campaign ({}):\n",
+        entries.len()
+    );
+    if entries.is_empty() {
+        out.push_str("  (none)\n");
+        return out;
+    }
+    for entry in entries {
+        if let Some(note) = &entry.drift_note {
+            out.push_str(&format!("  {} [{}] — {}\n", entry.dir, entry.role, note));
+            continue;
+        }
+        let lines = entry
+            .lines_changed
+            .as_deref()
+            .filter(|value| !value.is_empty())
+            .unwrap_or("0 files changed");
+        let counts = entry
+            .latest_counts
+            .as_ref()
+            .map(format_counts)
+            .unwrap_or_default();
+        out.push_str(&format!(
+            "  {} [{}] — {} commits since {} — {}{}\n",
+            entry.dir,
+            entry.role,
+            entry.commits_since.unwrap_or(0),
+            entry.latest_commit.as_deref().unwrap_or("?"),
+            lines,
+            counts
+        ));
+    }
+    out
 }
 
 fn format_counts(counts: &Counts) -> String {
@@ -865,6 +889,86 @@ mod tests {
         assert!(
             !ledger.campaigns.is_empty(),
             "seed ledger should not be empty"
+        );
+    }
+
+    fn health_entry(dir: &str) -> CrateHealthEntry {
+        CrateHealthEntry {
+            dir: dir.into(),
+            role: "kernel".into(),
+            latest_commit: None,
+            commits_since: None,
+            lines_changed: None,
+            drift_note: None,
+            latest_counts: None,
+        }
+    }
+
+    #[test]
+    fn empty_sections_render_none() {
+        assert_eq!(
+            render_never_campaigned(&[]),
+            "\nNever campaigned (0):\n  (none)\n"
+        );
+        assert_eq!(
+            render_historical_only(&[]),
+            "\nHistorical only — no commit SHA (0):\n  (none)\n"
+        );
+        assert_eq!(
+            render_most_drift(&[]),
+            "\nMost drift since last SHA campaign (0):\n  (none)\n"
+        );
+    }
+
+    #[test]
+    fn never_campaigned_lists_each_dir_and_role() {
+        let entries = vec![health_entry("alpha"), health_entry("beta")];
+        assert_eq!(
+            render_never_campaigned(&entries),
+            "\nNever campaigned (2):\n  alpha [kernel]\n  beta [kernel]\n"
+        );
+    }
+
+    #[test]
+    fn historical_only_appends_counts_when_present_only() {
+        let mut with_counts = health_entry("alpha");
+        with_counts.latest_counts = Some(Counts {
+            viable: 5,
+            caught: 4,
+            survived: 1,
+            timeout: 0,
+            unviable: 0,
+        });
+        let entries = vec![with_counts, health_entry("beta")];
+        assert_eq!(
+            render_historical_only(&entries),
+            "\nHistorical only — no commit SHA (2):\n  \
+             alpha [kernel] — viable 5 caught 4 survived 1 timeout 0\n  beta [kernel]\n"
+        );
+    }
+
+    #[test]
+    fn most_drift_prefers_the_drift_note_over_commit_detail() {
+        let mut noted = health_entry("alpha");
+        noted.drift_note = Some("commit not in this history".into());
+        let mut detailed = health_entry("beta");
+        detailed.latest_commit = Some("abc123def456".into());
+        detailed.commits_since = Some(2);
+        detailed.lines_changed = Some(String::new());
+        detailed.latest_counts = Some(Counts {
+            viable: 1,
+            caught: 0,
+            survived: 1,
+            timeout: 0,
+            unviable: 0,
+        });
+        let entries = vec![noted, detailed];
+        assert_eq!(
+            render_most_drift(&entries),
+            "\nMost drift since last SHA campaign (2):\n  \
+             alpha [kernel] — commit not in this history\n  \
+             beta [kernel] — 2 commits since abc123def456 — 0 files changed — \
+             viable 1 caught 0 survived 1 timeout 0\n"
         );
     }
 }

@@ -1,13 +1,16 @@
 # coder-core — Mutation Testing Report
 
-**Update — 2026-08-23** (ledger campaign at `4857a35`, branch `fix/coder-core-mutant-survivors`)
+**Status:** current · **Authority:** ledger campaign at `4857a35`, branch `fix/coder-core-mutant-survivors`
 
 | Metric | July seed | This campaign (before) | After |
 |--------|:---:|:---:|:---:|
-| Viable mutants | 469 | 510 | 510 |
+| Viable mutants | 469 | 469 | 469 |
 | Caught | 341 | 341 | **458** |
 | **Missed** | 127 | 127 | **10** |
 | Timeouts | — | 1 | 1 |
+
+Every campaign shown generated the same 510 mutants (469 viable + 41 unviable); only
+catches moved.
 
 ## Fixed (117 mutants, every one verified KILLED before recording)
 

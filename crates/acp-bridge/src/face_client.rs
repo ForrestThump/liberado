@@ -298,10 +298,15 @@ mod tests {
     }
 }
 
+/// Serializes every env-mutating test below.
+///
+/// One shared lock, not per-test statics: same-named function-local mutexes would be
+/// distinct locks, and the env mutations would not actually be serialized.
+#[cfg(test)]
+static ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 #[tokio::test]
 async fn server_base_prefers_the_env_over_the_default() {
-    static ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
-
     let _guard = ENV_LOCK.lock().await;
     let saved = std::env::var("LIBERADO_SERVER").ok();
 
@@ -320,8 +325,6 @@ async fn server_base_prefers_the_env_over_the_default() {
 
 #[tokio::test]
 async fn an_unreachable_daemon_is_a_named_error_not_success() {
-    static ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
-
     let _guard = ENV_LOCK.lock().await;
     let saved = std::env::var("LIBERADO_SERVER").ok();
 
@@ -343,8 +346,6 @@ async fn an_unreachable_daemon_is_a_named_error_not_success() {
 
 #[tokio::test]
 async fn a_non_200_daemon_response_surfaces_the_status() {
-    static ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
-
     let _guard = ENV_LOCK.lock().await;
     let saved = std::env::var("LIBERADO_SERVER").ok();
 

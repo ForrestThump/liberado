@@ -16,7 +16,6 @@ fn reranker_is_opt_in_via_the_exact_string_one() {
     for off in ["", "0", "true", "on", "2"] {
         assert!(!reranker_requested(Ok(off.into())), "{off:?} must stay off");
     }
-    let _ = std::env::var("LIBERADO_MEMORY_RERANK_DEFINITELY_UNSET_XYZ");
 }
 
 // ── Deterministic model-free embedder (same pattern as liberado-memory-store's tests) ──

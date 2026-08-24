@@ -140,7 +140,7 @@ Use the **crate directory name** under `crates/` (e.g. `executor`, not `liberado
 
 ```bash
 just mutants-report
-# or: just mutants-next          # one dir name: never-campaigned first, else highest drift
+# or: just mutants-next          # one dir name: never-campaigned first, else highest drift, else historical-only
 ```
 
 Report sections:
@@ -216,7 +216,7 @@ This runs `liberado mutants run`, which:
 
 1. Invokes `cargo mutants` with repo timeout flags
 2. Builds into `target/mutants/` (isolated from `target/debug/`)
-3. On Windows, uses `--in-place` (no `%TEMP%` workspace copy)
+3. Always passes `--in-place` (no `%TEMP%` workspace copy; sibling path deps break it on every host)
 4. Appends one row to `mutants-ledger.json` when `mutants.out/outcomes.json` is complete
 
 ### Verify the ledger append
