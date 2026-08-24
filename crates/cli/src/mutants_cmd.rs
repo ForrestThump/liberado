@@ -52,35 +52,18 @@ enum RunProfile {
     LibOnly,
 }
 
+#[path = "mutants_cmd_run.rs"]
+mod run_support;
+use run_support::{clear_stale_outcomes, parse_run_invocation};
+
 pub fn run(args: &mut impl Iterator<Item = String>) -> Result<(), Box<dyn std::error::Error>> {
     let root = crate_map_cmd::repository_root()?;
-    let mut arguments: Vec<String> = args.collect();
-    let mut profile = RunProfile::Default;
-    if arguments.first().is_some_and(|flag| flag == "--lib-only") {
-        profile = RunProfile::LibOnly;
-        arguments.remove(0);
-    }
-    let crate_dir = arguments
-        .first()
-        .ok_or("usage: liberado mutants run [--lib-only] <crate-dir>")?
-        .as_str();
-    if arguments.len() > 1 {
-        return Err("usage: liberado mutants run [--lib-only] <crate-dir>".into());
-    }
-    let crate_info = resolve_crate(&root, crate_dir)?;
+    let arguments: Vec<String> = args.collect();
+    let invocation = parse_run_invocation(&arguments)?;
+    let crate_info = resolve_crate(&root, &invocation.crate_dir)?;
 
-    // outcomes.json is persistent scratch. If this run dies before cargo-mutants
-    // rewrites it, the file still holds the previous campaign of (often) this same
-    // crate; recording would then append those stale counts under today's commit
-    // and reset the drift clock. Remove it first so a row can only ever come from
-    // the run that just finished. (The recorder's completeness check is the second
-    // line of defence; this removes the trigger.)
-    let stale_outcomes = root.join(OUTCOMES_FILE);
-    if stale_outcomes.exists() {
-        fs::remove_file(&stale_outcomes)
-            .map_err(|e| format!("could not clear stale {}: {e}", OUTCOMES_FILE))?;
-    }
-    let command = build_mutants_command(&crate_info.name, profile);
+    clear_stale_outcomes(&root)?;
+    let command = build_mutants_command(&crate_info.name, invocation.profile);
     let mutants_target = root.join(MUTANTS_TARGET_DIR);
     eprintln!("[mutants] running: {command}");
     eprintln!(
@@ -92,7 +75,12 @@ pub fn run(args: &mut impl Iterator<Item = String>) -> Result<(), Box<dyn std::e
         .current_dir(&root)
         .env("CARGO_TARGET_DIR", &mutants_target)
         .status()?;
-    match record_campaign(&root, Some(crate_dir), Some(&command), profile)? {
+    match record_campaign(
+        &root,
+        Some(&invocation.crate_dir),
+        Some(&command),
+        invocation.profile,
+    )? {
         RecordOutcome::Appended { package, commit } => {
             eprintln!("[mutants] recorded campaign for {package} at {commit}");
         }

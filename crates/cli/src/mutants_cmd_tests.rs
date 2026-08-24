@@ -695,3 +695,51 @@ fn grouping_keeps_only_viable_package_scope_rows() {
     assert_eq!(grouped["liberado-alpha"].len(), 1);
     assert_eq!(grouped["liberado-beta"].len(), 1);
 }
+
+// ── run invocation parsing (extracted from run) ──────────────────────────────
+
+fn args(list: &[&str]) -> Vec<String> {
+    list.iter().map(|s| s.to_string()).collect()
+}
+
+#[test]
+fn run_invocation_defaults_and_flag_position() {
+    let plain = parse_run_invocation(&args(&["acp-bridge"])).unwrap();
+    assert_eq!(plain.crate_dir, "acp-bridge");
+    assert!(matches!(plain.profile, RunProfile::Default));
+
+    let flagged = parse_run_invocation(&args(&["--lib-only", "coder-agent"])).unwrap();
+    assert_eq!(flagged.crate_dir, "coder-agent");
+    assert!(matches!(flagged.profile, RunProfile::LibOnly));
+
+    // `--lib-only` is only a flag in the first position; elsewhere it is a
+    // (weirdly named) crate directory like any other.
+    let late = parse_run_invocation(&args(&["cli", "--lib-only"])).unwrap_err();
+    assert!(late.contains("usage"), "{late}");
+}
+
+#[test]
+fn run_invocation_rejects_missing_and_extra_arguments() {
+    let missing = parse_run_invocation(&args(&[])).unwrap_err();
+    assert!(missing.contains("usage"), "{missing}");
+
+    let extra = parse_run_invocation(&args(&["a", "b"])).unwrap_err();
+    assert!(extra.contains("usage"), "{extra}");
+
+    let flag_only = parse_run_invocation(&args(&["--lib-only"])).unwrap_err();
+    assert!(flag_only.contains("usage"), "{flag_only}");
+}
+
+#[test]
+fn clear_stale_outcomes_removes_the_scratch_file_only() {
+    let root = tempfile::tempdir().unwrap();
+    let scratch = root.path().join(OUTCOMES_FILE);
+    fs::create_dir_all(scratch.parent().unwrap()).unwrap();
+    fs::write(&scratch, "{}").unwrap();
+
+    clear_stale_outcomes(root.path()).expect("clearing an existing file succeeds");
+    assert!(!scratch.exists(), "the stale outcomes must be gone");
+
+    // Absent file is not an error: the common first-run path.
+    clear_stale_outcomes(root.path()).expect("clearing an absent file is fine");
+}

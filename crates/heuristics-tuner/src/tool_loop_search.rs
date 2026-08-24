@@ -14,7 +14,6 @@ use crate::candidate::{Candidate, CandidateOrigin};
 use crate::config::TunerConfig;
 use crate::rubric::format_executor_rubric;
 use crate::search::{Budget, request_justification_if_budget_allows};
-use crate::tool_loop_generation::{cold_start_executor, mutate_executor};
 use crate::tool_loop_scoring::{ToolLoopFitness, score_executor_candidate};
 
 /// The executor-layer analog of [`crate::search::select_beam`] — same disqualify-then-rank logic,
@@ -133,46 +132,13 @@ async fn gather_generation_candidates_executor(
     config: &TunerConfig,
     budget: &Budget,
 ) -> Vec<Candidate> {
-    let mut pool: Vec<Candidate> = Vec::new();
-
-    for (parent_index, (parent, parent_fitness)) in beam.iter().enumerate() {
-        for _ in 0..config.mutations_per_candidate {
-            if budget.exhausted() {
-                break;
-            }
-            let failing = parent_fitness.failing();
-            if let Ok(prompt) = mutate_executor(
-                config.meta_provider.as_ref(),
-                &parent.prompt,
-                &failing,
-                budget,
-            )
-            .await
-            {
-                pool.push(Candidate {
-                    prompt,
-                    origin: CandidateOrigin::MutatedFrom {
-                        parent_index,
-                        parent_accuracy: parent_fitness.accuracy,
-                    },
-                });
-            } // Err logged inside mutate_executor(); skip this slot, not the run
-        }
-    }
-
-    for _ in 0..config.cold_starts_per_generation {
-        if budget.exhausted() {
-            break;
-        }
-        if let Ok(prompt) = cold_start_executor(config.meta_provider.as_ref(), budget).await {
-            pool.push(Candidate {
-                prompt,
-                origin: CandidateOrigin::ColdStart,
-            });
-        }
-    }
-
-    pool
+    crate::generation_engine::gather_generation_candidates(
+        crate::generation_engine::ExecutorGeneration,
+        beam,
+        config,
+        budget,
+    )
+    .await
 }
 
 /// Score every candidate in a pool against the executor scenario set.
