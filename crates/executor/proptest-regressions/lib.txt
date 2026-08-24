@@ -1,0 +1,11 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc c078fcdd331c47989f24e2617c739bf5e15384c732d8531a3a7f332cd085bb99 # shrinks to x = Null
+cc 6c49110b348406cccd1982f3fa3a31df0b6c049a47455978f636706ada143c34 # shrinks to x = Array []
+cc 719e7cbedcabd256eb9ad43be152e78438a4d2c9b04202f00247e4501605c36e # shrinks to a = Object {"": String("8 V[P[h E Q i"), "0": String("7[d n:6 a g[B j[c:4 Aa AB l[f M AC:s 5[K{1 A")}, b = Null
+cc 2283b746d4968d2365639cda07d9d22b62af3d938e6d88d6506fdc78f7efe953 # shrinks to a = Null, b = Array []
+cc 86607c91f9cff001c6ec50975fd5af0b4622b210e44cdfe996206924f3ec16b9 # shrinks to a = Array [Array [String("F[X a E A[v C ")], String("0[A "), String("A U{i ")], b = Array [Array [String("c 0 ")], Null, String("v$x?e{H\"U'A'*2Ts.rA~^1t<Cv%7`Hai?_@[l9`(.$AKSz|P`E4,/.'LB'FI\"X\"\\54| -='7TM+'/:}X.&E^F#'<X(/)? L")]

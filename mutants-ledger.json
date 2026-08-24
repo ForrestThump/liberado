@@ -1398,6 +1398,21 @@
         "timeout": 8,
         "unviable": 71
       }
+    },
+    {
+      "package": "liberado-executor",
+      "commit": "862224478106eb226334fbb3eb766e722dd3b7dc",
+      "recorded_at": "2026-08-24",
+      "command": "cargo mutants -p liberado-executor --cap-lints true --timeout 3.0 --minimum-test-timeout 30 --in-place",
+      "tool_version": "27.0.0",
+      "scope": "package",
+      "counts": {
+        "viable": 332,
+        "caught": 246,
+        "survived": 86,
+        "timeout": 0,
+        "unviable": 57
+      }
     }
   ]
 }
