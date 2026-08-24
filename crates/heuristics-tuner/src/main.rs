@@ -107,25 +107,31 @@ async fn prepare_run_dir() -> Result<std::path::PathBuf, Box<dyn std::error::Err
     Ok(out_dir)
 }
 
+/// Run whichever layer `config.layer` selects and persist its per-generation artifacts.
+///
+/// Extracted verbatim from `main` so the driver stays thin: this is the one place that knows
+/// which search loop and which saver belong to each layer, and it only runs against a live
+/// provider (see the module docs), so it is deliberately untested — everything below it that
+/// touches files instead of models is.
+async fn run_selected_layer(
+    config: TunerConfig,
+    out_dir: &Path,
+) -> Result<String, Box<dyn std::error::Error>> {
+    Ok(match config.layer {
+        Layer::Dispatcher => save_dispatcher_result(run_tuner(config).await, out_dir).await?,
+        Layer::Executor => save_tool_loop_result(run_executor_tuner(config).await, out_dir).await?,
+        Layer::Subagent => save_tool_loop_result(run_subagent_tuner(config).await, out_dir).await?,
+        Layer::Coder => save_coder_result(run_coder_tuner(config).await, out_dir).await?,
+    })
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt::init();
 
     let config = TunerConfig::load()?;
-    let layer = config.layer;
     let out_dir = prepare_run_dir().await?;
-
-    let final_rubric = match layer {
-        Layer::Dispatcher => save_dispatcher_result(run_tuner(config).await, &out_dir).await?,
-        Layer::Executor => {
-            save_tool_loop_result(run_executor_tuner(config).await, &out_dir).await?
-        }
-        Layer::Subagent => {
-            save_tool_loop_result(run_subagent_tuner(config).await, &out_dir).await?
-        }
-        Layer::Coder => save_coder_result(run_coder_tuner(config).await, &out_dir).await?,
-    };
-
+    let final_rubric = run_selected_layer(config, &out_dir).await?;
     write_final_result(&final_rubric, &out_dir).await
 }
 
@@ -152,4 +158,147 @@ All files saved under {}",
     );
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use liberado_heuristics_tuner::{
+        Candidate, CandidateFitness, CandidateOrigin, CoderFitness, CoderGenerationRecord,
+        CoderTunerResult, ExecutorGenerationRecord, ExecutorTunerResult, GenerationRecord,
+        ToolLoopFitness, TunerResult,
+    };
+
+    fn origin() -> CandidateOrigin {
+        CandidateOrigin::ColdStart
+    }
+
+    fn candidate(text: &str) -> Candidate {
+        Candidate {
+            prompt: text.into(),
+            origin: origin(),
+        }
+    }
+
+    fn dispatcher_fitness(accuracy: f32) -> CandidateFitness {
+        CandidateFitness {
+            accuracy,
+            safe_default_rate: 1.0,
+            unsafe_acts: 0,
+            scenarios: Vec::new(),
+        }
+    }
+
+    fn tool_loop_fitness(accuracy: f32) -> ToolLoopFitness {
+        ToolLoopFitness {
+            accuracy,
+            outcome_match_rate: accuracy,
+            unsafe_acts: 0,
+            scenarios: Vec::new(),
+        }
+    }
+
+    fn coder_fitness(accuracy: f32) -> CoderFitness {
+        CoderFitness {
+            accuracy,
+            outcome_match_rate: 1.0,
+            nonempty_diff_rate: 1.0,
+            unsafe_acts: 0,
+            scenarios: Vec::new(),
+        }
+    }
+
+    #[tokio::test]
+    async fn dispatcher_result_writes_one_file_per_generation_plus_final() {
+        let result = TunerResult {
+            winner: candidate("w"),
+            winner_fitness: dispatcher_fitness(0.9),
+            baseline_fitness: dispatcher_fitness(0.5),
+            rubric: "final rubric".into(),
+            generations: vec![GenerationRecord {
+                generation: 1,
+                candidate: candidate("g1"),
+                fitness: dispatcher_fitness(0.7),
+                rubric: "gen 1 rubric".into(),
+            }],
+        };
+        let out = tempfile::tempdir().unwrap();
+        let saved = save_dispatcher_result(result, out.path()).await.unwrap();
+        assert_eq!(saved, "final rubric");
+        assert_eq!(
+            std::fs::read_to_string(out.path().join("generation-1.txt")).unwrap(),
+            "gen 1 rubric"
+        );
+    }
+
+    #[tokio::test]
+    async fn tool_loop_result_writes_every_generation_file() {
+        let result = ExecutorTunerResult {
+            winner: candidate("w"),
+            winner_fitness: tool_loop_fitness(0.9),
+            baseline_fitness: tool_loop_fitness(0.4),
+            rubric: "tool loop final".into(),
+            generations: vec![
+                ExecutorGenerationRecord {
+                    generation: 1,
+                    candidate: candidate("g1"),
+                    fitness: tool_loop_fitness(0.6),
+                    rubric: "gen 1".into(),
+                },
+                ExecutorGenerationRecord {
+                    generation: 2,
+                    candidate: candidate("g2"),
+                    fitness: tool_loop_fitness(0.8),
+                    rubric: "gen 2".into(),
+                },
+            ],
+        };
+        let out = tempfile::tempdir().unwrap();
+        let saved = save_tool_loop_result(result, out.path()).await.unwrap();
+        assert_eq!(saved, "tool loop final");
+        for generation in 1..=2 {
+            let path = out.path().join(format!("generation-{generation}.txt"));
+            assert!(path.exists(), "{} missing", path.display());
+        }
+    }
+
+    #[tokio::test]
+    async fn coder_result_also_leaves_draft_proposal_artifacts() {
+        let result = CoderTunerResult {
+            winner: candidate("improved prompt"),
+            winner_fitness: coder_fitness(0.9),
+            baseline_fitness: coder_fitness(0.5),
+            rubric: "coder final".into(),
+            generations: vec![CoderGenerationRecord {
+                generation: 1,
+                candidate: candidate("g1"),
+                fitness: coder_fitness(0.7),
+                rubric: "gen 1".into(),
+            }],
+        };
+        let out = tempfile::tempdir().unwrap();
+        let saved = save_coder_result(result, out.path()).await.unwrap();
+        assert_eq!(saved, "coder final");
+        assert!(out.path().join("generation-1.txt").exists());
+        // The draft-proposal artifacts land beside the generations (never into prompts/).
+        let artifacts: Vec<_> = std::fs::read_dir(out.path())
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        assert!(
+            artifacts.iter().any(|name| name.starts_with("proposal")),
+            "expected a proposal artifact among {artifacts:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn write_final_result_names_the_file_and_saves_the_rubric() {
+        let out = tempfile::tempdir().unwrap();
+        write_final_result("the answer", out.path()).await.unwrap();
+        assert_eq!(
+            std::fs::read_to_string(out.path().join("final.txt")).unwrap(),
+            "the answer"
+        );
+    }
 }
