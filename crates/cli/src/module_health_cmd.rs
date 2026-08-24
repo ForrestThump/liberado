@@ -173,7 +173,6 @@ fn exact(value: f64, path: &str, metric: &str) -> Result<u64, Box<dyn std::error
     }
     Ok(value as u64)
 }
-
 fn compare(
     config: &Config,
     baseline: &Report,
@@ -193,27 +192,16 @@ fn compare(
                 .waiver
                 .iter()
                 .find(|w| w.path == *path && w.metric == metric);
-            let limit = waiver.map_or(new_limit, |w| w.ceiling);
-            match baseline.get(path) {
-                None if current_value > limit => {
-                    failures.push(format!("{path}: new-file {metric:?} {current_value} > {limit}"))
-                }
-                Some(_old) if waiver.is_some() && current_value > limit => failures.push(format!(
-                    "{path}: waived {metric:?} {current_value} > ceiling {limit}"
-                )),
-                // A waived file is governed by its ceiling alone; the
-                // baseline-regression rule below would otherwise defeat every
-                // waiver for a file already past the review boundary.
-                Some(old) if
-                    waiver.is_none()
-                    && current_value > value(old, metric)
-                    && current_value > review => {
-                    failures.push(format!(
-                        "{path}: {metric:?} regressed {} -> {current_value} (review boundary {review})",
-                        value(old, metric)
-                    ))
-                }
-                _ => {}
+            if let Some(failure) = metric_failure(
+                path,
+                metric,
+                current_value,
+                baseline.get(path),
+                waiver,
+                review,
+                new_limit,
+            ) {
+                failures.push(failure);
             }
         }
     }
@@ -222,6 +210,40 @@ fn compare(
     }
     failures.sort();
     Err(format!("module-health regression:\n{}\nSplit the file or add a metric-specific reviewed waiver; do not raise the baseline.", failures.join("\n")).into())
+}
+
+/// One metric of one file against the baseline, the boundaries, and any
+/// waiver. A waiver governs the file outright: within its ceiling the file
+/// passes even where the baseline-regression rule would fail it.
+#[allow(clippy::too_many_arguments)]
+fn metric_failure(
+    path: &str,
+    metric: Metric,
+    current_value: u64,
+    old: Option<&FileMetrics>,
+    waiver: Option<&Waiver>,
+    review: u64,
+    new_limit: u64,
+) -> Option<String> {
+    let limit = waiver.map_or(new_limit, |w| w.ceiling);
+    match old {
+        None if current_value > limit => Some(format!(
+            "{path}: new-file {metric:?} {current_value} > {limit}"
+        )),
+        Some(_) if waiver.is_some() && current_value > limit => Some(format!(
+            "{path}: waived {metric:?} {current_value} > ceiling {limit}"
+        )),
+        // Without a waiver the file may not grow past the review boundary.
+        Some(old)
+            if waiver.is_none() && current_value > value(old, metric) && current_value > review =>
+        {
+            Some(format!(
+                "{path}: {metric:?} regressed {} -> {current_value} (review boundary {review})",
+                value(old, metric)
+            ))
+        }
+        _ => None,
+    }
 }
 
 fn value(metrics: &FileMetrics, metric: Metric) -> u64 {
