@@ -307,3 +307,76 @@ mod tests {
         assert_eq!(h.result.as_ref().unwrap().summary, "wrote note");
     }
 }
+
+#[test]
+fn labels_tags_and_blurbs_are_pinned() {
+    use SessionKind::*;
+    assert_eq!(Primary.label(), "Primary");
+    assert_eq!(Coding.label(), "Coding");
+    assert_eq!(Life.label(), "Life");
+    assert_eq!(Custom.label(), "Custom");
+    assert_eq!(Primary.tag(), "CHAT");
+    assert_eq!(Coding.tag(), "CODE");
+    assert_eq!(Primary.tools_blurb(), "chat + delegate");
+    assert!(
+        Coding.tools_blurb().starts_with("coder"),
+        "coding blurb: {}",
+        Coding.tools_blurb()
+    );
+}
+
+#[test]
+fn has_goal_reflects_the_goal_presence() {
+    let with = SessionSummary {
+        id: "s1".into(),
+        title: None,
+        goal: Some(GoalHeaderSpec {
+            description: "do a thing".into(),
+            domain: DomainWire::default(),
+        }),
+        status: String::new(),
+        created_at: String::new(),
+        awaiting_input: false,
+        result: None,
+        visibility: Default::default(),
+        parent_session: None,
+    };
+    assert!(with.has_goal());
+
+    let without = SessionSummary { goal: None, ..with };
+    assert!(!without.has_goal());
+}
+
+#[test]
+fn summary_label_prefers_title_then_goal_then_empty() {
+    let mk = |title: Option<&str>, desc: Option<&str>| SessionSummary {
+        id: "s1".into(),
+        title: title.map(String::from),
+        goal: desc.map(|d| GoalHeaderSpec {
+            description: d.into(),
+            domain: DomainWire::default(),
+        }),
+        status: String::new(),
+        created_at: String::new(),
+        awaiting_input: false,
+        result: None,
+        visibility: Default::default(),
+        parent_session: None,
+    };
+
+    // Title wins over goal.
+    let both = mk(Some("My Title"), Some("goal text"));
+    assert_eq!(both.label(), "My Title");
+
+    // Goal when no title.
+    let goal_only = mk(None, Some("goal description"));
+    assert_eq!(goal_only.label(), "goal description");
+
+    // Neither → empty.
+    let neither = mk(None, None);
+    assert_eq!(neither.label(), "");
+
+    // Whitespace-only title is treated as absent.
+    let ws = mk(Some("   "), None);
+    assert_eq!(ws.label(), "");
+}

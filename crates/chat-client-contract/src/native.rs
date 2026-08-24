@@ -237,3 +237,17 @@ mod sse_tests {
         assert_eq!(events[0].data, "Hi");
     }
 }
+
+#[test]
+fn comment_only_block_yields_no_event() {
+    let mut d = SseDecoder::default();
+    let events = d.push(": a comment only\n\n");
+    assert!(events.is_empty());
+}
+
+#[test]
+fn empty_line_between_events_separates_them() {
+    let mut d = SseDecoder::default();
+    let events = d.push("event: token\ndata: hello\n\nevent: token\ndata: world\n\n");
+    assert_eq!(events.len(), 2);
+}
