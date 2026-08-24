@@ -125,7 +125,6 @@ impl liberado_session::DomainPackRunner for InstantCodingPack {
 
 use crate::boot_helper_tests::ENV_LOCK as DATA_DIR_ENV_LOCK;
 
-
 /// Restores `LIBERADO_DATA_DIR` on drop. Declare after `DATA_DIR_ENV_LOCK` so Drop runs while
 /// the lock is still held (reverse declaration order) — same pattern as `lib_boot_helper_tests`.
 struct RestoreDataDir {
@@ -192,6 +191,10 @@ fn rewind_app() -> (Router, Arc<GoalSessionHub>, Arc<GoalSessionStore>) {
 
     let app = Router::new()
         .route("/api/goals/{id}/rewind", axum::routing::post(goals_rewind))
+        .route(
+            "/api/goals/{id}/diff",
+            axum::routing::get(super::goals_diff),
+        )
         .with_state(state);
     (app, goals, store)
 }
@@ -418,4 +421,139 @@ async fn rewind_restores_the_latest_checkpoint_and_reports_it() {
         std::fs::read_to_string(workspace.path().join("kept.txt")).unwrap(),
         "v1"
     );
+}
+
+// ── the diff handler ────────────────────────────────────────────────────────────────
+
+async fn get_diff(app: &Router, id: &str) -> axum::http::Response<Body> {
+    app.clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(format!("/api/goals/{id}/diff"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap()
+}
+
+async fn body_text(response: axum::http::Response<Body>) -> String {
+    let bytes = axum::body::to_bytes(response.into_body(), 2 * 1024 * 1024)
+        .await
+        .unwrap();
+    String::from_utf8_lossy(&bytes).into_owned()
+}
+
+#[tokio::test]
+async fn diff_of_an_unknown_session_is_404() {
+    let (app, _goals, _store) = rewind_app();
+    let response = get_diff(&app, "g_ghost").await;
+    assert_eq!(response.status(), axum::http::StatusCode::NOT_FOUND);
+    let text = body_text(response).await;
+    assert!(text.contains("not found"), "{text}");
+}
+
+#[tokio::test]
+async fn diff_of_a_session_without_a_workspace_is_404() {
+    let (app, goals, _store) = rewind_app();
+    let id = start_coding_session(&goals, serde_json::json!({})).await;
+    let response = get_diff(&app, &id).await;
+    assert_eq!(response.status(), axum::http::StatusCode::NOT_FOUND);
+    let text = body_text(response).await;
+    assert!(text.contains("no workspace"), "{text}");
+}
+
+#[tokio::test]
+async fn diff_with_a_workspace_that_vanished_is_404() {
+    let (app, goals, _store) = rewind_app();
+    let id = start_coding_session(
+        &goals,
+        serde_json::json!({ "workspace_root": "/nonexistent/diff-test-ws" }),
+    )
+    .await;
+    let response = get_diff(&app, &id).await;
+    assert_eq!(response.status(), axum::http::StatusCode::NOT_FOUND);
+    let text = body_text(response).await;
+    assert!(text.contains("workspace not available"), "{text}");
+}
+
+#[tokio::test]
+async fn diff_in_a_non_git_workspace_reports_git_failure_500() {
+    let (app, goals, _store) = rewind_app();
+    let workspace = tempfile::tempdir().unwrap();
+    let id = start_coding_session(
+        &goals,
+        serde_json::json!({
+            "workspace_root": workspace.path().to_string_lossy(),
+        }),
+    )
+    .await;
+    let response = get_diff(&app, &id).await;
+    assert_eq!(
+        response.status(),
+        axum::http::StatusCode::INTERNAL_SERVER_ERROR
+    );
+    let text = body_text(response).await;
+    assert!(text.contains("git diff failed"), "{text}");
+}
+
+#[tokio::test]
+async fn diff_of_a_clean_workspace_says_no_changes() {
+    let (app, goals, _store) = rewind_app();
+    let workspace = tempfile::tempdir().unwrap();
+    seed_git_repo(workspace.path());
+    let id = start_coding_session(
+        &goals,
+        serde_json::json!({
+            "workspace_root": workspace.path().to_string_lossy(),
+        }),
+    )
+    .await;
+    let response = get_diff(&app, &id).await;
+    assert_eq!(response.status(), axum::http::StatusCode::OK);
+    let text = body_text(response).await;
+    assert_eq!(text, "(no changes)");
+}
+
+/// A committed file plus an uncommitted edit: the diff endpoint returns exactly that edit.
+#[tokio::test]
+async fn diff_returns_the_uncommitted_change() {
+    let (app, goals, _store) = rewind_app();
+    let workspace = tempfile::tempdir().unwrap();
+    seed_git_repo(workspace.path());
+    std::fs::write(workspace.path().join("note.txt"), "line one\nedited\n").unwrap();
+    let id = start_coding_session(
+        &goals,
+        serde_json::json!({
+            "workspace_root": workspace.path().to_string_lossy(),
+        }),
+    )
+    .await;
+    let response = get_diff(&app, &id).await;
+    assert_eq!(response.status(), axum::http::StatusCode::OK);
+    let text = body_text(response).await;
+    assert!(text.contains("diff --git"), "{text}");
+    assert!(text.contains("+edited"), "{text}");
+}
+
+/// `git init` a workspace with one committed file. Tests that shell out to git must set an
+/// identity: CI runners have none (AGENTS.md).
+fn seed_git_repo(dir: &std::path::Path) {
+    use liberado_common::process::std_command;
+    let git = |args: &[&str]| {
+        std_command("git")
+            .args(args)
+            .current_dir(dir)
+            .env("GIT_AUTHOR_NAME", "liberado")
+            .env("GIT_AUTHOR_EMAIL", "liberado@local")
+            .env("GIT_COMMITTER_NAME", "liberado")
+            .env("GIT_COMMITTER_EMAIL", "liberado@local")
+            .output()
+            .expect("git runs")
+    };
+    assert!(git(&["init", "--quiet"]).status.success());
+    std::fs::write(dir.join("note.txt"), "line one\n").unwrap();
+    assert!(git(&["add", "."]).status.success());
+    assert!(git(&["commit", "--quiet", "-m", "seed"]).status.success());
 }
