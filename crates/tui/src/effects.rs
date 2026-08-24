@@ -1535,4 +1535,368 @@ data: not-json
         );
         dummy.abort();
     }
+
+    // ── run_async dispatch coverage: one test per previously-unrouted effect ────────────
+
+    async fn next_action(action_rx: &mut mpsc::Receiver<Action>) -> Action {
+        tokio::time::timeout(Duration::from_secs(2), action_rx.recv())
+            .await
+            .expect("timeout waiting for action")
+            .expect("channel closed")
+    }
+
+    #[tokio::test]
+    async fn refresh_sessions_populates_the_switcher() {
+        let mock_server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/sessions"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {
+                    "id": "g_01",
+                    "title": "a goal",
+                    "goal": {"kind": "coding", "description": "a goal"},
+                    "status": "running",
+                    "created_at": "2026-08-24T00:00:00Z"
+                }
+            ])))
+            .mount(&mock_server)
+            .await;
+
+        let app = make_app(&mock_server.uri());
+        let (action_tx, mut action_rx) = mpsc::channel(256);
+        let runner = make_runner(app, action_tx);
+
+        runner.run(Effect::RefreshSessions).await;
+        match next_action(&mut action_rx).await {
+            Action::SessionsUpdate(sessions) => {
+                assert_eq!(sessions.len(), 1);
+                assert_eq!(sessions[0].id, "g_01");
+            }
+            other => panic!("expected SessionsUpdate, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn fetch_models_reports_the_catalog() {
+        let mock_server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/models"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({"models": ["m1", "m2"], "current": "m1"})),
+            )
+            .mount(&mock_server)
+            .await;
+
+        let app = make_app(&mock_server.uri());
+        let (action_tx, mut action_rx) = mpsc::channel(256);
+        let runner = make_runner(app, action_tx);
+
+        runner.run(Effect::FetchModels).await;
+        match next_action(&mut action_rx).await {
+            Action::ModelsLoaded { models, error } => {
+                assert_eq!(models, vec!["m1".to_string(), "m2".to_string()]);
+                assert_eq!(error, None);
+            }
+            other => panic!("expected ModelsLoaded, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn start_chat_stream_streams_tokens_then_done() {
+        let mock_server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/chat/stream"))
+            .respond_with(ResponseTemplate::new(200).set_body_raw(
+                concat!(
+                    "event: session\r\ndata: c1\r\n\r\n",
+                    "event: token\r\ndata: hel\r\n\r\n",
+                    "event: token\r\ndata: lo\r\n\r\n",
+                    "event: session_finished\r\n",
+                    "data: {\"status\":\"done\",\"summary\":\"\"}\r\n\r\n"
+                ),
+                "text/event-stream",
+            ))
+            .mount(&mock_server)
+            .await;
+
+        let app = make_app(&mock_server.uri());
+        let (action_tx, mut action_rx) = mpsc::channel(256);
+        let runner = make_runner(app.clone(), action_tx);
+
+        runner
+            .run(Effect::StartChatStream {
+                message: "hi".into(),
+                session: None,
+            })
+            .await;
+        // Give the spawned stream task a moment to drain; the actions arrive in order.
+        let mut seen = Vec::new();
+        for _ in 0..4 {
+            seen.push(next_action(&mut action_rx).await);
+        }
+        assert!(
+            matches!(seen.last(), Some(Action::SseDone)),
+            "the terminal frame ends with SseDone: {seen:?}"
+        );
+        assert!(
+            matches!(&seen[1], Action::SseToken(t) if t == "hel"),
+            "{seen:?}"
+        );
+        assert!(
+            matches!(&seen[2], Action::SseToken(t) if t == "lo"),
+            "{seen:?}"
+        );
+        // The stream ended terminally: no live handle remains.
+        assert!(runner.stream_state.lock().handle.is_none());
+        let _ = app;
+    }
+
+    #[tokio::test]
+    async fn start_chat_stream_reports_an_error_status_instead_of_decoding_it() {
+        let mock_server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/chat/stream"))
+            .respond_with(ResponseTemplate::new(500).set_body_string("nope"))
+            .mount(&mock_server)
+            .await;
+
+        let app = make_app(&mock_server.uri());
+        let (action_tx, mut action_rx) = mpsc::channel(256);
+        let runner = make_runner(app, action_tx);
+
+        runner
+            .run(Effect::StartChatStream {
+                message: "hi".into(),
+                session: None,
+            })
+            .await;
+        let action = next_action(&mut action_rx).await;
+        assert!(
+            matches!(&action, Action::SseFailed(msg) if msg.contains("server returned 500")),
+            "{action:?}"
+        );
+        assert!(runner.stream_state.lock().handle.is_none());
+    }
+
+    #[tokio::test]
+    async fn start_chat_stream_unreachable_daemon_fails_the_stream() {
+        // Port 1 is not listening: connect fails fast on all platforms.
+        let app = make_app("http://127.0.0.1:1");
+        let (action_tx, mut action_rx) = mpsc::channel(256);
+        let runner = make_runner(app, action_tx);
+
+        runner
+            .run(Effect::StartChatStream {
+                message: "hi".into(),
+                session: None,
+            })
+            .await;
+        let action = next_action(&mut action_rx).await;
+        assert!(
+            matches!(&action, Action::SseFailed(msg) if msg.contains("could not reach daemon")),
+            "{action:?}"
+        );
+        assert!(runner.stream_state.lock().handle.is_none());
+    }
+
+    #[tokio::test]
+    async fn join_goal_session_streams_goal_events_until_finished() {
+        let mock_server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/goals/g_7/stream"))
+            .respond_with(ResponseTemplate::new(200).set_body_raw(
+                concat!(
+                    "event: progress\r\ndata: {\"message\":\"working\"}\r\n\r\n",
+                    "event: failed\r\ndata: {\"message\":\"boom\"}\r\n\r\n"
+                ),
+                "text/event-stream",
+            ))
+            .mount(&mock_server)
+            .await;
+
+        let app = make_app(&mock_server.uri());
+        let (action_tx, mut action_rx) = mpsc::channel(256);
+        let runner = make_runner(app, action_tx);
+
+        runner.run(Effect::JoinGoalSession("g_7".into())).await;
+        let mut saw_progress = false;
+        loop {
+            match next_action(&mut action_rx).await {
+                Action::GoalStreamEvent(crate::app::GoalUiEvent::Progress(_)) => {
+                    saw_progress = true
+                }
+                Action::GoalStreamEvent(crate::app::GoalUiEvent::Finished { .. }) => break,
+                Action::GoalStreamClosed(_) => break,
+                other => panic!("unexpected action {other:?}"),
+            }
+        }
+        assert!(saw_progress, "progress frames reached the app");
+    }
+
+    #[tokio::test]
+    async fn send_goal_message_surfaces_the_outcome() {
+        let mock_server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/goals/g_9/message"))
+            .respond_with(ResponseTemplate::new(202))
+            .mount(&mock_server)
+            .await;
+
+        let app = make_app(&mock_server.uri());
+        let (action_tx, mut action_rx) = mpsc::channel(256);
+        let runner = make_runner(app, action_tx);
+
+        runner
+            .run(Effect::SendGoalMessage {
+                id: "g_9".into(),
+                text: "answer".into(),
+            })
+            .await;
+        match next_action(&mut action_rx).await {
+            Action::GoalMessageOutcome(outcome) => assert_eq!(
+                outcome,
+                crate::api::GoalMessageOutcome::Accepted,
+                "a 202 is an accepted outcome: {outcome:?}"
+            ),
+            other => panic!("expected GoalMessageOutcome, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn spawn_goal_session_hands_back_the_new_id() {
+        let mock_server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/goals"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({"session_id": "g_new"})),
+            )
+            .mount(&mock_server)
+            .await;
+
+        let app = make_app(&mock_server.uri());
+        let (action_tx, mut action_rx) = mpsc::channel(256);
+        let runner = make_runner(app, action_tx);
+
+        runner
+            .run(Effect::SpawnGoalSession {
+                domain: "life".into(),
+                goal: "plan the week".into(),
+                origin_conversation: None,
+            })
+            .await;
+        match next_action(&mut action_rx).await {
+            Action::GoalSpawned {
+                session_id,
+                domain,
+                description,
+            } => {
+                assert_eq!(session_id, "g_new");
+                assert_eq!(domain, "life");
+                assert_eq!(description, "plan the week");
+            }
+            other => panic!("expected GoalSpawned, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn start_coding_goal_spawns_into_the_coding_domain() {
+        let mock_server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/goals"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({"session_id": "g_code"})),
+            )
+            .mount(&mock_server)
+            .await;
+
+        let app = make_app(&mock_server.uri());
+        let (action_tx, mut action_rx) = mpsc::channel(256);
+        let runner = make_runner(app, action_tx);
+
+        runner
+            .run(Effect::StartCodingGoal {
+                project: None,
+                text: "fix the bug".into(),
+                mode: None,
+                origin_conversation: None,
+            })
+            .await;
+        match next_action(&mut action_rx).await {
+            Action::GoalSpawned {
+                session_id, domain, ..
+            } => {
+                assert_eq!(session_id, "g_code");
+                assert_eq!(domain, "coding");
+            }
+            other => panic!("expected GoalSpawned, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn park_goal_session_reports_the_outcome_as_a_system_message() {
+        let mock_server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/goals/g_3/park"))
+            .respond_with(ResponseTemplate::new(202))
+            .mount(&mock_server)
+            .await;
+
+        let app = make_app(&mock_server.uri());
+        let (action_tx, mut action_rx) = mpsc::channel(256);
+        let runner = make_runner(app, action_tx);
+
+        runner.run(Effect::ParkGoalSession("g_3".into())).await;
+        match next_action(&mut action_rx).await {
+            Action::SystemMessage(msg) => {
+                assert!(msg.contains("parked"), "{msg}");
+            }
+            other => panic!("expected SystemMessage, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn resume_goal_session_without_an_answer_explains_itself() {
+        let app = make_app("http://127.0.0.1:1"); // must never be contacted
+        let (action_tx, mut action_rx) = mpsc::channel(256);
+        let runner = make_runner(app, action_tx);
+
+        runner
+            .run(Effect::ResumeGoalSession {
+                id: "g_4".into(),
+                answer: String::new(),
+            })
+            .await;
+        match next_action(&mut action_rx).await {
+            Action::SystemMessage(msg) => assert!(msg.contains("Usage"), "{msg}"),
+            other => panic!("expected usage hint, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn leave_goal_session_aborts_a_live_subscription() {
+        let app = make_app("http://127.0.0.1:1");
+        let (action_tx, mut action_rx) = mpsc::channel(256);
+        let runner = make_runner(app.clone(), action_tx);
+
+        // A live handle in the joined state, as if /join had subscribed.
+        let handle = tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_secs(30)).await;
+        });
+        runner.stream_state.lock().goal_handle = Some(handle.abort_handle());
+
+        runner.run(Effect::LeaveGoalSession).await;
+        // The handle is gone from state and the task was aborted (join errors).
+        assert!(runner.stream_state.lock().goal_handle.is_none());
+        let joined = tokio::time::timeout(Duration::from_secs(2), handle).await;
+        assert!(
+            matches!(joined, Ok(Err(_))),
+            "the subscription task aborts: {joined:?}"
+        );
+
+        // And nothing was ever sent to the app.
+        assert!(action_rx.try_recv().is_err());
+    }
 }
