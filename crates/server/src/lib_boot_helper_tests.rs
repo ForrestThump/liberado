@@ -3,7 +3,9 @@
 use super::*;
 use std::sync::Arc;
 
-static ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+/// Serializes every env var these helpers touch. `pub(crate)` because the rewind HTTP tests
+/// set `LIBERADO_DATA_DIR` too — two locks over one variable would serialize nothing.
+pub(crate) static ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 #[tokio::test]
 async fn webui_dist_env_overrides_the_builtin_directory() {
