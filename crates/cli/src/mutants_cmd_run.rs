@@ -1,11 +1,15 @@
-//! Argument parsing and scratch hygiene for [`super::run`] — split out so the
+//! Run-command support for [`super::run`] — argument parsing, scratch
+//! hygiene, the cargo spawn, and the outcome announcements. Split out so the
 //! parent file stays under its function-count ratchet while every usage rule
 //! stays unit-testable.
 
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::process::ExitStatus;
 
-use super::RunProfile;
+use liberado_common::process::std_command;
+
+use super::{MUTANTS_TARGET_DIR, RecordOutcome, RunProfile};
 
 const USAGE_RUN: &str = "usage: liberado mutants run [--lib-only] <crate-dir>";
 
@@ -49,4 +53,42 @@ pub(super) fn clear_stale_outcomes(root: &Path) -> Result<(), Box<dyn std::error
             .map_err(|e| format!("could not clear stale {}: {e}", super::OUTCOMES_FILE))?;
     }
     Ok(())
+}
+
+/// Spawn cargo-mutants in an isolated target dir and wait for it.
+///
+/// The artifact dir keeps mutant builds out of `target/debug`, so a campaign
+/// never evicts the developer's own incremental cache.
+pub(super) fn spawn_mutants(
+    root: &Path,
+    command: &str,
+) -> Result<ExitStatus, Box<dyn std::error::Error>> {
+    let mutants_target: PathBuf = root.join(MUTANTS_TARGET_DIR);
+    eprintln!(
+        "[mutants] artifact dir: {} (isolated from target/debug)",
+        mutants_target.display()
+    );
+    let status = std_command("cargo")
+        .args(command.split_whitespace().skip(1))
+        .current_dir(root)
+        .env("CARGO_TARGET_DIR", &mutants_target)
+        .status()?;
+    Ok(status)
+}
+
+/// Say what recording did, and say it honestly when cargo-mutants failed.
+pub(super) fn announce_record(outcome: RecordOutcome, cargo_success: bool) {
+    match outcome {
+        RecordOutcome::Appended { package, commit } => {
+            eprintln!("[mutants] recorded campaign for {package} at {commit}");
+        }
+        RecordOutcome::SkippedIncomplete => {
+            eprintln!("[mutants] run finished but outcomes were incomplete; nothing recorded");
+        }
+    }
+    if !cargo_success {
+        eprintln!(
+            "[mutants] cargo mutants exited with a failure; campaign recorded if outcomes were complete"
+        );
+    }
 }

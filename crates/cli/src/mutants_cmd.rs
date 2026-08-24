@@ -61,39 +61,20 @@ pub fn run(args: &mut impl Iterator<Item = String>) -> Result<(), Box<dyn std::e
     let arguments: Vec<String> = args.collect();
     let invocation = parse_run_invocation(&arguments)?;
     let crate_info = resolve_crate(&root, &invocation.crate_dir)?;
-
     clear_stale_outcomes(&root)?;
+
     let command = build_mutants_command(&crate_info.name, invocation.profile);
-    let mutants_target = root.join(MUTANTS_TARGET_DIR);
     eprintln!("[mutants] running: {command}");
-    eprintln!(
-        "[mutants] artifact dir: {} (isolated from target/debug)",
-        mutants_target.display()
+    let status = run_support::spawn_mutants(&root, &command)?;
+    run_support::announce_record(
+        record_campaign(
+            &root,
+            Some(&invocation.crate_dir),
+            Some(&command),
+            invocation.profile,
+        )?,
+        status.success(),
     );
-    let status = std_command("cargo")
-        .args(command.split_whitespace().skip(1))
-        .current_dir(&root)
-        .env("CARGO_TARGET_DIR", &mutants_target)
-        .status()?;
-    match record_campaign(
-        &root,
-        Some(&invocation.crate_dir),
-        Some(&command),
-        invocation.profile,
-    )? {
-        RecordOutcome::Appended { package, commit } => {
-            eprintln!("[mutants] recorded campaign for {package} at {commit}");
-        }
-        RecordOutcome::SkippedIncomplete => {
-            eprintln!("[mutants] run finished but outcomes were incomplete; nothing recorded");
-        }
-    }
-    if !status.success() {
-        eprintln!(
-            "[mutants] cargo mutants exited with {}; campaign recorded if outcomes were complete",
-            status
-        );
-    }
     Ok(())
 }
 
