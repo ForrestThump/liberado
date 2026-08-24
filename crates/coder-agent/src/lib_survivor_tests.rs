@@ -182,6 +182,30 @@ async fn trace_reading_round_trips_events_and_fails_soft() {
     );
 }
 
+/// With no tracked changes the untracked section starts the diff directly; with
+/// tracked edits there is exactly one blank line before it — never glued on.
+#[tokio::test]
+async fn the_untracked_section_is_separated_from_the_tracked_diff() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path());
+    std::fs::write(dir.path().join("tracked.rs"), "fn changed() {}\n").unwrap();
+    std::fs::write(dir.path().join("added.rs"), "fn brand_new() {}\n").unwrap();
+    let diff = workspace_diff(&dir.path().to_string_lossy()).await.unwrap();
+    // The pushed separator plus git's own trailing newline gives one blank line.
+    assert!(diff.contains("\n\n# untracked files"), "{diff}");
+
+    let clean = tempfile::tempdir().unwrap();
+    init_repo(clean.path());
+    std::fs::write(clean.path().join("added.rs"), "fn brand_new() {}\n").unwrap();
+    let diff2 = workspace_diff(&clean.path().to_string_lossy())
+        .await
+        .unwrap();
+    assert!(
+        diff2.starts_with("# untracked files"),
+        "an untracked-only diff has no leading blank: {diff2:?}"
+    );
+}
+
 /// A directory that is not a git repo makes `git diff` fail; that must surface
 /// as an error, not as an empty diff wearing a success shape.
 #[tokio::test]
@@ -203,8 +227,8 @@ async fn truncation_marks_only_what_was_cut() {
     let diff = workspace_diff(&dir.path().to_string_lossy()).await.unwrap();
     assert!(diff.contains("… truncated"), "{diff}");
     assert!(
-        diff.contains("\n… truncated"),
-        "the marker sits on its own line: {diff}"
+        !diff.contains("\n\n… truncated"),
+        "the body already ends in a newline; the marker must not add another: {diff}"
     );
 
     // An exact fit is not a truncation.

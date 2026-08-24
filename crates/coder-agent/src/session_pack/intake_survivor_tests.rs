@@ -148,12 +148,33 @@ fn verifiers_are_shown_with_their_judgement_role() {
     );
     assert!(rendered.contains("Verifiers ("), "{rendered}");
     assert!(rendered.contains("added by verify_profile"), "{rendered}");
+    assert!(
+        rendered.contains("of these came from the profile"),
+        "the count note must appear when the profile injected gates: {rendered}"
+    );
 }
 
 #[test]
 fn no_verifiers_means_no_verifier_section() {
     let rendered = render_draft(&plain_draft(), "");
     assert!(!rendered.contains("Verifiers ("), "{rendered}");
+}
+
+/// A hand-written verifier list carries no provenance note — the "(0 of these"
+/// shape would be noise.
+#[test]
+fn no_injected_gates_means_no_provenance_note() {
+    let rendered = render_draft(
+        &GoalContractDraft {
+            verifiers: vec![cmd("cargo-clippy")],
+            ..plain_draft()
+        },
+        "",
+    );
+    assert!(
+        !rendered.contains("of these came from the profile"),
+        "{rendered}"
+    );
 }
 
 #[test]

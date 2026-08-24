@@ -1115,6 +1115,21 @@
       }
     },
     {
+      "package": "liberado-coder-agent",
+      "commit": "770db3e9ef0dbbef2b4fa5c117f9059a8c5da770",
+      "recorded_at": "2026-08-24",
+      "command": "cargo mutants -p liberado-coder-agent --cap-lints true --timeout 90 --minimum-test-timeout 90 --in-place -- --lib",
+      "tool_version": "27.0.0",
+      "scope": "package",
+      "counts": {
+        "viable": 700,
+        "caught": 679,
+        "survived": 17,
+        "timeout": 4,
+        "unviable": 124
+      }
+    },
+    {
       "package": "liberado-acp-bridge",
       "commit": "0e14ecc1c7521034c9142782a0306861584acb29",
       "recorded_at": "2026-08-23",

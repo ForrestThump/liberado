@@ -590,3 +590,58 @@ async fn a_failing_ship_preflight_fails_a_green_fanout() {
         "the operator must see WHY: {goal_result:?}"
     );
 }
+
+// ── select_attempt_workspace ────────────────────────────────────────────────
+
+#[tokio::test]
+async fn a_fanout_child_runs_in_place_even_on_a_git_repo() {
+    let dir = tempfile::tempdir().unwrap();
+    let out = liberado_common::process::std_command("git")
+        .args(["init", "-q"])
+        .arg(dir.path())
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let payload_json = serde_json::json!({ "fanout_child": true });
+    let payload = CodingGoalPayload::parse(&payload_json).unwrap();
+    let (events, _rx) = events_channel().await;
+    let (ws, sandbox) = select_attempt_workspace(
+        "s1",
+        &payload,
+        &policies(CodingMode::Normal),
+        dir.path(),
+        &events,
+    )
+    .await
+    .expect("workspace selected");
+    assert_eq!(
+        ws,
+        dir.path(),
+        "a fanout child works in place, not in a durable worktree"
+    );
+    assert!(matches!(sandbox, SandboxSpec::HostLocal));
+}
+
+#[tokio::test]
+async fn explore_mode_runs_in_place_even_on_a_git_repo() {
+    let dir = tempfile::tempdir().unwrap();
+    let out = liberado_common::process::std_command("git")
+        .args(["init", "-q"])
+        .arg(dir.path())
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let payload = CodingGoalPayload::parse(&serde_json::json!({})).unwrap();
+    let (events, _rx) = events_channel().await;
+    let (ws, sandbox) = select_attempt_workspace(
+        "s1",
+        &payload,
+        &policies(CodingMode::Explore),
+        dir.path(),
+        &events,
+    )
+    .await
+    .expect("workspace selected");
+    assert_eq!(ws, dir.path(), "exploration must not spin up worktrees");
+    assert!(matches!(sandbox, SandboxSpec::HostLocal));
+}
