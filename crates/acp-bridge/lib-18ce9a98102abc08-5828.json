@@ -1,0 +1,17 @@
+{
+  "id": "lib-18ce9a98102abc08-5828",
+  "mode": "coding",
+  "cwd": "C:\\Users\\Shiloh\\AppData\\Local\\Temp\\.tmpGIebbj",
+  "model": "mock-model",
+  "messages": [
+    {
+      "role": "user",
+      "content": "hi"
+    },
+    {
+      "role": "assistant",
+      "content": "hello from converse"
+    }
+  ],
+  "updated_at": "2026-08-24T01:48:00.017090700+00:00"
+}

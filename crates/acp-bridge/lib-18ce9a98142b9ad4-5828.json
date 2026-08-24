@@ -1,7 +1,7 @@
 {
-  "id": "lib-coding-memory",
-  "mode": "coding",
-  "cwd": "C:\\Users\\Shiloh\\AppData\\Local\\Temp\\.tmpRAri9T",
+  "id": "lib-18ce9a98142b9ad4-5828",
+  "mode": "chat",
+  "cwd": "C:\\Users\\Shiloh\\AppData\\Local\\Temp\\.tmpJlkflk",
   "model": "mock-model",
   "messages": [
     {
@@ -13,5 +13,5 @@
       "content": "working on it"
     }
   ],
-  "updated_at": "2026-08-24T01:48:00.060548+00:00"
+  "updated_at": "2026-08-24T01:48:00.089812600+00:00"
 }
