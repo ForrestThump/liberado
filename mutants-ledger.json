@@ -1128,6 +1128,81 @@
         "timeout": 12,
         "unviable": 90
       }
+    },
+    {
+      "package": "liberado-markdown",
+      "commit": "0e14ecc1c7521034c9142782a0306861584acb29",
+      "recorded_at": "2026-08-23",
+      "command": "cargo mutants -p liberado-markdown --cap-lints true --timeout 3.0 --minimum-test-timeout 30 --in-place",
+      "tool_version": "27.1.0",
+      "scope": "package",
+      "counts": {
+        "viable": 126,
+        "caught": 48,
+        "survived": 33,
+        "timeout": 45,
+        "unviable": 20
+      }
+    },
+    {
+      "package": "liberado-markdown",
+      "commit": "98aaafafe17b483cbae895b82720e4e93e8f7956",
+      "recorded_at": "2026-08-23",
+      "command": "cargo mutants -p liberado-markdown --cap-lints true --timeout 3.0 --minimum-test-timeout 30 --in-place",
+      "tool_version": "27.1.0",
+      "scope": "package",
+      "counts": {
+        "viable": 139,
+        "caught": 134,
+        "survived": 3,
+        "timeout": 2,
+        "unviable": 26
+      }
+    },
+    {
+      "package": "liberado-markdown",
+      "commit": "93645e4856260b7173e03ce0c6a4887953f8cdf5",
+      "recorded_at": "2026-08-23",
+      "command": "cargo mutants -p liberado-markdown --cap-lints true --timeout 3.0 --minimum-test-timeout 30 --in-place",
+      "tool_version": "27.1.0",
+      "scope": "package",
+      "counts": {
+        "viable": 139,
+        "caught": 135,
+        "survived": 2,
+        "timeout": 2,
+        "unviable": 26
+      }
+    },
+    {
+      "package": "liberado-markdown",
+      "commit": "c23c9ca7bd71313c416550882012084fa0ff5882",
+      "recorded_at": "2026-08-23",
+      "command": "cargo mutants -p liberado-markdown --cap-lints true --timeout 3.0 --minimum-test-timeout 30 --in-place",
+      "tool_version": "27.1.0",
+      "scope": "package",
+      "counts": {
+        "viable": 118,
+        "caught": 114,
+        "survived": 2,
+        "timeout": 2,
+        "unviable": 21
+      }
+    },
+    {
+      "package": "liberado-executor",
+      "commit": "f6597d133ad268efc4a601469cfaf3cf021982e7",
+      "recorded_at": "2026-08-23",
+      "command": "cargo mutants -p liberado-executor --cap-lints true --timeout 3.0 --minimum-test-timeout 30 --in-place",
+      "tool_version": "27.1.0",
+      "scope": "package",
+      "counts": {
+        "viable": 332,
+        "caught": 314,
+        "survived": 18,
+        "timeout": 0,
+        "unviable": 57
+      }
     }
   ]
 }

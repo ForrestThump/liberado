@@ -539,23 +539,18 @@ fn emit_crap_failure(
     has_ratchet: bool,
     error: Box<dyn std::error::Error>,
 ) -> Box<dyn std::error::Error> {
-    let hint = crap_failure_hint(has_ratchet);
-    if std::env::var_os("GITHUB_ACTIONS").is_some() {
-        let title = if has_ratchet {
-            "CRAP regression"
-        } else {
-            "CRAP ceiling"
-        };
-        let message = if has_ratchet {
-            CRAP_REGRESSION_GH
-        } else {
-            CRAP_CEILING_GH
-        };
-        eprintln!("::error title={title}::{message}");
-    }
-    eprintln!("\n----------\n{hint}\n----------");
-    format!("{error}\n\n{hint}").into()
+    crap_failure::emit_crap_failure_to(
+        std::env::var_os("GITHUB_ACTIONS").is_some(),
+        has_ratchet,
+        error,
+    )
 }
+
+mod crap_failure;
+
+#[cfg(test)]
+#[path = "ci_cmd/crap_failure_tests.rs"]
+mod crap_failure_tests;
 
 fn crap_failure_hint(has_ratchet: bool) -> &'static str {
     if has_ratchet {
