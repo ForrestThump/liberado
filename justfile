@@ -1,4 +1,4 @@
-# Liberado — command runner (`just`). Cross-platform: plain `cargo …` lines run under
+# Liberado â€” command runner (`just`). Cross-platform: plain `cargo â€¦` lines run under
 # both `sh` (CI/Linux/macOS) and PowerShell (Windows). PowerShell-only recipes are
 # tagged `[windows]`.
 
@@ -8,7 +8,7 @@ set quiet := true
 default:
     @just --list
 
-# ── Build ────────────────────────────────────────────────────────────────────
+# â”€â”€ Build â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 # Build the full native workspace (webui is WASM-only and excluded).
 build:
@@ -18,7 +18,7 @@ build:
 build-release:
     cargo build --locked --release --bin liberado
 
-# ── Test ─────────────────────────────────────────────────────────────────────
+# â”€â”€ Test â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 # Run the whole workspace test suite (includes the layer-rules gate).
 test:
@@ -32,7 +32,7 @@ test-p name:
 test-t1:
     cargo test --locked -p liberado-server -- t1_conformance
 
-# ── Quality gates (what CI runs) ─────────────────────────────────────────────
+# â”€â”€ Quality gates (what CI runs) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 # CI gate: fmt + clippy. Green is required before every commit.
 check:
@@ -41,7 +41,7 @@ check:
 
 # Full local CI. Includes the host-stable module-health ratchet on every OS.
 # Linux also runs the same per-function CRAP compare GitHub runs
-# (a score that went up fails and is named — fix it before you push).
+# (a score that went up fails and is named â€” fix it before you push).
 # Windows checks the 150 ceiling only; coverage is host-sensitive.
 # The baseline is not rewritten while that check is red. On Linux success,
 # rewrite `crap-baseline.json`. If the tree is otherwise clean, a Linux
@@ -182,9 +182,9 @@ compare-prepare:
 compare-reset path commit="":
     cargo run --locked -p liberado-cli -- coder compare reset {{path}} {{if commit == "" { "" } else { "--commit " + commit }}}
 
-# ── Mutation testing ─────────────────────────────────────────────────────────
+# â”€â”€ Mutation testing â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 #
-# Playbook: Skills/mutants-campaign.md — cold-start assessment, run, record, fix survivors.
+# Playbook: Skills/mutants-campaign.md â€” cold-start assessment, run, record, fix survivors.
 # Ledger: mutants-ledger.json (append-only). Health: just mutants-report / just mutants-next.
 #
 # Run cargo-mutants on one crate and append results to mutants-ledger.json.
@@ -193,51 +193,33 @@ compare-reset path commit="":
 # CARGO_TARGET_DIR keeps the invoke binary out of target/debug/liberado.exe so
 # `cargo mutants -p liberado-cli` can rebuild that path without Access denied.
 # Mutants builds go to target/mutants/ (see mutants_cmd.rs).
-[unix]
+# The env comes from the recipe-scoped [env] attribute, not a shell prefix:
+# `set "X=Y"&&` is cmd.exe syntax, which neither sh nor PowerShell runs.
+[env('CARGO_TARGET_DIR', 'target/liberado-invoke')]
 mutants name:
-    CARGO_TARGET_DIR=target/liberado-invoke cargo run --locked --quiet -p liberado-cli -- mutants run {{name}}
-
-[windows]
-mutants name:
-    set "CARGO_TARGET_DIR=target\liberado-invoke"&& cargo run --locked --quiet -p liberado-cli -- mutants run {{name}}
+    cargo run --locked --quiet -p liberado-cli -- mutants run {{name}}
 
 # coder-agent: lib tests only (mock_intake_e2e hangs in cargo-mutants temp env).
-[unix]
+[env('CARGO_TARGET_DIR', 'target/liberado-invoke')]
 mutants-agent:
-    CARGO_TARGET_DIR=target/liberado-invoke cargo run --locked --quiet -p liberado-cli -- mutants run --lib-only coder-agent
-
-[windows]
-mutants-agent:
-    set "CARGO_TARGET_DIR=target\liberado-invoke"&& cargo run --locked --quiet -p liberado-cli -- mutants run --lib-only coder-agent
+    cargo run --locked --quiet -p liberado-cli -- mutants run --lib-only coder-agent
 
 # Ingest an existing mutants.out without re-running cargo mutants.
-[unix]
+[env('CARGO_TARGET_DIR', 'target/liberado-invoke')]
 mutants-record name:
-    CARGO_TARGET_DIR=target/liberado-invoke cargo run --locked --quiet -p liberado-cli -- mutants record {{name}}
-
-[windows]
-mutants-record name:
-    set "CARGO_TARGET_DIR=target\liberado-invoke"&& cargo run --locked --quiet -p liberado-cli -- mutants record {{name}}
+    cargo run --locked --quiet -p liberado-cli -- mutants record {{name}}
 
 # Health report: never campaigned, historical-only, most drift since last SHA run.
-[unix]
+[env('CARGO_TARGET_DIR', 'target/liberado-invoke')]
 mutants-report:
-    CARGO_TARGET_DIR=target/liberado-invoke cargo run --locked --quiet -p liberado-cli -- mutants report
-
-[windows]
-mutants-report:
-    set "CARGO_TARGET_DIR=target\liberado-invoke"&& cargo run --locked --quiet -p liberado-cli -- mutants report
+    cargo run --locked --quiet -p liberado-cli -- mutants report
 
 # Print one crate directory name to mutation-test next (see Skills/mutants-campaign.md).
-[unix]
+[env('CARGO_TARGET_DIR', 'target/liberado-invoke')]
 mutants-next:
-    CARGO_TARGET_DIR=target/liberado-invoke cargo run --locked --quiet -p liberado-cli -- mutants next
+    cargo run --locked --quiet -p liberado-cli -- mutants next
 
-[windows]
-mutants-next:
-    set "CARGO_TARGET_DIR=target\liberado-invoke"&& cargo run --locked --quiet -p liberado-cli -- mutants next
-
-# ── Run ──────────────────────────────────────────────────────────────────────
+# â”€â”€ Run â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 # Serve the daemon + HTTP API on the vault at `LIBERADO_VAULT` (or $1).
 serve vault:
@@ -247,7 +229,7 @@ serve vault:
 config-check:
     cargo run --bin liberado -- config check
 
-# ── Windows dev-stack helpers ────────────────────────────────────────────────
+# â”€â”€ Windows dev-stack helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 [windows]
 dev-stack: # Rebuild + restart the whole dev stack (daemon, server, webui).

@@ -138,7 +138,7 @@ pub fn report(args: &mut impl Iterator<Item = String>) -> Result<(), Box<dyn std
     let ledger = load_ledger(&root)?;
     let crates = crate_map_cmd::list_crates(&root)?;
     let health = build_health(&root, &ledger, &crates, include_all)?;
-    print_report(&health);
+    print!("{}", render_report(&health));
     Ok(())
 }
 
@@ -536,24 +536,30 @@ fn git_shortstat(
     Ok(String::from_utf8(output.stdout)?.trim().to_string())
 }
 
-fn print_report(health: &HealthReport) {
-    println!("=== Mutants campaign health ===\n");
+/// Render the campaign health report as text.
+///
+/// Pure so tests can assert on it directly; `report` prints the result.
+fn render_report(health: &HealthReport) -> String {
+    let mut out = String::from("=== Mutants campaign health ===\n\n");
 
-    println!("Never campaigned ({}):", health.never_campaigned.len());
+    out.push_str(&format!(
+        "Never campaigned ({}):\n",
+        health.never_campaigned.len()
+    ));
     if health.never_campaigned.is_empty() {
-        println!("  (none)");
+        out.push_str("  (none)\n");
     } else {
         for entry in &health.never_campaigned {
-            println!("  {} [{}]", entry.dir, entry.role);
+            out.push_str(&format!("  {} [{}]\n", entry.dir, entry.role));
         }
     }
 
-    println!(
-        "\nHistorical only — no commit SHA ({}):",
+    out.push_str(&format!(
+        "\nHistorical only — no commit SHA ({}):\n",
         health.historical_only.len()
-    );
+    ));
     if health.historical_only.is_empty() {
-        println!("  (none)");
+        out.push_str("  (none)\n");
     } else {
         for entry in &health.historical_only {
             let counts = entry
@@ -561,20 +567,20 @@ fn print_report(health: &HealthReport) {
                 .as_ref()
                 .map(format_counts)
                 .unwrap_or_default();
-            println!("  {} [{}]{}", entry.dir, entry.role, counts);
+            out.push_str(&format!("  {} [{}]{}\n", entry.dir, entry.role, counts));
         }
     }
 
-    println!(
-        "\nMost drift since last SHA campaign ({}):",
+    out.push_str(&format!(
+        "\nMost drift since last SHA campaign ({}):\n",
         health.most_drift.len()
-    );
+    ));
     if health.most_drift.is_empty() {
-        println!("  (none)");
+        out.push_str("  (none)\n");
     } else {
         for entry in &health.most_drift {
             if let Some(note) = &entry.drift_note {
-                println!("  {} [{}] — {}", entry.dir, entry.role, note);
+                out.push_str(&format!("  {} [{}] — {}\n", entry.dir, entry.role, note));
                 continue;
             }
             let lines = entry
@@ -587,17 +593,18 @@ fn print_report(health: &HealthReport) {
                 .as_ref()
                 .map(format_counts)
                 .unwrap_or_default();
-            println!(
-                "  {} [{}] — {} commits since {} — {}{}",
+            out.push_str(&format!(
+                "  {} [{}] — {} commits since {} — {}{}\n",
                 entry.dir,
                 entry.role,
                 entry.commits_since.unwrap_or(0),
                 entry.latest_commit.as_deref().unwrap_or("?"),
                 lines,
                 counts
-            );
+            ));
         }
     }
+    out
 }
 
 fn format_counts(counts: &Counts) -> String {
@@ -608,263 +615,5 @@ fn format_counts(counts: &Counts) -> String {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use std::process::Command;
-
-    fn init_git_repo(root: &Path) {
-        for (dir, name) in [
-            ("crates/alpha", "liberado-alpha"),
-            ("crates/beta", "liberado-beta"),
-        ] {
-            fs::create_dir_all(root.join(dir)).unwrap();
-            fs::write(
-                root.join(dir).join("Cargo.toml"),
-                format!(
-                    "[package]\nname = \"{name}\"\n\n[package.metadata.liberado]\nrole = \"kernel\"\n"
-                ),
-            )
-            .unwrap();
-            fs::write(
-                root.join(dir).join("lib.rs"),
-                "pub fn value() -> i32 { 1 }\n",
-            )
-            .unwrap();
-        }
-        run_git(root, &["init"]);
-        run_git(root, &["config", "user.email", "test@example.com"]);
-        run_git(root, &["config", "user.name", "Test"]);
-        run_git(root, &["add", "."]);
-        run_git(root, &["commit", "-m", "initial"]);
-    }
-
-    fn run_git(root: &Path, args: &[&str]) {
-        let status = Command::new("git")
-            .args(args)
-            .current_dir(root)
-            .status()
-            .expect("git command");
-        assert!(status.success(), "git {:?} failed", args);
-    }
-
-    #[test]
-    fn ingest_counts_from_outcomes_json() {
-        let outcomes: OutcomesFile = serde_json::from_str(
-            r#"{
-  "caught": 3,
-  "missed": 1,
-  "timeout": 0,
-  "unviable": 2,
-  "cargo_mutants_version": "27.1.0"
-}"#,
-        )
-        .unwrap();
-        let counts = outcomes.counts();
-        assert_eq!(counts.viable, 4);
-        assert_eq!(counts.caught, 3);
-        assert_eq!(counts.survived, 1);
-        assert_eq!(counts.unviable, 2);
-    }
-
-    #[test]
-    fn package_from_outcomes_skips_baseline_row() {
-        let package = package_from_outcomes_bytes(
-            br#"{
-  "outcomes": [
-    {"scenario": "Baseline"},
-    {"scenario": {"Mutant": {"package": "liberado-alpha"}}}
-  ],
-  "caught": 1,
-  "missed": 0,
-  "timeout": 0,
-  "unviable": 0,
-  "cargo_mutants_version": "27.1.0"
-}"#,
-        );
-        assert_eq!(package, Some("liberado-alpha".into()));
-    }
-
-    #[test]
-    fn record_refuses_zero_viable_outcomes_so_a_crashed_run_cannot_shadow_the_last_campaign() {
-        let dir = tempfile::tempdir().unwrap();
-        let root = dir.path();
-        init_git_repo(root);
-        // A completed outcomes file from a run whose baseline build never happened: every
-        // count zero. Recording it would append an all-zero row that the report treats as
-        // the crate's newest campaign.
-        fs::create_dir_all(root.join("mutants.out")).unwrap();
-        fs::write(
-            root.join(OUTCOMES_FILE),
-            r#"{
-  "caught": 0,
-  "missed": 0,
-  "timeout": 0,
-  "unviable": 0,
-  "cargo_mutants_version": "27.1.0"
-}"#,
-        )
-        .unwrap();
-
-        let outcome = record_campaign(root, Some("alpha"), None, RunProfile::Default).unwrap();
-        assert!(matches!(outcome, RecordOutcome::SkippedIncomplete));
-        assert!(
-            load_ledger(root).unwrap().campaigns.is_empty(),
-            "a zero-viable run must not append a ledger row"
-        );
-    }
-
-    #[test]
-    fn ledger_append_preserves_prior_rows() {
-        let dir = tempfile::tempdir().unwrap();
-        let root = dir.path();
-        fs::write(
-            root.join(LEDGER_FILE),
-            r#"{"schema":1,"campaigns":[{"package":"liberado-alpha","commit":null,"recorded_at":"2026-07-29","scope":"package","source":"markdown-seed","counts":{"viable":1,"caught":1,"survived":0,"timeout":0,"unviable":0}}]}"#,
-        )
-        .unwrap();
-        append_campaign(
-            root,
-            Campaign {
-                package: "liberado-alpha".into(),
-                commit: Some("abc123".into()),
-                recorded_at: "2026-08-21".into(),
-                command: Some("cargo mutants -p liberado-alpha".into()),
-                tool_version: Some("27.1.0".into()),
-                scope: "package".into(),
-                counts: Counts {
-                    viable: 4,
-                    caught: 4,
-                    survived: 0,
-                    timeout: 0,
-                    unviable: 0,
-                },
-                source: None,
-            },
-        )
-        .unwrap();
-        let ledger = load_ledger(root).unwrap();
-        assert_eq!(ledger.campaigns.len(), 2);
-        assert!(ledger.campaigns[0].commit.is_none());
-        assert_eq!(ledger.campaigns[1].commit.as_deref(), Some("abc123"));
-    }
-
-    #[test]
-    fn report_groups_never_historical_and_drift() {
-        let dir = tempfile::tempdir().unwrap();
-        let root = dir.path();
-        init_git_repo(root);
-        let base = current_commit(root).unwrap();
-        fs::write(
-            root.join("crates/beta/lib.rs"),
-            "pub fn value() -> i32 { 2 }\n",
-        )
-        .unwrap();
-        run_git(root, &["add", "crates/beta/lib.rs"]);
-        run_git(root, &["commit", "-m", "change beta"]);
-
-        let ledger = Ledger {
-            schema: 1,
-            campaigns: vec![
-                Campaign {
-                    package: "liberado-alpha".into(),
-                    commit: None,
-                    recorded_at: "2026-07-29".into(),
-                    command: None,
-                    tool_version: Some("27.1.0".into()),
-                    scope: "package".into(),
-                    counts: Counts {
-                        viable: 10,
-                        caught: 9,
-                        survived: 1,
-                        timeout: 0,
-                        unviable: 0,
-                    },
-                    source: Some("markdown-seed".into()),
-                },
-                Campaign {
-                    package: "liberado-beta".into(),
-                    commit: Some(base),
-                    recorded_at: "2026-08-01".into(),
-                    command: Some("cargo mutants -p liberado-beta".into()),
-                    tool_version: Some("27.1.0".into()),
-                    scope: "package".into(),
-                    counts: Counts {
-                        viable: 5,
-                        caught: 4,
-                        survived: 1,
-                        timeout: 0,
-                        unviable: 0,
-                    },
-                    source: None,
-                },
-            ],
-        };
-        let crates = crate_map_cmd::list_crates(root).unwrap();
-        let health = build_health(root, &ledger, &crates, true).unwrap();
-        assert!(health.never_campaigned.is_empty());
-        assert_eq!(health.historical_only.len(), 1);
-        assert_eq!(health.historical_only[0].dir, "alpha");
-        assert_eq!(health.most_drift.len(), 1);
-        assert_eq!(health.most_drift[0].dir, "beta");
-        assert_eq!(health.most_drift[0].commits_since, Some(1));
-    }
-
-    #[test]
-    fn drift_marks_missing_ancestor() {
-        let dir = tempfile::tempdir().unwrap();
-        let root = dir.path();
-        init_git_repo(root);
-        let crates = crate_map_cmd::list_crates(root).unwrap();
-        let ledger = Ledger {
-            schema: 1,
-            campaigns: vec![Campaign {
-                package: "liberado-alpha".into(),
-                commit: Some("deadbeefdeadbeefdeadbeefdeadbeefdeadbeef".into()),
-                recorded_at: "2026-08-01".into(),
-                command: None,
-                tool_version: None,
-                scope: "package".into(),
-                counts: Counts {
-                    viable: 1,
-                    caught: 1,
-                    survived: 0,
-                    timeout: 0,
-                    unviable: 0,
-                },
-                source: None,
-            }],
-        };
-        let health = build_health(root, &ledger, &crates, true).unwrap();
-        assert_eq!(health.most_drift.len(), 1);
-        assert_eq!(
-            health.most_drift[0].drift_note.as_deref(),
-            Some("commit not in this history")
-        );
-    }
-
-    #[test]
-    fn build_mutants_command_uses_longer_timeout_for_cli() {
-        let cli = build_mutants_command("liberado-cli", RunProfile::Default);
-        assert!(cli.contains("--timeout 120"));
-        assert!(cli.contains("--minimum-test-timeout 120"));
-
-        let tui = build_mutants_command("liberado-tui", RunProfile::Default);
-        assert!(tui.contains("--timeout 3.0"));
-        assert!(tui.contains("--minimum-test-timeout 30"));
-
-        let acp = build_mutants_command("liberado-acp-bridge", RunProfile::Default);
-        assert!(acp.contains("--timeout 10.0"));
-        assert!(acp.contains("--minimum-test-timeout 120"));
-    }
-
-    #[test]
-    fn repo_mutants_ledger_parses() {
-        let root = crate_map_cmd::repository_root().expect("repository root");
-        let ledger = load_ledger(&root).expect("ledger should parse");
-        assert_eq!(ledger.schema, 1);
-        assert!(
-            !ledger.campaigns.is_empty(),
-            "seed ledger should not be empty"
-        );
-    }
-}
+#[path = "mutants_cmd_tests.rs"]
+mod tests;
