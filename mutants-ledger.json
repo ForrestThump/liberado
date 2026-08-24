@@ -1248,6 +1248,51 @@
         "timeout": 0,
         "unviable": 4
       }
+    },
+    {
+      "package": "liberado-chat-search",
+      "commit": "92813995a7721349bfdb29904310a0850d189881",
+      "recorded_at": "2026-08-24",
+      "command": "cargo mutants -p liberado-chat-search --cap-lints true --timeout 3.0 --minimum-test-timeout 30 --in-place",
+      "tool_version": "27.1.0",
+      "scope": "package",
+      "counts": {
+        "viable": 29,
+        "caught": 20,
+        "survived": 9,
+        "timeout": 0,
+        "unviable": 4
+      }
+    },
+    {
+      "package": "liberado-chat-search",
+      "commit": "92813995a7721349bfdb29904310a0850d189881",
+      "recorded_at": "2026-08-24",
+      "command": "cargo mutants -p liberado-chat-search --cap-lints true --timeout 3.0 --minimum-test-timeout 30 --in-place",
+      "tool_version": "27.1.0",
+      "scope": "package",
+      "counts": {
+        "viable": 29,
+        "caught": 22,
+        "survived": 7,
+        "timeout": 0,
+        "unviable": 4
+      }
+    },
+    {
+      "package": "liberado-chat-search",
+      "commit": "92813995a7721349bfdb29904310a0850d189881",
+      "recorded_at": "2026-08-24",
+      "command": "cargo mutants -p liberado-chat-search --cap-lints true --timeout 3.0 --minimum-test-timeout 30 --in-place",
+      "tool_version": "27.1.0",
+      "scope": "package",
+      "counts": {
+        "viable": 29,
+        "caught": 28,
+        "survived": 1,
+        "timeout": 0,
+        "unviable": 4
+      }
     }
   ]
 }

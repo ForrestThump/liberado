@@ -226,4 +226,22 @@ mod proptest_tests {
             prop_assert!(ParsedQuery::parse_literal(&space).is_err());
         }
     }
+
+    #[test]
+    fn find_start_returns_exact_byte_offsets_not_zero_or_one() {
+        let q = ParsedQuery::parse_literal("needle").unwrap();
+        let hay = format!("{}{}", "x".repeat(10), "needle here");
+        assert_eq!(q.find_start(&hay), Some(10));
+        assert_eq!(q.find_start("needle at start"), Some(0));
+        assert_eq!(q.find_start("nothing relevant"), None);
+    }
+
+    #[test]
+    fn find_start_regex_reports_the_match_start_not_the_line_start() {
+        let q = ParsedQuery::parse_regex("\\bneedle\\b").unwrap();
+        let hay = "some text before needle after";
+        let offset = q.find_start(hay).expect("regex matches");
+        assert!(offset > 0, "must report the match start, not 0");
+        assert_eq!(&hay[offset..offset + 6], "needle");
+    }
 }
