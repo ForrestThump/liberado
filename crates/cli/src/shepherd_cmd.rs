@@ -246,40 +246,100 @@ impl Pr {
     }
 }
 
-pub fn run(args: impl Iterator<Item = String>) -> Result<(), Box<dyn std::error::Error>> {
-    let args: Vec<_> = args.collect();
-    if args.iter().any(|a| a == "--self-test") {
-        return self_test();
-    }
-    let once = args.iter().any(|a| a == "--once");
-    let watch = args.iter().any(|a| a == "--watch");
-    let dry = args.iter().any(|a| a == "--dry-run");
-    let selected_project = args
+/// One parsed shepherd invocation: which mode was asked for and with what modifiers.
+///
+/// Parsing is pure so the usage rules (a mode is required; `config` demands `check`; `--project`
+/// takes the next argument) are testable without a repository or a daemon behind them.
+#[derive(Debug, PartialEq, Eq)]
+enum Invocation {
+    SelfTest,
+    ConfigCheck { project: Option<String> },
+    Drive { once: bool, watch: bool },
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct ParsedInvocation {
+    mode: Invocation,
+    dry_run: bool,
+    project: Option<String>,
+    seed: Option<PathBuf>,
+    reset_baselines: bool,
+}
+
+fn parse_invocation(args: &[String]) -> Result<ParsedInvocation, String> {
+    let dry_run = args.iter().any(|a| a == "--dry-run");
+    let project = args
         .windows(2)
         .find(|a| a[0] == "--project")
-        .map(|a| a[1].as_str());
+        .map(|a| a[1].clone());
+    let seed = args
+        .windows(2)
+        .find(|a| a[0] == "--seed")
+        .map(|a| PathBuf::from(&a[1]));
+    let reset_baselines = args.iter().any(|a| a == "--reset-baselines");
+
+    if args.iter().any(|a| a == "--self-test") {
+        return Ok(ParsedInvocation {
+            mode: Invocation::SelfTest,
+            dry_run,
+            project,
+            seed,
+            reset_baselines,
+        });
+    }
     if args.first().is_some_and(|arg| arg == "config") {
         if args.get(1).is_none_or(|arg| arg != "check") {
             return Err("usage: liberado shepherd config check [--project <name>]".into());
         }
-        return config_check(selected_project);
+        return Ok(ParsedInvocation {
+            mode: Invocation::ConfigCheck {
+                project: project.clone(),
+            },
+            dry_run,
+            project,
+            seed,
+            reset_baselines,
+        });
     }
-    let seed_path = args
-        .windows(2)
-        .find(|a| a[0] == "--seed")
-        .map(|a| PathBuf::from(&a[1]));
-    if !(once || watch || seed_path.is_some()) {
+    let once = args.iter().any(|a| a == "--once");
+    let watch = args.iter().any(|a| a == "--watch");
+    if !(once || watch || seed.is_some()) {
         return Err(
             "usage: liberado shepherd <--once|--watch|--seed FILE> [--project <name>] [--dry-run]\n       liberado shepherd config check [--project <name>]\n       liberado shepherd --self-test"
                 .into(),
         );
     }
-    let cfg = Config::load(selected_project)?;
-    if args.iter().any(|a| a == "--reset-baselines") {
+    Ok(ParsedInvocation {
+        mode: Invocation::Drive { once, watch },
+        dry_run,
+        project,
+        seed,
+        reset_baselines,
+    })
+}
+
+pub fn run(args: impl Iterator<Item = String>) -> Result<(), Box<dyn std::error::Error>> {
+    let args: Vec<_> = args.collect();
+    let parsed = parse_invocation(&args)?;
+    match parsed.mode {
+        Invocation::SelfTest => self_test(),
+        Invocation::ConfigCheck { ref project } => config_check(project.as_deref()),
+        Invocation::Drive { once, watch } => drive(&parsed, once, watch),
+    }
+}
+
+fn drive(
+    parsed: &ParsedInvocation,
+    once: bool,
+    watch: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let dry = parsed.dry_run;
+    let cfg = Config::load(parsed.project.as_deref())?;
+    if parsed.reset_baselines {
         reset_baselines(&cfg)?;
     }
-    if let Some(path) = seed_path {
-        seed(&cfg, &path, dry)?;
+    if let Some(path) = &parsed.seed {
+        seed(&cfg, path, dry)?;
     }
     loop {
         let open_prs = prs(&cfg)?;
@@ -1717,6 +1777,69 @@ mod tests {
         assert_eq!(
             cfg.daemon, "http://env-daemon",
             "daemon is never project-set"
+        );
+    }
+
+    fn argv(items: &[&str]) -> Vec<String> {
+        items.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn invocation_parses_every_documented_shape() {
+        assert!(matches!(
+            parse_invocation(&argv(&["--self-test"])).unwrap().mode,
+            Invocation::SelfTest
+        ));
+        let config_check =
+            parse_invocation(&argv(&["config", "check", "--project", "liberado"])).unwrap();
+        assert_eq!(
+            config_check.mode,
+            Invocation::ConfigCheck {
+                project: Some("liberado".into())
+            }
+        );
+        let seed_drive = parse_invocation(&argv(&["--seed", "tasks.txt", "--dry-run"])).unwrap();
+        assert_eq!(
+            seed_drive.mode,
+            Invocation::Drive {
+                once: false,
+                watch: false
+            }
+        );
+        assert_eq!(seed_drive.seed, Some(PathBuf::from("tasks.txt")));
+        assert!(seed_drive.dry_run);
+    }
+
+    #[test]
+    fn invocation_demands_a_mode_before_doing_anything() {
+        let error = parse_invocation(&argv(&["--dry-run"])).unwrap_err();
+        assert!(error.contains("--once|--watch|--seed"), "{error}");
+    }
+
+    #[test]
+    fn invocation_rejects_config_without_check() {
+        let error = parse_invocation(&argv(&["config"])).unwrap_err();
+        assert!(error.contains("config check"), "{error}");
+    }
+
+    #[test]
+    fn invocation_carries_the_secondary_flags() {
+        let parsed = parse_invocation(&argv(&[
+            "--once",
+            "--reset-baselines",
+            "--project",
+            "other",
+        ]))
+        .unwrap();
+        assert!(parsed.reset_baselines);
+        assert!(!parsed.dry_run);
+        assert_eq!(parsed.project.as_deref(), Some("other"));
+        assert_eq!(
+            parsed.mode,
+            Invocation::Drive {
+                once: true,
+                watch: false
+            }
         );
     }
 }
