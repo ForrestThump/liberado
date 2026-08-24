@@ -45,12 +45,11 @@ async fn emitted_timestamps_are_rfc3339_with_millis() {
     session.start_run("model-x", "mock", Some("task text"));
     let lines = lines_of(&path);
     let ts = lines[0]["ts"].as_str().expect("ts is a string");
-    let parsed = chrono::DateTime::parse_from_rfc3339(ts).expect("ts must parse as RFC 3339");
+    chrono::DateTime::parse_from_rfc3339(ts).expect("ts must parse as RFC 3339");
     assert!(
         ts.ends_with('Z') && ts.contains('.'),
         "millis + Z suffix expected: {ts}"
     );
-    drop(parsed);
 }
 
 #[test]

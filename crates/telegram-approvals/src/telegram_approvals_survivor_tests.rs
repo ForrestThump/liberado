@@ -292,8 +292,13 @@ async fn stale_replies_are_labelled_and_fresh_ones_are_not() {
 
 /// When the re-signed note cannot be written back, the flow must stop before
 /// telling the human "Revised" — nothing was revised.
+///
+/// Write denial is platform-specific: Unix mode bits on the directory, an
+/// ACL deny ACE via icacls on Windows (`*S-1-1-0` is the locale-independent
+/// Everyone SID).
 #[tokio::test]
 async fn a_failed_revision_write_never_announces_success() {
+    #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
 
     let (vault, dir) = vault().await;
@@ -316,12 +321,40 @@ async fn a_failed_revision_write_never_announces_success() {
 
     // Make the proposals tree unwritable so the write-back fails.
     let proposals_dir = dir.path().join("proposals");
+    #[cfg(unix)]
     std::fs::set_permissions(&proposals_dir, std::fs::Permissions::from_mode(0o555)).unwrap();
+    #[cfg(windows)]
+    {
+        let out = liberado_common::process::std_command("icacls")
+            .arg(&proposals_dir)
+            .args(["/deny", "*S-1-1-0:(OI)(CI)(W)"])
+            .output()
+            .expect("icacls runs");
+        assert!(
+            out.status.success(),
+            "icacls deny failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
 
     bot.apply_revision("prop-5", "make it shorter").await;
 
     // Restore so tempdir cleanup can remove the tree.
+    #[cfg(unix)]
     std::fs::set_permissions(&proposals_dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+    #[cfg(windows)]
+    {
+        let out = liberado_common::process::std_command("icacls")
+            .arg(&proposals_dir)
+            .args(["/remove:d", "*S-1-1-0"])
+            .output()
+            .expect("icacls runs");
+        assert!(
+            out.status.success(),
+            "icacls restore failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
 
     let actions = channel.actions.lock().unwrap();
     assert!(

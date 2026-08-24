@@ -189,27 +189,39 @@ enum RecordOutcome {
     SkippedIncomplete,
 }
 
+/// Per-crate `(test_timeout, minimum_test_timeout)` overrides.
+///
+/// Data, not match arms: each new crate entry is a row here rather than a
+/// branch in [`build_mutants_command`], which sits just under its
+/// function-complexity ratchet and must not grow with the campaign list.
+const TIMEOUT_OVERRIDES: &[(&str, &str, &str)] = &[
+    // liberado-cli pulls most of the workspace; baseline + integration tests exceed 3s.
+    ("liberado-cli", "120", "120"),
+    // memory-mcp's stdio integration tests exceed 3s on a cold target/mutants cache,
+    // which times out the unmutated baseline and kills the whole campaign.
+    ("liberado-memory-mcp", "60", "60"),
+    // Same cold-cache effect for conversation-store: the baseline test phase also
+    // compiles doctests, which alone exceeds the 3s floor on a cold cache.
+    ("liberado-conversation-store", "60", "60"),
+    // coder-core's suite is simply large; a cold cache pushes the baseline test
+    // phase well past 3s before any mutant runs.
+    ("liberado-coder-core", "90", "90"),
+    // acp-bridge spawns child processes in its smoke test; a cold baseline exceeds 3s.
+    ("liberado-acp-bridge", "10.0", "120"),
+    // chat-search pulls the Tantivy index stack; its cold-cache baseline test phase
+    // exceeds 3s before any mutant runs (same signature as conversation-store).
+    ("liberado-chat-search", "60", "60"),
+];
+
 fn build_mutants_command(package: &str, profile: RunProfile) -> String {
-    let (test_timeout, min_test_timeout) = match (package, profile) {
-        // liberado-cli pulls most of the workspace; baseline + integration tests exceed 3s.
-        ("liberado-cli", _) => ("120", "120"),
-        // memory-mcp's stdio integration tests exceed 3s on a cold target/mutants cache,
-        // which times out the unmutated baseline and kills the whole campaign.
-        ("liberado-memory-mcp", _) => ("60", "60"),
-        // Same cold-cache effect for conversation-store: the baseline test phase also
-        // compiles doctests, which alone exceeds the 3s floor on a cold cache.
-        ("liberado-conversation-store", _) => ("60", "60"),
-        // coder-core's suite is simply large; a cold cache pushes the baseline test
-        // phase well past 3s before any mutant runs.
-        ("liberado-coder-core", _) => ("90", "90"),
-        // acp-bridge spawns child processes in its smoke test; a cold baseline exceeds 3s.
-        ("liberado-acp-bridge", _) => ("10.0", "120"),
-        // chat-search pulls the Tantivy index stack; its cold-cache baseline test phase
-        // exceeds 3s before any mutant runs (same signature as conversation-store).
-        ("liberado-chat-search", _) => ("60", "60"),
-        (_, RunProfile::LibOnly) => ("90", "90"),
-        _ => ("3.0", "30"),
-    };
+    let (test_timeout, min_test_timeout) = TIMEOUT_OVERRIDES
+        .iter()
+        .find(|(p, _, _)| *p == package)
+        .map(|(_, t, m)| (*t, *m))
+        .unwrap_or(match profile {
+            RunProfile::LibOnly => ("90", "90"),
+            _ => ("3.0", "30"),
+        });
     let mut parts = vec![
         "cargo".to_string(),
         "mutants".to_string(),
