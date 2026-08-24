@@ -1383,6 +1383,21 @@
         "timeout": 0,
         "unviable": 2
       }
+    },
+    {
+      "package": "liberado-theme",
+      "commit": "5b61330b9aefbb604cf3e0771a646171b9cb9f83",
+      "recorded_at": "2026-08-24",
+      "command": "cargo mutants -p liberado-theme --cap-lints true --timeout 3.0 --minimum-test-timeout 30 --in-place",
+      "tool_version": "27.0.0",
+      "scope": "package",
+      "counts": {
+        "viable": 39,
+        "caught": 38,
+        "survived": 1,
+        "timeout": 0,
+        "unviable": 2
+      }
     }
   ]
 }
