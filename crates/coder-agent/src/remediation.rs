@@ -265,3 +265,7 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "remediation_survivor_tests.rs"]
+mod survivor_tests;
