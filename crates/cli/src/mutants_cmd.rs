@@ -269,16 +269,8 @@ fn record_campaign(
     };
     let commit = current_commit(root)?;
     let counts = outcomes.counts();
-    if counts.viable == 0 {
-        // A completed outcomes file with no viable mutants means cargo-mutants never got a
-        // baseline build (missing sibling checkout, disk full, config error). Recording it
-        // would shadow the crate's real last campaign — the report reads the newest row.
-        return Ok(RecordOutcome::SkippedIncomplete);
-    }
-    if !outcomes_are_complete(&counts, outcomes.total_mutants) {
-        // A partial outcomes file (killed mid-campaign) must not shadow the
-        // crate's real last campaign — see outcomes_are_complete.
-        return Ok(RecordOutcome::SkippedIncomplete);
+    if let Some(skip) = validate_outcomes(&counts, outcomes.total_mutants) {
+        return Ok(skip);
     }
     let campaign = Campaign {
         package: package.clone(),
@@ -318,9 +310,18 @@ pub fn load_ledger(root: &Path) -> Result<Ledger, Box<dyn std::error::Error>> {
 /// Every tested mutant lands in exactly one of the four buckets; when the
 /// declared total is known and the buckets do not sum to it, the outcomes file
 /// is a partial write from a killed run.
-fn outcomes_are_complete(counts: &Counts, total_mutants: u32) -> bool {
-    total_mutants == 0
-        || counts.caught + counts.survived + counts.timeout + counts.unviable == total_mutants
+/// Refuse outcome files that would shadow the crate's real last campaign:
+/// zero-viable means the baseline build never happened, and a bucket sum below
+/// the declared total means the run was killed mid-campaign.
+fn validate_outcomes(counts: &Counts, total_mutants: u32) -> Option<RecordOutcome> {
+    if counts.viable == 0 {
+        return Some(RecordOutcome::SkippedIncomplete);
+    }
+    let accounted = counts.caught + counts.survived + counts.timeout + counts.unviable;
+    if total_mutants > 0 && accounted != total_mutants {
+        return Some(RecordOutcome::SkippedIncomplete);
+    }
+    None
 }
 
 fn save_ledger(root: &Path, ledger: &Ledger) -> Result<(), Box<dyn std::error::Error>> {
