@@ -14,13 +14,28 @@ fn xdg_lock() -> &'static Mutex<()> {
     LOCK.get_or_init(|| Mutex::new(()))
 }
 
+/// Serialises every test that points the platform config root somewhere else.
+///
+/// `dirs::config_dir()` reads `XDG_CONFIG_HOME` on Linux but `%APPDATA%` on
+/// Windows, so the fixture redirects whichever variable the running platform
+/// actually consults. A test that sets only the XDG variable passes on a
+/// developer Linux box and silently tests nothing on Windows.
+fn config_root_var() -> &'static str {
+    if cfg!(windows) {
+        "APPDATA"
+    } else {
+        "XDG_CONFIG_HOME"
+    }
+}
+
 struct RestoreXdg(Option<std::ffi::OsString>);
 
 impl RestoreXdg {
     fn set_to(path: &Path) -> Self {
-        let prior = std::env::var_os("XDG_CONFIG_HOME");
+        let var = config_root_var();
+        let prior = std::env::var_os(var);
         unsafe {
-            std::env::set_var("XDG_CONFIG_HOME", path);
+            std::env::set_var(var, path);
         }
         Self(prior)
     }
@@ -28,10 +43,11 @@ impl RestoreXdg {
 
 impl Drop for RestoreXdg {
     fn drop(&mut self) {
+        let var = config_root_var();
         unsafe {
             match &self.0 {
-                Some(v) => std::env::set_var("XDG_CONFIG_HOME", v),
-                None => std::env::remove_var("XDG_CONFIG_HOME"),
+                Some(v) => std::env::set_var(var, v),
+                None => std::env::remove_var(var),
             }
         }
     }
@@ -39,6 +55,23 @@ impl Drop for RestoreXdg {
 
 #[test]
 fn user_paths_hang_off_the_platform_config_root() {
+    // Windows' `dirs` resolves through the Known-Folders API, which ignores
+    // every environment variable, so exact-root redirection is only possible
+    // off Windows. The `<root>/liberado` join structure is pinned either way.
+    if cfg!(windows) {
+        let root = dirs::config_dir().expect("roaming app data resolves");
+        assert_eq!(user_config_dir(), Some(root.join("liberado")));
+        assert_eq!(
+            user_themes_dir(),
+            Some(root.join("liberado").join("themes")),
+            "themes live one level deeper"
+        );
+        assert_eq!(
+            user_settings_path(),
+            Some(root.join("liberado").join("settings.toml"))
+        );
+        return;
+    }
     let _guard = xdg_lock().lock().unwrap();
     let dir = tempfile::tempdir().unwrap();
     let _restore = RestoreXdg::set_to(dir.path());
