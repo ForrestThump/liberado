@@ -68,6 +68,18 @@ pub fn run(args: &mut impl Iterator<Item = String>) -> Result<(), Box<dyn std::e
         return Err("usage: liberado mutants run [--lib-only] <crate-dir>".into());
     }
     let crate_info = resolve_crate(&root, crate_dir)?;
+
+    // outcomes.json is persistent scratch. If this run dies before cargo-mutants
+    // rewrites it, the file still holds the previous campaign of (often) this same
+    // crate; recording would then append those stale counts under today's commit
+    // and reset the drift clock. Remove it first so a row can only ever come from
+    // the run that just finished. (The recorder's completeness check is the second
+    // line of defence; this removes the trigger.)
+    let stale_outcomes = root.join(OUTCOMES_FILE);
+    if stale_outcomes.exists() {
+        fs::remove_file(&stale_outcomes)
+            .map_err(|e| format!("could not clear stale {}: {e}", OUTCOMES_FILE))?;
+    }
     let command = build_mutants_command(&crate_info.name, profile);
     let mutants_target = root.join(MUTANTS_TARGET_DIR);
     eprintln!("[mutants] running: {command}");
@@ -558,71 +570,82 @@ fn git_shortstat(
 
 /// Render the campaign health report as text.
 ///
-/// Pure so tests can assert on it directly; `report` prints the result.
+/// Pure so tests can assert on it directly; `report` prints the result. Each
+/// section has its own renderer so tests can pin one section's shape without
+/// building the others.
 fn render_report(health: &HealthReport) -> String {
     let mut out = String::from("=== Mutants campaign health ===\n\n");
+    out.push_str(&render_never_campaigned(&health.never_campaigned));
+    out.push_str(&render_historical_only(&health.historical_only));
+    out.push_str(&render_most_drift(&health.most_drift));
+    out
+}
 
-    out.push_str(&format!(
-        "Never campaigned ({}):\n",
-        health.never_campaigned.len()
-    ));
-    if health.never_campaigned.is_empty() {
+/// Render the "historical only" section.
+/// Render the "never campaigned" section.
+fn render_never_campaigned(entries: &[CrateHealthEntry]) -> String {
+    let mut out = format!("\nNever campaigned ({}):\n", entries.len());
+    if entries.is_empty() {
         out.push_str("  (none)\n");
-    } else {
-        for entry in &health.never_campaigned {
-            out.push_str(&format!("  {} [{}]\n", entry.dir, entry.role));
-        }
+        return out;
     }
+    for entry in entries {
+        out.push_str(&format!("  {} [{}]\n", entry.dir, entry.role));
+    }
+    out
+}
 
-    out.push_str(&format!(
-        "\nHistorical only — no commit SHA ({}):\n",
-        health.historical_only.len()
-    ));
-    if health.historical_only.is_empty() {
+fn render_historical_only(entries: &[CrateHealthEntry]) -> String {
+    let mut out = format!("\nHistorical only — no commit SHA ({}):\n", entries.len());
+    if entries.is_empty() {
         out.push_str("  (none)\n");
-    } else {
-        for entry in &health.historical_only {
-            let counts = entry
-                .latest_counts
-                .as_ref()
-                .map(format_counts)
-                .unwrap_or_default();
-            out.push_str(&format!("  {} [{}]{}\n", entry.dir, entry.role, counts));
-        }
+        return out;
     }
+    for entry in entries {
+        let counts = entry
+            .latest_counts
+            .as_ref()
+            .map(format_counts)
+            .unwrap_or_default();
+        out.push_str(&format!("  {} [{}]{}\n", entry.dir, entry.role, counts));
+    }
+    out
+}
 
-    out.push_str(&format!(
+/// Render the "most drift" section.
+fn render_most_drift(entries: &[CrateHealthEntry]) -> String {
+    let mut out = format!(
         "\nMost drift since last SHA campaign ({}):\n",
-        health.most_drift.len()
-    ));
-    if health.most_drift.is_empty() {
+        entries.len()
+    );
+    if entries.is_empty() {
         out.push_str("  (none)\n");
-    } else {
-        for entry in &health.most_drift {
-            if let Some(note) = &entry.drift_note {
-                out.push_str(&format!("  {} [{}] — {}\n", entry.dir, entry.role, note));
-                continue;
-            }
-            let lines = entry
-                .lines_changed
-                .as_deref()
-                .filter(|value| !value.is_empty())
-                .unwrap_or("0 files changed");
-            let counts = entry
-                .latest_counts
-                .as_ref()
-                .map(format_counts)
-                .unwrap_or_default();
-            out.push_str(&format!(
-                "  {} [{}] — {} commits since {} — {}{}\n",
-                entry.dir,
-                entry.role,
-                entry.commits_since.unwrap_or(0),
-                entry.latest_commit.as_deref().unwrap_or("?"),
-                lines,
-                counts
-            ));
+        return out;
+    }
+    for entry in entries {
+        if let Some(note) = &entry.drift_note {
+            out.push_str(&format!("  {} [{}] — {}\n", entry.dir, entry.role, note));
+            continue;
         }
+        let lines = entry
+            .lines_changed
+            .as_deref()
+            .filter(|value| !value.is_empty())
+            .unwrap_or("0 files changed");
+        let counts = entry
+            .latest_counts
+            .as_ref()
+            .map(format_counts)
+            .unwrap_or_default();
+        out.push_str(&format!(
+            "  {} [{}] — {} commits since {} — {}{}\n",
+            entry.dir,
+            entry.role,
+            entry.commits_since.unwrap_or(0),
+            entry.latest_commit.as_deref().unwrap_or("?"),
+            lines,
+            counts
+        ));
     }
     out
 }

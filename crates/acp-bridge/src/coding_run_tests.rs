@@ -69,12 +69,16 @@ async fn a_dirty_worktree_is_committed_even_with_no_global_git_identity() {
     assert!(is_dirty(repo.path()), "precondition: tree must be dirty");
 
     let empty_cfg = tempfile::NamedTempFile::new().expect("cfg");
-    // SAFETY: single-threaded under ENV_LOCK; removed below.
+    let saved_global = std::env::var("GIT_CONFIG_GLOBAL").ok();
+    // SAFETY: single-threaded under ENV_LOCK; prior value restored below.
     unsafe { std::env::set_var("GIT_CONFIG_GLOBAL", empty_cfg.path()) };
 
     let result = preserve_worktree(repo.path(), "done").await;
 
-    unsafe { std::env::remove_var("GIT_CONFIG_GLOBAL") };
+    match saved_global {
+        Some(v) => unsafe { std::env::set_var("GIT_CONFIG_GLOBAL", v) },
+        None => unsafe { std::env::remove_var("GIT_CONFIG_GLOBAL") },
+    }
 
     let sha = result
         .expect("preserving a dirty worktree must succeed without global identity")
@@ -110,7 +114,8 @@ async fn prepare_workspace_fails_hard_when_worktree_setup_fails() {
     std::fs::create_dir(dir.path().join(".git")).expect(".git");
 
     let data = tempfile::tempdir().expect("data dir");
-    // SAFETY: single-threaded under env_lock; restored below.
+    let saved_data_dir = std::env::var("LIBERADO_DATA_DIR").ok();
+    // SAFETY: single-threaded under ENV_LOCK; prior value restored below.
     unsafe {
         std::env::set_var("LIBERADO_DATA_DIR", data.path());
     }
@@ -127,8 +132,9 @@ async fn prepare_workspace_fails_hard_when_worktree_setup_fails() {
         "error should refuse live-tree demotion, got: {err}"
     );
 
-    unsafe {
-        std::env::remove_var("LIBERADO_DATA_DIR");
+    match saved_data_dir {
+        Some(v) => unsafe { std::env::set_var("LIBERADO_DATA_DIR", v) },
+        None => unsafe { std::env::remove_var("LIBERADO_DATA_DIR") },
     }
 }
 

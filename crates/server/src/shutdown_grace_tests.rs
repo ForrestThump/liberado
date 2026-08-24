@@ -7,19 +7,29 @@ use super::*;
 /// kill in-flight turns instantly.
 #[test]
 fn shutdown_grace_reads_env_then_falls_back_to_the_default() {
-    // SAFETY(test): this var is read only by this function; restored per case.
+    let saved = std::env::var("LIBERADO_SHUTDOWN_GRACE_SECS").ok();
+    // SAFETY(test): this var has a single reader, `shutdown_grace_from_env`; the prior
+    // value is restored on every path below so a failed assert cannot leak it.
     unsafe {
         std::env::set_var("LIBERADO_SHUTDOWN_GRACE_SECS", "7");
     }
-    assert_eq!(shutdown_grace_from_env(), Duration::from_secs(7));
+    let env_wins = shutdown_grace_from_env();
     unsafe {
         std::env::set_var("LIBERADO_SHUTDOWN_GRACE_SECS", "not-a-number");
     }
-    assert_eq!(shutdown_grace_from_env(), DEFAULT_SHUTDOWN_GRACE);
+    let garbage_is_not_zero = shutdown_grace_from_env();
     unsafe {
         std::env::remove_var("LIBERADO_SHUTDOWN_GRACE_SECS");
     }
-    assert_eq!(shutdown_grace_from_env(), DEFAULT_SHUTDOWN_GRACE);
+    let unset_falls_back = shutdown_grace_from_env();
+    match saved {
+        Some(v) => unsafe { std::env::set_var("LIBERADO_SHUTDOWN_GRACE_SECS", v) },
+        None => unsafe { std::env::remove_var("LIBERADO_SHUTDOWN_GRACE_SECS") },
+    }
+
+    assert_eq!(env_wins, Duration::from_secs(7));
+    assert_eq!(garbage_is_not_zero, DEFAULT_SHUTDOWN_GRACE);
+    assert_eq!(unset_falls_back, DEFAULT_SHUTDOWN_GRACE);
 }
 
 /// With no signal delivered, the waiter must still be waiting — a variant that returned

@@ -370,3 +370,83 @@ fn render_report_drift_row_covers_note_lines_and_commit_fallbacks() {
     );
     assert!(text.contains("  delta [tool] — 1 commits since ? — 0 files changed"));
 }
+
+fn health_entry(dir: &str) -> CrateHealthEntry {
+    CrateHealthEntry {
+        dir: dir.into(),
+        role: "kernel".into(),
+        latest_commit: None,
+        commits_since: None,
+        lines_changed: None,
+        drift_note: None,
+        latest_counts: None,
+    }
+}
+
+#[test]
+fn empty_sections_render_none() {
+    assert_eq!(
+        render_never_campaigned(&[]),
+        "\nNever campaigned (0):\n  (none)\n"
+    );
+    assert_eq!(
+        render_historical_only(&[]),
+        "\nHistorical only — no commit SHA (0):\n  (none)\n"
+    );
+    assert_eq!(
+        render_most_drift(&[]),
+        "\nMost drift since last SHA campaign (0):\n  (none)\n"
+    );
+}
+
+#[test]
+fn never_campaigned_lists_each_dir_and_role() {
+    let entries = vec![health_entry("alpha"), health_entry("beta")];
+    assert_eq!(
+        render_never_campaigned(&entries),
+        "\nNever campaigned (2):\n  alpha [kernel]\n  beta [kernel]\n"
+    );
+}
+
+#[test]
+fn historical_only_appends_counts_when_present_only() {
+    let mut with_counts = health_entry("alpha");
+    with_counts.latest_counts = Some(Counts {
+        viable: 5,
+        caught: 4,
+        survived: 1,
+        timeout: 0,
+        unviable: 0,
+    });
+    let entries = vec![with_counts, health_entry("beta")];
+    assert_eq!(
+        render_historical_only(&entries),
+        "\nHistorical only — no commit SHA (2):\n  \
+         alpha [kernel] — viable 5 caught 4 survived 1 timeout 0\n  beta [kernel]\n"
+    );
+}
+
+#[test]
+fn most_drift_prefers_the_drift_note_over_commit_detail() {
+    let mut noted = health_entry("alpha");
+    noted.drift_note = Some("commit not in this history".into());
+    let mut detailed = health_entry("beta");
+    detailed.latest_commit = Some("abc123def456".into());
+    detailed.commits_since = Some(2);
+    detailed.lines_changed = Some(String::new());
+    detailed.latest_counts = Some(Counts {
+        viable: 1,
+        caught: 0,
+        survived: 1,
+        timeout: 0,
+        unviable: 0,
+    });
+    let entries = vec![noted, detailed];
+    assert_eq!(
+        render_most_drift(&entries),
+        "\nMost drift since last SHA campaign (2):\n  \
+         alpha [kernel] — commit not in this history\n  \
+         beta [kernel] — 2 commits since abc123def456 — 0 files changed — \
+         viable 1 caught 0 survived 1 timeout 0\n"
+    );
+}

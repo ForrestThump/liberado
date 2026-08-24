@@ -5,7 +5,7 @@ use liberado_executor::Budget;
 use liberado_session_store::SessionStore;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-struct CountingNotifier(AtomicUsize);
+struct CountingNotifier(Arc<AtomicUsize>);
 #[async_trait]
 impl Notifier for CountingNotifier {
     async fn notify(&self, _message: &str) -> Result<(), NotifyError> {
@@ -30,8 +30,9 @@ async fn deliver_cron_appends_to_the_sticky_session_and_sends() {
         Arc::new(NoTools),
     ));
 
+    let counter = Arc::new(AtomicUsize::new(0));
     let notifier = ChatDeliveringNotifier::new(
-        Arc::new(CountingNotifier(AtomicUsize::new(0))),
+        Arc::new(CountingNotifier(counter.clone())),
         chat,
         StickySession::ephemeral(),
         Arc::new(Mutex::new(None)), // never active → no quiet wait
@@ -52,8 +53,10 @@ async fn deliver_cron_appends_to_the_sticky_session_and_sends() {
         "the brief must be appended into the sticky conversation, got: {}",
         last.message.content
     );
-    drop(notifier);
-    let _ = NoTools;
+    assert!(
+        counter.load(Ordering::SeqCst) >= 1,
+        "the brief must also be pushed through the inner notifier"
+    );
 }
 
 /// Plain notifications and proposals pass straight through to the inner notifier,

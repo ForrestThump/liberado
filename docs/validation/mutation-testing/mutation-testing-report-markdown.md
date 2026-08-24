@@ -5,7 +5,7 @@
 
 ## Summary
 
-| Metric | Baseline (`0e14ecc`) | Final (`93645e4`) |
+| Metric | Baseline (`0e14ecc`) | Final (`c23c9ca7`) |
 |--------|:-----:|:-----:|
 | Viable mutants | 126 | 118 |
 | Caught | 48 | **114** |
@@ -69,7 +69,7 @@ initially mislabeled two SIGKILLed runs as ordinary failures.
 | Scanner depth logic | `nested_brackets_in_link_text`, `nested_parens_in_link_url` | Match-arm deletions, `depth == 0` guard swaps, and `depth ±= 1` operator swaps |
 | Block-level gaps | `horizontal_rule_forms` (`***`/`___`), `empty_input_yields_no_lines` | The `||`→`&&` hr-chain mutant; empty-input contract |
 
-## Accepted residues (4)
+## Accepted residues (4 mutants, 3 sites)
 
 All four were individually reproduced and classified by hand before acceptance.
 
@@ -79,7 +79,7 @@ All four were individually reproduced and classified by hand before acceptance.
 | `lib.rs:282` `parse_inline` link/code dispatch | `>` → `>=` | Equivalent | Same reasoning as line 275. |
 | `lib.rs:297` `parse_inline` fallback step | `start + 1` → `start - 1` / `start * 1` | Liveness tautology (times out) | Verified HANGS by hand. This is the single-byte-progress operation that guarantees termination; mutating it to identity (`*1`, `/1`) stalls exactly the new fallback tests, and `-1` underflows or cycles. Any black-box test distinguishing these variants would itself have to not terminate. Restructuring cannot remove it: every formulation of "advance one byte" bottoms out at one mutable `+1`. |
 
-The two timeout rows are the mutation suite's view of the fix itself: the campaign proves
+The timeout residue is the mutation suite's view of the fix itself: the campaign proves
 the progress guarantee is the *only* remaining unguarded liveness dependency.
 
 ## Campaign provenance

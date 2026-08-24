@@ -45,7 +45,7 @@ false positives from Phase 3 of the master plan.
 
 | Metric | Value |
 |--------|:-----:|
-| Viable mutants | 294 |
+| Generated mutants | 294 |
 | Caught | 248 |
 | Timeouts | 5 |
 | Unviable | 32 |
