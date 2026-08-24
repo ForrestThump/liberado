@@ -76,6 +76,9 @@ Fix: add a per-crate entry to the timeout table in `build_mutants_command`
 
 ## Interrupted runs: recovery ritual
 
+Two overlapping campaigns in one checkout clobber each other — `--in-place` plus a
+shared `target/mutants` scratch means only one crate at a time per clone.
+
 `--in-place` runs mutate this very tree. An aborted or killed run leaves the last-applied
 mutation live plus stray files. After ANY interrupted run — before believing any test
 failure:
@@ -216,7 +219,8 @@ This runs `liberado mutants run`, which:
 
 1. Invokes `cargo mutants` with repo timeout flags
 2. Builds into `target/mutants/` (isolated from `target/debug/`)
-3. On Windows, uses `--in-place` (no `%TEMP%` workspace copy)
+3. Uses `--in-place` on every platform (no `%TEMP%` workspace copy; sibling
+   checkouts break it there too)
 4. Appends one row to `mutants-ledger.json` when `mutants.out/outcomes.json` is complete
 
 ### Verify the ledger append

@@ -248,6 +248,15 @@ fn build_mutants_command_uses_longer_timeout_for_cli() {
     let acp = build_mutants_command("liberado-acp-bridge", RunProfile::Default);
     assert!(acp.contains("--timeout 10.0"));
     assert!(acp.contains("--minimum-test-timeout 120"));
+
+    // Entries added after cold-baseline timeout autopsies; each one here
+    // means a crate whose unmutated test phase exceeded the 3s floor.
+    let memory = build_mutants_command("liberado-memory-mcp", RunProfile::Default);
+    assert!(memory.contains("--timeout 60"));
+    let conversation = build_mutants_command("liberado-conversation-store", RunProfile::Default);
+    assert!(conversation.contains("--timeout 60"));
+    let core = build_mutants_command("liberado-coder-core", RunProfile::Default);
+    assert!(core.contains("--timeout 90"));
 }
 
 #[test]

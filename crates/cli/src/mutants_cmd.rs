@@ -210,7 +210,7 @@ fn build_mutants_command(package: &str, profile: RunProfile) -> String {
     // cargo-mutants copies the workspace into %TEMP%; paseo/node_modules symlinks fail on
     // Windows without elevation (os error 1314), and on any host the gitignored sibling
     // checkouts (turbovault/, turbomcp/) do not survive the copy, so manifest resolution
-    // fails in the temp dir. In-place avoids both. Restore risk is documented in AGENTS.md
+    // fails in the temp dir. In-place avoids both. Recovery ritual lives in Skills/mutants-campaign.md
     // — prefer this to a run that never starts.
     parts.extend(["--in-place".into()]);
     if profile == RunProfile::LibOnly && package != "liberado-cli" {
@@ -263,6 +263,14 @@ fn record_campaign(
         // would shadow the crate's real last campaign — the report reads the newest row.
         return Ok(RecordOutcome::SkippedIncomplete);
     }
+    // cargo-mutants writes outcomes incrementally, so a run killed mid-campaign
+    // leaves a plausible-looking partial file. Every tested mutant lands in
+    // exactly one of these four buckets; anything less than the declared total
+    // means the rest never ran and recording would shadow the last good row.
+    let accounted = counts.caught + counts.survived + counts.timeout + counts.unviable;
+    if outcomes.total_mutants > 0 && accounted != outcomes.total_mutants {
+        return Ok(RecordOutcome::SkippedIncomplete);
+    }
     let campaign = Campaign {
         package: package.clone(),
         commit: Some(commit.clone()),
@@ -299,8 +307,12 @@ pub fn load_ledger(root: &Path) -> Result<Ledger, Box<dyn std::error::Error>> {
 }
 
 fn save_ledger(root: &Path, ledger: &Ledger) -> Result<(), Box<dyn std::error::Error>> {
+    // Atomic temp+rename: concurrent agents append to one ledger file, and a
+    // truncating in-place write loses appends or corrupts the JSON mid-flight.
     let path = root.join(LEDGER_FILE);
-    fs::write(path, serde_json::to_string_pretty(ledger)? + "\n")?;
+    let tmp = root.join(format!("{LEDGER_FILE}.tmp"));
+    fs::write(&tmp, serde_json::to_string_pretty(ledger)? + "\n")?;
+    fs::rename(&tmp, path)?;
     Ok(())
 }
 
@@ -326,6 +338,8 @@ fn current_commit(root: &Path) -> Result<String, Box<dyn std::error::Error>> {
 
 #[derive(Debug, Deserialize)]
 struct OutcomesFile {
+    #[serde(default)]
+    total_mutants: u32,
     caught: u32,
     missed: u32,
     timeout: u32,
@@ -431,6 +445,12 @@ fn package_campaigns_by_package(ledger: &Ledger) -> BTreeMap<String, Vec<&Campai
     let mut grouped: BTreeMap<String, Vec<&Campaign>> = BTreeMap::new();
     for campaign in &ledger.campaigns {
         if campaign.scope != "package" {
+            continue;
+        }
+        // Zero-viable rows are crashed or partial runs (recorded before the
+        // refusal above existed). Skipping keeps the crate's real campaign
+        // visible to report and next instead of being shadowed by zeros.
+        if campaign.counts.viable == 0 {
             continue;
         }
         grouped
