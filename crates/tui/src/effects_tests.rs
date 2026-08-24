@@ -763,6 +763,10 @@ async fn run_goal_stream_stream_error_sends_error_close() {
 
 // ── run_async dispatch coverage: one test per previously-unrouted effect ────────────
 
+#[path = "effects_test_util.rs"]
+mod effects_test_util;
+use effects_test_util::refused_daemon_url;
+
 async fn next_action(action_rx: &mut mpsc::Receiver<Action>) -> Action {
     tokio::time::timeout(Duration::from_secs(2), action_rx.recv())
         .await
@@ -906,8 +910,9 @@ async fn start_chat_stream_reports_an_error_status_instead_of_decoding_it() {
 
 #[tokio::test]
 async fn start_chat_stream_unreachable_daemon_fails_the_stream() {
-    // Port 1 is not listening: connect fails fast on all platforms.
-    let app = make_app("http://127.0.0.1:1");
+    // Nothing listens there, so connect fails on every platform; how fast
+    // is platform-dependent (see refused_daemon_url).
+    let app = make_app(&refused_daemon_url());
     let (action_tx, mut action_rx) = mpsc::channel(256);
     let runner = make_runner(app, action_tx);
 
@@ -917,7 +922,10 @@ async fn start_chat_stream_unreachable_daemon_fails_the_stream() {
             session: None,
         })
         .await;
-    let action = next_action(&mut action_rx).await;
+    let action = tokio::time::timeout(Duration::from_secs(15), action_rx.recv())
+        .await
+        .expect("the failed stream must report back")
+        .expect("channel closed");
     assert!(
         matches!(&action, Action::SseFailed(msg) if msg.contains("could not reach daemon")),
         "{action:?}"

@@ -215,14 +215,18 @@ const TIMEOUT_OVERRIDES: &[(&str, &str, &str)] = &[
 ];
 
 fn build_mutants_command(package: &str, profile: RunProfile) -> String {
-    let (test_timeout, min_test_timeout) = TIMEOUT_OVERRIDES
-        .iter()
-        .find(|(p, _, _)| *p == package)
-        .map(|(_, t, m)| (*t, *m))
-        .unwrap_or(match profile {
-            RunProfile::LibOnly => ("90", "90"),
-            _ => ("3.0", "30"),
-        });
+    // Plain loop, no closures: this file sits against a function-count
+    // ratchet, so table lookups must not cost lambda entries.
+    let mut override_pair: Option<(&'static str, &'static str)> = None;
+    for entry in TIMEOUT_OVERRIDES {
+        if entry.0 == package {
+            override_pair = Some((entry.1, entry.2));
+        }
+    }
+    let (test_timeout, min_test_timeout) = override_pair.unwrap_or(match profile {
+        RunProfile::LibOnly => ("90", "90"),
+        _ => ("3.0", "30"),
+    });
     let mut parts = vec![
         "cargo".to_string(),
         "mutants".to_string(),
