@@ -467,11 +467,13 @@ fn build_health(
 fn package_campaigns_by_package(ledger: &Ledger) -> BTreeMap<String, Vec<&Campaign>> {
     let mut grouped: BTreeMap<String, Vec<&Campaign>> = BTreeMap::new();
     // Zero-viable rows (crashed/partial runs recorded before the recorder's
-    // refusal existed) are skipped so they cannot shadow the real campaign.
-    for campaign in &ledger.campaigns {
-        if campaign.scope != "package" || campaign.counts.viable == 0 {
-            continue;
-        }
+    // refusal existed) are skipped via the is_health_row filter below so they
+    // cannot shadow the real campaign.
+    for campaign in ledger
+        .campaigns
+        .iter()
+        .filter(|c| c.scope == "package" && c.counts.viable > 0)
+    {
         grouped
             .entry(campaign.package.clone())
             .or_default()

@@ -781,3 +781,47 @@ async fn run_routes_top_level_parallel_goals_through_the_fan_out() {
         "failed workers still produce a partial report, not a crash: {summary}"
     );
 }
+
+/// A payload naming an unknown pool must fail with a named setup error — this
+/// covers the pool-lookup branch of run() that the happy-path tests skip.
+#[tokio::test]
+async fn run_rejects_unknown_pool_with_a_named_error() {
+    let pack = make_pack(
+        DispatchDecision {
+            action: DispatchAction::ExecuteDirect {
+                seed_calls: Vec::new(),
+                relevant_mcps: Vec::new(),
+                delivery: Delivery::Summarize,
+            },
+            confidence: 1.0,
+            rationale: "unused".into(),
+        },
+        vec![],
+        CapabilitySet::empty(),
+    );
+    let mut hub = GoalSessionHub::new(GoalSessionStore::new());
+    hub.register_pack(Arc::new(pack));
+    let hub = Arc::new(hub);
+    let id = hub
+        .start_with_grant(
+            GoalSpec {
+                id: None,
+                description: "wrong pool".into(),
+                success_criteria: vec![],
+                domain: DomainHint::from(DISPATCH_DOMAIN),
+                max_turns: 0,
+                max_idle_secs: None,
+                origin: None,
+                profile: None,
+                payload: serde_json::json!({ "pool": "nonexistent-pool" }),
+            },
+            SessionGrant::default(),
+        )
+        .await
+        .expect("start");
+    let snap = wait_terminal(&hub, &id).await;
+    assert!(
+        matches!(snap.session.status, SessionStatus::Failed),
+        "unknown pool must fail the session"
+    );
+}
