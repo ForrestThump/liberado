@@ -20,6 +20,52 @@ const RERUN: &str = "shepherd:ci-rerun";
 const READY: &str = "shepherd:ready";
 const BLOCKED: &str = "shepherd:blocked";
 
+/// The numeric shepherd knobs and their environment keys.
+///
+/// Parsing lives in [`Limits::from_reader`], which takes the value reader as a parameter so
+/// tests can exercise the malformed-value errors without touching process-global env state;
+/// `from_env` is the production one-liner over `std::env`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Limits {
+    max_kickbacks: usize,
+    cold_reviews: usize,
+    cold_turns: u32,
+    max_concurrent: usize,
+    poll: u64,
+}
+
+impl Limits {
+    fn from_env() -> Result<Self, Box<dyn std::error::Error>> {
+        let get = |key: &str| std::env::var(key).ok();
+        Ok(Self::from_reader(get)?)
+    }
+
+    fn from_reader<F>(get: F) -> Result<Self, String>
+    where
+        F: Fn(&str) -> Option<String>,
+    {
+        fn parse<T: std::str::FromStr>(
+            get: impl Fn(&str) -> Option<String>,
+            key: &str,
+            default: T,
+        ) -> Result<T, String> {
+            match get(key) {
+                None => Ok(default),
+                Some(raw) => raw.parse().map_err(|_| {
+                    format!("environment variable {key} must be a number, got '{raw}'")
+                }),
+            }
+        }
+        Ok(Self {
+            max_kickbacks: parse(&get, "SHEPHERD_MAX_KICKBACKS", 2)?,
+            cold_reviews: parse(&get, "SHEPHERD_COLD_REVIEWS", 2)?,
+            cold_turns: parse(&get, "SHEPHERD_COLD_REVIEW_MAX_TURNS", 60)?,
+            max_concurrent: parse(&get, "SHEPHERD_MAX_CONCURRENT", 2)?,
+            poll: parse(&get, "SHEPHERD_POLL_SECONDS", 120)?,
+        })
+    }
+}
+
 #[derive(Clone)]
 struct Config {
     root: PathBuf,
@@ -39,13 +85,8 @@ impl Config {
     fn get(key: &str, default: &str) -> String {
         std::env::var(key).unwrap_or_else(|_| default.into())
     }
-    fn number<T: std::str::FromStr>(key: &str, default: T) -> Result<T, Box<dyn std::error::Error>>
-    where
-        T::Err: std::error::Error + 'static,
-    {
-        Ok(std::env::var(key).ok().map_or(Ok(default), |v| v.parse())?)
-    }
     fn load(selected_project: Option<&str>) -> Result<Self, Box<dyn std::error::Error>> {
+        let limits = Limits::from_env()?;
         let mut config = Self {
             root: crate::crate_map_cmd::repository_root()?,
             repository: None,
@@ -54,11 +95,11 @@ impl Config {
             project: Self::get("SHEPHERD_PROJECT", "liberado"),
             base: Self::get("SHEPHERD_BASE", "main"),
             profile: Self::get("SHEPHERD_PROFILE", "coding-unattended"),
-            max_kickbacks: Self::number("SHEPHERD_MAX_KICKBACKS", 2)?,
-            cold_reviews: Self::number("SHEPHERD_COLD_REVIEWS", 2)?,
-            cold_turns: Self::number("SHEPHERD_COLD_REVIEW_MAX_TURNS", 60)?,
-            max_concurrent: Self::number("SHEPHERD_MAX_CONCURRENT", 2)?,
-            poll: Self::number("SHEPHERD_POLL_SECONDS", 120)?,
+            max_kickbacks: limits.max_kickbacks,
+            cold_reviews: limits.cold_reviews,
+            cold_turns: limits.cold_turns,
+            max_concurrent: limits.max_concurrent,
+            poll: limits.poll,
         };
         let topology = load_shepherd_topology()?;
         validate_shepherd_topology(&topology)?;
@@ -762,6 +803,57 @@ fn cold_review_prompt(cfg: &Config, pr: &Pr, round: usize, old: &BTreeSet<String
     )
 }
 
+/// What a PR with fresh CI failures should get, decided from facts alone so tests can pin the
+/// escalation ladder without `gh` or a daemon on the wire: rerun once, then kick back up to the
+/// cap (a free slot required), then block.
+#[derive(Debug, PartialEq, Eq)]
+enum FailureAction {
+    Rerun,
+    Blocked,
+    WaitForSlot,
+    Kickback,
+}
+
+fn next_failure_action(
+    has_rerun: bool,
+    kicks: usize,
+    max_kickbacks: usize,
+    slot_free: impl FnOnce() -> bool,
+) -> FailureAction {
+    if !has_rerun {
+        FailureAction::Rerun
+    } else if kicks >= max_kickbacks {
+        FailureAction::Blocked
+    } else if !slot_free() {
+        FailureAction::WaitForSlot
+    } else {
+        FailureAction::Kickback
+    }
+}
+
+/// The clean-PR mirror of [`next_failure_action`]: ready once the cold-review cap is met,
+/// otherwise spend a free slot on one more cold review.
+#[derive(Debug, PartialEq, Eq)]
+enum CleanAction {
+    Ready,
+    WaitForSlot,
+    Review { round: usize },
+}
+
+fn next_clean_action(
+    reviews: usize,
+    cold_reviews: usize,
+    slot_free: impl FnOnce() -> bool,
+) -> CleanAction {
+    if reviews >= cold_reviews {
+        CleanAction::Ready
+    } else if !slot_free() {
+        CleanAction::WaitForSlot
+    } else {
+        CleanAction::Review { round: reviews + 1 }
+    }
+}
+
 /// A PR with fresh CI failures: rerun once, then kick back a goal (up to the cap), then block.
 ///
 /// Every arm ends the tick for this PR, so the caller does not fall through to the cold-review
@@ -775,33 +867,37 @@ fn handle_new_failures(
     run: &Option<Value>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let kicks = pr.count("shepherd:kickback-");
-    if !pr.has(RERUN) {
-        if !dry && let Some(id) = run.as_ref().and_then(|r| r["databaseId"].as_u64()) {
-            let id = id.to_string();
-            let _ = gh(cfg, &["run", "rerun", &id, "--failed"], false);
-            label(cfg, pr, RERUN.into())
+    let action = next_failure_action(pr.has(RERUN), kicks, cfg.max_kickbacks, || {
+        active_goals(cfg) < cfg.max_concurrent
+    });
+    match action {
+        FailureAction::Rerun => {
+            if !dry && let Some(id) = run.as_ref().and_then(|r| r["databaseId"].as_u64()) {
+                let id = id.to_string();
+                let _ = gh(cfg, &["run", "rerun", &id, "--failed"], false);
+                label(cfg, pr, RERUN.into())
+            }
         }
-        return Ok(());
-    }
-    if kicks >= cfg.max_kickbacks {
-        if !dry {
-            label(cfg, pr, BLOCKED.into())
+        FailureAction::Blocked => {
+            if !dry {
+                label(cfg, pr, BLOCKED.into())
+            }
         }
-        return Ok(());
-    }
-    if active_goals(cfg) >= cfg.max_concurrent {
-        return Ok(());
-    }
-    if !dry {
-        let prompt = kickback_prompt(pr, new, old);
-        if let Some(id) = start_goal(cfg, prompt, 0) {
-            label(cfg, pr, format!("shepherd:kickback-{}", kicks + 1));
-            remove_label(cfg, pr, RERUN);
-            log(
-                cfg,
-                "kickback_started",
-                json!({"pr":pr.number,"session":id}),
-            )
+        // Waiting for a budget slot ends this PR's tick without side effects.
+        FailureAction::WaitForSlot => {}
+        FailureAction::Kickback => {
+            if !dry {
+                let prompt = kickback_prompt(pr, new, old);
+                if let Some(id) = start_goal(cfg, prompt, 0) {
+                    label(cfg, pr, format!("shepherd:kickback-{}", kicks + 1));
+                    remove_label(cfg, pr, RERUN);
+                    log(
+                        cfg,
+                        "kickback_started",
+                        json!({"pr":pr.number,"session":id}),
+                    )
+                }
+            }
         }
     }
     Ok(())
@@ -816,25 +912,28 @@ fn handle_clean(
     old: &BTreeSet<String>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let reviews = pr.count("shepherd:review-");
-    if reviews >= cfg.cold_reviews {
-        if !dry {
-            label(cfg, pr, READY.into())
+    let action = next_clean_action(reviews, cfg.cold_reviews, || {
+        active_goals(cfg) < cfg.max_concurrent
+    });
+    match action {
+        CleanAction::Ready => {
+            if !dry {
+                label(cfg, pr, READY.into())
+            }
         }
-        return Ok(());
-    }
-    if active_goals(cfg) >= cfg.max_concurrent {
-        return Ok(());
-    }
-    if !dry {
-        let round = reviews + 1;
-        let prompt = cold_review_prompt(cfg, pr, round, old);
-        if let Some(id) = start_goal(cfg, prompt, cfg.cold_turns) {
-            let path = pending(cfg, pr.number);
-            fs::create_dir_all(path.parent().unwrap())?;
-            fs::write(
-                path,
-                serde_json::to_vec(&json!({"session_id":id,"round":round}))?,
-            )?
+        CleanAction::WaitForSlot => {}
+        CleanAction::Review { round } => {
+            if !dry {
+                let prompt = cold_review_prompt(cfg, pr, round, old);
+                if let Some(id) = start_goal(cfg, prompt, cfg.cold_turns) {
+                    let path = pending(cfg, pr.number);
+                    fs::create_dir_all(path.parent().unwrap())?;
+                    fs::write(
+                        path,
+                        serde_json::to_vec(&json!({"session_id":id,"round":round}))?,
+                    )?
+                }
+            }
         }
     }
     Ok(())
@@ -849,16 +948,14 @@ fn tick_idle(status: &str) -> bool {
     status == "pending" || status == "none"
 }
 
-fn tick(cfg: &Config, pr: &mut Pr, dry: bool) -> Result<(), Box<dyn std::error::Error>> {
-    if pr.terminal() {
-        return Ok(());
-    }
-    if tick_idle(ci_status(cfg, pr)?) {
-        return Ok(());
-    }
-    if settle(cfg, pr, dry)? == ReviewTransition::Waiting {
-        return Ok(());
-    }
+/// The failure sets [`ci_delta`] splits a PR's CI signal into.
+type CiDelta = (BTreeSet<String>, BTreeSet<String>, Option<Value>);
+
+/// The current failure set of the PR's latest run, split against the baseline of its base
+/// commit: everything not in the baseline is *new* (this push), everything shared is
+/// *pre-existing*. Also logs the delta — the split decision is only ever made with the counts
+/// recorded next to it.
+fn ci_delta(cfg: &Config, pr: &Pr) -> Result<CiDelta, Box<dyn std::error::Error>> {
     let run = latest_run(cfg, &pr.branch, None)?;
     let current = run
         .as_ref()
@@ -867,7 +964,7 @@ fn tick(cfg: &Config, pr: &mut Pr, dry: bool) -> Result<(), Box<dyn std::error::
         .transpose()?
         .unwrap_or_default();
     let (base, provenance) = if pr.base_sha.is_empty() {
-        (BTreeSet::new(), "no-base".into())
+        (BTreeSet::new(), "no-base".to_string())
     } else {
         baseline(cfg, &pr.base_sha)?
     };
@@ -878,7 +975,25 @@ fn tick(cfg: &Config, pr: &mut Pr, dry: bool) -> Result<(), Box<dyn std::error::
         "ci_delta",
         json!({"pr":pr.number,"new":new.len(),"preexisting":old.len(),"base":provenance}),
     );
+    log(
+        cfg,
+        "ci_delta",
+        json!({"pr":pr.number,"new":new.len(),"preexisting":old.len(),"base":provenance}),
+    );
+    Ok((new, old, run))
+}
 
+fn tick(cfg: &Config, pr: &mut Pr, dry: bool) -> Result<(), Box<dyn std::error::Error>> {
+    if pr.terminal() {
+        return Ok(());
+    }
+    if tick_idle(ci_status(cfg, pr)?) {
+        return Ok(());
+    }
+    if settle(cfg, pr, dry)? == ReviewTransition::Waiting {
+        return Ok(());
+    }
+    let (new, old, run) = ci_delta(cfg, pr)?;
     if !new.is_empty() {
         return handle_new_failures(cfg, pr, dry, &new, &old, &run);
     }
@@ -1491,5 +1606,117 @@ mod tests {
         );
         assert_eq!(parse_goal_status(&json!({})), None);
         assert_eq!(parse_goal_status(&json!("running")), None);
+    }
+
+    #[test]
+    fn limits_default_when_the_environment_says_nothing() {
+        let get = |_key: &str| None;
+        let limits = Limits::from_reader(get).unwrap();
+        assert_eq!(
+            limits,
+            Limits {
+                max_kickbacks: 2,
+                cold_reviews: 2,
+                cold_turns: 60,
+                max_concurrent: 2,
+                poll: 120,
+            }
+        );
+    }
+
+    #[test]
+    fn limits_read_valid_overrides() {
+        let get = |key: &str| match key {
+            "SHEPHERD_MAX_KICKBACKS" => Some("5".into()),
+            "SHEPHERD_POLL_SECONDS" => Some("30".into()),
+            _ => None,
+        };
+        let limits = Limits::from_reader(get).unwrap();
+        assert_eq!(limits.max_kickbacks, 5);
+        assert_eq!(limits.poll, 30);
+        assert_eq!(limits.cold_reviews, 2, "unset keys keep their default");
+    }
+
+    #[test]
+    fn limits_name_the_key_of_a_malformed_value() {
+        let get = |key: &str| match key {
+            "SHEPHERD_COLD_REVIEWS" => Some("many".into()),
+            _ => None,
+        };
+        let error = Limits::from_reader(get).unwrap_err();
+        assert!(
+            error.contains("SHEPHERD_COLD_REVIEWS") && error.contains("many"),
+            "the error must name the key and the bad value: {error}"
+        );
+    }
+
+    #[test]
+    fn failure_escalation_reruns_once_then_kicks_then_blocks() {
+        // First sighting: rerun CI before doing anything else.
+        assert_eq!(
+            next_failure_action(false, 0, 2, || true),
+            FailureAction::Rerun
+        );
+        // A rerun already spent and the kickback cap reached: blocked, no matter the slots.
+        assert_eq!(
+            next_failure_action(true, 2, 2, || true),
+            FailureAction::Blocked
+        );
+        // Cap not reached but every budget slot busy: wait.
+        assert_eq!(
+            next_failure_action(true, 0, 2, || false),
+            FailureAction::WaitForSlot
+        );
+        // Rerun spent, cap not reached, slot free: start a kickback goal.
+        assert_eq!(
+            next_failure_action(true, 1, 2, || true),
+            FailureAction::Kickback
+        );
+    }
+
+    #[test]
+    fn clean_prs_ready_after_cap_else_review_when_a_slot_frees_up() {
+        assert_eq!(next_clean_action(2, 2, || true), CleanAction::Ready);
+        assert_eq!(next_clean_action(1, 3, || false), CleanAction::WaitForSlot);
+        assert_eq!(
+            next_clean_action(1, 3, || true),
+            CleanAction::Review { round: 2 },
+            "the review round continues from the reviews already done"
+        );
+    }
+
+    #[test]
+    fn apply_project_overrides_only_the_fields_it_declares() {
+        let mut cfg = test_config(PathBuf::new());
+        cfg.daemon = "http://env-daemon".into();
+        let project = liberado_config::ShepherdProjectConfig {
+            name: "p".into(),
+            repository: "owner/repo".into(),
+            coding_project: "proj".into(),
+            base_branch: "trunk".into(),
+            profile: "coding".into(),
+            check_names: vec!["test".into()],
+            max_kickbacks: Some(7),
+            cold_reviews: None,
+            cold_review_max_turns: None,
+            max_concurrent_goals: None,
+            poll_seconds: None,
+        };
+        cfg.apply_project(&project);
+        assert_eq!(cfg.repository.as_deref(), Some("owner/repo"));
+        assert_eq!(cfg.project, "proj");
+        assert_eq!(cfg.base, "trunk");
+        assert_eq!(cfg.profile, "coding");
+        assert_eq!(cfg.max_kickbacks, 7);
+        assert_eq!(cfg.check_names, vec!["test".to_string()]);
+        // Fields the project leaves unset keep their environment-derived values.
+        assert_eq!(cfg.cold_reviews, 2);
+        assert_eq!(cfg.cold_turns, 60);
+        assert_eq!(cfg.max_concurrent, 2);
+        assert_eq!(cfg.poll, 120);
+        assert_eq!(
+            cfg.daemon, "http://env-daemon",
+            "daemon is never project-set"
+        );
     }
 }
