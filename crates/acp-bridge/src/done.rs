@@ -379,4 +379,41 @@ error: could not compile `done-kickback-sandbox` (lib) due to 1 previous error
             "must not dump the raw log: {shown}"
         );
     }
+
+    /// The wrapper's answers for its own tool are fixed; everything else must be
+    /// exactly whatever the wrapped runtime says, both directions.
+    #[test]
+    fn done_tool_metadata_is_fixed_and_delegation_is_faithful() {
+        let runtime = wrap(
+            Arc::new(MetadataStub),
+            PathBuf::from("/tmp"),
+            Some(spec("light", "exit 0")),
+        );
+        // done itself: never read-only, never parks.
+        assert!(!runtime.is_read_only(DONE_TOOL));
+        assert!(!runtime.parks_for_human(DONE_TOOL));
+        // Delegation survives both mutations of the flag and both directions.
+        assert!(runtime.is_read_only("read_file"));
+        assert!(!runtime.is_read_only("write_file"));
+        assert!(runtime.parks_for_human("ask_human"));
+        assert!(!runtime.parks_for_human("read_file"));
+    }
+
+    struct MetadataStub;
+
+    #[async_trait]
+    impl ToolRuntime for MetadataStub {
+        fn catalog(&self) -> Vec<ToolDef> {
+            vec![ToolDef::new("read_file", "r", json!({}))]
+        }
+        async fn invoke(&self, call: &ToolInvocation) -> Result<String, String> {
+            Ok(format!("stub:{}", call.name))
+        }
+        fn is_read_only(&self, tool_name: &str) -> bool {
+            tool_name == "read_file"
+        }
+        fn parks_for_human(&self, tool_name: &str) -> bool {
+            tool_name == "ask_human"
+        }
+    }
 }

@@ -330,3 +330,135 @@ fn question_answers_cover_skip_other_out_of_range_and_cancelled() {
         assert!(!err.is_empty(), "{why}");
     }
 }
+
+#[tokio::test]
+async fn the_default_ask_question_is_an_honest_refusal() {
+    // A chooser-less implementor only defines `ask`; the defaulted
+    // `ask_question` must error, never answer with text.
+    struct AskOnly;
+    #[async_trait]
+    impl PermissionAsk for AskOnly {
+        async fn ask(
+            &self,
+            _session_id: &str,
+            _program: &str,
+            _args: &[String],
+        ) -> Result<PermissionDecision, String> {
+            Ok(PermissionDecision::Deny)
+        }
+    }
+    let ask: Arc<dyn PermissionAsk> = Arc::new(AskOnly);
+    let err = ask
+        .ask_question("s1", "Which?", &["a".into()])
+        .await
+        .expect_err("the default must refuse");
+    assert!(err.contains("cannot show a question"), "{err}");
+}
+
+#[tokio::test]
+async fn broker_without_a_wire_reports_the_missing_bound_surface() {
+    // No bind_wire call. The broker must fail with "wire is not bound" — an
+    // Ok(...) here would mean the rpc path silently skipped the wire check.
+    let broker = PermissionBroker::new();
+    let err = broker
+        .ask_question("s1", "Which crate?", &["a".into()])
+        .await
+        .expect_err("unbound broker cannot ask");
+    assert!(err.contains("not bound"), "{err}");
+
+    let err = broker
+        .ask("s1", "git", &["push".to_string()])
+        .await
+        .expect_err("same for command permission");
+    assert!(err.contains("not bound"), "{err}");
+}
+
+#[test]
+fn runtime_metadata_flags_delegate_to_the_wrapped_runtime() {
+    struct Mixed;
+    #[async_trait]
+    impl ToolRuntime for Mixed {
+        fn catalog(&self) -> Vec<ToolDef> {
+            vec![]
+        }
+        async fn invoke(&self, _call: &ToolInvocation) -> Result<String, String> {
+            Ok(String::new())
+        }
+        fn is_read_only(&self, tool_name: &str) -> bool {
+            tool_name == "read_file"
+        }
+        fn parks_for_human(&self, tool_name: &str) -> bool {
+            tool_name == "ask_human"
+        }
+    }
+
+    let grants = IsolatedGrants::new();
+    let runtime = wrap(
+        Arc::new(Mixed),
+        CommandGrantSet::default(),
+        grants.attach(PermissionDecision::Deny),
+    );
+    assert!(runtime.is_read_only("read_file"));
+    assert!(!runtime.is_read_only("write_file"));
+    assert!(runtime.parks_for_human("ask_human"));
+    assert!(!runtime.parks_for_human("read_file"));
+}
+
+#[test]
+fn global_grant_dir_prefers_env_then_home() {
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let saved = std::env::var("LIBERADO_GRANT_DIR").ok();
+
+    // SAFETY: single-threaded test under ENV_LOCK; restored below.
+    unsafe { std::env::set_var("LIBERADO_GRANT_DIR", "D:/grants-tmp") };
+    assert_eq!(
+        default_global_grant_dir(),
+        PathBuf::from("D:/grants-tmp"),
+        "the env var wins when present"
+    );
+
+    // SAFETY: as above.
+    unsafe { std::env::remove_var("LIBERADO_GRANT_DIR") };
+    let home_fallback = default_global_grant_dir();
+    assert!(
+        home_fallback.ends_with(".liberado"),
+        "without env the machine-wide dir lives under home: {home_fallback:?}"
+    );
+    assert!(home_fallback.is_absolute(), "{home_fallback:?}");
+
+    match saved {
+        // SAFETY: restore-only, under ENV_LOCK.
+        Some(v) => unsafe { std::env::set_var("LIBERADO_GRANT_DIR", v) },
+        None => unsafe { std::env::remove_var("LIBERADO_GRANT_DIR") },
+    }
+}
+
+#[test]
+fn short_question_sheets_gain_a_free_text_option_and_long_ones_do_not() {
+    let one = question_params("sid", "Go?", &["yes".into()]);
+    let ids_one: Vec<_> = one["options"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|o| o["optionId"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        ids_one,
+        ["opt-0", "other", "skip"],
+        "a single choice must gain the Something-else option so Paseo's chooser renders"
+    );
+
+    let two = question_params("sid", "Go?", &["yes".into(), "no".into()]);
+    let ids_two: Vec<_> = two["options"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|o| o["optionId"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        ids_two,
+        ["opt-0", "opt-1", "skip"],
+        "two real choices need no padding"
+    );
+}

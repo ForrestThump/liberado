@@ -297,3 +297,85 @@ mod tests {
         assert!(calls.is_empty());
     }
 }
+
+#[tokio::test]
+async fn server_base_prefers_the_env_over_the_default() {
+    static ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+    let _guard = ENV_LOCK.lock().await;
+    let saved = std::env::var("LIBERADO_SERVER").ok();
+
+    // SAFETY: single-threaded under ENV_LOCK; restored below.
+    unsafe { std::env::set_var("LIBERADO_SERVER", "http://127.0.0.1:9") };
+    assert_eq!(server_base(), "http://127.0.0.1:9");
+    unsafe { std::env::remove_var("LIBERADO_SERVER") };
+    assert_eq!(server_base(), DEFAULT_SERVER);
+
+    match saved {
+        // SAFETY: restore-only under the same lock.
+        Some(v) => unsafe { std::env::set_var("LIBERADO_SERVER", v) },
+        None => unsafe { std::env::remove_var("LIBERADO_SERVER") },
+    }
+}
+
+#[tokio::test]
+async fn an_unreachable_daemon_is_a_named_error_not_success() {
+    static ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+    let _guard = ENV_LOCK.lock().await;
+    let saved = std::env::var("LIBERADO_SERVER").ok();
+
+    // Port 1 on loopback is closed by convention; connect fails fast.
+    unsafe { std::env::set_var("LIBERADO_SERVER", "http://127.0.0.1:1") };
+    let mut daemon_session = None;
+    let err = run_face_turn(&mut daemon_session, "hi", "acp-1", &|_, _| Ok(()))
+        .await
+        .expect_err("nothing is listening there");
+
+    unsafe {
+        match saved {
+            Some(v) => std::env::set_var("LIBERADO_SERVER", v),
+            None => std::env::remove_var("LIBERADO_SERVER"),
+        }
+    }
+    assert!(err.contains("cannot reach daemon"), "{err}");
+}
+
+#[tokio::test]
+async fn a_non_200_daemon_response_surfaces_the_status() {
+    static ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+    let _guard = ENV_LOCK.lock().await;
+    let saved = std::env::var("LIBERADO_SERVER").ok();
+
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    unsafe { std::env::set_var("LIBERADO_SERVER", format!("http://127.0.0.1:{port}")) };
+    let server = std::thread::spawn(move || {
+        use std::io::Read as _;
+        let (mut sock, _) = listener.accept().unwrap();
+        // Drain the request head before answering; answering mid-request
+        // resets the client's send side and masquerades as a connect error.
+        let mut buf = [0u8; 1024];
+        let _ = sock.read(&mut buf);
+        std::io::Write::write_all(
+            &mut sock,
+            b"HTTP/1.1 503 Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+        )
+        .unwrap();
+    });
+
+    let mut daemon_session = None;
+    let err = run_face_turn(&mut daemon_session, "hi", "acp-1", &|_, _| Ok(()))
+        .await
+        .expect_err("a 503 must fail the turn");
+
+    server.join().unwrap();
+    unsafe {
+        match saved {
+            Some(v) => std::env::set_var("LIBERADO_SERVER", v),
+            None => std::env::remove_var("LIBERADO_SERVER"),
+        }
+    }
+    assert!(err.contains("503"), "{err}");
+}

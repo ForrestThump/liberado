@@ -543,4 +543,37 @@ mod tests {
         assert_eq!(loaded.messages[3].role, "assistant");
         assert_eq!(loaded.messages[3].content, "second answer");
     }
+
+    #[test]
+    fn validate_id_rejects_each_separator_on_its_own() {
+        for bad in ["a/b", "a\\b", "a\u{0}b"] {
+            assert!(validate_id(bad).is_err(), "{bad:?} must be rejected");
+        }
+        assert!(validate_id("plain-id").is_ok());
+    }
+
+    #[test]
+    fn load_reports_corrupt_records_as_errors_not_as_absent() {
+        let _guard = set_sessions_dir(&TempDir::new().unwrap()).0;
+        let id = "corrupt";
+        std::fs::write(sessions_dir().join(format!("{id}.json")), "{ not json }").unwrap();
+        let err = load(id).expect_err("a corrupt record must surface, not read as absent");
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn updates_stamp_rfc3339_timestamps() {
+        let dir = TempDir::new().unwrap();
+        {
+            let (_lock, _g) = set_sessions_dir(&dir);
+            save(&sample_record("stamp")).unwrap();
+            update_model("stamp", "m2").unwrap();
+            let loaded = load("stamp").unwrap().unwrap();
+            assert!(
+                chrono::DateTime::parse_from_rfc3339(&loaded.updated_at).is_ok(),
+                "updated_at must stay RFC3339, got {:?}",
+                loaded.updated_at
+            );
+        }
+    }
 }

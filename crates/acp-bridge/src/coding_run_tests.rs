@@ -140,3 +140,87 @@ async fn prepare_workspace_non_git_uses_cwd() {
         .expect("non-git host cwd is ok");
     assert_eq!(path, dir.path());
 }
+
+/// A step missing only its name must be dropped; a step missing only its run
+/// must also be dropped. `&&` would keep half-defined steps.
+#[test]
+fn step_from_json_requires_both_name_and_run() {
+    assert!(step_from_json(&json!({ "name": "only-name" })).is_none());
+    assert!(step_from_json(&json!({ "run": "exit 0" })).is_none());
+    let full = step_from_json(&json!({ "name": "n", "run": "exit 0" })).expect("complete");
+    assert_eq!(full.name, "n");
+}
+
+/// The workspace payload is what an operator reads to answer "where did this run".
+/// An empty object would say nothing.
+#[test]
+fn workspace_payload_names_the_root() {
+    let p = workspace_payload(Path::new("/somewhere/ws"));
+    assert_eq!(p["workspace_root"], "/somewhere/ws");
+}
+
+/// Files changed render as their own section; an empty list renders none.
+#[test]
+fn render_lists_files_changed_only_when_there_are_any() {
+    let mk = |files: Vec<&str>| CodingRoundOutcome {
+        summary: String::new(),
+        outcome: "Succeeded".into(),
+        files_changed: files.iter().map(|s| s.to_string()).collect(),
+        workspace: "/tmp/ws".into(),
+        trace_path: None,
+        validation_notes: None,
+        findings: String::new(),
+    };
+    let with = mk(vec!["src/a.rs"]).render();
+    assert!(with.contains("**Files changed:**"), "{with}");
+    assert!(with.contains("- `src/a.rs`"), "{with}");
+    let without = mk(vec![]).render();
+    assert!(
+        !without.contains("Files changed"),
+        "an empty list must not print the heading: {without}"
+    );
+}
+
+/// `workspace_env` carries the shared build cache to children verbatim; blanks
+/// and absents contribute nothing. (Trimming is apply_shared_target_dir's job.)
+#[test]
+fn workspace_env_carries_only_a_real_shared_target_dir() {
+    let mut tuning = CoderTuning::default();
+    assert!(workspace_env(&tuning).is_empty(), "nothing configured");
+
+    tuning.workspace_build.shared_target_dir = Some("  ".into());
+    assert!(
+        workspace_env(&tuning).is_empty(),
+        "blank is not a directory"
+    );
+
+    tuning.workspace_build.shared_target_dir = Some(" target/shared ".into());
+    let env = workspace_env(&tuning);
+    assert_eq!(
+        env.get("CARGO_TARGET_DIR"),
+        Some(&" target/shared ".to_string()),
+        "passed through untouched; downstream trims"
+    );
+}
+
+/// `[acp]` from real config reaches the caller; a broken load falls back to defaults.
+#[test]
+fn load_acp_config_reads_the_declared_section_and_defaults_on_failure() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("topology.toml"),
+        "vault_path = \"/tmp/vault\"\n\n[acp]\nmax_turns = 7\n",
+    )
+    .unwrap();
+    let cfg = load_acp_config(Some(dir.path()));
+    assert_eq!(
+        cfg.max_turns,
+        Some(7),
+        "[acp] max_turns must reach the bridge"
+    );
+
+    // A dir without topology falls back to defaults rather than erroring.
+    let empty = tempfile::tempdir().unwrap();
+    let cfg = load_acp_config(Some(empty.path()));
+    assert_eq!(cfg.max_turns, None);
+}

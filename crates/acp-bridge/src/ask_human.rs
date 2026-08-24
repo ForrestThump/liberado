@@ -323,4 +323,31 @@ mod tests {
         let call = ToolInvocation::new("1", ASK_HUMAN_TOOL, json!({ "question": "  " }));
         assert_eq!(render_question(&call), "(no question provided)");
     }
+
+    /// ask_human itself is read-only; every other tool's answer must come from the
+    /// wrapped runtime verbatim, in both directions.
+    #[test]
+    fn read_only_answers_are_fixed_for_ask_human_and_delegated_elsewhere() {
+        struct Mixed;
+        #[async_trait]
+        impl ToolRuntime for Mixed {
+            fn catalog(&self) -> Vec<ToolDef> {
+                vec![]
+            }
+            async fn invoke(&self, _call: &ToolInvocation) -> Result<String, String> {
+                Ok(String::new())
+            }
+            fn is_read_only(&self, tool_name: &str) -> bool {
+                tool_name == "search_text"
+            }
+            fn parks_for_human(&self, tool_name: &str) -> bool {
+                tool_name == "run_command"
+            }
+        }
+
+        let runtime = wrap_with_client(Arc::new(Mixed), true, None);
+        assert!(runtime.is_read_only(ASK_HUMAN_TOOL));
+        assert!(runtime.is_read_only("search_text"));
+        assert!(!runtime.is_read_only("write_file"));
+    }
 }

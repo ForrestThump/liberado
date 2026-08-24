@@ -1,0 +1,17 @@
+{
+  "id": "lib-18ce8f560dee39d0-21764",
+  "mode": "chat",
+  "cwd": "C:\\Users\\Shiloh\\AppData\\Local\\Temp\\.tmpDH6EJ3",
+  "model": "mock-model",
+  "messages": [
+    {
+      "role": "user",
+      "content": "fix the test"
+    },
+    {
+      "role": "assistant",
+      "content": "working on it"
+    }
+  ],
+  "updated_at": "2026-08-23T22:21:41.889492100+00:00"
+}

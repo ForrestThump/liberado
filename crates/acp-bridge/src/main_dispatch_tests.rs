@@ -264,7 +264,7 @@ async fn finishing_a_prompt_clears_the_slot_and_answers() {
 async fn cancel_notification_aborts_only_the_matching_in_flight_prompt() {
     let bridge = test_bridge();
     let (in_flight, liveness) = session_with_pending_prompt(&bridge, "s1").await;
-    let mut in_flight = Some(in_flight);
+    let in_flight = Some(in_flight);
 
     // An unrelated method must not touch the slot.
     dispatch_notification(
@@ -301,10 +301,8 @@ async fn cancel_notification_aborts_only_the_matching_in_flight_prompt() {
         &in_flight,
     )
     .await;
-    // Abort is asynchronous; joining settles the task (and drops its receiver).
-    if let Some(inf) = in_flight.as_mut() {
-        let _ = (&mut inf.handle).await;
-    }
+    // abort() drops the task on its next poll; one yield lets it land.
+    tokio::task::yield_now().await;
     assert!(
         liveness.is_closed(),
         "the matching in-flight prompt is aborted"

@@ -1,0 +1,8 @@
+{
+  "id": "lib-empty-msg",
+  "mode": "coding",
+  "cwd": "/home/user/project",
+  "model": "deepseek-v4-pro",
+  "messages": [],
+  "updated_at": "2026-08-23T22:21:41.891341100+00:00"
+}
