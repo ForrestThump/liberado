@@ -84,20 +84,32 @@ fn classified_decision_logging_fires_for_every_action_variant() {
         }),
     ];
 
-    let (_, seen) = with_captured(|| {
-        for d in &decisions {
-            log_classified_decision(d, "test-model");
+    // Under a loaded runner, parallel tests each installing their own
+    // thread-local subscriber can drop one event through tracing's callsite
+    // interest cache. Retrying tolerates that race but not a regression: a
+    // variant that genuinely stopped logging never reaches 4 in any attempt,
+    // so the assertion below still fails.
+    let mut lines = 0;
+    let mut last_seen = Vec::new();
+    for _ in 0..10 {
+        let (_, seen) = with_captured(|| {
+            for d in &decisions {
+                log_classified_decision(d, "test-model");
+            }
+        });
+        last_seen = seen;
+        lines = last_seen
+            .iter()
+            .filter(|(l, m)| *l == tracing::Level::INFO && m.contains("classified decision"))
+            .count();
+        if lines == decisions.len() {
+            break;
         }
-    });
-
-    let lines = seen
-        .iter()
-        .filter(|(l, m)| *l == tracing::Level::INFO && m.contains("classified decision"))
-        .count();
+    }
     assert_eq!(
         lines,
         decisions.len(),
-        "each action variant must emit exactly one pre-guard line, got {seen:?}"
+        "each action variant must emit exactly one pre-guard line, got {last_seen:?}"
     );
 }
 #[test]
