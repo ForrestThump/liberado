@@ -320,6 +320,13 @@ fn mvl(path: &Path, heading: bool) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn pi(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    print!("{}", summarize_pi(path)?);
+    Ok(())
+}
+
+/// Ingest one pi-style `session.jsonl` and render its summary as a string (the printable
+/// core of [`pi`], split out so tests can assert on rendered lines).
+fn summarize_pi(path: &Path) -> Result<String, Box<dyn std::error::Error>> {
     let mut turns = 0;
     let mut tools = BTreeMap::new();
     let mut first_edit = None;
@@ -389,34 +396,34 @@ fn pi(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
             timeouts += 1;
         }
     }
-    println!(
-        "## pi  {}",
+    let mut out = format!(
+        "## pi  {}\n",
         path.file_name().unwrap_or_default().to_string_lossy()
     );
-    println!("- turns: {turns}   tools: {}", counts(&tools));
-    println!(
-        "- first edit: {}",
+    out.push_str(&format!("- turns: {turns}   tools: {}\n", counts(&tools)));
+    out.push_str(&format!(
+        "- first edit: {}\n",
         first_edit.unwrap_or_else(|| "None".into())
-    );
-    println!("- connect-timeout mentions: {timeouts}");
+    ));
+    out.push_str(&format!("- connect-timeout mentions: {timeouts}\n"));
     if !cargo.is_empty() {
-        println!("- cargo:");
+        out.push_str("- cargo:\n");
         for line in cargo.iter().take(30) {
-            println!("  {line}");
+            out.push_str(&format!("  {line}\n"));
         }
     }
     if !last_text.is_empty() {
-        println!(
-            "- last assistant: {}",
+        out.push_str(&format!(
+            "- last assistant: {}\n",
             last_text
                 .trim()
                 .replace('\n', " ")
                 .chars()
                 .take(320)
                 .collect::<String>()
-        );
+        ));
     }
-    Ok(())
+    Ok(out)
 }
 
 fn kind(path: &Path) -> &'static str {
@@ -765,5 +772,107 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(err.contains("not found"), "{err}");
+    }
+
+    /// `summarize_pi` folds a pi-style session into rendered lines: turn counts, sorted tool
+    /// histogram, first edit (edit/write names only, first one wins), bash+cargo capture,
+    /// assistant last-text, and connect-timeout mentions. Asserting exact lines is what kills
+    /// the operator flips (`==`, `&&`, `+=`) cargo-mutants kept finding here.
+    #[test]
+    fn summarize_pi_renders_turns_tools_edits_and_timeouts() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("session.jsonl");
+        fs::write(
+            &path,
+            concat!(
+                "{\"type\":\"turn_start\"}\n",
+                "{\"type\":\"tool_execution_start\",\"toolName\":\"bash\",\"args\":{\"command\":\"cargo test --workspace\"}}\n",
+                "{\"type\":\"tool_execution_start\",\"toolName\":\"read_file\"}\n",
+                "{\"type\":\"turn_start\"}\n",
+                "{\"type\":\"tool_execution_start\",\"name\":\"edit\",\"input\":{\"path\":\"src/x.rs\"}}\n",
+                "{\"type\":\"message_end\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"first \"},{\"type\":\"other\"},{\"type\":\"text\",\"text\":\"part\"}]}}\n",
+                "{\"type\":\"turn_start\"}\n",
+                "{\"type\":\"tool_execution_start\",\"toolName\":\"write\",\"args\":{\"path\":\"src/second.rs\"}}\n",
+                "{\"type\":\"noise\",\"detail\":\"saw a Connect Timeout while streaming\"}\n"
+            ),
+        )
+        .unwrap();
+
+        let out = summarize_pi(&path).unwrap();
+        assert!(out.contains("## pi  session.jsonl"), "{out}");
+        assert!(
+            out.contains("- turns: 3   tools: {bash: 1, edit: 1, read_file: 1, write: 1}"),
+            "{out}"
+        );
+        assert!(
+            out.contains("- first edit: (2, src/x.rs)"),
+            "the FIRST edit/write call pins turn and path; a later write must not win, got: {out}"
+        );
+        assert!(out.contains("- connect-timeout mentions: 1"), "{out}");
+        assert!(out.contains("t1 cargo test --workspace"), "{out}");
+        assert!(
+            out.contains("- last assistant: first part"),
+            "text blocks join and non-text blocks drop, got: {out}"
+        );
+    }
+
+    /// A read-only pi session renders no cargo section and no last-assistant line: the
+    /// emptiness guards are load-bearing.
+    #[test]
+    fn summarize_pi_omits_empty_sections() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("session.jsonl");
+        fs::write(&path, "{\"type\":\"turn_start\"}\n").unwrap();
+        let out = summarize_pi(&path).unwrap();
+        assert!(!out.contains("- cargo:"), "{out}");
+        assert!(!out.contains("- last assistant:"), "{out}");
+        assert!(out.contains("- first edit: None"), "{out}");
+    }
+
+    /// Directory classification: a folder holding only `pi/` is still a compare layout —
+    /// the `liberado || pi` disjunction, not a conjunction.
+    #[test]
+    fn kind_treats_a_pi_only_directory_as_a_compare_layout() {
+        let dir = tempdir().unwrap();
+        fs::create_dir(dir.path().join("pi")).unwrap();
+        assert_eq!(kind(dir.path()), "compare");
+    }
+
+    /// Every `walk` arm dispatches instead of falling through to the `unrecognized` error:
+    /// a deleted match arm turns its case into exactly that error.
+    #[test]
+    fn walk_dispatches_every_known_layout() {
+        let dir = tempdir().unwrap();
+
+        // mvl file
+        let mvl_path = dir.path().join("run.mvl.jsonl");
+        fs::write(&mvl_path, "").unwrap();
+        assert!(walk(&mvl_path).is_ok(), "an .mvl.jsonl file must walk");
+
+        // pi session file
+        let pi_path = dir.path().join("session.jsonl");
+        fs::write(&pi_path, "").unwrap();
+        assert!(walk(&pi_path).is_ok(), "session.jsonl must walk");
+
+        // liberado-dir: json files summarise individually
+        let json_dir = dir.path().join("jsons");
+        fs::create_dir(&json_dir).unwrap();
+        fs::write(
+            json_dir.join("trace.json"),
+            "{\"request\":{},\"events\":[]}",
+        )
+        .unwrap();
+        assert!(walk(&json_dir).is_ok(), "a dir of trace jsons must walk");
+
+        // outdir: candidate discovery descends into run.mvl.jsonl
+        let outdir = dir.path().join("run");
+        fs::create_dir(&outdir).unwrap();
+        fs::write(outdir.join("run.mvl.jsonl"), "").unwrap();
+        assert!(walk(&outdir).is_ok(), "a run directory must walk");
+
+        // unknown extension stays an error — the arms did not swallow everything
+        let stray = dir.path().join("notes.txt");
+        fs::write(&stray, "x").unwrap();
+        assert!(walk(&stray).is_err(), "unrecognized input must error");
     }
 }
