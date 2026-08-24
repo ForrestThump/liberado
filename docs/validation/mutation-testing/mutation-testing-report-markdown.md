@@ -99,3 +99,26 @@ shrinking the mutable-arithmetic surface (139→118 viable). Residues unchanged.
 Ledger rows appended (never edited); raw `mutants.out/` discarded after triage per the
 three-layer rule. Commits: baseline ledger row first, then
 `fix(markdown): guarantee parse_inline termination…`, then two test commits.
+
+---
+
+## Stretch goal — fresh `executor` campaign (2026-08-23)
+
+**Status:** recorded · **Authority:** ledger row at `f6597d1`
+
+| Metric | Value |
+|--------|:-----:|
+| Viable mutants | 332 |
+| Caught | 314 |
+| Missed | 18 |
+| Timeouts | **0** |
+| Unviable | 57 |
+
+The crate grew ~2× since the markdown-era seed (168 viable, 29 survived, commit unknown);
+a fresh run resets its drift clock and shows the survivor pool already shrank to 18 with no
+fixes in this campaign. No timeouts — the executor suite needs no timeout-table entry.
+Survivor triage left for a dedicated pass; raw `mutants.out/` discarded after ingest per the
+three-layer rule.
+
+Campaign litter note: the run created `crates/executor/proptest-regressions/` (mutant-induced
+proptest failures); deleted untracked, matching every other crate that does not track them.
