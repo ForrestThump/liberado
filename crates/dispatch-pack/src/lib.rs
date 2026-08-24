@@ -260,6 +260,34 @@ impl DispatchPack {
     }
 }
 
+/// Route the payload's `parallel_goals`.
+///
+/// * `Err` — a parallel child may not nest a further fan-out (presence alone is
+///   enough to reject: an empty fan-out on a child is still nesting).
+/// * `Some(goals)` — a non-empty fan-out was requested; run it.
+/// * `None` — nothing to fan out; the single-goal path proceeds.
+fn parallel_route(goal: &GoalSpec) -> Result<Option<Vec<serde_json::Value>>, PackError> {
+    let payload = &goal.payload;
+    let is_child = payload.get("parallel_child").and_then(|v| v.as_bool()) == Some(true);
+    let goals = payload.get("parallel_goals").and_then(|v| v.as_array());
+    if is_child && goals.is_some() {
+        return Err(PackError::Setup(
+            "parallel dispatch children cannot nest further parallel goals".into(),
+        ));
+    }
+    match goals {
+        Some(goals) if !goals.is_empty() => Ok(Some(goals.clone())),
+        _ => Ok(None),
+    }
+}
+
+/// `GoalSpec::max_turns` is the pack's soft turn budget with 0 meaning "pack
+/// default": any positive count reaches the orchestrator, zero collapses to
+/// `None` so the default stands in.
+fn effective_turn_budget(max_turns: u32) -> Option<u32> {
+    Some(max_turns).filter(|t| *t > 0)
+}
+
 #[async_trait]
 impl DomainPackRunner for DispatchPack {
     fn domain_id(&self) -> &str {
@@ -293,30 +321,14 @@ impl DomainPackRunner for DispatchPack {
             .and_then(|o| o.correlation_id.clone())
             .unwrap_or_else(|| format!("dispatch-session-{session_id}"));
 
-        if goal.payload.get("parallel_child").and_then(|v| v.as_bool()) == Some(true)
-            && goal
-                .payload
-                .get("parallel_goals")
-                .and_then(|v| v.as_array())
-                .is_some()
-        {
-            return Err(PackError::Setup(
-                "parallel dispatch children cannot nest further parallel goals".into(),
-            ));
-        }
-        if let Some(parallel_goals) = goal
-            .payload
-            .get("parallel_goals")
-            .and_then(|v| v.as_array())
-            && !parallel_goals.is_empty()
-        {
+        if let Some(parallel_goals) = parallel_route(goal)? {
             return Self::run_parallel(
                 pool,
                 session_id,
                 goal,
                 &events,
                 &correlation_id,
-                parallel_goals,
+                &parallel_goals,
             )
             .await;
         }
@@ -382,7 +394,7 @@ impl DomainPackRunner for DispatchPack {
                 &goal.description,
                 &correlation_id,
                 &ctx.grant.capabilities,
-                Some(goal.max_turns).filter(|t| *t > 0),
+                effective_turn_budget(goal.max_turns),
             ),
         )
         .await
@@ -967,6 +979,182 @@ mod tests {
             matches!(snap.session.status, SessionStatus::Failed),
             "nested fan-out must fail: {:?}",
             snap.session.status
+        );
+    }
+
+    // ── parallel_route / budget / write_proposal survivors ────────────────────
+
+    #[test]
+    fn parallel_route_rejects_nesting_and_routes_only_real_fan_outs() {
+        let base = |payload: serde_json::Value| GoalSpec {
+            id: None,
+            description: String::new(),
+            success_criteria: vec![],
+            domain: DomainHint::from(DISPATCH_DOMAIN),
+            max_turns: 0,
+            max_idle_secs: None,
+            origin: None,
+            profile: None,
+            payload,
+        };
+
+        // A child may not nest any fan-out — presence alone rejects, even empty.
+        let err = parallel_route(&base(serde_json::json!({
+            "parallel_child": true,
+            "parallel_goals": [{ "goal": "a" }],
+        })))
+        .expect_err("child with goals must be a nesting error");
+        assert!(err.to_string().contains("cannot nest"), "{err}");
+
+        let err = parallel_route(&base(serde_json::json!({
+            "parallel_child": true,
+            "parallel_goals": [],
+        })))
+        .expect_err("an empty fan-out on a child is still nesting");
+        assert!(err.to_string().contains("cannot nest"), "{err}");
+
+        // A real fan-out routes with its goals carried through.
+        let routed = parallel_route(&base(serde_json::json!({
+            "parallel_goals": [{ "goal": "a" }, { "goal": "b" }],
+        })))
+        .expect("a top-level fan-out is legal");
+        assert_eq!(routed.as_deref().map(|g| g.len()), Some(2));
+
+        // Everything else is the single-goal path.
+        assert!(
+            parallel_route(&base(serde_json::json!({})))
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            parallel_route(&base(serde_json::json!({ "parallel_child": true })))
+                .unwrap()
+                .is_none(),
+            "a child marker alone requests no fan-out"
+        );
+        assert!(
+            parallel_route(&base(serde_json::json!({ "parallel_goals": [] })))
+                .unwrap()
+                .is_none(),
+            "an empty fan-out on a parent falls through to the single-goal path"
+        );
+    }
+
+    #[test]
+    fn zero_max_turns_means_pack_default_positive_propagates() {
+        assert_eq!(
+            effective_turn_budget(0),
+            None,
+            "0 is the pack-default sentinel"
+        );
+        assert_eq!(effective_turn_budget(5), Some(5));
+        assert_eq!(effective_turn_budget(u32::MAX), Some(u32::MAX));
+    }
+
+    struct StubNotifier {
+        // `Err` carries the NotifyError payload; `Ok` notifies successfully.
+        fail_with: Option<String>,
+        calls: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    #[async_trait]
+    impl liberado_notify::Notifier for StubNotifier {
+        async fn notify(&self, _message: &str) -> Result<(), liberado_notify::NotifyError> {
+            self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            match &self.fail_with {
+                Some(e) => Err(liberado_notify::NotifyError(e.clone())),
+                None => Ok(()),
+            }
+        }
+    }
+
+    fn signed(id: &str) -> SignedProposal {
+        ProposalSigner::random().sign(liberado_common::Proposal::pending(
+            id,
+            format!("corr-{id}"),
+            "test-agent",
+            liberado_common::ProposedAction::ToolCalls(vec![]),
+            "needs your review",
+        ))
+    }
+
+    #[tokio::test]
+    async fn write_proposal_persists_the_note_and_reports_the_ping_outcome() {
+        let dir = tempfile::tempdir().unwrap();
+        let pack = DispatchPack::new(
+            Arc::new(CapabilityCatalog::new()),
+            Vec::new(),
+            1,
+            dir.path().to_path_buf(),
+        )
+        .with_notifier(Arc::new(StubNotifier {
+            fail_with: None,
+            calls: Default::default(),
+        }));
+        let proposal = signed("prop-ok");
+
+        let notified = pack.write_proposal(&proposal).await.unwrap();
+        assert!(
+            notified,
+            "a successful ping means deferred_to_human folds true"
+        );
+
+        let written = dir
+            .path()
+            .join(PROPOSALS_DIR)
+            .join(format!("{}.md", proposal.as_proposal().id));
+        assert!(
+            written.exists(),
+            "the note must be on disk at {}",
+            written.display()
+        );
+    }
+
+    #[tokio::test]
+    async fn write_proposal_still_writes_when_the_notify_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        let pack = DispatchPack::new(
+            Arc::new(CapabilityCatalog::new()),
+            Vec::new(),
+            1,
+            dir.path().to_path_buf(),
+        )
+        .with_notifier(Arc::new(StubNotifier {
+            fail_with: Some("transport down".into()),
+            calls: Default::default(),
+        }));
+
+        let proposal = signed("prop-fail");
+        let notified = pack.write_proposal(&proposal).await.unwrap();
+        assert!(
+            !notified,
+            "a failed ping must report false so the chat reply is not suppressed"
+        );
+        assert!(
+            dir.path().join(PROPOSALS_DIR).join("prop-fail.md").exists(),
+            "the note survives even when the ping fails"
+        );
+    }
+
+    #[tokio::test]
+    async fn write_proposal_without_a_notifier_reports_false_and_writes() {
+        let dir = tempfile::tempdir().unwrap();
+        let pack = DispatchPack::new(
+            Arc::new(CapabilityCatalog::new()),
+            Vec::new(),
+            1,
+            dir.path().to_path_buf(),
+        );
+
+        let proposal = signed("prop-quiet");
+        let notified = pack.write_proposal(&proposal).await.unwrap();
+        assert!(!notified, "no channel configured: nothing went out-of-band");
+        assert!(
+            dir.path()
+                .join(PROPOSALS_DIR)
+                .join("prop-quiet.md")
+                .exists(),
+            "the note is still the deliverable"
         );
     }
 }
