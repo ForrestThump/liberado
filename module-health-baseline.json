@@ -66,10 +66,10 @@
     "cyclomatic": 12
   },
   "crates/acp-bridge/src/main_dispatch_tests.rs": {
-    "ploc": 349,
-    "lloc": 125,
+    "ploc": 354,
+    "lloc": 129,
     "functions": 18,
-    "cyclomatic": 21
+    "cyclomatic": 23
   },
   "crates/acp-bridge/src/main_misc_tests.rs": {
     "ploc": 744,
@@ -204,16 +204,16 @@
     "cyclomatic": 1
   },
   "crates/chat-client-contract/src/native.rs": {
-    "ploc": 178,
-    "lloc": 90,
-    "functions": 19,
-    "cyclomatic": 29
+    "ploc": 190,
+    "lloc": 96,
+    "functions": 21,
+    "cyclomatic": 31
   },
   "crates/chat-client-contract/src/session_kind.rs": {
-    "ploc": 225,
-    "lloc": 27,
-    "functions": 21,
-    "cyclomatic": 55
+    "ploc": 286,
+    "lloc": 48,
+    "functions": 26,
+    "cyclomatic": 60
   },
   "crates/chat-client-contract/src/wire.rs": {
     "ploc": 901,
@@ -234,16 +234,16 @@
     "cyclomatic": 1
   },
   "crates/chat-search/src/query.rs": {
-    "ploc": 187,
-    "lloc": 48,
-    "functions": 16,
-    "cyclomatic": 39
+    "ploc": 203,
+    "lloc": 58,
+    "functions": 18,
+    "cyclomatic": 41
   },
   "crates/chat-search/src/scan.rs": {
-    "ploc": 383,
-    "lloc": 106,
-    "functions": 19,
-    "cyclomatic": 54
+    "ploc": 420,
+    "lloc": 131,
+    "functions": 22,
+    "cyclomatic": 57
   },
   "crates/cli/src/chat_client.rs": {
     "ploc": 372,
@@ -372,10 +372,10 @@
     "cyclomatic": 2
   },
   "crates/cli/src/module_health_cmd.rs": {
-    "ploc": 316,
-    "lloc": 77,
-    "functions": 22,
-    "cyclomatic": 89
+    "ploc": 390,
+    "lloc": 88,
+    "functions": 24,
+    "cyclomatic": 93
   },
   "crates/cli/src/module_health_cmd/analysis.rs": {
     "ploc": 126,
@@ -384,16 +384,16 @@
     "cyclomatic": 27
   },
   "crates/cli/src/mutants_cmd.rs": {
-    "ploc": 578,
-    "lloc": 187,
-    "functions": 48,
-    "cyclomatic": 148
+    "ploc": 585,
+    "lloc": 186,
+    "functions": 51,
+    "cyclomatic": 149
   },
   "crates/cli/src/mutants_cmd_tests.rs": {
-    "ploc": 506,
-    "lloc": 185,
-    "functions": 27,
-    "cyclomatic": 31
+    "ploc": 568,
+    "lloc": 212,
+    "functions": 31,
+    "cyclomatic": 35
   },
   "crates/cli/src/readiness_cmd.rs": {
     "ploc": 364,
@@ -426,16 +426,28 @@
     "cyclomatic": 6
   },
   "crates/coder-agent/src/assemble.rs": {
-    "ploc": 1144,
+    "ploc": 1165,
     "lloc": 236,
     "functions": 39,
     "cyclomatic": 80
   },
+  "crates/coder-agent/src/assemble_survivor_tests.rs": {
+    "ploc": 103,
+    "lloc": 33,
+    "functions": 4,
+    "cyclomatic": 5
+  },
   "crates/coder-agent/src/coding_goal.rs": {
-    "ploc": 109,
+    "ploc": 112,
     "lloc": 19,
     "functions": 16,
     "cyclomatic": 19
+  },
+  "crates/coder-agent/src/coding_goal_survivor_tests.rs": {
+    "ploc": 34,
+    "lloc": 10,
+    "functions": 5,
+    "cyclomatic": 6
   },
   "crates/coder-agent/src/cold_review.rs": {
     "ploc": 506,
@@ -444,10 +456,16 @@
     "cyclomatic": 80
   },
   "crates/coder-agent/src/completion_gate.rs": {
-    "ploc": 583,
+    "ploc": 586,
     "lloc": 110,
     "functions": 39,
     "cyclomatic": 96
+  },
+  "crates/coder-agent/src/completion_gate_survivor_tests.rs": {
+    "ploc": 234,
+    "lloc": 72,
+    "functions": 16,
+    "cyclomatic": 23
   },
   "crates/coder-agent/src/critic.rs": {
     "ploc": 146,
@@ -456,34 +474,64 @@
     "cyclomatic": 25
   },
   "crates/coder-agent/src/fanout.rs": {
-    "ploc": 1055,
+    "ploc": 1058,
     "lloc": 230,
     "functions": 55,
     "cyclomatic": 124
   },
+  "crates/coder-agent/src/fanout_survivor_tests.rs": {
+    "ploc": 175,
+    "lloc": 61,
+    "functions": 12,
+    "cyclomatic": 16
+  },
   "crates/coder-agent/src/finish_gate.rs": {
-    "ploc": 155,
+    "ploc": 158,
     "lloc": 33,
     "functions": 13,
     "cyclomatic": 23
   },
+  "crates/coder-agent/src/finish_gate_survivor_tests.rs": {
+    "ploc": 65,
+    "lloc": 16,
+    "functions": 6,
+    "cyclomatic": 7
+  },
   "crates/coder-agent/src/gates.rs": {
-    "ploc": 515,
+    "ploc": 518,
     "lloc": 181,
     "functions": 48,
     "cyclomatic": 88
   },
+  "crates/coder-agent/src/gates_survivor_tests.rs": {
+    "ploc": 11,
+    "lloc": 4,
+    "functions": 2,
+    "cyclomatic": 3
+  },
+  "crates/coder-agent/src/intake_coldreview_survivor_tests.rs": {
+    "ploc": 166,
+    "lloc": 48,
+    "functions": 21,
+    "cyclomatic": 28
+  },
   "crates/coder-agent/src/intake_session.rs": {
-    "ploc": 246,
+    "ploc": 249,
     "lloc": 62,
     "functions": 13,
     "cyclomatic": 33
   },
   "crates/coder-agent/src/lib.rs": {
-    "ploc": 2536,
+    "ploc": 2539,
     "lloc": 805,
     "functions": 137,
     "cyclomatic": 271
+  },
+  "crates/coder-agent/src/lib_survivor_tests.rs": {
+    "ploc": 596,
+    "lloc": 183,
+    "functions": 28,
+    "cyclomatic": 33
   },
   "crates/coder-agent/src/live.rs": {
     "ploc": 77,
@@ -498,28 +546,52 @@
     "cyclomatic": 58
   },
   "crates/coder-agent/src/progress.rs": {
-    "ploc": 407,
+    "ploc": 410,
     "lloc": 151,
     "functions": 25,
     "cyclomatic": 68
   },
+  "crates/coder-agent/src/progress_survivor_tests.rs": {
+    "ploc": 224,
+    "lloc": 75,
+    "functions": 16,
+    "cyclomatic": 23
+  },
   "crates/coder-agent/src/remediation.rs": {
-    "ploc": 179,
+    "ploc": 182,
     "lloc": 59,
     "functions": 19,
     "cyclomatic": 26
   },
+  "crates/coder-agent/src/remediation_survivor_tests.rs": {
+    "ploc": 82,
+    "lloc": 13,
+    "functions": 6,
+    "cyclomatic": 9
+  },
   "crates/coder-agent/src/repair_feedback.rs": {
-    "ploc": 660,
+    "ploc": 663,
     "lloc": 166,
     "functions": 49,
     "cyclomatic": 128
   },
+  "crates/coder-agent/src/repair_feedback_survivor_tests.rs": {
+    "ploc": 195,
+    "lloc": 52,
+    "functions": 17,
+    "cyclomatic": 21
+  },
   "crates/coder-agent/src/roles.rs": {
-    "ploc": 182,
+    "ploc": 185,
     "lloc": 50,
     "functions": 15,
     "cyclomatic": 45
+  },
+  "crates/coder-agent/src/roles_survivor_tests.rs": {
+    "ploc": 123,
+    "lloc": 59,
+    "functions": 14,
+    "cyclomatic": 15
   },
   "crates/coder-agent/src/runtime.rs": {
     "ploc": 169,
@@ -528,10 +600,16 @@
     "cyclomatic": 19
   },
   "crates/coder-agent/src/session_critic.rs": {
-    "ploc": 260,
+    "ploc": 263,
     "lloc": 71,
     "functions": 23,
     "cyclomatic": 46
+  },
+  "crates/coder-agent/src/session_critic_survivor_tests.rs": {
+    "ploc": 197,
+    "lloc": 42,
+    "functions": 18,
+    "cyclomatic": 23
   },
   "crates/coder-agent/src/session_pack.rs": {
     "ploc": 365,
@@ -540,28 +618,52 @@
     "cyclomatic": 55
   },
   "crates/coder-agent/src/session_pack/build.rs": {
-    "ploc": 768,
+    "ploc": 771,
     "lloc": 154,
     "functions": 27,
     "cyclomatic": 97
   },
+  "crates/coder-agent/src/session_pack/build_survivor_tests.rs": {
+    "ploc": 627,
+    "lloc": 177,
+    "functions": 37,
+    "cyclomatic": 57
+  },
   "crates/coder-agent/src/session_pack/intake.rs": {
-    "ploc": 440,
+    "ploc": 443,
     "lloc": 93,
     "functions": 28,
     "cyclomatic": 89
   },
+  "crates/coder-agent/src/session_pack/intake_survivor_tests.rs": {
+    "ploc": 487,
+    "lloc": 152,
+    "functions": 27,
+    "cyclomatic": 40
+  },
   "crates/coder-agent/src/session_pack/policies.rs": {
-    "ploc": 290,
+    "ploc": 293,
     "lloc": 71,
     "functions": 37,
     "cyclomatic": 45
   },
+  "crates/coder-agent/src/session_pack/policies_survivor_tests.rs": {
+    "ploc": 41,
+    "lloc": 11,
+    "functions": 4,
+    "cyclomatic": 5
+  },
   "crates/coder-agent/src/session_pack/preflight_hook.rs": {
-    "ploc": 405,
+    "ploc": 408,
     "lloc": 104,
     "functions": 51,
     "cyclomatic": 87
+  },
+  "crates/coder-agent/src/session_pack/preflight_hook_survivor_tests.rs": {
+    "ploc": 222,
+    "lloc": 71,
+    "functions": 15,
+    "cyclomatic": 24
   },
   "crates/coder-agent/src/session_pack/run_tests.rs": {
     "ploc": 468,
@@ -576,16 +678,28 @@
     "cyclomatic": 85
   },
   "crates/coder-agent/src/trace.rs": {
-    "ploc": 419,
+    "ploc": 422,
     "lloc": 96,
     "functions": 35,
     "cyclomatic": 68
   },
+  "crates/coder-agent/src/trace_survivor_tests.rs": {
+    "ploc": 114,
+    "lloc": 40,
+    "functions": 10,
+    "cyclomatic": 17
+  },
   "crates/coder-agent/src/verify_pipeline.rs": {
-    "ploc": 736,
+    "ploc": 739,
     "lloc": 186,
     "functions": 39,
     "cyclomatic": 87
+  },
+  "crates/coder-agent/src/verify_pipeline_survivor_tests.rs": {
+    "ploc": 32,
+    "lloc": 11,
+    "functions": 2,
+    "cyclomatic": 3
   },
   "crates/coder-core/src/acceptance.rs": {
     "ploc": 114,
@@ -738,8 +852,8 @@
     "cyclomatic": 65
   },
   "crates/coder-runner/src/cli_entry_tests.rs": {
-    "ploc": 72,
-    "lloc": 27,
+    "ploc": 73,
+    "lloc": 28,
     "functions": 5,
     "cyclomatic": 6
   },
@@ -756,8 +870,8 @@
     "cyclomatic": 4
   },
   "crates/coder-sandbox/src/checkpoint.rs": {
-    "ploc": 231,
-    "lloc": 67,
+    "ploc": 232,
+    "lloc": 69,
     "functions": 20,
     "cyclomatic": 58
   },
@@ -1308,16 +1422,16 @@
     "cyclomatic": 78
   },
   "crates/dispatch-pack/src/lib.rs": {
-    "ploc": 354,
+    "ploc": 367,
     "lloc": 60,
-    "functions": 38,
-    "cyclomatic": 69
+    "functions": 40,
+    "cyclomatic": 71
   },
   "crates/dispatch-pack/src/lib_tests.rs": {
-    "ploc": 755,
-    "lloc": 160,
+    "ploc": 765,
+    "lloc": 147,
     "functions": 29,
-    "cyclomatic": 49
+    "cyclomatic": 47
   },
   "crates/dispatcher/src/guards.rs": {
     "ploc": 551,
@@ -2130,10 +2244,10 @@
     "cyclomatic": 29
   },
   "crates/server/src/shutdown_grace_tests.rs": {
-    "ploc": 34,
-    "lloc": 18,
-    "functions": 2,
-    "cyclomatic": 5
+    "ploc": 36,
+    "lloc": 19,
+    "functions": 3,
+    "cyclomatic": 6
   },
   "crates/server/src/shutdown_tests.rs": {
     "ploc": 537,
