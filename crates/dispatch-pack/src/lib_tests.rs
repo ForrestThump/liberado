@@ -360,7 +360,7 @@ impl RuntimeFactory for RootedMarkerFactory {
 
 fn init_parent_repo(dir: &std::path::Path) {
     let run = |args: &[&str]| {
-        let out = std::process::Command::new("git")
+        let out = liberado_common::process::std_command("git")
             .args(args)
             .current_dir(dir)
             .env("GIT_AUTHOR_NAME", "dispatch-pack-test")
