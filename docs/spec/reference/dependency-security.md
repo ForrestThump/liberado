@@ -25,3 +25,11 @@ The cargo-vet exemption set is the accepted graph at the time this gate was
 introduced. It is debt, not an audit claim. New exemptions may not be added
 without a written review reason, and the set should shrink as audits become
 available.
+
+## Yanked crates
+
+`deny.toml` sets `yanked = "warn"` rather than `"deny"`. A transitive crate
+can be yanked upstream at any moment after it enters the lockfile, and when
+no newer version exists (as happened to `bisync 0.3.0` under
+`gix-protocol`) there is no code fix — only a policy change unblocks CI.
+Yanked warnings are still surfaced so the drift stays visible.
