@@ -283,3 +283,7 @@ mod tests {
         assert_eq!(req.config.verifiers.len(), 1);
     }
 }
+
+#[cfg(test)]
+#[path = "intake_coldreview_survivor_tests.rs"]
+mod survivor_tests;
