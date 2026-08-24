@@ -9,7 +9,7 @@ use liberado_common::process::std_command;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 pub const LEDGER_FILE: &str = "mutants-ledger.json";
 const OUTCOMES_FILE: &str = "mutants.out/outcomes.json";
@@ -319,16 +319,22 @@ pub fn load_ledger(root: &Path) -> Result<Ledger, Box<dyn std::error::Error>> {
 }
 
 fn save_ledger(root: &Path, ledger: &Ledger) -> Result<(), Box<dyn std::error::Error>> {
-    // Atomic temp+rename: concurrent agents append to one ledger file, and a
-    // truncating in-place write loses appends or corrupts the JSON mid-flight.
-    let path = root.join(LEDGER_FILE);
-    // Unique suffix: two concurrent appenders sharing one `.tmp` would lose a
-    // row even with the final rename (second writer overwrites the first's temp
-    // file before it is renamed into place).
-    let tmp = root.join(format!("{LEDGER_FILE}.{}.tmp", std::process::id()));
-    fs::write(&tmp, serde_json::to_string_pretty(ledger)? + "\n")?;
-    fs::rename(&tmp, path)?;
+    let bytes = serde_json::to_string_pretty(ledger)? + "\n";
+    write_atomic(root, root.join(LEDGER_FILE), &bytes);
     Ok(())
+}
+
+// Atomic temp+rename with a pid-unique temp name: concurrent agents append to
+// one ledger file, and a truncating in-place write loses appends or corrupts
+// the JSON mid-flight. A failed rename may leave an inert `.tmp` beside it.
+fn write_atomic(root: &Path, path: PathBuf, bytes: &str) {
+    let tmp = root.join(format!(
+        "{}.{}.tmp",
+        path.file_name().unwrap_or_default().to_string_lossy(),
+        std::process::id()
+    ));
+    fs::write(&tmp, bytes).expect("ledger temp write");
+    fs::rename(&tmp, path).expect("ledger atomic rename");
 }
 
 fn resolve_crate(root: &Path, crate_dir: &str) -> Result<CrateInfo, Box<dyn std::error::Error>> {

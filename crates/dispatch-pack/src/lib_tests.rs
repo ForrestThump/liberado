@@ -714,3 +714,70 @@ async fn write_proposal_without_a_notifier_reports_false_and_writes() {
         "the note is still the deliverable"
     );
 }
+
+/// The full run() path with a top-level fan-out: routing, sub-dispatch, and the
+/// Reported disposition all execute (covers the arm the direct
+/// dispatch_parallel test bypasses).
+#[tokio::test]
+async fn run_routes_top_level_parallel_goals_through_the_fan_out() {
+    let pack = make_pack(
+        DispatchDecision {
+            action: DispatchAction::ExecuteDirect {
+                seed_calls: Vec::new(),
+                relevant_mcps: Vec::new(),
+                delivery: Delivery::Summarize,
+            },
+            confidence: 1.0,
+            rationale: "unused".into(),
+        },
+        vec![],
+        CapabilitySet::empty(),
+    );
+    let mut hub = GoalSessionHub::new(GoalSessionStore::new());
+    hub.register_pack(Arc::new(pack));
+    let hub = Arc::new(hub);
+    let id = hub
+        .start_with_grant(
+            GoalSpec {
+                id: None,
+                description: "fan out".into(),
+                success_criteria: vec![],
+                domain: DomainHint::from(DISPATCH_DOMAIN),
+                max_turns: 0,
+                max_idle_secs: None,
+                origin: None,
+                profile: None,
+                payload: serde_json::json!({
+                    "parallel_goals": [
+                        { "goal": "a", "label": "A" },
+                        { "goal": "b", "label": "B" },
+                    ],
+                }),
+            },
+            SessionGrant::default(),
+        )
+        .await
+        .expect("start");
+    let snap = wait_terminal(&hub, &id).await;
+    assert_eq!(
+        snap.session.status,
+        SessionStatus::Succeeded,
+        "the fan-out ran; workers report Failed outcomes but the dispatch itself succeeds: {:?}",
+        snap.session.status
+    );
+    let summary = snap
+        .session
+        .result
+        .as_ref()
+        .expect("a terminal fan-out records its result")
+        .summary
+        .clone();
+    assert!(
+        summary.contains("[A]") && summary.contains("[B]"),
+        "summary must name both sub-goal outcomes: {summary}"
+    );
+    assert!(
+        summary.contains("partially succeeded"),
+        "failed workers still produce a partial report, not a crash: {summary}"
+    );
+}
