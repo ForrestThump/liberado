@@ -45,11 +45,20 @@ fn parse_command(
 }
 
 fn execute(command: CiCommand) -> Result<(), Box<dyn std::error::Error>> {
+    // Deliberately tiered: every tier stays under the complexity ceiling even though none of
+    // these arms is unit-testable without running the real tool behind it (`parse_command`
+    // above carries the testable half of this dispatch).
     match command {
         CiCommand::Local => with_log(local_run),
         CiCommand::Check => with_log(check),
         CiCommand::Crap => with_log(crap_check),
         CiCommand::Ratchet => with_log(crap_ratchet),
+        command => execute_health(command),
+    }
+}
+
+fn execute_health(command: CiCommand) -> Result<(), Box<dyn std::error::Error>> {
+    match command {
         CiCommand::Modules => crate::module_health_cmd::check(&repository_root()?),
         CiCommand::ModulesRatchet => crate::module_health_cmd::ratchet(&repository_root()?),
         command => execute_readiness(command),

@@ -481,4 +481,20 @@ mod tests {
         );
         branch_create_in(&repo, "feature-x").expect("branch create without host identity");
     }
+
+    /// Every IndexWorktree summary maps to its porcelain code; a stat-only update (None) maps to
+    /// nothing rather than a fake entry.
+    #[test]
+    fn index_worktree_codes_match_the_porcelain_table() {
+        use gix::status::index_worktree::iter::Summary as S;
+        assert_eq!(index_worktree_code(Some(S::Added)), Some("??"));
+        assert_eq!(index_worktree_code(Some(S::Modified)), Some(" M"));
+        assert_eq!(index_worktree_code(Some(S::Removed)), Some(" D"));
+        assert_eq!(index_worktree_code(Some(S::TypeChange)), Some(" T"));
+        assert_eq!(index_worktree_code(Some(S::Renamed)), Some(" R"));
+        assert_eq!(index_worktree_code(Some(S::Copied)), Some(" C"));
+        assert_eq!(index_worktree_code(Some(S::IntentToAdd)), Some(" A"));
+        assert_eq!(index_worktree_code(Some(S::Conflict)), Some("UU"));
+        assert_eq!(index_worktree_code(None), None);
+    }
 }
