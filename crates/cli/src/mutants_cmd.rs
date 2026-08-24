@@ -9,7 +9,7 @@ use liberado_common::process::std_command;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 pub const LEDGER_FILE: &str = "mutants-ledger.json";
 const OUTCOMES_FILE: &str = "mutants.out/outcomes.json";
@@ -326,21 +326,17 @@ fn validate_outcomes(counts: &Counts, total_mutants: u32) -> Option<RecordOutcom
 
 fn save_ledger(root: &Path, ledger: &Ledger) -> Result<(), Box<dyn std::error::Error>> {
     let bytes = serde_json::to_string_pretty(ledger)? + "\n";
-    write_atomic(root, root.join(LEDGER_FILE), &bytes);
+    write_atomic(root, &bytes);
     Ok(())
 }
 
 // Atomic temp+rename with a pid-unique temp name: concurrent agents append to
 // one ledger file, and a truncating in-place write loses appends or corrupts
 // the JSON mid-flight. A failed rename may leave an inert `.tmp` beside it.
-fn write_atomic(root: &Path, path: PathBuf, bytes: &str) {
-    let tmp = root.join(format!(
-        "{}.{}.tmp",
-        path.file_name().unwrap_or_default().to_string_lossy(),
-        std::process::id()
-    ));
+fn write_atomic(root: &Path, bytes: &str) {
+    let tmp = root.join(format!("{LEDGER_FILE}.{}.tmp", std::process::id()));
     fs::write(&tmp, bytes).expect("ledger temp write");
-    fs::rename(&tmp, path).expect("ledger atomic rename");
+    fs::rename(&tmp, root.join(LEDGER_FILE)).expect("ledger atomic rename");
 }
 
 fn resolve_crate(root: &Path, crate_dir: &str) -> Result<CrateInfo, Box<dyn std::error::Error>> {
@@ -468,17 +464,14 @@ fn build_health(
     })
 }
 
-/// Rows health/next may read: package-scope campaigns from runs that actually
-/// tested something. Zero-viable rows are crashed or partial runs (recorded
-/// before the recorder's refusal existed); skipping them keeps a crate's real
-/// campaign visible instead of being shadowed by zeros.
-fn is_health_row(campaign: &Campaign) -> bool {
-    campaign.scope == "package" && campaign.counts.viable > 0
-}
-
 fn package_campaigns_by_package(ledger: &Ledger) -> BTreeMap<String, Vec<&Campaign>> {
     let mut grouped: BTreeMap<String, Vec<&Campaign>> = BTreeMap::new();
-    for campaign in ledger.campaigns.iter().filter(|c| is_health_row(c)) {
+    // Zero-viable rows (crashed/partial runs recorded before the recorder's
+    // refusal existed) are skipped so they cannot shadow the real campaign.
+    for campaign in &ledger.campaigns {
+        if campaign.scope != "package" || campaign.counts.viable == 0 {
+            continue;
+        }
         grouped
             .entry(campaign.package.clone())
             .or_default()
