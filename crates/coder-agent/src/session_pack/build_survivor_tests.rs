@@ -645,3 +645,44 @@ async fn explore_mode_runs_in_place_even_on_a_git_repo() {
     assert_eq!(ws, dir.path(), "exploration must not spin up worktrees");
     assert!(matches!(sandbox, SandboxSpec::HostLocal));
 }
+
+/// An explicit `force_host_local` payload keeps even a git-repo build mode in
+/// place instead of a durable worktree.
+#[tokio::test]
+async fn forced_host_local_runs_in_place() {
+    let dir = tempfile::tempdir().unwrap();
+    let out = liberado_common::process::std_command("git")
+        .args(["init", "-q"])
+        .arg(dir.path())
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let payload =
+        CodingGoalPayload::parse(&serde_json::json!({ "force_host_local": true })).unwrap();
+    let (events, _rx) = events_channel().await;
+    let (ws, sandbox) = select_attempt_workspace(
+        "s1",
+        &payload,
+        &policies(CodingMode::Normal),
+        dir.path(),
+        &events,
+    )
+    .await
+    .expect("workspace selected");
+    assert_eq!(ws, dir.path(), "the operator's host-local override wins");
+    assert!(matches!(sandbox, SandboxSpec::HostLocal));
+}
+
+#[test]
+fn force_host_local_defaults_to_false_and_reads_true() {
+    assert!(
+        !CodingGoalPayload::parse(&serde_json::json!({}))
+            .unwrap()
+            .force_host_local()
+    );
+    assert!(
+        CodingGoalPayload::parse(&serde_json::json!({ "force_host_local": true }))
+            .unwrap()
+            .force_host_local()
+    );
+}
