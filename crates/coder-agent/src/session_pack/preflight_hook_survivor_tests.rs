@@ -165,7 +165,7 @@ async fn drain(events: &mut tokio::sync::mpsc::Receiver<SessionEvent>) -> Vec<Se
 /// detail for steps that passed.
 #[tokio::test]
 async fn a_green_run_sends_progress_then_verdict_only() {
-    let spec = PreflightSpec::new("probe", vec![PreflightStep::new("always-green", "true")]);
+    let spec = PreflightSpec::new("probe", vec![PreflightStep::new("always-green", "exit 0")]);
     let (tx, mut rx) = tokio::sync::mpsc::channel(16);
     let dir = tempfile::tempdir().unwrap();
     let report = run_ship_preflight("s", dir.path(), &spec, &tx)
@@ -188,8 +188,8 @@ async fn failure_detail_names_only_failing_steps() {
     let spec = PreflightSpec::new(
         "probe",
         vec![
-            PreflightStep::new("passes", "true"),
-            PreflightStep::new("breaks", "false"),
+            PreflightStep::new("passes", "exit 0"),
+            PreflightStep::new("breaks", "exit 1"),
         ],
     );
     let (tx, mut rx) = tokio::sync::mpsc::channel(16);
@@ -215,7 +215,7 @@ async fn failures_that_already_exist_at_base_do_not_block() {
     let data = tempfile::tempdir().unwrap();
     // SAFETY-free variant: scoped via guard below instead.
     let (dir, _base) = repo_with_base_and_head().await;
-    let spec = PreflightSpec::new("probe", vec![PreflightStep::new("doomed", "false")]);
+    let spec = PreflightSpec::new("probe", vec![PreflightStep::new("doomed", "exit 1")]);
     let (tx, mut rx) = tokio::sync::mpsc::channel(16);
 
     let _restore = RestoreDataDir::set_to(data.path());
