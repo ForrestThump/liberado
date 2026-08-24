@@ -38,6 +38,7 @@
 //!   liberado coder compare await     wait locally for one comparison job
 //!   liberado coder summarize <path>  summarize a cross-harness compare run
 //!   liberado coder smoke              validate the coder runner process boundary
+//!   liberado coder import <file>     foreign (Kilo / OpenHands) → `.messages.json`
 //!   liberado mutants run <crate-dir>   run cargo-mutants and append to mutants-ledger.json
 //!   liberado mutants record [crate-dir] ingest mutants.out/outcomes.json into the ledger
 //!   liberado mutants report [--all]    print never/historical/drift campaign health

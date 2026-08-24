@@ -21,6 +21,14 @@ as a declarative protocol table. A waiver names one file, one metric, a reason,
 a review date, and a hard ceiling. It does not disable the other metrics.
 Stale, duplicate, and unnecessary waivers fail the check.
 
+Not every waiver request is accepted. Before proposing one: move test modules
+into `#[path]` sibling files first (test growth is never waiver material); name
+what the file *is* and why splitting it would hide something; and put a real
+ceiling and review date on it. Reasons that read as laziness — "tests are
+long", "splitting is churn", "it grew" — get the contribution pushed back for
+rework. The acceptance bar lives as comments beside the `[[waiver]]` example in
+`module-health.toml`.
+
 After an accepted improvement, run `just module-health-ratchet` and commit the
 lower baseline. GitHub runs only the read-only comparison.
 
