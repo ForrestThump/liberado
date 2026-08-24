@@ -117,12 +117,24 @@ async fn run_selected_layer(
     config: TunerConfig,
     out_dir: &Path,
 ) -> Result<String, Box<dyn std::error::Error>> {
-    Ok(match config.layer {
-        Layer::Dispatcher => save_dispatcher_result(run_tuner(config).await, out_dir).await?,
-        Layer::Executor => save_tool_loop_result(run_executor_tuner(config).await, out_dir).await?,
-        Layer::Subagent => save_tool_loop_result(run_subagent_tuner(config).await, out_dir).await?,
-        Layer::Coder => save_coder_result(run_coder_tuner(config).await, out_dir).await?,
-    })
+    match config.layer {
+        Layer::Coder => save_coder_result(run_coder_tuner(config).await, out_dir).await,
+        layer => run_tool_loop_layer(layer, config, out_dir).await,
+    }
+}
+
+/// The dispatcher, executor, and subagent layers all end in an `ExecutorTunerResult`-shaped
+/// save; only the search loop that produces it differs (see the module docs).
+async fn run_tool_loop_layer(
+    layer: Layer,
+    config: TunerConfig,
+    out_dir: &Path,
+) -> Result<String, Box<dyn std::error::Error>> {
+    match layer {
+        Layer::Dispatcher => save_dispatcher_result(run_tuner(config).await, out_dir).await,
+        Layer::Executor => save_tool_loop_result(run_executor_tuner(config).await, out_dir).await,
+        _ => save_tool_loop_result(run_subagent_tuner(config).await, out_dir).await,
+    }
 }
 
 #[tokio::main]

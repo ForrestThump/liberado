@@ -73,23 +73,32 @@ pub async fn run(resume: Option<String>) -> Result<(), Box<dyn std::error::Error
         print!("> ");
         std::io::stdout().flush()?;
 
-        let line = match lines.next_line().await? {
-            Some(line) => line,
-            None => break, // EOF (Ctrl-D)
+        let Some(line) = lines.next_line().await? else {
+            break; // EOF (Ctrl-D)
         };
         match classify_line(&line) {
-            LineAction::Skip => continue,
+            LineAction::Skip => {}
             LineAction::Quit => break,
             LineAction::Send(message) => {
-                if let Err(err) = turn(&client, &endpoint, &base, &mut session, message).await {
-                    // A turn-level error (not a connection error, which `turn` reports itself)
-                    // — surface it and keep the REPL alive.
-                    eprintln!("\n[error] {err}");
-                }
+                send_turn(&client, &endpoint, &base, &mut session, message).await
             }
         }
     }
     Ok(())
+}
+
+/// Send one message; a turn-level error (not a connection error, which `turn` reports itself)
+/// is surfaced and the REPL stays alive.
+async fn send_turn(
+    client: &reqwest::Client,
+    endpoint: &str,
+    base: &str,
+    session: &mut Option<String>,
+    message: &str,
+) {
+    if let Err(err) = turn(client, endpoint, base, session, message).await {
+        eprintln!("\n[error] {err}");
+    }
 }
 
 /// One REPL turn: POST the message (with the current session, if any), stream the SSE response, and

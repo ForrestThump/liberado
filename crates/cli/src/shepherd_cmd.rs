@@ -341,27 +341,44 @@ fn drive(
     if let Some(path) = &parsed.seed {
         seed(&cfg, path, dry)?;
     }
-    loop {
-        let open_prs = prs(&cfg)?;
-        for mut pr in open_prs.clone() {
-            if let Err(e) = tick(&cfg, &mut pr, dry) {
-                log(
-                    &cfg,
-                    "tick_error",
-                    json!({"pr":pr.number,"detail":e.to_string()}),
-                );
-            }
+    watch_loop(&cfg, once, watch, dry)
+}
+
+/// One pass over the open PRs: tick each, then count how many are still working.
+fn tick_all(cfg: &Config, dry: bool) -> Result<(usize, usize), Box<dyn std::error::Error>> {
+    let open_prs = prs(cfg)?;
+    for mut pr in open_prs.clone() {
+        if let Err(e) = tick(cfg, &mut pr, dry) {
+            log(
+                cfg,
+                "tick_error",
+                json!({"pr":pr.number,"detail":e.to_string()}),
+            );
         }
-        let active = prs(&cfg)?.into_iter().filter(|p| !p.terminal()).count();
+    }
+    let working = prs(cfg)?.into_iter().filter(|p| !p.terminal()).count();
+    Ok((open_prs.len(), working))
+}
+
+/// The pass cadence: `--once` and plain `--seed` runs stop after one pass; `--watch` keeps
+/// polling until nothing is left working.
+fn watch_loop(
+    cfg: &Config,
+    once: bool,
+    watch: bool,
+    dry: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    loop {
+        let (open, working) = tick_all(cfg, dry)?;
         if once || !watch {
             log(
-                &cfg,
+                cfg,
                 "pass_complete",
-                json!({"open_prs":open_prs.len(),"still_working":active}),
+                json!({"open_prs":open,"still_working":working}),
             );
             return Ok(());
         }
-        if active == 0 {
+        if working == 0 {
             return Ok(());
         }
         thread::sleep(Duration::from_secs(cfg.poll));
@@ -931,33 +948,54 @@ fn handle_new_failures(
         active_goals(cfg) < cfg.max_concurrent
     });
     match action {
-        FailureAction::Rerun => {
-            if !dry && let Some(id) = run.as_ref().and_then(|r| r["databaseId"].as_u64()) {
-                let id = id.to_string();
-                let _ = gh(cfg, &["run", "rerun", &id, "--failed"], false);
-                label(cfg, pr, RERUN.into())
-            }
-        }
-        FailureAction::Blocked => {
-            if !dry {
-                label(cfg, pr, BLOCKED.into())
-            }
-        }
+        FailureAction::Rerun => rerun_failed_run(cfg, pr, dry, run),
+        FailureAction::Blocked => block_pr(cfg, pr, dry),
         // Waiting for a budget slot ends this PR's tick without side effects.
-        FailureAction::WaitForSlot => {}
-        FailureAction::Kickback => {
-            if !dry {
-                let prompt = kickback_prompt(pr, new, old);
-                if let Some(id) = start_goal(cfg, prompt, 0) {
-                    label(cfg, pr, format!("shepherd:kickback-{}", kicks + 1));
-                    remove_label(cfg, pr, RERUN);
-                    log(
-                        cfg,
-                        "kickback_started",
-                        json!({"pr":pr.number,"session":id}),
-                    )
-                }
-            }
+        FailureAction::WaitForSlot => Ok(()),
+        FailureAction::Kickback => kickback(cfg, pr, dry, new, old, kicks),
+    }
+}
+
+/// First sighting of fresh failures: rerun CI once before doing anything else.
+fn rerun_failed_run(
+    cfg: &Config,
+    pr: &mut Pr,
+    dry: bool,
+    run: &Option<Value>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if !dry && let Some(id) = run.as_ref().and_then(|r| r["databaseId"].as_u64()) {
+        let id = id.to_string();
+        let _ = gh(cfg, &["run", "rerun", &id, "--failed"], false);
+        label(cfg, pr, RERUN.into())
+    }
+    Ok(())
+}
+
+fn block_pr(cfg: &Config, pr: &mut Pr, dry: bool) -> Result<(), Box<dyn std::error::Error>> {
+    if !dry {
+        label(cfg, pr, BLOCKED.into())
+    }
+    Ok(())
+}
+
+fn kickback(
+    cfg: &Config,
+    pr: &mut Pr,
+    dry: bool,
+    new: &BTreeSet<String>,
+    old: &BTreeSet<String>,
+    kicks: usize,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if !dry {
+        let prompt = kickback_prompt(pr, new, old);
+        if let Some(id) = start_goal(cfg, prompt, 0) {
+            label(cfg, pr, format!("shepherd:kickback-{}", kicks + 1));
+            remove_label(cfg, pr, RERUN);
+            log(
+                cfg,
+                "kickback_started",
+                json!({"pr":pr.number,"session":id}),
+            )
         }
     }
     Ok(())
@@ -976,24 +1014,37 @@ fn handle_clean(
         active_goals(cfg) < cfg.max_concurrent
     });
     match action {
-        CleanAction::Ready => {
-            if !dry {
-                label(cfg, pr, READY.into())
-            }
-        }
-        CleanAction::WaitForSlot => {}
-        CleanAction::Review { round } => {
-            if !dry {
-                let prompt = cold_review_prompt(cfg, pr, round, old);
-                if let Some(id) = start_goal(cfg, prompt, cfg.cold_turns) {
-                    let path = pending(cfg, pr.number);
-                    fs::create_dir_all(path.parent().unwrap())?;
-                    fs::write(
-                        path,
-                        serde_json::to_vec(&json!({"session_id":id,"round":round}))?,
-                    )?
-                }
-            }
+        CleanAction::Ready => mark_ready(cfg, pr, dry),
+        // Waiting for a budget slot ends this PR's tick without side effects.
+        CleanAction::WaitForSlot => Ok(()),
+        CleanAction::Review { round } => start_cold_review(cfg, pr, dry, old, round),
+    }
+}
+
+fn mark_ready(cfg: &Config, pr: &mut Pr, dry: bool) -> Result<(), Box<dyn std::error::Error>> {
+    if !dry {
+        label(cfg, pr, READY.into())
+    }
+    Ok(())
+}
+
+/// Spend a budget slot on one cold review and record the pending round so `settle` can find it.
+fn start_cold_review(
+    cfg: &Config,
+    pr: &Pr,
+    dry: bool,
+    old: &BTreeSet<String>,
+    round: usize,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if !dry {
+        let prompt = cold_review_prompt(cfg, pr, round, old);
+        if let Some(id) = start_goal(cfg, prompt, cfg.cold_turns) {
+            let path = pending(cfg, pr.number);
+            fs::create_dir_all(path.parent().unwrap())?;
+            fs::write(
+                path,
+                serde_json::to_vec(&json!({"session_id":id,"round":round}))?,
+            )?
         }
     }
     Ok(())
