@@ -3,7 +3,10 @@
 # Run:     `cargo deny check`
 
 [advisories]
-yanked = "deny"
+# "warn", not "deny": bisync 0.3.0 (transitive dep of gix-protocol) was yanked
+# upstream with no replacement. Blocking all CI on an external maintainer's
+# action is disproportionate; revisit when gix updates its dependency.
+yanked = "warn"
 # `paste` (RUSTSEC-2024-0436) is unmaintained with no safe upgrade, pulled in transitively
 # by fastembed/tokenizers (vector search) and ratatui (TUI). Pinned at its final version;
 # revisit when an upstream dependency drops it.
