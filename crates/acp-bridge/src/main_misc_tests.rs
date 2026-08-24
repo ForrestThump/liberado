@@ -786,3 +786,34 @@ fn the_reader_stops_on_either_a_dead_receiver_or_a_dead_wire() {
     assert!(reader_should_stop(false, true), "EOF/error ends it");
     assert!(reader_should_stop(true, true));
 }
+
+/// A notification travelling the real dispatch path must neither get a response
+/// nor be mistaken for a request. The is_notification `||`->`&&` flip turns this
+/// very message into an unknown-method request and answers it.
+#[tokio::test]
+async fn a_notification_through_dispatch_gets_no_response_and_still_cancels() {
+    let bridge = test_bridge();
+    let sink = Arc::new(CaptureSink::new_test());
+    let wire: Arc<dyn WireSink> = Arc::clone(&sink) as Arc<dyn WireSink>;
+    let (in_flight, liveness) = session_with_pending_prompt(&bridge, "s1").await;
+    let mut in_flight = Some(in_flight);
+
+    let msg: JsonRpcIncoming = serde_json::from_str(
+        r#"{"jsonrpc":"2.0","method":"session/cancel","params":{"sessionId":"s1"}}"#,
+    )
+    .unwrap();
+    dispatch_stdin_message(&bridge, &wire, msg, &mut in_flight)
+        .await
+        .expect("routing a notification must not fail");
+
+    tokio::task::yield_now().await;
+    assert!(
+        liveness.is_closed(),
+        "the notification-shaped cancel must still cancel"
+    );
+    let captured = sink.lines.lock().unwrap();
+    assert!(
+        captured.is_empty(),
+        "notifications expect no response at all: {captured:?}"
+    );
+}

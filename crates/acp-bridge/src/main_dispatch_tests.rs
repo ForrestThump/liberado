@@ -274,12 +274,15 @@ async fn cancel_notification_aborts_only_the_matching_in_flight_prompt() {
         &in_flight,
     )
     .await;
+    tokio::task::yield_now().await;
     assert!(
         !liveness.is_closed(),
         "non-cancel notifications are ignored"
     );
 
-    // Cancel for a DIFFERENT session does not abort this task.
+    // Cancel for a DIFFERENT session must leave this prompt running. The yield
+    // gives a wrongly-armed abort time to land, so this pair of asserts kills
+    // the ==->!= flip deterministically instead of racing it.
     dispatch_notification(
         &bridge,
         "session/cancel",
@@ -287,6 +290,7 @@ async fn cancel_notification_aborts_only_the_matching_in_flight_prompt() {
         &in_flight,
     )
     .await;
+    tokio::task::yield_now().await;
     assert!(
         !liveness.is_closed(),
         "another session's cancel must not stop this prompt"
@@ -301,7 +305,6 @@ async fn cancel_notification_aborts_only_the_matching_in_flight_prompt() {
         &in_flight,
     )
     .await;
-    // abort() drops the task on its next poll; one yield lets it land.
     tokio::task::yield_now().await;
     assert!(
         liveness.is_closed(),

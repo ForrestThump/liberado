@@ -145,8 +145,14 @@ async fn prepare_workspace_non_git_uses_cwd() {
 /// must also be dropped. `&&` would keep half-defined steps.
 #[test]
 fn step_from_json_requires_both_name_and_run() {
-    assert!(step_from_json(&json!({ "name": "only-name" })).is_none());
-    assert!(step_from_json(&json!({ "run": "exit 0" })).is_none());
+    assert!(
+        step_from_json(&json!({ "name": "", "run": "exit 0" })).is_none(),
+        "empty name must be rejected by the guard itself"
+    );
+    assert!(
+        step_from_json(&json!({ "name": "n", "run": "" })).is_none(),
+        "empty run must be rejected by the guard itself"
+    );
     let full = step_from_json(&json!({ "name": "n", "run": "exit 0" })).expect("complete");
     assert_eq!(full.name, "n");
 }
