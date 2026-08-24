@@ -1,0 +1,76 @@
+[
+  {
+    "name": "mixed text and embedded text resource",
+    "params": {
+      "prompt": [
+        { "type": "text", "text": "first" },
+        {
+          "type": "resource",
+          "resource": {
+            "uri": "file:///notes/plan.md",
+            "mimeType": "text/markdown",
+            "text": "embedded body"
+          }
+        },
+        { "type": "text", "text": "last" }
+      ]
+    },
+    "expected": "first\n[resource: file:///notes/plan.md (text/markdown)]\nembedded body\nlast"
+  },
+  {
+    "name": "top-level resource link",
+    "params": {
+      "prompt": [
+        {
+          "type": "resource_link",
+          "uri": "file:///src/lib.rs",
+          "name": "lib.rs",
+          "mimeType": "text/x-rust"
+        }
+      ]
+    },
+    "expected": "[resource: file:///src/lib.rs | lib.rs (text/x-rust)]"
+  },
+  {
+    "name": "embedded binary blob",
+    "params": {
+      "prompt": [
+        {
+          "type": "resource",
+          "resource": {
+            "uri": "file:///data.bin",
+            "mimeType": "application/octet-stream",
+            "blob": "SGVsbG8="
+          }
+        }
+      ]
+    },
+    "expected": "[resource: file:///data.bin (application/octet-stream)]"
+  },
+  {
+    "name": "empty embedded text remains a source marker",
+    "params": {
+      "prompt": [
+        {
+          "type": "resource",
+          "resource": {
+            "uri": "file:///empty.txt",
+            "mimeType": "text/plain",
+            "text": ""
+          }
+        }
+      ]
+    },
+    "expected": "[resource: file:///empty.txt (text/plain)]"
+  },
+  {
+    "name": "unsupported top-level media",
+    "params": {
+      "prompt": [
+        { "type": "image", "data": "aW1hZ2U=", "mimeType": "image/png" },
+        { "type": "audio", "data": "YXVkaW8=", "mimeType": "audio/mp3" }
+      ]
+    },
+    "error": "prompt contained no text content"
+  }
+]
