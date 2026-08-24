@@ -186,7 +186,7 @@ fn truncate(text: &str, max: usize) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{dispatch, truncate};
+    use super::{dispatch, truncate, turn};
     use chat_client_contract::native::SseEvent;
 
     fn ev(event: &str, data: &str) -> SseEvent {
@@ -314,5 +314,96 @@ mod tests {
     fn unknown_event_types_are_ignored() {
         let mut session = None;
         assert!(!dispatch(&ev("something_future", "whatever"), &mut session));
+    }
+
+    // ── turn ────────────────────────────────────────────────────────────
+
+    /// A 200 response streams its events: the `session` id folds into the REPL state and the
+    /// terminator ends the turn. If the status guard ever inverts, a success takes the error
+    /// branch and every event is dropped — this test fails on that.
+    #[tokio::test]
+    async fn turn_streams_a_success_response_and_folds_the_session() {
+        use tokio::io::AsyncWriteExt as _;
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut sock, _) = listener.accept().await.unwrap();
+            let body = concat!(
+                "event: session\r\ndata: 01HZTURN\r\n\r\n",
+                "event: session_finished\r\n",
+                "data: {\"status\":\"done\",\"summary\":\"\"}\r\n\r\n"
+            );
+            sock.write_all(
+                format!(
+                    "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nconnection: close\r\ncontent-length: {}\r\n\r\n{body}",
+                    body.len()
+                )
+                .as_bytes(),
+            )
+            .await
+            .unwrap();
+        });
+
+        let client = reqwest::Client::new();
+        let endpoint = format!("http://{addr}/chat");
+        let mut session: Option<String> = None;
+        turn(
+            &client,
+            &endpoint,
+            &format!("http://{addr}"),
+            &mut session,
+            "hi",
+        )
+        .await
+        .expect("a successful turn must not error");
+        assert_eq!(
+            session.as_deref(),
+            Some("01HZTURN"),
+            "the streamed session id must fold into REPL state"
+        );
+        server.await.unwrap();
+    }
+
+    /// A non-success status reports and swallows (the REPL survives), and no session id leaks
+    /// into the state from a failed turn.
+    #[tokio::test]
+    async fn turn_reports_an_error_status_without_touching_the_session() {
+        use tokio::io::AsyncWriteExt as _;
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut sock, _) = listener.accept().await.unwrap();
+            let body = "{\"error\":\"nope\"}";
+            sock.write_all(
+                format!(
+                    "HTTP/1.1 500 Internal Server Error\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                    body.len()
+                )
+                .as_bytes(),
+            )
+            .await
+            .unwrap();
+        });
+
+        let client = reqwest::Client::new();
+        let endpoint = format!("http://{addr}/chat");
+        let mut session = Some("01HZKEEP".to_string());
+        turn(
+            &client,
+            &endpoint,
+            &format!("http://{addr}"),
+            &mut session,
+            "hi",
+        )
+        .await
+        .expect("an error status is reported, not propagated");
+        assert_eq!(
+            session.as_deref(),
+            Some("01HZKEEP"),
+            "a failed turn must not change the session"
+        );
+        server.await.unwrap();
     }
 }

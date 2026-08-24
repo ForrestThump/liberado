@@ -693,9 +693,10 @@ mod tests {
         CRAP_COMPARE_SUMMARY, CRAP_EMPTY_BASELINE, CRAP_HOST_CEILING_ONLY, CRAP_REGRESSION_GH,
         CRAP_REGRESSION_HINT, CiLog, EXTRACT_MAX_LINES, LCOV_FILE, LLVM_COV_ARGS, StageOutcome,
         USAGE, announce_compare, baseline_has_entries, compare_args, compare_banners,
-        crap_failure_hint, emit_crap_failure, exe_lives_in_cargo_target, extract_ci_failures, git,
-        porcelain_path, relativize_json_file, relativize_lcov, repo_relative_source_path,
-        repository_root, run_cmd, stage_ratcheted_baseline, uses_per_function_ratchet,
+        compare_to_baseline, crap_failure_hint, emit_crap_failure, exe_lives_in_cargo_target,
+        extract_ci_failures, git, porcelain_path, relativize_json_file, relativize_lcov,
+        repo_relative_source_path, repository_root, run_cmd, stage_ratcheted_baseline,
+        uses_per_function_ratchet,
     };
     use liberado_common::process::std_command;
     use std::fs;
@@ -765,6 +766,42 @@ mod tests {
         assert!(
             logged.contains("definitely-not-a-real-program-xyz"),
             "{logged}"
+        );
+    }
+
+    /// `announce_compare` writes its banners into the ci log and derives the ratchet flag from
+    /// the baseline state. With no baseline file there is nothing to regress against, so the
+    /// per-function ratchet stays off.
+    #[test]
+    fn announce_compare_logs_banners_without_a_baseline() {
+        let temp = tempdir().unwrap();
+        let log = CiLog::create(temp.path()).unwrap();
+        let fail_regression = announce_compare(&log).unwrap();
+        assert!(
+            !fail_regression,
+            "no baseline file means no per-function regression check"
+        );
+        let logged = fs::read_to_string(&log.path).unwrap();
+        assert!(
+            logged.contains(CRAP_EMPTY_BASELINE),
+            "empty-baseline banner must reach the ci log, got:\n{logged}"
+        );
+        assert!(
+            logged.contains(CRAP_COMPARE_SUMMARY),
+            "summary banner must reach the ci log, got:\n{logged}"
+        );
+    }
+
+    /// A baseline compare of an empty workspace cannot succeed: either the cargo-crap probe
+    /// fails (tool absent) or the comparer has no usable coverage input. A `compare_to_baseline`
+    /// body replaced by `Ok(())` (the surviving mutant) reports success from thin air.
+    #[test]
+    fn compare_to_baseline_never_succeeds_on_an_empty_workspace() {
+        let temp = tempdir().unwrap();
+        let log = CiLog::create(temp.path()).unwrap();
+        assert!(
+            compare_to_baseline(&log).is_err(),
+            "comparing an empty workspace must be an error"
         );
     }
 

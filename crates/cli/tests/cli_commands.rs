@@ -1217,3 +1217,71 @@ fn mutants_record_ingests_outcomes_json() {
     assert_eq!(campaigns[0]["counts"]["survived"], 1);
     assert!(campaigns[0]["commit"].as_str().is_some());
 }
+
+/// `docs crate-map --write` must regenerate the map file. A missing map makes the check arm
+/// fail, so a created file is proof the `--write` guard actually matched — the surviving
+/// mutant rewrote the guard to `false`, turning every write into a doomed check.
+#[test]
+fn docs_crate_map_write_flag_generates_the_map() {
+    let temp = tempdir().unwrap();
+    let root = temp.path();
+    fs::create_dir(root.join("crates")).expect("crates directory");
+    fs::create_dir_all(root.join("docs/spec/reference")).expect("map directory");
+    fs::write(root.join("Cargo.toml"), "[workspace]\nmembers = []\n").expect("workspace manifest");
+
+    let output = run_cli(root, &["docs", "crate-map", "--write"]);
+    assert!(
+        output.status.success(),
+        "crate-map --write failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        root.join("docs/spec/reference/crate-map.md").is_file(),
+        "--write must generate the crate map file"
+    );
+}
+
+/// `mutants run <dir>` reaches the crate resolver: an unknown crate name fails with the
+/// resolver's error, not the argument-usage text a dropped dispatch arm would print.
+#[test]
+fn mutants_run_reaches_the_crate_resolver() {
+    let temp = tempdir().unwrap();
+    let root = temp.path();
+    fs::create_dir(root.join("crates")).expect("crates directory");
+    fs::write(root.join("Cargo.toml"), "[workspace]\nmembers = []\n").expect("workspace manifest");
+
+    let stderr = run_usage(root, &["mutants", "run", "not-a-crate"]);
+    assert!(
+        stderr.contains("unknown crate directory"),
+        "expected the resolver error, got: {stderr}"
+    );
+    assert!(
+        !stderr.contains("usage: liberado mutants run"),
+        "the run arm must dispatch, not fall through to usage: {stderr}"
+    );
+}
+
+/// `serve` with an unloadable config is a hard error (Decision 14 fail-fast): the daemon
+/// never starts and the process exits non-zero. A `run_serve` body replaced by `Ok(())`
+/// would exit 0 without reading any config.
+#[test]
+fn serve_with_an_unloadable_config_fails() {
+    let temp = tempdir().unwrap();
+    let config_dir = temp.path().join("config");
+    fs::create_dir(&config_dir).expect("config directory");
+    fs::write(config_dir.join("topology.toml"), "not=[valid toml").expect("garbage topology");
+
+    let output = std_command(env!("CARGO_BIN_EXE_liberado"))
+        .env("LIBERADO_CONFIG_DIR", &config_dir)
+        .args(["serve", "/nonexistent-vault-for-mutant-test"])
+        .current_dir(temp.path())
+        .output()
+        .expect("liberado CLI should start");
+
+    assert!(
+        !output.status.success(),
+        "serve with a garbage config must fail, stdout: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+}
