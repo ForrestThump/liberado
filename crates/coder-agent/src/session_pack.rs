@@ -27,6 +27,10 @@ pub(crate) mod preflight_hook;
 #[cfg(test)]
 mod tests;
 
+#[cfg(test)]
+#[path = "session_pack/run_tests.rs"]
+mod run_tests;
+
 use std::path::PathBuf;
 use std::sync::Arc;
 
