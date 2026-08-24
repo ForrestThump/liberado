@@ -538,66 +538,80 @@ fn git_shortstat(
 
 fn print_report(health: &HealthReport) {
     println!("=== Mutants campaign health ===\n");
+    print!("{}", never_campaigned_block(&health.never_campaigned));
+    print!("{}", historical_only_block(&health.historical_only));
+    print!("{}", most_drift_block(&health.most_drift));
+}
 
-    println!("Never campaigned ({}):", health.never_campaigned.len());
-    if health.never_campaigned.is_empty() {
-        println!("  (none)");
-    } else {
-        for entry in &health.never_campaigned {
-            println!("  {} [{}]", entry.dir, entry.role);
-        }
+fn never_campaigned_block(entries: &[CrateHealthEntry]) -> String {
+    let mut out = format!("Never campaigned ({}):\n", entries.len());
+    if entries.is_empty() {
+        out.push_str("  (none)\n");
+        return out;
     }
+    for entry in entries {
+        out.push_str(&format!("  {} [{}]\n", entry.dir, entry.role));
+    }
+    out
+}
 
-    println!(
-        "\nHistorical only — no commit SHA ({}):",
-        health.historical_only.len()
+fn historical_only_block(entries: &[CrateHealthEntry]) -> String {
+    let mut out = format!("\nHistorical only — no commit SHA ({}):\n", entries.len());
+    if entries.is_empty() {
+        out.push_str("  (none)\n");
+        return out;
+    }
+    for entry in entries {
+        let counts = entry
+            .latest_counts
+            .as_ref()
+            .map(format_counts)
+            .unwrap_or_default();
+        out.push_str(&format!("  {} [{}]{}\n", entry.dir, entry.role, counts));
+    }
+    out
+}
+
+fn most_drift_block(entries: &[CrateHealthEntry]) -> String {
+    let mut out = format!(
+        "\nMost drift since last SHA campaign ({}):\n",
+        entries.len()
     );
-    if health.historical_only.is_empty() {
-        println!("  (none)");
-    } else {
-        for entry in &health.historical_only {
-            let counts = entry
-                .latest_counts
-                .as_ref()
-                .map(format_counts)
-                .unwrap_or_default();
-            println!("  {} [{}]{}", entry.dir, entry.role, counts);
-        }
+    if entries.is_empty() {
+        out.push_str("  (none)\n");
+        return out;
     }
+    for entry in entries {
+        out.push_str(&format!("  {}\n", drift_line(entry)));
+    }
+    out
+}
 
-    println!(
-        "\nMost drift since last SHA campaign ({}):",
-        health.most_drift.len()
-    );
-    if health.most_drift.is_empty() {
-        println!("  (none)");
-    } else {
-        for entry in &health.most_drift {
-            if let Some(note) = &entry.drift_note {
-                println!("  {} [{}] — {}", entry.dir, entry.role, note);
-                continue;
-            }
-            let lines = entry
-                .lines_changed
-                .as_deref()
-                .filter(|value| !value.is_empty())
-                .unwrap_or("0 files changed");
-            let counts = entry
-                .latest_counts
-                .as_ref()
-                .map(format_counts)
-                .unwrap_or_default();
-            println!(
-                "  {} [{}] — {} commits since {} — {}{}",
-                entry.dir,
-                entry.role,
-                entry.commits_since.unwrap_or(0),
-                entry.latest_commit.as_deref().unwrap_or("?"),
-                lines,
-                counts
-            );
-        }
+/// One `most_drift` row. A drift note replaces the commit arithmetic when the recorded SHA is
+/// not in this history (rebase or squash since the campaign).
+fn drift_line(entry: &CrateHealthEntry) -> String {
+    if let Some(note) = &entry.drift_note {
+        return format!("{} [{}] — {}", entry.dir, entry.role, note);
     }
+    let lines = entry
+        .lines_changed
+        .as_deref()
+        .filter(|value| !value.is_empty())
+        .unwrap_or("0 files changed");
+    let counts = entry
+        .latest_counts
+        .as_ref()
+        .map(format_counts)
+        .unwrap_or_default();
+    format!(
+        "{} [{}] — {} commits since {} — {}{}",
+        entry.dir,
+        entry.role,
+        entry.commits_since.unwrap_or(0),
+        entry.latest_commit.as_deref().unwrap_or("?"),
+        lines,
+        counts
+    )
 }
 
 fn format_counts(counts: &Counts) -> String {
@@ -839,6 +853,87 @@ mod tests {
         assert_eq!(
             health.most_drift[0].drift_note.as_deref(),
             Some("commit not in this history")
+        );
+    }
+
+    #[test]
+    fn report_blocks_render_each_section() {
+        let entry = CrateHealthEntry {
+            dir: "alpha".into(),
+            role: "kernel".into(),
+            latest_commit: Some("abc123def456".into()),
+            commits_since: Some(3),
+            lines_changed: Some(" 2 files changed, 10 insertions(+)".into()),
+            drift_note: None,
+            latest_counts: Some(Counts {
+                viable: 4,
+                caught: 4,
+                survived: 0,
+                timeout: 0,
+                unviable: 0,
+            }),
+        };
+
+        assert_eq!(
+            never_campaigned_block(&[]),
+            "Never campaigned (0):\n  (none)\n"
+        );
+        assert_eq!(
+            never_campaigned_block(std::slice::from_ref(&entry)),
+            "Never campaigned (1):\n  alpha [kernel]\n"
+        );
+
+        assert_eq!(
+            historical_only_block(&[]),
+            "\nHistorical only — no commit SHA (0):\n  (none)\n"
+        );
+        assert_eq!(
+            historical_only_block(std::slice::from_ref(&entry)),
+            format!(
+                "\nHistorical only — no commit SHA (1):\n  alpha [kernel]{}\n",
+                format_counts(entry.latest_counts.as_ref().unwrap())
+            )
+        );
+
+        assert_eq!(
+            most_drift_block(&[]),
+            "\nMost drift since last SHA campaign (0):\n  (none)\n"
+        );
+        assert_eq!(
+            most_drift_block(std::slice::from_ref(&entry)),
+            format!(
+                "\nMost drift since last SHA campaign (1):\n  {}\n",
+                drift_line(&entry)
+            )
+        );
+    }
+
+    #[test]
+    fn drift_line_falls_back_when_git_data_is_missing() {
+        let mut entry = CrateHealthEntry {
+            dir: "alpha".into(),
+            role: "kernel".into(),
+            latest_commit: None,
+            commits_since: None,
+            lines_changed: None,
+            drift_note: None,
+            latest_counts: None,
+        };
+        assert_eq!(
+            drift_line(&entry),
+            "alpha [kernel] — 0 commits since ? — 0 files changed"
+        );
+        entry.drift_note = Some("commit not in this history".into());
+        assert_eq!(
+            drift_line(&entry),
+            "alpha [kernel] — commit not in this history"
+        );
+        entry.lines_changed = Some(String::new());
+        entry.drift_note = None;
+        assert_eq!(
+            drift_line(&entry),
+            "alpha [kernel] — 0 commits since ? — 0 files changed",
+            "a blank shortstat must fall back like an absent one"
         );
     }
 

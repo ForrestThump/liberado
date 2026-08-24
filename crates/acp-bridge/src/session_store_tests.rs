@@ -305,7 +305,8 @@ fn validate_id_rejects_each_separator_on_its_own() {
 
 #[test]
 fn load_reports_corrupt_records_as_errors_not_as_absent() {
-    let _guard = set_sessions_dir(&TempDir::new().unwrap()).0;
+    let dir = TempDir::new().unwrap();
+    let (_lock, _guard) = set_sessions_dir(&dir);
     let id = "corrupt";
     std::fs::write(sessions_dir().join(format!("{id}.json")), "{ not json }").unwrap();
     let err = load(id).expect_err("a corrupt record must surface, not read as absent");

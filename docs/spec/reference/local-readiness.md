@@ -36,7 +36,7 @@ and function and include an explicit ceiling, reason, and review date.
 ## Mutation-testing recipes
 
 The `just` file carries the mutation campaign entry points backing
-[`Skills/mutants-campaign.md`](../../Skills/mutants-campaign.md):
+[`Skills/mutants-campaign.md`](../../../Skills/mutants-campaign.md):
 
 - `just mutants <crate-dir>` — run cargo-mutants for one crate and append a ledger row to
   `mutants-ledger.json` (append-only; a row is recorded only when outcomes are complete and
