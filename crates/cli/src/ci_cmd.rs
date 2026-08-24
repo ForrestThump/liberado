@@ -239,6 +239,13 @@ pub(crate) fn crap_for_root(root: &Path) -> Result<(), Box<dyn std::error::Error
 fn crap_ratchet(log: &CiLog) -> Result<(), Box<dyn std::error::Error>> {
     generate_lcov(log)?;
     compare_to_baseline(log)?;
+    write_and_stage_ratcheted_baseline(log)
+}
+
+/// The baseline-write half of [`crap_ratchet`], split so each driver stays under the complexity
+/// ceiling. Linux-only by policy: GitHub's Ubuntu job is the host of truth for per-function
+/// scores, and coverage numbers are host-sensitive.
+fn write_and_stage_ratcheted_baseline(log: &CiLog) -> Result<(), Box<dyn std::error::Error>> {
     if !cfg!(target_os = "linux") {
         eprintln!(
             "[liberado ci] {BASELINE_FILE} write is Linux-only \

@@ -360,4 +360,66 @@ mod tests {
         assert_eq!(failures, 1);
         assert!(actions.is_empty());
     }
+    // ── handle_terminal_event ───────────────────────────────────────────
+
+    use crossterm::event::{KeyModifiers, MouseEvent, MouseEventKind};
+
+    #[tokio::test]
+    async fn ctrl_c_key_press_runs_the_quit_effect() {
+        let (runner, _action_tx, mut action_rx) = test_runner();
+        let key = crossterm::event::KeyEvent::new_with_kind(
+            crossterm::event::KeyCode::Char('c'),
+            KeyModifiers::CONTROL,
+            KeyEventKind::Press,
+        );
+        handle_terminal_event(&runner, CEvent::Key(key)).await;
+        assert!(
+            runner.should_quit.load(Ordering::Relaxed),
+            "Ctrl+C must run the Quit effect, which sets should_quit"
+        );
+        assert!(action_rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn a_key_release_is_ignored() {
+        let (runner, _action_tx, mut action_rx) = test_runner();
+        let key = crossterm::event::KeyEvent::new_with_kind(
+            crossterm::event::KeyCode::Char('q'),
+            KeyModifiers::empty(),
+            KeyEventKind::Release,
+        );
+        handle_terminal_event(&runner, CEvent::Key(key)).await;
+        assert!(!runner.should_quit.load(Ordering::Relaxed));
+        assert!(action_rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn a_resize_marks_the_frame_dirty() {
+        let (runner, _action_tx, mut action_rx) = test_runner();
+        handle_terminal_event(&runner, CEvent::Resize(80, 24)).await;
+        assert!(
+            runner.app.lock().should_draw(),
+            "resize forces a redraw on the next tick"
+        );
+        assert!(action_rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn a_mouse_click_dispatches_into_the_app() {
+        use crossterm::event::MouseButton;
+
+        let (runner, _action_tx, mut action_rx) = test_runner();
+        runner.app.lock().clear_dirty();
+        let mouse = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 10,
+            row: 5,
+            modifiers: KeyModifiers::empty(),
+        };
+        handle_terminal_event(&runner, CEvent::Mouse(mouse)).await;
+        // The exact pane hit is App's business; here we pin that mouse events reach it and
+        // leave an observable state change (dirty flag or queued effect) behind.
+        let dirty_or_action = runner.app.lock().should_draw() || action_rx.try_recv().is_ok();
+        assert!(dirty_or_action, "the click was delivered to the app");
+    }
 }

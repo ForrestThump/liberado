@@ -388,4 +388,29 @@ mod tests {
         assert_eq!(opts.expected_content_shown.get("c1").unwrap(), "hit");
         assert_eq!(opts.kill_after_seq, Some(3));
     }
+
+    /// Every rule's wire string — the spelling foreign harnesses see in reports and pin their
+    /// tooling to.
+    #[test]
+    fn as_str_is_the_stable_wire_name_for_every_rule() {
+        use ConformanceRule::*;
+        assert_eq!(Reconstruction.as_str(), "reconstruction");
+        assert_eq!(CrashSurvival.as_str(), "crash_survival");
+        assert_eq!(Ordering.as_str(), "ordering");
+        assert_eq!(
+            SystemPromptRecoverable.as_str(),
+            "system_prompt_recoverable"
+        );
+        assert_eq!(
+            ToolCatalogueRecoverable.as_str(),
+            "tool_catalogue_recoverable"
+        );
+        assert_eq!(ToolHonesty.as_str(), "tool_honesty");
+        assert_eq!(WithdrawalVisible.as_str(), "withdrawal_visible");
+        assert_eq!(JoinIntegrity.as_str(), "join_integrity");
+        // ALL and as_str must agree: a rule added without a wire name would report as "".
+        for rule in ConformanceRule::ALL {
+            assert!(!rule.as_str().is_empty());
+        }
+    }
 }
