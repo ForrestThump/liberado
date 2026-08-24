@@ -75,4 +75,5 @@ Authority model: [doc-authority.md](spec/reference/doc-authority.md).
 | [docs/spec/reference/local-readiness.md](spec/reference/local-readiness.md) | reference | active | normative | ci | local-readiness |
 | [docs/validation/README.md](validation/README.md) | validation | active | evidence | correctness | — |
 | [docs/validation/mutation-testing-plan.md](validation/mutation-testing-plan.md) | validation | historical | evidence | correctness | — |
+| [docs/validation/mutation-testing/mutation-testing-report-acp-bridge.md](validation/mutation-testing/mutation-testing-report-acp-bridge.md) | validation | historical | evidence | — | — |
 | [docs/validation/mutation-testing/mutation-testing-report-common.md](validation/mutation-testing/mutation-testing-report-common.md) | validation | historical | evidence | correctness | — |

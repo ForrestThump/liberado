@@ -1,4 +1,5 @@
 ---
+kind: validation
 status: historical
 authority: evidence
 crate: acp-bridge
