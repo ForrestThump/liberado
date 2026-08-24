@@ -919,3 +919,7 @@ mod tests {
         assert!(body.contains("light"));
     }
 }
+
+#[cfg(test)]
+#[path = "theme_survivor_tests.rs"]
+mod survivor_tests;
