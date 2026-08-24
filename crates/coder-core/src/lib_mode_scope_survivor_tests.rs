@@ -122,7 +122,7 @@ fn write_scope_activity_and_permit_semantics() {
         ..DispatchWriteScope::default()
     };
     assert!(allow_only.is_active());
-    assert!(allow_only.permits("docs/readme.md"));
+    assert!(allow_only.permits("docs/roadmap.md"));
     assert!(
         !allow_only.permits("src/main.rs"),
         "allow list is exclusive"
