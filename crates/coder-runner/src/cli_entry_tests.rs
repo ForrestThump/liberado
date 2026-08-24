@@ -6,7 +6,7 @@
 //! which the CRAP ratchet caught as a regression on `run_headless`.
 
 use super::{
-    HeadlessArgs, Topology, provider_profile, provider_profile_named, read_request, run_headless,
+    HeadlessArgs, Topology, provider_profile_named, read_request, read_topology, run_headless,
     run_request,
 };
 use tempfile::TempDir;
@@ -46,7 +46,11 @@ api_key_env = "TEST_PROV_KEY"
     )
     .unwrap();
 
-    let profile = provider_profile(Some(dir.path())).expect("declared provider resolves");
+    // Resolve through the named seam: provider_profile() would consult the
+    // ambient LIBERADO_CODER_PROVIDER first, making this test depend on the
+    // host environment.
+    let topology = read_topology(dir.path()).expect("fixture topology parses");
+    let profile = provider_profile_named(topology, "testprov").expect("declared provider resolves");
     assert_eq!(profile.name, "testprov");
     assert_eq!(profile.api_key_env, "TEST_PROV_KEY");
     assert_eq!(profile.base_url, "http://127.0.0.1:9");

@@ -170,17 +170,24 @@ impl ShadowGit {
         // put `git_dir` under the work tree (git clean would wipe HEAD and the chain).
         let mut clean_args = vec!["clean".to_string(), "-fd".into(), "-q".into()];
         if let Ok(rel) = self.git_dir.strip_prefix(&self.work_tree) {
-            let rel_s = path_for_cli(rel);
-            if !rel_s.is_empty() {
+            // gitignore-style patterns compare `/` separators; path_for_cli
+            // keeps the platform separator, which on Windows never matches and
+            // silently disarms the whole exclusion chain.
+            // gitignore-style patterns compare `/` separators; the platform
+            // string keeps `\` on Windows, which never matches and silently
+            // disarms the whole exclusion chain.
+            let mut pattern = path_for_cli(rel).replace('\\', "/");
+            if !pattern.is_empty() {
                 clean_args.push("-e".into());
-                clean_args.push(rel_s);
+                clean_args.push(pattern.clone());
                 // Also exclude parent segments (e.g. data/ when git_dir is data/checkpoints/id).
                 let mut cur = PathBuf::new();
                 for comp in rel.components() {
                     cur.push(comp);
                     if cur.as_os_str() != rel.as_os_str() {
+                        pattern = path_for_cli(&cur).replace('\\', "/");
                         clean_args.push("-e".into());
-                        clean_args.push(path_for_cli(&cur));
+                        clean_args.push(pattern.clone());
                     }
                 }
             }

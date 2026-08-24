@@ -322,7 +322,10 @@ fn save_ledger(root: &Path, ledger: &Ledger) -> Result<(), Box<dyn std::error::E
     // Atomic temp+rename: concurrent agents append to one ledger file, and a
     // truncating in-place write loses appends or corrupts the JSON mid-flight.
     let path = root.join(LEDGER_FILE);
-    let tmp = root.join(format!("{LEDGER_FILE}.tmp"));
+    // Unique suffix: two concurrent appenders sharing one `.tmp` would lose a
+    // row even with the final rename (second writer overwrites the first's temp
+    // file before it is renamed into place).
+    let tmp = root.join(format!("{LEDGER_FILE}.{}.tmp", std::process::id()));
     fs::write(&tmp, serde_json::to_string_pretty(ledger)? + "\n")?;
     fs::rename(&tmp, path)?;
     Ok(())

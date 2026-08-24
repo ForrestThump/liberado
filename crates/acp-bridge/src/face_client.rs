@@ -302,7 +302,7 @@ mod face_env_tests {
     use super::*;
 
     /// One lock for all three env tests: function-local statics would be three
-    /// distinct mutexes guarding the same process-global variable â€” exclusion
+    /// distinct mutexes guarding the same process-global variable — exclusion
     /// in name only.
     static ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 

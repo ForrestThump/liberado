@@ -1,4 +1,4 @@
-# Liberado â€” command runner (`just`). Cross-platform: plain `cargo â€¦` lines run under
+# Liberado — command runner (`just`). Cross-platform: plain `cargo â€¦` lines run under
 # both `sh` (CI/Linux/macOS) and PowerShell (Windows). PowerShell-only recipes are
 # tagged `[windows]`.
 
@@ -41,7 +41,7 @@ check:
 
 # Full local CI. Includes the host-stable module-health ratchet on every OS.
 # Linux also runs the same per-function CRAP compare GitHub runs
-# (a score that went up fails and is named â€” fix it before you push).
+# (a score that went up fails and is named — fix it before you push).
 # Windows checks the 150 ceiling only; coverage is host-sensitive.
 # The baseline is not rewritten while that check is red. On Linux success,
 # rewrite `crap-baseline.json`. If the tree is otherwise clean, a Linux
@@ -184,7 +184,7 @@ compare-reset path commit="":
 
 # â”€â”€ Mutation testing â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 #
-# Playbook: Skills/mutants-campaign.md â€” cold-start assessment, run, record, fix survivors.
+# Playbook: Skills/mutants-campaign.md — cold-start assessment, run, record, fix survivors.
 # Ledger: mutants-ledger.json (append-only). Health: just mutants-report / just mutants-next.
 #
 # Run cargo-mutants on one crate and append results to mutants-ledger.json.

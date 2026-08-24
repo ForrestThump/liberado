@@ -102,7 +102,7 @@ fn gate_config_default_is_disabled() {
     assert!(gate.strategist.is_none());
 }
 
-/// The default was `enabled: false, hash_length: 4`. It is now on at 7 — see
+/// The default was `enabled: false, hash_length: 4`. It is now off, at length 7 — see
 /// `HashlineConfig::default` for the run that changed it. The values live in
 /// `hashline_default_tests`, which says *why* each one is what it is; this test keeps only
 /// the part that belongs here: whatever the default is, it must pass its own validator.

@@ -305,11 +305,19 @@ async fn cancel_notification_aborts_only_the_matching_in_flight_prompt() {
         &in_flight,
     )
     .await;
-    tokio::task::yield_now().await;
-    assert!(
-        liveness.is_closed(),
-        "the matching in-flight prompt is aborted"
-    );
+    // abort() drops the task on its next poll; under load that poll may need a
+    // few scheduler turns, so poll with a deadline instead of asserting after a
+    // single yield (a false failure here would look like a cancel bug).
+    let settled = tokio::time::timeout(std::time::Duration::from_millis(500), async {
+        loop {
+            tokio::task::yield_now().await;
+            if liveness.is_closed() {
+                break;
+            }
+        }
+    })
+    .await;
+    assert!(settled.is_ok(), "the matching in-flight prompt is aborted");
     let reply = waiter.await.expect("waiter woken").expect("ok");
     assert_eq!(
         reply["outcome"]["outcome"], "cancelled",

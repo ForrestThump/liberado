@@ -2,11 +2,19 @@
 
 use super::*;
 
+/// One lock for every env mutation in this binary's tests — same-named
+/// function-local mutexes would be distinct locks and exclude nothing. Held for
+/// the whole test (no awaits inside) so parallel tests cannot observe a torn or
+/// leaked value even when an assert panics mid-sequence: the poisoned process
+/// env is the failure being reported, not a side effect to hide.
+static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// The env override wins, an unset var falls back to the 300s default, and garbage parses
 /// as "not set" rather than zero — a daemon that reads a broken setting as "no grace" would
 /// kill in-flight turns instantly.
 #[test]
 fn shutdown_grace_reads_env_then_falls_back_to_the_default() {
+    let _env = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let saved = std::env::var("LIBERADO_SHUTDOWN_GRACE_SECS").ok();
     // SAFETY(test): this var has a single reader, `shutdown_grace_from_env`; the prior
     // value is restored on every path below so a failed assert cannot leak it.
