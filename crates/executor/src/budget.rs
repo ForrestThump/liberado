@@ -213,3 +213,7 @@ mod proptest_tests {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "budget_survivor_tests.rs"]
+mod survivor_tests;
