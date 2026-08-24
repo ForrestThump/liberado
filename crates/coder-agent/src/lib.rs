@@ -3063,3 +3063,7 @@ mod disposition_tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "lib_survivor_tests.rs"]
+mod survivor_tests;

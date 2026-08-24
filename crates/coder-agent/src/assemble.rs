@@ -632,13 +632,22 @@ pub mod entry {
 
     /// Session-pack build assembly: mode policies, contract fills verifiers later, critic off,
     /// repair mirrors coder when not restricted.
+    ///
+    /// Every field is enumerated on purpose. A `..Default()` spread here let a field silently
+    /// fall back to its default under mutation (and under careless editing); explicit bindings
+    /// make every input load-bearing.
     pub fn pack_surface(args: PackSurfaceArgs) -> ProductionSurface {
         ProductionSurface {
             task: args.task,
             workspace: WorkspaceRef::new(args.workspace_path.to_string_lossy(), "HEAD"),
             workspace_path: args.workspace_path,
             sandbox: args.sandbox,
+            attempt: 0,
+            prior_feedback: Vec::new(),
+            strategist_directive: None,
             coder_role: Some(args.coder_role),
+            model_override: None,
+            max_turns: None,
             mode: args.mode,
             command_policy: Some(args.command_policy),
             path_policy: Some(args.path_policy),
@@ -647,12 +656,14 @@ pub mod entry {
             repair: RepairPolicy::MirrorCoder,
             empty_verifiers: EmptyVerifiersPolicy::LeaveEmpty,
             trace_dir: TraceDirPolicy::AsConfigured,
+            default_empty_path_policy: false,
             disable_planner: true,
-            ..ProductionSurface::default()
         }
     }
 
     /// ACP coding dispatch: reviewer critic, default verifiers, data-dir trace fallback.
+    ///
+    /// Fields enumerated explicitly — see [`pack_surface`].
     pub fn acp_surface(
         task: CoderTask,
         workspace_path: PathBuf,
@@ -666,22 +677,29 @@ pub mod entry {
             workspace: WorkspaceRef::new(workspace_path.to_string_lossy(), "HEAD"),
             workspace_path,
             sandbox: SandboxSpec::HostLocal,
-            model_override,
-            max_turns,
             attempt,
             prior_feedback,
+            strategist_directive: None,
+            coder_role: None,
+            model_override,
+            max_turns,
+            mode: CodingMode::Normal,
+            command_policy: None,
+            path_policy: None,
+            hashline: None,
             critic: CriticPolicy::ReviewerWithLoadedPrompt,
             repair: RepairPolicy::FromTuning,
             empty_verifiers: EmptyVerifiersPolicy::DefaultForWorkspace,
             trace_dir: TraceDirPolicy::DataDirFallback,
             default_empty_path_policy: true,
             disable_planner: true,
-            ..ProductionSurface::default()
         }
     }
 
     /// Headless `liberado-coder-run task run`: no repair, default verifiers, workspace-relative
     /// traces. Gate comes from tuning (not a hardcoded `enabled: false`).
+    ///
+    /// Fields enumerated explicitly — see [`pack_surface`].
     pub fn runner_surface(
         task: CoderTask,
         workspace_path: PathBuf,
@@ -693,14 +711,22 @@ pub mod entry {
             workspace: WorkspaceRef::new(workspace_path.to_string_lossy(), "HEAD"),
             workspace_path,
             sandbox: SandboxSpec::HostLocal,
+            attempt: 0,
+            prior_feedback: Vec::new(),
+            strategist_directive: None,
+            coder_role: None,
             model_override: model,
             max_turns,
+            mode: CodingMode::Normal,
+            command_policy: None,
+            path_policy: None,
+            hashline: None,
             critic: CriticPolicy::Disabled,
             repair: RepairPolicy::None,
             empty_verifiers: EmptyVerifiersPolicy::DefaultForWorkspace,
             trace_dir: TraceDirPolicy::RelativeToWorkspace,
+            default_empty_path_policy: false,
             disable_planner: true,
-            ..ProductionSurface::default()
         }
     }
 }
@@ -1307,3 +1333,7 @@ mod tests {
         assert_eq!(p.entries().count(), 1);
     }
 }
+
+#[cfg(test)]
+#[path = "assemble_survivor_tests.rs"]
+mod survivor_tests;

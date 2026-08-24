@@ -186,3 +186,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "finish_gate_survivor_tests.rs"]
+mod survivor_tests;

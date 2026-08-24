@@ -551,3 +551,7 @@ mod request_record_tests {
         assert_eq!(offered, vec!["grep".to_string(), "edit_file".to_string()]);
     }
 }
+
+#[cfg(test)]
+#[path = "trace_survivor_tests.rs"]
+mod survivor_tests;

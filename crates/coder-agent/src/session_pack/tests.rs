@@ -975,12 +975,12 @@ async fn ship_preflight_green_allows_succeeded() {
 
 /// Restores `LIBERADO_DATA_DIR` on drop. Declare after `DATA_DIR_ENV_LOCK` so Drop
 /// runs while the lock is still held (reverse declaration order).
-struct RestoreLiberadoDataDir {
+pub(super) struct RestoreLiberadoDataDir {
     prior: Option<std::ffi::OsString>,
 }
 
 impl RestoreLiberadoDataDir {
-    fn set_to(path: impl AsRef<std::ffi::OsStr>) -> Self {
+    pub(super) fn set_to(path: impl AsRef<std::ffi::OsStr>) -> Self {
         let prior = std::env::var_os("LIBERADO_DATA_DIR");
         // SAFETY: caller holds `DATA_DIR_ENV_LOCK` for the life of this guard.
         unsafe {

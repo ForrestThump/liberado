@@ -801,3 +801,7 @@ mod tests {
         assert!(files.is_empty());
     }
 }
+
+#[cfg(test)]
+#[path = "verify_pipeline_survivor_tests.rs"]
+mod survivor_tests;
