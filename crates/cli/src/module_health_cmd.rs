@@ -201,7 +201,13 @@ fn compare(
                 Some(_old) if waiver.is_some() && current_value > limit => failures.push(format!(
                     "{path}: waived {metric:?} {current_value} > ceiling {limit}"
                 )),
-                Some(old) if current_value > value(old, metric) && current_value > review => {
+                // A waived file is governed by its ceiling alone; the
+                // baseline-regression rule below would otherwise defeat every
+                // waiver for a file already past the review boundary.
+                Some(old) if
+                    waiver.is_none()
+                    && current_value > value(old, metric)
+                    && current_value > review => {
                     failures.push(format!(
                         "{path}: {metric:?} regressed {} -> {current_value} (review boundary {review})",
                         value(old, metric)
@@ -334,5 +340,60 @@ mod tests {
             .to_string();
         assert!(error.contains("Functions"));
         assert!(!error.contains("Ploc"));
+    }
+
+    #[test]
+    fn waiver_exempts_a_growing_existing_file_within_its_ceiling() {
+        let mut cfg = config();
+        cfg.waiver.push(Waiver {
+            path: "crates/a/src/big.rs".into(),
+            metric: Metric::Ploc,
+            ceiling: 1200,
+            reason: "single authority".into(),
+            reviewed_on: "2026-08-24".into(),
+        });
+        let baseline = BTreeMap::from([(
+            "crates/a/src/big.rs".into(),
+            FileMetrics {
+                ploc: 1100,
+                ..Default::default()
+            },
+        )]);
+        // 1150 is over the review boundary (100) and over baseline, but under
+        // the waiver ceiling: the waiver governs, so no failure.
+        let grown = FileMetrics {
+            ploc: 1150,
+            ..Default::default()
+        };
+        assert!(
+            compare(
+                &cfg,
+                &baseline,
+                &BTreeMap::from([("crates/a/src/big.rs".into(), grown.clone())])
+            )
+            .is_ok()
+        );
+        // Past the ceiling it fails again, naming the ceiling.
+        let over = FileMetrics {
+            ploc: 1250,
+            ..Default::default()
+        };
+        let error = compare(
+            &cfg,
+            &baseline,
+            &BTreeMap::from([("crates/a/src/big.rs".into(), over)]),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("ceiling 1200"), "{error}");
+        // Without the waiver the same growth still regresses.
+        assert!(
+            compare(
+                &config(),
+                &baseline,
+                &BTreeMap::from([("crates/a/src/big.rs".into(), grown)])
+            )
+            .is_err()
+        );
     }
 }

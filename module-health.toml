@@ -35,3 +35,24 @@ cyclomatic_new = 150
 # ceiling = 2000
 # reason = "Static protocol table; splitting it would hide the single authority."
 # reviewed_on = "2026-08-21"
+
+[[waiver]]
+path = "crates/coder-agent/src/assemble.rs"
+metric = "ploc"
+ceiling = 1165
+reason = "Surface assembly enumerates every ProductionSurface field explicitly so no `..Default()` spread can silently absorb a field mutation; the enumeration is the survivor fix and splitting it would separate the field list from the one function that owns it."
+reviewed_on = "2026-08-24"
+
+[[waiver]]
+path = "crates/coder-agent/src/fanout.rs"
+metric = "ploc"
+ceiling = 1058
+reason = "Growth is the three-line #[cfg(test)] #[path] sibling wiring only — the survivor tests themselves live in fanout_survivor_tests.rs; the parent-module declaration is irreducible for the split pattern this branch mandates."
+reviewed_on = "2026-08-24"
+
+[[waiver]]
+path = "crates/coder-agent/src/lib.rs"
+metric = "ploc"
+ceiling = 2539
+reason = "Same as fanout.rs: three lines of #[cfg(test)] #[path] sibling wiring (lib_survivor_tests.rs); the crate-root module declaration cannot live anywhere else."
+reviewed_on = "2026-08-24"

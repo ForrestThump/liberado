@@ -433,8 +433,12 @@ fn committing_pack(succeed: bool) -> CodingSessionPack {
 /// A git repo with one commit, so worktrees can branch off HEAD.
 async fn parent_repo() -> (tempfile::TempDir, PathBuf) {
     let dir = tempfile::tempdir().unwrap();
+    // Repo-local identity: the fan-out merge (`--no-ff`) creates a merge commit,
+    // and CI runners have no global user.email/user.name for it to fall back on.
     for args in [
         vec!["init", "-q"],
+        vec!["config", "user.email", "t@t"],
+        vec!["config", "user.name", "t"],
         vec![
             "-c",
             "user.email=t@t",
