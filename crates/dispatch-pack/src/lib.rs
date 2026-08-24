@@ -129,6 +129,51 @@ impl DispatchPack {
         Ok(notified)
     }
 
+    /// Fold a finished disposition into the GoalResult: ping the human for `Propose`
+    /// (recording whether the out-of-band ping actually went through), shape the
+    /// summary, and stamp the diagnostics.
+    async fn finish_run(
+        &self,
+        session_id: &str,
+        pool_name: &str,
+        correlation_id: &str,
+        disposition: Disposition,
+        events: Sender<SessionEvent>,
+    ) -> Result<GoalResult, PackError> {
+        // Whether this run deferred the action to the human AND surfaced it out-of-band, so the
+        // face agent (via `delegate`) can drop the redundant reply (Gap 2). A `Reported` carries the
+        // runtime's own flag; a `Propose`'s ping is sent here, by `write_proposal`, so its notified-
+        // state is only known once that returns.
+        let deferred_to_human = if let Disposition::Propose(ref proposal) = disposition {
+            self.write_proposal(proposal)
+                .await
+                .map_err(PackError::Failed)?
+        } else {
+            disposition.deferred_to_human()
+        };
+
+        let (terminal, summary) = disposition.terminal_summary();
+        let _ = events
+            .send(SessionEvent::new(
+                session_id,
+                SessionEventKind::Progress {
+                    message: summary.clone(),
+                },
+            ))
+            .await;
+
+        Ok(GoalResult {
+            terminal,
+            summary,
+            artifacts: Vec::new(),
+            diagnostics: serde_json::json!({
+                "pool": pool_name,
+                "correlation_id": correlation_id,
+                "deferred_to_human": deferred_to_human,
+            }),
+        })
+    }
+
     /// Production C7 path: `parallel_goals` on the payload reaches `dispatch_parallel`.
     /// When `parent_root` is set, each worker gets a `WorktreeWorkspace`. Worktree
     /// creation is fail-closed — a shared fallback would be silent collision.
@@ -404,41 +449,8 @@ impl DomainPackRunner for DispatchPack {
         .await
         .map_err(|e| PackError::Failed(format!("orchestration failed: {e}")))?;
 
-        // Whether this run deferred the action to the human AND surfaced it out-of-band, so the
-        // face agent (via `delegate`) can drop the redundant reply (Gap 2). A `Reported` carries the
-        // runtime's own flag; a `Propose`'s ping is sent here, by `write_proposal`, so its notified-
-        // state is only known once that returns.
-        let deferred_to_human = if let Disposition::Propose(ref proposal) = disposition {
-            self.write_proposal(proposal)
-                .await
-                .map_err(PackError::Failed)?
-        } else {
-            disposition.deferred_to_human()
-        };
-
-        let (terminal, summary) = disposition.terminal_summary();
-        // Outcome turn is also recorded by the hub's run_session; recording the disposition-shaped
-        // summary here would duplicate. The hub always closes with goal_result.summary — so just
-        // return it.
-        let _ = events
-            .send(SessionEvent::new(
-                session_id,
-                SessionEventKind::Progress {
-                    message: summary.clone(),
-                },
-            ))
-            .await;
-
-        Ok(GoalResult {
-            terminal,
-            summary,
-            artifacts: Vec::new(),
-            diagnostics: serde_json::json!({
-                "pool": pool_name,
-                "correlation_id": correlation_id,
-                "deferred_to_human": deferred_to_human,
-            }),
-        })
+        self.finish_run(session_id, pool_name, &correlation_id, disposition, events)
+            .await
     }
 }
 
