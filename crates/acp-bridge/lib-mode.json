@@ -1,8 +1,0 @@
-{
-  "id": "lib-mode",
-  "mode": "chat",
-  "cwd": "/home/user/project",
-  "model": "deepseek-v4-pro",
-  "messages": [],
-  "updated_at": "2026-08-24T01:48:00.129469500+00:00"
-}

@@ -1,8 +1,0 @@
-{
-  "id": "lib-cwd",
-  "mode": "coding",
-  "cwd": "/tmp/load-cwd-test",
-  "model": "mock-model",
-  "messages": [],
-  "updated_at": "2026-08-24T01:48:00.048442500+00:00"
-}

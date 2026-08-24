@@ -1,8 +1,0 @@
-{
-  "id": "lib-load-test",
-  "mode": "chat",
-  "cwd": "/tmp/test-project",
-  "model": "gpt-4o",
-  "messages": [],
-  "updated_at": "2026-08-24T01:48:00.053991900+00:00"
-}

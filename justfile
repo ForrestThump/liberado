@@ -193,49 +193,34 @@ compare-reset path commit="":
 # CARGO_TARGET_DIR keeps the invoke binary out of target/debug/liberado.exe so
 # `cargo mutants -p liberado-cli` can rebuild that path without Access denied.
 # Mutants builds go to target/mutants/ (see mutants_cmd.rs).
-[unix]
+#
+# One recipe per verb, no [windows] pair: just runs recipes under sh on every
+# platform, so `VAR=value command` works everywhere. The previous `set "X=Y"&&`
+# cmd.exe forms silently set nothing under that shell, which reintroduced the
+# target/debug collision the comment below warns about.
+[env('CARGO_TARGET_DIR', 'target/liberado-invoke')]
 mutants name:
-    CARGO_TARGET_DIR=target/liberado-invoke cargo run --locked --quiet -p liberado-cli -- mutants run {{name}}
-
-[windows]
-mutants name:
-    set "CARGO_TARGET_DIR=target\liberado-invoke"&& cargo run --locked --quiet -p liberado-cli -- mutants run {{name}}
+    cargo run --locked --quiet -p liberado-cli -- mutants run {{name}}
 
 # coder-agent: lib tests only (mock_intake_e2e hangs in cargo-mutants temp env).
-[unix]
+[env('CARGO_TARGET_DIR', 'target/liberado-invoke')]
 mutants-agent:
-    CARGO_TARGET_DIR=target/liberado-invoke cargo run --locked --quiet -p liberado-cli -- mutants run --lib-only coder-agent
-
-[windows]
-mutants-agent:
-    set "CARGO_TARGET_DIR=target\liberado-invoke"&& cargo run --locked --quiet -p liberado-cli -- mutants run --lib-only coder-agent
+    cargo run --locked --quiet -p liberado-cli -- mutants run --lib-only coder-agent
 
 # Ingest an existing mutants.out without re-running cargo mutants.
-[unix]
+[env('CARGO_TARGET_DIR', 'target/liberado-invoke')]
 mutants-record name:
-    CARGO_TARGET_DIR=target/liberado-invoke cargo run --locked --quiet -p liberado-cli -- mutants record {{name}}
-
-[windows]
-mutants-record name:
-    set "CARGO_TARGET_DIR=target\liberado-invoke"&& cargo run --locked --quiet -p liberado-cli -- mutants record {{name}}
+    cargo run --locked --quiet -p liberado-cli -- mutants record {{name}}
 
 # Health report: never campaigned, historical-only, most drift since last SHA run.
-[unix]
+[env('CARGO_TARGET_DIR', 'target/liberado-invoke')]
 mutants-report:
-    CARGO_TARGET_DIR=target/liberado-invoke cargo run --locked --quiet -p liberado-cli -- mutants report
-
-[windows]
-mutants-report:
-    set "CARGO_TARGET_DIR=target\liberado-invoke"&& cargo run --locked --quiet -p liberado-cli -- mutants report
+    cargo run --locked --quiet -p liberado-cli -- mutants report
 
 # Print one crate directory name to mutation-test next (see Skills/mutants-campaign.md).
-[unix]
+[env('CARGO_TARGET_DIR', 'target/liberado-invoke')]
 mutants-next:
-    CARGO_TARGET_DIR=target/liberado-invoke cargo run --locked --quiet -p liberado-cli -- mutants next
-
-[windows]
-mutants-next:
-    set "CARGO_TARGET_DIR=target\liberado-invoke"&& cargo run --locked --quiet -p liberado-cli -- mutants next
+    cargo run --locked --quiet -p liberado-cli -- mutants next
 
 # ── Run ──────────────────────────────────────────────────────────────────────
 
