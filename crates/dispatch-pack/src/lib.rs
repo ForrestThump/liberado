@@ -288,6 +288,14 @@ fn effective_turn_budget(max_turns: u32) -> Option<u32> {
     Some(max_turns).filter(|t| *t > 0)
 }
 
+/// Correlation id for a dispatch run: the goal's originating correlation when
+/// present, else a stable per-session fallback.
+fn correlation_id_for(goal: &GoalSpec, session_id: &str) -> String {
+    goal.origin
+        .as_ref()
+        .and_then(|o| o.correlation_id.clone())
+        .unwrap_or_else(|| format!("dispatch-session-{session_id}"))
+}
 #[async_trait]
 impl DomainPackRunner for DispatchPack {
     fn domain_id(&self) -> &str {
@@ -315,11 +323,7 @@ impl DomainPackRunner for DispatchPack {
             ))
         })?;
 
-        let correlation_id = goal
-            .origin
-            .as_ref()
-            .and_then(|o| o.correlation_id.clone())
-            .unwrap_or_else(|| format!("dispatch-session-{session_id}"));
+        let correlation_id = correlation_id_for(goal, session_id);
 
         if let Some(parallel_goals) = parallel_route(goal)? {
             return Self::run_parallel(

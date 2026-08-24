@@ -275,12 +275,9 @@ fn record_campaign(
         // would shadow the crate's real last campaign — the report reads the newest row.
         return Ok(RecordOutcome::SkippedIncomplete);
     }
-    // cargo-mutants writes outcomes incrementally, so a run killed mid-campaign
-    // leaves a plausible-looking partial file. Every tested mutant lands in
-    // exactly one of these four buckets; anything less than the declared total
-    // means the rest never ran and recording would shadow the last good row.
-    let accounted = counts.caught + counts.survived + counts.timeout + counts.unviable;
-    if outcomes.total_mutants > 0 && accounted != outcomes.total_mutants {
+    if !outcomes_are_complete(&counts, outcomes.total_mutants) {
+        // A partial outcomes file (killed mid-campaign) must not shadow the
+        // crate's real last campaign — see outcomes_are_complete.
         return Ok(RecordOutcome::SkippedIncomplete);
     }
     let campaign = Campaign {
@@ -316,6 +313,14 @@ pub fn load_ledger(root: &Path) -> Result<Ledger, Box<dyn std::error::Error>> {
         return Err(format!("unsupported {} schema {}", LEDGER_FILE, ledger.schema).into());
     }
     Ok(ledger)
+}
+
+/// Every tested mutant lands in exactly one of the four buckets; when the
+/// declared total is known and the buckets do not sum to it, the outcomes file
+/// is a partial write from a killed run.
+fn outcomes_are_complete(counts: &Counts, total_mutants: u32) -> bool {
+    total_mutants == 0
+        || counts.caught + counts.survived + counts.timeout + counts.unviable == total_mutants
 }
 
 fn save_ledger(root: &Path, ledger: &Ledger) -> Result<(), Box<dyn std::error::Error>> {
@@ -462,18 +467,17 @@ fn build_health(
     })
 }
 
+/// Rows health/next may read: package-scope campaigns from runs that actually
+/// tested something. Zero-viable rows are crashed or partial runs (recorded
+/// before the recorder's refusal existed); skipping them keeps a crate's real
+/// campaign visible instead of being shadowed by zeros.
+fn is_health_row(campaign: &Campaign) -> bool {
+    campaign.scope == "package" && campaign.counts.viable > 0
+}
+
 fn package_campaigns_by_package(ledger: &Ledger) -> BTreeMap<String, Vec<&Campaign>> {
     let mut grouped: BTreeMap<String, Vec<&Campaign>> = BTreeMap::new();
-    for campaign in &ledger.campaigns {
-        if campaign.scope != "package" {
-            continue;
-        }
-        // Zero-viable rows are crashed or partial runs (recorded before the
-        // refusal above existed). Skipping keeps the crate's real campaign
-        // visible to report and next instead of being shadowed by zeros.
-        if campaign.counts.viable == 0 {
-            continue;
-        }
+    for campaign in ledger.campaigns.iter().filter(|c| is_health_row(c)) {
         grouped
             .entry(campaign.package.clone())
             .or_default()
