@@ -687,16 +687,19 @@ fn repository_root() -> Result<PathBuf, Box<dyn std::error::Error>> {
 }
 
 #[cfg(test)]
+#[path = "ci_cmd_usage_tests.rs"]
+mod ci_cmd_usage_tests;
+
+#[cfg(test)]
 mod tests {
     use super::{
         BASELINE_FILE, CI_LOG_FILE, CRAP_CEILING, CRAP_CEILING_GH, CRAP_CEILING_HINT,
         CRAP_COMPARE_SUMMARY, CRAP_EMPTY_BASELINE, CRAP_HOST_CEILING_ONLY, CRAP_REGRESSION_GH,
         CRAP_REGRESSION_HINT, CiLog, EXTRACT_MAX_LINES, LCOV_FILE, LLVM_COV_ARGS, StageOutcome,
-        USAGE, announce_compare, baseline_has_entries, compare_args, compare_banners,
-        compare_to_baseline, crap_failure_hint, emit_crap_failure, exe_lives_in_cargo_target,
-        extract_ci_failures, git, porcelain_path, relativize_json_file, relativize_lcov,
-        repo_relative_source_path, repository_root, run_cmd, stage_ratcheted_baseline,
-        uses_per_function_ratchet,
+        announce_compare, baseline_has_entries, compare_args, compare_banners, compare_to_baseline,
+        crap_failure_hint, emit_crap_failure, exe_lives_in_cargo_target, extract_ci_failures, git,
+        porcelain_path, relativize_json_file, relativize_lcov, repo_relative_source_path,
+        repository_root, run_cmd, stage_ratcheted_baseline, uses_per_function_ratchet,
     };
     use liberado_common::process::std_command;
     use std::fs;
@@ -766,29 +769,6 @@ mod tests {
         assert!(
             logged.contains("definitely-not-a-real-program-xyz"),
             "{logged}"
-        );
-    }
-
-    /// `announce_compare` writes its banners into the ci log and derives the ratchet flag from
-    /// the baseline state. With no baseline file there is nothing to regress against, so the
-    /// per-function ratchet stays off.
-    #[test]
-    fn announce_compare_logs_banners_without_a_baseline() {
-        let temp = tempdir().unwrap();
-        let log = CiLog::create(temp.path()).unwrap();
-        let fail_regression = announce_compare(&log).unwrap();
-        assert!(
-            !fail_regression,
-            "no baseline file means no per-function regression check"
-        );
-        let logged = fs::read_to_string(&log.path).unwrap();
-        assert!(
-            logged.contains(CRAP_EMPTY_BASELINE),
-            "empty-baseline banner must reach the ci log, got:\n{logged}"
-        );
-        assert!(
-            logged.contains(CRAP_COMPARE_SUMMARY),
-            "summary banner must reach the ci log, got:\n{logged}"
         );
     }
 
@@ -906,13 +886,6 @@ error[E0425]: cannot find value `foo` in this scope
         let text = std::fs::read_to_string(&second.path).unwrap();
         assert!(!text.contains("old run"), "{text}");
         assert!(text.contains(CI_LOG_FILE), "{text}");
-    }
-
-    #[test]
-    fn usage_names_the_three_verbs() {
-        assert!(USAGE.contains("check"));
-        assert!(USAGE.contains("crap"));
-        assert!(USAGE.contains("ratchet"));
     }
 
     #[test]

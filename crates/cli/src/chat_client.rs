@@ -329,6 +329,12 @@ mod tests {
         let addr = listener.local_addr().unwrap();
         let server = tokio::spawn(async move {
             let (mut sock, _) = listener.accept().await.unwrap();
+            // Drain the request head before answering: writing into an
+            // in-flight request aborts the client's send side (WSAECONNABORTED)
+            // and surfaces as "could not reach the daemon".
+            use tokio::io::AsyncReadExt as _;
+            let mut drain = [0u8; 1024];
+            let _ = sock.read(&mut drain).await;
             let body = concat!(
                 "event: session\r\ndata: 01HZTURN\r\n\r\n",
                 "event: session_finished\r\n",
@@ -375,6 +381,12 @@ mod tests {
         let addr = listener.local_addr().unwrap();
         let server = tokio::spawn(async move {
             let (mut sock, _) = listener.accept().await.unwrap();
+            // Drain the request head before answering: writing into an
+            // in-flight request aborts the client's send side (WSAECONNABORTED)
+            // and surfaces as "could not reach the daemon".
+            use tokio::io::AsyncReadExt as _;
+            let mut drain = [0u8; 1024];
+            let _ = sock.read(&mut drain).await;
             let body = "{\"error\":\"nope\"}";
             sock.write_all(
                 format!(

@@ -129,7 +129,6 @@ fn liberado(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-/// Aggregated counters and extracts from one MVL file (a tolerant, one-pass renderer).
 struct MvlStats {
     usage: BTreeMap<String, f64>,
     tools: BTreeMap<String, usize>,
@@ -154,8 +153,6 @@ fn mvl_stats() -> MvlStats {
     }
 }
 
-/// Fold one `completion` record into the running stats: usage, first and last model text,
-/// finish reason, and per-call tool counts with the first edit and cargo commands.
 fn ingest_completion(stats: &mut MvlStats, object: &Value) {
     stats.completions += 1;
     if let Some(values) = object.get("usage").and_then(Value::as_object) {
@@ -223,7 +220,6 @@ fn ingest_completion(stats: &mut MvlStats, object: &Value) {
     }
 }
 
-/// Fold one `tool_result` record: match named failures and cargo-line spans against `error`.
 fn ingest_tool_result(stats: &mut MvlStats, object: &Value, error: &Regex) {
     let shown = text(
         object
@@ -242,7 +238,6 @@ fn ingest_tool_result(stats: &mut MvlStats, object: &Value, error: &Regex) {
     }
 }
 
-/// Render the collected MVL stats as a human summary (what `mvl` prints).
 fn render_mvl_summary(stats: &MvlStats, path: &Path, heading: bool) -> String {
     let mut out = String::new();
     if heading {
@@ -298,8 +293,6 @@ fn render_mvl_summary(stats: &MvlStats, path: &Path, heading: bool) -> String {
     out
 }
 
-/// Ingest one MVL file and render its summary. Tolerant: malformed lines are skipped by
-/// [`records`], an empty file renders an empty summary.
 fn summarize_mvl(path: &Path, heading: bool) -> Result<String, Box<dyn std::error::Error>> {
     let error = Regex::new(r"error\[E\d+\]|test \S+ \.\.\. FAILED")?;
     let mut stats = mvl_stats();
@@ -324,8 +317,6 @@ fn pi(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-/// Ingest one pi-style `session.jsonl` and render its summary as a string (the printable
-/// core of [`pi`], split out so tests can assert on rendered lines).
 fn summarize_pi(path: &Path) -> Result<String, Box<dyn std::error::Error>> {
     let mut turns = 0;
     let mut tools = BTreeMap::new();
@@ -554,6 +545,10 @@ pub fn run(args: impl Iterator<Item = String>) -> Result<(), Box<dyn std::error:
 }
 
 #[cfg(test)]
+#[path = "summarize_pi_tests.rs"]
+mod summarize_pi_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
@@ -644,32 +639,7 @@ mod tests {
 
     // ── kind ────────────────────────────────────────────────────────────
 
-    /// The file-kind classifier drives which renderer runs; each recognisable shape has its own
-    /// label, and everything else is "unknown" rather than a guess.
-    #[test]
-    fn kind_classifies_known_shapes() {
-        let dir = tempdir().unwrap();
-        // A directory with any .json file is a liberado traces dir.
-        fs::write(dir.path().join("x.json"), "{}").unwrap();
-        assert_eq!(kind(dir.path()), "liberado-dir");
-        // An empty directory is just a directory.
-        let empty = tempdir().unwrap();
-        assert_eq!(kind(empty.path()), "dir");
-        // Bare .json / .jsonl files by extension.
-        let json_path = dir.path().join("traces.json");
-        fs::write(&json_path, "{}").unwrap();
-        assert_eq!(kind(&json_path), "liberado-json");
-        let jsonl_path = dir.path().join("x.jsonl");
-        fs::write(&jsonl_path, "{}").unwrap();
-        assert_eq!(kind(&jsonl_path), "jsonl");
-        // Unknown extension.
-        let unknown = dir.path().join("notes.txt");
-        fs::write(&unknown, "x").unwrap();
-        assert_eq!(kind(&unknown), "unknown");
-    }
-
     // ── renderers over real files ───────────────────────────────────────
-
     /// `liberado` summarises a native trace JSON: the request/events shape the coder writes.
     #[test]
     fn liberado_summarises_a_native_trace() {
@@ -695,23 +665,6 @@ mod tests {
             liberado(&path).is_ok(),
             "a well-formed trace must summarise"
         );
-    }
-
-    /// `mvl` and `pi` are tolerant parsers: an empty file renders an empty summary rather than
-    /// failing, and malformed lines are skipped by `records`.
-    #[test]
-    fn mvl_and_pi_tolerate_empty_and_partial_input() {
-        let dir = tempdir().unwrap();
-        let mvl_path = dir.path().join("run.mvl.jsonl");
-        fs::write(&mvl_path, "").unwrap();
-        assert!(mvl(&mvl_path, true).is_ok(), "empty MVL must not fail");
-        let pi_path = dir.path().join("session.jsonl");
-        fs::write(
-            &pi_path,
-            "{\"type\":\"turn_start\"}\nnot-json\n{\"type\":\"message_end\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"hi\"}]}}\n",
-        )
-        .unwrap();
-        assert!(pi(&pi_path).is_ok(), "partial pi session must not fail");
     }
 
     /// `summarize_mvl` aggregates a real file: usage sums, per-tool counts, the first edit's
@@ -772,70 +725,6 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(err.contains("not found"), "{err}");
-    }
-
-    /// `summarize_pi` folds a pi-style session into rendered lines: turn counts, sorted tool
-    /// histogram, first edit (edit/write names only, first one wins), bash+cargo capture,
-    /// assistant last-text, and connect-timeout mentions. Asserting exact lines is what kills
-    /// the operator flips (`==`, `&&`, `+=`) cargo-mutants kept finding here.
-    #[test]
-    fn summarize_pi_renders_turns_tools_edits_and_timeouts() {
-        let dir = tempdir().unwrap();
-        let path = dir.path().join("session.jsonl");
-        fs::write(
-            &path,
-            concat!(
-                "{\"type\":\"turn_start\"}\n",
-                "{\"type\":\"tool_execution_start\",\"toolName\":\"bash\",\"args\":{\"command\":\"cargo test --workspace\"}}\n",
-                "{\"type\":\"tool_execution_start\",\"toolName\":\"read_file\"}\n",
-                "{\"type\":\"turn_start\"}\n",
-                "{\"type\":\"tool_execution_start\",\"name\":\"edit\",\"input\":{\"path\":\"src/x.rs\"}}\n",
-                "{\"type\":\"message_end\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"first \"},{\"type\":\"other\"},{\"type\":\"text\",\"text\":\"part\"}]}}\n",
-                "{\"type\":\"turn_start\"}\n",
-                "{\"type\":\"tool_execution_start\",\"toolName\":\"write\",\"args\":{\"path\":\"src/second.rs\"}}\n",
-                "{\"type\":\"noise\",\"detail\":\"saw a Connect Timeout while streaming\"}\n"
-            ),
-        )
-        .unwrap();
-
-        let out = summarize_pi(&path).unwrap();
-        assert!(out.contains("## pi  session.jsonl"), "{out}");
-        assert!(
-            out.contains("- turns: 3   tools: {bash: 1, edit: 1, read_file: 1, write: 1}"),
-            "{out}"
-        );
-        assert!(
-            out.contains("- first edit: (2, src/x.rs)"),
-            "the FIRST edit/write call pins turn and path; a later write must not win, got: {out}"
-        );
-        assert!(out.contains("- connect-timeout mentions: 1"), "{out}");
-        assert!(out.contains("t1 cargo test --workspace"), "{out}");
-        assert!(
-            out.contains("- last assistant: first part"),
-            "text blocks join and non-text blocks drop, got: {out}"
-        );
-    }
-
-    /// A read-only pi session renders no cargo section and no last-assistant line: the
-    /// emptiness guards are load-bearing.
-    #[test]
-    fn summarize_pi_omits_empty_sections() {
-        let dir = tempdir().unwrap();
-        let path = dir.path().join("session.jsonl");
-        fs::write(&path, "{\"type\":\"turn_start\"}\n").unwrap();
-        let out = summarize_pi(&path).unwrap();
-        assert!(!out.contains("- cargo:"), "{out}");
-        assert!(!out.contains("- last assistant:"), "{out}");
-        assert!(out.contains("- first edit: None"), "{out}");
-    }
-
-    /// Directory classification: a folder holding only `pi/` is still a compare layout —
-    /// the `liberado || pi` disjunction, not a conjunction.
-    #[test]
-    fn kind_treats_a_pi_only_directory_as_a_compare_layout() {
-        let dir = tempdir().unwrap();
-        fs::create_dir(dir.path().join("pi")).unwrap();
-        assert_eq!(kind(dir.path()), "compare");
     }
 
     /// Every `walk` arm dispatches instead of falling through to the `unrecognized` error:
