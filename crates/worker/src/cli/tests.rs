@@ -59,6 +59,7 @@ fn every_flag_overrides_its_env_default() {
             "http://forge:3000",
             "--clone-base-url",
             "http://git.internal",
+            "--forge-insecure-tls",
             "--token-env",
             "MY_TOKEN",
             "--max-concurrent",
@@ -73,6 +74,7 @@ fn every_flag_overrides_its_env_default() {
     assert_eq!(args.model.as_deref(), Some("test-model"));
     assert_eq!(args.forge_url.as_deref(), Some("http://forge:3000"));
     assert_eq!(args.clone_base_url.as_deref(), Some("http://git.internal"));
+    assert!(args.forge_insecure_tls, "the flag must opt in explicitly");
     assert_eq!(args.token, "abc");
     assert_eq!(args.max_concurrent, 4);
 }
@@ -97,6 +99,20 @@ fn forge_token_comes_from_the_env_var_the_flag_names() {
 fn worker_token_env_var_is_the_fallback_token_source() {
     let args = defaults(&[("LIBERADO_WORKER_TOKEN", "fallback")]);
     assert_eq!(args.token, "fallback");
+}
+
+#[test]
+fn insecure_tls_is_opt_in_via_flag_or_env() {
+    let args = defaults(&[("LIBERADO_WORKER_TOKEN", "t")]);
+    assert!(
+        !args.forge_insecure_tls,
+        "must stay off without explicit opt-in"
+    );
+    let args = defaults(&[
+        ("LIBERADO_WORKER_TOKEN", "t"),
+        ("LIBERADO_FORGE_INSECURE_TLS", "1"),
+    ]);
+    assert!(args.forge_insecure_tls);
 }
 
 #[test]

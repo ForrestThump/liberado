@@ -163,6 +163,7 @@ fn harness() -> Harness {
         model: None,
         forge_url: Some("http://forge.example".into()),
         forge_token: "freshtoken".into(),
+        forge_insecure_tls: false,
         clone_base_url: Some(root.path().join("remote").to_string_lossy().into_owned()),
         max_concurrent: 2,
     });
@@ -251,9 +252,10 @@ async fn a_succeeded_run_pushes_a_delegate_branch_and_opens_the_pr() {
     assert!(url.ends_with("/pulls/1"));
 
     let branch = branch_name(&spec("fix the flaky widget"));
+    let expected_namespace = TaskId("01JTESTTASK000000".into()).short();
     assert!(
-        branch.starts_with("delegate/01jtestt/"),
-        "branch namespaced by task short id, got {branch}"
+        branch.starts_with(&format!("delegate/{expected_namespace}/")),
+        "branch namespaced by the task id's random tail, got {branch}"
     );
     assert!(branch.ends_with(&slugify("fix the flaky widget")));
     assert!(

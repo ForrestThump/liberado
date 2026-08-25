@@ -15,6 +15,9 @@ pub struct Args {
     pub model: Option<String>,
     pub forge_url: Option<String>,
     pub forge_token: String,
+    /// Accept self-signed / private-CA certificates on the forge URL. Deliberate
+    /// opt-in for LAN forges; never a default.
+    pub forge_insecure_tls: bool,
     /// Base for resolving relative repository paths to clone URLs; defaults to the
     /// forge itself when unset.
     pub clone_base_url: Option<String>,
@@ -64,6 +67,10 @@ pub fn parse_args(
         forge_url: env.var("LIBERADO_FORGE_URL"),
         clone_base_url: None,
         forge_token: String::new(),
+        forge_insecure_tls: matches!(
+            env.var("LIBERADO_FORGE_INSECURE_TLS").as_deref(),
+            Some("1") | Some("true")
+        ),
         token: String::new(),
         max_concurrent: 2,
     };
@@ -94,6 +101,10 @@ fn apply_flag(
         "--bind" | "--data-dir" | "--config-dir" | "--model" | "--forge-url"
         | "--clone-base-url" => apply_value_flag(args, flag, iter),
         "--forge-token-env" | "--token-env" => apply_token_env_flag(args, flag, iter, env),
+        "--forge-insecure-tls" => {
+            args.forge_insecure_tls = true;
+            Ok(())
+        }
         "--max-concurrent" => {
             let raw = iter
                 .next()
