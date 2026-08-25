@@ -78,16 +78,6 @@ pub fn run(args: &mut impl Iterator<Item = String>) -> Result<(), Box<dyn std::e
     Ok(())
 }
 
-/// Shared `report`/`next` flag parsing: at most one argument, `--all`.
-/// A typo like `--al` is a usage error, not a silent filtered run.
-fn parse_include_all(args: &mut impl Iterator<Item = String>, usage: &str) -> Result<bool, String> {
-    match args.next().as_deref() {
-        None => Ok(false),
-        Some("--all") => Ok(true),
-        Some(other) => Err(format!("{usage} (got {other:?})")),
-    }
-}
-
 pub fn record(args: &mut impl Iterator<Item = String>) -> Result<(), Box<dyn std::error::Error>> {
     let root = crate_map_cmd::repository_root()?;
     let crate_dir = args.next();
@@ -122,7 +112,8 @@ pub fn record(args: &mut impl Iterator<Item = String>) -> Result<(), Box<dyn std
 
 pub fn report(args: &mut impl Iterator<Item = String>) -> Result<(), Box<dyn std::error::Error>> {
     let root = crate_map_cmd::repository_root()?;
-    let include_all = parse_include_all(args, "usage: liberado mutants report [--all]")?;
+    let include_all =
+        run_support::parse_include_all(args, "usage: liberado mutants report [--all]")?;
     let ledger = load_ledger(&root)?;
     let crates = crate_map_cmd::list_crates(&root)?;
     let health = build_health(&root, &ledger, &crates, include_all)?;
@@ -134,7 +125,7 @@ pub fn next_crate(
     args: &mut impl Iterator<Item = String>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let root = crate_map_cmd::repository_root()?;
-    let include_all = parse_include_all(args, "usage: liberado mutants next [--all]")?;
+    let include_all = run_support::parse_include_all(args, "usage: liberado mutants next [--all]")?;
     let ledger = load_ledger(&root)?;
     let crates = crate_map_cmd::list_crates(&root)?;
     let health = build_health(&root, &ledger, &crates, include_all)?;
@@ -348,17 +339,22 @@ fn save_ledger(root: &Path, ledger: &Ledger) -> Result<(), Box<dyn std::error::E
         campaigns: dedupe_campaigns(ledger.campaigns.clone()),
     };
     let bytes = serde_json::to_string_pretty(&ledger)? + "\n";
-    write_atomic(root, &bytes);
+    write_atomic(root, &bytes)?;
     Ok(())
 }
 
-// Atomic temp+rename with a pid-unique temp name: concurrent agents append to
-// one ledger file, and a truncating in-place write loses appends or corrupts
-// the JSON mid-flight. A failed rename may leave an inert `.tmp` beside it.
-fn write_atomic(root: &Path, bytes: &str) {
+// Atomic temp+rename with a pid-unique temp name. A failed write or rename
+// propagates to the caller (a campaign that cannot be recorded must fail the
+// command, not panic mid-run) and removes the inert `.tmp` it may leave.
+fn write_atomic(root: &Path, bytes: &str) -> Result<(), Box<dyn std::error::Error>> {
     let tmp = root.join(format!("{LEDGER_FILE}.{}.tmp", std::process::id()));
-    fs::write(&tmp, bytes).expect("ledger temp write");
-    fs::rename(&tmp, root.join(LEDGER_FILE)).expect("ledger atomic rename");
+    // Plain `and_then` + a function path, not a closure chain: this file sits
+    // against a function-count ratchet.
+    let outcome = fs::write(&tmp, bytes).and_then(|()| fs::rename(&tmp, root.join(LEDGER_FILE)));
+    if outcome.is_err() {
+        let _ = fs::remove_file(&tmp);
+    }
+    outcome.map_err(std::convert::Into::into)
 }
 
 fn resolve_crate(root: &Path, crate_dir: &str) -> Result<CrateInfo, Box<dyn std::error::Error>> {

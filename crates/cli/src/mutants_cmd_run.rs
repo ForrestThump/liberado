@@ -92,3 +92,16 @@ pub(super) fn announce_record(outcome: RecordOutcome, cargo_success: bool) {
         );
     }
 }
+
+/// Shared `report`/`next` flag parsing: at most one argument, `--all`.
+/// A typo like `--al` is a usage error, not a silent filtered run.
+pub(super) fn parse_include_all(
+    args: &mut impl Iterator<Item = String>,
+    usage: &str,
+) -> Result<bool, String> {
+    match args.next().as_deref() {
+        None => Ok(false),
+        Some("--all") => Ok(true),
+        Some(other) => Err(format!("{usage} (got {other:?})")),
+    }
+}
