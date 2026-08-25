@@ -2,7 +2,7 @@
 
 **Status**: Resolves Tier-3 Decision 14 (single source of truth for config / topology). Actionable.
 **Owner**: Shiloh Mangus
-**Last Updated**: August 11, 2026
+**Last Updated**: August 25, 2026
 **Related**:
 - `liberado-architecture-decisions.md` (Decision 14; Decision 10 secrets; Decision 4 policy)
 - Every companion spec contributes tunables (their "Tunables — single source of truth" tables)
@@ -91,6 +91,25 @@ Surfaced two ways:
 - **On daemon startup** — refuses to start, prints actionable errors.
 - **`liberado config check`** — validates the merged config without starting the daemon (CI-able;
   run after any `ssh` edit before restarting).
+
+## 4.1 Machine-owned overlays and install secrets
+
+Two files live outside the three section files and are written by the running system, never by hand:
+
+- **Grants overlay** (`<data_dir>/grants.overlay.toml`). When a human taps
+  "Approve everywhere", the daemon appends the grant here - never into the
+  hand-edited `policy.toml`. At boot the overlay is parsed and its
+  grants/zones APPENDED to the base policy (base entries keep priority, so
+  the overlay can only add authority for a zone the base never declared),
+  and the merged candidate is validated like any policy. It is deliberately
+  soft: a missing overlay is the common case; a broken one is logged and
+  ignored rather than blocking boot. Deleting the file revokes every such
+  grant.
+- **Proposal signing key** (`<data_dir>/.proposal-key`, 32 random bytes,
+  generated on first use). Runtime downgrade proposals are signed with it
+  for integrity. If it cannot be persisted, the run falls back to an
+  ephemeral key and warns - proposals created then simply fail verification
+  after a restart, which is the safe direction (rejected, not accepted).
 
 ## 5. Where the Tunables Come From
 
