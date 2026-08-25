@@ -742,3 +742,24 @@ fn save_ledger_drops_exact_duplicate_rows() {
     save_ledger(root.path(), &varied).expect("save succeeds");
     assert_eq!(load_ledger(root.path()).unwrap().campaigns.len(), 2);
 }
+
+// ── report/next flag parsing ─────────────────────────────────────────────────
+
+#[test]
+fn parse_include_all_accepts_nothing_or_all_only() {
+    let none: Vec<String> = vec![];
+    assert!(!parse_include_all(&mut none.iter().cloned(), "u").unwrap());
+
+    let all = vec!["--all".to_string()];
+    assert!(parse_include_all(&mut all.into_iter(), "u").unwrap());
+
+    // A typo must be a usage error naming what was seen, never a silent
+    // filtered run.
+    let typo = vec!["--al".to_string()];
+    let err = parse_include_all(
+        &mut typo.into_iter(),
+        "usage: liberado mutants report [--all]",
+    )
+    .unwrap_err();
+    assert!(err.contains("--al") && err.contains("usage"), "{err}");
+}

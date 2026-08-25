@@ -217,6 +217,33 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn coder_layer_cannot_reach_the_tool_loop_path() {
+        // The guard arm exists so a future Layer variant cannot silently
+        // tune the wrong layer; this pins that it fails loudly instead.
+        use liberado_heuristics_tuner::Layer;
+
+        let config = TunerConfig {
+            layer: Layer::Coder,
+            scoring_providers: Vec::new(),
+            meta_provider: std::sync::Arc::new(liberado_provider::MockProvider::new("mock")),
+            samples_per_scenario: 1,
+            max_scenarios: None,
+            coder_tier: liberado_heuristics_tuner::CoderTier::Smoke,
+            coder_scenario_filter: None,
+            beam_width: 1,
+            cold_starts_per_generation: 0,
+            mutations_per_candidate: 0,
+            max_generations: 1,
+            call_budget: 1,
+        };
+        let out = tempfile::tempdir().unwrap();
+        let err = run_tool_loop_layer(Layer::Coder, config, out.path())
+            .await
+            .expect_err("the coder layer must be refused here");
+        assert!(err.to_string().contains("coder layer"), "{err}");
+    }
+
     fn coder_fitness(accuracy: f32) -> CoderFitness {
         CoderFitness {
             accuracy,

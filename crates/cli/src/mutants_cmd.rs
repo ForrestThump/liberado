@@ -78,6 +78,16 @@ pub fn run(args: &mut impl Iterator<Item = String>) -> Result<(), Box<dyn std::e
     Ok(())
 }
 
+/// Shared `report`/`next` flag parsing: at most one argument, `--all`.
+/// A typo like `--al` is a usage error, not a silent filtered run.
+fn parse_include_all(args: &mut impl Iterator<Item = String>, usage: &str) -> Result<bool, String> {
+    match args.next().as_deref() {
+        None => Ok(false),
+        Some("--all") => Ok(true),
+        Some(other) => Err(format!("{usage} (got {other:?})")),
+    }
+}
+
 pub fn record(args: &mut impl Iterator<Item = String>) -> Result<(), Box<dyn std::error::Error>> {
     let root = crate_map_cmd::repository_root()?;
     let crate_dir = args.next();
@@ -112,13 +122,7 @@ pub fn record(args: &mut impl Iterator<Item = String>) -> Result<(), Box<dyn std
 
 pub fn report(args: &mut impl Iterator<Item = String>) -> Result<(), Box<dyn std::error::Error>> {
     let root = crate_map_cmd::repository_root()?;
-    let include_all = match args.next().as_deref() {
-        None => false,
-        Some("--all") => true,
-        Some(other) => {
-            return Err(format!("usage: liberado mutants report [--all] (got {other:?})").into());
-        }
-    };
+    let include_all = parse_include_all(args, "usage: liberado mutants report [--all]")?;
     let ledger = load_ledger(&root)?;
     let crates = crate_map_cmd::list_crates(&root)?;
     let health = build_health(&root, &ledger, &crates, include_all)?;
@@ -130,13 +134,7 @@ pub fn next_crate(
     args: &mut impl Iterator<Item = String>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let root = crate_map_cmd::repository_root()?;
-    let include_all = match args.next().as_deref() {
-        None => false,
-        Some("--all") => true,
-        Some(other) => {
-            return Err(format!("usage: liberado mutants next [--all] (got {other:?})").into());
-        }
-    };
+    let include_all = parse_include_all(args, "usage: liberado mutants next [--all]")?;
     let ledger = load_ledger(&root)?;
     let crates = crate_map_cmd::list_crates(&root)?;
     let health = build_health(&root, &ledger, &crates, include_all)?;
