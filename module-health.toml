@@ -64,6 +64,20 @@ ceiling = 1515
 reason = "Growth is the #[cfg(test)] #[path] sibling wiring only (telegram_approvals_survivor_tests.rs); the parent-module declaration is irreducible under the split pattern."
 reviewed_on = "2026-08-24"
 
+[[waiver]]
+path = "crates/executor/src/lib.rs"
+metric = "ploc"
+ceiling = 4056
+reason = "Growth is the four-line #[cfg(test)] #[path] sibling wiring (lib_survivor_tests.rs); the crate-root module declaration cannot live anywhere else."
+reviewed_on = "2026-08-25"
+
+[[waiver]]
+path = "crates/executor/src/risk_gated.rs"
+metric = "ploc"
+ceiling = 1397
+reason = "Same as executor lib.rs: three lines of sibling-test module wiring (risk_gated_survivor_tests.rs)."
+reviewed_on = "2026-08-25"
+
 # main-agent sessions sibling test file: four metrics over every boundary.
 [[waiver]]
 path = "crates/main-agent/src/sessions/tests.rs"

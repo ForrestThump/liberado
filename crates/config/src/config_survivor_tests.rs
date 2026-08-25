@@ -7,19 +7,19 @@
 use super::*;
 use std::sync::{Mutex, OnceLock};
 
-fn env_lock() -> &'static Mutex<()> {
+pub(crate) fn env_lock() -> &'static Mutex<()> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     LOCK.get_or_init(|| Mutex::new(()))
 }
 
 /// Set one variable for the test, restore the prior value on drop.
-struct EnvGuard {
+pub(crate) struct EnvGuard {
     var: &'static str,
     prior: Option<std::ffi::OsString>,
 }
 
 impl EnvGuard {
-    fn set(var: &'static str, value: &Path) -> Self {
+    pub(crate) fn set(var: &'static str, value: &Path) -> Self {
         let prior = std::env::var_os(var);
         // SAFETY: callers hold ENV_LOCK, so no concurrent test reads these.
         unsafe { std::env::set_var(var, value) };
