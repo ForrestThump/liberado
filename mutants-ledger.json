@@ -1638,6 +1638,21 @@
         "timeout": 6,
         "unviable": 26
       }
+    },
+    {
+      "package": "liberado-bootstrap",
+      "commit": "ce6286aa8e6f918b4a2178af20c39ebebffc5f18",
+      "recorded_at": "2026-08-25",
+      "command": "cargo mutants -p liberado-bootstrap --cap-lints true --timeout 3.0 --minimum-test-timeout 30 --in-place",
+      "tool_version": "27.0.0",
+      "scope": "package",
+      "counts": {
+        "viable": 49,
+        "caught": 29,
+        "survived": 20,
+        "timeout": 0,
+        "unviable": 27
+      }
     }
   ]
 }
