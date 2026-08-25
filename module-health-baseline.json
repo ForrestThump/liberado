@@ -3060,10 +3060,10 @@
     "cyclomatic": 26
   },
   "crates/worker/src/cli.rs": {
-    "ploc": 105,
-    "lloc": 25,
-    "functions": 14,
-    "cyclomatic": 46
+    "ploc": 128,
+    "lloc": 27,
+    "functions": 16,
+    "cyclomatic": 50
   },
   "crates/worker/src/cli/tests.rs": {
     "ploc": 132,
