@@ -186,16 +186,28 @@
     "cyclomatic": 18
   },
   "crates/bootstrap/src/lib.rs": {
-    "ploc": 960,
+    "ploc": 963,
     "lloc": 227,
     "functions": 67,
     "cyclomatic": 122
   },
+  "crates/bootstrap/src/lib_survivor_tests.rs": {
+    "ploc": 178,
+    "lloc": 46,
+    "functions": 13,
+    "cyclomatic": 19
+  },
   "crates/bootstrap/src/mcp_apply.rs": {
-    "ploc": 420,
+    "ploc": 423,
     "lloc": 115,
     "functions": 32,
     "cyclomatic": 63
+  },
+  "crates/bootstrap/src/mcp_apply_survivor_tests.rs": {
+    "ploc": 98,
+    "lloc": 21,
+    "functions": 5,
+    "cyclomatic": 6
   },
   "crates/chat-client-contract/src/lib.rs": {
     "ploc": 8,
@@ -408,22 +420,22 @@
     "cyclomatic": 27
   },
   "crates/cli/src/mutants_cmd.rs": {
-    "ploc": 586,
-    "lloc": 178,
-    "functions": 50,
-    "cyclomatic": 142
+    "ploc": 560,
+    "lloc": 169,
+    "functions": 46,
+    "cyclomatic": 134
   },
   "crates/cli/src/mutants_cmd_run.rs": {
-    "ploc": 63,
-    "lloc": 13,
-    "functions": 5,
-    "cyclomatic": 17
+    "ploc": 106,
+    "lloc": 22,
+    "functions": 11,
+    "cyclomatic": 28
   },
   "crates/cli/src/mutants_cmd_tests.rs": {
-    "ploc": 621,
-    "lloc": 230,
-    "functions": 34,
-    "cyclomatic": 38
+    "ploc": 645,
+    "lloc": 237,
+    "functions": 38,
+    "cyclomatic": 42
   },
   "crates/cli/src/readiness_cmd.rs": {
     "ploc": 364,
@@ -1026,13 +1038,19 @@
     "cyclomatic": 19
   },
   "crates/coder-tools/src/fuzzy_match.rs": {
-    "ploc": 352,
+    "ploc": 355,
     "lloc": 137,
     "functions": 37,
     "cyclomatic": 87
   },
+  "crates/coder-tools/src/fuzzy_match_survivor_tests.rs": {
+    "ploc": 61,
+    "lloc": 28,
+    "functions": 7,
+    "cyclomatic": 12
+  },
   "crates/coder-tools/src/git.rs": {
-    "ploc": 349,
+    "ploc": 353,
     "lloc": 94,
     "functions": 33,
     "cyclomatic": 113
@@ -1066,6 +1084,12 @@
     "lloc": 40,
     "functions": 12,
     "cyclomatic": 24
+  },
+  "crates/coder-tools/src/tool_survivor_tests.rs": {
+    "ploc": 265,
+    "lloc": 111,
+    "functions": 16,
+    "cyclomatic": 19
   },
   "crates/common/src/approval_ledger.rs": {
     "ploc": 137,
@@ -1235,9 +1259,15 @@
     "functions": 41,
     "cyclomatic": 80
   },
+  "crates/config/src/config_survivor_tests.rs": {
+    "ploc": 216,
+    "lloc": 104,
+    "functions": 22,
+    "cyclomatic": 28
+  },
   "crates/config/src/lib.rs": {
-    "ploc": 920,
-    "lloc": 270,
+    "ploc": 929,
+    "lloc": 276,
     "functions": 80,
     "cyclomatic": 135
   },
@@ -1398,10 +1428,16 @@
     "cyclomatic": 80
   },
   "crates/cron/src/lib.rs": {
-    "ploc": 266,
+    "ploc": 269,
     "lloc": 82,
     "functions": 18,
     "cyclomatic": 35
+  },
+  "crates/cron/src/name_survivor_tests.rs": {
+    "ploc": 6,
+    "lloc": 2,
+    "functions": 1,
+    "cyclomatic": 2
   },
   "crates/daemon/src/debounce.rs": {
     "ploc": 84,
@@ -1530,10 +1566,16 @@
     "cyclomatic": 4
   },
   "crates/executor/src/lib.rs": {
-    "ploc": 4053,
+    "ploc": 4056,
     "lloc": 966,
     "functions": 275,
     "cyclomatic": 469
+  },
+  "crates/executor/src/lib_survivor_tests.rs": {
+    "ploc": 555,
+    "lloc": 183,
+    "functions": 45,
+    "cyclomatic": 51
   },
   "crates/executor/src/mvl.rs": {
     "ploc": 497,
@@ -1542,16 +1584,22 @@
     "cyclomatic": 92
   },
   "crates/executor/src/mvl_survivor_tests.rs": {
-    "ploc": 233,
-    "lloc": 88,
-    "functions": 22,
-    "cyclomatic": 23
+    "ploc": 275,
+    "lloc": 104,
+    "functions": 25,
+    "cyclomatic": 26
   },
   "crates/executor/src/risk_gated.rs": {
-    "ploc": 1394,
+    "ploc": 1397,
     "lloc": 331,
     "functions": 72,
     "cyclomatic": 132
+  },
+  "crates/executor/src/risk_gated_survivor_tests.rs": {
+    "ploc": 151,
+    "lloc": 27,
+    "functions": 11,
+    "cyclomatic": 17
   },
   "crates/harness-eval/src/adapter.rs": {
     "ploc": 19,
@@ -1992,10 +2040,16 @@
     "cyclomatic": 19
   },
   "crates/mcp/src/factory.rs": {
-    "ploc": 306,
+    "ploc": 309,
     "lloc": 68,
     "functions": 34,
     "cyclomatic": 64
+  },
+  "crates/mcp/src/factory_survivor_tests.rs": {
+    "ploc": 119,
+    "lloc": 28,
+    "functions": 10,
+    "cyclomatic": 18
   },
   "crates/mcp/src/lib.rs": {
     "ploc": 154,
@@ -2016,10 +2070,16 @@
     "cyclomatic": 30
   },
   "crates/mcp/src/pool.rs": {
-    "ploc": 352,
+    "ploc": 355,
     "lloc": 96,
     "functions": 39,
     "cyclomatic": 85
+  },
+  "crates/mcp/src/pool_survivor_tests.rs": {
+    "ploc": 201,
+    "lloc": 81,
+    "functions": 18,
+    "cyclomatic": 25
   },
   "crates/mcp/src/scoped.rs": {
     "ploc": 209,
