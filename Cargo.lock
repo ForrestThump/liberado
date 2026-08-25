@@ -6087,6 +6087,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "liberado-provider-free-proxy"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "axum",
+ "regex",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tower",
+ "tracing",
+ "tracing-subscriber",
+ "wiremock",
+]
+
+[[package]]
 name = "liberado-provider-openai-compat"
 version = "0.1.0"
 dependencies = [

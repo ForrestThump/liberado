@@ -1,4 +1,4 @@
-# Liberado — command runner (`just`). Cross-platform: plain `cargo â€¦` lines run under
+# Liberado — command runner (`just`). Cross-platform: plain `cargo …` lines run under
 # both `sh` (CI/Linux/macOS) and PowerShell (Windows). PowerShell-only recipes are
 # tagged `[windows]`.
 
@@ -8,7 +8,7 @@ set quiet := true
 default:
     @just --list
 
-# â”€â”€ Build â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# ── Build ────────────────────────────────────────────────────────────────────
 
 # Build the full native workspace (webui is WASM-only and excluded).
 build:
@@ -18,7 +18,7 @@ build:
 build-release:
     cargo build --locked --release --bin liberado
 
-# â”€â”€ Test â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# ── Test ─────────────────────────────────────────────────────────────────────
 
 # Run the whole workspace test suite (includes the layer-rules gate).
 test:
@@ -32,7 +32,7 @@ test-p name:
 test-t1:
     cargo test --locked -p liberado-server -- t1_conformance
 
-# â”€â”€ Quality gates (what CI runs) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# ── Quality gates (what CI runs) ─────────────────────────────────────────────
 
 # CI gate: fmt + clippy. Green is required before every commit.
 check:
@@ -182,7 +182,7 @@ compare-prepare:
 compare-reset path commit="":
     cargo run --locked -p liberado-cli -- coder compare reset {{path}} {{if commit == "" { "" } else { "--commit " + commit }}}
 
-# â”€â”€ Mutation testing â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# ── Mutation testing ─────────────────────────────────────────────────────────
 #
 # Playbook: Skills/mutants-campaign.md — cold-start assessment, run, record, fix survivors.
 # Ledger: mutants-ledger.json (append-only). Health: just mutants-report / just mutants-next.
@@ -219,7 +219,7 @@ mutants-report:
 mutants-next:
     cargo run --locked --quiet -p liberado-cli -- mutants next
 
-# â”€â”€ Run â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# ── Run ──────────────────────────────────────────────────────────────────────
 
 # Serve the daemon + HTTP API on the vault at `LIBERADO_VAULT` (or $1).
 serve vault:
@@ -229,7 +229,7 @@ serve vault:
 config-check:
     cargo run --bin liberado -- config check
 
-# â”€â”€ Windows dev-stack helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# ── Windows dev-stack helpers ────────────────────────────────────────────────
 
 [windows]
 dev-stack: # Rebuild + restart the whole dev stack (daemon, server, webui).

@@ -1086,11 +1086,6 @@ fn ci_delta(cfg: &Config, pr: &Pr) -> Result<CiDelta, Box<dyn std::error::Error>
         "ci_delta",
         json!({"pr":pr.number,"new":new.len(),"preexisting":old.len(),"base":provenance}),
     );
-    log(
-        cfg,
-        "ci_delta",
-        json!({"pr":pr.number,"new":new.len(),"preexisting":old.len(),"base":provenance}),
-    );
     Ok((new, old, run))
 }
 

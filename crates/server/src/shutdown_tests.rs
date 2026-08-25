@@ -281,9 +281,18 @@ async fn grace_timeout_aborts_and_leaves_unanswered() {
     let (chat, store) = make_chat(dir.path(), Arc::new(PendingProvider)).await;
     let id = chat.create(None).await.unwrap();
     let (_replay, _rx) = chat.start_or_attach(id, "never finishes");
-    // User message is persisted at turn start before provider returns.
-    tokio::time::sleep(Duration::from_millis(50)).await;
-    assert!(chat.turn_running(id));
+    // User message is persisted at turn start before the provider returns.
+    // Bounded poll, not a fixed sleep: a loaded runner schedules the turn's
+    // first poll at an arbitrary offset.
+    let mut running = false;
+    for _ in 0..400 {
+        if chat.turn_running(id) {
+            running = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    assert!(running, "the in-flight turn must register as running");
 
     let state = state_with(Arc::clone(&chat), store, dir.path().to_path_buf());
     let t0 = Instant::now();

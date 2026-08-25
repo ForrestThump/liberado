@@ -696,50 +696,70 @@ fn grouping_keeps_only_viable_package_scope_rows() {
     assert_eq!(grouped["liberado-beta"].len(), 1);
 }
 
-// ── run invocation parsing (extracted from run) ──────────────────────────────
-
-fn args(list: &[&str]) -> Vec<String> {
-    list.iter().map(|s| s.to_string()).collect()
-}
-
+/// A merge that unions both sides can paste a whole block twice (13
+/// duplicates landed that way during the campaign). save_ledger must drop
+/// exact duplicates so the on-disk artifact stays append-only AND
+/// duplicate-free, whatever git history looked like mid-merge.
 #[test]
-fn run_invocation_defaults_and_flag_position() {
-    let plain = parse_run_invocation(&args(&["acp-bridge"])).unwrap();
-    assert_eq!(plain.crate_dir, "acp-bridge");
-    assert!(matches!(plain.profile, RunProfile::Default));
-
-    let flagged = parse_run_invocation(&args(&["--lib-only", "coder-agent"])).unwrap();
-    assert_eq!(flagged.crate_dir, "coder-agent");
-    assert!(matches!(flagged.profile, RunProfile::LibOnly));
-
-    // `--lib-only` is only a flag in the first position; elsewhere it is a
-    // (weirdly named) crate directory like any other.
-    let late = parse_run_invocation(&args(&["cli", "--lib-only"])).unwrap_err();
-    assert!(late.contains("usage"), "{late}");
-}
-
-#[test]
-fn run_invocation_rejects_missing_and_extra_arguments() {
-    let missing = parse_run_invocation(&args(&[])).unwrap_err();
-    assert!(missing.contains("usage"), "{missing}");
-
-    let extra = parse_run_invocation(&args(&["a", "b"])).unwrap_err();
-    assert!(extra.contains("usage"), "{extra}");
-
-    let flag_only = parse_run_invocation(&args(&["--lib-only"])).unwrap_err();
-    assert!(flag_only.contains("usage"), "{flag_only}");
-}
-
-#[test]
-fn clear_stale_outcomes_removes_the_scratch_file_only() {
+fn save_ledger_drops_exact_duplicate_rows() {
     let root = tempfile::tempdir().unwrap();
-    let scratch = root.path().join(OUTCOMES_FILE);
-    fs::create_dir_all(scratch.parent().unwrap()).unwrap();
-    fs::write(&scratch, "{}").unwrap();
+    let mk = |pkg: &str, survived: u32| Campaign {
+        package: pkg.to_string(),
+        commit: Some("a".repeat(40)),
+        recorded_at: "2026-08-24".to_string(),
+        command: Some("cargo mutants -p x".to_string()),
+        tool_version: Some("27.1.0".to_string()),
+        scope: "package".to_string(),
+        counts: Counts {
+            viable: 10,
+            caught: 10 - survived,
+            survived,
+            timeout: 0,
+            unviable: 0,
+        },
+        source: None,
+    };
+    let ledger = Ledger {
+        schema: 1,
+        campaigns: vec![
+            mk("liberado-a", 3),
+            mk("liberado-b", 5),
+            mk("liberado-a", 3), // exact duplicate of the first row
+        ],
+    };
+    save_ledger(root.path(), &ledger).expect("save succeeds");
 
-    clear_stale_outcomes(root.path()).expect("clearing an existing file succeeds");
-    assert!(!scratch.exists(), "the stale outcomes must be gone");
+    let reloaded = load_ledger(root.path()).expect("reload");
+    assert_eq!(reloaded.campaigns.len(), 2, "the duplicate is gone");
+    assert_eq!(reloaded.campaigns[0].package, "liberado-a");
+    assert_eq!(reloaded.campaigns[1].package, "liberado-b");
 
-    // Absent file is not an error: the common first-run path.
-    clear_stale_outcomes(root.path()).expect("clearing an absent file is fine");
+    // Distinct rows with equal survivors are NOT duplicates.
+    let varied = Ledger {
+        schema: 1,
+        campaigns: vec![mk("liberado-x", 4), mk("liberado-y", 4)],
+    };
+    save_ledger(root.path(), &varied).expect("save succeeds");
+    assert_eq!(load_ledger(root.path()).unwrap().campaigns.len(), 2);
+}
+
+// ── report/next flag parsing ─────────────────────────────────────────────────
+
+#[test]
+fn parse_include_all_accepts_nothing_or_all_only() {
+    let none: Vec<String> = vec![];
+    assert!(!parse_include_all(&mut none.iter().cloned(), "u").unwrap());
+
+    let all = vec!["--all".to_string()];
+    assert!(parse_include_all(&mut all.into_iter(), "u").unwrap());
+
+    // A typo must be a usage error naming what was seen, never a silent
+    // filtered run.
+    let typo = vec!["--al".to_string()];
+    let err = parse_include_all(
+        &mut typo.into_iter(),
+        "usage: liberado mutants report [--all]",
+    )
+    .unwrap_err();
+    assert!(err.contains("--al") && err.contains("usage"), "{err}");
 }

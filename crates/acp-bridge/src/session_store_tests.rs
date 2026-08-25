@@ -1,6 +1,8 @@
 //! Split from `session_store.rs` for module-health boundaries.
 
 use super::*;
+use std::fs;
+use std::io;
 use tempfile::TempDir;
 
 fn sample_record(id: &str) -> SessionRecord {
@@ -26,6 +28,53 @@ fn save_then_load_round_trips() {
         .expect("load must succeed")
         .expect("record must be present");
     assert_eq!(loaded, record, "loaded record must equal the saved one");
+}
+
+/// `create_dir_all` fails when the sessions "directory" is actually a file —
+/// the error path the happy path never sees. Needs the raw override (a plain
+/// path), since `set_sessions_dir` only accepts an existing temp directory.
+#[test]
+fn save_errors_when_the_sessions_dir_is_a_file() {
+    let dir = TempDir::new().unwrap();
+    let blocked = dir.path().join("blocked");
+    fs::write(&blocked, b"not a directory").unwrap();
+    let _guard = raw_override(blocked);
+
+    let err = save(&sample_record("lib-filed")).expect_err("must fail");
+    assert_ne!(err.kind(), io::ErrorKind::NotFound, "{err}");
+}
+
+/// A target that already exists as a *directory* makes the final rename fail;
+/// save must surface that error and clean up its temp file rather than leave
+/// debris beside the half-state.
+#[test]
+fn save_cleans_up_its_temp_file_when_the_rename_fails() {
+    let dir = TempDir::new().unwrap();
+    let _guards = set_sessions_dir(&dir);
+    // The record target is <sessions-dir>/lib-collide.json — as a directory,
+    // so the temp write succeeds and only the final rename fails.
+    fs::create_dir_all(dir.path().join("lib-collide.json")).unwrap();
+
+    let err = save(&sample_record("lib-collide")).expect_err("rename must fail");
+    assert_ne!(err.kind(), io::ErrorKind::NotFound, "{err}");
+    let leftovers: Vec<_> = fs::read_dir(dir.path())
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|n| n.ends_with(".tmp"))
+        .collect();
+    assert!(
+        leftovers.is_empty(),
+        "stale temp files left behind: {leftovers:?}"
+    );
+}
+
+/// Override the redirect target with an arbitrary path, holding the same lock
+/// discipline as [`set_sessions_dir`] (reset runs while the lock is held).
+fn raw_override(path: std::path::PathBuf) -> std::sync::MutexGuard<'static, ()> {
+    let lock = DIR_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    *TEST_SESSIONS_DIR.lock().unwrap() = Some(path);
+    lock
 }
 
 // ── Not found ───────────────────────────────────────────────────────
@@ -317,7 +366,7 @@ fn load_reports_corrupt_records_as_errors_not_as_absent() {
 fn updates_stamp_rfc3339_timestamps() {
     let dir = TempDir::new().unwrap();
     {
-        let (_lock, _g) = set_sessions_dir(&dir);
+        let _guard = set_sessions_dir(&dir);
         save(&sample_record("stamp")).unwrap();
         update_model("stamp", "m2").unwrap();
         let loaded = load("stamp").unwrap().unwrap();
