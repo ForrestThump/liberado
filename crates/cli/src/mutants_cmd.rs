@@ -5,10 +5,11 @@
 
 use crate::crate_map_cmd::{self, CrateInfo};
 use chrono::Utc;
+use fs4::fs_std::FileExt;
 use liberado_common::process::std_command;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
-use std::fs;
+use std::fs::{self, File, OpenOptions};
 use std::path::Path;
 
 pub const LEDGER_FILE: &str = "mutants-ledger.json";
@@ -66,16 +67,23 @@ pub fn run(args: &mut impl Iterator<Item = String>) -> Result<(), Box<dyn std::e
     let command = build_mutants_command(&crate_info.name, invocation.profile);
     eprintln!("[mutants] running: {command}");
     let status = run_support::spawn_mutants(&root, &command)?;
-    run_support::announce_record(
-        record_campaign(
-            &root,
-            Some(&invocation.crate_dir),
-            Some(&command),
-            invocation.profile,
-        )?,
-        status.success(),
-    );
-    Ok(())
+    let outcome = record_campaign(
+        &root,
+        Some(&invocation.crate_dir),
+        Some(&command),
+        invocation.profile,
+    )?;
+    run_support::announce_record(&outcome, status.success());
+    match outcome {
+        RecordOutcome::Appended { .. } => Ok(()),
+        // A baseline compile failure or killed run leaves nothing worth
+        // recording; exiting zero here would let `just mutants` report a
+        // green campaign that never happened.
+        RecordOutcome::SkippedIncomplete => Err(
+            "cargo mutants produced no complete outcomes (baseline failure or interrupted run); nothing recorded"
+                .into(),
+        ),
+    }
 }
 
 pub fn record(args: &mut impl Iterator<Item = String>) -> Result<(), Box<dyn std::error::Error>> {
@@ -274,9 +282,40 @@ fn record_campaign(
 }
 
 fn append_campaign(root: &Path, campaign: Campaign) -> Result<(), Box<dyn std::error::Error>> {
+    // The rename in `write_atomic` makes one write indivisible, but the whole
+    // update is read-modify-write. Two agents appending at once could each read
+    // the same ledger and the last rename would drop the other's row — the
+    // exact concurrent-agent workflow the skill documents. Hold an OS lock
+    // (BSD flock / Windows LockFileEx via fs4) across the sequence; the kernel
+    // releases it if a process dies, so no stale lock can wedge later runs.
+    let _guard = ledger_lock(root)?;
     let mut ledger = load_ledger(root)?;
     ledger.campaigns.push(campaign);
     save_ledger(root, &ledger)
+}
+
+/// Cross-process exclusive hold over the ledger read-modify-write window.
+/// Blocking acquisition is deliberate: the critical section is two small file
+/// operations, so waiting always beats failing a campaign that took minutes.
+struct LedgerLock(File);
+
+impl Drop for LedgerLock {
+    fn drop(&mut self) {
+        // Explicit unlock before close: closing would release anyway, but
+        // naming it keeps the invariant visible and the handle read.
+        let _ = FileExt::unlock(&self.0);
+    }
+}
+
+fn ledger_lock(root: &Path) -> Result<LedgerLock, Box<dyn std::error::Error>> {
+    let path = root.join(format!("{LEDGER_FILE}.lock"));
+    let file = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(&path)?;
+    FileExt::lock_exclusive(&file)?;
+    Ok(LedgerLock(file))
 }
 
 pub fn load_ledger(root: &Path) -> Result<Ledger, Box<dyn std::error::Error>> {

@@ -77,7 +77,7 @@ pub(super) fn spawn_mutants(
 }
 
 /// Say what recording did, and say it honestly when cargo-mutants failed.
-pub(super) fn announce_record(outcome: RecordOutcome, cargo_success: bool) {
+pub(super) fn announce_record(outcome: &RecordOutcome, cargo_success: bool) {
     match outcome {
         RecordOutcome::Appended { package, commit } => {
             eprintln!("[mutants] recorded campaign for {package} at {commit}");

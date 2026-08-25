@@ -763,3 +763,64 @@ fn parse_include_all_accepts_nothing_or_all_only() {
     .unwrap_err();
     assert!(err.contains("--al") && err.contains("usage"), "{err}");
 }
+
+/// Two agents appending at once must both land: `append_campaign` is a
+/// read-modify-write, so without the ledger lock the last rename would
+/// silently drop whichever row it did not carry.
+#[test]
+fn concurrent_appends_both_survive_the_read_modify_write() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    fs::write(
+        root.join(LEDGER_FILE),
+        r#"{"schema":1,"campaigns":[{"package":"liberado-seed","commit":null,"recorded_at":"2026-08-25","scope":"package","source":"markdown-seed","counts":{"viable":1,"caught":1,"survived":0,"timeout":0,"unviable":0}}]}"#,
+    )
+    .unwrap();
+
+    fn row(package: &str) -> Campaign {
+        Campaign {
+            package: package.into(),
+            commit: Some("feedface".into()),
+            recorded_at: "2026-08-25".into(),
+            command: Some("cargo mutants".into()),
+            tool_version: Some("27.1.0".into()),
+            scope: "package".into(),
+            counts: Counts {
+                viable: 2,
+                caught: 2,
+                survived: 0,
+                timeout: 0,
+                unviable: 0,
+            },
+            source: None,
+        }
+    }
+
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+    let mut handles = Vec::new();
+    for package in ["liberado-agent-a", "liberado-agent-b"] {
+        let root = root.to_path_buf();
+        let barrier = std::sync::Arc::clone(&barrier);
+        // `Box<dyn Error>` is not `Send`; flatten to a string inside the thread.
+        handles.push(std::thread::spawn(move || {
+            barrier.wait();
+            append_campaign(&root, row(package)).map_err(|e| e.to_string())
+        }));
+    }
+    for handle in handles {
+        handle.join().unwrap().unwrap();
+    }
+
+    let packages: Vec<String> = load_ledger(root)
+        .unwrap()
+        .campaigns
+        .iter()
+        .map(|c| c.package.clone())
+        .collect();
+    assert!(
+        packages.contains(&"liberado-agent-a".to_string())
+            && packages.contains(&"liberado-agent-b".to_string()),
+        "both concurrent rows must survive: {packages:?}"
+    );
+    assert_eq!(packages.len(), 3, "seed plus exactly two appends");
+}
