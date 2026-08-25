@@ -106,16 +106,19 @@ fn apply_flag(
             Ok(())
         }
         "--max-concurrent" => {
-            let raw = iter
-                .next()
-                .ok_or("--max-concurrent needs a value")?
-                .parse()
-                .map_err(|_| "--max-concurrent wants a number")?;
-            args.max_concurrent = raw;
+            args.max_concurrent = parse_max_concurrent(iter)?;
             Ok(())
         }
         other => Err(usage(format!("unknown argument: {other}"))),
     }
+}
+
+/// Parse the `--max-concurrent` value: present and numeric, or a named usage error.
+fn parse_max_concurrent(iter: &mut impl Iterator<Item = String>) -> Result<usize, String> {
+    iter.next()
+        .ok_or("--max-concurrent needs a value")?
+        .parse()
+        .map_err(|_| "--max-concurrent wants a number".to_string())
 }
 
 /// Flags whose value lands in one string-ish field, named after the flag itself.
