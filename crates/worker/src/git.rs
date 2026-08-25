@@ -91,8 +91,18 @@ pub fn is_dirty(worktree: &Path) -> bool {
         .unwrap_or(false)
 }
 
+/// Paths the worker writes for its own bookkeeping. They document the run and stay on
+/// the worker (plan §16); they are never part of the deliverable branch.
+pub const WORKER_LOCAL_PATHS: &[&str] = &["coder-traces", ".liberado"];
+
 pub async fn commit_all(worktree: &Path, message: &str) -> Result<(), GitError> {
-    git(worktree, &["add", "-A"]).await?;
+    let excludes: Vec<String> = WORKER_LOCAL_PATHS
+        .iter()
+        .map(|path| format!(":(exclude){path}"))
+        .collect();
+    let mut add = vec!["add", "-A", "--", "."];
+    add.extend(excludes.iter().map(String::as_str));
+    git(worktree, &add).await?;
     git(
         worktree,
         &[

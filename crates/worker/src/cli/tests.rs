@@ -100,6 +100,22 @@ fn worker_token_env_var_is_the_fallback_token_source() {
 }
 
 #[test]
+fn model_resolution_prefers_the_flag_then_the_provider_default() {
+    let mut args = defaults(&[("LIBERADO_WORKER_TOKEN", "t")]);
+    assert_eq!(
+        args.effective_model("topology-model"),
+        "topology-model",
+        "with no --model flag, the profile's default_model configures the run"
+    );
+    args.model = Some("flag-model".into());
+    assert_eq!(
+        args.effective_model("topology-model"),
+        "flag-model",
+        "an explicit --model overrides topology"
+    );
+}
+
+#[test]
 fn a_missing_token_is_a_usage_error_naming_the_variable() {
     let error = parse_args(argv(&[]), &env_of(&[])).expect_err("no token must fail");
     assert!(error.contains("usage"), "{error}");

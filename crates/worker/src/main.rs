@@ -35,7 +35,7 @@ async fn run() -> Result<(), String> {
         std::env::var("LIBERADO_CODER_PROVIDER").ok().as_deref(),
     )?;
 
-    let settings = Arc::new(settings_from_args(&args));
+    let settings = Arc::new(settings_from_args(&args, &profile));
 
     // Forge construction happens here because the token is a secret; the runner only
     // ever sees the trait object.
@@ -77,13 +77,16 @@ async fn run() -> Result<(), String> {
     Ok(())
 }
 
-fn settings_from_args(args: &Args) -> WorkerSettings {
+fn settings_from_args(
+    args: &Args,
+    profile: &liberado_config_loader::ProviderProfile,
+) -> WorkerSettings {
     WorkerSettings {
         bind: args.bind.clone(),
         token: args.token.clone(),
         data_dir: args.data_dir.clone(),
         config_dir: args.config_dir.clone(),
-        model: args.model.clone(),
+        model: Some(args.effective_model(&profile.default_model)),
         forge_url: args.forge_url.clone(),
         forge_token: args.forge_token.clone(),
         clone_base_url: args.clone_base_url.clone(),

@@ -37,11 +37,19 @@ impl CoderBackend for WriteFileBackend {
         )
         .await
         .map_err(|error| CoderError::Backend(error.to_string()))?;
+        // The pack writes its traces into the worktree; the branch must not carry them.
+        let traces = root.join("coder-traces");
+        tokio::fs::create_dir_all(&traces)
+            .await
+            .map_err(|error| CoderError::Backend(error.to_string()))?;
+        tokio::fs::write(traces.join("session.json"), "{}\n")
+            .await
+            .map_err(|error| CoderError::Backend(error.to_string()))?;
         Ok(CoderRunResult {
             backend: self.name().to_string(),
             outcome: self.outcome,
             summary: "wrote delivered.txt".into(),
-            files_changed: vec!["delivered.txt".into()],
+            files_changed: vec!["delivered.txt".into(), "coder-traces/session.json".into()],
             file_changes: vec![],
             validation_notes: None,
             critic_verdict: None,
@@ -203,6 +211,17 @@ fn branch_tip(remote: &Path, branch: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// Every path in the branch's tree, one `ls-tree` line per file.
+fn branch_tree(remote: &Path, branch: &str) -> String {
+    let output = std::process::Command::new("git")
+        .arg("-C")
+        .arg(remote)
+        .args(["ls-tree", "-r", "--name-only", branch])
+        .output()
+        .expect("git ls-tree runs");
+    String::from_utf8_lossy(&output.stdout).into_owned()
+}
+
 // --- the pipeline --------------------------------------------------------
 
 /// The D1 acceptance path: a succeeded pack run lands a pushed branch and an open PR.
@@ -250,16 +269,31 @@ async fn a_succeeded_run_pushes_a_delegate_branch_and_opens_the_pr() {
     assert!(opened[0].body.contains("01JTESTTASK000000"));
     assert!(opened[0].body.contains("- [ ] a file appears"));
     assert!(opened[0].body.contains("wrote delivered.txt"));
-
-    // Worktree persists for inspection; the record carries session + PR.
+    // The body describes the deliverable, not worker bookkeeping.
     assert!(
-        h.settings
-            .worktrees_dir()
-            .join("01JTESTTASK000000")
-            .exists()
+        !opened[0].body.contains("coder-traces"),
+        "PR body must not list trace files"
+    );
+    assert!(opened[0].body.contains("- Files changed: 1"));
+
+    // Worktree persists for inspection — including this run's traces; the record
+    // carries session + PR.
+    let worktree = h.settings.worktrees_dir().join("01JTESTTASK000000");
+    assert!(worktree.exists());
+    assert!(
+        worktree.join("coder-traces/session.json").exists(),
+        "traces stay on the worker even though they are not committed"
     );
     assert_eq!(record.pr_url.as_deref(), Some(url.as_str()));
     assert!(record.session_id.is_some());
+
+    // The pushed branch carries the deliverable and not the traces.
+    let tree = branch_tree(&h.remote, &branch);
+    assert!(tree.contains("delivered.txt"));
+    assert!(
+        !tree.contains("coder-traces"),
+        "plan §16: traces must not travel on the branch"
+    );
 }
 
 /// A failed pack run is an honest failure: no push, no PR, worktree kept.
@@ -334,4 +368,36 @@ fn branch_name_honors_the_grant_namespace() {
     let mut s = spec("do things");
     s.grant.branch_namespace = Some("bench-box".into());
     assert_eq!(branch_name(&s), "delegate/bench-box/do-things");
+}
+
+fn result_with_files(files: Vec<&str>) -> liberado_coder_core::CoderRunResult {
+    liberado_coder_core::CoderRunResult {
+        backend: "stub".into(),
+        outcome: Outcome::Succeeded,
+        summary: "did things".into(),
+        files_changed: files.into_iter().map(str::to_string).collect(),
+        file_changes: vec![],
+        validation_notes: None,
+        critic_verdict: None,
+        gate_votes: vec![],
+        trace_path: None,
+        diff_findings: vec![],
+        session_findings: vec![],
+        remediation: None,
+        diagnostics: serde_json::Value::Null,
+    }
+}
+
+#[test]
+fn pr_body_lists_deliverables_not_worker_bookkeeping() {
+    let result = result_with_files(vec![
+        "src/lib.rs",
+        "coder-traces/session.json",
+        ".liberado/offload/big.bin",
+    ]);
+    let body = super::pr_body(&spec("body test"), &result);
+    assert!(body.contains("- Files changed: 1"), "{body}");
+    assert!(body.contains("`src/lib.rs`"));
+    assert!(!body.contains("coder-traces"), "{body}");
+    assert!(!body.contains(".liberado"), "{body}");
 }

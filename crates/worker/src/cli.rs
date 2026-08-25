@@ -36,6 +36,17 @@ impl EnvLookup for ProcessEnv {
     }
 }
 
+impl Args {
+    /// Model precedence: the explicit flag wins, otherwise the provider profile's
+    /// declared default — topology alone must be able to configure a worker end to end,
+    /// and a profile's endpoint, key, and default model belong together.
+    pub fn effective_model(&self, profile_default_model: &str) -> String {
+        self.model
+            .clone()
+            .unwrap_or_else(|| profile_default_model.to_string())
+    }
+}
+
 pub fn parse_args(
     argv: impl Iterator<Item = String>,
     env: &impl EnvLookup,
@@ -58,29 +69,7 @@ pub fn parse_args(
     };
     let mut iter = argv;
     while let Some(flag) = iter.next() {
-        let mut value = |name: &str| iter.next().ok_or_else(|| format!("{name} needs a value"));
-        match flag.as_str() {
-            "--bind" => args.bind = value("--bind")?,
-            "--data-dir" => args.data_dir = PathBuf::from(value("--data-dir")?),
-            "--config-dir" => args.config_dir = Some(PathBuf::from(value("--config-dir")?)),
-            "--model" => args.model = Some(value("--model")?),
-            "--forge-url" => args.forge_url = Some(value("--forge-url")?),
-            "--clone-base-url" => args.clone_base_url = Some(value("--clone-base-url")?),
-            "--forge-token-env" => {
-                let name = value("--forge-token-env")?;
-                args.forge_token = env.var(&name).ok_or_else(|| format!("{name} is not set"))?;
-            }
-            "--token-env" => {
-                let name = value("--token-env")?;
-                args.token = env.var(&name).ok_or_else(|| format!("{name} is not set"))?;
-            }
-            "--max-concurrent" => {
-                args.max_concurrent = value("--max-concurrent")?
-                    .parse()
-                    .map_err(|_| "--max-concurrent wants a number")?
-            }
-            other => return Err(usage(format!("unknown argument: {other}"))),
-        }
+        apply_flag(&mut args, &flag, &mut iter, env)?;
     }
     if args.token.is_empty() {
         args.token = env
@@ -91,6 +80,40 @@ pub fn parse_args(
         args.forge_token = env.var("LIBERADO_FORGE_TOKEN").unwrap_or_default();
     }
     Ok(args)
+}
+
+/// Apply one `--flag [value]` pair. Split from [`parse_args`] so adding a flag costs
+/// the loop no complexity — the CRAP ratchet reads this file.
+fn apply_flag(
+    args: &mut Args,
+    flag: &str,
+    iter: &mut impl Iterator<Item = String>,
+    env: &impl EnvLookup,
+) -> Result<(), String> {
+    let mut value = |name: &str| iter.next().ok_or_else(|| format!("{name} needs a value"));
+    match flag {
+        "--bind" => args.bind = value("--bind")?,
+        "--data-dir" => args.data_dir = PathBuf::from(value("--data-dir")?),
+        "--config-dir" => args.config_dir = Some(PathBuf::from(value("--config-dir")?)),
+        "--model" => args.model = Some(value("--model")?),
+        "--forge-url" => args.forge_url = Some(value("--forge-url")?),
+        "--clone-base-url" => args.clone_base_url = Some(value("--clone-base-url")?),
+        "--forge-token-env" => {
+            let name = value("--forge-token-env")?;
+            args.forge_token = env.var(&name).ok_or_else(|| format!("{name} is not set"))?;
+        }
+        "--token-env" => {
+            let name = value("--token-env")?;
+            args.token = env.var(&name).ok_or_else(|| format!("{name} is not set"))?;
+        }
+        "--max-concurrent" => {
+            args.max_concurrent = value("--max-concurrent")?
+                .parse()
+                .map_err(|_| "--max-concurrent wants a number")?
+        }
+        other => return Err(usage(format!("unknown argument: {other}"))),
+    }
+    Ok(())
 }
 
 fn usage(message: impl std::fmt::Display) -> String {

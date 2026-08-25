@@ -5,14 +5,14 @@ use liberado_delegate_contract::{SubmitOutcome, TaskRecord, TaskSpec, WorkerHeal
 /// `liberado delegate …` — the delegator-side client of a worker's control plane
 /// (`docs/future-work/delegate-network-plan.md`). Thin async HTTP over the shared
 /// contract, routed like `chat` rather than through the sync router: a blocking client
-/// panics when its runtime drops inside the daemon-adjacent dispatch context. All
-/// logic lives on the worker.
+/// panics when its runtime drops inside the daemon-adjacent dispatch context. All logic
+/// lives on the worker; this file owns argument grammar, transport, and rendering.
 pub async fn run(args: &mut impl Iterator<Item = String>) -> Result<(), Box<dyn Error>> {
     match args.next().as_deref() {
-        Some("submit") => submit(args).await,
-        Some("status") => status(args).await,
-        Some("cancel") => cancel(args).await,
-        Some("health") => health(args).await,
+        Some("submit") => cmd_submit(args).await,
+        Some("status") => cmd_status(args).await,
+        Some("cancel") => cmd_cancel(args).await,
+        Some("health") => cmd_health(args).await,
         _ => Err(usage("unknown or missing subcommand").into()),
     }
 }
@@ -28,6 +28,17 @@ fn usage(message: &str) -> String {
          Env: LIBERADO_DELEGATE_ENDPOINT (required unless --endpoint),\n\
          \x20\x20\x20\x20 LIBERADO_DELEGATE_TOKEN (default token source)"
     )
+}
+
+/// Print to stdout, exiting quietly when the pipe closes. `liberado delegate … | head`
+/// is normal usage; Rust ignores SIGPIPE, so an unchecked write would panic the CLI
+/// instead of doing what every other Unix tool does — stop.
+fn emit(text: &str) {
+    use std::io::Write;
+    let mut out = std::io::stdout();
+    if out.write_all(text.as_bytes()).is_err() || out.write_all(b"\n").is_err() {
+        std::process::exit(0);
+    }
 }
 
 #[derive(Debug, Default, PartialEq)]
@@ -105,47 +116,31 @@ async fn checked(response: reqwest::Response) -> Result<String, String> {
     }
 }
 
-async fn submit(mut args: impl Iterator<Item = String>) -> Result<(), Box<dyn Error>> {
-    // First positional is the subcommand's file argument; re-parse what follows it.
+fn pretty<T: serde::Serialize>(value: &T) -> Result<String, String> {
+    serde_json::to_string_pretty(value).map_err(|error| error.to_string())
+}
+
+// --- subcommand wrappers: grammar + env + output -------------------------
+
+async fn cmd_submit(mut args: impl Iterator<Item = String>) -> Result<(), Box<dyn Error>> {
     let (file, flags) = parse_flags(&mut args, "task.json path").map_err(|error| usage(&error))?;
     let file = file.ok_or_else(|| usage("submit needs a task.json path"))?;
     let connection = connection(&flags)?;
-
-    let raw = std::fs::read_to_string(&file).map_err(|error| format!("read {file}: {error}"))?;
-    let spec: TaskSpec =
-        serde_json::from_str(&raw).map_err(|error| format!("{file} is not a TaskSpec: {error}"))?;
-
-    let body = checked(
-        request(&connection, reqwest::Method::POST, routes::TASKS)
-            .json(&spec)
-            .send()
-            .await
-            .map_err(|error| format!("post worker tasks endpoint: {error}"))?,
-    )
-    .await?;
-    let outcome: SubmitOutcome = serde_json::from_str(&body)?;
-
-    if outcome.duplicate {
-        println!(
-            "duplicate submit ignored (id {} already exists); current status below",
-            spec.id
-        );
-    } else {
-        println!("submitted task {}", spec.id);
-    }
-    println!("{}", serde_json::to_string_pretty(&outcome.record)?);
+    let text = submit_from_file(&connection, &file).await?;
+    emit(&text);
     Ok(())
 }
 
-async fn status(mut args: impl Iterator<Item = String>) -> Result<(), Box<dyn Error>> {
+async fn cmd_status(mut args: impl Iterator<Item = String>) -> Result<(), Box<dyn Error>> {
     let (id, flags) = parse_flags(&mut args, "task-id").map_err(|error| usage(&error))?;
     let id = id.ok_or_else(|| usage("status needs a task-id"))?;
-    let record = fetch_task(&id, &flags).await?;
-    println!("{}", serde_json::to_string_pretty(&record)?);
+    let connection = connection(&flags)?;
+    let record = fetch_task(&connection, &id).await?;
+    emit(&pretty(&record)?);
     Ok(())
 }
 
-async fn cancel(mut args: impl Iterator<Item = String>) -> Result<(), Box<dyn Error>> {
+async fn cmd_cancel(mut args: impl Iterator<Item = String>) -> Result<(), Box<dyn Error>> {
     let (id, flags) = parse_flags(&mut args, "task-id").map_err(|error| usage(&error))?;
     let id = id.ok_or_else(|| usage("cancel needs a task-id"))?;
     let connection = connection(&flags)?;
@@ -160,36 +155,65 @@ async fn cancel(mut args: impl Iterator<Item = String>) -> Result<(), Box<dyn Er
         .map_err(|error| format!("post cancel: {error}"))?,
     )
     .await?;
-    let record: TaskRecord = serde_json::from_str(&body)?;
-    println!("{}", serde_json::to_string_pretty(&record)?);
+    let record: TaskRecord = serde_json::from_str(&body).map_err(|error| error.to_string())?;
+    emit(&pretty(&record)?);
     Ok(())
 }
 
-async fn health(mut args: impl Iterator<Item = String>) -> Result<(), Box<dyn Error>> {
+async fn cmd_health(mut args: impl Iterator<Item = String>) -> Result<(), Box<dyn Error>> {
     let (_none, flags) = parse_flags(&mut args, "").map_err(|error| usage(&error))?;
     let connection = connection(&flags)?;
-    let body = checked(
-        request(&connection, reqwest::Method::GET, routes::HEALTH)
-            .send()
-            .await
-            .map_err(|error| format!("get health: {error}"))?,
-    )
-    .await?;
-    let health: WorkerHealth = serde_json::from_str(&body)?;
-    println!(
+    let health = fetch_health(&connection).await?;
+    emit(&format!(
         "worker {} version {} fingerprint {}",
         health.status, health.version, health.fingerprint
-    );
+    ));
     Ok(())
 }
 
-async fn fetch_task(id: &str, flags: &Flags) -> Result<TaskRecord, String> {
-    let connection = connection(flags)?;
+// --- injectable cores: connection in, result or reason out ---------------
+
+/// Read a TaskSpec from disk, submit it, and render the outcome text. Duplicate
+/// delivery is reported as the no-op it was, with the stored record for comparison.
+async fn submit_from_file(connection: &Connection, path: &str) -> Result<String, String> {
+    let raw = std::fs::read_to_string(path).map_err(|error| format!("read {path}: {error}"))?;
+    let spec: TaskSpec =
+        serde_json::from_str(&raw).map_err(|error| format!("{path} is not a TaskSpec: {error}"))?;
+    let response = request(connection, reqwest::Method::POST, routes::TASKS)
+        .json(&spec)
+        .send()
+        .await
+        .map_err(|error| format!("post worker tasks endpoint: {error}"))?;
+    let outcome: SubmitOutcome =
+        serde_json::from_str(&checked(response).await?).map_err(|error| error.to_string())?;
+    let header = if outcome.duplicate {
+        format!(
+            "duplicate submit ignored (id {} already exists); current status below",
+            spec.id
+        )
+    } else {
+        format!("submitted task {}", spec.id)
+    };
+    Ok(format!("{header}\n{}", pretty(&outcome.record)?))
+}
+
+async fn fetch_task(connection: &Connection, id: &str) -> Result<TaskRecord, String> {
     let body = checked(
-        request(&connection, reqwest::Method::GET, &routes::task(id))
+        request(connection, reqwest::Method::GET, &routes::task(id))
             .send()
             .await
             .map_err(|error| format!("get task: {error}"))?,
+    )
+    .await?;
+    serde_json::from_str(&body).map_err(|error| error.to_string())
+}
+
+async fn fetch_health(connection: &Connection) -> Result<WorkerHealth, String> {
+    let body = checked(
+        request(connection, reqwest::Method::GET, routes::HEALTH)
+            .send()
+            .await
+            .map_err(|error| format!("get health: {error}"))?,
     )
     .await?;
     serde_json::from_str(&body).map_err(|error| error.to_string())
