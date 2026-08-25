@@ -45,6 +45,7 @@
 //!   liberado mutants next [--all]        suggest the next crate to mutation-test
 //!   liberado delegate submit <task.json>  hand a coding task to a LAN delegation worker
 //!   liberado delegate status <task-id>    poll one delegated task on the worker
+//!   liberado delegate watch <task-id>     stream one task's events until it terminates
 //!   liberado delegate cancel <task-id>    queue-level cancel of one delegated task
 //!   liberado delegate health              liveness + build fingerprint of a worker
 //!

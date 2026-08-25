@@ -10,10 +10,11 @@ use std::sync::Arc;
 use axum::extract::{Path, State};
 use axum::http::{Request, StatusCode, header};
 use axum::middleware::{self, Next};
+use axum::response::sse::{Event as SseEvent, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use liberado_delegate_contract::{RejectReason, TaskSpec, WorkerHealth};
+use liberado_delegate_contract::{RejectReason, TaskSpec, WorkerEvent, WorkerHealth};
 
 use crate::queue::TaskStore;
 use crate::runner::{self, RunContext};
@@ -31,6 +32,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route(liberado_delegate_contract::routes::HEALTH, get(health))
         .route(liberado_delegate_contract::routes::TASKS, post(submit))
         .route("/v1/delegate/tasks/{task_id}", get(get_task))
+        .route("/v1/delegate/tasks/{task_id}/events", get(task_events))
         .route("/v1/delegate/tasks/{task_id}/cancel", post(cancel))
         .route_layer(middleware::from_fn_with_state(state.clone(), bearer_auth));
     protected.with_state(state)
@@ -120,6 +122,71 @@ async fn get_task(State(state): State<Arc<AppState>>, Path(task_id): Path<String
     }
 }
 
+/// The task's event stream: journal replay first, then live until a terminal event.
+///
+/// Subscribe *before* reading the journal, then deduplicate by correlation id while
+/// splicing — otherwise an event landing in the gap is either lost (subscribe after
+/// read) or delivered twice (read after subscribe without the check). At-least-once
+/// with stable ids turns both hazards into a client-side skip.
+async fn task_events(State(state): State<Arc<AppState>>, Path(task_id): Path<String>) -> Response {
+    if state.store.get(&task_id).ok().flatten().is_none() {
+        return not_found(&task_id);
+    }
+    let mut live = state.store.subscribe();
+    let replay = state.store.replay(&task_id).unwrap_or_default();
+    let seen: std::collections::HashSet<String> = replay
+        .iter()
+        .map(|event| event.correlation_id.clone())
+        .collect();
+
+    let stream = async_stream::stream! {
+        for event in &replay {
+            yield Ok::<SseEvent, std::convert::Infallible>(worker_event_to_sse(event));
+        }
+        // A task that already finished has its terminal event in the journal; waiting
+        // on the broadcast after it would park the connection forever — the channel
+        // carries no history and no close signal.
+        if replay.last().is_some_and(WorkerEvent::is_terminal) {
+            return;
+        }
+        loop {
+            match live.recv().await {
+                Ok(event) => {
+                    if seen.contains(&event.correlation_id) {
+                        continue;
+                    }
+                    let terminal = event.is_terminal();
+                    yield Ok(worker_event_to_sse(&event));
+                    if terminal {
+                        break;
+                    }
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+            }
+        }
+    };
+
+    // Same heartbeat rationale as the daemon's chat stream: a long tool call emits
+    // nothing for minutes, and an idle connection is one an intermediary may close.
+    Sse::new(Box::pin(stream))
+        .keep_alive(KeepAlive::new().interval(std::time::Duration::from_secs(15)))
+        .into_response()
+}
+
+/// Encode one [`WorkerEvent`] as SSE. The frame's event name is the kind's serde tag;
+/// the data is the full event JSON, correlation id included for client-side dedupe.
+fn worker_event_to_sse(event: &WorkerEvent) -> SseEvent {
+    let name = match event.kind {
+        liberado_delegate_contract::EventKind::Question => "question",
+        liberado_delegate_contract::EventKind::StatusChanged => "status_changed",
+        liberado_delegate_contract::EventKind::PrReady => "pr_ready",
+        liberado_delegate_contract::EventKind::Blocked => "blocked",
+    };
+    let data = serde_json::to_string(event).unwrap_or_else(|_| "{}".into());
+    SseEvent::default().event(name).data(data)
+}
+
 async fn cancel(State(state): State<Arc<AppState>>, Path(task_id): Path<String>) -> Response {
     match state.store.cancel(&task_id) {
         Ok(record) => (StatusCode::OK, Json(record)).into_response(),
@@ -150,3 +217,6 @@ fn internal_error(message: String) -> Response {
     )
         .into_response()
 }
+
+#[cfg(test)]
+mod tests;

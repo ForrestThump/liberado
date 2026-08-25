@@ -8,7 +8,9 @@ use std::sync::{Arc, Mutex};
 
 use liberado_coder_core::{CoderBackend, CoderError, CoderRunRequest, CoderRunResult};
 use liberado_common::Outcome;
-use liberado_delegate_contract::{Acceptance, TaskBudget, TaskGrant, TaskId, TaskSpec, TaskStatus};
+use liberado_delegate_contract::{
+    Acceptance, TaskBudget, TaskGrant, TaskId, TaskSpec, TaskStatus, WorkerEvent,
+};
 use liberado_forge::{
     CheckStates, ForgeClient, ForgeError, MergeCommit, MergeMethod, OpenPr, PrRef,
 };
@@ -124,6 +126,7 @@ struct Harness {
     root: tempfile::TempDir,
     remote: PathBuf,
     settings: Arc<WorkerSettings>,
+    store: Arc<TaskStore>,
 }
 
 fn harness() -> Harness {
@@ -155,6 +158,7 @@ fn harness() -> Harness {
     run(&seed, &["init", "-q", "--bare", &remote.to_string_lossy()]);
     run(&seed, &["push", "-q", &remote.to_string_lossy(), "main"]);
 
+    let store = Arc::new(TaskStore::open(&root.path().join("data")).expect("store"));
     let settings = Arc::new(WorkerSettings {
         bind: "127.0.0.1:0".into(),
         token: "test-token".into(),
@@ -171,6 +175,7 @@ fn harness() -> Harness {
         root,
         remote,
         settings,
+        store,
     }
 }
 
@@ -288,6 +293,34 @@ async fn a_succeeded_run_pushes_a_delegate_branch_and_opens_the_pr() {
     );
     assert_eq!(record.pr_url.as_deref(), Some(url.as_str()));
     assert!(record.session_id.is_some());
+
+    // The real execution path journals every transition with rising correlations.
+    use liberado_delegate_contract::EventKind;
+    let events = h.store.replay("01JTESTTASK000000").expect("replay");
+    let kinds: Vec<EventKind> = events.iter().map(|event| event.kind).collect();
+    assert_eq!(
+        kinds,
+        vec![
+            EventKind::StatusChanged,
+            EventKind::StatusChanged,
+            EventKind::PrReady
+        ],
+        "{events:?}"
+    );
+    for pair in events.windows(2) {
+        let seq = |e: &WorkerEvent| -> u64 {
+            e.correlation_id
+                .rsplit(':')
+                .next()
+                .unwrap()
+                .parse()
+                .expect("seq")
+        };
+        assert!(
+            seq(&pair[1]) > seq(&pair[0]),
+            "correlations increase: {events:?}"
+        );
+    }
 
     // The pushed branch carries the deliverable and not the traces.
     let tree = branch_tree(&h.remote, &branch);

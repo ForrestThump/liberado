@@ -5,11 +5,19 @@
 //! needed at this scale: a torn record loses only status, never the work — branches and
 //! commits live in git, traces in the worktree).
 //!
+//! Every transition also appends a [`WorkerEvent`] to `<task_id>/events.jsonl` with a
+//! persisted monotonic sequence baked into its correlation id (`delegate:<id>:<seq>`),
+//! then offers it to live subscribers. Replay-from-journal plus correlation ids is what
+//! makes the event stream at-least-once-safe: a client that reconnects gets the full
+//! history and deduplicates anything it saw twice.
+//!
 //! Idempotency lives here and nowhere else: `submit` keys on `TaskSpec.id`, so an
 //! at-least-once redelivery returns the stored record with `duplicate = true` instead of
 //! running the task twice. This is the same discipline the vault inbox uses.
 
 use std::path::PathBuf;
+
+use liberado_delegate_contract::{EventKind, WorkerEvent};
 
 use liberado_delegate_contract::{SubmitOutcome, TaskId, TaskRecord, TaskSpec, TaskStatus};
 
@@ -36,15 +44,29 @@ pub enum CancelError {
     Queue(#[from] QueueError),
 }
 
+/// Broadcast capacity for live subscribers. Replay-from-disk covers everyone else;
+/// a slow SSE client that falls this far behind mid-stream skips forward rather than
+/// stalling the worker (`Lagged` handling in the stream), and its correlation ids let
+/// it notice the gap.
+const EVENT_CHANNEL_CAPACITY: usize = 256;
+
 pub struct TaskStore {
     root: PathBuf,
+    events: tokio::sync::broadcast::Sender<WorkerEvent>,
 }
 
 impl TaskStore {
     pub fn open(data_dir: &std::path::Path) -> Result<Self, QueueError> {
         let root = data_dir.join("delegate").join("tasks");
         std::fs::create_dir_all(&root)?;
-        Ok(Self { root })
+        let (events, _) = tokio::sync::broadcast::channel(EVENT_CHANNEL_CAPACITY);
+        Ok(Self { root, events })
+    }
+
+    /// Live subscription to task events. Late joiners get history through
+    /// [`TaskStore::replay`]; the stream handlers splice the two together.
+    pub fn subscribe(&self) -> tokio::sync::broadcast::Receiver<WorkerEvent> {
+        self.events.subscribe()
     }
 
     fn task_dir(&self, id: &TaskId) -> PathBuf {
@@ -88,15 +110,7 @@ impl TaskStore {
             });
         }
         std::fs::create_dir_all(&dir)?;
-        self.write_json(&dir.join("task.json"), spec)?;
-        let record = TaskRecord {
-            spec: spec.clone(),
-            status: TaskStatus::Queued,
-            session_id: None,
-            pr_url: None,
-            updated_at: now_rfc3339(),
-        };
-        self.write_json(&dir.join("record.json"), &record)?;
+        let record = self.persist_new_task(spec)?;
         Ok(SubmitOutcome {
             record,
             duplicate: false,
@@ -113,7 +127,7 @@ impl TaskStore {
 
     /// Move a task into `Running`, recording the coding session id.
     pub fn mark_running(&self, id: &TaskId, session_id: &str) -> Result<TaskRecord, QueueError> {
-        self.patch(id, |record| {
+        self.transition(id, EventKind::StatusChanged, |record| {
             record.status = TaskStatus::Running;
             record.session_id = Some(session_id.to_string());
         })
@@ -121,15 +135,49 @@ impl TaskStore {
 
     /// Record a terminal status (`PrOpened` / `Failed` / `Cancelled`). The PR URL is
     /// lifted out of the variant so surfaces can render it without matching on status.
+    /// A `PrOpened` transition emits [`EventKind::PrReady`] — the event the delegator's
+    /// inbox wakes on; every other terminal lands as a plain status change.
     pub fn finish(&self, id: &TaskId, status: TaskStatus) -> Result<TaskRecord, QueueError> {
-        let pr_url = match &status {
-            TaskStatus::PrOpened { url } => Some(url.clone()),
-            _ => None,
-        };
-        self.patch(id, |record| {
+        let (kind, pr_url) = event_shape(&status);
+        let record = self.transition(id, kind, |record| {
             record.status = status.clone();
-            record.pr_url = pr_url.clone();
-        })
+            record.pr_url = pr_url;
+        })?;
+        Ok(record)
+    }
+
+    /// One state change plus its journalled event, applied together. Every public
+    /// transition funnels through here so emission cannot be forgotten and this file's
+    /// per-function complexity stays flat.
+    fn transition(
+        &self,
+        id: &TaskId,
+        kind: EventKind,
+        change: impl FnOnce(&mut TaskRecord),
+    ) -> Result<TaskRecord, QueueError> {
+        let record = self.patch(id, change)?;
+        self.record_event(id, kind, status_payload(&record.status))?;
+        Ok(record)
+    }
+
+    /// First delivery: write the spec, the initial record, and the queued event.
+    fn persist_new_task(&self, spec: &TaskSpec) -> Result<TaskRecord, QueueError> {
+        let dir = self.task_dir(&spec.id);
+        let record = TaskRecord {
+            spec: spec.clone(),
+            status: TaskStatus::Queued,
+            session_id: None,
+            pr_url: None,
+            updated_at: now_rfc3339(),
+        };
+        self.write_json(&dir.join("task.json"), spec)?;
+        self.write_json(&dir.join("record.json"), &record)?;
+        self.record_event(
+            &spec.id,
+            EventKind::StatusChanged,
+            status_payload(&record.status),
+        )?;
+        Ok(record)
     }
 
     fn patch(
@@ -175,7 +223,94 @@ impl TaskStore {
         ids.sort();
         Ok(ids)
     }
+
+    /// Every event recorded for a task, in emission order. Torn trailing lines (a
+    /// crash mid-append) are skipped, not fatal: an at-least-once stream may lose a
+    /// tail entry to infrastructure, and the status poll is the reconciliation path.
+    pub fn replay(&self, id: &str) -> Result<Vec<WorkerEvent>, QueueError> {
+        let path = self.root.join(id).join("events.jsonl");
+        if !path.exists() {
+            return Ok(Vec::new());
+        }
+        let raw = std::fs::read_to_string(&path)?;
+        Ok(raw
+            .lines()
+            .filter_map(|line| serde_json::from_str(line).ok())
+            .collect())
+    }
+
+    /// Record one event: persist to the task's journal with a monotonic correlation
+    /// sequence, then offer it to live subscribers. Journal write first — replay is
+    /// the durable contract, the broadcast is best-effort fan-out.
+    fn record_event(
+        &self,
+        id: &TaskId,
+        kind: EventKind,
+        payload: serde_json::Value,
+    ) -> Result<(), QueueError> {
+        let seq = self.next_seq(id)?;
+        let event = WorkerEvent {
+            kind,
+            correlation_id: format!("delegate:{id}:{seq}"),
+            task_id: id.clone(),
+            payload,
+        };
+        let dir = self.task_dir(id);
+        use std::io::Write as _;
+        let mut journal = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(dir.join("events.jsonl"))?;
+        writeln!(
+            journal,
+            "{}",
+            serde_json::to_string(&event).map_err(|source| {
+                QueueError::Json {
+                    context: "event serialization".into(),
+                    source,
+                }
+            })?
+        )?;
+        let _ = self.events.send(event);
+        Ok(())
+    }
+
+    /// Monotonic per-task sequence, persisted so correlations stay stable across
+    /// restarts. A process-global lock is fine here: transitions are rare (a few per
+    /// task) and contended only in the same instant a task changes state.
+    fn next_seq(&self, id: &TaskId) -> Result<u64, QueueError> {
+        let _guard = SEQ_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let dir = self.task_dir(id);
+        let path = dir.join("events.seq");
+        let current: u64 = match std::fs::read_to_string(&path) {
+            Ok(raw) => raw.trim().parse().unwrap_or(0),
+            Err(_) => 0,
+        };
+        let next = current + 1;
+        std::fs::write(&path, next.to_string())?;
+        Ok(next)
+    }
 }
+
+/// Which event a terminal status announces, and what the record's PR field becomes.
+/// A `PrOpened` transition is [`EventKind::PrReady`] — the delegator's wake signal;
+/// everything else is a plain status change.
+fn event_shape(status: &TaskStatus) -> (EventKind, Option<String>) {
+    match status {
+        TaskStatus::PrOpened { url } => (EventKind::PrReady, Some(url.clone())),
+        _ => (EventKind::StatusChanged, None),
+    }
+}
+
+/// The wire shape of a status transition: the full [`TaskStatus`] under one key, so
+/// consumers match on the same enum the poll endpoint returns.
+fn status_payload(status: &TaskStatus) -> serde_json::Value {
+    serde_json::json!({ "status": status })
+}
+
+static SEQ_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 fn now_rfc3339() -> String {
     chrono::Utc::now().to_rfc3339()

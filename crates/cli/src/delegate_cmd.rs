@@ -10,10 +10,23 @@ use liberado_delegate_contract::{SubmitOutcome, TaskRecord, TaskSpec, WorkerHeal
 pub async fn run(args: &mut impl Iterator<Item = String>) -> Result<(), Box<dyn Error>> {
     match args.next().as_deref() {
         Some("submit") => cmd_submit(args).await,
-        Some("status") => cmd_status(args).await,
-        Some("cancel") => cmd_cancel(args).await,
-        Some("health") => cmd_health(args).await,
+        // The task-addressed group shares one arm so adding a subcommand costs the
+        // router nothing — the same shape the worker's own flag parser uses.
+        Some(name @ ("status" | "cancel" | "health" | "watch")) => cmd_dispatch(name, args).await,
         _ => Err(usage("unknown or missing subcommand").into()),
+    }
+}
+
+async fn cmd_dispatch(
+    name: &str,
+    args: &mut impl Iterator<Item = String>,
+) -> Result<(), Box<dyn Error>> {
+    match name {
+        "status" => cmd_status(args).await,
+        "cancel" => cmd_cancel(args).await,
+        "health" => cmd_health(args).await,
+        "watch" => watch_cmd::run(args).await,
+        other => unreachable!("run admitted {other:?}"),
     }
 }
 
@@ -23,6 +36,7 @@ fn usage(message: &str) -> String {
          usage:\n  \
          liberado delegate submit <task.json> [--endpoint URL] [--token-env VAR]\n  \
          liberado delegate status <task-id>   [--endpoint URL] [--token-env VAR]\n  \
+         liberado delegate watch <task-id>    [--endpoint URL] [--token-env VAR]\n  \
          liberado delegate cancel <task-id>   [--endpoint URL] [--token-env VAR]\n  \
          liberado delegate health             [--endpoint URL] [--token-env VAR]\n\n\
          Env: LIBERADO_DELEGATE_ENDPOINT (required unless --endpoint),\n\
@@ -221,3 +235,6 @@ async fn fetch_health(connection: &Connection) -> Result<WorkerHealth, String> {
 
 #[cfg(test)]
 mod tests;
+
+#[path = "delegate_cmd_watch.rs"]
+mod watch_cmd;

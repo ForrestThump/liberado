@@ -162,3 +162,119 @@ fn records_survive_reopening_the_store() {
     let record = reopened.get(&id.0).expect("get").expect("survives");
     assert_eq!(record.session_id.as_deref(), Some("sess"));
 }
+
+// --- the event journal ----------------------------------------------------
+
+use liberado_delegate_contract::{EventKind, WorkerEvent};
+
+fn events_dir(tmp: &tempfile::TempDir, id: &str) -> std::path::PathBuf {
+    tmp.path().join("delegate").join("tasks").join(id)
+}
+
+#[test]
+fn every_transition_appends_a_durable_event_with_increasing_correlations() {
+    let (tmp, store) = store();
+    let id = TaskId("01JEVSEQ0000000000A".into());
+    let task_id = id.clone();
+    store.submit(&spec(&id.0)).expect("submit");
+    store.mark_running(&id, "s1").expect("running");
+    store
+        .finish(
+            &id,
+            TaskStatus::PrOpened {
+                url: "http://forge/pr/3".into(),
+            },
+        )
+        .expect("finish");
+
+    let journal = events_dir(&tmp, &id.0).join("events.jsonl");
+    assert!(journal.exists(), "journal must be on disk");
+    let raw = std::fs::read_to_string(journal).expect("journal readable");
+    let events: Vec<WorkerEvent> = raw
+        .lines()
+        .map(|line| serde_json::from_str(line).expect("each line parses"))
+        .collect();
+
+    let kinds: Vec<EventKind> = events.iter().map(|e| e.kind).collect();
+    assert_eq!(
+        kinds,
+        vec![
+            EventKind::StatusChanged,
+            EventKind::StatusChanged,
+            EventKind::PrReady
+        ],
+        "queued -> running -> pr_ready"
+    );
+    assert_eq!(events[2].payload["status"]["state"], "pr_opened");
+    assert_eq!(
+        events[2].payload["status"]["detail"]["url"],
+        "http://forge/pr/3"
+    );
+
+    // Correlations carry the persisted monotonic sequence, so replays and dedupe stay
+    // stable across restarts.
+    let seqs: Vec<&str> = events
+        .iter()
+        .map(|e| e.correlation_id.split(':').next_back().unwrap())
+        .collect();
+    assert_eq!(seqs, vec!["1", "2", "3"], "{events:?}");
+
+    // Replay from a fresh handle returns exactly what the journal holds.
+    let reopened = TaskStore::open(tmp.path()).expect("reopen");
+    assert_eq!(reopened.replay(&task_id.0).expect("replay"), events);
+}
+
+#[test]
+fn a_duplicate_submit_records_no_event() {
+    let (_tmp, store) = store();
+    store.submit(&spec("01JEVSEQ0000000000B")).expect("first");
+    store
+        .submit(&spec("01JEVSEQ0000000000B"))
+        .expect("duplicate");
+    assert_eq!(
+        store.replay("01JEVSEQ0000000000B").expect("replay").len(),
+        1,
+        "redelivery is a no-op and must stay silent"
+    );
+}
+
+#[test]
+fn cancel_and_failure_emit_terminal_status_events() {
+    let (_tmp, store) = store();
+    store.submit(&spec("01JEVSEQ0000000000C")).expect("submit");
+    store.cancel("01JEVSEQ0000000000C").expect("cancel");
+    let cancelled = store.replay("01JEVSEQ0000000000C").expect("replay");
+    assert_eq!(
+        cancelled.last().expect("an event").kind,
+        EventKind::StatusChanged
+    );
+    assert!(
+        cancelled.last().unwrap().is_terminal(),
+        "cancelled closes the story"
+    );
+
+    let id = TaskId("01JEVSEQ0000000000D".into());
+    store.submit(&spec(&id.0)).expect("submit d");
+    store
+        .finish(
+            &id,
+            TaskStatus::Failed {
+                reason: "boom".into(),
+            },
+        )
+        .expect("fail");
+    let failed = store.replay(&id.0).expect("replay");
+    assert!(failed.last().unwrap().is_terminal());
+}
+
+#[test]
+fn terminal_pr_opened_maps_to_pr_ready_with_url() {
+    use super::event_shape;
+    use liberado_delegate_contract::EventKind;
+    let (kind, url) = event_shape(&TaskStatus::PrOpened { url: "u".into() });
+    assert_eq!(kind, EventKind::PrReady);
+    assert_eq!(url.as_deref(), Some("u"));
+    let (kind, url) = event_shape(&TaskStatus::Failed { reason: "r".into() });
+    assert_eq!(kind, EventKind::StatusChanged);
+    assert_eq!(url, None);
+}

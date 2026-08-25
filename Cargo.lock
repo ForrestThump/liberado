@@ -6352,9 +6352,12 @@ dependencies = [
 name = "liberado-worker"
 version = "0.1.0"
 dependencies = [
+ "async-stream",
  "async-trait",
  "axum",
+ "chat-client-contract",
  "chrono",
+ "futures",
  "liberado-coder-agent",
  "liberado-coder-core",
  "liberado-common",

@@ -28,6 +28,12 @@ pub mod routes {
         format!("{TASKS}/{task_id}/answers")
     }
 
+    /// `GET {task_events}` — SSE stream of this task's [`WorkerEvent`]s: replay of
+    /// everything already recorded, then live until a terminal event.
+    pub fn task_events(task_id: &str) -> String {
+        format!("{TASKS}/{task_id}/events")
+    }
+
     /// `POST {task_cancel}` — cooperative stop at the next tool boundary.
     pub fn task_cancel(task_id: &str) -> String {
         format!("{TASKS}/{task_id}/cancel")
@@ -198,6 +204,25 @@ pub struct WorkerEvent {
     pub payload: serde_json::Value,
 }
 
+impl WorkerEvent {
+    /// Whether this event closes the task's story. The SSE stream ends here and the
+    /// delegator's inbox treats the item as actionable. `PrReady` is terminal even
+    /// though the lifecycle continues toward merge — nothing further happens without
+    /// the delegator's decision.
+    pub fn is_terminal(&self) -> bool {
+        match self.kind {
+            EventKind::PrReady => true,
+            EventKind::StatusChanged => self
+                .payload
+                .get("status")
+                .and_then(|status| status.get("state"))
+                .and_then(|state| state.as_str())
+                .is_some_and(|state| matches!(state, "failed" | "cancelled")),
+            EventKind::Question | EventKind::Blocked => false,
+        }
+    }
+}
+
 /// Lifecycle status of a task on the worker. D1 spans Queued → Running → PrOpened /
 /// Failed / Cancelled; Blocked arrives with monitor plumbing (D3).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -272,5 +297,49 @@ mod tests {
         // Stable and lowercase regardless of input case.
         let c = TaskId("01JGITEAFORGE0000000TEST1".to_string());
         assert_eq!(c.short(), "0test1");
+    }
+
+    fn event(kind: EventKind, payload: serde_json::Value) -> WorkerEvent {
+        WorkerEvent {
+            kind,
+            correlation_id: format!("delegate:t:{payload}"),
+            task_id: TaskId("t".into()),
+            payload,
+        }
+    }
+
+    #[test]
+    fn terminal_events_close_the_stream() {
+        use serde_json::json;
+        let pr_ready = event(
+            EventKind::PrReady,
+            json!({"status": {"state": "pr_opened"}}),
+        );
+        let failed = event(
+            EventKind::StatusChanged,
+            json!({"status": {"state": "failed", "detail": {"reason": "x"}}}),
+        );
+        let cancelled = event(
+            EventKind::StatusChanged,
+            json!({"status": {"state": "cancelled"}}),
+        );
+        let running = event(
+            EventKind::StatusChanged,
+            json!({"status": {"state": "running"}}),
+        );
+        let queued = event(
+            EventKind::StatusChanged,
+            json!({"status": {"state": "queued"}}),
+        );
+        // Blocked is not terminal in D1 semantics: it still awaits delegator action
+        // (a kickback or an answer), it just cannot proceed on its own.
+        let blocked = event(EventKind::Blocked, json!({}));
+
+        assert!(pr_ready.is_terminal());
+        assert!(failed.is_terminal());
+        assert!(cancelled.is_terminal());
+        assert!(!running.is_terminal());
+        assert!(!queued.is_terminal());
+        assert!(!blocked.is_terminal());
     }
 }

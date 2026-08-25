@@ -25,7 +25,9 @@ liberado-delegate-contract = { workspace = true }
 liberado-forge = { workspace = true }
 liberado-provider = { workspace = true }
 liberado-provider-openai-compat = { workspace = true }
+async-stream = { workspace = true }
 axum = { version = "0.8", features = ["json"] }
+futures = { workspace = true }
 chrono = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -38,6 +40,7 @@ ulid = { workspace = true }
 
 [dev-dependencies]
 async-trait = { workspace = true }
+chat-client-contract = { workspace = true }
 tempfile = { workspace = true }
 
 [package.metadata.liberado]
