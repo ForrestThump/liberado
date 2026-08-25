@@ -272,8 +272,15 @@ fn truncate(text: &str, max_chars: usize) -> String {
 }
 
 /// PR body carrying the task identity, criteria as checkboxes, and the run summary —
-/// the audit trail the delegator reviews before merging (plan §7.4).
+/// the audit trail the delegator reviews before merging (plan §7.4). Worker-local paths
+/// (`coder-traces`, `.liberado`) are filtered from the file list so the body describes
+/// what the PR actually contains.
 pub fn pr_body(spec: &TaskSpec, result: &liberado_coder_core::CoderRunResult) -> String {
+    let deliverable_files: Vec<&String> = result
+        .files_changed
+        .iter()
+        .filter(|file| !is_worker_local(file))
+        .collect();
     let mut body = format!(
         "Delegated task `{}` from project `{}`.\n\n## Goal\n\n{}\n",
         spec.id, spec.project, spec.goal
@@ -287,16 +294,21 @@ pub fn pr_body(spec: &TaskSpec, result: &liberado_coder_core::CoderRunResult) ->
     body.push_str("\n## Outcome\n\n");
     body.push_str(&format!("- Outcome: {:?}\n", result.outcome));
     body.push_str(&format!("- Summary: {}\n", result.summary));
-    if !result.files_changed.is_empty() {
-        body.push_str(&format!(
-            "- Files changed: {}\n",
-            result.files_changed.len()
-        ));
-        for file in result.files_changed.iter().take(20) {
+    if !deliverable_files.is_empty() {
+        body.push_str(&format!("- Files changed: {}\n", deliverable_files.len()));
+        for file in deliverable_files.iter().take(20) {
             body.push_str(&format!("  - `{file}`\n"));
         }
     }
     body
+}
+
+/// Whether a reported path is worker bookkeeping rather than task output; mirrors
+/// [`crate::git::WORKER_LOCAL_PATHS`].
+fn is_worker_local(path: &str) -> bool {
+    crate::git::WORKER_LOCAL_PATHS
+        .iter()
+        .any(|prefix| path == *prefix || path.starts_with(&format!("{prefix}/")))
 }
 
 /// Health payload builder kept off the HTTP layer so tests pin it directly.
