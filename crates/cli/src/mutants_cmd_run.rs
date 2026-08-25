@@ -9,7 +9,7 @@ use std::process::ExitStatus;
 
 use liberado_common::process::std_command;
 
-use super::{LEDGER_FILE, MUTANTS_TARGET_DIR, RecordOutcome, RunProfile};
+use super::{Campaign, LEDGER_FILE, Ledger, MUTANTS_TARGET_DIR, RecordOutcome, RunProfile};
 
 const USAGE_RUN: &str = "usage: liberado mutants run [--lib-only] <crate-dir>";
 
@@ -123,4 +123,34 @@ pub(super) fn write_ledger_atomically(
         let _ = fs::remove_file(&tmp);
     }
     outcome.map_err(std::convert::Into::into)
+}
+
+/// Deduplicate rows and atomically persist the ledger.
+pub(super) fn persist_ledger(
+    root: &Path,
+    ledger: &Ledger,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let ledger = Ledger {
+        schema: ledger.schema,
+        campaigns: dedupe_campaigns(ledger.campaigns.clone()),
+    };
+    let bytes = serde_json::to_string_pretty(&ledger)? + "\n";
+    write_ledger_atomically(root, &bytes)
+}
+
+/// Drop byte-identical duplicate rows before saving.
+///
+/// The ledger is append-only, but merges have pasted whole blocks twice (13
+/// duplicates at once during the campaign branch). A merge that unions both
+/// sides then re-saves goes through here, so the on-disk artifact can never
+/// keep a duplicate pair even when git history briefly contained one.
+fn dedupe_campaigns(campaigns: Vec<Campaign>) -> Vec<Campaign> {
+    let mut seen = std::collections::HashSet::new();
+    campaigns
+        .into_iter()
+        .filter(|c| {
+            let canonical = serde_json::to_string(c).expect("a ledger row serialises");
+            seen.insert(canonical)
+        })
+        .collect()
 }

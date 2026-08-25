@@ -316,37 +316,10 @@ fn validate_outcomes(counts: &Counts, total_mutants: u32) -> Option<RecordOutcom
     None
 }
 
-/// Drop byte-identical duplicate rows before saving.
-///
-/// The ledger is append-only, but merges have pasted whole blocks twice (13
-/// duplicates at once during the campaign branch). A merge that unions both
-/// sides then re-saves goes through here, so the on-disk artifact can never
-/// keep a duplicate pair even when git history briefly contained one.
-fn dedupe_campaigns(campaigns: Vec<Campaign>) -> Vec<Campaign> {
-    let mut seen = std::collections::HashSet::new();
-    campaigns
-        .into_iter()
-        .filter(|c| {
-            let canonical = serde_json::to_string(c).expect("a ledger row serialises");
-            seen.insert(canonical)
-        })
-        .collect()
-}
-
+// The body lives in run_support::persist_ledger; this delegate keeps the
+// historical name, call sites, and score at the root.
 fn save_ledger(root: &Path, ledger: &Ledger) -> Result<(), Box<dyn std::error::Error>> {
-    let ledger = Ledger {
-        schema: ledger.schema,
-        campaigns: dedupe_campaigns(ledger.campaigns.clone()),
-    };
-    let bytes = serde_json::to_string_pretty(&ledger)? + "\n";
-    write_atomic(root, &bytes)?;
-    Ok(())
-}
-
-// Atomic temp+rename lives in run_support::write_ledger_atomically; this
-// delegate keeps the historical call shape (and score) at the root.
-fn write_atomic(root: &Path, bytes: &str) -> Result<(), Box<dyn std::error::Error>> {
-    run_support::write_ledger_atomically(root, bytes)
+    run_support::persist_ledger(root, ledger)
 }
 
 fn resolve_crate(root: &Path, crate_dir: &str) -> Result<CrateInfo, Box<dyn std::error::Error>> {
