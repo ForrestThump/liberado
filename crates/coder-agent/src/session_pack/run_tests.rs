@@ -426,10 +426,13 @@ async fn fanout_runs_children_in_process_and_reports_their_files() {
         sid,
         serde_json::json!({
             "subtasks": two_subtasks(),
-            "max_concurrent_subagents": 2,
         }),
         0,
-        serde_json::json!({}),
+        // Serialised via grant override: concurrent `git worktree add` in
+        // one parent repo races the index lock on loaded runners (see
+        // failed_fanout_children_end_the_goal_failed). Which pool size is
+        // announced is covered by the override-ceiling test.
+        serde_json::json!({ "max_concurrent_coding_subagents": 1 }),
     )
     .await;
     let out = out.expect("in-process fan-out reaches a terminal result");
@@ -440,7 +443,7 @@ async fn fanout_runs_children_in_process_and_reports_their_files() {
             &e.kind,
             SessionEventKind::Progress { message }
                 if message.contains("coding fan-out: 2 subtask(s)")
-                    && message.contains("max_concurrent=2")
+                    && message.contains("max_concurrent=1")
                     && message.contains("mode=in-process")
         )),
         "the fan-out is announced with its budget: {events:?}"
@@ -510,19 +513,17 @@ async fn fanout_success_still_faces_the_ship_preflight() {
         sid,
         serde_json::json!({
             "subtasks": two_subtasks(),
-            // Serialise the children: concurrent `git worktree add` in the
-            // same parent repo races the index lock (see the note on
-            // failed_fanout_children_end_the_goal_failed), and this test
-            // needs BOTH branches to merge so a green fan-out actually
-            // reaches its ship bar.
-            "max_concurrent_coding_subagents": 1,
             "preflight": {
                 "required": true,
                 "steps": [{ "name": "must-fail", "run": fail }]
             },
         }),
         0,
-        serde_json::json!({}),
+        // Serialise the children via grant override: concurrent `git
+        // worktree add` in the same parent repo races the index lock (see
+        // failed_fanout_children_end_the_goal_failed), and this test needs
+        // BOTH branches to merge so a green fan-out reaches its ship bar.
+        serde_json::json!({ "max_concurrent_coding_subagents": 1 }),
     )
     .await;
     let out = out.expect("preflight runs after a green fan-out");
