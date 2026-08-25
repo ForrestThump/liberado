@@ -264,3 +264,51 @@ async fn tool_events_land_in_both_logs() {
     assert_eq!(result["ok"], true);
     assert_eq!(result["content_shown"], "file body");
 }
+
+/// The follow-up prompt must be a DELTA: labelled `delta` and carrying only the
+/// messages added since the previous request.
+#[tokio::test]
+async fn follow_up_prompts_are_deltas_with_only_new_messages() {
+    let mvl = scratch("delta.mvl.jsonl");
+    let session = MvlSession::open(&mvl, None, "run-delta").unwrap();
+    let msg = |role: Role, content: &str| Message {
+        role,
+        content: content.into(),
+        tool_calls: vec![],
+        tool_call_id: None,
+    };
+    let mut first = CompletionRequest::new(vec![
+        msg(Role::System, "You are terse."),
+        msg(Role::User, "first"),
+    ]);
+    let _ = &mut first;
+    session.on_request(0, &first);
+
+    // The follow-up carries the whole conversation so far plus one new turn.
+    let mut second = CompletionRequest::new(vec![
+        msg(Role::System, "You are terse."),
+        msg(Role::User, "first"),
+        msg(Role::Assistant, "done"),
+        msg(Role::User, "second"),
+    ]);
+    let _ = &mut second;
+    session.on_request(1, &second);
+
+    let prompts: Vec<Value> = lines_of(&mvl)
+        .into_iter()
+        .filter(|l| l["type"] == "prompt")
+        .collect();
+    assert_eq!(prompts.len(), 2);
+    assert_eq!(prompts[0]["messages"]["mode"], "full");
+    let second = &prompts[1];
+    assert_eq!(second["messages"]["mode"], "delta", "{second}");
+    let items = second["messages"]["items"].as_array().unwrap();
+    assert_eq!(
+        items,
+        &[
+            json!({"role": "assistant", "content": "done"}),
+            json!({"role": "user", "content": "second"})
+        ],
+        "only the turns added since the previous request: {second}"
+    );
+}

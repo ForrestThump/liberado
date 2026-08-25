@@ -1370,6 +1370,51 @@
       }
     },
     {
+      "package": "liberado-executor",
+      "commit": "862224478106eb226334fbb3eb766e722dd3b7dc",
+      "recorded_at": "2026-08-24",
+      "command": "cargo mutants -p liberado-executor --cap-lints true --timeout 3.0 --minimum-test-timeout 30 --in-place",
+      "tool_version": "27.0.0",
+      "scope": "package",
+      "counts": {
+        "viable": 332,
+        "caught": 246,
+        "survived": 86,
+        "timeout": 0,
+        "unviable": 57
+      }
+    },
+    {
+      "package": "liberado-executor",
+      "commit": "97fc00d4213e0b2567a2a60f8b24bd5a6965fe02",
+      "recorded_at": "2026-08-25",
+      "command": "cargo mutants -p liberado-executor --cap-lints true --timeout 3.0 --minimum-test-timeout 30 --in-place",
+      "tool_version": "27.0.0",
+      "scope": "package",
+      "counts": {
+        "viable": 332,
+        "caught": 313,
+        "survived": 18,
+        "timeout": 1,
+        "unviable": 57
+      }
+    },
+    {
+      "package": "liberado-executor",
+      "commit": "decd6e5404206b8cee383a72e92ff188fd7486ea",
+      "recorded_at": "2026-08-25",
+      "command": "cargo mutants -p liberado-executor --cap-lints true --timeout 3.0 --minimum-test-timeout 30 --in-place",
+      "tool_version": "27.0.0",
+      "scope": "package",
+      "counts": {
+        "viable": 332,
+        "caught": 319,
+        "survived": 12,
+        "timeout": 1,
+        "unviable": 57
+      }
+    },
+    {
       "package": "liberado-acp-bridge",
       "commit": "862224478106eb226334fbb3eb766e722dd3b7dc",
       "recorded_at": "2026-08-24",
@@ -1397,21 +1442,6 @@
         "survived": 25,
         "timeout": 8,
         "unviable": 71
-      }
-    },
-    {
-      "package": "liberado-executor",
-      "commit": "862224478106eb226334fbb3eb766e722dd3b7dc",
-      "recorded_at": "2026-08-24",
-      "command": "cargo mutants -p liberado-executor --cap-lints true --timeout 3.0 --minimum-test-timeout 30 --in-place",
-      "tool_version": "27.0.0",
-      "scope": "package",
-      "counts": {
-        "viable": 332,
-        "caught": 246,
-        "survived": 86,
-        "timeout": 0,
-        "unviable": 57
       }
     },
     {
