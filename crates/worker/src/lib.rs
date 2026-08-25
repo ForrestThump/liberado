@@ -15,6 +15,13 @@
 //! - Acceptance gates travel in the [`liberado_delegate_contract::TaskSpec`] but are not
 //!   yet enforced (D3); no disk-floor check at accept time yet.
 //! - Token auth on every route, constant-time compared; LAN-only by design, no discovery.
+//!
+//! The model comes from the worker's own `[[providers]]` topology entry: the selected
+//! profile's `default_model` names what delegated runs use unless `--model` overrides it.
+//! For unattended boxes where the bill is the failure mode, point the profile at
+//! `liberado-free-proxy` (`base_url = "http://127.0.0.1:8788/v1"`,
+//! `default_model = "auto"`) and every delegated run resolves to the best-ranked free
+//! model — the proxy refuses paid slugs loudly, so delegation cannot silently cost money.
 
 pub mod cli;
 pub mod config;
