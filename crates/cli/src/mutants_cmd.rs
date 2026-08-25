@@ -127,27 +127,39 @@ pub fn next_crate(
     args: &mut impl Iterator<Item = String>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let root = crate_map_cmd::repository_root()?;
+    let mut stdout = std::io::stdout();
+    next_crate_in(&root, args, &mut stdout)
+}
+
+/// The injectable core of [`next_crate`]: same grammar and selection ladder, but rooted
+/// where the caller says and writing to any sink, so the ladder is testable against
+/// fixtures instead of the process cwd.
+fn next_crate_in(
+    root: &Path,
+    args: &mut impl Iterator<Item = String>,
+    out: &mut impl std::io::Write,
+) -> Result<(), Box<dyn std::error::Error>> {
     let include_all = args.next().is_some_and(|flag| flag == "--all");
     if args.next().is_some() {
         return Err("usage: liberado mutants next [--all]".into());
     }
-    let ledger = load_ledger(&root)?;
-    let crates = crate_map_cmd::list_crates(&root)?;
-    let health = build_health(&root, &ledger, &crates, include_all)?;
+    let ledger = load_ledger(root)?;
+    let crates = crate_map_cmd::list_crates(root)?;
+    let health = build_health(root, &ledger, &crates, include_all)?;
     if let Some(name) = health
         .never_campaigned
         .first()
         .map(|entry| entry.dir.as_str())
     {
-        println!("{name}");
+        writeln!(out, "{name}")?;
         return Ok(());
     }
     if let Some(entry) = health.most_drift.first() {
-        println!("{}", entry.dir);
+        writeln!(out, "{}", entry.dir)?;
         return Ok(());
     }
     if let Some(entry) = health.historical_only.first() {
-        println!("{}", entry.dir);
+        writeln!(out, "{}", entry.dir)?;
         return Ok(());
     }
     Err("no crates matched the selection filters".into())
@@ -658,3 +670,7 @@ fn format_counts(counts: &Counts) -> String {
 #[cfg(test)]
 #[path = "mutants_cmd_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "mutants_cmd_next_tests.rs"]
+mod next_tests;

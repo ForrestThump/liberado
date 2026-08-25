@@ -5,7 +5,7 @@
 > Layer semantics and dependency rules: [contracts.md](../architecture/contracts.md) and
 > `crates/test-support/tests/layer_rules.rs` (the same role tags, mechanically enforced).
 
-51 workspace crates.
+54 workspace crates.
 
 ## foundation
 
@@ -27,6 +27,8 @@ Front-end building blocks, liftable into any UI without dragging the system alon
 |---|---|---|
 | [`chat-client-contract`](../../../crates/chat-client-contract/) | *none* | Shared HTTP/SSE wire DTOs + the SseDecoder incremental parser -- the one contract every chat surface (TUI, WebUI, CLI) speaks. |
 | [`liberado-commands`](../../../crates/liberado-commands/) | *none* | Shared slash-command parser and handlers for Liberado chat clients (TUI, WebUI, CLI) |
+| [`liberado-delegate-contract`](../../../crates/delegate-contract/) | *none* | Wire DTOs + route constants for LAN delegation: the one contract the delegator and the worker machine both speak. |
+| [`liberado-forge`](../../../crates/liberado-forge/) | *none* | One seam for forge operations (open PR / comment / checks / merge): ForgeClient trait + Gitea REST implementation. |
 | [`liberado-markdown`](../../../crates/markdown/) | *none* | Lightweight Markdown parser for Liberado — UI-agnostic blocks and inline spans consumed by ratatui, Dioxus, and terminal output. |
 | [`liberado-theme`](../../../crates/theme/) | *none* | Shared theme definitions for Liberado UIs — color tokens consumed by ratatui, Dioxus/CSS, and terminal output. No UI dependency. |
 
@@ -100,9 +102,10 @@ Composition roots: the only crates allowed to see everything.
 |---|---|---|
 | [`liberado-acp-bridge`](../../../crates/acp-bridge/) | `chat-client-contract` | ACP (Agent Client Protocol) bridge over stdio for Paseo integration. |
 | [`liberado-bootstrap`](../../../crates/bootstrap/) | `liberado-coder-agent`, `liberado-coder-core`, `liberado-common`, `liberado-config`, `liberado-cron`, `liberado-daemon`, `liberado-dispatcher`, `liberado-dispatch-pack`, `liberado-notify`, `liberado-orchestrator`, `liberado-executor`, `liberado-mcp`, `liberado-provider`, `liberado-provider-openai-compat` | Composition helpers that build Liberado's provider/dispatcher/orchestrator from the process environment — the shared daemon-assembly logic for every binary, so the env wiring lives in one place. |
-| [`liberado-cli`](../../../crates/cli/) | `liberado-common`, `liberado-config`, `liberado-config-loader`, `liberado-server`, `liberado-coder-core`, `liberado-harness-eval`, `chat-client-contract` | the `liberado` binary: a client + launcher — `serve` runs the daemon/API, `chat` is a streaming client |
+| [`liberado-cli`](../../../crates/cli/) | `liberado-common`, `liberado-config`, `liberado-config-loader`, `liberado-server`, `liberado-coder-core`, `liberado-harness-eval`, `chat-client-contract`, `liberado-delegate-contract` | the `liberado` binary: a client + launcher — `serve` runs the daemon/API, `chat` is a streaming client |
 | [`liberado-daemon`](../../../crates/daemon/) | `liberado-common`, `liberado-config`, `liberado-notify`, `liberado-vault`, `liberado-dispatcher`, `liberado-orchestrator`, `liberado-session`, `liberado-provider` | The Liberado daemon (Decision 2, daemon-first): the long-running core that watches the vault, attributes changes (loop-breaking), and emits reactable events. v1 vertical slice. |
 | [`liberado-server`](../../../crates/server/) | `chat-client-contract`, `liberado-bootstrap`, `liberado-chat-search`, `liberado-common`, `liberado-cost`, `liberado-config`, `liberado-daemon`, `liberado-dispatcher`, `liberado-mcp`, `liberado-executor`, `liberado-main-agent`, `liberado-conversation-store`, `liberado-provider`, `liberado-telegram-approvals`, `liberado-commands`, `liberado-memory-store`, `liberado-vault`, `liberado-session`, `liberado-session-store`, `liberado-coder-agent`, `liberado-coder-core`, `liberado-notify`, `liberado-messaging` | The Liberado daemon's API server (library): the watch loop + chat + HTTP/SSE API. Runnable via `liberado serve`. |
+| [`liberado-worker`](../../../crates/worker/) | `liberado-coder-agent`, `liberado-coder-core`, `liberado-common`, `liberado-config-loader`, `liberado-delegate-contract`, `liberado-forge`, `liberado-provider`, `liberado-provider-openai-compat` | LAN delegation worker: hosts the control plane, runs delegated coding tasks through the coding pack, pushes branches, opens PRs. |
 
 ## tooling
 

@@ -43,6 +43,10 @@
 //!   liberado mutants record [crate-dir] ingest mutants.out/outcomes.json into the ledger
 //!   liberado mutants report [--all]    print never/historical/drift campaign health
 //!   liberado mutants next [--all]        suggest the next crate to mutation-test
+//!   liberado delegate submit <task.json>  hand a coding task to a LAN delegation worker
+//!   liberado delegate status <task-id>    poll one delegated task on the worker
+//!   liberado delegate cancel <task-id>    queue-level cancel of one delegated task
+//!   liberado delegate health              liveness + build fingerprint of a worker
 //!
 //! `serve` runs in the foreground, hosting the vault watch loop and the chat/HTTP/SSE API until
 //! killed. `chat` is a thin HTTP/SSE client of a separately-running daemon (see `chat_client`).
@@ -56,6 +60,7 @@ mod ci_cmd;
 mod coder_cmd;
 mod compare_cmd;
 mod crate_map_cmd;
+mod delegate_cmd;
 mod dependency_security_cmd;
 mod docs_audit_cmd;
 mod docs_cmd;
@@ -100,15 +105,29 @@ async fn dispatch(
     args: &mut impl Iterator<Item = String>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     match args.next().as_deref() {
-        Some("chat") => chat_client::run(args.next()).await,
-        // `prompt [profile]` — what a chat under that profile is actually told, composed from
-        // config alone. No daemon, so it runs mid-debug and in CI, which is the point: the prompt
-        // and the tool list disagreeing is a class of bug that otherwise costs a deploy to see.
-        // A bare `prompt` shows the no-profile case.
+        // HTTP-client surfaces share one arm so adding another costs dispatch no
+        // branches — they are clients of remote daemons/workers, not local groups.
+        Some(name @ ("chat" | "delegate")) => dispatch_client(name, args).await,
+        // `prompt [profile]` composes what a chat under that profile is actually told
+        // from config alone — no daemon, so it runs mid-debug and in CI.
         Some("prompt") => liberado_server::show_prompt(None, args.next().as_deref()),
         Some("serve") => run_serve(args.next()).await,
         None => run_serve_from_env().await,
         Some(named) => route_named(named, args).await,
+    }
+}
+
+/// The streaming-client arms: `chat` talks to the daemon's SSE API, `delegate` to a LAN
+/// worker's control plane. Both must stay on the async path — reqwest::blocking panics
+/// when its runtime drops inside this context.
+async fn dispatch_client(
+    name: &str,
+    args: &mut impl Iterator<Item = String>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    match name {
+        "chat" => chat_client::run(args.next()).await,
+        "delegate" => delegate_cmd::run(args).await,
+        other => unreachable!("dispatch admitted {other:?}"),
     }
 }
 
@@ -124,22 +143,36 @@ async fn route_named(
     }
 }
 
-/// The six synchronous sub-command groups, by first argument. Each wrapper owns its own
-/// argument match; `None` means "not a known group", leaving the caller free to fall back.
+/// `route_sync` only decides *whether* a name is a synchronous group; the grammar for
+/// each group lives in [`route_group`]. Split so adding a group costs the router no
+/// complexity — the CRAP ratchet reads this file.
 fn route_sync(
     name: &str,
     args: &mut impl Iterator<Item = String>,
 ) -> Option<Result<(), Box<dyn std::error::Error>>> {
-    let route = match name {
+    let known = matches!(
+        name,
+        "coder" | "mutants" | "ci" | "shepherd" | "docs" | "config"
+    );
+    if !known {
+        return None;
+    }
+    Some(route_group(name, args))
+}
+
+fn route_group(
+    name: &str,
+    args: &mut impl Iterator<Item = String>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    match name {
         "coder" => coder_cmd::run(args),
         "mutants" => cmd_mutants(args),
         "ci" => cmd_ci(args),
         "shepherd" => shepherd_cmd::run(args),
         "docs" => cmd_docs(args),
         "config" => cmd_config(args),
-        _ => return None,
-    };
-    Some(route)
+        other => unreachable!("route_sync admitted {other:?}"),
+    }
 }
 
 /// `liberado ci …` — ship preflight, CRAP check, or the local check-then-ratchet run.
@@ -257,7 +290,9 @@ mod dispatch_tests {
     /// arms reach for a daemon or network and stay out of unit tests.
     #[tokio::test]
     async fn named_subcommands_reject_unknown_subarguments_with_usage() {
-        for command in ["ci", "coder", "mutants", "shepherd", "docs", "config"] {
+        for command in [
+            "ci", "coder", "delegate", "mutants", "shepherd", "docs", "config",
+        ] {
             let args = [command.to_string(), "not-a-real-subcommand".to_string()];
             let err = dispatch(&mut args.into_iter())
                 .await
@@ -266,6 +301,26 @@ mod dispatch_tests {
             assert!(
                 err.to_lowercase().contains("usage"),
                 "{command}: expected usage text, got: {err}"
+            );
+        }
+    }
+
+    /// `route_sync` returning `None` is the bare-vault back-compat fall-through; every
+    /// named group must return `Some` even for junk arguments (each owns its usage error).
+    /// `delegate` is absent on purpose: it is an HTTP client and routes through the
+    /// async dispatch arms, not here.
+    #[test]
+    fn unknown_groups_fall_through_and_known_groups_own_their_arguments() {
+        for unknown in ["not-a-group", "", "serve-ish"] {
+            let result = route_sync(unknown, &mut Vec::new().into_iter());
+            assert!(result.is_none(), "{unknown:?} must fall through");
+        }
+        for known in ["coder", "mutants", "ci", "shepherd", "docs", "config"] {
+            let mut junk = vec!["not-a-real-subcommand".to_string()].into_iter();
+            let result = route_sync(known, &mut junk).expect("known group routes");
+            assert!(
+                result.is_err(),
+                "{known}: junk sub-argument must be an owned usage error"
             );
         }
     }

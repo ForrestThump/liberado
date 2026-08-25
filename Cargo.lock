@@ -5528,6 +5528,7 @@ dependencies = [
  "liberado-common",
  "liberado-config",
  "liberado-config-loader",
+ "liberado-delegate-contract",
  "liberado-harness-eval",
  "liberado-server",
  "regex",
@@ -5793,6 +5794,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "liberado-delegate-contract"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "liberado-dispatch-pack"
 version = "0.1.0"
 dependencies = [
@@ -5859,6 +5869,18 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "liberado-forge"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
 ]
 
 [[package]]
@@ -6305,6 +6327,32 @@ dependencies = [
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
+]
+
+[[package]]
+name = "liberado-worker"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "axum",
+ "chrono",
+ "liberado-coder-agent",
+ "liberado-coder-core",
+ "liberado-common",
+ "liberado-config-loader",
+ "liberado-delegate-contract",
+ "liberado-forge",
+ "liberado-provider",
+ "liberado-provider-openai-compat",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "toml 0.8.23",
+ "tracing",
+ "tracing-subscriber",
+ "ulid",
 ]
 
 [[package]]

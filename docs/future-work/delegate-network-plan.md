@@ -9,8 +9,12 @@ open_items: true
 
 # LAN delegation — a delegator agent driving a worker machine
 
-**Status**: Plan, 2026-08-24. Not scheduled. Nothing here is built. This doc exists so the
-design survives until backlog capacity appears, and so it does not get reinvented badly.
+**Status**: Plan, 2026-08-24. **D1 landed 2026-08-25** (`liberado-delegate-contract`,
+`liberado-forge` with the Gitea impl, `liberado-worker` accept→worktree→run→push→PR,
+`liberado delegate submit|status|cancel|health`; duplicate submit is a stored-record
+no-op, restart rescan reports crashed runs honestly). D2+ not started. The rest of this
+doc exists so the design survives until backlog capacity appears, and so it does not get
+reinvented badly.
 
 **Related**:
 

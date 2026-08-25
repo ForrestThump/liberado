@@ -1,0 +1,47 @@
+[package]
+name = "liberado-worker"
+version = "0.1.0"
+description = "LAN delegation worker: hosts the control plane, runs delegated coding tasks through the coding pack, pushes branches, opens PRs."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[lib]
+name = "liberado_worker"
+path = "src/lib.rs"
+
+[[bin]]
+name = "liberado-worker"
+path = "src/main.rs"
+
+[dependencies]
+liberado-coder-agent = { workspace = true }
+liberado-coder-core = { workspace = true }
+liberado-common = { workspace = true }
+liberado-config-loader = { workspace = true }
+liberado-delegate-contract = { workspace = true }
+liberado-forge = { workspace = true }
+liberado-provider = { workspace = true }
+liberado-provider-openai-compat = { workspace = true }
+axum = { version = "0.8", features = ["json"] }
+chrono = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+toml = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+ulid = { workspace = true }
+
+[dev-dependencies]
+async-trait = { workspace = true }
+tempfile = { workspace = true }
+
+[package.metadata.liberado]
+# Layer role for the layer-rules test + crate-map generator (docs/architecture/contracts.md).
+# Composition root rather than service on purpose: it depends on pack crates (coder-agent,
+# coder-core) and picks concrete backends/forges — the same role daemon and server hold.
+role = "root"

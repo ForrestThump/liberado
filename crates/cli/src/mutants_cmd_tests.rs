@@ -2,7 +2,7 @@
 
 use super::*;
 
-fn init_git_repo(root: &Path) {
+pub(super) fn init_git_repo(root: &Path) {
     for (dir, name) in [
         ("crates/alpha", "liberado-alpha"),
         ("crates/beta", "liberado-beta"),
@@ -28,7 +28,7 @@ fn init_git_repo(root: &Path) {
     run_git(root, &["commit", "-m", "initial"]);
 }
 
-fn run_git(root: &Path, args: &[&str]) {
+pub(super) fn run_git(root: &Path, args: &[&str]) {
     // `std_command`, not raw `Command::new`: the subprocess rule scans this file as
     // production code (it has no `#[cfg(test)]` marker of its own), and the helper
     // nulls the child's stdin anyway.
