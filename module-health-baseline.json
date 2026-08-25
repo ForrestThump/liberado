@@ -144,16 +144,16 @@
     "cyclomatic": 11
   },
   "crates/acp-bridge/src/session_store.rs": {
-    "ploc": 158,
-    "lloc": 46,
-    "functions": 17,
-    "cyclomatic": 51
+    "ploc": 146,
+    "lloc": 44,
+    "functions": 16,
+    "cyclomatic": 49
   },
   "crates/acp-bridge/src/session_store_tests.rs": {
-    "ploc": 265,
-    "lloc": 137,
-    "functions": 23,
-    "cyclomatic": 25
+    "ploc": 299,
+    "lloc": 153,
+    "functions": 30,
+    "cyclomatic": 32
   },
   "crates/acp-bridge/src/ship_bar_tests.rs": {
     "ploc": 127,

@@ -7,7 +7,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 #[cfg(test)]
 use tempfile::TempDir;
@@ -134,12 +134,6 @@ fn record_path(id: &str) -> io::Result<PathBuf> {
     Ok(sessions_dir().join(format!("{id}.json")))
 }
 
-/// Confirm `resolved` lives under the sessions directory — defense-in-depth
-/// on top of [`validate_id`].
-fn within_dir(resolved: &Path) -> bool {
-    resolved.parent() == Some(sessions_dir().as_path())
-}
-
 // ── Public API ──────────────────────────────────────────────────────────────
 
 /// Save a session record atomically.
@@ -147,20 +141,17 @@ fn within_dir(resolved: &Path) -> bool {
 /// Writes to a temporary file in the same directory, then renames over the
 /// target so a crash mid-write cannot leave a half-written record that would
 /// later parse as truth.
+///
+/// Containment is structural: the sessions directory is read once and the
+/// validated id is joined under it, so a record path cannot escape. (An earlier
+/// version re-read `sessions_dir()` for a second containment check; with
+/// redirection now race-free that re-read can never disagree, and its mismatch
+/// branch was dead — validate_id remains the traversal boundary.)
 pub fn save(record: &SessionRecord) -> io::Result<()> {
     let dir = sessions_dir();
     std::fs::create_dir_all(&dir)?;
 
     let target = record_path(&record.id)?;
-    if !within_dir(&target) {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!(
-                "session id {:?} resolves outside sessions directory",
-                record.id
-            ),
-        ));
-    }
 
     let tmp = target.with_extension("json.tmp");
     let json = serde_json::to_string_pretty(record)
