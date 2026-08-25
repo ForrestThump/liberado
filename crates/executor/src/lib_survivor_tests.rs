@@ -587,7 +587,7 @@ fn a_period_two_alternation_is_detected_with_its_tools() {
         ("search_text", "q"),
     ]);
     let cycling = detect_short_cycle(&history).expect("ABAB is a cycle");
-    assert_eq!(cycling.len(), 2, "{cycling:?}");
+    assert_eq!(cycling.len(), 2);
 }
 
 #[test]
@@ -605,4 +605,33 @@ fn a_mono_streak_is_never_a_short_cycle() {
 fn short_histories_cannot_form_a_cycle() {
     let history = hist(&[("read_file", "a.md"), ("search_text", "q")]);
     assert_eq!(detect_short_cycle(&history), None);
+}
+
+/// A period-3 alternation is caught with its tools listed in walk order.
+#[test]
+fn a_period_three_alternation_is_detected_in_order() {
+    let history = hist(&[
+        ("read_file", "a.md"),
+        ("search_text", "q"),
+        ("write_file", "b.md"),
+        ("read_file", "a.md"),
+        ("search_text", "q"),
+        ("write_file", "b.md"),
+    ]);
+    let cycling = detect_short_cycle(&history).expect("ABCABC is a cycle");
+    assert_eq!(
+        cycling,
+        vec!["read_file", "search_text", "write_file"],
+        "{cycling:?}"
+    );
+}
+
+/// Disjoint token sets cosine to exactly zero — NaN from a broken idf would
+/// fail this equality.
+#[test]
+fn disjoint_arguments_similarity_is_exactly_zero() {
+    use serde_json::json;
+    let a = json!({"query": "alpha"});
+    let b = json!({"other": "beta"});
+    assert_eq!(args_similarity(&a, &b), 0.0);
 }
