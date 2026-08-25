@@ -335,6 +335,18 @@
     "functions": 2,
     "cyclomatic": 4
   },
+  "crates/cli/src/delegate_cmd.rs": {
+    "ploc": 189,
+    "lloc": 46,
+    "functions": 37,
+    "cyclomatic": 86
+  },
+  "crates/cli/src/delegate_cmd/tests.rs": {
+    "ploc": 243,
+    "lloc": 83,
+    "functions": 18,
+    "cyclomatic": 31
+  },
   "crates/cli/src/dependency_security_cmd.rs": {
     "ploc": 10,
     "lloc": 2,
@@ -372,10 +384,10 @@
     "cyclomatic": 55
   },
   "crates/cli/src/lib.rs": {
-    "ploc": 167,
-    "lloc": 25,
-    "functions": 16,
-    "cyclomatic": 60
+    "ploc": 207,
+    "lloc": 36,
+    "functions": 19,
+    "cyclomatic": 69
   },
   "crates/cli/src/main.rs": {
     "ploc": 4,
@@ -1475,6 +1487,12 @@
     "functions": 40,
     "cyclomatic": 78
   },
+  "crates/delegate-contract/src/lib.rs": {
+    "ploc": 172,
+    "lloc": 0,
+    "functions": 8,
+    "cyclomatic": 15
+  },
   "crates/dispatch-pack/src/lib.rs": {
     "ploc": 367,
     "lloc": 60,
@@ -1906,6 +1924,24 @@
     "lloc": 242,
     "functions": 110,
     "cyclomatic": 127
+  },
+  "crates/liberado-forge/src/gitea.rs": {
+    "ploc": 242,
+    "lloc": 28,
+    "functions": 20,
+    "cyclomatic": 54
+  },
+  "crates/liberado-forge/src/gitea/tests.rs": {
+    "ploc": 274,
+    "lloc": 83,
+    "functions": 16,
+    "cyclomatic": 31
+  },
+  "crates/liberado-forge/src/lib.rs": {
+    "ploc": 72,
+    "lloc": 1,
+    "functions": 2,
+    "cyclomatic": 9
   },
   "crates/main-agent/src/compaction.rs": {
     "ploc": 273,
@@ -3076,5 +3112,77 @@
     "lloc": 84,
     "functions": 20,
     "cyclomatic": 26
+  },
+  "crates/worker/src/cli.rs": {
+    "ploc": 105,
+    "lloc": 25,
+    "functions": 14,
+    "cyclomatic": 46
+  },
+  "crates/worker/src/cli/tests.rs": {
+    "ploc": 132,
+    "lloc": 37,
+    "functions": 15,
+    "cyclomatic": 18
+  },
+  "crates/worker/src/config.rs": {
+    "ploc": 78,
+    "lloc": 18,
+    "functions": 14,
+    "cyclomatic": 28
+  },
+  "crates/worker/src/git.rs": {
+    "ploc": 105,
+    "lloc": 11,
+    "functions": 16,
+    "cyclomatic": 22
+  },
+  "crates/worker/src/http.rs": {
+    "ploc": 127,
+    "lloc": 19,
+    "functions": 14,
+    "cyclomatic": 31
+  },
+  "crates/worker/src/lib.rs": {
+    "ploc": 14,
+    "lloc": 0,
+    "functions": 1,
+    "cyclomatic": 2
+  },
+  "crates/worker/src/main.rs": {
+    "ploc": 114,
+    "lloc": 26,
+    "functions": 12,
+    "cyclomatic": 33
+  },
+  "crates/worker/src/provider_factory.rs": {
+    "ploc": 36,
+    "lloc": 2,
+    "functions": 3,
+    "cyclomatic": 8
+  },
+  "crates/worker/src/queue.rs": {
+    "ploc": 147,
+    "lloc": 42,
+    "functions": 17,
+    "cyclomatic": 43
+  },
+  "crates/worker/src/queue/tests.rs": {
+    "ploc": 140,
+    "lloc": 61,
+    "functions": 10,
+    "cyclomatic": 15
+  },
+  "crates/worker/src/runner.rs": {
+    "ploc": 271,
+    "lloc": 70,
+    "functions": 32,
+    "cyclomatic": 67
+  },
+  "crates/worker/src/runner/tests.rs": {
+    "ploc": 344,
+    "lloc": 85,
+    "functions": 26,
+    "cyclomatic": 41
   }
 }

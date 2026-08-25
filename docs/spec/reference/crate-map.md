@@ -5,7 +5,11 @@
 > Layer semantics and dependency rules: [contracts.md](../architecture/contracts.md) and
 > `crates/test-support/tests/layer_rules.rs` (the same role tags, mechanically enforced).
 
+<<<<<<< HEAD
 54 workspace crates.
+=======
+55 workspace crates.
+>>>>>>> 0d047b1 (chore(post-merge): regenerate crate map and ratchet baselines for the merged tree)
 
 ## foundation
 
