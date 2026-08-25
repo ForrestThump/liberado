@@ -748,18 +748,48 @@ fn save_ledger_drops_exact_duplicate_rows() {
 #[test]
 fn parse_include_all_accepts_nothing_or_all_only() {
     let none: Vec<String> = vec![];
-    assert!(!parse_include_all(&mut none.iter().cloned(), "u").unwrap());
+    assert!(!run_support::parse_include_all(&mut none.iter().cloned(), "u").unwrap());
 
     let all = vec!["--all".to_string()];
-    assert!(parse_include_all(&mut all.into_iter(), "u").unwrap());
+    assert!(run_support::parse_include_all(&mut all.into_iter(), "u").unwrap());
 
     // A typo must be a usage error naming what was seen, never a silent
     // filtered run.
     let typo = vec!["--al".to_string()];
-    let err = parse_include_all(
+    let err = run_support::parse_include_all(
         &mut typo.into_iter(),
         "usage: liberado mutants report [--all]",
     )
     .unwrap_err();
     assert!(err.contains("--al") && err.contains("usage"), "{err}");
+}
+
+/// When the final rename cannot land (here: a directory occupies the
+/// ledger's name), save_ledger must return the error instead of panicking,
+/// and must not leave pid-temp litter beside it.
+#[test]
+fn save_ledger_fails_cleanly_when_the_target_cannot_be_renamed() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir(dir.path().join(LEDGER_FILE)).unwrap();
+    let ledger = Ledger {
+        schema: 1,
+        campaigns: vec![],
+    };
+
+    let outcome = save_ledger(dir.path(), &ledger);
+
+    assert!(
+        outcome.is_err(),
+        "renaming onto a directory must fail: {outcome:?}"
+    );
+    let litter: Vec<String> = std::fs::read_dir(dir.path())
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .map(|e| e.file_name().to_string_lossy().to_string())
+        .filter(|n| n.ends_with(".tmp"))
+        .collect();
+    assert!(
+        litter.is_empty(),
+        "no inert temp files may remain: {litter:?}"
+    );
 }

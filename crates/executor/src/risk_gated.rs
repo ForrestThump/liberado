@@ -1852,3 +1852,7 @@ mod one_intent_one_prompt {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "risk_gated_survivor_tests.rs"]
+mod survivor_tests;

@@ -61,3 +61,5 @@ coder-traces/
 # Python bytecode
 scripts/__pycache__/
 **/__pycache__/
+# Per-installation proposal-signing key (never commit an install secret).
+.proposal-key

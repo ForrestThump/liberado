@@ -78,16 +78,6 @@ pub fn run(args: &mut impl Iterator<Item = String>) -> Result<(), Box<dyn std::e
     Ok(())
 }
 
-/// Shared `report`/`next` flag parsing: at most one argument, `--all`.
-/// A typo like `--al` is a usage error, not a silent filtered run.
-fn parse_include_all(args: &mut impl Iterator<Item = String>, usage: &str) -> Result<bool, String> {
-    match args.next().as_deref() {
-        None => Ok(false),
-        Some("--all") => Ok(true),
-        Some(other) => Err(format!("{usage} (got {other:?})")),
-    }
-}
-
 pub fn record(args: &mut impl Iterator<Item = String>) -> Result<(), Box<dyn std::error::Error>> {
     let root = crate_map_cmd::repository_root()?;
     let crate_dir = args.next();
@@ -122,7 +112,8 @@ pub fn record(args: &mut impl Iterator<Item = String>) -> Result<(), Box<dyn std
 
 pub fn report(args: &mut impl Iterator<Item = String>) -> Result<(), Box<dyn std::error::Error>> {
     let root = crate_map_cmd::repository_root()?;
-    let include_all = parse_include_all(args, "usage: liberado mutants report [--all]")?;
+    let include_all =
+        run_support::parse_include_all(args, "usage: liberado mutants report [--all]")?;
     let ledger = load_ledger(&root)?;
     let crates = crate_map_cmd::list_crates(&root)?;
     let health = build_health(&root, &ledger, &crates, include_all)?;
@@ -134,7 +125,7 @@ pub fn next_crate(
     args: &mut impl Iterator<Item = String>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let root = crate_map_cmd::repository_root()?;
-    let include_all = parse_include_all(args, "usage: liberado mutants next [--all]")?;
+    let include_all = run_support::parse_include_all(args, "usage: liberado mutants next [--all]")?;
     let ledger = load_ledger(&root)?;
     let crates = crate_map_cmd::list_crates(&root)?;
     let health = build_health(&root, &ledger, &crates, include_all)?;
@@ -185,6 +176,9 @@ const TIMEOUT_OVERRIDES: &[(&str, &str, &str)] = &[
     // chat-search pulls the Tantivy index stack; its cold-cache baseline test phase
     // exceeds 3s before any mutant runs (same signature as conversation-store).
     ("liberado-chat-search", "60", "60"),
+    // coder-tools shells out to real git in its tests; 141/582 mutants timed
+    // out at the 3s floor without ever being decided.
+    ("liberado-coder-tools", "30", "30"),
 ];
 
 fn build_mutants_command(package: &str, profile: RunProfile) -> String {
@@ -322,40 +316,10 @@ fn validate_outcomes(counts: &Counts, total_mutants: u32) -> Option<RecordOutcom
     None
 }
 
-/// Drop byte-identical duplicate rows before saving.
-///
-/// The ledger is append-only, but merges have pasted whole blocks twice (13
-/// duplicates at once during the campaign branch). A merge that unions both
-/// sides then re-saves goes through here, so the on-disk artifact can never
-/// keep a duplicate pair even when git history briefly contained one.
-fn dedupe_campaigns(campaigns: Vec<Campaign>) -> Vec<Campaign> {
-    let mut seen = std::collections::HashSet::new();
-    campaigns
-        .into_iter()
-        .filter(|c| {
-            let canonical = serde_json::to_string(c).expect("a ledger row serialises");
-            seen.insert(canonical)
-        })
-        .collect()
-}
-
+// The body lives in run_support::persist_ledger; this delegate keeps the
+// historical name, call sites, and score at the root.
 fn save_ledger(root: &Path, ledger: &Ledger) -> Result<(), Box<dyn std::error::Error>> {
-    let ledger = Ledger {
-        schema: ledger.schema,
-        campaigns: dedupe_campaigns(ledger.campaigns.clone()),
-    };
-    let bytes = serde_json::to_string_pretty(&ledger)? + "\n";
-    write_atomic(root, &bytes);
-    Ok(())
-}
-
-// Atomic temp+rename with a pid-unique temp name: concurrent agents append to
-// one ledger file, and a truncating in-place write loses appends or corrupts
-// the JSON mid-flight. A failed rename may leave an inert `.tmp` beside it.
-fn write_atomic(root: &Path, bytes: &str) {
-    let tmp = root.join(format!("{LEDGER_FILE}.{}.tmp", std::process::id()));
-    fs::write(&tmp, bytes).expect("ledger temp write");
-    fs::rename(&tmp, root.join(LEDGER_FILE)).expect("ledger atomic rename");
+    run_support::persist_ledger(root, ledger)
 }
 
 fn resolve_crate(root: &Path, crate_dir: &str) -> Result<CrateInfo, Box<dyn std::error::Error>> {

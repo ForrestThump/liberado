@@ -624,6 +624,10 @@ fn persist_proposal_key(path: &Path, key: &[u8]) -> std::io::Result<()> {
 }
 
 #[cfg(test)]
+#[path = "config_survivor_tests.rs"]
+mod survivor_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use liberado_common::Capability;
@@ -677,6 +681,15 @@ capabilities = [
 
     #[test]
     fn loads_and_parses_policy_and_topology() {
+        // Isolate the data dir: load_config always consults the machine-owned
+        // grants overlay from LIBERADO_DATA_DIR, and the survivor tests set
+        // that variable under the shared lock. Holding the same lock and
+        // pointing the dir at an empty tempdir keeps this test's zone/grant
+        // counts exact no matter which tests run concurrently.
+        let _guard = crate::survivor_tests::env_lock().lock().unwrap();
+        let data = TempDir::new().unwrap();
+        let _env = crate::survivor_tests::EnvGuard::set("LIBERADO_DATA_DIR", data.path());
+
         let dir = TempDir::new().unwrap();
         write_file(dir.path(), "topology.toml", TOPOLOGY_TOML);
         write_file(dir.path(), "policy.toml", POLICY_TOML);
@@ -856,6 +869,12 @@ transport = { kind = "stdio", command = "email-mcp", args = [] }
 writes_vault = false   # sends email; writes no vault zone
 "#,
         );
+
+        // Same data-dir isolation as loads_and_parses_policy_and_topology:
+        // the overlay merge reads the process-global env under a shared lock.
+        let _guard = crate::survivor_tests::env_lock().lock().unwrap();
+        let data = TempDir::new().unwrap();
+        let _env = crate::survivor_tests::EnvGuard::set("LIBERADO_DATA_DIR", data.path());
 
         let (config, prov) = load_config(Some(dir.path())).expect("valid config should load");
         assert_eq!(config.topology.mcps.len(), 1);

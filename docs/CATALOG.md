@@ -78,3 +78,4 @@ Authority model: [doc-authority.md](spec/reference/doc-authority.md).
 | [docs/validation/mutation-testing-plan.md](validation/mutation-testing-plan.md) | validation | historical | evidence | correctness | — |
 | [docs/validation/mutation-testing/mutation-testing-report-acp-bridge.md](validation/mutation-testing/mutation-testing-report-acp-bridge.md) | validation | historical | evidence | — | — |
 | [docs/validation/mutation-testing/mutation-testing-report-common.md](validation/mutation-testing/mutation-testing-report-common.md) | validation | historical | evidence | correctness | — |
+| [docs/validation/mutation-testing/mutation-testing-report-mcp.md](validation/mutation-testing/mutation-testing-report-mcp.md) | validation | historical | evidence | — | — |
