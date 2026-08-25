@@ -74,6 +74,7 @@
 //! callers and holds an upstream credential.
 
 pub mod bench_api;
+pub mod bounded;
 pub mod free;
 pub mod http;
 pub mod match_slug;

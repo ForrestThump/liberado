@@ -69,27 +69,35 @@ async fn chat_completions(
     State(state): State<Arc<ProxyService>>,
     Json(mut body): Json<Value>,
 ) -> Response {
-    let candidates = match state.candidates_for(&body).await {
-        Ok(c) => c,
-        Err(e) => return route_error_response(e),
-    };
-    if candidates.is_empty() {
+    // Model rewriting indexes the body as an object; anything else (array, string, number)
+    // must be refused at the boundary — an `IndexMut` panic here would kill the connection
+    // with no HTTP response, which is remote-triggerable.
+    if !body.is_object() {
         return (
-            StatusCode::BAD_GATEWAY,
-            Json(json!({ "error": { "message": "no free models available to route to" } })),
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": { "message": "request body must be a JSON object" } })),
         )
             .into_response();
     }
 
+    let candidates = match state.candidates_for(&body).await {
+        // Invariant: `Ok` never carries an empty list — an empty free set surfaces as
+        // `RouteError::Resolve` (`NoFreeModels`) instead, so there is no empty-arm here.
+        Ok(c) => c,
+        Err(e) => return route_error_response(e),
+    };
+
     tracing::info!(candidates = ?candidates, "routing chat completion");
+    let mut attempted = 0usize;
     for slug in candidates {
+        attempted += 1;
         ProxyService::rewrite_model(&mut body, &slug);
         if let Step::Finish(response) = attempt_candidate(&state, &body, &slug).await {
             return response;
         }
     }
 
-    exhausted_response(&state)
+    exhausted_response(attempted)
 }
 
 async fn attempt_candidate(state: &ProxyService, body: &Value, slug: &str) -> Step {
@@ -141,19 +149,33 @@ enum FailureVerdict {
     Relay(Response),
 }
 
+/// Read an upstream error body bounded — a hostile or misbehaving peer must not choose our
+/// memory footprint. Unreadable bodies become empty strings: classification falls back to the
+/// status code alone.
+async fn failure_body_text(response: reqwest::Response) -> String {
+    match crate::bounded::read_capped(response, "upstream error", 64 * 1024).await {
+        Ok(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
+        Err(e) => {
+            tracing::warn!(error = %e, "unreadable upstream error body");
+            String::new()
+        }
+    }
+}
+
 async fn classify_failure(
     state: &ProxyService,
     slug: &str,
     response: reqwest::Response,
 ) -> FailureVerdict {
     let status = response.status();
-    // Read the error body (bounded) to classify it; a payload problem relays straight back
-    // instead of burning another free model's quota.
-    let text = response.text().await.unwrap_or_default();
+    // Bounded read, then clip again for the log line and relay. A payload problem relays
+    // straight back instead of burning another free model's quota.
+    let text = failure_body_text(response).await;
     let clipped: String = text.chars().take(2_000).collect();
+    let status_code = status.as_u16();
     tracing::warn!(
         candidate = %slug,
-        status = status.as_u16(),
+        status = status_code,
         body = %clipped,
         "upstream refusal"
     );
@@ -163,13 +185,12 @@ async fn classify_failure(
     FailureVerdict::Relay(error_relay(status, &clipped))
 }
 
-fn exhausted_response(state: &ProxyService) -> Response {
+fn exhausted_response(attempted: usize) -> Response {
     (
         StatusCode::BAD_GATEWAY,
         Json(json!({
             "error": { "message": format!(
-                "all {} ranked free candidates refused the request",
-                state.config.max_attempts) }
+                "all {attempted} attempted free candidates refused the request") }
         })),
     )
         .into_response()

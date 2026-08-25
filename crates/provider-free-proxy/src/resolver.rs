@@ -116,7 +116,7 @@ impl DefaultSources {
             base_url: base_url.into(),
             api_key,
             spider,
-            scrape_timeout_secs: 90,
+            scrape_timeout_secs: crate::settings::DEFAULT_SCRAPE_TIMEOUT_SECS,
         }
     }
 

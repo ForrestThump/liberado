@@ -13,8 +13,14 @@ pub const DEFAULT_BIND: &str = "127.0.0.1:8788";
 pub const DEFAULT_UPSTREAM_BASE: &str = "https://openrouter.ai/api/v1";
 /// Six hours: benchmarks re-rank slowly and the API allows 500 requests/day per key.
 pub const DEFAULT_TTL_SECS: u64 = 21_600;
-pub const DEFAULT_MAX_ATTEMPTS: u32 = 3;
+/// Floor for the TTL knob. A configured 0 would mean "re-resolve on every request", hammering
+/// the rate-limited benchmarks API (500/day) and adding discovery latency to every call — so
+/// anything below one minute is treated as one minute, not as an error and not as zero.
+pub const MIN_TTL_SECS: u64 = 60;
+/// Default per-scrape budget for the fallback sources; the resolver's client also imports this
+/// so the number lives in exactly one place.
 pub const DEFAULT_SCRAPE_TIMEOUT_SECS: u64 = 90;
+pub const DEFAULT_MAX_ATTEMPTS: u32 = 3;
 
 /// Everything `main` needs from the environment.
 #[derive(Debug, Clone, PartialEq)]
@@ -41,7 +47,7 @@ impl ProxySettings {
         Self {
             bind: get("LIBERADO_FREE_PROXY_BIND", DEFAULT_BIND),
             upstream_base: get("LIBERADO_FREE_PROXY_UPSTREAM_BASE", DEFAULT_UPSTREAM_BASE),
-            ttl_secs: parse("LIBERADO_FREE_PROXY_TTL_SECS", DEFAULT_TTL_SECS),
+            ttl_secs: parse("LIBERADO_FREE_PROXY_TTL_SECS", DEFAULT_TTL_SECS).max(MIN_TTL_SECS),
             // Attempt depth is u32 upstream; parse through u64 so a nonsense negative reads as
             // absent rather than wrapping.
             max_attempts: parse(
@@ -129,6 +135,24 @@ mod tests {
         assert_eq!(s.ttl_secs, DEFAULT_TTL_SECS);
         assert_eq!(s.max_attempts, DEFAULT_MAX_ATTEMPTS);
         assert_eq!(s.scrape_timeout_secs, DEFAULT_SCRAPE_TIMEOUT_SECS);
+    }
+
+    /// A parsed TTL of 0 is *not* nonsense — it parses cleanly, which makes it worse: it would
+    /// silently mean "re-resolve every request". The floor catches the legitimate-looking case.
+    #[test]
+    fn ttl_values_below_the_floor_clamp_to_one_minute() {
+        for configured in ["0", "1", "59"] {
+            let s = ProxySettings::from_lookup(lookup_of(&[(
+                "LIBERADO_FREE_PROXY_TTL_SECS",
+                configured,
+            )]));
+            assert_eq!(s.ttl_secs, MIN_TTL_SECS, "configured {configured:?}");
+        }
+        let s = ProxySettings::from_lookup(lookup_of(&[("LIBERADO_FREE_PROXY_TTL_SECS", "61")]));
+        assert_eq!(
+            s.ttl_secs, 61,
+            "at or above the floor passes through untouched"
+        );
     }
 
     #[test]

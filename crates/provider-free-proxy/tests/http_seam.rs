@@ -290,6 +290,56 @@ async fn exhausted_candidates_answer_502() {
     );
 }
 
+/// A non-object body previously reached serde_json's `IndexMut`, which panics on
+/// arrays/strings/numbers — killing the connection with no HTTP response, remotely triggerable.
+/// The boundary must refuse it politely instead.
+#[tokio::test]
+async fn non_object_bodies_get_a_400_not_a_dropped_connection() {
+    let upstream = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/api/v1/chat/completions"))
+        .respond_with(ok_completion())
+        .expect(0) // a malformed body must never reach any model
+        .mount(&upstream)
+        .await;
+
+    let app =
+        liberado_provider_free_proxy::http_router(service_at(format!("{}/api/v1", upstream.uri())));
+    for bad in [json!([1, 2, 3]), json!("a string"), json!(42), json!(null)] {
+        let (status, err) = post_chat(app.clone(), bad.clone()).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "body {bad}");
+        let message = err["error"]["message"].as_str().unwrap_or_default();
+        assert!(message.contains("JSON object"), "{message}");
+    }
+}
+
+/// An unreadable (oversized) upstream error body must not wedge classification: the 429's
+/// status alone still fails over, and the next candidate serves.
+#[tokio::test]
+async fn an_oversized_error_body_still_fails_over_on_status() {
+    let upstream = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/api/v1/chat/completions"))
+        .and(body_partial_json(json!({ "model": "best/m" })))
+        .respond_with(ResponseTemplate::new(429).set_body_string("x".repeat(80 * 1024)))
+        .expect(1)
+        .mount(&upstream)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/api/v1/chat/completions"))
+        .and(body_partial_json(json!({ "model": "second/m" })))
+        .respond_with(ok_completion())
+        .expect(1)
+        .mount(&upstream)
+        .await;
+
+    let app =
+        liberado_provider_free_proxy::http_router(service_at(format!("{}/api/v1", upstream.uri())));
+    let (status, reply) = post_chat(app, json!({"model": "auto", "messages": []})).await;
+    assert_eq!(status, StatusCode::OK, "the second candidate must serve");
+    assert_eq!(reply["choices"][0]["message"]["content"], json!("ok"));
+}
+
 #[tokio::test]
 async fn healthz_answers_ok() {
     let app = liberado_provider_free_proxy::http_router(service_at("http://unused.invalid".into()));
