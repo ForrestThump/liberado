@@ -1400,6 +1400,21 @@
       }
     },
     {
+      "package": "liberado-executor",
+      "commit": "decd6e5404206b8cee383a72e92ff188fd7486ea",
+      "recorded_at": "2026-08-25",
+      "command": "cargo mutants -p liberado-executor --cap-lints true --timeout 3.0 --minimum-test-timeout 30 --in-place",
+      "tool_version": "27.0.0",
+      "scope": "package",
+      "counts": {
+        "viable": 332,
+        "caught": 319,
+        "survived": 12,
+        "timeout": 1,
+        "unviable": 57
+      }
+    },
+    {
       "package": "liberado-acp-bridge",
       "commit": "862224478106eb226334fbb3eb766e722dd3b7dc",
       "recorded_at": "2026-08-24",

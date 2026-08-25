@@ -1,39 +1,80 @@
-# Mutation Testing Report — `liberado-executor`
+# executor — Mutation Testing Report
 
-Generated 2026-07-29 using `cargo-mutants 27.1.0`.
+**Date:** 2026-08-25
+**Status:** historical
+**Authority:** evidence
+**Scope:** `liberado-executor`, full lib.
 
-## Summary
+## Campaign history
 
-| Metric | Before | After | Delta |
-|--------|--------|-------|-------|
-| Tests | 72 | 78 | **+6** |
-| Mutants tested | 198 | 198 | — |
-| Caught | 135 | 139 | **+4** |
-| Missed | 33 | 29 | **−4** |
-| Unviable | 30 | 30 | — |
-| Catch rate (of viable) | 80.4% | 82.7% | **+2.3pp** |
+| Ledger row | Survived | Caught | Viable |
+|---|---:|---:|---:|
+| markdown-era (`commit: null`) | 29 | 139 | 168 |
+| `f6597d13` | 18 | 314 | 332 |
+| `8622244` (fresh baseline) | **86** | 246 | 332 |
+| `97fc00d` | 18 | 313 | 332 |
+| `decd6e5` (final) | **12** | 319 | 332 |
 
-No real code bugs were found during triage.
+The `f6597d13` row undercounted by ~5× on identical viability — trust fresh
+numbers over any row whose generation you cannot reproduce.
 
-## Tests Added
+## What was killed, by module
 
-| Test | Area |
-|------|------|
-| `cosine_of_identical_vectors_is_one` | Similarity — identity check |
-| `cosine_of_orthogonal_vectors_is_zero` | Similarity — orthogonality |
-| `cosine_of_zero_vector_is_zero` | Similarity — zero-vector guard |
-| `args_similarity_default_near_duplicates` | Similarity — near-duplicate args |
-| `args_similarity_empty_both_is_identical` | Similarity — both empty |
-| `args_similarity_neutral_args_still_use_cosine` | Similarity — distinct non-empty |
-| `tf_idf_smoke` | TF-IDF vector computation |
+- **mvl.rs** — writer parent-dir creation, RFC3339 timestamps (parse + millis +
+  Z), sha256 helpers against a known digest and key-order independence,
+  message/catalog item rendering, execution sidecar path, terminal events,
+  tools_changed firing only on real offer changes, full-vs-delta prompts
+  (follow-ups labelled `delta` and carrying only new turns — the fixture must
+  grow the conversation, or delta legitimately emits nothing), system-message
+  hashing, tool start/result events in both logs.
+- **budget.rs** — wall-clock boundary, limit chaining and counting, turn-cap
+  adjustment preserving extra limits.
+- **lib.rs pure helpers** — spill-label sanitisation, char-boundary truncation
+  (the `/=` step variant hangs a test binary; hangs count as kills),
+  prompt-builder wording pins, doom/cycle escalation rungs and the one-time
+  recovery bonus, wrap-up reserve arithmetic (`turn + WRAP_UP_TURNS - 1`) and
+  withdraw-except-finish.
+- **lib.rs stateful** — request observation (system hash forwarded, absent
+  prompt recorded as `None`), model override fidelity, all six mvl wrappers
+  writing their event type through to the session files (turn mapping
+  `saturating_sub(1)` pinned), read/write batch repeat counting by identity
+  (name+arguments, excluding the current call), ok-flags in traces, short-cycle
+  detection including period-3 walk order, and an exact-zero cosine for
+  disjoint token sets (a broken idf produces NaN).
+- **risk_gated.rs** — compact numeric permission-request ids, held-authority
+  summary across MCP and both zone kinds, the undeclared-zone fail-safe (no
+  grant → deferred, action never invoked), and its human-granted exception
+  (held `Write` on an undeclared zone runs direct).
 
-## Remaining Missed Mutants (29)
+## Accepted survivors
 
-| Category | Mutants | Reason |
-|----------|---------|--------|
-| **Constant string getters** (6) | `wrap_up_directive` (2), `tools_removed_nudge` (2), `LoopProfile::semantic` (1), `held_summary` (2) | No test asserts the exact string content of these prompt/display helpers |
-| **Constructor / public wrapper** (3) | `LoopProfile::semantic → Default::default()` (1), `converse_messages` return (2) | Default impl is identical; converse_messages return depends on provider response not asserted in tests |
-| **Budget arithmetic** (10) | `run_loop` line 731 (`- → +/`), 734 (`== → !=`), 791 (`>` → `==</`>=`), 799 (`delete !`), 895 (`+= → *=`), 928 (`delete !`), 930 (`+= → -=/`*=`) | Tracing-only guards (`> 0`, `delete !`) or operators whose output diverges gradually; tests pass because they assert on tool execution outcomes not exact turn budgets |
-| **TF-IDF / cosine operators** (4) | `tf_idf_vectors` `+= → -=` and `*= → +=` (2), `cosine` `|| → &&` (1) — note: `cosine * → /` and `* → +` were CAUGHT by new tests | The `||` → `&&` path is indistinguishable because both produce 0.0 for orthogonal/empty vectors |
-| **args_similarity `&&` → `||`** (1) | Line 1247 | Both paths produce same result when vectors are orthogonal or one is empty |
-| **RiskGatedToolRuntime guards** (5) | `authority_decision → ()` (1), zone-restriction guard → true (1), `delete !` on default WriteClass (1), Write match arm deletion (1), `held_summary → constants` (2) | Integration-level; authority_decision return value is not checked by callers |
+| Location | Mutant | Why it stands |
+|---|---|---|
+| `lib.rs:116` | boundary walk `>` → `>=` | Position 0 is always a char boundary; the equal case exits anyway (confirmed empirically). |
+| `lib.rs:283` | `semantic()` → `Default::default()` | `ArgMatch::default()` is already `Semantic`. |
+| `lib.rs:795/796`, `:1695`×3 | logging gates | Gate `tracing` calls only. |
+| `lib.rs:1911` | `&&` → `\|\|` before doom re-set | Both arms write the same literal; the overwrite is unobservable. |
+| `lib.rs:2416/2420` | cycle-window arithmetic | Output is a sorted, deduped projection; overlapping windows yield identical sets for every input tried. |
+| `lib.rs:2477` | empty-token guard `&&` → `\|\|` | The scalar branch and an empty-vector cosine agree (both 0.0) wherever they differ. |
+| `mvl.rs:210` | `warn` → `()` | Logging-only. |
+| `risk_gated.rs:188` | `authority_decision` → `()` | Logging-only. |
+| `risk_gated.rs:403/409` | dead zone-class fallbacks | The write-capability check returns before the write-class match whenever the grant is missing, so both fallback forms are unreachable. |
+
+Line-drift warning, learned twice here: a survivor name taken from an older
+outcomes file can point at a different operator once files are edited. Re-read
+the source line before writing a test against it.
+
+`Executor::converse_stream`'s error-classification bang needs a streaming
+provider harness and remains the one harness-blocked site.
+
+## Harness notes
+
+- Per-mutant verification scripts MUST take the crate name as a parameter; a
+  hardcoded `-p` once verified zero mutations against the wrong crate's tests.
+- Run mutation loops in the background writing per-mutant results to a log;
+  foreground loops exceed shell timeouts and die mid-mutation, leaving applied
+  mutants AND poisoned scratch backups. Restore material belongs in git
+  (HEAD + the mod declaration), never only in /tmp copies that later runs may
+  overwrite with mutated content.
+- A hung mutant (infinite loop) is a kill; wrap the inner cargo invocation in
+  `timeout` and treat expiry as failure of the suite.
