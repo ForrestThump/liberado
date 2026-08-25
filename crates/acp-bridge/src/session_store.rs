@@ -7,7 +7,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 #[cfg(test)]
 use tempfile::TempDir;
@@ -41,7 +41,7 @@ pub struct SessionRecord {
 /// fallback `crates/config/src/lib.rs::data_dir()` and
 /// `crates/acp-bridge/src/coding_run.rs` use.
 ///
-/// Tests may call `set_test_sessions_dir` to override the directory globally
+/// Tests may call `set_sessions_dir` to override the directory globally
 /// (avoids env-var races under parallel `cargo test`).
 pub fn sessions_dir() -> PathBuf {
     #[cfg(test)]
@@ -58,42 +58,45 @@ pub fn sessions_dir() -> PathBuf {
 static TEST_SESSIONS_DIR: std::sync::Mutex<Option<PathBuf>> = std::sync::Mutex::new(None);
 
 #[cfg(test)]
-/// Point `sessions_dir()` at a temp directory for the duration of this test.
+/// Holds `sessions_dir()` redirected for the duration of one test.
 ///
-/// The returned guard holds the lock and restores the default on drop, so the redirection and
-/// the exclusion have exactly the same lifetime — a caller cannot hold one without the other.
-///
-/// Serializes every test that redirects `sessions_dir()`. `TEST_SESSIONS_DIR` is process-global,
-/// and `cargo test` runs a binary's tests concurrently on one process. Without this lock each
-/// test overwrites the directory the others are using.
-pub(crate) fn set_sessions_dir(
-    dir: &TempDir,
-) -> (std::sync::MutexGuard<'static, ()>, TestDirGuard) {
-    // A poisoned lock here means another test panicked while holding it. The directory is
-    // restored by `TestDirGuard`'s Drop during that unwind, so the state is still sound and
-    // failing every subsequent test on it would hide the one real failure.
-    let lock = DIR_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    (lock, set_test_sessions_dir(dir.path().to_path_buf()))
+/// Owns the directory lock, and the reset runs in [`Drop`](Self::drop) **while that lock is
+/// still held** — a struct's fields release only after its `Drop::drop` returns, so the
+/// redirection and its teardown are atomic with respect to every other test in the binary.
+/// The previous two-value tuple returned `(MutexGuard, TestDirGuard)` separately, and tuples
+/// drop left-to-right: the lock released *before* the reset, leaving a window where a parallel
+/// test could acquire the lock, set its own override, and have this guard's teardown clobber
+/// it mid-flight (~1-in-3 full-binary runs).
+pub(crate) struct SessionsDirOverride {
+    _dir_lock: std::sync::MutexGuard<'static, ()>,
 }
 
 #[cfg(test)]
-static DIR_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-#[cfg(test)]
-fn set_test_sessions_dir(dir: PathBuf) -> TestDirGuard {
-    *TEST_SESSIONS_DIR.lock().expect("lock") = Some(dir);
-    TestDirGuard
-}
-
-#[cfg(test)]
-pub(crate) struct TestDirGuard;
-
-#[cfg(test)]
-impl Drop for TestDirGuard {
+impl Drop for SessionsDirOverride {
     fn drop(&mut self) {
         *TEST_SESSIONS_DIR.lock().expect("lock") = None;
     }
 }
+
+#[cfg(test)]
+/// Point `sessions_dir()` at a temp directory for the duration of this test.
+///
+/// Serializes every test that redirects `sessions_dir()`. `TEST_SESSIONS_DIR` is process-global,
+/// and `cargo test` runs a binary's tests concurrently on one process. Without this lock each
+/// test overwrites the directory the others are using.
+pub(crate) fn set_sessions_dir(dir: &TempDir) -> SessionsDirOverride {
+    // A poisoned lock here means another test panicked while holding it. The directory is
+    // restored by `SessionsDirOverride`'s Drop during that unwind, so the state is still sound
+    // and failing every subsequent test on it would hide the one real failure.
+    let dir_lock = DIR_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    *TEST_SESSIONS_DIR.lock().expect("lock") = Some(dir.path().to_path_buf());
+    SessionsDirOverride {
+        _dir_lock: dir_lock,
+    }
+}
+
+#[cfg(test)]
+static DIR_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 // ── Path helpers ────────────────────────────────────────────────────────────
 
@@ -131,12 +134,6 @@ fn record_path(id: &str) -> io::Result<PathBuf> {
     Ok(sessions_dir().join(format!("{id}.json")))
 }
 
-/// Confirm `resolved` lives under the sessions directory — defense-in-depth
-/// on top of [`validate_id`].
-fn within_dir(resolved: &Path) -> bool {
-    resolved.parent() == Some(sessions_dir().as_path())
-}
-
 // ── Public API ──────────────────────────────────────────────────────────────
 
 /// Save a session record atomically.
@@ -144,20 +141,17 @@ fn within_dir(resolved: &Path) -> bool {
 /// Writes to a temporary file in the same directory, then renames over the
 /// target so a crash mid-write cannot leave a half-written record that would
 /// later parse as truth.
+///
+/// Containment is structural: the sessions directory is read once and the
+/// validated id is joined under it, so a record path cannot escape. (An earlier
+/// version re-read `sessions_dir()` for a second containment check; with
+/// redirection now race-free that re-read can never disagree, and its mismatch
+/// branch was dead — validate_id remains the traversal boundary.)
 pub fn save(record: &SessionRecord) -> io::Result<()> {
     let dir = sessions_dir();
     std::fs::create_dir_all(&dir)?;
 
     let target = record_path(&record.id)?;
-    if !within_dir(&target) {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!(
-                "session id {:?} resolves outside sessions directory",
-                record.id
-            ),
-        ));
-    }
 
     let tmp = target.with_extension("json.tmp");
     let json = serde_json::to_string_pretty(record)

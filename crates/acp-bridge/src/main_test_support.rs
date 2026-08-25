@@ -95,16 +95,20 @@ impl ToolRuntime for EchoTool {
 /// `session_store` tests or each other.
 pub(crate) static SESSION_LOAD_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-pub(crate) fn lock_sessions_dir(
-    dir: &TempDir,
-) -> (
-    std::sync::MutexGuard<'static, ()>,
-    std::sync::MutexGuard<'static, ()>,
-    session_store::TestDirGuard,
-) {
-    let lock = SESSION_LOAD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let (dir_lock, guard) = session_store::set_sessions_dir(dir);
-    (lock, dir_lock, guard)
+pub(crate) fn lock_sessions_dir(dir: &TempDir) -> LockedSessionsDir {
+    let load_lock = SESSION_LOAD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    // Field order is the drop order: the directory override resets first (under the dir lock it
+    // still holds), then the load lock releases.
+    LockedSessionsDir {
+        _dir_override: session_store::set_sessions_dir(dir),
+        _load_lock: load_lock,
+    }
+}
+
+/// Both serialization locks for a sessions-dir test, torn down in the safe order on drop.
+pub(crate) struct LockedSessionsDir {
+    _dir_override: session_store::SessionsDirOverride,
+    _load_lock: std::sync::MutexGuard<'static, ()>,
 }
 
 // ── Dispatch-loop and CLI survivors (mutation campaign) ────────────────────

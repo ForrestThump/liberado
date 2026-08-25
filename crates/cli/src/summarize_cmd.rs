@@ -129,6 +129,7 @@ fn liberado(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+/// Aggregated counters and extracts from one MVL file (a tolerant, one-pass renderer).
 struct MvlStats {
     usage: BTreeMap<String, f64>,
     tools: BTreeMap<String, usize>,
@@ -153,6 +154,8 @@ fn mvl_stats() -> MvlStats {
     }
 }
 
+/// Fold one `completion` record into the running stats: usage, first and last model text,
+/// finish reason, and per-call tool counts with the first edit and cargo commands.
 fn ingest_completion(stats: &mut MvlStats, object: &Value) {
     stats.completions += 1;
     if let Some(values) = object.get("usage").and_then(Value::as_object) {
@@ -220,6 +223,7 @@ fn ingest_completion(stats: &mut MvlStats, object: &Value) {
     }
 }
 
+/// Fold one `tool_result` record: match named failures and cargo-line spans against `error`.
 fn ingest_tool_result(stats: &mut MvlStats, object: &Value, error: &Regex) {
     let shown = text(
         object
@@ -238,6 +242,7 @@ fn ingest_tool_result(stats: &mut MvlStats, object: &Value, error: &Regex) {
     }
 }
 
+/// Render the collected MVL stats as a human summary (what `mvl` prints).
 fn render_mvl_summary(stats: &MvlStats, path: &Path, heading: bool) -> String {
     let mut out = String::new();
     if heading {
@@ -293,6 +298,8 @@ fn render_mvl_summary(stats: &MvlStats, path: &Path, heading: bool) -> String {
     out
 }
 
+/// Ingest one MVL file and render its summary. Tolerant: malformed lines are skipped by
+/// [`records`], an empty file renders an empty summary.
 fn summarize_mvl(path: &Path, heading: bool) -> Result<String, Box<dyn std::error::Error>> {
     let error = Regex::new(r"error\[E\d+\]|test \S+ \.\.\. FAILED")?;
     let mut stats = mvl_stats();
@@ -317,6 +324,8 @@ fn pi(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+/// Ingest one pi-style `session.jsonl` and render its summary as a string (the printable
+/// core of [`pi`], split out so tests can assert on rendered lines).
 fn summarize_pi(path: &Path) -> Result<String, Box<dyn std::error::Error>> {
     let mut turns = 0;
     let mut tools = BTreeMap::new();

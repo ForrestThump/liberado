@@ -1,5 +1,5 @@
 use liberado_common::process::std_command;
-use serde_json::Value;
+use serde_json::{Value, json};
 use std::fs;
 use std::path::{Path, PathBuf};
 use tempfile::tempdir;
@@ -1143,6 +1143,167 @@ fn mutants_next_suggests_a_never_campaigned_crate_first() {
         root.join("crates").join(&name).is_dir(),
         "{name} is not a crate directory"
     );
+}
+
+// --- `mutants next` selection branches, exercised against fixture repos --------------------
+//
+// The live-checkout test above is a useful smoke check, but which branch of the selector fires
+// depends on the *real* workspace's campaign state — adding or ledgering one crate flips the
+// path taken and moves the function's measured coverage, which the CRAP ratchet then reports
+// as a regression no diff caused. These fixtures pin every branch deterministically.
+
+/// Two-crate git checkout (`crates/{alpha,beta}`) with a committed HEAD, so drift enrichment
+/// has real history to count. Returns the dir (owned: must outlive the assertions) and HEAD sha.
+fn next_fixture_repo() -> (tempfile::TempDir, String) {
+    let temp = tempdir().expect("temporary repository");
+    let root = temp.path();
+    for (dir, role) in [("alpha", "kernel"), ("beta", "client")] {
+        fs::create_dir_all(root.join("crates").join(dir)).expect("crate dir");
+        fs::write(
+            root.join("crates").join(dir).join("Cargo.toml"),
+            format!(
+                "[package]\nname = \"liberado-{dir}\"\n\n[package.metadata.liberado]\nrole = \"{role}\"\n"
+            ),
+        )
+        .expect("manifest");
+    }
+    fs::write(root.join("Cargo.toml"), "[workspace]\nmembers = []\n").expect("workspace toml");
+    run_git(root, &["init"]);
+    run_git(root, &["config", "user.email", "test@example.com"]);
+    run_git(root, &["config", "user.name", "Test"]);
+    run_git(root, &["add", "."]);
+    run_git(root, &["commit", "-m", "initial"]);
+    let head = std_command("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(root)
+        .output()
+        .expect("rev-parse");
+    let sha = String::from_utf8_lossy(&head.stdout).trim().to_string();
+    (temp, sha)
+}
+
+fn run_git(root: &Path, args: &[&str]) {
+    let status = std_command("git")
+        .args(args)
+        .current_dir(root)
+        .status()
+        .expect("git command");
+    assert!(status.success(), "git {args:?} failed");
+}
+
+fn write_ledger(root: &Path, campaigns: Value) {
+    fs::write(
+        root.join("mutants-ledger.json"),
+        serde_json::json!({ "schema": 1, "campaigns": campaigns }).to_string(),
+    )
+    .expect("ledger");
+}
+
+fn campaign(package: &str, commit: Option<&str>) -> Value {
+    let mut c = json!({
+        "package": package,
+        "recorded_at": "2026-08-24T00:00:00Z",
+        "scope": "package",
+        "counts": { "viable": 10, "caught": 8, "survived": 2, "timeout": 0, "unviable": 0 }
+    });
+    if let Some(sha) = commit {
+        c["commit"] = json!(sha);
+    }
+    c
+}
+
+#[test]
+fn next_prefers_never_campaigned_over_a_drifted_ledger_entry() {
+    let (temp, sha) = next_fixture_repo();
+    let root = temp.path();
+    // alpha is campaigned (drift path), beta is absent from the ledger → beta wins.
+    write_ledger(root, json!([campaign("liberado-alpha", Some(&sha))]));
+
+    let output = run_cli(root, &["mutants", "next"]);
+    assert!(
+        output.status.success(),
+        "mutants next failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "beta");
+}
+
+#[test]
+fn next_falls_back_to_most_drift_when_everything_was_campaigned() {
+    let (temp, sha) = next_fixture_repo();
+    let root = temp.path();
+    write_ledger(
+        root,
+        json!([
+            campaign("liberado-alpha", Some(&sha)),
+            campaign("liberado-beta", Some(&sha)),
+        ]),
+    );
+
+    let output = run_cli(root, &["mutants", "next"]);
+    assert!(
+        output.status.success(),
+        "mutants next failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    // Equal drift → directory order decides.
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "alpha");
+}
+
+#[test]
+fn next_falls_back_to_historical_only_when_campaigns_record_no_commit() {
+    let (temp, _sha) = next_fixture_repo();
+    let root = temp.path();
+    write_ledger(
+        root,
+        json!([
+            campaign("liberado-alpha", None),
+            campaign("liberado-beta", None),
+        ]),
+    );
+
+    let output = run_cli(root, &["mutants", "next"]);
+    assert!(
+        output.status.success(),
+        "mutants next failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "alpha");
+}
+
+#[test]
+fn next_reports_exhaustion_when_the_role_filter_removes_every_crate() {
+    let (temp, _sha) = next_fixture_repo();
+    let root = temp.path();
+    // Both crates are campaign-free but the default filter still sees them; exhaust the
+    // selection by giving every crate a tooling role, which `--all` must then bypass.
+    for dir in ["alpha", "beta"] {
+        fs::write(
+            root.join("crates").join(dir).join("Cargo.toml"),
+            format!(
+                "[package]\nname = \"liberado-{dir}\"\n\n[package.metadata.liberado]\nrole = \"tooling\"\n"
+            ),
+        )
+        .expect("manifest rewrite");
+    }
+    run_git(root, &["add", "."]);
+    run_git(root, &["commit", "-m", "all tooling"]);
+
+    let filtered = run_cli(root, &["mutants", "next"]);
+    assert!(
+        !filtered.status.success(),
+        "an all-tooling workspace must exhaust the selection"
+    );
+    let stderr = String::from_utf8_lossy(&filtered.stderr);
+    assert!(stderr.contains("no crates matched"), "{stderr}");
+
+    let with_all = run_cli(root, &["mutants", "next", "--all"]);
+    assert!(
+        with_all.status.success(),
+        "--all must bypass the role filter:\n{}",
+        String::from_utf8_lossy(&with_all.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&with_all.stdout).trim(), "alpha");
 }
 
 #[test]
