@@ -435,6 +435,10 @@ impl ToolRuntime for PermittedRuntime {
 }
 
 #[cfg(test)]
+#[path = "pool_survivor_tests.rs"]
+mod survivor_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use async_trait::async_trait;

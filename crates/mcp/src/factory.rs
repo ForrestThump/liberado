@@ -18,6 +18,10 @@ use crate::MultiMcpRuntime;
 use crate::connector::McpConnector;
 use crate::pool::{AsToolRuntime, ConnectionPool, PermittedRuntime, PoolPolicy, PooledCheckout};
 
+#[cfg(test)]
+#[path = "factory_survivor_tests.rs"]
+mod survivor_tests;
+
 /// Pooling knobs passed into [`McpRegistry`] at construction (from `tuning.mcp_pooling`).
 #[derive(Debug, Clone)]
 pub struct McpPoolSettings {

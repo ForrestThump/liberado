@@ -1668,6 +1668,36 @@
         "timeout": 0,
         "unviable": 27
       }
+    },
+    {
+      "package": "liberado-mcp",
+      "commit": "5ca11c681b068ca5ce7e1602f99f18ef9310dc01",
+      "recorded_at": "2026-08-25",
+      "command": "cargo mutants -p liberado-mcp --cap-lints true --timeout 3.0 --minimum-test-timeout 30 --in-place",
+      "tool_version": "27.1.0",
+      "scope": "package",
+      "counts": {
+        "viable": 100,
+        "caught": 66,
+        "survived": 33,
+        "timeout": 1,
+        "unviable": 33
+      }
+    },
+    {
+      "package": "liberado-mcp",
+      "commit": "5ca11c681b068ca5ce7e1602f99f18ef9310dc01",
+      "recorded_at": "2026-08-25",
+      "command": "cargo mutants -p liberado-mcp --cap-lints true --timeout 3.0 --minimum-test-timeout 30 --in-place",
+      "tool_version": "27.1.0",
+      "scope": "package",
+      "counts": {
+        "viable": 100,
+        "caught": 86,
+        "survived": 14,
+        "timeout": 0,
+        "unviable": 33
+      }
     }
   ]
 }
