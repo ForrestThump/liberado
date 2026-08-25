@@ -1,5 +1,5 @@
 //! The `liberado` command line: argument routing + launcher over the daemon server
-//! ([`liberado_server`](liberado_server)). It owns nothing but dispatch and tracing-subscriber
+//! ([`liberado_server`]). It owns nothing but dispatch and tracing-subscriber
 //! init; all daemon and chat logic lives in libraries.
 //!
 //! This is a *library* target housing the real logic, with `main.rs` a three-line shell over
@@ -8,9 +8,9 @@
 //! what the test suite does (the CRAP ratchet reads that as cc²+cc).
 //!
 //! Usage:
-//!   liberado serve <vault-path>      run the daemon + HTTP/SSE API in the foreground
-//!   liberado <vault-path>            back-compat alias for `serve`
-//!   LIBERADO_VAULT=<vault> liberado  same, taking the vault from the environment
+//!   liberado serve \\<\1\\>      run the daemon + HTTP/SSE API in the foreground
+//!   liberado \\<\1\\>            back-compat alias for `serve`
+//!   LIBERADO_VAULT=\\<\1\\> liberado  same, taking the vault from the environment
 //!   liberado chat [session-id]       the streaming terminal client of a running daemon
 //!   liberado config check            load + validate config, print a summary (or an error)
 //!   liberado ci                      full local CI; ratchet and stage/amend crap-baseline.json
@@ -25,21 +25,21 @@
 //!   liberado docs check-links         check relative Markdown links
 //!   liberado docs crate-map           check the generated crate map
 //!   liberado docs crate-map --write   regenerate the crate map
-//!   liberado docs metadata <command>  lint or generate documentation metadata
-//!   liberado docs site [--out <path>] generate the searchable documentation site
-//!   liberado prompt \[profile\]        print the system prompt a chat under <profile> would get
-//!   liberado coder trace <id>        render a durable coding trace as a human transcript
-//!   liberado coder compare <a> <b>   side-by-side harness metrics for two native traces
+//!   liberado docs metadata \\<\1\\>  lint or generate documentation metadata
+//!   liberado docs site [--out \\<\1\\>] generate the searchable documentation site
+//!   liberado prompt \[profile\]        print the system prompt a chat under \\<\1\\> would get
+//!   liberado coder trace \\<\1\\>        render a durable coding trace as a human transcript
+//!   liberado coder compare \\<\1\\> \\<\1\\>   side-by-side harness metrics for two native traces
 //!   liberado coder compare prepare   create isolated, pinned comparison worktrees
 //!   liberado coder compare run       run both harnesses and preserve all results
 //!   liberado coder compare save      commit and archive one harness result
 //!   liberado coder compare reset     restore tracked files in a compare workspace
 //!   liberado coder compare submit    enqueue a durable user-worker comparison job
 //!   liberado coder compare await     wait locally for one comparison job
-//!   liberado coder summarize <path>  summarize a cross-harness compare run
+//!   liberado coder summarize \\<\1\\>  summarize a cross-harness compare run
 //!   liberado coder smoke              validate the coder runner process boundary
-//!   liberado coder import <file>     foreign (Kilo / OpenHands) → `.messages.json`
-//!   liberado mutants run <crate-dir>   run cargo-mutants and append to mutants-ledger.json
+//!   liberado coder import \\<\1\\>     foreign (Kilo / OpenHands) → `.messages.json`
+//!   liberado mutants run \\<\1\\>   run cargo-mutants and append to mutants-ledger.json
 //!   liberado mutants record [crate-dir] ingest mutants.out/outcomes.json into the ledger
 //!   liberado mutants report [--all]    print never/historical/drift campaign health
 //!   liberado mutants next [--all]        suggest the next crate to mutation-test
