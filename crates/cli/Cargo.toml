@@ -21,6 +21,7 @@ liberado-server = { workspace = true }
 liberado-coder-core = { workspace = true }
 liberado-harness-eval = { workspace = true }
 chat-client-contract = { workspace = true }
+liberado-delegate-contract = { workspace = true }
 tokio = { workspace = true }
 tracing-subscriber = { workspace = true }
 reqwest = { workspace = true }

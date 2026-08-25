@@ -1,0 +1,23 @@
+[package]
+name = "liberado-forge"
+version = "0.1.0"
+description = "One seam for forge operations (open PR / comment / checks / merge): ForgeClient trait + Gitea REST implementation."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+async-trait = { workspace = true }
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
+
+[package.metadata.liberado]
+# Layer role for the layer-rules test + crate-map generator (docs/architecture/contracts.md)
+role = "client"

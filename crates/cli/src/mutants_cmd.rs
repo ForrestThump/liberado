@@ -151,15 +151,15 @@ pub fn next_crate(
         .first()
         .map(|entry| entry.dir.as_str())
     {
-        println!("{name}");
+        writeln!(out, "{name}")?;
         return Ok(());
     }
     if let Some(entry) = health.most_drift.first() {
-        println!("{}", entry.dir);
+        writeln!(out, "{}", entry.dir)?;
         return Ok(());
     }
     if let Some(entry) = health.historical_only.first() {
-        println!("{}", entry.dir);
+        writeln!(out, "{}", entry.dir)?;
         return Ok(());
     }
     Err("no crates matched the selection filters".into())
@@ -642,3 +642,7 @@ fn format_counts(counts: &Counts) -> String {
 #[cfg(test)]
 #[path = "mutants_cmd_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "mutants_cmd_next_tests.rs"]
+mod next_tests;
