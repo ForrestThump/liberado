@@ -1452,10 +1452,10 @@
     "cyclomatic": 78
   },
   "crates/delegate-contract/src/lib.rs": {
-    "ploc": 172,
-    "lloc": 0,
-    "functions": 8,
-    "cyclomatic": 15
+    "ploc": 187,
+    "lloc": 8,
+    "functions": 9,
+    "cyclomatic": 16
   },
   "crates/dispatch-pack/src/lib.rs": {
     "ploc": 367,
@@ -1872,10 +1872,10 @@
     "cyclomatic": 127
   },
   "crates/liberado-forge/src/gitea.rs": {
-    "ploc": 242,
-    "lloc": 28,
-    "functions": 20,
-    "cyclomatic": 54
+    "ploc": 251,
+    "lloc": 29,
+    "functions": 21,
+    "cyclomatic": 55
   },
   "crates/liberado-forge/src/gitea/tests.rs": {
     "ploc": 274,
@@ -3060,19 +3060,19 @@
     "cyclomatic": 26
   },
   "crates/worker/src/cli.rs": {
-    "ploc": 128,
-    "lloc": 27,
-    "functions": 16,
-    "cyclomatic": 50
+    "ploc": 138,
+    "lloc": 28,
+    "functions": 17,
+    "cyclomatic": 52
   },
   "crates/worker/src/cli/tests.rs": {
-    "ploc": 132,
-    "lloc": 37,
-    "functions": 15,
-    "cyclomatic": 18
+    "ploc": 147,
+    "lloc": 42,
+    "functions": 16,
+    "cyclomatic": 19
   },
   "crates/worker/src/config.rs": {
-    "ploc": 78,
+    "ploc": 79,
     "lloc": 18,
     "functions": 14,
     "cyclomatic": 28
@@ -3096,7 +3096,7 @@
     "cyclomatic": 2
   },
   "crates/worker/src/main.rs": {
-    "ploc": 114,
+    "ploc": 119,
     "lloc": 26,
     "functions": 12,
     "cyclomatic": 33
@@ -3126,8 +3126,8 @@
     "cyclomatic": 67
   },
   "crates/worker/src/runner/tests.rs": {
-    "ploc": 344,
-    "lloc": 85,
+    "ploc": 346,
+    "lloc": 86,
     "functions": 26,
     "cyclomatic": 41
   }
