@@ -343,18 +343,10 @@ fn save_ledger(root: &Path, ledger: &Ledger) -> Result<(), Box<dyn std::error::E
     Ok(())
 }
 
-// Atomic temp+rename with a pid-unique temp name. A failed write or rename
-// propagates to the caller (a campaign that cannot be recorded must fail the
-// command, not panic mid-run) and removes the inert `.tmp` it may leave.
+// Atomic temp+rename lives in run_support::write_ledger_atomically; this
+// delegate keeps the historical call shape (and score) at the root.
 fn write_atomic(root: &Path, bytes: &str) -> Result<(), Box<dyn std::error::Error>> {
-    let tmp = root.join(format!("{LEDGER_FILE}.{}.tmp", std::process::id()));
-    // Plain `and_then` + a function path, not a closure chain: this file sits
-    // against a function-count ratchet.
-    let outcome = fs::write(&tmp, bytes).and_then(|()| fs::rename(&tmp, root.join(LEDGER_FILE)));
-    if outcome.is_err() {
-        let _ = fs::remove_file(&tmp);
-    }
-    outcome.map_err(std::convert::Into::into)
+    run_support::write_ledger_atomically(root, bytes)
 }
 
 fn resolve_crate(root: &Path, crate_dir: &str) -> Result<CrateInfo, Box<dyn std::error::Error>> {

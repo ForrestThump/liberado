@@ -9,7 +9,7 @@ use std::process::ExitStatus;
 
 use liberado_common::process::std_command;
 
-use super::{MUTANTS_TARGET_DIR, RecordOutcome, RunProfile};
+use super::{LEDGER_FILE, MUTANTS_TARGET_DIR, RecordOutcome, RunProfile};
 
 const USAGE_RUN: &str = "usage: liberado mutants run [--lib-only] <crate-dir>";
 
@@ -104,4 +104,23 @@ pub(super) fn parse_include_all(
         Some("--all") => Ok(true),
         Some(other) => Err(format!("{usage} (got {other:?})")),
     }
+}
+
+/// Atomic ledger save: pid-unique temp file, then rename over the target.
+///
+/// Failures propagate (a campaign that cannot be recorded must fail the
+/// command, not panic mid-run) and the inert `.tmp` is removed.
+pub(super) fn write_ledger_atomically(
+    root: &Path,
+    bytes: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let tmp = root.join(format!("{LEDGER_FILE}.{}.tmp", std::process::id()));
+    // Plain `and_then` plus a function path, not closures: keeps this
+    // module's own budgets headroom-friendly.
+    let outcome =
+        fs::write(&tmp, bytes).and_then(|()| fs::rename(&tmp, root.join(super::LEDGER_FILE)));
+    if outcome.is_err() {
+        let _ = fs::remove_file(&tmp);
+    }
+    outcome.map_err(std::convert::Into::into)
 }
