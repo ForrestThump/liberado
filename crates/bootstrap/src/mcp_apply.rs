@@ -511,3 +511,7 @@ mod tests {
         assert!(registry.names().contains(&"vault".to_string()));
     }
 }
+
+#[cfg(test)]
+#[path = "mcp_apply_survivor_tests.rs"]
+mod survivor_tests;
