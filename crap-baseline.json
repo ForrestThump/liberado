@@ -10393,8 +10393,8 @@
       "function": "absolute_path",
       "line": 678,
       "cyclomatic": 2.0,
-      "coverage": 100.0,
-      "crap": 2.0,
+      "coverage": 62.5,
+      "crap": 2.2109375,
       "crate": "liberado-coder-sandbox"
     },
     {
@@ -10960,8 +10960,8 @@
       "function": "CargoTargetDirGuard::drop",
       "line": 158,
       "cyclomatic": 3.0,
-      "coverage": 100.0,
-      "crap": 3.0,
+      "coverage": 80.0,
+      "crap": 3.072,
       "crate": "liberado-coder-sandbox"
     },
     {
@@ -22336,8 +22336,8 @@
       "function": "append",
       "line": 25,
       "cyclomatic": 5.0,
-      "coverage": 90.0,
-      "crap": 5.025,
+      "coverage": 80.0,
+      "crap": 5.2,
       "crate": "liberado-main-agent"
     },
     {
@@ -34737,9 +34737,27 @@
       "file": "crates/worker/src/cli.rs",
       "function": "apply_flag",
       "line": 87,
-      "cyclomatic": 23.0,
+      "cyclomatic": 7.0,
       "coverage": 100.0,
-      "crap": 23.0,
+      "crap": 7.0,
+      "crate": "liberado-worker"
+    },
+    {
+      "file": "crates/worker/src/cli.rs",
+      "function": "apply_token_env_flag",
+      "line": 130,
+      "cyclomatic": 6.0,
+      "coverage": 92.85714285714286,
+      "crap": 6.013119533527696,
+      "crate": "liberado-worker"
+    },
+    {
+      "file": "crates/worker/src/cli.rs",
+      "function": "apply_value_flag",
+      "line": 111,
+      "cyclomatic": 14.0,
+      "coverage": 93.75,
+      "crap": 14.0478515625,
       "crate": "liberado-worker"
     },
     {
@@ -34754,7 +34772,7 @@
     {
       "file": "crates/worker/src/cli.rs",
       "function": "usage",
-      "line": 119,
+      "line": 146,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -34979,7 +34997,7 @@
     {
       "file": "crates/worker/src/lib.rs",
       "function": "build_fingerprint",
-      "line": 28,
+      "line": 35,
       "cyclomatic": 1.0,
       "coverage": 0.0,
       "crap": 2.0,

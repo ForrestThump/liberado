@@ -90,28 +90,55 @@ fn apply_flag(
     iter: &mut impl Iterator<Item = String>,
     env: &impl EnvLookup,
 ) -> Result<(), String> {
-    let mut value = |name: &str| iter.next().ok_or_else(|| format!("{name} needs a value"));
     match flag {
-        "--bind" => args.bind = value("--bind")?,
-        "--data-dir" => args.data_dir = PathBuf::from(value("--data-dir")?),
-        "--config-dir" => args.config_dir = Some(PathBuf::from(value("--config-dir")?)),
-        "--model" => args.model = Some(value("--model")?),
-        "--forge-url" => args.forge_url = Some(value("--forge-url")?),
-        "--clone-base-url" => args.clone_base_url = Some(value("--clone-base-url")?),
-        "--forge-token-env" => {
-            let name = value("--forge-token-env")?;
-            args.forge_token = env.var(&name).ok_or_else(|| format!("{name} is not set"))?;
-        }
-        "--token-env" => {
-            let name = value("--token-env")?;
-            args.token = env.var(&name).ok_or_else(|| format!("{name} is not set"))?;
-        }
+        "--bind" | "--data-dir" | "--config-dir" | "--model" | "--forge-url"
+        | "--clone-base-url" => apply_value_flag(args, flag, iter),
+        "--forge-token-env" | "--token-env" => apply_token_env_flag(args, flag, iter, env),
         "--max-concurrent" => {
-            args.max_concurrent = value("--max-concurrent")?
+            let raw = iter
+                .next()
+                .ok_or("--max-concurrent needs a value")?
                 .parse()
-                .map_err(|_| "--max-concurrent wants a number")?
+                .map_err(|_| "--max-concurrent wants a number")?;
+            args.max_concurrent = raw;
+            Ok(())
         }
-        other => return Err(usage(format!("unknown argument: {other}"))),
+        other => Err(usage(format!("unknown argument: {other}"))),
+    }
+}
+
+/// Flags whose value lands in one string-ish field, named after the flag itself.
+fn apply_value_flag(
+    args: &mut Args,
+    flag: &str,
+    iter: &mut impl Iterator<Item = String>,
+) -> Result<(), String> {
+    let mut value = || iter.next().ok_or_else(|| format!("{flag} needs a value"));
+    match flag {
+        "--bind" => args.bind = value()?,
+        "--data-dir" => args.data_dir = PathBuf::from(value()?),
+        "--config-dir" => args.config_dir = Some(PathBuf::from(value()?)),
+        "--model" => args.model = Some(value()?),
+        "--forge-url" => args.forge_url = Some(value()?),
+        "--clone-base-url" => args.clone_base_url = Some(value()?),
+        other => unreachable!("apply_flag admitted {other:?}"),
+    }
+    Ok(())
+}
+
+/// Flags naming an environment variable that *holds* the value rather than being it.
+fn apply_token_env_flag(
+    args: &mut Args,
+    flag: &str,
+    iter: &mut impl Iterator<Item = String>,
+    env: &impl EnvLookup,
+) -> Result<(), String> {
+    let name = iter.next().ok_or_else(|| format!("{flag} needs a value"))?;
+    let token = env.var(&name).ok_or_else(|| format!("{name} is not set"))?;
+    match flag {
+        "--forge-token-env" => args.forge_token = token,
+        "--token-env" => args.token = token,
+        other => unreachable!("apply_flag admitted {other:?}"),
     }
     Ok(())
 }
