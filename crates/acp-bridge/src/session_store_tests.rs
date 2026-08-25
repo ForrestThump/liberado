@@ -317,7 +317,7 @@ fn load_reports_corrupt_records_as_errors_not_as_absent() {
 fn updates_stamp_rfc3339_timestamps() {
     let dir = TempDir::new().unwrap();
     {
-        let (_lock, _g) = set_sessions_dir(&dir);
+        let _guard = set_sessions_dir(&dir);
         save(&sample_record("stamp")).unwrap();
         update_model("stamp", "m2").unwrap();
         let loaded = load("stamp").unwrap().unwrap();
