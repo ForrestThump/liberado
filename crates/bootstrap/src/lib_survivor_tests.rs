@@ -72,8 +72,15 @@ fn role_providers(config: &Config) -> RoleProviders {
     role_providers_from_config(config, Arc::new(NoopRecorder))
 }
 
+/// Hold before any [`KeyGuard::set`]; the two guards together make the
+/// env write and its restore exclusive to this one test.
+fn lock_env() -> std::sync::MutexGuard<'static, ()> {
+    ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 #[test]
 fn an_undeclared_provider_falls_back_to_the_deepseek_profile_itself() {
+    let _env = lock_env();
     let _key = KeyGuard::set();
     let config = keyed_config(
         "no-such-provider",
@@ -94,6 +101,7 @@ fn an_undeclared_provider_falls_back_to_the_deepseek_profile_itself() {
 
 #[test]
 fn for_config_builds_a_factory_when_the_selected_key_is_present() {
+    let _env = lock_env();
     let _key = KeyGuard::set();
     let config = keyed_config("alpha", vec![profile("alpha", "model-alpha")]);
 
@@ -101,8 +109,10 @@ fn for_config_builds_a_factory_when_the_selected_key_is_present() {
         .expect("a configured key must yield a factory");
     use liberado_coder_agent::CoderProviderFactory;
 
-    let mut role = liberado_coder_core::CoderRoleConfig::default();
-    role.model = "role-model".to_string();
+    let role = liberado_coder_core::CoderRoleConfig {
+        model: "role-model".to_string(),
+        ..Default::default()
+    };
     let provider = factory
         .provider_for("coder", &role)
         .expect("the same key serves provider_for");
@@ -121,6 +131,7 @@ fn is_enabled_tracks_primary_presence_in_both_directions() {
         "an all-None RoleProviders is watch-only"
     );
 
+    let _env = lock_env();
     let _key = KeyGuard::set();
     let providers = role_providers(&keyed_config(
         "alpha",
@@ -134,6 +145,7 @@ fn is_enabled_tracks_primary_presence_in_both_directions() {
 
 #[test]
 fn a_model_only_override_reaches_that_roles_provider() {
+    let _env = lock_env();
     let _key = KeyGuard::set();
     let mut config = keyed_config("alpha", vec![profile("alpha", "model-alpha")]);
     config.topology.roles.insert(
@@ -189,6 +201,7 @@ fn dispatch_packs_build_when_a_provider_is_configured_and_stay_none_without_one(
         .is_none()
     );
 
+    let _env = lock_env();
     let _key = KeyGuard::set();
     let providers = role_providers(&keyed_config(
         "alpha",
