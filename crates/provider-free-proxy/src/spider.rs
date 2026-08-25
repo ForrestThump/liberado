@@ -60,7 +60,8 @@ impl SpiderClient {
     /// missing markdown, oversized body — collapses into one `Err(String)` because every cause
     /// has the same remedy for the caller: try the next source.
     ///
-    /// The request body's `timeout` is a *hint* to spider-mcp; the [`RequestBuilder::timeout`]
+    /// The request body's `timeout` is a *hint* to spider-mcp; the
+    /// [`reqwest::RequestBuilder::timeout`](reqwest::RequestBuilder::timeout)
     /// below is the hard local ceiling. Without it a hung spider-mcp would hold the resolver's
     /// refresh lock and stall every `/v1/models` and auto-routed chat request indefinitely.
     pub async fn scrape_markdown(&self, url: &str, timeout_secs: u64) -> Result<String, String> {

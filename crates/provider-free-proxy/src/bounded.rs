@@ -1,7 +1,7 @@
 //! Bounded response-body reads.
 //!
 //! Every body this proxy buffers from a *peer we do not fully control* (spider-mcp's scrape
-//! output, an upstream's error payloads) goes through [`read_capped`]: a peer (or anything
+//! output, an upstream's error payloads) goes through `read_capped`: a peer (or anything
 //! impersonating one) must not choose this process's memory footprint. Successful completion
 //! streams are relayed chunk-by-chunk and never buffered, so they need no cap.
 

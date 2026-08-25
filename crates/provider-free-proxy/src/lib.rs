@@ -54,8 +54,9 @@
 //!   alternatives. Silently remapping a named model would hide cost intent; refusing says it out
 //!   loud.
 //! - Upstream refusal for the chosen candidate (429 daily/hourly caps, 402, unknown-model) walks
-//!   down the ranked list, up to [`MAX_ATTEMPTS`] candidates per request. Free tiers are capped
-//!   per model; failover is how the proxy stays useful at 06:55.
+//!   down the ranked list, up to
+//!   [`DEFAULT_MAX_ATTEMPTS`](crate::settings::DEFAULT_MAX_ATTEMPTS) candidates per request.
+//!   Free tiers are capped per model; failover is how the proxy stays useful at 06:55.
 //!
 //! ## Environment
 //!
