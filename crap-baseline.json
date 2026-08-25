@@ -16871,7 +16871,7 @@
     {
       "file": "crates/delegate-contract/src/lib.rs",
       "function": "RejectReason::new",
-      "line": 247,
+      "line": 252,
       "cyclomatic": 1.0,
       "coverage": 0.0,
       "crap": 2.0,
@@ -16880,7 +16880,7 @@
     {
       "file": "crates/delegate-contract/src/lib.rs",
       "function": "TaskGrant::default",
-      "line": 138,
+      "line": 143,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -16889,7 +16889,7 @@
     {
       "file": "crates/delegate-contract/src/lib.rs",
       "function": "TaskId::fmt",
-      "line": 54,
+      "line": 59,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -16898,7 +16898,7 @@
     {
       "file": "crates/delegate-contract/src/lib.rs",
       "function": "TaskId::short",
-      "line": 44,
+      "line": 47,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -16907,7 +16907,7 @@
     {
       "file": "crates/delegate-contract/src/lib.rs",
       "function": "default_true",
-      "line": 108,
+      "line": 113,
       "cyclomatic": 1.0,
       "coverage": 0.0,
       "crap": 2.0,
@@ -22118,7 +22118,7 @@
     {
       "file": "crates/liberado-forge/src/gitea.rs",
       "function": "GiteaForge::checks",
-      "line": 207,
+      "line": 221,
       "cyclomatic": 5.0,
       "coverage": 100.0,
       "crap": 5.0,
@@ -22127,7 +22127,7 @@
     {
       "file": "crates/liberado-forge/src/gitea.rs",
       "function": "GiteaForge::comment",
-      "line": 190,
+      "line": 204,
       "cyclomatic": 3.0,
       "coverage": 100.0,
       "crap": 3.0,
@@ -22136,7 +22136,7 @@
     {
       "file": "crates/liberado-forge/src/gitea.rs",
       "function": "GiteaForge::get_pull_head",
-      "line": 95,
+      "line": 109,
       "cyclomatic": 4.0,
       "coverage": 100.0,
       "crap": 4.0,
@@ -22145,7 +22145,7 @@
     {
       "file": "crates/liberado-forge/src/gitea.rs",
       "function": "GiteaForge::json",
-      "line": 84,
+      "line": 98,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -22154,7 +22154,7 @@
     {
       "file": "crates/liberado-forge/src/gitea.rs",
       "function": "GiteaForge::merge",
-      "line": 241,
+      "line": 255,
       "cyclomatic": 6.0,
       "coverage": 100.0,
       "crap": 6.0,
@@ -22164,15 +22164,15 @@
       "file": "crates/liberado-forge/src/gitea.rs",
       "function": "GiteaForge::new",
       "line": 28,
-      "cyclomatic": 2.0,
+      "cyclomatic": 1.0,
       "coverage": 100.0,
-      "crap": 2.0,
+      "crap": 1.0,
       "crate": "liberado-forge"
     },
     {
       "file": "crates/liberado-forge/src/gitea.rs",
       "function": "GiteaForge::open_pr",
-      "line": 166,
+      "line": 180,
       "cyclomatic": 4.0,
       "coverage": 100.0,
       "crap": 4.0,
@@ -22181,7 +22181,7 @@
     {
       "file": "crates/liberado-forge/src/gitea.rs",
       "function": "GiteaForge::repos_api",
-      "line": 38,
+      "line": 52,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -22190,7 +22190,7 @@
     {
       "file": "crates/liberado-forge/src/gitea.rs",
       "function": "GiteaForge::require",
-      "line": 67,
+      "line": 81,
       "cyclomatic": 4.0,
       "coverage": 100.0,
       "crap": 4.0,
@@ -22199,7 +22199,7 @@
     {
       "file": "crates/liberado-forge/src/gitea.rs",
       "function": "GiteaForge::send",
-      "line": 47,
+      "line": 61,
       "cyclomatic": 4.0,
       "coverage": 88.23529411764706,
       "crap": 4.026053327905557,
@@ -22207,8 +22207,17 @@
     },
     {
       "file": "crates/liberado-forge/src/gitea.rs",
+      "function": "GiteaForge::with_tls",
+      "line": 36,
+      "cyclomatic": 2.0,
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "liberado-forge"
+    },
+    {
+      "file": "crates/liberado-forge/src/gitea.rs",
       "function": "map_state",
-      "line": 143,
+      "line": 157,
       "cyclomatic": 4.0,
       "coverage": 100.0,
       "crap": 4.0,
@@ -22217,7 +22226,7 @@
     {
       "file": "crates/liberado-forge/src/gitea.rs",
       "function": "overall",
-      "line": 153,
+      "line": 167,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -34718,7 +34727,7 @@
     {
       "file": "crates/worker/src/cli.rs",
       "function": "Args::effective_model",
-      "line": 43,
+      "line": 46,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -34727,7 +34736,7 @@
     {
       "file": "crates/worker/src/cli.rs",
       "function": "ProcessEnv::var",
-      "line": 34,
+      "line": 37,
       "cyclomatic": 1.0,
       "coverage": 0.0,
       "crap": 2.0,
@@ -34736,7 +34745,7 @@
     {
       "file": "crates/worker/src/cli.rs",
       "function": "apply_flag",
-      "line": 87,
+      "line": 94,
       "cyclomatic": 7.0,
       "coverage": 100.0,
       "crap": 7.0,
@@ -34745,7 +34754,7 @@
     {
       "file": "crates/worker/src/cli.rs",
       "function": "apply_token_env_flag",
-      "line": 130,
+      "line": 144,
       "cyclomatic": 6.0,
       "coverage": 92.85714285714286,
       "crap": 6.013119533527696,
@@ -34754,7 +34763,7 @@
     {
       "file": "crates/worker/src/cli.rs",
       "function": "apply_value_flag",
-      "line": 111,
+      "line": 125,
       "cyclomatic": 14.0,
       "coverage": 93.75,
       "crap": 14.0478515625,
@@ -34763,7 +34772,7 @@
     {
       "file": "crates/worker/src/cli.rs",
       "function": "parse_args",
-      "line": 50,
+      "line": 53,
       "cyclomatic": 6.0,
       "coverage": 100.0,
       "crap": 6.0,
@@ -34771,8 +34780,17 @@
     },
     {
       "file": "crates/worker/src/cli.rs",
+      "function": "parse_max_concurrent",
+      "line": 117,
+      "cyclomatic": 2.0,
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "liberado-worker"
+    },
+    {
+      "file": "crates/worker/src/cli.rs",
       "function": "usage",
-      "line": 146,
+      "line": 160,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -34781,7 +34799,7 @@
     {
       "file": "crates/worker/src/config.rs",
       "function": "WorkerSettings::clone_url",
-      "line": 49,
+      "line": 52,
       "cyclomatic": 7.0,
       "coverage": 60.0,
       "crap": 10.136,
@@ -34790,7 +34808,7 @@
     {
       "file": "crates/worker/src/config.rs",
       "function": "WorkerSettings::repos_dir",
-      "line": 40,
+      "line": 43,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -34799,7 +34817,7 @@
     {
       "file": "crates/worker/src/config.rs",
       "function": "WorkerSettings::tasks_dir",
-      "line": 36,
+      "line": 39,
       "cyclomatic": 1.0,
       "coverage": 0.0,
       "crap": 2.0,
@@ -34808,7 +34826,7 @@
     {
       "file": "crates/worker/src/config.rs",
       "function": "WorkerSettings::worktrees_dir",
-      "line": 44,
+      "line": 47,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -34817,7 +34835,7 @@
     {
       "file": "crates/worker/src/config.rs",
       "function": "provider_profile",
-      "line": 100,
+      "line": 103,
       "cyclomatic": 2.0,
       "coverage": 0.0,
       "crap": 6.0,
@@ -34826,7 +34844,7 @@
     {
       "file": "crates/worker/src/config.rs",
       "function": "read_topology",
-      "line": 85,
+      "line": 88,
       "cyclomatic": 3.0,
       "coverage": 0.0,
       "crap": 12.0,
@@ -34835,7 +34853,7 @@
     {
       "file": "crates/worker/src/config.rs",
       "function": "read_tuning",
-      "line": 67,
+      "line": 70,
       "cyclomatic": 4.0,
       "coverage": 26.666666666666668,
       "crap": 10.309925925925928,
@@ -35015,7 +35033,7 @@
     {
       "file": "crates/worker/src/main.rs",
       "function": "rescan_after_restart",
-      "line": 100,
+      "line": 105,
       "cyclomatic": 9.0,
       "coverage": 0.0,
       "crap": 90.0,
@@ -35033,7 +35051,7 @@
     {
       "file": "crates/worker/src/main.rs",
       "function": "settings_from_args",
-      "line": 80,
+      "line": 84,
       "cyclomatic": 1.0,
       "coverage": 0.0,
       "crap": 2.0,
