@@ -26,10 +26,24 @@ impl GiteaForge {
     /// `base_url` like `https://git.example.com` (or `http://192.168.x.y:3000`);
     /// trailing slashes are tolerated. The token is a Gitea access token, never a password.
     pub fn new(base_url: &str, token: &str) -> Result<Self, ForgeError> {
+        Self::with_tls(base_url, token, false)
+    }
+
+    /// Same, with explicit control over certificate validation. `accept_invalid_certs`
+    /// exists for LAN forges whose TLS certificates are not signed by a public CA
+    /// (homelab Gitea behind a local CA); it is a deliberate deployment choice, never
+    /// a default — set it only for hosts you already trust at the network layer.
+    pub fn with_tls(
+        base_url: &str,
+        token: &str,
+        accept_invalid_certs: bool,
+    ) -> Result<Self, ForgeError> {
+        let http = reqwest::Client::builder()
+            .danger_accept_invalid_certs(accept_invalid_certs)
+            .build()
+            .map_err(ForgeError::Http)?;
         Ok(Self {
-            http: reqwest::Client::builder()
-                .build()
-                .map_err(ForgeError::Http)?,
+            http,
             base_url: base_url.trim_end_matches('/').to_string(),
             token: token.to_string(),
         })

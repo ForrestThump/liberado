@@ -40,11 +40,16 @@ pub mod routes {
 pub struct TaskId(pub String);
 
 impl TaskId {
-    /// The short form used in branch names: lowercase, first 8 characters.
+    /// The short form used in branch names: lowercase, last 6 characters. The tail on
+    /// purpose — a ULID's leading characters encode the timestamp, so every task
+    /// minted within the same minute shares them and two bursts would collide on one
+    /// branch name. The trailing characters are the random section.
     pub fn short(&self) -> String {
+        let len = self.0.chars().count();
+        let start = len.saturating_sub(6);
         self.0
             .chars()
-            .take(8)
+            .skip(start)
             .collect::<String>()
             .to_ascii_lowercase()
     }
@@ -248,5 +253,24 @@ impl RejectReason {
         Self {
             message: message.into(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Two ULIDs minted in the same millisecond share their leading (timestamp)
+    /// characters; the short form must still differ because it draws from the random
+    /// tail. This is the property that keeps two same-minute tasks off one branch.
+    #[test]
+    fn short_draws_from_the_random_tail_not_the_timestamp() {
+        let a = TaskId("01JGITEAFORGE0000000TEST1".to_string());
+        let b = TaskId("01JGITEAFORGE0000000TEST2".to_string());
+        assert_ne!(a.short(), b.short());
+        assert_eq!(a.short(), "0test1");
+        // Stable and lowercase regardless of input case.
+        let c = TaskId("01JGITEAFORGE0000000TEST1".to_string());
+        assert_eq!(c.short(), "0test1");
     }
 }

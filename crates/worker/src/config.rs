@@ -27,6 +27,9 @@ pub struct WorkerSettings {
     pub forge_url: Option<String>,
     /// Forge API token.
     pub forge_token: String,
+    /// Accept private-CA / self-signed certificates on the forge URL. Opt-in for LAN
+    /// forges; git's equivalent is scoped separately via GIT_CONFIG_GLOBAL.
+    pub forge_insecure_tls: bool,
     /// Base for resolving relative repository paths to clone URLs.
     pub clone_base_url: Option<String>,
     pub max_concurrent: usize,

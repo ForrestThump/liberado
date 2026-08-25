@@ -41,8 +41,12 @@ async fn run() -> Result<(), String> {
     // ever sees the trait object.
     let forge: Option<Arc<dyn liberado_forge::ForgeClient>> = match &settings.forge_url {
         Some(url) if !settings.forge_token.is_empty() => Some(Arc::new(
-            liberado_forge::gitea::GiteaForge::new(url, &settings.forge_token)
-                .map_err(|error| format!("forge client: {error}"))?,
+            liberado_forge::gitea::GiteaForge::with_tls(
+                url,
+                &settings.forge_token,
+                settings.forge_insecure_tls,
+            )
+            .map_err(|error| format!("forge client: {error}"))?,
         )),
         _ => {
             tracing::warn!(
@@ -89,6 +93,7 @@ fn settings_from_args(
         model: Some(args.effective_model(&profile.default_model)),
         forge_url: args.forge_url.clone(),
         forge_token: args.forge_token.clone(),
+        forge_insecure_tls: args.forge_insecure_tls,
         clone_base_url: args.clone_base_url.clone(),
         max_concurrent: args.max_concurrent,
     }
