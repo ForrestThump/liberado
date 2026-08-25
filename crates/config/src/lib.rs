@@ -624,6 +624,10 @@ fn persist_proposal_key(path: &Path, key: &[u8]) -> std::io::Result<()> {
 }
 
 #[cfg(test)]
+#[path = "config_survivor_tests.rs"]
+mod survivor_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use liberado_common::Capability;

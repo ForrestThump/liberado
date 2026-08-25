@@ -185,6 +185,9 @@ const TIMEOUT_OVERRIDES: &[(&str, &str, &str)] = &[
     // chat-search pulls the Tantivy index stack; its cold-cache baseline test phase
     // exceeds 3s before any mutant runs (same signature as conversation-store).
     ("liberado-chat-search", "60", "60"),
+    // coder-tools shells out to real git in its tests; 141/582 mutants timed
+    // out at the 3s floor without ever being decided.
+    ("liberado-coder-tools", "30", "30"),
 ];
 
 fn build_mutants_command(package: &str, profile: RunProfile) -> String {
