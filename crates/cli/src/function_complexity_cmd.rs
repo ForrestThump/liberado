@@ -265,11 +265,21 @@ mod tests {
             version: String::new(),
             entries: vec![],
         };
-        let current = Report {
+        let within = Report {
             version: String::new(),
             entries: vec![entry("table", 24.0)],
         };
-        assert!(compare(&config, &baseline, &current).is_ok());
+        assert!(compare(&config, &baseline, &within).is_ok());
+
+        // The ceiling is a real limit: past it the waived function fails
+        // again. (Kill assertion for the waiver branch - without it a
+        // runaway waived function would pass forever.)
+        let over = Report {
+            version: String::new(),
+            entries: vec![entry("table", 26.0)],
+        };
+        let err = compare(&config, &baseline, &over).unwrap_err().to_string();
+        assert!(err.contains("26 > 25"), "the ceiling must be named: {err}");
     }
 
     // ── load_config: the waiver validation ladder ───────────────────────

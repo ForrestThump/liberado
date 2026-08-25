@@ -112,10 +112,13 @@ pub fn record(args: &mut impl Iterator<Item = String>) -> Result<(), Box<dyn std
 
 pub fn report(args: &mut impl Iterator<Item = String>) -> Result<(), Box<dyn std::error::Error>> {
     let root = crate_map_cmd::repository_root()?;
-    let include_all = args.next().is_some_and(|flag| flag == "--all");
-    if args.next().is_some() {
-        return Err("usage: liberado mutants report [--all]".into());
-    }
+    let include_all = match args.next().as_deref() {
+        None => false,
+        Some("--all") => true,
+        Some(other) => {
+            return Err(format!("usage: liberado mutants report [--all] (got {other:?})").into());
+        }
+    };
     let ledger = load_ledger(&root)?;
     let crates = crate_map_cmd::list_crates(&root)?;
     let health = build_health(&root, &ledger, &crates, include_all)?;
@@ -127,10 +130,13 @@ pub fn next_crate(
     args: &mut impl Iterator<Item = String>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let root = crate_map_cmd::repository_root()?;
-    let include_all = args.next().is_some_and(|flag| flag == "--all");
-    if args.next().is_some() {
-        return Err("usage: liberado mutants next [--all]".into());
-    }
+    let include_all = match args.next().as_deref() {
+        None => false,
+        Some("--all") => true,
+        Some(other) => {
+            return Err(format!("usage: liberado mutants next [--all] (got {other:?})").into());
+        }
+    };
     let ledger = load_ledger(&root)?;
     let crates = crate_map_cmd::list_crates(&root)?;
     let health = build_health(&root, &ledger, &crates, include_all)?;
@@ -306,15 +312,41 @@ fn validate_outcomes(counts: &Counts, total_mutants: u32) -> Option<RecordOutcom
     if counts.viable == 0 {
         return Some(RecordOutcome::SkippedIncomplete);
     }
+    // A missing declared total (older outcomes format) cannot prove the run
+    // finished; treating 0 as "no check" would record partial campaigns.
+    if total_mutants == 0 {
+        return Some(RecordOutcome::SkippedIncomplete);
+    }
     let accounted = counts.caught + counts.survived + counts.timeout + counts.unviable;
-    if total_mutants > 0 && accounted != total_mutants {
+    if accounted != total_mutants {
         return Some(RecordOutcome::SkippedIncomplete);
     }
     None
 }
 
+/// Drop byte-identical duplicate rows before saving.
+///
+/// The ledger is append-only, but merges have pasted whole blocks twice (13
+/// duplicates at once during the campaign branch). A merge that unions both
+/// sides then re-saves goes through here, so the on-disk artifact can never
+/// keep a duplicate pair even when git history briefly contained one.
+fn dedupe_campaigns(campaigns: Vec<Campaign>) -> Vec<Campaign> {
+    let mut seen = std::collections::HashSet::new();
+    campaigns
+        .into_iter()
+        .filter(|c| {
+            let canonical = serde_json::to_string(c).expect("a ledger row serialises");
+            seen.insert(canonical)
+        })
+        .collect()
+}
+
 fn save_ledger(root: &Path, ledger: &Ledger) -> Result<(), Box<dyn std::error::Error>> {
-    let bytes = serde_json::to_string_pretty(ledger)? + "\n";
+    let ledger = Ledger {
+        schema: ledger.schema,
+        campaigns: dedupe_campaigns(ledger.campaigns.clone()),
+    };
+    let bytes = serde_json::to_string_pretty(&ledger)? + "\n";
     write_atomic(root, &bytes);
     Ok(())
 }

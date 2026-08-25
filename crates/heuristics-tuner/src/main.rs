@@ -133,7 +133,14 @@ async fn run_tool_loop_layer(
     match layer {
         Layer::Dispatcher => save_dispatcher_result(run_tuner(config).await, out_dir).await,
         Layer::Executor => save_tool_loop_result(run_executor_tuner(config).await, out_dir).await,
-        _ => save_tool_loop_result(run_subagent_tuner(config).await, out_dir).await,
+        Layer::Subagent => save_tool_loop_result(run_subagent_tuner(config).await, out_dir).await,
+        // run_selected_layer routes Coder before this function; an explicit
+        // failing arm keeps a future Layer variant from silently tuning the
+        // wrong layer.
+        Layer::Coder => Err(
+            "the coder layer is routed by run_selected_layer and cannot reach the tool-loop path"
+                .into(),
+        ),
     }
 }
 

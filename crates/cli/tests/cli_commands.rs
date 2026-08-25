@@ -1164,8 +1164,12 @@ fn mutants_record_ingests_outcomes_json() {
     fs::create_dir_all(root.join("mutants.out")).expect("mutants output");
     fs::write(
         root.join("mutants.out/outcomes.json"),
+        // total_mutants must be present and equal the bucket sum: an
+        // undeclared total cannot prove the run finished, and the recorder
+        // refuses it.
         r#"{
   "outcomes": [{"scenario": {"Mutant": {"package": "liberado-markdown"}}}],
+  "total_mutants": 3,
   "caught": 2,
   "missed": 1,
   "timeout": 0,

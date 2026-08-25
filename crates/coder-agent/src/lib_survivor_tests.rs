@@ -287,7 +287,12 @@ async fn a_checkpoint_event_reaches_the_live_bus() {
         take_workspace_checkpoint(dir.path(), "s1", "before-edit").await;
     })
     .await;
-    let event = rx.try_recv().expect("checkpoint emitted");
+    // Bounded recv, not try_recv: the emitter may land the event a scheduler
+    // tick after the live scope returns under load.
+    let event = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
+        .await
+        .expect("checkpoint must arrive")
+        .expect("channel stays open");
     match event.kind {
         SessionEventKind::Checkpoint { label, .. } => assert_eq!(label, "before-edit"),
         other => panic!("expected Checkpoint, got {other:?}"),
