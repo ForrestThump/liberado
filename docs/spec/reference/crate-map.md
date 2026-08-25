@@ -5,7 +5,7 @@
 > Layer semantics and dependency rules: [contracts.md](../architecture/contracts.md) and
 > `crates/test-support/tests/layer_rules.rs` (the same role tags, mechanically enforced).
 
-51 workspace crates.
+52 workspace crates.
 
 ## foundation
 
@@ -43,6 +43,7 @@ The orchestration engine: decide/act loops, sessions, capability plumbing.
 | [`liberado-main-agent`](../../../crates/main-agent/) | `liberado-common`, `liberado-conversation-store`, `liberado-dispatcher`, `liberado-executor`, `liberado-mcp`, `liberado-provider`, `liberado-session` | The conversational main agent: a multi-turn Conversation that carries context across turns and drives the executor's tool-calling loop. The thing a chat UI talks to. |
 | [`liberado-mcp`](../../../crates/mcp/) | `liberado-common`, `liberado-provider`, `liberado-executor` | The production `ToolRuntime` for Liberado: a turbomcp-client-backed adapter that exposes an MCP server's tools to the executor and injects write provenance into each call's `_meta` so tool-mediated vault writes are self-attributed (loop-broken). |
 | [`liberado-orchestrator`](../../../crates/orchestrator/) | `liberado-common`, `liberado-notify`, `liberado-provider`, `liberado-session`, `liberado-executor` | Bridges a dispatcher DispatchDecision to an execution: builds the task + write provenance, runs the executor's agent loop over a ToolRuntime, and returns a Report (or surfaces a Clarify). Decoupled from MCP connection management via the RuntimeFactory trait. |
+| [`liberado-provider-free-proxy`](../../../crates/provider-free-proxy/) | *none* | An OpenAI-compatible inference proxy that serves only OpenRouter's free models, picking whichever available free model ranks highest on coding benchmarks (API first, deterministic spider-mcp scrape fallback). |
 | [`liberado-provider-openai-compat`](../../../crates/provider-openai-compat/) | `liberado-provider` | A single, config-driven Provider implementation for any OpenAI-compatible chat-completions API (DeepSeek, OpenRouter, and future backends like OpenAI direct/Groq/Together) — replaces what used to be one hand-copied crate per backend. |
 | [`liberado-scratchpad`](../../../crates/scratchpad/) | `liberado-provider` | Per-execution scratchpad (todo-list) tool for the Liberado engine — engine-injected, not an MCP. |
 | [`liberado-session`](../../../crates/session/) | `liberado-common` | The session kernel (D7): GoalSpec, SessionGrant, Visibility, the SessionEvent envelope, the GoalSessionHub, the DomainPackRunner trait, and the SessionRecordStore seam the converged store implements. Surfaces are clients of this contract — not loop owners. |

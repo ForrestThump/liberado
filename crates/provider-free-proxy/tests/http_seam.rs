@@ -1,0 +1,408 @@
+//! Wire-seam tests for the proxy's HTTP surface.
+//!
+//! The unit tests prove the pieces; these prove the assembled router speaks the OpenAI
+//! contract end to end against a real HTTP upstream — model rewriting reaching the wire,
+//! free-only refusals surfacing as 400s, and failover walking the ranking on quota refusals
+//! but not on payload errors.
+
+use std::sync::Arc;
+use std::time::Duration;
+
+use axum::body::Body;
+use axum::http::{Request, StatusCode};
+use liberado_provider_free_proxy::free::FreeModel;
+use liberado_provider_free_proxy::rank::ModelScores;
+use liberado_provider_free_proxy::resolver::{
+    BestFreeModelResolver, CodingBenchmarkSource, DefaultSources, FreeModelDiscovery,
+    ScrapeRankingSource,
+};
+use liberado_provider_free_proxy::service::{ProxyConfig, ProxyService};
+use serde_json::{Value, json};
+use tower::ServiceExt;
+use wiremock::matchers::{body_partial_json, method, path};
+use wiremock::{Mock, MockServer, ResponseTemplate};
+
+struct FixedDiscovery(Vec<FreeModel>);
+#[async_trait::async_trait]
+impl FreeModelDiscovery for FixedDiscovery {
+    async fn discover(&self) -> Result<Vec<FreeModel>, String> {
+        Ok(self.0.clone())
+    }
+}
+
+struct FailingBenchmarks;
+#[async_trait::async_trait]
+impl CodingBenchmarkSource for FailingBenchmarks {
+    async fn coding_benchmark_rows(&self) -> Result<Vec<(String, ModelScores)>, String> {
+        Err("unavailable".into())
+    }
+}
+
+struct EmptyScrapes;
+#[async_trait::async_trait]
+impl ScrapeRankingSource for EmptyScrapes {
+    async fn scraped_leaderboard_rows(&self) -> Vec<(String, ModelScores)> {
+        Vec::new()
+    }
+}
+
+fn fm(id: &str, ctx: u64) -> FreeModel {
+    FreeModel {
+        id: id.into(),
+        context_length: ctx,
+        supports_tools: true,
+    }
+}
+
+fn service_at(upstream_base: String) -> Arc<ProxyService> {
+    let resolver = Arc::new(BestFreeModelResolver::new(
+        Arc::new(FixedDiscovery(vec![
+            fm("best/m", 100_000),
+            fm("second/m", 64_000),
+        ])),
+        Arc::new(FailingBenchmarks),
+        Arc::new(EmptyScrapes),
+        Duration::from_secs(3600),
+    ));
+    Arc::new(ProxyService::new(
+        resolver,
+        ProxyConfig {
+            upstream_base,
+            upstream_api_key: "sk-upstream".into(),
+            max_attempts: 3,
+        },
+    ))
+}
+
+fn ok_completion() -> ResponseTemplate {
+    ResponseTemplate::new(200).set_body_json(json!({
+        "id": "resp-1",
+        "choices": [{ "message": { "role": "assistant", "content": "ok" } }]
+    }))
+}
+
+async fn post_chat(app: axum::Router, body: Value) -> (StatusCode, Value) {
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/chat/completions")
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .expect("request"),
+        )
+        .await
+        .expect("router answers");
+    let status = response.status();
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("body");
+    let value = if bytes.is_empty() {
+        Value::Null
+    } else {
+        serde_json::from_slice(&bytes).unwrap_or(Value::Null)
+    };
+    (status, value)
+}
+
+#[tokio::test]
+async fn auto_requests_reach_the_upstream_as_the_best_free_model() {
+    let upstream = MockServer::start().await;
+    let sent = Arc::new(std::sync::Mutex::new(Vec::<Value>::new()));
+    let sink = sent.clone();
+    struct Capture(Arc<std::sync::Mutex<Vec<Value>>>);
+    impl wiremock::Respond for Capture {
+        fn respond(&self, request: &wiremock::Request) -> ResponseTemplate {
+            let body: Value = serde_json::from_slice(&request.body).expect("json body");
+            self.0.lock().unwrap().push(body);
+            ok_completion()
+        }
+    }
+    Mock::given(method("POST"))
+        .and(path("/api/v1/chat/completions"))
+        .respond_with(Capture(sink))
+        .expect(1)
+        .mount(&upstream)
+        .await;
+
+    let app =
+        liberado_provider_free_proxy::http_router(service_at(format!("{}/api/v1", upstream.uri())));
+    let (status, reply) = post_chat(
+        app,
+        json!({"model": "auto", "messages": [{"role":"user","content":"hi"}]}),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(reply["choices"][0]["message"]["content"], json!("ok"));
+    let bodies = sent.lock().unwrap();
+    assert_eq!(bodies.len(), 1);
+    assert_eq!(
+        bodies[0]["model"],
+        json!("best/m"),
+        "auto must resolve to the ranked-best slug"
+    );
+    assert!(
+        bodies[0]["messages"].is_array(),
+        "everything except `model` must survive the rewrite"
+    );
+}
+
+#[tokio::test]
+async fn the_upstream_bearer_key_is_forwarded() {
+    let upstream = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/api/v1/chat/completions"))
+        .and(wiremock::matchers::header(
+            "authorization",
+            "Bearer sk-upstream",
+        ))
+        .respond_with(ok_completion())
+        .expect(1)
+        .mount(&upstream)
+        .await;
+
+    let app =
+        liberado_provider_free_proxy::http_router(service_at(format!("{}/api/v1", upstream.uri())));
+    let (status, _) = post_chat(app, json!({"messages": []})).await;
+    assert_eq!(status, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn naming_a_paid_model_is_refused_without_touching_the_upstream() {
+    let upstream = MockServer::start().await;
+    // No mocks mounted: any upstream hit would hang/fail the expect(0) verification below.
+    Mock::given(method("POST"))
+        .respond_with(ok_completion())
+        .expect(0)
+        .mount(&upstream)
+        .await;
+
+    let app = liberado_provider_free_proxy::http_router(service_at(upstream.uri()));
+    let (status, err) = post_chat(app, json!({"model": "openai/gpt-4o", "messages": []})).await;
+
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let message = err["error"]["message"].as_str().unwrap_or_default();
+    assert!(message.contains("openai/gpt-4o"), "{message}");
+    assert!(
+        message.contains("best/m"),
+        "alternatives must be named: {message}"
+    );
+}
+
+#[tokio::test]
+async fn models_lists_only_free_models_ranked_first() {
+    let app = liberado_provider_free_proxy::http_router(service_at("http://unused.invalid".into()));
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v1/models")
+                .body(Body::empty())
+                .expect("req"),
+        )
+        .await
+        .expect("answer");
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let v: Value = serde_json::from_slice(&bytes).unwrap();
+    let ids: Vec<&str> = v["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|m| m["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(ids, vec!["best/m", "second/m"]);
+}
+
+#[tokio::test]
+async fn quota_refusals_fail_over_to_the_next_ranked_model() {
+    let upstream = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/api/v1/chat/completions"))
+        .and(body_partial_json(json!({ "model": "best/m" })))
+        .respond_with(ResponseTemplate::new(429).set_body_string(
+            json!({"error":{"message":"Rate limit exceeded for best/m today"}}).to_string(),
+        ))
+        .expect(1)
+        .mount(&upstream)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/api/v1/chat/completions"))
+        .and(body_partial_json(json!({ "model": "second/m" })))
+        .respond_with(ok_completion())
+        .expect(1)
+        .mount(&upstream)
+        .await;
+
+    let app =
+        liberado_provider_free_proxy::http_router(service_at(format!("{}/api/v1", upstream.uri())));
+    let (status, reply) = post_chat(app, json!({"model": "auto", "messages": []})).await;
+    assert_eq!(status, StatusCode::OK, "second candidate must serve");
+    assert_eq!(reply["choices"][0]["message"]["content"], json!("ok"));
+}
+
+#[tokio::test]
+async fn a_payload_400_is_relayed_without_spending_another_candidate() {
+    let upstream = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/api/v1/chat/completions"))
+        .and(body_partial_json(json!({ "model": "best/m" })))
+        .respond_with(ResponseTemplate::new(400).set_body_string(
+            json!({"error":{"message":"'messages' must be an array"}}).to_string(),
+        ))
+        .expect(1)
+        .mount(&upstream)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/api/v1/chat/completions"))
+        .and(body_partial_json(json!({ "model": "second/m" })))
+        .respond_with(ok_completion())
+        .expect(0) // must never be reached: our payload, not the candidate, was wrong
+        .mount(&upstream)
+        .await;
+
+    let app =
+        liberado_provider_free_proxy::http_router(service_at(format!("{}/api/v1", upstream.uri())));
+    let (status, _) = post_chat(app, json!({"model": "auto", "messages": "not-an-array"})).await;
+    assert_eq!(status.as_u16(), 400);
+}
+
+#[tokio::test]
+async fn exhausted_candidates_answer_502() {
+    let upstream = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/api/v1/chat/completions"))
+        .respond_with(ResponseTemplate::new(429))
+        .mount(&upstream)
+        .await;
+
+    let app =
+        liberado_provider_free_proxy::http_router(service_at(format!("{}/api/v1", upstream.uri())));
+    let (status, err) = post_chat(app, json!({"messages": []})).await;
+    assert_eq!(status, StatusCode::BAD_GATEWAY);
+    assert!(
+        err["error"]["message"]
+            .as_str()
+            .unwrap_or("")
+            .contains("candidates")
+    );
+}
+
+#[tokio::test]
+async fn healthz_answers_ok() {
+    let app = liberado_provider_free_proxy::http_router(service_at("http://unused.invalid".into()));
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/healthz")
+                .body(Body::empty())
+                .expect("req"),
+        )
+        .await
+        .expect("answer");
+    assert_eq!(response.status(), StatusCode::OK);
+    // The exact body matters: process supervisors and scripts grep it.
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    assert_eq!(&bytes[..], b"ok");
+}
+
+/// The full "which endpoint do I get?" flow over real HTTP, with the models themselves left
+/// untouched: discovery and ranking run against mock OpenRouter endpoints, `GET /v1/models`
+/// hands the ranked answer back as data, and routing confirms what a request *would* target —
+/// while the chat-completions route stays pinned at zero hits. A caller can integrate against
+/// this proxy end to end without ever spending a token.
+#[tokio::test]
+async fn querying_models_hands_back_the_best_endpoint_without_any_inference() {
+    let upstream = MockServer::start().await;
+    let base = format!("{}/api/v1", upstream.uri());
+
+    // Real discovery + ranking sources, pointed at the mocks.
+    Mock::given(method("GET"))
+        .and(path("/api/v1/models"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "data": [
+                { "id": "vendor/small", "context_length": 100_000,
+                  "pricing": { "prompt": "0", "completion": "0" },
+                  "supported_parameters": ["tools"] },
+                { "id": "vendor/large", "context_length": 500_000,
+                  "pricing": { "prompt": "0", "completion": "0" },
+                  "supported_parameters": ["tools"] },
+                { "id": "vendor/paid", "context_length": 900_000,
+                  "pricing": { "prompt": "0.000001", "completion": "0.000002" },
+                  "supported_parameters": ["tools"] }
+            ]
+        })))
+        .expect(1)
+        .mount(&upstream)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/benchmarks"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "data": [
+                { "source": "artificial-analysis",
+                  "model_permaslug": "vendor/small", "coding_index": 82.5 }
+            ]
+        })))
+        .mount(&upstream)
+        .await;
+    // The assertion that matters: no model is ever invoked by this flow.
+    Mock::given(method("POST"))
+        .and(path("/api/v1/chat/completions"))
+        .respond_with(ok_completion())
+        .expect(0)
+        .mount(&upstream)
+        .await;
+
+    let sources = Arc::new(DefaultSources::new(
+        base.clone(),
+        Some("sk-up".into()),
+        None,
+    ));
+    let resolver = Arc::new(BestFreeModelResolver::with_defaults(sources, 3600));
+    let state = Arc::new(ProxyService::new(
+        resolver,
+        ProxyConfig {
+            upstream_base: base.clone(),
+            upstream_api_key: "sk-up".into(),
+            max_attempts: 3,
+        },
+    ));
+
+    // 1. Ask the proxy which endpoints exist — the answer is the ranking itself, paid model
+    //    excluded, benchmark winner first (overriding the context-size heuristic).
+    let app = liberado_provider_free_proxy::http_router(state.clone());
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v1/models")
+                .body(Body::empty())
+                .expect("req"),
+        )
+        .await
+        .expect("answer");
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let catalog: Value = serde_json::from_slice(&bytes).unwrap();
+    let ids: Vec<&str> = catalog["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|m| m["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(ids, vec!["vendor/small", "vendor/large"]);
+
+    // 2. The hand-off: naming the winner resolves to exactly that candidate, still without a
+    //    completion call — callers learn their target before spending anything.
+    let chosen = ids[0].to_string();
+    let candidates = state
+        .candidates_for(&json!({ "model": chosen, "messages": [] }))
+        .await
+        .expect("winner is servable");
+    assert_eq!(candidates, vec!["vendor/small"]);
+}
