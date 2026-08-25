@@ -55,6 +55,7 @@ Prefer archive/ for completed plans.
 | Doc | Status | Kind |
 |-----|--------|------|
 | [cadence-triggered-maintenance-agents.md](cadence-triggered-maintenance-agents.md) | draft | plan |
+| [delegate-network-plan.md](delegate-network-plan.md) | draft | plan |
 | [model-knob-profiles.md](model-knob-profiles.md) | draft | plan |
 
 Start every planning session at [roadmap.md](../roadmap.md).

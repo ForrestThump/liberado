@@ -50,6 +50,7 @@ Authority model: [doc-authority.md](spec/reference/doc-authority.md).
 | [docs/future-work/coder-harness-reliability-2026-08.md](future-work/coder-harness-reliability-2026-08.md) | finding | active | evidence | coding-harness | coder-harness-reliability-2026-08 |
 | [docs/future-work/coding-tui-plan.md](future-work/coding-tui-plan.md) | plan | active | implementation | coding-harness | coding-tui |
 | [docs/future-work/context-compaction-viewport-rearchitecture.md](future-work/context-compaction-viewport-rearchitecture.md) | plan | active | implementation | chat | context-compaction-viewport |
+| [docs/future-work/delegate-network-plan.md](future-work/delegate-network-plan.md) | plan | draft | advisory | delegation | lan-delegation |
 | [docs/future-work/harness-study-2026-08.md](future-work/harness-study-2026-08.md) | finding | active | advisory | coding-harness | harness-study-2026-08 |
 | [docs/future-work/heuristics-tuning-engine-plan.md](future-work/heuristics-tuning-engine-plan.md) | plan | active | implementation | tuning | heuristics-tuning-engine |
 | [docs/future-work/latency-and-routing-observability-plan.md](future-work/latency-and-routing-observability-plan.md) | plan | active | implementation | observability | latency-routing-observability |
