@@ -177,11 +177,41 @@ pub struct QuestionOption {
     pub consequence: String,
 }
 
+/// What a delegator reply means. `question` answers one parked `ask_delegator`;
+/// `instruction` is a kickback: the delegator reviewed the PR and is sending the run
+/// back with directions (plan §10). New kinds append.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AnswerKind {
+    Question,
+    Instruction,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Answer {
     pub question_id: String,
     pub chosen_option: Option<String>,
     pub body: String,
+    /// Defaults to [`AnswerKind::Question`] so pre-D3 senders stay valid on the wire.
+    #[serde(default = "default_answer_kind")]
+    pub kind: AnswerKind,
+}
+
+fn default_answer_kind() -> AnswerKind {
+    AnswerKind::Question
+}
+
+impl Answer {
+    /// A kickback instruction. `question_id` carries the round tag (`kickback:N`) so
+    /// the worker's journal keeps one correlation per round without new plumbing.
+    pub fn instruction(round: u32, body: impl Into<String>) -> Self {
+        Self {
+            question_id: format!("kickback:{round}"),
+            chosen_option: None,
+            body: body.into(),
+            kind: AnswerKind::Instruction,
+        }
+    }
 }
 
 /// The kinds of `WorkerEvent`. Stable wire vocabulary: new variants append, never rename.
@@ -217,22 +247,32 @@ impl WorkerEvent {
                 .get("status")
                 .and_then(|status| status.get("state"))
                 .and_then(|state| state.as_str())
-                .is_some_and(|state| matches!(state, "failed" | "cancelled")),
+                .is_some_and(|state| matches!(state, "failed" | "cancelled" | "blocked")),
             EventKind::Question | EventKind::Blocked => false,
         }
     }
 }
 
-/// Lifecycle status of a task on the worker. D1 spans Queued → Running → PrOpened /
-/// Failed / Cancelled; Blocked arrives with monitor plumbing (D3).
+/// Lifecycle status of a task on the worker. Queued → Running → PrOpened /
+/// Failed / Cancelled / Blocked.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "state", content = "detail")]
 pub enum TaskStatus {
     Queued,
     Running,
-    PrOpened { url: String },
-    Failed { reason: String },
+    PrOpened {
+        url: String,
+    },
+    Failed {
+        reason: String,
+    },
     Cancelled,
+    /// The worker stopped trying: question cap overflow or a timed-out ask with no
+    /// default (plan §8/§9). Terminal for the run; the worktree and branch survive
+    /// and a human decision restarts it as a kickback.
+    Blocked {
+        reason: String,
+    },
 }
 
 /// Everything a poll returns. `pr_url` duplicates the PrOpened variant on purpose:
@@ -292,6 +332,31 @@ impl RejectReason {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A pre-D3 sender that omits `kind` still parses: the default is Question.
+    #[test]
+    fn answers_default_to_the_question_kind() {
+        let legacy = r#"{"question_id":"q1","chosen_option":"a","body":"x"}"#;
+        let answer: Answer = serde_json::from_str(legacy).expect("legacy shape parses");
+        assert_eq!(answer.kind, AnswerKind::Question);
+        assert!(Answer::instruction(2, "fix it").kind == AnswerKind::Instruction);
+        assert_eq!(Answer::instruction(2, "fix it").question_id, "kickback:2");
+    }
+
+    /// Blocked closes a task's story exactly like failed/cancelled — the SSE stream
+    /// ends there and the delegator's inbox treats the item as actionable.
+    #[test]
+    fn blocked_is_terminal_on_the_stream() {
+        let event = |state: &str| WorkerEvent {
+            kind: EventKind::StatusChanged,
+            correlation_id: "delegate:t:9".into(),
+            task_id: TaskId("t".into()),
+            payload: serde_json::json!({"status": {"state": state}}),
+        };
+        assert!(event("blocked").is_terminal());
+        assert!(event("failed").is_terminal());
+        assert!(!event("running").is_terminal());
+    }
 
     /// Two ULIDs minted in the same millisecond share their leading (timestamp)
     /// characters; the short form must still differ because it draws from the random

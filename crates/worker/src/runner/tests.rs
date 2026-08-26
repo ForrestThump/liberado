@@ -23,6 +23,7 @@ use crate::queue::TaskStore;
 
 struct WriteFileBackend {
     outcome: Outcome,
+    runs: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 #[async_trait::async_trait]
@@ -32,10 +33,11 @@ impl CoderBackend for WriteFileBackend {
     }
 
     async fn run(&self, request: CoderRunRequest) -> Result<CoderRunResult, CoderError> {
+        let n = self.runs.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
         let root = PathBuf::from(&request.workspace.root);
         tokio::fs::write(
             root.join("delivered.txt"),
-            format!("work by {}\n", request.task.id),
+            format!("work by {}, pass {}\n", request.task.id, n),
         )
         .await
         .map_err(|error| CoderError::Backend(error.to_string()))?;
@@ -68,11 +70,51 @@ impl CoderBackend for WriteFileBackend {
 #[derive(Default, Clone)]
 struct RecordingForge {
     opened: Arc<Mutex<Vec<OpenPr>>>,
+    comments: Arc<Mutex<Vec<(u64, String)>>>,
 }
 
 impl RecordingForge {
     fn opened(&self) -> Vec<OpenPr> {
         self.opened.lock().expect("forge lock").clone()
+    }
+}
+
+/// Writes like [`WriteFileBackend`] but records every goal it is handed, so tests
+/// can pin what the model actually saw (the kickback seeding lives there).
+struct GoalCapturingBackend {
+    goals: Arc<Mutex<Vec<String>>>,
+}
+
+#[async_trait::async_trait]
+impl CoderBackend for GoalCapturingBackend {
+    fn name(&self) -> &str {
+        "goal-capturing-stub"
+    }
+
+    async fn run(&self, request: CoderRunRequest) -> Result<CoderRunResult, CoderError> {
+        self.goals
+            .lock()
+            .expect("goals lock")
+            .push(request.task.description.clone());
+        let root = PathBuf::from(&request.workspace.root);
+        tokio::fs::write(root.join("delivered.txt"), "work\n")
+            .await
+            .map_err(|error| CoderError::Backend(error.to_string()))?;
+        Ok(CoderRunResult {
+            backend: self.name().to_string(),
+            outcome: Outcome::Succeeded,
+            summary: "wrote delivered.txt".into(),
+            files_changed: vec!["delivered.txt".into()],
+            file_changes: vec![],
+            validation_notes: None,
+            critic_verdict: None,
+            gate_votes: vec![],
+            trace_path: None,
+            diff_findings: vec![],
+            session_findings: vec![],
+            remediation: None,
+            diagnostics: serde_json::Value::Null,
+        })
     }
 }
 
@@ -86,8 +128,12 @@ impl ForgeClient for RecordingForge {
             url: format!("http://forge.example/{}/pulls/1", req.repo.api_segment()),
         })
     }
-    async fn comment(&self, _pr: &PrRef, _body: &str) -> Result<(), ForgeError> {
-        Err(ForgeError::Shape("not used in D1 tests".into()))
+    async fn comment(&self, pr: &PrRef, body: &str) -> Result<(), ForgeError> {
+        self.comments
+            .lock()
+            .expect("comments lock")
+            .push((pr.number, body.to_string()));
+        Ok(())
     }
     async fn checks(&self, _pr: &PrRef, names: &[String]) -> Result<CheckStates, ForgeError> {
         Ok(CheckStates {
@@ -197,7 +243,7 @@ fn spec(goal: &str) -> TaskSpec {
 
 async fn context(
     harness: &Harness,
-    backend: WriteFileBackend,
+    backend: impl CoderBackend + 'static,
     forge: RecordingForge,
 ) -> RunContext {
     let store = Arc::new(TaskStore::open(&harness.settings.data_dir).expect("store"));
@@ -242,6 +288,7 @@ async fn a_succeeded_run_pushes_a_delegate_branch_and_opens_the_pr() {
         &h,
         WriteFileBackend {
             outcome: Outcome::Succeeded,
+            runs: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         },
         forge.clone(),
     )
@@ -342,6 +389,7 @@ async fn a_failed_run_records_failure_without_opening_anything() {
         &h,
         WriteFileBackend {
             outcome: Outcome::Failed,
+            runs: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         },
         forge.clone(),
     )
@@ -375,6 +423,7 @@ async fn an_unknown_base_branch_fails_honestly() {
         &h,
         WriteFileBackend {
             outcome: Outcome::Succeeded,
+            runs: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         },
         RecordingForge::default(),
     )
@@ -437,4 +486,171 @@ fn pr_body_lists_deliverables_not_worker_bookkeeping() {
     assert!(body.contains("`src/lib.rs`"));
     assert!(!body.contains("coder-traces"), "{body}");
     assert!(!body.contains(".liberado"), "{body}");
+}
+
+// --- kickback (D3 slice A) ------------------------------------------------
+
+#[tokio::test]
+async fn kickback_reruns_on_the_same_branch_updates_the_pr_and_comments() {
+    let harness = harness();
+    let spec = spec("01KICKRUN000000000000TEST1");
+    let forge = RecordingForge::default();
+    let ctx = context(
+        &harness,
+        WriteFileBackend {
+            outcome: Outcome::Succeeded,
+            runs: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        },
+        forge.clone(),
+    )
+    .await;
+    ctx.store.submit(&spec).expect("submit");
+
+    let first = super::execute(ctx.clone(), spec.clone()).await;
+    assert!(
+        matches!(first.status, TaskStatus::PrOpened { .. }),
+        "{first:?}"
+    );
+    assert_eq!(forge.opened.lock().unwrap().len(), 1, "one PR so far");
+    let branch = branch_name(&spec);
+    let tip_sha = |remote: &Path| {
+        String::from_utf8_lossy(
+            &std::process::Command::new("git")
+                .args([
+                    "-C",
+                    remote.to_string_lossy().as_ref(),
+                    "rev-parse",
+                    &format!("refs/heads/{branch}"),
+                ])
+                .output()
+                .expect("rev-parse runs")
+                .stdout,
+        )
+        .to_string()
+    };
+    let tip_before = tip_sha(&harness.remote);
+
+    // The answers layer journals the round before spawning; mirror that here.
+    let round = ctx
+        .store
+        .record_instruction(&spec.id, "rename the file to kicker.md")
+        .unwrap();
+
+    let second = super::execute_kickback(
+        ctx.clone(),
+        spec.clone(),
+        round,
+        "rename the file to kicker.md".into(),
+    )
+    .await;
+    assert!(
+        matches!(second.status, TaskStatus::PrOpened { ref url } if Some(url) == first.pr_url.as_ref()),
+        "same PR url after kickback: {second:?}"
+    );
+    assert_eq!(forge.opened.lock().unwrap().len(), 1, "no duplicate PR");
+    let comments = forge.comments.lock().unwrap();
+    assert_eq!(comments.len(), 1, "summary comment on the existing PR");
+    assert_eq!(comments[0].0, 1);
+    assert!(
+        comments[0].1.contains("Kickback applied"),
+        "{}",
+        comments[0].1
+    );
+    drop(comments);
+    let tip_after = tip_sha(&harness.remote);
+    assert_ne!(tip_before, tip_after, "the re-run must push new work");
+
+    // Journal shows PrOpened -> Running -> PrOpened across the round.
+    let kinds: Vec<_> = ctx
+        .store
+        .replay(&spec.id.0)
+        .unwrap()
+        .iter()
+        .map(|e| e.kind)
+        .collect();
+    assert_eq!(
+        kinds,
+        vec![
+            liberado_delegate_contract::EventKind::StatusChanged, // queued
+            liberado_delegate_contract::EventKind::StatusChanged, // running
+            liberado_delegate_contract::EventKind::PrReady,       // pr 1
+            liberado_delegate_contract::EventKind::StatusChanged, // running again
+            liberado_delegate_contract::EventKind::PrReady,       // pr 2
+        ]
+    );
+}
+
+#[tokio::test]
+async fn kickback_seeds_the_instruction_into_the_goal_the_model_sees() {
+    let harness = harness();
+    let spec = spec("01KICKRUN000000000000TEST2");
+    let goals = Arc::new(Mutex::new(Vec::new()));
+    let forge = RecordingForge::default();
+    let ctx = context(
+        &harness,
+        GoalCapturingBackend {
+            goals: goals.clone(),
+        },
+        forge,
+    )
+    .await;
+    ctx.store.submit(&spec).expect("submit");
+    let _ = super::execute(ctx.clone(), spec.clone()).await;
+    let round = ctx
+        .store
+        .record_instruction(&spec.id, "use kebab-case everywhere")
+        .unwrap();
+    let _ = super::execute_kickback(ctx, spec, round, "use kebab-case everywhere".into()).await;
+
+    let goals = goals.lock().unwrap();
+    assert_eq!(goals.len(), 2);
+    assert!(
+        !goals[0].contains("Kickback"),
+        "first pass sees the plain goal"
+    );
+    assert!(goals[1].contains("Kickback round 1"), "{}", goals[1]);
+    assert!(
+        goals[1].contains("use kebab-case everywhere"),
+        "{}",
+        goals[1]
+    );
+    assert!(
+        goals[1].starts_with(&goals[0]),
+        "original goal preserved as prefix"
+    );
+}
+
+#[tokio::test]
+async fn kickback_without_a_pr_fails_honestly_instead_of_running() {
+    let harness = harness();
+    let spec = spec("01KICKRUN000000000000TEST3");
+    let forge = RecordingForge::default();
+    let ctx = context(
+        &harness,
+        WriteFileBackend {
+            outcome: Outcome::Succeeded,
+            runs: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        },
+        forge,
+    )
+    .await;
+    // Submitted but never run: no PR exists to kick back against.
+    ctx.store.submit(&spec).expect("submit");
+    let record = super::execute_kickback(ctx.clone(), spec, 1, "nonsense".into()).await;
+    match record.status {
+        TaskStatus::Failed { reason } => {
+            assert!(reason.contains("no open PR"), "{reason}");
+        }
+        other => panic!("expected Failed, got {other:?}"),
+    }
+}
+
+#[test]
+fn pr_urls_from_our_own_responses_round_trip_into_references() {
+    use super::pr::pr_ref_from_url;
+    let repo = liberado_forge::RepoPath("o/r".into());
+    let pr = pr_ref_from_url("https://forge.example/o/r/pulls/17", repo.clone()).expect("parses");
+    assert_eq!(pr.number, 17);
+    assert_eq!(pr.repo.api_segment(), "o/r");
+    assert!(pr_ref_from_url("https://forge.example/o/r", repo).is_none());
 }

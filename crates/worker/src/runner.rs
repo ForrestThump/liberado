@@ -13,7 +13,7 @@ use liberado_coder_agent::assemble_production_run;
 use liberado_coder_core::{CoderBackend, CoderTask};
 use liberado_config_loader::ProviderProfile;
 use liberado_delegate_contract::{TaskId, TaskRecord, TaskSpec, TaskStatus, WorkerHealth};
-use liberado_forge::{ForgeClient, OpenPr, RepoPath};
+use liberado_forge::ForgeClient;
 
 use crate::ask::{AnswerMailbox, AskDelegator, TaskDelegatorCtx};
 use crate::config::{self, WorkerSettings};
@@ -102,11 +102,74 @@ impl RunContext {
     }
 }
 
+/// How this pass over the pipeline differs from the first one. A kickback reuses the
+/// branch, worktree, and PR that already exist and seeds the model's goal with the
+/// delegator's instruction (plan §10; the §8 fallback shape — worse context, same
+/// durability).
+#[derive(Debug, Clone)]
+pub struct RunShape {
+    pub reuse_worktree: bool,
+    pub effective_goal: String,
+    /// Set on kickbacks: the PR to update instead of opening.
+    pub existing_pr_url: Option<String>,
+}
+
+impl RunShape {
+    fn first_pass(spec: &TaskSpec) -> Self {
+        Self {
+            reuse_worktree: false,
+            effective_goal: spec.goal.clone(),
+            existing_pr_url: None,
+        }
+    }
+}
+
 /// The full lifecycle of one accepted task. Runs in its own tokio task; every terminal
 /// path leaves a record behind.
 pub async fn execute(ctx: RunContext, spec: TaskSpec) -> TaskRecord {
+    let shape = RunShape::first_pass(&spec);
+    run_shaped(ctx, spec, shape).await
+}
+
+/// A kickback round: re-run the pack on the surviving branch with the instruction
+/// appended to the goal, push, update the existing PR, and report the new summary as
+/// a PR comment — the visible half of the audit trail (plan §10).
+pub async fn execute_kickback(
+    ctx: RunContext,
+    spec: TaskSpec,
+    round: u32,
+    instruction: String,
+) -> TaskRecord {
     let id = spec.id.clone();
-    if let Err(reason) = prepare_and_run(&ctx, &spec).await {
+    // The PR url must exist before anything runs; without it there is nothing to
+    // kick back against.
+    let existing = ctx.store.get(&id.0).ok().flatten();
+    let Some(pr_url) = existing.as_ref().and_then(|record| record.pr_url.clone()) else {
+        let reason = "kickback refused: task has no open PR".to_string();
+        return match existing {
+            Some(_) => ctx
+                .store
+                .finish(&id, TaskStatus::Failed { reason })
+                .unwrap_or_else(|error| {
+                    fallback_record(&spec, format!("record failed state: {error}"))
+                }),
+            None => fallback_record(&spec, reason),
+        };
+    };
+    let shape = RunShape {
+        reuse_worktree: true,
+        effective_goal: format!(
+            "{}\n\n## Kickback round {round}\nThe delegator reviewed the pull request and sent it back with this instruction:\n\n{}",
+            spec.goal, instruction
+        ),
+        existing_pr_url: Some(pr_url),
+    };
+    run_shaped(ctx, spec, shape).await
+}
+
+async fn run_shaped(ctx: RunContext, spec: TaskSpec, shape: RunShape) -> TaskRecord {
+    let id = spec.id.clone();
+    if let Err(reason) = prepare_and_run(&ctx, &spec, shape).await {
         tracing::warn!(task = %id, %reason, "delegated task failed");
         return ctx
             .store
@@ -132,7 +195,7 @@ fn fallback_record(spec: &TaskSpec, reason: String) -> TaskRecord {
     }
 }
 
-async fn prepare_and_run(ctx: &RunContext, spec: &TaskSpec) -> Result<(), String> {
+async fn prepare_and_run(ctx: &RunContext, spec: &TaskSpec, shape: RunShape) -> Result<(), String> {
     let session_id = ulid::Ulid::new().to_string();
     ctx.store
         .mark_running(&spec.id, &session_id)
@@ -143,15 +206,20 @@ async fn prepare_and_run(ctx: &RunContext, spec: &TaskSpec) -> Result<(), String
     let clone_dir = repo_dir(ctx, &spec.repository);
 
     ensure_clone(ctx, &clone_dir, &spec.repository).await?;
-    git::create_worktree(&clone_dir, &branch, &worktree, &spec.base_branch)
-        .await
-        .map_err(|error| format!("create worktree at {branch}: {error}"))?;
+    ensure_worktree(ctx, spec, &branch, shape.reuse_worktree).await?;
 
     let backend = ctx.backends.backend_for(TaskDelegatorCtx {
         task_id: spec.id.clone(),
         session_id: session_id.clone(),
     });
-    let result = run_pack(ctx, backend.as_ref(), spec, &worktree).await?;
+    let result = run_pack(
+        ctx,
+        backend.as_ref(),
+        spec,
+        &shape.effective_goal,
+        &worktree,
+    )
+    .await?;
 
     if result.outcome != liberado_common::Outcome::Succeeded {
         return Err(format!(
@@ -161,7 +229,25 @@ async fn prepare_and_run(ctx: &RunContext, spec: &TaskSpec) -> Result<(), String
     }
 
     commit_and_push(ctx, spec, &branch, &result).await?;
-    open_pull_request(ctx, spec, &branch, &result).await
+    pr::open_or_update_pr(ctx, spec, &branch, shape, &result).await
+}
+
+/// First pass creates the worktree; a kickback lands on the one it left behind —
+/// recreating would discard the very state the delegator reviewed.
+async fn ensure_worktree(
+    ctx: &RunContext,
+    spec: &TaskSpec,
+    branch: &str,
+    reuse: bool,
+) -> Result<(), String> {
+    let worktree = worktree_path(ctx, &spec.id);
+    if reuse && worktree.join(".git").exists() {
+        return Ok(());
+    }
+    let clone_dir = repo_dir(ctx, &spec.repository);
+    git::create_worktree(&clone_dir, branch, &worktree, &spec.base_branch)
+        .await
+        .map_err(|error| format!("create worktree at {branch}: {error}"))
 }
 
 async fn ensure_clone(
@@ -185,10 +271,11 @@ async fn run_pack(
     ctx: &RunContext,
     backend: &dyn CoderBackend,
     spec: &TaskSpec,
+    effective_goal: &str,
     worktree: &std::path::Path,
 ) -> Result<liberado_coder_core::CoderRunResult, String> {
     let tuning = config::read_tuning(ctx.settings.config_dir.as_deref())?;
-    let mut task = CoderTask::new(format!("delegate-{}", spec.id.short()), &spec.goal);
+    let mut task = CoderTask::new(format!("delegate-{}", spec.id.short()), effective_goal);
     task.success_criteria = spec.success_criteria.clone();
 
     let surface = liberado_coder_agent::assemble::entry::runner_surface(
@@ -245,37 +332,6 @@ async fn commit_and_push(
         .map_err(|error| format!("push {branch}: {error}"))
 }
 
-async fn open_pull_request(
-    ctx: &RunContext,
-    spec: &TaskSpec,
-    branch: &str,
-    result: &liberado_coder_core::CoderRunResult,
-) -> Result<(), String> {
-    let Some(forge) = &ctx.forge else {
-        return Err("forge is not configured on this worker; cannot open PR".into());
-    };
-    let pr = forge
-        .open_pr(&OpenPr {
-            repo: RepoPath(spec.repository.clone()),
-            title: truncate(first_line(&spec.goal), 72),
-            head: branch.to_string(),
-            base: spec.base_branch.clone(),
-            body: pr_body(spec, result),
-        })
-        .await
-        .map_err(|error| format!("open PR: {error}"))?;
-    ctx.store
-        .finish(
-            &spec.id,
-            TaskStatus::PrOpened {
-                url: pr.url.clone(),
-            },
-        )
-        .map_err(|error| format!("record PR status: {error}"))?;
-    tracing::info!(task = %spec.id, pr_url = %pr.url, "delegated task opened a PR");
-    Ok(())
-}
-
 fn repo_dir(ctx: &RunContext, repository: &str) -> PathBuf {
     let slug = repository
         .chars()
@@ -318,14 +374,6 @@ pub fn slugify(text: &str) -> String {
 
 fn first_line(text: &str) -> &str {
     text.lines().next().unwrap_or(text)
-}
-
-fn truncate(text: &str, max_chars: usize) -> String {
-    if text.chars().count() <= max_chars {
-        return text.to_string();
-    }
-    let cut: String = text.chars().take(max_chars.saturating_sub(1)).collect();
-    format!("{cut}…")
 }
 
 /// PR body carrying the task identity, criteria as checkboxes, and the run summary —
@@ -379,3 +427,6 @@ pub fn health_payload() -> WorkerHealth {
 
 #[cfg(test)]
 mod tests;
+
+#[path = "runner/pr.rs"]
+mod pr;

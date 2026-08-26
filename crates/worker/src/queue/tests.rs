@@ -340,6 +340,7 @@ fn answer_settles_a_question_and_unknown_ids_are_refused() {
 
     let answer = Answer {
         question_id: "q1".into(),
+        kind: liberado_delegate_contract::AnswerKind::Question,
         chosen_option: Some("v2".into()),
         body: "go with v2".into(),
     };
@@ -352,6 +353,7 @@ fn answer_settles_a_question_and_unknown_ids_are_refused() {
 
     let unknown = Answer {
         question_id: "nope".into(),
+        kind: liberado_delegate_contract::AnswerKind::Question,
         chosen_option: None,
         body: String::new(),
     };
@@ -393,4 +395,56 @@ fn blocked_marker_is_emitted_once_per_task_no_matter_what() {
         blocked[0].payload["reason"],
         serde_json::json!("cap reached")
     );
+}
+
+#[test]
+fn instructions_journal_rounds_and_survives_reopens() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = TaskStore::open(dir.path()).unwrap();
+    let _ = store.submit(&spec("01KICKTEST")).unwrap();
+    let task = TaskId("01KICKTEST".into());
+
+    assert_eq!(store.kickback_count(&task).expect("count"), 0);
+    assert_eq!(store.record_instruction(&task, "wrong format").unwrap(), 1);
+    assert_eq!(store.record_instruction(&task, "still wrong").unwrap(), 2);
+
+    // A fresh store over the same data dir must not reset the cap.
+    let reopened = TaskStore::open(dir.path()).unwrap();
+    assert_eq!(reopened.kickback_count(&task).expect("count"), 2);
+    assert_eq!(
+        reopened.instruction_body(&task, 1).unwrap().as_deref(),
+        Some("wrong format")
+    );
+    assert_eq!(reopened.instruction_body(&task, 9).unwrap(), None);
+}
+
+/// A Blocked finish announces itself on the stream as its own kind and is terminal
+/// for cancel — the delegator's action item, not noise.
+#[test]
+fn blocked_finish_emits_blocked_and_cancel_leaves_it_alone() {
+    let (_tmp, store) = store();
+    let _ = store.submit(&spec("01BLKTEST")).unwrap();
+    let task = TaskId("01BLKTEST".into());
+
+    let record = store
+        .finish(
+            &task,
+            TaskStatus::Blocked {
+                reason: "cap".into(),
+            },
+        )
+        .unwrap();
+    assert!(matches!(record.status, TaskStatus::Blocked { .. }));
+
+    let events = store.replay("01BLKTEST").unwrap();
+    let last = events.last().unwrap();
+    assert_eq!(
+        last.payload["status"]["state"],
+        serde_json::json!("blocked"),
+        "terminal blocked rides as a status change, like failed does"
+    );
+    assert!(last.is_terminal());
+
+    let after = store.cancel("01BLKTEST").unwrap();
+    assert_eq!(after.status, record.status, "blocked is a terminal no-op");
 }

@@ -5521,6 +5521,7 @@ dependencies = [
 name = "liberado-cli"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "chat-client-contract",
  "chrono",
  "fs4",
@@ -5530,6 +5531,7 @@ dependencies = [
  "liberado-config",
  "liberado-config-loader",
  "liberado-delegate-contract",
+ "liberado-forge",
  "liberado-harness-eval",
  "liberado-server",
  "regex",

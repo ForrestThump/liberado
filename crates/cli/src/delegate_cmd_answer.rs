@@ -3,7 +3,7 @@
 
 use std::error::Error;
 
-use liberado_delegate_contract::{Answer, AnswerAck};
+use liberado_delegate_contract::{Answer, AnswerAck, AnswerKind};
 
 use super::{Connection, Flags, checked, connection, emit, request, routes};
 /// `liberado delegate answer <task-id> <question-id> [--option LABEL] [--body TEXT]`
@@ -19,6 +19,7 @@ pub(super) async fn run(mut args: impl Iterator<Item = String>) -> Result<(), Bo
         &connection,
         &Answer {
             question_id: question_id.clone(),
+            kind: AnswerKind::Question,
             chosen_option: flags.option,
             body: flags.body.unwrap_or_default(),
         },
@@ -34,14 +35,14 @@ pub(super) async fn run(mut args: impl Iterator<Item = String>) -> Result<(), Bo
 }
 
 #[derive(Debug, Default)]
-struct AnswerFlags {
+pub(super) struct AnswerFlags {
     endpoint: Option<String>,
     token_env: Option<String>,
     option: Option<String>,
     body: Option<String>,
 }
 
-fn to_flags(answer: &AnswerFlags) -> Flags {
+pub(super) fn to_flags(answer: &AnswerFlags) -> Flags {
     Flags {
         endpoint: answer.endpoint.clone(),
         token_env: answer.token_env.clone(),

@@ -10,6 +10,7 @@ use crate::http::AppState;
 use crate::queue::TaskStore;
 use crate::runner::RunContext;
 use axum::extract::Path;
+use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use liberado_delegate_contract::WorkerEvent;
 use liberado_delegate_contract::{Acceptance, Answer, TaskBudget, TaskGrant, TaskId, TaskSpec};
@@ -47,6 +48,25 @@ impl Harness {
         )
         .await;
         response.status()
+    }
+
+    async fn kickback(&self, task_id: &str, round: u32, body: &str) -> axum::http::StatusCode {
+        self.answer(task_id, &Answer::instruction(round, body))
+            .await
+    }
+
+    /// Move a submitted task to PrOpened without running anything, the way the
+    /// runner would.
+    async fn open_pr(&self, task_id: &str) {
+        use liberado_delegate_contract::TaskStatus;
+        self.store
+            .finish(
+                &TaskId(task_id.to_string()),
+                TaskStatus::PrOpened {
+                    url: format!("https://forge/{task_id}/pulls/1"),
+                },
+            )
+            .expect("pr opened");
     }
 }
 
@@ -246,6 +266,7 @@ async fn an_answer_settles_the_question_and_reports_delivery() {
             "01ANSWERTEST",
             &Answer {
                 question_id: "q1".into(),
+                kind: liberado_delegate_contract::AnswerKind::Question,
                 chosen_option: Some("left".into()),
                 body: "go left".into(),
             },
@@ -270,6 +291,7 @@ async fn unknown_questions_and_unknown_tasks_are_rejected_honestly() {
             "01NOTASKETEST",
             &Answer {
                 question_id: "ghost".into(),
+                kind: liberado_delegate_contract::AnswerKind::Question,
                 chosen_option: None,
                 body: String::new(),
             },
@@ -282,10 +304,71 @@ async fn unknown_questions_and_unknown_tasks_are_rejected_honestly() {
             "01ABSENTTASK",
             &Answer {
                 question_id: "q1".into(),
+                kind: liberado_delegate_contract::AnswerKind::Question,
                 chosen_option: None,
                 body: String::new(),
             },
         )
         .await;
     assert_eq!(no_task, axum::http::StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn kickback_on_a_pr_opened_task_is_accepted_and_journalled() {
+    let h = harness();
+    let _ = h.store.submit(&spec("01KICKHTTP0000000000TEST")).unwrap();
+    h.open_pr("01KICKHTTP0000000000TEST").await;
+
+    // The spawned re-run uses NoopBackend; the assertions here are about acceptance
+    // plumbing, which is settled before any run matters.
+    assert_eq!(
+        h.kickback("01KICKHTTP0000000000TEST", 1, "fix it").await,
+        StatusCode::OK
+    );
+    let task = TaskId("01KICKHTTP0000000000TEST".into());
+    assert_eq!(h.store.kickback_count(&task).unwrap(), 1);
+}
+
+#[tokio::test]
+async fn kickback_off_pr_opened_conflicts_without_journalling() {
+    let h = harness();
+    let id = "01KICKHTTP0000000000TEST";
+    let _ = h.store.submit(&spec(id)).unwrap();
+    // Still Queued — nothing reviewed yet.
+    assert_eq!(h.kickback(id, 1, "too early").await, StatusCode::CONFLICT);
+    assert_eq!(h.store.kickback_count(&TaskId(id.into())).unwrap(), 0);
+}
+
+/// The D3 cap: past grant.max_kickbacks the refusal itself blocks the task — one
+/// blocked event, visible on the stream, and a 409 telling the delegator why.
+#[tokio::test]
+async fn past_the_kickback_cap_the_task_lands_blocked() {
+    let h = harness();
+    let id = "01KICKHTTP0000000000TEST";
+    let _ = h.store.submit(&spec(id)).unwrap(); // grant.max_kickbacks defaults to 2
+    h.open_pr(id).await;
+
+    assert_eq!(h.kickback(id, 1, "round one").await, StatusCode::OK);
+    assert_eq!(h.kickback(id, 2, "round two").await, StatusCode::OK);
+    assert_eq!(h.kickback(id, 3, "round three").await, StatusCode::CONFLICT);
+
+    let record = h.store.get(id).unwrap().unwrap();
+    match record.status {
+        liberado_delegate_contract::TaskStatus::Blocked { reason } => {
+            assert!(reason.contains("cap"), "{reason}");
+        }
+        other => panic!("expected Blocked, got {other:?}"),
+    }
+    // Terminal Blocked rides as a status change (like failed does); the stream's
+    // own terminality is what the delegator's inbox keys on.
+    let events = h.store.replay(id).unwrap();
+    let last = events.last().unwrap();
+    assert_eq!(
+        last.payload["status"]["state"],
+        serde_json::json!("blocked")
+    );
+    assert!(last.is_terminal());
+
+    // And once blocked, further instructions are refused by the state check alone.
+    assert_eq!(h.kickback(id, 4, "round four").await, StatusCode::CONFLICT);
 }

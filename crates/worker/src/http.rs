@@ -15,7 +15,8 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use liberado_delegate_contract::{
-    Answer, AnswerAck, RejectReason, TaskId, TaskSpec, WorkerEvent, WorkerHealth,
+    Answer, AnswerAck, AnswerKind, RejectReason, TaskId, TaskRecord, TaskSpec, WorkerEvent,
+    WorkerHealth,
 };
 
 use crate::queue::TaskStore;
@@ -216,9 +217,19 @@ async fn post_answer(
     Path(task_id): Path<String>,
     Json(answer): Json<Answer>,
 ) -> Response {
-    if state.store.get(&task_id).ok().flatten().is_none() {
+    let Some(record) = state.store.get(&task_id).ok().flatten() else {
         return not_found(&task_id);
+    };
+    match answer.kind {
+        AnswerKind::Instruction => post_kickback(state, record, answer).await,
+        AnswerKind::Question => post_question_answer(state, task_id, answer).await,
     }
+}
+
+/// A question reply settles the parked ask. Persisted first — the durable record
+/// survives even when no waiter is left — then handed to the mailbox.
+/// `delivered = false` is honest bookkeeping, not an error.
+async fn post_question_answer(state: Arc<AppState>, task_id: String, answer: Answer) -> Response {
     match state
         .store
         .record_answer(&TaskId(task_id.clone()), &answer, false)
@@ -238,6 +249,55 @@ async fn post_answer(
     }
     let delivered = state.mailbox.deliver(&answer);
     (StatusCode::OK, Json(AnswerAck { delivered })).into_response()
+}
+
+/// A kickback sends the run back to work (plan §10). Only a task sitting at
+/// `PrOpened` can be kicked: earlier there is nothing to review, later the record is
+/// terminal. The round is journalled before the cap check so the count reflects every
+/// instruction ever received; past `grant.max_kickbacks` the task lands as `Blocked`
+/// for a human and the refusal is the response. Otherwise a re-run spawns on the
+/// surviving branch, exactly as submit spawns the first pass.
+async fn post_kickback(state: Arc<AppState>, record: TaskRecord, answer: Answer) -> Response {
+    use liberado_delegate_contract::TaskStatus;
+
+    let task_id = TaskId(record.spec.id.0.clone());
+    if !matches!(record.status, TaskStatus::PrOpened { .. }) {
+        return (
+            StatusCode::CONFLICT,
+            Json(RejectReason::new(format!(
+                "task {} is {:?}; only a PR-opened task can be kicked back",
+                task_id, record.status
+            ))),
+        )
+            .into_response();
+    }
+
+    let round = match state.store.record_instruction(&task_id, &answer.body) {
+        Ok(round) => round,
+        Err(error) => return internal_error(error.to_string()),
+    };
+    if round > record.spec.grant.max_kickbacks {
+        let reason = format!(
+            "kickback cap reached ({round} rounds > max {}); needs a human",
+            record.spec.grant.max_kickbacks
+        );
+        let _ = state.store.finish(
+            &task_id,
+            TaskStatus::Blocked {
+                reason: reason.clone(),
+            },
+        );
+        return (StatusCode::CONFLICT, Json(RejectReason::new(reason))).into_response();
+    }
+
+    let ctx = state.run.clone();
+    tokio::spawn(runner::execute_kickback(
+        ctx,
+        record.spec,
+        round,
+        answer.body,
+    ));
+    (StatusCode::OK, Json(AnswerAck { delivered: true })).into_response()
 }
 
 fn not_found(task_id: &str) -> Response {

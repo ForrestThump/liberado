@@ -162,6 +162,7 @@ impl AskDelegator {
                 Some(default) => {
                     let fallback = Answer {
                         question_id: question.id.clone(),
+                        kind: liberado_delegate_contract::AnswerKind::Question,
                         chosen_option: Some(default.clone()),
                         body: format!(
                             "no answer within {}s; the question's declared default was applied",
@@ -387,17 +388,19 @@ mod tests {
 
         // Let the ask register before answering.
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        let question_id = f
+            .store
+            .replay("01ASKTASK0000000000000TEST")
+            .unwrap()
+            .iter()
+            .find(|e| e.kind == liberado_delegate_contract::EventKind::Question)
+            .map(|e| e.payload["question"]["id"].as_str().unwrap().to_string())
+            .expect("question on the stream");
         let answer = Answer {
-            question_id: f
-                .store
-                .replay("01ASKTASK0000000000000TEST")
-                .unwrap()
-                .iter()
-                .find(|e| e.kind == liberado_delegate_contract::EventKind::Question)
-                .map(|e| e.payload["question"]["id"].as_str().unwrap().to_string())
-                .expect("question on the stream"),
+            question_id,
             chosen_option: Some("right".into()),
             body: "take the slow road".into(),
+            kind: liberado_delegate_contract::AnswerKind::Question,
         };
         assert!(
             f.mailbox.deliver(&answer),

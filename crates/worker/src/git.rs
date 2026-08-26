@@ -82,10 +82,20 @@ pub async fn create_worktree(
     .map(|_| ())
 }
 
+/// Whether the worktree carries deliverable changes. Worker-local bookkeeping
+/// ([`WORKER_LOCAL_PATHS`]) is excluded on purpose: those files are always untracked,
+/// so counting them would report dirty forever and make a no-change re-run attempt
+/// an empty commit.
 pub fn is_dirty(worktree: &Path) -> bool {
+    let excludes: Vec<String> = WORKER_LOCAL_PATHS
+        .iter()
+        .map(|path| format!(":(exclude){path}"))
+        .collect();
+    let mut args = vec!["status", "--porcelain", "--", "."];
+    args.extend(excludes.iter().map(String::as_str));
     liberado_common::process::std_command("git")
         .current_dir(worktree)
-        .args(["status", "--porcelain"])
+        .args(&args)
         .output()
         .map(|output| !output.stdout.is_empty())
         .unwrap_or(false)

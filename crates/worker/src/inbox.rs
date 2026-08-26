@@ -27,7 +27,7 @@ pub fn inbox_kind(event: &WorkerEvent) -> Option<ItemKind> {
                 .and_then(|status| status.get("state"))
                 .and_then(|state| state.as_str());
             match state {
-                Some("failed") | Some("cancelled") => Some(ItemKind::Blocked),
+                Some("failed") | Some("cancelled") | Some("blocked") => Some(ItemKind::Blocked),
                 _ => None,
             }
         }
@@ -106,6 +106,15 @@ mod tests {
         );
         assert_eq!(
             inbox_kind(&cancelled),
+            Some(liberado_inbox_spool::ItemKind::Blocked)
+        );
+
+        let blocked_status = event(
+            EventKind::StatusChanged,
+            serde_json::json!({"status": {"state": "blocked", "detail": "cap"}}),
+        );
+        assert_eq!(
+            inbox_kind(&blocked_status),
             Some(liberado_inbox_spool::ItemKind::Blocked)
         );
 

@@ -9,43 +9,15 @@ use liberado_delegate_contract::{SubmitOutcome, TaskRecord, TaskSpec, WorkerHeal
 /// lives on the worker; this file owns argument grammar, transport, and rendering.
 pub async fn run(args: &mut impl Iterator<Item = String>) -> Result<(), Box<dyn Error>> {
     match args.next().as_deref() {
+        // Submit owns its grammar (file path); every other verb is routed centrally
+        // so adding one costs this entry point nothing.
         Some("submit") => cmd_submit(args).await,
-        // The task-addressed group shares one arm so adding a subcommand costs the
-        // router nothing — the same shape the worker's own flag parser uses.
-        Some(name @ ("status" | "cancel" | "health" | "watch" | "answer")) => {
-            cmd_dispatch(name, args).await
-        }
-        _ => Err(usage("unknown or missing subcommand").into()),
+        Some(name) => router::dispatch(name, args).await,
+        None => Err(usage("unknown or missing subcommand").into()),
     }
 }
 
-async fn cmd_dispatch(
-    name: &str,
-    args: &mut impl Iterator<Item = String>,
-) -> Result<(), Box<dyn Error>> {
-    match name {
-        // The sibling-module routers share one arm so adding another client
-        // subcommand costs this dispatcher nothing.
-        name @ ("watch" | "answer") => stream_cmd_dispatch(name, args).await,
-        "status" => cmd_status(args).await,
-        "cancel" => cmd_cancel(args).await,
-        "health" => cmd_health(args).await,
-        other => unreachable!("run admitted {other:?}"),
-    }
-}
-
-async fn stream_cmd_dispatch(
-    name: &str,
-    args: &mut impl Iterator<Item = String>,
-) -> Result<(), Box<dyn Error>> {
-    match name {
-        "watch" => watch_cmd::run(args).await,
-        "answer" => answer_cmd::run(args).await,
-        other => unreachable!("cmd_dispatch admitted {other:?}"),
-    }
-}
-
-pub(super) fn usage(message: &str) -> String {
+fn usage(message: &str) -> String {
     format!(
         "{message}\n\n\
          usage:\n  \
@@ -53,7 +25,9 @@ pub(super) fn usage(message: &str) -> String {
          liberado delegate status <task-id>   [--endpoint URL] [--token-env VAR]\n  \
          liberado delegate watch <task-id>    [--endpoint URL] [--token-env VAR]\n  \
          liberado delegate cancel <task-id>   [--endpoint URL] [--token-env VAR]\n  \
-         liberado delegate health             [--endpoint URL] [--token-env VAR]\n  \
+         liberado delegate health             [--endpoint URL] [--token-env VAR]\n  \\
+         liberado delegate kickback <task-id> --body TEXT [--comment]\n  \\
+         liberado delegate merge <task-id>    [--method squash|merge|rebase]\n  \\
          liberado delegate answer <task-id> <question-id> [--option LABEL]\n  \
              \x20\x20[--body TEXT] [--endpoint URL] [--token-env VAR]\n\n\
          Env: LIBERADO_DELEGATE_ENDPOINT (required unless --endpoint),\n\
@@ -162,7 +136,9 @@ async fn cmd_submit(mut args: impl Iterator<Item = String>) -> Result<(), Box<dy
     Ok(())
 }
 
-async fn cmd_status(mut args: impl Iterator<Item = String>) -> Result<(), Box<dyn Error>> {
+pub(super) async fn cmd_status(
+    mut args: impl Iterator<Item = String>,
+) -> Result<(), Box<dyn Error>> {
     let (id, flags) = parse_flags(&mut args, "task-id").map_err(|error| usage(&error))?;
     let id = id.ok_or_else(|| usage("status needs a task-id"))?;
     let connection = connection(&flags)?;
@@ -171,7 +147,9 @@ async fn cmd_status(mut args: impl Iterator<Item = String>) -> Result<(), Box<dy
     Ok(())
 }
 
-async fn cmd_cancel(mut args: impl Iterator<Item = String>) -> Result<(), Box<dyn Error>> {
+pub(super) async fn cmd_cancel(
+    mut args: impl Iterator<Item = String>,
+) -> Result<(), Box<dyn Error>> {
     let (id, flags) = parse_flags(&mut args, "task-id").map_err(|error| usage(&error))?;
     let id = id.ok_or_else(|| usage("cancel needs a task-id"))?;
     let connection = connection(&flags)?;
@@ -191,7 +169,9 @@ async fn cmd_cancel(mut args: impl Iterator<Item = String>) -> Result<(), Box<dy
     Ok(())
 }
 
-async fn cmd_health(mut args: impl Iterator<Item = String>) -> Result<(), Box<dyn Error>> {
+pub(super) async fn cmd_health(
+    mut args: impl Iterator<Item = String>,
+) -> Result<(), Box<dyn Error>> {
     let (_none, flags) = parse_flags(&mut args, "").map_err(|error| usage(&error))?;
     let connection = connection(&flags)?;
     let health = fetch_health(&connection).await?;
@@ -253,8 +233,14 @@ async fn fetch_health(connection: &Connection) -> Result<WorkerHealth, String> {
 #[cfg(test)]
 mod tests;
 
+#[path = "delegate_cmd_router.rs"]
+mod router;
+
 #[path = "delegate_cmd_answer.rs"]
 mod answer_cmd;
+
+#[path = "delegate_cmd_review.rs"]
+mod review_cmd;
 
 #[path = "delegate_cmd_watch.rs"]
 mod watch_cmd;

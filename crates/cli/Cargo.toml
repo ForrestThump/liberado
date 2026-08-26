@@ -22,6 +22,7 @@ liberado-coder-core = { workspace = true }
 liberado-harness-eval = { workspace = true }
 chat-client-contract = { workspace = true }
 liberado-delegate-contract = { workspace = true }
+liberado-forge = { workspace = true }
 tokio = { workspace = true }
 tracing-subscriber = { workspace = true }
 reqwest = { workspace = true }
@@ -34,6 +35,7 @@ serde_yaml = { workspace = true }
 toml = { workspace = true }
 tempfile = { workspace = true }
 sha2 = { workspace = true }
+async-trait = { workspace = true }
 
 [package.metadata.liberado]
 # Layer role for the layer-rules test + crate-map generator (docs/architecture/contracts.md)

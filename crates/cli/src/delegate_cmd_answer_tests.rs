@@ -83,6 +83,7 @@ async fn answer_posts_the_contract_shape_to_the_answers_route() {
         &connection,
         &liberado_delegate_contract::Answer {
             question_id: "01Q".into(),
+            kind: AnswerKind::Question,
             chosen_option: Some("left".into()),
             body: "go left".into(),
         },
