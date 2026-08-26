@@ -139,8 +139,13 @@ struct HeadInfo {
 /// After a successful merge, the PR carries the id of the commit the merge produced.
 #[derive(Deserialize)]
 struct MergedPull {
-    #[serde(default)]
+    /// Gitea's field name has drifted across versions (`merged_commit_id` on most
+    /// instances, `merge_commit_sha` on others); both deserialize here. A missing id
+    /// with a 200 readback still means merged — the sha is informational.
+    #[serde(default, alias = "merge_commit_sha")]
     merged_commit_id: Option<String>,
+    #[serde(default)]
+    merged: bool,
 }
 
 #[derive(Deserialize)]
@@ -278,16 +283,80 @@ impl ForgeClient for GiteaForge {
                 &readback_url,
             )
             .await?;
-        merged
-            .merged_commit_id
-            .map(|sha| MergeCommit { sha })
-            .ok_or(ForgeError::Shape(format!(
-                "pull {}/#{} reported no merged_commit_id after merge",
-                pr.repo.api_segment(),
-                pr.number
-            )))
+        resolve_merge_commit(merged, pr)
+    }
+}
+
+/// Interpret a post-merge readback. Gitea's sha field has drifted across versions
+/// (`merged_commit_id`, `merge_commit_sha`); both deserialize. A 200 readback that
+/// claims merged but carries no sha still means merged — report the PR reference
+/// rather than failing uselessly after the fact.
+fn resolve_merge_commit(merged: MergedPull, pr: &PrRef) -> Result<MergeCommit, ForgeError> {
+    match (merged.merged, merged.merged_commit_id) {
+        (_, Some(sha)) => Ok(MergeCommit { sha }),
+        (true, None) => Ok(MergeCommit {
+            sha: format!("pr/{}", pr.number),
+        }),
+        (false, None) => Err(ForgeError::Shape(format!(
+            "pull {}/#{} reports itself as unmerged after merge",
+            pr.repo.api_segment(),
+            pr.number
+        ))),
     }
 }
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod merge_shape_tests {
+    use super::{MergeCommit, resolve_merge_commit};
+    use crate::{ForgeError, PrRef, RepoPath};
+
+    fn pr() -> PrRef {
+        PrRef {
+            repo: RepoPath("o/r".into()),
+            number: 7,
+            url: "http://f/o/r/pulls/7".into(),
+        }
+    }
+
+    #[test]
+    fn either_sha_field_wins_over_everything() {
+        let ok = resolve_merge_commit(
+            serde_json::from_value(serde_json::json!({
+                "merged": true, "merge_commit_sha": "abc123"
+            }))
+            .unwrap(),
+            &pr(),
+        )
+        .unwrap();
+        assert_eq!(
+            ok,
+            MergeCommit {
+                sha: "abc123".into()
+            }
+        );
+    }
+
+    /// The live-dogfood case: Gitea answered 200 and the readback carried no sha.
+    /// The forge DID merge; failing here would lie about the outcome.
+    #[test]
+    fn merged_without_a_sha_reports_the_pr_reference() {
+        let ok = resolve_merge_commit(
+            serde_json::from_value(serde_json::json!({ "merged": true })).unwrap(),
+            &pr(),
+        )
+        .unwrap();
+        assert_eq!(ok, MergeCommit { sha: "pr/7".into() });
+    }
+
+    #[test]
+    fn unmerged_readbacks_are_honest_errors() {
+        let err = resolve_merge_commit(
+            serde_json::from_value(serde_json::json!({ "merged": false })).unwrap(),
+            &pr(),
+        );
+        assert!(matches!(err, Err(ForgeError::Shape(_))));
+    }
+}
