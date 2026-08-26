@@ -72,6 +72,20 @@ reason = "Growth is the four-line #[cfg(test)] #[path] sibling wiring (lib_survi
 reviewed_on = "2026-08-25"
 
 [[waiver]]
+path = "crates/coder-tools/src/hashline.rs"
+metric = "ploc"
+ceiling = 1096
+reason = "Growth is the three-line #[cfg(test)] #[path] sibling wiring (hashline_survivor_tests.rs); the parent-module declaration is irreducible under the split pattern this branch mandates."
+reviewed_on = "2026-08-25"
+
+[[waiver]]
+path = "crates/coder-tools/src/repo_map.rs"
+metric = "ploc"
+ceiling = 1020
+reason = "Same as hashline.rs: three lines of #[cfg(test)] #[path] sibling wiring (repo_map_survivor_tests.rs); the module declaration cannot live anywhere else."
+reviewed_on = "2026-08-25"
+
+[[waiver]]
 path = "crates/executor/src/risk_gated.rs"
 metric = "ploc"
 ceiling = 1397

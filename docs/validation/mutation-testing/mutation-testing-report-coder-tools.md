@@ -1,45 +1,70 @@
 # coder-tools — Mutation Testing Report
 
-**Date:** 2026-07-30
+**Date:** 2026-08-25 · **Campaign commit:** `4ffd4b4e` · **Tool:** cargo-mutants 27.1.0
 
-| Metric | Value |
-|--------|:-----:|
-| Source files | 1 (`src/lib.rs`) |
-| Tests before | 10 |
-| Tests after | 21 |
-| Viable mutants | 59 |
-| Caught | 55 |
-| **Catch rate** | **93.2%** |
-| False positives | 4 |
+The historical "4 survivors" figure below came from a single-file scope under a 3-second
+test floor: 141 of 526 viable mutants timed out rather than ran. The honest re-baseline
+widened scope to the whole crate and raised the floor to 30 seconds (`TIMEOUT_OVERRIDES`).
+That exposed **966 viable mutants**, 276 of which survived at `37440e4`.
 
-## Survivors (4 — all false positives)
+| Metric | 2026-07-30 | Re-baseline | Now |
+|--------|:---------:|:-----------:|:---:|
+| Viable | 59 | 966 | 966 |
+| Caught | 55 | 673 | **863** |
+| Survived | 4 | 276 | **81** |
+| Timeout | 0 | 17 | 22 |
+| Unviable | 26 | 89 | 89 |
 
-| Line | Mutant | Reason |
-|:----:|--------|--------|
-| 82 | `invoke_json_for_backend` → `Ok(Default::default())` | Thin delegator wrapping `invoke_json`; zero logic beyond delegation |
-| 507 | `default_diff_mode` → `String::new()` / `"xyzzy".into()` | Constant function returning `"patch"`; any string works as serde default |
-| 539 | `cap_bytes` `>` → `>=` | `Vec::truncate(n)` is no-op when `n >= self.len()` — same operator class as coder-sandbox's `capped_utf8` false positive |
+## Fixed along the way
 
-## Patches Applied (11 new tests)
+### A real production bug: the TypeScript repo-map query never compiled
 
-| Survivors Fixed | Test Added |
-|----------------|------------|
-| `list_files` → `Ok(Default::default())`; `!` deleted | `list_files_returns_workspace_contents`, `list_files_respects_limit` |
-| `search_text` `>=` → `<` | `search_text_respects_limit_and_multi_match_file` |
-| `edit_file` `>` → `>=` | `edit_file_writes_unique_old_text` |
-| `apply_patch` `>` → `<` | `apply_patch_rejects_ambiguous_edit` |
-| `git_status` → `Ok(Default::default())` | `git_status_returns_result` |
-| `git_diff` → `Ok(Default::default())` | `git_diff_returns_result` |
-| `catalog` → `vec![]` | `catalog_contains_expected_tools` |
-| `invoke` → `Ok(String::new())` / `Ok("xyzzy".into())` | `invoke_round_trips_through_invoke_json` |
-| `path_allowed_to_write` → `true` | `write_blocked_by_path_policy` |
-| `walk_files` `+=` → `*=` + `>=` → `<` | `walk_files_respects_limit` |
-| `default_limit` → `1` | Caught by `list_files_respects_limit` (test both default and explicit limit) |
+`query_source("typescript")` mixed two node types this grammar does not have:
+enum names are `(identifier)` (not `(type_identifier)`) and function expressions are
+`(function_expression)` (not `(function)`). `Query::new` failed on every TS/TSX file,
+`extract_tags` returned empty, and repository maps silently lost every TypeScript and
+TSX file. Two MatchArm-deletion mutants on that match arm were unkillable *because the
+arm already did nothing*. Fixed and pinned by per-language extraction tests.
 
-## Notes
+### Survivor kills by module
 
-- The `walk_files_respects_limit` test caught both `+=` → `*=` and `>=` → `<` simultaneously
-  (the two mutants at lines 567-568), since either one causes `walk_files` to visit 0 files.
-- `cap_bytes` (line 539) has the same `>` / `>=` / `Vec::truncate` false-positive class already
-  documented in the coder-sandbox report.
-- The 4 unviable mutants were in zero-test-coverage regions (not exercised by any test).
+- **repo_map.rs** (112 → 7): golden PageRank distributions — including a config whose
+  personalization sums to three, so normalization is observable rather than a fixed
+  point — personalization boost matrix (path-only / symbol-only / chat), graph edge
+  weights and pair deduplication, tag name-length bounds with one-based lines,
+  ts/js/jsx/go query health, task-term classification, rank bar formatting,
+  min-source-files boundary, path-vs-body scoring under the file cap, context-map
+  routing and evidence ordering (`name×4 > file×2 > snippet×1`, zero-score exclusion,
+  `min(max/3, 384)` budget), truncation message arithmetic counted from the overflow
+  point, both strict-greater budget guards pinned at exact fit (header and blank lines
+  ride free — token accounting starts at zero), and walk depth/skip-list/size ceilings.
+- **hashline.rs** (81 → 16, of which 13 equivalents): exact normalization output,
+  full-tag golden hash with clamped lengths, JSON-quoted error previews,
+  MV/section-header termination of PUT bodies, blank-row layout rules (per-blank-row
+  empty payloads; leading/trailing blanks are layout), comment skipping between ops,
+  exact bounds-validation messages distinguishing an empty file from an out-of-range
+  anchor, BOF inserting into one-line non-empty files instead of replacing them,
+  EOF phantom handling with first-changed tracking.
+- **git.rs** (15 → 2): Display renders the message; agent commits carry the liberado
+  identity through `--format`; named-file commits stage only those files; empty
+  pathspecs rejected at the tool layer; local push/fetch keep stdout quiet;
+  fast-forward merges narrate; log format routing passes `%s` through while `""`
+  falls back to the walk.
+- **fuzzy_match.rs** (14 → 4): golden Levenshtein pairs, taller-than-content targets,
+  equal-height near misses, tied windows stay ambiguous with earliest-best, odd-unit
+  indent rounding.
+
+## Accepted residue (equivalent or transport-bound)
+
+Documented per-function in test-file comments where the reasoning fits:
+
+- **pagerank/personalization scalar cancellation**: base shares cancel under
+  normalization; the total-positive invariant always holds for positive inputs.
+- **hashline**: nested re-checks subsume weakened guards (`line > line_count` inside a
+  coarser arm); unsigned arithmetic cannot go negative; peek loops converge from
+  either start; `i != 0 ≡ i > 0`.
+- **walk caps**: `MAX_SCAN_FILES` boundary needs a 5001-file fixture — observationally
+  equivalent below the cap, not worth slowing every mutant run for.
+- **fuzzy ties**: `>` vs `>=` into `second_best` stores the same f64 either way.
+- The remaining bulk sits in `lib.rs`'s tool surface (grep/read/untracked-section/
+  preflight plumbing) — next campaign tier.
