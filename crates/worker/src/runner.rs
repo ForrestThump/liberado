@@ -12,7 +12,7 @@ use std::sync::Arc;
 use liberado_coder_agent::assemble_production_run;
 use liberado_coder_core::{CoderBackend, CoderTask};
 use liberado_config_loader::ProviderProfile;
-use liberado_delegate_contract::{TaskId, TaskRecord, TaskSpec, TaskStatus, WorkerHealth};
+use liberado_delegate_contract::{TaskId, TaskRecord, TaskSpec, TaskStatus};
 use liberado_forge::ForgeClient;
 
 use crate::ask::{AnswerMailbox, AskDelegator, TaskDelegatorCtx};
@@ -201,12 +201,19 @@ async fn prepare_and_run(ctx: &RunContext, spec: &TaskSpec, shape: RunShape) -> 
         .mark_running(&spec.id, &session_id)
         .map_err(|error| format!("record running state: {error}"))?;
 
-    let branch = branch_name(spec);
+    let branch = naming::branch_name(spec);
     let worktree = worktree_path(ctx, &spec.id);
     let clone_dir = repo_dir(ctx, &spec.repository);
 
-    ensure_clone(ctx, &clone_dir, &spec.repository).await?;
-    ensure_worktree(ctx, spec, &branch, shape.reuse_worktree).await?;
+    // One clone cache serves every task of a repository; two concurrent fetches
+    // race on the same remote-tracking refs and git refuses the second update.
+    // Clone mutation is therefore serialized per repository (live finding 2026-08-26:
+    // "cannot lock ref refs/remotes/origin/main" killed one of two parallel tasks).
+    with_repo_lock(&spec.repository, async || {
+        ensure_clone(ctx, &clone_dir, &spec.repository).await?;
+        ensure_worktree(ctx, spec, &branch, shape.reuse_worktree).await
+    })
+    .await?;
 
     let backend = ctx.backends.backend_for(TaskDelegatorCtx {
         task_id: spec.id.clone(),
@@ -262,6 +269,27 @@ async fn ensure_worktree(
     git::create_worktree(&clone_dir, branch, &worktree, &spec.base_branch)
         .await
         .map_err(|error| format!("create worktree at {branch}: {error}"))
+}
+
+/// Per-repository critical section around clone-cache mutations (fetch/clone/
+/// worktree creation). The map itself is process-global; entries are cheap and
+/// never removed — repositories per worker are few.
+pub(crate) async fn with_repo_lock<T>(
+    repo: &str,
+    body: impl AsyncFnOnce() -> Result<T, String>,
+) -> Result<T, String> {
+    static LOCKS: std::sync::OnceLock<
+        std::sync::Mutex<std::collections::HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
+    > = std::sync::OnceLock::new();
+    let locks = LOCKS.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+    let entry = locks
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .entry(repo.to_string())
+        .or_default()
+        .clone();
+    let _guard = entry.lock().await;
+    (body)().await
 }
 
 async fn ensure_clone(
@@ -358,34 +386,6 @@ fn worktree_path(ctx: &RunContext, id: &TaskId) -> PathBuf {
     ctx.settings.worktrees_dir().join(&id.0)
 }
 
-/// Branch shape per plan §7.4, honoring the grant's namespace override.
-pub fn branch_name(spec: &TaskSpec) -> String {
-    let namespace = spec
-        .grant
-        .branch_namespace
-        .clone()
-        .unwrap_or_else(|| spec.id.short());
-    format!("delegate/{}/{}", namespace, slugify(&spec.goal))
-}
-
-/// Git-ref-safe kebab of the goal's leading words, capped at 40 characters.
-pub fn slugify(text: &str) -> String {
-    let mut slug = String::new();
-    for c in text.chars() {
-        if c.is_ascii_alphanumeric() {
-            slug.push(c.to_ascii_lowercase());
-        } else if slug.ends_with('-') || slug.is_empty() {
-            continue;
-        } else {
-            slug.push('-');
-        }
-        if slug.len() >= 40 {
-            break;
-        }
-    }
-    slug.trim_matches('-').to_string()
-}
-
 fn first_line(text: &str) -> &str {
     text.lines().next().unwrap_or(text)
 }
@@ -430,20 +430,14 @@ fn is_worker_local(path: &str) -> bool {
         .any(|prefix| path == *prefix || path.starts_with(&format!("{prefix}/")))
 }
 
-/// Health payload builder kept off the HTTP layer so tests pin it directly.
-pub fn health_payload() -> WorkerHealth {
-    WorkerHealth {
-        status: "ok".to_string(),
-        version: env!("CARGO_PKG_VERSION").to_string(),
-        fingerprint: crate::build_fingerprint(),
-    }
-}
-
 #[cfg(test)]
 mod tests;
 
 #[path = "runner/pr.rs"]
 mod pr;
+
+#[path = "runner/naming.rs"]
+mod naming;
 
 #[path = "runner/preflight.rs"]
 mod preflight;

@@ -76,7 +76,7 @@ async fn bearer_auth(
 }
 
 async fn health(State(_state): State<Arc<AppState>>) -> Json<WorkerHealth> {
-    Json(runner::health_payload())
+    Json(health_payload())
 }
 
 async fn submit(State(state): State<Arc<AppState>>, Json(spec): Json<TaskSpec>) -> Response {
@@ -178,6 +178,15 @@ async fn task_events(State(state): State<Arc<AppState>>, Path(task_id): Path<Str
     Sse::new(Box::pin(stream))
         .keep_alive(KeepAlive::new().interval(std::time::Duration::from_secs(15)))
         .into_response()
+}
+
+/// Health payload builder kept off the HTTP layer so tests pin it directly.
+pub fn health_payload() -> WorkerHealth {
+    WorkerHealth {
+        status: "ok".to_string(),
+        version: env!("CARGO_PKG_VERSION").to_string(),
+        fingerprint: crate::build_fingerprint(),
+    }
 }
 
 /// Encode one [`WorkerEvent`] as SSE. The frame's event name is the kind's serde tag;

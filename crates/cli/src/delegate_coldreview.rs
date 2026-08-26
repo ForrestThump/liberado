@@ -261,7 +261,7 @@ pub(super) fn parse_kickback_args(
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--body" => flags.body = args.next().ok_or("--body needs a value")?,
-            "--comment" => flags.comment = true,
+            "--comment" | "--post" => flags.comment = true,
             "--forge-url" => {
                 flags.forge_url = Some(args.next().ok_or("--forge-url needs a value")?)
             }

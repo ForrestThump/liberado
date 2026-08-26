@@ -258,19 +258,9 @@ impl ForgeClient for GiteaForge {
     }
 
     async fn diff(&self, pr: &PrRef) -> Result<String, ForgeError> {
-        // Gitea serves `.diff` as plain text off the HTML route, not the API prefix.
-        let url = format!(
-            "{}/repos/{}/pulls/{}.diff",
-            self.base_url,
-            pr.repo.api_segment(),
-            pr.number
-        );
-        let response = self
-            .http
-            .get(&url)
-            .header("Authorization", format!("token {}", self.token))
-            .send()
-            .await?;
+        // `.diff` is plain text, not JSON, so it cannot go through `json()`.
+        let url = self.repos_api(&pr.repo, &format!("pulls/{}.diff", pr.number));
+        let response = self.send(reqwest::Method::GET, url.clone(), None).await?;
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
         if !status.is_success() {

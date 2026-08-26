@@ -15,7 +15,8 @@ use liberado_forge::{
     CheckStates, ForgeClient, ForgeError, MergeCommit, MergeMethod, OpenPr, PrRef,
 };
 
-use super::{RunContext, branch_name, slugify};
+use super::naming::slugify;
+use super::{RunContext, naming::branch_name};
 use crate::config::WorkerSettings;
 use crate::queue::TaskStore;
 
@@ -735,3 +736,6 @@ async fn passing_preflight_steps_land_in_the_pr_body() {
         opened[0].body
     );
 }
+
+#[path = "tests_lock.rs"]
+mod locks;
