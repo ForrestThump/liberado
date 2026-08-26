@@ -244,3 +244,14 @@ fn provider_from_config_none_paths() {
     let config = keyed_config("declared", vec![profile]);
     assert!(provider_from_config(&config).is_none());
 }
+
+/// The Some path stays live too: with the key present the provider is built
+/// and returned, exercising the tracing::info block and the Some arm.
+#[test]
+fn provider_from_config_some_path() {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let _key = KeyGuard::set();
+    let config = keyed_config("declared", vec![profile("declared", "m")]);
+    let provider = provider_from_config(&config);
+    assert!(provider.is_some(), "a keyed profile builds a provider");
+}
