@@ -220,3 +220,27 @@ fn dispatch_packs_build_when_a_provider_is_configured_and_stay_none_without_one(
         "configured dispatcher+subagent providers must assemble a dispatch pack"
     );
 }
+
+/// The None paths stay honest: an unknown provider with no deepseek
+/// fallback resolves to no provider, and a declared profile whose key is
+/// absent from the environment builds nothing rather than panicking.
+#[test]
+fn provider_from_config_none_paths() {
+    let _guard = ENV_LOCK.lock().unwrap();
+
+    // Unknown name, no deepseek declared: the ? arm returns early.
+    let config = keyed_config("missing", vec![profile("other", "m")]);
+    assert!(provider_from_config(&config).is_none());
+
+    // Declared profile whose API key env is unset in this process. A name
+    // unique to this test cannot be set by a concurrent suite member, so
+    // reading its absence needs no guard beyond the env lock above.
+    const ABSENT_KEY_ENV: &str = "LIBERADO_SURVIVOR_ABSENT_KEY_9F3A";
+    unsafe {
+        std::env::remove_var(ABSENT_KEY_ENV);
+    }
+    let mut profile = profile("declared", "m");
+    profile.api_key_env = ABSENT_KEY_ENV.to_string();
+    let config = keyed_config("declared", vec![profile]);
+    assert!(provider_from_config(&config).is_none());
+}
