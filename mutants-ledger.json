@@ -1638,6 +1638,21 @@
         "timeout": 6,
         "unviable": 26
       }
+    },
+    {
+      "package": "liberado-coder-agent",
+      "commit": "de9b6329cf5d24225054e4e613d17a9507faa0fb",
+      "recorded_at": "2026-08-26",
+      "command": "cargo mutants -p liberado-coder-agent --cap-lints true --timeout 90 --minimum-test-timeout 90 --in-place -- --lib",
+      "tool_version": "27.0.0",
+      "scope": "package",
+      "counts": {
+        "viable": 700,
+        "caught": 683,
+        "survived": 13,
+        "timeout": 4,
+        "unviable": 124
+      }
     }
   ]
 }
