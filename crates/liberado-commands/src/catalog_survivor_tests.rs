@@ -64,7 +64,9 @@ fn filter_matches_by_insert_not_only_name() {
         filter_commands("/session ")
     );
     assert!(
-        filter_commands("/theme ").iter().any(|spec| spec.name == "/theme"),
+        filter_commands("/theme ")
+            .iter()
+            .any(|spec| spec.name == "/theme"),
         "insert-only match lost (theme): {:?}",
         filter_commands("/theme ")
     );
