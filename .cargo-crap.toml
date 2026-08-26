@@ -12,6 +12,9 @@
 # `threshold` is the hard ceiling for *new* functions (`--fail-above`). The
 # per-function ratchet is `--fail-regression` against the baseline, which is
 # how scores go down and stay down. Lower this ceiling once the tail is gone.
+# Do not set `min` here. `liberado ci crap` passes `--min 10` only on the
+# Linux regression compare; a config `min` would also strip low scores from
+# baseline writes and hide a 4→50 jump as a new function under the ceiling.
 #
 # `missing = skip`: a function llvm-cov did not instrument (typically a
 # `#[cfg]` that is off on this OS) is omitted instead of scored at 0%. That

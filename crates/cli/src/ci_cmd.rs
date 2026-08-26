@@ -20,6 +20,8 @@
 //! Coverage is host-sensitive. Non-Linux `just ci` / `liberado ci crap` checks
 //! the 150 ceiling only (`--fail-above`). The per-function ratchet
 //! (`--fail-regression`) runs on Linux, which is GitHub's Ubuntu job.
+//! A current score below 10 is not a regression: cargo-crap `--min` drops it
+//! before the detector runs, so a 4→5 move does not fail the job.
 //!
 //! `just ci` is `cargo run -p liberado-cli -- ci`. On Windows, `cargo test` cannot
 //! overwrite a running `target/debug/liberado.exe` (Access is denied). A second
@@ -52,6 +54,12 @@ const EXTRACT_MAX_LINES: usize = liberado_coder_core::FAILURE_EXTRACT_MAX_LINES;
 /// New-function / `--fail-above` ceiling. Must match `.cargo-crap.toml` `threshold`.
 const CRAP_CEILING: &str = "150";
 
+/// cargo-crap `--min` keeps functions with `crap >= min`. Passing 10 drops a
+/// current score below 10, so a 4→5 move is not a regression. Do not put this
+/// in `.cargo-crap.toml`: that file is also read when writing the baseline, and
+/// a filtered write would make a 4→50 jump look like a new function under 150.
+const CRAP_REGRESSION_MIN: &str = "10";
+
 /// llvm-cov flags live here, never after `--`. After `--` they become
 /// test-binary arguments, and libtest rejects them (`Unrecognized option`).
 /// `--ignore-run-fail` still writes the LCOV when a test is red (the test
@@ -72,9 +80,10 @@ const LLVM_COV_ARGS: &[&str] = &[
 const CRAP_REGRESSION_HINT: &str = "\
 CRAP check failed. A function's score went up vs crap-baseline.json \
 (per-function ratchet: 50 cannot become 60, even under the 150 ceiling). \
-cargo-crap named the functions above. Split the function or add tests until \
-each score is at or below its baseline. Do not raise the baseline. \
-`just ci` will not rewrite it while this check is red. Fix locally, then push.";
+A current score below 10 is ignored. cargo-crap named the functions above. \
+Split the function or add tests until each score is at or below its baseline. \
+Do not raise the baseline. `just ci` will not rewrite it while this check is red. \
+Fix locally, then push.";
 
 /// Printed after `cargo crap` exits non-zero when the baseline is still empty.
 const CRAP_CEILING_HINT: &str = "\
@@ -84,8 +93,8 @@ Split it or add tests. New functions must land at or below 150.";
 /// One-line GitHub Actions annotation (newlines are not legal in `::error`).
 const CRAP_REGRESSION_GH: &str = "\
 A function CRAP score went up vs crap-baseline.json (per-function ratchet). \
-Split the function or add tests. Do not raise the baseline. \
-Linux `just ci` or this Ubuntu job is the check that matches the file.";
+Scores below 10 are ignored. Split the function or add tests. \
+Do not raise the baseline. Linux `just ci` or this Ubuntu job is the check that matches the file.";
 
 /// Banner when this host is not Linux: do not run `--fail-regression` here.
 const CRAP_HOST_CEILING_ONLY: &str = "\
@@ -98,7 +107,7 @@ A green Linux `liberado ci ratchet` fills the per-function ratchet.";
 
 const CRAP_COMPARE_SUMMARY: &str = "\
 [liberado ci] CRAP compare against crap-baseline.json \
-(per-function ratchet on Linux; 150 is the new-function ceiling)";
+(per-function ratchet on Linux; scores below 10 are ignored; 150 is the new-function ceiling)";
 
 const CRAP_CEILING_GH: &str = "\
 A function is above the 150 CRAP ceiling. Split it or add tests. \
@@ -331,7 +340,13 @@ fn compare_args(fail_regression: bool) -> Vec<&'static str> {
         CRAP_CEILING,
     ];
     if fail_regression {
-        args.extend_from_slice(&["--baseline", BASELINE_FILE, "--fail-regression"]);
+        args.extend_from_slice(&[
+            "--min",
+            CRAP_REGRESSION_MIN,
+            "--baseline",
+            BASELINE_FILE,
+            "--fail-regression",
+        ]);
     }
     args
 }

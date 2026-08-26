@@ -3,11 +3,12 @@
 use super::{
     BASELINE_FILE, CI_LOG_FILE, CRAP_CEILING, CRAP_CEILING_GH, CRAP_CEILING_HINT,
     CRAP_COMPARE_SUMMARY, CRAP_EMPTY_BASELINE, CRAP_HOST_CEILING_ONLY, CRAP_REGRESSION_GH,
-    CRAP_REGRESSION_HINT, CiLog, EXTRACT_MAX_LINES, LCOV_FILE, LLVM_COV_ARGS, StageOutcome,
-    announce_compare, baseline_has_entries, compare_args, compare_banners, compare_to_baseline,
-    crap_failure_hint, emit_crap_failure, exe_lives_in_cargo_target, extract_ci_failures, git,
-    porcelain_path, relativize_json_file, relativize_lcov, repo_relative_source_path,
-    repository_root, run_cmd, stage_ratcheted_baseline, uses_per_function_ratchet,
+    CRAP_REGRESSION_HINT, CRAP_REGRESSION_MIN, CiLog, EXTRACT_MAX_LINES, LCOV_FILE, LLVM_COV_ARGS,
+    StageOutcome, announce_compare, baseline_has_entries, compare_args, compare_banners,
+    compare_to_baseline, crap_failure_hint, emit_crap_failure, exe_lives_in_cargo_target,
+    extract_ci_failures, git, porcelain_path, relativize_json_file, relativize_lcov,
+    repo_relative_source_path, repository_root, run_cmd, stage_ratcheted_baseline,
+    uses_per_function_ratchet,
 };
 use liberado_common::process::std_command;
 use std::fs;
@@ -280,7 +281,10 @@ fn cargo_target_exe_is_the_image_cargo_test_would_overwrite() {
 fn regression_hint_tells_an_agent_not_to_raise_the_baseline() {
     assert!(CRAP_REGRESSION_HINT.contains("per-function"));
     assert!(CRAP_REGRESSION_HINT.contains("just ci"));
+    assert!(CRAP_REGRESSION_HINT.contains("below 10"));
     assert!(CRAP_REGRESSION_HINT.contains("Do not raise the baseline"));
+    assert!(CRAP_REGRESSION_GH.contains("below 10"));
+    assert!(CRAP_COMPARE_SUMMARY.contains("below 10"));
     assert!(CRAP_CEILING_HINT.contains(CRAP_CEILING));
     assert!(CRAP_REGRESSION_GH.contains("Ubuntu"));
     assert!(CRAP_CEILING_GH.contains(CRAP_CEILING));
@@ -299,12 +303,33 @@ fn compare_args_always_enforce_the_150_ceiling() {
     assert!(ceiling.contains(&"--threshold"));
     assert!(ceiling.contains(&CRAP_CEILING));
     assert!(!ceiling.contains(&"--fail-regression"));
+    assert!(
+        !ceiling.contains(&"--min"),
+        "ceiling-only must not hide low scores from a later reader of the argv"
+    );
     let ratchet = compare_args(true);
     assert!(ratchet.contains(&"--fail-above"));
     assert!(ratchet.contains(&"--threshold"));
     assert!(ratchet.contains(&CRAP_CEILING));
     assert!(ratchet.contains(&"--fail-regression"));
     assert!(ratchet.contains(&"--baseline"));
+    assert!(ratchet.contains(&"--min"));
+    assert!(ratchet.contains(&CRAP_REGRESSION_MIN));
+}
+
+#[test]
+fn regression_compare_drops_current_scores_below_ten() {
+    assert_eq!(CRAP_REGRESSION_MIN, "10");
+    let ratchet = compare_args(true);
+    let min_at = ratchet
+        .iter()
+        .position(|&flag| flag == "--min")
+        .expect("--min is part of the ratchet argv");
+    assert_eq!(ratchet.get(min_at + 1), Some(&CRAP_REGRESSION_MIN));
+    assert!(
+        ratchet.contains(&"--fail-regression"),
+        "the floor only applies when the per-function detector runs"
+    );
 }
 
 /// A toml that still names a higher ceiling would let `cargo crap` (no flags)
@@ -321,6 +346,12 @@ fn cargo_crap_toml_threshold_matches_the_ci_ceiling() {
     assert!(
         toml.contains(&expected),
         ".cargo-crap.toml must set {expected}; got:\n{toml}"
+    );
+    assert!(
+        !toml
+            .lines()
+            .any(|line| line.trim_start().starts_with("min")),
+        "min in .cargo-crap.toml would also filter baseline writes; got:\n{toml}"
     );
 }
 
