@@ -95,3 +95,62 @@ fn reindent_shifts_every_line_by_the_anchor_delta() {
     let out2 = adjust_indentation(old, actual, new_shallow);
     assert_eq!(out2, "    one();\n            two();", "{out2:?}");
 }
+
+// ── edit distance ───────────────────────────────────────────────────────────
+
+/// Golden Levenshtein distances covering insertion runs, transpositions,
+/// substitutions, and the trivial edges.
+#[test]
+fn levenshtein_golden_pairs() {
+    assert_eq!(levenshtein("", ""), 0);
+    assert_eq!(levenshtein("", "x"), 1);
+    assert_eq!(levenshtein("abc", ""), 3);
+    assert_eq!(levenshtein("kitten", "sitting"), 3);
+    assert_eq!(levenshtein("flaw", "lawn"), 2);
+    assert_eq!(levenshtein("ab", "ba"), 2);
+    assert_eq!(levenshtein("abcdef", "abcdef"), 0);
+}
+
+// ── window matching ─────────────────────────────────────────────────────────
+
+/// A target taller than the content cannot match anywhere.
+#[test]
+fn taller_target_is_not_found() {
+    let outcome = find_match("only\none", "a\nb\nc", true, 0.5);
+    assert!(matches!(outcome, MatchOutcome::NotFound { closest: None }));
+}
+
+/// An equal-height near miss is found fuzzily: the window loop must still
+/// run when lengths match exactly.
+#[test]
+fn equal_height_near_miss_matches_fuzzily() {
+    let outcome = find_match("alpha\nbeta", "alpha\nbets", true, 0.6);
+    assert!(
+        matches!(outcome, MatchOutcome::Fuzzy(_)),
+        "expected a fuzzy hit: {outcome:?}"
+    );
+}
+
+/// Two equally-scoring windows stay ambiguous and report the *first* one as
+/// best: strict improvement is what keeps the earliest window ahead.
+#[test]
+fn tied_windows_report_first_best_and_stay_ambiguous() {
+    use MatchOutcome::*;
+    let content = "abd\nQQQQQQQ\nabd";
+    match find_match(content, "abc", true, 0.6) {
+        Ambiguous { count, best } => {
+            assert_eq!(count, 2, "{best:?}");
+            assert_eq!(best.start_line, 1, "earliest window wins ties");
+            assert_eq!(best.actual_text, "abd");
+        }
+        other => panic!("expected ambiguity across two windows: {other:?}"),
+    }
+}
+
+/// An offset that is not a multiple of the unit separates the ceiling
+/// branch from the round-to-nearest one: 4 over unit 3 rounds to 1.
+#[test]
+fn odd_unit_depths_round_down_through_the_min_branch() {
+    let odd = ["a", "   b", "    c"];
+    assert_eq!(relative_indent_depths(&odd), vec![0, 1, 1]);
+}

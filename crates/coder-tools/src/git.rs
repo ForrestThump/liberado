@@ -435,6 +435,9 @@ pub fn diff_patch(root: &Path) -> Result<String, GitError> {
 mod git_tests;
 
 #[cfg(test)]
+#[path = "git_error_tests.rs"]
+mod error_survivor_tests;
+#[cfg(test)]
 #[cfg(test)]
 #[path = "tool_survivor_tests.rs"]
 mod tool_survivor_tests;
