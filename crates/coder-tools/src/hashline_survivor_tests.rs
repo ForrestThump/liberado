@@ -317,3 +317,29 @@ fn empty_file_bof_and_eof_end_to_end() {
     assert_eq!(after, "HEAD\nTAIL");
     assert_eq!(first, Some(1));
 }
+
+#[test]
+fn strip_keyword_matches_the_bare_keyword() {
+    // `s.len() == keyword.len()` is a hit: empty rest is allowed. `<=` would
+    // reject the bare keyword before the equality check runs.
+    assert_eq!(strip_keyword("CUT", "CUT"), Some(""));
+    assert_eq!(strip_keyword("PUT", "PUT"), Some(""));
+    assert_eq!(strip_keyword("CUT 1", "CUT"), Some(" 1"));
+    assert!(strip_keyword("CU", "CUT").is_none());
+}
+
+#[test]
+fn put_body_line_ending_with_bracket_is_payload_not_a_header() {
+    // The stop condition is `is_op_header || (starts_with('[') && ends_with(']'))`.
+    // Turning the inner `&&` into `||` treats any line that merely ends with `]`
+    // as the next section, so `+hello]` would never land in the PUT.
+    let patch = "[f.txt#TAG1]\nPUT <1:\n+hello]\n";
+    let sections = parse_patch(patch).expect("a payload that ends with ] is still payload");
+    assert_eq!(
+        sections[0].edits,
+        vec![Edit::InsertBof {
+            text: "hello]".into()
+        }],
+        "{sections:?}"
+    );
+}

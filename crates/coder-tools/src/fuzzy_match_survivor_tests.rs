@@ -154,3 +154,37 @@ fn odd_unit_depths_round_down_through_the_min_branch() {
     let odd = ["a", "   b", "    c"];
     assert_eq!(relative_indent_depths(&odd), vec![0, 1, 1]);
 }
+
+#[test]
+fn indent_unit_uses_the_gap_from_the_minimum_not_the_sum() {
+    // indents [1, 2, 4]: min 1, original steps [0, 1, 3], unit 1, depths [0, 1, 3].
+    // Adding the minimum instead yields steps [2, 3, 5], unit 2, depths [0, 1, 2].
+    let lines = [" a", "  b", "    c"];
+    let depths = relative_indent_depths(&lines);
+    assert_eq!(depths, vec![0, 1, 3], "{depths:?}");
+}
+
+#[test]
+fn depth_rounding_divides_by_the_unit_not_taking_remainder() {
+    // indents [0, 3] with unit 3: (3 - 0 + 1) / 3 = 1. Remainder 3 % 3 = 0 would collapse
+    // the deeper line to the same depth as the shallow one.
+    let lines = ["a", "   b"];
+    let depths = relative_indent_depths(&lines);
+    assert_eq!(depths, vec![0, 1], "{depths:?}");
+}
+
+#[test]
+fn tab_indented_actual_keeps_tabs_when_the_anchor_was_spaces() {
+    let old = "    fn a() {}\n    fn b() {}\n";
+    let actual = "\tfn a() {}\n\tfn b() {}\n";
+    let new = "    fn a() {}\n    fn c() {}\n";
+    let out = adjust_indentation(old, actual, new);
+    assert!(
+        out.contains('\t'),
+        "the file's tab indent is preserved: {out:?}"
+    );
+    assert!(
+        !out.contains("    fn"),
+        "spaces from the model must not win over tabs in the file: {out:?}"
+    );
+}

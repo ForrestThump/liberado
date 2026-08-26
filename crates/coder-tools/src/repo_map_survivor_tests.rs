@@ -184,6 +184,26 @@ fn rank_definitions_multiplies_pagerank_by_reference_weight() {
     approx(ranked[0].rank, 2.0_f64.sqrt(), "Widget rank");
 }
 
+#[test]
+fn rank_definitions_keeps_the_matching_name_not_a_sibling() {
+    // Two defs in one file. The finder must match on name (`==`), not pick the
+    // first other definition (`!=`).
+    let tags = vec![tag("a.rs", "Alpha", true, 3), tag("a.rs", "Beta", true, 9)];
+    let graph = build_dep_graph(&tags);
+    let scores = vec![1.0];
+    let ranked = rank_definitions(&graph, &scores);
+    let alpha = ranked
+        .iter()
+        .find(|d| d.name == "Alpha")
+        .expect("Alpha is ranked");
+    let beta = ranked
+        .iter()
+        .find(|d| d.name == "Beta")
+        .expect("Beta is ranked");
+    assert_eq!(alpha.line, 3, "{ranked:?}");
+    assert_eq!(beta.line, 9, "{ranked:?}");
+}
+
 /// `count_ref_files` counts *distinct files* holding a non-definition tag,
 /// ignoring defining files and unrelated names.
 #[test]
