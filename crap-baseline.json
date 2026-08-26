@@ -817,8 +817,8 @@
       "function": "handle_session_new",
       "line": 856,
       "cyclomatic": 2.0,
-      "coverage": 96.0,
-      "crap": 2.000256,
+      "coverage": 94.0,
+      "crap": 2.000864,
       "crate": "liberado-acp-bridge"
     },
     {
@@ -1762,8 +1762,8 @@
       "function": "sessions_dir",
       "line": 46,
       "cyclomatic": 2.0,
-      "coverage": 88.88888888888889,
-      "crap": 2.0054869684499312,
+      "coverage": 100.0,
+      "crap": 2.0,
       "crate": "liberado-acp-bridge"
     },
     {
@@ -2032,8 +2032,8 @@
       "function": "build_provider_from_profile",
       "line": 92,
       "cyclomatic": 4.0,
-      "coverage": 57.14285714285714,
-      "crap": 5.259475218658892,
+      "coverage": 71.42857142857143,
+      "crap": 4.373177842565598,
       "crate": "liberado-bootstrap"
     },
     {
@@ -2095,8 +2095,8 @@
       "function": "provider_from_config",
       "line": 53,
       "cyclomatic": 4.0,
-      "coverage": 55.55555555555556,
-      "crap": 5.404663923182442,
+      "coverage": 88.88888888888889,
+      "crap": 4.021947873799726,
       "crate": "liberado-bootstrap"
     },
     {
@@ -4577,7 +4577,7 @@
     {
       "file": "crates/cli/src/mutants_cmd.rs",
       "function": "OutcomesFile::counts",
-      "line": 403,
+      "line": 357,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -4585,17 +4585,8 @@
     },
     {
       "file": "crates/cli/src/mutants_cmd.rs",
-      "function": "append_campaign",
-      "line": 282,
-      "cyclomatic": 2.0,
-      "coverage": 100.0,
-      "crap": 2.0,
-      "crate": "liberado-cli"
-    },
-    {
-      "file": "crates/cli/src/mutants_cmd.rs",
       "function": "base_entry",
-      "line": 504,
+      "line": 458,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -4604,7 +4595,7 @@
     {
       "file": "crates/cli/src/mutants_cmd.rs",
       "function": "build_health",
-      "line": 433,
+      "line": 387,
       "cyclomatic": 7.0,
       "coverage": 100.0,
       "crap": 7.0,
@@ -4613,7 +4604,7 @@
     {
       "file": "crates/cli/src/mutants_cmd.rs",
       "function": "build_mutants_command",
-      "line": 190,
+      "line": 201,
       "cyclomatic": 7.0,
       "coverage": 92.3076923076923,
       "crap": 7.022303140646336,
@@ -4622,7 +4613,7 @@
     {
       "file": "crates/cli/src/mutants_cmd.rs",
       "function": "commit_is_ancestor",
-      "line": 551,
+      "line": 505,
       "cyclomatic": 2.0,
       "coverage": 100.0,
       "crap": 2.0,
@@ -4631,7 +4622,7 @@
     {
       "file": "crates/cli/src/mutants_cmd.rs",
       "function": "current_commit",
-      "line": 370,
+      "line": 324,
       "cyclomatic": 4.0,
       "coverage": 90.0,
       "crap": 4.016,
@@ -4639,17 +4630,8 @@
     },
     {
       "file": "crates/cli/src/mutants_cmd.rs",
-      "function": "dedupe_campaigns",
-      "line": 331,
-      "cyclomatic": 1.0,
-      "coverage": 100.0,
-      "crap": 1.0,
-      "crate": "liberado-cli"
-    },
-    {
-      "file": "crates/cli/src/mutants_cmd.rs",
       "function": "enrich_drift",
-      "line": 527,
+      "line": 481,
       "cyclomatic": 5.0,
       "coverage": 100.0,
       "crap": 5.0,
@@ -4658,7 +4640,7 @@
     {
       "file": "crates/cli/src/mutants_cmd.rs",
       "function": "enrich_historical",
-      "line": 516,
+      "line": 470,
       "cyclomatic": 2.0,
       "coverage": 90.0,
       "crap": 2.004,
@@ -4667,7 +4649,7 @@
     {
       "file": "crates/cli/src/mutants_cmd.rs",
       "function": "format_counts",
-      "line": 681,
+      "line": 635,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -4676,7 +4658,7 @@
     {
       "file": "crates/cli/src/mutants_cmd.rs",
       "function": "git_shortstat",
-      "line": 579,
+      "line": 533,
       "cyclomatic": 4.0,
       "coverage": 73.68421052631578,
       "crap": 4.291587694999271,
@@ -4684,17 +4666,8 @@
     },
     {
       "file": "crates/cli/src/mutants_cmd.rs",
-      "function": "load_ledger",
-      "line": 288,
-      "cyclomatic": 5.0,
-      "coverage": 92.85714285714286,
-      "crap": 5.009110787172012,
-      "crate": "liberado-cli"
-    },
-    {
-      "file": "crates/cli/src/mutants_cmd.rs",
       "function": "next_crate",
-      "line": 133,
+      "line": 141,
       "cyclomatic": 9.0,
       "coverage": 100.0,
       "crap": 9.0,
@@ -4703,7 +4676,7 @@
     {
       "file": "crates/cli/src/mutants_cmd.rs",
       "function": "package_campaigns_by_package",
-      "line": 486,
+      "line": 440,
       "cyclomatic": 2.0,
       "coverage": 100.0,
       "crap": 2.0,
@@ -4712,16 +4685,7 @@
     {
       "file": "crates/cli/src/mutants_cmd.rs",
       "function": "package_from_outcomes_bytes",
-      "line": 392,
-      "cyclomatic": 4.0,
-      "coverage": 100.0,
-      "crap": 4.0,
-      "crate": "liberado-cli"
-    },
-    {
-      "file": "crates/cli/src/mutants_cmd.rs",
-      "function": "parse_include_all",
-      "line": 83,
+      "line": 346,
       "cyclomatic": 4.0,
       "coverage": 100.0,
       "crap": 4.0,
@@ -4730,7 +4694,7 @@
     {
       "file": "crates/cli/src/mutants_cmd.rs",
       "function": "record",
-      "line": 91,
+      "line": 98,
       "cyclomatic": 6.0,
       "coverage": 69.23076923076923,
       "crap": 7.048702776513427,
@@ -4739,7 +4703,7 @@
     {
       "file": "crates/cli/src/mutants_cmd.rs",
       "function": "record_campaign",
-      "line": 227,
+      "line": 238,
       "cyclomatic": 13.0,
       "coverage": 98.07692307692308,
       "crap": 13.001201923076923,
@@ -4748,7 +4712,7 @@
     {
       "file": "crates/cli/src/mutants_cmd.rs",
       "function": "render_historical_only",
-      "line": 626,
+      "line": 580,
       "cyclomatic": 3.0,
       "coverage": 100.0,
       "crap": 3.0,
@@ -4757,7 +4721,7 @@
     {
       "file": "crates/cli/src/mutants_cmd.rs",
       "function": "render_most_drift",
-      "line": 644,
+      "line": 598,
       "cyclomatic": 4.0,
       "coverage": 100.0,
       "crap": 4.0,
@@ -4766,7 +4730,7 @@
     {
       "file": "crates/cli/src/mutants_cmd.rs",
       "function": "render_never_campaigned",
-      "line": 614,
+      "line": 568,
       "cyclomatic": 3.0,
       "coverage": 100.0,
       "crap": 3.0,
@@ -4775,7 +4739,7 @@
     {
       "file": "crates/cli/src/mutants_cmd.rs",
       "function": "render_report",
-      "line": 604,
+      "line": 558,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -4784,7 +4748,7 @@
     {
       "file": "crates/cli/src/mutants_cmd.rs",
       "function": "report",
-      "line": 123,
+      "line": 130,
       "cyclomatic": 6.0,
       "coverage": 100.0,
       "crap": 6.0,
@@ -4793,7 +4757,7 @@
     {
       "file": "crates/cli/src/mutants_cmd.rs",
       "function": "resolve_crate",
-      "line": 361,
+      "line": 315,
       "cyclomatic": 2.0,
       "coverage": 100.0,
       "crap": 2.0,
@@ -4802,7 +4766,7 @@
     {
       "file": "crates/cli/src/mutants_cmd.rs",
       "function": "rev_list_count",
-      "line": 559,
+      "line": 513,
       "cyclomatic": 5.0,
       "coverage": 73.68421052631578,
       "crap": 5.455605773436361,
@@ -4811,25 +4775,25 @@
     {
       "file": "crates/cli/src/mutants_cmd.rs",
       "function": "run",
-      "line": 59,
+      "line": 63,
       "cyclomatic": 7.0,
-      "coverage": 31.57894736842105,
-      "crap": 22.69514506487826,
+      "coverage": 33.33333333333333,
+      "crap": 21.518518518518523,
       "crate": "liberado-cli"
     },
     {
       "file": "crates/cli/src/mutants_cmd.rs",
-      "function": "save_ledger",
-      "line": 342,
-      "cyclomatic": 2.0,
+      "function": "run_exit",
+      "line": 88,
+      "cyclomatic": 3.0,
       "coverage": 100.0,
-      "crap": 2.0,
+      "crap": 3.0,
       "crate": "liberado-cli"
     },
     {
       "file": "crates/cli/src/mutants_cmd.rs",
       "function": "short_sha",
-      "line": 547,
+      "line": 501,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -4838,19 +4802,73 @@
     {
       "file": "crates/cli/src/mutants_cmd.rs",
       "function": "validate_outcomes",
-      "line": 309,
+      "line": 299,
       "cyclomatic": 4.0,
       "coverage": 92.3076923076923,
       "crap": 4.007282658170232,
       "crate": "liberado-cli"
     },
     {
-      "file": "crates/cli/src/mutants_cmd.rs",
-      "function": "write_atomic",
-      "line": 355,
+      "file": "crates/cli/src/mutants_cmd_ledger.rs",
+      "function": "LedgerLock::drop",
+      "line": 32,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
+      "crate": "liberado-cli"
+    },
+    {
+      "file": "crates/cli/src/mutants_cmd_ledger.rs",
+      "function": "append_campaign",
+      "line": 10,
+      "cyclomatic": 3.0,
+      "coverage": 100.0,
+      "crap": 3.0,
+      "crate": "liberado-cli"
+    },
+    {
+      "file": "crates/cli/src/mutants_cmd_ledger.rs",
+      "function": "dedupe_campaigns",
+      "line": 71,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "liberado-cli"
+    },
+    {
+      "file": "crates/cli/src/mutants_cmd_ledger.rs",
+      "function": "ledger_lock",
+      "line": 39,
+      "cyclomatic": 3.0,
+      "coverage": 100.0,
+      "crap": 3.0,
+      "crate": "liberado-cli"
+    },
+    {
+      "file": "crates/cli/src/mutants_cmd_ledger.rs",
+      "function": "load_ledger",
+      "line": 50,
+      "cyclomatic": 5.0,
+      "coverage": 92.85714285714286,
+      "crap": 5.009110787172012,
+      "crate": "liberado-cli"
+    },
+    {
+      "file": "crates/cli/src/mutants_cmd_ledger.rs",
+      "function": "save_ledger",
+      "line": 82,
+      "cyclomatic": 3.0,
+      "coverage": 100.0,
+      "crap": 3.0,
+      "crate": "liberado-cli"
+    },
+    {
+      "file": "crates/cli/src/mutants_cmd_ledger.rs",
+      "function": "write_atomic",
+      "line": 95,
+      "cyclomatic": 2.0,
+      "coverage": 87.5,
+      "crap": 2.0078125,
       "crate": "liberado-cli"
     },
     {
@@ -4869,6 +4887,15 @@
       "cyclomatic": 3.0,
       "coverage": 0.0,
       "crap": 12.0,
+      "crate": "liberado-cli"
+    },
+    {
+      "file": "crates/cli/src/mutants_cmd_run.rs",
+      "function": "parse_include_all",
+      "line": 98,
+      "cyclomatic": 4.0,
+      "coverage": 100.0,
+      "crap": 4.0,
       "crate": "liberado-cli"
     },
     {
@@ -6883,8 +6910,8 @@
       "function": "take_workspace_checkpoint",
       "line": 1247,
       "cyclomatic": 3.0,
-      "coverage": 92.85714285714286,
-      "crap": 3.003279883381924,
+      "coverage": 100.0,
+      "crap": 3.0,
       "crate": "liberado-coder-agent"
     },
     {
@@ -7621,8 +7648,8 @@
       "function": "CodingSessionPack::run_one_attempt",
       "line": 539,
       "cyclomatic": 5.0,
-      "coverage": 87.09677419354838,
-      "crap": 5.053707495552348,
+      "coverage": 90.32258064516128,
+      "crap": 5.022657849686147,
       "crate": "liberado-coder-agent"
     },
     {
@@ -9934,8 +9961,8 @@
       "function": "ShadowGit::run_git",
       "line": 252,
       "cyclomatic": 3.0,
-      "coverage": 75.0,
-      "crap": 3.140625,
+      "coverage": 100.0,
+      "crap": 3.0,
       "crate": "liberado-coder-sandbox"
     },
     {
@@ -10456,8 +10483,8 @@
       "function": "add_worktree_on_branch",
       "line": 59,
       "cyclomatic": 8.0,
-      "coverage": 98.07692307692308,
-      "crap": 8.00045516613564,
+      "coverage": 100.0,
+      "crap": 8.0,
       "crate": "liberado-coder-sandbox"
     },
     {
@@ -10861,8 +10888,8 @@
       "function": "find_match",
       "line": 209,
       "cyclomatic": 13.0,
-      "coverage": 93.84615384615384,
-      "crap": 13.039384615384616,
+      "coverage": 95.3846153846154,
+      "crap": 13.016615384615385,
       "crate": "liberado-coder-tools"
     },
     {
@@ -11023,8 +11050,8 @@
       "function": "fetch",
       "line": 332,
       "cyclomatic": 3.0,
-      "coverage": 0.0,
-      "crap": 12.0,
+      "coverage": 80.0,
+      "crap": 3.072,
       "crate": "liberado-coder-tools"
     },
     {
@@ -11104,8 +11131,8 @@
       "function": "status",
       "line": 133,
       "cyclomatic": 8.0,
-      "coverage": 15.789473684210526,
-      "crap": 46.21898235894445,
+      "coverage": 78.94736842105263,
+      "crap": 8.597171599358507,
       "crate": "liberado-coder-tools"
     },
     {
@@ -11113,8 +11140,8 @@
       "function": "tree_index_code",
       "line": 178,
       "cyclomatic": 5.0,
-      "coverage": 0.0,
-      "crap": 30.0,
+      "coverage": 57.14285714285714,
+      "crap": 6.96793002915452,
       "crate": "liberado-coder-tools"
     },
     {
@@ -11950,8 +11977,8 @@
       "function": "glob_match",
       "line": 2186,
       "cyclomatic": 10.0,
-      "coverage": 86.95652173913044,
-      "crap": 10.221911728445797,
+      "coverage": 100.0,
+      "crap": 10.0,
       "crate": "liberado-coder-tools"
     },
     {
@@ -12958,8 +12985,8 @@
       "function": "Delivery::label",
       "line": 226,
       "cyclomatic": 3.0,
-      "coverage": 80.0,
-      "crap": 3.072,
+      "coverage": 100.0,
+      "crap": 3.0,
       "crate": "liberado-common"
     },
     {
@@ -14542,8 +14569,8 @@
       "function": "append_grant_to_overlay",
       "line": 351,
       "cyclomatic": 1.0,
-      "coverage": 0.0,
-      "crap": 2.0,
+      "coverage": 100.0,
+      "crap": 1.0,
       "crate": "liberado-config"
     },
     {
@@ -14560,8 +14587,8 @@
       "function": "capability_catalog_from_config",
       "line": 489,
       "cyclomatic": 2.0,
-      "coverage": 0.0,
-      "crap": 6.0,
+      "coverage": 100.0,
+      "crap": 2.0,
       "crate": "liberado-config"
     },
     {
@@ -14569,8 +14596,8 @@
       "function": "capability_zone_name",
       "line": 418,
       "cyclomatic": 4.0,
-      "coverage": 83.33333333333334,
-      "crap": 4.0740740740740735,
+      "coverage": 100.0,
+      "crap": 4.0,
       "crate": "liberado-config"
     },
     {
@@ -14632,8 +14659,8 @@
       "function": "load_config",
       "line": 190,
       "cyclomatic": 12.0,
-      "coverage": 70.0,
-      "crap": 15.888000000000002,
+      "coverage": 82.0,
+      "crap": 12.839808,
       "crate": "liberado-config"
     },
     {
@@ -14659,8 +14686,8 @@
       "function": "load_or_create_proposal_key",
       "line": 591,
       "cyclomatic": 4.0,
-      "coverage": 0.0,
-      "crap": 20.0,
+      "coverage": 92.3076923076923,
+      "crap": 4.007282658170232,
       "crate": "liberado-config"
     },
     {
@@ -14668,8 +14695,8 @@
       "function": "load_section",
       "line": 431,
       "cyclomatic": 4.0,
-      "coverage": 73.68421052631578,
-      "crap": 4.291587694999271,
+      "coverage": 100.0,
+      "crap": 4.0,
       "crate": "liberado-config"
     },
     {
@@ -14704,8 +14731,8 @@
       "function": "persist_proposal_key",
       "line": 613,
       "cyclomatic": 5.0,
-      "coverage": 0.0,
-      "crap": 30.0,
+      "coverage": 87.5,
+      "crap": 5.048828125,
       "crate": "liberado-config"
     },
     {
@@ -15892,8 +15919,8 @@
       "function": "CronEventSource::name",
       "line": 124,
       "cyclomatic": 1.0,
-      "coverage": 0.0,
-      "crap": 2.0,
+      "coverage": 100.0,
+      "crap": 1.0,
       "crate": "liberado-cron"
     },
     {
@@ -17503,8 +17530,8 @@
       "function": "Executor::run_reads",
       "line": 1864,
       "cyclomatic": 7.0,
-      "coverage": 90.9090909090909,
-      "crap": 7.036814425244177,
+      "coverage": 94.54545454545456,
+      "crap": 7.007951915852742,
       "crate": "liberado-executor"
     },
     {
@@ -17719,8 +17746,8 @@
       "function": "char_boundary_at_or_before",
       "line": 114,
       "cyclomatic": 3.0,
-      "coverage": 71.42857142857143,
-      "crap": 3.2099125364431487,
+      "coverage": 100.0,
+      "crap": 3.0,
       "crate": "liberado-executor"
     },
     {
@@ -17827,8 +17854,8 @@
       "function": "grant_recovery_bonus",
       "line": 836,
       "cyclomatic": 2.0,
-      "coverage": 85.71428571428571,
-      "crap": 2.011661807580175,
+      "coverage": 100.0,
+      "crap": 2.0,
       "crate": "liberado-executor"
     },
     {
@@ -17908,8 +17935,8 @@
       "function": "sanitize_spill_label",
       "line": 84,
       "cyclomatic": 2.0,
-      "coverage": 86.66666666666667,
-      "crap": 2.0094814814814814,
+      "coverage": 100.0,
+      "crap": 2.0,
       "crate": "liberado-executor"
     },
     {
@@ -17989,8 +18016,8 @@
       "function": "truncate_head",
       "line": 122,
       "cyclomatic": 1.0,
-      "coverage": 0.0,
-      "crap": 2.0,
+      "coverage": 100.0,
+      "crap": 1.0,
       "crate": "liberado-executor"
     },
     {
@@ -18331,8 +18358,8 @@
       "function": "held_summary",
       "line": 828,
       "cyclomatic": 1.0,
-      "coverage": 0.0,
-      "crap": 2.0,
+      "coverage": 100.0,
+      "crap": 1.0,
       "crate": "liberado-executor"
     },
     {
@@ -20689,8 +20716,8 @@
       "function": "TunerConfig::load",
       "line": 118,
       "cyclomatic": 2.0,
-      "coverage": 5.263157894736842,
-      "crap": 5.401078874471498,
+      "coverage": 100.0,
+      "crap": 2.0,
       "crate": "liberado-heuristics-tuner"
     },
     {
@@ -20707,8 +20734,8 @@
       "function": "load_file_config",
       "line": 185,
       "cyclomatic": 3.0,
-      "coverage": 0.0,
-      "crap": 12.0,
+      "coverage": 50.0,
+      "crap": 4.125,
       "crate": "liberado-heuristics-tuner"
     },
     {
@@ -20752,8 +20779,8 @@
       "function": "resolve_scenario_filter",
       "line": 256,
       "cyclomatic": 3.0,
-      "coverage": 0.0,
-      "crap": 12.0,
+      "coverage": 30.0,
+      "crap": 6.087,
       "crate": "liberado-heuristics-tuner"
     },
     {
@@ -25576,8 +25603,8 @@
       "function": "OpenAiCompatibleProvider::from_env",
       "line": 135,
       "cyclomatic": 2.0,
-      "coverage": 64.28571428571429,
-      "crap": 2.182215743440233,
+      "coverage": 100.0,
+      "crap": 2.0,
       "crate": "liberado-provider-openai-compat"
     },
     {
@@ -31327,8 +31354,8 @@
       "function": "ApprovalBot::spawn_typing_pulse",
       "line": 310,
       "cyclomatic": 2.0,
-      "coverage": 66.66666666666666,
-      "crap": 2.1481481481481484,
+      "coverage": 100.0,
+      "crap": 2.0,
       "crate": "liberado-telegram-approvals"
     },
     {
@@ -34339,11 +34366,11 @@
     }
   ],
   "diagnostics": {
-    "analyzed_files": 431,
-    "lcov_files": 320,
-    "matched_files": 319,
+    "analyzed_files": 437,
+    "lcov_files": 321,
+    "matched_files": 320,
     "source_only": {
-      "count": 112,
+      "count": 117,
       "examples": [
         "crates/acp-bridge/src/coding_run_tests.rs",
         "crates/acp-bridge/src/grant_tests.rs",

@@ -396,22 +396,28 @@
     "cyclomatic": 27
   },
   "crates/cli/src/mutants_cmd.rs": {
-    "ploc": 586,
-    "lloc": 178,
-    "functions": 50,
-    "cyclomatic": 142
+    "ploc": 548,
+    "lloc": 163,
+    "functions": 44,
+    "cyclomatic": 129
+  },
+  "crates/cli/src/mutants_cmd_ledger.rs": {
+    "ploc": 70,
+    "lloc": 22,
+    "functions": 9,
+    "cyclomatic": 23
   },
   "crates/cli/src/mutants_cmd_run.rs": {
-    "ploc": 63,
-    "lloc": 13,
-    "functions": 5,
-    "cyclomatic": 17
+    "ploc": 73,
+    "lloc": 14,
+    "functions": 6,
+    "cyclomatic": 21
   },
   "crates/cli/src/mutants_cmd_tests.rs": {
-    "ploc": 621,
-    "lloc": 230,
-    "functions": 34,
-    "cyclomatic": 38
+    "ploc": 689,
+    "lloc": 250,
+    "functions": 40,
+    "cyclomatic": 46
   },
   "crates/cli/src/readiness_cmd.rs": {
     "ploc": 364,
@@ -1014,13 +1020,19 @@
     "cyclomatic": 19
   },
   "crates/coder-tools/src/fuzzy_match.rs": {
-    "ploc": 352,
+    "ploc": 355,
     "lloc": 137,
     "functions": 37,
     "cyclomatic": 87
   },
+  "crates/coder-tools/src/fuzzy_match_survivor_tests.rs": {
+    "ploc": 61,
+    "lloc": 28,
+    "functions": 7,
+    "cyclomatic": 12
+  },
   "crates/coder-tools/src/git.rs": {
-    "ploc": 349,
+    "ploc": 353,
     "lloc": 94,
     "functions": 33,
     "cyclomatic": 113
@@ -1055,6 +1067,12 @@
     "functions": 12,
     "cyclomatic": 24
   },
+  "crates/coder-tools/src/tool_survivor_tests.rs": {
+    "ploc": 265,
+    "lloc": 111,
+    "functions": 16,
+    "cyclomatic": 19
+  },
   "crates/common/src/approval_ledger.rs": {
     "ploc": 137,
     "lloc": 26,
@@ -1080,10 +1098,16 @@
     "cyclomatic": 16
   },
   "crates/common/src/dispatch.rs": {
-    "ploc": 314,
+    "ploc": 317,
     "lloc": 30,
     "functions": 24,
     "cyclomatic": 44
+  },
+  "crates/common/src/dispatch_label_tests.rs": {
+    "ploc": 12,
+    "lloc": 2,
+    "functions": 1,
+    "cyclomatic": 2
   },
   "crates/common/src/error.rs": {
     "ploc": 15,
@@ -1223,9 +1247,15 @@
     "functions": 41,
     "cyclomatic": 80
   },
+  "crates/config/src/config_survivor_tests.rs": {
+    "ploc": 216,
+    "lloc": 104,
+    "functions": 22,
+    "cyclomatic": 28
+  },
   "crates/config/src/lib.rs": {
-    "ploc": 920,
-    "lloc": 270,
+    "ploc": 929,
+    "lloc": 276,
     "functions": 80,
     "cyclomatic": 135
   },
@@ -1386,10 +1416,16 @@
     "cyclomatic": 80
   },
   "crates/cron/src/lib.rs": {
-    "ploc": 266,
+    "ploc": 269,
     "lloc": 82,
     "functions": 18,
     "cyclomatic": 35
+  },
+  "crates/cron/src/name_survivor_tests.rs": {
+    "ploc": 6,
+    "lloc": 2,
+    "functions": 1,
+    "cyclomatic": 2
   },
   "crates/daemon/src/debounce.rs": {
     "ploc": 84,
@@ -1512,10 +1548,16 @@
     "cyclomatic": 4
   },
   "crates/executor/src/lib.rs": {
-    "ploc": 4053,
+    "ploc": 4056,
     "lloc": 966,
     "functions": 275,
     "cyclomatic": 469
+  },
+  "crates/executor/src/lib_survivor_tests.rs": {
+    "ploc": 555,
+    "lloc": 183,
+    "functions": 45,
+    "cyclomatic": 51
   },
   "crates/executor/src/mvl.rs": {
     "ploc": 497,
@@ -1524,16 +1566,22 @@
     "cyclomatic": 92
   },
   "crates/executor/src/mvl_survivor_tests.rs": {
-    "ploc": 233,
-    "lloc": 88,
-    "functions": 22,
-    "cyclomatic": 23
+    "ploc": 275,
+    "lloc": 104,
+    "functions": 25,
+    "cyclomatic": 26
   },
   "crates/executor/src/risk_gated.rs": {
-    "ploc": 1394,
+    "ploc": 1397,
     "lloc": 331,
     "functions": 72,
     "cyclomatic": 132
+  },
+  "crates/executor/src/risk_gated_survivor_tests.rs": {
+    "ploc": 151,
+    "lloc": 27,
+    "functions": 11,
+    "cyclomatic": 17
   },
   "crates/harness-eval/src/adapter.rs": {
     "ploc": 19,
@@ -1644,10 +1692,16 @@
     "cyclomatic": 30
   },
   "crates/heuristics-tuner/src/config.rs": {
-    "ploc": 325,
+    "ploc": 328,
     "lloc": 58,
     "functions": 32,
     "cyclomatic": 53
+  },
+  "crates/heuristics-tuner/src/config_load_tests.rs": {
+    "ploc": 47,
+    "lloc": 12,
+    "functions": 6,
+    "cyclomatic": 14
   },
   "crates/heuristics-tuner/src/draft_proposal.rs": {
     "ploc": 422,

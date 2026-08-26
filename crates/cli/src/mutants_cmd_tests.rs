@@ -1,5 +1,6 @@
 //! Split from `mutants_cmd.rs` for module-health boundaries.
 
+use super::ledger::save_ledger;
 use super::*;
 
 fn init_git_repo(root: &Path) {
@@ -106,43 +107,6 @@ fn record_refuses_zero_viable_outcomes_so_a_crashed_run_cannot_shadow_the_last_c
     );
 }
 
-#[test]
-fn ledger_append_preserves_prior_rows() {
-    let dir = tempfile::tempdir().unwrap();
-    let root = dir.path();
-    fs::write(
-        root.join(LEDGER_FILE),
-        r#"{"schema":1,"campaigns":[{"package":"liberado-alpha","commit":null,"recorded_at":"2026-07-29","scope":"package","source":"markdown-seed","counts":{"viable":1,"caught":1,"survived":0,"timeout":0,"unviable":0}}]}"#,
-    )
-    .unwrap();
-    append_campaign(
-        root,
-        Campaign {
-            package: "liberado-alpha".into(),
-            commit: Some("abc123".into()),
-            recorded_at: "2026-08-21".into(),
-            command: Some("cargo mutants -p liberado-alpha".into()),
-            tool_version: Some("27.1.0".into()),
-            scope: "package".into(),
-            counts: Counts {
-                viable: 4,
-                caught: 4,
-                survived: 0,
-                timeout: 0,
-                unviable: 0,
-            },
-            source: None,
-        },
-    )
-    .unwrap();
-    let ledger = load_ledger(root).unwrap();
-    assert_eq!(ledger.campaigns.len(), 2);
-    assert!(ledger.campaigns[0].commit.is_none());
-    assert_eq!(ledger.campaigns[1].commit.as_deref(), Some("abc123"));
-}
-
-/// A partial outcomes file (killed mid-campaign) must be refused even though
-/// every count is plausible: accounted != declared total.
 #[test]
 fn record_refuses_partial_outcomes_below_the_declared_total() {
     let dir = tempfile::tempdir().unwrap();
@@ -701,51 +665,6 @@ fn grouping_keeps_only_viable_package_scope_rows() {
 /// exact duplicates so the on-disk artifact stays append-only AND
 /// duplicate-free, whatever git history looked like mid-merge.
 #[test]
-fn save_ledger_drops_exact_duplicate_rows() {
-    let root = tempfile::tempdir().unwrap();
-    let mk = |pkg: &str, survived: u32| Campaign {
-        package: pkg.to_string(),
-        commit: Some("a".repeat(40)),
-        recorded_at: "2026-08-24".to_string(),
-        command: Some("cargo mutants -p x".to_string()),
-        tool_version: Some("27.1.0".to_string()),
-        scope: "package".to_string(),
-        counts: Counts {
-            viable: 10,
-            caught: 10 - survived,
-            survived,
-            timeout: 0,
-            unviable: 0,
-        },
-        source: None,
-    };
-    let ledger = Ledger {
-        schema: 1,
-        campaigns: vec![
-            mk("liberado-a", 3),
-            mk("liberado-b", 5),
-            mk("liberado-a", 3), // exact duplicate of the first row
-        ],
-    };
-    save_ledger(root.path(), &ledger).expect("save succeeds");
-
-    let reloaded = load_ledger(root.path()).expect("reload");
-    assert_eq!(reloaded.campaigns.len(), 2, "the duplicate is gone");
-    assert_eq!(reloaded.campaigns[0].package, "liberado-a");
-    assert_eq!(reloaded.campaigns[1].package, "liberado-b");
-
-    // Distinct rows with equal survivors are NOT duplicates.
-    let varied = Ledger {
-        schema: 1,
-        campaigns: vec![mk("liberado-x", 4), mk("liberado-y", 4)],
-    };
-    save_ledger(root.path(), &varied).expect("save succeeds");
-    assert_eq!(load_ledger(root.path()).unwrap().campaigns.len(), 2);
-}
-
-// ── report/next flag parsing ─────────────────────────────────────────────────
-
-#[test]
 fn parse_include_all_accepts_nothing_or_all_only() {
     let none: Vec<String> = vec![];
     assert!(!run_support::parse_include_all(&mut none.iter().cloned(), "u").unwrap());
@@ -768,28 +687,17 @@ fn parse_include_all_accepts_nothing_or_all_only() {
 /// ledger's name), save_ledger must return the error instead of panicking,
 /// and must not leave pid-temp litter beside it.
 #[test]
-fn save_ledger_fails_cleanly_when_the_target_cannot_be_renamed() {
-    let dir = tempfile::tempdir().unwrap();
-    std::fs::create_dir(dir.path().join(LEDGER_FILE)).unwrap();
-    let ledger = Ledger {
-        schema: 1,
-        campaigns: vec![],
-    };
+fn run_exit_succeeds_on_an_appended_campaign_and_fails_when_incomplete() {
+    let appended = run_exit(RecordOutcome::Appended {
+        package: "liberado-x".into(),
+        commit: "abc".into(),
+    });
+    assert!(appended.is_ok(), "recorded campaigns are success");
 
-    let outcome = save_ledger(dir.path(), &ledger);
-
+    let skipped = run_exit(RecordOutcome::SkippedIncomplete);
+    let err = skipped.expect_err("incomplete outcomes must fail the command");
     assert!(
-        outcome.is_err(),
-        "renaming onto a directory must fail: {outcome:?}"
-    );
-    let litter: Vec<String> = std::fs::read_dir(dir.path())
-        .unwrap()
-        .filter_map(|e| e.ok())
-        .map(|e| e.file_name().to_string_lossy().to_string())
-        .filter(|n| n.ends_with(".tmp"))
-        .collect();
-    assert!(
-        litter.is_empty(),
-        "no inert temp files may remain: {litter:?}"
+        err.contains("no complete outcomes"),
+        "the message must name the cause: {err}"
     );
 }

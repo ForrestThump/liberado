@@ -9,7 +9,7 @@ use std::process::ExitStatus;
 
 use liberado_common::process::std_command;
 
-use super::{Campaign, LEDGER_FILE, Ledger, MUTANTS_TARGET_DIR, RecordOutcome, RunProfile};
+use super::{MUTANTS_TARGET_DIR, RecordOutcome, RunProfile};
 
 const USAGE_RUN: &str = "usage: liberado mutants run [--lib-only] <crate-dir>";
 
@@ -77,7 +77,7 @@ pub(super) fn spawn_mutants(
 }
 
 /// Say what recording did, and say it honestly when cargo-mutants failed.
-pub(super) fn announce_record(outcome: RecordOutcome, cargo_success: bool) {
+pub(super) fn announce_record(outcome: &RecordOutcome, cargo_success: bool) {
     match outcome {
         RecordOutcome::Appended { package, commit } => {
             eprintln!("[mutants] recorded campaign for {package} at {commit}");
@@ -104,53 +104,4 @@ pub(super) fn parse_include_all(
         Some("--all") => Ok(true),
         Some(other) => Err(format!("{usage} (got {other:?})")),
     }
-}
-
-/// Atomic ledger save: pid-unique temp file, then rename over the target.
-///
-/// Failures propagate (a campaign that cannot be recorded must fail the
-/// command, not panic mid-run) and the inert `.tmp` is removed.
-pub(super) fn write_ledger_atomically(
-    root: &Path,
-    bytes: &str,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let tmp = root.join(format!("{LEDGER_FILE}.{}.tmp", std::process::id()));
-    // Plain `and_then` plus a function path, not closures: keeps this
-    // module's own budgets headroom-friendly.
-    let outcome =
-        fs::write(&tmp, bytes).and_then(|()| fs::rename(&tmp, root.join(super::LEDGER_FILE)));
-    if outcome.is_err() {
-        let _ = fs::remove_file(&tmp);
-    }
-    outcome.map_err(std::convert::Into::into)
-}
-
-/// Deduplicate rows and atomically persist the ledger.
-pub(super) fn persist_ledger(
-    root: &Path,
-    ledger: &Ledger,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let ledger = Ledger {
-        schema: ledger.schema,
-        campaigns: dedupe_campaigns(ledger.campaigns.clone()),
-    };
-    let bytes = serde_json::to_string_pretty(&ledger)? + "\n";
-    write_ledger_atomically(root, &bytes)
-}
-
-/// Drop byte-identical duplicate rows before saving.
-///
-/// The ledger is append-only, but merges have pasted whole blocks twice (13
-/// duplicates at once during the campaign branch). A merge that unions both
-/// sides then re-saves goes through here, so the on-disk artifact can never
-/// keep a duplicate pair even when git history briefly contained one.
-fn dedupe_campaigns(campaigns: Vec<Campaign>) -> Vec<Campaign> {
-    let mut seen = std::collections::HashSet::new();
-    campaigns
-        .into_iter()
-        .filter(|c| {
-            let canonical = serde_json::to_string(c).expect("a ledger row serialises");
-            seen.insert(canonical)
-        })
-        .collect()
 }

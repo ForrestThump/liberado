@@ -11,6 +11,10 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 
+#[path = "mutants_cmd_ledger.rs"]
+mod ledger;
+use ledger::{append_campaign, load_ledger};
+
 pub const LEDGER_FILE: &str = "mutants-ledger.json";
 const OUTCOMES_FILE: &str = "mutants.out/outcomes.json";
 const MUTANTS_TARGET_DIR: &str = "target/mutants";
@@ -66,16 +70,29 @@ pub fn run(args: &mut impl Iterator<Item = String>) -> Result<(), Box<dyn std::e
     let command = build_mutants_command(&crate_info.name, invocation.profile);
     eprintln!("[mutants] running: {command}");
     let status = run_support::spawn_mutants(&root, &command)?;
-    run_support::announce_record(
-        record_campaign(
-            &root,
-            Some(&invocation.crate_dir),
-            Some(&command),
-            invocation.profile,
-        )?,
-        status.success(),
-    );
-    Ok(())
+    let outcome = record_campaign(
+        &root,
+        Some(&invocation.crate_dir),
+        Some(&command),
+        invocation.profile,
+    )?;
+    run_support::announce_record(&outcome, status.success());
+    run_exit(outcome).map_err(std::convert::Into::into)
+}
+
+/// Pure exit policy for one finished run: complete outcomes succeed (survivors
+/// are findings, not infrastructure failures); incomplete outcomes must fail
+/// the command, or `just mutants` would report a green campaign that never
+/// happened. Split out so the policy is unit-testable without spawning
+/// cargo-mutants.
+fn run_exit(outcome: RecordOutcome) -> Result<(), String> {
+    match outcome {
+        RecordOutcome::Appended { .. } => Ok(()),
+        RecordOutcome::SkippedIncomplete => Err(
+            "cargo mutants produced no complete outcomes (baseline failure or interrupted run); nothing recorded"
+                .to_string(),
+        ),
+    }
 }
 
 pub fn record(args: &mut impl Iterator<Item = String>) -> Result<(), Box<dyn std::error::Error>> {
@@ -273,27 +290,6 @@ fn record_campaign(
     Ok(RecordOutcome::Appended { package, commit })
 }
 
-fn append_campaign(root: &Path, campaign: Campaign) -> Result<(), Box<dyn std::error::Error>> {
-    let mut ledger = load_ledger(root)?;
-    ledger.campaigns.push(campaign);
-    save_ledger(root, &ledger)
-}
-
-pub fn load_ledger(root: &Path) -> Result<Ledger, Box<dyn std::error::Error>> {
-    let path = root.join(LEDGER_FILE);
-    if !path.is_file() {
-        return Ok(Ledger {
-            schema: 1,
-            campaigns: Vec::new(),
-        });
-    }
-    let ledger: Ledger = serde_json::from_slice(&fs::read(path)?)?;
-    if ledger.schema != 1 {
-        return Err(format!("unsupported {} schema {}", LEDGER_FILE, ledger.schema).into());
-    }
-    Ok(ledger)
-}
-
 /// Every tested mutant lands in exactly one of the four buckets; when the
 /// declared total is known and the buckets do not sum to it, the outcomes file
 /// is a partial write from a killed run.
@@ -314,12 +310,6 @@ fn validate_outcomes(counts: &Counts, total_mutants: u32) -> Option<RecordOutcom
         return Some(RecordOutcome::SkippedIncomplete);
     }
     None
-}
-
-// The body lives in run_support::persist_ledger; this delegate keeps the
-// historical name, call sites, and score at the root.
-fn save_ledger(root: &Path, ledger: &Ledger) -> Result<(), Box<dyn std::error::Error>> {
-    run_support::persist_ledger(root, ledger)
 }
 
 fn resolve_crate(root: &Path, crate_dir: &str) -> Result<CrateInfo, Box<dyn std::error::Error>> {

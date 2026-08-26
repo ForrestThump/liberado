@@ -431,3 +431,7 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "config_load_tests.rs"]
+mod load_tests;

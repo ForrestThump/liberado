@@ -564,3 +564,7 @@ mod proptest_tests {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "dispatch_label_tests.rs"]
+mod label_tests;

@@ -63,3 +63,6 @@ scripts/__pycache__/
 **/__pycache__/
 # Per-installation proposal-signing key (never commit an install secret).
 .proposal-key
+
+# OS-held lock file for ledger read-modify-write exclusion
+mutants-ledger.json.lock
