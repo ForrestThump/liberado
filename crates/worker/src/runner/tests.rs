@@ -170,6 +170,8 @@ fn harness() -> Harness {
         forge_insecure_tls: false,
         clone_base_url: Some(root.path().join("remote").to_string_lossy().into_owned()),
         max_concurrent: 2,
+        question_timeout_secs: 1,
+        max_open_questions: 3,
     });
     Harness {
         root,
@@ -202,7 +204,7 @@ async fn context(
     RunContext {
         settings: harness.settings.clone(),
         store,
-        backend: Arc::new(backend),
+        backends: Arc::new(crate::runner::FixedBackend(Arc::new(backend))),
         forge: Some(Arc::new(forge)),
     }
 }

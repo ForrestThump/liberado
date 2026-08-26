@@ -1,0 +1,21 @@
+[package]
+name = "liberado-inbox-spool"
+version = "0.1.0"
+description = "Append-only delegator inbox: machine-local spool of worker events with correlation dedupe, FIFO drain, and settle tracking."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+[package.metadata.liberado]
+# Layer role for the layer-rules test + crate-map generator (docs/architecture/contracts.md).
+role = "store"
+
+[dev-dependencies]
+tempfile = { workspace = true }

@@ -6,8 +6,8 @@
 
 use super::*;
 use liberado_coder_core::{
-    CoderRoleConfig, CoderRunConfig, CoderTask, CoderTrace, CommandPolicy, PathPolicy,
-    ProgressPolicy, SandboxSpec, VerdictStatus, WorkspaceRef,
+    CoderBackend, CoderRoleConfig, CoderRunConfig, CoderTask, CoderTrace, CommandPolicy,
+    LIBERADO_LOOP_BACKEND, PathPolicy, ProgressPolicy, SandboxSpec, VerdictStatus, WorkspaceRef,
 };
 use liberado_coder_sandbox::failure_identities;
 use liberado_provider::{CompletionResponse, MockProvider, ToolInvocation};

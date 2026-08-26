@@ -6,10 +6,12 @@
 //! `docs/spec/architecture/agentic-loops.md` and `docs/future-work/archive/agentic-mesh-hygiene-audit-2026-07-10.md`.
 
 pub mod assemble;
+mod backend;
 mod coding_goal;
 pub mod cold_review;
 mod completion_gate;
 mod critic;
+pub mod extension;
 mod fanout;
 mod finish_gate;
 mod gates;
@@ -30,6 +32,7 @@ pub use assemble::{
     AssembledRun, AssemblyProvenance, CriticPolicy, EmptyVerifiersPolicy, FieldSource,
     ProductionSurface, RepairPolicy, TraceDirPolicy, assemble_production_run,
 };
+pub use backend::LiberadoLoopBackend;
 
 pub use coding_goal::CodingGoalPayload;
 pub use cold_review::{
@@ -70,11 +73,10 @@ pub mod ship_preflight {
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-use async_trait::async_trait;
 use chrono::Utc;
 use liberado_coder_core::{
-    CoderBackend, CoderError, CoderEvent, CoderRoleConfig, CoderRunRequest, CoderRunResult,
-    CriticVerdict, LIBERADO_LOOP_BACKEND, resolve_verifier_specs,
+    CoderError, CoderEvent, CoderRoleConfig, CoderRunRequest, CoderRunResult, CriticVerdict,
+    resolve_verifier_specs,
 };
 use liberado_coder_tools::CodingToolRuntime;
 use liberado_common::Outcome;
@@ -110,40 +112,6 @@ impl CoderProviderFactory for SingleProviderFactory {
         _config: &CoderRoleConfig,
     ) -> Result<Arc<dyn Provider>, CoderError> {
         Ok(self.provider.clone())
-    }
-}
-
-/// Liberado's home-spun coding goal-session backend (`CoderBackend` implementation).
-#[derive(Clone)]
-pub struct LiberadoLoopBackend {
-    providers: Arc<dyn CoderProviderFactory>,
-}
-
-impl LiberadoLoopBackend {
-    pub fn new(provider: Arc<dyn Provider>) -> Self {
-        Self::with_provider_factory(Arc::new(SingleProviderFactory::new(provider)))
-    }
-
-    pub fn with_provider_factory(providers: Arc<dyn CoderProviderFactory>) -> Self {
-        Self { providers }
-    }
-}
-
-#[async_trait]
-impl CoderBackend for LiberadoLoopBackend {
-    fn name(&self) -> &str {
-        LIBERADO_LOOP_BACKEND
-    }
-
-    async fn run(&self, request: CoderRunRequest) -> Result<CoderRunResult, CoderError> {
-        // The attempt loop is separated from what comes after it so the session critic reads the
-        // *whole* run — including every repair attempt. The repair turns are the ones worth
-        // reading: an agent answering review feedback is under the most pressure to say "good
-        // catch, fixed" and move on, which is exactly the shape of the failure this looks for.
-        let config = request.config.clone();
-        let mut result = self.run_attempts(request).await?;
-        self.review_session_after_run(&config, &mut result).await;
-        Ok(result)
     }
 }
 
@@ -658,7 +626,7 @@ impl LiberadoLoopBackend {
         let session_id = trace::session_id(&request);
         let events = Arc::new(Mutex::new(vec![CoderEvent::SessionStarted {
             session_id: session_id.clone(),
-            backend: self.name().to_string(),
+            backend: self.backend_name().to_string(),
             task_id: request.task.id.clone(),
             at: Utc::now(),
         }]));
@@ -728,6 +696,7 @@ impl LiberadoLoopBackend {
         session_id: &str,
         events: &trace::EventLog,
         event_preview_max_chars: usize,
+        extensions: &[Arc<dyn extension::RuntimeExtension>],
     ) -> Result<WorkerRuntime, CoderError> {
         let workspace_root_in = request.workspace.root.clone();
         // Pass the task/session id so Worktree isolation gets a unique directory name (not the
@@ -779,7 +748,8 @@ impl LiberadoLoopBackend {
             events.clone(),
             progress.clone(),
             event_preview_max_chars,
-        );
+        )
+        .with_extensions(extensions);
         Ok(WorkerRuntime {
             effective_root,
             checkpoint_key,
@@ -861,8 +831,14 @@ impl LiberadoLoopBackend {
             baseline_sha,
             progress,
             runtime,
-        } = Self::prepare_worker_runtime(&request, &session_id, &events, event_preview_max_chars)
-            .await?;
+        } = Self::prepare_worker_runtime(
+            &request,
+            &session_id,
+            &events,
+            event_preview_max_chars,
+            &self.extensions,
+        )
+        .await?;
 
         let (provider, task) = self
             .build_worker_task(&request, &worker_role_name, &events)
@@ -962,7 +938,7 @@ impl LiberadoLoopBackend {
         );
 
         let result = CoderRunResult {
-            backend: self.name().to_string(),
+            backend: self.backend_name().to_string(),
             outcome: state.outcome,
             summary: state.summary,
             files_changed,
@@ -1296,8 +1272,8 @@ pub(crate) static DATA_DIR_ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex
 mod tests {
     use super::*;
     use liberado_coder_core::{
-        CoderRoleConfig, CoderRunConfig, CoderTask, CoderTrace, CommandPolicy, PathPolicy,
-        ProgressPolicy, SandboxSpec, WorkspaceRef,
+        CoderBackend, CoderRoleConfig, CoderRunConfig, CoderTask, CoderTrace, CommandPolicy,
+        LIBERADO_LOOP_BACKEND, PathPolicy, ProgressPolicy, SandboxSpec, WorkspaceRef,
     };
     use liberado_provider::{CompletionResponse, MockProvider, ProviderError, ToolInvocation};
     use serde_json::json;

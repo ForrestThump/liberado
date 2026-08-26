@@ -5928,6 +5928,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "liberado-inbox-spool"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "liberado-main-agent"
 version = "0.1.0"
 dependencies = [
@@ -6364,6 +6374,7 @@ dependencies = [
  "liberado-config-loader",
  "liberado-delegate-contract",
  "liberado-forge",
+ "liberado-inbox-spool",
  "liberado-provider",
  "liberado-provider-openai-compat",
  "serde",

@@ -58,12 +58,21 @@ async fn run() -> Result<(), String> {
     };
 
     let store = Arc::new(TaskStore::open(&args.data_dir).map_err(|error| error.to_string())?);
-    rescan_after_restart(&store, &settings, &profile, &forge).await?;
+    // One mailbox per process: restart-rescanned runs park on it just like fresh ones.
+    let mailbox = Arc::new(liberado_worker::ask::AnswerMailbox::default());
+    rescan_after_restart(&store, &mailbox, &settings, &profile, &forge).await?;
 
-    let run_ctx = RunContext::production(settings.clone(), store.clone(), profile, forge)?;
+    let run_ctx = RunContext::production(
+        settings.clone(),
+        store.clone(),
+        mailbox.clone(),
+        profile,
+        forge,
+    )?;
     let state = Arc::new(AppState {
         slots: Arc::new(tokio::sync::Semaphore::new(settings.max_concurrent)),
         settings: settings.clone(),
+        mailbox,
         store,
         run: run_ctx,
     });
@@ -96,6 +105,8 @@ fn settings_from_args(
         forge_insecure_tls: args.forge_insecure_tls,
         clone_base_url: args.clone_base_url.clone(),
         max_concurrent: args.max_concurrent,
+        question_timeout_secs: args.question_timeout_secs,
+        max_open_questions: args.max_open_questions,
     }
 }
 
@@ -104,6 +115,7 @@ fn settings_from_args(
 /// The worktree and any pushed branch survive either way.
 async fn rescan_after_restart(
     store: &Arc<TaskStore>,
+    mailbox: &Arc<liberado_worker::ask::AnswerMailbox>,
     settings: &Arc<WorkerSettings>,
     profile: &liberado_config_loader::ProviderProfile,
     forge: &Option<Arc<dyn liberado_forge::ForgeClient>>,
@@ -120,6 +132,7 @@ async fn rescan_after_restart(
                 let ctx = RunContext::production(
                     settings.clone(),
                     store.clone(),
+                    mailbox.clone(),
                     profile.clone(),
                     forge.clone(),
                 )?;

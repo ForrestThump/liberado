@@ -12,7 +12,7 @@ use crate::runner::RunContext;
 use axum::extract::Path;
 use axum::response::IntoResponse;
 use liberado_delegate_contract::WorkerEvent;
-use liberado_delegate_contract::{Acceptance, TaskBudget, TaskGrant, TaskId, TaskSpec};
+use liberado_delegate_contract::{Acceptance, Answer, TaskBudget, TaskGrant, TaskId, TaskSpec};
 
 fn spec(id: &str) -> TaskSpec {
     TaskSpec {
@@ -35,6 +35,21 @@ struct Harness {
     store: Arc<TaskStore>,
 }
 
+impl Harness {
+    /// Drive the answers handler directly (no TCP): the endpoint is thin over the
+    /// store + mailbox, and the mailbox round-trip has its own tests in `ask`.
+    async fn answer(&self, task_id: &str, answer: &Answer) -> axum::http::StatusCode {
+        use super::post_answer;
+        let response = post_answer(
+            State(Arc::clone(&self.state)),
+            Path(task_id.to_string()),
+            axum::Json(answer.clone()),
+        )
+        .await;
+        response.status()
+    }
+}
+
 fn harness() -> Harness {
     let tmp = tempfile::tempdir().expect("tempdir");
     let settings = Arc::new(WorkerSettings {
@@ -48,18 +63,21 @@ fn harness() -> Harness {
         forge_insecure_tls: false,
         clone_base_url: None,
         max_concurrent: 1,
+        question_timeout_secs: 1,
+        max_open_questions: 3,
     });
     let store = Arc::new(TaskStore::open(&settings.data_dir).expect("store"));
     // The runner is never invoked by these tests; events flow through the store.
     let run = RunContext {
         settings: settings.clone(),
         store: store.clone(),
-        backend: Arc::new(NoopBackend),
+        backends: Arc::new(crate::runner::FixedBackend(Arc::new(NoopBackend))),
         forge: None,
     };
     let state = Arc::new(AppState {
         slots: Arc::new(tokio::sync::Semaphore::new(1)),
         settings,
+        mailbox: Arc::new(crate::ask::AnswerMailbox::default()),
         store: store.clone(),
         run,
     });
@@ -183,4 +201,91 @@ async fn a_midrun_client_receives_replay_then_live_through_terminal() {
             "{event:?}"
         );
     }
+}
+
+#[tokio::test]
+async fn an_answer_settles_the_question_and_reports_delivery() {
+    use liberado_delegate_contract::{Question, QuestionOption};
+    let h = harness();
+    let task = TaskId("01ANSWERTEST".into());
+    let _ = h.store.submit(&spec("01ANSWERTEST")).expect("submit");
+    let _ = h
+        .store
+        .record_question(
+            &task,
+            Question {
+                id: "q1".into(),
+                correlation_id: String::new(),
+                task_id: task.clone(),
+                session_id: "sess".into(),
+                body: "left or right?".into(),
+                options: vec![QuestionOption {
+                    label: "left".into(),
+                    consequence: "fast".into(),
+                }],
+                default_option: None,
+            },
+        )
+        .expect("question recorded");
+    // A parked ask registers its waiter on the same mailbox the handler uses.
+    let parked = {
+        let state = Arc::clone(&h.state);
+        tokio::spawn(async move {
+            crate::ask::AnswerMailbox::wait(
+                state.mailbox.as_ref(),
+                "q1",
+                std::time::Duration::from_secs(5),
+            )
+            .await
+        })
+    };
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+    let status = h
+        .answer(
+            "01ANSWERTEST",
+            &Answer {
+                question_id: "q1".into(),
+                chosen_option: Some("left".into()),
+                body: "go left".into(),
+            },
+        )
+        .await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+    assert!(parked.await.expect("join").is_some(), "waiter got it");
+    assert_eq!(
+        h.store.open_questions(&task).expect("open"),
+        0,
+        "the endpoint persisted the answer"
+    );
+}
+
+#[tokio::test]
+async fn unknown_questions_and_unknown_tasks_are_rejected_honestly() {
+    let h = harness();
+    let _ = h.store.submit(&spec("01NOTASKETEST")).expect("submit");
+
+    let no_question = h
+        .answer(
+            "01NOTASKETEST",
+            &Answer {
+                question_id: "ghost".into(),
+                chosen_option: None,
+                body: String::new(),
+            },
+        )
+        .await;
+    assert_eq!(no_question, axum::http::StatusCode::NOT_FOUND);
+
+    let no_task = h
+        .answer(
+            "01ABSENTTASK",
+            &Answer {
+                question_id: "q1".into(),
+                chosen_option: None,
+                body: String::new(),
+            },
+        )
+        .await;
+    assert_eq!(no_task, axum::http::StatusCode::NOT_FOUND);
 }

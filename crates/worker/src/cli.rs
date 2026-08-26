@@ -23,6 +23,8 @@ pub struct Args {
     pub clone_base_url: Option<String>,
     pub token: String,
     pub max_concurrent: usize,
+    pub question_timeout_secs: u64,
+    pub max_open_questions: u32,
 }
 
 /// The type of [`std::env::args`] and [`std::env::var`], narrowed to what parsing needs.
@@ -73,6 +75,14 @@ pub fn parse_args(
         ),
         token: String::new(),
         max_concurrent: 2,
+        question_timeout_secs: env
+            .var("LIBERADO_WORKER_QUESTION_TIMEOUT_SECS")
+            .and_then(|raw| raw.parse().ok())
+            .unwrap_or(900),
+        max_open_questions: env
+            .var("LIBERADO_WORKER_MAX_OPEN_QUESTIONS")
+            .and_then(|raw| raw.parse().ok())
+            .unwrap_or(3),
     };
     let mut iter = argv;
     while let Some(flag) = iter.next() {
@@ -105,20 +115,35 @@ fn apply_flag(
             args.forge_insecure_tls = true;
             Ok(())
         }
-        "--max-concurrent" => {
-            args.max_concurrent = parse_max_concurrent(iter)?;
-            Ok(())
+        "--max-concurrent" | "--question-timeout-secs" | "--max-open-questions" => {
+            apply_numeric_flag(args, flag, iter)
         }
         other => Err(usage(format!("unknown argument: {other}"))),
     }
 }
 
-/// Parse the `--max-concurrent` value: present and numeric, or a named usage error.
-fn parse_max_concurrent(iter: &mut impl Iterator<Item = String>) -> Result<usize, String> {
-    iter.next()
-        .ok_or("--max-concurrent needs a value")?
-        .parse()
-        .map_err(|_| "--max-concurrent wants a number".to_string())
+/// Numeric flags share one arm so adding another costs the flag loop nothing; this
+/// helper owns their assignment.
+fn apply_numeric_flag(
+    args: &mut Args,
+    flag: &str,
+    iter: &mut impl Iterator<Item = String>,
+) -> Result<(), String> {
+    match flag {
+        "--max-concurrent" => args.max_concurrent = parse_number(iter, flag)?,
+        "--question-timeout-secs" => args.question_timeout_secs = parse_number(iter, flag)?,
+        other => args.max_open_questions = parse_number::<u32>(iter, other)?,
+    }
+    Ok(())
+}
+
+/// Parse any numeric flag value with the flag's name in the error.
+fn parse_number<T: std::str::FromStr>(
+    iter: &mut impl Iterator<Item = String>,
+    flag: &str,
+) -> Result<T, String> {
+    let raw = iter.next().ok_or_else(|| format!("{flag} needs a value"))?;
+    raw.parse().map_err(|_| format!("{flag} wants a number"))
 }
 
 /// Flags whose value lands in one string-ish field, named after the flag itself.
@@ -161,7 +186,8 @@ fn usage(message: impl std::fmt::Display) -> String {
     format!(
         "{message}\n\nusage: liberado-worker [--bind ADDR] [--data-dir PATH] [--config-dir PATH]\n\
          \x20                [--model NAME] [--forge-url URL] [--forge-token-env VAR]\n\
-         \x20                [--clone-base-url URL] [--token-env VAR] [--max-concurrent N]\n\n\
+         \x20                [--clone-base-url URL] [--token-env VAR] [--max-concurrent N]\n\
+         \x20                [--question-timeout-secs S] [--max-open-questions N]\n\n\
          Env: LIBERADO_WORKER_BIND LIBERADO_WORKER_TOKEN LIBERADO_DATA_DIR\n\
          \x20\x20\x20\x20 LIBERADO_CONFIG_DIR LIBERADO_CODER_PROVIDER LIBERADO_FORGE_URL LIBERADO_FORGE_TOKEN"
     )

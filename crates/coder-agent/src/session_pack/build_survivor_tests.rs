@@ -6,7 +6,8 @@
 
 use super::super::tests::RestoreLiberadoDataDir;
 use super::*;
-use crate::{CoderBackend, CoderRunResult};
+use crate::CoderRunResult;
+use liberado_coder_core::CoderBackend;
 use liberado_coder_core::CoderError;
 use liberado_session::{GoalSessionRecord, GoalSessionStore, HumanInput, SessionRecordStore};
 

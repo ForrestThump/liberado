@@ -257,6 +257,14 @@ pub struct SubmitOutcome {
     pub duplicate: bool,
 }
 
+/// Response to `POST {task_answers}`. `delivered = false` means the answer was
+/// persisted but no parked run is waiting — the worker restarted since the question,
+/// or it already timed out. The delegator reconciles through the status poll.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AnswerAck {
+    pub delivered: bool,
+}
+
 /// Liveness + build fingerprint (`GET /health`). The supervisor logs fingerprint
 /// mismatches loudly — a dispatched run tests the installed binary, not your working tree.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

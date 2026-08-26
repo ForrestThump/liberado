@@ -23,10 +23,12 @@
 //! `default_model = "auto"`) and every delegated run resolves to the best-ranked free
 //! model — the proxy refuses paid slugs loudly, so delegation cannot silently cost money.
 
+pub mod ask;
 pub mod cli;
 pub mod config;
 pub mod git;
 pub mod http;
+pub mod inbox;
 pub mod provider_factory;
 pub mod queue;
 pub mod runner;

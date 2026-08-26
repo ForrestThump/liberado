@@ -17,9 +17,24 @@
 
 use std::path::PathBuf;
 
-use liberado_delegate_contract::{EventKind, WorkerEvent};
+use liberado_delegate_contract::{
+    Answer, EventKind, Question, SubmitOutcome, TaskId, TaskRecord, TaskSpec, TaskStatus,
+    WorkerEvent,
+};
 
-use liberado_delegate_contract::{SubmitOutcome, TaskId, TaskRecord, TaskSpec, TaskStatus};
+/// A question and, when it has one, its answer. The storage unit under
+/// `<task>/questions/<question_id>.json`; also what a resumed reader finds on disk
+/// after either side of the exchange crashes.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct QuestionRecord {
+    pub question: Question,
+    #[serde(default)]
+    pub answer: Option<Answer>,
+    /// True when the answer was chosen by the worker's timeout fallback rather than
+    /// spoken by the delegator.
+    #[serde(default)]
+    pub timed_out_default: bool,
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum QueueError {
@@ -30,6 +45,8 @@ pub enum QueueError {
         context: String,
         source: serde_json::Error,
     },
+    #[error("question {0} not found")]
+    QuestionNotFound(String),
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -248,14 +265,29 @@ impl TaskStore {
         kind: EventKind,
         payload: serde_json::Value,
     ) -> Result<(), QueueError> {
+        self.journal_event(self.mint_event(id, kind, payload)?)
+    }
+
+    /// Build the event without touching disk: monotonic sequence + correlation id.
+    /// Callers that must embed the correlation into the payload (questions) mint
+    /// first and journal second; everyone else uses [`TaskStore::record_event`].
+    fn mint_event(
+        &self,
+        id: &TaskId,
+        kind: EventKind,
+        payload: serde_json::Value,
+    ) -> Result<WorkerEvent, QueueError> {
         let seq = self.next_seq(id)?;
-        let event = WorkerEvent {
+        Ok(WorkerEvent {
             kind,
             correlation_id: format!("delegate:{id}:{seq}"),
             task_id: id.clone(),
             payload,
-        };
-        let dir = self.task_dir(id);
+        })
+    }
+
+    fn journal_event(&self, event: WorkerEvent) -> Result<(), QueueError> {
+        let dir = self.task_dir(&event.task_id);
         use std::io::Write as _;
         let mut journal = std::fs::OpenOptions::new()
             .create(true)
@@ -264,15 +296,105 @@ impl TaskStore {
         writeln!(
             journal,
             "{}",
-            serde_json::to_string(&event).map_err(|source| {
-                QueueError::Json {
-                    context: "event serialization".into(),
-                    source,
-                }
+            serde_json::to_string(&event).map_err(|source| QueueError::Json {
+                context: "event serialization".into(),
+                source,
             })?
         )?;
         let _ = self.events.send(event);
         Ok(())
+    }
+
+    /// Persist a question and put it on the stream. The question file carries the
+    /// event's correlation id, so an inbox item, the journal line, and the stored
+    /// record all key on the same value.
+    pub fn record_question(
+        &self,
+        task_id: &TaskId,
+        mut question: Question,
+    ) -> Result<Question, QueueError> {
+        let event = self.mint_event(task_id, EventKind::Question, serde_json::Value::Null)?;
+        question.correlation_id = event.correlation_id.clone();
+        let payload = serde_json::json!({ "question": question });
+        self.journal_event(WorkerEvent { payload, ..event })?;
+        let dir = self.task_dir(task_id);
+        std::fs::create_dir_all(dir.join("questions"))?;
+        self.write_json(
+            &dir.join("questions").join(format!("{}.json", question.id)),
+            &QuestionRecord {
+                question: question.clone(),
+                answer: None,
+                timed_out_default: false,
+            },
+        )?;
+        Ok(question)
+    }
+
+    /// Store the answer to a question. `timed_out_default` marks answers the worker
+    /// chose itself from the question's declared default — the delegator never spoke.
+    pub fn record_answer(
+        &self,
+        task_id: &TaskId,
+        answer: &Answer,
+        timed_out_default: bool,
+    ) -> Result<QuestionRecord, QueueError> {
+        let path = self
+            .task_dir(task_id)
+            .join("questions")
+            .join(format!("{}.json", answer.question_id));
+        if !path.exists() {
+            return Err(QueueError::QuestionNotFound(answer.question_id.clone()));
+        }
+        let mut stored: QuestionRecord = self.read_json(&path)?;
+        stored.answer = Some(answer.clone());
+        stored.timed_out_default = timed_out_default;
+        self.write_json(&path, &stored)?;
+        self.record_event(
+            task_id,
+            EventKind::StatusChanged,
+            serde_json::json!({
+                "answered": {
+                    "question_id": answer.question_id,
+                    "chosen_option": answer.chosen_option,
+                    "timed_out_default": timed_out_default,
+                }
+            }),
+        )?;
+        Ok(stored)
+    }
+
+    /// Questions still awaiting an answer.
+    pub fn open_questions(&self, id: &TaskId) -> Result<u64, QueueError> {
+        let dir = self.task_dir(id).join("questions");
+        let mut open = 0;
+        let entries = match std::fs::read_dir(&dir) {
+            Ok(entries) => entries,
+            Err(_) => return Ok(0),
+        };
+        for entry in entries {
+            let record: QuestionRecord = self.read_json(&entry?.path())?;
+            if record.answer.is_none() {
+                open += 1;
+            }
+        }
+        Ok(open)
+    }
+
+    /// Put a `Blocked` marker on the stream, once per task no matter how many times
+    /// called: the delegator's inbox reports one blocked task, not twenty.
+    pub fn record_blocked_once(&self, id: &TaskId, reason: &str) -> Result<(), QueueError> {
+        let already = self
+            .replay(&id.0)?
+            .iter()
+            .any(|event| event.kind == EventKind::Blocked);
+        if already {
+            return Ok(());
+        }
+        self.record_event(
+            id,
+            EventKind::Blocked,
+            serde_json::json!({ "reason": reason }),
+        )
     }
 
     /// Monotonic per-task sequence, persisted so correlations stay stable across

@@ -15,6 +15,7 @@ use liberado_executor::ToolRuntime;
 use liberado_provider::{ToolDef, ToolInvocation};
 use liberado_session::SessionEventKind;
 
+use crate::extension::RuntimeExtension;
 use crate::progress::{ProgressAction, ProgressGuard};
 use crate::trace::{self, EventLog};
 
@@ -23,6 +24,9 @@ pub struct GuardedTracingRuntime {
     events: EventLog,
     progress: Arc<Mutex<ProgressGuard>>,
     preview_max_chars: usize,
+    /// Composition-root tools (e.g. the worker's `ask_delegator`), consulted before
+    /// the base runtime. Empty in every local run.
+    extensions: Vec<Arc<dyn RuntimeExtension>>,
 }
 
 impl GuardedTracingRuntime {
@@ -37,7 +41,44 @@ impl GuardedTracingRuntime {
             events,
             progress,
             preview_max_chars,
+            extensions: Vec::new(),
         }
+    }
+
+    /// Attach several extensions at construction time (the backend threads its
+    /// whole set through here).
+    pub fn with_extensions(mut self, extensions: &[Arc<dyn RuntimeExtension>]) -> Self {
+        self.extensions.extend(extensions.iter().cloned());
+        self
+    }
+
+    /// Extension tools appended after the base catalog.
+    fn extension_tools(&self) -> Vec<ToolDef> {
+        let mut tools = Vec::new();
+        for extension in &self.extensions {
+            tools.extend(extension.tools());
+        }
+        tools
+    }
+
+    /// The latched-fatal refusal for this call, if exploration is closed.
+    fn fatal_blocker(&self, call_name: &str) -> Option<String> {
+        let guard = self.progress.lock().expect("progress mutex poisoned");
+        guard
+            .fatal()
+            .filter(|_| !crate::progress::escapes_fatal(call_name))
+            .map(|fatal| fatal.message())
+    }
+
+    /// Extension tools answer before the base runtime sees the call; unclaimed
+    /// calls fall through.
+    async fn answer_call(&self, call: &ToolInvocation) -> Result<String, String> {
+        for extension in &self.extensions {
+            if let Some(claimed) = extension.invoke(call).await {
+                return claimed;
+            }
+        }
+        self.inner.invoke(call).await
     }
 }
 
@@ -46,23 +87,17 @@ use crate::live::emit as emit_live;
 #[async_trait]
 impl ToolRuntime for GuardedTracingRuntime {
     fn catalog(&self) -> Vec<ToolDef> {
-        self.inner.catalog()
+        let mut catalog = self.inner.catalog();
+        catalog.extend(self.extension_tools());
+        catalog
     }
 
     async fn invoke(&self, call: &ToolInvocation) -> Result<String, String> {
-        {
-            // A latched fatal refuses further *exploration*, which is the point — but it must not
-            // refuse the edit it is demanding. This used to return for every tool, ahead of
-            // `observe`, which made `observe`'s escape hatch dead code and left the deadlock it
-            // was written to fix fully live.
-            let guard = self.progress.lock().expect("progress mutex poisoned");
-            if let Some(fatal) = guard.fatal()
-                && !crate::progress::escapes_fatal(&call.name)
-            {
-                return Err(fatal.message());
-            }
+        // A latched fatal refuses further *exploration*, which is the point — but it must not
+        // refuse the edit it is demanding (`observe`'s escape hatch below depends on that).
+        if let Some(message) = self.fatal_blocker(&call.name) {
+            return Err(message);
         }
-
         // Two audiences, two sizes. The live stream feeds a chat pane a human is reading, so it
         // stays at `event_preview_max_chars`; the trace is the diagnostic record and keeps as much
         // as `TRACE_MAX_CHARS` allows — see that constant for why they were wrong to share a number.
@@ -78,7 +113,7 @@ impl ToolRuntime for GuardedTracingRuntime {
             name: call.name.clone(),
             args_preview: trace::preview_value(&call.arguments, self.preview_max_chars),
         });
-        let result = self.inner.invoke(call).await;
+        let result = self.answer_call(call).await;
         let full_output = match &result {
             Ok(value) => value.clone(),
             Err(value) => value.clone(),
@@ -151,6 +186,51 @@ mod tests {
             name: name.into(),
             arguments: args,
         }
+    }
+
+    struct StaticExtension;
+
+    #[async_trait::async_trait]
+    impl crate::extension::RuntimeExtension for StaticExtension {
+        fn tools(&self) -> Vec<ToolDef> {
+            vec![ToolDef::new("ext_tool", "test", json!({"type": "object"}))]
+        }
+
+        async fn invoke(&self, call: &ToolInvocation) -> Option<Result<String, String>> {
+            match call.name.as_str() {
+                "ext_tool" => Some(Ok("extension answered".into())),
+                _ => None,
+            }
+        }
+    }
+
+    fn guarded(dir: &std::path::Path) -> GuardedTracingRuntime {
+        let inner =
+            CodingToolRuntime::new(dir, CommandPolicy::none_allowed(), PathPolicy::default())
+                .unwrap();
+        let guard = Arc::new(Mutex::new(ProgressGuard::new(ProgressPolicy::default())));
+        GuardedTracingRuntime::new(inner, EventLog::default(), guard, 500)
+    }
+
+    #[tokio::test]
+    async fn extension_tools_join_the_catalog_and_answer_before_the_base() {
+        let dir = tempfile::tempdir().unwrap();
+        let rt = guarded(dir.path()).with_extensions(&[Arc::new(StaticExtension)]);
+        assert!(
+            rt.catalog().iter().any(|tool| tool.name == "ext_tool"),
+            "extension tools must be offered"
+        );
+        let answered = rt
+            .invoke(&call("ext_tool", json!({})))
+            .await
+            .expect("extension must answer its own tool");
+        assert_eq!(answered, "extension answered");
+        // Unclaimed names still reach the base runtime (which refuses unknowns honestly).
+        assert!(
+            rt.invoke(&call("not_a_real_tool", json!({})))
+                .await
+                .is_err()
+        );
     }
 
     /// A latched progress fatal must not refuse the edit it is demanding.

@@ -9,12 +9,13 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use liberado_coder_agent::{LiberadoLoopBackend, assemble_production_run};
+use liberado_coder_agent::assemble_production_run;
 use liberado_coder_core::{CoderBackend, CoderTask};
 use liberado_config_loader::ProviderProfile;
 use liberado_delegate_contract::{TaskId, TaskRecord, TaskSpec, TaskStatus, WorkerHealth};
 use liberado_forge::{ForgeClient, OpenPr, RepoPath};
 
+use crate::ask::{AnswerMailbox, AskDelegator, TaskDelegatorCtx};
 use crate::config::{self, WorkerSettings};
 use crate::git;
 use crate::provider_factory::ProfileProviderFactory;
@@ -25,26 +26,77 @@ use crate::queue::TaskStore;
 pub struct RunContext {
     pub settings: Arc<WorkerSettings>,
     pub store: Arc<TaskStore>,
-    pub backend: Arc<dyn CoderBackend>,
+    /// Where each task's coding backend comes from. A source rather than a fixed
+    /// backend because delegated runs carry a per-task `ask_delegator` extension —
+    /// the question has to know which task asked it.
+    pub backends: Arc<dyn TaskBackendSource>,
     pub forge: Option<Arc<dyn ForgeClient>>,
+}
+
+/// One coding backend per delegated run.
+pub trait TaskBackendSource: Send + Sync {
+    fn backend_for(&self, ctx: TaskDelegatorCtx) -> Arc<dyn CoderBackend>;
+}
+
+/// Tests and no-extension uses: every task gets the same backend instance.
+pub struct FixedBackend(pub Arc<dyn CoderBackend>);
+
+impl TaskBackendSource for FixedBackend {
+    fn backend_for(&self, _ctx: TaskDelegatorCtx) -> Arc<dyn CoderBackend> {
+        self.0.clone()
+    }
+}
+
+/// Production: clones the assembled template per task and attaches `ask_delegator`,
+/// wired to this worker's store and answer mailbox.
+pub struct ProductionBackends {
+    pub template: liberado_coder_agent::LiberadoLoopBackend,
+    pub store: Arc<TaskStore>,
+    pub mailbox: Arc<AnswerMailbox>,
+    pub question_timeout_secs: u64,
+    pub max_open_questions: u32,
+}
+
+impl TaskBackendSource for ProductionBackends {
+    fn backend_for(&self, ctx: TaskDelegatorCtx) -> Arc<dyn CoderBackend> {
+        let extension = AskDelegator::new(
+            self.store.clone(),
+            self.mailbox.clone(),
+            self.question_timeout_secs,
+            self.max_open_questions,
+            ctx,
+        );
+        Arc::new(self.template.clone().with_extension(Arc::new(extension)))
+    }
 }
 
 impl RunContext {
     /// The production context: real provider factory from the worker's topology profile,
     /// Gitea forge when configured. A missing API key fails here, at assembly time.
+    /// The caller owns the mailbox so one worker process shares it across every
+    /// `RunContext` (restart rescans build fresh contexts; an answer must reach a
+    /// re-spawned run's waiter just the same).
     pub fn production(
         settings: Arc<WorkerSettings>,
         store: Arc<TaskStore>,
+        mailbox: Arc<AnswerMailbox>,
         profile: ProviderProfile,
         forge: Option<Arc<dyn ForgeClient>>,
     ) -> Result<Self, String> {
         let factory = ProfileProviderFactory::from_profile(profile)?;
+        let backends = ProductionBackends {
+            template: liberado_coder_agent::LiberadoLoopBackend::with_provider_factory(Arc::new(
+                factory,
+            )),
+            question_timeout_secs: settings.question_timeout_secs,
+            max_open_questions: settings.max_open_questions,
+            store: store.clone(),
+            mailbox,
+        };
         Ok(Self {
             settings,
             store,
-            backend: Arc::new(LiberadoLoopBackend::with_provider_factory(Arc::new(
-                factory,
-            ))),
+            backends: Arc::new(backends),
             forge,
         })
     }
@@ -95,7 +147,11 @@ async fn prepare_and_run(ctx: &RunContext, spec: &TaskSpec) -> Result<(), String
         .await
         .map_err(|error| format!("create worktree at {branch}: {error}"))?;
 
-    let result = run_pack(ctx, spec, &worktree).await?;
+    let backend = ctx.backends.backend_for(TaskDelegatorCtx {
+        task_id: spec.id.clone(),
+        session_id: session_id.clone(),
+    });
+    let result = run_pack(ctx, backend.as_ref(), spec, &worktree).await?;
 
     if result.outcome != liberado_common::Outcome::Succeeded {
         return Err(format!(
@@ -127,6 +183,7 @@ async fn ensure_clone(
 
 async fn run_pack(
     ctx: &RunContext,
+    backend: &dyn CoderBackend,
     spec: &TaskSpec,
     worktree: &std::path::Path,
 ) -> Result<liberado_coder_core::CoderRunResult, String> {
@@ -153,7 +210,7 @@ async fn run_pack(
 
     // Wall clock is enforced here rather than inside the executor budget plumbing; the
     // wire field exists from day one so delegators can rely on the ceiling.
-    let run = ctx.backend.run(assembled.request);
+    let run = backend.run(assembled.request);
     let timed = match spec.budget.wall_clock_secs {
         Some(secs) => tokio::time::timeout(std::time::Duration::from_secs(secs), run)
             .await

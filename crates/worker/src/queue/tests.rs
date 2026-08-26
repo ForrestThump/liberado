@@ -1,5 +1,29 @@
 use super::TaskStore;
-use liberado_delegate_contract::{Acceptance, TaskBudget, TaskGrant, TaskId, TaskSpec, TaskStatus};
+use liberado_delegate_contract::{
+    Acceptance, Answer, Question, QuestionOption, TaskBudget, TaskGrant, TaskId, TaskSpec,
+    TaskStatus,
+};
+
+fn question(task: &TaskId, id: &str) -> Question {
+    Question {
+        id: id.to_string(),
+        correlation_id: String::new(),
+        task_id: task.clone(),
+        session_id: "sess".into(),
+        body: "which schema?".into(),
+        options: vec![
+            QuestionOption {
+                label: "v2".into(),
+                consequence: "migration needed".into(),
+            },
+            QuestionOption {
+                label: "v1".into(),
+                consequence: "none".into(),
+            },
+        ],
+        default_option: Some("v1".into()),
+    }
+}
 
 fn spec(id: &str) -> TaskSpec {
     TaskSpec {
@@ -277,4 +301,96 @@ fn terminal_pr_opened_maps_to_pr_ready_with_url() {
     let (kind, url) = event_shape(&TaskStatus::Failed { reason: "r".into() });
     assert_eq!(kind, EventKind::StatusChanged);
     assert_eq!(url, None);
+}
+
+#[test]
+fn question_persists_with_the_event_correlation_and_counts_open() {
+    let (_tmp, store) = store();
+    let task = TaskId("01QTEST".into());
+    let _ = store.submit(&spec("01QTEST")).expect("submit");
+
+    let asked = store
+        .record_question(&task, question(&task, "q1"))
+        .expect("record question");
+    assert_eq!(
+        asked.correlation_id, "delegate:01QTEST:2",
+        "submit event is seq 1"
+    );
+
+    // Journal carries the Question event whose payload embeds the same correlation.
+    let events = store.replay("01QTEST").expect("replay");
+    let last = events.last().expect("event");
+    assert_eq!(last.kind, EventKind::Question);
+    assert_eq!(
+        last.payload["question"]["correlation_id"],
+        serde_json::json!("delegate:01QTEST:2")
+    );
+    assert_eq!(store.open_questions(&task).expect("open"), 1);
+
+    // The stored file round-trips.
+    assert!(store.root.join("01QTEST/questions/q1.json").exists());
+}
+
+#[test]
+fn answer_settles_a_question_and_unknown_ids_are_refused() {
+    let (_tmp, store) = store();
+    let task = TaskId("01ATEST".into());
+    let _ = store.submit(&spec("01ATEST")).expect("submit");
+    let _ = store.record_question(&task, question(&task, "q1")).unwrap();
+
+    let answer = Answer {
+        question_id: "q1".into(),
+        chosen_option: Some("v2".into()),
+        body: "go with v2".into(),
+    };
+    let record = store
+        .record_answer(&task, &answer, false)
+        .expect("answer recorded");
+    assert_eq!(record.answer.as_ref().expect("answered").body, "go with v2");
+    assert!(!record.timed_out_default);
+    assert_eq!(store.open_questions(&task).expect("open"), 0);
+
+    let unknown = Answer {
+        question_id: "nope".into(),
+        chosen_option: None,
+        body: String::new(),
+    };
+    assert!(store.record_answer(&task, &unknown, false).is_err());
+
+    // Answer arrival is visible on the stream for the delegator's own reconciliation.
+    let events = store.replay("01ATEST").unwrap();
+    let answered_event = events
+        .iter()
+        .rev()
+        .find(|e| e.payload.get("answered").is_some());
+    assert_eq!(
+        answered_event.expect("answered event").payload["answered"]["question_id"],
+        serde_json::json!("q1")
+    );
+}
+
+#[test]
+fn blocked_marker_is_emitted_once_per_task_no_matter_what() {
+    let (_tmp, store) = store();
+    let task = TaskId("01BTEST".into());
+    let _ = store.submit(&spec("01BTEST")).expect("submit");
+
+    store
+        .record_blocked_once(&task, "cap reached")
+        .expect("first blocked");
+    store
+        .record_blocked_once(&task, "timeout")
+        .expect("second blocked is a no-op");
+
+    let blocked: Vec<_> = store
+        .replay("01BTEST")
+        .unwrap()
+        .into_iter()
+        .filter(|e| e.kind == EventKind::Blocked)
+        .collect();
+    assert_eq!(blocked.len(), 1, "one blocked task, not twenty");
+    assert_eq!(
+        blocked[0].payload["reason"],
+        serde_json::json!("cap reached")
+    );
 }

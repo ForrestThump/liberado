@@ -12,9 +12,23 @@ open_items: true
 **Status**: Plan, 2026-08-24. **D1 landed 2026-08-25** (`liberado-delegate-contract`,
 `liberado-forge` with the Gitea impl, `liberado-worker` accept→worktree→run→push→PR,
 `liberado delegate submit|status|cancel|health`; duplicate submit is a stored-record
-no-op, restart rescan reports crashed runs honestly). D2+ not started. The rest of this
-doc exists so the design survives until backlog capacity appears, and so it does not get
-reinvented badly.
+no-op, restart rescan reports crashed runs honestly). **D2 landed 2026-08-25** in two
+slices: SSE event streams (`GET /tasks/{id}/events`, worker event journal with
+persisted correlation sequences, `liberado delegate watch`, replay+live splice with
+correlation dedupe), then the question protocol and inbox (`ask_delegator` as a
+pack-neutral `RuntimeExtension` attached per delegated run, answer mailbox + `POST
+/tasks/{id}/answers` + `liberado delegate answer`, timeout → declared default or
+blocked-once, question cap, `liberado-inbox-spool` store crate, worker-side
+event→inbox adapter with FIFO drain proven against interleaved task journals).
+**Deviation from §8**: the park is an in-memory await inside the tool call — the
+executor conversation never serializes, so a worker restart while parked fails the
+run through the normal rescan path instead of resuming from persisted session state.
+Durable resume is deferred until measured to be worth it; the §8 v1 fallback (fresh
+run seeded from the branch) remains available by design. Still open: daemon-side
+`EventSource` adapter wiring (spool → wake → "drain the delegate inbox"), standing
+answer policies, monitor plumbing (`Blocked` status variant arrives with D3). The rest
+of this doc exists so the design survives until backlog capacity appears, and so it
+does not get reinvented badly.
 
 **Related**:
 

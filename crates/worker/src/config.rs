@@ -33,6 +33,12 @@ pub struct WorkerSettings {
     /// Base for resolving relative repository paths to clone URLs.
     pub clone_base_url: Option<String>,
     pub max_concurrent: usize,
+    /// How long `ask_delegator` parks before falling back to the question's declared
+    /// default (or refusing, when there is none).
+    pub question_timeout_secs: u64,
+    /// Open questions allowed per task before further asks are refused and the task
+    /// is marked blocked for the delegator's attention.
+    pub max_open_questions: u32,
 }
 
 impl WorkerSettings {

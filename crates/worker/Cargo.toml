@@ -23,8 +23,10 @@ liberado-common = { workspace = true }
 liberado-config-loader = { workspace = true }
 liberado-delegate-contract = { workspace = true }
 liberado-forge = { workspace = true }
+liberado-inbox-spool = { workspace = true }
 liberado-provider = { workspace = true }
 liberado-provider-openai-compat = { workspace = true }
+async-trait = { workspace = true }
 async-stream = { workspace = true }
 axum = { version = "0.8", features = ["json"] }
 futures = { workspace = true }
@@ -39,7 +41,6 @@ tracing-subscriber = { workspace = true }
 ulid = { workspace = true }
 
 [dev-dependencies]
-async-trait = { workspace = true }
 chat-client-contract = { workspace = true }
 tempfile = { workspace = true }
 

@@ -12,7 +12,9 @@ pub async fn run(args: &mut impl Iterator<Item = String>) -> Result<(), Box<dyn 
         Some("submit") => cmd_submit(args).await,
         // The task-addressed group shares one arm so adding a subcommand costs the
         // router nothing — the same shape the worker's own flag parser uses.
-        Some(name @ ("status" | "cancel" | "health" | "watch")) => cmd_dispatch(name, args).await,
+        Some(name @ ("status" | "cancel" | "health" | "watch" | "answer")) => {
+            cmd_dispatch(name, args).await
+        }
         _ => Err(usage("unknown or missing subcommand").into()),
     }
 }
@@ -22,15 +24,28 @@ async fn cmd_dispatch(
     args: &mut impl Iterator<Item = String>,
 ) -> Result<(), Box<dyn Error>> {
     match name {
+        // The sibling-module routers share one arm so adding another client
+        // subcommand costs this dispatcher nothing.
+        name @ ("watch" | "answer") => stream_cmd_dispatch(name, args).await,
         "status" => cmd_status(args).await,
         "cancel" => cmd_cancel(args).await,
         "health" => cmd_health(args).await,
-        "watch" => watch_cmd::run(args).await,
         other => unreachable!("run admitted {other:?}"),
     }
 }
 
-fn usage(message: &str) -> String {
+async fn stream_cmd_dispatch(
+    name: &str,
+    args: &mut impl Iterator<Item = String>,
+) -> Result<(), Box<dyn Error>> {
+    match name {
+        "watch" => watch_cmd::run(args).await,
+        "answer" => answer_cmd::run(args).await,
+        other => unreachable!("cmd_dispatch admitted {other:?}"),
+    }
+}
+
+pub(super) fn usage(message: &str) -> String {
     format!(
         "{message}\n\n\
          usage:\n  \
@@ -38,7 +53,9 @@ fn usage(message: &str) -> String {
          liberado delegate status <task-id>   [--endpoint URL] [--token-env VAR]\n  \
          liberado delegate watch <task-id>    [--endpoint URL] [--token-env VAR]\n  \
          liberado delegate cancel <task-id>   [--endpoint URL] [--token-env VAR]\n  \
-         liberado delegate health             [--endpoint URL] [--token-env VAR]\n\n\
+         liberado delegate health             [--endpoint URL] [--token-env VAR]\n  \
+         liberado delegate answer <task-id> <question-id> [--option LABEL]\n  \
+             \x20\x20[--body TEXT] [--endpoint URL] [--token-env VAR]\n\n\
          Env: LIBERADO_DELEGATE_ENDPOINT (required unless --endpoint),\n\
          \x20\x20\x20\x20 LIBERADO_DELEGATE_TOKEN (default token source)"
     )
@@ -47,7 +64,7 @@ fn usage(message: &str) -> String {
 /// Print to stdout, exiting quietly when the pipe closes. `liberado delegate … | head`
 /// is normal usage; Rust ignores SIGPIPE, so an unchecked write would panic the CLI
 /// instead of doing what every other Unix tool does — stop.
-fn emit(text: &str) {
+pub(super) fn emit(text: &str) {
     use std::io::Write;
     let mut out = std::io::stdout();
     if out.write_all(text.as_bytes()).is_err() || out.write_all(b"\n").is_err() {
@@ -56,7 +73,7 @@ fn emit(text: &str) {
 }
 
 #[derive(Debug, Default, PartialEq)]
-struct Flags {
+pub(super) struct Flags {
     endpoint: Option<String>,
     token_env: Option<String>,
 }
@@ -84,12 +101,12 @@ fn parse_flags(
     Ok((positional, flags))
 }
 
-struct Connection {
+pub(super) struct Connection {
     endpoint: String,
     token: String,
 }
 
-fn connection(flags: &Flags) -> Result<Connection, String> {
+pub(super) fn connection(flags: &Flags) -> Result<Connection, String> {
     let endpoint = flags
         .endpoint
         .clone()
@@ -109,7 +126,7 @@ fn connection(flags: &Flags) -> Result<Connection, String> {
 }
 
 /// One authenticated request builder against the worker's control plane.
-fn request(
+pub(super) fn request(
     connection: &Connection,
     method: reqwest::Method,
     path: &str,
@@ -120,7 +137,7 @@ fn request(
         .header("Authorization", format!("Bearer {}", connection.token))
 }
 
-async fn checked(response: reqwest::Response) -> Result<String, String> {
+pub(super) async fn checked(response: reqwest::Response) -> Result<String, String> {
     let status = response.status();
     let body = response.text().await.unwrap_or_default();
     if status.is_success() {
@@ -235,6 +252,9 @@ async fn fetch_health(connection: &Connection) -> Result<WorkerHealth, String> {
 
 #[cfg(test)]
 mod tests;
+
+#[path = "delegate_cmd_answer.rs"]
+mod answer_cmd;
 
 #[path = "delegate_cmd_watch.rs"]
 mod watch_cmd;

@@ -14,7 +14,9 @@ use axum::response::sse::{Event as SseEvent, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use liberado_delegate_contract::{RejectReason, TaskSpec, WorkerEvent, WorkerHealth};
+use liberado_delegate_contract::{
+    Answer, AnswerAck, RejectReason, TaskId, TaskSpec, WorkerEvent, WorkerHealth,
+};
 
 use crate::queue::TaskStore;
 use crate::runner::{self, RunContext};
@@ -24,6 +26,8 @@ pub struct AppState {
     pub store: Arc<TaskStore>,
     /// Concurrency ceiling across delegated runs; acquired by the runner.
     pub slots: Arc<tokio::sync::Semaphore>,
+    /// Where answers to parked questions find their waiters.
+    pub mailbox: Arc<crate::ask::AnswerMailbox>,
     pub run: RunContext,
 }
 
@@ -34,6 +38,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/v1/delegate/tasks/{task_id}", get(get_task))
         .route("/v1/delegate/tasks/{task_id}/events", get(task_events))
         .route("/v1/delegate/tasks/{task_id}/cancel", post(cancel))
+        .route("/v1/delegate/tasks/{task_id}/answers", post(post_answer))
         .route_layer(middleware::from_fn_with_state(state.clone(), bearer_auth));
     protected.with_state(state)
 }
@@ -200,6 +205,39 @@ async fn cancel(State(state): State<Arc<AppState>>, Path(task_id): Path<String>)
         Err(crate::queue::CancelError::NotFound(_)) => not_found(&task_id),
         Err(error) => internal_error(error.to_string()),
     }
+}
+
+/// Reply to a parked `ask_delegator` question (plan §8). The answer is persisted
+/// first — the durable record survives even when no waiter is left — then handed to
+/// the mailbox. `delivered = false` is honest bookkeeping, not an error: the delegator
+/// learns the run will not see its answer and can reconcile by polling.
+async fn post_answer(
+    State(state): State<Arc<AppState>>,
+    Path(task_id): Path<String>,
+    Json(answer): Json<Answer>,
+) -> Response {
+    if state.store.get(&task_id).ok().flatten().is_none() {
+        return not_found(&task_id);
+    }
+    match state
+        .store
+        .record_answer(&TaskId(task_id.clone()), &answer, false)
+    {
+        Ok(_) => {}
+        Err(crate::queue::QueueError::QuestionNotFound(_)) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(RejectReason::new(format!(
+                    "unknown question {} for task {task_id}",
+                    answer.question_id
+                ))),
+            )
+                .into_response();
+        }
+        Err(error) => return internal_error(error.to_string()),
+    }
+    let delivered = state.mailbox.deliver(&answer);
+    (StatusCode::OK, Json(AnswerAck { delivered })).into_response()
 }
 
 fn not_found(task_id: &str) -> Response {
