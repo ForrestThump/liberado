@@ -43,7 +43,8 @@
 //!
 //! The resolved order refreshes on a TTL (benchmarks are re-scored slowly upstream; the API is
 //! rate-limited to 500 requests/day per key) and serves stale data rather than failing when a
-//! refresh errors.
+//! refresh errors on transport. An empty free catalog is a hard error: yesterday's ranking is
+//! not reused, because those slugs may now be paid.
 //!
 //! ## Routing behaviour
 //!
