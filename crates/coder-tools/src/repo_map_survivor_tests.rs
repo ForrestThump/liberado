@@ -61,6 +61,14 @@ fn pagerank_matches_golden_distributions() {
         c.iter().all(|r| r.is_finite()),
         "zero personalization must not produce NaN: {c:?}"
     );
+
+    // Config D: the personalization vector sums to three, so the raw update
+    // does not conserve mass and normalization genuinely rescales. This pins
+    // the divide (and its positivity guard) rather than riding a fixed point.
+    let d = pagerank(3, &[(0, 1, 1.0), (0, 2, 2.0)], &[2.0, 0.5, 0.5], 0.85, 40);
+    approx(d[0], 0.525_364_572, "D node0");
+    approx(d[1], 0.201_992_190, "D node1");
+    approx(d[2], 0.272_643_238, "D node2");
 }
 
 // ── personalization ─────────────────────────────────────────────────────────
@@ -77,20 +85,27 @@ fn chat_boost_multiplies_by_ten_exactly() {
     approx(ratio, 10.0, "chat file holds exactly 10x the share");
 }
 
-/// Task-term boosts multiply the base share: a path-and-symbol match lifts one
-/// file to (3 + 8)/12 of the mass while the unmatched file keeps 1/12.
+/// Task-term boosts multiply the base share, one matched side at a time:
+/// path+symbol lifts 11x, path-only and symbol-only 7x each, unmatched 1x.
 #[test]
 fn task_boost_golden_vector() {
-    let files = ["src/widget.rs".to_string(), "other.rs".to_string()];
+    let files = [
+        "src/widget.rs".to_string(),
+        "src/widg.rs".to_string(),
+        "plain.rs".to_string(),
+        "other.rs".to_string(),
+    ];
     let tags = vec![
         vec![tag("src/widget.rs", "widget_maker", true, 3)],
         Vec::new(),
+        vec![tag("plain.rs", "widg_tool", true, 5)],
+        Vec::new(),
     ];
-    let vec = build_personalization(2, &files, &tags, &HashSet::new(), &["widget".to_string()]);
-    // path_score(widget.rs)=4 (contains), symbol_score=4 (widget_maker) -> boost 3+8=11.
-    approx(vec[0], 11.0 / 12.0, "matched share");
-    approx(vec[1], 1.0 / 12.0, "unmatched share");
-    assert!(vec[0] > vec[1]);
+    let vec = build_personalization(4, &files, &tags, &HashSet::new(), &["widg".to_string()]);
+    approx(vec[0], 11.0 / 26.0, "path+symbol share");
+    approx(vec[1], 7.0 / 26.0, "path-only share");
+    approx(vec[2], 7.0 / 26.0, "symbol-only share");
+    approx(vec[3], 1.0 / 26.0, "unmatched share");
 }
 
 // ── graph construction ──────────────────────────────────────────────────────
@@ -283,6 +298,22 @@ fn extract_task_terms_caseless_words_are_code_like_only_when_short() {
     );
 }
 
+/// A plural term matches its singular stem only when that stem is at least
+/// four characters long.
+#[test]
+fn task_match_score_plural_stem_needs_four_characters() {
+    assert_eq!(task_match_score("cat dog", &["cats".to_string()]), 0);
+    assert_eq!(
+        task_match_score("update the resource", &["resources".to_string()]),
+        2
+    );
+    assert_eq!(
+        task_match_score("resources", &["resources".to_string()]),
+        12,
+        "exact match still wins"
+    );
+}
+
 // ── rank formatting ─────────────────────────────────────────────────────────
 
 #[test]
@@ -356,6 +387,71 @@ async fn select_source_files_path_score_outweighs_body_score() {
     assert!(
         pos_of("crates/auth/src/widget_path.rs") < pos_of("crates/filler/src/file_000.rs"),
         "path match (x4 of one term) outranks three body-term hits: {selected:?}"
+    );
+}
+
+/// Evidence ordering follows the weighted score: a name match (x4) outranks
+/// a file match (x2) which outranks a snippet-only match (x1); zero-score
+/// definitions stay out of the section entirely.
+#[test]
+fn context_map_evidence_ordering_follows_weights() {
+    let defs = vec![
+        ranked_def("plain_a.rs", "widg_fn", 0.30, 3, "fn widg_fn() {{}}"),
+        ranked_def("src/widg.rs", "plain_fn", 0.20, 4, "fn plain_fn() {{}}"),
+        ranked_def(
+            "plain_b.rs",
+            "quiet_fn",
+            0.10,
+            5,
+            "// widg mention in a comment",
+        ),
+        ranked_def("plain_c.rs", "silent_fn", 0.05, 6, "fn silent_fn() {{}}"),
+    ];
+    let terms = ["widg".to_string()];
+    let out = render_context_map(&defs, &terms, 4096);
+
+    let evidence = &out[..out.find("Repo map").unwrap_or(out.len())];
+    assert!(evidence.contains("Task evidence"), "{out}");
+
+    let pos_of = |needle: &str| {
+        evidence
+            .find(needle)
+            .unwrap_or_else(|| panic!("{needle} absent"))
+    };
+    // widg_fn (name, x4) before src/widg.rs's plain_fn (file, x2) before the
+    // comment mention (snippet, x1); the untouched definition stays out.
+    assert!(pos_of("widg_fn") < pos_of("plain_fn"), "{evidence}");
+    assert!(pos_of("plain_fn") < pos_of("widg mention"), "{evidence}");
+    assert!(
+        !evidence.contains("silent_fn"),
+        "zero-score defs excluded: {evidence}"
+    );
+}
+
+/// The evidence budget is min(max_tokens/3, 384): at max_tokens=300 it is
+/// 100 tokens, which cuts off verbose evidence after the first hit.
+#[test]
+fn context_map_evidence_budget_is_one_third_capped() {
+    let long_snippet = format!("// widg {}", "w".repeat(250));
+    let defs = vec![
+        ranked_def("plain_b.rs", "widg_long", 0.20, 5, &long_snippet),
+        ranked_def("plain_b.rs", "quiet_fn", 0.10, 6, "// widg fn"),
+    ];
+    let terms = ["widg".to_string()];
+    let out = render_context_map(&defs, &terms, 300);
+
+    let evidence = &out[..out.find("Repo map").unwrap_or(out.len())];
+    assert!(
+        evidence.contains("task evidence truncated"),
+        "the 100-token evidence budget must truncate before both hits render: {evidence}"
+    );
+
+    // With headroom (budget min(900/3, 384) = 300) nothing is cut.
+    let out = render_context_map(&defs, &terms, 900);
+    let evidence = &out[..out.find("Repo map").unwrap_or(out.len())];
+    assert!(
+        !evidence.contains("task evidence truncated"),
+        "300-token evidence budget fits both hits: {evidence}"
     );
 }
 
@@ -464,21 +560,20 @@ fn task_evidence_budget_is_additive_and_inclusive_at_exact_fit() {
 /// definitions in the current file plus three per untouched file.
 #[test]
 fn repo_map_truncation_message_counts_are_exact() {
-    fn def_line(rank: f64, line: usize, snippet: &str) -> String {
-        format!("  {:>10} L{:>4}  {}", format_rank(rank), line, snippet)
-    }
-    let header_est = estimate_tokens("Repo map (0.0k tokens):", 3.5);
-    let blank_est = estimate_tokens("", 3.5);
-    let f_line_est = estimate_tokens("f.rs", 3.5);
-    let keep_a_est = estimate_tokens(&def_line(0.80, 1, "fn keep_a() {}"), 3.5);
-    let budget = header_est + blank_est + f_line_est + keep_a_est;
-
     let ranked = vec![
         ranked_def("f.rs", "keep_a", 0.80, 1, "fn keep_a() {}"),
         ranked_def("f.rs", "drop_b", 0.80, 2, "fn drop_b() {}"),
         ranked_def("f.rs", "drop_c", 0.70, 3, "fn drop_c() {}"),
         ranked_def("g.rs", "gone_d", 0.60, 1, "fn gone_d() {}"),
     ];
+    fn def_line(rank: f64, line: usize, snippet: &str) -> String {
+        format!("  {:>10} L{:>4}  {}", format_rank(rank), line, snippet)
+    }
+    // Only file and definition lines count against the budget; the header
+    // and blank line are pushed without accounting.
+    let f_line_est = estimate_tokens("f.rs", 3.5);
+    let keep_a_est = estimate_tokens(&def_line(0.80, 1, "fn keep_a() {}"), 3.5);
+    let budget = f_line_est + keep_a_est;
 
     let out = render_repo_map(&ranked, budget);
     assert!(
@@ -496,26 +591,62 @@ fn repo_map_truncation_message_counts_are_exact() {
 }
 
 /// An exactly-spent budget still admits the next file's header line: the
-/// outer guard is strict greater-than.
+/// outer guard is strict greater-than. Only definition/file lines count
+/// against the budget; the header and blank line ride free.
 #[test]
 fn repo_map_outer_budget_guard_is_strict() {
     let ranked = vec![
         ranked_def("f.rs", "only_a", 0.9, 1, "fn only_a() {}"),
         ranked_def("g.rs", "only_b", 0.8, 1, "fn only_b() {}"),
     ];
-    let header_and_blank =
-        estimate_tokens("Repo map (0.1k tokens):", 3.5) + estimate_tokens("", 3.5);
     let f_line = estimate_tokens("f.rs", 3.5);
     let only_a = estimate_tokens(
         &format!("  {:>10} L{:>4}  {}", format_rank(0.9), 1, "fn only_a() {}"),
         3.5,
     );
-    let budget = header_and_blank + f_line + only_a;
+    let budget = f_line + only_a;
 
     let out = render_repo_map(&ranked, budget);
     assert!(
         out.contains("g.rs"),
         "an exactly-spent budget still opens the next file:\n{out}"
+    );
+}
+
+/// A definition line that lands exactly on the budget still renders: the
+/// inner guard is also strict greater-than.
+#[test]
+fn repo_map_inner_budget_guard_is_inclusive_at_exact_fit() {
+    let ranked = vec![
+        ranked_def("f.rs", "first", 0.9, 1, "fn first_one() {}"),
+        ranked_def("f.rs", "second", 0.8, 2, "fn second_two() {}"),
+    ];
+    let f_line = estimate_tokens("f.rs", 3.5);
+    let first = estimate_tokens(
+        &format!(
+            "  {:>10} L{:>4}  {}",
+            format_rank(0.9),
+            1,
+            "fn first_one() {}"
+        ),
+        3.5,
+    );
+    let second = estimate_tokens(
+        &format!(
+            "  {:>10} L{:>4}  {}",
+            format_rank(0.8),
+            2,
+            "fn second_two() {}"
+        ),
+        3.5,
+    );
+    let budget = f_line + first + second;
+
+    let out = render_repo_map(&ranked, budget);
+    assert!(out.contains("second_two"), "exact fit renders:\n{out:?}");
+    assert!(
+        !out.contains("omitted"),
+        "nothing is omitted at exact fit:\n{out:?}"
     );
 }
 
