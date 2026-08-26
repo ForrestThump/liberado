@@ -45,3 +45,6 @@ pub fn handle(ctx: &mut dyn CommandContext) -> Vec<CommandResult> {
     }
     vec![CommandResult::StatusShown]
 }
+#[cfg(test)]
+#[path = "status_survivor_tests.rs"]
+mod survivor_tests;

@@ -175,3 +175,6 @@ pub fn dispatch(cmd: &SlashCommand, ctx: &mut dyn CommandContext) -> Vec<Command
         } => handlers::focus::coding(*mode, project.as_deref(), text, ctx),
     }
 }
+#[cfg(test)]
+#[path = "dispatch_survivor_tests.rs"]
+mod survivor_tests;
