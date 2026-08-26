@@ -221,15 +221,29 @@ async fn prepare_and_run(ctx: &RunContext, spec: &TaskSpec, shape: RunShape) -> 
     )
     .await?;
 
+    // Acceptance gates (plan §15 D3): the pack must have succeeded AND the
+    // delegator's declared steps pass against the finished work before anything
+    // reaches the forge.
+    let preflight = verify_result(&worktree, spec, &result).await?;
+
+    commit_and_push(ctx, spec, &branch, &result).await?;
+    pr::open_or_update_pr(ctx, spec, &branch, shape, &result, &preflight.body_section).await
+}
+
+/// The post-pack gate: an honest pack failure and a red acceptance step look the
+/// same from outside — Failed with the reason named — and nothing proceeds.
+async fn verify_result(
+    worktree: &std::path::Path,
+    spec: &TaskSpec,
+    result: &liberado_coder_core::CoderRunResult,
+) -> Result<preflight::PreflightOutcome, String> {
     if result.outcome != liberado_common::Outcome::Succeeded {
         return Err(format!(
             "coding pack reported {:?}: {}",
             result.outcome, result.summary
         ));
     }
-
-    commit_and_push(ctx, spec, &branch, &result).await?;
-    pr::open_or_update_pr(ctx, spec, &branch, shape, &result).await
+    preflight::enforce(worktree, &spec.acceptance.preflight).await
 }
 
 /// First pass creates the worktree; a kickback lands on the one it left behind —
@@ -430,3 +444,6 @@ mod tests;
 
 #[path = "runner/pr.rs"]
 mod pr;
+
+#[path = "runner/preflight.rs"]
+mod preflight;

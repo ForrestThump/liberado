@@ -23,6 +23,9 @@ liberado-harness-eval = { workspace = true }
 chat-client-contract = { workspace = true }
 liberado-delegate-contract = { workspace = true }
 liberado-forge = { workspace = true }
+liberado-coder-agent = { workspace = true }
+liberado-provider = { workspace = true }
+liberado-provider-openai-compat = { workspace = true }
 tokio = { workspace = true }
 tracing-subscriber = { workspace = true }
 reqwest = { workspace = true }

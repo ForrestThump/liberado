@@ -24,11 +24,27 @@ event→inbox adapter with FIFO drain proven against interleaved task journals).
 executor conversation never serializes, so a worker restart while parked fails the
 run through the normal rescan path instead of resuming from persisted session state.
 Durable resume is deferred until measured to be worth it; the §8 v1 fallback (fresh
-run seeded from the branch) remains available by design. Still open: daemon-side
-`EventSource` adapter wiring (spool → wake → "drain the delegate inbox"), standing
-answer policies, monitor plumbing (`Blocked` status variant arrives with D3). The rest
-of this doc exists so the design survives until backlog capacity appears, and so it
-does not get reinvented badly.
+run seeded from the branch) remains available by design.
+
+**D3 slice landed 2026-08-26** (kickback loop + acceptance plumbing): `TaskStatus::
+Blocked` (terminal; rides as a status-change event like failed), `Answer.kind`
+(`question` default | `instruction`) with restart-proof kickback round counts,
+`execute_kickback` reusing branch/worktree/PR and commenting the new outcome,
+cap overflow → Blocked + 409, `delegate kickback|merge|review` on the delegator
+(merge verifies required checks delegator-side first), `acceptance.preflight`
+steps enforced in the worktree before any push via the pack's own preflight runner
+(required red → Failed; optional red → PR-body note), cold review over the PR diff
+via the existing `cold_review` module with author context hard-excluded.
+Live-proven end-to-end: kickback → fix → merge on delegation-scratch PR #4
+(squash f747038); during the re-run the model caught a criteria/instruction
+contradiction, asked, timed out, and applied its declared default — §8 composing
+with §10 without new code. Found live: Gitea merge responses can lack a sha field;
+the forge now tolerates both known field names.
+
+Still open: daemon-side `EventSource` wiring (spool → wake → "drain the delegate
+inbox" dispatch), standing answer policies (§9 later phase), shepherd integration
+and multi-worker pools (D4). The rest of this doc exists so the design survives
+until backlog capacity appears, and so it does not get reinvented badly.
 
 **Related**:
 

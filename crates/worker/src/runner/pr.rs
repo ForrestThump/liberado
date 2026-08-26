@@ -13,14 +13,15 @@ pub(super) async fn open_or_update_pr(
     branch: &str,
     shape: RunShape,
     result: &liberado_coder_core::CoderRunResult,
+    preflight_section: &str,
 ) -> Result<(), String> {
     let Some(forge) = ctx.forge.as_deref() else {
         return Err("forge is not configured on this worker; cannot open PR".into());
     };
     if let Some(url) = &shape.existing_pr_url {
-        return update_pull_request(forge, ctx, spec, url, result).await;
+        return update_pull_request(forge, ctx, spec, url, result, preflight_section).await;
     }
-    open_pull_request(forge, ctx, spec, branch, result).await
+    open_pull_request(forge, ctx, spec, branch, result, preflight_section).await
 }
 
 /// Kickback path: report the new outcome on the existing PR and keep its url. The
@@ -31,6 +32,7 @@ async fn update_pull_request(
     spec: &TaskSpec,
     pr_url: &str,
     result: &liberado_coder_core::CoderRunResult,
+    preflight_section: &str,
 ) -> Result<(), String> {
     let repo = RepoPath(spec.repository.clone());
     let pr = pr_ref_from_url(pr_url, repo)
@@ -39,8 +41,14 @@ async fn update_pull_request(
         .comment(
             &pr,
             &format!(
-                "Kickback applied. Outcome: {:?}\n\n{}",
-                result.outcome, result.summary
+                "Kickback applied. Outcome: {:?}\n\n{}{}",
+                result.outcome,
+                result.summary,
+                if preflight_section.is_empty() {
+                    String::new()
+                } else {
+                    format!("\n\n{preflight_section}")
+                }
             ),
         )
         .await
@@ -54,6 +62,14 @@ async fn update_pull_request(
         )
         .map_err(|error| format!("record PR status: {error}"))?;
     Ok(())
+}
+
+fn section_suffix(preflight_section: &str) -> String {
+    if preflight_section.is_empty() {
+        String::new()
+    } else {
+        format!("\n{preflight_section}\n")
+    }
 }
 
 /// Parse the worker's own canonical PR url back into an addressable reference. Only
@@ -73,6 +89,7 @@ async fn open_pull_request(
     spec: &TaskSpec,
     branch: &str,
     result: &liberado_coder_core::CoderRunResult,
+    preflight_section: &str,
 ) -> Result<(), String> {
     let pr = forge
         .open_pr(&OpenPr {
@@ -80,7 +97,11 @@ async fn open_pull_request(
             title: truncate(first_line(&spec.goal), 72),
             head: branch.to_string(),
             base: spec.base_branch.clone(),
-            body: pr_body(spec, result),
+            body: format!(
+                "{}{}",
+                pr_body(spec, result),
+                section_suffix(preflight_section)
+            ),
         })
         .await
         .map_err(|error| format!("open PR: {error}"))?;

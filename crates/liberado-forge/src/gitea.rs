@@ -257,6 +257,31 @@ impl ForgeClient for GiteaForge {
         })
     }
 
+    async fn diff(&self, pr: &PrRef) -> Result<String, ForgeError> {
+        // Gitea serves `.diff` as plain text off the HTML route, not the API prefix.
+        let url = format!(
+            "{}/repos/{}/pulls/{}.diff",
+            self.base_url,
+            pr.repo.api_segment(),
+            pr.number
+        );
+        let response = self
+            .http
+            .get(&url)
+            .header("Authorization", format!("token {}", self.token))
+            .send()
+            .await?;
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        if !status.is_success() {
+            return Err(ForgeError::Status {
+                code: status.as_u16(),
+                body: format!("GET {url}: {body}"),
+            });
+        }
+        Ok(body)
+    }
+
     async fn merge(&self, pr: &PrRef, method: MergeMethod) -> Result<MergeCommit, ForgeError> {
         let url = self.repos_api(&pr.repo, &format!("pulls/{}/merge", pr.number));
         self.require(

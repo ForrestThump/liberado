@@ -28,6 +28,7 @@ fn usage(message: &str) -> String {
          liberado delegate health             [--endpoint URL] [--token-env VAR]\n  \\
          liberado delegate kickback <task-id> --body TEXT [--comment]\n  \\
          liberado delegate merge <task-id>    [--method squash|merge|rebase]\n  \\
+         liberado delegate review <task-id>   [--post] [--forge-url URL]\n  \\
          liberado delegate answer <task-id> <question-id> [--option LABEL]\n  \
              \x20\x20[--body TEXT] [--endpoint URL] [--token-env VAR]\n\n\
          Env: LIBERADO_DELEGATE_ENDPOINT (required unless --endpoint),\n\

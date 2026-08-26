@@ -18,6 +18,7 @@ path = "src/main.rs"
 
 [dependencies]
 liberado-coder-agent = { workspace = true }
+liberado-coder-sandbox = { workspace = true }
 liberado-coder-core = { workspace = true }
 liberado-common = { workspace = true }
 liberado-config-loader = { workspace = true }

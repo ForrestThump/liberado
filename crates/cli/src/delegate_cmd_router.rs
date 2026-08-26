@@ -7,7 +7,34 @@ use std::error::Error;
 use super::answer_cmd;
 use super::review_cmd;
 use super::watch_cmd;
-use super::{cmd_cancel, cmd_health, cmd_status, usage};
+use super::{cmd_cancel, cmd_health, cmd_status};
+
+/// The delegator's own provider profile (plan §4): LIBERADO_CONFIG_DIR +
+/// LIBERADO_CODER_PROVIDER name one `[[providers]]` entry. Missing config dir means
+/// the default topology; a named-but-undeclared provider is an error, never a fallback.
+pub(super) fn resolve_provider_profile() -> Result<liberado_config_loader::ProviderProfile, String>
+{
+    use liberado_config_loader::Topology;
+    let dir = std::env::var("LIBERADO_CONFIG_DIR")
+        .ok()
+        .map(std::path::PathBuf::from);
+    let topology = match &dir {
+        Some(dir) => {
+            let raw = std::fs::read_to_string(dir.join("topology.toml")).map_err(|error| {
+                format!("read {}: {error}", dir.join("topology.toml").display())
+            })?;
+            toml::from_str::<Topology>(&raw).map_err(|error| format!("parse topology: {error}"))?
+        }
+        None => Topology::default(),
+    };
+    let name =
+        std::env::var("LIBERADO_CODER_PROVIDER").unwrap_or_else(|_| topology.provider.clone());
+    topology
+        .providers
+        .into_iter()
+        .find(|profile| profile.name == name)
+        .ok_or_else(|| format!("provider '{name}' is not declared in topology.providers"))
+}
 
 pub(super) async fn dispatch(
     name: &str,
@@ -19,9 +46,8 @@ pub(super) async fn dispatch(
         "health" => cmd_health(args).await,
         "watch" => watch_cmd::run(args).await,
         "answer" => answer_cmd::run(args).await,
-        "kickback" => review_cmd::run(args).await,
-        "merge" => review_cmd::run_merge(args).await,
-        other => Err(usage(&format!("unknown or missing subcommand: {other}")).into()),
+        // The review family routes as one so growing it costs the dispatcher nothing.
+        other => review_cmd::route(other, args).await,
     }
 }
 

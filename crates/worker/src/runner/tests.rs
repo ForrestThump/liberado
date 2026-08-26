@@ -147,6 +147,9 @@ impl ForgeClient for RecordingForge {
     async fn merge(&self, _pr: &PrRef, _method: MergeMethod) -> Result<MergeCommit, ForgeError> {
         Err(ForgeError::Shape("workers cannot merge".into()))
     }
+    async fn diff(&self, _pr: &PrRef) -> Result<String, ForgeError> {
+        Ok(String::new())
+    }
 }
 
 // --- harness -------------------------------------------------------------
@@ -653,4 +656,82 @@ fn pr_urls_from_our_own_responses_round_trip_into_references() {
     assert_eq!(pr.number, 17);
     assert_eq!(pr.repo.api_segment(), "o/r");
     assert!(pr_ref_from_url("https://forge.example/o/r", repo).is_none());
+}
+
+#[tokio::test]
+async fn a_failing_required_preflight_step_fails_the_task_before_any_push() {
+    let harness = harness();
+    let mut spec = spec("01PREFLIGHT0000000000000TEST");
+    spec.id = TaskId("01PREFLIGHT0000000000000TEST".into());
+    spec.acceptance.preflight = vec![liberado_delegate_contract::PreflightStepDto {
+        name: "must-contain-work".into(),
+        run: "grep -q 'never-present-token' delivered.txt".into(),
+        timeout_secs: Some(10),
+        required: true,
+    }];
+    let forge = RecordingForge::default();
+    let ctx = context(
+        &harness,
+        WriteFileBackend {
+            outcome: Outcome::Succeeded,
+            runs: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        },
+        forge.clone(),
+    )
+    .await;
+    ctx.store.submit(&spec).expect("submit");
+
+    let record = super::execute(ctx.clone(), spec).await;
+    match record.status {
+        TaskStatus::Failed { reason } => {
+            assert!(reason.contains("acceptance preflight"), "{reason}");
+            assert!(reason.contains("must-contain-work"), "{reason}");
+        }
+        other => panic!("expected Failed, got {other:?}"),
+    }
+    assert!(
+        forge.opened.lock().unwrap().is_empty(),
+        "a red gate must not reach the forge"
+    );
+}
+
+#[tokio::test]
+async fn passing_preflight_steps_land_in_the_pr_body() {
+    let harness = harness();
+    let mut spec = spec("01PREFLIGHT0000000000001TEST");
+    spec.id = TaskId("01PREFLIGHT0000000000001TEST".into());
+    spec.acceptance.preflight = vec![liberado_delegate_contract::PreflightStepDto {
+        name: "file-exists".into(),
+        run: "test -f delivered.txt".into(),
+        timeout_secs: Some(10),
+        required: true,
+    }];
+    let forge = RecordingForge::default();
+    let ctx = context(
+        &harness,
+        WriteFileBackend {
+            outcome: Outcome::Succeeded,
+            runs: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        },
+        forge.clone(),
+    )
+    .await;
+    ctx.store.submit(&spec).expect("submit");
+
+    let record = super::execute(ctx, spec).await;
+    assert!(
+        matches!(record.status, TaskStatus::PrOpened { .. }),
+        "{record:?}"
+    );
+    let opened = forge.opened.lock().unwrap();
+    assert!(
+        opened[0].body.contains("Acceptance preflight"),
+        "{}",
+        opened[0].body
+    );
+    assert!(
+        opened[0].body.contains("[pass] `file-exists`"),
+        "{}",
+        opened[0].body
+    );
 }

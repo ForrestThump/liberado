@@ -104,5 +104,9 @@ pub trait ForgeClient: Send + Sync {
     async fn open_pr(&self, req: &OpenPr) -> Result<PrRef, ForgeError>;
     async fn comment(&self, pr: &PrRef, body: &str) -> Result<(), ForgeError>;
     async fn checks(&self, pr: &PrRef, names: &[String]) -> Result<CheckStates, ForgeError>;
+
+    /// The pull request's unified diff — the change surface a cold review reads
+    /// (plan §10). Text, not JSON; empty output is valid and means "no changes".
+    async fn diff(&self, pr: &PrRef) -> Result<String, ForgeError>;
     async fn merge(&self, pr: &PrRef, method: MergeMethod) -> Result<MergeCommit, ForgeError>;
 }
