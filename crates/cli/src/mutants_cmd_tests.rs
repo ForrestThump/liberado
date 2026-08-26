@@ -1,5 +1,6 @@
 //! Split from `mutants_cmd.rs` for module-health boundaries.
 
+use super::ledger::save_ledger;
 use super::*;
 
 fn init_git_repo(root: &Path) {
