@@ -588,6 +588,31 @@ fn repo_map_truncation_message_counts_are_exact() {
         "omission arithmetic pinned: wanted '{expected}' in:\n{out}"
     );
     assert!(out.contains("(repo map truncated"));
+
+    // Overflowing in a *later* file makes the remainder count depend on the
+    // overflow point: g.rs sits at position one, so one file remains.
+    let ranked = vec![
+        ranked_def("f.rs", "full_a", 0.90, 1, "fn full_a_one() {}"),
+        ranked_def("f.rs", "full_b", 0.85, 2, "fn full_b_two() {}"),
+        ranked_def("g.rs", "spill_c", 0.70, 1, "fn spill_c_three() {}"),
+    ];
+    let f_line_est = estimate_tokens("f.rs", 3.5);
+    let a_est = estimate_tokens(&def_line(0.90, 1, "fn full_a_one() {}"), 3.5);
+    let b_est = estimate_tokens(&def_line(0.85, 2, "fn full_b_two() {}"), 3.5);
+    let g_line_est = estimate_tokens("g.rs", 3.5);
+    // Everything in f.rs plus g.rs's own file line fits; spill_c does not.
+    let budget = f_line_est + a_est + b_est + g_line_est;
+
+    let out = render_repo_map(&ranked, budget);
+    assert!(
+        out.contains("g.rs") && !out.contains("spill_c"),
+        "g.rs opens but its definition busts the budget:\n{out:?}"
+    );
+    let expected_late = "  ... (+3 more symbols across 1 files omitted)";
+    assert!(
+        out.contains(expected_late),
+        "remainder counted from the overflow point: wanted '{expected_late}' in:\n{out}"
+    );
 }
 
 /// An exactly-spent budget still admits the next file's header line: the
@@ -715,21 +740,4 @@ fn walk_depth_skips_and_size_ceiling() {
             "{skipped} must be skipped: {found:?}"
         );
     }
-}
-
-#[test]
-fn probe_full_ts_query() {
-    let (_n, lang) = detect_lang("a.ts").unwrap();
-    let q = Query::new(&lang, query_source("typescript"));
-    eprintln!("full ts query ok: {}", q.is_ok());
-    if let Err(e) = &q {
-        eprintln!("err: {e}");
-    }
-    let tags = extract_tags("a.ts", "function hello(): void {}", "typescript", &lang);
-    eprintln!(
-        "tags: {:?}",
-        tags.iter()
-            .map(|t| (t.name.as_str(), t.is_def))
-            .collect::<Vec<_>>()
-    );
 }
