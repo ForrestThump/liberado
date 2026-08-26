@@ -825,3 +825,19 @@ fn concurrent_appends_both_survive_the_read_modify_write() {
     );
     assert_eq!(packages.len(), 3, "seed plus exactly two appends");
 }
+
+#[test]
+fn run_exit_succeeds_on_an_appended_campaign_and_fails_when_incomplete() {
+    let appended = run_exit(RecordOutcome::Appended {
+        package: "liberado-x".into(),
+        commit: "abc".into(),
+    });
+    assert!(appended.is_ok(), "recorded campaigns are success");
+
+    let skipped = run_exit(RecordOutcome::SkippedIncomplete);
+    let err = skipped.expect_err("incomplete outcomes must fail the command");
+    assert!(
+        err.contains("no complete outcomes"),
+        "the message must name the cause: {err}"
+    );
+}

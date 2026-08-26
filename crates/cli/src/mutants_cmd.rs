@@ -77,14 +77,20 @@ pub fn run(args: &mut impl Iterator<Item = String>) -> Result<(), Box<dyn std::e
         invocation.profile,
     )?;
     run_support::announce_record(&outcome, status.success());
+    run_exit(outcome).map_err(std::convert::Into::into)
+}
+
+/// Pure exit policy for one finished run: complete outcomes succeed (survivors
+/// are findings, not infrastructure failures); incomplete outcomes must fail
+/// the command, or `just mutants` would report a green campaign that never
+/// happened. Split out so the policy is unit-testable without spawning
+/// cargo-mutants.
+fn run_exit(outcome: RecordOutcome) -> Result<(), String> {
     match outcome {
         RecordOutcome::Appended { .. } => Ok(()),
-        // A baseline compile failure or killed run leaves nothing worth
-        // recording; exiting zero here would let `just mutants` report a
-        // green campaign that never happened.
         RecordOutcome::SkippedIncomplete => Err(
             "cargo mutants produced no complete outcomes (baseline failure or interrupted run); nothing recorded"
-                .into(),
+                .to_string(),
         ),
     }
 }
