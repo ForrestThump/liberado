@@ -668,5 +668,16 @@ mod tests {
             !matches_capture_entry(std::path::Path::new("notes/foo.md"), "inbox/*"),
             "a non-matching glob must not match"
         );
+        // A `?` glob with no `*` exercises the second `||` in the
+        // glob-detection condition. A mutant that flips it to `&&` would send
+        // `inbox/???.md` to the prefix branch and misclassify it.
+        assert!(
+            matches_capture_entry(std::path::Path::new("inbox/foo.md"), "inbox/???.md"),
+            "a `?` glob must take the glob branch and match"
+        );
+        assert!(
+            !matches_capture_entry(std::path::Path::new("notes/foo.md"), "inbox/???.md"),
+            "a non-matching `?` glob must not match"
+        );
     }
 }
