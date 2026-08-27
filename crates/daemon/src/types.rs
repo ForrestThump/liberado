@@ -224,3 +224,92 @@ pub struct Daemon {
     /// Populated from `[tuning.capture]`.
     pub(crate) capture_scope: crate::vault_source::CaptureScope,
 }
+
+#[cfg(test)]
+mod label_tests {
+    //! Pin the per-variant labels in [`ReactionOutcome::label`].
+    //!
+    //! Existing tests use `.label()` only inside panic messages, so a body that returns the
+    //! wrong string still passes. These pins exist to kill the `replace ReactionOutcome::label
+    //! -> &str with ""` and `... with "xyzzy"` mutants.
+    use super::ReactionOutcome;
+    use liberado_common::{
+        BlockReason, DispatchAction, DispatchDecision, Outcome, ProposalSigner, Report,
+    };
+    use liberado_orchestrator::Disposition;
+
+    fn sample_report() -> Report {
+        Report {
+            outcome: Outcome::Succeeded,
+            summary: "ok".into(),
+            artifacts: Vec::new(),
+            new_high_signal_facts: Vec::new(),
+            follow_up: None,
+            deferred_to_human: false,
+            repeat_calls: 0,
+        }
+    }
+
+    fn sample_signed_proposal() -> liberado_common::SignedProposal {
+        ProposalSigner::random().sign(liberado_common::Proposal::pending(
+            "prop-label-test",
+            "corr-label-test",
+            "label-tests",
+            liberado_common::ProposedAction::ToolCalls(vec![]),
+            "needs your review",
+        ))
+    }
+
+    #[test]
+    fn observed_label_is_the_braced_token() {
+        assert_eq!(ReactionOutcome::Observed.label(), "(observed)");
+    }
+
+    #[test]
+    fn decided_label_delegates_to_dispatch_action_label() {
+        let decision = DispatchDecision {
+            action: DispatchAction::Clarify {
+                questions: vec!["why?".into()],
+                what_blocked: BlockReason::Ambiguous,
+            },
+            confidence: 1.0,
+            rationale: "test".into(),
+        };
+        assert_eq!(ReactionOutcome::Decided(decision).label(), "Clarify");
+    }
+
+    #[test]
+    fn acted_reported_label_is_acted_reported() {
+        let disposition = Disposition::Reported(sample_report());
+        assert_eq!(
+            ReactionOutcome::Acted(disposition).label(),
+            "acted:reported"
+        );
+    }
+
+    #[test]
+    fn acted_clarify_label_is_acted_clarify() {
+        let disposition = Disposition::Clarify {
+            questions: vec!["why?".into()],
+            what_blocked: BlockReason::Ambiguous,
+        };
+        assert_eq!(ReactionOutcome::Acted(disposition).label(), "acted:clarify");
+    }
+
+    #[test]
+    fn acted_propose_label_is_acted_proposed() {
+        let disposition = Disposition::Propose(sample_signed_proposal());
+        assert_eq!(
+            ReactionOutcome::Acted(disposition).label(),
+            "acted:proposed"
+        );
+    }
+
+    #[test]
+    fn dispatched_label_is_dispatched() {
+        let outcome = ReactionOutcome::Dispatched {
+            session_id: "session-123".into(),
+        };
+        assert_eq!(outcome.label(), "dispatched");
+    }
+}

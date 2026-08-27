@@ -4,8 +4,12 @@
 //! These live outside `main.rs` because that file sits over every module-health review
 //! boundary — any line added there regresses the ratchet (see `module-health.toml`).
 
-use super::{SessionRound, build_task_context, derive_task_id, session_state_dir};
+use super::{
+    SessionRound, build_task_context, derive_task_id, now_unix_seconds, push_work,
+    session_state_dir,
+};
 use liberado_coder_core::CoderTuning;
+use liberado_common::process::std_command;
 
 /// build_task_context with the repo map disabled: the workspace summary (and prior-round
 /// history when a session id is given) is all that feeds the task context; no shell-out.
@@ -96,5 +100,72 @@ async fn build_task_context_separates_workspace_summary_from_session_history() {
     assert!(
         between.contains("\n\n"),
         "workspace summary and session history must be separated by a blank line, got: {between:?}"
+    );
+}
+
+/// Mutation-survivor kills (see `docs/validation/mutation-testing/mutation-testing-report-coder-runner.md`).
+/// These live here rather than in a new file so `main.rs` stays under the module-health
+/// ratchet — every line added to `main.rs` regresses its Ploc baseline.
+/// A temp repo with one committed file, a bare `origin` remote, and a branch ready to push.
+fn survivor_temp_repo_with_remote() -> (tempfile::TempDir, tempfile::TempDir) {
+    let work = tempfile::tempdir().expect("tempdir");
+    let wp = work.path().to_string_lossy().to_string();
+    let bare = tempfile::tempdir().expect("bare tempdir");
+    let bp = bare.path().to_string_lossy().to_string();
+
+    let run = |args: &[&str]| {
+        let out = std_command("git").args(args).output().expect("git");
+        assert!(
+            out.status.success(),
+            "git {args:?} failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    };
+
+    run(&["-C", &wp, "init", "-q"]);
+    run(&["-C", &bp, "init", "--bare", "-q"]);
+    run(&["-C", &wp, "remote", "add", "origin", &bp]);
+    std::fs::write(work.path().join("seed.txt"), "seed\n").expect("seed");
+    run(&["-C", &wp, "add", "-A"]);
+    run(&[
+        "-C",
+        &wp,
+        "-c",
+        "user.name=t",
+        "-c",
+        "user.email=t@t",
+        "commit",
+        "-q",
+        "-m",
+        "seed",
+    ]);
+    run(&["-C", &wp, "checkout", "-q", "-b", "agent/x-123"]);
+    (work, bare)
+}
+
+#[test]
+fn now_unix_seconds_is_a_recent_epoch() {
+    // Kills the mutants that replace the body with `0` or `1`: a real clock reads far above the
+    // 2023 epoch, so any constant collapses to a wrong, tiny value.
+    let t = now_unix_seconds();
+    assert!(
+        t > 1_700_000_000,
+        "now_unix_seconds returned {t}; expected a recent unix timestamp"
+    );
+}
+
+#[tokio::test]
+async fn push_work_pushes_the_branch_to_origin() {
+    let (work, bare) = survivor_temp_repo_with_remote();
+    push_work(work.path(), "agent/x-123").await;
+
+    let out = std_command("git")
+        .args(["ls-remote", "--heads", bare.path().to_str().unwrap()])
+        .output()
+        .expect("ls-remote");
+    let remote = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        remote.contains("agent/x-123"),
+        "push_work did not push the branch to origin: {remote}"
     );
 }

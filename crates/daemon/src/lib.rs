@@ -379,7 +379,7 @@ impl Daemon {
     }
 
     /// Spawn the background proposal-expiry reaper when a non-zero interval is configured.
-    fn spawn_reaper(&mut self) {
+    pub(crate) fn spawn_reaper(&mut self) {
         if !self.proposal_reap_interval.is_zero() {
             let reap_interval = self.proposal_reap_interval;
             let reap_vault = self.vault.clone();
@@ -396,3 +396,51 @@ impl Daemon {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod accessor_tests {
+    //! Pin the small accessors in [`Daemon`] so cargo-mutants' "replace with `Default::default()`"
+    //! / "replace with `None`" / "replace with `Some(Default::default())`" alternatives cannot
+    //! survive a configured input.
+    use super::Daemon;
+    use std::time::Duration;
+
+    async fn fresh_daemon() -> (Daemon, tempfile::TempDir) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let daemon = Daemon::open("test", dir.path()).await.expect("open daemon");
+        (daemon, dir)
+    }
+
+    #[tokio::test]
+    async fn proposal_reap_interval_returns_configured_value() {
+        let (daemon, _dir) = fresh_daemon().await;
+        let daemon = daemon.with_proposal_reap_interval(123);
+        assert_eq!(
+            daemon.proposal_reap_interval(),
+            Duration::from_secs(123),
+            "proposal_reap_interval() must echo the configured value, not the default"
+        );
+    }
+
+    #[tokio::test]
+    async fn user_timezone_returns_configured_value() {
+        use liberado_common::UserTimezone;
+        let (daemon, _dir) = fresh_daemon().await;
+        let tz = UserTimezone::parse("America/New_York").expect("valid timezone");
+        let daemon = daemon.with_user_timezone(tz);
+        assert_eq!(
+            daemon.user_timezone(),
+            Some(tz),
+            "user_timezone() must echo the configured value, not None or Default"
+        );
+    }
+
+    #[tokio::test]
+    async fn user_timezone_is_none_by_default() {
+        let (daemon, _dir) = fresh_daemon().await;
+        assert!(
+            daemon.user_timezone().is_none(),
+            "a daemon with no timezone configured must report None"
+        );
+    }
+}

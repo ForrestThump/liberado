@@ -199,6 +199,10 @@ const TIMEOUT_OVERRIDES: &[(&str, &str, &str)] = &[
     // provider-free-proxy: 90 lib tests plus wiremock integration exceed the
     // 3s unmutated baseline (debug.log: process_status=Timeout elapsed=3.0s).
     ("liberado-provider-free-proxy", "30", "30"),
+    // daemon: the reaper integration test (spawn_reaper launches the expiry
+    // reaper and waits a 1s tick) pushes the unmutated baseline past 3s on a
+    // cold target/mutants cache, timing out the run before any mutant starts.
+    ("liberado-daemon", "20", "20"),
 ];
 
 fn build_mutants_command(package: &str, profile: RunProfile) -> String {
