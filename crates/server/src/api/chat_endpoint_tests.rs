@@ -109,6 +109,30 @@ async fn streaming_without_chat_fails_as_an_sse_event_on_both_verbs() {
             body.contains("event: failed"),
             "the failure rides the converged vocabulary: {body}"
         );
+        assert!(
+            body.contains('\u{2014}'),
+            "disabled-chat error must carry a UTF-8 em-dash, not Windows-1252 mojibake: {body}"
+        );
+        assert!(
+            !body.contains('\u{00e2}'),
+            "U+00E2 is the first character of the Windows-1252 misread of U+2014: {body}"
+        );
+        let data = body
+            .lines()
+            .find_map(|line| {
+                line.strip_prefix("data:")
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+            })
+            .expect("SSE failed event carries a data line");
+        let event = chat_client_contract::SessionEvent::from_sse_data("failed", data)
+            .expect("failed payload must decode");
+        match event.kind {
+            chat_client_contract::SessionEventKind::Failed { message } => {
+                assert_eq!(message, super::CHAT_DISABLED_HINT);
+            }
+            other => panic!("expected Failed, got {other:?}"),
+        }
     }
 }
 

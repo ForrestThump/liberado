@@ -198,6 +198,10 @@ fn pick_chat_creation(
     }
 }
 
+/// `\u{2014}` keeps this glyph ASCII in source. UTF-8 em-dash bytes (`E2 80 94`) read as
+/// Windows-1252 become U+00E2 U+20AC U+201D in the WebUI error bubble.
+const CHAT_DISABLED_HINT: &str = "chat is disabled \u{2014} set DEEPSEEK_API_KEY";
+
 /// Build a single-`failed`-event stream response: the shape every "the stream cannot start" path
 /// returns (chat disabled, profile resolution failure, creation failure). Sends the error on the
 /// channel and destroys `tx` so a successful start owns the only remaining sender.
@@ -243,7 +247,7 @@ async fn chat_stream_core(
 
     let Some(sessions) = state.chat.clone() else {
         // No chat configured: a single `failed` event, and no `session` head (there's no session).
-        return fail_stream_response(tx, rx, "chat is disabled â€” set DEEPSEEK_API_KEY".into());
+        return fail_stream_response(tx, rx, CHAT_DISABLED_HINT.into());
     };
 
     // Resolve the session up front (creating one on the first message), so we can announce it to the
@@ -478,7 +482,7 @@ pub async fn chat(
         return (
             StatusCode::SERVICE_UNAVAILABLE,
             Json(ApiError {
-                error: "chat is disabled â€” set DEEPSEEK_API_KEY".into(),
+                error: CHAT_DISABLED_HINT.into(),
             }),
         )
             .into_response();
@@ -530,7 +534,7 @@ pub async fn list_conversations(State(state): State<Arc<AppState>>) -> impl Into
         return (
             StatusCode::SERVICE_UNAVAILABLE,
             Json(ApiError {
-                error: "chat is disabled â€” set DEEPSEEK_API_KEY".into(),
+                error: CHAT_DISABLED_HINT.into(),
             }),
         )
             .into_response();
@@ -792,7 +796,7 @@ pub async fn patch_conversation_title(
         return (
             StatusCode::SERVICE_UNAVAILABLE,
             Json(ApiError {
-                error: "chat is disabled â€” set DEEPSEEK_API_KEY".into(),
+                error: CHAT_DISABLED_HINT.into(),
             }),
         )
             .into_response();
@@ -825,7 +829,7 @@ pub async fn get_conversation(
         return (
             StatusCode::SERVICE_UNAVAILABLE,
             Json(ApiError {
-                error: "chat is disabled â€” set DEEPSEEK_API_KEY".into(),
+                error: CHAT_DISABLED_HINT.into(),
             }),
         )
             .into_response();
