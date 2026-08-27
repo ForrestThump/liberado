@@ -7,6 +7,9 @@ use crate::components::model_browser::ModelBrowser;
 use crate::components::picker::Picker;
 use crate::components::profile_browser::ProfileBrowser;
 use crate::components::slash_palette::SlashPalette;
+use crate::icons::{
+    IconCheck, IconChevronDown, IconChevronRight, IconGlasses, IconSpinner, IconStop, IconX,
+};
 
 // Slash commands only run in the browser — `submit` gates the whole block on wasm32, so gate the
 // imports identically or a native build trips the workspace's zero-warnings bar on unused imports.
@@ -117,6 +120,14 @@ async fn fetch_conversation(api_base: &str, conv_id: &str) -> Result<LoadedConve
         turn_running: history.turn_running,
         turn_unanswered: history.turn_unanswered,
     })
+}
+
+/// Blank the local transcript only when we just left a saved conversation.
+///
+/// A first turn that has not received a session id yet has neither a session nor a ghost —
+/// wiping it is what made Send look silent after a stream failure.
+fn clear_transcript_on_missing_id(has_session: bool, has_ghost: bool) -> bool {
+    has_session && !has_ghost
 }
 
 // ── Chat component ──────────────────────────────────────────────────────────
@@ -268,19 +279,23 @@ pub fn Chat(
                         }
                     }
                 });
-            } else if ghost_session.read().is_none() {
+            } else if clear_transcript_on_missing_id(
+                session.read().is_some(),
+                ghost_session.read().is_some(),
+            ) {
                 messages.set(Vec::new());
                 session.set(None);
                 // A new chat starts on the default grant; leaving a stale chip up would claim
                 // otherwise.
                 active_profile.set(None);
             }
-            // An incognito chat is deliberately *not* an `active_conv_id`: it is not in the sidebar,
-            // so there is nothing there to highlight, and letting it set one would make the
-            // conversation list flicker at a row that does not exist. That leaves this effect seeing
-            // `None` and reading it as "fresh chat" — which would blank the live transcript the
-            // moment `sending` flips false at the end of the first turn. The guard above is what
-            // keeps a private chat on screen; `discard_ghost` is the only thing that clears it.
+            // No conversation id. An incognito chat never has one (it is not in the sidebar, so
+            // there is nothing there to highlight), and a first durable turn does not have one
+            // until the stream sends `session`. Blanking here is what made Send look silent: a
+            // failed first turn flips `sending` false, this effect runs, and the optimistic user
+            // bubble disappeared. Leave the local transcript; New Chat and leaving a saved
+            // conversation still clear through the branch above (they have a session) or through
+            // the new-chat effect.
         }
         #[cfg(not(target_arch = "wasm32"))]
         {
@@ -367,6 +382,7 @@ pub fn Chat(
         #[cfg(target_arch = "wasm32")]
         {
             if let Some(id) = session() {
+                let stop_base = api_base.clone();
                 let url = format!("{stop_base}/api/conversations/{id}/cancel");
                 wasm_bindgen_futures::spawn_local(async move {
                     let _ = reqwest::Client::new().post(&url).send().await;
@@ -567,7 +583,7 @@ pub fn Chat(
                         onclick: move |_| profile_browser_open.set(true),
                         span { class: "profile-chip-label", "profile" }
                         span { class: "profile-chip-name", "{label}" }
-                        span { class: "profile-chip-caret", "\u{25BE}" }
+                        span { class: "profile-chip-caret", IconChevronDown {} }
                     }
                 }
             }
@@ -578,7 +594,7 @@ pub fn Chat(
                 // second sentence is the honest limit of the promise.
                 div {
                     class: "incognito-banner",
-                    span { class: "incognito-glyph", "\u{1F576}" }
+                    span { class: "incognito-glyph", IconGlasses {} }
                     span {
                         b { "Incognito." }
                         " This chat is never written to disk and is discarded when you leave it. Actions the agent takes — notes, memories, files — still happen."
@@ -681,7 +697,9 @@ pub fn Chat(
                 }
             }
 
-            if palette_open() {
+            div {
+                class: "composer-dock",
+                if palette_open() {
                 SlashPalette {
                     input: input(),
                     selected: slash_index(),
@@ -698,7 +716,7 @@ pub fn Chat(
                 }
             }
 
-            form {
+                form {
                 class: "input-bar",
                 onsubmit: move |evt| {
                     evt.prevent_default();
@@ -808,7 +826,7 @@ pub fn Chat(
                         r#type: "button",
                         onclick: move |_| stop_stream(),
                         title: "Stop generating",
-                        "\u{23F9}"
+                        IconStop {}
                     }
                 }
                 button {
@@ -816,6 +834,7 @@ pub fn Chat(
                     r#type: "submit",
                     disabled: sending(),
                     "Send"
+                }
                 }
             }
         }
@@ -888,7 +907,6 @@ fn ToolBlock(content: String) -> Element {
     // The daemon's first line is already a summary ("RESULT (Succeeded):"). Reuse it as the header
     // rather than inventing one, falling back only if it is empty so the header is never blank.
     let label = tool_block_label(&content);
-    let arrow = if expanded() { "\u{25BC}" } else { "\u{25B8}" };
 
     rsx! {
         div {
@@ -902,8 +920,10 @@ fn ToolBlock(content: String) -> Element {
                     let now = expanded();
                     expanded.set(!now);
                 },
-                span { class: "thinking-arrow", "{arrow}" }
-                span { class: "thinking-label", "\u{1F527} {label}" }
+                span { class: "thinking-arrow",
+                    if expanded() { IconChevronDown {} } else { IconChevronRight {} }
+                }
+                span { class: "thinking-label", "{label}" }
             }
             if expanded() {
                 div {
@@ -936,7 +956,6 @@ fn ThinkingGroup(steps: Vec<ThinkingStep>) -> Element {
     let summary: Vec<String> = steps.iter().map(|s| s.tool_name.clone()).collect();
     let summary_text = summary.join(", ");
 
-    let header_arrow = if expanded() { "\u{25BC}" } else { "\u{25B8}" };
     let header_label = if has_pending {
         format!(
             "Thinking ({count} step{plural}): {summary_text} \u{2026}",
@@ -956,7 +975,9 @@ fn ThinkingGroup(steps: Vec<ThinkingStep>) -> Element {
                 class: "thinking-header",
                 r#type: "button",
                 onclick: toggle,
-                span { class: "thinking-arrow", "{header_arrow}" }
+                span { class: "thinking-arrow",
+                    if expanded() { IconChevronDown {} } else { IconChevronRight {} }
+                }
                 span { class: "thinking-label", "{header_label}" }
             }
             if expanded() {
@@ -1001,19 +1022,19 @@ fn ThinkingStepRow(step: ThinkingStep) -> Element {
 
     let args_text = args_display(&step.tool_args);
 
-    let mark = match step.ok {
-        None => "\u{23F3}",
-        Some(true) => "\u{2713}",
-        Some(false) => "\u{2717}",
-    };
-
-    let name_text = format!("\u{1F527} {}{}", step.tool_name, args_text);
+    let name_text = format!("{}{}", step.tool_name, args_text);
 
     rsx! {
         div {
             class: "{status_cls}",
             span { class: "thinking-step-name", "{name_text}" }
-            span { class: "thinking-step-mark", "{mark}" }
+            span { class: "thinking-step-mark",
+                match step.ok {
+                    None => rsx! { IconSpinner {} },
+                    Some(true) => rsx! { IconCheck {} },
+                    Some(false) => rsx! { IconX {} },
+                }
+            }
             if !step.preview.is_empty() {
                 span { class: "thinking-step-preview", "{step.preview}" }
             }
@@ -1597,6 +1618,20 @@ mod chat_msg_tests {
         });
         assert!(msg.thinking_steps.is_empty());
         assert_eq!(msg.content, "hi");
+    }
+
+    /// The history effect must not wipe a first turn just because it has no conversation id yet.
+    /// That is the Silent Send bug: stream fail → `sending` false → `active_conv_id` still None →
+    /// the optimistic user bubble vanished. A ghost (incognito) also keeps its transcript.
+    #[test]
+    fn a_first_turn_without_a_session_keeps_the_local_transcript() {
+        assert!(!clear_transcript_on_missing_id(false, false));
+        assert!(!clear_transcript_on_missing_id(false, true));
+        assert!(
+            clear_transcript_on_missing_id(true, false),
+            "leaving a saved conversation should still blank"
+        );
+        assert!(!clear_transcript_on_missing_id(true, true));
     }
 
     /// The three constructors set the role that each message kind renders under — a user message
