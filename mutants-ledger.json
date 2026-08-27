@@ -1863,6 +1863,36 @@
         "timeout": 0,
         "unviable": 29
       }
+    },
+    {
+      "package": "liberado-coder-runner",
+      "commit": "ce1db7a567c81da6416b7f26d17ff77a555fb740",
+      "recorded_at": "2026-08-27",
+      "command": "cargo mutants -p liberado-coder-runner --cap-lints true --timeout 3.0 --minimum-test-timeout 30 --in-place",
+      "tool_version": "27.1.0",
+      "scope": "package",
+      "counts": {
+        "viable": 78,
+        "caught": 69,
+        "survived": 9,
+        "timeout": 0,
+        "unviable": 13
+      }
+    },
+    {
+      "package": "liberado-coder-runner",
+      "commit": "ce1db7a567c81da6416b7f26d17ff77a555fb740",
+      "recorded_at": "2026-08-27",
+      "command": "cargo mutants -p liberado-coder-runner --cap-lints true --timeout 3.0 --minimum-test-timeout 30 --in-place",
+      "tool_version": "27.1.0",
+      "scope": "package",
+      "counts": {
+        "viable": 78,
+        "caught": 72,
+        "survived": 6,
+        "timeout": 0,
+        "unviable": 13
+      }
     }
   ]
 }
