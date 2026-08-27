@@ -2548,7 +2548,10 @@ fn cosine(
     if norm_a == 0.0 || norm_b == 0.0 {
         return 0.0;
     }
-    dot / (norm_a * norm_b)
+    // f32 summation order can nudge a true 1.0 a hair past the unit interval (see
+    // proptest_args_similarity_stays_in_unit_range / CI on main after #208). Clamp so
+    // callers treating this as a [0, 1] similarity never see out-of-range scores.
+    (dot / (norm_a * norm_b)).clamp(0.0, 1.0)
 }
 
 #[cfg(test)]
@@ -4630,6 +4633,18 @@ mod tests {
     }
 
     #[test]
+    fn args_similarity_permutation_arrays_stay_in_unit_range() {
+        // Minimal failing input from main CI after #208 (ubuntu test job).
+        let a = serde_json::json!([null, false]);
+        let b = serde_json::json!([false, null]);
+        let s = args_similarity(&a, &b);
+        assert!(
+            (0.0..=1.0).contains(&s),
+            "permuted near-duplicate arrays must stay in [0,1], got {s}"
+        );
+    }
+
+    #[test]
     fn args_similarity_default_near_duplicates() {
         let a = serde_json::json!({"q": "hello world"});
         let b = serde_json::json!({"q": "hello world"});
@@ -5308,10 +5323,8 @@ mod proptest_tests {
         (args_similarity(&x, &x) - 1.0).abs() < 1e-5
     }
 
-    /// The output is a similarity: never negative, never above 1. (A cosine of two non-empty
-    /// vectors can round a hair past 1.0 in f32, but the tolerance-free bound here holds for
-    /// generated inputs because independent trees essentially never produce exactly-proportional
-    /// TF-IDF vectors.)
+    /// The output is a similarity: never negative, never above 1. Cosine clamps f32 noise
+    /// that would otherwise round a hair past 1.0 on near-duplicate bags.
     fn similarity_in_range(a: Value, b: Value) -> bool {
         let s = args_similarity(&a, &b);
         (0.0..=1.0).contains(&s)
