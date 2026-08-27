@@ -315,3 +315,149 @@ fn an_unreadable_section_file_is_an_error_not_defaults() {
     let rendered = err.to_string();
     assert!(rendered.contains(POLICY_FILE), "{rendered}");
 }
+
+// ── log-only NotFound / schema_version survivors ─────────────────────────────
+// Same shape as coder-core's prompts_guard_survivor_tests: both match arms return
+// Policy::default(); only the WARN distinguishes missing vs unreadable. The
+// schema_version `!=` is likewise only observable via the warn event.
+
+use std::sync::{Arc, Mutex as StdMutex};
+
+#[derive(Default, Clone)]
+struct Captured(Arc<StdMutex<Vec<(tracing::Level, String)>>>);
+
+impl<S: tracing::Subscriber> tracing_subscriber::layer::Layer<S> for Captured {
+    fn on_event(&self, event: &tracing::Event<'_>, _: tracing_subscriber::layer::Context<'_, S>) {
+        struct Msg(Vec<String>);
+        impl tracing::field::Visit for Msg {
+            fn record_debug(&mut self, f: &tracing::field::Field, v: &dyn std::fmt::Debug) {
+                self.0.push(format!("{}={v:?}", f.name()));
+            }
+        }
+        let mut m = Msg(Vec::new());
+        event.record(&mut m);
+        self.0
+            .lock()
+            .unwrap()
+            .push((*event.metadata().level(), m.0.join(" ")));
+    }
+}
+
+/// Missing overlay stays quiet; an unreadable overlay must WARN.
+///
+/// Kills: match-guard `==`→`!=`, guard→false (missing would warn), and on unix
+/// guard→true (unreadable would stay silent).
+#[test]
+fn missing_grants_overlay_is_quiet_while_unreadable_is_loud() {
+    use tracing_subscriber::layer::SubscriberExt as _;
+
+    let captured = Captured::default();
+    let sub = tracing_subscriber::registry().with(captured.clone());
+    let dir = tempfile::tempdir().unwrap();
+    let missing = dir.path().join("does-not-exist-grants.overlay.toml");
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let locked = dir.path().join("locked.overlay.toml");
+        std::fs::write(&locked, "grants = []\n").unwrap();
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+        tracing::subscriber::with_default(sub, || {
+            let _ = load_grants_overlay_at(&missing);
+            let _ = load_grants_overlay_at(&locked);
+        });
+
+        let _ = std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o644));
+
+        let seen = captured.0.lock().unwrap();
+        assert!(
+            seen.iter()
+                .any(|(l, m)| *l == tracing::Level::WARN && m.contains("could not be read")),
+            "unreadable overlay must warn: {seen:?}"
+        );
+        assert!(
+            !seen
+                .iter()
+                .any(|(_, m)| m.contains("does-not-exist-grants.overlay.toml")),
+            "missing overlay stays silent: {seen:?}"
+        );
+    }
+
+    #[cfg(not(unix))]
+    {
+        tracing::subscriber::with_default(sub, || {
+            let _ = load_grants_overlay_at(&missing);
+        });
+        let seen = captured.0.lock().unwrap();
+        assert!(
+            !seen
+                .iter()
+                .any(|(l, _)| *l == tracing::Level::WARN),
+            "missing overlay stays silent: {seen:?}"
+        );
+    }
+}
+
+/// Mismatched tuning schema_version must WARN; an exact match must not.
+///
+/// Kills: `ver != CURRENT_SCHEMA_VERSION` → `==` (would warn on match / stay quiet on mismatch).
+#[test]
+fn tuning_schema_version_mismatch_warns_match_is_quiet() {
+    use tracing_subscriber::layer::SubscriberExt as _;
+
+    let _guard = env_lock().lock().unwrap();
+    let data = tempfile::tempdir().unwrap();
+    let _data_env = EnvGuard::set(DATA_DIR_ENV, data.path());
+
+    let captured = Captured::default();
+    let sub = tracing_subscriber::registry().with(captured.clone());
+
+    let cfg_mismatch = tempfile::tempdir().unwrap();
+    std::fs::write(
+        cfg_mismatch.path().join(TOPOLOGY_FILE),
+        "vault_path = \"/tmp/schema-survivor-vault\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        cfg_mismatch.path().join(TUNING_FILE),
+        format!("schema_version = \"not-{CURRENT_SCHEMA_VERSION}\"\n"),
+    )
+    .unwrap();
+
+    let cfg_match = tempfile::tempdir().unwrap();
+    std::fs::write(
+        cfg_match.path().join(TOPOLOGY_FILE),
+        "vault_path = \"/tmp/schema-survivor-vault\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        cfg_match.path().join(TUNING_FILE),
+        format!("schema_version = \"{CURRENT_SCHEMA_VERSION}\"\n"),
+    )
+    .unwrap();
+
+    tracing::subscriber::with_default(sub, || {
+        load_config(Some(cfg_mismatch.path())).expect("mismatch still loads");
+        load_config(Some(cfg_match.path())).expect("match still loads");
+    });
+
+    let seen = captured.0.lock().unwrap();
+    let mismatch_warns = seen.iter().any(|(l, m)| {
+        *l == tracing::Level::WARN
+            && m.contains(&format!("schema_version 'not-{CURRENT_SCHEMA_VERSION}'"))
+    });
+    assert!(
+        mismatch_warns,
+        "mismatched schema_version must warn: {seen:?}"
+    );
+    // Mutant `!=`→`==` warns when the configured value equals current.
+    let match_warns = seen.iter().any(|(l, m)| {
+        *l == tracing::Level::WARN
+            && m.contains(&format!("schema_version '{CURRENT_SCHEMA_VERSION}' does not match"))
+    });
+    assert!(
+        !match_warns,
+        "matching schema_version must stay quiet: {seen:?}"
+    );
+}
