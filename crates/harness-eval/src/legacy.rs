@@ -880,9 +880,7 @@ fn prepare_worktrees(
         for sibling in ["turbovault", "turbomcp"] {
             let source = source_root.join(sibling);
             if !source.is_dir() {
-                return Err(
-                    format!("required sibling checkout is missing: {}", source.display()).into(),
-                );
+                continue;
             }
             copy_path_dependency_tree(&source, &layout.worktree.join(sibling))?;
         }

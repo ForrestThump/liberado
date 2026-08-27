@@ -37,18 +37,21 @@ pub struct PreflightReport {
     pub credential_environment: String,
 }
 
-/// The two sibling path-dependencies this comparison needs must exist.
-fn check_sibling_dependencies(repository: &Path) -> Result<(), Box<dyn Error>> {
-    for sibling in ["turbovault", "turbomcp"] {
-        let path = repository.join(sibling);
-        if !path.is_dir() {
-            return Err(format!("required path dependency is missing: {}", path.display()).into());
-        }
-    }
-    Ok(())
+/// Leftover local `turbovault/` / `turbomcp/` trees are optional. Cargo fetches the git+tag pins.
+fn optional_sibling_bytes(repository: &Path) -> Result<u64, Box<dyn Error>> {
+    ["turbovault", "turbomcp"]
+        .iter()
+        .try_fold(0_u64, |total, sibling| {
+            let path = repository.join(sibling);
+            if !path.is_dir() {
+                return Ok(total);
+            }
+            directory_size_without_caches(&path).map(|size| total.saturating_add(size))
+        })
+        .map_err(|err| err.into())
 }
 
-/// Free-space vs the disk estimate (reserve + dependency bytes × harness count). Returns the
+/// Free-space vs the disk estimate (reserve + leftover-clone bytes × harness count). Returns the
 /// measured free bytes and the estimate; fails when the host is too tight.
 fn disk_reserve_check(
     repository: &Path,
@@ -60,13 +63,7 @@ fn disk_reserve_check(
         .limits
         .minimum_free_bytes
         .max(policy.minimum_free_bytes);
-    let dependency_bytes =
-        ["turbovault", "turbomcp"]
-            .iter()
-            .try_fold(0_u64, |total, sibling| {
-                directory_size_without_caches(&repository.join(sibling))
-                    .map(|size| total.saturating_add(size))
-            })?;
+    let dependency_bytes = optional_sibling_bytes(repository)?;
     let harness_count = spec.harnesses.len() as u64;
     let estimated_required_bytes = reserve
         .saturating_add(dependency_bytes.saturating_mul(harness_count))
@@ -144,7 +141,6 @@ pub fn run(
     let repository = spec.repository.canonicalize()?;
     require_program("git")?;
     require_program("cargo")?;
-    check_sibling_dependencies(&repository)?;
     reject_git_index_locks(&repository)?;
     let base_commit = git_capture(
         &repository,
@@ -524,14 +520,10 @@ mod tests {
         assert_eq!(credential.expose(), "dummy");
         assert!(!format!("{credential:?}").contains("dummy"));
 
-        // A missing path dependency is a fail-fast condition.
+        // Leftover nested clones are optional; cargo fetches the git+tag pins.
         fs::remove_dir_all(repository.join("turbovault")).unwrap();
-        let err = run(&spec, &policy).unwrap_err();
-        assert!(
-            err.to_string().contains("required path dependency"),
-            "{err}"
-        );
-        fs::create_dir(repository.join("turbovault")).unwrap();
+        fs::remove_dir_all(repository.join("turbomcp")).unwrap();
+        run(&spec, &policy).expect("missing leftover clones must not fail preflight");
 
         // A stale worktree index lock blocks the run rather than corrupting the pinned worktrees.
         let worktree_lock = repository.join(".git/worktrees/some-worktree/index.lock");

@@ -1,15 +1,13 @@
 # Liberado — Rust-native personal AI Life OS.
 #
 # One Cargo workspace for the Liberado system (Decision 7). External dependencies
-# (turbovault, turbomcp) are NOT members — they are consumed as path dependencies
-# during co-development (checked out as siblings) and pinned to crates.io for release
-# builds. They live in their own workspaces, so they are excluded here.
+# (turbovault, turbomcp) are NOT members — they are consumed as git+tag pins on the
+# ForrestThump forks. Leftover `turbovault/` and `turbomcp/` directories are gitignored
+# and are not required to build.
 [workspace]
 resolver = "3"
 members = ["crates/*"]
 exclude = [
-    "turbovault",
-    "turbomcp",
     "liberado-tool-helper-mcp", # superseded by crates/memory-store + crates/memory-mcp (Decision 7)
     "mcps",
 ]
@@ -102,26 +100,24 @@ liberado-sysmap = { path = "crates/sysmap" }
 liberado-sysmap-gui = { path = "crates/sysmap-gui" }
 sysmap-core = { path = "crates/sysmap-core" }
 
-# --- co-developed path dependencies (Decision 7) ---
-# Pinned to whatever is checked out in the sibling directories (currently the
-# `develop` staging branch). Swap to crates.io versions for release builds.
-turbovault-core = { path = "turbovault/crates/turbovault-core" }
-turbovault-vault = { path = "turbovault/crates/turbovault-vault" }
-turbovault-audit = { path = "turbovault/crates/turbovault-audit" }
-turbovault = { path = "turbovault/crates/turbovault" } # umbrella (ObsidianMcpServer) — test-only
-# liberado-memory-store's semantic recall. (2026-07-11: the vector-db work is on the fork's
-# `develop` like the other turbovault-* deps — the old "pinned to feature/vector-db" note was
-# stale; CI checks out `develop` for both siblings.)
-turbovault-vector = { path = "turbovault/crates/turbovault-vector" }
-turbomcp = { path = "turbomcp/crates/turbomcp" }
-turbomcp-client = { path = "turbomcp/crates/turbomcp-client" }
-turbomcp-transport = { path = "turbomcp/crates/turbomcp-transport" } # ChildProcessTransport (stdio connector)
-turbomcp-server = { path = "turbomcp/crates/turbomcp-server" } # test-only (in-process channel server)
-turbomcp-core = { path = "turbomcp/crates/turbomcp-core" }     # test-only (McpHandler)
-turbomcp-types = { path = "turbomcp/crates/turbomcp-types" }   # test-only (handler types)
+# --- co-developed git+tag pins (Decision 7) ---
+# ForrestThump forks at tag `liberado-2026-08-27`. Cargo fetches them; path siblings are
+# not required. Swap to crates.io versions for release builds once the forks publish.
+turbovault-core = { git = "https://github.com/ForrestThump/turbovault", tag = "liberado-2026-08-27" }
+turbovault-vault = { git = "https://github.com/ForrestThump/turbovault", tag = "liberado-2026-08-27" }
+turbovault-audit = { git = "https://github.com/ForrestThump/turbovault", tag = "liberado-2026-08-27" }
+turbovault = { git = "https://github.com/ForrestThump/turbovault", tag = "liberado-2026-08-27" } # umbrella (ObsidianMcpServer) — test-only
+# liberado-memory-store's semantic recall.
+turbovault-vector = { git = "https://github.com/ForrestThump/turbovault", tag = "liberado-2026-08-27" }
+turbomcp = { git = "https://github.com/ForrestThump/turbomcp", tag = "liberado-2026-08-27" }
+turbomcp-client = { git = "https://github.com/ForrestThump/turbomcp", tag = "liberado-2026-08-27" }
+turbomcp-transport = { git = "https://github.com/ForrestThump/turbomcp", tag = "liberado-2026-08-27" } # ChildProcessTransport (stdio connector)
+turbomcp-server = { git = "https://github.com/ForrestThump/turbomcp", tag = "liberado-2026-08-27" } # test-only (in-process channel server)
+turbomcp-core = { git = "https://github.com/ForrestThump/turbomcp", tag = "liberado-2026-08-27" }     # test-only (McpHandler)
+turbomcp-types = { git = "https://github.com/ForrestThump/turbomcp", tag = "liberado-2026-08-27" }   # test-only (handler types)
 
-# Co-development: our path-dep turbovault still declares the `turbomcp*` crates as "3.1.5" from
-# crates.io. Redirect them to the local fork so the whole tree builds against ONE turbomcp — the one
+# The git-pinned turbovault still declares the `turbomcp*` crates as "3.1.5" from crates.io.
+# Redirect them to the same ForrestThump tag so the whole tree builds against ONE turbomcp — the one
 # carrying the request `_meta` pass-through. Remove once turbomcp publishes the change.
 #
 # Every turbomcp-* crate turbovault names must be listed, not just the umbrella. Patching `turbomcp`
@@ -130,10 +126,10 @@ turbomcp-types = { path = "turbomcp/crates/turbomcp-types" }   # test-only (hand
 # stopped unifying: "expected `ResourceTemplate`, found `turbomcp_core::ResourceTemplate`". That is
 # what kept the `e2e` provenance capstone unbuildable and switched off.
 [patch.crates-io]
-turbomcp = { path = "turbomcp/crates/turbomcp" }
-turbomcp-core = { path = "turbomcp/crates/turbomcp-core" }
-turbomcp-server = { path = "turbomcp/crates/turbomcp-server" }
-turbomcp-types = { path = "turbomcp/crates/turbomcp-types" }
+turbomcp = { git = "https://github.com/ForrestThump/turbomcp", tag = "liberado-2026-08-27" }
+turbomcp-core = { git = "https://github.com/ForrestThump/turbomcp", tag = "liberado-2026-08-27" }
+turbomcp-server = { git = "https://github.com/ForrestThump/turbomcp", tag = "liberado-2026-08-27" }
+turbomcp-types = { git = "https://github.com/ForrestThump/turbomcp", tag = "liberado-2026-08-27" }
 
 [profile.release]
 lto = true

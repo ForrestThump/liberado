@@ -3615,91 +3615,91 @@ version = "0.28.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.turbomcp]]
-version = "3.1.5"
+version = "3.1.5@git:d5d9a9f8321f07b9693e9869b8afebfecc049e71"
 criteria = "safe-to-deploy"
 
 [[exemptions.turbomcp-client]]
-version = "3.1.5"
+version = "3.1.5@git:d5d9a9f8321f07b9693e9869b8afebfecc049e71"
 criteria = "safe-to-deploy"
 
 [[exemptions.turbomcp-core]]
-version = "3.1.5"
+version = "3.1.5@git:d5d9a9f8321f07b9693e9869b8afebfecc049e71"
 criteria = "safe-to-deploy"
 
 [[exemptions.turbomcp-http]]
-version = "3.1.5"
+version = "3.1.5@git:d5d9a9f8321f07b9693e9869b8afebfecc049e71"
 criteria = "safe-to-deploy"
 
 [[exemptions.turbomcp-macros]]
-version = "3.1.5"
+version = "3.1.5@git:d5d9a9f8321f07b9693e9869b8afebfecc049e71"
 criteria = "safe-to-deploy"
 
 [[exemptions.turbomcp-protocol]]
-version = "3.1.5"
+version = "3.1.5@git:d5d9a9f8321f07b9693e9869b8afebfecc049e71"
 criteria = "safe-to-deploy"
 
 [[exemptions.turbomcp-server]]
-version = "3.1.5"
+version = "3.1.5@git:d5d9a9f8321f07b9693e9869b8afebfecc049e71"
 criteria = "safe-to-deploy"
 
 [[exemptions.turbomcp-stdio]]
-version = "3.1.5"
+version = "3.1.5@git:d5d9a9f8321f07b9693e9869b8afebfecc049e71"
 criteria = "safe-to-deploy"
 
 [[exemptions.turbomcp-telemetry]]
-version = "3.1.5"
+version = "3.1.5@git:d5d9a9f8321f07b9693e9869b8afebfecc049e71"
 criteria = "safe-to-deploy"
 
 [[exemptions.turbomcp-transport]]
-version = "3.1.5"
+version = "3.1.5@git:d5d9a9f8321f07b9693e9869b8afebfecc049e71"
 criteria = "safe-to-deploy"
 
 [[exemptions.turbomcp-transport-traits]]
-version = "3.1.5"
+version = "3.1.5@git:d5d9a9f8321f07b9693e9869b8afebfecc049e71"
 criteria = "safe-to-deploy"
 
 [[exemptions.turbomcp-types]]
-version = "3.1.5"
+version = "3.1.5@git:d5d9a9f8321f07b9693e9869b8afebfecc049e71"
 criteria = "safe-to-deploy"
 
 [[exemptions.turbovault]]
-version = "1.6.0"
+version = "1.6.0@git:bf9f0baf4a91d9e0718f2b8a3112ca0491bf145f"
 criteria = "safe-to-deploy"
 
 [[exemptions.turbovault-audit]]
-version = "1.6.0"
+version = "1.6.0@git:bf9f0baf4a91d9e0718f2b8a3112ca0491bf145f"
 criteria = "safe-to-deploy"
 
 [[exemptions.turbovault-batch]]
-version = "1.6.0"
+version = "1.6.0@git:bf9f0baf4a91d9e0718f2b8a3112ca0491bf145f"
 criteria = "safe-to-deploy"
 
 [[exemptions.turbovault-core]]
-version = "1.6.0"
+version = "1.6.0@git:bf9f0baf4a91d9e0718f2b8a3112ca0491bf145f"
 criteria = "safe-to-deploy"
 
 [[exemptions.turbovault-export]]
-version = "1.6.0"
+version = "1.6.0@git:bf9f0baf4a91d9e0718f2b8a3112ca0491bf145f"
 criteria = "safe-to-deploy"
 
 [[exemptions.turbovault-git]]
-version = "1.6.0"
+version = "1.6.0@git:bf9f0baf4a91d9e0718f2b8a3112ca0491bf145f"
 criteria = "safe-to-deploy"
 
 [[exemptions.turbovault-graph]]
-version = "1.6.0"
+version = "1.6.0@git:bf9f0baf4a91d9e0718f2b8a3112ca0491bf145f"
 criteria = "safe-to-deploy"
 
 [[exemptions.turbovault-parser]]
-version = "1.6.0"
+version = "1.6.0@git:bf9f0baf4a91d9e0718f2b8a3112ca0491bf145f"
 criteria = "safe-to-deploy"
 
 [[exemptions.turbovault-tools]]
-version = "1.6.0"
+version = "1.6.0@git:bf9f0baf4a91d9e0718f2b8a3112ca0491bf145f"
 criteria = "safe-to-deploy"
 
 [[exemptions.turbovault-vault]]
-version = "1.6.0"
+version = "1.6.0@git:bf9f0baf4a91d9e0718f2b8a3112ca0491bf145f"
 criteria = "safe-to-deploy"
 
 [[exemptions.type-map]]

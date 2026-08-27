@@ -102,6 +102,10 @@ fn workflow_has_no_privileged_compilation_path() {
     assert!(text.contains("cargo metadata --locked"));
     assert!(text.contains("cargo deny --locked check"));
     assert!(text.contains("cargo vet --locked"));
+    assert!(
+        !text.contains("checkout-siblings"),
+        "CI must let cargo fetch git+tag forks; do not check out path siblings"
+    );
 }
 
 #[test]

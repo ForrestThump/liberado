@@ -13,21 +13,15 @@
 git status --short
 git branch --show-current
 git log origin/main..HEAD --oneline
-cargo metadata --locked          # fails when turbovault/ or turbomcp/ is missing
+cargo metadata --locked          # resolves git+tag forks from Cargo.lock
 ```
 
-The sibling checkouts are gitignored path dependencies. Never link them
-with a junction; re-clone instead:
+Leftover `turbovault/` and `turbomcp/` directories are gitignored and are not
+required. Never junction them into a worktree. Confirm the git+tag pins:
 
 ```bash
-git clone -q -b develop git@github.com:ForrestThump/turbovault.git turbovault
-git clone -q -b develop git@github.com:ForrestThump/turbomcp.git  turbomcp
-cargo metadata --locked          # confirm the manifest resolves
+cargo metadata --locked
 ```
-
-Missing siblings fail llvm-cov with "The system cannot find the path
-specified" from inside `cargo clean` — the message does not name the
-siblings. Check this first.
 
 ### 2. Surface the CRAP report
 

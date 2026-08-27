@@ -1,10 +1,15 @@
-//! Provision the workspace's gitignored path dependencies into a session worktree.
+//! Provision leftover gitignored path dependencies into a session worktree.
 //!
-//! ## Why a coding worktree could not compile anything
+//! The root manifest pins `turbovault*` and `turbomcp*` as git+tag crates, so a clean checkout
+//! does not need nested clones. This module still copies any `path = "…"` roots the parent
+//! manifest declares — leftover local clones, or a future path dep — because `git worktree add`
+//! never brings gitignored directories along.
 //!
-//! `turbovault/` and `turbomcp/` are path dependencies expected *inside* this repo and are
-//! **gitignored**, so `git worktree add` never brings them along. Cargo then fails at manifest
-//! resolution, before compiling a line:
+//! ## Why a coding worktree used to fail at manifest resolution
+//!
+//! When those crates were path dependencies, `turbovault/` and `turbomcp/` lived *inside* this
+//! repo and were **gitignored**, so `git worktree add` never brought them along. Cargo then failed
+//! at manifest resolution, before compiling a line:
 //!
 //! ```text
 //! error: failed to load source for dependency `turbomcp`

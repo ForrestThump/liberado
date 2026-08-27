@@ -31,8 +31,8 @@ fn git(repository: &Path, args: &[&str]) -> bool {
         .success()
 }
 
-/// A scratch git repository with a committed zero-dependency crate, the required path dependency
-/// siblings, and a committed lockfile so `--locked` accepts the worktrees.
+/// A scratch git repository with a committed zero-dependency crate, optional leftover
+/// nested clones, and a committed lockfile so `--locked` accepts the worktrees.
 fn scratch_repository(temp: &tempfile::TempDir) -> std::path::PathBuf {
     let repository = temp.path().join("repo");
     fs::create_dir_all(repository.join("src")).unwrap();

@@ -22,7 +22,7 @@ external = { path = "../outside/thing" }
 /// The real manifest is the case that matters — a parser that handles the fixture but not
 /// the file it exists for is worth nothing.
 #[test]
-fn the_real_root_manifest_declares_the_expected_roots() {
+fn the_real_root_manifest_pins_forks_by_git_tag_not_path() {
     let manifest = std::fs::read_to_string(
         Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("..")
@@ -32,8 +32,14 @@ fn the_real_root_manifest_declares_the_expected_roots() {
     .expect("read root Cargo.toml");
     let roots = declared_path_dep_roots(&manifest);
     assert!(
-        roots.contains(&"turbovault".to_string()) && roots.contains(&"turbomcp".to_string()),
-        "the sibling checkouts CI clones must be discovered here, got {roots:?}"
+        !roots.iter().any(|r| r == "turbovault" || r == "turbomcp"),
+        "turbovault/turbomcp must be git+tag, not path deps; got {roots:?}"
+    );
+    assert!(
+        manifest.contains("tag = \"liberado-2026-08-27\"")
+            && manifest.contains("https://github.com/ForrestThump/turbovault")
+            && manifest.contains("https://github.com/ForrestThump/turbomcp"),
+        "root manifest must pin ForrestThump forks at liberado-2026-08-27"
     );
 }
 

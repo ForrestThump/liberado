@@ -10,17 +10,12 @@ you keep GitHub from sending the work back.
 
 ## Build and test
 
-**The workspace does not build without two sibling checkouts.** `turbovault/` and `turbomcp/` are
-path dependencies expected *inside* this repo (both gitignored). If they are missing, `cargo` fails
-at manifest resolution before compiling anything:
+**Cargo fetches the co-developed forks by git tag.** `turbovault*` and `turbomcp*` crates are
+pinned to the ForrestThump forks at tag `liberado-2026-08-27` (the same SHAs CI previously
+checked out as path siblings). Nested `turbovault/` and `turbomcp/` clones inside this repo are
+not required; leftover directories stay gitignored if present.
 
-```bash
-git clone <fork>/turbovault turbovault && git -C turbovault checkout develop
-git clone <fork>/turbomcp  turbomcp  && git -C turbomcp  checkout develop
-```
-
-`.github/workflows/ci.yml` checks them out the same way — that file is the authority on what CI
-runs, and preflight mirrors it.
+`.github/workflows/ci.yml` is the authority on what CI runs, and preflight mirrors it.
 
 ```bash
 just ci                                        # full local CI + CRAP ratchet; run before you push
@@ -117,14 +112,12 @@ machine and on no CI runner, so `git commit` in a temp repo passes locally and f
 `cmd` vs `sh`. Reproduce the runner's condition rather than trusting a green local run —
 `GIT_CONFIG_GLOBAL=<file with autocrlf=true>` is often enough.
 
-**Never point a git worktree at the sibling checkouts with a junction.** `turbovault/` and
-`turbomcp/` are gitignored path dependencies inside this repo. Creating a scratch worktree and
-linking them in with `mklink /J` works — until `git worktree remove --force` follows the junction
-and deletes the **contents of the originals**, leaving two empty directories and a workspace that
-cannot resolve its own manifest. Re-clone from `ForrestThump/{turbovault,turbomcp}` at `develop`
-(the same refs `.github/workflows/ci.yml` uses) and confirm with `cargo metadata --locked`. Copying
-them, or putting the worktree somewhere you will delete by path rather than by `git worktree`, both
-avoid it.
+**Never junction leftover `turbovault/` or `turbomcp/` directories into a git worktree.** Those
+names stay gitignored in case a local clone is present, but they are not required to build: Cargo
+fetches the ForrestThump forks at tag `liberado-2026-08-27`. Creating a scratch worktree and
+linking leftover clones in with `mklink /J` works — until `git worktree remove --force` follows
+the junction and deletes the **contents of the originals**. Copying leftover dirs, or omitting
+them, both avoid it. Confirm the git+tag pins with `cargo metadata --locked`.
 
 **A green suite does not prove the lockfile was committed.** CI resolves without `--locked` and
 regenerates `Cargo.lock` in place, so adding a dependency and forgetting the lock passes every check

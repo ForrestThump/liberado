@@ -10713,6 +10713,7 @@ dependencies = [
 [[package]]
 name = "turbomcp"
 version = "3.1.5"
+source = "git+https://github.com/ForrestThump/turbomcp?tag=liberado-2026-08-27#d5d9a9f8321f07b9693e9869b8afebfecc049e71"
 dependencies = [
  "schemars",
  "serde",
@@ -10733,6 +10734,7 @@ dependencies = [
 [[package]]
 name = "turbomcp-client"
 version = "3.1.5"
+source = "git+https://github.com/ForrestThump/turbomcp?tag=liberado-2026-08-27#d5d9a9f8321f07b9693e9869b8afebfecc049e71"
 dependencies = [
  "chrono",
  "futures",
@@ -10755,6 +10757,7 @@ dependencies = [
 [[package]]
 name = "turbomcp-core"
 version = "3.1.5"
+source = "git+https://github.com/ForrestThump/turbomcp?tag=liberado-2026-08-27#d5d9a9f8321f07b9693e9869b8afebfecc049e71"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -10770,6 +10773,7 @@ dependencies = [
 [[package]]
 name = "turbomcp-http"
 version = "3.1.5"
+source = "git+https://github.com/ForrestThump/turbomcp?tag=liberado-2026-08-27#d5d9a9f8321f07b9693e9869b8afebfecc049e71"
 dependencies = [
  "bytes",
  "fastrand",
@@ -10787,6 +10791,7 @@ dependencies = [
 [[package]]
 name = "turbomcp-macros"
 version = "3.1.5"
+source = "git+https://github.com/ForrestThump/turbomcp?tag=liberado-2026-08-27#d5d9a9f8321f07b9693e9869b8afebfecc049e71"
 dependencies = [
  "proc-macro-crate",
  "proc-macro2",
@@ -10801,6 +10806,7 @@ dependencies = [
 [[package]]
 name = "turbomcp-protocol"
 version = "3.1.5"
+source = "git+https://github.com/ForrestThump/turbomcp?tag=liberado-2026-08-27#d5d9a9f8321f07b9693e9869b8afebfecc049e71"
 dependencies = [
  "arc-swap",
  "bytes",
@@ -10835,6 +10841,7 @@ dependencies = [
 [[package]]
 name = "turbomcp-server"
 version = "3.1.5"
+source = "git+https://github.com/ForrestThump/turbomcp?tag=liberado-2026-08-27#d5d9a9f8321f07b9693e9869b8afebfecc049e71"
 dependencies = [
  "async-trait",
  "bytes",
@@ -10859,6 +10866,7 @@ dependencies = [
 [[package]]
 name = "turbomcp-stdio"
 version = "3.1.5"
+source = "git+https://github.com/ForrestThump/turbomcp?tag=liberado-2026-08-27#d5d9a9f8321f07b9693e9869b8afebfecc049e71"
 dependencies = [
  "bytes",
  "futures",
@@ -10875,6 +10883,7 @@ dependencies = [
 [[package]]
 name = "turbomcp-telemetry"
 version = "3.1.5"
+source = "git+https://github.com/ForrestThump/turbomcp?tag=liberado-2026-08-27#d5d9a9f8321f07b9693e9869b8afebfecc049e71"
 dependencies = [
  "futures-util",
  "http",
@@ -10899,6 +10908,7 @@ dependencies = [
 [[package]]
 name = "turbomcp-transport"
 version = "3.1.5"
+source = "git+https://github.com/ForrestThump/turbomcp?tag=liberado-2026-08-27#d5d9a9f8321f07b9693e9869b8afebfecc049e71"
 dependencies = [
  "ahash",
  "anyhow",
@@ -10931,6 +10941,7 @@ dependencies = [
 [[package]]
 name = "turbomcp-transport-traits"
 version = "3.1.5"
+source = "git+https://github.com/ForrestThump/turbomcp?tag=liberado-2026-08-27#d5d9a9f8321f07b9693e9869b8afebfecc049e71"
 dependencies = [
  "bytes",
  "serde",
@@ -10943,6 +10954,7 @@ dependencies = [
 [[package]]
 name = "turbomcp-types"
 version = "3.1.5"
+source = "git+https://github.com/ForrestThump/turbomcp?tag=liberado-2026-08-27#d5d9a9f8321f07b9693e9869b8afebfecc049e71"
 dependencies = [
  "serde",
  "serde_json",
@@ -10951,6 +10963,7 @@ dependencies = [
 [[package]]
 name = "turbovault"
 version = "1.6.0"
+source = "git+https://github.com/ForrestThump/turbovault?tag=liberado-2026-08-27#bf9f0baf4a91d9e0718f2b8a3112ca0491bf145f"
 dependencies = [
  "anyhow",
  "clap",
@@ -10979,6 +10992,7 @@ dependencies = [
 [[package]]
 name = "turbovault-audit"
 version = "1.6.0"
+source = "git+https://github.com/ForrestThump/turbovault?tag=liberado-2026-08-27#bf9f0baf4a91d9e0718f2b8a3112ca0491bf145f"
 dependencies = [
  "chrono",
  "log",
@@ -10995,6 +11009,7 @@ dependencies = [
 [[package]]
 name = "turbovault-batch"
 version = "1.6.0"
+source = "git+https://github.com/ForrestThump/turbovault?tag=liberado-2026-08-27#bf9f0baf4a91d9e0718f2b8a3112ca0491bf145f"
 dependencies = [
  "chrono",
  "schemars",
@@ -11009,6 +11024,7 @@ dependencies = [
 [[package]]
 name = "turbovault-core"
 version = "1.6.0"
+source = "git+https://github.com/ForrestThump/turbovault?tag=liberado-2026-08-27#bf9f0baf4a91d9e0718f2b8a3112ca0491bf145f"
 dependencies = [
  "chrono",
  "log",
@@ -11027,6 +11043,7 @@ dependencies = [
 [[package]]
 name = "turbovault-export"
 version = "1.6.0"
+source = "git+https://github.com/ForrestThump/turbovault?tag=liberado-2026-08-27#bf9f0baf4a91d9e0718f2b8a3112ca0491bf145f"
 dependencies = [
  "chrono",
  "serde",
@@ -11037,6 +11054,7 @@ dependencies = [
 [[package]]
 name = "turbovault-git"
 version = "1.6.0"
+source = "git+https://github.com/ForrestThump/turbovault?tag=liberado-2026-08-27#bf9f0baf4a91d9e0718f2b8a3112ca0491bf145f"
 dependencies = [
  "fs4",
  "git2",
@@ -11050,6 +11068,7 @@ dependencies = [
 [[package]]
 name = "turbovault-graph"
 version = "1.6.0"
+source = "git+https://github.com/ForrestThump/turbovault?tag=liberado-2026-08-27#bf9f0baf4a91d9e0718f2b8a3112ca0491bf145f"
 dependencies = [
  "anyhow",
  "dashmap",
@@ -11064,6 +11083,7 @@ dependencies = [
 [[package]]
 name = "turbovault-parser"
 version = "1.6.0"
+source = "git+https://github.com/ForrestThump/turbovault?tag=liberado-2026-08-27#bf9f0baf4a91d9e0718f2b8a3112ca0491bf145f"
 dependencies = [
  "log",
  "pulldown-cmark",
@@ -11077,6 +11097,7 @@ dependencies = [
 [[package]]
 name = "turbovault-tools"
 version = "1.6.0"
+source = "git+https://github.com/ForrestThump/turbovault?tag=liberado-2026-08-27#bf9f0baf4a91d9e0718f2b8a3112ca0491bf145f"
 dependencies = [
  "anyhow",
  "chrono",
@@ -11108,6 +11129,7 @@ dependencies = [
 [[package]]
 name = "turbovault-vault"
 version = "1.6.0"
+source = "git+https://github.com/ForrestThump/turbovault?tag=liberado-2026-08-27#bf9f0baf4a91d9e0718f2b8a3112ca0491bf145f"
 dependencies = [
  "anyhow",
  "dashmap",
@@ -11136,6 +11158,7 @@ dependencies = [
 [[package]]
 name = "turbovault-vector"
 version = "1.6.0"
+source = "git+https://github.com/ForrestThump/turbovault?tag=liberado-2026-08-27#bf9f0baf4a91d9e0718f2b8a3112ca0491bf145f"
 dependencies = [
  "anyhow",
  "async-trait",
