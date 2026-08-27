@@ -39,10 +39,8 @@ fn lookup(key: &str) -> Option<String> {
     std::env::var(key).ok()
 }
 
-#[tokio::main]
-async fn main() {
-    tracing_subscriber_init();
-
+/// Exit 2 listing env *names* when no listed provider key is set. Never prints values.
+fn abort_if_no_provider_keys() {
     if !any_listed_key_set(lookup) {
         eprintln!(
             "liberado-free-proxy: no provider API key is set. Export at least one of:\n  {}",
@@ -50,16 +48,25 @@ async fn main() {
         );
         std::process::exit(2);
     }
+}
 
-    let upstreams = configured_upstreams(lookup);
-    let settings = ProxySettings::from_env();
-    let spider = SpiderClient::from_env();
+fn warn_if_spider_unset(spider: &Option<SpiderClient>) {
     if spider.is_none() {
         eprintln!(
             "SPIDER_MCP_URL unset — the scrape fallback is disabled; ranking relies on the \
              Benchmarks API (when OpenRouter is configured) and the heuristic floor"
         );
     }
+}
+
+/// Upstreams, settings, sources, resolver, and the HTTP service. Ranking is not awaited here.
+fn wire_service(
+    lookup: impl Fn(&str) -> Option<String>,
+) -> (Arc<ProxyService>, Arc<BestFreeModelResolver>, String) {
+    let upstreams = configured_upstreams(lookup);
+    let settings = ProxySettings::from_env();
+    let spider = SpiderClient::from_env();
+    warn_if_spider_unset(&spider);
 
     let registry = UpstreamRegistry::from_upstreams(upstreams.clone());
     let sources = Arc::new(
@@ -78,10 +85,12 @@ async fn main() {
             registry,
         },
     ));
+    (service, resolver, settings.bind)
+}
 
-    let boot_resolver = Arc::clone(&resolver);
+fn spawn_initial_ranking(resolver: Arc<BestFreeModelResolver>) {
     tokio::spawn(async move {
-        match boot_resolver.current().await {
+        match resolver.current().await {
             Ok(resolution) => tracing::info!(
                 origin = resolution.origin.label(),
                 models = resolution.ranked.len(),
@@ -96,14 +105,24 @@ async fn main() {
             }
         }
     });
+}
 
-    let app = liberado_provider_free_proxy::http_router(service);
-    let listener = tokio::net::TcpListener::bind(&settings.bind)
+async fn bind_and_serve(app: axum::Router, bind: String) {
+    let listener = tokio::net::TcpListener::bind(&bind)
         .await
-        .unwrap_or_else(|e| panic!("cannot bind {}: {e}", settings.bind));
+        .unwrap_or_else(|e| panic!("cannot bind {bind}: {e}"));
     let bound = listener
         .local_addr()
         .unwrap_or_else(|e| panic!("cannot read bound address: {e}"));
     tracing::info!(%bound, "liberado-free-proxy listening");
     axum::serve(listener, app).await.expect("server run");
+}
+
+#[tokio::main]
+async fn main() {
+    tracing_subscriber_init();
+    abort_if_no_provider_keys();
+    let (service, resolver, bind) = wire_service(lookup);
+    spawn_initial_ranking(resolver);
+    bind_and_serve(liberado_provider_free_proxy::http_router(service), bind).await;
 }

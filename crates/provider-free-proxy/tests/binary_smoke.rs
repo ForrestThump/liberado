@@ -173,6 +173,7 @@ fn groq_key_alone_is_enough_to_boot() {
     let body = wait_for_healthz(port);
     assert_eq!(body, "ok");
     wait_for_log(&drained, "listening");
+    wait_for_log(&drained, "SPIDER_MCP_URL unset");
 }
 
 #[test]
@@ -184,4 +185,5 @@ fn booted_proxy_serves_healthz_and_logs_the_bound_address() {
     let body = wait_for_healthz(port);
     assert_eq!(body, "ok");
     wait_for_log(&drained, "listening");
+    wait_for_log(&drained, "SPIDER_MCP_URL unset");
 }

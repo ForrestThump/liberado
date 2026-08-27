@@ -147,6 +147,14 @@ impl DefaultSources {
         self.providers.iter().find(|u| u.id == "openrouter")
     }
 
+    /// OpenRouter adapter with a non-empty bearer. Missing adapter and empty key
+    /// share one error so ranking can fall through without logging the key.
+    fn openrouter_for_benchmarks(&self) -> Result<&crate::providers::Upstream, String> {
+        self.openrouter()
+            .filter(|up| !up.bearer().is_empty())
+            .ok_or_else(|| "no OPENROUTER_API_KEY configured".into())
+    }
+
     async fn get_json(&self, url: &str, bearer: Option<&str>) -> Result<serde_json::Value, String> {
         let mut req = self.http.get(url);
         if let Some(key) = bearer.filter(|k| !k.is_empty()) {
@@ -221,29 +229,12 @@ impl FreeModelDiscovery for DefaultSources {
 #[async_trait]
 impl CodingBenchmarkSource for DefaultSources {
     async fn coding_benchmark_rows(&self) -> Result<Vec<(String, ModelScores)>, String> {
-        let up = self
-            .openrouter()
-            .ok_or("no OPENROUTER_API_KEY configured")?;
-        let key = up.bearer();
-        if key.is_empty() {
-            return Err("no OPENROUTER_API_KEY configured".into());
-        }
-        let response = self
-            .http
-            .get(format!("{}/benchmarks", up.base_url.trim_end_matches('/')))
-            .bearer_auth(key)
-            .query(&[("task_type", "coding"), ("max_results", "100")])
-            .send()
-            .await
-            .map_err(|e| format!("transport: {e}"))?;
-        let status = response.status();
-        if !status.is_success() {
-            return Err(format!("HTTP {status}"));
-        }
-        let body: serde_json::Value = response
-            .json()
-            .await
-            .map_err(|e| format!("body not JSON: {e}"))?;
+        let up = self.openrouter_for_benchmarks()?;
+        let url = format!(
+            "{}/benchmarks?task_type=coding&max_results=100",
+            up.base_url.trim_end_matches('/')
+        );
+        let body = self.get_json(&url, Some(up.bearer())).await?;
         Ok(bench_api::parse_benchmarks(&body))
     }
 }

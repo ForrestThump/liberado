@@ -441,6 +441,57 @@ mod default_sources_wire {
         assert!(err.contains("401"), "{err}");
     }
 
+    /// `DefaultSources::new` always injects OpenRouter; this is the `openrouter().ok_or` path.
+    #[tokio::test]
+    async fn benchmarks_without_an_openrouter_adapter_is_an_error() {
+        let src = DefaultSources::from_upstreams(
+            vec![crate::providers::Upstream::from_parts(
+                "groq",
+                "http://unused.invalid/openai/v1",
+                "GROQ_API_KEY",
+                "gsk-test",
+                crate::providers::CatalogPolicy::ZeroPriceOrUnpriced,
+                crate::providers::BillingKind::RateLimitedFree,
+                crate::providers::ModelAllow::Chat,
+            )],
+            None,
+        );
+        let err = src.coding_benchmark_rows().await.expect_err("must fail");
+        assert!(err.contains("OPENROUTER_API_KEY"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn benchmarks_non_json_body_is_an_error() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/v1/benchmarks"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("content-type", "text/plain")
+                    .set_body_string("{not-json}"),
+            )
+            .mount(&server)
+            .await;
+        let src = DefaultSources::new(
+            format!("{}/api/v1", server.uri()),
+            Some("sk-live".into()),
+            None,
+        );
+        let err = src.coding_benchmark_rows().await.expect_err("must fail");
+        assert!(err.contains("body not JSON"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn benchmarks_transport_error_is_an_error() {
+        let src = DefaultSources::new(
+            "http://127.0.0.1:9/api/v1".to_string(),
+            Some("sk-live".into()),
+            None,
+        );
+        let err = src.coding_benchmark_rows().await.expect_err("must fail");
+        assert!(err.contains("transport"), "{err}");
+    }
+
     #[tokio::test]
     async fn scrapes_are_disabled_without_a_spider_client() {
         let src = DefaultSources::new("http://unused.invalid".to_string(), None, None);
