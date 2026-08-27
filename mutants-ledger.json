@@ -1848,6 +1848,21 @@
         "timeout": 0,
         "unviable": 29
       }
+    },
+    {
+      "package": "liberado-provider-free-proxy",
+      "commit": "ee91bd2461066a416c220a62154e981a5ff90535",
+      "recorded_at": "2026-08-27",
+      "command": "cargo mutants -p liberado-provider-free-proxy --cap-lints true --timeout 30 --minimum-test-timeout 30 --in-place",
+      "tool_version": "27.1.0",
+      "scope": "package",
+      "counts": {
+        "viable": 206,
+        "caught": 204,
+        "survived": 2,
+        "timeout": 0,
+        "unviable": 29
+      }
     }
   ]
 }
