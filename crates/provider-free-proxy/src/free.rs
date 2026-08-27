@@ -280,6 +280,25 @@ mod tests {
     }
 
     #[test]
+    fn zero_price_required_drops_unpriced_and_paid_leftovers() {
+        let body = json!({
+            "data": [
+                { "id": "gpt-oss-120b" },
+                { "id": "paid-sku", "pricing": { "prompt": "0.00000035", "completion": "0.00000075" } },
+                { "id": "free-sku", "pricing": { "prompt": "0", "completion": "0" } },
+            ]
+        });
+        let free = parse_provider_models(
+            &body,
+            "cerebras",
+            CatalogPolicy::ZeroPriceRequired,
+            ModelAllow::Chat,
+        );
+        let ids: Vec<&str> = free.iter().map(|m| m.upstream_id.as_str()).collect();
+        assert_eq!(ids, vec!["free-sku"]);
+    }
+
+    #[test]
     fn unpriced_compat_models_are_kept_priced_leftovers_are_not() {
         let body = json!({
             "data": [

@@ -8,8 +8,7 @@
 /// How a vendor bills. This is the gate that keeps paid leftovers off the ranking.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BillingKind {
-    /// 429 / rate-limit is failover, never a bill (Groq, NVIDIA playground, Cerebras free,
-    /// OpenRouter `:free`).
+    /// 429 / rate-limit is failover, never a bill (Groq, NVIDIA playground, OpenRouter `:free`).
     RateLimitedFree,
     /// Only rows whose pricing both parse to zero (OpenRouter, Kilo, Mistral). Missing or
     /// unparseable pricing is paid.

@@ -520,6 +520,35 @@ async fn querying_models_hands_back_the_best_endpoint_without_any_inference() {
 }
 
 #[tokio::test]
+async fn a_403_fails_over_to_the_next_ranked_model() {
+    let upstream = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/api/v1/chat/completions"))
+        .and(body_partial_json(json!({ "model": "best/m" })))
+        .respond_with(ResponseTemplate::new(403).set_body_string("forbidden"))
+        .expect(1)
+        .mount(&upstream)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/api/v1/chat/completions"))
+        .and(body_partial_json(json!({ "model": "second/m" })))
+        .respond_with(ok_completion())
+        .expect(1)
+        .mount(&upstream)
+        .await;
+
+    let app =
+        liberado_provider_free_proxy::http_router(service_at(format!("{}/api/v1", upstream.uri())));
+    let (status, reply) = post_chat(app, json!({"model": "auto", "messages": []})).await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "second candidate must serve after 403"
+    );
+    assert_eq!(reply["choices"][0]["message"]["content"], json!("ok"));
+}
+
+#[tokio::test]
 async fn a_503_fails_over_to_the_next_ranked_model() {
     let upstream = MockServer::start().await;
     Mock::given(method("POST"))

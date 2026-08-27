@@ -3,14 +3,14 @@
 //! [`ProxyService`] turns an incoming OpenAI-shaped chat-completions body into an upstream call
 //! against exactly one of the ranked free models:
 //!
-//! - `model` absent / `"auto"` / `""` → best-ranked free model;
-//! - `model` naming a slug in the current free set → honoured as-is (an explicit choice *inside*
-//!   the mandate);
+//! - `model` absent / `"auto"` / `""` → best-ranked free model, then fall through the ranking;
+//! - `model` naming a slug in the current free set → honoured alone (an explicit choice *inside*
+//!   the mandate; no walk to the next-best model);
 //! - anything else → refused with 400 and the nearest ranked alternatives. Silently remapping a
 //!   named model would hide a paid-model intent; refusing says it out loud.
 //!
 //! Failover walks down the ranking when upstream refuses a candidate for reasons that are about
-//! *the candidate* — rate limits, quota, 5xx, timeouts, unknown/no-endpoint models. A payload
+//! *the candidate* — rate limits, quota, 403, 5xx, timeouts, unknown/no-endpoint models. A payload
 //! problem (400 with an unrecognized shape) must NOT trigger failover: retrying a broken request
 //! on five models just spends five free quotas instead of one.
 
@@ -25,7 +25,9 @@ use crate::resolver::{BestFreeModelResolver, Resolution};
 
 /// Upstream error statuses that say "this model specifically cannot serve you right now" —
 /// worth spending another candidate on. 5xx is handled as a range in [`ProxyService::should_fail_over`].
-const FAILOVER_STATUSES: [u16; 4] = [402, 404, 408, 429];
+/// 403 is candidate-scoped (NVIDIA playground forbids a SKU the key cannot call); 401 is not
+/// (the key itself failed).
+const FAILOVER_STATUSES: [u16; 5] = [402, 403, 404, 408, 429];
 
 /// Phrases in an upstream error body that mean the *model* is unusable (rather than our payload
 /// being wrong). Matched case-insensitively on the raw text.
@@ -313,14 +315,13 @@ mod tests {
     #[test]
     fn candidate_failure_statuses_fail_over() {
         let svc = test_service();
-        for s in [402u16, 404, 408, 429] {
+        for s in [402u16, 403, 404, 408, 429] {
             assert!(svc.should_fail_over(s, ""), "{s} should fail over");
         }
         for s in [500u16, 502, 503, 529] {
             assert!(svc.should_fail_over(s, "internal"), "{s} should fail over");
         }
         assert!(!svc.should_fail_over(401, "bad key"));
-        assert!(!svc.should_fail_over(403, "forbidden"));
     }
 
     #[test]

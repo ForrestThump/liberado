@@ -70,14 +70,14 @@
 //!
 //! ## Routing behaviour
 //!
-//! - Requested model absent / `"auto"` → best-ranked free model.
-//! - Requested model names a slug in the current free set → honoured (an explicit choice inside
-//!   the mandate).
+//! - Requested model absent / `"auto"` → best-ranked free model, then fall through the ranking.
+//! - Requested model names a slug in the current free set → honoured alone (an explicit choice
+//!   inside the mandate; no walk to the next-best model).
 //! - Requested model names anything else → refused with HTTP 400 naming the nearest ranked free
 //!   alternatives. Silently remapping a named model would hide cost intent; refusing says it out
 //!   loud.
 //! - Upstream refusal for the chosen candidate (429 / rate-limit, 5xx, timeout, candidate-scoped
-//!   transport error, 402, unknown-model) walks down the ranked list to the next-best remaining
+//!   transport error, 402, 403, unknown-model) walks down the ranked list to the next-best remaining
 //!   free model, up to [`DEFAULT_MAX_ATTEMPTS`](crate::settings::DEFAULT_MAX_ATTEMPTS)
 //!   candidates per request. Each attempt uses **that model's** provider base and key. A 400
 //!   payload error does not spend another candidate. Quota-then-pay candidates are skipped
@@ -96,7 +96,7 @@
 //! | `GEMINI_API_KEY` | `https://generativelanguage.googleapis.com/v1beta/openai` | Flash / Flash-Lite / Gemma only; Pro skipped |
 //! | `MISTRAL_API_KEY` | `https://api.mistral.ai/v1` | zero-price required (pay-per-token catalog otherwise empty) |
 //! | `NVIDIA_AI_API_KEY` | `https://integrate.api.nvidia.com/v1` | rate-limited playground; unpriced chat rows are candidates |
-//! | `CEREBRAS_API_KEY` | `https://api.cerebras.ai/v1` | rate-limited free tier; 429 is failover |
+//! | `CEREBRAS_API_KEY` | `https://api.cerebras.ai/v1` | zero-price required (list prices are pay-per-token; 402 is not a free SKU) |
 //! | `OPENCODE_ZEN_API_KEY` | `https://opencode.ai/zen/v1` | documented Free SKUs only (`-free`, `big-pickle`) |
 //! | `CLOUDFLARE_WORKERS_API_KEY` | `https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/v1` | **omitted** (neuron quota-then-pay). Also needs `CLOUDFLARE_ACCOUNT_ID`; missing account id skips the adapter |
 //! | `KILOCODE_API_KEY` | `https://api.kilo.ai/api/gateway` | zero-price required |

@@ -225,8 +225,11 @@ const SPECS: &[Spec] = &[
         api_key_env: "CEREBRAS_API_KEY",
         account_id_env: None,
         default_base: "https://api.cerebras.ai/v1",
-        catalog: CatalogPolicy::ZeroPriceOrUnpriced,
-        billing: BillingKind::RateLimitedFree,
+        // Authenticated `/v1/models` lists SKUs with no pricing object; the public catalog
+        // prices them pay-per-token and chat returns 402 payment_required. Do not treat
+        // unpriced leftovers as free.
+        catalog: CatalogPolicy::ZeroPriceRequired,
+        billing: BillingKind::ZeroPricedOnly,
         allow: ModelAllow::Chat,
     },
     Spec {
@@ -490,6 +493,15 @@ mod tests {
             ups.iter()
                 .all(|u| u.catalog == CatalogPolicy::ZeroPriceRequired)
         );
+    }
+
+    #[test]
+    fn cerebras_is_zero_price_required() {
+        let ups = configured_upstreams(lookup_of(&[("CEREBRAS_API_KEY", "csk-test")]));
+        assert_eq!(ups.len(), 1);
+        assert_eq!(ups[0].id, "cerebras");
+        assert_eq!(ups[0].catalog, CatalogPolicy::ZeroPriceRequired);
+        assert_eq!(ups[0].billing, BillingKind::ZeroPricedOnly);
     }
 
     #[test]
