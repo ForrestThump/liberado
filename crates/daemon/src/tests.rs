@@ -4358,7 +4358,11 @@ async fn proposal_reap_loop_archives_expired_approved_proposal() {
     let handle = tokio::spawn(async move {
         crate::proposals::proposal_reap_loop(loop_vault, StdDuration::from_millis(50)).await;
     });
-    tokio::time::sleep(StdDuration::from_millis(300)).await;
+    // The loop skips the first interval fire, then waits one more tick before the first
+    // sweep. Under a full Windows `cargo test` binary that 50ms tick is often starved;
+    // 300ms failed `test (windows-latest)`. Match the 2s wait
+    // `spawn_reaper_starts_the_expiry_reaper` already uses.
+    tokio::time::sleep(StdDuration::from_millis(2000)).await;
     handle.abort();
 
     let archived = vault
