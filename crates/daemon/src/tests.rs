@@ -2319,6 +2319,100 @@ async fn daemon_rejects_an_approved_proposal_with_a_bad_integrity_signature() {
     handle.abort();
 }
 
+/// A proposal that the human has *legitimately approved* via the ledger, but whose integrity
+/// signature was forged (or tampered with after signing), must STILL be refused. Without this
+/// assertion, a mutant that replaces `reject_if_tampered` with `None` would let a forged
+/// proposal slide through every later guard (terminal, expiry, actionable, ledger) and run.
+///
+/// `daemon_rejects_an_approved_proposal_with_a_bad_integrity_signature` (above) covers the
+/// "no ledger approval" variant — the ledger guard there refuses before execution gets a
+/// chance. Here the ledger DOES approve, so the only thing standing between a forged
+/// proposal and a tool call is the daemon's integrity check. To prove the daemon's check is
+/// the one that fires (not the orchestrator's), the test uses *two different signers*:
+/// the orchestrator's signer verifies the proposal, the daemon's signer would not.
+#[tokio::test]
+async fn forged_proposal_with_a_ledger_approval_still_does_not_execute() {
+    use liberado_common::{Proposal, ProposalSigner, ProposalStatus, ProposedAction, ToolCall};
+    use liberado_orchestrator::Orchestrator;
+    use liberado_test_support::{InvocationRecordingFactory, InvocationRecordingRuntime};
+
+    let runtime = InvocationRecordingRuntime::default();
+    let invoked = runtime.invoked.clone();
+    // The orchestrator's signer (used to defend-in-depth-verify the proposal just before
+    // `runtime.invoke`). The daemon's signer is *different*, so only the daemon's check can
+    // catch the forgery.
+    let orch_signer = ProposalSigner::random();
+    let daemon_signer = ProposalSigner::random();
+    let orch = Orchestrator::new(
+        Arc::new(liberado_provider::MockProvider::with_script(
+            "mock",
+            Vec::<liberado_provider::CompletionResponse>::new(),
+        )),
+        InvocationRecordingFactory { runtime },
+        CapabilitySet::empty(),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        std::env::temp_dir(),
+        orch_signer.clone(),
+        "default",
+    );
+
+    let (daemon, dir) = temp_daemon().await;
+    let daemon = daemon
+        .with_debounce(Duration::from_millis(80))
+        .with_orchestrator(orch)
+        // The daemon verifies the proposal against `daemon_signer`, not the orchestrator's
+        // `orch_signer`. A proposal signed by the orchestrator's key is fine for the
+        // orchestrator's defense-in-depth check, but the daemon's check still fires.
+        .with_proposal_signer(daemon_signer)
+        .with_approval_ledger(test_ledger(&dir));
+
+    let proposals_dir = dir.path().join("proposals");
+    std::fs::create_dir_all(&proposals_dir).unwrap();
+
+    // The human's approval is real — it lands in the ledger. A mutant bypassing only the
+    // integrity check still has to clear this guard.
+    approve_in(&dir, "forged-but-approved:1").await;
+
+    let (tx, mut rx) = unbounded_channel();
+    let handle = tokio::spawn(daemon.run(tx));
+
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    // Sign the proposal with the orchestrator's key (so the orchestrator's signer.verify
+    // returns true) but NOT the daemon's (so the daemon's check is the one that must fire).
+    let proposal = Proposal::pending(
+        "forged-but-approved:1",
+        "forged-but-approved:1",
+        "test",
+        ProposedAction::ToolCalls(vec![ToolCall {
+            tool: "tasks:create".into(),
+            args: serde_json::json!({ "summary": "should-not-run" }),
+        }]),
+        "a forged but ledger-approved proposal",
+    )
+    .with_requested_grant(liberado_common::Capability::Write(
+        liberado_common::Zone::vault("tasks"),
+    ));
+    let mut proposal = orch_signer.sign(proposal);
+    proposal.set_status(ProposalStatus::Approved);
+    std::fs::write(proposals_dir.join("forged-approved.md"), proposal.to_note()).unwrap();
+
+    let _reaction = tokio::time::timeout(Duration::from_secs(5), rx.recv())
+        .await
+        .expect("timed out waiting for reaction")
+        .expect("reaction channel closed");
+
+    assert!(
+        invoked.lock().unwrap().is_empty(),
+        "a forged proposal must not run even when the ledger says Approved; \
+         a mutant that drops reject_if_tampered would let the tool call through"
+    );
+
+    handle.abort();
+}
+
 #[tokio::test]
 async fn runtime_gated_downgrade_lands_in_the_vault_and_executes_once_approved() {
     // End-to-end proof of item 3's fix: a RiskGatedToolRuntime downgrade writes into the
@@ -2648,6 +2742,27 @@ async fn known_session_profile_still_dispatches() {
     assert_eq!(
         snap.session.goal.profile.as_deref(),
         Some("interactive-cron")
+    );
+    // The grant must carry the profile's configured capabilities (the whole point of the
+    // profile lookup). Without this assertion, a mutant that drops the `capabilities:` field
+    // from the SessionGrant struct literal here would silently downgrade the session to a
+    // default-empty grant and run with no authority at all.
+    assert!(
+        snap.session
+            .grant
+            .capabilities
+            .grants_ask_human(),
+        "the session grant must inherit the profile's AskHuman capability: got {:?}",
+        snap.session.grant.capabilities
+    );
+    assert_eq!(
+        snap.session.grant.profile.as_deref(),
+        Some("interactive-cron"),
+        "the grant's profile field must echo the resolved profile"
+    );
+    assert!(
+        snap.session.grant.overrides.is_null(),
+        "no profile-supplied overrides were configured; the grant's overrides must be Value::Null"
     );
 
     handle.abort();

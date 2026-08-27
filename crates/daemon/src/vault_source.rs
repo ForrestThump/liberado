@@ -609,4 +609,14 @@ mod tests {
             "path matching capture_paths and not ignore_globs must produce an event"
         );
     }
+
+    /// The `name()` string is the source identifier recorded on every event this source produces
+    /// (and is what surfaces in tracing when the source attaches). A wrong string silently tags
+    /// reactions as "from" the wrong origin, so pin it explicitly.
+    #[tokio::test]
+    async fn vault_event_source_name_is_vault_watch() {
+        let (_dir, vault, _rel) = test_vault().await;
+        let source = VaultEventSource::new(vault, Duration::from_millis(50), Vec::new(), default_scope());
+        assert_eq!(source.name(), "vault-watch");
+    }
 }
