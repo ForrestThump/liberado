@@ -1,7 +1,7 @@
 [package]
 name = "liberado-provider-free-proxy"
 version = "0.1.0"
-description = "An OpenAI-compatible inference proxy that serves only OpenRouter's free models, picking whichever available free model ranks highest on coding benchmarks (API first, deterministic spider-mcp scrape fallback)."
+description = "An OpenAI-compatible inference proxy that serves only genuinely-free models across configured providers, picking whichever available free model ranks highest on coding benchmarks (API first, deterministic spider-mcp scrape fallback)."
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true

@@ -45,11 +45,37 @@ pub fn free_id_for_api_slug(slug: &str, free: &[FreeModel]) -> Option<String> {
 }
 
 fn try_free_id(slug: &str, free: &[FreeModel]) -> Option<String> {
-    if free.iter().any(|m| m.id == slug) {
-        return Some(slug.to_string());
+    let hits: Vec<&FreeModel> = free
+        .iter()
+        .filter(|m| model_matches_slug(m, slug))
+        .collect();
+    match hits.as_slice() {
+        [] => None,
+        [m] => Some(m.id.clone()),
+        many => {
+            // Benchmarks API slugs are OpenRouter's. Prefer that vendor when several
+            // providers share a native id; abstain if even that is ambiguous.
+            let or: Vec<&FreeModel> = many
+                .iter()
+                .copied()
+                .filter(|m| m.provider == "openrouter")
+                .collect();
+            match or.as_slice() {
+                [m] => Some(m.id.clone()),
+                _ => None,
+            }
+        }
     }
+}
+
+fn model_matches_slug(m: &FreeModel, slug: &str) -> bool {
     let as_free = format!("{slug}:free");
-    free.iter().find(|m| m.id == as_free).map(|m| m.id.clone())
+    if m.id == slug || m.id == as_free || m.upstream_id == slug || m.upstream_id == as_free {
+        return true;
+    }
+    let prefix = format!("{}/", m.provider);
+    m.id.strip_prefix(&prefix)
+        .is_some_and(|rest| rest == slug || rest == as_free)
 }
 
 /// The best-matching free-model slug for a leaderboard name, or `None`.
@@ -84,12 +110,17 @@ pub fn best_slug_for(leader_name: &str, free: &[FreeModel]) -> Option<String> {
 }
 
 fn tokens_for_model(m: &FreeModel) -> HashSet<String> {
-    // Slug's model segment ("gemma-4-31b-it") carries the identity most leaderboards name;
-    // the author segment ("google") adds evidence for models whose identity lives there
-    // ("google/gemma-4" vs a bare "gemma 4" entry still matches via the model half).
-    let mut set = tokens(m.id.rsplit('/').next().unwrap_or(&m.id));
-    if let Some(author) = m.id.split('/').next()
-        && m.id.contains('/')
+    // Native slug ("gemma-4-31b-it" / "google/gemma-4-31b-it:free") carries the identity
+    // most leaderboards name. Public ids are `{provider}/{native}`; scoring the native
+    // half keeps "Gemma 4 31B" matching after the provider prefix is added.
+    let slug = if m.upstream_id.is_empty() {
+        m.id.as_str()
+    } else {
+        m.upstream_id.as_str()
+    };
+    let mut set = tokens(slug.rsplit('/').next().unwrap_or(slug));
+    if let Some(author) = slug.split('/').next()
+        && slug.contains('/')
     {
         set.extend(tokens(author));
     }

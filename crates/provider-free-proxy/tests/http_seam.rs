@@ -11,6 +11,8 @@ use std::time::Duration;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use liberado_provider_free_proxy::free::FreeModel;
+use liberado_provider_free_proxy::providers::{BillingKind, Upstream, UpstreamRegistry};
+use liberado_provider_free_proxy::quota::QuotaBudget;
 use liberado_provider_free_proxy::rank::ModelScores;
 use liberado_provider_free_proxy::resolver::{
     BestFreeModelResolver, CodingBenchmarkSource, DefaultSources, FreeModelDiscovery,
@@ -47,31 +49,24 @@ impl ScrapeRankingSource for EmptyScrapes {
 }
 
 fn fm(id: &str, ctx: u64) -> FreeModel {
-    FreeModel {
-        id: id.into(),
-        context_length: ctx,
-        supports_tools: true,
-    }
+    FreeModel::fixture(id, ctx, true)
 }
 
 fn service_at(upstream_base: String) -> Arc<ProxyService> {
+    service_with(
+        vec![fm("best/m", 100_000), fm("second/m", 64_000)],
+        ProxyConfig::single(upstream_base, "sk-upstream", 3),
+    )
+}
+
+fn service_with(models: Vec<FreeModel>, config: ProxyConfig) -> Arc<ProxyService> {
     let resolver = Arc::new(BestFreeModelResolver::new(
-        Arc::new(FixedDiscovery(vec![
-            fm("best/m", 100_000),
-            fm("second/m", 64_000),
-        ])),
+        Arc::new(FixedDiscovery(models)),
         Arc::new(FailingBenchmarks),
         Arc::new(EmptyScrapes),
         Duration::from_secs(3600),
     ));
-    Arc::new(ProxyService::new(
-        resolver,
-        ProxyConfig {
-            upstream_base,
-            upstream_api_key: "sk-upstream".into(),
-            max_attempts: 3,
-        },
-    ))
+    Arc::new(ProxyService::new(resolver, config))
 }
 
 fn ok_completion() -> ResponseTemplate {
@@ -477,11 +472,7 @@ async fn querying_models_hands_back_the_best_endpoint_without_any_inference() {
     let resolver = Arc::new(BestFreeModelResolver::with_defaults(sources, 3600));
     let state = Arc::new(ProxyService::new(
         resolver,
-        ProxyConfig {
-            upstream_base: base.clone(),
-            upstream_api_key: "sk-up".into(),
-            max_attempts: 3,
-        },
+        ProxyConfig::single(base.clone(), "sk-up", 3),
     ));
 
     // 1. Ask the proxy which endpoints exist — the answer is the ranking itself, paid model
@@ -507,7 +498,10 @@ async fn querying_models_hands_back_the_best_endpoint_without_any_inference() {
         .iter()
         .map(|m| m["id"].as_str().unwrap())
         .collect();
-    assert_eq!(ids, vec!["vendor/small", "vendor/large"]);
+    assert_eq!(
+        ids,
+        vec!["openrouter/vendor/small", "openrouter/vendor/large"]
+    );
 
     // 2. The hand-off: naming the winner resolves to exactly that candidate, still without a
     //    completion call — callers learn their target before spending anything.
@@ -516,5 +510,236 @@ async fn querying_models_hands_back_the_best_endpoint_without_any_inference() {
         .candidates_for(&json!({ "model": chosen, "messages": [] }))
         .await
         .expect("winner is servable");
-    assert_eq!(candidates, vec!["vendor/small"]);
+    assert_eq!(
+        candidates
+            .iter()
+            .map(|c| c.public_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["openrouter/vendor/small"]
+    );
+}
+
+#[tokio::test]
+async fn a_403_fails_over_to_the_next_ranked_model() {
+    let upstream = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/api/v1/chat/completions"))
+        .and(body_partial_json(json!({ "model": "best/m" })))
+        .respond_with(ResponseTemplate::new(403).set_body_string("forbidden"))
+        .expect(1)
+        .mount(&upstream)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/api/v1/chat/completions"))
+        .and(body_partial_json(json!({ "model": "second/m" })))
+        .respond_with(ok_completion())
+        .expect(1)
+        .mount(&upstream)
+        .await;
+
+    let app =
+        liberado_provider_free_proxy::http_router(service_at(format!("{}/api/v1", upstream.uri())));
+    let (status, reply) = post_chat(app, json!({"model": "auto", "messages": []})).await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "second candidate must serve after 403"
+    );
+    assert_eq!(reply["choices"][0]["message"]["content"], json!("ok"));
+}
+
+#[tokio::test]
+async fn a_503_fails_over_to_the_next_ranked_model() {
+    let upstream = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/api/v1/chat/completions"))
+        .and(body_partial_json(json!({ "model": "best/m" })))
+        .respond_with(ResponseTemplate::new(503).set_body_string("unavailable"))
+        .expect(1)
+        .mount(&upstream)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/api/v1/chat/completions"))
+        .and(body_partial_json(json!({ "model": "second/m" })))
+        .respond_with(ok_completion())
+        .expect(1)
+        .mount(&upstream)
+        .await;
+
+    let app =
+        liberado_provider_free_proxy::http_router(service_at(format!("{}/api/v1", upstream.uri())));
+    let (status, reply) = post_chat(app, json!({"model": "auto", "messages": []})).await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "second candidate must serve after 503"
+    );
+    assert_eq!(reply["choices"][0]["message"]["content"], json!("ok"));
+}
+
+#[tokio::test]
+async fn a_timeout_on_candidate_one_serves_candidate_two() {
+    let upstream = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/api/v1/chat/completions"))
+        .and(body_partial_json(json!({ "model": "best/m" })))
+        .respond_with(ok_completion().set_delay(Duration::from_secs(2)))
+        .expect(1)
+        .mount(&upstream)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/api/v1/chat/completions"))
+        .and(body_partial_json(json!({ "model": "second/m" })))
+        .respond_with(ok_completion())
+        .expect(1)
+        .mount(&upstream)
+        .await;
+
+    let mut config = ProxyConfig::single(format!("{}/api/v1", upstream.uri()), "sk-upstream", 3);
+    config.attempt_timeout = Duration::from_millis(200);
+    let app = liberado_provider_free_proxy::http_router(service_with(
+        vec![fm("best/m", 100_000), fm("second/m", 64_000)],
+        config,
+    ));
+    let (status, reply) = post_chat(app, json!({"model": "auto", "messages": []})).await;
+    assert_eq!(status, StatusCode::OK, "timeout must fail over");
+    assert_eq!(reply["choices"][0]["message"]["content"], json!("ok"));
+}
+
+#[tokio::test]
+async fn transport_failure_on_candidate_one_serves_candidate_two() {
+    let good = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .respond_with(ok_completion())
+        .expect(1)
+        .mount(&good)
+        .await;
+
+    let first = fm("best/m", 100_000).with_provider("down");
+    let second = fm("second/m", 64_000).with_provider("up");
+    let mut config = ProxyConfig {
+        max_attempts: 3,
+        attempt_timeout: Duration::from_millis(200),
+        registry: UpstreamRegistry::from_upstreams([
+            Upstream::new_for_tests(
+                "down",
+                "http://127.0.0.1:9/v1",
+                "sk-down",
+                BillingKind::RateLimitedFree,
+            ),
+            Upstream::new_for_tests(
+                "up",
+                format!("{}/v1", good.uri()),
+                "sk-up",
+                BillingKind::RateLimitedFree,
+            ),
+        ]),
+    };
+    let _ = &mut config;
+    let app = liberado_provider_free_proxy::http_router(service_with(vec![first, second], config));
+    let (status, reply) = post_chat(app, json!({"model": "auto", "messages": []})).await;
+    assert_eq!(status, StatusCode::OK, "transport must fail over");
+    assert_eq!(reply["choices"][0]["message"]["content"], json!("ok"));
+}
+
+#[tokio::test]
+async fn quota_then_pay_is_skipped_before_a_billable_call() {
+    let billed = MockServer::start().await;
+    let free = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .respond_with(ok_completion())
+        .expect(0)
+        .mount(&billed)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .respond_with(ok_completion())
+        .expect(1)
+        .mount(&free)
+        .await;
+
+    let mut billed_up = Upstream::new_for_tests(
+        "billed",
+        format!("{}/v1", billed.uri()),
+        "sk-billed",
+        BillingKind::QuotaThenPay,
+    );
+    billed_up.quota = QuotaBudget::remaining(0);
+    let first = fm("best/m", 100_000).with_provider("billed");
+    let second = fm("second/m", 64_000).with_provider("free");
+    let config = ProxyConfig {
+        max_attempts: 3,
+        attempt_timeout: Duration::from_secs(5),
+        registry: UpstreamRegistry::from_upstreams([
+            billed_up,
+            Upstream::new_for_tests(
+                "free",
+                format!("{}/v1", free.uri()),
+                "sk-free",
+                BillingKind::RateLimitedFree,
+            ),
+        ]),
+    };
+    let app = liberado_provider_free_proxy::http_router(service_with(vec![first, second], config));
+    let (status, reply) = post_chat(app, json!({"model": "auto", "messages": []})).await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "quota-then-pay must be skipped, not billed"
+    );
+    assert_eq!(reply["choices"][0]["message"]["content"], json!("ok"));
+}
+
+#[tokio::test]
+async fn walking_the_ranking_can_change_provider() {
+    let groq = MockServer::start().await;
+    let nvidia = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/openai/v1/chat/completions"))
+        .and(wiremock::matchers::header(
+            "authorization",
+            "Bearer gsk-test",
+        ))
+        .respond_with(ResponseTemplate::new(429).set_body_string("rate limit"))
+        .expect(1)
+        .mount(&groq)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .and(wiremock::matchers::header(
+            "authorization",
+            "Bearer nvapi-test",
+        ))
+        .respond_with(ok_completion())
+        .expect(1)
+        .mount(&nvidia)
+        .await;
+
+    // Larger context ranks first on the heuristic floor, so Groq is tried before NVIDIA.
+    let first = fm("llama-fast", 200_000).with_provider("groq");
+    let second = fm("nemotron", 32_000).with_provider("nvidia");
+    let config = ProxyConfig {
+        max_attempts: 3,
+        attempt_timeout: Duration::from_secs(5),
+        registry: UpstreamRegistry::from_upstreams([
+            Upstream::new_for_tests(
+                "groq",
+                format!("{}/openai/v1", groq.uri()),
+                "gsk-test",
+                BillingKind::RateLimitedFree,
+            ),
+            Upstream::new_for_tests(
+                "nvidia",
+                format!("{}/v1", nvidia.uri()),
+                "nvapi-test",
+                BillingKind::RateLimitedFree,
+            ),
+        ]),
+    };
+    let app = liberado_provider_free_proxy::http_router(service_with(vec![first, second], config));
+    let (status, reply) = post_chat(app, json!({"model": "auto", "messages": []})).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(reply["choices"][0]["message"]["content"], json!("ok"));
 }

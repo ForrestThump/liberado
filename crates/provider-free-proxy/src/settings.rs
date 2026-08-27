@@ -20,7 +20,8 @@ pub const MIN_TTL_SECS: u64 = 60;
 /// Default per-scrape budget for the fallback sources; the resolver's client also imports this
 /// so the number lives in exactly one place.
 pub const DEFAULT_SCRAPE_TIMEOUT_SECS: u64 = 90;
-pub const DEFAULT_MAX_ATTEMPTS: u32 = 3;
+/// Default failover depth. Raised from 3 now that several free providers can share one ranking.
+pub const DEFAULT_MAX_ATTEMPTS: u32 = 6;
 
 /// Everything `main` needs from the environment.
 #[derive(Debug, Clone, PartialEq)]

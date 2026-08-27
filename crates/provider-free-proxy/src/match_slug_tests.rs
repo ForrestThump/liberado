@@ -2,12 +2,23 @@ use super::*;
 
 fn free(ids: &[&str]) -> Vec<FreeModel> {
     ids.iter()
-        .map(|id| FreeModel {
-            id: (*id).into(),
-            context_length: 0,
-            supports_tools: true,
-        })
+        .map(|id| FreeModel::fixture(*id, 0, true))
         .collect()
+}
+
+#[test]
+fn api_slug_maps_onto_a_prefixed_openrouter_id() {
+    let pool = vec![FreeModel {
+        id: "openrouter/z-ai/glm-5.2:free".into(),
+        provider: "openrouter".into(),
+        upstream_id: "z-ai/glm-5.2:free".into(),
+        context_length: 0,
+        supports_tools: true,
+    }];
+    assert_eq!(
+        free_id_for_api_slug("z-ai/glm-5.2", &pool).as_deref(),
+        Some("openrouter/z-ai/glm-5.2:free")
+    );
 }
 
 #[test]

@@ -3,26 +3,31 @@
 //! [`ProxyService`] turns an incoming OpenAI-shaped chat-completions body into an upstream call
 //! against exactly one of the ranked free models:
 //!
-//! - `model` absent / `"auto"` / `""` → best-ranked free model;
-//! - `model` naming a slug in the current free set → honoured as-is (an explicit choice *inside*
-//!   the mandate);
+//! - `model` absent / `"auto"` / `""` → best-ranked free model, then fall through the ranking;
+//! - `model` naming a slug in the current free set → honoured alone (an explicit choice *inside*
+//!   the mandate; no walk to the next-best model);
 //! - anything else → refused with 400 and the nearest ranked alternatives. Silently remapping a
 //!   named model would hide a paid-model intent; refusing says it out loud.
 //!
 //! Failover walks down the ranking when upstream refuses a candidate for reasons that are about
-//! *the candidate* — rate limits, quota, unknown/no-endpoint models. A payload problem (400 with
-//! an unrecognized shape) must NOT trigger failover: retrying a broken request on five models
-//! just spends five free quotas instead of one.
+//! *the candidate* — rate limits, quota, 403, 5xx, timeouts, unknown/no-endpoint models. A payload
+//! problem (400 with an unrecognized shape) must NOT trigger failover: retrying a broken request
+//! on five models just spends five free quotas instead of one.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use serde_json::{Value, json};
 
+use crate::free::FreeModel;
+use crate::providers::UpstreamRegistry;
 use crate::resolver::{BestFreeModelResolver, Resolution};
 
 /// Upstream error statuses that say "this model specifically cannot serve you right now" —
-/// worth spending another candidate on.
-const FAILOVER_STATUSES: [u16; 4] = [402, 404, 408, 429];
+/// worth spending another candidate on. 5xx is handled as a range in [`ProxyService::should_fail_over`].
+/// 403 is candidate-scoped (NVIDIA playground forbids a SKU the key cannot call); 401 is not
+/// (the key itself failed).
+const FAILOVER_STATUSES: [u16; 5] = [402, 403, 404, 408, 429];
 
 /// Phrases in an upstream error body that mean the *model* is unusable (rather than our payload
 /// being wrong). Matched case-insensitively on the raw text.
@@ -32,7 +37,12 @@ const MODEL_ERROR_MARKERS: &[&str] = &[
     "not a valid model",
     "no auth provider found",
     "rate limit exceeded",
+    "too many requests",
+    "resource_exhausted",
 ];
+
+/// Default per-candidate HTTP timeout. A hanging peer must not pin the whole ranking walk.
+pub const DEFAULT_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Debug, thiserror::Error)]
 pub enum RouteError {
@@ -55,6 +65,27 @@ pub enum AttemptOutcome {
     Failed(String),
 }
 
+/// One ranked candidate with enough identity to POST to the right vendor.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RouteCandidate {
+    /// Proxy-facing id (`groq/llama-3.1-8b-instant`).
+    pub public_id: String,
+    /// Native id the vendor's `/chat/completions` expects.
+    pub upstream_id: String,
+    /// Provider slug used to look up base URL + key.
+    pub provider: String,
+}
+
+impl RouteCandidate {
+    pub fn from_model(m: &FreeModel) -> Self {
+        Self {
+            public_id: m.id.clone(),
+            upstream_id: m.upstream_id.clone(),
+            provider: m.provider.clone(),
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct ProxyService {
     pub resolver: Arc<BestFreeModelResolver>,
@@ -65,12 +96,35 @@ pub struct ProxyService {
 /// Static wiring for the proxy.
 #[derive(Debug, Clone)]
 pub struct ProxyConfig {
-    /// OpenAI-compatible base URL of the upstream (…/api/v1).
-    pub upstream_base: String,
-    /// Bearer key sent upstream (free models still require an OpenRouter account).
-    pub upstream_api_key: String,
     /// How many ranked candidates one request may walk through before giving up.
     pub max_attempts: u32,
+    /// Per-candidate HTTP timeout. Transport/timeout errors fail over; they are not 502 until
+    /// the ranking is exhausted.
+    pub attempt_timeout: Duration,
+    /// Configured upstreams keyed by provider slug. Keys live only here.
+    pub registry: UpstreamRegistry,
+}
+
+impl ProxyConfig {
+    /// Single-upstream fixture used by unit and seam tests.
+    pub fn single(
+        upstream_base: impl Into<String>,
+        upstream_api_key: impl Into<String>,
+        max_attempts: u32,
+    ) -> Self {
+        Self {
+            max_attempts,
+            attempt_timeout: DEFAULT_ATTEMPT_TIMEOUT,
+            registry: UpstreamRegistry::from_upstreams([
+                crate::providers::Upstream::new_for_tests(
+                    "test",
+                    upstream_base,
+                    upstream_api_key,
+                    crate::providers::BillingKind::RateLimitedFree,
+                ),
+            ]),
+        }
+    }
 }
 
 impl ProxyService {
@@ -85,7 +139,7 @@ impl ProxyService {
     /// Resolve the ordered candidate slugs for one incoming request body.
     ///
     /// Public for tests; the HTTP layer wraps this in status codes.
-    pub async fn candidates_for(&self, body: &Value) -> Result<Vec<String>, RouteError> {
+    pub async fn candidates_for(&self, body: &Value) -> Result<Vec<RouteCandidate>, RouteError> {
         let requested = body["model"].as_str().unwrap_or("").trim();
         let explicit = !requested.is_empty() && requested != "auto";
         if !explicit {
@@ -95,8 +149,8 @@ impl ProxyService {
         let resolution = self.resolution().await?;
         // An explicitly-named slug gets no failover beyond itself unless it too fails over —
         // but it MUST be in the free set, whatever it is.
-        if resolution.contains(requested) {
-            return Ok(vec![requested.to_string()]);
+        if let Some(m) = resolution.ranked.iter().find(|m| m.id == requested) {
+            return Ok(vec![RouteCandidate::from_model(m)]);
         }
         Err(RouteError::NotFree {
             requested: requested.to_string(),
@@ -105,12 +159,13 @@ impl ProxyService {
     }
 
     /// Ranked candidates for auto-routing: up to `max_attempts`, best first.
-    pub async fn top_candidates(&self) -> Result<Vec<String>, RouteError> {
+    pub async fn top_candidates(&self) -> Result<Vec<RouteCandidate>, RouteError> {
         let resolution = self.resolution().await?;
         Ok(resolution
-            .ranked_ids()
-            .into_iter()
+            .ranked
+            .iter()
             .take(self.config.max_attempts.max(1) as usize)
+            .map(RouteCandidate::from_model)
             .collect())
     }
 
@@ -135,6 +190,9 @@ impl ProxyService {
         if FAILOVER_STATUSES.contains(&status) {
             return true;
         }
+        if (500..=599).contains(&status) {
+            return true;
+        }
         if status == 400 {
             let lowered = body_text.to_ascii_lowercase();
             return MODEL_ERROR_MARKERS.iter().any(|m| lowered.contains(m));
@@ -142,12 +200,12 @@ impl ProxyService {
         false
     }
 
-    /// The upstream URL for chat completions.
-    pub fn chat_endpoint(&self) -> String {
-        format!(
-            "{}/chat/completions",
-            self.config.upstream_base.trim_end_matches('/')
-        )
+    /// The chat-completions URL for a provider slug, if that adapter is configured.
+    pub fn chat_endpoint_for(&self, provider: &str) -> Option<String> {
+        self.config
+            .registry
+            .get(provider)
+            .map(|up| format!("{}/chat/completions", up.base_url.trim_end_matches('/')))
     }
 
     /// Rewrite the body's model field to `slug`.
@@ -191,11 +249,11 @@ mod tests {
     }
 
     fn fm(id: &str, ctx: u64, tools: bool) -> FreeModel {
-        FreeModel {
-            id: id.into(),
-            context_length: ctx,
-            supports_tools: tools,
-        }
+        FreeModel::fixture(id, ctx, tools)
+    }
+
+    fn public_ids(cands: Vec<RouteCandidate>) -> Vec<String> {
+        cands.into_iter().map(|c| c.public_id).collect()
     }
 
     fn service() -> ProxyService {
@@ -211,11 +269,7 @@ mod tests {
         ));
         ProxyService::new(
             resolver,
-            ProxyConfig {
-                upstream_base: "https://up.example/api/v1/".into(),
-                upstream_api_key: "sk".into(),
-                max_attempts: 2,
-            },
+            ProxyConfig::single("https://up.example/api/v1/", "sk", 2),
         )
     }
 
@@ -226,7 +280,7 @@ mod tests {
                 None => json!({"messages": []}),
                 Some(m) => json!({"model": m, "messages": []}),
             };
-            let got = service().candidates_for(&body).await.expect("candidates");
+            let got = public_ids(service().candidates_for(&body).await.expect("candidates"));
             assert_eq!(got, vec!["best/m", "second/m"], "model={model:?}");
         }
     }
@@ -235,7 +289,7 @@ mod tests {
     async fn an_explicit_free_slug_is_honoured_alone() {
         let body = json!({"model": "third/m", "messages": []});
         assert_eq!(
-            service().candidates_for(&body).await.expect("candidates"),
+            public_ids(service().candidates_for(&body).await.expect("candidates")),
             vec!["third/m"]
         );
     }
@@ -261,10 +315,12 @@ mod tests {
     #[test]
     fn candidate_failure_statuses_fail_over() {
         let svc = test_service();
-        for s in [402u16, 404, 408, 429] {
+        for s in [402u16, 403, 404, 408, 429] {
             assert!(svc.should_fail_over(s, ""), "{s} should fail over");
         }
-        assert!(!svc.should_fail_over(500, "internal"));
+        for s in [500u16, 502, 503, 529] {
+            assert!(svc.should_fail_over(s, "internal"), "{s} should fail over");
+        }
         assert!(!svc.should_fail_over(401, "bad key"));
     }
 
@@ -276,6 +332,8 @@ mod tests {
             "{\"error\":{\"message\":\"No endpoints found for z-ai/gone\"}}"
         ));
         assert!(svc.should_fail_over(400, "Rate limit exceeded for this model"));
+        assert!(svc.should_fail_over(400, "too many requests"));
+        assert!(svc.should_fail_over(400, "RESOURCE_EXHAUSTED: quota"));
         assert!(!svc.should_fail_over(400, "'messages' must be an array"));
     }
 
@@ -293,7 +351,7 @@ mod tests {
     #[tokio::test]
     async fn chat_endpoint_joins_paths_and_strips_trailing_slash() {
         assert_eq!(
-            service().chat_endpoint(),
+            service().chat_endpoint_for("test").expect("test upstream"),
             "https://up.example/api/v1/chat/completions"
         );
     }
@@ -309,11 +367,7 @@ mod tests {
         ));
         ProxyService::new(
             resolver,
-            ProxyConfig {
-                upstream_base: "https://up.example/api/v1".into(),
-                upstream_api_key: "sk".into(),
-                max_attempts: 3,
-            },
+            ProxyConfig::single("https://up.example/api/v1", "sk", 3),
         )
     }
 }

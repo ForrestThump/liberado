@@ -44,11 +44,7 @@ impl ScrapeRankingSource for FixedScrapes {
 }
 
 fn fm(id: &str, ctx: u64, tools: bool) -> FreeModel {
-    FreeModel {
-        id: id.into(),
-        context_length: ctx,
-        supports_tools: tools,
-    }
+    FreeModel::fixture(id, ctx, tools)
 }
 
 fn resolver(
@@ -189,6 +185,42 @@ async fn an_empty_free_list_is_an_explicit_error() {
         Arc::new(FixedScrapes(vec![])),
     );
     assert!(matches!(r.current().await, Err(ResolveError::NoFreeModels)));
+}
+
+#[tokio::test]
+async fn api_scores_rank_prefixed_ids_above_a_bigger_unscored_peer() {
+    let r = resolver(
+        Arc::new(FixedDiscovery(vec![
+            FreeModel {
+                id: "openrouter/z-ai/glm-5.2:free".into(),
+                provider: "openrouter".into(),
+                upstream_id: "z-ai/glm-5.2:free".into(),
+                context_length: 32_000,
+                supports_tools: true,
+            },
+            FreeModel {
+                id: "groq/llama-fast".into(),
+                provider: "groq".into(),
+                upstream_id: "llama-fast".into(),
+                context_length: 1_000_000,
+                supports_tools: true,
+            },
+        ])),
+        Arc::new(ApiBenchmarks(vec![(
+            "z-ai/glm-5.2".into(),
+            ModelScores {
+                coding_index: Some(71.4),
+                ..Default::default()
+            },
+        )])),
+        Arc::new(FixedScrapes(vec![])),
+    );
+    let res = r.current().await.expect("resolve");
+    assert_eq!(res.origin, Origin::BenchmarksApi);
+    assert_eq!(
+        res.ranked_ids(),
+        vec!["openrouter/z-ai/glm-5.2:free", "groq/llama-fast"]
+    );
 }
 
 #[tokio::test]
@@ -333,7 +365,9 @@ mod default_sources_wire {
         let src = DefaultSources::new(format!("{}/api/v1", server.uri()), None, None);
         let models = src.discover().await.expect("discover succeeds");
         assert_eq!(models.len(), 1);
-        assert_eq!(models[0].id, "z-ai/glm-5.2:free");
+        assert_eq!(models[0].id, "openrouter/z-ai/glm-5.2:free");
+        assert_eq!(models[0].upstream_id, "z-ai/glm-5.2:free");
+        assert_eq!(models[0].provider, "openrouter");
         assert!(models[0].supports_tools);
     }
 
@@ -405,6 +439,57 @@ mod default_sources_wire {
         );
         let err = src.coding_benchmark_rows().await.expect_err("must fail");
         assert!(err.contains("401"), "{err}");
+    }
+
+    /// `DefaultSources::new` always injects OpenRouter; this is the `openrouter().ok_or` path.
+    #[tokio::test]
+    async fn benchmarks_without_an_openrouter_adapter_is_an_error() {
+        let src = DefaultSources::from_upstreams(
+            vec![crate::providers::Upstream::from_parts(
+                "groq",
+                "http://unused.invalid/openai/v1",
+                "GROQ_API_KEY",
+                "gsk-test",
+                crate::providers::CatalogPolicy::ZeroPriceOrUnpriced,
+                crate::providers::BillingKind::RateLimitedFree,
+                crate::providers::ModelAllow::Chat,
+            )],
+            None,
+        );
+        let err = src.coding_benchmark_rows().await.expect_err("must fail");
+        assert!(err.contains("OPENROUTER_API_KEY"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn benchmarks_non_json_body_is_an_error() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/v1/benchmarks"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("content-type", "text/plain")
+                    .set_body_string("{not-json}"),
+            )
+            .mount(&server)
+            .await;
+        let src = DefaultSources::new(
+            format!("{}/api/v1", server.uri()),
+            Some("sk-live".into()),
+            None,
+        );
+        let err = src.coding_benchmark_rows().await.expect_err("must fail");
+        assert!(err.contains("body not JSON"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn benchmarks_transport_error_is_an_error() {
+        let src = DefaultSources::new(
+            "http://127.0.0.1:9/api/v1".to_string(),
+            Some("sk-live".into()),
+            None,
+        );
+        let err = src.coding_benchmark_rows().await.expect_err("must fail");
+        assert!(err.contains("transport"), "{err}");
     }
 
     #[tokio::test]
@@ -516,16 +601,149 @@ mod default_sources_wire {
         assert_eq!(resolution.origin, Origin::BenchmarksApi);
         assert_eq!(
             resolution.ranked_ids(),
-            vec!["vendor/small", "vendor/large"]
+            vec!["openrouter/vendor/small", "openrouter/vendor/large"]
         );
         // …and the answer is usable as data: who won, and that it is servable.
         assert_eq!(
             resolution.ranked.first().map(|m| m.id.as_str()),
-            Some("vendor/small")
+            Some("openrouter/vendor/small")
         );
-        assert!(resolution.contains("vendor/small"));
+        assert!(resolution.contains("openrouter/vendor/small"));
 
         // No completion request left the process: `expect(0)` verifies on drop.
+    }
+
+    #[tokio::test]
+    async fn catalogs_merge_across_providers_with_collision_safe_ids() {
+        let openrouter = MockServer::start().await;
+        let groq = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/v1/models"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": [
+                    { "id": "meta-llama/llama-3.1-8b-instruct:free",
+                      "pricing": { "prompt": "0", "completion": "0" },
+                      "supported_parameters": ["tools"] },
+                    { "id": "openai/gpt-4o",
+                      "pricing": { "prompt": "0.000005", "completion": "0.000015" },
+                      "supported_parameters": ["tools"] }
+                ]
+            })))
+            .mount(&openrouter)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/openai/v1/models"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": [
+                    { "id": "llama-3.1-8b-instant", "context_length": 131072 }
+                ]
+            })))
+            .mount(&groq)
+            .await;
+
+        let src = DefaultSources::from_upstreams(
+            vec![
+                crate::providers::Upstream::new_for_tests(
+                    "openrouter",
+                    format!("{}/api/v1", openrouter.uri()),
+                    "sk-or",
+                    crate::providers::BillingKind::ZeroPricedOnly,
+                ),
+                crate::providers::Upstream::new_for_tests(
+                    "groq",
+                    format!("{}/openai/v1", groq.uri()),
+                    "gsk-test",
+                    crate::providers::BillingKind::RateLimitedFree,
+                ),
+            ],
+            None,
+        );
+        let models = src.discover().await.expect("merged catalog");
+        let ids: Vec<&str> = models.iter().map(|m| m.id.as_str()).collect();
+        assert!(
+            ids.contains(&"openrouter/meta-llama/llama-3.1-8b-instruct:free"),
+            "{ids:?}"
+        );
+        assert!(ids.contains(&"groq/llama-3.1-8b-instant"), "{ids:?}");
+        assert!(
+            !ids.iter().any(|id| id.contains("gpt-4o")),
+            "paid leftover must not enter: {ids:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_401_provider_is_skipped_when_another_catalog_is_non_empty() {
+        let good = MockServer::start().await;
+        let bad = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/v1/models"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": [{ "id": "z-ai/glm-5.2:free",
+                           "pricing": { "prompt": "0", "completion": "0" } }]
+            })))
+            .mount(&good)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/openai/v1/models"))
+            .respond_with(ResponseTemplate::new(401))
+            .mount(&bad)
+            .await;
+
+        let src = DefaultSources::from_upstreams(
+            vec![
+                crate::providers::Upstream::new_for_tests(
+                    "openrouter",
+                    format!("{}/api/v1", good.uri()),
+                    "sk-or",
+                    crate::providers::BillingKind::ZeroPricedOnly,
+                ),
+                crate::providers::Upstream::new_for_tests(
+                    "groq",
+                    format!("{}/openai/v1", bad.uri()),
+                    "gsk-bad",
+                    crate::providers::BillingKind::RateLimitedFree,
+                ),
+            ],
+            None,
+        );
+        let models = src.discover().await.expect("other provider saved us");
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0].provider, "openrouter");
+    }
+
+    #[tokio::test]
+    async fn anyapi_catalog_keeps_only_free_suffix_at_zero_price() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v1/models"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": [
+                    { "id": "meta-llama/llama-3.3-70b-instruct:free",
+                      "pricing": { "prompt": "0", "completion": "0" } },
+                    { "id": "openai/gpt-4o",
+                      "pricing": { "prompt": "0.000005", "completion": "0.000015" } },
+                    { "id": "unpriced-leftover" },
+                    { "id": "vendor/unpriced:free" }
+                ]
+            })))
+            .mount(&server)
+            .await;
+
+        let src = DefaultSources::from_upstreams(
+            vec![crate::providers::Upstream::from_parts(
+                "anyapi",
+                format!("{}/v1", server.uri()),
+                "ANYAPI_API_KEY",
+                "sk-anyapi",
+                crate::providers::CatalogPolicy::ZeroPriceRequired,
+                crate::providers::BillingKind::ZeroPricedOnly,
+                crate::providers::ModelAllow::AnyApiFree,
+            )],
+            None,
+        );
+        let models = src.discover().await.expect("discover");
+        let ids: Vec<&str> = models.iter().map(|m| m.id.as_str()).collect();
+        assert_eq!(ids, vec!["anyapi/meta-llama/llama-3.3-70b-instruct:free"]);
     }
 }
 

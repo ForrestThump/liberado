@@ -70,9 +70,9 @@ impl Resolution {
 
 #[derive(Debug, thiserror::Error)]
 pub enum ResolveError {
-    #[error("openrouter /models unavailable: {0}")]
+    #[error("free-model discovery unavailable: {0}")]
     Discovery(String),
-    #[error("openrouter reports no zero-priced models")]
+    #[error("no zero-priced free models from any configured provider")]
     NoFreeModels,
 }
 
@@ -97,16 +97,33 @@ pub trait ScrapeRankingSource: Send + Sync {
 /// Production wiring over real HTTP.
 pub struct DefaultSources {
     http: reqwest::Client,
-    base_url: String,
-    api_key: Option<String>,
+    providers: Vec<crate::providers::Upstream>,
     spider: Option<SpiderClient>,
     scrape_timeout_secs: u64,
 }
 
 impl DefaultSources {
+    /// OpenRouter-only wiring, kept so existing tests can point one mock at `/models`.
     pub fn new(
         base_url: impl Into<String>,
         api_key: Option<String>,
+        spider: Option<SpiderClient>,
+    ) -> Self {
+        let providers = vec![crate::providers::Upstream::from_parts(
+            "openrouter",
+            base_url,
+            "OPENROUTER_API_KEY",
+            api_key.unwrap_or_default(),
+            crate::providers::CatalogPolicy::ZeroPriceRequired,
+            crate::providers::BillingKind::ZeroPricedOnly,
+            crate::providers::ModelAllow::Chat,
+        )];
+        Self::from_upstreams(providers, spider)
+    }
+
+    /// Production wiring: every configured adapter.
+    pub fn from_upstreams(
+        providers: Vec<crate::providers::Upstream>,
         spider: Option<SpiderClient>,
     ) -> Self {
         Self {
@@ -114,8 +131,7 @@ impl DefaultSources {
                 .timeout(Duration::from_secs(30))
                 .build()
                 .expect("static client config"),
-            base_url: base_url.into(),
-            api_key,
+            providers,
             spider,
             scrape_timeout_secs: crate::settings::DEFAULT_SCRAPE_TIMEOUT_SECS,
         }
@@ -127,9 +143,21 @@ impl DefaultSources {
         self
     }
 
-    async fn get_json(&self, url: &str, auth: bool) -> Result<serde_json::Value, String> {
+    fn openrouter(&self) -> Option<&crate::providers::Upstream> {
+        self.providers.iter().find(|u| u.id == "openrouter")
+    }
+
+    /// OpenRouter adapter with a non-empty bearer. Missing adapter and empty key
+    /// share one error so ranking can fall through without logging the key.
+    fn openrouter_for_benchmarks(&self) -> Result<&crate::providers::Upstream, String> {
+        self.openrouter()
+            .filter(|up| !up.bearer().is_empty())
+            .ok_or_else(|| "no OPENROUTER_API_KEY configured".into())
+    }
+
+    async fn get_json(&self, url: &str, bearer: Option<&str>) -> Result<serde_json::Value, String> {
         let mut req = self.http.get(url);
-        if auth && let Some(key) = &self.api_key {
+        if let Some(key) = bearer.filter(|k| !k.is_empty()) {
             req = req.bearer_auth(key);
         }
         let response = req.send().await.map_err(|e| format!("transport: {e}"))?;
@@ -142,47 +170,71 @@ impl DefaultSources {
             .await
             .map_err(|e| format!("body not JSON: {e}"))
     }
+
+    async fn discover_one(
+        &self,
+        up: &crate::providers::Upstream,
+    ) -> Result<Vec<FreeModel>, String> {
+        let body = self
+            .get_json(
+                &format!("{}/models", up.base_url.trim_end_matches('/')),
+                Some(up.bearer()),
+            )
+            .await?;
+        Ok(free::parse_provider_models(
+            &body, &up.id, up.catalog, up.allow,
+        ))
+    }
 }
 
 #[async_trait]
 impl FreeModelDiscovery for DefaultSources {
     async fn discover(&self) -> Result<Vec<FreeModel>, String> {
-        let body = self
-            .get_json(
-                &format!("{}/models", self.base_url.trim_end_matches('/')),
-                false,
-            )
-            .await?;
-        Ok(free::parse_free_models(&body))
+        if self.providers.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut merged = Vec::new();
+        let mut last_err: Option<String> = None;
+        let mut any_ok = false;
+        for up in &self.providers {
+            match self.discover_one(up).await {
+                Ok(models) => {
+                    any_ok = true;
+                    tracing::info!(
+                        provider = %up.id,
+                        models = models.len(),
+                        "provider catalog merged"
+                    );
+                    merged.extend(models);
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        provider = %up.id,
+                        error = %e,
+                        "skipping provider during discovery"
+                    );
+                    last_err = Some(format!("{}: {e}", up.id));
+                }
+            }
+        }
+        if merged.is_empty() && !any_ok {
+            return Err(last_err.unwrap_or_else(|| "no providers configured".into()));
+        }
+        merged.sort_by(|a, b| a.id.cmp(&b.id));
+        merged.dedup_by(|a, b| a.id == b.id);
+        Ok(merged)
     }
 }
 
 #[async_trait]
 impl CodingBenchmarkSource for DefaultSources {
     async fn coding_benchmark_rows(&self) -> Result<Vec<(String, ModelScores)>, String> {
-        let key = self
-            .api_key
-            .as_ref()
-            .ok_or("no OPENROUTER_API_KEY configured")?;
-        let response = self
-            .http
-            .get(format!(
-                "{}/benchmarks",
-                self.base_url.trim_end_matches('/')
-            ))
-            .bearer_auth(key)
-            .query(&[("task_type", "coding"), ("max_results", "100")])
-            .send()
-            .await
-            .map_err(|e| format!("transport: {e}"))?;
-        let status = response.status();
-        if !status.is_success() {
-            return Err(format!("HTTP {status}"));
-        }
-        let body: serde_json::Value = response
-            .json()
-            .await
-            .map_err(|e| format!("body not JSON: {e}"))?;
+        let up = self.openrouter_for_benchmarks()?;
+        let url = format!(
+            "{}/benchmarks?task_type=coding&max_results=100",
+            up.base_url.trim_end_matches('/')
+        );
+        let body = self.get_json(&url, Some(up.bearer())).await?;
         Ok(bench_api::parse_benchmarks(&body))
     }
 }

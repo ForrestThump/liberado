@@ -48,9 +48,23 @@ fn free_port() -> u16 {
         .port()
 }
 
+fn clear_provider_keys(cmd: &mut Command) {
+    for name in liberado_provider_free_proxy::listed_key_env_names() {
+        cmd.env_remove(name);
+    }
+}
+
 fn spawn_proxy(port: u16) -> (KillOnDrop, Arc<Mutex<Vec<String>>>) {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_liberado-free-proxy"))
-        .env("OPENROUTER_API_KEY", "sk-smoke")
+    spawn_proxy_with(port, &[("OPENROUTER_API_KEY", "sk-smoke")])
+}
+
+fn spawn_proxy_with(port: u16, keys: &[(&str, &str)]) -> (KillOnDrop, Arc<Mutex<Vec<String>>>) {
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_liberado-free-proxy"));
+    clear_provider_keys(&mut cmd);
+    for (k, v) in keys {
+        cmd.env(k, v);
+    }
+    let mut child = cmd
         .env("LIBERADO_FREE_PROXY_BIND", format!("127.0.0.1:{port}"))
         // Closed port on loopback: refuses immediately, keeps the test off the network.
         .env(
@@ -123,11 +137,10 @@ fn http_get(addr: &str, path: &str) -> Result<String, String> {
 }
 
 #[test]
-fn missing_openrouter_key_exits_2_with_a_clear_message() {
-    let output = Command::new(env!("CARGO_BIN_EXE_liberado-free-proxy"))
-        .env_remove("OPENROUTER_API_KEY")
-        .output()
-        .expect("binary spawns");
+fn missing_all_provider_keys_exits_2_listing_the_env_names() {
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_liberado-free-proxy"));
+    clear_provider_keys(&mut cmd);
+    let output = cmd.output().expect("binary spawns");
     assert_eq!(
         output.status.code(),
         Some(2),
@@ -135,6 +148,33 @@ fn missing_openrouter_key_exits_2_with_a_clear_message() {
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("OPENROUTER_API_KEY"), "{stderr}");
+    assert!(stderr.contains("GROQ_API_KEY"), "{stderr}");
+    assert!(stderr.contains("GEMINI_API_KEY"), "{stderr}");
+    assert!(stderr.contains("KILOCODE_API_KEY"), "{stderr}");
+    assert!(stderr.contains("ANYAPI_API_KEY"), "{stderr}");
+    assert!(
+        !stderr.contains("sk-"),
+        "must not print key-shaped values: {stderr}"
+    );
+}
+
+#[test]
+fn groq_key_alone_is_enough_to_boot() {
+    let port = free_port();
+    let (_child, drained) = spawn_proxy_with(
+        port,
+        &[
+            ("GROQ_API_KEY", "gsk-smoke"),
+            (
+                "LIBERADO_FREE_PROXY_GROQ_BASE",
+                "http://127.0.0.1:9/openai/v1",
+            ),
+        ],
+    );
+    let body = wait_for_healthz(port);
+    assert_eq!(body, "ok");
+    wait_for_log(&drained, "listening");
+    wait_for_log(&drained, "SPIDER_MCP_URL unset");
 }
 
 #[test]
@@ -146,4 +186,5 @@ fn booted_proxy_serves_healthz_and_logs_the_bound_address() {
     let body = wait_for_healthz(port);
     assert_eq!(body, "ok");
     wait_for_log(&drained, "listening");
+    wait_for_log(&drained, "SPIDER_MCP_URL unset");
 }
