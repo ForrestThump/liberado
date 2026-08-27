@@ -408,3 +408,7 @@ mod tests {
             .expect_err("a wrong-shaped answer must not read as a pass");
     }
 }
+
+#[cfg(test)]
+#[path = "session_critic_survivor_tests.rs"]
+mod survivor_tests;

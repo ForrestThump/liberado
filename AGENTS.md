@@ -88,7 +88,8 @@ complete failure set — comparing a branch against its base is meaningless with
 **Run `just ci` before you push — CRAP is a per-function ratchet.** `crap-baseline.json` is the last
 best score for each function, scored on Ubuntu (the GitHub job's host). GitHub only *reads* it
 (`liberado ci crap` / job `CRAP regression`); it never writes the file. A function at 50 that goes
-to 60 fails, even under the 150 ceiling. New functions must land at or below 150. Linux `just ci`
+to 60 fails, even under the 150 ceiling. A current score below 10 is ignored, so a 4→5 move does
+not fail the job. New functions must land at or below 150. Linux `just ci`
 runs that same per-function compare and may rewrite the file. Windows `just ci` checks the 150
 ceiling only — coverage numbers are host-sensitive and a Windows compare false-fails. Do not raise
 the file by hand. Split the function or add tests. cargo-crap matches **file + function name**,
@@ -149,7 +150,7 @@ production entry point still reads it.
 - `crates/coder-tools/` — the tools the model actually calls.
 - `crates/coder-sandbox/` — workspaces, worktrees, checkpoints, preflight.
 - `crates/executor/` — the bounded decide/act loop shared by all agents.
-- `Skills/` — task playbooks (e.g. `cold-review-pr.md`).
+- `Skills/` — task playbooks (e.g. `cold-review-pr.md`, `mutants-campaign.md`).
 - `liberado shepherd` — drives agent PRs to ready-or-blocked on the same differential rule.
 - `crates/harness-eval/` and `liberado coder compare prepare|run|save|submit|await` — own durable Liberado/Pi comparisons: pinned
   worktrees, separate Cargo caches, 30-minute compile ceilings, spawn-on-submit dispatch behind a
@@ -222,7 +223,9 @@ relying on care.
 free. `target/` reached 71.6 GB in one checkout, and `cargo-mutants` copies the whole workspace into
 `%TEMP%` per run and leaves it there when killed (~23 GB in leaked clones). Check free space before
 a long dispatch and sweep `%TEMP%\cargo-mutants-*`. The harness now reports this honestly instead of
-telling the model to fix it (PR #119), but it cannot prevent it.
+telling the model to fix it (PR #119), but it cannot prevent it. For mutation campaigns, read
+`Skills/mutants-campaign.md`: builds use `target/mutants/`, and `just mutants-report` reads
+`mutants-ledger.json` for survivor counts and commit drift.
 
 **Reinstall `liberado-acp` after merging anything the bridge links.** A dispatched run tests the
 installed binary, not your working tree. A run once silently tested a stale build; it was caught

@@ -15,7 +15,7 @@ use liberado_dispatcher::DEFAULT_SYSTEM_PROMPT;
 
 use crate::candidate::{Candidate, CandidateOrigin};
 use crate::config::TunerConfig;
-use crate::generation::{cold_start, mutate, request_justification};
+use crate::generation::request_justification;
 use crate::rubric::format_rubric;
 use crate::scoring::{CandidateFitness, score_candidate};
 
@@ -221,46 +221,13 @@ async fn gather_generation_candidates(
     config: &TunerConfig,
     budget: &Budget,
 ) -> Vec<Candidate> {
-    let mut pool: Vec<Candidate> = Vec::new();
-
-    for (parent_index, (parent, parent_fitness)) in beam.iter().enumerate() {
-        for _ in 0..config.mutations_per_candidate {
-            if budget.exhausted() {
-                break;
-            }
-            let failing = parent_fitness.failing();
-            if let Ok(prompt) = mutate(
-                config.meta_provider.as_ref(),
-                &parent.prompt,
-                &failing,
-                budget,
-            )
-            .await
-            {
-                pool.push(Candidate {
-                    prompt,
-                    origin: CandidateOrigin::MutatedFrom {
-                        parent_index,
-                        parent_accuracy: parent_fitness.accuracy,
-                    },
-                });
-            } // Err logged inside mutate(); skip this slot, not the run
-        }
-    }
-
-    for _ in 0..config.cold_starts_per_generation {
-        if budget.exhausted() {
-            break;
-        }
-        if let Ok(prompt) = cold_start(config.meta_provider.as_ref(), budget).await {
-            pool.push(Candidate {
-                prompt,
-                origin: CandidateOrigin::ColdStart,
-            });
-        }
-    }
-
-    pool
+    crate::generation_engine::gather_generation_candidates(
+        crate::generation_engine::DispatcherGeneration,
+        beam,
+        config,
+        budget,
+    )
+    .await
 }
 
 /// Score every candidate in a pool against the scenario set.

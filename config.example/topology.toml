@@ -141,6 +141,24 @@ delegation_mode = true
 # model_env = "GROQ_MODEL"          # optional — omit if this backend has no override-env convention
 # extra_client_error_status = []    # e.g. [402] for a backend with its own "insufficient credits" code
 
+# The free-coding proxy (`crates/provider-free-proxy`, binary `liberado-free-proxy`): a local
+# OpenAI-compatible proxy that serves ONLY OpenRouter's zero-priced models and picks whichever
+# available one ranks highest on coding benchmarks — OpenRouter's Benchmarks API when it answers,
+# otherwise deterministic leaderboard scraping through liberado-spider-mcp (no LLM in the loop).
+# Run the binary alongside the daemon, then select it here (globally, or per role via [roles.*]):
+#
+#   OPENROUTER_API_KEY=... LIBERADO_FREE_PROXY_BIND=127.0.0.1:8788 liberado-free-proxy
+#
+# `default_model = "auto"` asks the proxy to resolve each request to its best-ranked free model;
+# naming any other slug is refused with 400 unless it is itself currently free. The api_key value
+# is ignored by the proxy (it holds its own upstream key) but must name a SET env var so the
+# generic constructor succeeds.
+# [[providers]]
+# name = "free-coding"
+# base_url = "http://127.0.0.1:8788/v1"
+# default_model = "auto"
+# api_key_env = "OPENROUTER_API_KEY"
+
 # --- Per-role model tuning (the execution-path latency knobs) ----------------------------------
 # Override provider / model / sampling PER ROLE, so you can run a fast cheap router and a strong
 # worker without a rebuild. Roles: `main_agent` (the chat face), `dispatcher` (the router that

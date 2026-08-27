@@ -1,7 +1,7 @@
 use liberado_common::process::std_command;
-use serde_json::Value;
+use serde_json::{Value, json};
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use tempfile::tempdir;
 
 fn run_cli(cwd: &Path, args: &[&str]) -> std::process::Output {
@@ -1094,4 +1094,359 @@ fn coder_summarize_command_dispatches_and_reports_native_trace() {
     assert!(stdout.contains("turns: 1"));
     assert!(stdout.contains("edit_file: 1"));
     assert!(stdout.contains("session_finished: done"));
+}
+
+fn checkout_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("crates directory")
+        .parent()
+        .expect("repository root")
+        .to_path_buf()
+}
+
+#[test]
+fn mutants_requires_a_subcommand() {
+    let temp = tempdir().unwrap();
+    let stderr = run_usage(temp.path(), &["mutants"]);
+    assert!(stderr.contains("usage: liberado mutants"), "{stderr}");
+}
+
+#[test]
+fn mutants_report_runs_from_the_checkout() {
+    let root = checkout_root();
+    let output = run_cli(&root, &["mutants", "report"]);
+    assert!(
+        output.status.success(),
+        "mutants report failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Never campaigned"));
+    assert!(stdout.contains("Historical only"));
+    assert!(stdout.contains("Most drift"));
+}
+
+#[test]
+fn mutants_next_suggests_a_never_campaigned_crate_first() {
+    let root = checkout_root();
+    let output = run_cli(&root, &["mutants", "next"]);
+    assert!(
+        output.status.success(),
+        "mutants next failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let name = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    assert!(!name.is_empty(), "expected a crate directory name");
+    assert!(
+        root.join("crates").join(&name).is_dir(),
+        "{name} is not a crate directory"
+    );
+}
+
+// --- `mutants next` selection branches, exercised against fixture repos --------------------
+//
+// The live-checkout test above is a useful smoke check, but which branch of the selector fires
+// depends on the *real* workspace's campaign state — adding or ledgering one crate flips the
+// path taken and moves the function's measured coverage, which the CRAP ratchet then reports
+// as a regression no diff caused. These fixtures pin every branch deterministically.
+
+/// Two-crate git checkout (`crates/{alpha,beta}`) with a committed HEAD, so drift enrichment
+/// has real history to count. Returns the dir (owned: must outlive the assertions) and HEAD sha.
+fn next_fixture_repo() -> (tempfile::TempDir, String) {
+    let temp = tempdir().expect("temporary repository");
+    let root = temp.path();
+    for (dir, role) in [("alpha", "kernel"), ("beta", "client")] {
+        fs::create_dir_all(root.join("crates").join(dir)).expect("crate dir");
+        fs::write(
+            root.join("crates").join(dir).join("Cargo.toml"),
+            format!(
+                "[package]\nname = \"liberado-{dir}\"\n\n[package.metadata.liberado]\nrole = \"{role}\"\n"
+            ),
+        )
+        .expect("manifest");
+    }
+    fs::write(root.join("Cargo.toml"), "[workspace]\nmembers = []\n").expect("workspace toml");
+    run_git(root, &["init"]);
+    run_git(root, &["config", "user.email", "test@example.com"]);
+    run_git(root, &["config", "user.name", "Test"]);
+    run_git(root, &["add", "."]);
+    run_git(root, &["commit", "-m", "initial"]);
+    let head = std_command("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(root)
+        .output()
+        .expect("rev-parse");
+    let sha = String::from_utf8_lossy(&head.stdout).trim().to_string();
+    (temp, sha)
+}
+
+fn run_git(root: &Path, args: &[&str]) {
+    let status = std_command("git")
+        .args(args)
+        .current_dir(root)
+        .status()
+        .expect("git command");
+    assert!(status.success(), "git {args:?} failed");
+}
+
+fn write_ledger(root: &Path, campaigns: Value) {
+    fs::write(
+        root.join("mutants-ledger.json"),
+        serde_json::json!({ "schema": 1, "campaigns": campaigns }).to_string(),
+    )
+    .expect("ledger");
+}
+
+fn campaign(package: &str, commit: Option<&str>) -> Value {
+    let mut c = json!({
+        "package": package,
+        "recorded_at": "2026-08-24T00:00:00Z",
+        "scope": "package",
+        "counts": { "viable": 10, "caught": 8, "survived": 2, "timeout": 0, "unviable": 0 }
+    });
+    if let Some(sha) = commit {
+        c["commit"] = json!(sha);
+    }
+    c
+}
+
+#[test]
+fn next_prefers_never_campaigned_over_a_drifted_ledger_entry() {
+    let (temp, sha) = next_fixture_repo();
+    let root = temp.path();
+    // alpha is campaigned (drift path), beta is absent from the ledger → beta wins.
+    write_ledger(root, json!([campaign("liberado-alpha", Some(&sha))]));
+
+    let output = run_cli(root, &["mutants", "next"]);
+    assert!(
+        output.status.success(),
+        "mutants next failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "beta");
+}
+
+#[test]
+fn next_falls_back_to_most_drift_when_everything_was_campaigned() {
+    let (temp, sha) = next_fixture_repo();
+    let root = temp.path();
+    write_ledger(
+        root,
+        json!([
+            campaign("liberado-alpha", Some(&sha)),
+            campaign("liberado-beta", Some(&sha)),
+        ]),
+    );
+
+    let output = run_cli(root, &["mutants", "next"]);
+    assert!(
+        output.status.success(),
+        "mutants next failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    // Equal drift → directory order decides.
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "alpha");
+}
+
+#[test]
+fn next_falls_back_to_historical_only_when_campaigns_record_no_commit() {
+    let (temp, _sha) = next_fixture_repo();
+    let root = temp.path();
+    write_ledger(
+        root,
+        json!([
+            campaign("liberado-alpha", None),
+            campaign("liberado-beta", None),
+        ]),
+    );
+
+    let output = run_cli(root, &["mutants", "next"]);
+    assert!(
+        output.status.success(),
+        "mutants next failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "alpha");
+}
+
+#[test]
+fn next_reports_exhaustion_when_the_role_filter_removes_every_crate() {
+    let (temp, _sha) = next_fixture_repo();
+    let root = temp.path();
+    // Both crates are campaign-free but the default filter still sees them; exhaust the
+    // selection by giving every crate a tooling role, which `--all` must then bypass.
+    for dir in ["alpha", "beta"] {
+        fs::write(
+            root.join("crates").join(dir).join("Cargo.toml"),
+            format!(
+                "[package]\nname = \"liberado-{dir}\"\n\n[package.metadata.liberado]\nrole = \"tooling\"\n"
+            ),
+        )
+        .expect("manifest rewrite");
+    }
+    run_git(root, &["add", "."]);
+    run_git(root, &["commit", "-m", "all tooling"]);
+
+    let filtered = run_cli(root, &["mutants", "next"]);
+    assert!(
+        !filtered.status.success(),
+        "an all-tooling workspace must exhaust the selection"
+    );
+    let stderr = String::from_utf8_lossy(&filtered.stderr);
+    assert!(stderr.contains("no crates matched"), "{stderr}");
+
+    let with_all = run_cli(root, &["mutants", "next", "--all"]);
+    assert!(
+        with_all.status.success(),
+        "--all must bypass the role filter:\n{}",
+        String::from_utf8_lossy(&with_all.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&with_all.stdout).trim(), "alpha");
+}
+
+#[test]
+fn mutants_record_ingests_outcomes_json() {
+    let temp = tempdir().expect("temporary repository");
+    let root = temp.path();
+    fs::create_dir_all(root.join("crates/markdown")).expect("crate directory");
+    fs::write(root.join("Cargo.toml"), "[workspace]\nmembers = []\n").expect("workspace");
+    fs::write(
+        root.join("crates/markdown/Cargo.toml"),
+        "[package]\nname = \"liberado-markdown\"\n\n[package.metadata.liberado]\nrole = \"client\"\n",
+    )
+    .expect("manifest");
+    fs::write(
+        root.join("mutants-ledger.json"),
+        "{\"schema\":1,\"campaigns\":[]}\n",
+    )
+    .expect("ledger");
+    fs::create_dir_all(root.join("mutants.out")).expect("mutants output");
+    fs::write(
+        root.join("mutants.out/outcomes.json"),
+        // total_mutants must be present and equal the bucket sum: an
+        // undeclared total cannot prove the run finished, and the recorder
+        // refuses it.
+        r#"{
+  "outcomes": [{"scenario": {"Mutant": {"package": "liberado-markdown"}}}],
+  "total_mutants": 3,
+  "caught": 2,
+  "missed": 1,
+  "timeout": 0,
+  "unviable": 0,
+  "cargo_mutants_version": "27.1.0"
+}"#,
+    )
+    .expect("outcomes");
+    std::process::Command::new("git")
+        .args(["init"])
+        .current_dir(root)
+        .status()
+        .expect("git init");
+    std::process::Command::new("git")
+        .args(["config", "user.email", "test@example.com"])
+        .current_dir(root)
+        .status()
+        .expect("git identity");
+    std::process::Command::new("git")
+        .args(["config", "user.name", "Test"])
+        .current_dir(root)
+        .status()
+        .expect("git identity");
+    std::process::Command::new("git")
+        .args(["add", "."])
+        .current_dir(root)
+        .status()
+        .expect("git add");
+    std::process::Command::new("git")
+        .args(["commit", "-m", "seed"])
+        .current_dir(root)
+        .status()
+        .expect("git commit");
+
+    let output = run_cli(root, &["mutants", "record", "markdown"]);
+    assert!(
+        output.status.success(),
+        "mutants record failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let ledger: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(root.join("mutants-ledger.json")).expect("ledger file"),
+    )
+    .expect("ledger json");
+    let campaigns = ledger["campaigns"].as_array().expect("campaigns");
+    assert_eq!(campaigns.len(), 1);
+    assert_eq!(campaigns[0]["package"], "liberado-markdown");
+    assert_eq!(campaigns[0]["counts"]["caught"], 2);
+    assert_eq!(campaigns[0]["counts"]["survived"], 1);
+    assert!(campaigns[0]["commit"].as_str().is_some());
+}
+
+/// `docs crate-map --write` must regenerate the map file. A missing map makes the check arm
+/// fail, so a created file is proof the `--write` guard actually matched — the surviving
+/// mutant rewrote the guard to `false`, turning every write into a doomed check.
+#[test]
+fn docs_crate_map_write_flag_generates_the_map() {
+    let temp = tempdir().unwrap();
+    let root = temp.path();
+    fs::create_dir(root.join("crates")).expect("crates directory");
+    fs::create_dir_all(root.join("docs/spec/reference")).expect("map directory");
+    fs::write(root.join("Cargo.toml"), "[workspace]\nmembers = []\n").expect("workspace manifest");
+
+    let output = run_cli(root, &["docs", "crate-map", "--write"]);
+    assert!(
+        output.status.success(),
+        "crate-map --write failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        root.join("docs/spec/reference/crate-map.md").is_file(),
+        "--write must generate the crate map file"
+    );
+}
+
+/// `mutants run <dir>` reaches the crate resolver: an unknown crate name fails with the
+/// resolver's error, not the argument-usage text a dropped dispatch arm would print.
+#[test]
+fn mutants_run_reaches_the_crate_resolver() {
+    let temp = tempdir().unwrap();
+    let root = temp.path();
+    fs::create_dir(root.join("crates")).expect("crates directory");
+    fs::write(root.join("Cargo.toml"), "[workspace]\nmembers = []\n").expect("workspace manifest");
+
+    let stderr = run_usage(root, &["mutants", "run", "not-a-crate"]);
+    assert!(
+        stderr.contains("unknown crate directory"),
+        "expected the resolver error, got: {stderr}"
+    );
+    assert!(
+        !stderr.contains("usage: liberado mutants run"),
+        "the run arm must dispatch, not fall through to usage: {stderr}"
+    );
+}
+
+/// `serve` with an unloadable config is a hard error (Decision 14 fail-fast): the daemon
+/// never starts and the process exits non-zero. A `run_serve` body replaced by `Ok(())`
+/// would exit 0 without reading any config.
+#[test]
+fn serve_with_an_unloadable_config_fails() {
+    let temp = tempdir().unwrap();
+    let config_dir = temp.path().join("config");
+    fs::create_dir(&config_dir).expect("config directory");
+    fs::write(config_dir.join("topology.toml"), "not=[valid toml").expect("garbage topology");
+
+    let output = std_command(env!("CARGO_BIN_EXE_liberado"))
+        .env("LIBERADO_CONFIG_DIR", &config_dir)
+        .args(["serve", "/nonexistent-vault-for-mutant-test"])
+        .current_dir(temp.path())
+        .output()
+        .expect("liberado CLI should start");
+
+    assert!(
+        !output.status.success(),
+        "serve with a garbage config must fail, stdout: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
 }

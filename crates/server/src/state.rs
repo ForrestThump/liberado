@@ -260,3 +260,7 @@ impl AppState {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "state_unit_tests.rs"]
+mod unit_tests;

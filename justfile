@@ -183,16 +183,41 @@ compare-reset path commit="":
     cargo run --locked -p liberado-cli -- coder compare reset {{path}} {{if commit == "" { "" } else { "--commit " + commit }}}
 
 # ── Mutation testing ─────────────────────────────────────────────────────────
-
-# Mutation-test one crate with hung-test protection:
-#   `just mutants daemon`        → per-mutant timeout 60s floor
-#   `just mutants coder-agent`   → short floor, lib tests only (integration tests hang)
+#
+# Playbook: Skills/mutants-campaign.md — cold-start assessment, run, record, fix survivors.
+# Ledger: mutants-ledger.json (append-only). Health: just mutants-report / just mutants-next.
+#
+# Run cargo-mutants on one crate and append results to mutants-ledger.json.
+# Example: `just mutants executor`
+#
+# CARGO_TARGET_DIR keeps the invoke binary out of target/debug/liberado.exe so
+# `cargo mutants -p liberado-cli` can rebuild that path without Access denied.
+# Mutants builds go to target/mutants/ (see mutants_cmd.rs).
+# The env comes from the recipe-scoped [env] attribute, not a shell prefix:
+# `set "X=Y"&&` is cmd.exe syntax, which neither sh nor PowerShell runs.
+[env('CARGO_TARGET_DIR', 'target/liberado-invoke')]
 mutants name:
-    cargo mutants -p liberado-{{name}} --cap-lints true --timeout 3.0 --minimum-test-timeout 30
+    cargo run --locked --quiet -p liberado-cli -- mutants run {{name}}
 
-# coder-agent: run lib tests only (mock_intake_e2e hangs in cargo-mutants temp env).
+# coder-agent: lib tests only (mock_intake_e2e hangs in cargo-mutants temp env).
+[env('CARGO_TARGET_DIR', 'target/liberado-invoke')]
 mutants-agent:
-    cargo mutants -p liberado-coder-agent --cap-lints true --timeout 3.0 --minimum-test-timeout 90 -- --lib
+    cargo run --locked --quiet -p liberado-cli -- mutants run --lib-only coder-agent
+
+# Ingest an existing mutants.out without re-running cargo mutants.
+[env('CARGO_TARGET_DIR', 'target/liberado-invoke')]
+mutants-record name:
+    cargo run --locked --quiet -p liberado-cli -- mutants record {{name}}
+
+# Health report: never campaigned, historical-only, most drift since last SHA run.
+[env('CARGO_TARGET_DIR', 'target/liberado-invoke')]
+mutants-report:
+    cargo run --locked --quiet -p liberado-cli -- mutants report
+
+# Print one crate directory name to mutation-test next (see Skills/mutants-campaign.md).
+[env('CARGO_TARGET_DIR', 'target/liberado-invoke')]
+mutants-next:
+    cargo run --locked --quiet -p liberado-cli -- mutants next
 
 # ── Run ──────────────────────────────────────────────────────────────────────
 

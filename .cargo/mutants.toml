@@ -1,0 +1,10 @@
+# Shared cargo-mutants defaults for MANUAL runs.
+#
+# The `liberado mutants run` CLI path passes --timeout / --minimum-test-timeout
+# explicitly (see build_mutants_command), and explicit flags win over this file —
+# so minimum_test_timeout below only affects hand-run `cargo mutants`. Kept so a
+# manual invocation still gets a floor above the suite's slowest test.
+
+minimum_test_timeout = 120
+gitignore = true
+exclude_globs = ["paseo/**", "**/node_modules/**"]

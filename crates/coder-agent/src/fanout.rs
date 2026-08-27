@@ -1185,3 +1185,7 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "fanout_survivor_tests.rs"]
+mod survivor_tests;

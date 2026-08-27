@@ -145,3 +145,7 @@ mod tests {
         assert!(error.contains("unknown field `allow`"), "error: {error}");
     }
 }
+
+#[cfg(test)]
+#[path = "coding_goal_survivor_tests.rs"]
+mod survivor_tests;

@@ -947,3 +947,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "build_survivor_tests.rs"]
+mod survivor_tests;

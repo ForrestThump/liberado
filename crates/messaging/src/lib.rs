@@ -130,8 +130,7 @@ pub trait MessagingChannel: Send + Sync {
     /// second, now-meaningless tap. `message_ref` is the id carried on the
     /// [`InboundEvent::Action`] the tap produced. Default is a no-op for channels without message
     /// editing (they keep the buttons; harmless — a repeat tap hits the "already decided" guard).
-    async fn edit_message(&self, message_ref: &str, text: &str) -> Result<(), MessagingError> {
-        let _ = (message_ref, text);
+    async fn edit_message(&self, _message_ref: &str, _text: &str) -> Result<(), MessagingError> {
         Ok(())
     }
 
@@ -142,8 +141,10 @@ pub trait MessagingChannel: Send + Sync {
 
     /// Register slash-command autocomplete entries `(command, description)` without a leading `/`.
     /// Default is a no-op for channels that lack a command menu.
-    async fn register_commands(&self, commands: &[(String, String)]) -> Result<(), MessagingError> {
-        let _ = commands;
+    async fn register_commands(
+        &self,
+        _commands: &[(String, String)],
+    ) -> Result<(), MessagingError> {
         Ok(())
     }
 
@@ -182,24 +183,5 @@ pub fn permission_action_rows(proposal_id: &str) -> Vec<Vec<ActionButton>> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn approval_rows_carry_prefixed_actions() {
-        let rows = approval_action_rows("prop-1");
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].len(), 3);
-        assert_eq!(rows[0][0].action, "approve");
-        assert_eq!(rows[0][1].action, "revise");
-        assert_eq!(rows[0][2].action, "reject");
-        assert!(rows[0].iter().all(|b| b.correlation_id == "prop-1"));
-    }
-
-    #[test]
-    fn permission_rows_have_four_scope_buttons() {
-        let rows = permission_action_rows("perm-1");
-        let actions: Vec<&str> = rows.iter().flatten().map(|b| b.action.as_str()).collect();
-        assert_eq!(actions, vec!["once", "session", "everywhere", "deny"]);
-    }
-}
+#[path = "lib_tests.rs"]
+mod tests;

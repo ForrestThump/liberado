@@ -2,7 +2,6 @@
 //! generalization of it (same deliberate tradeoff as executor vs dispatcher).
 
 use crate::candidate::{Candidate, CandidateOrigin};
-use crate::coder_generation::{cold_start_coder, mutate_coder};
 use crate::coder_scenarios::{CoderTier, DEFAULT_CODER_SYSTEM_PROMPT};
 use crate::coder_scoring::{CoderFitness, score_coder_candidate};
 use crate::config::TunerConfig;
@@ -109,46 +108,13 @@ async fn gather_generation_candidates_coder(
     config: &TunerConfig,
     budget: &Budget,
 ) -> Vec<Candidate> {
-    let mut pool: Vec<Candidate> = Vec::new();
-
-    for (parent_index, (parent, parent_fitness)) in beam.iter().enumerate() {
-        for _ in 0..config.mutations_per_candidate {
-            if budget.exhausted() {
-                break;
-            }
-            let failing = parent_fitness.failing();
-            if let Ok(prompt) = mutate_coder(
-                config.meta_provider.as_ref(),
-                &parent.prompt,
-                &failing,
-                budget,
-            )
-            .await
-            {
-                pool.push(Candidate {
-                    prompt,
-                    origin: CandidateOrigin::MutatedFrom {
-                        parent_index,
-                        parent_accuracy: parent_fitness.accuracy,
-                    },
-                });
-            } // Err logged inside mutate_coder(); skip this slot, not the run
-        }
-    }
-
-    for _ in 0..config.cold_starts_per_generation {
-        if budget.exhausted() {
-            break;
-        }
-        if let Ok(prompt) = cold_start_coder(config.meta_provider.as_ref(), budget).await {
-            pool.push(Candidate {
-                prompt,
-                origin: CandidateOrigin::ColdStart,
-            });
-        }
-    }
-
-    pool
+    crate::generation_engine::gather_generation_candidates(
+        crate::generation_engine::CoderGeneration,
+        beam,
+        config,
+        budget,
+    )
+    .await
 }
 
 /// Score every candidate in a pool against the coding curriculum.

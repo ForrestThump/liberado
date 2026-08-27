@@ -184,6 +184,10 @@ fn scan_file(path: &Path, query: &ParsedQuery) -> Result<Option<ConversationMatc
 }
 
 #[cfg(test)]
+#[path = "scan/tests.rs"]
+mod survivor_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use std::io::Write;
@@ -417,6 +421,57 @@ mod tests {
         let sr2 = search(dir.path(), &q2, 10).await.unwrap();
         assert_eq!(sr2.matches.len(), 1);
         assert_eq!(sr2.matches[0].matches.len(), 1);
+    }
+
+    #[test]
+    fn snippet_ellipsis_depends_on_content_around_the_match() {
+        let q = ParsedQuery::parse_literal("target").unwrap();
+
+        // Match with text on both sides: both ellipses appear.
+        let long = format!("{} target {}", "x".repeat(200), "y".repeat(200));
+        let s = snippet(&long, &q);
+        assert!(s.starts_with('\u{2026}'), "text before the match: {s}");
+        assert!(s.ends_with('\u{2026}'), "text after the match: {s}");
+
+        // Match at the very start of content: no leading ellipsis.
+        let at_start = format!("target {}", "y".repeat(300));
+        let s = snippet(&at_start, &q);
+        assert!(!s.starts_with('\u{2026}'), "no text before the match: {s}");
+        assert!(s.ends_with('\u{2026}'));
+
+        // Match at the very end: no trailing ellipsis.
+        let at_end = format!("{} target", "x".repeat(300));
+        let s = snippet(&at_end, &q);
+        assert!(s.starts_with('\u{2026}'));
+        assert!(!s.ends_with('\u{2026}'), "no text after the match: {s}");
+    }
+
+    /// A non-existent root returns empty results rather than an error — the scan
+    /// is a best-effort search over whatever conversations exist.
+    #[tokio::test]
+    async fn search_nonexistent_root_returns_empty_results_not_an_error() {
+        let dir = TempDir::new().unwrap();
+        let missing = dir.path().join("does-not-exist");
+        let q = ParsedQuery::parse_literal("anything").unwrap();
+        let results = search(missing.as_path(), &q, 10).await.unwrap();
+        assert_eq!(results.total_found, 0);
+        assert!(results.matches.is_empty());
+    }
+
+    /// A non-NotFound error must propagate, not be swallowed by the
+    /// NotFound guard. Passing a regular file as root produces
+    /// NotADirectory, which is a genuine misconfiguration.
+    #[tokio::test]
+    async fn search_propagates_non_notfound_errors() {
+        let dir = TempDir::new().unwrap();
+        let file_root = dir.path().join("regular-file");
+        std::fs::write(&file_root, "not a directory").unwrap();
+        let q = ParsedQuery::parse_literal("anything").unwrap();
+        let result = search(&file_root, &q, 10).await;
+        assert!(
+            result.is_err(),
+            "a non-directory root must produce an error, not empty results"
+        );
     }
 }
 

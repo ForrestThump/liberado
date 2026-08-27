@@ -314,52 +314,5 @@ impl Provider for MissingKeyProvider {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// Production must call the shared resolver, not a bare env read.
-    ///
-    /// Restoring `std::env::var_os("LIBERADO_CONFIG_DIR")` in `build_provider` compiles and
-    /// reintroduces silent empty-config when the variable is unset — the dogfood failure mode.
-    #[test]
-    fn build_provider_does_not_read_config_dir_env_directly() {
-        let src = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/provider.rs"));
-        let production = src.split("#[cfg(test)]").next().expect("production half");
-        // Allow the error string / comments to mention the env name; ban the call site.
-        let code_only: String = production
-            .lines()
-            .filter(|l| !l.trim_start().starts_with("//"))
-            .collect::<Vec<_>>()
-            .join("\n");
-        let build_provider = code_only
-            .split_once("pub(crate) fn build_provider()")
-            .and_then(|(_, tail)| tail.split_once("pub(crate) async fn load_model_catalog"))
-            .map(|(body, _)| body)
-            .expect("provider source must contain the build_provider body");
-        assert!(
-            !build_provider.contains("var_os(\"LIBERADO_CONFIG_DIR\")")
-                && !build_provider.contains("var(\"LIBERADO_CONFIG_DIR\")"),
-            "build_provider must not read LIBERADO_CONFIG_DIR via env; use provider_config_dir()"
-        );
-        assert!(
-            build_provider.contains("provider_config_dir()"),
-            "build_provider must call provider_config_dir()"
-        );
-        assert!(
-            code_only.contains("liberado_config::config_dir()"),
-            "provider_config_dir must be liberado_config::config_dir"
-        );
-    }
-
-    #[test]
-    fn provider_config_dir_is_the_shared_resolver() {
-        // Same function the rest of the bridge uses — identity of resolution, not of result
-        // (env races under parallel tests).
-        let a = provider_config_dir();
-        let b = liberado_config::config_dir();
-        assert_eq!(
-            a, b,
-            "ACP provider config dir must match liberado_config::config_dir()"
-        );
-    }
-}
+#[path = "provider_tests.rs"]
+mod tests;

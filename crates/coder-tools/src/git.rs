@@ -431,54 +431,17 @@ pub fn diff_patch(root: &Path) -> Result<String, GitError> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
+#[path = "git_tests.rs"]
+mod git_tests;
 
-    /// Seed a repo with env identity only — no `user.name` in the repo config.
-    /// Isolated open must then see no committer; that is the CI runner's world.
-    fn repo_without_user_config() -> tempfile::TempDir {
-        let dir = tempfile::tempdir().unwrap();
-        let run = |args: &[&str]| {
-            let out = std::process::Command::new("git")
-                .args(args)
-                .current_dir(dir.path())
-                .env("GIT_AUTHOR_NAME", "test")
-                .env("GIT_AUTHOR_EMAIL", "test@test")
-                .env("GIT_COMMITTER_NAME", "test")
-                .env("GIT_COMMITTER_EMAIL", "test@test")
-                .output()
-                .unwrap();
-            assert!(
-                out.status.success(),
-                "git {args:?}: {}",
-                String::from_utf8_lossy(&out.stderr)
-            );
-        };
-        run(&["init", "--quiet"]);
-        std::fs::write(dir.path().join("seed.txt"), "initial\n").unwrap();
-        run(&["add", "seed.txt"]);
-        run(&["commit", "-m", "initial"]);
-        dir
-    }
+#[cfg(test)]
+#[path = "git_error_tests.rs"]
+mod error_survivor_tests;
 
-    #[test]
-    fn isolated_open_has_no_committer_without_fallbacks() {
-        let dir = repo_without_user_config();
-        let repo = gix::open_opts(dir.path(), gix::open::Options::isolated()).unwrap();
-        assert!(
-            repo.committer().is_none(),
-            "fixture must not carry a committer or the identity fallback is untested"
-        );
-    }
+#[cfg(test)]
+#[path = "tool_survivor_tests.rs"]
+mod tool_survivor_tests;
 
-    #[test]
-    fn branch_create_works_without_host_identity() {
-        let dir = repo_without_user_config();
-        let repo = open_repo_with(dir.path(), gix::open::Options::isolated()).unwrap();
-        assert!(
-            repo.committer().is_some(),
-            "open_repo_with must install the agent identity when the host has none"
-        );
-        branch_create_in(&repo, "feature-x").expect("branch create without host identity");
-    }
-}
+#[cfg(test)]
+#[path = "tool_campaign_tests.rs"]
+mod tool_campaign_tests;

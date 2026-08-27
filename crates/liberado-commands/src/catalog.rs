@@ -359,3 +359,6 @@ mod tests {
         assert_eq!(accept_completion("/hel", 0).as_deref(), Some("/help"));
     }
 }
+#[cfg(test)]
+#[path = "catalog_survivor_tests.rs"]
+mod survivor_tests;

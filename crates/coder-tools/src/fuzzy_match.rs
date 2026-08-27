@@ -344,6 +344,10 @@ pub fn adjust_indentation(old_text: &str, actual_text: &str, new_text: &str) -> 
 }
 
 #[cfg(test)]
+#[path = "fuzzy_match_survivor_tests.rs"]
+mod survivor_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 

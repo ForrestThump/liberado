@@ -203,6 +203,10 @@ fn build_event(schedule: &ParsedSchedule, fire_at: DateTime<Utc>) -> Event {
 }
 
 #[cfg(test)]
+#[path = "name_survivor_tests.rs"]
+mod name_survivor_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 

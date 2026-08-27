@@ -730,3 +730,7 @@ mod tests {
         assert_eq!(kept.first().unwrap(), "issue-18");
     }
 }
+
+#[cfg(test)]
+#[path = "completion_gate_survivor_tests.rs"]
+mod survivor_tests;

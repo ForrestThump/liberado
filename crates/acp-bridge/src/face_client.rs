@@ -297,3 +297,102 @@ mod tests {
         assert!(calls.is_empty());
     }
 }
+#[cfg(test)]
+mod face_env_tests {
+    use super::*;
+
+    /// One lock for all three env tests: function-local statics would be three
+    /// distinct mutexes guarding the same process-global variable — exclusion
+    /// in name only.
+    static ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+    /// Restores LIBERADO_SERVER on drop. Tests assert with `expect_err`, whose
+    /// panic must not leave a foreign value behind for every later test in
+    /// this binary.
+    struct ServerEnvGuard {
+        saved: Option<String>,
+    }
+
+    impl ServerEnvGuard {
+        // SAFETY: callers hold ENV_LOCK across the guard's whole lifetime.
+        fn capture() -> Self {
+            Self {
+                saved: std::env::var("LIBERADO_SERVER").ok(),
+            }
+        }
+    }
+
+    impl Drop for ServerEnvGuard {
+        fn drop(&mut self) {
+            // SAFETY: see capture; still under ENV_LOCK on every path.
+            unsafe {
+                match self.saved.take() {
+                    Some(v) => std::env::set_var("LIBERADO_SERVER", v),
+                    None => std::env::remove_var("LIBERADO_SERVER"),
+                }
+            }
+        }
+    }
+
+    async fn lock_server_env() -> (tokio::sync::MutexGuard<'static, ()>, ServerEnvGuard) {
+        let guard = ENV_LOCK.lock().await;
+        let env = ServerEnvGuard::capture();
+        (guard, env)
+    }
+
+    #[tokio::test]
+    async fn server_base_prefers_the_env_over_the_default() {
+        let _guard = lock_server_env().await;
+        // SAFETY: under ENV_LOCK; ServerEnvGuard restores.
+        unsafe { std::env::set_var("LIBERADO_SERVER", "http://127.0.0.1:9") };
+        assert_eq!(server_base(), "http://127.0.0.1:9");
+        unsafe { std::env::remove_var("LIBERADO_SERVER") };
+        assert_eq!(server_base(), DEFAULT_SERVER);
+    } // ServerEnvGuard drop restores the saved value.
+
+    #[tokio::test]
+    async fn an_unreachable_daemon_is_a_named_error_not_success() {
+        let _guard = lock_server_env().await;
+        // SAFETY: under ENV_LOCK; ServerEnvGuard restores even on panic.
+        unsafe { std::env::set_var("LIBERADO_SERVER", "http://127.0.0.1:1") };
+        let mut daemon_session = None;
+        let err = run_face_turn(&mut daemon_session, "hi", "acp-1", &|_, _| Ok(()))
+            .await
+            .expect_err("nothing is listening there");
+        assert!(err.contains("cannot reach daemon"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn a_non_200_daemon_response_surfaces_the_status() {
+        let (_guard, mut env) = lock_server_env().await;
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        // SAFETY: under ENV_LOCK; env restores via guard on any exit path.
+        unsafe {
+            std::env::set_var("LIBERADO_SERVER", format!("http://127.0.0.1:{port}"));
+        }
+        env.saved = None; // we own the value now; nothing to restore.
+
+        let server = std::thread::spawn(move || {
+            use std::io::Read as _;
+            let (mut sock, _) = listener.accept().unwrap();
+            // Drain the request head before answering; answering mid-request
+            // resets the client's send side and masquerades as a connect error.
+            let mut buf = [0u8; 1024];
+            let _ = sock.read(&mut buf);
+            std::io::Write::write_all(
+                &mut sock,
+                b"HTTP/1.1 503 Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+            )
+            .unwrap();
+        });
+
+        let mut daemon_session = None;
+        let err = run_face_turn(&mut daemon_session, "hi", "acp-1", &|_, _| Ok(()))
+            .await
+            .expect_err("a 503 must fail the turn");
+
+        server.join().unwrap();
+        assert!(err.contains("503"), "{err}");
+    }
+}

@@ -27,6 +27,12 @@ impl JsonlLatencyRecorder {
             std::env::var("LIBERADO_DATA_DIR").unwrap_or_else(|_| ".liberado".into()),
         )
         .join("latency");
+        Self::spawn_at(dir)
+    }
+
+    /// Spawn with an explicit journal directory. Tests use this instead of mutating
+    /// process-global state.
+    pub fn spawn_at(dir: PathBuf) -> Arc<Self> {
         let path = dir.join("events.jsonl");
         let (tx, mut rx) = mpsc::unbounded_channel::<LatencyEvent>();
 
@@ -70,3 +76,7 @@ impl LatencyRecorder for JsonlLatencyRecorder {
         let _ = self.tx.send(event);
     }
 }
+
+#[cfg(test)]
+#[path = "latency_tests.rs"]
+mod tests;

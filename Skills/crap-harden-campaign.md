@@ -66,8 +66,8 @@ every `?` / `ok_or_else` as a branch. Prefer `let-else` over chains of
 
 `crap-baseline.json` is committed at the repo root (the last best
 per-function score). Ubuntu CI runs the per-function ratchet
-(`liberado ci crap` — `--fail-regression`); Windows and other hosts are
-ceiling-only (150). To compare locally run:
+(`liberado ci crap` — `--fail-regression` with `--min 10`); Windows and other hosts are
+ceiling-only (150). A current score below 10 is not a regression. To compare locally run:
 
 ```bash
 cargo run --locked --quiet -p liberado-cli -- ci crap

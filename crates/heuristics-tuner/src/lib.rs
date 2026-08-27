@@ -26,6 +26,7 @@ pub mod coder_search;
 pub mod config;
 pub mod draft_proposal;
 pub mod generation;
+mod generation_engine;
 pub mod rubric;
 pub mod scoring;
 pub mod search;

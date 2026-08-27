@@ -8,4 +8,7 @@ pub mod profile;
 pub mod quit;
 pub mod session;
 pub mod status;
+#[cfg(test)]
+#[path = "handler_survivor_tests.rs"]
+mod survivor_tests;
 pub mod theme;

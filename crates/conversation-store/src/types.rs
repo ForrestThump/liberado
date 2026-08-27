@@ -200,3 +200,7 @@ pub struct NewNode {
     /// `Assistant` one). See [`MessageNode::model`].
     pub model: Option<String>,
 }
+
+#[cfg(test)]
+#[path = "types_tests.rs"]
+mod tests;

@@ -247,3 +247,7 @@ mod tests {
         assert_eq!(resolved, "INLINE");
     }
 }
+
+#[cfg(test)]
+#[path = "roles_survivor_tests.rs"]
+mod survivor_tests;

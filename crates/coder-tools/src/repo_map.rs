@@ -156,16 +156,16 @@ fn query_source(lang_name: &str) -> &'static str {
 (class_declaration name: (type_identifier) @def.type)
 (interface_declaration name: (type_identifier) @def.type)
 (type_alias_declaration name: (type_identifier) @def.type)
-(enum_declaration name: (type_identifier) @def.type)
+(enum_declaration name: (identifier) @def.type)
 (lexical_declaration
   (variable_declarator
     name: (identifier) @def.func
-    value: [(arrow_function) (function)]))
+    value: [(arrow_function) (function_expression)]))
 (export_statement
   declaration: (lexical_declaration
     (variable_declarator
       name: (identifier) @def.func
-      value: [(arrow_function) (function)])))
+      value: [(arrow_function) (function_expression)])))
 (call_expression function: (identifier) @ref.call)
 (call_expression function: (member_expression property: (property_identifier) @ref.call))
 (new_expression constructor: (identifier) @ref.call)
@@ -1277,3 +1277,6 @@ def main():
         }
     }
 }
+#[cfg(test)]
+#[path = "repo_map_survivor_tests.rs"]
+mod survivor_tests;

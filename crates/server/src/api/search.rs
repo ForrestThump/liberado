@@ -101,3 +101,7 @@ pub async fn search_conversations(
             .into_response(),
     }
 }
+
+#[cfg(test)]
+#[path = "search_tests.rs"]
+mod tests;

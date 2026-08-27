@@ -208,7 +208,7 @@ where
                 return Some(0);
             }
             "--help" | "-h" | "help" => {
-                print_help();
+                println!("{}", help_text());
                 return Some(0);
             }
             "--mode" | "-m" => {
@@ -258,8 +258,9 @@ where
     None
 }
 
-fn print_help() {
-    println!(
+/// The `--help` text, built rather than printed so tests can pin what a client sees.
+fn help_text() -> String {
+    format!(
         "liberado-acp {} — Liberado multi-mode ACP agent for Paseo\n\n\
          Usage:\n\
            liberado-acp [--mode coding|goal|chat|face]   ACP on stdin/stdout\n\
@@ -278,7 +279,7 @@ fn print_help() {
            LIBERADO_CONFIG_DIR         Liberado config ([coder] tuning)\n\
            LIBERADO_SERVER             face mode daemon URL (default http://127.0.0.1:4201)",
         env!("CARGO_PKG_VERSION")
-    );
+    )
 }
 
 async fn run() -> Result<(), Box<dyn std::error::Error>> {
@@ -296,6 +297,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     // which of the two readers is running.
     let (stdin_tx, mut stdin_rx) = mpsc::channel::<std::io::Result<Option<String>>>(64);
     spawn_stdin_reader(stdin_tx);
+    // One sink object serves responses and notifications for the whole loop.
+    let wire_dyn: Arc<dyn WireSink> = wire.clone();
     let mut in_flight: Option<InFlightPrompt> = None;
 
     loop {
@@ -310,11 +313,11 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                     None => std::future::pending().await,
                 }
             } => {
-                handle_prompt_join(&wire, join, &mut in_flight)?;
+                handle_prompt_join(wire_dyn.as_ref(), join, &mut in_flight)?;
             }
             line = stdin_rx.recv() => {
                 // A closed channel means the reader ended — same as EOF on stdin.
-                if !handle_stdin_line(&bridge, &wire, line, &mut in_flight).await? {
+                if !handle_stdin_line(&bridge, &wire_dyn, line, &mut in_flight).await? {
                     break;
                 }
             }
@@ -376,50 +379,69 @@ fn apply_shared_target_dir(shared_target_dir: &Option<String>) {
 /// Returns once the task is registered in `in_flight`.
 fn spawn_prompt_if_free(
     bridge: &Arc<Bridge>,
-    wire: &Arc<StdoutWire>,
+    wire: &Arc<dyn WireSink>,
     params: &Value,
     id: Value,
     in_flight: &mut Option<InFlightPrompt>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    if in_flight.is_some() {
-        wire.write_rpc_response(
+    match prompt_slot_check(in_flight.is_some(), params) {
+        PromptSlot::Busy => wire.write_rpc_response(
             id,
             Err(JsonRpcErrorBody {
-                code: -32603,
+                code: JSONRPC_INTERNAL_ERROR,
                 message: "another session/prompt is already in flight".into(),
             }),
-        )?;
-        return Ok(());
+        )?,
+        PromptSlot::MissingSessionId => {
+            wire.write_rpc_response(id, Err(missing_session_error()))?;
+        }
+        PromptSlot::Ready(sid) => {
+            let bridge_p = Arc::clone(bridge);
+            let sink: Arc<dyn WireSink> = Arc::clone(wire);
+            let params = params.clone();
+            let handle =
+                tokio::spawn(async move { run_session_prompt(bridge_p, sink, params).await });
+            *in_flight = Some(InFlightPrompt {
+                session_id: sid,
+                request_id: id,
+                handle,
+            });
+        }
     }
-    let sid = match params
+    Ok(())
+}
+
+/// Whether another `session/prompt` may start, and the session id it would run for.
+///
+/// One prompt at a time keeps `session/cancel` meaningful; a missing or empty session
+/// id is invalid params, not an internal error.
+enum PromptSlot {
+    Busy,
+    MissingSessionId,
+    Ready(String),
+}
+
+fn prompt_slot_check(in_flight: bool, params: &Value) -> PromptSlot {
+    if in_flight {
+        return PromptSlot::Busy;
+    }
+    match params
         .get("sessionId")
         .and_then(|v| v.as_str())
         .map(str::to_string)
     {
-        Some(s) if !s.is_empty() => s,
-        _ => {
-            wire.write_rpc_response(
-                id,
-                Err(JsonRpcErrorBody {
-                    // -32602 Invalid params: the request is well-formed and the
-                    // method exists, the arguments are wrong.
-                    code: JSONRPC_INVALID_PARAMS,
-                    message: "missing sessionId".into(),
-                }),
-            )?;
-            return Ok(());
-        }
-    };
-    let bridge_p = Arc::clone(bridge);
-    let sink: Arc<dyn WireSink> = Arc::clone(wire) as Arc<dyn WireSink>;
-    let params = params.clone();
-    let handle = tokio::spawn(async move { run_session_prompt(bridge_p, sink, params).await });
-    *in_flight = Some(InFlightPrompt {
-        session_id: sid,
-        request_id: id,
-        handle,
-    });
-    Ok(())
+        Some(s) if !s.is_empty() => PromptSlot::Ready(s),
+        _ => PromptSlot::MissingSessionId,
+    }
+}
+
+/// -32602 Invalid params: the request is well-formed and the method exists, the arguments
+/// are wrong.
+fn missing_session_error() -> JsonRpcErrorBody {
+    JsonRpcErrorBody {
+        code: JSONRPC_INVALID_PARAMS,
+        message: "missing sessionId".into(),
+    }
 }
 
 /// Resolve every piece of startup state the bridge needs: provider, catalog, config (with the
@@ -497,8 +519,8 @@ fn spawn_stdin_reader(stdin_tx: mpsc::Sender<std::io::Result<Option<String>>>) {
                         Ok(_) => Ok(Some(buf.trim_end_matches(['\r', '\n']).to_string())),
                         Err(e) => Err(e),
                     };
-                    let done = matches!(msg, Ok(None) | Err(_));
-                    if stdin_tx.blocking_send(msg).is_err() || done {
+                    let done = stdin_read_done(&msg);
+                    if reader_should_stop(stdin_tx.blocking_send(msg).is_err(), done) {
                         break;
                     }
                 }
@@ -512,14 +534,27 @@ fn spawn_stdin_reader(stdin_tx: mpsc::Sender<std::io::Result<Option<String>>>) {
                 let mut lines = BufReader::new(tokio::io::stdin()).lines();
                 loop {
                     let msg = lines.next_line().await;
-                    let done = matches!(msg, Ok(None) | Err(_));
-                    if stdin_tx.send(msg).await.is_err() || done {
+                    let done = stdin_read_done(&msg);
+                    if reader_should_stop(stdin_tx.send(msg).await.is_err(), done) {
                         break;
                     }
                 }
             });
         }
     }
+}
+
+/// Either condition ends the loop: a dead receiver means nobody is listening, and EOF or a
+/// read error means the wire is gone. Requiring *both* would spin forever after either one.
+fn reader_should_stop(send_failed: bool, done: bool) -> bool {
+    send_failed || done
+}
+
+/// A read is *done* when it reports EOF or an error — either ends the reader loop. A
+/// successful line keeps it running; mistaking one for the other either drops the wire
+/// mid-session or spins forever after EOF.
+fn stdin_read_done(msg: &std::io::Result<Option<String>>) -> bool {
+    matches!(msg, Ok(None) | Err(_))
 }
 
 /// Complete an in-flight prompt: clear the slot, map the join result onto a JSON-RPC response
@@ -532,8 +567,30 @@ type PromptJoin = (
     Result<Result<Value, String>, tokio::task::JoinError>,
 );
 
+/// Map one finished prompt task onto its JSON-RPC outcome.
+///
+/// A cancelled task is a *cancelled turn*, not an error: `session/cancel` aborts as a hard
+/// backup after the cooperative path, and the client must see `stopReason: "cancelled"`.
+fn prompt_join_outcome(
+    join_result: Result<Result<Value, String>, tokio::task::JoinError>,
+) -> Result<Value, JsonRpcErrorBody> {
+    match join_result {
+        Ok(Ok(v)) => Ok(v),
+        Ok(Err(message)) => Err(JsonRpcErrorBody {
+            code: JSONRPC_INTERNAL_ERROR,
+            message,
+        }),
+        // Task abort (hard cancel backup) → cancelled turn.
+        Err(je) if je.is_cancelled() => Ok(json!({ "stopReason": "cancelled" })),
+        Err(je) => Err(JsonRpcErrorBody {
+            code: JSONRPC_INTERNAL_ERROR,
+            message: format!("prompt task failed: {je}"),
+        }),
+    }
+}
+
 fn handle_prompt_join(
-    wire: &StdoutWire,
+    wire: &dyn WireSink,
     join: Option<PromptJoin>,
     in_flight: &mut Option<InFlightPrompt>,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -541,20 +598,7 @@ fn handle_prompt_join(
         return Ok(());
     };
     *in_flight = None;
-    let outcome = match join_result {
-        Ok(Ok(v)) => Ok(v),
-        Ok(Err(message)) => Err(JsonRpcErrorBody {
-            code: -32603,
-            message,
-        }),
-        // Task abort (hard cancel backup) → cancelled turn.
-        Err(je) if je.is_cancelled() => Ok(json!({ "stopReason": "cancelled" })),
-        Err(je) => Err(JsonRpcErrorBody {
-            code: -32603,
-            message: format!("prompt task failed: {je}"),
-        }),
-    };
-    wire.write_rpc_response(id, outcome)?;
+    wire.write_rpc_response(id, prompt_join_outcome(join_result))?;
     Ok(())
 }
 
@@ -563,7 +607,7 @@ fn handle_prompt_join(
 /// no response — returns `true`.
 async fn handle_stdin_line(
     bridge: &Arc<Bridge>,
-    wire: &Arc<StdoutWire>,
+    wire: &Arc<dyn WireSink>,
     line: Option<std::io::Result<Option<String>>>,
     in_flight: &mut Option<InFlightPrompt>,
 ) -> Result<bool, Box<dyn std::error::Error>> {
@@ -593,7 +637,7 @@ async fn handle_stdin_line(
 
 async fn dispatch_stdin_message(
     bridge: &Arc<Bridge>,
-    wire: &Arc<StdoutWire>,
+    wire: &Arc<dyn WireSink>,
     msg: JsonRpcIncoming,
     in_flight: &mut Option<InFlightPrompt>,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -1087,6 +1131,14 @@ impl WireSink for CapturingSink {
             }
         }
         self.inner.emit(method, params)
+    }
+
+    fn write_rpc_response(
+        &self,
+        id: Value,
+        outcome: Result<Value, JsonRpcErrorBody>,
+    ) -> Result<(), String> {
+        self.inner.write_rpc_response(id, outcome)
     }
 }
 
@@ -1980,1433 +2032,20 @@ fn new_session_id() -> String {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::provider::catalog_model_ids;
-    use tempfile::TempDir;
+#[path = "main_test_support.rs"]
+mod test_support;
 
-    #[test]
-    fn extract_prompt_joins_text_blocks() {
-        let params = json!({
-            "sessionId": "s1",
-            "prompt": [
-                { "type": "text", "text": "hello " },
-                { "type": "text", "text": "world" }
-            ]
-        });
-        assert_eq!(extract_prompt_text(&params).unwrap(), "hello \nworld");
-    }
+#[cfg(test)]
+mod main_cli_args_tests;
 
-    /// Independent P4.3 oracle. The fixture uses the ACP wire shapes, not shapes inferred from an
-    /// implementation: embedded text/blob content is nested under `resource`, while
-    /// `resource_link`, `image`, and `audio` are top-level content blocks.
-    #[test]
-    fn p4_3_acceptance_uses_exact_acp_wire_shapes() {
-        let cases: Value =
-            serde_json::from_str(include_str!("../tests/fixtures/p4_3_prompt_blocks.json"))
-                .expect("valid P4.3 fixture");
-        for case in cases.as_array().expect("fixture case array") {
-            let name = case["name"].as_str().expect("case name");
-            let result = extract_prompt_text(&case["params"]);
-            if let Some(expected) = case.get("expected").and_then(Value::as_str) {
-                assert_eq!(result.expect(name), expected, "{name}");
-            } else {
-                let expected_error = case["error"].as_str().expect("case error");
-                assert_eq!(result.expect_err(name), expected_error, "{name}");
-            }
-        }
-    }
+#[cfg(test)]
+mod main_dispatch_tests;
 
-    /// The whole point of advertising `embeddedContext: true`: embedded textual resources reach
-    /// the model with a source line above them, in prompt order, without dropping the rest.
-    #[test]
-    fn extract_prompt_preserves_mixed_block_order() {
-        let params = json!({
-            "sessionId": "s1",
-            "prompt": [
-                { "type": "text", "text": "first" },
-                {
-                    "type": "resource",
-                    "resource": {
-                        "uri": "file:///notes/plan.md",
-                        "mimeType": "text/markdown",
-                        "text": "embedded body"
-                    }
-                },
-                { "type": "text", "text": "last" }
-            ]
-        });
-        let out = extract_prompt_text(&params).unwrap();
-        let first = out.find("first").unwrap();
-        let marker = out.find("[resource: file:///notes/plan.md").unwrap();
-        let body = out.find("embedded body").unwrap();
-        let last = out.find("last").unwrap();
-        assert!(
-            first < marker && marker < body && body < last,
-            "block order must survive extraction: {out:?}"
-        );
-    }
+#[cfg(test)]
+mod main_session_catalog_tests;
 
-    #[test]
-    fn extract_prompt_renders_embedded_text_resource() {
-        let params = json!({
-            "prompt": [
-                {
-                    "type": "resource",
-                    "resource": {
-                        "uri": "file:///notes/plan.md",
-                        "mimeType": "text/markdown",
-                        "text": "# Plan\n\nDo the thing."
-                    }
-                }
-            ]
-        });
-        assert_eq!(
-            extract_prompt_text(&params).unwrap(),
-            "[resource: file:///notes/plan.md (text/markdown)]\n# Plan\n\nDo the thing."
-        );
-    }
+#[cfg(test)]
+mod main_prompt_event_tests;
 
-    /// A resource link carries no embedded text, so it renders as a concise source marker.
-    #[test]
-    fn extract_prompt_marks_resource_link() {
-        let params = json!({
-            "prompt": [
-                {
-                    "type": "resource_link",
-                    "uri": "file:///src/lib.rs",
-                    "name": "lib.rs",
-                    "mimeType": "text/x-rust"
-                }
-            ]
-        });
-        assert_eq!(
-            extract_prompt_text(&params).unwrap(),
-            "[resource: file:///src/lib.rs | lib.rs (text/x-rust)]"
-        );
-    }
-
-    /// A resource link without optional MIME data still identifies its required name and URI.
-    #[test]
-    fn extract_prompt_marks_resource_link_without_mime() {
-        let params = json!({
-            "prompt": [
-                { "type": "resource_link", "uri": "file:///data.csv", "name": "data.csv" }
-            ]
-        });
-        assert_eq!(
-            extract_prompt_text(&params).unwrap(),
-            "[resource: file:///data.csv | data.csv]"
-        );
-    }
-
-    /// A binary blob is embedded but must stay metadata-only: the base64 payload is never decoded
-    /// into text, only the source marker is rendered.
-    #[test]
-    fn extract_prompt_keeps_binary_resource_metadata_only() {
-        let params = json!({
-            "prompt": [
-                {
-                    "type": "resource",
-                    "resource": {
-                        "uri": "file:///data.bin",
-                        "mimeType": "application/octet-stream",
-                        "blob": "SGVsbG8="
-                    }
-                }
-            ]
-        });
-        let out = extract_prompt_text(&params).unwrap();
-        assert_eq!(
-            out,
-            "[resource: file:///data.bin (application/octet-stream)]"
-        );
-        assert!(
-            !out.contains("SGVsbG8="),
-            "base64 payload must not reach the model"
-        );
-    }
-
-    /// Image and audio blocks are rejected from the text stream entirely; a prompt made only of
-    /// them has no usable text and must fail as before.
-    #[test]
-    fn extract_prompt_rejects_media_only_prompt() {
-        let params = json!({
-            "prompt": [
-                { "type": "image", "data": "aW1hZ2U=", "mimeType": "image/png" },
-                { "type": "audio", "data": "YXVkaW8=", "mimeType": "audio/mp3" }
-            ]
-        });
-        assert_eq!(
-            extract_prompt_text(&params).unwrap_err(),
-            "prompt contained no text content"
-        );
-    }
-
-    /// When media blocks sit next to real text, they are dropped, never decoded.
-    #[test]
-    fn extract_prompt_media_blocks_never_decode_to_text() {
-        let params = json!({
-            "prompt": [
-                { "type": "text", "text": "keep me" },
-                { "type": "image", "data": "aW1hZ2U=", "mimeType": "image/png" },
-                { "type": "audio", "data": "YXVkaW8=", "mimeType": "audio/mp3" }
-            ]
-        });
-        let out = extract_prompt_text(&params).unwrap();
-        assert_eq!(out, "keep me");
-        assert!(!out.contains("aW1hZ2U=") && !out.contains("YXVkaW8="));
-    }
-
-    /// Whitespace-only blocks must still fail; embedded-context support must not make an empty
-    /// prompt look usable.
-    #[test]
-    fn extract_prompt_empty_text_still_fails() {
-        let params = json!({
-            "prompt": [
-                { "type": "text", "text": "   " }
-            ]
-        });
-        assert_eq!(
-            extract_prompt_text(&params).unwrap_err(),
-            "prompt contained no text content"
-        );
-    }
-
-    #[test]
-    fn session_new_payload_has_models_and_modes() {
-        let catalog = vec![
-            CatalogModel {
-                model_id: "deepseek/deepseek-v4-pro".into(),
-                name: "deepseek/deepseek-v4-pro".into(),
-                description: "OpenRouter · deepseek/deepseek-v4-pro".into(),
-            },
-            CatalogModel {
-                model_id: "deepseek/deepseek-v4-flash".into(),
-                name: "deepseek/deepseek-v4-flash".into(),
-                description: "OpenRouter · deepseek/deepseek-v4-flash".into(),
-            },
-        ];
-        let v = session_state_payload(
-            "sid",
-            &catalog,
-            "deepseek/deepseek-v4-pro",
-            AgentMode::Coding,
-            &liberado_common::CapabilitySet::empty(),
-        );
-        assert_eq!(v["sessionId"], "sid");
-        assert_eq!(v["models"]["currentModelId"], "deepseek/deepseek-v4-pro");
-        assert_eq!(v["models"]["availableModels"].as_array().unwrap().len(), 2);
-        assert_eq!(
-            v["models"]["availableModels"][1]["modelId"],
-            "deepseek/deepseek-v4-flash"
-        );
-        assert_eq!(v["modes"]["currentModeId"], "coding");
-        assert_eq!(v["modes"]["availableModes"].as_array().unwrap().len(), 4);
-        let ids: Vec<&str> = v["modes"]["availableModes"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .filter_map(|m| m["id"].as_str())
-            .collect();
-        assert_eq!(ids, ["coding", "goal", "chat", "face"]);
-    }
-
-    #[test]
-    fn catalog_is_full_and_alphabetical() {
-        let live = vec![
-            "openai/gpt-4o".into(),
-            "anthropic/claude-3.5-sonnet".into(),
-            "deepseek/deepseek-v4-pro".into(),
-            "deepseek/deepseek-chat".into(),
-        ];
-        let ordered = catalog_model_ids(&live, "deepseek/deepseek-v4-pro");
-        assert_eq!(
-            ordered,
-            vec![
-                "anthropic/claude-3.5-sonnet",
-                "deepseek/deepseek-chat",
-                "deepseek/deepseek-v4-pro",
-                "openai/gpt-4o",
-            ]
-        );
-    }
-
-    #[test]
-    fn catalog_inserts_current_when_missing_from_live_then_sorts() {
-        let live = vec!["openai/gpt-4o".into(), "anthropic/claude-3.5-sonnet".into()];
-        let ordered = catalog_model_ids(&live, "deepseek/deepseek-v4-pro");
-        assert_eq!(
-            ordered,
-            vec![
-                "anthropic/claude-3.5-sonnet",
-                "deepseek/deepseek-v4-pro",
-                "openai/gpt-4o",
-            ]
-        );
-    }
-
-    /// A Bridge with a scripted provider — enough to drive `handle_request` in tests.
-    fn test_bridge() -> Arc<Bridge> {
-        use liberado_provider::MockProvider;
-        test_bridge_with(Arc::new(MockProvider::with_script("mock", [])))
-    }
-
-    fn test_bridge_with(provider: Arc<dyn Provider>) -> Arc<Bridge> {
-        Arc::new(Bridge {
-            provider,
-            backend: "mock".into(),
-            catalog: Mutex::new(Vec::new()),
-            current_model: Mutex::new("mock-model".into()),
-            default_mode: AgentMode::Coding,
-            max_turns: 8,
-            coder_tuning: liberado_coder_core::CoderTuning::default(),
-            config_dir: None,
-            local_grant: liberado_common::CapabilitySet::empty(),
-            system_prompt: None,
-            acp_sessions: Mutex::new(HashMap::new()),
-            permissions: Arc::new(permission::PermissionBroker::new()),
-        })
-    }
-
-    #[tokio::test]
-    async fn a_permission_reply_wakes_the_waiter() {
-        let bridge = test_bridge();
-        let rx = bridge.permissions.register_waiter("lib-perm-1");
-        let msg: JsonRpcIncoming = serde_json::from_str(
-            r#"{"jsonrpc":"2.0","id":"lib-perm-1","result":{"outcome":{"outcome":"selected","optionId":"once"}}}"#,
-        )
-        .unwrap();
-        assert!(
-            apply_client_rpc_reply(&bridge, &msg),
-            "a JSON-RPC result with no method is a client reply"
-        );
-        let reply = rx.await.expect("waiter").expect("ok");
-        assert_eq!(
-            permission::parse_decision(&reply),
-            permission::PermissionDecision::Once
-        );
-    }
-
-    #[test]
-    fn a_session_prompt_is_not_a_permission_reply() {
-        let bridge = test_bridge();
-        let msg: JsonRpcIncoming = serde_json::from_str(
-            r#"{"jsonrpc":"2.0","id":1,"method":"session/prompt","params":{}}"#,
-        )
-        .unwrap();
-        assert!(!apply_client_rpc_reply(&bridge, &msg));
-    }
-
-    /// A method the agent does not implement must answer -32601, not -32603.
-    ///
-    /// A cold review pointed out every error used the same "Internal error" code, so a client
-    /// routing on it could not tell "you asked for something I do not implement" from "I broke".
-    #[tokio::test]
-    async fn an_unknown_method_is_method_not_found() {
-        let bridge = test_bridge();
-        let sink = CaptureSink {
-            lines: std::sync::Mutex::new(Vec::new()),
-        };
-        let err = handle_request(bridge, "session/does_not_exist", json!({}), &sink)
-            .await
-            .expect_err("an unimplemented method must be an error");
-        assert!(
-            err.starts_with(METHOD_NOT_FOUND_PREFIX),
-            "must be taggable as -32601 by the wire layer, got: {err}"
-        );
-    }
-
-    #[tokio::test]
-    async fn initialize_shape_is_acp_compatible() {
-        // Drives the real handler. The previous version built its own JSON literal and asserted on
-        // that — it "mirrored the handle_request arm" by its own comment, so deleting the arm, or
-        // dropping any field from the real response, left it green.
-        let bridge = test_bridge();
-        let sink = CaptureSink {
-            lines: std::sync::Mutex::new(Vec::new()),
-        };
-        let result = handle_request(bridge, "initialize", json!({}), &sink)
-            .await
-            .expect("initialize must succeed");
-
-        assert_eq!(result["protocolVersion"], PROTOCOL_VERSION);
-        assert_eq!(result["agentInfo"]["name"], "Liberado");
-        assert_eq!(result["agentCapabilities"]["loadSession"], true);
-        assert_eq!(
-            result["agentCapabilities"]["promptCapabilities"]["embeddedContext"],
-            true
-        );
-    }
-
-    #[test]
-    fn load_session_capability_is_honest() {
-        const {
-            assert!(
-                LOAD_SESSION_CAPABILITY,
-                "loadSession must be true now that durable resume is implemented; \
-                 false would make Paseo think resume is unsupported"
-            );
-        }
-    }
-
-    #[test]
-    fn tool_call_ids_pair_start_and_finish() {
-        let mut pending = Vec::new();
-        let start_a = push_tool_call_id(&mut pending, "read_file");
-        let start_b = push_tool_call_id(&mut pending, "run_command");
-        assert_ne!(start_a, start_b);
-        assert_eq!(pop_tool_call_id(&mut pending, "run_command"), start_b);
-        assert_eq!(pop_tool_call_id(&mut pending, "read_file"), start_a);
-        assert!(pending.is_empty());
-    }
-
-    #[test]
-    fn tool_call_ids_pair_same_name_lifo() {
-        let mut pending = Vec::new();
-        let first = push_tool_call_id(&mut pending, "read_file");
-        let second = push_tool_call_id(&mut pending, "read_file");
-        // Finish order matches LIFO (inner tool completes first).
-        assert_eq!(pop_tool_call_id(&mut pending, "read_file"), second);
-        assert_eq!(pop_tool_call_id(&mut pending, "read_file"), first);
-    }
-
-    #[test]
-    fn tool_call_id_pairing_is_required_for_paseo_ui() {
-        // Mutation guard: if start and finish minted independent ids (old bug), this fails.
-        let mut pending = Vec::new();
-        let started = push_tool_call_id(&mut pending, "list_files");
-        let finished = pop_tool_call_id(&mut pending, "list_files");
-        assert_eq!(
-            started, finished,
-            "Paseo indexes tool UI by toolCallId; start and finish must share one id"
-        );
-    }
-
-    #[test]
-    fn version_flag_exits_without_stdio_loop() {
-        assert_eq!(handle_cli_args(["--version"]), Some(0));
-        assert_eq!(handle_cli_args(["-V"]), Some(0));
-        assert_eq!(handle_cli_args(["version"]), Some(0));
-    }
-
-    #[test]
-    fn help_flag_exits_without_stdio_loop() {
-        assert_eq!(handle_cli_args(["--help"]), Some(0));
-        assert_eq!(handle_cli_args(["-h"]), Some(0));
-    }
-
-    #[test]
-    fn no_args_enters_acp_mode() {
-        assert_eq!(handle_cli_args(Vec::<String>::new()), None);
-    }
-
-    #[test]
-    fn unknown_flag_is_an_error_exit() {
-        assert_eq!(handle_cli_args(["--nope"]), Some(2));
-    }
-
-    #[test]
-    fn mode_flag_continues_into_acp_loop() {
-        // `--mode` sets default and continues (does not exit).
-        assert_eq!(handle_cli_args(["--mode", "chat"]), None);
-        assert_eq!(handle_cli_args(["--mode=face"]), None);
-        assert_eq!(handle_cli_args(["-m", "coding"]), None);
-        assert_eq!(handle_cli_args(["--mode", "goal"]), None);
-        assert_eq!(handle_cli_args(["--mode=goal"]), None);
-    }
-
-    #[test]
-    fn unknown_mode_is_an_error_exit() {
-        assert_eq!(handle_cli_args(["--mode", "banana"]), Some(2));
-        assert_eq!(handle_cli_args(["--mode=nope"]), Some(2));
-    }
-
-    #[tokio::test]
-    async fn wait_until_cancelled_resolves_when_flag_set() {
-        let (tx, mut rx) = watch::channel(false);
-        let waiter = tokio::spawn(async move {
-            wait_until_cancelled(&mut rx).await;
-        });
-        // Give the waiter a chance to park on changed().
-        tokio::task::yield_now().await;
-        tx.send(true).expect("send cancel");
-        tokio::time::timeout(std::time::Duration::from_secs(2), waiter)
-            .await
-            .expect("cancel wait timed out")
-            .expect("join");
-    }
-
-    #[tokio::test]
-    async fn wait_until_cancelled_sees_already_true() {
-        let (_tx, mut rx) = watch::channel(true);
-        tokio::time::timeout(
-            std::time::Duration::from_millis(200),
-            wait_until_cancelled(&mut rx),
-        )
-        .await
-        .expect("must return immediately when already cancelled");
-    }
-
-    #[tokio::test]
-    async fn chat_turn_stops_with_cancelled_on_cancel_flag() {
-        use liberado_provider::{CompletionResponse, MockProvider};
-        use std::time::Duration;
-
-        // Slow first completion so cancel can win mid-turn.
-        let provider = Arc::new(MockProvider::with_script(
-            "mock",
-            [CompletionResponse::text("should not finish")],
-        ));
-        let (cancel_tx, cancel_rx) = watch::channel(false);
-        let session = Arc::new(SessionHandle {
-            id: "sess-cancel".into(),
-            conversation: Mutex::new(Conversation::new("test system")),
-            executor: Executor::new(provider, Budget::new(8)),
-            tools: Arc::new(NoTools),
-            coding_tools: false,
-            pending_ask: std::sync::Mutex::new(None),
-            cancel_tx: cancel_tx.clone(),
-            cancel_rx,
-        });
-        let sink = CaptureSink {
-            lines: std::sync::Mutex::new(Vec::new()),
-        };
-
-        // Cancel BEFORE the turn starts. The previous version slept 5ms and then cancelled, so
-        // the fast mock almost always finished first and the assertion accepted `end_turn` —
-        // which meant the test passed with the cancel path deleted entirely.
-        cancel_tx.send(true).expect("cancel send");
-
-        let turn = tokio::spawn({
-            let session = Arc::clone(&session);
-            async move { run_prompt_turn(session, "hello".into(), &sink).await }
-        });
-
-        let stop = tokio::time::timeout(Duration::from_secs(5), turn)
-            .await
-            .expect("turn join timeout")
-            .expect("join")
-            .expect("turn result");
-        assert_eq!(
-            stop, "cancelled",
-            "a turn whose session was already cancelled must report `cancelled`"
-        );
-    }
-
-    /// Captures ACP notifications instead of writing stdout (for MockProvider turns).
-    struct CaptureSink {
-        lines: std::sync::Mutex<Vec<(String, Value)>>,
-    }
-
-    impl WireSink for CaptureSink {
-        fn emit(&self, method: &str, params: Value) -> Result<(), String> {
-            self.lines
-                .lock()
-                .map_err(|e| e.to_string())?
-                .push((method.to_string(), params));
-            Ok(())
-        }
-    }
-
-    struct EchoTool;
-
-    #[async_trait::async_trait]
-    impl ToolRuntime for EchoTool {
-        fn catalog(&self) -> Vec<liberado_provider::ToolDef> {
-            vec![liberado_provider::ToolDef::new(
-                "echo",
-                "Echo a message",
-                json!({
-                    "type": "object",
-                    "properties": { "msg": { "type": "string" } },
-                    "required": ["msg"]
-                }),
-            )]
-        }
-        async fn invoke(&self, call: &liberado_provider::ToolInvocation) -> Result<String, String> {
-            let msg = call
-                .arguments
-                .get("msg")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
-            Ok(format!("echo:{msg}"))
-        }
-    }
-
-    #[tokio::test]
-    async fn mock_provider_turn_streams_paired_tool_and_text() {
-        use liberado_provider::{CompletionResponse, MockProvider, ToolInvocation};
-
-        let provider = Arc::new(MockProvider::with_script(
-            "mock",
-            [
-                CompletionResponse::tool_calls(vec![ToolInvocation::new(
-                    "tc1",
-                    "echo",
-                    json!({ "msg": "hi" }),
-                )]),
-                CompletionResponse::text("all done"),
-            ],
-        ));
-        // Chat-path wire test: same SessionHandle / run_prompt_turn stack as mode=chat,
-        // with a mock tool so we can assert tool_call id pairing on the ACP wire.
-        let (cancel_tx, cancel_rx) = watch::channel(false);
-        let session = Arc::new(SessionHandle {
-            id: "sess-mock".into(),
-            conversation: Mutex::new(Conversation::new("test system")),
-            executor: Executor::new(provider, Budget::new(8)),
-            tools: Arc::new(EchoTool),
-            coding_tools: false,
-            pending_ask: std::sync::Mutex::new(None),
-            cancel_tx,
-            cancel_rx,
-        });
-        let sink = CaptureSink {
-            lines: std::sync::Mutex::new(Vec::new()),
-        };
-
-        let stop = run_prompt_turn(session, "please echo".into(), &sink)
-            .await
-            .expect("turn");
-        assert_eq!(stop, "end_turn");
-
-        let lines = sink.lines.lock().unwrap().clone();
-        assert!(
-            !lines.is_empty(),
-            "expected session/update notifications on the wire"
-        );
-
-        let tool_starts: Vec<&Value> = lines
-            .iter()
-            .filter(|(m, p)| m == "session/update" && p["update"]["sessionUpdate"] == "tool_call")
-            .map(|(_, p)| p)
-            .collect();
-        let tool_updates: Vec<&Value> = lines
-            .iter()
-            .filter(|(m, p)| {
-                m == "session/update" && p["update"]["sessionUpdate"] == "tool_call_update"
-            })
-            .map(|(_, p)| p)
-            .collect();
-        assert_eq!(tool_starts.len(), 1, "one tool_call: {lines:?}");
-        assert_eq!(tool_updates.len(), 1, "one tool_call_update: {lines:?}");
-        let start_id = tool_starts[0]["update"]["toolCallId"]
-            .as_str()
-            .expect("start id");
-        let finish_id = tool_updates[0]["update"]["toolCallId"]
-            .as_str()
-            .expect("finish id");
-        assert_eq!(
-            start_id, finish_id,
-            "MockProvider path must pair toolCallId (mutation target for P0.1)"
-        );
-        assert_eq!(tool_starts[0]["update"]["title"], "echo");
-        assert_eq!(tool_updates[0]["update"]["status"], "completed");
-
-        let text: String = lines
-            .iter()
-            .filter(|(m, p)| {
-                m == "session/update" && p["update"]["sessionUpdate"] == "agent_message_chunk"
-            })
-            .filter_map(|(_, p)| p["update"]["content"]["text"].as_str())
-            .collect();
-        assert!(
-            text.contains("all done"),
-            "expected assistant text chunks, got {text:?} from {lines:?}"
-        );
-    }
-
-    // ── session/load tests ───────────────────────────────────────────────
-
-    /// Serializes tests in this module that redirect `sessions_dir()` so they do not race with
-    /// `session_store` tests or each other.
-    static SESSION_LOAD_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-    fn lock_sessions_dir(
-        dir: &TempDir,
-    ) -> (
-        std::sync::MutexGuard<'static, ()>,
-        std::sync::MutexGuard<'static, ()>,
-        session_store::TestDirGuard,
-    ) {
-        let lock = SESSION_LOAD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let (dir_lock, guard) = session_store::set_sessions_dir(dir);
-        (lock, dir_lock, guard)
-    }
-
-    #[tokio::test]
-    async fn load_saved_session_restores_mode_and_model() {
-        let dir = TempDir::new().unwrap();
-        let _guards = lock_sessions_dir(&dir);
-
-        let record = session_store::SessionRecord {
-            id: "lib-load-test".into(),
-            mode: "chat".into(),
-            cwd: PathBuf::from("/tmp/test-project"),
-            model: "gpt-4o".into(),
-            messages: vec![],
-            updated_at: session_store::new_timestamp(),
-        };
-        session_store::save(&record).expect("save");
-
-        let bridge = test_bridge();
-        let sink = CaptureSink {
-            lines: std::sync::Mutex::new(Vec::new()),
-        };
-        let result = handle_request(
-            bridge,
-            "session/load",
-            json!({"sessionId": "lib-load-test"}),
-            &sink,
-        )
-        .await
-        .expect("session/load must succeed");
-
-        assert_eq!(result["sessionId"], "lib-load-test");
-        assert_eq!(result["modes"]["currentModeId"], "chat");
-        assert_eq!(result["models"]["currentModelId"], "gpt-4o");
-    }
-
-    #[tokio::test]
-    async fn load_saved_session_registers_in_memory_with_correct_cwd() {
-        let dir = TempDir::new().unwrap();
-        let _guards = lock_sessions_dir(&dir);
-
-        let cwd = PathBuf::from("/tmp/load-cwd-test");
-        let record = session_store::SessionRecord {
-            id: "lib-cwd".into(),
-            mode: "coding".into(),
-            cwd: cwd.clone(),
-            model: "mock-model".into(),
-            messages: vec![],
-            updated_at: session_store::new_timestamp(),
-        };
-        session_store::save(&record).expect("save");
-
-        let bridge = test_bridge();
-        let sink = CaptureSink {
-            lines: std::sync::Mutex::new(Vec::new()),
-        };
-        let result = handle_request(
-            Arc::clone(&bridge),
-            "session/load",
-            json!({"sessionId": "lib-cwd"}),
-            &sink,
-        )
-        .await
-        .expect("session/load must succeed");
-
-        assert_eq!(result["sessionId"], "lib-cwd");
-
-        let sessions = bridge.acp_sessions.lock().await;
-        let sess = sessions.get("lib-cwd").expect("session must be registered");
-        assert_eq!(sess.cwd, cwd, "cwd must match loaded record");
-    }
-
-    #[tokio::test]
-    async fn load_unsaved_id_is_clear_error_not_empty_session() {
-        let dir = TempDir::new().unwrap();
-        let _guards = lock_sessions_dir(&dir);
-
-        let bridge = test_bridge();
-        let sink = CaptureSink {
-            lines: std::sync::Mutex::new(Vec::new()),
-        };
-        let err = handle_request(
-            bridge,
-            "session/load",
-            json!({"sessionId": "no-such-id"}),
-            &sink,
-        )
-        .await
-        .expect_err("loading an unsaved id must be an error");
-
-        assert!(
-            err.contains("no saved session found"),
-            "error must say no session was found, got: {err}"
-        );
-    }
-
-    #[tokio::test]
-    async fn load_replays_stored_messages_in_stored_order() {
-        let dir = TempDir::new().unwrap();
-        let _guards = lock_sessions_dir(&dir);
-
-        let record = session_store::SessionRecord {
-            id: "lib-replay".into(),
-            mode: "coding".into(),
-            cwd: PathBuf::from("/tmp/replay"),
-            model: "mock-model".into(),
-            messages: vec![
-                session_store::StoredMessage {
-                    role: "user".into(),
-                    content: "hello".into(),
-                },
-                session_store::StoredMessage {
-                    role: "assistant".into(),
-                    content: "hi there".into(),
-                },
-                session_store::StoredMessage {
-                    role: "user".into(),
-                    content: "second".into(),
-                },
-                session_store::StoredMessage {
-                    role: "assistant".into(),
-                    content: "answer".into(),
-                },
-            ],
-            updated_at: session_store::new_timestamp(),
-        };
-        session_store::save(&record).expect("save");
-
-        let bridge = test_bridge();
-        let sink = CaptureSink {
-            lines: std::sync::Mutex::new(Vec::new()),
-        };
-        let result = handle_request(
-            bridge,
-            "session/load",
-            json!({"sessionId": "lib-replay"}),
-            &sink,
-        )
-        .await
-        .expect("session/load must succeed");
-
-        assert_eq!(result["sessionId"], "lib-replay");
-
-        let lines = sink.lines.lock().unwrap();
-        let updates: Vec<_> = lines
-            .iter()
-            .filter(|(m, _)| m == "session/update")
-            .collect();
-        assert_eq!(
-            updates.len(),
-            4,
-            "must emit exactly 4 message chunks, got {:?}",
-            updates
-        );
-
-        assert_eq!(
-            updates[0].1["update"]["sessionUpdate"], "user_message_chunk",
-            "first message must be user"
-        );
-        assert_eq!(updates[0].1["update"]["content"]["text"], "hello");
-        assert_eq!(
-            updates[1].1["update"]["sessionUpdate"], "agent_message_chunk",
-            "second message must be assistant"
-        );
-        assert_eq!(updates[1].1["update"]["content"]["text"], "hi there");
-        assert_eq!(
-            updates[2].1["update"]["sessionUpdate"], "user_message_chunk",
-            "third message must be user"
-        );
-        assert_eq!(updates[2].1["update"]["content"]["text"], "second");
-        assert_eq!(
-            updates[3].1["update"]["sessionUpdate"], "agent_message_chunk",
-            "fourth message must be assistant"
-        );
-        assert_eq!(updates[3].1["update"]["content"]["text"], "answer");
-    }
-
-    /// A resume the *model* can see, not just the editor.
-    ///
-    /// Replaying the transcript to the client repaints the UI. If the conversation behind it starts
-    /// empty, the user reads their own history while the agent has none of it — the precise failure
-    /// `loadSession: false` existed to prevent, and worse once the flag says `true`, because the
-    /// interface now asserts the memory is there.
-    ///
-    /// This is the requirement the original implementation skipped, and it skipped the test with
-    /// it: five tests covered the replay and none covered the restore, so everything looked green.
-    #[tokio::test]
-    async fn load_restores_history_into_the_conversation_not_only_the_client() {
-        let dir = TempDir::new().unwrap();
-        let _guards = lock_sessions_dir(&dir);
-
-        let record = session_store::SessionRecord {
-            id: "lib-memory".into(),
-            mode: "chat".into(),
-            cwd: PathBuf::from("/tmp/memory"),
-            model: "mock-model".into(),
-            messages: vec![
-                session_store::StoredMessage {
-                    role: "user".into(),
-                    content: "my name is Ada".into(),
-                },
-                session_store::StoredMessage {
-                    role: "assistant".into(),
-                    content: "noted, Ada".into(),
-                },
-            ],
-            updated_at: session_store::new_timestamp(),
-        };
-        session_store::save(&record).expect("save");
-
-        let bridge = test_bridge();
-        let sink = CaptureSink {
-            lines: std::sync::Mutex::new(Vec::new()),
-        };
-        handle_request(
-            bridge.clone(),
-            "session/load",
-            json!({"sessionId": "lib-memory"}),
-            &sink,
-        )
-        .await
-        .expect("session/load must succeed");
-
-        let sessions = bridge.acp_sessions.lock().await;
-        let chat = sessions
-            .get("lib-memory")
-            .and_then(|s| s.converse.clone())
-            .expect("chat mode must have a live converse session after load");
-        let convo = chat.conversation.lock().await;
-        // `transient` is 0 on a freshly built conversation, so this is every message it holds.
-        let messages = convo.turn_tail(0);
-        let text: String = messages
-            .iter()
-            .map(|m| format!("{:?}:{}\n", m.role, m.content))
-            .collect();
-
-        assert!(
-            text.contains("my name is Ada"),
-            "the user's prior turn must be in the model's conversation: {text}"
-        );
-        assert!(
-            text.contains("noted, Ada"),
-            "the assistant's prior turn must be in the model's conversation: {text}"
-        );
-        assert!(
-            messages
-                .iter()
-                .any(|m| matches!(m.role, liberado_provider::Role::System)),
-            "the system prompt must survive the restore: {text}"
-        );
-    }
-
-    #[tokio::test]
-    async fn load_reloads_already_loaded_session_without_duplicate_emit() {
-        let dir = TempDir::new().unwrap();
-        let _guards = lock_sessions_dir(&dir);
-
-        let record = session_store::SessionRecord {
-            id: "lib-reload".into(),
-            mode: "coding".into(),
-            cwd: PathBuf::from("/tmp/reload"),
-            model: "mock-model".into(),
-            messages: vec![session_store::StoredMessage {
-                role: "user".into(),
-                content: "ping".into(),
-            }],
-            updated_at: session_store::new_timestamp(),
-        };
-        session_store::save(&record).expect("save");
-
-        let bridge = test_bridge();
-        let sink = CaptureSink {
-            lines: std::sync::Mutex::new(Vec::new()),
-        };
-        // First load emits messages.
-        handle_request(
-            Arc::clone(&bridge),
-            "session/load",
-            json!({"sessionId": "lib-reload"}),
-            &sink,
-        )
-        .await
-        .expect("first load");
-
-        assert_eq!(
-            sink.lines.lock().unwrap().len(),
-            1,
-            "first load emits 1 message"
-        );
-
-        let sink2 = CaptureSink {
-            lines: std::sync::Mutex::new(Vec::new()),
-        };
-        // Second load must succeed without re-emitting history for the already-loaded session.
-        let result = handle_request(
-            bridge,
-            "session/load",
-            json!({"sessionId": "lib-reload"}),
-            &sink2,
-        )
-        .await
-        .expect("second load");
-
-        assert_eq!(result["sessionId"], "lib-reload");
-        assert!(
-            sink2.lines.lock().unwrap().is_empty(),
-            "re-loading an already-loaded session must not re-emit messages"
-        );
-    }
-
-    /// render_coding_event maps tool activity to tool_call entries and everything else to text.
-    #[test]
-    fn render_coding_event_emits_text_and_tool_entries() {
-        use liberado_session::{SessionEvent, SessionEventKind};
-
-        let sink = CaptureSink {
-            lines: std::sync::Mutex::new(Vec::new()),
-        };
-        let mk = |kind| SessionEvent::new("s", kind);
-
-        render_coding_event(
-            &sink,
-            "s",
-            &mk(SessionEventKind::Token { text: "hi".into() }),
-            &mut Vec::new(),
-        )
-        .unwrap();
-        let mut pending = Vec::new();
-        render_coding_event(
-            &sink,
-            "s",
-            &mk(SessionEventKind::ToolStarted {
-                name: "read".into(),
-                args_preview: "\"a.json\"".into(),
-            }),
-            &mut pending,
-        )
-        .unwrap();
-        assert!(!pending.is_empty(), "an open tool call must be tracked");
-        render_coding_event(
-            &sink,
-            "s",
-            &mk(SessionEventKind::ToolFinished {
-                name: "read".into(),
-                ok: true,
-                result_preview: "ok".into(),
-            }),
-            &mut pending,
-        )
-        .unwrap();
-        assert!(pending.is_empty(), "a finished tool call must be popped");
-        render_coding_event(
-            &sink,
-            "s",
-            &mk(SessionEventKind::ValidationFinished {
-                ok: false,
-                summary: "tests broke".into(),
-            }),
-            &mut Vec::new(),
-        )
-        .unwrap();
-
-        let lines = sink.lines.lock().unwrap();
-        let updates: Vec<String> = lines
-            .iter()
-            .map(|(_, p)| {
-                p["update"]["sessionUpdate"]
-                    .as_str()
-                    .unwrap_or("")
-                    .to_string()
-            })
-            .collect();
-        assert!(
-            updates.contains(&"agent_message_chunk".into()),
-            "tokens and validation must render as text chunks: {updates:?}"
-        );
-        assert!(
-            lines.iter().any(|(_, p)| {
-                p["update"]["content"]["text"]
-                    .as_str()
-                    .is_some_and(|t| t.contains("hi"))
-            }),
-            "the token text must be emitted"
-        );
-        assert!(
-            updates.contains(&"tool_call".into()) && updates.contains(&"tool_call_update".into()),
-            "tool start/finish must render as tool entries: {updates:?}"
-        );
-    }
-
-    #[tokio::test]
-    async fn two_converse_turns_keep_prior_replies() {
-        use liberado_provider::{CompletionResponse, MockProvider};
-        let provider = Arc::new(MockProvider::with_script(
-            "mock",
-            [
-                CompletionResponse::text("first reply"),
-                CompletionResponse::text("second reply"),
-            ],
-        ));
-        let (cancel_tx, cancel_rx) = watch::channel(false);
-        let session = Arc::new(SessionHandle {
-            id: "sess-turns".into(),
-            conversation: Mutex::new(Conversation::new("sys")),
-            executor: Executor::new(provider, Budget::new(8)),
-            tools: Arc::new(NoTools),
-            coding_tools: false,
-            pending_ask: std::sync::Mutex::new(None),
-            cancel_tx,
-            cancel_rx,
-        });
-        let sink = CaptureSink {
-            lines: std::sync::Mutex::new(Vec::new()),
-        };
-        let stop1 = run_prompt_turn(Arc::clone(&session), "one".into(), &sink)
-            .await
-            .unwrap();
-        let stop2 = run_prompt_turn(Arc::clone(&session), "two".into(), &sink)
-            .await
-            .unwrap();
-        assert_eq!(stop1, "end_turn");
-        assert_eq!(stop2, "end_turn");
-        let convo = session.conversation.lock().await;
-        let text: String = convo
-            .messages()
-            .iter()
-            .map(|m| m.content.as_str())
-            .collect::<Vec<_>>()
-            .join("\n");
-        assert!(
-            text.contains("one") && text.contains("first reply"),
-            "first turn must remain: {text}"
-        );
-        assert!(
-            text.contains("two") && text.contains("second reply"),
-            "second turn must append, not replace: {text}"
-        );
-    }
-
-    #[tokio::test]
-    async fn ask_human_parks_and_the_next_prompt_is_the_answer() {
-        use liberado_provider::{CompletionResponse, MockProvider, ToolInvocation};
-        let provider = Arc::new(MockProvider::with_script(
-            "mock",
-            [
-                CompletionResponse::tool_calls(vec![ToolInvocation::new(
-                    "ask-1",
-                    ask_human::ASK_HUMAN_TOOL,
-                    json!({ "question": "Which crate?" }),
-                )]),
-                CompletionResponse::text("using acp-bridge"),
-            ],
-        ));
-        let (cancel_tx, cancel_rx) = watch::channel(false);
-        let session = Arc::new(SessionHandle {
-            id: "sess-ask".into(),
-            conversation: Mutex::new(Conversation::new("sys")),
-            executor: Executor::new(provider, Budget::new(8)),
-            tools: ask_human::wrap(Arc::new(EchoTool), true),
-            coding_tools: true,
-            pending_ask: std::sync::Mutex::new(None),
-            cancel_tx,
-            cancel_rx,
-        });
-        let sink = CaptureSink {
-            lines: std::sync::Mutex::new(Vec::new()),
-        };
-        let stop1 = run_prompt_turn(Arc::clone(&session), "split this".into(), &sink)
-            .await
-            .unwrap();
-        assert_eq!(stop1, "end_turn");
-        let parked = session.pending_ask.lock().unwrap().clone();
-        assert_eq!(parked.as_deref(), Some("ask-1"));
-        let stop2 = run_prompt_turn(Arc::clone(&session), "acp-bridge".into(), &sink)
-            .await
-            .unwrap();
-        assert_eq!(stop2, "end_turn");
-        assert!(session.pending_ask.lock().unwrap().is_none());
-        let convo = session.conversation.lock().await;
-        let text: String = convo
-            .messages()
-            .iter()
-            .map(|m| format!("{:?}:{}", m.role, m.content))
-            .collect::<Vec<_>>()
-            .join("\n");
-        assert!(
-            text.contains("acp-bridge"),
-            "answer must land as the tool result: {text}"
-        );
-        assert!(
-            text.contains("using acp-bridge"),
-            "model must continue after the answer: {text}"
-        );
-    }
-
-    #[tokio::test]
-    async fn coding_prompt_is_a_converse_turn_not_a_pack_run() {
-        use liberado_provider::{CompletionResponse, MockProvider};
-        let store = TempDir::new().unwrap();
-        let _guards = lock_sessions_dir(&store);
-        let cwd = TempDir::new().unwrap();
-        let bridge = test_bridge_with(Arc::new(MockProvider::with_script(
-            "mock",
-            [CompletionResponse::text("hello from converse")],
-        )));
-        let created = handle_session_new(&bridge, &json!({ "cwd": cwd.path() }))
-            .await
-            .unwrap();
-        let sid = created["sessionId"].as_str().unwrap().to_string();
-        let sink: Arc<dyn WireSink> = Arc::new(CaptureSink {
-            lines: std::sync::Mutex::new(Vec::new()),
-        });
-        let result = run_session_prompt(
-            Arc::clone(&bridge),
-            sink,
-            json!({ "sessionId": sid, "prompt": [{ "type": "text", "text": "hi" }] }),
-        )
-        .await
-        .unwrap();
-        assert_eq!(result["stopReason"], "end_turn");
-        // Persistence captures agent_message_chunk text. The pack path announces itself;
-        // converse does not.
-        let stored = session_store::load(&sid)
-            .ok()
-            .flatten()
-            .expect("prompt persists");
-        let assistant: String = stored
-            .messages
-            .iter()
-            .filter(|m| m.role == "assistant")
-            .map(|m| m.content.as_str())
-            .collect::<Vec<_>>()
-            .join("");
-        assert!(
-            assistant.contains("hello from converse"),
-            "the model reply must reach the wire: {assistant:?}"
-        );
-        assert!(
-            !assistant.contains("Starting Liberado coding pack"),
-            "coding mode must not fire the one-shot pack: {assistant:?}"
-        );
-    }
-
-    #[tokio::test]
-    async fn coding_mode_attaches_coding_tools_on_a_real_workspace() {
-        let store = TempDir::new().unwrap();
-        let _guards = lock_sessions_dir(&store);
-        let cwd = TempDir::new().unwrap();
-        let bridge = test_bridge();
-        let created = handle_session_new(&bridge, &json!({ "cwd": cwd.path() }))
-            .await
-            .unwrap();
-        let sid = created["sessionId"].as_str().unwrap().to_string();
-        assert_eq!(created["modes"]["currentModeId"], "coding");
-        let handle = ensure_converse(&bridge, &sid).await.unwrap();
-        assert!(
-            handle.coding_tools,
-            "interactive coding must attach the pack's tools"
-        );
-        let names: Vec<String> = handle.tools.catalog().into_iter().map(|t| t.name).collect();
-        assert!(names.contains(&"read_file".into()), "{names:?}");
-        assert!(
-            !names.contains(&"submit_report".into()),
-            "converse must not offer the pack terminator: {names:?}"
-        );
-        assert!(
-            !names.contains(&"done".into()),
-            "test bridge has no topology, so done must not appear: {names:?}"
-        );
-    }
-
-    #[test]
-    fn snapshot_turns_keeps_user_and_assistant_prose() {
-        let convo = Mutex::new(Conversation::from_history(vec![
-            liberado_provider::Message::system("sys"),
-            liberado_provider::Message::user("hello"),
-            liberado_provider::Message::assistant("hi"),
-            liberado_provider::Message::tool_result("t1", "ignored"),
-            liberado_provider::Message::user(""),
-        ]));
-        let turns = snapshot_turns(&convo);
-        assert_eq!(
-            turns
-                .iter()
-                .map(|m| (m.role.as_str(), m.content.as_str()))
-                .collect::<Vec<_>>(),
-            vec![("user", "hello"), ("assistant", "hi")]
-        );
-    }
-
-    #[test]
-    fn chat_system_prompt_uses_configured_text_when_present() {
-        assert_eq!(
-            chat_system_prompt(PathBuf::from("/ws").as_path(), Some("custom chat")),
-            "custom chat"
-        );
-        let fallback = chat_system_prompt(PathBuf::from("/ws").as_path(), Some("  "));
-        assert!(
-            fallback.contains("no file tools"),
-            "whitespace-only config must fall back: {fallback}"
-        );
-        assert!(fallback.contains("/ws"), "{fallback}");
-    }
-
-    #[tokio::test]
-    async fn ensure_converse_refuses_goal_mode() {
-        let store = TempDir::new().unwrap();
-        let _guards = lock_sessions_dir(&store);
-        let cwd = TempDir::new().unwrap();
-        let bridge = test_bridge();
-        let created = handle_session_new(&bridge, &json!({ "cwd": cwd.path() }))
-            .await
-            .unwrap();
-        let sid = created["sessionId"].as_str().unwrap().to_string();
-        handle_set_mode(&bridge, &json!({ "sessionId": sid, "modeId": "goal" }))
-            .await
-            .unwrap();
-        let err = ensure_converse(&bridge, &sid)
-            .await
-            .err()
-            .expect("goal is not converse");
-        assert!(
-            err.contains("not a conversation"),
-            "must refuse the pack mode, got: {err}"
-        );
-    }
-
-    #[tokio::test]
-    async fn set_mode_chat_rebuilds_without_tools_and_keeps_turns() {
-        use liberado_provider::{CompletionResponse, MockProvider};
-        let store = TempDir::new().unwrap();
-        let _guards = lock_sessions_dir(&store);
-        let cwd = TempDir::new().unwrap();
-        let bridge = test_bridge_with(Arc::new(MockProvider::with_script(
-            "mock",
-            [CompletionResponse::text("working on it")],
-        )));
-        let created = handle_session_new(&bridge, &json!({ "cwd": cwd.path() }))
-            .await
-            .unwrap();
-        let sid = created["sessionId"].as_str().unwrap().to_string();
-        let sink: Arc<dyn WireSink> = Arc::new(CaptureSink {
-            lines: std::sync::Mutex::new(Vec::new()),
-        });
-        run_session_prompt(
-            Arc::clone(&bridge),
-            sink,
-            json!({
-                "sessionId": sid,
-                "prompt": [{ "type": "text", "text": "fix the test" }]
-            }),
-        )
-        .await
-        .unwrap();
-
-        handle_set_mode(&bridge, &json!({ "sessionId": sid, "modeId": "chat" }))
-            .await
-            .unwrap();
-
-        let map = bridge.acp_sessions.lock().await;
-        let sess = map.get(&sid).unwrap();
-        assert_eq!(sess.mode, AgentMode::Chat);
-        let handle = sess
-            .converse
-            .clone()
-            .expect("chat mode must keep a converse handle");
-        assert!(
-            !handle.coding_tools,
-            "chat must not keep the coding tool runtime"
-        );
-        let convo = handle.conversation.lock().await;
-        let text: String = convo
-            .messages()
-            .iter()
-            .map(|m| m.content.as_str())
-            .collect::<Vec<_>>()
-            .join("\n");
-        assert!(text.contains("fix the test"), "{text}");
-        assert!(text.contains("working on it"), "{text}");
-    }
-
-    #[tokio::test]
-    async fn set_mode_goal_drops_converse() {
-        let store = TempDir::new().unwrap();
-        let _guards = lock_sessions_dir(&store);
-        let cwd = TempDir::new().unwrap();
-        let bridge = test_bridge();
-        let created = handle_session_new(&bridge, &json!({ "cwd": cwd.path() }))
-            .await
-            .unwrap();
-        let sid = created["sessionId"].as_str().unwrap().to_string();
-        ensure_converse(&bridge, &sid).await.unwrap();
-        handle_set_mode(&bridge, &json!({ "sessionId": sid, "modeId": "goal" }))
-            .await
-            .unwrap();
-        let map = bridge.acp_sessions.lock().await;
-        let sess = map.get(&sid).unwrap();
-        assert_eq!(sess.mode, AgentMode::Goal);
-        assert!(
-            sess.converse.is_none(),
-            "goal mode must not keep a converse handle"
-        );
-    }
-
-    #[tokio::test]
-    async fn set_mode_rejects_unknown_id_with_expected_list() {
-        let store = TempDir::new().unwrap();
-        let _guards = lock_sessions_dir(&store);
-        let cwd = TempDir::new().unwrap();
-        let bridge = test_bridge();
-        let created = handle_session_new(&bridge, &json!({ "cwd": cwd.path() }))
-            .await
-            .unwrap();
-        let sid = created["sessionId"].as_str().unwrap();
-        let err = handle_set_mode(&bridge, &json!({ "sessionId": sid, "modeId": "banana" }))
-            .await
-            .expect_err("unknown mode");
-        assert!(
-            err.contains(AgentMode::EXPECTED),
-            "error must list parseable modes, got: {err}"
-        );
-        assert!(err.contains("goal"), "{err}");
-    }
-
-    #[tokio::test]
-    async fn load_coding_session_restores_tools_and_history() {
-        let store = TempDir::new().unwrap();
-        let _guards = lock_sessions_dir(&store);
-        let cwd = TempDir::new().unwrap();
-        session_store::save(&session_store::SessionRecord {
-            id: "lib-coding-memory".into(),
-            mode: "coding".into(),
-            cwd: cwd.path().to_path_buf(),
-            model: "mock-model".into(),
-            messages: vec![
-                session_store::StoredMessage {
-                    role: "user".into(),
-                    content: "fix the test".into(),
-                },
-                session_store::StoredMessage {
-                    role: "assistant".into(),
-                    content: "working on it".into(),
-                },
-            ],
-            updated_at: session_store::new_timestamp(),
-        })
-        .unwrap();
-
-        let bridge = test_bridge();
-        let sink = CaptureSink {
-            lines: std::sync::Mutex::new(Vec::new()),
-        };
-        handle_request(
-            Arc::clone(&bridge),
-            "session/load",
-            json!({ "sessionId": "lib-coding-memory" }),
-            &sink,
-        )
-        .await
-        .unwrap();
-
-        let sessions = bridge.acp_sessions.lock().await;
-        let handle = sessions
-            .get("lib-coding-memory")
-            .and_then(|s| s.converse.clone())
-            .expect("coding load must restore a converse handle");
-        assert!(handle.coding_tools);
-        let convo = handle.conversation.lock().await;
-        let text: String = convo
-            .messages()
-            .iter()
-            .map(|m| m.content.as_str())
-            .collect::<Vec<_>>()
-            .join("\n");
-        assert!(text.contains("fix the test"), "{text}");
-        assert!(text.contains("working on it"), "{text}");
-    }
-}
+#[cfg(test)]
+mod main_misc_tests;

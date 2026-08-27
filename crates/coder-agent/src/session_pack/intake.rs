@@ -585,3 +585,7 @@ fn verifier_label(v: &VerifierSpec) -> String {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "intake_survivor_tests.rs"]
+mod survivor_tests;

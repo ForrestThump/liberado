@@ -217,7 +217,7 @@ fn indexed_complexities(entries: &[Entry]) -> BTreeMap<Key, f64> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Config, Entry, Report, Waiver, compare};
+    use super::{CONFIG_FILE, Config, Entry, Report, Waiver, compare};
 
     fn entry(function: &str, cyclomatic: f64) -> Entry {
         Entry {
@@ -265,12 +265,139 @@ mod tests {
             version: String::new(),
             entries: vec![],
         };
-        let current = Report {
+        let within = Report {
             version: String::new(),
             entries: vec![entry("table", 24.0)],
         };
-        assert!(compare(&config, &baseline, &current).is_ok());
-        config.waiver[0].ceiling = 23.0;
-        assert!(compare(&config, &baseline, &current).is_err());
+        assert!(compare(&config, &baseline, &within).is_ok());
+
+        // The ceiling is a real limit: past it the waived function fails
+        // again. (Kill assertion for the waiver branch - without it a
+        // runaway waived function would pass forever.)
+        let over = Report {
+            version: String::new(),
+            entries: vec![entry("table", 26.0)],
+        };
+        let err = compare(&config, &baseline, &over).unwrap_err().to_string();
+        assert!(err.contains("26 > 25"), "the ceiling must be named: {err}");
+    }
+
+    // ── load_config: the waiver validation ladder ───────────────────────
+
+    fn config_dir_with(body: &str, extra_file: Option<&str>) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join(CONFIG_FILE), body).unwrap();
+        if let Some(rel) = extra_file {
+            std::fs::create_dir_all(dir.path().join(rel).parent().unwrap()).unwrap();
+            std::fs::write(dir.path().join(rel), "// exists").unwrap();
+        }
+        dir
+    }
+
+    #[test]
+    fn load_config_accepts_a_valid_waiver_against_an_existing_file() {
+        let dir = config_dir_with(
+            r#"
+new_function_ceiling = 20.0
+
+[[waiver]]
+file = "src/lib.rs"
+function = "big_one"
+ceiling = 40.0
+reason = "legacy parser state machine"
+reviewed_on = "2026-08-01"
+"#,
+            Some("src/lib.rs"),
+        );
+        let config = super::load_config(dir.path()).unwrap();
+        assert_eq!(config.waiver.len(), 1);
+    }
+
+    #[test]
+    fn load_config_rejects_a_ceiling_below_one() {
+        let dir = config_dir_with("new_function_ceiling = 0.5", None);
+        let err = super::load_config(dir.path()).unwrap_err().to_string();
+        assert!(err.contains("at least 1"), "{err}");
+    }
+
+    #[test]
+    fn load_config_rejects_a_waiver_without_reason_or_review_date() {
+        let dir = config_dir_with(
+            r#"
+new_function_ceiling = 20.0
+
+[[waiver]]
+file = "src/lib.rs"
+function = "big_one"
+ceiling = 40.0
+reason = ""
+reviewed_on = "2026-08-01"
+"#,
+            Some("src/lib.rs"),
+        );
+        let err = super::load_config(dir.path()).unwrap_err().to_string();
+        assert!(err.contains("needs reason and reviewed_on"), "{err}");
+    }
+
+    #[test]
+    fn load_config_rejects_an_unnecessary_waiver() {
+        let dir = config_dir_with(
+            r#"
+new_function_ceiling = 20.0
+
+[[waiver]]
+file = "src/lib.rs"
+function = "mild_one"
+ceiling = 20.0
+reason = "not above the default ceiling"
+reviewed_on = "2026-08-01"
+"#,
+            Some("src/lib.rs"),
+        );
+        let err = super::load_config(dir.path()).unwrap_err().to_string();
+        assert!(err.contains("unnecessary"), "{err}");
+    }
+
+    #[test]
+    fn load_config_rejects_a_stale_waiver_for_a_deleted_file() {
+        let dir = config_dir_with(
+            r#"
+new_function_ceiling = 20.0
+
+[[waiver]]
+file = "src/gone.rs"
+function = "big_one"
+ceiling = 40.0
+reason = "the file is gone"
+reviewed_on = "2026-08-01"
+"#,
+            None,
+        );
+        let err = super::load_config(dir.path()).unwrap_err().to_string();
+        assert!(err.contains("stale complexity waiver"), "{err}");
+    }
+
+    #[test]
+    fn load_config_rejects_duplicate_waivers() {
+        let body = r#"
+new_function_ceiling = 20.0
+
+[[waiver]]
+file = "src/lib.rs"
+function = "big_one"
+ceiling = 40.0
+reason = "first"
+reviewed_on = "2026-08-01"
+
+[[waiver]]
+file = "src/lib.rs"
+function = "big_one"
+ceiling = 41.0
+reason = "second copy"
+reviewed_on = "2026-08-01"
+"#;
+        let dir = config_dir_with(body, Some("src/lib.rs"));
+        let err = super::load_config(dir.path()).unwrap_err().to_string();
+        assert!(err.contains("duplicate"), "{err}");
     }
 }

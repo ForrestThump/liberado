@@ -13,6 +13,7 @@ name = "liberado"
 path = "src/main.rs"
 
 [dependencies]
+fs4 = { workspace = true }
 liberado-common = { workspace = true }
 liberado-config = { workspace = true }
 liberado-config-loader = { workspace = true }

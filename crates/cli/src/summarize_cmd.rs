@@ -320,6 +320,13 @@ fn mvl(path: &Path, heading: bool) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn pi(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    print!("{}", summarize_pi(path)?);
+    Ok(())
+}
+
+/// Ingest one pi-style `session.jsonl` and render its summary as a string (the printable
+/// core of [`pi`], split out so tests can assert on rendered lines).
+fn summarize_pi(path: &Path) -> Result<String, Box<dyn std::error::Error>> {
     let mut turns = 0;
     let mut tools = BTreeMap::new();
     let mut first_edit = None;
@@ -389,34 +396,34 @@ fn pi(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
             timeouts += 1;
         }
     }
-    println!(
-        "## pi  {}",
+    let mut out = format!(
+        "## pi  {}\n",
         path.file_name().unwrap_or_default().to_string_lossy()
     );
-    println!("- turns: {turns}   tools: {}", counts(&tools));
-    println!(
-        "- first edit: {}",
+    out.push_str(&format!("- turns: {turns}   tools: {}\n", counts(&tools)));
+    out.push_str(&format!(
+        "- first edit: {}\n",
         first_edit.unwrap_or_else(|| "None".into())
-    );
-    println!("- connect-timeout mentions: {timeouts}");
+    ));
+    out.push_str(&format!("- connect-timeout mentions: {timeouts}\n"));
     if !cargo.is_empty() {
-        println!("- cargo:");
+        out.push_str("- cargo:\n");
         for line in cargo.iter().take(30) {
-            println!("  {line}");
+            out.push_str(&format!("  {line}\n"));
         }
     }
     if !last_text.is_empty() {
-        println!(
-            "- last assistant: {}",
+        out.push_str(&format!(
+            "- last assistant: {}\n",
             last_text
                 .trim()
                 .replace('\n', " ")
                 .chars()
                 .take(320)
                 .collect::<String>()
-        );
+        ));
     }
-    Ok(())
+    Ok(out)
 }
 
 fn kind(path: &Path) -> &'static str {
@@ -547,6 +554,10 @@ pub fn run(args: impl Iterator<Item = String>) -> Result<(), Box<dyn std::error:
 }
 
 #[cfg(test)]
+#[path = "summarize_pi_tests.rs"]
+mod summarize_pi_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
@@ -637,32 +648,7 @@ mod tests {
 
     // ── kind ────────────────────────────────────────────────────────────
 
-    /// The file-kind classifier drives which renderer runs; each recognisable shape has its own
-    /// label, and everything else is "unknown" rather than a guess.
-    #[test]
-    fn kind_classifies_known_shapes() {
-        let dir = tempdir().unwrap();
-        // A directory with any .json file is a liberado traces dir.
-        fs::write(dir.path().join("x.json"), "{}").unwrap();
-        assert_eq!(kind(dir.path()), "liberado-dir");
-        // An empty directory is just a directory.
-        let empty = tempdir().unwrap();
-        assert_eq!(kind(empty.path()), "dir");
-        // Bare .json / .jsonl files by extension.
-        let json_path = dir.path().join("traces.json");
-        fs::write(&json_path, "{}").unwrap();
-        assert_eq!(kind(&json_path), "liberado-json");
-        let jsonl_path = dir.path().join("x.jsonl");
-        fs::write(&jsonl_path, "{}").unwrap();
-        assert_eq!(kind(&jsonl_path), "jsonl");
-        // Unknown extension.
-        let unknown = dir.path().join("notes.txt");
-        fs::write(&unknown, "x").unwrap();
-        assert_eq!(kind(&unknown), "unknown");
-    }
-
     // ── renderers over real files ───────────────────────────────────────
-
     /// `liberado` summarises a native trace JSON: the request/events shape the coder writes.
     #[test]
     fn liberado_summarises_a_native_trace() {
@@ -688,23 +674,6 @@ mod tests {
             liberado(&path).is_ok(),
             "a well-formed trace must summarise"
         );
-    }
-
-    /// `mvl` and `pi` are tolerant parsers: an empty file renders an empty summary rather than
-    /// failing, and malformed lines are skipped by `records`.
-    #[test]
-    fn mvl_and_pi_tolerate_empty_and_partial_input() {
-        let dir = tempdir().unwrap();
-        let mvl_path = dir.path().join("run.mvl.jsonl");
-        fs::write(&mvl_path, "").unwrap();
-        assert!(mvl(&mvl_path, true).is_ok(), "empty MVL must not fail");
-        let pi_path = dir.path().join("session.jsonl");
-        fs::write(
-            &pi_path,
-            "{\"type\":\"turn_start\"}\nnot-json\n{\"type\":\"message_end\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"hi\"}]}}\n",
-        )
-        .unwrap();
-        assert!(pi(&pi_path).is_ok(), "partial pi session must not fail");
     }
 
     /// `summarize_mvl` aggregates a real file: usage sums, per-tool counts, the first edit's
@@ -765,5 +734,43 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(err.contains("not found"), "{err}");
+    }
+
+    /// Every `walk` arm dispatches instead of falling through to the `unrecognized` error:
+    /// a deleted match arm turns its case into exactly that error.
+    #[test]
+    fn walk_dispatches_every_known_layout() {
+        let dir = tempdir().unwrap();
+
+        // mvl file
+        let mvl_path = dir.path().join("run.mvl.jsonl");
+        fs::write(&mvl_path, "").unwrap();
+        assert!(walk(&mvl_path).is_ok(), "an .mvl.jsonl file must walk");
+
+        // pi session file
+        let pi_path = dir.path().join("session.jsonl");
+        fs::write(&pi_path, "").unwrap();
+        assert!(walk(&pi_path).is_ok(), "session.jsonl must walk");
+
+        // liberado-dir: json files summarise individually
+        let json_dir = dir.path().join("jsons");
+        fs::create_dir(&json_dir).unwrap();
+        fs::write(
+            json_dir.join("trace.json"),
+            "{\"request\":{},\"events\":[]}",
+        )
+        .unwrap();
+        assert!(walk(&json_dir).is_ok(), "a dir of trace jsons must walk");
+
+        // outdir: candidate discovery descends into run.mvl.jsonl
+        let outdir = dir.path().join("run");
+        fs::create_dir(&outdir).unwrap();
+        fs::write(outdir.join("run.mvl.jsonl"), "").unwrap();
+        assert!(walk(&outdir).is_ok(), "a run directory must walk");
+
+        // unknown extension stays an error — the arms did not swallow everything
+        let stray = dir.path().join("notes.txt");
+        fs::write(&stray, "x").unwrap();
+        assert!(walk(&stray).is_err(), "unrecognized input must error");
     }
 }

@@ -20,6 +20,52 @@ const RERUN: &str = "shepherd:ci-rerun";
 const READY: &str = "shepherd:ready";
 const BLOCKED: &str = "shepherd:blocked";
 
+/// The numeric shepherd knobs and their environment keys.
+///
+/// Parsing lives in [`Limits::from_reader`], which takes the value reader as a parameter so
+/// tests can exercise the malformed-value errors without touching process-global env state;
+/// `from_env` is the production one-liner over `std::env`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Limits {
+    max_kickbacks: usize,
+    cold_reviews: usize,
+    cold_turns: u32,
+    max_concurrent: usize,
+    poll: u64,
+}
+
+impl Limits {
+    fn from_env() -> Result<Self, Box<dyn std::error::Error>> {
+        let get = |key: &str| std::env::var(key).ok();
+        Ok(Self::from_reader(get)?)
+    }
+
+    fn from_reader<F>(get: F) -> Result<Self, String>
+    where
+        F: Fn(&str) -> Option<String>,
+    {
+        fn parse<T: std::str::FromStr>(
+            get: impl Fn(&str) -> Option<String>,
+            key: &str,
+            default: T,
+        ) -> Result<T, String> {
+            match get(key) {
+                None => Ok(default),
+                Some(raw) => raw.parse().map_err(|_| {
+                    format!("environment variable {key} must be a number, got '{raw}'")
+                }),
+            }
+        }
+        Ok(Self {
+            max_kickbacks: parse(&get, "SHEPHERD_MAX_KICKBACKS", 2)?,
+            cold_reviews: parse(&get, "SHEPHERD_COLD_REVIEWS", 2)?,
+            cold_turns: parse(&get, "SHEPHERD_COLD_REVIEW_MAX_TURNS", 60)?,
+            max_concurrent: parse(&get, "SHEPHERD_MAX_CONCURRENT", 2)?,
+            poll: parse(&get, "SHEPHERD_POLL_SECONDS", 120)?,
+        })
+    }
+}
+
 #[derive(Clone)]
 struct Config {
     root: PathBuf,
@@ -39,13 +85,8 @@ impl Config {
     fn get(key: &str, default: &str) -> String {
         std::env::var(key).unwrap_or_else(|_| default.into())
     }
-    fn number<T: std::str::FromStr>(key: &str, default: T) -> Result<T, Box<dyn std::error::Error>>
-    where
-        T::Err: std::error::Error + 'static,
-    {
-        Ok(std::env::var(key).ok().map_or(Ok(default), |v| v.parse())?)
-    }
     fn load(selected_project: Option<&str>) -> Result<Self, Box<dyn std::error::Error>> {
+        let limits = Limits::from_env()?;
         let mut config = Self {
             root: crate::crate_map_cmd::repository_root()?,
             repository: None,
@@ -54,11 +95,11 @@ impl Config {
             project: Self::get("SHEPHERD_PROJECT", "liberado"),
             base: Self::get("SHEPHERD_BASE", "main"),
             profile: Self::get("SHEPHERD_PROFILE", "coding-unattended"),
-            max_kickbacks: Self::number("SHEPHERD_MAX_KICKBACKS", 2)?,
-            cold_reviews: Self::number("SHEPHERD_COLD_REVIEWS", 2)?,
-            cold_turns: Self::number("SHEPHERD_COLD_REVIEW_MAX_TURNS", 60)?,
-            max_concurrent: Self::number("SHEPHERD_MAX_CONCURRENT", 2)?,
-            poll: Self::number("SHEPHERD_POLL_SECONDS", 120)?,
+            max_kickbacks: limits.max_kickbacks,
+            cold_reviews: limits.cold_reviews,
+            cold_turns: limits.cold_turns,
+            max_concurrent: limits.max_concurrent,
+            poll: limits.poll,
         };
         let topology = load_shepherd_topology()?;
         validate_shepherd_topology(&topology)?;
@@ -205,62 +246,139 @@ impl Pr {
     }
 }
 
-pub fn run(args: impl Iterator<Item = String>) -> Result<(), Box<dyn std::error::Error>> {
-    let args: Vec<_> = args.collect();
-    if args.iter().any(|a| a == "--self-test") {
-        return self_test();
-    }
-    let once = args.iter().any(|a| a == "--once");
-    let watch = args.iter().any(|a| a == "--watch");
-    let dry = args.iter().any(|a| a == "--dry-run");
-    let selected_project = args
+/// One parsed shepherd invocation: which mode was asked for and with what modifiers.
+///
+/// Parsing is pure so the usage rules (a mode is required; `config` demands `check`; `--project`
+/// takes the next argument) are testable without a repository or a daemon behind them.
+#[derive(Debug, PartialEq, Eq)]
+enum Invocation {
+    SelfTest,
+    ConfigCheck { project: Option<String> },
+    Drive { once: bool, watch: bool },
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct ParsedInvocation {
+    mode: Invocation,
+    dry_run: bool,
+    project: Option<String>,
+    seed: Option<PathBuf>,
+    reset_baselines: bool,
+}
+
+fn parse_invocation(args: &[String]) -> Result<ParsedInvocation, String> {
+    let dry_run = args.iter().any(|a| a == "--dry-run");
+    let project = args
         .windows(2)
         .find(|a| a[0] == "--project")
-        .map(|a| a[1].as_str());
+        .map(|a| a[1].clone());
+    let seed = args
+        .windows(2)
+        .find(|a| a[0] == "--seed")
+        .map(|a| PathBuf::from(&a[1]));
+    let reset_baselines = args.iter().any(|a| a == "--reset-baselines");
+
+    if args.iter().any(|a| a == "--self-test") {
+        return Ok(ParsedInvocation {
+            mode: Invocation::SelfTest,
+            dry_run,
+            project,
+            seed,
+            reset_baselines,
+        });
+    }
     if args.first().is_some_and(|arg| arg == "config") {
         if args.get(1).is_none_or(|arg| arg != "check") {
             return Err("usage: liberado shepherd config check [--project <name>]".into());
         }
-        return config_check(selected_project);
+        return Ok(ParsedInvocation {
+            mode: Invocation::ConfigCheck {
+                project: project.clone(),
+            },
+            dry_run,
+            project,
+            seed,
+            reset_baselines,
+        });
     }
-    let seed_path = args
-        .windows(2)
-        .find(|a| a[0] == "--seed")
-        .map(|a| PathBuf::from(&a[1]));
-    if !(once || watch || seed_path.is_some()) {
+    let once = args.iter().any(|a| a == "--once");
+    let watch = args.iter().any(|a| a == "--watch");
+    if !(once || watch || seed.is_some()) {
         return Err(
             "usage: liberado shepherd <--once|--watch|--seed FILE> [--project <name>] [--dry-run]\n       liberado shepherd config check [--project <name>]\n       liberado shepherd --self-test"
                 .into(),
         );
     }
-    let cfg = Config::load(selected_project)?;
-    if args.iter().any(|a| a == "--reset-baselines") {
+    Ok(ParsedInvocation {
+        mode: Invocation::Drive { once, watch },
+        dry_run,
+        project,
+        seed,
+        reset_baselines,
+    })
+}
+
+pub fn run(args: impl Iterator<Item = String>) -> Result<(), Box<dyn std::error::Error>> {
+    let args: Vec<_> = args.collect();
+    let parsed = parse_invocation(&args)?;
+    match parsed.mode {
+        Invocation::SelfTest => self_test(),
+        Invocation::ConfigCheck { ref project } => config_check(project.as_deref()),
+        Invocation::Drive { once, watch } => drive(&parsed, once, watch),
+    }
+}
+
+fn drive(
+    parsed: &ParsedInvocation,
+    once: bool,
+    watch: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let dry = parsed.dry_run;
+    let cfg = Config::load(parsed.project.as_deref())?;
+    if parsed.reset_baselines {
         reset_baselines(&cfg)?;
     }
-    if let Some(path) = seed_path {
-        seed(&cfg, &path, dry)?;
+    if let Some(path) = &parsed.seed {
+        seed(&cfg, path, dry)?;
     }
-    loop {
-        let open_prs = prs(&cfg)?;
-        for mut pr in open_prs.clone() {
-            if let Err(e) = tick(&cfg, &mut pr, dry) {
-                log(
-                    &cfg,
-                    "tick_error",
-                    json!({"pr":pr.number,"detail":e.to_string()}),
-                );
-            }
+    watch_loop(&cfg, once, watch, dry)
+}
+
+/// One pass over the open PRs: tick each, then count how many are still working.
+fn tick_all(cfg: &Config, dry: bool) -> Result<(usize, usize), Box<dyn std::error::Error>> {
+    let open_prs = prs(cfg)?;
+    for mut pr in open_prs.clone() {
+        if let Err(e) = tick(cfg, &mut pr, dry) {
+            log(
+                cfg,
+                "tick_error",
+                json!({"pr":pr.number,"detail":e.to_string()}),
+            );
         }
-        let active = prs(&cfg)?.into_iter().filter(|p| !p.terminal()).count();
+    }
+    let working = prs(cfg)?.into_iter().filter(|p| !p.terminal()).count();
+    Ok((open_prs.len(), working))
+}
+
+/// The pass cadence: `--once` and plain `--seed` runs stop after one pass; `--watch` keeps
+/// polling until nothing is left working.
+fn watch_loop(
+    cfg: &Config,
+    once: bool,
+    watch: bool,
+    dry: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    loop {
+        let (open, working) = tick_all(cfg, dry)?;
         if once || !watch {
             log(
-                &cfg,
+                cfg,
                 "pass_complete",
-                json!({"open_prs":open_prs.len(),"still_working":active}),
+                json!({"open_prs":open,"still_working":working}),
             );
             return Ok(());
         }
-        if active == 0 {
+        if working == 0 {
             return Ok(());
         }
         thread::sleep(Duration::from_secs(cfg.poll));
@@ -762,6 +880,57 @@ fn cold_review_prompt(cfg: &Config, pr: &Pr, round: usize, old: &BTreeSet<String
     )
 }
 
+/// What a PR with fresh CI failures should get, decided from facts alone so tests can pin the
+/// escalation ladder without `gh` or a daemon on the wire: rerun once, then kick back up to the
+/// cap (a free slot required), then block.
+#[derive(Debug, PartialEq, Eq)]
+enum FailureAction {
+    Rerun,
+    Blocked,
+    WaitForSlot,
+    Kickback,
+}
+
+fn next_failure_action(
+    has_rerun: bool,
+    kicks: usize,
+    max_kickbacks: usize,
+    slot_free: impl FnOnce() -> bool,
+) -> FailureAction {
+    if !has_rerun {
+        FailureAction::Rerun
+    } else if kicks >= max_kickbacks {
+        FailureAction::Blocked
+    } else if !slot_free() {
+        FailureAction::WaitForSlot
+    } else {
+        FailureAction::Kickback
+    }
+}
+
+/// The clean-PR mirror of [`next_failure_action`]: ready once the cold-review cap is met,
+/// otherwise spend a free slot on one more cold review.
+#[derive(Debug, PartialEq, Eq)]
+enum CleanAction {
+    Ready,
+    WaitForSlot,
+    Review { round: usize },
+}
+
+fn next_clean_action(
+    reviews: usize,
+    cold_reviews: usize,
+    slot_free: impl FnOnce() -> bool,
+) -> CleanAction {
+    if reviews >= cold_reviews {
+        CleanAction::Ready
+    } else if !slot_free() {
+        CleanAction::WaitForSlot
+    } else {
+        CleanAction::Review { round: reviews + 1 }
+    }
+}
+
 /// A PR with fresh CI failures: rerun once, then kick back a goal (up to the cap), then block.
 ///
 /// Every arm ends the tick for this PR, so the caller does not fall through to the cold-review
@@ -775,23 +944,48 @@ fn handle_new_failures(
     run: &Option<Value>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let kicks = pr.count("shepherd:kickback-");
-    if !pr.has(RERUN) {
-        if !dry && let Some(id) = run.as_ref().and_then(|r| r["databaseId"].as_u64()) {
-            let id = id.to_string();
-            let _ = gh(cfg, &["run", "rerun", &id, "--failed"], false);
-            label(cfg, pr, RERUN.into())
-        }
-        return Ok(());
+    let action = next_failure_action(pr.has(RERUN), kicks, cfg.max_kickbacks, || {
+        active_goals(cfg) < cfg.max_concurrent
+    });
+    match action {
+        FailureAction::Rerun => rerun_failed_run(cfg, pr, dry, run),
+        FailureAction::Blocked => block_pr(cfg, pr, dry),
+        // Waiting for a budget slot ends this PR's tick without side effects.
+        FailureAction::WaitForSlot => Ok(()),
+        FailureAction::Kickback => kickback(cfg, pr, dry, new, old, kicks),
     }
-    if kicks >= cfg.max_kickbacks {
-        if !dry {
-            label(cfg, pr, BLOCKED.into())
-        }
-        return Ok(());
+}
+
+/// First sighting of fresh failures: rerun CI once before doing anything else.
+fn rerun_failed_run(
+    cfg: &Config,
+    pr: &mut Pr,
+    dry: bool,
+    run: &Option<Value>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if !dry && let Some(id) = run.as_ref().and_then(|r| r["databaseId"].as_u64()) {
+        let id = id.to_string();
+        let _ = gh(cfg, &["run", "rerun", &id, "--failed"], false);
+        label(cfg, pr, RERUN.into())
     }
-    if active_goals(cfg) >= cfg.max_concurrent {
-        return Ok(());
+    Ok(())
+}
+
+fn block_pr(cfg: &Config, pr: &mut Pr, dry: bool) -> Result<(), Box<dyn std::error::Error>> {
+    if !dry {
+        label(cfg, pr, BLOCKED.into())
     }
+    Ok(())
+}
+
+fn kickback(
+    cfg: &Config,
+    pr: &mut Pr,
+    dry: bool,
+    new: &BTreeSet<String>,
+    old: &BTreeSet<String>,
+    kicks: usize,
+) -> Result<(), Box<dyn std::error::Error>> {
     if !dry {
         let prompt = kickback_prompt(pr, new, old);
         if let Some(id) = start_goal(cfg, prompt, 0) {
@@ -816,17 +1010,33 @@ fn handle_clean(
     old: &BTreeSet<String>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let reviews = pr.count("shepherd:review-");
-    if reviews >= cfg.cold_reviews {
-        if !dry {
-            label(cfg, pr, READY.into())
-        }
-        return Ok(());
+    let action = next_clean_action(reviews, cfg.cold_reviews, || {
+        active_goals(cfg) < cfg.max_concurrent
+    });
+    match action {
+        CleanAction::Ready => mark_ready(cfg, pr, dry),
+        // Waiting for a budget slot ends this PR's tick without side effects.
+        CleanAction::WaitForSlot => Ok(()),
+        CleanAction::Review { round } => start_cold_review(cfg, pr, dry, old, round),
     }
-    if active_goals(cfg) >= cfg.max_concurrent {
-        return Ok(());
-    }
+}
+
+fn mark_ready(cfg: &Config, pr: &mut Pr, dry: bool) -> Result<(), Box<dyn std::error::Error>> {
     if !dry {
-        let round = reviews + 1;
+        label(cfg, pr, READY.into())
+    }
+    Ok(())
+}
+
+/// Spend a budget slot on one cold review and record the pending round so `settle` can find it.
+fn start_cold_review(
+    cfg: &Config,
+    pr: &Pr,
+    dry: bool,
+    old: &BTreeSet<String>,
+    round: usize,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if !dry {
         let prompt = cold_review_prompt(cfg, pr, round, old);
         if let Some(id) = start_goal(cfg, prompt, cfg.cold_turns) {
             let path = pending(cfg, pr.number);
@@ -849,16 +1059,14 @@ fn tick_idle(status: &str) -> bool {
     status == "pending" || status == "none"
 }
 
-fn tick(cfg: &Config, pr: &mut Pr, dry: bool) -> Result<(), Box<dyn std::error::Error>> {
-    if pr.terminal() {
-        return Ok(());
-    }
-    if tick_idle(ci_status(cfg, pr)?) {
-        return Ok(());
-    }
-    if settle(cfg, pr, dry)? == ReviewTransition::Waiting {
-        return Ok(());
-    }
+/// The failure sets [`ci_delta`] splits a PR's CI signal into.
+type CiDelta = (BTreeSet<String>, BTreeSet<String>, Option<Value>);
+
+/// The current failure set of the PR's latest run, split against the baseline of its base
+/// commit: everything not in the baseline is *new* (this push), everything shared is
+/// *pre-existing*. Also logs the delta — the split decision is only ever made with the counts
+/// recorded next to it.
+fn ci_delta(cfg: &Config, pr: &Pr) -> Result<CiDelta, Box<dyn std::error::Error>> {
     let run = latest_run(cfg, &pr.branch, None)?;
     let current = run
         .as_ref()
@@ -867,7 +1075,7 @@ fn tick(cfg: &Config, pr: &mut Pr, dry: bool) -> Result<(), Box<dyn std::error::
         .transpose()?
         .unwrap_or_default();
     let (base, provenance) = if pr.base_sha.is_empty() {
-        (BTreeSet::new(), "no-base".into())
+        (BTreeSet::new(), "no-base".to_string())
     } else {
         baseline(cfg, &pr.base_sha)?
     };
@@ -878,7 +1086,20 @@ fn tick(cfg: &Config, pr: &mut Pr, dry: bool) -> Result<(), Box<dyn std::error::
         "ci_delta",
         json!({"pr":pr.number,"new":new.len(),"preexisting":old.len(),"base":provenance}),
     );
+    Ok((new, old, run))
+}
 
+fn tick(cfg: &Config, pr: &mut Pr, dry: bool) -> Result<(), Box<dyn std::error::Error>> {
+    if pr.terminal() {
+        return Ok(());
+    }
+    if tick_idle(ci_status(cfg, pr)?) {
+        return Ok(());
+    }
+    if settle(cfg, pr, dry)? == ReviewTransition::Waiting {
+        return Ok(());
+    }
+    let (new, old, run) = ci_delta(cfg, pr)?;
     if !new.is_empty() {
         return handle_new_failures(cfg, pr, dry, &new, &old, &run);
     }
@@ -936,560 +1157,5 @@ fn self_test() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn test_config(root: PathBuf) -> Config {
-        Config {
-            root,
-            repository: None,
-            check_names: Vec::new(),
-            daemon: String::new(),
-            project: String::new(),
-            base: "main".into(),
-            profile: String::new(),
-            max_kickbacks: 2,
-            cold_reviews: 2,
-            cold_turns: 60,
-            max_concurrent: 2,
-            poll: 120,
-        }
-    }
-    #[test]
-    fn parser_is_platform_specific_and_preserves_step_failure() {
-        self_test().unwrap()
-    }
-    #[test]
-    fn preexisting_note_is_bounded() {
-        let set = (0..11).map(|i| format!("j|{i}")).collect();
-        assert!(note(&set).lines().count() <= 12)
-    }
-
-    #[test]
-    fn selected_checks_filter_by_job_name() {
-        let cfg = Config {
-            root: PathBuf::new(),
-            repository: None,
-            check_names: vec!["test (windows-latest)".into()],
-            daemon: String::new(),
-            project: String::new(),
-            base: String::new(),
-            profile: String::new(),
-            max_kickbacks: 0,
-            cold_reviews: 0,
-            cold_turns: 0,
-            max_concurrent: 0,
-            poll: 0,
-        };
-        assert!(check_selected(&cfg, "test (windows-latest)|crate::test"));
-        assert!(!check_selected(&cfg, "test (ubuntu-latest)|crate::test"));
-    }
-
-    #[test]
-    fn missing_selected_check_is_not_success() {
-        let rows = vec![json!({"name":"test (ubuntu)","state":"SUCCESS"})];
-        assert_eq!(check_status(&["test (windows)".into()], &rows), "pending");
-    }
-
-    #[test]
-    fn shepherd_config_rejects_unknown_coding_project() {
-        let mut topology = liberado_config::Topology::default();
-        topology
-            .shepherd
-            .projects
-            .push(liberado_config::ShepherdProjectConfig {
-                name: "example".into(),
-                repository: "owner/repo".into(),
-                coding_project: "missing".into(),
-                base_branch: "main".into(),
-                profile: "coding-unattended".into(),
-                check_names: Vec::new(),
-                max_kickbacks: None,
-                cold_reviews: None,
-                cold_review_max_turns: None,
-                max_concurrent_goals: None,
-                poll_seconds: None,
-            });
-        assert!(
-            validate_shepherd_topology(&topology)
-                .unwrap_err()
-                .to_string()
-                .contains("unknown coding_project")
-        );
-    }
-
-    /// A minimal valid shepherd project, for the validation-branch tests below.
-    fn valid_project(name: &str) -> liberado_config::ShepherdProjectConfig {
-        liberado_config::ShepherdProjectConfig {
-            name: name.into(),
-            repository: "owner/repo".into(),
-            coding_project: "liberado".into(),
-            base_branch: "main".into(),
-            profile: "coding-unattended".into(),
-            check_names: vec!["test".into()],
-            max_kickbacks: None,
-            cold_reviews: None,
-            cold_review_max_turns: None,
-            max_concurrent_goals: None,
-            poll_seconds: None,
-        }
-    }
-
-    fn topology_with(project: liberado_config::ShepherdProjectConfig) -> liberado_config::Topology {
-        let mut topology = liberado_config::Topology::default();
-        // The project must be declared in the application `[projects]` list too, or validation
-        // fails on the unknown-coding-project check before reaching the branch under test.
-        topology.projects.push(liberado_config::ProjectConfig {
-            name: project.coding_project.clone(),
-            root: PathBuf::from("/tmp/project"),
-            write_class: liberado_common::WriteClass::AgentWritable,
-            enabled: true,
-            preflight: Default::default(),
-        });
-        topology.shepherd.projects.push(project);
-        topology
-    }
-
-    fn rejects(project: liberado_config::ShepherdProjectConfig, needle: &str) {
-        let error = validate_shepherd_topology(&topology_with(project))
-            .unwrap_err()
-            .to_string();
-        assert!(error.contains(needle), "expected {needle:?} in {error:?}");
-    }
-
-    /// Every invalid shape is refused with a message that names the problem — a shepherd that
-    /// silently accepts a broken topology would mislabel PRs instead.
-    #[test]
-    fn shepherd_config_rejects_every_invalid_shape() {
-        rejects(valid_project(""), "name must not be empty");
-        rejects(
-            liberado_config::ShepherdProjectConfig {
-                name: "dupe".into(),
-                repository: "not-owner-repo".into(),
-                ..valid_project("dupe")
-            },
-            "OWNER/REPOSITORY",
-        );
-        rejects(
-            liberado_config::ShepherdProjectConfig {
-                base_branch: "  ".into(),
-                ..valid_project("blank-base")
-            },
-            "base_branch and profile must not be empty",
-        );
-        rejects(
-            liberado_config::ShepherdProjectConfig {
-                max_concurrent_goals: Some(0),
-                ..valid_project("zero-concurrent")
-            },
-            "must be greater than zero",
-        );
-        rejects(
-            liberado_config::ShepherdProjectConfig {
-                poll_seconds: Some(0),
-                ..valid_project("zero-poll")
-            },
-            "must be greater than zero",
-        );
-        rejects(
-            liberado_config::ShepherdProjectConfig {
-                check_names: vec![String::new()],
-                ..valid_project("empty-check")
-            },
-            "non-empty and unique",
-        );
-    }
-
-    #[test]
-    fn shepherd_config_rejects_duplicate_project_names() {
-        let mut topology = topology_with(valid_project("dupe"));
-        topology.shepherd.projects.push(valid_project("dupe"));
-        let error = validate_shepherd_topology(&topology)
-            .unwrap_err()
-            .to_string();
-        assert!(error.contains("duplicate shepherd project name"), "{error}");
-    }
-
-    #[test]
-    fn shepherd_config_accepts_a_valid_project() {
-        assert!(validate_shepherd_topology(&topology_with(valid_project("ok"))).is_ok());
-    }
-
-    // ── select_shepherd_project ────────────────────────────────────────
-
-    #[test]
-    fn project_selection_follows_the_three_way_rule() {
-        let one = valid_project("one");
-        let two = valid_project("two");
-        // An explicit name wins and must exist.
-        let both = [one.clone(), two.clone()];
-        let picked = select_shepherd_project(Some("two"), &both)
-            .unwrap()
-            .unwrap();
-        assert_eq!(picked.name, "two");
-        assert!(
-            select_shepherd_project(Some("nope"), std::slice::from_ref(&one))
-                .unwrap_err()
-                .contains("unknown shepherd project")
-        );
-        // A single configured project auto-applies.
-        let single = [one.clone()];
-        let picked = select_shepherd_project(None, &single).unwrap().unwrap();
-        assert_eq!(picked.name, "one");
-        // Several without a name is an error, not a guess.
-        let pair = [one, two];
-        assert!(
-            select_shepherd_project(None, &pair)
-                .unwrap_err()
-                .contains("multiple")
-        );
-        // None configured means the environment defaults apply.
-        assert!(select_shepherd_project(None, &[]).unwrap().is_none());
-    }
-
-    // ── apply_project / state ───────────────────────────────────────────
-
-    #[test]
-    fn apply_project_copies_every_field() {
-        let mut cfg = test_config(PathBuf::from("/tmp/root"));
-        let project = liberado_config::ShepherdProjectConfig {
-            name: "p".into(),
-            repository: "owner/repo".into(),
-            coding_project: "proj".into(),
-            base_branch: "dev".into(),
-            profile: "prof".into(),
-            check_names: vec!["a".into(), "b".into()],
-            max_kickbacks: Some(1),
-            cold_reviews: Some(3),
-            cold_review_max_turns: Some(9),
-            max_concurrent_goals: Some(4),
-            poll_seconds: Some(30),
-        };
-        cfg.apply_project(&project);
-        assert_eq!(cfg.repository.as_deref(), Some("owner/repo"));
-        assert_eq!(cfg.check_names, vec!["a", "b"]);
-        assert_eq!(cfg.project, "proj");
-        assert_eq!(cfg.base, "dev");
-        assert_eq!(cfg.profile, "prof");
-        assert_eq!(cfg.max_kickbacks, 1);
-        assert_eq!(cfg.cold_reviews, 3);
-        assert_eq!(cfg.cold_turns, 9);
-        assert_eq!(cfg.max_concurrent, 4);
-        assert_eq!(cfg.poll, 30);
-    }
-
-    #[test]
-    fn state_lives_under_the_shepherd_dir() {
-        let cfg = test_config(PathBuf::from("/tmp/root"));
-        assert_eq!(cfg.state(), PathBuf::from("/tmp/root/.liberado/shepherd"));
-    }
-
-    // ── reset_baselines ─────────────────────────────────────────────────
-
-    #[test]
-    fn reset_baselines_removes_only_json_caches() {
-        let temp = tempfile::tempdir().unwrap();
-        let cfg = test_config(temp.path().to_path_buf());
-        let dir = cfg.state().join("baselines");
-        fs::create_dir_all(&dir).unwrap();
-        fs::write(dir.join("abc.json"), "{}").unwrap();
-        fs::write(dir.join("keep.txt"), "x").unwrap();
-        reset_baselines(&cfg).unwrap();
-        assert!(!dir.join("abc.json").exists(), "json cache must be removed");
-        assert!(
-            dir.join("keep.txt").exists(),
-            "non-json files are not baselines"
-        );
-    }
-
-    // ── Config::get ─────────────────────────────────────────────────────
-
-    /// `get` reads its environment variable, falling back to the default when unset. The var name
-    /// is unique to this test so the set/clear pair cannot be observed by another test.
-    #[test]
-    fn config_get_reads_env_with_a_default() {
-        let key = "SHEPHERD_TEST_GET_9f2c7d";
-        // Edition 2024 marks these unsafe: the pair is scoped to this test with a unique key.
-        unsafe { std::env::set_var(key, "from-env") };
-        assert_eq!(Config::get(key, "fallback"), "from-env");
-        unsafe { std::env::remove_var(key) };
-        assert_eq!(Config::get(key, "fallback"), "fallback");
-    }
-
-    // ── seed (dry mode) ────────────────────────────────────────────────
-
-    /// Dry mode parses and validates the task file but never talks to the daemon.
-    #[test]
-    fn seed_in_dry_mode_parses_tasks_without_starting_goals() {
-        let temp = tempfile::tempdir().unwrap();
-        let cfg = test_config(temp.path().to_path_buf());
-        let task = temp.path().join("tasks.txt");
-        fs::write(&task, "# comment\n\nfirst task\nsecond task\n\n").unwrap();
-        assert!(seed(&cfg, &task, true).is_ok());
-        // A missing file is still an error in dry mode.
-        assert!(seed(&cfg, &temp.path().join("nope.txt"), true).is_err());
-    }
-
-    #[test]
-    fn tick_idle_gates_pending_and_none_but_not_settled() {
-        assert!(tick_idle("pending"), "pending CI is not a settled signal");
-        assert!(tick_idle("none"), "no CI run is not a settled signal");
-        assert!(!tick_idle("completed"), "settled CI lets tick proceed");
-    }
-
-    /// The baseline cache is read without touching the network: a `baselines/<short>.json` file
-    /// written by a previous run is the whole answer.
-    #[test]
-    fn baseline_reads_the_cached_failure_set() {
-        let temp = tempfile::tempdir().unwrap();
-        let cfg = test_config(temp.path().to_path_buf());
-        let sha = "0123456789abcdef";
-        let dir = cfg.state().join("baselines");
-        fs::create_dir_all(&dir).unwrap();
-        fs::write(
-            dir.join(format!("{}.json", &sha[..12])),
-            serde_json::to_vec(&json!({
-                "base_sha": sha,
-                "failures": ["job|test::a", "job|step:Lint"],
-                "provenance": "cache",
-            }))
-            .unwrap(),
-        )
-        .unwrap();
-        let (failures, provenance) = baseline(&cfg, sha).unwrap();
-        assert_eq!(provenance, "cache");
-        assert!(failures.contains("job|test::a"), "{failures:?}");
-        assert!(failures.contains("job|step:Lint"), "{failures:?}");
-    }
-
-    #[test]
-    fn settled_review_labels_only_on_success_and_preserves_dry_run_state() {
-        let temp = tempfile::tempdir().unwrap();
-        let cfg = test_config(temp.path().to_path_buf());
-        let mut pr = Pr {
-            number: 42,
-            title: "test".into(),
-            branch: "test".into(),
-            base_sha: String::new(),
-            labels: Vec::new(),
-        };
-        let path = pending(&cfg, pr.number);
-        fs::create_dir_all(path.parent().unwrap()).unwrap();
-        fs::write(&path, r#"{"session_id":"one","round":1}"#).unwrap();
-        let mut labels = Vec::new();
-        assert_eq!(
-            settle_with(
-                &cfg,
-                &mut pr,
-                false,
-                |_| Some("failed".into()),
-                |_, label| labels.push(label)
-            )
-            .unwrap(),
-            ReviewTransition::Failed
-        );
-        assert!(!path.exists());
-        assert!(labels.is_empty());
-
-        fs::write(&path, r#"{"session_id":"two","round":1}"#).unwrap();
-        assert_eq!(
-            settle_with(
-                &cfg,
-                &mut pr,
-                false,
-                |_| Some("succeeded".into()),
-                |_, label| labels.push(label)
-            )
-            .unwrap(),
-            ReviewTransition::Labeled
-        );
-        assert!(!path.exists());
-        assert_eq!(labels, ["shepherd:review-1"]);
-
-        fs::write(&path, r#"{"session_id":"three","round":2}"#).unwrap();
-        assert_eq!(
-            settle_with(
-                &cfg,
-                &mut pr,
-                true,
-                |_| Some("succeeded".into()),
-                |_, label| labels.push(label)
-            )
-            .unwrap(),
-            ReviewTransition::Labeled
-        );
-        assert!(path.exists());
-        assert_eq!(labels, ["shepherd:review-1"]);
-    }
-
-    #[test]
-    fn prompts_keep_unattended_guardrails() {
-        let cfg = test_config(PathBuf::new());
-        let pr = Pr {
-            number: 1,
-            title: "title".into(),
-            branch: "branch".into(),
-            base_sha: String::new(),
-            labels: Vec::new(),
-        };
-        let failures = BTreeSet::from(["test|case".into()]);
-        let kickback = kickback_prompt(&pr, &failures, &BTreeSet::new());
-        assert!(kickback.contains("Reproduce a new failure locally before changing anything"));
-        assert!(kickback.contains("Do not delete, skip, or `#[ignore]` a test"));
-        let review = cold_review_prompt(&cfg, &pr, 1, &BTreeSet::new());
-        assert!(review.contains("Real, Exaggerated, or Hallucinated"));
-        assert!(review.contains("Run it both ways"));
-    }
-
-    // ── parse_failure_set ───────────────────────────────────────────────
-
-    /// A rustc error with a diagnostic code (`error[E0123]`) is a step failure, folded into the
-    /// result as `job|step:<step>` — the self-test's plain `error:` is only one spelling.
-    #[test]
-    fn failure_set_recognises_diagnostic_codes() {
-        let set =
-            parse_failure_set("test (ubuntu-latest)\tLint\terror[E0123]: unresolved import\n");
-        assert!(set.contains("test (ubuntu-latest)|step:Lint"), "{set:?}");
-    }
-
-    /// `error: could not compile` (the old cargo spelling, no bracket code) is a step failure too.
-    #[test]
-    fn failure_set_recognises_could_not_compile() {
-        let set = parse_failure_set(
-            "clippy\tLint\terror: could not compile `x` (due to 3 previous errors)\n",
-        );
-        assert!(set.contains("clippy|step:Lint"), "{set:?}");
-    }
-
-    /// A step whose named test failed must not ALSO be reported as a bare step failure — that
-    /// would double-count one failure.
-    #[test]
-    fn failure_set_does_not_double_count_named_tests() {
-        let set = parse_failure_set("test (ubuntu-latest)\tTests\tX test crate::case ... FAILED\n");
-        assert!(set.contains("test (ubuntu-latest)|crate::case"), "{set:?}");
-        assert!(!set.contains("test (ubuntu-latest)|step:Tests"), "{set:?}");
-    }
-
-    /// Malformed rows (fewer than the three tab-separated columns) are skipped, not fatal.
-    #[test]
-    fn failure_set_skips_short_rows() {
-        let set = parse_failure_set("only-two-columns\tignored\ngarbage\n");
-        assert!(set.is_empty(), "{set:?}");
-    }
-
-    // ── check_status ────────────────────────────────────────────────────
-
-    fn row(name: &str, state: &str) -> serde_json::Value {
-        json!({ "name": name, "state": state })
-    }
-
-    /// No checks reported yet reads as "none" — the PR is neither green nor red, just unreported.
-    #[test]
-    fn check_status_none_when_no_rows() {
-        assert_eq!(check_status(&[], &[]), "none");
-    }
-
-    /// All passing → success; any pending/queued/in-progress state → pending (never success
-    /// early); any failure/error state → failure.
-    #[test]
-    fn check_status_aggregates_states() {
-        let rows = vec![row("a", "SUCCESS"), row("b", "success")];
-        assert_eq!(check_status(&[], &rows), "success");
-        let rows = vec![row("a", "SUCCESS"), row("b", "in_progress")];
-        assert_eq!(check_status(&[], &rows), "pending");
-        let rows = vec![row("a", "SUCCESS"), row("b", "failure")];
-        assert_eq!(check_status(&[], &rows), "failure");
-        let rows = vec![row("a", "queued"), row("b", "timed_out")];
-        assert_eq!(check_status(&[], &rows), "pending");
-    }
-
-    /// An empty check-name filter means "all reported checks" — the full row set is the gate.
-    #[test]
-    fn check_status_with_no_filter_uses_all_rows() {
-        let rows = vec![row("a", "SUCCESS")];
-        assert_eq!(check_status(&[], &rows), "success");
-    }
-
-    // ── Pr ──────────────────────────────────────────────────────────────
-
-    fn pr(labels: &[&str]) -> Pr {
-        Pr {
-            number: 7,
-            title: "t".into(),
-            branch: "b".into(),
-            base_sha: String::new(),
-            labels: labels.iter().map(|s| s.to_string()).collect(),
-        }
-    }
-
-    /// `has` is exact-label matching; `count` counts the numbered kickback labels; `terminal` is
-    /// ready-or-blocked.
-    #[test]
-    fn pr_label_helpers() {
-        let p = pr(&["shepherd:kickback-1", "shepherd:kickback-2", READY]);
-        assert!(p.has("shepherd:kickback-1"));
-        assert!(!p.has("shepherd:kickback-3"));
-        assert_eq!(p.count("shepherd:kickback-"), 2);
-        assert!(p.terminal());
-        assert!(!pr(&["shepherd:kickback-1"]).terminal());
-        assert!(pr(&[BLOCKED]).terminal());
-    }
-
-    // ── review_transition ───────────────────────────────────────────────
-
-    /// Every status the daemon reports maps to exactly one transition; an unknown status fails
-    /// closed (the review is treated as failed rather than silently passing).
-    #[test]
-    fn review_transition_covers_every_status() {
-        for waiting in [
-            None,
-            Some("running"),
-            Some("pending"),
-            Some("starting"),
-            Some("active"),
-            Some("parked"),
-        ] {
-            assert_eq!(
-                review_transition(waiting),
-                ReviewTransition::Waiting,
-                "{waiting:?}"
-            );
-        }
-        assert_eq!(
-            review_transition(Some("succeeded")),
-            ReviewTransition::Labeled
-        );
-        for failed in [Some("failed"), Some("cancelled"), Some("lost")] {
-            assert_eq!(
-                review_transition(failed),
-                ReviewTransition::Failed,
-                "{failed:?}"
-            );
-        }
-    }
-
-    // ── note ────────────────────────────────────────────────────────────
-
-    #[test]
-    fn note_is_empty_for_no_preexisting_failures() {
-        assert_eq!(note(&BTreeSet::new()), "");
-    }
-
-    // ── parse_goal_status ───────────────────────────────────────────────
-
-    /// The status lives either at the top level or under `session`, lowercase either way. (A bare
-    /// status string is not a shape the daemon emits.)
-    #[test]
-    fn goal_status_reads_top_level_or_session() {
-        assert_eq!(
-            parse_goal_status(&json!({"status": "Running"})),
-            Some("running".into())
-        );
-        assert_eq!(
-            parse_goal_status(&json!({"session": {"status": "succeeded"}})),
-            Some("succeeded".into())
-        );
-        assert_eq!(parse_goal_status(&json!({})), None);
-        assert_eq!(parse_goal_status(&json!("running")), None);
-    }
-}
+#[path = "shepherd_cmd_tests.rs"]
+mod shepherd_cmd_tests;

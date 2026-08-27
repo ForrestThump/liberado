@@ -550,3 +550,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "mvl_survivor_tests.rs"]
+mod survivor_tests;

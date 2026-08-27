@@ -1,0 +1,34 @@
+[package]
+name = "liberado-provider-free-proxy"
+version = "0.1.0"
+description = "An OpenAI-compatible inference proxy that serves only OpenRouter's free models, picking whichever available free model ranks highest on coding benchmarks (API first, deterministic spider-mcp scrape fallback)."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+async-trait = { workspace = true }
+axum = { version = "0.8", features = ["json"] }
+regex = { workspace = true }
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
+tower = { version = "0.5", features = ["util"] }
+wiremock = "0.6"
+
+[[bin]]
+name = "liberado-free-proxy"
+path = "src/bin/liberado-free-proxy.rs"
+
+[package.metadata.liberado]
+# Layer role for the layer-rules test + crate-map generator (docs/architecture/contracts.md)
+role = "kernel"

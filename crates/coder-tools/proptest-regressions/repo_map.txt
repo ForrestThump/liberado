@@ -5,3 +5,4 @@
 # It is recommended to check this file in to source control so that
 # everyone who runs the test benefits from these saved cases.
 cc db96947c305a7de7a44099da8274b82b31ea0316873651c186d2701e7aa317cc # shrinks to r = 2.7512248564148324e-297
+cc bdebd5ae7440a21b69cf40657fa762b7e14a7b33b5146594c8006b418a44b065 # shrinks to s = "a 0Σ0పaઅA𪜀𐞀A¡\u{dd6}", c = 7.236788919641866

@@ -649,3 +649,7 @@ mod command_request_tests {
         assert!(req.output_max_bytes.is_none());
     }
 }
+
+#[cfg(test)]
+#[path = "gates_survivor_tests.rs"]
+mod survivor_tests;

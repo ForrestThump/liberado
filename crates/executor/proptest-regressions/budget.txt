@@ -1,0 +1,8 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc dddbd4174a70305c76d1a1b99d9cf6dd930d342af2900ffe2e817fac5389cfc2 # shrinks to (turns1, turns2) = (0, 0), (elapsed1, elapsed2) = (0, 229), (tokens1, tokens2) = (0, 0), max_elapsed = 1, max_tokens = 1
+cc fa572f50b8c513fd6101c81cb9d87a0df244f2422a732c6ca2a3ace92a2201a6 # shrinks to (turns1, turns2) = (0, 0), (elapsed1, elapsed2) = (0, 0), (tokens1, tokens2) = (0, 26010), max_elapsed = 1, max_tokens = 1

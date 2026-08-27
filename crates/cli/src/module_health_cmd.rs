@@ -74,17 +74,27 @@ pub fn check(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-pub fn ratchet(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
-    let current = if root.join(BASELINE_FILE).is_file() {
+/// The current report for a ratchet: compare against the existing baseline when there is one,
+/// otherwise produce an initial report from a fresh analysis. Split from [`ratchet`] so the
+/// driver stays under the complexity ceiling; the analysis half runs the real tool and is
+/// covered by `just ci` itself.
+fn current_report(root: &Path) -> Result<Report, Box<dyn std::error::Error>> {
+    if root.join(BASELINE_FILE).is_file() {
         check(root)?;
-        serde_json::from_slice(&std::fs::read(root.join(CURRENT_FILE))?)?
+        Ok(serde_json::from_slice(&std::fs::read(
+            root.join(CURRENT_FILE),
+        )?)?)
     } else {
         load_config(root)?;
         let report = analysis::analyze(root)?;
         write_report(&root.join(CURRENT_FILE), &report)?;
         eprintln!("[module health] creating initial baseline");
-        report
-    };
+        Ok(report)
+    }
+}
+
+pub fn ratchet(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    let current = current_report(root)?;
     write_report(&root.join(BASELINE_FILE), &current)?;
     eprintln!("[module health] ratcheted {BASELINE_FILE}");
     Ok(())
@@ -173,7 +183,6 @@ fn exact(value: f64, path: &str, metric: &str) -> Result<u64, Box<dyn std::error
     }
     Ok(value as u64)
 }
-
 fn compare(
     config: &Config,
     baseline: &Report,
@@ -193,21 +202,16 @@ fn compare(
                 .waiver
                 .iter()
                 .find(|w| w.path == *path && w.metric == metric);
-            let limit = waiver.map_or(new_limit, |w| w.ceiling);
-            match baseline.get(path) {
-                None if current_value > limit => {
-                    failures.push(format!("{path}: new-file {metric:?} {current_value} > {limit}"))
-                }
-                Some(_old) if waiver.is_some() && current_value > limit => failures.push(format!(
-                    "{path}: waived {metric:?} {current_value} > ceiling {limit}"
-                )),
-                Some(old) if current_value > value(old, metric) && current_value > review => {
-                    failures.push(format!(
-                        "{path}: {metric:?} regressed {} -> {current_value} (review boundary {review})",
-                        value(old, metric)
-                    ))
-                }
-                _ => {}
+            if let Some(failure) = metric_failure(
+                path,
+                metric,
+                current_value,
+                baseline.get(path),
+                waiver,
+                review,
+                new_limit,
+            ) {
+                failures.push(failure);
             }
         }
     }
@@ -216,6 +220,40 @@ fn compare(
     }
     failures.sort();
     Err(format!("module-health regression:\n{}\nSplit the file or add a metric-specific reviewed waiver; do not raise the baseline.", failures.join("\n")).into())
+}
+
+/// One metric of one file against the baseline, the boundaries, and any
+/// waiver. A waiver governs the file outright: within its ceiling the file
+/// passes even where the baseline-regression rule would fail it.
+#[allow(clippy::too_many_arguments)]
+fn metric_failure(
+    path: &str,
+    metric: Metric,
+    current_value: u64,
+    old: Option<&FileMetrics>,
+    waiver: Option<&Waiver>,
+    review: u64,
+    new_limit: u64,
+) -> Option<String> {
+    let limit = waiver.map_or(new_limit, |w| w.ceiling);
+    match old {
+        None if current_value > limit => Some(format!(
+            "{path}: new-file {metric:?} {current_value} > {limit}"
+        )),
+        Some(_) if waiver.is_some() && current_value > limit => Some(format!(
+            "{path}: waived {metric:?} {current_value} > ceiling {limit}"
+        )),
+        // Without a waiver the file may not grow past the review boundary.
+        Some(old)
+            if waiver.is_none() && current_value > value(old, metric) && current_value > review =>
+        {
+            Some(format!(
+                "{path}: {metric:?} regressed {} -> {current_value} (review boundary {review})",
+                value(old, metric)
+            ))
+        }
+        _ => None,
+    }
 }
 
 fn value(metrics: &FileMetrics, metric: Metric) -> u64 {
@@ -334,5 +372,60 @@ mod tests {
             .to_string();
         assert!(error.contains("Functions"));
         assert!(!error.contains("Ploc"));
+    }
+
+    #[test]
+    fn waiver_exempts_a_growing_existing_file_within_its_ceiling() {
+        let mut cfg = config();
+        cfg.waiver.push(Waiver {
+            path: "crates/a/src/big.rs".into(),
+            metric: Metric::Ploc,
+            ceiling: 1200,
+            reason: "single authority".into(),
+            reviewed_on: "2026-08-24".into(),
+        });
+        let baseline = BTreeMap::from([(
+            "crates/a/src/big.rs".into(),
+            FileMetrics {
+                ploc: 1100,
+                ..Default::default()
+            },
+        )]);
+        // 1150 is over the review boundary (100) and over baseline, but under
+        // the waiver ceiling: the waiver governs, so no failure.
+        let grown = FileMetrics {
+            ploc: 1150,
+            ..Default::default()
+        };
+        assert!(
+            compare(
+                &cfg,
+                &baseline,
+                &BTreeMap::from([("crates/a/src/big.rs".into(), grown.clone())])
+            )
+            .is_ok()
+        );
+        // Past the ceiling it fails again, naming the ceiling.
+        let over = FileMetrics {
+            ploc: 1250,
+            ..Default::default()
+        };
+        let error = compare(
+            &cfg,
+            &baseline,
+            &BTreeMap::from([("crates/a/src/big.rs".into(), over)]),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("ceiling 1200"), "{error}");
+        // Without the waiver the same growth still regresses.
+        assert!(
+            compare(
+                &config(),
+                &baseline,
+                &BTreeMap::from([("crates/a/src/big.rs".into(), grown)])
+            )
+            .is_err()
+        );
     }
 }

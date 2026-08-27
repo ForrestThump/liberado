@@ -20,7 +20,9 @@ struct Receipt {
     checks: Vec<String>,
 }
 
-pub fn ready(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
+/// Everything that compiles or lints the workspace, in dependency order. Split from `ready`
+/// so the driver stays under the complexity ceiling — these steps only run for real.
+fn compile_gate(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
     crate::ci_cmd::vacate_cargo_target_image()?;
     run(root, "cargo", &["fmt", "--check"])?;
     run_quiet(
@@ -44,11 +46,21 @@ pub fn ready(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
             "-D",
             "clippy::cognitive_complexity",
         ],
-    )?;
-    test_changed_packages(root)?;
+    )
+}
+
+/// The source-level audits after the build is green. Same thin-driver reasoning as
+/// [`compile_gate`].
+fn audits(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
     crate::module_health_cmd::check(root)?;
     crate::function_complexity_cmd::check(root)?;
-    crate::docs_audit_cmd::run(root, std::iter::empty())?;
+    crate::docs_audit_cmd::run(root, std::iter::empty())
+}
+
+pub fn ready(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    compile_gate(root)?;
+    test_changed_packages(root)?;
+    audits(root)?;
     write_receipt(root)?;
     eprintln!("[ready] OK; receipt: {RECEIPT_FILE}");
     Ok(())
@@ -339,5 +351,48 @@ mod tests {
         if cfg!(windows) {
             assert_eq!(decode_output(&bytes), "Debian missing");
         }
+    }
+
+    #[test]
+    fn changed_packages_reads_crate_manifests_from_the_branch_diff() {
+        use super::changed_packages;
+
+        let temp = tempdir().unwrap();
+        git(temp.path(), &["init"]);
+        // Identity: a merge-base with origin/main does not exist on a fresh repo, so this
+        // exercises the HEAD^ fallback too.
+        let env = [
+            ("GIT_AUTHOR_NAME", "test"),
+            ("GIT_AUTHOR_EMAIL", "test@example.com"),
+            ("GIT_COMMITTER_NAME", "test"),
+            ("GIT_COMMITTER_EMAIL", "test@example.com"),
+        ];
+        let commit = |msg: &str| {
+            let mut cmd = Command::new("git");
+            cmd.args(["commit", "--allow-empty", "-m", msg])
+                .current_dir(temp.path());
+            for (k, v) in env {
+                cmd.env(k, v);
+            }
+            assert!(cmd.status().unwrap().success(), "commit {msg}");
+        };
+        commit("base");
+        fs::create_dir_all(temp.path().join("crates/demo/src")).unwrap();
+        fs::write(
+            temp.path().join("crates/demo/Cargo.toml"),
+            "[package]\nname = \"liberado-demo\"\nversion = \"0.1.0\"\n",
+        )
+        .unwrap();
+        fs::write(temp.path().join("crates/demo/src/lib.rs"), "").unwrap();
+        fs::write(temp.path().join("README.md"), "docs change").unwrap();
+        git(temp.path(), &["add", "."]);
+        commit("change");
+
+        let packages = changed_packages(temp.path()).unwrap();
+        assert_eq!(
+            packages,
+            ["liberado-demo".to_string()].into_iter().collect(),
+            "only crates/ manifests from the diff are returned, not top-level files"
+        );
     }
 }

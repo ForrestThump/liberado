@@ -437,3 +437,7 @@ mod tests {
         assert_eq!(after_resync.for_model(None), 9_999);
     }
 }
+
+#[cfg(test)]
+#[path = "compaction/tests.rs"]
+mod survivor_tests;

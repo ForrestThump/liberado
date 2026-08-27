@@ -52,3 +52,10 @@ pub use result::CommandResult;
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+#[path = "commands_slash_display_tests.rs"]
+mod slash_display_tests;
+#[cfg(test)]
+#[path = "test_mock.rs"]
+mod test_mock;

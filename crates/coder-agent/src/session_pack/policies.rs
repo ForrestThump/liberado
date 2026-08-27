@@ -360,3 +360,7 @@ mod tests {
         assert_eq!(p.hashline.hash_length, 5);
     }
 }
+
+#[cfg(test)]
+#[path = "policies_survivor_tests.rs"]
+mod survivor_tests;

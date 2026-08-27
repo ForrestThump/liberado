@@ -490,3 +490,7 @@ mod tests {
         assert!(spec.steps.iter().any(|s| s.name == "test"));
     }
 }
+
+#[cfg(test)]
+#[path = "preflight_hook_survivor_tests.rs"]
+mod survivor_tests;

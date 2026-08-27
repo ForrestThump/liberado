@@ -58,6 +58,12 @@ pub(crate) struct JsonRpcRequest {
 
 pub(crate) trait WireSink: Send + Sync {
     fn emit(&self, method: &str, params: Value) -> Result<(), String>;
+    /// Serialize and deliver one JSON-RPC response carrying a result or an error body.
+    fn write_rpc_response(
+        &self,
+        id: Value,
+        outcome: Result<Value, JsonRpcErrorBody>,
+    ) -> Result<(), String>;
 }
 
 /// Unified stdout writer for responses and notifications (one lock, NDJSON-safe).
@@ -70,29 +76,6 @@ impl StdoutWire {
         writeln!(out, "{json}").map_err(|e| e.to_string())?;
         out.flush().map_err(|e| e.to_string())?;
         Ok(())
-    }
-
-    pub(crate) fn write_rpc_response(
-        &self,
-        id: Value,
-        outcome: Result<Value, JsonRpcErrorBody>,
-    ) -> Result<(), String> {
-        let body = match outcome {
-            Ok(result) => JsonRpcResponse {
-                jsonrpc: "2.0",
-                id,
-                result: Some(result),
-                error: None,
-            },
-            Err(error) => JsonRpcResponse {
-                jsonrpc: "2.0",
-                id,
-                result: None,
-                error: Some(error),
-            },
-        };
-        let json = serde_json::to_string(&body).map_err(|e| e.to_string())?;
-        self.write_line(&json)
     }
 
     /// Agent → client request (permission). Ids are strings so they cannot collide with
@@ -120,6 +103,29 @@ impl WireSink for StdoutWire {
             jsonrpc: "2.0",
             method: method.to_string(),
             params,
+        };
+        let json = serde_json::to_string(&body).map_err(|e| e.to_string())?;
+        self.write_line(&json)
+    }
+
+    fn write_rpc_response(
+        &self,
+        id: Value,
+        outcome: Result<Value, JsonRpcErrorBody>,
+    ) -> Result<(), String> {
+        let body = match outcome {
+            Ok(result) => JsonRpcResponse {
+                jsonrpc: "2.0",
+                id,
+                result: Some(result),
+                error: None,
+            },
+            Err(error) => JsonRpcResponse {
+                jsonrpc: "2.0",
+                id,
+                result: None,
+                error: Some(error),
+            },
         };
         let json = serde_json::to_string(&body).map_err(|e| e.to_string())?;
         self.write_line(&json)
@@ -258,3 +264,7 @@ pub(crate) fn short_id() -> String {
         .as_nanos();
     format!("{nanos:x}")
 }
+
+#[cfg(test)]
+#[path = "wire_tests.rs"]
+mod tests;

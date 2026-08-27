@@ -1262,3 +1262,6 @@ mod tests {
         );
     }
 }
+#[cfg(test)]
+#[path = "hashline_survivor_tests.rs"]
+mod survivor_tests;
