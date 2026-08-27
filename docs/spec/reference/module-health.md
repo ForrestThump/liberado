@@ -29,6 +29,13 @@ long", "splitting is churn", "it grew" — get the contribution pushed back for
 rework. The acceptance bar lives as comments beside the `[[waiver]]` example in
 `module-health.toml`.
 
+The mutant-hardening campaign recorded a narrow class of accepted waivers that
+follow this rule exactly: the parent module's growth is only the irreducible
+three- or four-line `#[cfg(test)] #[path]` sibling wiring that declares the
+split test file, while the survivor tests themselves live in the sibling.
+Those waivers carry a hard `ploc` ceiling and a review date; any further growth
+in the parent module is not covered and must be split, not waived.
+
 After an accepted improvement, run `just module-health-ratchet` and commit the
 lower baseline. GitHub runs only the read-only comparison.
 
