@@ -1938,6 +1938,21 @@
         "timeout": 1,
         "unviable": 49
       }
+    },
+    {
+      "package": "liberado-daemon",
+      "commit": "bcf1449f4399b2518ae4b73d8c0a59b1cb33029a",
+      "recorded_at": "2026-08-27",
+      "command": "cargo mutants -p liberado-daemon --cap-lints true --timeout 20 --minimum-test-timeout 20 --in-place",
+      "tool_version": "27.1.0",
+      "scope": "package",
+      "counts": {
+        "viable": 122,
+        "caught": 119,
+        "survived": 2,
+        "timeout": 1,
+        "unviable": 49
+      }
     }
   ]
 }
