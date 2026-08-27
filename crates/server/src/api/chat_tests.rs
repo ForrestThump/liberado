@@ -29,6 +29,39 @@ fn incognito_parses_from_the_query_string_as_true_not_one() {
     );
 }
 
+/// The WebUI error bubble renders this string as-is from the SSE `failed` payload. UTF-8
+/// em-dash bytes (`E2 80 94`) misread as Windows-1252 become U+00E2 U+20AC U+201D (`â€"`).
+#[test]
+fn chat_disabled_hint_is_a_utf8_em_dash_not_windows1252_mojibake() {
+    let hint = super::CHAT_DISABLED_HINT;
+    assert_eq!(
+        hint.as_bytes(),
+        b"chat is disabled \xe2\x80\x94 set DEEPSEEK_API_KEY",
+        "{hint:?}"
+    );
+    assert!(
+        hint.contains('\u{2014}'),
+        "expected U+2014 em-dash, got {hint:?}"
+    );
+    assert!(
+        !hint.contains('\u{00e2}'),
+        "U+00E2 is the first character of the Windows-1252 misread of U+2014: {hint:?}"
+    );
+
+    // Same JSON-in-SSE path the WebUI `failed` listener runs (`from_sse_data`).
+    let json = serde_json::json!({ "message": hint }).to_string();
+    let event = chat_client_contract::SessionEvent::from_sse_data("failed", &json)
+        .expect("disabled-chat payload must decode");
+    match event.kind {
+        chat_client_contract::SessionEventKind::Failed { message } => {
+            assert_eq!(message, hint);
+            assert!(message.contains('\u{2014}'), "{message:?}");
+            assert!(!message.contains('\u{00e2}'), "{message:?}");
+        }
+        other => panic!("expected Failed, got {other:?}"),
+    }
+}
+
 // ── The `?ephemeral_only=true` guard ─────────────────────────────────────────────────────
 //
 // Driven through the real router and the real store, because what is being asserted is that a

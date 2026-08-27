@@ -29,6 +29,8 @@
 
 use dioxus::prelude::*;
 
+use crate::icons::IconGlasses;
+
 /// The path the daemon refuses to serve for anything but an incognito session.
 ///
 /// Teardown happens on its own, from an effect, with nobody watching — so it must not be able to
@@ -162,7 +164,7 @@ pub fn IncognitoToggle(on: Signal<bool>) -> Element {
                 let now = on();
                 on.set(!now);
             },
-            span { class: "incognito-glyph", "\u{1F576}" }
+            span { class: "incognito-glyph", IconGlasses {} }
             span { class: "incognito-label", "Incognito" }
         }
     }

@@ -3,6 +3,7 @@ use dioxus::prelude::*;
 use chat_client_contract::{ConvHeader, ConversationSearchResponse, ConversationSearchResult};
 
 use crate::components::mcp_panel::McpPanel;
+use crate::icons::IconChevronLeft;
 
 async fn fetch_conversations(api_base: String) -> Result<Vec<ConvHeader>, String> {
     let url = format!("{api_base}/api/conversations");
@@ -59,6 +60,20 @@ async fn fetch_search_results(
     Ok(body.results)
 }
 
+/// A short line for the conversation-list fetch, not the raw reqwest string.
+///
+/// The raw form (`Error: Bad response: error decoding response body`) sat in the sidebar forever
+/// with no way to try again. Keep the cause class, drop the decoder dump.
+fn conversations_error_label(err: &str) -> &'static str {
+    if err.starts_with("Failed to reach daemon") {
+        "Could not reach the daemon."
+    } else if err.starts_with("Bad response") {
+        "Could not read the conversation list."
+    } else {
+        "Could not load conversations."
+    }
+}
+
 /// Close the sidebar after the user picks something in it — but only where it is an overlay
 /// sitting on top of the chat. On a phone the sidebar covers the whole content area, so leaving it
 /// open after a selection hides the very conversation you just chose and forces a second tap. On a
@@ -106,7 +121,7 @@ fn relative_time(iso: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{conv_title, delete_accepted, relative_time};
+    use super::{conv_title, conversations_error_label, delete_accepted, relative_time};
 
     fn ago(dur: chrono::Duration) -> String {
         (chrono::Utc::now() - dur).to_rfc3339()
@@ -201,6 +216,23 @@ mod tests {
                 "{no} should surface as a delete failure"
             );
         }
+    }
+
+    /// Fetch failures render a short human line, never the reqwest decoder dump.
+    #[test]
+    fn conversation_fetch_errors_are_short() {
+        assert_eq!(
+            conversations_error_label("Failed to reach daemon: connection refused"),
+            "Could not reach the daemon."
+        );
+        assert_eq!(
+            conversations_error_label("Bad response: error decoding response body"),
+            "Could not read the conversation list."
+        );
+        assert_eq!(
+            conversations_error_label("something else"),
+            "Could not load conversations."
+        );
     }
 
     /// An unnamed conversation reads as "Untitled" in both the conversation list and search results.
@@ -314,13 +346,13 @@ pub fn Sidebar(
                         }
                         collapse_after_pick(collapsed);
                     },
-                    "+ New Chat"
+                    "New Chat"
                 }
                 button {
                     class: "sidebar-collapse-btn",
                     onclick: toggle,
                     title: "Collapse sidebar",
-                    "◄"
+                    IconChevronLeft {}
                 }
             }
             div {
@@ -416,9 +448,18 @@ pub fn Sidebar(
                             }
                         }
                         Some(Err(e)) => rsx! {
-                            p {
-                                class: "sidebar-empty",
-                                "Error: {e}"
+                            div {
+                                class: "sidebar-error",
+                                p {
+                                    class: "sidebar-empty",
+                                    "{conversations_error_label(e)}"
+                                }
+                                button {
+                                    class: "sidebar-retry-btn",
+                                    r#type: "button",
+                                    onclick: move |_| conversations.restart(),
+                                    "Retry"
+                                }
                             }
                         },
                         None => rsx! {

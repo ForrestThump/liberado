@@ -5,12 +5,14 @@ use dioxus::prelude::*;
 
 mod back_nav;
 mod components;
+mod icons;
 mod theme;
 
 use components::chat::Chat;
 use components::dashboard::Dashboard;
 use components::incognito::IncognitoToggle;
 use components::sidebar::Sidebar;
+use icons::IconMenu;
 
 /// Absolute base URL of the daemon's HTTP API.
 ///
@@ -54,6 +56,8 @@ fn api_base() -> String {
 /// here, and it re-collapses itself after you pick a conversation — but only where it is an
 /// overlay covering the chat. On a wide screen it is a side panel, and closing it on every
 /// selection would just take the conversation list away from you.
+///
+/// A one-shot sample. The App keeps a signal that tracks resize via matchMedia.
 pub(crate) fn is_narrow_viewport() -> bool {
     #[cfg(target_arch = "wasm32")]
     {
@@ -68,6 +72,32 @@ pub(crate) fn is_narrow_viewport() -> bool {
     {
         false
     }
+}
+
+/// Keep `narrow` in sync with the live viewport.
+///
+/// `use_signal(is_narrow_viewport)` only samples once. A desktop load then shrinking to 375px
+/// used to leave the sidebar expanded, covering the chat, with no layout that could recover.
+#[cfg(target_arch = "wasm32")]
+fn watch_viewport_width(mut narrow: Signal<bool>) {
+    use wasm_bindgen::JsCast;
+    use wasm_bindgen::closure::Closure;
+
+    let Some(window) = web_sys::window() else {
+        return;
+    };
+    let handler = Closure::<dyn FnMut()>::new(move || {
+        let now = is_narrow_viewport();
+        if narrow() != now {
+            narrow.set(now);
+        }
+    });
+    if let Ok(Some(mql)) = window.match_media("(max-width: 767px)") {
+        let _ = mql.add_event_listener_with_callback("change", handler.as_ref().unchecked_ref());
+    } else {
+        let _ = window.add_event_listener_with_callback("resize", handler.as_ref().unchecked_ref());
+    }
+    handler.forget();
 }
 
 fn main() {
@@ -134,7 +164,21 @@ fn App() -> Element {
     // `mut` because the header's menu button toggles it (see below).
     // Default collapsed on narrow (phone-width) viewports so the sidebar doesn't cover the chat
     // on first load — expanded by default everywhere else, matching prior behavior.
+    // Tracked as a signal so a resize across the breakpoint is not a permanent layout.
+    let is_narrow = use_signal(is_narrow_viewport);
+    #[cfg(target_arch = "wasm32")]
+    use_hook(move || watch_viewport_width(is_narrow));
     let mut sidebar_collapsed = use_signal(is_narrow_viewport);
+    let mut was_narrow = use_signal(is_narrow_viewport);
+    use_effect(move || {
+        let now = is_narrow();
+        if now != was_narrow() {
+            was_narrow.set(now);
+            // Crossing the breakpoint adopts the layout that belongs there: overlay closed on
+            // a phone, side panel open on a desk. Manual toggle still wins until the next cross.
+            sidebar_collapsed.set(now);
+        }
+    });
 
     // ── Back gesture ────────────────────────────────────────────────────────────────────────
     //
@@ -145,7 +189,7 @@ fn App() -> Element {
     // The sidebar counts only where it is an overlay. On a wide screen it is a persistent panel that
     // starts open, which would mean a guard entry from first paint and a Back press that collapses
     // the conversation list for no reason — the same distinction `collapse_after_pick` draws.
-    let sidebar_is_a_layer = move || !sidebar_collapsed() && is_narrow_viewport();
+    let sidebar_is_a_layer = move || !sidebar_collapsed() && is_narrow();
 
     use_hook(|| {
         let mut view = view;
@@ -165,7 +209,7 @@ fn App() -> Element {
                 theme_browser_open.set(false);
             } else if profile_browser_open() {
                 profile_browser_open.set(false);
-            } else if !sidebar_collapsed() && is_narrow_viewport() {
+            } else if !sidebar_collapsed() && is_narrow() {
                 sidebar_collapsed.set(true);
             } else if view() != "chat" {
                 view.set("chat");
@@ -221,7 +265,7 @@ fn App() -> Element {
                                 sidebar_collapsed.set(!now);
                             },
                             title: if sidebar_collapsed() { "Show conversations" } else { "Hide conversations" },
-                            "\u{2630}"
+                            IconMenu {}
                         }
                         span { class: "brand", "Liberado" }
                         span { class: "brand-version", "v0.1" }

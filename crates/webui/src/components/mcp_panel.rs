@@ -2,6 +2,8 @@ use dioxus::prelude::*;
 
 use chat_client_contract::{CatalogResponse, McpInfo};
 
+use crate::icons::{IconChevronDown, IconChevronRight};
+
 async fn fetch_catalog(api_base: String) -> Result<CatalogResponse, String> {
     let url = format!("{api_base}/api/catalog");
     let resp = reqwest::get(&url)
@@ -107,7 +109,7 @@ pub fn McpPanel(api_base: String) -> Element {
                 class: "mcp-panel-header",
                 onclick: move |_| expanded.set(!expanded()),
                 span { class: "mcp-panel-arrow",
-                    if expanded() { "\u{25BC}" } else { "\u{25B8}" }
+                    if expanded() { IconChevronDown {} } else { IconChevronRight {} }
                 }
                 span { class: "mcp-panel-title", "MCP Servers" }
                 span { class: "mcp-panel-count", "{count_display}" }
@@ -159,7 +161,7 @@ fn McpServerItem(mcp: McpInfo) -> Element {
                 class: "mcp-server-header",
                 onclick: move |_| server_expanded.set(!server_expanded()),
                 span { class: "mcp-server-arrow",
-                    if server_expanded() { "\u{25BC}" } else { "\u{25B8}" }
+                    if server_expanded() { IconChevronDown {} } else { IconChevronRight {} }
                 }
                 div {
                     class: "mcp-server-info",

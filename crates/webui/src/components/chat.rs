@@ -7,6 +7,9 @@ use crate::components::model_browser::ModelBrowser;
 use crate::components::picker::Picker;
 use crate::components::profile_browser::ProfileBrowser;
 use crate::components::slash_palette::SlashPalette;
+use crate::icons::{
+    IconCheck, IconChevronDown, IconChevronRight, IconGlasses, IconSpinner, IconStop, IconX,
+};
 
 // Slash commands only run in the browser — `submit` gates the whole block on wasm32, so gate the
 // imports identically or a native build trips the workspace's zero-warnings bar on unused imports.
@@ -117,6 +120,14 @@ async fn fetch_conversation(api_base: &str, conv_id: &str) -> Result<LoadedConve
         turn_running: history.turn_running,
         turn_unanswered: history.turn_unanswered,
     })
+}
+
+/// Blank the local transcript only when we just left a saved conversation.
+///
+/// A first turn that has not received a session id yet has neither a session nor a ghost —
+/// wiping it is what made Send look silent after a stream failure.
+fn clear_transcript_on_missing_id(has_session: bool, has_ghost: bool) -> bool {
+    has_session && !has_ghost
 }
 
 // ── Chat component ──────────────────────────────────────────────────────────
@@ -268,19 +279,23 @@ pub fn Chat(
                         }
                     }
                 });
-            } else if ghost_session.read().is_none() {
+            } else if clear_transcript_on_missing_id(
+                session.read().is_some(),
+                ghost_session.read().is_some(),
+            ) {
                 messages.set(Vec::new());
                 session.set(None);
                 // A new chat starts on the default grant; leaving a stale chip up would claim
                 // otherwise.
                 active_profile.set(None);
             }
-            // An incognito chat is deliberately *not* an `active_conv_id`: it is not in the sidebar,
-            // so there is nothing there to highlight, and letting it set one would make the
-            // conversation list flicker at a row that does not exist. That leaves this effect seeing
-            // `None` and reading it as "fresh chat" — which would blank the live transcript the
-            // moment `sending` flips false at the end of the first turn. The guard above is what
-            // keeps a private chat on screen; `discard_ghost` is the only thing that clears it.
+            // No conversation id. An incognito chat never has one (it is not in the sidebar, so
+            // there is nothing there to highlight), and a first durable turn does not have one
+            // until the stream sends `session`. Blanking here is what made Send look silent: a
+            // failed first turn flips `sending` false, this effect runs, and the optimistic user
+            // bubble disappeared. Leave the local transcript; New Chat and leaving a saved
+            // conversation still clear through the branch above (they have a session) or through
+            // the new-chat effect.
         }
         #[cfg(not(target_arch = "wasm32"))]
         {
@@ -367,6 +382,7 @@ pub fn Chat(
         #[cfg(target_arch = "wasm32")]
         {
             if let Some(id) = session() {
+                let stop_base = api_base.clone();
                 let url = format!("{stop_base}/api/conversations/{id}/cancel");
                 wasm_bindgen_futures::spawn_local(async move {
                     let _ = reqwest::Client::new().post(&url).send().await;
@@ -567,7 +583,7 @@ pub fn Chat(
                         onclick: move |_| profile_browser_open.set(true),
                         span { class: "profile-chip-label", "profile" }
                         span { class: "profile-chip-name", "{label}" }
-                        span { class: "profile-chip-caret", "\u{25BE}" }
+                        span { class: "profile-chip-caret", IconChevronDown {} }
                     }
                 }
             }
@@ -578,7 +594,7 @@ pub fn Chat(
                 // second sentence is the honest limit of the promise.
                 div {
                     class: "incognito-banner",
-                    span { class: "incognito-glyph", "\u{1F576}" }
+                    span { class: "incognito-glyph", IconGlasses {} }
                     span {
                         b { "Incognito." }
                         " This chat is never written to disk and is discarded when you leave it. Actions the agent takes — notes, memories, files — still happen."
@@ -681,7 +697,9 @@ pub fn Chat(
                 }
             }
 
-            if palette_open() {
+            div {
+                class: "composer-dock",
+                if palette_open() {
                 SlashPalette {
                     input: input(),
                     selected: slash_index(),
@@ -698,7 +716,7 @@ pub fn Chat(
                 }
             }
 
-            form {
+                form {
                 class: "input-bar",
                 onsubmit: move |evt| {
                     evt.prevent_default();
@@ -808,7 +826,7 @@ pub fn Chat(
                         r#type: "button",
                         onclick: move |_| stop_stream(),
                         title: "Stop generating",
-                        "\u{23F9}"
+                        IconStop {}
                     }
                 }
                 button {
@@ -816,6 +834,7 @@ pub fn Chat(
                     r#type: "submit",
                     disabled: sending(),
                     "Send"
+                }
                 }
             }
         }
@@ -888,7 +907,6 @@ fn ToolBlock(content: String) -> Element {
     // The daemon's first line is already a summary ("RESULT (Succeeded):"). Reuse it as the header
     // rather than inventing one, falling back only if it is empty so the header is never blank.
     let label = tool_block_label(&content);
-    let arrow = if expanded() { "\u{25BC}" } else { "\u{25B8}" };
 
     rsx! {
         div {
@@ -902,8 +920,10 @@ fn ToolBlock(content: String) -> Element {
                     let now = expanded();
                     expanded.set(!now);
                 },
-                span { class: "thinking-arrow", "{arrow}" }
-                span { class: "thinking-label", "\u{1F527} {label}" }
+                span { class: "thinking-arrow",
+                    if expanded() { IconChevronDown {} } else { IconChevronRight {} }
+                }
+                span { class: "thinking-label", "{label}" }
             }
             if expanded() {
                 div {
@@ -936,7 +956,6 @@ fn ThinkingGroup(steps: Vec<ThinkingStep>) -> Element {
     let summary: Vec<String> = steps.iter().map(|s| s.tool_name.clone()).collect();
     let summary_text = summary.join(", ");
 
-    let header_arrow = if expanded() { "\u{25BC}" } else { "\u{25B8}" };
     let header_label = if has_pending {
         format!(
             "Thinking ({count} step{plural}): {summary_text} \u{2026}",
@@ -956,7 +975,9 @@ fn ThinkingGroup(steps: Vec<ThinkingStep>) -> Element {
                 class: "thinking-header",
                 r#type: "button",
                 onclick: toggle,
-                span { class: "thinking-arrow", "{header_arrow}" }
+                span { class: "thinking-arrow",
+                    if expanded() { IconChevronDown {} } else { IconChevronRight {} }
+                }
                 span { class: "thinking-label", "{header_label}" }
             }
             if expanded() {
@@ -1001,19 +1022,19 @@ fn ThinkingStepRow(step: ThinkingStep) -> Element {
 
     let args_text = args_display(&step.tool_args);
 
-    let mark = match step.ok {
-        None => "\u{23F3}",
-        Some(true) => "\u{2713}",
-        Some(false) => "\u{2717}",
-    };
-
-    let name_text = format!("\u{1F527} {}{}", step.tool_name, args_text);
+    let name_text = format!("{}{}", step.tool_name, args_text);
 
     rsx! {
         div {
             class: "{status_cls}",
             span { class: "thinking-step-name", "{name_text}" }
-            span { class: "thinking-step-mark", "{mark}" }
+            span { class: "thinking-step-mark",
+                match step.ok {
+                    None => rsx! { IconSpinner {} },
+                    Some(true) => rsx! { IconCheck {} },
+                    Some(false) => rsx! { IconX {} },
+                }
+            }
             if !step.preview.is_empty() {
                 span { class: "thinking-step-preview", "{step.preview}" }
             }
@@ -1498,189 +1519,5 @@ fn connect_stream(
 }
 
 #[cfg(test)]
-mod stream_url_tests {
-    use super::stream_url;
-
-    const BASE: &str = "http://d";
-
-    fn url(session: Option<&str>, model: Option<&str>) -> String {
-        stream_url(BASE, "hi", session, false, None, model)
-    }
-
-    /// The regression this function was extracted for. A model picked for an existing conversation
-    /// has to survive alongside `session`; when the two were arms of one match it could not, and the
-    /// symptom was a turn quietly answering on the wrong model rather than any kind of error.
-    #[test]
-    fn a_model_survives_a_session_id() {
-        let u = url(Some("01ABC"), Some("openai/gpt-5"));
-        assert!(u.contains("&session=01ABC"), "{u}");
-        assert!(u.contains("&model=openai%2Fgpt-5"), "{u}");
-    }
-
-    /// The case that caused the live failure: no conversation yet, so the pick rides the request
-    /// that creates one instead of going anywhere near the daemon-wide default.
-    #[test]
-    fn a_model_rides_the_request_that_creates_the_conversation() {
-        let u = url(None, Some("z-ai/glm-4.5-air"));
-        assert!(!u.contains("session="), "{u}");
-        assert!(u.contains("&model=z-ai%2Fglm-4.5-air"), "{u}");
-    }
-
-    #[test]
-    fn a_model_survives_incognito_and_a_profile() {
-        let inc = stream_url(BASE, "hi", None, true, None, Some("m/1"));
-        assert!(
-            inc.contains("incognito=true") && inc.contains("&model=m%2F1"),
-            "{inc}"
-        );
-        let prof = stream_url(BASE, "hi", None, false, Some("basic"), Some("m/1"));
-        assert!(
-            prof.contains("profile=basic") && prof.contains("&model=m%2F1"),
-            "{prof}"
-        );
-    }
-
-    /// Absent and empty both mean "say nothing", so the daemon falls through to its own precedence
-    /// rather than being handed a blank slug to resolve.
-    #[test]
-    fn no_model_means_no_parameter() {
-        assert!(!url(Some("01ABC"), None).contains("model="));
-        assert!(!url(Some("01ABC"), Some("")).contains("model="));
-    }
-
-    /// `session` names an existing conversation; `incognito` and `profile` describe how to open a new
-    /// one. Asserted so the exclusivity survives someone appending a parameter the way `model` is.
-    #[test]
-    fn a_session_id_suppresses_the_creation_only_parameters() {
-        let u = stream_url(BASE, "hi", Some("01ABC"), true, Some("basic"), None);
-        assert!(u.contains("&session=01ABC"), "{u}");
-        assert!(!u.contains("incognito") && !u.contains("profile"), "{u}");
-    }
-}
-
-#[cfg(test)]
-mod chat_msg_tests {
-    use super::*;
-
-    /// The role mapping is a *translation* — the wire's vocabulary to the renderer's — and unknown
-    /// wire roles must not break rendering: they read as user bubbles rather than nothing.
-    #[test]
-    fn wire_roles_map_to_bubble_roles() {
-        for (wire, expected) in [
-            ("assistant", "assistant"),
-            ("tool", "tool"),
-            ("system", "system"),
-            ("user", "user"),
-            ("something-new", "user"),
-        ] {
-            let msg = ChatMsg::from_wire(&ChatMessage {
-                role: wire.to_string(),
-                content: "x".to_string(),
-                tool_calls: None,
-                tool_call_id: None,
-                model: None,
-            });
-            assert_eq!(msg.role, expected, "wire role {wire:?}");
-        }
-    }
-
-    /// History never carries thinking steps (those exist only on the live SSE stream), so the wire
-    /// decoder must not invent any.
-    #[test]
-    fn wire_messages_carry_no_thinking_steps() {
-        let msg = ChatMsg::from_wire(&ChatMessage {
-            role: "assistant".to_string(),
-            content: "hi".to_string(),
-            tool_calls: None,
-            tool_call_id: None,
-            model: None,
-        });
-        assert!(msg.thinking_steps.is_empty());
-        assert_eq!(msg.content, "hi");
-    }
-
-    /// The three constructors set the role that each message kind renders under — a user message
-    /// typed in this tab, an assistant turn, a stream failure.
-    #[test]
-    fn constructors_set_the_role() {
-        assert_eq!(ChatMsg::new_user("q".into()).role, "user");
-        assert_eq!(ChatMsg::new_assistant("a".into()).role, "assistant");
-        assert_eq!(ChatMsg::new_error("e".into()).role, "error");
-        for msg in [
-            ChatMsg::new_user("q".into()),
-            ChatMsg::new_assistant("a".into()),
-            ChatMsg::new_error("e".into()),
-        ] {
-            assert!(
-                msg.thinking_steps.is_empty(),
-                "constructors must not add steps"
-            );
-        }
-    }
-
-    /// Short titles pass through unchanged (and trimmed); only over-60-byte titles are cut.
-    #[test]
-    fn short_titles_pass_through() {
-        assert_eq!(truncate_title("What is a database?"), "What is a database?");
-        assert_eq!(truncate_title("  padded  "), "padded");
-    }
-
-    /// The 60-byte cap is a display limit; crossing it appends the ellipsis that tells the reader
-    /// the row is abbreviated.
-    #[test]
-    fn long_titles_are_cut_and_elided() {
-        let long = "x".repeat(100);
-        let out = truncate_title(&long);
-        assert!(out.ends_with('…'), "{out}");
-        assert!(out.len() < 100);
-        // 57 chars + a 3-byte ellipsis: the visible name is exactly the capped window.
-        assert_eq!(out, format!("{}…", "x".repeat(57)));
-    }
-
-    /// The regression the char-boundary walk exists for: a multi-byte title whose 57th byte lands
-    /// mid-codepoint must not panic the sidebar's title write. Uses 4-byte chars (57 % 4 ≠ 0) so
-    /// the naive byte cut would genuinely land mid-char — 3-byte CJK would put the boundary exactly
-    /// at 57 and pass both ways.
-    #[test]
-    fn long_titles_cut_on_char_boundaries() {
-        // 20 four-byte emoji = 80 bytes; a naive 57-byte cut would split the 15th char.
-        let wide = "😀".repeat(20);
-        let out = truncate_title(&wide);
-        assert!(wide.starts_with(out.trim_end_matches('…')));
-        assert!(
-            out.is_char_boundary(out.len()),
-            "output must be valid UTF-8 at the cut"
-        );
-    }
-
-    /// The JSON spellings of "no arguments" and the empty string all render as nothing.
-    #[test]
-    fn empty_args_render_as_nothing() {
-        assert_eq!(clean_args(""), "");
-        assert_eq!(clean_args("{}"), "");
-        assert_eq!(clean_args("null"), "");
-        assert_eq!(args_display(""), "");
-        assert_eq!(args_display("{}"), "");
-        assert_eq!(args_display("null"), "");
-    }
-
-    #[test]
-    fn real_args_are_kept_and_parenthesized() {
-        assert_eq!(clean_args("path=/tmp/x"), "path=/tmp/x");
-        assert_eq!(args_display("path=/tmp/x"), "(path=/tmp/x)");
-        assert_eq!(args_display("{ \"a\": 1 }"), "({ \"a\": 1 })");
-    }
-
-    /// The tool block's header is the daemon's own summary line, colon trimmed; empty content
-    /// falls back to a neutral label rather than a blank header.
-    #[test]
-    fn tool_block_header_uses_the_daemon_summary_line() {
-        assert_eq!(
-            tool_block_label("RESULT (Succeeded):\nwrote 12 notes\n"),
-            "RESULT (Succeeded)"
-        );
-        assert_eq!(tool_block_label("  RESULT (Failed):  "), "RESULT (Failed)");
-        assert_eq!(tool_block_label("\n\nbody without a header"), "Tool result");
-        assert_eq!(tool_block_label(""), "Tool result");
-    }
-}
+#[path = "chat_tests.rs"]
+mod chat_tests;
