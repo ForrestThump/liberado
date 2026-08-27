@@ -184,13 +184,12 @@ domain pack** (first pack — not the product center; see [`agentic-loops.md`](a
 
 ## Co-development with Turbovault & Turbomcp
 
-`turbovault/` and `turbomcp/` are **sibling repos**, consumed as path dependencies during
-co-development (Decision 7) and excluded from this workspace. A root `[patch.crates-io]` redirects
-Turbovault's published `turbomcp` to the local fork so the whole tree builds against one Turbomcp —
-the one carrying the request-`_meta` pass-through that the provenance loop depends on. (Those upstream
-changes live on feature branches and have a draft issue in `turbomcp-request-meta-issue-draft.md`.)
-Both siblings build from the fork's `develop` branch (the vector-db work landed there —
-2026-07-11; the old feature/vector-db pin note was stale). CI checks out `develop` for both.
+`turbovault*` and `turbomcp*` crates are **git+tag pins** on the ForrestThump forks at
+`liberado-2026-08-27`. Nested sibling clones inside this repo are not required. A root
+`[patch.crates-io]` redirects Turbovault's published `turbomcp` to the same git tag so the
+whole tree builds against one Turbomcp — the one carrying the request-`_meta` pass-through
+that the provenance loop depends on. Leftover `turbovault/` and `turbomcp/` directories stay
+gitignored if present.
 
 ## Current status
 

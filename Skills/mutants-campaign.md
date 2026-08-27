@@ -256,10 +256,11 @@ CARGO_TARGET_DIR=target/liberado-invoke cargo run --locked --quiet -p liberado-c
 - Sweep stale `%TEMP%\cargo-mutants-*` if copy mode was used elsewhere.
 - Bulk baseline (local only): `.liberado/mutants-baseline-campaign.ps1` — one crate at a time,
   deletes `target/mutants/` after each crate. Not for CI.
-- **`--in-place` is needed on Linux too** when `turbovault/` or `turbomcp/` are path dependencies
-  inside the repo. `cargo-mutants` copies the workspace to a temp dir and the sibling paths break.
-  Pass `--in-place` alongside the timeout flags (same as Windows). This is now unconditional in
-  the CLI's generated command.
+- **`--in-place` is still needed on Linux** when leftover `turbovault/` or `turbomcp/`
+  directories exist as local clones. `cargo-mutants` copies the workspace to a temp dir
+  and those extra trees do not survive the copy. The git+tag pins in `Cargo.toml` do not
+  need the directories. Pass `--in-place` alongside the timeout flags (same as Windows).
+  This is now unconditional in the CLI's generated command.
 
 Config: `.cargo/mutants.toml` — do **not** put `timeout` there (removed in cargo-mutants 27.x);
 timeouts come from the CLI (`build_mutants_command` in `crates/cli/src/mutants_cmd.rs`).

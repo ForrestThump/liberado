@@ -1,10 +1,6 @@
 {
   "name": "Liberado",
   "install": "./.cursor/install.sh",
-  "repositoryDependencies": [
-    "github.com/ForrestThump/turbovault",
-    "github.com/ForrestThump/turbomcp"
-  ],
   "ports": [
     {
       "name": "liberado daemon (API + WebUI)",

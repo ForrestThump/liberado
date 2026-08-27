@@ -231,9 +231,9 @@ fn build_mutants_command(package: &str, profile: RunProfile) -> String {
         min_test_timeout.to_string(),
     ];
     // cargo-mutants copies the workspace into %TEMP%; paseo/node_modules symlinks fail on
-    // Windows without elevation (os error 1314), and on any host the gitignored sibling
-    // checkouts (turbovault/, turbomcp/) do not survive the copy, so manifest resolution
-    // fails in the temp dir. In-place avoids both. Recovery ritual lives in Skills/mutants-campaign.md
+    // Windows without elevation (os error 1314), and leftover gitignored clones
+    // (turbovault/, turbomcp/) do not survive the copy. The git+tag pins do not need those
+    // directories. In-place avoids both. Recovery ritual lives in Skills/mutants-campaign.md
     // — prefer this to a run that never starts.
     parts.extend(["--in-place".into()]);
     if profile == RunProfile::LibOnly && package != "liberado-cli" {

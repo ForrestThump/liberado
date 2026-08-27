@@ -70,18 +70,16 @@ drift — the classic failures, all of which the script removes:
 | Rebuild the image but forget to recreate the container (old code keeps running) | Always `up -d --force-recreate` after build |
 | Recreate against a stale image | Rebuilds first, in the same run |
 | Copy a half-synced / dirty tree; no record of what commit it was | Ships a **committed** ref via `git archive` + `rsync --delete`; writes `DEPLOYED_COMMIT` |
-| Sync the main tree but drop the vendored `turbovault/` + `turbomcp/` → build dies on a missing `Cargo.toml` | Ships those nested repos too (see below); preflights that they exist before touching the box |
+| Sync leftover nested `turbovault/` / `turbomcp/` clones | Optional; Cargo fetches the git+tag pins. Ships leftover clones when present |
 | No way to know what's live | Bakes the SHA into the image (`/etc/liberado-build-sha`, `LIBERADO_BUILD_SHA`, image label) and **verifies it after boot** |
 | "It didn't come up" goes unnoticed | Health-gates on `/api/status`; dumps logs and fails loudly if it doesn't converge |
 
-### The vendored-repo footgun
+### Leftover nested clones
 
-`turbovault/` and `turbomcp/` are **gitignored nested git repos** consumed as Cargo *path*
-dependencies (see the co-dev note in the root `Cargo.toml`). Because they're gitignored, a
-`git archive` of the main repo does **not** contain them — sync only that and the in-container build
-fails with `failed to read turbomcp/crates/turbomcp/Cargo.toml`. `deploy.sh` ships them alongside the
-main tree (as working copies) and refuses to run if they're missing locally. The build SHA identifies
-the **main** commit; the vendored repos are developed in their own `.git` and change rarely.
+`turbovault/` and `turbomcp/` directories are **gitignored** leftover clones. They are not
+required: Cargo fetches the ForrestThump forks at tag `liberado-2026-08-27`. `deploy.sh` still
+ships them as working copies when they exist locally. The build SHA identifies the **main**
+commit.
 
 ## Guardrails (and their escape hatches)
 

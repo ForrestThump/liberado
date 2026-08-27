@@ -797,9 +797,8 @@ async fn create_linked_worktree(parent_root: &Path, dest: &Path) -> Result<(), S
         )));
     }
 
-    // The workspace's path dependencies are gitignored, so `git worktree add` leaves them out
-    // and cargo cannot resolve the manifest — meaning a coding run in here could not compile or
-    // test a single line of its own work. Provision them before handing the worktree over.
+    // Leftover gitignored path-deps are copied when the parent manifest still declares them.
+    // The current root pin is git+tag, so this is a no-op unless a path dep remains.
     crate::path_deps::provision_path_deps(parent_root, dest).await;
 
     Ok(())

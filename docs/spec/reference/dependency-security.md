@@ -16,10 +16,11 @@ cargo-vet before any job may compile a build script or procedural macro.
    review. Do not add a name-only exception.
 4. Run `just dependency-security` and request the CODEOWNER review.
 
-GitHub Actions and the two sibling path dependencies use full commit SHAs.
-Dependabot proposes Action SHA changes. Update sibling SHAs in
-`.github/actions/checkout-siblings/action.yml` only after reviewing their
-diffs. Checkout credentials are never persisted into a compiling job.
+GitHub Actions use full commit SHAs. Dependabot proposes Action SHA changes.
+`turbovault*` and `turbomcp*` are git+tag pins on the public ForrestThump forks
+(`tag = "liberado-2026-08-27"`). `Cargo.lock` records the resolved commit SHA.
+Update the tag and lockfile together after reviewing the fork diff. Checkout
+credentials are never persisted into a compiling job.
 
 The cargo-vet exemption set is the accepted graph at the time this gate was
 introduced. It is debt, not an audit claim. New exemptions may not be added

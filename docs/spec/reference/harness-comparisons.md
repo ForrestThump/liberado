@@ -101,7 +101,7 @@ liberado coder compare doctor --task target/compare/task.txt \
   --credential openrouter-default
 ```
 
-It checks the worker policy, repository and pinned revision, required path dependencies, harness
+It checks the worker policy, repository and pinned revision, harness
 launchers, credential availability, Git locks, and disk estimate. It never starts a harness and
 does not replace the executor's execution-time preflight.
 
@@ -163,9 +163,11 @@ liberado coder compare prepare <run-dir> --commit main
   artifacts/pi/{git,sessions,traces}/
 ```
 
-The command copies the required `turbovault/` and `turbomcp/` source into each worktree. It rejects
+The command copies leftover `turbovault/` and `turbomcp/` trees into each worktree when those
+directories are present locally. They are not required: Cargo fetches the ForrestThump git+tag
+pins. When a leftover tree is copied, the copy rejects
 symlinks and Windows reparse points, and excludes rebuildable or repository-local `.git/`,
-`target/`, `.liberado/`, and `.fastembed_cache/` directories. It never links a worktree to a sibling
+`target/`, `.liberado/`, and `.fastembed_cache/` directories. It never links a worktree to a leftover
 checkout.
 
 The Cargo target directories are separate. Never share one target directory across comparison

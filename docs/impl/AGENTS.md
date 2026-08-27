@@ -64,8 +64,9 @@ crates/
   memory-store/         # Vault-backed general/procedural memory stores with turbovault-vector semantic recall
   telegram-approvals/   # Approval/chat bot: Approve/Reject/Revise taps ? proposal frontmatter edits
 
-turbovault/          # Co-developed path dep (sibling repo, not a workspace member)
-turbomcp/            # Co-developed path dep (sibling repo, not a workspace member)
+# Optional leftover clones (gitignored, not required):
+# turbovault/          # ForrestThump/turbovault is a git+tag pin, not a workspace member
+# turbomcp/            # ForrestThump/turbomcp is a git+tag pin, not a workspace member
 ```
 
 Full generated inventory: [`docs/spec/reference/crate-map.md`](../spec/reference/crate-map.md) — regenerate with `just gen-crate-map`.
@@ -304,19 +305,13 @@ The dispatcher and executor tests use `MockProvider` from `crates/provider` — no
 
 ## Co-development with Turbovault / Turbomcp
 
-`turbovault/` and `turbomcp/` are sibling repos (path deps, not workspace members). If they are
-not checked out next to this repo, `cargo build` will fail. Clone them:
+`turbovault*` and `turbomcp*` are git+tag pins on the ForrestThump forks at
+`liberado-2026-08-27` (not workspace members). Nested sibling clones are not
+required; `cargo build` fetches the tags. Leftover `turbovault/` and `turbomcp/`
+directories stay gitignored if present.
 
-```cmd
-cd ..
-git clone https://github.com/shilohmangus/turbovault
-git clone https://github.com/shilohmangus/turbomcp
-cd life-os
-cargo build
-```
-
-A root `[patch.crates-io]` in `Cargo.toml` redirects the published `turbomcp` to the local fork
-so the whole tree builds against one turbomcp (the one carrying `_meta` pass-through needed for
+A root `[patch.crates-io]` in `Cargo.toml` redirects the published `turbomcp` to the same
+git tag so the whole tree builds against one turbomcp (the one carrying `_meta` pass-through needed for
 provenance loop-breaking).
 
 ---

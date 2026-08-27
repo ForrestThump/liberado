@@ -103,10 +103,10 @@ pub async fn compute_baseline(
     .await
     .map_err(|e| format!("baseline worktree at {}: {e}", &short))?;
 
-    // `git worktree add` does not bring gitignored path-deps (`turbovault/`, `turbomcp/`).
-    // Without them `cargo` dies at manifest resolution and the baseline is an opaque fail
-    // that would hide real regressions if we treated it as "already broken". Copy, never
-    // junction — `worktree remove --force` followed a junction once and emptied the originals.
+    // `git worktree add` does not bring gitignored leftover path-deps (`turbovault/`, `turbomcp/`).
+    // The current root pin is git+tag, so this is a no-op unless the parent manifest still
+    // declares a path dep. Copy, never junction — `worktree remove --force` followed a junction
+    // once and emptied the originals.
     let _ = crate::provision_path_deps(opts.project_root, &worktree).await;
 
     // Warm build, and the agent's tree is untouched throughout. Restore whatever
