@@ -1964,6 +1964,143 @@ async fn handle_proposal_change_expired_refuse_does_not_apply_session_grant() {
     );
 }
 
+/// `complete_refusal_lifecycle` must archive a proposal as `Expired` *only* when the
+/// orchestrator returns the exact `EXPIRED_PROPOSAL_REFUSAL_SUMMARY` (a pre-execution expired
+/// refusal where tools never ran). Any other report — Failed with a different summary, or a
+/// Succeeded report that merely mentions expiry — must leave the note untouched. A mutant that
+/// drops the body (`None`), flips the equality (`!=`→`==`), or flips the operator (`||`→`&&`)
+/// all change which reports get archived; the three cases below pin each branch.
+#[tokio::test]
+async fn complete_refusal_lifecycle_archives_only_on_exact_expired_refusal() {
+    use liberado_common::{Outcome, Report, WriteProvenance};
+    use liberado_orchestrator::EXPIRED_PROPOSAL_REFUSAL_SUMMARY;
+
+    let (daemon, dir) = temp_daemon().await;
+    let proposals_dir = dir.path().join("proposals");
+    std::fs::create_dir_all(&proposals_dir).unwrap();
+
+    let prov = WriteProvenance::agent("test", "c1");
+
+    fn refusal_report(outcome: Outcome, summary: &str) -> Report {
+        Report {
+            outcome,
+            summary: summary.to_string(),
+            artifacts: Vec::new(),
+            new_high_signal_facts: Vec::new(),
+            deferred_to_human: false,
+            follow_up: None,
+            repeat_calls: 0,
+        }
+    }
+
+    // One case per proposal id so archives never bleed across assertions.
+    async fn case(
+        daemon: &crate::Daemon,
+        prov: &WriteProvenance,
+        id: &str,
+        outcome: Outcome,
+        summary: &str,
+        expect_archive_as_expired: bool,
+    ) {
+        use liberado_common::{Proposal, ProposalSigner, ProposalStatus, ProposedAction, ToolCall};
+        use std::path::Path;
+        let base = Proposal::pending(
+            id,
+            id,
+            "test",
+            ProposedAction::ToolCalls(vec![ToolCall {
+                tool: "tasks:create".into(),
+                args: serde_json::json!({ "summary": "x" }),
+            }]),
+            "a proposal",
+        );
+        let mut signed = ProposalSigner::random().sign(base);
+        signed.set_status(ProposalStatus::Approved);
+        let mut proposal = signed.into_proposal();
+
+        let rel = Path::new("proposals").join(format!("{id}.md"));
+        daemon
+            .vault
+            .write(&rel, &proposal.to_note(), None, prov)
+            .await
+            .unwrap();
+        let archive_rel = format!("proposals/archive/expired/{id}.md");
+
+        let result = daemon
+            .complete_refusal_lifecycle(&rel, &mut proposal, &refusal_report(outcome, summary))
+            .await;
+
+        if expect_archive_as_expired {
+            assert!(
+                matches!(result, Some(crate::ReactionOutcome::Observed)),
+                "{id}: exact expired refusal must complete the lifecycle"
+            );
+            assert!(
+                daemon.vault.read(&rel).await.is_err(),
+                "{id}: original must be moved"
+            );
+            let archived = daemon
+                .vault
+                .read(&archive_rel)
+                .await
+                .unwrap_or_else(|_| panic!("{id}: must archive as expired"));
+            assert_eq!(
+                Proposal::from_note(&archived).unwrap().status,
+                ProposalStatus::Expired,
+                "{id}: archived proposal must carry Expired status"
+            );
+        } else {
+            assert!(
+                result.is_none(),
+                "{id}: report must not complete the expiry lifecycle"
+            );
+            assert!(
+                daemon.vault.read(&rel).await.is_ok(),
+                "{id}: note must be left in place"
+            );
+            assert!(
+                daemon.vault.read(&archive_rel).await.is_err(),
+                "{id}: must not archive"
+            );
+        }
+    }
+
+    // Case A: exact expired refusal → archive as Expired.
+    case(
+        &daemon,
+        &prov,
+        "expire-lifecycle-a",
+        Outcome::Failed,
+        EXPIRED_PROPOSAL_REFUSAL_SUMMARY,
+        true,
+    )
+    .await;
+
+    // Case B: Failed with a *different* summary → leave the note in place, no archive.
+    // Pins the `summary != EXPIRED` half of the condition (catches `!=`→`==` on the summary).
+    case(
+        &daemon,
+        &prov,
+        "expire-lifecycle-b",
+        Outcome::Failed,
+        "some other failure",
+        false,
+    )
+    .await;
+
+    // Case C: Succeeded report whose summary happens to match → must NOT archive.
+    // Pins the `outcome != Failed` half of the condition (catches `||`→`&&`).
+    case(
+        &daemon,
+        &prov,
+        "expire-lifecycle-c",
+        Outcome::Succeeded,
+        EXPIRED_PROPOSAL_REFUSAL_SUMMARY,
+        false,
+    )
+    .await;
+}
+
 #[tokio::test]
 async fn handle_proposal_change_does_not_execute_approved_past_deadline() {
     // Late approve after `expires` must not run tools — only expire + archive.
@@ -2319,6 +2456,260 @@ async fn daemon_rejects_an_approved_proposal_with_a_bad_integrity_signature() {
     handle.abort();
 }
 
+/// A proposal that the human has *legitimately approved* via the ledger, but whose integrity
+/// signature was forged (or tampered with after signing), must STILL be refused. Without this
+/// assertion, a mutant that replaces `reject_if_tampered` with `None` would let a forged
+/// proposal slide through every later guard (terminal, expiry, actionable, ledger) and run.
+///
+/// `daemon_rejects_an_approved_proposal_with_a_bad_integrity_signature` (above) covers the
+/// "no ledger approval" variant — the ledger guard there refuses before execution gets a
+/// chance. Here the ledger DOES approve, so the only thing standing between a forged
+/// proposal and a tool call is the daemon's integrity check. To prove the daemon's check is
+/// the one that fires (not the orchestrator's), the test uses *two different signers*:
+/// the orchestrator's signer verifies the proposal, the daemon's signer would not.
+#[tokio::test]
+async fn forged_proposal_with_a_ledger_approval_still_does_not_execute() {
+    use liberado_common::{Proposal, ProposalSigner, ProposalStatus, ProposedAction, ToolCall};
+    use liberado_orchestrator::Orchestrator;
+    use liberado_test_support::{InvocationRecordingFactory, InvocationRecordingRuntime};
+
+    let runtime = InvocationRecordingRuntime::default();
+    let invoked = runtime.invoked.clone();
+    // The orchestrator's signer (used to defend-in-depth-verify the proposal just before
+    // `runtime.invoke`). The daemon's signer is *different*, so only the daemon's check can
+    // catch the forgery.
+    let orch_signer = ProposalSigner::random();
+    let daemon_signer = ProposalSigner::random();
+    let orch = Orchestrator::new(
+        Arc::new(liberado_provider::MockProvider::with_script(
+            "mock",
+            Vec::<liberado_provider::CompletionResponse>::new(),
+        )),
+        InvocationRecordingFactory { runtime },
+        CapabilitySet::empty(),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        std::env::temp_dir(),
+        orch_signer.clone(),
+        "default",
+    );
+
+    let (daemon, dir) = temp_daemon().await;
+    let daemon = daemon
+        .with_debounce(Duration::from_millis(80))
+        .with_orchestrator(orch)
+        // The daemon verifies the proposal against `daemon_signer`, not the orchestrator's
+        // `orch_signer`. A proposal signed by the orchestrator's key is fine for the
+        // orchestrator's defense-in-depth check, but the daemon's check still fires.
+        .with_proposal_signer(daemon_signer)
+        .with_approval_ledger(test_ledger(&dir));
+
+    let proposals_dir = dir.path().join("proposals");
+    std::fs::create_dir_all(&proposals_dir).unwrap();
+
+    // The human's approval is real — it lands in the ledger. A mutant bypassing only the
+    // integrity check still has to clear this guard.
+    approve_in(&dir, "forged-but-approved:1").await;
+
+    let (tx, mut rx) = unbounded_channel();
+    let handle = tokio::spawn(daemon.run(tx));
+
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    // Sign the proposal with the orchestrator's key (so the orchestrator's signer.verify
+    // returns true) but NOT the daemon's (so the daemon's check is the one that must fire).
+    let proposal = Proposal::pending(
+        "forged-but-approved:1",
+        "forged-but-approved:1",
+        "test",
+        ProposedAction::ToolCalls(vec![ToolCall {
+            tool: "tasks:create".into(),
+            args: serde_json::json!({ "summary": "should-not-run" }),
+        }]),
+        "a forged but ledger-approved proposal",
+    )
+    .with_requested_grant(liberado_common::Capability::Write(
+        liberado_common::Zone::vault("tasks"),
+    ));
+    let mut proposal = orch_signer.sign(proposal);
+    proposal.set_status(ProposalStatus::Approved);
+    std::fs::write(proposals_dir.join("forged-approved.md"), proposal.to_note()).unwrap();
+
+    let _reaction = tokio::time::timeout(Duration::from_secs(5), rx.recv())
+        .await
+        .expect("timed out waiting for reaction")
+        .expect("reaction channel closed");
+
+    assert!(
+        invoked.lock().unwrap().is_empty(),
+        "a forged proposal must not run even when the ledger says Approved; \
+         a mutant that drops reject_if_tampered would let the tool call through"
+    );
+
+    handle.abort();
+}
+
+/// Without an approval ledger attached, even a *fully legitimate* proposal must be refused
+/// silently. The note's `status: approved` is just a claim — the ledger is the authority.
+/// A mutant that replaces `refuse_without_ledger_approval` with `None` would let the note's
+/// claim be enough, and the orchestrator would run the tool.
+#[tokio::test]
+async fn approved_proposal_without_a_ledger_does_not_execute() {
+    use liberado_common::{Proposal, ProposalSigner, ProposalStatus, ProposedAction, ToolCall};
+    use liberado_orchestrator::Orchestrator;
+    use liberado_test_support::{InvocationRecordingFactory, InvocationRecordingRuntime};
+
+    let runtime = InvocationRecordingRuntime::default();
+    let invoked = runtime.invoked.clone();
+    // Same signer for both daemon and orchestrator, so neither integrity check fires — the
+    // ledger check is the only one that can stop this.
+    let signer = ProposalSigner::random();
+    let orch = Orchestrator::new(
+        Arc::new(liberado_provider::MockProvider::with_script(
+            "mock",
+            Vec::<liberado_provider::CompletionResponse>::new(),
+        )),
+        InvocationRecordingFactory { runtime },
+        CapabilitySet::empty(),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        std::env::temp_dir(),
+        signer.clone(),
+        "default",
+    );
+
+    let (daemon, dir) = temp_daemon().await;
+    // NO `with_approval_ledger` call — `self.approvals` is None. The proposal claims Approved
+    // and is properly signed, so the only thing that can stop the tool is the ledger check.
+    let daemon = daemon
+        .with_debounce(Duration::from_millis(80))
+        .with_orchestrator(orch)
+        .with_proposal_signer(signer.clone());
+
+    let proposals_dir = dir.path().join("proposals");
+    std::fs::create_dir_all(&proposals_dir).unwrap();
+
+    let (tx, mut rx) = unbounded_channel();
+    let handle = tokio::spawn(daemon.run(tx));
+
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    let proposal = Proposal::pending(
+        "no-ledger:1",
+        "no-ledger:1",
+        "test",
+        ProposedAction::ToolCalls(vec![ToolCall {
+            tool: "tasks:create".into(),
+            args: serde_json::json!({ "summary": "should-not-run" }),
+        }]),
+        "an approved but un-ledgered proposal",
+    )
+    .with_requested_grant(liberado_common::Capability::Write(
+        liberado_common::Zone::vault("tasks"),
+    ));
+    let mut proposal = signer.sign(proposal);
+    proposal.set_status(ProposalStatus::Approved);
+    std::fs::write(proposals_dir.join("no-ledger.md"), proposal.to_note()).unwrap();
+
+    let _reaction = tokio::time::timeout(Duration::from_secs(5), rx.recv())
+        .await
+        .expect("timed out waiting for reaction")
+        .expect("reaction channel closed");
+
+    assert!(
+        invoked.lock().unwrap().is_empty(),
+        "a proposal claiming Approved without a ledger entry must not execute; \
+         a mutant that drops refuse_without_ledger_approval would let it through"
+    );
+
+    handle.abort();
+}
+
+/// A proposal whose ledger entry is *explicitly* Rejected must not execute — even with a
+/// matching signature and `status: approved` in the note. The ledger overrides the note.
+#[tokio::test]
+async fn rejected_proposal_in_ledger_does_not_execute() {
+    use liberado_common::{Proposal, ProposalSigner, ProposalStatus, ProposedAction, ToolCall};
+    use liberado_orchestrator::Orchestrator;
+    use liberado_test_support::{InvocationRecordingFactory, InvocationRecordingRuntime};
+
+    let runtime = InvocationRecordingRuntime::default();
+    let invoked = runtime.invoked.clone();
+    let signer = ProposalSigner::random();
+    let orch = Orchestrator::new(
+        Arc::new(liberado_provider::MockProvider::with_script(
+            "mock",
+            Vec::<liberado_provider::CompletionResponse>::new(),
+        )),
+        InvocationRecordingFactory { runtime },
+        CapabilitySet::empty(),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        std::env::temp_dir(),
+        signer.clone(),
+        "default",
+    );
+
+    let (daemon, dir) = temp_daemon().await;
+    let daemon = daemon
+        .with_debounce(Duration::from_millis(80))
+        .with_orchestrator(orch)
+        .with_proposal_signer(signer.clone())
+        .with_approval_ledger(test_ledger(&dir));
+
+    let proposals_dir = dir.path().join("proposals");
+    std::fs::create_dir_all(&proposals_dir).unwrap();
+
+    // The human *rejected* this proposal out of band. The note's status:approved is a stale
+    // claim that should be overruled by the ledger.
+    test_ledger(&dir)
+        .record(
+            "rejected-by-human:1",
+            liberado_common::ApprovalDecision::Rejected,
+            "test",
+        )
+        .await
+        .unwrap();
+
+    let (tx, mut rx) = unbounded_channel();
+    let handle = tokio::spawn(daemon.run(tx));
+
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    let proposal = Proposal::pending(
+        "rejected-by-human:1",
+        "rejected-by-human:1",
+        "test",
+        ProposedAction::ToolCalls(vec![ToolCall {
+            tool: "tasks:create".into(),
+            args: serde_json::json!({ "summary": "should-not-run" }),
+        }]),
+        "an approved note but rejected by human",
+    )
+    .with_requested_grant(liberado_common::Capability::Write(
+        liberado_common::Zone::vault("tasks"),
+    ));
+    let mut proposal = signer.sign(proposal);
+    proposal.set_status(ProposalStatus::Approved);
+    std::fs::write(proposals_dir.join("rejected.md"), proposal.to_note()).unwrap();
+
+    let _reaction = tokio::time::timeout(Duration::from_secs(5), rx.recv())
+        .await
+        .expect("timed out waiting for reaction")
+        .expect("reaction channel closed");
+
+    assert!(
+        invoked.lock().unwrap().is_empty(),
+        "a proposal whose ledger says Rejected must not execute even if the note says Approved; \
+         a mutant that drops refuse_without_ledger_approval would let it through"
+    );
+
+    handle.abort();
+}
+
 #[tokio::test]
 async fn runtime_gated_downgrade_lands_in_the_vault_and_executes_once_approved() {
     // End-to-end proof of item 3's fix: a RiskGatedToolRuntime downgrade writes into the
@@ -2648,6 +3039,24 @@ async fn known_session_profile_still_dispatches() {
     assert_eq!(
         snap.session.goal.profile.as_deref(),
         Some("interactive-cron")
+    );
+    // The grant must carry the profile's configured capabilities (the whole point of the
+    // profile lookup). Without this assertion, a mutant that drops the `capabilities:` field
+    // from the SessionGrant struct literal here would silently downgrade the session to a
+    // default-empty grant and run with no authority at all.
+    assert!(
+        snap.session.grant.capabilities.grants_ask_human(),
+        "the session grant must inherit the profile's AskHuman capability: got {:?}",
+        snap.session.grant.capabilities
+    );
+    assert_eq!(
+        snap.session.grant.profile.as_deref(),
+        Some("interactive-cron"),
+        "the grant's profile field must echo the resolved profile"
+    );
+    assert!(
+        snap.session.grant.overrides.is_null(),
+        "no profile-supplied overrides were configured; the grant's overrides must be Value::Null"
     );
 
     handle.abort();
@@ -3846,5 +4255,242 @@ async fn a_permission_request_also_needs_a_recorded_decision() {
     assert_eq!(
         test_ledger(&dir).decision_for("perm-gated").await,
         Some(liberado_common::ApprovalDecision::Approved),
+    );
+}
+
+/// `notify_executed` must actually deliver a notification to the human after a proposal runs.
+/// A mutant that drops the body (`()`) is silent — the human never learns the action happened.
+/// The call side-effect is the only observable behavior, so spy on the notifier.
+#[tokio::test]
+async fn notify_executed_sends_a_notification() {
+    use liberado_common::{Outcome, Proposal, ProposalSigner, ProposedAction, Report, ToolCall};
+    use liberado_notify::Notifier;
+    use std::sync::{Arc, Mutex};
+
+    #[derive(Default)]
+    struct SpyNotifier {
+        calls: Arc<Mutex<Vec<String>>>,
+    }
+    #[async_trait::async_trait]
+    impl Notifier for SpyNotifier {
+        async fn notify(&self, message: &str) -> Result<(), liberado_notify::NotifyError> {
+            self.calls.lock().unwrap().push(message.to_string());
+            Ok(())
+        }
+    }
+
+    let calls = Arc::new(Mutex::new(Vec::<String>::new()));
+    let notifier = Arc::new(SpyNotifier {
+        calls: calls.clone(),
+    });
+    let (daemon, _dir) = temp_daemon().await;
+    let daemon = daemon.with_notifier(notifier);
+
+    let proposal = Proposal::pending(
+        "notify:1",
+        "notify:1",
+        "test",
+        ProposedAction::ToolCalls(vec![ToolCall {
+            tool: "tasks:create".into(),
+            args: serde_json::json!({ "summary": "did a thing" }),
+        }]),
+        "the human's proposal ran",
+    );
+    let mut signed = ProposalSigner::random().sign(proposal);
+    signed.set_status(liberado_common::ProposalStatus::Approved);
+    let proposal = signed.into_proposal();
+
+    let report = Report {
+        outcome: Outcome::Succeeded,
+        summary: "ran successfully".into(),
+        artifacts: Vec::new(),
+        new_high_signal_facts: Vec::new(),
+        deferred_to_human: false,
+        follow_up: None,
+        repeat_calls: 0,
+    };
+
+    daemon.notify_executed(&proposal, &report).await;
+
+    let logged = calls.lock().unwrap();
+    assert!(
+        !logged.is_empty(),
+        "notify_executed must send a notification to the human"
+    );
+    assert!(
+        logged[0].contains("proposal executed"),
+        "notification must report that the proposal executed"
+    );
+}
+
+/// `proposal_reap_loop` must actually sweep and archive expired approved proposals on its tick.
+/// A mutant that drops the body (`()`) returns before ever calling `reap_expired_proposals`,
+/// so the expired note sits forever.
+#[tokio::test]
+async fn proposal_reap_loop_archives_expired_approved_proposal() {
+    use chrono::{Duration as ChronoDuration, Utc};
+    use liberado_common::{Proposal, ProposalSigner, ProposalStatus, ProposedAction, ToolCall};
+    use std::path::Path;
+    use std::time::Duration as StdDuration;
+
+    let (daemon, _dir) = temp_daemon().await;
+    let vault = daemon.vault.clone();
+    let root = vault.root().to_path_buf();
+    std::fs::create_dir_all(root.join("proposals")).unwrap();
+
+    let proposal = Proposal::pending(
+        "reap-loop:1",
+        "reap-loop:1",
+        "test",
+        ProposedAction::ToolCalls(vec![ToolCall {
+            tool: "tasks:create".into(),
+            args: serde_json::json!({}),
+        }]),
+        "expired approved proposal",
+    );
+    let mut signed = ProposalSigner::random().sign(proposal);
+    signed.set_status(ProposalStatus::Approved);
+    let mut proposal = signed.into_proposal();
+    proposal.expires = Some(Utc::now() - ChronoDuration::hours(2));
+    std::fs::write(root.join("proposals/reap-loop-1.md"), proposal.to_note()).unwrap();
+
+    let loop_vault = vault.clone();
+    let handle = tokio::spawn(async move {
+        crate::proposals::proposal_reap_loop(loop_vault, StdDuration::from_millis(50)).await;
+    });
+    tokio::time::sleep(StdDuration::from_millis(300)).await;
+    handle.abort();
+
+    let archived = vault
+        .read(Path::new("proposals/archive/expired/reap-loop-1.md"))
+        .await;
+    assert!(
+        archived.is_ok(),
+        "proposal_reap_loop must archive an expired approved proposal"
+    );
+    assert_eq!(
+        Proposal::from_note(&archived.unwrap()).unwrap().status,
+        ProposalStatus::Expired
+    );
+}
+
+/// `reap_expired_proposals` must treat a missing `proposals/` dir as a no-op (Ok), but a
+/// directory listing error that is *not* NotFound must propagate as Err. The match-guard
+/// mutants (drop the guard, flip `==`, or force it `true`) each change which errors are
+/// swallowed; the two cases below pin both arms.
+#[tokio::test]
+async fn reap_expired_proposals_tolerates_missing_dir_and_non_dir() {
+    let (daemon, _dir) = temp_daemon().await;
+    let vault = daemon.vault.clone();
+    let root = vault.root().to_path_buf();
+
+    // Case 1: ensure no `proposals/` dir -> the NotFound arm must return Ok.
+    let proposals_dir = root.join("proposals");
+    if proposals_dir.exists() {
+        std::fs::remove_dir_all(&proposals_dir).unwrap();
+    }
+    let result = crate::proposals::reap_expired_proposals(&vault).await;
+    assert!(
+        result.is_ok(),
+        "reaping with no proposals dir must be a no-op Ok, got {:?}",
+        result.err()
+    );
+
+    // Case 2: `proposals` is a *file* (not a directory) -> the listing error is not NotFound.
+    // Original propagates it as Err; a mutant that always takes the Ok arm would swallow it.
+    std::fs::write(&proposals_dir, "").unwrap();
+    let result = crate::proposals::reap_expired_proposals(&vault).await;
+    assert!(
+        result.is_err(),
+        "a non-NotFound listing error must propagate as Err, not be swallowed"
+    );
+}
+
+/// `spawn_reaper` must actually launch the background reaper when a non-zero interval is set.
+/// A mutant that drops the body (`()`) or flips `!is_zero()` never spawns it, so an expired
+/// approved proposal that the reactive path never touches stays in the active dir forever.
+#[tokio::test]
+async fn spawn_reaper_starts_the_expiry_reaper() {
+    use chrono::{Duration as ChronoDuration, Utc};
+    use liberado_common::{Proposal, ProposalSigner, ProposalStatus, ProposedAction, ToolCall};
+    use std::path::Path;
+    use std::time::Duration as StdDuration;
+
+    let (base, _dir) = temp_daemon().await;
+    let mut daemon = base.with_proposal_reap_interval(1);
+    let vault = daemon.vault.clone();
+    let root = vault.root().to_path_buf();
+    std::fs::create_dir_all(root.join("proposals")).unwrap();
+
+    let proposal = Proposal::pending(
+        "spawn-reap:1",
+        "spawn-reap:1",
+        "test",
+        ProposedAction::ToolCalls(vec![ToolCall {
+            tool: "tasks:create".into(),
+            args: serde_json::json!({}),
+        }]),
+        "expired approved proposal",
+    );
+    let mut signed = ProposalSigner::random().sign(proposal);
+    signed.set_status(ProposalStatus::Approved);
+    let mut proposal = signed.into_proposal();
+    proposal.expires = Some(Utc::now() - ChronoDuration::hours(2));
+    std::fs::write(root.join("proposals/spawn-reap-1.md"), proposal.to_note()).unwrap();
+
+    daemon.spawn_reaper();
+    tokio::time::sleep(StdDuration::from_millis(2000)).await;
+
+    let archived = vault
+        .read(Path::new("proposals/archive/expired/spawn-reap-1.md"))
+        .await;
+    assert!(
+        archived.is_ok(),
+        "spawn_reaper must launch the reaper that archives expired proposals"
+    );
+    assert_eq!(
+        Proposal::from_note(&archived.unwrap()).unwrap().status,
+        ProposalStatus::Expired
+    );
+}
+
+/// `persist_everywhere_grant` must write the machine-owned overlay so an "approve everywhere"
+/// grant survives a restart. A mutant that drops the body (`()`) is silently a no-op - the
+/// grant the human approved never lands on disk.
+#[tokio::test]
+async fn persist_everywhere_grant_writes_to_overlay() {
+    use liberado_common::{Capability, Zone};
+    use std::env;
+
+    let data_dir = tempfile::TempDir::new().unwrap();
+    let prev = env::var("LIBERADO_DATA_DIR").ok();
+    unsafe {
+        env::set_var("LIBERADO_DATA_DIR", data_dir.path());
+    }
+    struct Restore(Option<String>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            unsafe {
+                match &self.0 {
+                    Some(v) => env::set_var("LIBERADO_DATA_DIR", v),
+                    None => env::remove_var("LIBERADO_DATA_DIR"),
+                }
+            }
+        }
+    }
+    let _restore = Restore(prev);
+
+    let capability = Capability::Write(Zone::vault("tasks"));
+    crate::proposals::persist_everywhere_grant("dispatcher", &capability);
+
+    let overlay_path = data_dir.path().join("grants.overlay.toml");
+    assert!(
+        overlay_path.exists(),
+        "persist_everywhere_grant must write the machine-owned overlay"
+    );
+    let contents = std::fs::read_to_string(&overlay_path).unwrap();
+    assert!(
+        contents.contains("tasks") && contents.contains("dispatcher"),
+        "overlay must record the persisted grant"
     );
 }
