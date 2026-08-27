@@ -4,7 +4,22 @@ use crate::components::profiles_panel::ProfilesPanel;
 use crate::components::reactions::ReactionsPanel;
 use crate::components::stuck_sessions::StuckSessionsPanel;
 use crate::components::vault::VaultPanel;
+use crate::icons::{IconCheck, IconX};
 use chat_client_contract::DaemonStatus;
+
+/// How often the Status view re-reads `/api/status`. Uptime is a live number; a one-shot
+/// `use_resource` left it frozen at whatever the first fetch returned.
+const STATUS_POLL_MS: i32 = 10_000;
+
+#[cfg(target_arch = "wasm32")]
+async fn sleep_ms(ms: i32) {
+    let promise = js_sys::Promise::new(&mut |resolve, _reject| {
+        if let Some(window) = web_sys::window() {
+            let _ = window.set_timeout_with_callback_and_timeout_and_arguments_0(&resolve, ms);
+        }
+    });
+    let _ = wasm_bindgen_futures::JsFuture::from(promise).await;
+}
 
 async fn fetch_status(api_base: String) -> Result<DaemonStatus, String> {
     let url = format!("{api_base}/api/status");
@@ -20,10 +35,25 @@ async fn fetch_status(api_base: String) -> Result<DaemonStatus, String> {
 
 #[component]
 pub fn Dashboard(api_base: String) -> Element {
+    #[cfg_attr(not(target_arch = "wasm32"), allow(unused_mut))]
+    let mut tick = use_signal(|| 0u32);
     let status = use_resource({
         let base = api_base.clone();
-        move || fetch_status(base.clone())
+        move || {
+            let _ = tick();
+            fetch_status(base.clone())
+        }
     });
+
+    #[cfg(target_arch = "wasm32")]
+    {
+        use_future(move || async move {
+            loop {
+                sleep_ms(STATUS_POLL_MS).await;
+                tick += 1;
+            }
+        });
+    }
 
     rsx! {
         div {
@@ -92,8 +122,8 @@ fn StatusBanner(status: DaemonStatus) -> Element {
             div {
                 class: "status-stats",
                 Stat { label: "Vault", value: &status.vault_path }
-                Stat { label: "Watcher", value: bool_label(status.watcher_active) }
-                Stat { label: "Dispatcher", value: bool_label(status.dispatcher_attached) }
+                BoolStat { label: "Watcher", on: status.watcher_active }
+                BoolStat { label: "Dispatcher", on: status.dispatcher_attached }
                 Stat { label: "Model", value: status.model_name.as_deref().unwrap_or("—") }
                 Stat { label: "Reactions", value: &status.reactions_seen.to_string() }
             }
@@ -113,7 +143,23 @@ fn Stat(label: String, value: String) -> Element {
 }
 
 fn bool_label(v: bool) -> &'static str {
-    if v { "✓ Enabled" } else { "✗ Disabled" }
+    if v { "Enabled" } else { "Disabled" }
+}
+
+#[component]
+fn BoolStat(label: String, on: bool) -> Element {
+    rsx! {
+        div {
+            class: "stat-tile",
+            p { class: "stat-label", "{label}" }
+            p { class: "stat-value stat-bool",
+                span { class: "stat-bool-icon",
+                    if on { IconCheck {} } else { IconX {} }
+                }
+                span { "{bool_label(on)}" }
+            }
+        }
+    }
 }
 
 fn format_uptime(secs: u64) -> String {
@@ -125,12 +171,17 @@ fn format_uptime(secs: u64) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{bool_label, format_uptime};
+    use super::{STATUS_POLL_MS, bool_label, format_uptime};
 
     #[test]
     fn bool_label_reads_as_enabled_or_disabled() {
-        assert_eq!(bool_label(true), "✓ Enabled");
-        assert_eq!(bool_label(false), "✗ Disabled");
+        assert_eq!(bool_label(true), "Enabled");
+        assert_eq!(bool_label(false), "Disabled");
+    }
+
+    #[test]
+    fn status_poll_is_ten_seconds() {
+        assert_eq!(STATUS_POLL_MS, 10_000);
     }
 
     /// Uptime is rendered as `Hh Mm Ss` regardless of magnitude — the daemon reports seconds, and
