@@ -40,7 +40,8 @@
 //!      zero. Pricing present and non-zero is excluded.
 //!    - **Documented free-tier allowlists**: Gemini keeps Flash / Flash-Lite / Gemma and skips
 //!      Pro (quota-then-pay once billing is enabled). OpenCode Zen keeps models the public
-//!      pricing table lists as Free (`-free` suffix, `big-pickle`).
+//!      pricing table lists as Free (`-free` suffix, `big-pickle`). AnyAPI keeps OpenRouter-style
+//!      `:free` suffixes and still requires zero `pricing.prompt` + `pricing.completion`.
 //!    - A provider that 401/403/timeouts during discovery is skipped with a warning, not a hard
 //!      error, as long as **some** provider produced a non-empty free set.
 //!    - Cloudflare Workers AI is recognized by env name but **omitted**: neuron billing is
@@ -100,6 +101,7 @@
 //! | `OPENCODE_ZEN_API_KEY` | `https://opencode.ai/zen/v1` | documented Free SKUs only (`-free`, `big-pickle`) |
 //! | `CLOUDFLARE_WORKERS_API_KEY` | `https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/v1` | **omitted** (neuron quota-then-pay). Also needs `CLOUDFLARE_ACCOUNT_ID`; missing account id skips the adapter |
 //! | `KILOCODE_API_KEY` | `https://api.kilo.ai/api/gateway` | zero-price required |
+//! | `ANYAPI_API_KEY` | `https://api.anyapi.ai/v1` | zero-price required **and** native id ends in `:free` |
 //!
 //! | Variable | Meaning |
 //! |---|---|

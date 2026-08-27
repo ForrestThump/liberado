@@ -710,6 +710,41 @@ mod default_sources_wire {
         assert_eq!(models.len(), 1);
         assert_eq!(models[0].provider, "openrouter");
     }
+
+    #[tokio::test]
+    async fn anyapi_catalog_keeps_only_free_suffix_at_zero_price() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v1/models"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": [
+                    { "id": "meta-llama/llama-3.3-70b-instruct:free",
+                      "pricing": { "prompt": "0", "completion": "0" } },
+                    { "id": "openai/gpt-4o",
+                      "pricing": { "prompt": "0.000005", "completion": "0.000015" } },
+                    { "id": "unpriced-leftover" },
+                    { "id": "vendor/unpriced:free" }
+                ]
+            })))
+            .mount(&server)
+            .await;
+
+        let src = DefaultSources::from_upstreams(
+            vec![crate::providers::Upstream::from_parts(
+                "anyapi",
+                format!("{}/v1", server.uri()),
+                "ANYAPI_API_KEY",
+                "sk-anyapi",
+                crate::providers::CatalogPolicy::ZeroPriceRequired,
+                crate::providers::BillingKind::ZeroPricedOnly,
+                crate::providers::ModelAllow::AnyApiFree,
+            )],
+            None,
+        );
+        let models = src.discover().await.expect("discover");
+        let ids: Vec<&str> = models.iter().map(|m| m.id.as_str()).collect();
+        assert_eq!(ids, vec!["anyapi/meta-llama/llama-3.3-70b-instruct:free"]);
+    }
 }
 
 /// Kills the `||` → `&&` in the API-precedence guard: a slug holding *either* API field must

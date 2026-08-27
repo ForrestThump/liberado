@@ -48,6 +48,7 @@ never logged.
 | `OPENCODE_ZEN_API_KEY` | `https://opencode.ai/zen/v1` | documented Free SKUs only |
 | `CLOUDFLARE_WORKERS_API_KEY` | `https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/v1` | **omitted** (neuron quota-then-pay). Needs `CLOUDFLARE_ACCOUNT_ID` |
 | `KILOCODE_API_KEY` | `https://api.kilo.ai/api/gateway` | zero-price required |
+| `ANYAPI_API_KEY` | `https://api.anyapi.ai/v1` | zero-price required and `:free` suffix |
 
 Public catalog ids are `{provider}/{native}` so two vendors cannot clobber each
 other. `/v1/models` lists those proxy-facing ids; chat rewrites `model` to the

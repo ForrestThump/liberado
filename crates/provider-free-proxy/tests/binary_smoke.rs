@@ -151,6 +151,7 @@ fn missing_all_provider_keys_exits_2_listing_the_env_names() {
     assert!(stderr.contains("GROQ_API_KEY"), "{stderr}");
     assert!(stderr.contains("GEMINI_API_KEY"), "{stderr}");
     assert!(stderr.contains("KILOCODE_API_KEY"), "{stderr}");
+    assert!(stderr.contains("ANYAPI_API_KEY"), "{stderr}");
     assert!(
         !stderr.contains("sk-"),
         "must not print key-shaped values: {stderr}"

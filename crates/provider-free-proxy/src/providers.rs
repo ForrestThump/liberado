@@ -28,6 +28,8 @@ pub enum ModelAllow {
     GeminiFreeTier,
     /// OpenCode Zen models documented as Free (suffix `-free`, or `big-pickle`).
     OpenCodeFree,
+    /// AnyAPI mixed catalog: OpenRouter-style ids whose native id ends in `:free`.
+    AnyApiFree,
 }
 
 /// One configured upstream. The resolved key lives only here.
@@ -259,6 +261,16 @@ const SPECS: &[Spec] = &[
         billing: BillingKind::ZeroPricedOnly,
         allow: ModelAllow::Chat,
     },
+    Spec {
+        id: "anyapi",
+        api_key_env: "ANYAPI_API_KEY",
+        account_id_env: None,
+        default_base: "https://api.anyapi.ai/v1",
+        // Mixed paid + free. Keep only `$0` rows whose native id ends in `:free`.
+        catalog: CatalogPolicy::ZeroPriceRequired,
+        billing: BillingKind::ZeroPricedOnly,
+        allow: ModelAllow::AnyApiFree,
+    },
 ];
 
 /// Env **names** (never values) the binary lists when none are set.
@@ -347,6 +359,7 @@ pub fn allow_native_id(allow: ModelAllow, native_id: &str) -> bool {
         ModelAllow::Chat => true,
         ModelAllow::GeminiFreeTier => gemini_is_documented_free_tier(native_id),
         ModelAllow::OpenCodeFree => opencode_is_documented_free(native_id),
+        ModelAllow::AnyApiFree => anyapi_is_documented_free(native_id),
     }
 }
 
@@ -388,6 +401,11 @@ pub fn gemini_is_documented_free_tier(id: &str) -> bool {
 pub fn opencode_is_documented_free(id: &str) -> bool {
     let id = id.to_ascii_lowercase();
     id.ends_with("-free") || id == "big-pickle"
+}
+
+/// AnyAPI free SKUs use OpenRouter-style ids with a `:free` suffix.
+pub fn anyapi_is_documented_free(id: &str) -> bool {
+    id.to_ascii_lowercase().ends_with(":free")
 }
 
 /// Public catalog id: `{provider}/{native}` unless `native` is already prefixed.
@@ -542,6 +560,35 @@ mod tests {
     }
 
     #[test]
+    fn anyapi_empty_key_is_skipped() {
+        assert!(configured_upstreams(lookup_of(&[("ANYAPI_API_KEY", "")])).is_empty());
+        assert!(configured_upstreams(lookup_of(&[("ANYAPI_API_KEY", "   ")])).is_empty());
+        assert!(!any_listed_key_set(lookup_of(&[("ANYAPI_API_KEY", "")])));
+    }
+
+    #[test]
+    fn anyapi_is_zero_price_required_with_free_suffix() {
+        let ups = configured_upstreams(lookup_of(&[("ANYAPI_API_KEY", "sk-anyapi")]));
+        assert_eq!(ups.len(), 1);
+        assert_eq!(ups[0].id, "anyapi");
+        assert_eq!(ups[0].base_url, "https://api.anyapi.ai/v1");
+        assert_eq!(ups[0].catalog, CatalogPolicy::ZeroPriceRequired);
+        assert_eq!(ups[0].billing, BillingKind::ZeroPricedOnly);
+        assert_eq!(ups[0].allow, ModelAllow::AnyApiFree);
+        assert_eq!(ups[0].api_key_env, "ANYAPI_API_KEY");
+    }
+
+    #[test]
+    fn anyapi_allowlist_requires_colon_free_suffix() {
+        assert!(anyapi_is_documented_free(
+            "meta-llama/llama-3.3-70b-instruct:free"
+        ));
+        assert!(anyapi_is_documented_free("Vendor/Model:FREE"));
+        assert!(!anyapi_is_documented_free("openai/gpt-4o"));
+        assert!(!anyapi_is_documented_free("hy3-free"));
+    }
+
+    #[test]
     fn listed_names_cover_every_adapter_env() {
         let names = listed_key_env_names();
         for expected in [
@@ -555,6 +602,7 @@ mod tests {
             "CLOUDFLARE_WORKERS_API_KEY",
             "CLOUDFLARE_ACCOUNT_ID",
             "KILOCODE_API_KEY",
+            "ANYAPI_API_KEY",
         ] {
             assert!(names.contains(&expected), "missing {expected}");
         }

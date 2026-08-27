@@ -339,6 +339,32 @@ mod tests {
     }
 
     #[test]
+    fn anyapi_keeps_free_suffix_at_zero_price_and_drops_the_rest() {
+        let body = json!({
+            "data": [
+                { "id": "meta-llama/llama-3.3-70b-instruct:free",
+                  "pricing": { "prompt": "0", "completion": "0" } },
+                { "id": "openai/gpt-4o",
+                  "pricing": { "prompt": "0.000005", "completion": "0.000015" } },
+                { "id": "unpriced-leftover" },
+                { "id": "vendor/unpriced:free" },
+                { "id": "openai/gpt-4o-mini",
+                  "pricing": { "prompt": "0", "completion": "0" } },
+            ]
+        });
+        let free = parse_provider_models(
+            &body,
+            "anyapi",
+            CatalogPolicy::ZeroPriceRequired,
+            ModelAllow::AnyApiFree,
+        );
+        let ids: Vec<&str> = free.iter().map(|m| m.upstream_id.as_str()).collect();
+        assert_eq!(ids, vec!["meta-llama/llama-3.3-70b-instruct:free"]);
+        assert_eq!(free[0].provider, "anyapi");
+        assert_eq!(free[0].id, "anyapi/meta-llama/llama-3.3-70b-instruct:free");
+    }
+
+    #[test]
     fn opencode_paid_catalog_rows_are_dropped() {
         let body = json!({
             "data": [
