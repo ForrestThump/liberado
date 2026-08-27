@@ -107,11 +107,7 @@ mod tests {
     use super::*;
 
     fn model(id: &str, ctx: u64, tools: bool) -> FreeModel {
-        FreeModel {
-            id: id.into(),
-            context_length: ctx,
-            supports_tools: tools,
-        }
+        FreeModel::fixture(id, ctx, tools)
     }
 
     fn scored(coding: Option<f64>) -> ModelScores {

@@ -4,8 +4,10 @@
 //! - `GET  /v1/models` — **only** free models, ranked best-coding-first, in OpenAI's `{"data":
 //!   [{"id": …}]}` shape so every existing picker (`parse_models_response`, TUI model browser,
 //!   ACP catalog) displays the ranking as its natural order.
-//! - `POST /v1/chat/completions` — the proxy path: resolve candidates, rewrite `model`, forward,
-//!   fail over down the ranking on candidate-shaped refusals, relay everything else verbatim.
+//! - `POST /v1/chat/completions` — the proxy path: resolve candidates, rewrite `model` to the
+//!   vendor's native id, POST to that vendor's base with that vendor's key, fail over down the
+//!   ranking on candidate-shaped refusals (429 / rate-limit / 5xx / timeout / transport), relay
+//!   everything else verbatim.
 //!
 //! Responses are relayed as raw bytes (streaming included) rather than re-serialized: this proxy
 //! must stay transparent to SSE chunk boundaries and unknown upstream fields alike.
@@ -19,7 +21,7 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde_json::{Value, json};
 
-use crate::service::{AttemptOutcome, ProxyService, RouteError};
+use crate::service::{AttemptOutcome, ProxyService, RouteCandidate, RouteError};
 
 pub fn router(state: Arc<ProxyService>) -> Router {
     Router::new()
@@ -41,7 +43,13 @@ async fn list_models(State(state): State<Arc<ProxyService>>) -> Response {
             let data: Vec<Value> = resolution
                 .ranked
                 .iter()
-                .map(|m| json!({ "id": m.id, "object": "model", "owned_by": "openrouter-free" }))
+                .map(|m| {
+                    json!({
+                        "id": m.id,
+                        "object": "model",
+                        "owned_by": m.provider,
+                    })
+                })
                 .collect();
             (
                 StatusCode::OK,
@@ -87,41 +95,88 @@ async fn chat_completions(
         Err(e) => return route_error_response(e),
     };
 
-    tracing::info!(candidates = ?candidates, "routing chat completion");
+    tracing::info!(
+        candidates = ?candidates.iter().map(|c| c.public_id.as_str()).collect::<Vec<_>>(),
+        "routing chat completion"
+    );
     let mut attempted = 0usize;
-    for slug in candidates {
+    for candidate in candidates {
         attempted += 1;
-        ProxyService::rewrite_model(&mut body, &slug);
-        if let Step::Finish(response) = attempt_candidate(&state, &body, &slug).await {
-            return response;
+        match attempt_candidate(&state, &mut body, &candidate).await {
+            Step::Finish(response) => return response,
+            Step::NextCandidate => {}
         }
     }
 
     exhausted_response(attempted)
 }
 
-async fn attempt_candidate(state: &ProxyService, body: &Value, slug: &str) -> Step {
+async fn attempt_candidate(
+    state: &ProxyService,
+    body: &mut Value,
+    candidate: &RouteCandidate,
+) -> Step {
+    let slug = candidate.public_id.as_str();
+    let Some(up) = state.config.registry.get(&candidate.provider) else {
+        // Proxy-local: we cannot even build the request. Do not churn the ranking.
+        tracing::error!(
+            candidate = %slug,
+            provider = %candidate.provider,
+            "no upstream adapter for candidate"
+        );
+        return Step::Finish(
+            (
+                StatusCode::BAD_GATEWAY,
+                Json(json!({ "error": { "message": format!(
+                    "proxy has no upstream for provider {}",
+                    candidate.provider
+                ) } })),
+            )
+                .into_response(),
+        );
+    };
+    if !up.may_send() {
+        tracing::info!(
+            candidate = %slug,
+            provider = %up.id,
+            "skipping candidate: remaining quota unknown or insufficient"
+        );
+        return Step::NextCandidate;
+    }
+
+    let Some(url) = state.chat_endpoint_for(&candidate.provider) else {
+        return Step::Finish(
+            (
+                StatusCode::BAD_GATEWAY,
+                Json(json!({ "error": { "message": "proxy cannot build upstream URL" } })),
+            )
+                .into_response(),
+        );
+    };
+
+    ProxyService::rewrite_model(body, &candidate.upstream_id);
     let response = state
         .http
-        .post(state.chat_endpoint())
-        .bearer_auth(&state.config.upstream_api_key)
-        .json(body)
+        .post(url)
+        .timeout(state.config.attempt_timeout)
+        .bearer_auth(up.bearer())
+        .json(&*body)
         .send()
         .await;
 
     let response = match response {
         Ok(r) => r,
         Err(e) => {
-            // Our network path failed, not one candidate's quota — retrying other models would
-            // not change that, so report rather than churn through the ranking.
-            tracing::warn!(candidate = %slug, error = %e, "upstream transport failure");
-            return Step::Finish(
-                (
-                    StatusCode::BAD_GATEWAY,
-                    Json(json!({ "error": { "message": format!("upstream unreachable: {e}") } })),
-                )
-                    .into_response(),
+            // Candidate-scoped: this vendor timed out or the path to it failed. The next
+            // ranked model may live on a different provider, so walk on. Exhaustion still
+            // answers 502.
+            tracing::warn!(
+                candidate = %slug,
+                provider = %candidate.provider,
+                error = %e,
+                "upstream transport failure; trying next candidate"
             );
+            return Step::NextCandidate;
         }
     };
 
