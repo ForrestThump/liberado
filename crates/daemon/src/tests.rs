@@ -1542,7 +1542,7 @@ async fn daemon_executes_an_approved_proposal() {
 
     // Write an approved proposal (simulates a human editing status to approved), signed with
     // the same key the daemon verifies against.
-    let mut proposal = Proposal::pending(
+    let proposal = Proposal::pending(
         "vault-change:test-proposal:abc",
         "vault-change:test-proposal:abc",
         "test",
@@ -1760,7 +1760,7 @@ async fn daemon_archives_a_rejected_proposal() {
 
     // A signed proposal the human then rejected. Signed with the daemon's key so the integrity
     // check (step 2.5) passes and we reach the terminal-observe branch.
-    let mut proposal = Proposal::pending(
+    let proposal = Proposal::pending(
         "vault-change:rejected-proposal:xyz",
         "vault-change:rejected-proposal:xyz",
         "test",
@@ -2596,7 +2596,7 @@ async fn approved_proposal_without_a_ledger_does_not_execute() {
 
     tokio::time::sleep(Duration::from_millis(300)).await;
 
-    let mut proposal = Proposal::pending(
+    let proposal = Proposal::pending(
         "no-ledger:1",
         "no-ledger:1",
         "test",
@@ -2679,7 +2679,7 @@ async fn rejected_proposal_in_ledger_does_not_execute() {
 
     tokio::time::sleep(Duration::from_millis(300)).await;
 
-    let mut proposal = Proposal::pending(
+    let proposal = Proposal::pending(
         "rejected-by-human:1",
         "rejected-by-human:1",
         "test",
