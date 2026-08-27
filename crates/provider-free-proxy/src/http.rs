@@ -73,6 +73,26 @@ enum Step {
     NextCandidate,
 }
 
+/// An unsuccessful upstream reply either names the *candidate* as the problem (fail over to the
+/// next ranked model) or it does not (relay verbatim).
+enum FailureVerdict {
+    FailOver,
+    Relay(Response),
+}
+
+/// Adapter, quota check, and chat URL for one ranked candidate.
+struct PreparedAttempt<'a> {
+    slug: &'a str,
+    url: String,
+    bearer: &'a str,
+}
+
+/// Outcome of looking up the adapter and URL: send, or stop this candidate.
+enum AttemptPrep<'a> {
+    Send(PreparedAttempt<'a>),
+    Stop(Step),
+}
+
 async fn chat_completions(
     State(state): State<Arc<ProxyService>>,
     Json(mut body): Json<Value>,
@@ -116,92 +136,120 @@ async fn attempt_candidate(
     body: &mut Value,
     candidate: &RouteCandidate,
 ) -> Step {
-    let slug = candidate.public_id.as_str();
-    let Some(up) = state.config.registry.get(&candidate.provider) else {
-        // Proxy-local: we cannot even build the request. Do not churn the ranking.
-        tracing::error!(
-            candidate = %slug,
-            provider = %candidate.provider,
-            "no upstream adapter for candidate"
-        );
-        return Step::Finish(
-            (
-                StatusCode::BAD_GATEWAY,
-                Json(json!({ "error": { "message": format!(
-                    "proxy has no upstream for provider {}",
-                    candidate.provider
-                ) } })),
-            )
-                .into_response(),
-        );
+    let prepared = match prepare_attempt(state, candidate) {
+        AttemptPrep::Send(prepared) => prepared,
+        AttemptPrep::Stop(step) => return step,
     };
-    if !up.may_send() {
-        tracing::info!(
-            candidate = %slug,
-            provider = %up.id,
-            "skipping candidate: remaining quota unknown or insufficient"
-        );
-        return Step::NextCandidate;
-    }
-
-    let Some(url) = state.chat_endpoint_for(&candidate.provider) else {
-        return Step::Finish(
-            (
-                StatusCode::BAD_GATEWAY,
-                Json(json!({ "error": { "message": "proxy cannot build upstream URL" } })),
-            )
-                .into_response(),
-        );
-    };
-
     ProxyService::rewrite_model(body, &candidate.upstream_id);
-    let response = state
-        .http
-        .post(url)
-        .timeout(state.config.attempt_timeout)
-        .bearer_auth(up.bearer())
-        .json(&*body)
-        .send()
-        .await;
-
-    let response = match response {
-        Ok(r) => r,
-        Err(e) => {
-            // Candidate-scoped: this vendor timed out or the path to it failed. The next
-            // ranked model may live on a different provider, so walk on. Exhaustion still
-            // answers 502.
-            tracing::warn!(
-                candidate = %slug,
-                provider = %candidate.provider,
-                error = %e,
-                "upstream transport failure; trying next candidate"
-            );
-            return Step::NextCandidate;
-        }
-    };
-
-    let status = response.status();
-    if !status.is_success() {
-        return match classify_failure(state, slug, response).await {
-            FailureVerdict::FailOver => Step::NextCandidate,
-            FailureVerdict::Relay(response) => Step::Finish(response),
-        };
-    }
-
-    match state.classify_response(response) {
-        AttemptOutcome::Ready(upstream) => Step::Finish(relay(upstream).await),
-        AttemptOutcome::Failed(reason) => {
-            tracing::warn!(candidate = %slug, %reason, "classified failed after success status");
-            Step::NextCandidate
-        }
+    match post_candidate(state, &prepared, body).await {
+        Ok(response) => step_from_upstream(state, prepared.slug, response).await,
+        Err(error) => transport_failure_step(prepared.slug, &candidate.provider, &error),
     }
 }
 
-/// An unsuccessful upstream reply either names the *candidate* as the problem (fail over to the
-/// next ranked model) or it does not (relay verbatim).
-enum FailureVerdict {
-    FailOver,
-    Relay(Response),
+fn prepare_attempt<'a>(state: &'a ProxyService, candidate: &'a RouteCandidate) -> AttemptPrep<'a> {
+    let slug = candidate.public_id.as_str();
+    let Some(up) = state.config.registry.get(&candidate.provider) else {
+        // Proxy-local: we cannot even build the request. Do not churn the ranking.
+        return AttemptPrep::Stop(no_adapter_step(slug, &candidate.provider));
+    };
+    if !up.may_send() {
+        return AttemptPrep::Stop(skip_quota_step(slug, &up.id));
+    }
+    let Some(url) = state.chat_endpoint_for(&candidate.provider) else {
+        return AttemptPrep::Stop(cannot_build_url_step());
+    };
+    AttemptPrep::Send(PreparedAttempt {
+        slug,
+        url,
+        bearer: up.bearer(),
+    })
+}
+
+fn no_adapter_step(slug: &str, provider: &str) -> Step {
+    tracing::error!(
+        candidate = %slug,
+        provider = %provider,
+        "no upstream adapter for candidate"
+    );
+    Step::Finish(
+        (
+            StatusCode::BAD_GATEWAY,
+            Json(json!({ "error": { "message": format!(
+                "proxy has no upstream for provider {provider}"
+            ) } })),
+        )
+            .into_response(),
+    )
+}
+
+fn skip_quota_step(slug: &str, provider: &str) -> Step {
+    tracing::info!(
+        candidate = %slug,
+        provider = %provider,
+        "skipping candidate: remaining quota unknown or insufficient"
+    );
+    Step::NextCandidate
+}
+
+fn cannot_build_url_step() -> Step {
+    Step::Finish(
+        (
+            StatusCode::BAD_GATEWAY,
+            Json(json!({ "error": { "message": "proxy cannot build upstream URL" } })),
+        )
+            .into_response(),
+    )
+}
+
+async fn post_candidate(
+    state: &ProxyService,
+    prepared: &PreparedAttempt<'_>,
+    body: &Value,
+) -> Result<reqwest::Response, reqwest::Error> {
+    state
+        .http
+        .post(&prepared.url)
+        .timeout(state.config.attempt_timeout)
+        .bearer_auth(prepared.bearer)
+        .json(body)
+        .send()
+        .await
+}
+
+fn transport_failure_step(slug: &str, provider: &str, error: &reqwest::Error) -> Step {
+    // Candidate-scoped: this vendor timed out or the path to it failed. The next
+    // ranked model may live on a different provider, so walk on. Exhaustion still
+    // answers 502.
+    tracing::warn!(
+        candidate = %slug,
+        provider = %provider,
+        error = %error,
+        "upstream transport failure; trying next candidate"
+    );
+    Step::NextCandidate
+}
+
+async fn step_from_upstream(state: &ProxyService, slug: &str, response: reqwest::Response) -> Step {
+    if !response.status().is_success() {
+        return step_from_failure(classify_failure(state, slug, response).await);
+    }
+    match state.classify_response(response) {
+        AttemptOutcome::Ready(upstream) => Step::Finish(relay(upstream).await),
+        AttemptOutcome::Failed(reason) => classified_failed_step(slug, &reason),
+    }
+}
+
+fn step_from_failure(verdict: FailureVerdict) -> Step {
+    match verdict {
+        FailureVerdict::FailOver => Step::NextCandidate,
+        FailureVerdict::Relay(response) => Step::Finish(response),
+    }
+}
+
+fn classified_failed_step(slug: &str, reason: &str) -> Step {
+    tracing::warn!(candidate = %slug, %reason, "classified failed after success status");
+    Step::NextCandidate
 }
 
 /// Read an upstream error body bounded — a hostile or misbehaving peer must not choose our
