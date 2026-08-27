@@ -123,7 +123,14 @@ async fn chat_completions(
     for candidate in candidates {
         attempted += 1;
         match attempt_candidate(&state, &mut body, &candidate).await {
-            Step::Finish(response) => return response,
+            Step::Finish(response) => {
+                tracing::info!(
+                    candidate = %candidate.public_id,
+                    attempt = attempted,
+                    "served chat completion"
+                );
+                return response;
+            }
             Step::NextCandidate => {}
         }
     }
@@ -289,6 +296,7 @@ async fn classify_failure(
 }
 
 fn exhausted_response(attempted: usize) -> Response {
+    tracing::warn!(attempted, "all free candidates refused the request");
     (
         StatusCode::BAD_GATEWAY,
         Json(json!({
