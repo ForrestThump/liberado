@@ -379,7 +379,7 @@ impl Daemon {
     }
 
     /// Spawn the background proposal-expiry reaper when a non-zero interval is configured.
-    fn spawn_reaper(&mut self) {
+    pub(crate) fn spawn_reaper(&mut self) {
         if !self.proposal_reap_interval.is_zero() {
             let reap_interval = self.proposal_reap_interval;
             let reap_vault = self.vault.clone();
@@ -407,9 +407,7 @@ mod accessor_tests {
 
     async fn fresh_daemon() -> (Daemon, tempfile::TempDir) {
         let dir = tempfile::tempdir().expect("tempdir");
-        let daemon = Daemon::open("test", dir.path())
-            .await
-            .expect("open daemon");
+        let daemon = Daemon::open("test", dir.path()).await.expect("open daemon");
         (daemon, dir)
     }
 

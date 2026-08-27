@@ -281,7 +281,10 @@ mod label_tests {
     #[test]
     fn acted_reported_label_is_acted_reported() {
         let disposition = Disposition::Reported(sample_report());
-        assert_eq!(ReactionOutcome::Acted(disposition).label(), "acted:reported");
+        assert_eq!(
+            ReactionOutcome::Acted(disposition).label(),
+            "acted:reported"
+        );
     }
 
     #[test]
@@ -296,7 +299,10 @@ mod label_tests {
     #[test]
     fn acted_propose_label_is_acted_proposed() {
         let disposition = Disposition::Propose(sample_signed_proposal());
-        assert_eq!(ReactionOutcome::Acted(disposition).label(), "acted:proposed");
+        assert_eq!(
+            ReactionOutcome::Acted(disposition).label(),
+            "acted:proposed"
+        );
     }
 
     #[test]

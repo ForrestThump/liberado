@@ -616,7 +616,57 @@ mod tests {
     #[tokio::test]
     async fn vault_event_source_name_is_vault_watch() {
         let (_dir, vault, _rel) = test_vault().await;
-        let source = VaultEventSource::new(vault, Duration::from_millis(50), Vec::new(), default_scope());
+        let source = VaultEventSource::new(
+            vault,
+            Duration::from_millis(50),
+            Vec::new(),
+            default_scope(),
+        );
         assert_eq!(source.name(), "vault-watch");
+    }
+
+    /// `matches_any_glob` must match a basename-only glob (`*.md`) against the file name even when
+    /// the full vault-relative path (`proposals/foo.md`) does not match (glob `*` does not cross
+    /// `/`). The `||` between the path and file-name matches is what enables this; a mutant that
+    /// flips it to `&&` would stop recognizing basename globs like `~*` or `*.tmp`.
+    #[test]
+    fn matches_any_glob_matches_basename_when_full_path_does_not() {
+        assert!(
+            matches_any_glob(
+                std::path::Path::new("proposals/foo.md"),
+                &["*.md".to_string()],
+            ),
+            "a basename glob must match via the file-name branch"
+        );
+        // A full-path pattern still matches.
+        assert!(matches_any_glob(
+            std::path::Path::new("proposals/foo.md"),
+            &["proposals/*.md".to_string()],
+        ));
+        // An empty glob list never matches.
+        assert!(!matches_any_glob(
+            std::path::Path::new("proposals/foo.md"),
+            &[]
+        ));
+    }
+
+    /// `matches_capture_entry` routes glob patterns (`inbox/*`) to the glob branch and plain
+    /// folder prefixes (`inbox/`) to the prefix branch. The `||` in the glob-detection condition
+    /// must keep a `*` pattern on the glob branch; a mutant that flips it to `&&` would send
+    /// `inbox/*` to the prefix branch and misclassify it.
+    #[test]
+    fn matches_capture_entry_glob_branch_vs_prefix_branch() {
+        assert!(
+            matches_capture_entry(std::path::Path::new("inbox/foo.md"), "inbox/*"),
+            "a glob pattern must take the glob branch and match"
+        );
+        assert!(matches_capture_entry(
+            std::path::Path::new("inbox/foo.md"),
+            "inbox/",
+        ));
+        assert!(
+            !matches_capture_entry(std::path::Path::new("notes/foo.md"), "inbox/*"),
+            "a non-matching glob must not match"
+        );
     }
 }

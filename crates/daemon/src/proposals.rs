@@ -306,7 +306,7 @@ impl Daemon {
     /// complete the expiry lifecycle without applying permission grants or marking Done. Matches
     /// the refusal summary **exactly** (not substring) so free-form Failed reports that mention
     /// "expired" are not misclassified.
-    async fn complete_refusal_lifecycle(
+    pub(crate) async fn complete_refusal_lifecycle(
         &self,
         rel_path: &Path,
         proposal: &mut Proposal,
@@ -364,7 +364,11 @@ impl Daemon {
     /// Step 7.5 tail: tell the human the proposal ran. Best-effort — the action already ran and
     /// was marked done; a failed confirmation just means the human finds out by checking the
     /// vault instead.
-    async fn notify_executed(&self, proposal: &Proposal, report: &liberado_common::Report) {
+    pub(crate) async fn notify_executed(
+        &self,
+        proposal: &Proposal,
+        report: &liberado_common::Report,
+    ) {
         let Some(notifier) = &self.notifier else {
             return;
         };
@@ -442,7 +446,7 @@ fn expiry_log(proposal: &Proposal, late: bool) {
 /// boot / container recreate). Only a human button tap ever reaches here, so the "agents can't
 /// edit their own permission config" invariant holds. Best-effort: a persistence failure is
 /// logged, never propagated — the approved call already ran.
-fn persist_everywhere_grant(component: &str, capability: &liberado_common::Capability) {
+pub(crate) fn persist_everywhere_grant(component: &str, capability: &liberado_common::Capability) {
     match liberado_config::append_grant_to_overlay(component, capability) {
         Ok(true) => tracing::info!(
             component,
