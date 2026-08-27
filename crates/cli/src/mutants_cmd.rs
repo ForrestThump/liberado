@@ -196,6 +196,9 @@ const TIMEOUT_OVERRIDES: &[(&str, &str, &str)] = &[
     // coder-tools shells out to real git in its tests; 141/582 mutants timed
     // out at the 3s floor without ever being decided.
     ("liberado-coder-tools", "30", "30"),
+    // provider-free-proxy: 90 lib tests plus wiremock integration exceed the
+    // 3s unmutated baseline (debug.log: process_status=Timeout elapsed=3.0s).
+    ("liberado-provider-free-proxy", "30", "30"),
 ];
 
 fn build_mutants_command(package: &str, profile: RunProfile) -> String {

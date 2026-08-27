@@ -307,6 +307,9 @@ fn build_mutants_command_uses_longer_timeout_for_cli() {
     assert!(conversation.contains("--timeout 60"));
     let core = build_mutants_command("liberado-coder-core", RunProfile::Default);
     assert!(core.contains("--timeout 90"));
+    let free_proxy = build_mutants_command("liberado-provider-free-proxy", RunProfile::Default);
+    assert!(free_proxy.contains("--timeout 30"));
+    assert!(free_proxy.contains("--minimum-test-timeout 30"));
 }
 
 #[test]
