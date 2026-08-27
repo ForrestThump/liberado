@@ -81,10 +81,18 @@ async fn health(State(_state): State<Arc<AppState>>) -> Json<WorkerHealth> {
 
 async fn submit(State(state): State<Arc<AppState>>, Json(spec): Json<TaskSpec>) -> Response {
     if let Some(reason) = validate(&spec) {
+        tracing::warn!(task = %spec.id, %reason, "rejected delegated task");
         return (StatusCode::BAD_REQUEST, Json(RejectReason::new(reason))).into_response();
     }
     match state.store.submit(&spec) {
         Ok(outcome) => {
+            tracing::info!(
+                task = %spec.id,
+                repository = %spec.repository,
+                base = %spec.base_branch,
+                duplicate = outcome.duplicate,
+                "accepted delegated task"
+            );
             if !outcome.duplicate {
                 let ctx = state.run.clone();
                 tokio::spawn(runner::execute(ctx, spec));
@@ -96,11 +104,14 @@ async fn submit(State(state): State<Arc<AppState>>, Json(spec): Json<TaskSpec>) 
             };
             (code, Json(outcome)).into_response()
         }
-        Err(error) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(RejectReason::new(error.to_string())),
-        )
-            .into_response(),
+        Err(error) => {
+            tracing::error!(task = %spec.id, %error, "failed to persist delegated task");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(RejectReason::new(error.to_string())),
+            )
+                .into_response()
+        }
     }
 }
 
@@ -257,6 +268,12 @@ async fn post_question_answer(state: Arc<AppState>, task_id: String, answer: Ans
         Err(error) => return internal_error(error.to_string()),
     }
     let delivered = state.mailbox.deliver(&answer);
+    tracing::info!(
+        task = %task_id,
+        question = %answer.question_id,
+        delivered,
+        "question answer recorded"
+    );
     (StatusCode::OK, Json(AnswerAck { delivered })).into_response()
 }
 
@@ -299,6 +316,7 @@ async fn post_kickback(state: Arc<AppState>, record: TaskRecord, answer: Answer)
         return (StatusCode::CONFLICT, Json(RejectReason::new(reason))).into_response();
     }
 
+    tracing::info!(task = %task_id, round, "kickback accepted");
     let ctx = state.run.clone();
     tokio::spawn(runner::execute_kickback(
         ctx,

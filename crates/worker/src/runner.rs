@@ -156,6 +156,7 @@ pub async fn execute_kickback(
             None => fallback_record(&spec, reason),
         };
     };
+    tracing::info!(task = %id, round, pr_url = %pr_url, "kickback round starting");
     let shape = RunShape {
         reuse_worktree: true,
         effective_goal: format!(
@@ -204,6 +205,14 @@ async fn prepare_and_run(ctx: &RunContext, spec: &TaskSpec, shape: RunShape) -> 
     let branch = naming::branch_name(spec);
     let worktree = worktree_path(ctx, &spec.id);
     let clone_dir = repo_dir(ctx, &spec.repository);
+    tracing::info!(
+        task = %spec.id,
+        session = %session_id,
+        repository = %spec.repository,
+        branch = %branch,
+        reuse_worktree = shape.reuse_worktree,
+        "delegated task running"
+    );
 
     // One clone cache serves every task of a repository; two concurrent fetches
     // race on the same remote-tracking refs and git refuses the second update.
@@ -219,6 +228,11 @@ async fn prepare_and_run(ctx: &RunContext, spec: &TaskSpec, shape: RunShape) -> 
         task_id: spec.id.clone(),
         session_id: session_id.clone(),
     });
+    tracing::info!(
+        task = %spec.id,
+        model = ?ctx.settings.model,
+        "running coding pack"
+    );
     let result = run_pack(
         ctx,
         backend.as_ref(),
@@ -227,12 +241,18 @@ async fn prepare_and_run(ctx: &RunContext, spec: &TaskSpec, shape: RunShape) -> 
         &worktree,
     )
     .await?;
+    tracing::info!(
+        task = %spec.id,
+        outcome = ?result.outcome,
+        "coding pack finished"
+    );
 
     // Acceptance gates (plan §15 D3): the pack must have succeeded AND the
     // delegator's declared steps pass against the finished work before anything
     // reaches the forge.
     let preflight = verify_result(&worktree, spec, &result).await?;
 
+    tracing::info!(task = %spec.id, branch = %branch, "committing and pushing");
     commit_and_push(ctx, spec, &branch, &result).await?;
     pr::open_or_update_pr(ctx, spec, &branch, shape, &result, &preflight.body_section).await
 }

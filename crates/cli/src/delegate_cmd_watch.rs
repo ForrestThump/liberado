@@ -56,7 +56,7 @@ where
             match serde_json::from_str::<WorkerEvent>(&frame.data) {
                 Ok(event) => {
                     let terminal = event.is_terminal();
-                    emit(&format!("[{}] {}", frame.event, event.correlation_id));
+                    emit(&format_watch_line(&frame.event, &event));
                     if terminal {
                         return Ok(());
                     }
@@ -68,10 +68,42 @@ where
     Ok(())
 }
 
+/// One watch line: kind, correlation, then the status/url/reason when present.
+/// The full goal never belongs here — operators grep task ids, not prompt text.
+fn format_watch_line(sse_name: &str, event: &WorkerEvent) -> String {
+    let mut line = format!("[{sse_name}] {}", event.correlation_id);
+    if let Some(state) = event
+        .payload
+        .pointer("/status/state")
+        .and_then(|value| value.as_str())
+    {
+        line.push(' ');
+        line.push_str(state);
+        if let Some(url) = event
+            .payload
+            .pointer("/status/detail/url")
+            .and_then(|value| value.as_str())
+        {
+            line.push(' ');
+            line.push_str(url);
+        }
+        if let Some(reason) = event
+            .payload
+            .pointer("/status/detail/reason")
+            .and_then(|value| value.as_str())
+        {
+            line.push_str(": ");
+            line.push_str(reason);
+        }
+    }
+    line
+}
+
 #[cfg(test)]
 mod tests {
-    use super::consume;
+    use super::{consume, format_watch_line};
     use futures::stream;
+    use liberado_delegate_contract::{EventKind, TaskId, WorkerEvent};
 
     fn sse(event: &str, data: &str) -> String {
         format!("event: {event}\ndata: {data}\n\n")
@@ -128,5 +160,21 @@ mod tests {
     async fn transport_errors_surface_as_errors() {
         let result = consume(chunks(vec![Err("connection reset".into())])).await;
         assert_eq!(result, Err("connection reset".into()));
+    }
+
+    #[test]
+    fn watch_line_carries_state_and_url_without_the_goal() {
+        let event = WorkerEvent {
+            kind: EventKind::PrReady,
+            correlation_id: "delegate:t:2".into(),
+            task_id: TaskId("t".into()),
+            payload: serde_json::json!({
+                "status": {"state": "pr_opened", "detail": {"url": "http://gitea/pulls/3"}}
+            }),
+        };
+        assert_eq!(
+            format_watch_line("pr_ready", &event),
+            "[pr_ready] delegate:t:2 pr_opened http://gitea/pulls/3"
+        );
     }
 }

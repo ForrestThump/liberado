@@ -61,6 +61,7 @@ async fn update_pull_request(
             },
         )
         .map_err(|error| format!("record PR status: {error}"))?;
+    tracing::info!(task = %spec.id, pr_url = %pr_url, "kickback updated existing PR");
     Ok(())
 }
 
