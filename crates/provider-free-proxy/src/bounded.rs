@@ -70,6 +70,24 @@ mod tests {
         assert!(err.contains("cap"), "{err}");
     }
 
+    /// `>` vs `>=`/`==` at the cap: a body of exactly `cap` bytes is admitted, including when
+    /// the content-length header claims that exact size.
+    #[tokio::test]
+    async fn a_body_exactly_at_the_cap_is_admitted() {
+        let server = MockServer::start().await;
+        let body = "x".repeat(1024);
+        Mock::given(method("GET"))
+            .and(path("/exact"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(body))
+            .mount(&server)
+            .await;
+        let resp = reqwest::get(server.uri() + "/exact").await.expect("get");
+        let bytes = read_capped(resp, "probe", 1024)
+            .await
+            .expect("exactly the cap is not over it");
+        assert_eq!(bytes.len(), 1024);
+    }
+
     // A deliberately lying content-length cannot be served by wiremock/hyper (it refuses to
     // frame a body that contradicts its own header), so the chunk-count check above has no
     // direct fixture; it remains as defense-in-depth against peers that stream past their

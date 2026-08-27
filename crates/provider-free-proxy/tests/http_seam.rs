@@ -243,6 +243,69 @@ async fn quota_refusals_fail_over_to_the_next_ranked_model() {
     assert_eq!(reply["choices"][0]["message"]["content"], json!("ok"));
 }
 
+/// A 400 whose body names a model/quota problem must fail over. Emptying
+/// `failure_body_text` would classify this as a payload 400 and relay it.
+#[tokio::test]
+async fn a_400_naming_rate_limit_fails_over_to_the_next_model() {
+    let upstream = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/api/v1/chat/completions"))
+        .and(body_partial_json(json!({ "model": "best/m" })))
+        .respond_with(ResponseTemplate::new(400).set_body_string(
+            json!({"error":{"message":"Rate limit exceeded for this model"}}).to_string(),
+        ))
+        .expect(1)
+        .mount(&upstream)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/api/v1/chat/completions"))
+        .and(body_partial_json(json!({ "model": "second/m" })))
+        .respond_with(ok_completion())
+        .expect(1)
+        .mount(&upstream)
+        .await;
+
+    let app =
+        liberado_provider_free_proxy::http_router(service_at(format!("{}/api/v1", upstream.uri())));
+    let (status, reply) = post_chat(app, json!({"model": "auto", "messages": []})).await;
+    assert_eq!(status, StatusCode::OK, "second candidate must serve");
+    assert_eq!(reply["choices"][0]["message"]["content"], json!("ok"));
+}
+
+/// The 64 KiB error-body cap must still admit an 8 KiB rate-limit payload.
+/// `64 * 1024` mutated to `64 + 1024` or `64 / 1024` would refuse this body,
+/// drop the text, and treat the 400 as a payload error.
+#[tokio::test]
+async fn an_8kib_rate_limit_400_still_fails_over() {
+    let upstream = MockServer::start().await;
+    let mut body = json!({"error":{"message":"Rate limit exceeded for this model"}}).to_string();
+    body.push_str(&"x".repeat(8 * 1024));
+    Mock::given(method("POST"))
+        .and(path("/api/v1/chat/completions"))
+        .and(body_partial_json(json!({ "model": "best/m" })))
+        .respond_with(ResponseTemplate::new(400).set_body_string(body))
+        .expect(1)
+        .mount(&upstream)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/api/v1/chat/completions"))
+        .and(body_partial_json(json!({ "model": "second/m" })))
+        .respond_with(ok_completion())
+        .expect(1)
+        .mount(&upstream)
+        .await;
+
+    let app =
+        liberado_provider_free_proxy::http_router(service_at(format!("{}/api/v1", upstream.uri())));
+    let (status, reply) = post_chat(app, json!({"model": "auto", "messages": []})).await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "readable error text must still fail over"
+    );
+    assert_eq!(reply["choices"][0]["message"]["content"], json!("ok"));
+}
+
 #[tokio::test]
 async fn a_payload_400_is_relayed_without_spending_another_candidate() {
     let upstream = MockServer::start().await;
@@ -282,11 +345,10 @@ async fn exhausted_candidates_answer_502() {
         liberado_provider_free_proxy::http_router(service_at(format!("{}/api/v1", upstream.uri())));
     let (status, err) = post_chat(app, json!({"messages": []})).await;
     assert_eq!(status, StatusCode::BAD_GATEWAY);
+    let message = err["error"]["message"].as_str().unwrap_or("");
     assert!(
-        err["error"]["message"]
-            .as_str()
-            .unwrap_or("")
-            .contains("candidates")
+        message.contains("all 2 attempted"),
+        "the attempt counter must count candidates, not stay at 0*1: {message}"
     );
 }
 

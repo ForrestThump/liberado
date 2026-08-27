@@ -253,6 +253,28 @@ mod tests {
         assert!(err.contains("cap"), "{err}");
     }
 
+    /// Production `MAX_SCRAPE_BODY` is `32 * 1024 * 1024`. Replacing either `*` with `+`
+    /// drops the cap to ~33 KB or ~1 MB. A 1.5 MB markdown page must still succeed.
+    #[tokio::test]
+    async fn a_megabyte_and_a_half_scrape_is_under_the_production_cap() {
+        let server = MockServer::start().await;
+        let markdown = "m".repeat(1_500_000);
+        Mock::given(method("POST"))
+            .and(path("/v1/scrape"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "success": true,
+                "data": { "markdown": markdown },
+            })))
+            .mount(&server)
+            .await;
+
+        let md = SpiderClient::new(server.uri(), None)
+            .scrape_markdown("https://example.com", 30)
+            .await
+            .expect("1.5 MB is under 32 MB");
+        assert_eq!(md.len(), 1_500_000);
+    }
+
     /// The request-body `timeout` is only a hint to spider-mcp; the local per-request timeout
     /// is the hard ceiling. A hung server must surface as an error within the budget, not hold
     /// the resolver's refresh lock forever.
