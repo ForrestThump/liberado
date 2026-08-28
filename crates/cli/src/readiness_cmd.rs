@@ -115,7 +115,7 @@ pub fn crap_linux(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
 fn wsl_path(root: &Path, distro: &str) -> Result<String, Box<dyn std::error::Error>> {
     let output = std_command("wsl.exe")
         .args(["-d", distro, "wslpath", "-a", "-u"])
-        .arg(root)
+        .arg(wsl_path_input(root))
         .output()
         .map_err(|error| format!("could not query Debian under WSL: {error}"))?;
     if output.status.success() {
@@ -132,6 +132,10 @@ fn wsl_path(root: &Path, distro: &str) -> Result<String, Box<dyn std::error::Err
         )
         .into())
     }
+}
+
+fn wsl_path_input(root: &Path) -> String {
+    root.to_string_lossy().replace('\\', "/")
 }
 
 fn decode_output(bytes: &[u8]) -> String {
@@ -293,7 +297,7 @@ fn command_text(
 
 #[cfg(test)]
 mod tests {
-    use super::{Receipt, decode_output, tree_fingerprint};
+    use super::{Receipt, decode_output, tree_fingerprint, wsl_path_input};
     use std::fs;
     use std::process::Command;
     use tempfile::tempdir;
@@ -351,6 +355,14 @@ mod tests {
         if cfg!(windows) {
             assert_eq!(decode_output(&bytes), "Debian missing");
         }
+    }
+
+    #[test]
+    fn wslpath_input_preserves_a_windows_path() {
+        assert_eq!(
+            wsl_path_input(std::path::Path::new(r"C:\tmp\life-os-pr216-fix")),
+            "C:/tmp/life-os-pr216-fix"
+        );
     }
 
     #[test]
