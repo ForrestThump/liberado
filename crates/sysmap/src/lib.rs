@@ -75,15 +75,23 @@ pub fn build(root: &Path, config_dir: Option<&Path>) -> Result<SystemMap, BuildE
 /// Walk up from the current directory to the repository root (a directory containing both
 /// `Cargo.toml` and `crates/`). Mirrors the CLI's `repository_root` resolution.
 pub fn repository_root() -> Result<PathBuf, String> {
-    let mut current = std::env::current_dir().map_err(|e| e.to_string())?;
+    let current = std::env::current_dir().map_err(|e| e.to_string())?;
+    find_repo_root(&current).ok_or_else(|| {
+        "could not find repository root (expected Cargo.toml and crates/)".to_string()
+    })
+}
+
+/// Walk up from `start` to the repository root (a directory containing both `Cargo.toml` and
+/// `crates/`). Pure, so tests can drive it without touching the process cwd. `None` means the
+/// walk ran off the top of `start` without finding a candidate.
+pub fn find_repo_root(start: &Path) -> Option<PathBuf> {
+    let mut current = start.to_path_buf();
     loop {
         if current.join("Cargo.toml").is_file() && current.join("crates").is_dir() {
-            return Ok(current);
+            return Some(current);
         }
         if !current.pop() {
-            return Err(
-                "could not find repository root (expected Cargo.toml and crates/)".to_string(),
-            );
+            return None;
         }
     }
 }
@@ -315,5 +323,45 @@ enabled = true
             let b = map.node(&e.to).is_some();
             a && b
         }));
+    }
+
+    #[test]
+    fn find_repo_root_walks_up_through_crates_only_directories() {
+        // A directory with `crates/` but no `Cargo.toml` is NOT the repo root — the function must
+        // keep walking until it finds both. The `||` mutation on the predicate used to short-circuit
+        // here and return the first directory containing `crates/`.
+        let dir = tempdir().unwrap();
+        let nested = dir.path().join("deep").join("nested");
+        fs::create_dir_all(nested.join("crates")).unwrap();
+        // No Cargo.toml at `nested` — the walk must continue.
+        let root = dir.path().to_path_buf();
+        fs::write(root.join("Cargo.toml"), "[workspace]\n").unwrap();
+        fs::create_dir(root.join("crates")).unwrap();
+        assert_eq!(find_repo_root(&nested).as_ref(), Some(&root));
+    }
+
+    #[test]
+    fn find_repo_root_returns_none_at_filesystem_top() {
+        // Walking off the top without finding a Cargo.toml+crates pair returns None, not a panic
+        // and not a wrong root. The `delete !` mutation on `current.pop()` used to flip the
+        // termination and recurse forever (in practice: panic via the loop body).
+        let dir = tempdir().unwrap();
+        let mut no_workspace = dir.path().to_path_buf();
+        // Strip everything down to a leaf directory that has no Cargo.toml/crates at any ancestor
+        // within the tempdir. tempdir() returns a path whose first component IS unique, so no
+        // ancestor above it qualifies.
+        no_workspace.push("leaf");
+        fs::create_dir_all(&no_workspace).unwrap();
+        assert_eq!(find_repo_root(&no_workspace), None);
+    }
+
+    #[test]
+    fn find_repo_root_accepts_cwd_at_the_root_itself() {
+        // Starting AT the repo root must return that root, not walk up to the temp parent.
+        let dir = tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        fs::write(root.join("Cargo.toml"), "[workspace]\n").unwrap();
+        fs::create_dir(root.join("crates")).unwrap();
+        assert_eq!(find_repo_root(&root).as_ref(), Some(&root));
     }
 }

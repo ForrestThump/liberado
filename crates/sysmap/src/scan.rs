@@ -423,4 +423,28 @@ mod tests {
         };
         assert!(!mcp_writes_vault(&opted_out));
     }
+
+    #[test]
+    fn runtime_layer_maps_every_known_kind_to_its_group() {
+        // Each cargo-mutants arm-deletion used to fall through to `_ => "unknown"`. Pin the table
+        // so dropping a single arm forces a test failure with the actual returned layer.
+        for (kind, expected) in [
+            ("provider", "foundation"),
+            ("notifier", "foundation"),
+            ("mcp", "service"),
+            ("hook", "service"),
+            ("pool", "kernel"),
+            ("profile", "kernel"),
+            ("schedule", "kernel"),
+            ("project", "pack"),
+            ("vault", "store"),
+        ] {
+            let layer = runtime_layer(kind);
+            assert_eq!(
+                layer.as_str(),
+                expected,
+                "runtime_layer({kind:?}) = {layer:?}, want {expected:?}"
+            );
+        }
+    }
 }
