@@ -2118,6 +2118,51 @@
         "timeout": 0,
         "unviable": 11
       }
+    },
+    {
+      "package": "liberado-sysmap",
+      "commit": "1a452e09ff15091ed19fea8305bd7f7770e078bf",
+      "recorded_at": "2026-08-28",
+      "command": "cargo mutants -p liberado-sysmap --cap-lints true --timeout 3.0 --minimum-test-timeout 30 --in-place",
+      "tool_version": "27.1.0",
+      "scope": "package",
+      "counts": {
+        "viable": 32,
+        "caught": 22,
+        "survived": 10,
+        "timeout": 0,
+        "unviable": 11
+      }
+    },
+    {
+      "package": "liberado-sysmap-gui",
+      "commit": "1a452e09ff15091ed19fea8305bd7f7770e078bf",
+      "recorded_at": "2026-08-28",
+      "command": "cargo mutants -p liberado-sysmap-gui --cap-lints true --timeout 3.0 --minimum-test-timeout 30 --in-place",
+      "tool_version": "27.1.0",
+      "scope": "package",
+      "counts": {
+        "viable": 196,
+        "caught": 31,
+        "survived": 165,
+        "timeout": 0,
+        "unviable": 31
+      }
+    },
+    {
+      "package": "liberado-test-support",
+      "commit": "1a452e09ff15091ed19fea8305bd7f7770e078bf",
+      "recorded_at": "2026-08-28",
+      "command": "cargo mutants -p liberado-test-support --cap-lints true --timeout 3.0 --minimum-test-timeout 30 --in-place",
+      "tool_version": "27.1.0",
+      "scope": "package",
+      "counts": {
+        "viable": 97,
+        "caught": 88,
+        "survived": 9,
+        "timeout": 0,
+        "unviable": 20
+      }
     }
   ]
 }

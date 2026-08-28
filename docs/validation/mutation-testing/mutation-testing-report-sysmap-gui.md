@@ -2,24 +2,24 @@
 
 **Status:** historical
 **Authority:** evidence
-**Date:** 2026-08-28 · **Campaign commit:** `737b99b` · **Tool:** cargo-mutants 27.1.0
+**Date:** 2026-08-28 · **Campaign commit:** `1a452e09ff15091ed19fea8305bd7f7770e078bf` · **Tool:** cargo-mutants 27.1.0
 
-Two campaigns were run on the same base (`737b99b`, the `origin/main` the work branched from).
-The first is the **baseline**, the second is the **final** after adding
-`second_hop_edge_in_selection_requires_both_endpoints_in_scope`. Both rows are appended to
-`mutants-ledger.json`.
+The original rows recorded the baseline and first test pass under a commit that did not contain
+the dirty-tree changes. They remain append-only history. The reviewed rerun at
+`1a452e09ff15091ed19fea8305bd7f7770e078bf` contains
+`second_hop_edge_in_selection_requires_both_endpoints_in_scope`.
 
-| Metric | Baseline | Final |
-|--------|:--------:|:-----:|
+| Metric | Original baseline | Reviewed rerun |
+|--------|:-----------------:|:--------------:|
 | Viable | 196 | 196 |
 | Caught | 30 | **31** |
 | Survived | 166 | **165** |
 | Timeout | 0 | 0 |
 | Unviable | 31 | 31 |
 
-`build_mutants_command` has no per-crate timeout override for `liberado-sysmap-gui`, so the run
-used the default `--timeout 3.0 --minimum-test-timeout 30` and `--in-place`. The eframe+wgpu
-toolchain makes every mutant rebuild ~1s; the full run took ~6 min on each pass.
+`build_mutants_command` has no per-crate timeout override for `liberado-sysmap-gui`, so the
+reviewed run used the default `--timeout 3.0 --minimum-test-timeout 30` and `--in-place`. The
+eframe+wgpu toolchain makes every mutant rebuild about 1s; the 227-mutant run took 8m.
 
 ## Killed along the way
 
@@ -33,16 +33,16 @@ The `sysmap-gui` crate is the 2D interactive renderer. Most of its 704-line `app
 panel code (window setup, sliders, painter calls) that has no testable seam without an egui
 headless harness, which the codebase does not have. The breakdown:
 
-* **`app.rs` rendering surface (≈138 survivors)** — sliders, checkboxes, painter calls, font
+* **`app.rs` rendering surface (138 survivors)** — sliders, checkboxes, painter calls, font
   selection, label fitting. All are changes to UI presentation with no observed behavioral
   effect on the `SystemMap` data; no test can reach them without spinning up an egui context.
-* **`interaction.rs::arrow_points` (12 survivors)** — arithmetic mutants in the 2D geometry
+* **`interaction.rs::arrow_points` (11 survivors)** — arithmetic mutants in the 2D geometry
   that draws the arrow head. The existing `arrowhead_points_in_edge_direction_at_every_zoom_level`
   test asserts the points are "behind the tip in the right direction" (`points[1].x <
   points[0].x`), which holds under any of the `*` / `+` / `-` mutations because the
   geometric structure is preserved. The exact length and angle are visual style choices.
-* **`interaction.rs::ray_rect_distance` (10 survivors)** — boundary (`>`, `>=`, `==`, `<`)
-  and division-by-zero handling for ray-AABB distance. Used in `app.rs`'s edge hit-testing,
+* **`interaction.rs::ray_rect_distance` (13 survivors)** — return-value, boundary, comparison,
+  and division mutants in the ray-AABB distance calculation. Used in `app.rs`'s edge hit-testing,
   which has no test.
 * **`insights.rs` (3 survivors)** — `show_cycle_warning` and `show_metadata` are
   presentation-only egui calls; their effect is "render some RichText on the UI" and is

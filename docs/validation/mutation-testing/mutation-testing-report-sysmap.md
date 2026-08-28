@@ -2,32 +2,31 @@
 
 **Status:** historical
 **Authority:** evidence
-**Date:** 2026-08-28 · **Campaign commit:** `f4c239d` · **Tool:** cargo-mutants 27.1.0
+**Date:** 2026-08-28 · **Campaign commit:** `1a452e09ff15091ed19fea8305bd7f7770e078bf` · **Tool:** cargo-mutants 27.1.0
 
-Two campaigns were run on the same base (`f4c239d`, the `origin/main` the work branched from).
-The first is the **baseline**, the second is the **final** after adding
-`find_repo_root` (refactored from `repository_root`) plus three
-`find_repo_root_*` tests, and a `runtime_layer_maps_every_known_kind_to_its_group`
-table-driven test. Both rows are appended to `mutants-ledger.json`.
+The original rows recorded the baseline and first test pass under a commit that did not contain
+the dirty-tree changes. They remain append-only history. The reviewed rerun at
+`1a452e09ff15091ed19fea8305bd7f7770e078bf` contains the `find_repo_root` refactor, its tests,
+the complete `runtime_layer` table test, and a direct `repository_root` wrapper test.
 
-| Metric | Baseline | Final |
-|--------|:--------:|:-----:|
+| Metric | Original baseline | Reviewed rerun |
+|--------|:-----------------:|:--------------:|
 | Viable | 30 | 32 |
-| Caught | 12 | **21** |
-| Survived | 18 | **11** |
+| Caught | 12 | **22** |
+| Survived | 18 | **10** |
 | Timeout | 0 | 0 |
 | Unviable | 11 | 11 |
 
-`build_mutants_command` has no per-crate timeout override for `liberado-sysmap`, so the run
-used the default `--timeout 3.0 --minimum-test-timeout 30` and `--in-place`. The first run took
-~2m on a cold `target/mutants` cache; the rebuild was ~1m.
+`build_mutants_command` has no per-crate timeout override for `liberado-sysmap`, so the reviewed
+run used the default `--timeout 3.0 --minimum-test-timeout 30` and `--in-place`. It tested 43
+mutants in 82s after a 1s baseline build and 2s baseline test.
 
 ## Killed along the way
 
 | Location | Mutant | Test added |
 |----------|--------|-----------|
-| `crates/sysmap/src/lib.rs:78` `&&` → `\|\|` in `repository_root` | first directory with `crates/` returned as the root | `find_repo_root_walks_up_through_crates_only_directories` — nested directory has `crates/` but no `Cargo.toml`; the function must keep walking |
-| `crates/sysmap/src/lib.rs:83` `delete !` in `repository_root` | the walk returns `None` after its first successful `pop()` | `find_repo_root_walks_up_through_crates_only_directories` — the walk must continue through the nested directory to the fixture root |
+| `crates/sysmap/src/lib.rs:90` `&&` → `\|\|` in `find_repo_root` | first directory with `crates/` returned as the root | `find_repo_root_walks_up_through_crates_only_directories` — nested directory has `crates/` but no `Cargo.toml`; the function must keep walking |
+| `crates/sysmap/src/lib.rs:93` `delete !` in `find_repo_root` | the walk returns `None` after its first successful `pop()` | `find_repo_root_walks_up_through_crates_only_directories` — the walk must continue through the nested directory to the fixture root |
 | `crates/sysmap/src/lib.rs:78` `repository_root` → `Ok(Default::default())` | empty `PathBuf` returned as the root | `repository_root_returns_an_absolute_workspace_root` calls the wrapper and rejects a relative empty path |
 | `crates/sysmap/src/scan.rs:49-53` × 5 (one per match arm) | deleting `provider \| notifier`, `mcp \| hook`, `pool \| profile \| schedule`, `project`, or `vault` falls through to `_ => "unknown"` | `runtime_layer_maps_every_known_kind_to_its_group` — table-driven test asserts every known kind maps to its expected group (`foundation` / `service` / `kernel` / `pack` / `store`) |
 
@@ -43,7 +42,7 @@ tests). Refactored:
 `liberado-sysmap-cli` calls `repository_root()` and `resolve_config_dir(...)`; both signatures
 are unchanged, so the binary is unaffected.
 
-## Survivors accepted out of scope (11)
+## Survivors accepted out of scope (10)
 
 | Location | Mutant | Why retained |
 |----------|--------|----------------|
@@ -60,7 +59,7 @@ are unchanged, so the binary is unaffected.
 
 ## Conclusion
 
-The `sysmap` crate's test suite catches **65.6% of viable mutants** (up from 40%). The 11
+The `sysmap` crate's test suite catches **68.8% of viable mutants** (up from 40%). The 10
 remaining misses are concentrated in three buckets: untested `Display` impls, untested fallback
 paths in config-dir resolution, and `MapNode` meta fields that no test asserts on. The
 `enabled` identity function, `transport_label` constant lookup, and `mcp_node` args key are

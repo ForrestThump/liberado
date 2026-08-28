@@ -2,25 +2,24 @@
 
 **Status:** historical
 **Authority:** evidence
-**Date:** 2026-08-28 · **Campaign commit:** `94ae882` · **Tool:** cargo-mutants 27.1.0
+**Date:** 2026-08-28 · **Campaign commit:** `b4686b87f66d48ba4074df5567fd15f3868524f8` · **Tool:** cargo-mutants 27.1.0
 
-Two campaigns were run on the same base (`94ae882`, the `origin/main` the work branched from).
-The first is the **baseline**, the second is the **final** after adding
-`scenarios_contains_labeled_anchors_across_categories`. Both rows are appended to
-`mutants-ledger.json`.
+The original rows recorded the baseline and the first test pass under a commit that did not
+contain the dirty-tree test changes. They remain append-only history. The reviewed rerun at
+`b4686b87f66d48ba4074df5567fd15f3868524f8` is the current ledger row and identifies the exact
+committed source after `scenarios_contains_labeled_anchors_across_categories` was added.
 
-| Metric | Baseline | Final |
-|--------|:--------:|:-----:|
+| Metric | Original baseline | Reviewed rerun |
+|--------|:-----------------:|:--------------:|
 | Viable | 22 | 22 |
 | Caught | 20 | **21** |
 | Survived | 2 | **1** |
 | Timeout | 0 | 0 |
 | Unviable | 3 | 3 |
 
-`build_mutants_command` has no per-crate timeout override for `liberado-eval`, so the run used
-the default `--timeout 3.0 --minimum-test-timeout 30` and `--in-place`. The first run took 34s
-on a cold `target/mutants` cache (just under the 30s `--minimum-test-timeout` floor); the
-rebuild was instant.
+`build_mutants_command` has no per-crate timeout override for `liberado-eval`, so the reviewed
+run used the default `--timeout 3.0 --minimum-test-timeout 30` and `--in-place`. It tested 25
+mutants in 59s after a 22s baseline build.
 
 ## Killed along the way
 
