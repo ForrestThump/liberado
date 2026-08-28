@@ -36,6 +36,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "registry"] }
 tokio = { version = "1", features = ["full"] }
 async-trait = "0.1"
 tempfile = "3"
+flate2 = "1"
 reqwest = { version = "0.12", features = ["blocking", "json", "stream"] }
 futures = "0.3"
 async-stream = "0.3"
@@ -84,6 +85,7 @@ liberado-commands = { path = "crates/liberado-commands" }
 liberado-test-support = { path = "crates/test-support" }
 liberado-eval = { path = "crates/eval" }
 liberado-cost = { path = "crates/cost" }
+liberado-ops = { path = "crates/ops" }
 liberado-telegram-approvals = { path = "crates/telegram-approvals" }
 liberado-cron = { path = "crates/cron" }
 liberado-chat-search = { path = "crates/chat-search" }

@@ -73,7 +73,7 @@ COPY --from=builder /out/liberado /usr/local/bin/liberado
 COPY --from=builder /out/liberado-conformance /usr/local/bin/liberado-conformance
 
 # Build provenance — the single answer to "what commit is actually running?".
-# `deploy/homelab/deploy.sh` passes the deployed git SHA here; it lands both in a file the daemon
+# `liberado deploy homelab` passes the deployed Git SHA here; it lands both in a file the daemon
 # container can print and in an image LABEL. Read it without guessing:
 #   docker exec liberado cat /etc/liberado-build-sha
 #   docker inspect -f '{{ index .Config.Labels "org.liberado.git-sha" }}' liberado:dev

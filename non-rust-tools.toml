@@ -1,0 +1,38 @@
+# Every executable Python, PowerShell, shell, or JavaScript file in this repository must be here.
+# The layer-rules crate rejects unlisted files and entries without a specific boundary reason.
+
+[[tool]]
+path = ".cursor/install.sh"
+owner = "development environment"
+purpose = "Install OS packages and bootstrap the cloud development image."
+justification = "Package installation is an operating-system shell boundary that Rust cannot remove."
+
+[[tool]]
+path = "scripts/cleanup_merged_branches.py"
+owner = "repository maintenance"
+purpose = "Audit and remove branches whose complete content is merged to the base branch."
+justification = "This standalone Python tool must run before or without a compiled repository binary."
+
+[[tool]]
+path = "scripts/test_cleanup_merged_branches.py"
+owner = "repository maintenance"
+purpose = "Exercise branch cleanup safety in temporary Git repositories."
+justification = "The tests execute the standalone Python entry point in its native runtime."
+
+[[tool]]
+path = "scripts/dispatch-acp-run.js"
+owner = "ACP integration"
+purpose = "Dispatch through the same Node stdio process boundary that Paseo uses."
+justification = "The JavaScript process is an exact compatibility probe for Paseo's Node launch boundary."
+
+[[tool]]
+path = "scripts/repro-acp-prompt.js"
+owner = "ACP integration"
+purpose = "Reproduce ACP prompt behavior through the Node client used by Paseo."
+justification = "A Rust rewrite would stop reproducing the Node client behavior under diagnosis."
+
+[[tool]]
+path = "scripts/repro-git-spawn-hang.js"
+owner = "ACP integration"
+purpose = "Reproduce a Windows child-process hang from the Node runtime."
+justification = "A Rust rewrite would remove the Node and Windows spawn interaction under diagnosis."

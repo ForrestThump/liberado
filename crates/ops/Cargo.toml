@@ -1,0 +1,28 @@
+[package]
+name = "liberado-ops"
+version = "0.1.0"
+description = "Cross-platform operator workflows for Liberado: deployment, development processes, and external surface installation"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+flate2 = { workspace = true }
+liberado-common = { workspace = true }
+liberado-config = { workspace = true }
+liberado-config-loader = { workspace = true }
+liberado-cost = { workspace = true }
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tempfile = { workspace = true }
+thiserror = { workspace = true }
+toml = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[package.metadata.liberado]
+role = "tooling"

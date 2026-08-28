@@ -37,6 +37,13 @@ cyclomatic_new = 150
 # reviewed_on = "2026-08-21"
 
 [[waiver]]
+path = "crates/cost/src/lib.rs"
+metric = "ploc"
+ceiling = 1146
+reason = "Growth is two crate-root lines that wire and export the split latency_report.rs module plus one JournalEvent schema initializer in the existing compatibility tests; the implementation does not grow this root."
+reviewed_on = "2026-08-28"
+
+[[waiver]]
 path = "crates/coder-agent/src/assemble.rs"
 metric = "ploc"
 ceiling = 1165

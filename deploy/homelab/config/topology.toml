@@ -45,7 +45,7 @@ enter_key = "newline"
 # --- Per-role model tiering (latency knobs; edit on the box + `up -d --force-recreate`, NO rebuild) --
 # Roles: main_agent (chat face), dispatcher (router), subagent (orchestrator/worker). All fields
 # optional; omitted = inherit `provider` + its model. temperature (when set) overrides the per-call
-# value; reasoning is "off"|"low"|"medium"|"high". Measure with deploy/homelab/latency-report.sh.
+# value; reasoning is "off"|"low"|"medium"|"high". Measure with `just latency-homelab`.
 #
 # ACTIVE (measured 2026-07-20): the router is a pure classifier, so a fast non-thinking model there is
 # a clean win — dispatcher p50 6785ms -> ~1977ms (3.4x) with correct routing and no user-visible

@@ -11,6 +11,7 @@
 //!   end (streaming calls often report nothing).
 
 mod journal;
+mod latency_report;
 mod price;
 mod report;
 mod rollup;
@@ -19,6 +20,7 @@ pub use journal::{
     JournalEvent, LoadError, child_to_parent_map, load_dispatch_parent_map, load_latency_events,
     load_latency_events_from_str,
 };
+pub use latency_report::{LatencySummary, format_latency_report, latency_summary};
 pub use price::{PriceTable, PricedEvent, price_event, price_table_from_models};
 pub use report::{Report, format_report};
 pub use rollup::{
@@ -356,6 +358,7 @@ mod tests {
             model: model.into(),
             kind: "llm_call".into(),
             wall_ms: 100,
+            ttft_ms: None,
             prompt_tokens: prompt,
             completion_tokens: completion,
             total_tokens: match (prompt, completion) {

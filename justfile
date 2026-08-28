@@ -5,6 +5,8 @@
 set dotenv-load := true
 set quiet := true
 
+python := if os() == "windows" { "py -3" } else { "python3" }
+
 default:
     @just --list
 
@@ -231,49 +233,59 @@ config-check:
 
 # ── Windows dev-stack helpers ────────────────────────────────────────────────
 
-[windows]
-dev-stack: # Rebuild + restart the whole dev stack (daemon, server, webui).
-    powershell -ExecutionPolicy Bypass -File scripts/start-dev-stack.ps1 -Restart
+ops-config-check *args: # Validate operations TOML.
+    cargo run --locked --quiet -p liberado-cli -- ops config check {{args}}
 
-[windows]
-tui: # Run the ratatui TUI against the dev stack.
-    powershell -ExecutionPolicy Bypass -File scripts/run-tui.ps1
+dev-start *args: # Start the daemon as a detached process.
+    cargo run --locked --quiet -p liberado-cli -- dev start {{args}}
 
-[windows]
-stop-daemon: # Stop the running daemon.
-    powershell -ExecutionPolicy Bypass -File scripts/stop-daemon.ps1
+dev-stack *args: # Compatibility alias: build and start the daemon.
+    cargo run --locked --quiet -p liberado-cli -- dev start --build {{args}}
 
-[windows]
-webui: # Start the detached daemon that serves the built WebUI.
-    powershell -ExecutionPolicy Bypass -File scripts/start-webui.ps1
+tui *args: # Run the ratatui TUI against the configured daemon.
+    cargo run --locked --quiet -p liberado-cli -- dev tui {{args}}
 
-[windows]
-webui-build: # Build the WebUI, then start the detached WebUI daemon.
-    powershell -ExecutionPolicy Bypass -File scripts/start-webui.ps1 -Build
+stop-daemon *args: # Stop the detached daemon if its recorded PID still matches.
+    cargo run --locked --quiet -p liberado-cli -- dev stop {{args}}
 
-[windows]
-webui-dev: # Start Dioxus WebUI hot reload; requires a daemon on port 4201.
-    powershell -ExecutionPolicy Bypass -File scripts/start-webui-dev.ps1
+webui *args: # Start the daemon that serves the built WebUI.
+    cargo run --locked --quiet -p liberado-cli -- dev start {{args}}
 
-[windows]
-stop-webui: # Stop the detached WebUI daemon.
-    powershell -ExecutionPolicy Bypass -File scripts/stop-webui.ps1
+webui-build *args: # Build and start the daemon that serves the WebUI.
+    cargo run --locked --quiet -p liberado-cli -- dev start --build {{args}}
 
-[windows]
-stop-webui-dev: # Stop the Dioxus WebUI development server.
-    powershell -ExecutionPolicy Bypass -File scripts/stop-webui-dev.ps1
+webui-dev *args: # Start Dioxus WebUI hot reload.
+    cargo run --locked --quiet -p liberado-cli -- dev webui-start {{args}}
 
-[windows]
-paseo-install: # Install liberado-acp and register its Paseo provider.
-    powershell -ExecutionPolicy Bypass -File scripts/install-paseo-liberado.ps1
+stop-webui *args: # Stop the detached daemon.
+    cargo run --locked --quiet -p liberado-cli -- dev stop {{args}}
 
-[windows]
-deploy-webui-homelab: # Build and ship the WebUI bundle to the homelab.
-    powershell -ExecutionPolicy Bypass -File scripts/deploy-webui-homelab.ps1
+stop-webui-dev *args: # Stop the Dioxus WebUI development server.
+    cargo run --locked --quiet -p liberado-cli -- dev webui-stop {{args}}
 
-[windows]
-deploy-homelab: # Build and deploy the daemon image to the homelab.
-    powershell -ExecutionPolicy Bypass -File scripts/deploy-homelab.ps1
+dev-status *args: # Report detached development processes.
+    cargo run --locked --quiet -p liberado-cli -- dev status {{args}}
+
+paseo-install *args: # Install liberado-acp and register its Paseo provider.
+    cargo run --locked --quiet -p liberado-cli -- paseo install {{args}}
+
+deploy-webui-homelab *args: # Build and ship the WebUI bundle to the configured host.
+    cargo run --locked --quiet -p liberado-cli -- deploy webui {{args}}
+
+deploy-homelab *args: # Build and deploy the daemon image to the configured host.
+    cargo run --locked --quiet -p liberado-cli -- deploy homelab {{args}}
+
+smoke-homelab *args: # Verify the configured live deployment.
+    cargo run --locked --quiet -p liberado-cli -- deploy smoke {{args}}
+
+latency-homelab *args: # Report latency from the configured remote journal.
+    cargo run --locked --quiet -p liberado-cli -- deploy latency {{args}}
+
+branches-clean *args: # Audit merged branches; pass --apply only after review.
+    {{python}} scripts/cleanup_merged_branches.py {{args}}
+
+branches-clean-test: # Test the branch cleaner in temporary repositories.
+    {{python}} -m unittest scripts/test_cleanup_merged_branches.py
 
 # Dispatch one ACP coding run through the same Node stdio boundary that Paseo uses.
 acp-dispatch *args:

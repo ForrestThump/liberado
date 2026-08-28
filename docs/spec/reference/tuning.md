@@ -406,7 +406,7 @@ docker logs liberado 2>&1 | grep -a "did not decode"
 ```
 
 Latency and token usage (including cache hit rate) are journaled to
-`<data-dir>/latency/*.jsonl`; `deploy/homelab/latency-report.sh` summarises per-role p50/p95.
+`<data-dir>/latency/*.jsonl`; `liberado-cost latency` summarizes per-role p50/p95.
 
 **Which compaction thresholds actually loaded**, at boot:
 

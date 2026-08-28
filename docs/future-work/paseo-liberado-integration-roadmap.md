@@ -21,7 +21,7 @@ dogfood-ready:** interactive coding, durable sessions, and Paseo permission prom
 
 - Dogfood / install: [`../impl/paseo-integration.md`](../impl/paseo-integration.md)
 - Prior residual list (folded into this plan): [`acp-bridge-completion-roadmap.md`](archive/acp-bridge-completion-roadmap.md)
-- Install script: `scripts/install-paseo-liberado.ps1`
+- Install command: `liberado paseo install`
 - Config example: `config.example/paseo-liberado.json`
 - Bridge source: `crates/acp-bridge/`
 - Scoreboard: [`../roadmap.md`](../roadmap.md) (cross-cutting Paseo items)
@@ -297,7 +297,7 @@ P0.3 --version ───────┘         │
 ```powershell
 # Liberado repo
 cargo install --path crates/acp-bridge --force
-powershell -File scripts/install-paseo-liberado.ps1
+just paseo-install
 # Restart Paseo; provider Liberado; diagnostics: binary, initialize, session/new
 # Prompt only after OPENROUTER_API_KEY (or peer) is in the env that starts Paseo
 # Interactive coding: mode picker → coding; denied shell commands show a permission chooser

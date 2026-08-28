@@ -11,8 +11,9 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 use liberado_cost::{
-    PriceTable, default_data_dir, format_report, price_table_from_topology_path,
-    report_from_data_dir, run_delegation_cost, run_provenance_ratio,
+    PriceTable, default_data_dir, format_latency_report, format_report, latency_journal_path,
+    latency_summary, load_latency_events, price_table_from_topology_path, report_from_data_dir,
+    run_delegation_cost, run_provenance_ratio,
 };
 
 const DEFAULT_RATIO_THRESHOLD: f64 = 3.0;
@@ -57,79 +58,83 @@ enum Command {
     },
     /// Compare prompt sizes after delegating vs non-delegating turns
     DelegationCost,
+    /// Per-role p50/p95 inference latency from the latency journal
+    Latency,
 }
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
     let data_dir = cli.data_dir.unwrap_or_else(default_data_dir);
-    let json = cli.json;
-
-    match cli.command.unwrap_or(Command::Report) {
-        Command::Report => {
-            let prices_table = match load_prices(cli.topology.as_ref(), cli.prices.as_ref()) {
-                Ok(p) => p,
-                Err(e) => {
-                    eprintln!("liberado-cost: {e}");
-                    return ExitCode::from(1);
-                }
-            };
-            match report_from_data_dir(&data_dir, &prices_table) {
-                Ok(report) => {
-                    if json {
-                        match serde_json::to_string_pretty(&report) {
-                            Ok(j) => println!("{j}"),
-                            Err(e) => {
-                                eprintln!("liberado-cost: JSON: {e}");
-                                return ExitCode::from(1);
-                            }
-                        }
-                    } else {
-                        print!("{}", format_report(&report));
-                    }
-                    ExitCode::SUCCESS
-                }
-                Err(e) => {
-                    eprintln!("liberado-cost: {e}");
-                    ExitCode::from(1)
-                }
-            }
+    let result = match cli.command.unwrap_or(Command::Report) {
+        Command::Report => run_report(
+            &data_dir,
+            cli.topology.as_ref(),
+            cli.prices.as_ref(),
+            cli.json,
+        ),
+        Command::ProvenanceRatio { threshold } => run_provenance(&data_dir, threshold, cli.json),
+        Command::DelegationCost => run_delegation(&data_dir, cli.json),
+        Command::Latency => run_latency(&data_dir, cli.json),
+    };
+    match result {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("liberado-cost: {error}");
+            ExitCode::from(1)
         }
-        Command::ProvenanceRatio { threshold } => {
-            let rows = run_provenance_ratio(&data_dir);
-            if json {
-                match serde_json::to_string_pretty(&rows) {
-                    Ok(j) => println!("{j}"),
-                    Err(e) => {
-                        eprintln!("liberado-cost: JSON: {e}");
-                        return ExitCode::from(1);
-                    }
-                }
-            } else {
-                print_provenance_ratio(&rows, threshold);
-            }
-            ExitCode::SUCCESS
-        }
-        Command::DelegationCost => match run_delegation_cost(&data_dir) {
-            Ok(samples) => {
-                if json {
-                    match serde_json::to_string_pretty(&samples) {
-                        Ok(j) => println!("{j}"),
-                        Err(e) => {
-                            eprintln!("liberado-cost: JSON: {e}");
-                            return ExitCode::from(1);
-                        }
-                    }
-                } else {
-                    print_delegation_cost(&samples);
-                }
-                ExitCode::SUCCESS
-            }
-            Err(e) => {
-                eprintln!("liberado-cost: {e}");
-                ExitCode::from(1)
-            }
-        },
     }
+}
+
+fn run_report(
+    data_dir: &std::path::Path,
+    topology: Option<&PathBuf>,
+    prices: Option<&PathBuf>,
+    json: bool,
+) -> Result<(), String> {
+    let report = report_from_data_dir(data_dir, &load_prices(topology, prices)?)
+        .map_err(|error| error.to_string())?;
+    if json {
+        println!("{}", json_pretty(&report)?);
+    } else {
+        print!("{}", format_report(&report));
+    }
+    Ok(())
+}
+
+fn run_provenance(data_dir: &std::path::Path, threshold: f64, json: bool) -> Result<(), String> {
+    let rows = run_provenance_ratio(data_dir);
+    if json {
+        println!("{}", json_pretty(&rows)?);
+    } else {
+        print_provenance_ratio(&rows, threshold);
+    }
+    Ok(())
+}
+
+fn run_delegation(data_dir: &std::path::Path, json: bool) -> Result<(), String> {
+    let samples = run_delegation_cost(data_dir).map_err(|error| error.to_string())?;
+    if json {
+        println!("{}", json_pretty(&samples)?);
+    } else {
+        print_delegation_cost(&samples);
+    }
+    Ok(())
+}
+
+fn run_latency(data_dir: &std::path::Path, json: bool) -> Result<(), String> {
+    let events =
+        load_latency_events(&latency_journal_path(data_dir)).map_err(|error| error.to_string())?;
+    let rows = latency_summary(&events);
+    if json {
+        println!("{}", json_pretty(&rows)?);
+    } else {
+        print!("{}", format_latency_report(&rows));
+    }
+    Ok(())
+}
+
+fn json_pretty(value: &impl serde::Serialize) -> Result<String, String> {
+    serde_json::to_string_pretty(value).map_err(|error| format!("JSON: {error}"))
 }
 
 fn load_prices(

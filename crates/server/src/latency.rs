@@ -6,7 +6,7 @@
 //! channel; a background task owns the file and does the writes. Best-effort — a full disk or a
 //! closed channel drops events rather than ever blocking an inference call.
 //!
-//! Analyze with `deploy/homelab/latency-report.sh` (p50/p95 per role).
+//! Analyze with `liberado-cost latency` or `just latency-homelab` (p50/p95 per role).
 
 use std::path::PathBuf;
 use std::sync::Arc;

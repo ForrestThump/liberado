@@ -22,6 +22,10 @@
 //!   liberado ci ratchet              check, write baseline, then stage or amend it
 //!                                    console is a summary; full child log is .liberado/ci.log
 //!   liberado shepherd --once          run the unattended PR shepherd once
+//!   liberado deploy <homelab|webui|smoke|latency> run configured deployment operations
+//!   liberado dev <start|stop|webui-start|webui-stop|status|tui> manage local processes
+//!   liberado paseo install            install ACP bridge and merge Paseo configuration
+//!   liberado ops config check         validate the resolved operations TOML
 //!   liberado docs check-links         check relative Markdown links
 //!   liberado docs crate-map           check the generated crate map
 //!   liberado docs crate-map --write   regenerate the crate map
@@ -64,6 +68,7 @@ mod docs_site_cmd;
 mod function_complexity_cmd;
 mod module_health_cmd;
 mod mutants_cmd;
+mod ops_cmd;
 mod readiness_cmd;
 mod shepherd_cmd;
 mod summarize_cmd;
@@ -124,7 +129,7 @@ async fn route_named(
     }
 }
 
-/// The six synchronous sub-command groups, by first argument. Each wrapper owns its own
+/// The synchronous sub-command groups, by first argument. Each wrapper owns its own
 /// argument match; `None` means "not a known group", leaving the caller free to fall back.
 fn route_sync(
     name: &str,
@@ -137,6 +142,10 @@ fn route_sync(
         "shepherd" => shepherd_cmd::run(args),
         "docs" => cmd_docs(args),
         "config" => cmd_config(args),
+        "deploy" => ops_cmd::run_deploy(args),
+        "dev" => ops_cmd::run_dev(args),
+        "paseo" => ops_cmd::run_paseo(args),
+        "ops" => ops_cmd::run_ops(args),
         _ => return None,
     };
     Some(route)

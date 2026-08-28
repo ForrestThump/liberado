@@ -254,8 +254,8 @@ The server listens on `0.0.0.0:4201` (LAN-accessible). Set `LIBERADO_PORT` to ch
 
 ```cmd
 cargo build -p liberado
-.\scripts\start-dev-stack.ps1 -Restart
-cargo run -p liberado-tui
+just dev-start --restart
+just dev-tui
 ```
 
 Slash: `/session` (session browser), `/model` (model list + Enter to hot-swap), `/theme set <name>`

@@ -12,33 +12,30 @@ making changes without re-deriving any of it.
 
 ## TL;DR — run it
 
-```powershell
-# 1. Start the daemon (serves the API on :4201, plus a static build of this UI)
-.\scripts\start-webui.ps1 -VaultPath <path-to-vault>
+```bash
+# Copy config.example/ops.toml to .liberado/ops.toml first.
+just dev-start --vault <path-to-vault>
+just webui-dev
 
-# 2. Start the hot-reload dev server (builds from source, live-reloads on save)
-.\scripts\start-webui-dev.ps1            # http://localhost:8080  (and http://<lan-ip>:8080)
-
-# stop them
-.\scripts\stop-webui-dev.ps1
-.\scripts\stop-webui.ps1
+just stop-webui-dev
+just stop-daemon
 ```
 
 - **Edit the UI against `:8080`** (hot reload). The WASM there still calls the daemon's
   API on `:4201` (see [api_base](#api-base--cors)), so the daemon must be running too.
 - **`:4201` serves a *static release build*** of this crate. It only updates when you
-  rebuild the bundle (`.\scripts\start-webui.ps1 -Build` or the `dx build` below). If
+  rebuild the bundle (`dx build` below). If
   `:4201` looks stale, that's why — hard-refresh after a rebuild, or just use `:8080`.
 
 ### Ship it to the homelab
 
-```powershell
-.\scripts\deploy-webui-homelab.ps1     # build + ship, ~1 min -> https://liberado.homelab.local
+```bash
+just deploy-webui-homelab
 ```
 
 The bundle is **mounted** into the daemon's container rather than baked into its image, and
 `ServeDir` re-reads it per request — so this is a file copy, with no image rebuild and no restart.
-Do *not* use `deploy/homelab/deploy.sh` for a frontend-only change; that rebuilds the daemon image
+Do *not* use `just deploy-homelab` for a frontend-only change; that rebuilds the daemon image
 and takes 20–40 minutes. See `deploy/homelab/README.md`.
 
 ---
