@@ -1968,6 +1968,36 @@
         "timeout": 0,
         "unviable": 1
       }
+    },
+    {
+      "package": "liberado-eval",
+      "commit": "94ae88262a736365d291489cf42263d8c1ddcb43",
+      "recorded_at": "2026-08-28",
+      "command": "cargo mutants -p liberado-eval --cap-lints true --timeout 3.0 --minimum-test-timeout 30 --in-place",
+      "tool_version": "27.1.0",
+      "scope": "package",
+      "counts": {
+        "viable": 22,
+        "caught": 20,
+        "survived": 2,
+        "timeout": 0,
+        "unviable": 3
+      }
+    },
+    {
+      "package": "liberado-eval",
+      "commit": "94ae88262a736365d291489cf42263d8c1ddcb43",
+      "recorded_at": "2026-08-28",
+      "command": "cargo mutants -p liberado-eval --cap-lints true --timeout 3.0 --minimum-test-timeout 30 --in-place",
+      "tool_version": "27.1.0",
+      "scope": "package",
+      "counts": {
+        "viable": 22,
+        "caught": 21,
+        "survived": 1,
+        "timeout": 0,
+        "unviable": 3
+      }
     }
   ]
 }
