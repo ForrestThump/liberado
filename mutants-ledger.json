@@ -1953,6 +1953,21 @@
         "timeout": 1,
         "unviable": 49
       }
+    },
+    {
+      "package": "liberado-sysmap-cli",
+      "commit": "9949809385dfb5a968a35a8c9a4c740daaaaf49d",
+      "recorded_at": "2026-08-28",
+      "command": "cargo mutants -p liberado-sysmap-cli --cap-lints true --timeout 3.0 --minimum-test-timeout 30 --in-place",
+      "tool_version": "27.1.0",
+      "scope": "package",
+      "counts": {
+        "viable": 3,
+        "caught": 3,
+        "survived": 0,
+        "timeout": 0,
+        "unviable": 1
+      }
     }
   ]
 }
