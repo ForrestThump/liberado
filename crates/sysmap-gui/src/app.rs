@@ -630,6 +630,27 @@ mod tests {
     }
 
     #[test]
+    fn second_hop_edge_in_selection_requires_both_endpoints_in_scope() {
+        // The `&&` on line 56 of `edge_in_selection` checks that BOTH endpoints are in the
+        // two-hop scope. The `||` mutant flips it: an edge with one endpoint in scope and one
+        // out (e.g. `x -> b` where x is unreachable from `a`) would be wrongly reported as
+        // selected. The existing test only checks edges where both endpoints ARE in scope,
+        // so the `||` mutation passes trivially.
+        let map = map();
+        let two_hop_scope = visible_scope(&map, Some("a"), true).unwrap();
+        let out_of_scope_edge = MapEdge {
+            from: "x".into(),
+            to: "b".into(),
+            kind: EdgeKind::Dependency,
+            label: String::new(),
+        };
+        assert!(
+            !edge_in_selection(&out_of_scope_edge, Some("a"), true, Some(&two_hop_scope)),
+            "edge with one endpoint outside the two-hop scope must not be selected"
+        );
+    }
+
+    #[test]
     fn arrowhead_points_in_edge_direction_at_every_zoom_level() {
         for zoom in [MIN_ZOOM, 1.0, MAX_ZOOM] {
             let points = arrow_points(Pos2::new(100.0, 50.0), Vec2::X, zoom);
