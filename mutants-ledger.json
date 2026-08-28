@@ -2163,6 +2163,36 @@
         "timeout": 0,
         "unviable": 20
       }
+    },
+    {
+      "package": "chat-client-contract",
+      "commit": "3f78ccf9797573df0fd8d7c6285964e479b569a9",
+      "recorded_at": "2026-08-28",
+      "command": "cargo mutants -p chat-client-contract --cap-lints true --timeout 3.0 --minimum-test-timeout 30 --in-place",
+      "tool_version": "27.1.0",
+      "scope": "package",
+      "counts": {
+        "viable": 31,
+        "caught": 29,
+        "survived": 1,
+        "timeout": 1,
+        "unviable": 7
+      }
+    },
+    {
+      "package": "sysmap-core",
+      "commit": "3f78ccf9797573df0fd8d7c6285964e479b569a9",
+      "recorded_at": "2026-08-28",
+      "command": "cargo mutants -p sysmap-core --cap-lints true --timeout 3.0 --minimum-test-timeout 30 --in-place",
+      "tool_version": "27.1.0",
+      "scope": "package",
+      "counts": {
+        "viable": 401,
+        "caught": 167,
+        "survived": 234,
+        "timeout": 0,
+        "unviable": 34
+      }
     }
   ]
 }
