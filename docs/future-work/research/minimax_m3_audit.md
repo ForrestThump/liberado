@@ -92,3 +92,171 @@ The unwrap drop is the most important number — and it's real, not test-extract
 
 The repo got *materially* better, not just bigger. The unwrap reduction and the mutation-ledger are the receipts. The honest counters are: the god-crates are still there with growing waiver stacks, and the test strategy is now mutation-driven to a degree that risks losing behavioral coverage. The free-proxy crate is the template — if `coder-tools` and `coder-agent` ever look like that, the waivers become unnecessary.
 
+---
+
+## Architecture consult (Sol / gpt-5.6-sol, corrected at `06aed987`)
+
+_Appended 2026-08-27 after PR #213 merge and green main CI. Source: Codex Sol consult saved at the time as `sol-consult-out.md`. This section corrects stale audit claims (path-sibling fragility closed by #213) and ranks five architecture paydowns plus the canonical next backlog PR (0.7 / C3)._
+
+**Scope.** This consult compares `docs/future-work/research/minimax_m3_audit.md` with the current
+tree, the active backlog, and PR #213. It does not propose implementation now. The key distinction
+is between a large file, a large crate, and a bad dependency boundary. The audit often treats these
+as the same problem. They are not.
+
+## Executive finding
+
+The audit is strongest when it identifies Liberado's durable assets: mechanical layer rules,
+mutation evidence, failure-mode records, provenance, and a domain-neutral executor with a second
+domain proof. Its strongest remaining criticism is also correct: several high-change composition
+files are too large for safe review.
+
+The audit is stale on dependency mechanics. PR #213 (`a3d67694`, implementation commit
+`440d5bcd`) replaced TurboVault and TurboMCP path siblings with git+tag dependencies at
+`liberado-2026-08-27`. The lockfile resolves TurboVault at `bf9f0baf` and TurboMCP at `d5d9a9f8`.
+A clean checkout no longer needs nested clones or their moving branches. This removes onboarding
+and CI coupling to local sibling state.
+
+It does **not** make Liberado independent of the forks. The workspace still patches TurboMCP crates
+to the tagged fork because the registry release lacks request `_meta` pass-through. TurboVault also
+declares registry TurboMCP versions, so the patch must keep one compatible TurboMCP type graph.
+The correct current statement is: **reproducible fork pins, no path siblings, crates.io still
+insufficient**. There should be no Epistates upstream PR work now.
+
+## 1. What the audit gets right, and what is stale
+
+### Right and still material
+
+1. **The engineering culture is an architectural asset.** The failure-mode catalogue, executed
+   defect mutations, layer-rule test, locked metadata check, and per-function CRAP ratchet turn
+   design claims into checks. This is more valuable than a simple test count.
+
+2. **The large composition files remain real review debt.** Current physical line counts are
+   `coder-tools/src/lib.rs` 5,887, `executor/src/lib.rs` 5,279, `orchestrator/src/lib.rs` 3,266,
+   and `coder-agent/src/lib.rs` 3,069. The module-health file confirms that production logical-line
+   ceilings are waived for `executor/src/lib.rs` at 4,056 and `coder-agent/src/lib.rs` at 2,539.
+   These are not merely crate-size complaints. `executor/src/lib.rs` combines public runtime
+   contracts, task/report types, turn-loop control, loop guards, spill handling, reporting, and
+   argument-similarity algorithms. `coder-tools/src/lib.rs` combines the runtime, the tool
+   catalogue, dispatch, policy checks, filesystem walking, symbol extraction, and output shaping.
+   A reviewer must hold too many independent invariants at once.
+
+3. **Single-maintainer concentration remains true.** Current shortlog attributes 983 commits to
+   the primary identity, 230 more to two ForrestThump identities, and 239 to the comparison bot.
+   This is a continuity and independent-review risk. Commit velocity alone does not prove poor
+   review, but it increases the value of small PRs and mechanical checks.
+
+4. **Mutation hardening created a maintainability cost worth managing.** The tree has 50
+   `*_survivor_tests.rs` files and 11,446 lines in them. `main-agent/src/sessions/tests.rs` has a
+   waiver ceiling of 175 functions; `daemon/src/tests.rs` has 125. These tests have real value:
+   they caught actual survivors. The debt is discoverability and duplicated fixtures, not proof
+   that the tests are fake.
+
+5. **Fail-closed configuration remains the correct design rule.** The historical optional-zone,
+   unread-setting, and unloaded-config failures justify mechanical composition tests. The audit is
+   right to treat silent safety disablement as more serious than a normal configuration bug.
+
+### Stale, weak, or overstated
+
+1. **Path-sibling fragility is closed.** PR #213 removed sibling checkout steps from all CI jobs and
+   changed the workspace dependencies and lockfile to immutable tag resolutions. The audit's claim
+   that the workspace requires two local checkouts at unpinned refs is now false.
+
+2. **Fork dependence remains, but has a narrower shape.** `Cargo.toml` lines 103-132 show git+tag
+   pins and a four-crate `[patch.crates-io]`. This is release and supply-chain debt, not local
+   workspace topology debt. Do not reopen path-sibling machinery.
+
+3. **The panic-point totals are snapshots, not a usable risk register.** The audit reports 3,768,
+   then 2,726, but does not define a stable production-code classifier. An `unwrap` in a proven
+   invariant is not equal to one on I/O or agent-controlled data. The reduction is encouraging;
+   the raw total cannot rank the next work. A useful follow-up would classify panic sites by input
+   trust and process blast radius, then ratchet only the unsafe classes.
+
+4. **“Mutation coverage theatre” is too broad.** A test added for one mutant can still pin a public
+   behavior. The factual concern is the 11,446-line survivor-test estate and the large-file
+   waivers. Review test intent, fixture cost, and observable assertions. Do not delete evidence
+   because of its origin.
+
+5. **“Ratchets that bite get softened” is not supported by the cited changes.** Lowering the CRAP
+   ceiling from 450 to 150 is stronger. Ignoring regressions while the current score remains below
+   10 is an explicit noise floor, not removal of the per-function ratchet. Waiver growth is a valid
+   warning, but it is separate evidence and should be tracked as such.
+
+6. **“God-crate” is the wrong unit for most of the finding.** `coder-tools` and `coder-agent` are
+   legitimate pack crates; `executor` is a legitimate kernel crate. Creating more crates would add
+   public boundaries and layer pressure without necessarily reducing cognitive load. First split
+   cohesive internal modules. Extract a crate only when reuse or dependency direction requires it.
+
+7. **The numerical snapshot is already drifting.** The current tree still has 583 Rust files and
+   has 231 Markdown files, not 233. Exact counts add little unless the method is committed and the
+   metric drives a gate.
+
+## 2. Top five debt paydowns by leverage
+
+These are architecture paydowns, not permission to bypass the active backlog. Each should be one
+small PR after the measurement work that conflicts with it.
+
+| Rank | Debt and leverage | Owner / crates | One-PR shape | Conflict and sequencing |
+|---:|---|---|---|---|
+| **1** | **Split the executor control plane into internal modules.** This has the highest leverage because every direct, subagent, and domain-pack execution crosses this kernel. Smaller review units reduce risk in budgets, loop termination, report gating, and tool invocation without changing the public waist. | **Liberado**: `crates/executor`; consumers in `orchestrator`, `coder-agent`, and session code should not change. | Move one cohesive family first: loop-guard detection and escalation (`ArgMatch`, `LoopProfile`, repetition/cycle/similarity helpers) into `loop_guard.rs`. Preserve public re-exports and behavior. Move its existing tests with it. No new crate and no API redesign. Remove or lower only the affected waiver if the first slice makes that honest. | High conflict with any executor or completion-gate implementation. Do it **after C5**, not during the controlled comparison or gate experiment. It should not conflict with E4/E5. |
+| **2** | **Split coding-tool catalogue, dispatch, and algorithms.** The 5,887-line file is a pack-level hotspot. Tool schema, permission checks, execution, and text/index helpers now change in one review unit. Separation also makes A2 changes attributable. | **Liberado**: `crates/coder-tools`; keep the `ToolRuntime` contract in `executor`. | After A1/A2, move one stable tool family and its argument types/handlers into a private module, with the root retaining catalogue assembly and re-exports. A good first slice is read/search/list tooling; do not redesign schemas or prompts in the move. | Direct conflict with **A2**, which may change the catalogue path. A2 must land first. Also avoid overlap with deferred C6 repository-map work. |
+| **3** | **Converge the dependency boundary on published releases.** PR #213 made builds reproducible, but the fork tag and `[patch.crates-io]` remain a permanent release exception if they have no exit test. This affects every build and supply-chain review. | **TurboMCP first**, then **TurboVault**, then a small **Liberado** cleanup. No Epistates PR now. | This is not one mixed PR. (a) TurboMCP publishes the required `_meta` behavior and compatible crate set. (b) TurboVault consumes that release and publishes its compatible set. (c) Liberado replaces git pins and removes the patch in one lockfile PR, with provenance e2e and `cargo metadata --locked` evidence. | Externally blocked today; crates.io is insufficient. It overlaps dependency manifests and supply-chain policy, but not C3. E5 may change the TurboMCP release contents; coordinate releases rather than publish twice. |
+| **4** | **Refactor mutation tests around behavioral fixtures without reducing killed-mutant evidence.** The risk is not the number of tests. It is that 11,446 survivor-test lines and files with 175/125 functions make intent hard to find and fixture changes broad. | **Liberado**: start with either `crates/main-agent/src/sessions/tests.rs` or `crates/daemon/src/tests.rs`, never both in one PR. | Extract shared fixture/builders and group tests by public state transition. Keep each survivor caught; run a small representative mutation set before and after. The success condition is less duplicated setup and a lower file-health waiver, not fewer assertions. | High conflict with active mutation campaigns and daemon CI repair. Wait for main CI and the current campaign to settle. Independent of TurboVault/TurboMCP. |
+| **5** | **Make configuration arrival a composition contract.** Existing literal rules catch some hardcoded consumers, but the historical failures crossed resolution, deserialization, assembly, and runtime use. This is high leverage because a silent default can disable a safety feature across every surface. | **Liberado**: `crates/config`, `config-loader`, `test-support`, and the relevant composition root only. Do not move policy into TurboVault. | Add one table-driven test that selects a safety-critical `CoderTuning` field, loads it through the real config resolution path, assembles the run config, and observes the changed runtime value. Extend the table one field at a time; do not add another config framework. | Likely conflict with new tuning fields and ACP/config work. It should follow C5 and A2 if those change configuration. No conflict with E4; only indirect conflict with E5 deployment config. |
+
+### Liberado versus TurboVault/TurboMCP boundary
+
+- Liberado owns session semantics, executor policy, tool selection, configuration arrival, inbox
+  semantics, provenance use, and surface behavior.
+- TurboVault owns positive vault directory enumeration and vault storage/query primitives. E4
+  belongs there. Liberado must not reproduce vault traversal to avoid the dependency.
+- TurboMCP owns HTTP/SSE transport reliability and protocol metadata carriage. E5 and `_meta`
+  pass-through belong there. Liberado may test these contracts but should not fork transport logic
+  into its MCP adapter.
+- The git tags are acceptable interim integration artifacts. They are not a reason to put Liberado
+  policy into the forks, and they are not equivalent to published dependency closure.
+
+## 3. Non-goals
+
+- Do not restore nested TurboVault or TurboMCP clones, path dependencies, sibling checkout actions,
+  or moving-branch CI.
+- Do not open Epistates upstream PRs now. The current controlled forks are the integration point.
+- Do not split `executor`, `coder-tools`, or `coder-agent` into new crates only to reduce file counts.
+  Preserve the layer model and first use private modules.
+- Do not run a broad `unwrap`/`expect` removal campaign from the audit's raw count. Classify unsafe
+  sites and fix agent-controlled, I/O, and daemon-fatal paths first when evidence selects them.
+- Do not remove mutation tests or weaken CRAP/module-health gates to make refactors easy. Preserve
+  the mutations they catch and lower waivers when structure improves.
+- Do not narrow tools, change prompts, change `max_turns`, or enable the completion gate before the
+  backlog measurements support those changes.
+- Do not combine E4, E5, E2, or dependency-release convergence in one cross-repository change.
+- Do not prioritize TUI/WebUI/Telegram consolidation from this audit. It gives no usage or cost
+  evidence that a surface should be removed.
+- Do not start deferred C6 repository-map work. The active backlog explicitly says focused search
+  is sufficient until measurement proves a context-selection limit.
+
+## 4. One next PR after main CI is green
+
+**Do backlog item 0.7 / C3: publish the controlled cross-harness baseline.** This is the only valid
+next PR. The active, canonical backlog says to take the first open unblocked item, and C3 is first.
+It is a report PR, not another harness or architecture change.
+
+PR shape:
+
+1. Pin Liberado, Pi, Hermes, and Deep Agents to recorded versions and one repository commit.
+2. Use the same task, model, provider, sampling settings, and resource limits. Keep native prompts
+   and tool schemas.
+3. Report ship-gate and merge-ready rate, cost per accepted result, duration percentiles only where
+   sample size permits them, human repair, and trace-linked failure classes.
+4. Run repeats where cost permits. If Hermes is absent, label the result evidence, not the baseline.
+5. Do not rank harnesses, change `max_turns`, enable the completion gate, narrow tools, or mix in any
+   of the five structural paydowns above.
+
+**Conflict shape:** branch from the final CI-green main commit because the measured artifact and
+ship bar must match the reported revision. The PR should primarily touch the dated findings/report
+and any run receipts required by the comparison specification. It should not touch `executor`,
+`coder-tools`, TurboVault, TurboMCP, or workspace dependency manifests. C5 depends on this report
+producing a non-zero finish rate; A1 is later and independent measurement work.
+
+This sequence is the sharp choice: establish whether the coding system finishes accepted work,
+then measure the completion gate, then measure tool economics. Structural cleanup before those
+measurements creates conflicts and changes the artifact that the backlog is trying to understand.
