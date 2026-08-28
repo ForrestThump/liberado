@@ -280,6 +280,9 @@ fn a_latched_fatal_is_consumed_once_the_report_is_filed() {
 
 #[tokio::test]
 async fn a_checkpoint_event_reaches_the_live_bus() {
+    // The production checkpoint entry point reads LIBERADO_DATA_DIR. Serialize this reader with
+    // the tests that temporarily point the process-global variable at their own temp directories.
+    let _env = crate::DATA_DIR_ENV_LOCK.lock().await;
     let dir = tempfile::tempdir().unwrap();
     init_repo(dir.path());
     let (tx, mut rx) = tokio::sync::mpsc::channel(4);
