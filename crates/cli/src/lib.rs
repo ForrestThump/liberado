@@ -123,10 +123,33 @@ async fn route_named(
     name: &str,
     args: &mut impl Iterator<Item = String>,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    if matches!(name, "deploy" | "dev" | "paseo" | "ops") {
+        let name = name.to_string();
+        let arguments: Vec<String> = args.collect();
+        return tokio::task::spawn_blocking(move || run_operations_route(&name, arguments))
+            .await
+            .map_err(|error| format!("operations task failed: {error}"))?
+            .map_err(Into::into);
+    }
     match route_sync(name, args) {
         Some(result) => result,
         None => liberado_server::run(name.to_string()).await,
     }
+}
+
+/// Operator commands use blocking filesystem, process, SSH, and HTTP clients by design. Keep the
+/// complete command on Tokio's blocking pool: dropping reqwest's blocking client on an async
+/// worker panics because that client owns a small internal runtime.
+fn run_operations_route(name: &str, arguments: Vec<String>) -> Result<(), String> {
+    let mut args = arguments.into_iter();
+    let result = match name {
+        "deploy" => ops_cmd::run_deploy(&mut args),
+        "dev" => ops_cmd::run_dev(&mut args),
+        "paseo" => ops_cmd::run_paseo(&mut args),
+        "ops" => ops_cmd::run_ops(&mut args),
+        _ => return Err(format!("unknown operations command: {name}")),
+    };
+    result.map_err(|error| error.to_string())
 }
 
 /// The synchronous sub-command groups, by first argument. Each wrapper owns its own
@@ -142,10 +165,6 @@ fn route_sync(
         "shepherd" => shepherd_cmd::run(args),
         "docs" => cmd_docs(args),
         "config" => cmd_config(args),
-        "deploy" => ops_cmd::run_deploy(args),
-        "dev" => ops_cmd::run_dev(args),
-        "paseo" => ops_cmd::run_paseo(args),
-        "ops" => ops_cmd::run_ops(args),
         _ => return None,
     };
     Some(route)
@@ -277,5 +296,39 @@ mod dispatch_tests {
                 "{command}: expected usage text, got: {err}"
             );
         }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn development_readiness_probe_runs_on_the_blocking_pool() {
+        use std::io::{Read, Write};
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0_u8; 1024];
+            let _ = stream.read(&mut request).unwrap();
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}")
+                .unwrap();
+        });
+        let directory = tempfile::tempdir().unwrap();
+        let config = directory.path().join("ops.toml");
+        std::fs::write(
+            &config,
+            format!(
+                "[development]\ndaemon_url = \"http://127.0.0.1:{port}\"\ndaemon_port = {port}\n"
+            ),
+        )
+        .unwrap();
+        let args = [
+            "dev".to_string(),
+            "start".to_string(),
+            "--config".to_string(),
+            config.display().to_string(),
+        ];
+
+        dispatch(&mut args.into_iter()).await.unwrap();
+        server.join().unwrap();
     }
 }

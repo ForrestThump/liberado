@@ -205,6 +205,7 @@ name = "tasks-mcp"
 description = "create, complete, and query tasks"
 consequence = "reversible"        # git-tracked vault writes are undoable
 transport = { kind = "stdio", command = "npx", args = ["-y", "@liberado/tasks-mcp"] }
+default_zone = "tasks"
 # enabled = true
 
 # A managed MCP: `liberado-mcp-forge sync` (with a matching entry in mcp-sources.toml) installs
@@ -236,6 +237,7 @@ name = "liberado-pdf-mcp"
 description = "PDF manipulation: merge, split, extract, convert"
 consequence = "reversible"
 transport = { kind = "managed" }
+writes_vault = false             # output files are outside the governed Obsidian vault
 
 [[mcps]]
 name = "liberado-rentcast-mcp"
@@ -253,6 +255,7 @@ name = "liberado-anythingllm-mcp"
 description = "ingest and query content in AnythingLLM"
 consequence = "reversible"
 transport = { kind = "managed" }
+writes_vault = false             # effects are confined to the external AnythingLLM workspace
 # Same reasoning as liberado-rentcast-mcp above — needs ANYTHINGLLM_API_KEY + a reachable
 # instance before enabling.
 enabled = false
@@ -262,6 +265,7 @@ name = "code-dispatch"
 description = "Plan, implement, and review code changes; scaffold and build new MCP tools"
 consequence = "reversible"
 transport = { kind = "stdio", command = "riggers-mcp", args = ["--config", "riggers/riggers.yaml"] }
+writes_vault = false             # writes code workspaces, not the Obsidian vault
 
 # A workspace-local MCP (not managed — mcp-forge's "managed" transport only supports cargo-
 # installing from an external git repo; a crate that already lives in this workspace just points

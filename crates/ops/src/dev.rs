@@ -73,7 +73,12 @@ fn start_daemon(
         &args,
         &[("LIBERADO_PORT", config.daemon_port.to_string())],
     )?;
-    wait_ready(&status_url, config.readiness_timeout_secs)
+    wait_ready(
+        repository,
+        "daemon",
+        &status_url,
+        config.readiness_timeout_secs,
+    )
 }
 
 fn start_webui(repository: &Path, config: &DevelopmentConfig) -> Result<(), String> {
@@ -90,6 +95,8 @@ fn start_webui(repository: &Path, config: &DevelopmentConfig) -> Result<(), Stri
     ];
     spawn_detached(repository, "webui-dev", Path::new("dx"), &args, &[])?;
     wait_ready(
+        repository,
+        "webui-dev",
         &format!("http://127.0.0.1:{}", config.webui_dev_port),
         config.readiness_timeout_secs,
     )
@@ -130,9 +137,7 @@ fn spawn_detached(
         .current_dir(repository)
         .stdout(Stdio::from(stdout))
         .stderr(Stdio::from(stderr));
-    detach_platform(&mut command);
-    let child = command
-        .spawn()
+    let child = spawn_platform(&mut command)
         .map_err(|error| format!("start {}: {error}", program.display()))?;
     let record = ProcessRecord {
         pid: child.id(),
@@ -151,16 +156,25 @@ fn spawn_detached(
 }
 
 #[cfg(windows)]
-fn detach_platform(command: &mut std::process::Command) {
+fn spawn_platform(command: &mut std::process::Command) -> std::io::Result<std::process::Child> {
     use std::os::windows::process::CommandExt;
     const DETACHED_PROCESS: u32 = 0x0000_0008;
     const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
     const CREATE_BREAKAWAY_FROM_JOB: u32 = 0x0100_0000;
     command.creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_BREAKAWAY_FROM_JOB);
+    match command.spawn() {
+        Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+            command.creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP);
+            command.spawn()
+        }
+        result => result,
+    }
 }
 
 #[cfg(not(windows))]
-fn detach_platform(_command: &mut std::process::Command) {}
+fn spawn_platform(command: &mut std::process::Command) -> std::io::Result<std::process::Child> {
+    command.spawn()
+}
 
 fn stop_process(repository: &Path, name: &str) -> Result<(), String> {
     let path = process_file(repository, name);
@@ -210,21 +224,35 @@ fn status(repository: &Path) -> Result<(), String> {
 
 #[cfg(windows)]
 fn process_matches(record: &ProcessRecord) -> Result<bool, String> {
-    let filter = format!("PID eq {}", record.pid);
-    let output = liberado_common::process::std_command("tasklist")
-        .args(["/FI", &filter, "/FO", "CSV", "/NH"])
-        .output()
-        .map_err(|error| format!("query PID {}: {error}", record.pid))?;
-    if !output.status.success() {
+    use std::os::windows::ffi::OsStringExt;
+    use windows_sys::Win32::Foundation::CloseHandle;
+    use windows_sys::Win32::System::Threading::{
+        OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW,
+    };
+
+    let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, record.pid) };
+    if handle.is_null() {
         return Ok(false);
     }
-    let text = String::from_utf8_lossy(&output.stdout).to_ascii_lowercase();
-    let expected = Path::new(&record.program)
+    let mut buffer = vec![0_u16; 32_768];
+    let mut length = u32::try_from(buffer.len()).unwrap_or(u32::MAX);
+    let queried =
+        unsafe { QueryFullProcessImageNameW(handle, 0, buffer.as_mut_ptr(), &mut length) } != 0;
+    unsafe { CloseHandle(handle) };
+    if !queried {
+        return Ok(false);
+    }
+    let actual = PathBuf::from(std::ffi::OsString::from_wide(
+        &buffer[..usize::try_from(length).unwrap_or(0)],
+    ));
+    Ok(actual
         .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or(&record.program)
-        .to_ascii_lowercase();
-    Ok(text.contains(&expected))
+        .zip(Path::new(&record.program).file_name())
+        .is_some_and(|(actual, expected)| {
+            actual
+                .to_string_lossy()
+                .eq_ignore_ascii_case(&expected.to_string_lossy())
+        }))
 }
 
 #[cfg(not(windows))]
@@ -241,11 +269,24 @@ fn process_matches(record: &ProcessRecord) -> Result<bool, String> {
 
 #[cfg(windows)]
 fn kill_process(pid: u32) -> Result<(), String> {
-    run_status(
-        Path::new("."),
-        "taskkill",
-        &["/PID", &pid.to_string(), "/T", "/F"],
-    )
+    use windows_sys::Win32::Foundation::CloseHandle;
+    use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_TERMINATE, TerminateProcess};
+
+    let handle = unsafe { OpenProcess(PROCESS_TERMINATE, 0, pid) };
+    if handle.is_null() {
+        return Err(format!(
+            "open PID {pid} for termination: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    let terminated = unsafe { TerminateProcess(handle, 1) } != 0;
+    let error = std::io::Error::last_os_error();
+    unsafe { CloseHandle(handle) };
+    if terminated {
+        Ok(())
+    } else {
+        Err(format!("terminate PID {pid}: {error}"))
+    }
 }
 
 #[cfg(not(windows))]
@@ -301,9 +342,21 @@ fn current_liberado_executable(repository: &Path) -> Result<PathBuf, String> {
     }
 }
 
-fn wait_ready(url: &str, timeout_secs: u64) -> Result<(), String> {
+fn wait_ready(repository: &Path, name: &str, url: &str, timeout_secs: u64) -> Result<(), String> {
     let deadline = std::time::Instant::now() + Duration::from_secs(timeout_secs);
     while std::time::Instant::now() < deadline {
+        let path = process_file(repository, name);
+        let record: ProcessRecord = serde_json::from_slice(
+            &std::fs::read(&path).map_err(|error| format!("read {}: {error}", path.display()))?,
+        )
+        .map_err(|error| format!("parse {}: {error}", path.display()))?;
+        if !process_matches(&record)? {
+            std::fs::remove_file(&path)
+                .map_err(|error| format!("remove stale {}: {error}", path.display()))?;
+            return Err(format!(
+                "{name} exited before {url} became ready; see .liberado/{name}.err.log"
+            ));
+        }
         if is_ready(url) {
             println!("Ready: {url}");
             return Ok(());
@@ -363,5 +416,28 @@ mod tests {
             process_file(Path::new("repo"), "daemon"),
             Path::new("repo/.liberado/daemon.process.json")
         );
+    }
+
+    #[test]
+    fn readiness_fails_immediately_when_the_child_has_exited() {
+        let repository = tempfile::tempdir().unwrap();
+        std::fs::create_dir(repository.path().join(".liberado")).unwrap();
+        let path = process_file(repository.path(), "daemon");
+        std::fs::write(
+            &path,
+            serde_json::to_vec(&ProcessRecord {
+                pid: u32::MAX,
+                program: "liberado-never-running".into(),
+                started_unix_secs: 7,
+            })
+            .unwrap(),
+        )
+        .unwrap();
+
+        let error = wait_ready(repository.path(), "daemon", "http://127.0.0.1:9", 30)
+            .expect_err("an exited process must fail before the HTTP timeout");
+
+        assert!(error.contains("exited before"), "{error}");
+        assert!(!path.exists(), "the stale process record must be removed");
     }
 }

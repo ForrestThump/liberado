@@ -8,7 +8,7 @@
 use std::path::PathBuf;
 
 use liberado_common::Capability;
-use liberado_config_loader::Policy;
+use liberado_config_loader::{Config, Policy};
 
 fn shipped_policy() -> Policy {
     let path: PathBuf = [
@@ -96,8 +96,13 @@ fn the_shipped_example_topology_deserializes() {
     .collect();
     let text =
         std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
-    let topology: Result<liberado_config_loader::Topology, _> = toml::from_str(&text);
-    if let Err(e) = topology {
-        panic!("config.example/topology.toml does not deserialize — new users copy this file: {e}");
+    let topology: liberado_config_loader::Topology =
+        toml::from_str(&text).unwrap_or_else(|e| panic!("example topology does not parse: {e}"));
+    Config {
+        topology,
+        policy: shipped_policy(),
+        tuning: Default::default(),
     }
+    .validate()
+    .unwrap_or_else(|e| panic!("config.example does not validate: {e}"));
 }

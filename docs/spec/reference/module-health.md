@@ -36,6 +36,12 @@ split test file, while the survivor tests themselves live in the sibling.
 Those waivers carry a hard `ploc` ceiling and a review date; any further growth
 in the parent module is not covered and must be split, not waived.
 
+The same narrow rule applies when a production crate root crosses its boundary
+only because it declares and exports a new sibling module. The waiver must name
+the exact wiring lines and exclude implementation growth. `crates/cost/src/lib.rs`
+uses this form for the split `latency_report.rs` module and its compatibility
+fixture field; the report implementation stays outside the waived root.
+
 After an accepted improvement, run `just module-health-ratchet` and commit the
 lower baseline. GitHub runs only the read-only comparison.
 
