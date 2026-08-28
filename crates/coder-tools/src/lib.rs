@@ -5,13 +5,13 @@ pub mod git;
 mod hashline;
 mod read_search;
 pub mod repo_map;
+mod symbols;
 mod text_view;
 
 #[cfg(test)]
-pub(crate) use read_search::{
-    default_output_mode, extract_impl_symbol, glob_match, identifiers, is_comment_line,
-    lang_from_path, ts_class,
-};
+pub(crate) use read_search::{default_output_mode, glob_match, identifiers};
+#[cfg(test)]
+pub(crate) use symbols::{extract_impl_symbol, is_comment_line, lang_from_path, ts_class};
 
 use std::{
     collections::HashMap,
