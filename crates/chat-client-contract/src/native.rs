@@ -50,7 +50,8 @@ impl SseDecoder {
 
         let mut events = Vec::new();
         while let Some(idx) = self.buf.find("\n\n") {
-            let block: String = self.buf.drain(..idx + 2).collect();
+            let block: String = self.buf.drain(..idx).collect();
+            self.buf.drain(..2);
             if let Some(event) = parse_block(&block) {
                 events.push(event);
             }
