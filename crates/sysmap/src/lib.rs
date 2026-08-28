@@ -343,8 +343,8 @@ enabled = true
     #[test]
     fn find_repo_root_returns_none_at_filesystem_top() {
         // Walking off the top without finding a Cargo.toml+crates pair returns None, not a panic
-        // and not a wrong root. The `delete !` mutation on `current.pop()` used to flip the
-        // termination and recurse forever (in practice: panic via the loop body).
+        // and not a wrong root. This pins the no-match contract. The walk-up test above, not this
+        // one, catches deletion of `!` from the `current.pop()` termination check.
         let dir = tempdir().unwrap();
         let mut no_workspace = dir.path().to_path_buf();
         // Strip everything down to a leaf directory that has no Cargo.toml/crates at any ancestor

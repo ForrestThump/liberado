@@ -1,5 +1,7 @@
 # sysmap — Mutation Testing Report
 
+**Status:** historical
+**Authority:** evidence
 **Date:** 2026-08-28 · **Campaign commit:** `f4c239d` · **Tool:** cargo-mutants 27.1.0
 
 Two campaigns were run on the same base (`f4c239d`, the `origin/main` the work branched from).
@@ -25,8 +27,8 @@ used the default `--timeout 3.0 --minimum-test-timeout 30` and `--in-place`. The
 | Location | Mutant | Test added |
 |----------|--------|-----------|
 | `crates/sysmap/src/lib.rs:78` `&&` → `\|\|` in `repository_root` | first directory with `crates/` returned as the root | `find_repo_root_walks_up_through_crates_only_directories` — nested directory has `crates/` but no `Cargo.toml`; the function must keep walking |
-| `crates/sysmap/src/lib.rs:83` `delete !` in `repository_root` | `current.pop()` returning `true` no longer terminates the walk, so it returns `None` | `find_repo_root_returns_none_at_filesystem_top` — leaf directory with no qualifying ancestors returns `None` |
-| `crates/sysmap/src/lib.rs:78` `repository_root` → `Ok(Default::default())` | empty `PathBuf` returned as the root | covered by the two `find_repo_root` tests above (refactor + 3 tests) |
+| `crates/sysmap/src/lib.rs:83` `delete !` in `repository_root` | the walk returns `None` after its first successful `pop()` | `find_repo_root_walks_up_through_crates_only_directories` — the walk must continue through the nested directory to the fixture root |
+| `crates/sysmap/src/lib.rs:78` `repository_root` → `Ok(Default::default())` | empty `PathBuf` returned as the root | `find_repo_root_accepts_cwd_at_the_root_itself` requires the fixture root |
 | `crates/sysmap/src/scan.rs:49-53` × 5 (one per match arm) | deleting `provider \| notifier`, `mcp \| hook`, `pool \| profile \| schedule`, `project`, or `vault` falls through to `_ => "unknown"` | `runtime_layer_maps_every_known_kind_to_its_group` — table-driven test asserts every known kind maps to its expected group (`foundation` / `service` / `kernel` / `pack` / `store`) |
 
 ### Refactor
@@ -41,9 +43,9 @@ tests). Refactored:
 `liberado-sysmap-cli` calls `repository_root()` and `resolve_config_dir(...)`; both signatures
 are unchanged, so the binary is unaffected.
 
-## Accepted equivalent (11)
+## Survivors accepted out of scope (11)
 
-| Location | Mutant | Why equivalent |
+| Location | Mutant | Why retained |
 |----------|--------|----------------|
 | `crates/sysmap/src/lib.rs:43` | `BuildError::fmt` → `Ok(())` | The `Display` impl is never asserted on. The error wraps either a `ScanError` or a `sysmap_core::ScanError`; both have their own `Display`. No test reads the formatted `BuildError` string. |
 | `crates/sysmap/src/lib.rs:107` | `delete !` in `resolve_config_dir` | Empty `LIBERADO_CONFIG_DIR` is treated as a valid (empty-path) config dir. Killing it needs an env-var test; AGENTS.md flags env-var manipulation in tests as a flake source. Same-crate test would race with any future test reading the var. |

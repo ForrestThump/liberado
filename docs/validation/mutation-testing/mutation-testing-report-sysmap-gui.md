@@ -1,5 +1,7 @@
 # sysmap-gui — Mutation Testing Report
 
+**Status:** historical
+**Authority:** evidence
 **Date:** 2026-08-28 · **Campaign commit:** `737b99b` · **Tool:** cargo-mutants 27.1.0
 
 Two campaigns were run on the same base (`737b99b`, the `origin/main` the work branched from).
@@ -25,7 +27,7 @@ toolchain makes every mutant rebuild ~1s; the full run took ~6 min on each pass.
 |----------|--------|-----------|
 | `crates/sysmap-gui/src/interaction.rs:56` `&&` → `\|\|` in `edge_in_selection` | An edge with one endpoint in the two-hop scope and one out (e.g. `x → b` where `x` is unreachable from `a`) was wrongly reported as in-selection. The existing `direct_selection_shows_only_incident_edges` test only checked edges where both endpoints ARE in scope, so the `\|\|` mutant passed trivially. | `second_hop_edge_in_selection_requires_both_endpoints_in_scope` — constructs an `x → b` edge against the existing fixture's two-hop scope and asserts `edge_in_selection` returns `false`. |
 
-## Accepted equivalent (165)
+## Survivors accepted out of scope (165)
 
 The `sysmap-gui` crate is the 2D interactive renderer. Most of its 704-line `app.rs` is egui
 panel code (window setup, sliders, painter calls) that has no testable seam without an egui

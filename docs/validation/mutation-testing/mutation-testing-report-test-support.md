@@ -1,5 +1,7 @@
 # test-support — Mutation Testing Report
 
+**Status:** historical
+**Authority:** evidence
 **Date:** 2026-08-28 · **Campaign commit:** `5abcd65` · **Tool:** cargo-mutants 27.1.0
 
 Two campaigns were run on the same base (`5abcd65`, the `origin/main` the work branched from).
@@ -26,12 +28,12 @@ run used the default `--timeout 3.0 --minimum-test-timeout 30` and `--in-place`.
 | `crates/test-support/src/lib.rs:108` `status == Fail` → `!= Fail` | Inverted filter | `all_checked_passed_returns_true_when_no_fail` + `false_when_any_fail` |
 | `crates/test-support/src/lib.rs:113` `all_checked_passed` → `true` | Always true regardless of verdicts | `all_checked_passed_*` (same pair) |
 | `crates/test-support/src/mvl_oracle.rs:154` `<=` → `>` in `apply_kill_prefix` | Boundary exclusion | `apply_kill_prefix_is_inclusive_at_the_boundary` |
-| `crates/test-support/src/trace_contracts.rs:357` `delete match arm "prompt"` in `assert_join_integrity` | Prompt event ignored, join fails | `context_transform_with_only_context_changed_passes_join` |
+| `crates/test-support/src/trace_contracts.rs` `&&` → `||` in `assert_join_integrity` | A matching `context_changed` event alone is rejected | `context_transform_with_only_context_changed_passes_join` |
 | `crates/test-support/src/trace_contracts.rs:477` `||` → `&&` in `assert_mvl_has_no_scheduler_leakage` | Both fields required | `mvl_rejects_rss_bytes_alone` |
 
-## Accepted equivalent (9)
+## Survivors retained for follow-up (9)
 
-| Location | Mutant | Why equivalent |
+| Location | Mutant | Why retained |
 |----------|--------|----------------|
 | `crates/test-support/src/lib.rs:64` `catalog` → `vec![]` | `Vec::new()` and `vec![]` produce identical empty `Vec<ToolDef>`; no observable difference in any same-crate test. | Equivalent — structural identity. |
 | `crates/test-support/src/lib.rs:147` `catalog` → `vec![]` | Same structural identity for `InvocationRecordingRuntime`. | Equivalent. |

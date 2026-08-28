@@ -1,5 +1,7 @@
 # eval — Mutation Testing Report
 
+**Status:** historical
+**Authority:** evidence
 **Date:** 2026-08-28 · **Campaign commit:** `94ae882` · **Tool:** cargo-mutants 27.1.0
 
 Two campaigns were run on the same base (`94ae882`, the `origin/main` the work branched from).
@@ -9,7 +11,7 @@ The first is the **baseline**, the second is the **final** after adding
 
 | Metric | Baseline | Final |
 |--------|:--------:|:-----:|
-| Viable | 25 | 22 |
+| Viable | 22 | 22 |
 | Caught | 20 | **21** |
 | Survived | 2 | **1** |
 | Timeout | 0 | 0 |
@@ -32,14 +34,14 @@ would then iterate zero times — observably identical to the unmutated run on t
 that existed. Asserting by anchor name kills the empty-replacement and any future mutation
 that drops the routing categories.
 
-## Accepted equivalent (1)
+## Survivor accepted out of scope (1)
 
-| Location | Mutant | Why equivalent |
+| Location | Mutant | Why retained |
 |----------|--------|----------------|
 | `crates/eval/src/main.rs:98` `main` → `Ok(())` | entire `#[tokio::main] async fn main` body replaced | The function reads `DEEPSEEK_API_KEY`, constructs a real `Dispatcher`, and dispatches each labeled scenario against a live model. Its only outputs are stdout lines and an `ExitCode`. No test in this crate can call it (it requires the API key) and refactoring `main` to a testable inner function is out of scope for a campaign. Structurally unkillable from a same-crate unit test. |
 
 ## Conclusion
 
-The `eval` crate's test suite catches **95.5% of viable mutants** (up from 80%). The single
-remaining miss is a `tokio::main` body whose side effects (HTTP calls, stdout) are not
+The `eval` crate's test suite catches **95.5% of viable mutants** (up from 90.9%). The single
+remaining survivor is a `tokio::main` body whose side effects (HTTP calls, stdout) are not
 reachable from any same-crate test without the live model.
