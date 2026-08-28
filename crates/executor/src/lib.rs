@@ -232,10 +232,8 @@ genuinely cannot proceed), call `submit_report` with your final result. Do not r
 /// `max_turns + DOOM_LOOP_RECOVERY_BONUS_TURNS`, never unbounded.
 const DOOM_LOOP_RECOVERY_BONUS_TURNS: u32 = 2;
 
-// LoopGuard, DOOM_LOOP_NUDGE, and CYCLE_NUDGE live in crate::loop_guard and are
-// re-imported at the top of this file so call-sites keep the bare names. The
-// top-up (DOOM_LOOP_RECOVERY_BONUS_TURNS) is per-run, not per-mechanism, so it
-// stays here next to WRAP_UP_TURNS.
+// The recovery top-up is per-run, not per-mechanism, so it stays here next to
+// WRAP_UP_TURNS rather than with the per-mechanism guard.
 
 /// The second escalation step for a persisting doom loop: the offending tool is actually removed
 /// from what the model can call for the rest of this task, not just asked to stop. Telling the

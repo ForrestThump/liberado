@@ -8,8 +8,8 @@
 //!
 //! `DOOM_LOOP_NUDGE` (the user-facing text) and the per-mechanism [`LoopGuard`] (the state the
 //! run loop escalates) also live here — both are loop-guard concerns, not loop-execution
-//! concerns. The escalation helpers ([`Escalation`], [`LoopGuard::strike`]) are private to this
-//! module.
+//! concerns. Escalation helpers ([`Escalation`], [`LoopGuard::strike`]) are `pub(crate)` so
+//! `run_loop` in `lib.rs` can import them.
 
 /// How strictly two consecutive same-tool calls must resemble each other to count as a repeat.
 ///
