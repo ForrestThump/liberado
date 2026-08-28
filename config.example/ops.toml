@@ -1,0 +1,32 @@
+# Copy this file to `.liberado/ops.toml`, a platform config directory as `ops.toml`, or another
+# untracked path selected with `LIBERADO_OPS_CONFIG`. Do not commit real hosts or credentials.
+
+[homelab]
+ssh_target = "operator@homelab.example"
+build_dir = "liberado-build"
+compose_file = "homelab/services/liberado/docker-compose.yml"
+container = "liberado"
+container_binary = "/usr/local/bin/liberado"
+image = "liberado:dev"
+api_url = "https://liberado.example"
+webui_remote_dir = "homelab/services/liberado/webui-dist"
+webui_local_dir = "target/dx/liberado-webui/release/web/public"
+latency_journal = "/data/latency/events.jsonl"
+connect_timeout_secs = 15
+deploy_lock_timeout_secs = 1800
+allow_invalid_tls = false
+
+[development]
+daemon_url = "http://127.0.0.1:4201"
+daemon_port = 4201
+webui_dev_port = 8080
+readiness_timeout_secs = 90
+
+[paseo]
+provider_name = "liberado"
+label = "Liberado"
+description = "Liberado multi-mode agent over ACP"
+model = "deepseek/deepseek-v4-pro"
+# home = "/path/to/paseo-home"
+# binary = "/path/to/liberado-acp"
+# config_dir = "/path/to/liberado/config"

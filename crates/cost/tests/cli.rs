@@ -3,7 +3,7 @@
 //! `main` is a thin dispatch shell over the lib functions, and the binary is never executed by
 //! the unit suite, so its arms sat at 0% coverage. These tests run the real binary via
 //! `CARGO_BIN_EXE_liberado-cost` and exercise each dispatch arm end-to-end: default Report,
-//! --json, --topology error, ProvenanceRatio, DelegationCost, and the clap usage error.
+//! --json, --topology error, ProvenanceRatio, DelegationCost, Latency, and clap usage errors.
 
 use std::fs;
 use std::path::Path;
@@ -152,6 +152,28 @@ fn delegation_cost_with_journal_succeeds() {
         "stderr: {}",
         String::from_utf8_lossy(&out.stderr)
     );
+}
+
+#[test]
+fn latency_report_reads_the_journal_and_supports_json() {
+    let temp = tempfile::tempdir().unwrap();
+    data_dir_with_journal(temp.path());
+    let out = Command::new(BIN)
+        .arg("--data-dir")
+        .arg(temp.path())
+        .args(["latency", "--json"])
+        .output()
+        .unwrap();
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let rows: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(rows[0]["role"], "orchestrator");
+    assert_eq!(rows[0]["p50_ms"], 20_531);
+    assert_eq!(rows[0]["ttft_p50_ms"], 1_204);
 }
 
 #[test]

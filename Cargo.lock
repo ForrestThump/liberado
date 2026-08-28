@@ -5530,6 +5530,7 @@ dependencies = [
  "liberado-config",
  "liberado-config-loader",
  "liberado-harness-eval",
+ "liberado-ops",
  "liberado-server",
  "regex",
  "reqwest 0.12.28",
@@ -6028,6 +6029,24 @@ dependencies = [
  "tokio",
  "tracing",
  "wiremock",
+]
+
+[[package]]
+name = "liberado-ops"
+version = "0.1.0"
+dependencies = [
+ "flate2",
+ "liberado-common",
+ "liberado-config",
+ "liberado-config-loader",
+ "liberado-cost",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+ "toml 0.8.23",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]

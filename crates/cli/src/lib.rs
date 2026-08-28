@@ -22,6 +22,10 @@
 //!   liberado ci ratchet              check, write baseline, then stage or amend it
 //!                                    console is a summary; full child log is .liberado/ci.log
 //!   liberado shepherd --once          run the unattended PR shepherd once
+//!   liberado deploy <homelab|webui|smoke|latency> run configured deployment operations
+//!   liberado dev <start|stop|webui-start|webui-stop|status|tui> manage local processes
+//!   liberado paseo install            install ACP bridge and merge Paseo configuration
+//!   liberado ops config check         validate the resolved operations TOML
 //!   liberado docs check-links         check relative Markdown links
 //!   liberado docs crate-map           check the generated crate map
 //!   liberado docs crate-map --write   regenerate the crate map
@@ -51,6 +55,7 @@
 //! prompt a chat would actually be given from that same config — the model's-eye view, without a
 //! daemon. Reactions are logged to stderr by the server; stdout is left for data.
 
+mod branch_cleaner_ci;
 mod chat_client;
 mod ci_cmd;
 mod coder_cmd;
@@ -64,6 +69,7 @@ mod docs_site_cmd;
 mod function_complexity_cmd;
 mod module_health_cmd;
 mod mutants_cmd;
+mod ops_cmd;
 mod readiness_cmd;
 mod shepherd_cmd;
 mod summarize_cmd;
@@ -118,13 +124,36 @@ async fn route_named(
     name: &str,
     args: &mut impl Iterator<Item = String>,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    if matches!(name, "deploy" | "dev" | "paseo" | "ops") {
+        let name = name.to_string();
+        let arguments: Vec<String> = args.collect();
+        return tokio::task::spawn_blocking(move || run_operations_route(&name, arguments))
+            .await
+            .map_err(|error| format!("operations task failed: {error}"))?
+            .map_err(Into::into);
+    }
     match route_sync(name, args) {
         Some(result) => result,
         None => liberado_server::run(name.to_string()).await,
     }
 }
 
-/// The six synchronous sub-command groups, by first argument. Each wrapper owns its own
+/// Operator commands use blocking filesystem, process, SSH, and HTTP clients by design. Keep the
+/// complete command on Tokio's blocking pool: dropping reqwest's blocking client on an async
+/// worker panics because that client owns a small internal runtime.
+fn run_operations_route(name: &str, arguments: Vec<String>) -> Result<(), String> {
+    let mut args = arguments.into_iter();
+    let result = match name {
+        "deploy" => ops_cmd::run_deploy(&mut args),
+        "dev" => ops_cmd::run_dev(&mut args),
+        "paseo" => ops_cmd::run_paseo(&mut args),
+        "ops" => ops_cmd::run_ops(&mut args),
+        _ => return Err(format!("unknown operations command: {name}")),
+    };
+    result.map_err(|error| error.to_string())
+}
+
+/// The synchronous sub-command groups, by first argument. Each wrapper owns its own
 /// argument match; `None` means "not a known group", leaving the caller free to fall back.
 fn route_sync(
     name: &str,
@@ -268,5 +297,39 @@ mod dispatch_tests {
                 "{command}: expected usage text, got: {err}"
             );
         }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn development_readiness_probe_runs_on_the_blocking_pool() {
+        use std::io::{Read, Write};
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0_u8; 1024];
+            let _ = stream.read(&mut request).unwrap();
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}")
+                .unwrap();
+        });
+        let directory = tempfile::tempdir().unwrap();
+        let config = directory.path().join("ops.toml");
+        std::fs::write(
+            &config,
+            format!(
+                "[development]\ndaemon_url = \"http://127.0.0.1:{port}\"\ndaemon_port = {port}\n"
+            ),
+        )
+        .unwrap();
+        let args = [
+            "dev".to_string(),
+            "start".to_string(),
+            "--config".to_string(),
+            config.display().to_string(),
+        ];
+
+        dispatch(&mut args.into_iter()).await.unwrap();
+        server.join().unwrap();
     }
 }

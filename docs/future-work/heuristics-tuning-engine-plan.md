@@ -241,8 +241,8 @@ architecture idea the way there is for a scored prompt candidate.
    reviewing later sees the search's progression, not just where it ended up. `main.rs` saves one
    file per generation (`generation-N.txt`) plus `final.txt` (same content as the last generation's
    file, so there's an obvious filename to check first) under
-   `<LIBERADO_DATA_DIR>/tuner/<run-timestamp>/` — one folder per invocation. `scripts/run-tuner.ps1`
-   wraps the whole thing into one command: it reads `OPENROUTER_API_KEY` from an already-exported
+   `<LIBERADO_DATA_DIR>/tuner/<run-timestamp>/` — one folder per invocation. `just tuner` wraps the
+   whole thing into one command: it reads `OPENROUTER_API_KEY` from an already-exported
    env var (never accepted as a script argument, so it never lands in shell history or a process
    listing), builds/runs the tuner, and points at the output folder when done.
 4. Proposal-rubric output format + human review flow — folded into step 3 above (the rubric

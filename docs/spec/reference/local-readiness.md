@@ -33,6 +33,24 @@ The host-stable function ratchet is configured in `function-complexity.toml` and
 functions must stay under the configured ceiling. A persistent exception must name one exact file
 and function and include an explicit ceiling, reason, and review date.
 
+## Operator recipes
+
+The cross-platform operator recipes call the Rust CLI and read host-specific values from
+`ops.toml`. Copy `config.example/ops.toml` to an untracked location, then pass it with
+`--config` or `LIBERADO_OPS_CONFIG`. The main entry points are:
+
+- `just ops-config-check --config <path>` — validate operations configuration.
+- `just dev-start`, `just dev-status`, and `just stop-daemon` — manage a local daemon.
+- `just deploy-homelab`, `just deploy-webui-homelab`, `just smoke-homelab`, and
+  `just latency-homelab` — run configured remote operations.
+- `just paseo-install` — install and register the configured ACP bridge.
+- `just branches-clean` — audit merged branches with the standalone Python tool; deletion still
+  requires its explicit `--apply` flag.
+
+The justfile is only the convenience surface. Rust owns operator business logic, and the Python
+branch cleaner remains independent so repository cleanup never depends on the binary built from
+the repository being cleaned.
+
 ## Mutation-testing recipes
 
 The `just` file carries the mutation campaign entry points backing

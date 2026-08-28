@@ -225,7 +225,7 @@ fn check(log: &CiLog) -> Result<(), Box<dyn std::error::Error>> {
         ],
     )?;
     run_cmd(log, "cargo", &["test", "--workspace", "--no-fail-fast"])?;
-    Ok(())
+    crate::branch_cleaner_ci::run(log)
 }
 
 /// Full local CI: the ship preflight, then the CRAP check, then rewrite and stage the baseline.

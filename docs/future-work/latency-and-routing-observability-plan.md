@@ -17,7 +17,7 @@ roundtrips, each with extended thinking on a strong model (`deepseek-v4-pro`).
 > - Every inference call is recorded by a role-tagged `MeteredProvider`
 >   (`crates/provider/src/latency.rs`) → `<data>/latency/events.jsonl` (role, model, wall_ms, TTFT,
 >   tokens; correlation set at the chat turn + dispatch pack seams). Report:
->   `deploy/homelab/latency-report.sh` (p50/p95 per role).
+>   `liberado-cost latency` (p50/p95 per role).
 > - **Per-role model tuning is now config-driven** (`[roles.main_agent|dispatcher|subagent]` in
 >   topology.toml): provider, model slug, `temperature`, and `reasoning` level — edit + restart, no
 >   rebuild. This is the enabling half of §3.1/§3.2 below.
@@ -184,7 +184,7 @@ one query, not a stopwatch.
    `jq`-able. Keep human `fmt` as default.
 5. **Aggregate `token_usage_total`** into `/api/status` (it's already `null` and wired for it) as a
    cheap always-on sanity signal.
-6. **One analysis command** — a small script (e.g. `deploy/homelab/latency-report.sh` or
+6. **One analysis command** — a repository command (now `liberado-cost latency`, or
    `scripts/`) that reads the latency JSONL and prints p50/p95 per hop + roundtrip count. "Measure the
    gains" becomes one command against before/after runs.
 
@@ -241,7 +241,7 @@ Each scenario → a chat turn (or `/spawn`) → assert outcome + capture per-rol
 change (per-role model, thinking, short-circuit) can be evaluated across **all** task classes in one
 run, not one hand-typed example. This is the harness that makes the §2/§3 tuning measurable and
 regression-safe. Likely a new `crates/…` bin or a `deploy/homelab/` script hitting `/api/chat/stream`
-+ `latency-report.sh`, with a pass/fail on outcomes so it doubles as a smoke test.
++ `liberado-cost latency`, with a pass/fail on outcomes so it doubles as a smoke test.
 
 ## Anchors (as of this writing)
 

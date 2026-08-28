@@ -38,7 +38,7 @@ session was invisible until someone went looking.
 
 **Deploy hygiene.** `deploy.sh` now flocks the build dir and stages per-invocation (deploys were
 raced twice in one session; the SHA is stamped from an argument, not the compiled tree, so a race can
-produce an image that lies about its contents). `smoke.sh` runs post-deploy and asserts deployment
+produce an image that lies about its contents). `liberado deploy smoke` asserts deployment
 *facts* — including that the config actually reached the box, which had already caused a "successful"
 deploy of an inert feature.
 
@@ -63,7 +63,7 @@ with two chatty turns. Subagents now inherit pool zone grants — defensible, un
 ## 2026-07-19 update (ops / dogfood)
 
 - **Liberado is LIVE on the homelab** and is the chat surface for life ops:
-  - API: `http://192.168.0.144:4201`
+  - API: the operator-configured `homelab.api_url` from untracked `ops.toml`
   - Telegram: `@liberado_notification_bot` (sticky free-form chat + cron delivery)
   - Provider: OpenRouter → `deepseek/deepseek-v4-pro`
 - **TurboVault plugin work paid off.** The live TurboVault peer (homelab `develop` image,
@@ -97,18 +97,18 @@ with two chatty turns. Subagents now inherit pool zone grants — defensible, un
 | Telegram chat + cron delivery | **Live** — free-form replies answer the sticky session; briefs fold in |
 | TurboVault MCP peer | **Live** — `develop` image; vector module + tasks in agent reach |
 | Provider | **Live** — OpenRouter / `deepseek/deepseek-v4-pro` |
-| Vault mount | Liberado `:ro`; TurboVault peer `:rw` (agent writes via capability-gated tools) |
+| Vault mount | Liberado `:rw`; writes remain capability-gated in Liberado policy |
 | OpenClaw briefings | **Retired** onto Liberado (no double-fire) |
 
 ### Operate it
 
 ```bash
-ssh shiloh@homelab-node-ai
+ssh <operator-host-from-ops.toml>
 docker compose -f ~/homelab/services/liberado/docker-compose.yml up -d --force-recreate
 docker logs liberado --tail 40
 docker ps --filter name=liberado
-curl -fsS http://192.168.0.144:4201/api/status
-curl -fsS http://192.168.0.144:4201/api/models
+curl -fsS "$LIBERADO_API_URL/api/status"
+curl -fsS "$LIBERADO_API_URL/api/models"
 ```
 
 | Thing | Location |
@@ -120,7 +120,7 @@ curl -fsS http://192.168.0.144:4201/api/models
 | **Secrets** | `~/homelab/services/liberado/.env` (mode 600) — surgical: provider keys + `LIBERADO_TELEGRAM_*` only (do **not** env_file the full `envs/_shared/auth.env`) |
 | **Data** | `~/homelab/services/liberado/data/` → `/data` (session store + sticky Telegram id) |
 | **Vault** | syncthing Main → Liberado `/vault:ro`; TurboVault peer mounts rw |
-| **API** | `http://192.168.0.144:4201` |
+| **API** | `homelab.api_url` in untracked `ops.toml` |
 | **TurboVault peer** | `http://turbovault:3001` (nginx front; speak to this, not `turbovault-backend`) |
 
 ### TurboVault modules (sibling repo)
@@ -156,7 +156,7 @@ Umbrella: [`../future-work/turbovault-modules-integration-roadmap.md`](../future
 #   ~/homelab/scripts/rebuild-turbovault.sh develop
 #   (enable module features in that Dockerfile/build: e.g. --features vector[,tasks])
 # Liberado image:
-ssh shiloh@homelab-node-ai 'cd ~/liberado-build && setsid bash -c "docker build -t liberado:dev . > ~/liberado-build.log 2>&1" </dev/null & disown'
+just deploy-homelab
 # Poll: tail -f ~/liberado-build.log
 # Then: docker compose -f ~/homelab/services/liberado/docker-compose.yml up -d --force-recreate
 ```

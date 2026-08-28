@@ -52,7 +52,7 @@ Without a price table every "expensive" claim is vibes.
 `correlation` makes the join *possible* — a chat turn and the subagent it dispatched share an id —
 but nothing performs it. The true cost of a user turn is its own calls **plus every call its
 delegation caused**, and today that requires reading JSONL by hand. The existing report script
-(`deploy/homelab/latency-report.sh`) does p50/p95 latency per role and no cost at all.
+(`liberado-cost latency`) does p50/p95 latency per role and no cost at all.
 
 ### 3. There is no estimate before spending
 

@@ -60,6 +60,7 @@ fn reader_parses_every_field_the_writer_emits() {
     );
     assert_eq!(read.kind, "llm_call");
     assert_eq!(read.wall_ms, 20_531);
+    assert_eq!(read.ttft_ms, Some(1_204));
     assert_eq!(read.prompt_tokens, Some(24_455), "priced at the input rate");
     assert_eq!(
         read.completion_tokens,

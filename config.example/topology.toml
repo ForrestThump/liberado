@@ -7,7 +7,7 @@
 
 # The Obsidian vault, the source of truth. REQUIRED (validation fails without it). The CLI's
 # `serve <vault-path>` argument overrides this when given.
-vault_path = "/home/shiloh/vault"
+vault_path = "/path/to/vault"
 
 # Operator IANA timezone — single source of truth for local wall-clock (default America/Chicago).
 # Cron *expressions* are still UTC; this only stamps "Local time: …" onto cron/webhook goal text
@@ -32,7 +32,7 @@ vault_path = "/home/shiloh/vault"
 #
 # [[projects]]
 # name = "liberado"
-# root = "/home/shiloh/Code/life-os"
+# root = "/path/to/project"
 # write_class = "agent_writable"
 # # Ship preflight before coding goal Succeeded / ready PR (language-agnostic steps).
 # # When omitted for name "liberado", the coding pack uses built-in CI-equivalent cargo steps.
@@ -54,7 +54,7 @@ vault_path = "/home/shiloh/vault"
 #
 # [[projects]]
 # name = "notes-site"
-# root = "/home/shiloh/Code/notes-site"
+# root = "/path/to/notes-site"
 
 # Unattended PR repair/review. The shepherd observes forge check results; local command gates live
 # under the matching [[projects]].preflight configuration above.
@@ -87,7 +87,7 @@ vault_path = "/home/shiloh/vault"
 # policy.toml). A goal that cannot ask is a goal that cannot park waiting for someone who is asleep.
 # ── ACP bridge ────────────────────────────────────────────────────────────────────────────────────
 # `liberado-acp` — the agent Paseo (and other ACP editors) spawn. Install it with
-# `scripts/install-paseo-liberado.ps1`; see docs/impl/paseo-integration.md.
+# `liberado paseo install`; see docs/impl/paseo-integration.md.
 #
 # Both knobs live here rather than in the editor's env block on purpose: a prompt is prose that
 # wants editing, version control and diffing, none of which survive being pasted into a JSON string
@@ -205,6 +205,7 @@ name = "tasks-mcp"
 description = "create, complete, and query tasks"
 consequence = "reversible"        # git-tracked vault writes are undoable
 transport = { kind = "stdio", command = "npx", args = ["-y", "@liberado/tasks-mcp"] }
+default_zone = "tasks"
 # enabled = true
 
 # A managed MCP: `liberado-mcp-forge sync` (with a matching entry in mcp-sources.toml) installs
@@ -236,6 +237,7 @@ name = "liberado-pdf-mcp"
 description = "PDF manipulation: merge, split, extract, convert"
 consequence = "reversible"
 transport = { kind = "managed" }
+writes_vault = false             # output files are outside the governed Obsidian vault
 
 [[mcps]]
 name = "liberado-rentcast-mcp"
@@ -253,6 +255,7 @@ name = "liberado-anythingllm-mcp"
 description = "ingest and query content in AnythingLLM"
 consequence = "reversible"
 transport = { kind = "managed" }
+writes_vault = false             # effects are confined to the external AnythingLLM workspace
 # Same reasoning as liberado-rentcast-mcp above — needs ANYTHINGLLM_API_KEY + a reachable
 # instance before enabling.
 enabled = false
@@ -262,6 +265,7 @@ name = "code-dispatch"
 description = "Plan, implement, and review code changes; scaffold and build new MCP tools"
 consequence = "reversible"
 transport = { kind = "stdio", command = "riggers-mcp", args = ["--config", "riggers/riggers.yaml"] }
+writes_vault = false             # writes code workspaces, not the Obsidian vault
 
 # A workspace-local MCP (not managed — mcp-forge's "managed" transport only supports cargo-
 # installing from an external git repo; a crate that already lives in this workspace just points
@@ -299,7 +303,7 @@ transport = { kind = "stdio", command = "riggers-mcp", args = ["--config", "rigg
 # name = "tasks-mcp-docker"
 # description = "create, complete, and query tasks (containerized)"
 # consequence = "reversible"
-# transport = { kind = "docker", image = "liberado-tasks-mcp:latest", volumes = ["/home/shiloh/vault:/vault:ro"], env = ["TASKS_MCP_API_KEY"] }
+# transport = { kind = "docker", image = "liberado-tasks-mcp:latest", volumes = ["/path/to/vault:/vault:ro"], env = ["TASKS_MCP_API_KEY"] }
 # # `env = ["TASKS_MCP_API_KEY"]` is a passthrough from the host env — never the value itself.
 
 # Named dispatcher/executor pools (Decision 18 checkpoint #3) — an ALWAYS-PRESENT "default" pool

@@ -38,7 +38,7 @@
 > walk-up-from-the-binary tier finds no repo `config/`, and the platform config dir usually holds no
 > `topology.toml`. Without an explicit value the agent runs on defaults: **no declared project, so no
 > ship bar, and an empty capability grant.** That was the state for the whole dogfood period and
-> nothing reported it. `scripts/install-paseo-liberado.ps1` now writes the variable; check the
+> nothing reported it. `liberado paseo install` now writes the variable from `ops.toml`; check the
 > `config directory resolved` line the bridge logs at startup to confirm which directory it picked
 > and which of the three files it found.
 >
@@ -117,10 +117,11 @@ where.exe liberado-acp
 
 You should see a JSON-RPC result with `"protocolVersion":1` and `"agentInfo":{"name":"Liberado",…}`.
 
-Helper script (writes Paseo config as well):
+The repository command installs the binary and merges the Paseo provider without replacing other
+Paseo configuration. Its settings come from `ops.toml`:
 
 ```powershell
-powershell -File scripts/install-paseo-liberado.ps1
+just paseo-install
 ```
 
 ## Register Liberado in Paseo

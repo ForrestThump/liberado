@@ -23,6 +23,8 @@ pub struct JournalEvent {
     #[serde(default)]
     pub wall_ms: u64,
     #[serde(default)]
+    pub ttft_ms: Option<u64>,
+    #[serde(default)]
     pub prompt_tokens: Option<u32>,
     #[serde(default)]
     pub completion_tokens: Option<u32>,

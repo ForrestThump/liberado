@@ -2,7 +2,9 @@
 
 **Written:** 2026-07-16  
 **Audience:** agent running *on this box* (`homelab-node-ai`) that will patch peers / compose — not Liberado core.  
-**Context:** Liberado daemon is already live at `http://192.168.0.144:4201` (`liberado:dev` container, network `homelab`). Topology/policy under `~/homelab/services/liberado/config/`. Face agent uses `delegate` only; specialists are granted to `dispatcher`.
+**Context:** Liberado is live at the `api_url` in the operator's untracked `ops.toml`
+(`liberado:dev` container, network `homelab`). Face agent uses `delegate` only; specialists are
+granted to `dispatcher`.
 
 ---
 
@@ -20,7 +22,7 @@ docker logs liberado --tail 80
 ```
 
 > Deploying new **Liberado code** is a different operation — never hand-build the image. Run
-> `bash deploy/homelab/deploy.sh` from the repo (see `deploy/homelab/README.md`), and check what's
+> `just deploy-homelab` from the repo (see `deploy/homelab/README.md`), and check what's
 > live with `docker exec liberado cat /etc/liberado-build-sha`.
 
 ---
@@ -264,8 +266,8 @@ transport = { kind = "http", url = "http://actual-mcp:3600" }
 
 ```bash
 # From host or any LAN client
-curl -fsS http://192.168.0.144:4201/api/status
-curl -fsS http://192.168.0.144:4201/api/catalog | head -c 2000
+curl -fsS "$LIBERADO_API_URL/api/status"
+curl -fsS "$LIBERADO_API_URL/api/catalog" | head -c 2000
 
 # Boot / connect log
 docker logs liberado --tail 100 2>&1 | grep -E 'MCP failed|SSE connection established|orchestrator enabled'
