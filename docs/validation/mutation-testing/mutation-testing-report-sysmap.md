@@ -28,7 +28,7 @@ used the default `--timeout 3.0 --minimum-test-timeout 30` and `--in-place`. The
 |----------|--------|-----------|
 | `crates/sysmap/src/lib.rs:78` `&&` → `\|\|` in `repository_root` | first directory with `crates/` returned as the root | `find_repo_root_walks_up_through_crates_only_directories` — nested directory has `crates/` but no `Cargo.toml`; the function must keep walking |
 | `crates/sysmap/src/lib.rs:83` `delete !` in `repository_root` | the walk returns `None` after its first successful `pop()` | `find_repo_root_walks_up_through_crates_only_directories` — the walk must continue through the nested directory to the fixture root |
-| `crates/sysmap/src/lib.rs:78` `repository_root` → `Ok(Default::default())` | empty `PathBuf` returned as the root | `find_repo_root_accepts_cwd_at_the_root_itself` requires the fixture root |
+| `crates/sysmap/src/lib.rs:78` `repository_root` → `Ok(Default::default())` | empty `PathBuf` returned as the root | `repository_root_returns_an_absolute_workspace_root` calls the wrapper and rejects a relative empty path |
 | `crates/sysmap/src/scan.rs:49-53` × 5 (one per match arm) | deleting `provider \| notifier`, `mcp \| hook`, `pool \| profile \| schedule`, `project`, or `vault` falls through to `_ => "unknown"` | `runtime_layer_maps_every_known_kind_to_its_group` — table-driven test asserts every known kind maps to its expected group (`foundation` / `service` / `kernel` / `pack` / `store`) |
 
 ### Refactor

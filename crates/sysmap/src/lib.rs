@@ -245,6 +245,17 @@ mod tests {
     }
 
     #[test]
+    fn repository_root_returns_an_absolute_workspace_root() {
+        let root = repository_root().expect("workspace root");
+        assert!(
+            root.is_absolute(),
+            "repository_root must return an absolute path: {root:?}"
+        );
+        assert!(root.join("Cargo.toml").is_file());
+        assert!(root.join("crates").is_dir());
+    }
+
+    #[test]
     fn topology_adds_runtime_nodes_and_instance_edges() {
         let dir = repo_with_crates();
         // Add the crates the runtime wiring references so the loop paths materialize. The server
