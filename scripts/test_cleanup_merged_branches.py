@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import importlib.util
+import io
 import pathlib
 import subprocess
 import sys
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 
 
 SCRIPT = pathlib.Path(__file__).with_name("cleanup_merged_branches.py")
@@ -46,6 +48,46 @@ class CleanerTests(unittest.TestCase):
 
     def cleaner(self) -> cleanup.Cleaner:
         return cleanup.Cleaner(self.repo, "origin", "main")
+
+    def add_remote(self) -> pathlib.Path:
+        remote = pathlib.Path(self.temp.name) / "remote.git"
+        subprocess.run(
+            ["git", "init", "--bare", str(remote)],
+            cwd=self.temp.name,
+            check=True,
+            text=True,
+            capture_output=True,
+        )
+        git(self.repo, "remote", "add", "origin", str(remote))
+        git(self.repo, "push", "-u", "origin", "main")
+        return remote
+
+    def remote_oid(self, remote: pathlib.Path, ref: str) -> str | None:
+        result = subprocess.run(
+            ["git", "--git-dir", str(remote), "rev-parse", "--verify", "--quiet", ref],
+            check=False,
+            text=True,
+            capture_output=True,
+        )
+        return result.stdout.strip() if result.returncode == 0 else None
+
+    def remote_candidate(
+        self,
+    ) -> tuple[pathlib.Path, cleanup.Cleaner, cleanup.Candidate]:
+        merged_oid = self.commit_on("merged", "merged.txt", "merged\n")
+        git(self.repo, "switch", "main")
+        git(self.repo, "merge", "--no-ff", "merged", "-m", "merge merged")
+        remote = self.add_remote()
+        git(self.repo, "push", "origin", "merged")
+        cleaner = cleanup.Cleaner(self.repo, "origin", "origin/main")
+        audit = cleaner.audit()
+        candidate = next(
+            item
+            for item in audit.delete
+            if item.scope == "remote" and item.branch == "merged"
+        )
+        self.assertEqual(candidate.oid, merged_oid)
+        return remote, cleaner, candidate
 
     def test_dry_audit_selects_only_merged_content(self) -> None:
         merged_oid = self.commit_on("merged", "merged.txt", "merged\n")
@@ -96,6 +138,75 @@ class CleanerTests(unittest.TestCase):
 
         with self.assertRaises(cleanup.GitError):
             cleaner.recheck(audit.delete)
+
+    def test_remote_dry_run_does_not_change_refs(self) -> None:
+        remote, _, candidate = self.remote_candidate()
+
+        output = io.StringIO()
+        with redirect_stdout(output):
+            result = cleanup.main(
+                [
+                    "--no-fetch",
+                    "--repo",
+                    str(self.repo),
+                    "--base",
+                    "origin/main",
+                ]
+            )
+
+        self.assertEqual(result, 0)
+        self.assertIn("Dry run", output.getvalue())
+        self.assertEqual(self.remote_oid(remote, "refs/heads/merged"), candidate.oid)
+        self.assertIsNone(self.remote_oid(remote, "refs/tags/archive/stale-branches"))
+
+    def test_remote_apply_archives_exact_tip_before_deletion(self) -> None:
+        remote, cleaner, candidate = self.remote_candidate()
+
+        cleaner.recheck([candidate])
+        cleaner.archive([candidate])
+        cleaner.delete([candidate])
+
+        self.assertIsNone(self.remote_oid(remote, "refs/heads/merged"))
+        tags = subprocess.run(
+            [
+                "git",
+                "--git-dir",
+                str(remote),
+                "for-each-ref",
+                "--format=%(refname) %(objectname)",
+                "refs/tags/archive/stale-branches/",
+            ],
+            check=True,
+            text=True,
+            capture_output=True,
+        ).stdout.splitlines()
+        self.assertEqual(len(tags), 1)
+        tag_ref, tag_oid = tags[0].split()
+        self.assertIn("/remote/merged-", tag_ref)
+        self.assertEqual(tag_oid, candidate.oid)
+
+    def test_remote_delete_lease_refuses_a_moved_tip(self) -> None:
+        remote, cleaner, candidate = self.remote_candidate()
+        moved_oid = self.commit_on("moved", "moved.txt", "moved\n")
+        git(self.repo, "push", "origin", "moved")
+        subprocess.run(
+            [
+                "git",
+                "--git-dir",
+                str(remote),
+                "update-ref",
+                "refs/heads/merged",
+                moved_oid,
+            ],
+            check=True,
+            text=True,
+            capture_output=True,
+        )
+
+        with self.assertRaises(cleanup.GitError):
+            cleaner.delete([candidate])
+
+        self.assertEqual(self.remote_oid(remote, "refs/heads/merged"), moved_oid)
 
 
 if __name__ == "__main__":

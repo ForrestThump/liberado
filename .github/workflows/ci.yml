@@ -119,6 +119,9 @@ jobs:
       - name: Tests (includes architecture and workflow-security rules)
         run: cargo test --locked --workspace --no-fail-fast
 
+      - name: Standalone branch cleaner tests
+        run: python -m unittest scripts/test_cleanup_merged_branches.py
+
   module-health:
     name: Module health regression (ubuntu-latest)
     needs: dependency-security

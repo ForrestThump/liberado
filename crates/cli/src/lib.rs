@@ -55,6 +55,7 @@
 //! prompt a chat would actually be given from that same config — the model's-eye view, without a
 //! daemon. Reactions are logged to stderr by the server; stdout is left for data.
 
+mod branch_cleaner_ci;
 mod chat_client;
 mod ci_cmd;
 mod coder_cmd;
