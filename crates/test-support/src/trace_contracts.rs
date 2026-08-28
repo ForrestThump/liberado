@@ -1080,4 +1080,64 @@ mod tests {
         assert_eq!(turns[1].turn, 1);
         assert_eq!(turns[0].system_text, "You are the coder.");
     }
+
+    /// Only `prompt` events seed turn reconstruction. The SAMPLE_MVL carries `completion`,
+    /// `tool_result`, and other non-prompt events with a `turn` field — cargo-mutants's
+    /// `==` -> `!=` mutation on the type-name check would let those events seed turns,
+    /// which then fail `reconstruct_turn` (no prompt) and the test sees an Err.
+    #[test]
+    fn reconstruct_all_turns_only_seeds_from_prompt_events() {
+        let events = parse_jsonl(SAMPLE_MVL).unwrap();
+        // The unmutated function returns Ok with 2 turns. The `!=` mutation makes
+        // `reconstruct_turn` fail for turns sourced from non-prompt events; we expect
+        // an error rather than a silently-shorter result.
+        let result = reconstruct_all_turns(&events);
+        assert!(
+            result.is_ok(),
+            "sample MVL has a prompt for each turn: {result:?}"
+        );
+    }
+
+    /// A `context_transform` is joined by a `context_changed` event at the same turn.
+    /// The `&&` -> `||` mutation on the `if !has_changed && !has_following_full` guard
+    /// would error on a clean context_changed (the `!has_changed` half would flip to
+    /// `!has_changed`, true, and combined with `||` the whole condition would fire).
+    /// A two-event fixture with just the MVL `context_changed` and the matching
+    /// exec `context_transform` (no following full prompt) proves the `&&` is correct.
+    #[test]
+    fn context_transform_with_only_context_changed_passes_join() {
+        let mvl = parse_jsonl(
+            r#"
+{"v":1,"type":"run_started","ts":"t","run":"r1","seq":0,"harness":{"name":"x","version":"0"}}
+{"v":1,"type":"context_changed","ts":"t","run":"r1","seq":1,"turn":1,"kind":"offload","removed_messages":0}
+"#,
+        )
+        .unwrap();
+        let ex = parse_jsonl(
+            r#"
+{"v":1,"type":"context_transform","ts":"t","run":"r1","seq":0,"turn":1,"kind":"offload","duration_ms":1,"removed_messages":0,"summary_bytes":0}
+"#,
+        )
+        .unwrap();
+        assert_join_integrity(&mvl, &ex).expect("context_changed alone is sufficient");
+    }
+
+    /// The MVL leakage rule rejects `rss_bytes` and `cpu_ms` as execution-only fields.
+    /// cargo-mutants's `||` -> `&&` mutation requires BOTH fields to be present before
+    /// flagging — a single `rss_bytes` event would pass. A test with just `rss_bytes`
+    /// (no `cpu_ms`) pins the original OR semantics.
+    #[test]
+    fn mvl_rejects_rss_bytes_alone() {
+        let mvl = parse_jsonl(
+            r#"
+{"v":1,"type":"prompt","ts":"t","run":"r1","seq":0,"turn":0,"messages":{"mode":"full","items":[]},"system":{"sha256":"s","text":"S"},"tool_catalog_sha256":"c","tools_offered":[],"params":{},"rss_bytes":1000}
+"#,
+        )
+        .unwrap();
+        let err = assert_mvl_has_no_scheduler_leakage(&mvl).unwrap_err();
+        assert!(
+            err.contains("rss_bytes") || err.contains("resource"),
+            "{err}"
+        );
+    }
 }
