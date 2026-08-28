@@ -2193,6 +2193,51 @@
         "timeout": 0,
         "unviable": 34
       }
+    },
+    {
+      "package": "chat-client-contract",
+      "commit": "dcbef9803b2eaf1d4abcef9c6bf1fe9619d6328f",
+      "recorded_at": "2026-08-28",
+      "command": "cargo mutants -p chat-client-contract --cap-lints true --timeout 3.0 --minimum-test-timeout 30 --in-place",
+      "tool_version": "27.1.0",
+      "scope": "package",
+      "counts": {
+        "viable": 31,
+        "caught": 29,
+        "survived": 1,
+        "timeout": 1,
+        "unviable": 7
+      }
+    },
+    {
+      "package": "chat-client-contract",
+      "commit": "fb78a46e2e4289c802c484edfc3e1c4d44ad808e",
+      "recorded_at": "2026-08-28",
+      "command": "cargo mutants -p chat-client-contract --cap-lints true --timeout 3.0 --minimum-test-timeout 30 --in-place",
+      "tool_version": "27.1.0",
+      "scope": "package",
+      "counts": {
+        "viable": 30,
+        "caught": 29,
+        "survived": 0,
+        "timeout": 1,
+        "unviable": 7
+      }
+    },
+    {
+      "package": "chat-client-contract",
+      "commit": "3104fae6a2da43bd08dea33caca60a7933984bdc",
+      "recorded_at": "2026-08-28",
+      "command": "cargo mutants -p chat-client-contract --cap-lints true --timeout 3.0 --minimum-test-timeout 30 --in-place",
+      "tool_version": "27.1.0",
+      "scope": "package",
+      "counts": {
+        "viable": 28,
+        "caught": 28,
+        "survived": 0,
+        "timeout": 0,
+        "unviable": 7
+      }
     }
   ]
 }

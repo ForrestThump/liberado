@@ -1,21 +1,38 @@
 # chat-client-contract — Mutation Testing Report
 
-**Date:** 2026-08-28 · **Campaign commit:** `3f78ccf` · **Tool:** cargo-mutants 27.1.0
+**Status:** historical
+**Authority:** evidence
+**Date:** 2026-08-28 · **Campaign commit:** `3104fae6a2da43bd08dea33caca60a7933984bdc` · **Tool:** cargo-mutants 27.1.0
 
-Two campaigns were run on the same base (`3f78ccf`, the `mutants/campaign-sysmap-cli` branch's `origin/main`). Both rows are appended to `mutants-ledger.json`.
+The original branch row named base commit `3f78ccf9797573df0fd8d7c6285964e479b569a9`,
+which did not contain its dirty-tree test. That row remains append-only history. Three reviewed
+runs record the merged artifact, removal of an equivalent branch, and the final bounded drain.
 
-| Metric | Baseline | Final |
-|--------|:--------:|:-----:|
-| Viable | 38 | 38 |
-| Caught | 29 | 29 |
-| Survived | 2 | **2** (1 equivalent + 1 timeout, not fixed) |
-| Timeout | 0 | 1 |
-| Unviable | 7 | 7 |
+| Metric | Original row | Merged rerun | Equivalent removed | Final |
+|--------|:------------:|:------------:|:------------------:|:-----:|
+| Total | 38 | 38 | 37 | 35 |
+| Viable | 31 | 31 | 30 | 28 |
+| Caught | 29 | 29 | 29 | **28** |
+| Survived | 1 | 1 | **0** | **0** |
+| Timeout | 1 | 1 | 1 | **0** |
+| Unviable | 7 | 7 | 7 | 7 |
 
-The `parse_block` `||` mutation (line 71) is structurally equivalent for any chunk: the mutation makes the skip guard `line.is_empty() && line.starts_with(':')`, which is impossible (no line is both empty and a comment). Any line that fails the `&&` also does not match `event:` or `data:`, so `parse_block`'s output (`saw_field`, `event_type`, `data_lines`) is unchanged. A test (`comment_and_empty_lines_are_skipped_before_event_parsing`) kills it for same-crate verification but the mutation itself is uncatchable by any observable-behavior change — it is documented as an equivalent miss.
+The original `parse_block` guard used `line.is_empty() || line.starts_with(':')`. Changing
+`||` to `&&` did not change any result because neither empty lines nor comment lines matched an
+SSE field prefix. The added test passed with and without that mutation and duplicated existing
+comment and separator coverage. The final code removes both the ineffective test and the
+unobservable `line.is_empty()` branch.
 
-The `SseDecoder::push` arithmetic mutation (`+` → `-` on line 53) is a timeout: the mutated arithmetic changes the buffer-drain index (`..idx - 2` instead of `..idx + 2`), which produces a shorter or negative slice. On some chunks the shorter slice creates a wrong split (e.g. splitting too early), which can cause the `find("\n\n")` loop to run differently — in practice, the mutation can make `push` hang or produce an incorrect number of events depending on chunk content. A specific slow-chunk test could kill it, but the mutation is a time-trap rather than a logic gap. Documented as a timeout miss.
+The original `SseDecoder::push` drained through `idx + 2`. Replacing `+` with `-` caused a
+timeout, while replacing it with `*` was caught. The final code drains the event body through
+`idx`, then drains the fixed two-byte separator. This keeps each loop iteration bounded and
+removes both arithmetic mutants.
+
+The final command used the default `--timeout 3.0 --minimum-test-timeout 30` and `--in-place`.
+It tested 35 mutants in 42s after a 1s baseline build.
 
 ## Conclusion
 
-`chat-client-contract`'s first greenfield campaign: 38 viable, 29 caught (76.3%). 1 missed survivor (`push` arithmetic — timeout trap) and 1 documented equivalent (`parse_block` guard — impossible `&&`). The crate is small (4 files, 1,882 LOC) and the only remaining unrecorded greenfield crate that does not require multi-file fixtures. A targeted timeout-chunk test for `push` would close the last gap.
+The final `chat-client-contract` suite catches **100% of viable mutants**: 28 caught, 0
+survivors, 0 timeouts, and 7 unviable mutants. The fixes remove an unobservable parser branch
+and an arithmetic operation that could prevent the SSE decoder from making progress.
