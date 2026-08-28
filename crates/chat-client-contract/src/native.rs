@@ -236,6 +236,20 @@ mod sse_tests {
         assert_eq!(events[0].event, "token");
         assert_eq!(events[0].data, "Hi");
     }
+
+    /// The `||` mutation on the `line.is_empty() || line.starts_with(':')` guard would make
+    /// the guard require both conditions (impossible). Empty lines and comments would then
+    /// be treated as field lines, corrupting parsing. A comment-only-then-event chunk
+    /// asserts the skip behavior is intact.
+    #[test]
+    fn comment_and_empty_lines_are_skipped_before_event_parsing() {
+        let mut decoder = SseDecoder::default();
+        // A block with a comment and an empty line followed by a real event.
+        let events = decoder.push(": a comment\n\nevent: done\ndata: \n\n");
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].event, "done");
+        assert_eq!(events[0].data, "");
+    }
 }
 
 #[test]

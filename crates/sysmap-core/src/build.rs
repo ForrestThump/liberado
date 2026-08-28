@@ -241,6 +241,47 @@ mod tests {
     }
 
     #[test]
+    fn dedup_removes_duplicate_profile_edges_not_distinct_ones() {
+        let dir = tempdir().unwrap();
+        write_workspace(dir.path());
+        add_crate(dir.path(), "common", "foundation", &[], &[], &[]);
+        add_crate(dir.path(), "consumer", "root", &["common"], &[], &[]);
+        // Profile with two identical declared Control edges (duplicate).
+        let profile = Profile {
+            manifest_namespace: "liberado".into(),
+            layers: vec![],
+            kinds: vec![],
+            nodes: vec![],
+            edges: vec![
+                DeclaredEdge {
+                    from: "consumer".into(),
+                    to: "common".into(),
+                    kind: EdgeKind::Control,
+                    label: "act".into(),
+                },
+                DeclaredEdge {
+                    from: "consumer".into(),
+                    to: "common".into(),
+                    kind: EdgeKind::Control,
+                    label: "act".into(),
+                },
+            ],
+            edge_rules: vec![],
+            routes: vec![],
+        };
+        let map = build(dir.path(), &profile, vec![], None).unwrap();
+        // One dependency edge + one declared Control edge (not two — the duplicate is removed).
+        assert_eq!(
+            map.edges
+                .iter()
+                .filter(|e| e.kind == EdgeKind::Control)
+                .count(),
+            1,
+            "duplicate profile Control edges must be deduplicated"
+        );
+    }
+
+    #[test]
     fn drops_edges_to_missing_nodes() {
         let dir = tempdir().unwrap();
         write_workspace(dir.path());
