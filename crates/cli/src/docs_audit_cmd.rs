@@ -1,10 +1,12 @@
 //! Deterministic documentation contracts and change-impact checks.
 
-use liberado_common::process::std_command;
 use serde::Deserialize;
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
+
+#[path = "docs_audit_cmd/change_set.rs"]
+mod change_set;
 
 const POLICY: &str = "docs-audit.toml";
 
@@ -197,17 +199,7 @@ fn require_terms(
 }
 
 fn changed_files(root: &Path, base: &str) -> Result<Vec<String>, Box<dyn std::error::Error>> {
-    let output = std_command("git")
-        .current_dir(root)
-        .args(["diff", "--name-only", &format!("{base}...HEAD")])
-        .output()?;
-    if !output.status.success() {
-        return Err(format!("git diff from {base} failed").into());
-    }
-    Ok(String::from_utf8(output.stdout)?
-        .lines()
-        .map(|line| line.replace('\\', "/"))
-        .collect())
+    change_set::changed_files(root, base)
 }
 
 fn check_impact(policy: &Policy, changed: &[String]) -> Result<(), Box<dyn std::error::Error>> {

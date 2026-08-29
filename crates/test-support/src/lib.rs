@@ -202,8 +202,8 @@ impl RuntimeFactory for FailingFactory {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use liberado_notify::Notifier;
     use serde_json::Value;
-
     #[test]
     fn noop_catalog_is_empty() {
         let rt = NoopRuntime;
@@ -304,5 +304,16 @@ mod tests {
             Err(e) => assert!(e.0.contains("MCP launch failed")),
             Ok(_) => panic!("expected error"),
         }
+    }
+
+    #[tokio::test]
+    async fn mock_notifier_with_ok_false_returns_error() {
+        // The `notify` impl's `if self.ok { Ok(()) } else { Err(...) }` branch was a survivor:
+        // cargo-mutants replaced the body with `Ok(())` and every existing test still passed
+        // because the default `ok=true` path returns Ok. Asserting the `ok=false` path makes
+        // the function's branch visible to the test suite.
+        let notifier = MockNotifier { ok: false };
+        let result = notifier.notify("anything").await;
+        assert!(result.is_err(), "ok=false must yield an error");
     }
 }

@@ -50,7 +50,8 @@ impl SseDecoder {
 
         let mut events = Vec::new();
         while let Some(idx) = self.buf.find("\n\n") {
-            let block: String = self.buf.drain(..idx + 2).collect();
+            let block: String = self.buf.drain(..idx).collect();
+            self.buf.drain(..2);
             if let Some(event) = parse_block(&block) {
                 events.push(event);
             }
@@ -68,7 +69,7 @@ fn parse_block(block: &str) -> Option<SseEvent> {
     let mut saw_field = false;
 
     for line in block.lines() {
-        if line.is_empty() || line.starts_with(':') {
+        if line.starts_with(':') {
             continue;
         }
         if let Some(value) = line.strip_prefix("event:") {

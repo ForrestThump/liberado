@@ -195,9 +195,7 @@ pub(crate) fn vacate_cargo_target_image() -> Result<(), Box<dyn std::error::Erro
 
 fn exe_lives_in_cargo_target(exe: &Path) -> bool {
     let hay = exe.to_string_lossy().replace('\\', "/");
-    hay.contains("/target/debug/")
-        || hay.contains("/target/release/")
-        || hay.contains("/target/llvm-cov-target/")
+    hay.contains("/debug/") || hay.contains("/release/") || hay.contains("/llvm-cov-target/")
 }
 
 /// Run the repository's local ship preflight (no CRAP llvm-cov).

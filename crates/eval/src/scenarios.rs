@@ -240,3 +240,27 @@ pub fn scenarios() -> Vec<Scenario> {
         },
     ]
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn scenarios_contains_labeled_anchors_across_categories() {
+        // The labeled set is the fixture the eval is tuned against. Asserting a few anchors by
+        // name (one per routing category) pins the surface cargo-mutants' `replace scenarios
+        // with vec![]` mutant used to skip: an empty list returns no anchors, the test fails.
+        let names: Vec<&str> = scenarios().iter().map(|s| s.name).collect();
+        for anchor in [
+            "simple-task-add",    // Execute
+            "research-and-write", // Subagent
+            "ambiguous",          // Clarify
+            "external-broadcast", // Propose
+        ] {
+            assert!(
+                names.contains(&anchor),
+                "missing labeled scenario {anchor}: have {names:?}"
+            );
+        }
+    }
+}

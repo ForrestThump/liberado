@@ -86,6 +86,11 @@ fn execute_complexity(command: CiCommand) -> Result<(), Box<dyn std::error::Erro
 
 fn local_run(log: &CiLog) -> Result<(), Box<dyn std::error::Error>> {
     check(log)?;
+    local_audits(log)
+}
+
+fn local_audits(log: &CiLog) -> Result<(), Box<dyn std::error::Error>> {
+    crate::readiness_cmd::audit_docs(&log.root)?;
     ratchet_quality(log)
 }
 
