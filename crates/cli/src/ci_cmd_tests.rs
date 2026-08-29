@@ -278,6 +278,21 @@ fn cargo_target_exe_is_the_image_cargo_test_would_overwrite() {
 }
 
 #[test]
+fn configured_cargo_target_exe_is_the_image_cargo_test_would_overwrite() {
+    assert!(exe_lives_in_cargo_target(Path::new(
+        r"C:\repo\target-windows-final\debug\liberado.exe"
+    )));
+}
+
+#[test]
+fn local_ci_wires_the_base_aware_docs_impact_gate() {
+    assert!(
+        include_str!("ci_cmd/dispatch.rs")
+            .contains("crate::readiness_cmd::audit_docs(&log.root)?;")
+    );
+}
+
+#[test]
 fn regression_hint_tells_an_agent_not_to_raise_the_baseline() {
     assert!(CRAP_REGRESSION_HINT.contains("per-function"));
     assert!(CRAP_REGRESSION_HINT.contains("just ci"));

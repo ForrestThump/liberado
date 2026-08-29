@@ -5,7 +5,7 @@ authority: normative
 domain: docs
 canonical_for: document-authority
 open_items: false
-last_verified: 2026-08-21
+last_verified: 2026-08-29
 ---
 
 # Document authority and metadata
@@ -78,7 +78,7 @@ and required fields are enforced on **all** managed documents, not only root pla
 `just docs-audit` adds contracts that metadata cannot express:
 
 1. `docs-audit.toml` binds implementation sources to their current reference document and required vocabulary in both directions.
-2. Pull-request CI compares the branch with its base. Contract-bearing source changes require a mapped documentation change or a narrow reviewed waiver.
+2. Pull-request CI compares the branch with its base. `just ci` and `just ready` derive the merge base from `origin/main`, with `HEAD^` as an isolated-repository fallback. Local audits compare that base with the full working tree, including untracked files, so an uncommitted source and document pair is checked accurately. Contract-bearing source changes require a mapped documentation change or a narrow reviewed waiver.
 3. Active documents cannot use vocabulary listed as obsolete in `docs-audit.toml`.
 4. Fenced `toml check`, `json check`, and `yaml check` examples must parse. Ordinary illustrative fragments remain unchecked.
 
