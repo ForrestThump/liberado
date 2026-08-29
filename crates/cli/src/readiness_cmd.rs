@@ -54,7 +54,11 @@ fn compile_gate(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
 fn audits(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
     crate::module_health_cmd::check(root)?;
     crate::function_complexity_cmd::check(root)?;
-    crate::docs_audit_cmd::run(root, std::iter::empty())
+    audit_docs(root)
+}
+
+pub(crate) fn audit_docs(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    crate::docs_audit_cmd::run(root, ["--base".to_string(), change_base(root)?].into_iter())
 }
 
 pub fn ready(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
@@ -230,8 +234,7 @@ fn test_changed_packages(root: &Path) -> Result<(), Box<dyn std::error::Error>> 
 }
 
 fn changed_packages(root: &Path) -> Result<BTreeSet<String>, Box<dyn std::error::Error>> {
-    let base = git_text(root, &["merge-base", "HEAD", "origin/main"])
-        .or_else(|_| git_text(root, &["rev-parse", "HEAD^"]))?;
+    let base = change_base(root)?;
     let names = git_text(root, &["diff", "--name-only", &base, "--"])?;
     let mut packages = BTreeSet::new();
     for name in names.lines() {
@@ -256,6 +259,11 @@ fn changed_packages(root: &Path) -> Result<BTreeSet<String>, Box<dyn std::error:
         }
     }
     Ok(packages)
+}
+
+fn change_base(root: &Path) -> Result<String, Box<dyn std::error::Error>> {
+    git_text(root, &["merge-base", "HEAD", "origin/main"])
+        .or_else(|_| git_text(root, &["rev-parse", "HEAD^"]))
 }
 
 fn git_text(root: &Path, args: &[&str]) -> Result<String, Box<dyn std::error::Error>> {

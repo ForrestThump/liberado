@@ -22,11 +22,18 @@ committed pre-push hook, and `just push` reject a stale receipt. Enable the hook
 just setup-hooks
 ```
 
+Both `just ci` and `just ready` run the base-aware documentation-impact audit used by GitHub.
+They compare `HEAD` with its merge base on `origin/main`; an isolated repository falls back to
+`HEAD^`. A contract-bearing source change must update the document named by `docs-audit.toml` or
+carry a narrow, reviewed waiver.
+
 Coverage-sensitive CRAP remains a Debian authority. Run `just crap-linux` after Rust control-flow
 changes. It runs natively on Debian/Linux. On Windows it maps the checkout into the Debian WSL
 distribution and runs the same Rust CLI command there.
 The default distribution name is `Debian`; set `LIBERADO_DEBIAN_WSL_DISTRO` when the installed
-Debian-compatible distribution uses another name.
+Debian-compatible distribution uses another name. Windows checkout paths are changed to
+forward-slash form before `wslpath` maps them, so a worktree such as `C:\tmp\review` keeps each
+path component intact.
 
 The host-stable function ratchet is configured in `function-complexity.toml` and committed in
 `function-complexity-baseline.json`. Existing functions may not gain cyclomatic complexity. New

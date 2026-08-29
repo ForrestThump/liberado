@@ -306,16 +306,16 @@
     "cyclomatic": 5
   },
   "crates/cli/src/ci_cmd/dispatch.rs": {
-    "ploc": 106,
-    "lloc": 14,
-    "functions": 9,
-    "cyclomatic": 59
+    "ploc": 110,
+    "lloc": 15,
+    "functions": 10,
+    "cyclomatic": 61
   },
   "crates/cli/src/ci_cmd_tests.rs": {
-    "ploc": 407,
-    "lloc": 174,
-    "functions": 30,
-    "cyclomatic": 35
+    "ploc": 414,
+    "lloc": 175,
+    "functions": 31,
+    "cyclomatic": 36
   },
   "crates/cli/src/ci_cmd_usage_tests.rs": {
     "ploc": 7,
@@ -360,10 +360,16 @@
     "cyclomatic": 4
   },
   "crates/cli/src/docs_audit_cmd.rs": {
-    "ploc": 345,
-    "lloc": 91,
-    "functions": 33,
-    "cyclomatic": 114
+    "ploc": 336,
+    "lloc": 88,
+    "functions": 32,
+    "cyclomatic": 110
+  },
+  "crates/cli/src/docs_audit_cmd/change_set.rs": {
+    "ploc": 68,
+    "lloc": 17,
+    "functions": 5,
+    "cyclomatic": 11
   },
   "crates/cli/src/docs_cmd.rs": {
     "ploc": 352,
@@ -450,10 +456,10 @@
     "cyclomatic": 84
   },
   "crates/cli/src/readiness_cmd.rs": {
-    "ploc": 374,
+    "ploc": 380,
     "lloc": 117,
-    "functions": 34,
-    "cyclomatic": 95
+    "functions": 36,
+    "cyclomatic": 98
   },
   "crates/cli/src/shepherd_cmd.rs": {
     "ploc": 1067,
