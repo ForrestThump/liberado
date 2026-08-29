@@ -456,10 +456,16 @@
     "cyclomatic": 84
   },
   "crates/cli/src/readiness_cmd.rs": {
-    "ploc": 380,
-    "lloc": 117,
-    "functions": 36,
-    "cyclomatic": 98
+    "ploc": 305,
+    "lloc": 100,
+    "functions": 26,
+    "cyclomatic": 77
+  },
+  "crates/cli/src/readiness_cmd/debian_crap.rs": {
+    "ploc": 365,
+    "lloc": 73,
+    "functions": 33,
+    "cyclomatic": 82
   },
   "crates/cli/src/shepherd_cmd.rs": {
     "ploc": 1067,
