@@ -10,10 +10,9 @@
 //!
 //! Children **never** self-merge. Nested fan-out is not supported in this slice.
 //!
-//! Concurrency is bounded by `max_concurrent` (wire from
-//! `tuning.dispatch.max_concurrent_coding_subagents`).
+//! Concurrency is bounded by `max_concurrent` from the dispatch tuning.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use liberado_coder_core::{
@@ -32,10 +31,14 @@ use serde_json::json;
 use tokio::sync::Semaphore;
 use tracing::{info, warn};
 
+mod names;
+
+pub use names::sanitize_label;
+
 /// One independent coding subtask for fan-out.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CodingSubtask {
-    /// Short label used in branch names (`fanout/<label>-…`). Path-safe preferred.
+    /// Short label used in branch names (`fanout/<session>/<label>-…`). Path-safe preferred.
     pub label: String,
     /// Full goal text for the child coding worker.
     pub description: String,
@@ -115,38 +118,16 @@ pub fn subtasks_from_payload(payload: &serde_json::Value) -> Option<Vec<CodingSu
     Some(out)
 }
 
-/// Sanitize label for branch / worktree directory segments.
-pub fn sanitize_label(label: &str) -> String {
-    let s: String = label
-        .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
-                c
-            } else {
-                '-'
-            }
-        })
-        .collect();
-    let s = s.trim_matches('-').to_string();
-    if s.is_empty() {
-        "task".into()
-    } else {
-        s.chars().take(40).collect()
-    }
-}
-
 /// Default concurrency when neither payload nor pack config sets a cap (matches
 /// `DispatchTuning::default().max_concurrent_coding_subagents`).
 pub const DEFAULT_MAX_CONCURRENT_CODING_SUBAGENTS: usize = 3;
 
-/// Run N coding children via in-process [`CoderBackend`] (no hub). Prefer
-/// [`run_coding_fanout_via_hub`] in production when a hub is attached.
-///
-/// `parent_root` must be a git repository. Children use HostLocal inside dedicated worktrees.
+/// Run in-process children in session-scoped worktrees; prefer the hub path when available.
 pub async fn run_coding_fanout(
     backend: Arc<dyn CoderBackend>,
     merger: Arc<dyn Provider>,
     parent_root: &Path,
+    parent_session_id: &str,
     tasks: Vec<CodingSubtask>,
     max_concurrent: usize,
     model: &str,
@@ -166,10 +147,11 @@ pub async fn run_coding_fanout(
         let sem = Arc::clone(&sem);
         let parent = parent_root.to_path_buf();
         let wt_base = worktrees_base.clone();
+        let parent_sid = parent_session_id.to_string();
         let model = model.to_string();
         handles.push(tokio::spawn(async move {
             let _permit = sem.acquire().await.expect("semaphore closed unexpectedly");
-            run_one_child_backend(backend, &parent, &wt_base, &task, i, &model).await
+            run_one_child_backend(backend, &parent, &wt_base, &task, i, &parent_sid, &model).await
         }));
     }
 
@@ -338,11 +320,10 @@ async fn run_one_child_backend(
     worktrees_base: &Path,
     task: &CodingSubtask,
     index: usize,
+    parent_session_id: &str,
     model: &str,
 ) -> ChildOutcome {
-    let label = sanitize_label(&task.label);
-    let branch = format!("fanout/{label}-{index}");
-    let wt_name = format!("fanout-{label}-{index}");
+    let (branch, wt_name) = names::fanout_child_names(parent_session_id, &task.label, index);
 
     let wt_path = match add_worktree_on_branch(parent_root, worktrees_base, &wt_name, &branch).await
     {
@@ -409,11 +390,7 @@ async fn run_one_child_hub(
     parent_session_id: &str,
     model: &str,
 ) -> ChildOutcome {
-    use liberado_session::{DomainHint, GoalSpec, TerminalKind};
-
-    let label = sanitize_label(&task.label);
-    let branch = format!("fanout/{label}-{index}");
-    let wt_name = format!("fanout-{label}-{index}");
+    let (branch, wt_name) = names::fanout_child_names(parent_session_id, &task.label, index);
 
     let wt_path = match add_worktree_on_branch(parent_root, worktrees_base, &wt_name, &branch).await
     {
@@ -431,6 +408,32 @@ async fn run_one_child_hub(
             };
         }
     };
+
+    run_child_goal(
+        hub,
+        grant,
+        parent_root,
+        task,
+        parent_session_id,
+        model,
+        branch,
+        wt_path,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn run_child_goal(
+    hub: Arc<liberado_session::GoalSessionHub>,
+    grant: liberado_session::SessionGrant,
+    parent_root: &Path,
+    task: &CodingSubtask,
+    parent_session_id: &str,
+    model: &str,
+    branch: String,
+    wt_path: PathBuf,
+) -> ChildOutcome {
+    use liberado_session::{DomainHint, GoalSpec, TerminalKind};
 
     let goal = GoalSpec {
         id: None,
@@ -852,42 +855,6 @@ mod tests {
         assert!(subtasks_from_payload(&p).is_none());
     }
 
-    #[test]
-    fn sanitize_label_preserves_alphanumeric_and_dash() {
-        assert_eq!(sanitize_label("hello-world"), "hello-world");
-        assert_eq!(sanitize_label("api_v2"), "api_v2");
-        assert_eq!(sanitize_label("task-42"), "task-42");
-    }
-
-    #[test]
-    fn sanitize_label_replaces_spaces_and_special_chars() {
-        assert_eq!(sanitize_label("hello world"), "hello-world");
-        assert_eq!(sanitize_label("fix: bug"), "fix--bug");
-        assert_eq!(sanitize_label("a@b#c"), "a-b-c");
-    }
-
-    #[test]
-    fn sanitize_label_trims_leading_trailing_dashes() {
-        assert_eq!(sanitize_label("-hello-"), "hello");
-        assert_eq!(sanitize_label("--start"), "start");
-        assert_eq!(sanitize_label("end--"), "end");
-    }
-
-    #[test]
-    fn sanitize_label_empty_returns_task() {
-        assert_eq!(sanitize_label(""), "task");
-        assert_eq!(sanitize_label("---"), "task");
-        assert_eq!(sanitize_label("!!!%#"), "task");
-    }
-
-    #[test]
-    fn sanitize_label_truncates_to_40_chars() {
-        let long = "a".repeat(100);
-        let out = sanitize_label(&long);
-        assert_eq!(out.len(), 40);
-        assert!(out.chars().all(|c| c == 'a'));
-    }
-
     #[tokio::test]
     async fn fanout_two_children_clean_merge() {
         let root = tempfile::tempdir().unwrap();
@@ -932,6 +899,7 @@ mod tests {
             backend,
             merger,
             root.path(),
+            "parent-clean-merge",
             vec![
                 CodingSubtask {
                     label: "api".into(),
@@ -1148,6 +1116,7 @@ mod tests {
             backend,
             merger,
             root.path(),
+            "parent-conflict-merge",
             vec![
                 CodingSubtask {
                     label: "a".into(),

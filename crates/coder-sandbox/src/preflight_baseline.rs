@@ -90,18 +90,23 @@ pub async fn compute_baseline(
 
     let short: String = opts.base_sha.chars().take(12).collect();
     let worktree = std::env::temp_dir().join(format!("liberado-baseline-{short}"));
-    // A leftover from an interrupted run would be checked out at the right commit anyway, but
-    // git refuses to re-add an existing path, so clear the registration first.
-    let _ = std::fs::remove_dir_all(&worktree);
-    let _ = run_git_best_effort(opts.project_root, &["worktree", "prune"]).await;
-
     let wt_cli = path_for_cli(&worktree);
-    run_git(
-        opts.project_root,
-        &["worktree", "add", "--detach", &wt_cli, opts.base_sha],
-    )
-    .await
-    .map_err(|e| format!("baseline worktree at {}: {e}", &short))?;
+    {
+        let _registry = crate::worktree_registry::lock().await;
+        #[cfg(test)]
+        let _depth = crate::worktree_registry::enter_probe();
+        // A leftover from an interrupted run would be checked out at the right commit anyway,
+        // but git refuses to re-add an existing path, so clear the registration first.
+        let _ = std::fs::remove_dir_all(&worktree);
+        let _ = run_git_best_effort(opts.project_root, &["worktree", "prune"]).await;
+
+        run_git(
+            opts.project_root,
+            &["worktree", "add", "--detach", &wt_cli, opts.base_sha],
+        )
+        .await
+        .map_err(|e| format!("baseline worktree at {}: {e}", &short))?;
+    }
 
     // `git worktree add` does not bring gitignored leftover path-deps (`turbovault/`, `turbomcp/`).
     // The current root pin is git+tag, so this is a no-op unless the parent manifest still
@@ -120,8 +125,13 @@ pub async fn compute_baseline(
     // `remove` rather than `remove --force`, and never a recursive delete of the parent: a
     // force-remove follows directory links out of the worktree and can take real checkouts with
     // it. Leaving a stray temp dir is the cheaper failure.
-    let _ = run_git_best_effort(opts.project_root, &["worktree", "remove", &wt_cli]).await;
-    let _ = run_git_best_effort(opts.project_root, &["worktree", "prune"]).await;
+    {
+        let _registry = crate::worktree_registry::lock().await;
+        #[cfg(test)]
+        let _depth = crate::worktree_registry::enter_probe();
+        let _ = run_git_best_effort(opts.project_root, &["worktree", "remove", &wt_cli]).await;
+        let _ = run_git_best_effort(opts.project_root, &["worktree", "prune"]).await;
+    }
 
     let report = report.map_err(|e| format!("baseline preflight: {e}"))?;
     let mut failures = FailureSet::new();

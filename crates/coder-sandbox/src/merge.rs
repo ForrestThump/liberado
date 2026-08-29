@@ -27,45 +27,6 @@ pub enum MergeAttempt {
     Conflicts { paths: Vec<String> },
 }
 
-/// Serializes every mutation of a repository's worktree registry.
-///
-/// `git worktree prune`, `git branch -D`, `git worktree add` and `git worktree remove`
-/// all rewrite `.git/worktrees/`, and git does not write that metadata atomically. Two
-/// children setting up at the same moment produced this on a Windows CI runner:
-///
-/// ```text
-/// fatal: failed to read .git/worktrees/fanout-api-0/commondir: No error
-/// ```
-///
-/// One child's `prune` was rewriting the directory another child's `add` was reading. It passed
-/// on Linux and locally, and failed roughly one run in ten on Windows — twice, and the first time
-/// I recorded it as an unexplained flake because I could not reproduce it in five local runs.
-///
-/// `remove_worktree` must take the same lock. Its fallback is `remove_dir_all` + `prune`,
-/// and an unlocked remove racing a sibling `add` is how a fan-out child fails setup
-/// before its backend call — even when `max_concurrent` is 1, because other tasks in this
-/// process still add and remove. Ubuntu CI saw that as `calls == 1` instead of `2`.
-///
-/// A single global lock rather than one per repository: creating a worktree takes milliseconds,
-/// the concurrency that matters is the coding work that follows, and two unrelated repositories
-/// contending for a few milliseconds is not worth a keyed map to avoid.
-static WORKTREE_REGISTRY: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
-
-/// Number of tasks inside the guarded section. Test-only, and the only way to assert the lock is
-/// doing its job — a race fix whose test is "run it a lot and hope" proves nothing.
-///
-/// [`PEAK_IN_REGISTRY`] is updated on *enter*, not after the function returns. Sampling the
-/// count after `add`/`remove` completes only sees whoever is still inside; an unlocked
-/// `remove` overlapping a locked `add` is then invisible (the add holds the mutex, so at most
-/// one add remains, and the overlapping remove has already dropped).
-#[cfg(test)]
-pub(crate) static CONCURRENT_IN_REGISTRY: std::sync::atomic::AtomicUsize =
-    std::sync::atomic::AtomicUsize::new(0);
-
-#[cfg(test)]
-pub(crate) static PEAK_IN_REGISTRY: std::sync::atomic::AtomicUsize =
-    std::sync::atomic::AtomicUsize::new(0);
-
 /// Create a linked worktree on a **named branch** at `parent` HEAD.
 ///
 /// `branch` must be a safe ref name (no path separators / `..`). The branch is created if missing
@@ -93,9 +54,9 @@ pub async fn add_worktree_on_branch(
 
     // Everything below rewrites `.git/worktrees/`. Held across all three git calls, not just the
     // add: the failure was a sibling's `prune` running mid-`add`.
-    let _registry = WORKTREE_REGISTRY.lock().await;
+    let _registry = crate::worktree_registry::lock().await;
     #[cfg(test)]
-    let _depth = ConcurrencyProbe::enter();
+    let _depth = crate::worktree_registry::enter_probe();
 
     let _ = liberado_common::process::command("git")
         .args(["-C", &parent_cli, "worktree", "prune"])
@@ -126,9 +87,9 @@ pub async fn add_worktree_on_branch(
 pub async fn remove_worktree(parent_root: &Path, worktree_path: &Path) -> Result<(), MergeError> {
     // Same registry as add: remove + fallback prune rewrite `.git/worktrees/` and
     // may `remove_dir_all` a dest another add is writing.
-    let _registry = WORKTREE_REGISTRY.lock().await;
+    let _registry = crate::worktree_registry::lock().await;
     #[cfg(test)]
-    let _depth = ConcurrencyProbe::enter();
+    let _depth = crate::worktree_registry::enter_probe();
 
     let parent_cli = path_for_cli(&strip_extended_path_prefix(parent_root));
     let dest_cli = path_for_cli(&strip_extended_path_prefix(worktree_path));
@@ -437,27 +398,7 @@ mod tests;
 #[path = "merge_validation_tests.rs"]
 mod validation_tests;
 
-/// Increments [`CONCURRENT_IN_REGISTRY`] on construction and decrements on drop, so a test can
-/// assert the guarded section is never entered twice at once.
-#[cfg(test)]
-struct ConcurrencyProbe;
-
-#[cfg(test)]
-impl ConcurrencyProbe {
-    fn enter() -> Self {
-        let now = CONCURRENT_IN_REGISTRY.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
-        PEAK_IN_REGISTRY.fetch_max(now, std::sync::atomic::Ordering::SeqCst);
-        Self
-    }
-}
-
-#[cfg(test)]
-impl Drop for ConcurrencyProbe {
-    fn drop(&mut self) {
-        CONCURRENT_IN_REGISTRY.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
-    }
-}
-
+// Registry serialization tests.
 #[cfg(test)]
 #[path = "merge_registry_lock_tests.rs"]
 mod registry_lock_tests;

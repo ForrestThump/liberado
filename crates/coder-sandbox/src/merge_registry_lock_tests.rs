@@ -1,6 +1,7 @@
 //! Split from `merge.rs` for module-health boundaries.
 
 use super::*;
+use crate::worktree_registry::PEAK_IN_REGISTRY;
 use std::sync::atomic::Ordering;
 
 fn reset_registry_peak() {
@@ -110,31 +111,52 @@ async fn concurrent_add_and_remove_are_serialized_and_succeed() {
     );
 }
 
-/// The fan-out tests share `coding_worktrees_base()` and the same dest names.
-/// Four parents adding `shared-child` at one base must all get a worktree;
-/// an unlocked remove deleting dest mid-add is how a child never reaches the backend.
+/// Fan-out helpers are not the only worktree users. Durable and ephemeral workspaces use
+/// `create_linked_worktree`; they must share the same registry guard with fan-out add/remove.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn shared_dest_add_and_remove_do_not_drop_a_child() {
-    let dest_base = tempfile::tempdir().expect("dest base");
-    let repos: Vec<_> = (0..4).map(|_| seed_repo()).collect();
+async fn fanout_and_workspace_paths_share_one_registry_guard() {
+    reset_registry_peak();
+    let repos: Vec<_> = (0..8).map(|_| seed_repo()).collect();
 
     let mut handles = Vec::new();
     for (i, repo) in repos.iter().enumerate() {
         let root = repo.path().to_path_buf();
-        let base = dest_base.path().to_path_buf();
         handles.push(tokio::spawn(async move {
-            let branch = format!("fanout/shared-{i}");
-            let wt = add_worktree_on_branch(&root, &base, "shared-child", &branch).await?;
-            remove_worktree(&root, &wt).await?;
-            Ok::<_, MergeError>(())
+            if i % 2 == 0 {
+                let base = root.join("fanout-worktrees");
+                let name = format!("child-{i}");
+                let branch = format!("fanout/child-{i}");
+                let wt = add_worktree_on_branch(&root, &base, &name, &branch)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                remove_worktree(&root, &wt)
+                    .await
+                    .map_err(|e| e.to_string())?;
+            } else {
+                let mut workspace = crate::WorktreeWorkspace::new(
+                    &root,
+                    &format!("session-{i}"),
+                    &root.join("session-worktrees"),
+                    liberado_coder_core::CommandPolicy::default(),
+                )
+                .await
+                .map_err(|e| e.to_string())?;
+                workspace.cleanup().await;
+            }
+            Ok::<_, String>(())
         }));
     }
 
-    for h in handles {
-        h.await
+    for handle in handles {
+        handle
+            .await
             .expect("task")
-            .expect("shared dest must not fail a child's worktree add");
+            .expect("every worktree path must succeed");
     }
+    assert!(
+        PEAK_IN_REGISTRY.load(Ordering::SeqCst) <= 1,
+        "fan-out and workspace paths overlapped in the shared registry"
+    );
 }
 
 #[test]
