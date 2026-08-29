@@ -27,31 +27,6 @@ pub enum MergeAttempt {
     Conflicts { paths: Vec<String> },
 }
 
-/// Serializes every mutation of a repository's worktree registry.
-///
-/// `git worktree prune`, `git branch -D` and `git worktree add` all rewrite `.git/worktrees/`,
-/// and git does not write that metadata atomically. Two children setting up at the same moment
-/// produced this on a Windows CI runner:
-///
-/// ```text
-/// fatal: failed to read .git/worktrees/fanout-api-0/commondir: No error
-/// ```
-///
-/// One child's `prune` was rewriting the directory another child's `add` was reading. It passed
-/// on Linux and locally, and failed roughly one run in ten on Windows — twice, and the first time
-/// I recorded it as an unexplained flake because I could not reproduce it in five local runs.
-///
-/// A single global lock rather than one per repository: creating a worktree takes milliseconds,
-/// the concurrency that matters is the coding work that follows, and two unrelated repositories
-/// contending for a few milliseconds is not worth a keyed map to avoid.
-static WORKTREE_REGISTRY: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
-
-/// Number of tasks inside the guarded section. Test-only, and the only way to assert the lock is
-/// doing its job — a race fix whose test is "run it a lot and hope" proves nothing.
-#[cfg(test)]
-pub(crate) static CONCURRENT_IN_REGISTRY: std::sync::atomic::AtomicUsize =
-    std::sync::atomic::AtomicUsize::new(0);
-
 /// Create a linked worktree on a **named branch** at `parent` HEAD.
 ///
 /// `branch` must be a safe ref name (no path separators / `..`). The branch is created if missing
@@ -79,9 +54,9 @@ pub async fn add_worktree_on_branch(
 
     // Everything below rewrites `.git/worktrees/`. Held across all three git calls, not just the
     // add: the failure was a sibling's `prune` running mid-`add`.
-    let _registry = WORKTREE_REGISTRY.lock().await;
+    let _registry = crate::worktree_registry::lock().await;
     #[cfg(test)]
-    let _depth = ConcurrencyProbe::enter();
+    let _depth = crate::worktree_registry::enter_probe();
 
     let _ = liberado_common::process::command("git")
         .args(["-C", &parent_cli, "worktree", "prune"])
@@ -98,31 +73,24 @@ pub async fn add_worktree_on_branch(
         .output()
         .await;
 
-    let output = liberado_common::process::command("git")
-        .args([
-            "-C",
-            &parent_cli,
-            "worktree",
-            "add",
-            "-b",
-            branch,
-            &dest_cli,
-            "HEAD",
-        ])
-        .output()
-        .await
-        .map_err(|e| MergeError::Git(format!("worktree add: {e}")))?;
-    if !output.status.success() {
-        return Err(MergeError::Git(format!(
-            "worktree add -b failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        )));
+    let output = git_worktree_add(&parent_cli, branch, &dest_cli).await?;
+    if output.status.success() {
+        return Ok(dest);
     }
-    Ok(dest)
+    // Held lock, dest cleaned, branch deleted — a leftover `index.lock` or a dest
+    // that reappeared still fails the first add. One retry after a second
+    // prune/cleanup is the mutation-site retry; do not retry the whole caller.
+    retry_worktree_add(&parent_cli, branch, &dest, &dest_cli, &output.stderr).await
 }
 
 /// Remove a worktree path and prune registrations (branch is left intact for merge).
 pub async fn remove_worktree(parent_root: &Path, worktree_path: &Path) -> Result<(), MergeError> {
+    // Same registry as add: remove + fallback prune rewrite `.git/worktrees/` and
+    // may `remove_dir_all` a dest another add is writing.
+    let _registry = crate::worktree_registry::lock().await;
+    #[cfg(test)]
+    let _depth = crate::worktree_registry::enter_probe();
+
     let parent_cli = path_for_cli(&strip_extended_path_prefix(parent_root));
     let dest_cli = path_for_cli(&strip_extended_path_prefix(worktree_path));
     let output = liberado_common::process::command("git")
@@ -338,6 +306,70 @@ fn validate_safe_name(name: &str, what: &str) -> Result<(), MergeError> {
     Ok(())
 }
 
+async fn git_worktree_add(
+    parent_cli: &str,
+    branch: &str,
+    dest_cli: &str,
+) -> Result<std::process::Output, MergeError> {
+    liberado_common::process::command("git")
+        .args([
+            "-C", parent_cli, "worktree", "add", "-b", branch, dest_cli, "HEAD",
+        ])
+        .output()
+        .await
+        .map_err(|e| MergeError::Git(format!("worktree add: {e}")))
+}
+
+fn worktree_add_failed(stderr: &[u8]) -> MergeError {
+    MergeError::Git(format!(
+        "worktree add -b failed: {}",
+        String::from_utf8_lossy(stderr)
+    ))
+}
+
+/// Transient git failures that a second add, still under the registry guard, can clear.
+///
+/// Kept as a named predicate so the retry arm is a real branch a test can invert,
+/// not a string compare buried inside `add_worktree_on_branch`.
+fn worktree_add_is_retryable(stderr: &str) -> bool {
+    let s = stderr.to_ascii_lowercase();
+    s.contains("index.lock")
+        || s.contains("unable to create")
+        || s.contains("already exists")
+        || s.contains("failed to read .git/worktrees")
+        || s.contains("is already used by worktree")
+}
+
+async fn retry_worktree_add(
+    parent_cli: &str,
+    branch: &str,
+    dest: &Path,
+    dest_cli: &str,
+    first_stderr: &[u8],
+) -> Result<PathBuf, MergeError> {
+    let stderr = String::from_utf8_lossy(first_stderr);
+    if !worktree_add_is_retryable(&stderr) {
+        return Err(worktree_add_failed(first_stderr));
+    }
+    let _ = liberado_common::process::command("git")
+        .args(["-C", parent_cli, "worktree", "prune"])
+        .output()
+        .await;
+    if dest.exists() {
+        let _ = std::fs::remove_dir_all(dest);
+        let _ = std::fs::remove_file(dest);
+    }
+    let _ = liberado_common::process::command("git")
+        .args(["-C", parent_cli, "branch", "-D", branch])
+        .output()
+        .await;
+    let retry = git_worktree_add(parent_cli, branch, dest_cli).await?;
+    if retry.status.success() {
+        return Ok(dest.to_path_buf());
+    }
+    Err(worktree_add_failed(&retry.stderr))
+}
+
 fn validate_branch_name(branch: &str) -> Result<(), MergeError> {
     if branch.is_empty()
         || branch.contains("..")
@@ -366,26 +398,7 @@ mod tests;
 #[path = "merge_validation_tests.rs"]
 mod validation_tests;
 
-/// Increments [`CONCURRENT_IN_REGISTRY`] on construction and decrements on drop, so a test can
-/// assert the guarded section is never entered twice at once.
-#[cfg(test)]
-struct ConcurrencyProbe;
-
-#[cfg(test)]
-impl ConcurrencyProbe {
-    fn enter() -> Self {
-        CONCURRENT_IN_REGISTRY.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        Self
-    }
-}
-
-#[cfg(test)]
-impl Drop for ConcurrencyProbe {
-    fn drop(&mut self) {
-        CONCURRENT_IN_REGISTRY.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
-    }
-}
-
+// Registry serialization tests.
 #[cfg(test)]
 #[path = "merge_registry_lock_tests.rs"]
 mod registry_lock_tests;

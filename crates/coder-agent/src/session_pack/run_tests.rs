@@ -372,6 +372,11 @@ mod fanout_scenarios {
         let pack = CodingSessionPack::with_backend(backend, provider, std::env::temp_dir());
 
         let workspace = tempfile::tempdir().unwrap();
+        // `LIBERADO_DATA_DIR` is process-global. Keep every fan-out scenario on its own base and
+        // hold the shared environment guard for as long as the run reads that value.
+        let data = tempfile::tempdir().unwrap();
+        let _env = DATA_DIR_ENV_LOCK.lock().await;
+        let _restore_env = RestoreLiberadoDataDir::set_to(data.path());
         let (ev_tx, mut ev_rx) = mpsc::channel::<SessionEvent>(256);
         let (_in_tx, in_rx) = mpsc::channel::<HumanInput>(16);
         let inputs = InputChannel::new(in_rx, None);
@@ -440,10 +445,7 @@ mod fanout_scenarios {
                 "subtasks": two_subtasks(),
             }),
             0,
-            // Serialised via grant override: concurrent `git worktree add` in
-            // one parent repo races the index lock on loaded runners (see
-            // failed_fanout_children_end_the_goal_failed). Which pool size is
-            // announced is covered by the override-ceiling test.
+            // Keep this scenario ordered; the override-ceiling test covers the pool setting.
             serde_json::json!({ "max_concurrent_coding_subagents": 1 }),
         )
         .await;
@@ -484,10 +486,7 @@ mod fanout_scenarios {
         .await;
         let out = out.expect("a red fan-out is still a terminal result, not an error");
         assert_eq!(out.terminal, TerminalKind::Failed, "{out:?}");
-        // Not pinned at 2: when two children race `git worktree add` in the same parent repo,
-        // one can lose the index lock and error out before its backend call. The point here is
-        // that whatever reached the backend came back red and the goal reports Failed.
-        assert!(calls >= 1, "at least one child reached the backend");
+        assert_eq!(calls, 2, "both red children must reach the backend");
         assert!(
             events.iter().any(|e| matches!(
                 &e.kind,
@@ -521,7 +520,7 @@ mod fanout_scenarios {
     async fn fanout_success_still_faces_the_ship_preflight() {
         let sid = "fanout-preflight";
         let fail = if cfg!(windows) { "exit /B 1" } else { "exit 1" };
-        let (out, _events, calls, _ws) = run_fanout_goal(
+        let (out, events, calls, _ws) = run_fanout_goal(
             sid,
             serde_json::json!({
                 "subtasks": two_subtasks(),
@@ -531,15 +530,18 @@ mod fanout_scenarios {
                 },
             }),
             0,
-            // Serialise the children via grant override: concurrent `git
-            // worktree add` in the same parent repo races the index lock (see
-            // failed_fanout_children_end_the_goal_failed), and this test needs
-            // BOTH branches to merge so a green fan-out reaches its ship bar.
+            // Keep the merge order stable so this test stays focused on the ship bar.
             serde_json::json!({ "max_concurrent_coding_subagents": 1 }),
         )
         .await;
         let out = out.expect("preflight runs after a green fan-out");
-        assert_eq!(calls, 2);
+        assert_eq!(
+            calls, 2,
+            "both children must reach the backend (alpha + beta); \
+             a worktree-setup race drops a child before ScriptedBackend::run. \
+             events={events:?} diagnostics={}",
+            out.diagnostics
+        );
         assert_eq!(
             out.terminal,
             TerminalKind::Failed,
