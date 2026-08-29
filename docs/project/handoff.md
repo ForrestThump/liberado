@@ -150,14 +150,12 @@ Umbrella: [`../future-work/turbovault-modules-integration-roadmap.md`](../future
 ### Rebuild path (homelab; Windows has no Docker Desktop)
 
 ```bash
-# Stream lean source from Windows repo (preserve remote turbovault develop clone):
-#   tar + scp Cargo.toml Cargo.lock Dockerfile .dockerignore crates turbomcp config → ~/liberado-build
-# TurboVault image is separate — rebuild with:
-#   ~/homelab/scripts/rebuild-turbovault.sh develop
-#   (enable module features in that Dockerfile/build: e.g. --features vector[,tasks])
-# Liberado image:
+# Preferred: GitHub Actions publishes ghcr.io/forrestthump/liberado:sha-<commit>.
+git fetch origin
+git checkout <branch>
+./deploy/homelab/setup.sh
+# Fallback on-box image build (does not pull GHCR):
 just deploy-homelab
-# Poll: tail -f ~/liberado-build.log
 # Then: docker compose -f ~/homelab/services/liberado/docker-compose.yml up -d --force-recreate
 ```
 

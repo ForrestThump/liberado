@@ -1,11 +1,12 @@
 # Public Compose example for a standalone Liberado homelab service.
 #
-# Deploy code with `just deploy-homelab`. Set host-specific paths and secrets only in the
-# host-managed Compose environment. Do not commit those values.
+# Try a PR: `deploy/homelab/setup.sh` pulls GHCR and overlays the image name without rewriting
+# this file, `.env`, or `config/`. Fallback: `just deploy-homelab` still builds `liberado:dev`
+# on the box. Set host-specific paths and secrets only in the host-managed Compose environment.
 
 services:
   liberado:
-    image: liberado:dev
+    image: ${LIBERADO_IMAGE:-liberado:dev}
     container_name: liberado
     restart: unless-stopped
     networks:

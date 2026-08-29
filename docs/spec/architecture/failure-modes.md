@@ -147,7 +147,7 @@ path was never wired to the same check.
 Five instances in a single session (2026-07-26), which is what earns this its own entry:
 
 - **Config vs repo.** `deploy/homelab/config/topology.toml` is a *mirror*; the box's copy is a host
-  mount `deploy.sh` never touches. A feature was added to the mirror, the deploy verified its build
+  mount that deploy (`setup.sh` / `just deploy-homelab`) never touches. A feature was added to the mirror, the deploy verified its build
   SHA and reported success, and the feature was inert. Indistinguishable from a bug.
 - **Pool grant vs gate set.** The daemon logged `capability=Write(Vault("Learning"))` as present
   while refusing that exact write. `subagent_gate_capabilities` intersected the ceiling against a

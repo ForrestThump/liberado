@@ -6,9 +6,10 @@ target/
 **/target/
 
 # Vendored / separate projects that are NOT part of the workspace Rust build.
-# NOTE: turbovault/ and turbomcp/ are deliberately NOT excluded — crates depend on their `crates/*`
-# as path dependencies, so their source must be in the build context. Their build artifacts are
-# covered by the `**/target/` glob above.
+# turbovault/ and turbomcp/ leftover clones are gitignored path siblings. Cargo consumes those
+# crates as git+tag pins (`liberado-2026-08-27`), so they must not enter the build context.
+turbovault/
+turbomcp/
 liberado-pr-dispatch-mcp/
 liberado-wakeup-mcp/
 spider-mcp/
@@ -27,7 +28,7 @@ mutants.out.old/
 # Downloaded model caches (fastembed pulls an 87 MB ONNX model at runtime, not build time).
 **/.fastembed_cache/
 
-# Host WebUI build artifacts (the image is headless).
+# Host WebUI build artifacts. Actions bakes a fresh bundle inside the builder; do not copy a host dist.
 dist/
 **/dist/
 **/pkg/

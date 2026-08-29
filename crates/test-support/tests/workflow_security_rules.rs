@@ -83,6 +83,7 @@ fn workflow_has_no_privileged_compilation_path() {
         "crap",
         "doc-links",
         "rustdoc",
+        "deploy-image",
     ] {
         let marker = format!("  {job}:\n");
         let start = text
@@ -105,6 +106,36 @@ fn workflow_has_no_privileged_compilation_path() {
     assert!(
         !text.contains("checkout-siblings"),
         "CI must let cargo fetch git+tag forks; do not check out path siblings"
+    );
+}
+
+#[test]
+fn deploy_image_job_publishes_to_ghcr_with_least_privilege() {
+    let text = std::fs::read_to_string(repository_root().join(".github/workflows/ci.yml"))
+        .expect("read CI workflow");
+    assert!(text.contains("ghcr.io/forrestthump/liberado"));
+    assert!(text.contains("BAKE_WEBUI=1"));
+    assert!(text.contains("CARGO_BUILD_JOBS=1"));
+    assert!(text.contains("provenance: false"));
+    assert!(text.contains("packages: write"));
+    assert!(!text.contains("contents: write"));
+    assert!(text.contains("github.event.pull_request.head.sha || github.sha"));
+    assert!(text.contains("sha-${COMMIT_SHA}"));
+
+    let marker = "  deploy-image:\n";
+    let start = text.find(marker).expect("missing deploy-image job");
+    let body = text[start + marker.len()..]
+        .lines()
+        .take_while(|line| line.is_empty() || line.starts_with("    "))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        body.contains("packages: write") && body.contains("contents: read"),
+        "deploy-image must grant packages write without inheriting a write-all token"
+    );
+    assert!(
+        !text[..start].contains("packages: write"),
+        "packages: write must stay on the image job, not the workflow default"
     );
 }
 

@@ -1,0 +1,5 @@
+# Overlay used by deploy/homelab/setup.sh. It changes only the image name.
+# Host compose, .env, config/, and volume mounts stay in place.
+services:
+  liberado:
+    image: ${LIBERADO_IMAGE:?set LIBERADO_IMAGE to ghcr.io/forrestthump/liberado:sha-<commit>}

@@ -33,8 +33,10 @@ just stop-daemon
 just deploy-webui-homelab
 ```
 
-The bundle is **mounted** into the daemon's container rather than baked into its image, and
-`ServeDir` re-reads it per request — so this is a file copy, with no image rebuild and no restart.
+The bundle is **mounted** into the daemon's container for a host-side UI-only ship, and
+`ServeDir` re-reads it per request — so that path is a file copy, with no image rebuild and no restart.
+GitHub Actions also **bakes** a release bundle into `ghcr.io/forrestthump/liberado` (`BAKE_WEBUI=1`).
+`deploy/homelab/setup.sh` serves that baked copy so the homelab does not need a `dx` build to try a PR.
 Do *not* use `just deploy-homelab` for a frontend-only change; that rebuilds the daemon image
 and takes 20–40 minutes. See `deploy/homelab/README.md`.
 
