@@ -29,9 +29,9 @@ pub enum MergeAttempt {
 
 /// Serializes every mutation of a repository's worktree registry.
 ///
-/// `git worktree prune`, `git branch -D` and `git worktree add` all rewrite `.git/worktrees/`,
-/// and git does not write that metadata atomically. Two children setting up at the same moment
-/// produced this on a Windows CI runner:
+/// `git worktree prune`, `git branch -D`, `git worktree add` and `git worktree remove`
+/// all rewrite `.git/worktrees/`, and git does not write that metadata atomically. Two
+/// children setting up at the same moment produced this on a Windows CI runner:
 ///
 /// ```text
 /// fatal: failed to read .git/worktrees/fanout-api-0/commondir: No error
@@ -40,6 +40,11 @@ pub enum MergeAttempt {
 /// One child's `prune` was rewriting the directory another child's `add` was reading. It passed
 /// on Linux and locally, and failed roughly one run in ten on Windows — twice, and the first time
 /// I recorded it as an unexplained flake because I could not reproduce it in five local runs.
+///
+/// `remove_worktree` must take the same lock. Its fallback is `remove_dir_all` + `prune`,
+/// and an unlocked remove racing a sibling `add` is how a fan-out child fails setup
+/// before its backend call — even when `max_concurrent` is 1, because other tasks in this
+/// process still add and remove. Ubuntu CI saw that as `calls == 1` instead of `2`.
 ///
 /// A single global lock rather than one per repository: creating a worktree takes milliseconds,
 /// the concurrency that matters is the coding work that follows, and two unrelated repositories
@@ -98,31 +103,24 @@ pub async fn add_worktree_on_branch(
         .output()
         .await;
 
-    let output = liberado_common::process::command("git")
-        .args([
-            "-C",
-            &parent_cli,
-            "worktree",
-            "add",
-            "-b",
-            branch,
-            &dest_cli,
-            "HEAD",
-        ])
-        .output()
-        .await
-        .map_err(|e| MergeError::Git(format!("worktree add: {e}")))?;
-    if !output.status.success() {
-        return Err(MergeError::Git(format!(
-            "worktree add -b failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        )));
+    let output = git_worktree_add(&parent_cli, branch, &dest_cli).await?;
+    if output.status.success() {
+        return Ok(dest);
     }
-    Ok(dest)
+    // Held lock, dest cleaned, branch deleted — a leftover `index.lock` or a dest
+    // that reappeared still fails the first add. One retry after a second
+    // prune/cleanup is the mutation-site retry; do not retry the whole caller.
+    retry_worktree_add(&parent_cli, branch, &dest, &dest_cli, &output.stderr).await
 }
 
 /// Remove a worktree path and prune registrations (branch is left intact for merge).
 pub async fn remove_worktree(parent_root: &Path, worktree_path: &Path) -> Result<(), MergeError> {
+    // Same registry as add: remove + fallback prune rewrite `.git/worktrees/` and
+    // may `remove_dir_all` a dest another add is writing.
+    let _registry = WORKTREE_REGISTRY.lock().await;
+    #[cfg(test)]
+    let _depth = ConcurrencyProbe::enter();
+
     let parent_cli = path_for_cli(&strip_extended_path_prefix(parent_root));
     let dest_cli = path_for_cli(&strip_extended_path_prefix(worktree_path));
     let output = liberado_common::process::command("git")
@@ -336,6 +334,70 @@ fn validate_safe_name(name: &str, what: &str) -> Result<(), MergeError> {
         )));
     }
     Ok(())
+}
+
+async fn git_worktree_add(
+    parent_cli: &str,
+    branch: &str,
+    dest_cli: &str,
+) -> Result<std::process::Output, MergeError> {
+    liberado_common::process::command("git")
+        .args([
+            "-C", parent_cli, "worktree", "add", "-b", branch, dest_cli, "HEAD",
+        ])
+        .output()
+        .await
+        .map_err(|e| MergeError::Git(format!("worktree add: {e}")))
+}
+
+fn worktree_add_failed(stderr: &[u8]) -> MergeError {
+    MergeError::Git(format!(
+        "worktree add -b failed: {}",
+        String::from_utf8_lossy(stderr)
+    ))
+}
+
+/// Transient git failures that a second add, still under [`WORKTREE_REGISTRY`], can clear.
+///
+/// Kept as a named predicate so the retry arm is a real branch a test can invert,
+/// not a string compare buried inside `add_worktree_on_branch`.
+fn worktree_add_is_retryable(stderr: &str) -> bool {
+    let s = stderr.to_ascii_lowercase();
+    s.contains("index.lock")
+        || s.contains("unable to create")
+        || s.contains("already exists")
+        || s.contains("failed to read .git/worktrees")
+        || s.contains("is already used by worktree")
+}
+
+async fn retry_worktree_add(
+    parent_cli: &str,
+    branch: &str,
+    dest: &Path,
+    dest_cli: &str,
+    first_stderr: &[u8],
+) -> Result<PathBuf, MergeError> {
+    let stderr = String::from_utf8_lossy(first_stderr);
+    if !worktree_add_is_retryable(&stderr) {
+        return Err(worktree_add_failed(first_stderr));
+    }
+    let _ = liberado_common::process::command("git")
+        .args(["-C", parent_cli, "worktree", "prune"])
+        .output()
+        .await;
+    if dest.exists() {
+        let _ = std::fs::remove_dir_all(dest);
+        let _ = std::fs::remove_file(dest);
+    }
+    let _ = liberado_common::process::command("git")
+        .args(["-C", parent_cli, "branch", "-D", branch])
+        .output()
+        .await;
+    let retry = git_worktree_add(parent_cli, branch, dest_cli).await?;
+    if retry.status.success() {
+        return Ok(dest.to_path_buf());
+    }
+    Err(worktree_add_failed(&retry.stderr))
 }
 
 fn validate_branch_name(branch: &str) -> Result<(), MergeError> {

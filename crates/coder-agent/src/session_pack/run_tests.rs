@@ -372,6 +372,14 @@ mod fanout_scenarios {
         let pack = CodingSessionPack::with_backend(backend, provider, std::env::temp_dir());
 
         let workspace = tempfile::tempdir().unwrap();
+        // Fan-out children write linked worktrees under `coding_worktrees_base()`,
+        // which follows `LIBERADO_DATA_DIR`. Without a pin, every fan-out test
+        // (and any sibling that set the env) shares `.liberado/coding-worktrees`
+        // and the same dest names (`fanout-alpha-0`). An unlocked remove then
+        // deletes dest mid-add and a child never reaches the backend.
+        let data = tempfile::tempdir().unwrap();
+        let _env = DATA_DIR_ENV_LOCK.lock().await;
+        let _restore_env = RestoreLiberadoDataDir::set_to(data.path());
         let (ev_tx, mut ev_rx) = mpsc::channel::<SessionEvent>(256);
         let (_in_tx, in_rx) = mpsc::channel::<HumanInput>(16);
         let inputs = InputChannel::new(in_rx, None);
@@ -521,7 +529,7 @@ mod fanout_scenarios {
     async fn fanout_success_still_faces_the_ship_preflight() {
         let sid = "fanout-preflight";
         let fail = if cfg!(windows) { "exit /B 1" } else { "exit 1" };
-        let (out, _events, calls, _ws) = run_fanout_goal(
+        let (out, events, calls, _ws) = run_fanout_goal(
             sid,
             serde_json::json!({
                 "subtasks": two_subtasks(),
@@ -539,7 +547,13 @@ mod fanout_scenarios {
         )
         .await;
         let out = out.expect("preflight runs after a green fan-out");
-        assert_eq!(calls, 2);
+        assert_eq!(
+            calls, 2,
+            "both children must reach the backend (alpha + beta); \
+             a worktree-setup race drops a child before ScriptedBackend::run. \
+             events={events:?} diagnostics={}",
+            out.diagnostics
+        );
         assert_eq!(
             out.terminal,
             TerminalKind::Failed,
