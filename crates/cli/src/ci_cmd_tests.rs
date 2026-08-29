@@ -278,6 +278,13 @@ fn cargo_target_exe_is_the_image_cargo_test_would_overwrite() {
 }
 
 #[test]
+fn configured_cargo_target_exe_is_the_image_cargo_test_would_overwrite() {
+    assert!(exe_lives_in_cargo_target(Path::new(
+        r"C:\repo\target-windows-final\debug\liberado.exe"
+    )));
+}
+
+#[test]
 fn regression_hint_tells_an_agent_not_to_raise_the_baseline() {
     assert!(CRAP_REGRESSION_HINT.contains("per-function"));
     assert!(CRAP_REGRESSION_HINT.contains("just ci"));
