@@ -327,7 +327,7 @@ fn worktree_add_failed(stderr: &[u8]) -> MergeError {
     ))
 }
 
-/// Transient git failures that a second add, still under [`WORKTREE_REGISTRY`], can clear.
+/// Transient git failures that a second add, still under the registry guard, can clear.
 ///
 /// Kept as a named predicate so the retry arm is a real branch a test can invert,
 /// not a string compare buried inside `add_worktree_on_branch`.
