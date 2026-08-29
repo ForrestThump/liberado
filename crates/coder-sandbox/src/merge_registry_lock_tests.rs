@@ -3,6 +3,10 @@
 use super::*;
 use std::sync::atomic::Ordering;
 
+fn reset_registry_peak() {
+    PEAK_IN_REGISTRY.store(0, Ordering::SeqCst);
+}
+
 fn seed_repo() -> tempfile::TempDir {
     let dir = tempfile::tempdir().expect("tempdir");
     let p = dir.path().to_string_lossy().to_string();
@@ -48,22 +52,18 @@ fn seed_repo() -> tempfile::TempDir {
 /// about one run in ten on a Windows runner.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn concurrent_worktree_creation_is_serialized_and_succeeds() {
+    reset_registry_peak();
     let repo = seed_repo();
     let base = repo.path().join("wt");
-    let peak = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
 
     let mut handles = Vec::new();
     for i in 0..4 {
         let root = repo.path().to_path_buf();
         let base = base.clone();
-        let peak = std::sync::Arc::clone(&peak);
         handles.push(tokio::spawn(async move {
             let name = format!("child-{i}");
             let branch = format!("fanout/child-{i}");
-            let result = add_worktree_on_branch(&root, &base, &name, &branch).await;
-            let seen = CONCURRENT_IN_REGISTRY.load(Ordering::SeqCst);
-            peak.fetch_max(seen, Ordering::SeqCst);
-            result
+            add_worktree_on_branch(&root, &base, &name, &branch).await
         }));
     }
 
@@ -73,7 +73,7 @@ async fn concurrent_worktree_creation_is_serialized_and_succeeds() {
             .expect("every child must get a worktree");
     }
     assert!(
-        peak.load(Ordering::SeqCst) <= 1,
+        PEAK_IN_REGISTRY.load(Ordering::SeqCst) <= 1,
         "two tasks were inside the worktree registry at once; the lock is not held"
     );
 }
@@ -83,27 +83,18 @@ async fn concurrent_worktree_creation_is_serialized_and_succeeds() {
 /// tests that share a dest base. Peak > 1 means the remove path is unlocked.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn concurrent_add_and_remove_are_serialized_and_succeed() {
+    reset_registry_peak();
     let repos: Vec<_> = (0..4).map(|_| seed_repo()).collect();
-    let peak = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
 
     let mut handles = Vec::new();
     for (i, repo) in repos.iter().enumerate() {
         let root = repo.path().to_path_buf();
         let base = root.join("wt");
-        let peak = std::sync::Arc::clone(&peak);
         handles.push(tokio::spawn(async move {
             let name = format!("child-{i}");
             let branch = format!("fanout/child-{i}");
             let wt = add_worktree_on_branch(&root, &base, &name, &branch).await?;
-            peak.fetch_max(
-                CONCURRENT_IN_REGISTRY.load(Ordering::SeqCst),
-                Ordering::SeqCst,
-            );
             remove_worktree(&root, &wt).await?;
-            peak.fetch_max(
-                CONCURRENT_IN_REGISTRY.load(Ordering::SeqCst),
-                Ordering::SeqCst,
-            );
             Ok::<_, MergeError>(())
         }));
     }
@@ -114,7 +105,7 @@ async fn concurrent_add_and_remove_are_serialized_and_succeed() {
             .expect("every child must add and remove");
     }
     assert!(
-        peak.load(Ordering::SeqCst) <= 1,
+        PEAK_IN_REGISTRY.load(Ordering::SeqCst) <= 1,
         "add and remove overlapped in the registry; remove is not locked"
     );
 }

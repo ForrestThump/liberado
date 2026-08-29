@@ -53,8 +53,17 @@ static WORKTREE_REGISTRY: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new
 
 /// Number of tasks inside the guarded section. Test-only, and the only way to assert the lock is
 /// doing its job — a race fix whose test is "run it a lot and hope" proves nothing.
+///
+/// [`PEAK_IN_REGISTRY`] is updated on *enter*, not after the function returns. Sampling the
+/// count after `add`/`remove` completes only sees whoever is still inside; an unlocked
+/// `remove` overlapping a locked `add` is then invisible (the add holds the mutex, so at most
+/// one add remains, and the overlapping remove has already dropped).
 #[cfg(test)]
 pub(crate) static CONCURRENT_IN_REGISTRY: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+#[cfg(test)]
+pub(crate) static PEAK_IN_REGISTRY: std::sync::atomic::AtomicUsize =
     std::sync::atomic::AtomicUsize::new(0);
 
 /// Create a linked worktree on a **named branch** at `parent` HEAD.
@@ -436,7 +445,8 @@ struct ConcurrencyProbe;
 #[cfg(test)]
 impl ConcurrencyProbe {
     fn enter() -> Self {
-        CONCURRENT_IN_REGISTRY.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let now = CONCURRENT_IN_REGISTRY.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+        PEAK_IN_REGISTRY.fetch_max(now, std::sync::atomic::Ordering::SeqCst);
         Self
     }
 }
