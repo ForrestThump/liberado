@@ -36,6 +36,16 @@ split test file, while the survivor tests themselves live in the sibling.
 Those waivers carry a hard `ploc` ceiling and a review date; any further growth
 in the parent module is not covered and must be split, not waived.
 
+When a later split honestly drops that sibling below every review boundary,
+delete the waiver. Do not keep the old ceiling as slack, and do not raise a
+ceiling to absorb a merge.
+
+`crates/main-agent/src/sessions/tests.rs` had four metric waivers (ploc 3640,
+lloc 1053, functions 175, cyclomatic 226). Sharing session fixtures and
+splitting tests by state made those ceilings unnecessary; they are gone from
+`module-health.toml`. The committed `module-health-baseline.json` is still the
+last accepted measurement — this change does not raise it.
+
 The same narrow rule applies when a production crate root crosses its boundary
 only because it declares and exports a new sibling module. The waiver must name
 the exact wiring lines and exclude implementation growth. `crates/cost/src/lib.rs`

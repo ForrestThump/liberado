@@ -99,35 +99,6 @@ ceiling = 1397
 reason = "Same as executor lib.rs: three lines of sibling-test module wiring (risk_gated_survivor_tests.rs)."
 reviewed_on = "2026-08-25"
 
-# main-agent sessions sibling test file: four metrics over every boundary.
-[[waiver]]
-path = "crates/main-agent/src/sessions/tests.rs"
-metric = "ploc"
-ceiling = 3640
-reason = "Sibling survivor-test file for the sessions module (already split out of src); the size is accumulated scenario coverage - worktree lifecycle, intake rounds, gates - where each test owns its fixture and splitting scatters shared builders without shrinking what a reader holds."
-reviewed_on = "2026-08-24"
-
-[[waiver]]
-path = "crates/main-agent/src/sessions/tests.rs"
-metric = "lloc"
-ceiling = 1053
-reason = "Same file as the ploc waiver: long scenario bodies are the point of end-to-end session tests."
-reviewed_on = "2026-08-24"
-
-[[waiver]]
-path = "crates/main-agent/src/sessions/tests.rs"
-metric = "functions"
-ceiling = 175
-reason = "One #[tokio::test] per mutant killed; function count tracks campaign coverage by design."
-reviewed_on = "2026-08-24"
-
-[[waiver]]
-path = "crates/main-agent/src/sessions/tests.rs"
-metric = "cyclomatic"
-ceiling = 226
-reason = "Branchiness lives in assertions about state machines, not in production control flow."
-reviewed_on = "2026-08-24"
-
 # daemon survivors sibling test file: four metrics over every boundary.
 [[waiver]]
 path = "crates/daemon/src/tests.rs"

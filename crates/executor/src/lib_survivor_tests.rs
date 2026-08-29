@@ -5,6 +5,7 @@
 //! one-time recovery bonus.
 
 use super::*;
+use crate::loop_guard::{RunPolicy, args_similarity};
 use liberado_provider::MockProvider;
 use serde_json::json;
 use std::path::Path;
