@@ -10,6 +10,7 @@ mod path_deps;
 mod preflight;
 mod preflight_baseline;
 pub mod warmup;
+mod worktree_registry;
 pub use checkpoint::{Checkpoint, CheckpointError, ShadowGit};
 pub use merge::{
     ConflictSides, MergeAttempt, MergeError, add_worktree_on_branch, branch_tip, commit_merge,
@@ -753,6 +754,10 @@ async fn create_linked_worktree(parent_root: &Path, dest: &Path) -> Result<(), S
     let parent_cli = path_for_cli(parent_root);
     let dest_cli = path_for_cli(dest);
 
+    let _registry = crate::worktree_registry::lock().await;
+    #[cfg(test)]
+    let _depth = crate::worktree_registry::enter_probe();
+
     // Bounded, because this is the path that hung. `process::command` nulls the child's stdin
     // so it can no longer inherit the ACP bridge's JSON-RPC wire — the actual bug, which cost a
     // Paseo prompt 19 silent minutes — and `output_within` makes sure that if some *other*
@@ -867,6 +872,9 @@ impl WorktreeWorkspace {
     pub async fn cleanup(&mut self) {
         let _path = self.worktree_path.take();
         let _repo = self.parent_repo.take();
+        let _registry = crate::worktree_registry::lock().await;
+        #[cfg(test)]
+        let _depth = crate::worktree_registry::enter_probe();
         // Prune the registration before removing the directory — git needs the
         // worktree metadata to know which registration to clean up.
         if let Some(repo) = _repo {

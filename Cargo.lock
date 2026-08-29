@@ -5677,6 +5677,7 @@ name = "liberado-config"
 version = "0.1.0"
 dependencies = [
  "dirs 5.0.1",
+ "liberado-coder-core",
  "liberado-common",
  "liberado-config-loader",
  "proptest",

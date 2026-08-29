@@ -416,6 +416,7 @@ impl CodingSessionPack {
                 Arc::clone(&self.backend),
                 Arc::clone(&self.provider),
                 workspace,
+                session_id,
                 subtasks,
                 max_concurrent,
                 model,

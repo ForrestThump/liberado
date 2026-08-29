@@ -21,6 +21,7 @@ rand = { workspace = true }
 [dev-dependencies]
 tempfile = { workspace = true }
 proptest = "1"
+liberado-coder-core = { workspace = true }
 
 [package.metadata.liberado]
 # Layer role for the layer-rules test + crate-map generator (docs/architecture/contracts.md)
