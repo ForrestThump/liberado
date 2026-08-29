@@ -2,7 +2,7 @@
 
 **Status**: Resolves Tier-3 Decision 14 (single source of truth for config / topology). Actionable.
 **Owner**: Shiloh Mangus
-**Last Updated**: August 25, 2026
+**Last Updated**: August 29, 2026
 **Related**:
 - `liberado-architecture-decisions.md` (Decision 14; Decision 10 secrets; Decision 4 policy)
 - Every companion spec contributes tunables (their "Tunables — single source of truth" tables)
@@ -110,6 +110,28 @@ Two files live outside the three section files and are written by the running sy
   for integrity. If it cannot be persisted, the run falls back to an
   ephemeral key and warns - proposals created then simply fail verification
   after a restart, which is the safe direction (rejected, not accepted).
+
+## 4.2 Pack-section arrival is a composition contract
+
+A value that parses is not a value the runtime uses. `[coder]` rides through
+`liberado-config` as an opaque `toml::Value`. The coding pack assembles it with
+`liberado_coder_core::CoderTuning::from_value` and `run_config()`. Literal
+construction rules catch a surface that hard-builds `CoderRunConfig`. They
+cannot catch a setting that defaults and is never the operator's value.
+
+The contract is `crates/config/src/coder_tuning_arrival_tests.rs`. Each row
+writes one safety-critical `[coder]` field into a real config directory, loads
+it through `load_config`, assembles the run config, and observes the changed
+runtime field. Covered today:
+
+| `tuning.toml` key | Silent-default cost if it does not arrive |
+|---|---|
+| `[coder.gate].enabled` | completion gate stays off |
+| `[coder.coder].max_turns` | turn budget ignores the file |
+| `[coder.progress].read_only_turn_limit` | progress limiter uses the code default |
+| `[coder.hashline].enabled` | hashline edits stay off |
+
+Extend that table one field at a time. Do not add another config framework.
 
 ## 5. Where the Tunables Come From
 
