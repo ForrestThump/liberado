@@ -29,11 +29,15 @@ carry a narrow, reviewed waiver.
 
 Coverage-sensitive CRAP remains a Debian authority. Run `just crap-linux` after Rust control-flow
 changes. It runs natively on Debian/Linux. On Windows it maps the checkout into the Debian WSL
-distribution and runs the same Rust CLI command there.
+distribution, bundles the clean committed `HEAD` into a managed Linux-native workspace, and runs
+the same Rust CLI command there. The native workspace prevents Windows worktree metadata and
+coverage objects from contaminating Linux tests or reports. Driver and coverage artifacts use
+separate Linux-only target directories under the selected user's cache.
 The default distribution name is `Debian`; set `LIBERADO_DEBIAN_WSL_DISTRO` when the installed
-Debian-compatible distribution uses another name. Windows checkout paths are changed to
-forward-slash form before `wslpath` maps them, so a worktree such as `C:\tmp\review` keeps each
-path component intact.
+Debian-compatible distribution uses another name. The runner selects the first non-root login so
+permission-sensitive tests retain their meaning; set `LIBERADO_DEBIAN_WSL_USER` to choose another
+login. Windows checkout paths are changed to forward-slash form before `wslpath` maps the bundle,
+so a worktree such as `C:\tmp\review` keeps each path component intact.
 
 The host-stable function ratchet is configured in `function-complexity.toml` and committed in
 `function-complexity-baseline.json`. Existing functions may not gain cyclomatic complexity. New

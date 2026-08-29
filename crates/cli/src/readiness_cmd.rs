@@ -7,6 +7,9 @@ use std::collections::BTreeSet;
 use std::path::Path;
 use std::process::Stdio;
 
+#[path = "readiness_cmd/debian_crap.rs"]
+mod debian_crap;
+
 const RECEIPT_FILE: &str = ".liberado/ready.json";
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -87,70 +90,7 @@ pub fn verify(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 pub fn crap_linux(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
-    if cfg!(target_os = "linux") {
-        return crate::ci_cmd::crap_for_root(root);
-    }
-    if !cfg!(windows) {
-        return Err(
-            "`just crap-linux` supports Debian/Linux and Windows with Debian under WSL".into(),
-        );
-    }
-    let distro = std::env::var("LIBERADO_DEBIAN_WSL_DISTRO").unwrap_or_else(|_| "Debian".into());
-    let linux_root = wsl_path(root, &distro)?;
-    let status = std_command("wsl.exe")
-        .args([
-            "-d",
-            &distro,
-            "--cd",
-            linux_root.trim(),
-            "bash",
-            "-lc",
-            "cargo run --locked --quiet -p liberado-cli -- ci crap",
-        ])
-        .status()
-        .map_err(|error| format!("could not start Debian under WSL: {error}"))?;
-    if status.success() {
-        Ok(())
-    } else {
-        Err("Debian CRAP check failed; inspect .liberado/ci.log from WSL".into())
-    }
-}
-
-fn wsl_path(root: &Path, distro: &str) -> Result<String, Box<dyn std::error::Error>> {
-    let output = std_command("wsl.exe")
-        .args(["-d", distro, "wslpath", "-a", "-u"])
-        .arg(wsl_path_input(root))
-        .output()
-        .map_err(|error| format!("could not query Debian under WSL: {error}"))?;
-    if output.status.success() {
-        Ok(decode_output(&output.stdout).trim().to_string())
-    } else {
-        let detail = if output.stderr.is_empty() {
-            decode_output(&output.stdout)
-        } else {
-            decode_output(&output.stderr)
-        };
-        Err(format!(
-            "Debian WSL distribution `{distro}` could not map the repository path: {}. Install it with `wsl --install -d Debian` or set LIBERADO_DEBIAN_WSL_DISTRO",
-            detail.trim()
-        )
-        .into())
-    }
-}
-
-fn wsl_path_input(root: &Path) -> String {
-    root.to_string_lossy().replace('\\', "/")
-}
-
-fn decode_output(bytes: &[u8]) -> String {
-    if cfg!(windows) && bytes.chunks_exact(2).any(|pair| pair[1] == 0) {
-        let words = bytes
-            .chunks_exact(2)
-            .map(|pair| u16::from_le_bytes([pair[0], pair[1]]));
-        String::from_utf16_lossy(&words.collect::<Vec<_>>())
-    } else {
-        String::from_utf8_lossy(bytes).into_owned()
-    }
+    debian_crap::run(root)
 }
 
 fn write_receipt(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
@@ -305,7 +245,7 @@ fn command_text(
 
 #[cfg(test)]
 mod tests {
-    use super::{Receipt, decode_output, tree_fingerprint, wsl_path_input};
+    use super::{Receipt, tree_fingerprint};
     use std::fs;
     use std::process::Command;
     use tempfile::tempdir;
@@ -352,25 +292,6 @@ mod tests {
         let json = serde_json::to_string(&receipt).unwrap();
         let decoded: Receipt = serde_json::from_str(&json).unwrap();
         assert_eq!(decoded.head, "abc");
-    }
-
-    #[test]
-    fn windows_utf16_command_output_is_readable() {
-        let bytes: Vec<_> = "Debian missing"
-            .encode_utf16()
-            .flat_map(u16::to_le_bytes)
-            .collect();
-        if cfg!(windows) {
-            assert_eq!(decode_output(&bytes), "Debian missing");
-        }
-    }
-
-    #[test]
-    fn wslpath_input_preserves_a_windows_path() {
-        assert_eq!(
-            wsl_path_input(std::path::Path::new(r"C:\tmp\life-os-pr216-fix")),
-            "C:/tmp/life-os-pr216-fix"
-        );
     }
 
     #[test]
