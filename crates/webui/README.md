@@ -57,6 +57,19 @@ dx build -r -p liberado-webui --web                                    # release
 The release bundle lands in `target/dx/liberado-webui/release/web/public`, which the
 daemon serves via `ServeDir` (constant `DIST_DIR` in `crates/server/src/lib.rs`).
 
+### Install as an app (PWA)
+
+The crate-root `index.html` plus `public/manifest.json`, `public/sw.js`, and the
+192/512 PNG icons are the install shell. `dx build` copies `public/` to the served
+directory root, so the service worker is `/sw.js` and its scope is the origin.
+
+Do not move the worker under `/assets/`. A worker at `/assets/sw.js` only
+controls `/assets/`, and Chrome will not treat the site as an app.
+
+The worker does not cache and does not intercept `/api/` — chat uses EventSource
+against `/api/chat/stream`. HTTPS is required on a phone; `http://<lan-ip>:4201`
+will not show an install prompt.
+
 ---
 
 ## Architecture

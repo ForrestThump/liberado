@@ -6,6 +6,8 @@ use dioxus::prelude::*;
 mod back_nav;
 mod components;
 mod icons;
+#[cfg(test)]
+mod pwa;
 mod theme;
 
 use components::chat::Chat;
