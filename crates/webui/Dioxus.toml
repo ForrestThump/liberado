@@ -1,5 +1,10 @@
 # dx build config. Without this the generated index.html carries Dioxus's placeholder title
 # ("dioxus | ⛺"), which is what a pinned tab at https://liberado.homelab.local/ would be named.
+#
+# Do not set `asset_dir = "public"`. That copies public/ under /assets/, and a
+# service worker at /assets/sw.js only controls /assets/ — not the app origin.
+# Dioxus 0.7 already merges crate-root `public/` into the served directory, so
+# sw.js, manifest.json, and the icons stay at `/`.
 [application]
 
 [web.app]

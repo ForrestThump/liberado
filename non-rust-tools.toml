@@ -42,3 +42,9 @@ path = "deploy/homelab/setup.sh"
 owner = "homelab deploy"
 purpose = "Pull the GHCR image for the current checkout and recreate the host Compose service."
 justification = "The operator runs this from a branch checkout against live Docker Compose; it must stay a host shell boundary that never writes config or secrets."
+
+[[tool]]
+path = "crates/webui/public/sw.js"
+owner = "web UI"
+purpose = "Provide the browser-managed origin-root service worker required by the PWA install shell."
+justification = "The browser owns this lifecycle and origin scope; replacing it with Rust would remove the web platform boundary the installed UI depends on."
