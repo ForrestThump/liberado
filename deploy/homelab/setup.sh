@@ -8,7 +8,7 @@ usage() {
 Pull ghcr.io/forrestthump/liberado:sha-<HEAD> and recreate the homelab Compose service.
 
 Usage:
-  deploy/homelab/setup.sh [--dry-run] [--help]
+  deploy/homelab/setup.sh [--dry-run] [--no-wait] [--help]
 
 Homelab steps:
   git fetch origin
@@ -24,16 +24,23 @@ Environment:
   LIBERADO_GHCR_IMAGE    Image repo (default: ghcr.io/forrestthump/liberado)
   LIBERADO_IMAGE_TAG     Tag to pull (default: sha-<git HEAD>)
   LIBERADO_CONTAINER     Container name (default: liberado)
+  LIBERADO_NO_WAIT       Skip the post-recreate health wait (default: wait)
+  LIBERADO_HEALTH_TIMEOUT_SECS   Health wait budget (default: 180)
 EOF
 }
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 REPO_ROOT=$(CDPATH= cd -- "${SCRIPT_DIR}/../.." && pwd)
 DRY_RUN=0
+WAIT_HEALTH=1
+if [ -n "${LIBERADO_NO_WAIT:-}" ]; then
+  WAIT_HEALTH=0
+fi
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --dry-run) DRY_RUN=1 ;;
+    --no-wait) WAIT_HEALTH=0 ;;
     -h|--help)
       usage
       exit 0
@@ -132,9 +139,35 @@ run() {
   "$@"
 }
 
+wait_healthy() {
+  local timeout_secs=${LIBERADO_HEALTH_TIMEOUT_SECS:-180}
+  local deadline=$(( $(date +%s) + timeout_secs ))
+  local status
+  while [ "$(date +%s)" -lt "${deadline}" ]; do
+    status=$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}nodefined{{end}}' "${CONTAINER}" 2>/dev/null || echo absent)
+    case "${status}" in
+      healthy)
+        echo "container ${CONTAINER} healthy"
+        return 0
+        ;;
+      nodefined)
+        if [ "$(docker inspect --format '{{.State.Running}}' "${CONTAINER}" 2>/dev/null)" = "true" ]; then
+          echo "container ${CONTAINER} running (no healthcheck defined)"
+          return 0
+        fi
+        ;;
+    esac
+    sleep 5
+  done
+  echo "error: container ${CONTAINER} was not healthy within ${timeout_secs}s (last status: ${status})" >&2
+  echo "inspect: docker logs ${CONTAINER} --tail 100" >&2
+  return 1
+}
+
 if [ "${DRY_RUN}" -eq 1 ]; then
   echo "dry-run: would pull ${IMAGE} and recreate ${CONTAINER}"
   echo "dry-run: would not write ${CONFIG_DIR} or ${ENV_FILE}"
+  echo "dry-run: WebUI overlay added only if the pulled image bakes /usr/share/liberado/webui"
   run "${COMPOSE[@]}" -f "${WEBUI_OVERLAY}" up -d --force-recreate --no-build --pull never
   exit 0
 fi
@@ -161,6 +194,10 @@ else
 fi
 
 run "${COMPOSE[@]}" up -d --force-recreate --no-build --pull never
+
+if [ "${WAIT_HEALTH}" -eq 1 ]; then
+  wait_healthy
+fi
 
 AFTER_CONFIG=$(fingerprint "${CONFIG_DIR}")
 AFTER_ENV=$(fingerprint "${ENV_FILE}")

@@ -8,7 +8,9 @@ the SSH target, API URL, remote paths, image, and container names.
 
 GitHub Actions builds the deploy image from this repo's `Dockerfile` and publishes it to
 `ghcr.io/forrestthump/liberado`. Tags include `sha-<full-commit>` on every built commit, `pr-<n>`
-on pull requests, and `main` on the default branch. The operator path on the homelab is:
+on pull requests, and `main` on the default branch. The `main` tag appears only after CI runs on
+the merged branch; until then, only `sha-<commit>` and `pr-<n>` exist. The operator path on the
+homelab is:
 
 ```bash
 git fetch origin
@@ -16,10 +18,17 @@ git checkout <this-pr-branch>
 ./deploy/homelab/setup.sh
 ```
 
+> Check out the **branch head**, not the merge ref. The Actions job stamps and builds
+> `github.event.pull_request.head.sha`, and `setup.sh` pulls `sha-$(git rev-parse HEAD)`. Using
+> `refs/pull/<n>/merge` computes a different HEAD, so the pull fails as a likely-404.
+
 `setup.sh` pulls `ghcr.io/forrestthump/liberado:sha-<HEAD>`, recreates the existing Compose
 service at `~/homelab/services/liberado`, and refuses to write `config/` or `.env`. It is safe
-to run again. If the image is missing or the pull is unauthorized, it exits with the next step
-(wait for the Actions job, or fix package visibility / `docker login`).
+to run again. After recreation it waits for the container healthcheck to report `healthy`
+(budget: `LIBERADO_HEALTH_TIMEOUT_SECS`, default 180s; skip with `--no-wait` or
+`LIBERADO_NO_WAIT=1`) and verifies the live build SHA. If the image is missing or the pull is
+unauthorized, it exits with the next step (wait for the Actions job, or fix package visibility /
+`docker login`).
 
 The first GHCR package is often **private** even when the repository is public. Anonymous pulls
 then look like a 404. One-time, with no token in git:
@@ -34,13 +43,30 @@ host file. When the pulled image contains a baked WebUI, it also applies
 [`docker-compose.ghcr-webui.yml`](docker-compose.ghcr-webui.yml) so `LIBERADO_WEBUI_DIST` points at
 `/usr/share/liberado/webui` instead of an empty host mount.
 
+### Roll back
+
+`setup.sh` never rewrites the host file, which still names `image: liberado:dev`. That local image
+stays cached on the box (the fallback build writes the same tag), so rolling back is a plain
+recreate without the GHCR overlays:
+
+```bash
+docker compose --project-directory ~/homelab/services/liberado \
+  -f ~/homelab/services/liberado/docker-compose.yml \
+  up -d --force-recreate --no-build --pull never
+```
+
+That reverts to the local `liberado:dev` image (build it first with `just deploy-homelab` if it is
+absent) and to the host-mounted WebUI at `/webui`, because the webui overlay no longer sets
+`LIBERADO_WEBUI_DIST`.
+
 Override the Compose project with `LIBERADO_HOMELAB_DIR` if it is not `~/homelab/services/liberado`.
 
 ## On-box build (fallback)
 
 `just deploy-homelab` still archives a committed Git ref over SSH and builds `liberado:dev` on the
 box. Use that path when GHCR is unreachable or you want a local image without Actions. It does not
-pull GHCR and it does not run `setup.sh`.
+pull GHCR and it does not run `setup.sh`. This is also the rollback path after a `setup.sh`
+deploy — see [Roll back](#roll-back).
 
 ```bash
 # Show every command without changing local or remote state.
