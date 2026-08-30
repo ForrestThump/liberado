@@ -24,7 +24,8 @@ Three files in one directory. The daemon resolves that directory in tiers (`libe
 | `policy.toml` | *Who may do what* — zones and their write classes, per-component capability grants |
 | `tuning.toml` | *How it behaves* — thresholds, budgets, timeouts, intervals. Every field has a default; the file is optional |
 
-**On the homelab, config is a host mount and `deploy.sh` does not ship it.** The copies in
+**On the homelab, config is a host mount. Deploy ships code, not those files.** `setup.sh` and
+`just deploy-homelab` leave `topology.toml` and `policy.toml` in place. The copies in
 `deploy/homelab/config/` are a mirror for review. To change live config:
 
 ```bash
@@ -501,7 +502,7 @@ classifier's own question is preserved ahead of it. Grep `guard=ask_human_capabi
 **"Why is it only getting 8 turns?"** → The dispatcher chose `depth = normal`. Depth is per-dispatch
 and declared, not inferred from which MCPs are in scope.
 
-**"I changed config and nothing happened."** → `deploy.sh` ships code, not config. Recreate the
+**"I changed config and nothing happened."** → Deploy ships code, not config. Recreate the
 container, then confirm with `config check` **in the container**.
 
 **"Why does the cost report say everything is unpriced?"** → No `[[models]]` entry carries

@@ -74,6 +74,9 @@ fn public_deployment_files_contain_no_private_host_data() {
         "config.example/topology.toml",
         "deploy/homelab/README.md",
         "deploy/homelab/docker-compose.yml",
+        "deploy/homelab/docker-compose.ghcr.yml",
+        "deploy/homelab/docker-compose.ghcr-webui.yml",
+        "deploy/homelab/setup.sh",
         "deploy/homelab/liberado-mcp-diagnosis.md",
         "docs/project/handoff.md",
     ] {
@@ -122,4 +125,60 @@ fn workspace_root() -> PathBuf {
         .and_then(Path::parent)
         .unwrap()
         .to_path_buf()
+}
+
+#[test]
+fn homelab_setup_script_pulls_ghcr_and_does_not_write_host_config() {
+    let root = workspace_root();
+    let script = std::fs::read_to_string(root.join("deploy/homelab/setup.sh")).unwrap();
+    let overlay =
+        std::fs::read_to_string(root.join("deploy/homelab/docker-compose.ghcr.yml")).unwrap();
+    let webui =
+        std::fs::read_to_string(root.join("deploy/homelab/docker-compose.ghcr-webui.yml")).unwrap();
+
+    assert!(script.contains("ghcr.io/forrestthump/liberado"));
+    assert!(script.contains("docker pull"));
+    assert!(script.contains("sha-${COMMIT_SHA}"));
+    assert!(script.contains("--project-directory"));
+    assert!(script.contains("--force-recreate"));
+    assert!(script.contains("never writes"));
+    assert!(!script.contains("topology.toml"));
+    assert!(!script.contains("policy.toml"));
+    assert!(!script.contains(">>"));
+    assert!(overlay.contains("image: ${LIBERADO_IMAGE"));
+    assert!(!overlay.contains("volumes:"));
+    assert!(webui.contains("LIBERADO_WEBUI_DIST"));
+    assert!(!webui.contains("volumes:"));
+}
+
+#[cfg(unix)]
+#[test]
+fn homelab_setup_dry_run_leaves_host_config_untouched() {
+    let root = workspace_root();
+    let temp = std::env::temp_dir().join(format!("liberado-setup-dry-run-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&temp);
+    std::fs::create_dir_all(temp.join("config")).unwrap();
+    std::fs::write(temp.join("docker-compose.yml"), "services: {}\n").unwrap();
+    std::fs::write(temp.join("config/topology.toml"), "provider = \"none\"\n").unwrap();
+    std::fs::write(temp.join(".env"), "KEEP=secret\n").unwrap();
+    let before_config = std::fs::read_to_string(temp.join("config/topology.toml")).unwrap();
+    let before_env = std::fs::read_to_string(temp.join(".env")).unwrap();
+
+    let status = std::process::Command::new("bash")
+        .arg(root.join("deploy/homelab/setup.sh"))
+        .arg("--dry-run")
+        .env("LIBERADO_HOMELAB_DIR", &temp)
+        .current_dir(&root)
+        .status()
+        .unwrap();
+    assert!(status.success(), "setup.sh --dry-run failed");
+    assert_eq!(
+        std::fs::read_to_string(temp.join("config/topology.toml")).unwrap(),
+        before_config
+    );
+    assert_eq!(
+        std::fs::read_to_string(temp.join(".env")).unwrap(),
+        before_env
+    );
+    let _ = std::fs::remove_dir_all(&temp);
 }

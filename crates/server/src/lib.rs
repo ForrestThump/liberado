@@ -45,10 +45,10 @@ const DIST_DIR: &str = "target/dx/liberado-webui/release/web/public";
 
 /// Directory the frontend is served from: `LIBERADO_WEBUI_DIST` if set, else [`DIST_DIR`].
 ///
-/// The homelab mounts the bundle into the container and points this at the mount, because the UI is
-/// built on a dev machine (it needs the wasm32 toolchain, which the deploy image does not carry) and
-/// shipped separately from the binary. Keeping it a mount rather than an image layer also means a UI
-/// redeploy is a file copy — `ServeDir` reads per request, so no restart is needed.
+/// GitHub Actions bakes a bundle into `/usr/share/liberado/webui` and the image sets this env to
+/// that path. Homelab Compose may still override it to a `/webui` mount so `just deploy-webui-homelab`
+/// can update the UI without rebuilding the daemon image. `setup.sh` points back at the baked path
+/// when the pulled image contains `index.html`.
 fn dist_dir() -> String {
     std::env::var("LIBERADO_WEBUI_DIST").unwrap_or_else(|_| DIST_DIR.to_string())
 }

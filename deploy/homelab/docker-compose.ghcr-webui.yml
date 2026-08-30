@@ -1,0 +1,8 @@
+# Prefer the WASM bundle baked into the GHCR image over an empty or stale host mount.
+# setup.sh adds this file only when the pulled image contains /usr/share/liberado/webui/index.html.
+# Host config and .env are not modified. The /webui bind mount can remain; this env var selects
+# the baked path instead.
+services:
+  liberado:
+    environment:
+      LIBERADO_WEBUI_DIST: "/usr/share/liberado/webui"
