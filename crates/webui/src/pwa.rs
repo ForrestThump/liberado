@@ -1,4 +1,4 @@
-//! Pin the install-shell files Chrome and Safari check.
+//! Pin the install-shell files and mobile viewport policy Chrome and Safari check.
 //!
 //! The WASM UI is already a same-origin client of `/api/*`. Installability is a
 //! handful of static files next to that shell: a custom `index.html`, a web app
@@ -123,6 +123,9 @@ fn index_html_errors(text: &str) -> Vec<String> {
     if !text.contains("apple-mobile-web-app-capable") {
         errors.push("index.html is missing the iOS home-screen meta tag".into());
     }
+    if !text.contains("interactive-widget=resizes-content") {
+        errors.push("index.html must resize the layout viewport for the on-screen keyboard".into());
+    }
     errors
 }
 
@@ -146,6 +149,19 @@ fn public_file_exists(name: &str) -> bool {
     crate_root().join("public").join(name).is_file()
 }
 
+fn css_rule<'a>(text: &'a str, selector: &str) -> &'a str {
+    let needle = format!("{selector} {{");
+    let start = text
+        .find(&needle)
+        .unwrap_or_else(|| panic!("missing CSS rule {selector}"))
+        + needle.len();
+    let rest = &text[start..];
+    let end = rest
+        .find('}')
+        .unwrap_or_else(|| panic!("unterminated CSS rule {selector}"));
+    &rest[..end]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -166,6 +182,24 @@ mod tests {
     fn shipped_index_html_is_the_pwa_shell() {
         let errors = index_html_errors(&read_crate_file("index.html"));
         assert!(errors.is_empty(), "{errors:?}");
+    }
+
+    #[test]
+    fn chat_layout_locks_the_shell_and_only_scrolls_messages() {
+        let css = read_crate_file("src/styles/main.css");
+        let chat = css_rule(&css, ".chat");
+        let messages = css_rule(&css, ".messages");
+        let composer = css_rule(&css, ".composer-dock");
+
+        assert!(chat.contains("overflow: hidden"), "{chat}");
+        assert!(messages.contains("min-height: 0"), "{messages}");
+        assert!(messages.contains("overflow-y: auto"), "{messages}");
+        assert!(
+            messages.contains("overscroll-behavior: contain"),
+            "{messages}"
+        );
+        assert!(composer.contains("flex-shrink: 0"), "{composer}");
+        assert!(!composer.contains("position: absolute"), "{composer}");
     }
 
     #[test]
@@ -260,6 +294,17 @@ mod tests {
             </head><body><div id="main"></div></body></html>"#;
         let errors = index_html_errors(html);
         assert!(errors.iter().any(|e| e.contains("/sw.js")), "{errors:?}");
+    }
+
+    #[test]
+    fn viewport_that_pans_for_the_keyboard_fails() {
+        let html =
+            read_crate_file("index.html").replace(", interactive-widget=resizes-content", "");
+        let errors = index_html_errors(&html);
+        assert!(
+            errors.iter().any(|e| e.contains("on-screen keyboard")),
+            "{errors:?}"
+        );
     }
 
     #[test]

@@ -5,23 +5,25 @@
     box-sizing: border-box;
 }
 
+html,
+body,
+#main {
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    overscroll-behavior: none;
+}
+
 body {
     font-family: system-ui, -apple-system, 'Segoe UI', sans-serif;
     background: var(--lib-app-bg, #0d0d1a);
     color: var(--lib-chat-assistant-text, #c0c0c0);
     -webkit-font-smoothing: antialiased;
-    overflow: hidden;
-    /* `dvh` tracks the *visible* viewport; `vh` on a phone is measured with the browser's chrome
-       retracted, so it is taller than what you can actually see. Combined with `overflow: hidden`
-       that put the input bar below the fold with no way to scroll to it -- the chat looked like it
-       had no text box at all. `vh` stays first as the fallback for browsers without `dvh`. */
-    height: 100vh;
-    height: 100dvh;
-}
-
-html {
-    overflow: hidden;
-    height: 100%;
+    /* A focused textarea can make a mobile browser pan the document even when document overflow is
+       hidden. Fix the document itself to the viewport; index.html's interactive-widget policy then
+       resizes this containing block to the space above the keyboard. */
+    position: fixed;
+    inset: 0;
 }
 
 ::-webkit-scrollbar {
@@ -41,9 +43,8 @@ html {
 /* ── App shell ──────────────────────────────────────────────────────────── */
 
 .app {
-    /* See the note on `body` -- must match it, or the shell overflows the visible viewport. */
-    height: 100vh;
-    height: 100dvh;
+    height: 100%;
+    min-height: 0;
     background: var(--lib-app-bg);
     color: var(--lib-chat-assistant-text);
     display: flex;
@@ -343,6 +344,7 @@ html {
     flex: 1;
     min-height: 0;
     position: relative;
+    overflow: hidden;
 }
 
 
@@ -558,6 +560,7 @@ html {
 .main-content {
     flex: 1;
     min-width: 0;
+    min-height: 0;
     overflow: hidden;
     display: flex;
     flex-direction: column;
@@ -573,13 +576,16 @@ html {
     min-height: 0;
     padding: 0;
     position: relative;
+    overflow: hidden;
 }
 
 .messages {
     flex: 1;
+    min-height: 0;
     overflow-y: auto;
-    /* Bottom padding keeps the last bubble above the floating composer. */
-    padding: 0.75rem 1rem 6rem;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+    padding: 0.75rem 1rem;
     display: flex;
     flex-direction: column;
     gap: 0.75rem;
@@ -706,7 +712,7 @@ html {
    whichever rule comes last wins and an earlier placement would silently lose to the 88%. */
 @media (max-width: 768px) {
     .messages {
-        padding: 0.5rem 0.75rem 5.5rem;
+        padding: 0.5rem 0.75rem;
     }
 
     /* Only the wrapper -- see the note on .bubble's max-width for why capping both compounds. */
@@ -714,11 +720,6 @@ html {
         max-width: 96%;
     }
 
-    .composer-dock {
-        left: 0.5rem;
-        right: 0.5rem;
-        bottom: 0.5rem;
-    }
 }
 
 /* ── Thinking steps group (collapsible) ──────────────────────────────────── */
@@ -847,17 +848,23 @@ html {
     font-style: italic;
 }
 
-/* ── Composer (floating pill over the transcript) ────────────────────────── */
+/* ── Composer (fixed row below the scrolling transcript) ────────────────── */
 
 .composer-dock {
-    position: absolute;
-    left: 1rem;
-    right: 1rem;
-    bottom: 0.75rem;
+    position: relative;
     z-index: 4;
     display: flex;
     flex-direction: column;
     gap: 0.5rem;
+    flex-shrink: 0;
+    padding: 0.5rem 1rem 0.75rem;
+    background: var(--lib-app-bg);
+}
+
+@media (max-width: 768px) {
+    .composer-dock {
+        padding: 0.5rem;
+    }
 }
 
 .input-bar {
