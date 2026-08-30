@@ -34,6 +34,8 @@ serde_yaml = { workspace = true }
 toml = { workspace = true }
 tempfile = { workspace = true }
 sha2 = { workspace = true }
+tree-sitter = { workspace = true }
+tree-sitter-rust = { workspace = true }
 
 [package.metadata.liberado]
 # Layer role for the layer-rules test + crate-map generator (docs/architecture/contracts.md)

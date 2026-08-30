@@ -106,6 +106,14 @@ module-health:
 module-health-ratchet:
     cargo run --locked --quiet -p liberado-cli -- ci modules-ratchet
 
+# Classify production Rust unwraps against the committed baseline and waivers.
+unwrap-classification:
+    cargo run --locked --quiet -p liberado-cli -- ci unwraps
+
+# Check first, then replace the unwrap classification baseline with current values.
+unwrap-ratchet:
+    cargo run --locked --quiet -p liberado-cli -- ci unwraps-ratchet
+
 # Validate the Rust-native PR shepherd's failure-identity and state-machine guards.
 shepherd-self-test:
     cargo run --locked -p liberado-cli -- shepherd --self-test

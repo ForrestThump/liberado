@@ -1,0 +1,1625 @@
+{
+  "summary": {
+    "total_unwraps": 111,
+    "proven_invariant": 61,
+    "local_failure": 0,
+    "process_fatal": 50,
+    "files_scanned": 412,
+    "files_with_unwraps": 49
+  },
+  "files": {
+    "crates/acp-bridge/src/session_store.rs": {
+      "proven_invariant": 1,
+      "local_failure": 0,
+      "process_fatal": 0,
+      "total": 1,
+      "occurrences": [
+        {
+          "file": "crates/acp-bridge/src/session_store.rs",
+          "line": 92,
+          "column": 6,
+          "method": "expect",
+          "snippet": "TEST_SESSIONS_DIR.lock().expect(\"lock\")",
+          "receiver": "TEST_SESSIONS_DIR.lock()",
+          "context": "set_sessions_dirSessionsDirOverride",
+          "classification": "proven_invariant",
+          "reason": "mutex / rwlock acquisition on internal non-poisoned state"
+        }
+      ]
+    },
+    "crates/cli/src/docs_cmd.rs": {
+      "proven_invariant": 0,
+      "local_failure": 0,
+      "process_fatal": 1,
+      "total": 1,
+      "occurrences": [
+        {
+          "file": "crates/cli/src/docs_cmd.rs",
+          "line": 97,
+          "column": 28,
+          "method": "expect",
+          "snippet": "file\n                .parent()\n                .expect(\"a scanned file always has a parent\")",
+          "receiver": "file\n                .parent()",
+          "context": "scan_fileResult<(), Box<dyn std::error::Error>>",
+          "classification": "process_fatal",
+          "reason": "production path unwrap requiring conversion to Result or waiver"
+        }
+      ]
+    },
+    "crates/cli/src/docs_meta_cmd.rs": {
+      "proven_invariant": 2,
+      "local_failure": 0,
+      "process_fatal": 3,
+      "total": 5,
+      "occurrences": [
+        {
+          "file": "crates/cli/src/docs_meta_cmd.rs",
+          "line": 105,
+          "column": 19,
+          "method": "unwrap",
+          "snippet": "Regex::new(r\"(?is)## Active (?:documents|plans).*?\\n(.*?)(?:\\n## |\\z)\")\n        .unwrap()",
+          "receiver": "Regex::new(r\"(?is)## Active (?:documents|plans).*?\\n(.*?)(?:\\n## |\\z)\")",
+          "context": "parse_active_linksHashSet<String>",
+          "classification": "proven_invariant",
+          "reason": "statically validated regex constant"
+        },
+        {
+          "file": "crates/cli/src/docs_meta_cmd.rs",
+          "line": 110,
+          "column": 17,
+          "method": "unwrap",
+          "snippet": "Regex::new(r\"\\]\\(([^)]+\\.md)\\)\").unwrap()",
+          "receiver": "Regex::new(r\"\\]\\(([^)]+\\.md)\\)\")",
+          "context": "parse_active_linksHashSet<String>",
+          "classification": "proven_invariant",
+          "reason": "statically validated regex constant"
+        },
+        {
+          "file": "crates/cli/src/docs_meta_cmd.rs",
+          "line": 131,
+          "column": 20,
+          "method": "unwrap",
+          "snippet": "Path::new(&doc.path)\n            .file_name()\n            .unwrap()",
+          "receiver": "Path::new(&doc.path)\n            .file_name()",
+          "context": "generate_future_work_readmeString",
+          "classification": "process_fatal",
+          "reason": "production path unwrap requiring conversion to Result or waiver"
+        },
+        {
+          "file": "crates/cli/src/docs_meta_cmd.rs",
+          "line": 217,
+          "column": 20,
+          "method": "unwrap",
+          "snippet": "doc.meta.as_ref().unwrap()",
+          "receiver": "doc.meta.as_ref()",
+          "context": "generate_catalogString",
+          "classification": "process_fatal",
+          "reason": "production path unwrap requiring conversion to Result or waiver"
+        },
+        {
+          "file": "crates/cli/src/docs_meta_cmd.rs",
+          "line": 707,
+          "column": 28,
+          "method": "expect",
+          "snippet": "path.parent().expect(\"document has parent\")",
+          "receiver": "path.parent()",
+          "context": "lint_documents_for_testResult<Vec<Issue>, Box<dyn std::error::Error>>",
+          "classification": "process_fatal",
+          "reason": "production path unwrap requiring conversion to Result or waiver"
+        }
+      ]
+    },
+    "crates/cli/src/mutants_cmd.rs": {
+      "proven_invariant": 0,
+      "local_failure": 0,
+      "process_fatal": 1,
+      "total": 1,
+      "occurrences": [
+        {
+          "file": "crates/cli/src/mutants_cmd.rs",
+          "line": 426,
+          "column": 22,
+          "method": "unwrap",
+          "snippet": "latest_sha.unwrap()",
+          "receiver": "latest_sha",
+          "context": "build_healthResult<HealthReport, Box<dyn std::error::Error>>",
+          "classification": "process_fatal",
+          "reason": "production path unwrap requiring conversion to Result or waiver"
+        }
+      ]
+    },
+    "crates/cli/src/mutants_cmd_ledger.rs": {
+      "proven_invariant": 0,
+      "local_failure": 0,
+      "process_fatal": 1,
+      "total": 1,
+      "occurrences": [
+        {
+          "file": "crates/cli/src/mutants_cmd_ledger.rs",
+          "line": 76,
+          "column": 29,
+          "method": "expect",
+          "snippet": "serde_json::to_string(c).expect(\"a ledger row serialises\")",
+          "receiver": "serde_json::to_string(c)",
+          "context": "dedupe_campaignsVec<Campaign>",
+          "classification": "process_fatal",
+          "reason": "production path unwrap requiring conversion to Result or waiver"
+        }
+      ]
+    },
+    "crates/cli/src/shepherd_cmd.rs": {
+      "proven_invariant": 2,
+      "local_failure": 0,
+      "process_fatal": 3,
+      "total": 5,
+      "occurrences": [
+        {
+          "file": "crates/cli/src/shepherd_cmd.rs",
+          "line": 453,
+          "column": 16,
+          "method": "unwrap",
+          "snippet": "Regex::new(r\"\\btest\\s+(\\S+)\\s+\\.\\.\\.\\s+FAILED\\b\").unwrap()",
+          "receiver": "Regex::new(r\"\\btest\\s+(\\S+)\\s+\\.\\.\\.\\s+FAILED\\b\")",
+          "context": "parse_failure_setBTreeSet<String>",
+          "classification": "proven_invariant",
+          "reason": "statically validated regex constant"
+        },
+        {
+          "file": "crates/cli/src/shepherd_cmd.rs",
+          "line": 454,
+          "column": 17,
+          "method": "unwrap",
+          "snippet": "Regex::new(r\"\\b(error(\\[[A-Z]\\d+\\])?:|error: could not compile)\").unwrap()",
+          "receiver": "Regex::new(r\"\\b(error(\\[[A-Z]\\d+\\])?:|error: could not compile)\")",
+          "context": "parse_failure_setBTreeSet<String>",
+          "classification": "proven_invariant",
+          "reason": "statically validated regex constant"
+        },
+        {
+          "file": "crates/cli/src/shepherd_cmd.rs",
+          "line": 470,
+          "column": 27,
+          "method": "unwrap",
+          "snippet": "key.split_once('|').unwrap()",
+          "receiver": "key.split_once('|')",
+          "context": "parse_failure_setBTreeSet<String>",
+          "classification": "process_fatal",
+          "reason": "production path unwrap requiring conversion to Result or waiver"
+        },
+        {
+          "file": "crates/cli/src/shepherd_cmd.rs",
+          "line": 700,
+          "column": 5,
+          "method": "expect",
+          "snippet": "reqwest::blocking::Client::builder()\n        .timeout(Duration::from_secs(30))\n        .build()\n        .expect(\"HTTP client\")",
+          "receiver": "reqwest::blocking::Client::builder()\n        .timeout(Duration::from_secs(30))\n        .build()",
+          "context": "clientreqwest::blocking::Client",
+          "classification": "process_fatal",
+          "reason": "production path unwrap requiring conversion to Result or waiver"
+        },
+        {
+          "file": "crates/cli/src/shepherd_cmd.rs",
+          "line": 1043,
+          "column": 32,
+          "method": "unwrap",
+          "snippet": "path.parent().unwrap()",
+          "receiver": "path.parent()",
+          "context": "start_cold_reviewResult<(), Box<dyn std::error::Error>>",
+          "classification": "process_fatal",
+          "reason": "production path unwrap requiring conversion to Result or waiver"
+        }
+      ]
+    },
+    "crates/coder-agent/src/coding_goal.rs": {
+      "proven_invariant": 2,
+      "local_failure": 0,
+      "process_fatal": 0,
+      "total": 2,
+      "occurrences": [
+        {
+          "file": "crates/coder-agent/src/coding_goal.rs",
+          "line": 52,
+          "column": 9,
+          "method": "expect",
+          "snippet": "serde_json::to_value(self).expect(\"CodingGoalPayload always serializes\")",
+          "receiver": "serde_json::to_value(self)",
+          "context": "into_valueserde_json::Value",
+          "classification": "proven_invariant",
+          "reason": "statically proven invariant or startup runtime boundary"
+        },
+        {
+          "file": "crates/coder-agent/src/coding_goal.rs",
+          "line": 57,
+          "column": 9,
+          "method": "expect",
+          "snippet": "serde_json::to_value(self).expect(\"CodingGoalPayload always serializes\")",
+          "receiver": "serde_json::to_value(self)",
+          "context": "to_valueserde_json::Value",
+          "classification": "proven_invariant",
+          "reason": "statically proven invariant or startup runtime boundary"
+        }
+      ]
+    },
+    "crates/coder-agent/src/fanout.rs": {
+      "proven_invariant": 0,
+      "local_failure": 0,
+      "process_fatal": 2,
+      "total": 2,
+      "occurrences": [
+        {
+          "file": "crates/coder-agent/src/fanout.rs",
+          "line": 153,
+          "column": 27,
+          "method": "expect",
+          "snippet": "sem.acquire().await.expect(\"semaphore closed unexpectedly\")",
+          "receiver": "sem.acquire().await",
+          "context": "run_coding_fanoutResult<FanoutReport, CoderError>",
+          "classification": "process_fatal",
+          "reason": "production path unwrap requiring conversion to Result or waiver"
+        },
+        {
+          "file": "crates/coder-agent/src/fanout.rs",
+          "line": 208,
+          "column": 27,
+          "method": "expect",
+          "snippet": "sem.acquire().await.expect(\"semaphore closed unexpectedly\")",
+          "receiver": "sem.acquire().await",
+          "context": "run_coding_fanout_via_hubResult<FanoutReport, CoderError>",
+          "classification": "process_fatal",
+          "reason": "production path unwrap requiring conversion to Result or waiver"
+        }
+      ]
+    },
+    "crates/coder-agent/src/lib.rs": {
+      "proven_invariant": 1,
+      "local_failure": 0,
+      "process_fatal": 0,
+      "total": 1,
+      "occurrences": [
+        {
+          "file": "crates/coder-agent/src/lib.rs",
+          "line": 616,
+          "column": 26,
+          "method": "expect",
+          "snippet": "progress\n        .lock()\n        .expect(\"progress mutex poisoned\")",
+          "receiver": "progress\n        .lock()",
+          "context": "log_ignored_fatal",
+          "classification": "proven_invariant",
+          "reason": "mutex / rwlock acquisition on internal non-poisoned state"
+        }
+      ]
+    },
+    "crates/coder-agent/src/progress.rs": {
+      "proven_invariant": 0,
+      "local_failure": 0,
+      "process_fatal": 1,
+      "total": 1,
+      "occurrences": [
+        {
+          "file": "crates/coder-agent/src/progress.rs",
+          "line": 126,
+          "column": 46,
+          "method": "expect",
+          "snippet": "self.fatal.clone().expect(\"fatal checked as Some\")",
+          "receiver": "self.fatal.clone()",
+          "context": "observeProgressAction",
+          "classification": "process_fatal",
+          "reason": "production path unwrap requiring conversion to Result or waiver"
+        }
+      ]
+    },
+    "crates/coder-agent/src/runtime.rs": {
+      "proven_invariant": 2,
+      "local_failure": 0,
+      "process_fatal": 0,
+      "total": 2,
+      "occurrences": [
+        {
+          "file": "crates/coder-agent/src/runtime.rs",
+          "line": 58,
+          "column": 25,
+          "method": "expect",
+          "snippet": "self.progress.lock().expect(\"progress mutex poisoned\")",
+          "receiver": "self.progress.lock()",
+          "context": "invokeResult<String, String>",
+          "classification": "proven_invariant",
+          "reason": "mutex / rwlock acquisition on internal non-poisoned state"
+        },
+        {
+          "file": "crates/coder-agent/src/runtime.rs",
+          "line": 103,
+          "column": 22,
+          "method": "expect",
+          "snippet": "self\n            .progress\n            .lock()\n            .expect(\"progress mutex poisoned\")",
+          "receiver": "self\n            .progress\n            .lock()",
+          "context": "invokeResult<String, String>",
+          "classification": "proven_invariant",
+          "reason": "mutex / rwlock acquisition on internal non-poisoned state"
+        }
+      ]
+    },
+    "crates/coder-agent/src/session_pack.rs": {
+      "proven_invariant": 2,
+      "local_failure": 0,
+      "process_fatal": 0,
+      "total": 2,
+      "occurrences": [
+        {
+          "file": "crates/coder-agent/src/session_pack.rs",
+          "line": 231,
+          "column": 10,
+          "method": "expect",
+          "snippet": "self.hub.lock().expect(\"coding pack hub mutex\")",
+          "receiver": "self.hub.lock()",
+          "context": "attach_hub",
+          "classification": "proven_invariant",
+          "reason": "mutex / rwlock acquisition on internal non-poisoned state"
+        },
+        {
+          "file": "crates/coder-agent/src/session_pack.rs",
+          "line": 235,
+          "column": 9,
+          "method": "expect",
+          "snippet": "self.hub.lock().expect(\"coding pack hub mutex\")",
+          "receiver": "self.hub.lock()",
+          "context": "hubOption<Arc<liberado_session::GoalSessionHub>>",
+          "classification": "proven_invariant",
+          "reason": "mutex / rwlock acquisition on internal non-poisoned state"
+        }
+      ]
+    },
+    "crates/coder-agent/src/trace.rs": {
+      "proven_invariant": 2,
+      "local_failure": 0,
+      "process_fatal": 0,
+      "total": 2,
+      "occurrences": [
+        {
+          "file": "crates/coder-agent/src/trace.rs",
+          "line": 19,
+          "column": 5,
+          "method": "expect",
+          "snippet": "events\n        .lock()\n        .expect(\"coder event mutex poisoned\")",
+          "receiver": "events\n        .lock()",
+          "context": "push_event",
+          "classification": "proven_invariant",
+          "reason": "mutex / rwlock acquisition on internal non-poisoned state"
+        },
+        {
+          "file": "crates/coder-agent/src/trace.rs",
+          "line": 26,
+          "column": 5,
+          "method": "expect",
+          "snippet": "events.lock().expect(\"coder event mutex poisoned\")",
+          "receiver": "events.lock()",
+          "context": "snapshot_eventsVec<CoderEvent>",
+          "classification": "proven_invariant",
+          "reason": "mutex / rwlock acquisition on internal non-poisoned state"
+        }
+      ]
+    },
+    "crates/coder-runner/src/main.rs": {
+      "proven_invariant": 1,
+      "local_failure": 0,
+      "process_fatal": 0,
+      "total": 1,
+      "occurrences": [
+        {
+          "file": "crates/coder-runner/src/main.rs",
+          "line": 928,
+          "column": 27,
+          "method": "expect",
+          "snippet": "tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())\n            .expect(\"install SIGTERM handler\")",
+          "receiver": "tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())",
+          "context": "wait_for_termination_signal",
+          "classification": "proven_invariant",
+          "reason": "statically proven invariant or startup runtime boundary"
+        }
+      ]
+    },
+    "crates/coder-tools/src/git.rs": {
+      "proven_invariant": 0,
+      "local_failure": 0,
+      "process_fatal": 1,
+      "total": 1,
+      "occurrences": [
+        {
+          "file": "crates/coder-tools/src/git.rs",
+          "line": 231,
+          "column": 41,
+          "method": "expect",
+          "snippet": "\"HEAD\".try_into().expect(\"HEAD is valid\")",
+          "receiver": "\"HEAD\".try_into()",
+          "context": "branch_create_inResult<(), GitError>",
+          "classification": "process_fatal",
+          "reason": "production path unwrap requiring conversion to Result or waiver"
+        }
+      ]
+    },
+    "crates/coder-tools/src/hashline.rs": {
+      "proven_invariant": 0,
+      "local_failure": 0,
+      "process_fatal": 2,
+      "total": 2,
+      "occurrences": [
+        {
+          "file": "crates/coder-tools/src/hashline.rs",
+          "line": 40,
+          "column": 41,
+          "method": "expect",
+          "snippet": "digest[..16].try_into().expect(\"16 bytes\")",
+          "receiver": "digest[..16].try_into()",
+          "context": "compute_file_hashString",
+          "classification": "process_fatal",
+          "reason": "production path unwrap requiring conversion to Result or waiver"
+        },
+        {
+          "file": "crates/coder-tools/src/hashline.rs",
+          "line": 48,
+          "column": 5,
+          "method": "expect",
+          "snippet": "String::from_utf8(chars).expect(\"ascii alphabet\")",
+          "receiver": "String::from_utf8(chars)",
+          "context": "compute_file_hashString",
+          "classification": "process_fatal",
+          "reason": "production path unwrap requiring conversion to Result or waiver"
+        }
+      ]
+    },
+    "crates/common/src/frontmatter.rs": {
+      "proven_invariant": 0,
+      "local_failure": 0,
+      "process_fatal": 1,
+      "total": 1,
+      "occurrences": [
+        {
+          "file": "crates/common/src/frontmatter.rs",
+          "line": 19,
+          "column": 16,
+          "method": "expect",
+          "snippet": "serde_yaml::to_string(frontmatter).expect(\"frontmatter serializes to YAML\")",
+          "receiver": "serde_yaml::to_string(frontmatter)",
+          "context": "render_noteString",
+          "classification": "process_fatal",
+          "reason": "production path unwrap requiring conversion to Result or waiver"
+        }
+      ]
+    },
+    "crates/common/src/local_time.rs": {
+      "proven_invariant": 0,
+      "local_failure": 0,
+      "process_fatal": 1,
+      "total": 1,
+      "occurrences": [
+        {
+          "file": "crates/common/src/local_time.rs",
+          "line": 52,
+          "column": 9,
+          "method": "expect",
+          "snippet": "Self::parse(DEFAULT_TIMEZONE).expect(\"DEFAULT_TIMEZONE must be a valid IANA name\")",
+          "receiver": "Self::parse(DEFAULT_TIMEZONE)",
+          "context": "default_zoneSelf",
+          "classification": "process_fatal",
+          "reason": "production path unwrap requiring conversion to Result or waiver"
+        }
+      ]
+    },
+    "crates/common/src/proposal.rs": {
+      "proven_invariant": 0,
+      "local_failure": 0,
+      "process_fatal": 4,
+      "total": 4,
+      "occurrences": [
+        {
+          "file": "crates/common/src/proposal.rs",
+          "line": 312,
+          "column": 23,
+          "method": "expect",
+          "snippet": "<Hmac<Sha256> as Mac>::new_from_slice(&self.key)\n            .expect(\"HMAC accepts a key of any length\")",
+          "receiver": "<Hmac<Sha256> as Mac>::new_from_slice(&self.key)",
+          "context": "computeString",
+          "classification": "process_fatal",
+          "reason": "production path unwrap requiring conversion to Result or waiver"
+        },
+        {
+          "file": "crates/common/src/proposal.rs",
+          "line": 320,
+          "column": 27,
+          "method": "expect",
+          "snippet": "serde_json::to_vec(&proposal.proposed_action)\n            .expect(\"ProposedAction serializes to JSON\")",
+          "receiver": "serde_json::to_vec(&proposal.proposed_action)",
+          "context": "computeString",
+          "classification": "process_fatal",
+          "reason": "production path unwrap requiring conversion to Result or waiver"
+        },
+        {
+          "file": "crates/common/src/proposal.rs",
+          "line": 328,
+          "column": 28,
+          "method": "expect",
+          "snippet": "serde_json::to_vec(cap).expect(\"Capability serializes to JSON\")",
+          "receiver": "serde_json::to_vec(cap)",
+          "context": "computeString",
+          "classification": "process_fatal",
+          "reason": "production path unwrap requiring conversion to Result or waiver"
+        },
+        {
+          "file": "crates/common/src/proposal.rs",
+          "line": 372,
+          "column": 9,
+          "method": "expect",
+          "snippet": "write!(s, \"{b:02x}\").expect(\"writing to a String cannot fail\")",
+          "receiver": "write!(s, \"{b:02x}\")",
+          "context": "hex_encodeString",
+          "classification": "process_fatal",
+          "reason": "production path unwrap requiring conversion to Result or waiver"
+        }
+      ]
+    },
+    "crates/config-loader/src/chain.rs": {
+      "proven_invariant": 0,
+      "local_failure": 0,
+      "process_fatal": 1,
+      "total": 1,
+      "occurrences": [
+        {
+          "file": "crates/config-loader/src/chain.rs",
+          "line": 98,
+          "column": 41,
+          "method": "unwrap",
+          "snippet": "merged.as_mut().unwrap()",
+          "receiver": "merged.as_mut()",
+          "context": "load_valueResult<Option<toml::Value>, ConfigLoadError>",
+          "classification": "process_fatal",
+          "reason": "production path unwrap requiring conversion to Result or waiver"
+        }
+      ]
+    },
+    "crates/cost/src/lib.rs": {
+      "proven_invariant": 0,
+      "local_failure": 0,
+      "process_fatal": 1,
+      "total": 1,
+      "occurrences": [
+        {
+          "file": "crates/cost/src/lib.rs",
+          "line": 290,
+          "column": 28,
+          "method": "expect",
+          "snippet": "cur.take().expect(\"just inserted\")",
+          "receiver": "cur.take()",
+          "context": "run_delegation_costResult<Vec<DelegationCostSample>, LoadError>",
+          "classification": "process_fatal",
+          "reason": "production path unwrap requiring conversion to Result or waiver"
+        }
+      ]
+    },
+    "crates/cost/src/main.rs": {
+      "proven_invariant": 0,
+      "local_failure": 0,
+      "process_fatal": 1,
+      "total": 1,
+      "occurrences": [
+        {
+          "file": "crates/cost/src/main.rs",
+          "line": 218,
+          "column": 32,
+          "method": "unwrap",
+          "snippet": "s.cached_prompt_tokens.unwrap()",
+          "receiver": "s.cached_prompt_tokens",
+          "context": "summarize",
+          "classification": "process_fatal",
+          "reason": "production path unwrap requiring conversion to Result or waiver"
+        }
+      ]
+    },
+    "crates/daemon/src/lib.rs": {
+      "proven_invariant": 0,
+      "local_failure": 0,
+      "process_fatal": 3,
+      "total": 3,
+      "occurrences": [
+        {
+          "file": "crates/daemon/src/lib.rs",
+          "line": 148,
+          "column": 9,
+          "method": "expect",
+          "snippet": "self.event_tx\n            .as_ref()\n            .expect(\"event_sender() called after run() already started\")",
+          "receiver": "self.event_tx\n            .as_ref()",
+          "context": "event_senderUnboundedSender<Event>",
+          "classification": "process_fatal",
+          "reason": "production path unwrap requiring conversion to Result or waiver"
+        },
+        {
+          "file": "crates/daemon/src/lib.rs",
+          "line": 312,
+          "column": 28,
+          "method": "expect",
+          "snippet": "self\n            .event_rx\n            .take()\n            .expect(\"Daemon::run must only be called once\")",
+          "receiver": "self\n            .event_rx\n            .take()",
+          "context": "runResult<(), DaemonError>",
+          "classification": "process_fatal",
+          "reason": "production path unwrap requiring conversion to Result or waiver"
+        },
+        {
+          "file": "crates/daemon/src/lib.rs",
+          "line": 318,
+          "column": 24,
+          "method": "expect",
+          "snippet": "self\n            .event_tx\n            .take()\n            .expect(\"Daemon::run must only be called once\")",
+          "receiver": "self\n            .event_tx\n            .take()",
+          "context": "runResult<(), DaemonError>",
+          "classification": "process_fatal",
+          "reason": "production path unwrap requiring conversion to Result or waiver"
+        }
+      ]
+    },
+    "crates/dispatcher/src/lib_tests_more.rs": {
+      "proven_invariant": 2,
+      "local_failure": 0,
+      "process_fatal": 0,
+      "total": 2,
+      "occurrences": [
+        {
+          "file": "crates/dispatcher/src/lib_tests_more.rs",
+          "line": 35,
+          "column": 9,
+          "method": "unwrap",
+          "snippet": "self.0\n            .lock()\n            .unwrap()",
+          "receiver": "self.0\n            .lock()",
+          "context": "on_event",
+          "classification": "proven_invariant",
+          "reason": "mutex / rwlock acquisition on internal non-poisoned state"
+        },
+        {
+          "file": "crates/dispatcher/src/lib_tests_more.rs",
+          "line": 46,
+          "column": 16,
+          "method": "unwrap",
+          "snippet": "captured.0.lock().unwrap()",
+          "receiver": "captured.0.lock()",
+          "context": "with_captured(R, Vec<(tracing::Level, String)>)",
+          "classification": "proven_invariant",
+          "reason": "mutex / rwlock acquisition on internal non-poisoned state"
+        }
+      ]
+    },
+    "crates/harness-eval/src/transport.rs": {
+      "proven_invariant": 0,
+      "local_failure": 0,
+      "process_fatal": 1,
+      "total": 1,
+      "occurrences": [
+        {
+          "file": "crates/harness-eval/src/transport.rs",
+          "line": 346,
+          "column": 29,
+          "method": "unwrap",
+          "snippet": "path.strip_prefix(root).unwrap()",
+          "receiver": "path.strip_prefix(root)",
+          "context": "visitio::Result<()>",
+          "classification": "process_fatal",
+          "reason": "production path unwrap requiring conversion to Result or waiver"
+        }
+      ]
+    },
+    "crates/heuristics-tuner/src/coder_search.rs": {
+      "proven_invariant": 0,
+      "local_failure": 0,
+      "process_fatal": 1,
+      "total": 1,
+      "occurrences": [
+        {
+          "file": "crates/heuristics-tuner/src/coder_search.rs",
+          "line": 216,
+          "column": 36,
+          "method": "expect",
+          "snippet": "beam.into_iter().next().expect(\"beam is never empty\")",
+          "receiver": "beam.into_iter().next()",
+          "context": "run_coder_tunerCoderTunerResult",
+          "classification": "process_fatal",
+          "reason": "production path unwrap requiring conversion to Result or waiver"
+        }
+      ]
+    },
+    "crates/heuristics-tuner/src/search.rs": {
+      "proven_invariant": 0,
+      "local_failure": 0,
+      "process_fatal": 1,
+      "total": 1,
+      "occurrences": [
+        {
+          "file": "crates/heuristics-tuner/src/search.rs",
+          "line": 205,
+          "column": 36,
+          "method": "expect",
+          "snippet": "beam.into_iter().next().expect(\"beam is never empty\")",
+          "receiver": "beam.into_iter().next()",
+          "context": "run_tunerTunerResult",
+          "classification": "process_fatal",
+          "reason": "production path unwrap requiring conversion to Result or waiver"
+        }
+      ]
+    },
+    "crates/heuristics-tuner/src/tool_loop_scoring.rs": {
+      "proven_invariant": 2,
+      "local_failure": 0,
+      "process_fatal": 0,
+      "total": 2,
+      "occurrences": [
+        {
+          "file": "crates/heuristics-tuner/src/tool_loop_scoring.rs",
+          "line": 50,
+          "column": 9,
+          "method": "unwrap",
+          "snippet": "self.invoked.lock().unwrap()",
+          "receiver": "self.invoked.lock()",
+          "context": "invokedVec<ToolInvocation>",
+          "classification": "proven_invariant",
+          "reason": "mutex / rwlock acquisition on internal non-poisoned state"
+        },
+        {
+          "file": "crates/heuristics-tuner/src/tool_loop_scoring.rs",
+          "line": 61,
+          "column": 9,
+          "method": "unwrap",
+          "snippet": "self.invoked.lock().unwrap()",
+          "receiver": "self.invoked.lock()",
+          "context": "invokeResult<String, String>",
+          "classification": "proven_invariant",
+          "reason": "mutex / rwlock acquisition on internal non-poisoned state"
+        }
+      ]
+    },
+    "crates/heuristics-tuner/src/tool_loop_search.rs": {
+      "proven_invariant": 0,
+      "local_failure": 0,
+      "process_fatal": 1,
+      "total": 1,
+      "occurrences": [
+        {
+          "file": "crates/heuristics-tuner/src/tool_loop_search.rs",
+          "line": 226,
+          "column": 36,
+          "method": "expect",
+          "snippet": "beam.into_iter().next().expect(\"beam is never empty\")",
+          "receiver": "beam.into_iter().next()",
+          "context": "run_tool_loop_tunerExecutorTunerResult",
+          "classification": "process_fatal",
+          "reason": "production path unwrap requiring conversion to Result or waiver"
+        }
+      ]
+    },
+    "crates/main-agent/src/sessions/compaction.rs": {
+      "proven_invariant": 1,
+      "local_failure": 0,
+      "process_fatal": 0,
+      "total": 1,
+      "occurrences": [
+        {
+          "file": "crates/main-agent/src/sessions/compaction.rs",
+          "line": 296,
+          "column": 29,
+          "method": "unwrap",
+          "snippet": "self.fail_once_content.lock().unwrap()",
+          "receiver": "self.fail_once_content.lock()",
+          "context": "appendliberado_conversation_store::StoreResult<MessageNode>",
+          "classification": "proven_invariant",
+          "reason": "mutex / rwlock acquisition on internal non-poisoned state"
+        }
+      ]
+    },
+    "crates/markdown/src/lib.rs": {
+      "proven_invariant": 0,
+      "local_failure": 0,
+      "process_fatal": 3,
+      "total": 3,
+      "occurrences": [
+        {
+          "file": "crates/markdown/src/lib.rs",
+          "line": 137,
+          "column": 17,
+          "method": "unwrap",
+          "snippet": "trimmed.strip_prefix(\"### \").unwrap()",
+          "receiver": "trimmed.strip_prefix(\"### \")",
+          "context": "markdown_to_linesVec<MarkdownLine>",
+          "classification": "process_fatal",
+          "reason": "production path unwrap requiring conversion to Result or waiver"
+        },
+        {
+          "file": "crates/markdown/src/lib.rs",
+          "line": 144,
+          "column": 17,
+          "method": "unwrap",
+          "snippet": "trimmed.strip_prefix(\"## \").unwrap()",
+          "receiver": "trimmed.strip_prefix(\"## \")",
+          "context": "markdown_to_linesVec<MarkdownLine>",
+          "classification": "process_fatal",
+          "reason": "production path unwrap requiring conversion to Result or waiver"
+        },
+        {
+          "file": "crates/markdown/src/lib.rs",
+          "line": 151,
+          "column": 17,
+          "method": "unwrap",
+          "snippet": "trimmed.strip_prefix(\"# \").unwrap()",
+          "receiver": "trimmed.strip_prefix(\"# \")",
+          "context": "markdown_to_linesVec<MarkdownLine>",
+          "classification": "process_fatal",
+          "reason": "production path unwrap requiring conversion to Result or waiver"
+        }
+      ]
+    },
+    "crates/mcp-forge/src/lock.rs": {
+      "proven_invariant": 1,
+      "local_failure": 0,
+      "process_fatal": 0,
+      "total": 1,
+      "occurrences": [
+        {
+          "file": "crates/mcp-forge/src/lock.rs",
+          "line": 32,
+          "column": 20,
+          "method": "expect",
+          "snippet": "toml::to_string_pretty(self).expect(\"LockFile always serializes\")",
+          "receiver": "toml::to_string_pretty(self)",
+          "context": "savestd::io::Result<()>",
+          "classification": "proven_invariant",
+          "reason": "mutex / rwlock acquisition on internal non-poisoned state"
+        }
+      ]
+    },
+    "crates/mcp/src/pool.rs": {
+      "proven_invariant": 0,
+      "local_failure": 0,
+      "process_fatal": 1,
+      "total": 1,
+      "occurrences": [
+        {
+          "file": "crates/mcp/src/pool.rs",
+          "line": 338,
+          "column": 9,
+          "method": "expect",
+          "snippet": "self.runtime\n            .as_deref()\n            .expect(\"PooledCheckout used after drop\")",
+          "receiver": "self.runtime\n            .as_deref()",
+          "context": "runtime&dyn RebindableRuntime",
+          "classification": "process_fatal",
+          "reason": "production path unwrap requiring conversion to Result or waiver"
+        }
+      ]
+    },
+    "crates/orchestrator/src/lib.rs": {
+      "proven_invariant": 0,
+      "local_failure": 0,
+      "process_fatal": 1,
+      "total": 1,
+      "occurrences": [
+        {
+          "file": "crates/orchestrator/src/lib.rs",
+          "line": 1361,
+          "column": 26,
+          "method": "expect",
+          "snippet": "semaphore\n                .clone()\n                .acquire_owned()\n                .await\n                .expect(\"semaphore is local to this call and never closed\")",
+          "receiver": "semaphore\n                .clone()\n                .acquire_owned()\n                .await",
+          "context": "dispatch_parallelResult<Report, OrchestratorError>",
+          "classification": "process_fatal",
+          "reason": "production path unwrap requiring conversion to Result or waiver"
+        }
+      ]
+    },
+    "crates/provider-free-proxy/src/bin/liberado-free-proxy.rs": {
+      "proven_invariant": 0,
+      "local_failure": 0,
+      "process_fatal": 1,
+      "total": 1,
+      "occurrences": [
+        {
+          "file": "crates/provider-free-proxy/src/bin/liberado-free-proxy.rs",
+          "line": 118,
+          "column": 5,
+          "method": "expect",
+          "snippet": "axum::serve(listener, app).await.expect(\"server run\")",
+          "receiver": "axum::serve(listener, app).await",
+          "context": "bind_and_serve",
+          "classification": "process_fatal",
+          "reason": "production path unwrap requiring conversion to Result or waiver"
+        }
+      ]
+    },
+    "crates/provider-free-proxy/src/http.rs": {
+      "proven_invariant": 1,
+      "local_failure": 0,
+      "process_fatal": 0,
+      "total": 1,
+      "occurrences": [
+        {
+          "file": "crates/provider-free-proxy/src/http.rs",
+          "line": 333,
+          "column": 5,
+          "method": "expect",
+          "snippet": "Response::builder()\n        .status(status)\n        .header(header::CONTENT_TYPE, content_type)\n        .body(axum::body::Body::from_stream(upstream.bytes_stream()))\n        .expect(\"statically valid response builder\")",
+          "receiver": "Response::builder()\n        .status(status)\n        .header(header::CONTENT_TYPE, content_type)\n        .body(axum::body::Body::from_stream(upstream.bytes_stream()))",
+          "context": "relayResponse",
+          "classification": "proven_invariant",
+          "reason": "statically proven invariant or startup runtime boundary"
+        }
+      ]
+    },
+    "crates/provider-free-proxy/src/resolver.rs": {
+      "proven_invariant": 5,
+      "local_failure": 0,
+      "process_fatal": 0,
+      "total": 5,
+      "occurrences": [
+        {
+          "file": "crates/provider-free-proxy/src/resolver.rs",
+          "line": 130,
+          "column": 19,
+          "method": "expect",
+          "snippet": "reqwest::Client::builder()\n                .timeout(Duration::from_secs(30))\n                .build()\n                .expect(\"static client config\")",
+          "receiver": "reqwest::Client::builder()\n                .timeout(Duration::from_secs(30))\n                .build()",
+          "context": "from_upstreamsSelf",
+          "classification": "proven_invariant",
+          "reason": "statically proven invariant or startup runtime boundary"
+        },
+        {
+          "file": "crates/provider-free-proxy/src/resolver.rs",
+          "line": 449,
+          "column": 21,
+          "method": "expect",
+          "snippet": "self.state.lock().expect(\"cache lock\")",
+          "receiver": "self.state.lock()",
+          "context": "fresh_snapshotOption<Resolution>",
+          "classification": "proven_invariant",
+          "reason": "mutex / rwlock acquisition on internal non-poisoned state"
+        },
+        {
+          "file": "crates/provider-free-proxy/src/resolver.rs",
+          "line": 459,
+          "column": 21,
+          "method": "expect",
+          "snippet": "self.state.lock().expect(\"cache lock\")",
+          "receiver": "self.state.lock()",
+          "context": "snapshot_any_ageOption<Resolution>",
+          "classification": "proven_invariant",
+          "reason": "mutex / rwlock acquisition on internal non-poisoned state"
+        },
+        {
+          "file": "crates/provider-free-proxy/src/resolver.rs",
+          "line": 464,
+          "column": 25,
+          "method": "expect",
+          "snippet": "self.state.lock().expect(\"cache lock\")",
+          "receiver": "self.state.lock()",
+          "context": "store",
+          "classification": "proven_invariant",
+          "reason": "mutex / rwlock acquisition on internal non-poisoned state"
+        },
+        {
+          "file": "crates/provider-free-proxy/src/resolver.rs",
+          "line": 469,
+          "column": 9,
+          "method": "expect",
+          "snippet": "self.state.lock().expect(\"cache lock\")",
+          "receiver": "self.state.lock()",
+          "context": "clear_snapshot",
+          "classification": "proven_invariant",
+          "reason": "mutex / rwlock acquisition on internal non-poisoned state"
+        }
+      ]
+    },
+    "crates/provider-free-proxy/src/scrape_parse.rs": {
+      "proven_invariant": 1,
+      "local_failure": 0,
+      "process_fatal": 0,
+      "total": 1,
+      "occurrences": [
+        {
+          "file": "crates/provider-free-proxy/src/scrape_parse.rs",
+          "line": 92,
+          "column": 9,
+          "method": "expect",
+          "snippet": "regex::Regex::new(r\"Quality\\s*(\\d+(?:\\.\\d+)?)%\\s*([^$,\\n]{2,80})\").expect(\"static regex\")",
+          "receiver": "regex::Regex::new(r\"Quality\\s*(\\d+(?:\\.\\d+)?)%\\s*([^$,\\n]{2,80})\")",
+          "context": "parse_openrouter_benchmarksVec<LeaderRow>",
+          "classification": "proven_invariant",
+          "reason": "statically validated regex constant"
+        }
+      ]
+    },
+    "crates/provider-free-proxy/src/spider.rs": {
+      "proven_invariant": 1,
+      "local_failure": 0,
+      "process_fatal": 0,
+      "total": 1,
+      "occurrences": [
+        {
+          "file": "crates/provider-free-proxy/src/spider.rs",
+          "line": 41,
+          "column": 19,
+          "method": "expect",
+          "snippet": "reqwest::Client::builder()\n                .connect_timeout(Duration::from_secs(10))\n                .build()\n                .expect(\"static client config\")",
+          "receiver": "reqwest::Client::builder()\n                .connect_timeout(Duration::from_secs(10))\n                .build()",
+          "context": "newSelf",
+          "classification": "proven_invariant",
+          "reason": "statically proven invariant or startup runtime boundary"
+        }
+      ]
+    },
+    "crates/provider-openai-compat/src/lib_wire_seam.rs": {
+      "proven_invariant": 3,
+      "local_failure": 0,
+      "process_fatal": 5,
+      "total": 8,
+      "occurrences": [
+        {
+          "file": "crates/provider-openai-compat/src/lib_wire_seam.rs",
+          "line": 17,
+          "column": 27,
+          "method": "expect",
+          "snippet": "serde_json::from_slice(&request.body)\n            .expect(\"outgoing request body should be valid JSON\")",
+          "receiver": "serde_json::from_slice(&request.body)",
+          "context": "respondResponseTemplate",
+          "classification": "process_fatal",
+          "reason": "production path unwrap requiring conversion to Result or waiver"
+        },
+        {
+          "file": "crates/provider-openai-compat/src/lib_wire_seam.rs",
+          "line": 19,
+          "column": 9,
+          "method": "unwrap",
+          "snippet": "self.bodies.lock().unwrap()",
+          "receiver": "self.bodies.lock()",
+          "context": "respondResponseTemplate",
+          "classification": "proven_invariant",
+          "reason": "mutex / rwlock acquisition on internal non-poisoned state"
+        },
+        {
+          "file": "crates/provider-openai-compat/src/lib_wire_seam.rs",
+          "line": 65,
+          "column": 5,
+          "method": "expect",
+          "snippet": "provider.complete(request).await.expect(\"call failed\")",
+          "receiver": "provider.complete(request).await",
+          "context": "sent_by_completeValue",
+          "classification": "process_fatal",
+          "reason": "production path unwrap requiring conversion to Result or waiver"
+        },
+        {
+          "file": "crates/provider-openai-compat/src/lib_wire_seam.rs",
+          "line": 66,
+          "column": 16,
+          "method": "unwrap",
+          "snippet": "bodies.lock().unwrap()",
+          "receiver": "bodies.lock()",
+          "context": "sent_by_completeValue",
+          "classification": "proven_invariant",
+          "reason": "mutex / rwlock acquisition on internal non-poisoned state"
+        },
+        {
+          "file": "crates/provider-openai-compat/src/lib_wire_seam.rs",
+          "line": 67,
+          "column": 5,
+          "method": "expect",
+          "snippet": "sent.first().cloned().expect(\"no request was captured\")",
+          "receiver": "sent.first().cloned()",
+          "context": "sent_by_completeValue",
+          "classification": "process_fatal",
+          "reason": "production path unwrap requiring conversion to Result or waiver"
+        },
+        {
+          "file": "crates/provider-openai-compat/src/lib_wire_seam.rs",
+          "line": 77,
+          "column": 19,
+          "method": "expect",
+          "snippet": "provider\n        .complete_stream(request)\n        .await\n        .expect(\"stream call failed\")",
+          "receiver": "provider\n        .complete_stream(request)\n        .await",
+          "context": "sent_by_streamValue",
+          "classification": "process_fatal",
+          "reason": "production path unwrap requiring conversion to Result or waiver"
+        },
+        {
+          "file": "crates/provider-openai-compat/src/lib_wire_seam.rs",
+          "line": 81,
+          "column": 16,
+          "method": "unwrap",
+          "snippet": "bodies.lock().unwrap()",
+          "receiver": "bodies.lock()",
+          "context": "sent_by_streamValue",
+          "classification": "proven_invariant",
+          "reason": "mutex / rwlock acquisition on internal non-poisoned state"
+        },
+        {
+          "file": "crates/provider-openai-compat/src/lib_wire_seam.rs",
+          "line": 82,
+          "column": 5,
+          "method": "expect",
+          "snippet": "sent.first().cloned().expect(\"no request was captured\")",
+          "receiver": "sent.first().cloned()",
+          "context": "sent_by_streamValue",
+          "classification": "process_fatal",
+          "reason": "production path unwrap requiring conversion to Result or waiver"
+        }
+      ]
+    },
+    "crates/provider/src/mock.rs": {
+      "proven_invariant": 11,
+      "local_failure": 0,
+      "process_fatal": 0,
+      "total": 11,
+      "occurrences": [
+        {
+          "file": "crates/provider/src/mock.rs",
+          "line": 46,
+          "column": 10,
+          "method": "unwrap",
+          "snippet": "self.models.lock().unwrap()",
+          "receiver": "self.models.lock()",
+          "context": "set_models",
+          "classification": "proven_invariant",
+          "reason": "mutex / rwlock acquisition on internal non-poisoned state"
+        },
+        {
+          "file": "crates/provider/src/mock.rs",
+          "line": 63,
+          "column": 9,
+          "method": "unwrap",
+          "snippet": "self.scripted\n            .lock()\n            .unwrap()",
+          "receiver": "self.scripted\n            .lock()",
+          "context": "push",
+          "classification": "proven_invariant",
+          "reason": "mutex / rwlock acquisition on internal non-poisoned state"
+        },
+        {
+          "file": "crates/provider/src/mock.rs",
+          "line": 74,
+          "column": 9,
+          "method": "unwrap",
+          "snippet": "self.scripted\n            .lock()\n            .unwrap()",
+          "receiver": "self.scripted\n            .lock()",
+          "context": "push_error",
+          "classification": "proven_invariant",
+          "reason": "mutex / rwlock acquisition on internal non-poisoned state"
+        },
+        {
+          "file": "crates/provider/src/mock.rs",
+          "line": 82,
+          "column": 9,
+          "method": "unwrap",
+          "snippet": "self.scripted.lock().unwrap()",
+          "receiver": "self.scripted.lock()",
+          "context": "remainingusize",
+          "classification": "proven_invariant",
+          "reason": "mutex / rwlock acquisition on internal non-poisoned state"
+        },
+        {
+          "file": "crates/provider/src/mock.rs",
+          "line": 87,
+          "column": 9,
+          "method": "unwrap",
+          "snippet": "self.received.lock().unwrap()",
+          "receiver": "self.received.lock()",
+          "context": "received_requestsVec<CompletionRequest>",
+          "classification": "proven_invariant",
+          "reason": "mutex / rwlock acquisition on internal non-poisoned state"
+        },
+        {
+          "file": "crates/provider/src/mock.rs",
+          "line": 92,
+          "column": 9,
+          "method": "unwrap",
+          "snippet": "self.received.lock().unwrap()",
+          "receiver": "self.received.lock()",
+          "context": "last_requestOption<CompletionRequest>",
+          "classification": "proven_invariant",
+          "reason": "mutex / rwlock acquisition on internal non-poisoned state"
+        },
+        {
+          "file": "crates/provider/src/mock.rs",
+          "line": 99,
+          "column": 9,
+          "method": "unwrap",
+          "snippet": "self.model.lock().unwrap()",
+          "receiver": "self.model.lock()",
+          "context": "modelString",
+          "classification": "proven_invariant",
+          "reason": "mutex / rwlock acquisition on internal non-poisoned state"
+        },
+        {
+          "file": "crates/provider/src/mock.rs",
+          "line": 105,
+          "column": 14,
+          "method": "unwrap",
+          "snippet": "self.model.lock().unwrap()",
+          "receiver": "self.model.lock()",
+          "context": "set_model",
+          "classification": "proven_invariant",
+          "reason": "mutex / rwlock acquisition on internal non-poisoned state"
+        },
+        {
+          "file": "crates/provider/src/mock.rs",
+          "line": 110,
+          "column": 9,
+          "method": "unwrap",
+          "snippet": "self.received.lock().unwrap()",
+          "receiver": "self.received.lock()",
+          "context": "completeProviderResult<CompletionResponse>",
+          "classification": "proven_invariant",
+          "reason": "mutex / rwlock acquisition on internal non-poisoned state"
+        },
+        {
+          "file": "crates/provider/src/mock.rs",
+          "line": 111,
+          "column": 15,
+          "method": "unwrap",
+          "snippet": "self.scripted.lock().unwrap()",
+          "receiver": "self.scripted.lock()",
+          "context": "completeProviderResult<CompletionResponse>",
+          "classification": "proven_invariant",
+          "reason": "mutex / rwlock acquisition on internal non-poisoned state"
+        },
+        {
+          "file": "crates/provider/src/mock.rs",
+          "line": 119,
+          "column": 12,
+          "method": "unwrap",
+          "snippet": "self.models.lock().unwrap()",
+          "receiver": "self.models.lock()",
+          "context": "list_modelsProviderResult<Vec<String>>",
+          "classification": "proven_invariant",
+          "reason": "mutex / rwlock acquisition on internal non-poisoned state"
+        }
+      ]
+    },
+    "crates/server/src/api/goals.rs": {
+      "proven_invariant": 1,
+      "local_failure": 0,
+      "process_fatal": 0,
+      "total": 1,
+      "occurrences": [
+        {
+          "file": "crates/server/src/api/goals.rs",
+          "line": 196,
+          "column": 31,
+          "method": "expect",
+          "snippet": "goal\n                    .payload\n                    .as_object_mut()\n                    .expect(\"CodingGoalPayload always serializes to an object\")",
+          "receiver": "goal\n                    .payload\n                    .as_object_mut()",
+          "context": "goals_startimpl IntoResponse",
+          "classification": "proven_invariant",
+          "reason": "statically proven invariant or startup runtime boundary"
+        }
+      ]
+    },
+    "crates/server/src/shutdown.rs": {
+      "proven_invariant": 1,
+      "local_failure": 0,
+      "process_fatal": 0,
+      "total": 1,
+      "occurrences": [
+        {
+          "file": "crates/server/src/shutdown.rs",
+          "line": 268,
+          "column": 27,
+          "method": "expect",
+          "snippet": "signal(SignalKind::terminate()).expect(\"install SIGTERM handler\")",
+          "receiver": "signal(SignalKind::terminate())",
+          "context": "wait_for_shutdown_signal",
+          "classification": "proven_invariant",
+          "reason": "statically proven invariant or startup runtime boundary"
+        }
+      ]
+    },
+    "crates/server/src/t1_conformance.rs": {
+      "proven_invariant": 3,
+      "local_failure": 0,
+      "process_fatal": 8,
+      "total": 11,
+      "occurrences": [
+        {
+          "file": "crates/server/src/t1_conformance.rs",
+          "line": 171,
+          "column": 20,
+          "method": "unwrap",
+          "snippet": "self\n            .app\n            .clone()\n            .oneshot(\n                Request::builder()\n                    .method(\"POST\")\n                    .uri(uri)\n                    .header(\"content-type\", \"application/json\")\n                    .body(Body::from(body.to_string()))\n                    .unwrap(),\n            )\n            .await\n            .unwrap()",
+          "receiver": "self\n            .app\n            .clone()\n            .oneshot(\n                Request::builder()\n                    .method(\"POST\")\n                    .uri(uri)\n                    .header(\"content-type\", \"application/json\")\n                    .body(Body::from(body.to_string()))\n                    .unwrap(),\n            )\n            .await",
+          "context": "post_json(StatusCode, String)",
+          "classification": "process_fatal",
+          "reason": "production path unwrap requiring conversion to Result or waiver"
+        },
+        {
+          "file": "crates/server/src/t1_conformance.rs",
+          "line": 175,
+          "column": 17,
+          "method": "unwrap",
+          "snippet": "Request::builder()\n                    .method(\"POST\")\n                    .uri(uri)\n                    .header(\"content-type\", \"application/json\")\n                    .body(Body::from(body.to_string()))\n                    .unwrap()",
+          "receiver": "Request::builder()\n                    .method(\"POST\")\n                    .uri(uri)\n                    .header(\"content-type\", \"application/json\")\n                    .body(Body::from(body.to_string()))",
+          "context": "post_json(StatusCode, String)",
+          "classification": "process_fatal",
+          "reason": "production path unwrap requiring conversion to Result or waiver"
+        },
+        {
+          "file": "crates/server/src/t1_conformance.rs",
+          "line": 185,
+          "column": 21,
+          "method": "unwrap",
+          "snippet": "axum::body::to_bytes(resp.into_body(), 64 * 1024)\n            .await\n            .unwrap()",
+          "receiver": "axum::body::to_bytes(resp.into_body(), 64 * 1024)\n            .await",
+          "context": "post_json(StatusCode, String)",
+          "classification": "process_fatal",
+          "reason": "production path unwrap requiring conversion to Result or waiver"
+        },
+        {
+          "file": "crates/server/src/t1_conformance.rs",
+          "line": 195,
+          "column": 20,
+          "method": "unwrap",
+          "snippet": "self\n            .app\n            .clone()\n            .oneshot(\n                Request::builder()\n                    .method(\"GET\")\n                    .uri(uri)\n                    .body(Body::empty())\n                    .unwrap(),\n            )\n            .await\n            .unwrap()",
+          "receiver": "self\n            .app\n            .clone()\n            .oneshot(\n                Request::builder()\n                    .method(\"GET\")\n                    .uri(uri)\n                    .body(Body::empty())\n                    .unwrap(),\n            )\n            .await",
+          "context": "get(StatusCode, String)",
+          "classification": "process_fatal",
+          "reason": "production path unwrap requiring conversion to Result or waiver"
+        },
+        {
+          "file": "crates/server/src/t1_conformance.rs",
+          "line": 199,
+          "column": 17,
+          "method": "unwrap",
+          "snippet": "Request::builder()\n                    .method(\"GET\")\n                    .uri(uri)\n                    .body(Body::empty())\n                    .unwrap()",
+          "receiver": "Request::builder()\n                    .method(\"GET\")\n                    .uri(uri)\n                    .body(Body::empty())",
+          "context": "get(StatusCode, String)",
+          "classification": "process_fatal",
+          "reason": "production path unwrap requiring conversion to Result or waiver"
+        },
+        {
+          "file": "crates/server/src/t1_conformance.rs",
+          "line": 208,
+          "column": 21,
+          "method": "unwrap",
+          "snippet": "axum::body::to_bytes(resp.into_body(), 64 * 1024)\n            .await\n            .unwrap()",
+          "receiver": "axum::body::to_bytes(resp.into_body(), 64 * 1024)\n            .await",
+          "context": "get(StatusCode, String)",
+          "classification": "process_fatal",
+          "reason": "production path unwrap requiring conversion to Result or waiver"
+        },
+        {
+          "file": "crates/server/src/t1_conformance.rs",
+          "line": 273,
+          "column": 9,
+          "method": "unwrap",
+          "snippet": "self.calls\n            .lock()\n            .unwrap()",
+          "receiver": "self.calls\n            .lock()",
+          "context": "session_needs_you",
+          "classification": "proven_invariant",
+          "reason": "mutex / rwlock acquisition on internal non-poisoned state"
+        },
+        {
+          "file": "crates/server/src/t1_conformance.rs",
+          "line": 572,
+          "column": 10,
+          "method": "unwrap",
+          "snippet": "self.saw.lock().unwrap()",
+          "receiver": "self.saw.lock()",
+          "context": "runResult<GoalResult, PackError>",
+          "classification": "proven_invariant",
+          "reason": "mutex / rwlock acquisition on internal non-poisoned state"
+        },
+        {
+          "file": "crates/server/src/t1_conformance.rs",
+          "line": 1170,
+          "column": 9,
+          "method": "unwrap",
+          "snippet": "self.ran.lock().unwrap()",
+          "receiver": "self.ran.lock()",
+          "context": "invokeResult<String, String>",
+          "classification": "proven_invariant",
+          "reason": "mutex / rwlock acquisition on internal non-poisoned state"
+        },
+        {
+          "file": "crates/server/src/t1_conformance.rs",
+          "line": 1311,
+          "column": 5,
+          "method": "unwrap",
+          "snippet": "serde_json::from_str::<serde_json::Value>(&body).unwrap()[\"session_id\"]\n        .as_str()\n        .unwrap()",
+          "receiver": "serde_json::from_str::<serde_json::Value>(&body).unwrap()[\"session_id\"]\n        .as_str()",
+          "context": "start_life_goalString",
+          "classification": "process_fatal",
+          "reason": "production path unwrap requiring conversion to Result or waiver"
+        },
+        {
+          "file": "crates/server/src/t1_conformance.rs",
+          "line": 1311,
+          "column": 5,
+          "method": "unwrap",
+          "snippet": "serde_json::from_str::<serde_json::Value>(&body).unwrap()",
+          "receiver": "serde_json::from_str::<serde_json::Value>(&body)",
+          "context": "start_life_goalString",
+          "classification": "process_fatal",
+          "reason": "production path unwrap requiring conversion to Result or waiver"
+        }
+      ]
+    },
+    "crates/session-store/src/jsonl.rs": {
+      "proven_invariant": 3,
+      "local_failure": 0,
+      "process_fatal": 0,
+      "total": 3,
+      "occurrences": [
+        {
+          "file": "crates/session-store/src/jsonl.rs",
+          "line": 101,
+          "column": 9,
+          "method": "expect",
+          "snippet": "self.ids\n            .lock()\n            .expect(\"id generator mutex poisoned\")",
+          "receiver": "self.ids\n            .lock()",
+          "context": "next_idUlid",
+          "classification": "proven_invariant",
+          "reason": "mutex / rwlock acquisition on internal non-poisoned state"
+        },
+        {
+          "file": "crates/session-store/src/jsonl.rs",
+          "line": 244,
+          "column": 9,
+          "method": "expect",
+          "snippet": "self.write_locks\n            .lock()\n            .expect(\"write-lock registry poisoned\")",
+          "receiver": "self.write_locks\n            .lock()",
+          "context": "write_lock_forArc<tokio::sync::Mutex<()>>",
+          "classification": "proven_invariant",
+          "reason": "mutex / rwlock acquisition on internal non-poisoned state"
+        },
+        {
+          "file": "crates/session-store/src/jsonl.rs",
+          "line": 421,
+          "column": 26,
+          "method": "expect",
+          "snippet": "prefix.last().expect(\"non-empty\")",
+          "receiver": "prefix.last()",
+          "context": "fork_sessionStoreResult<SessionHeader>",
+          "classification": "proven_invariant",
+          "reason": "statically proven invariant or startup runtime boundary"
+        }
+      ]
+    },
+    "crates/session/src/hub.rs": {
+      "proven_invariant": 1,
+      "local_failure": 0,
+      "process_fatal": 0,
+      "total": 1,
+      "occurrences": [
+        {
+          "file": "crates/session/src/hub.rs",
+          "line": 230,
+          "column": 20,
+          "method": "expect",
+          "snippet": "self.packs.get(&domain).expect(\"checked above\")",
+          "receiver": "self.packs.get(&domain)",
+          "context": "start_innerResult<String, String>",
+          "classification": "proven_invariant",
+          "reason": "statically proven invariant or startup runtime boundary"
+        }
+      ]
+    },
+    "crates/sysmap-core/src/model.rs": {
+      "proven_invariant": 1,
+      "local_failure": 0,
+      "process_fatal": 0,
+      "total": 1,
+      "occurrences": [
+        {
+          "file": "crates/sysmap-core/src/model.rs",
+          "line": 367,
+          "column": 30,
+          "method": "expect",
+          "snippet": "self.stack.pop().expect(\"SCC root keeps a non-empty stack\")",
+          "receiver": "self.stack.pop()",
+          "context": "visit",
+          "classification": "proven_invariant",
+          "reason": "statically proven invariant or startup runtime boundary"
+        }
+      ]
+    },
+    "crates/test-support/src/lib.rs": {
+      "proven_invariant": 7,
+      "local_failure": 0,
+      "process_fatal": 0,
+      "total": 7,
+      "occurrences": [
+        {
+          "file": "crates/test-support/src/lib.rs",
+          "line": 88,
+          "column": 9,
+          "method": "unwrap",
+          "snippet": "self.calls\n            .lock()\n            .unwrap()",
+          "receiver": "self.calls\n            .lock()",
+          "context": "runtime_forResult<Box<dyn ToolRuntime>, RuntimeSetupError>",
+          "classification": "proven_invariant",
+          "reason": "mutex / rwlock acquisition on internal non-poisoned state"
+        },
+        {
+          "file": "crates/test-support/src/lib.rs",
+          "line": 121,
+          "column": 10,
+          "method": "unwrap",
+          "snippet": "self.default_result.lock().unwrap()",
+          "receiver": "self.default_result.lock()",
+          "context": "with_default_resultSelf",
+          "classification": "proven_invariant",
+          "reason": "mutex / rwlock acquisition on internal non-poisoned state"
+        },
+        {
+          "file": "crates/test-support/src/lib.rs",
+          "line": 127,
+          "column": 9,
+          "method": "unwrap",
+          "snippet": "self.per_tool\n            .lock()\n            .unwrap()",
+          "receiver": "self.per_tool\n            .lock()",
+          "context": "with_errorSelf",
+          "classification": "proven_invariant",
+          "reason": "mutex / rwlock acquisition on internal non-poisoned state"
+        },
+        {
+          "file": "crates/test-support/src/lib.rs",
+          "line": 136,
+          "column": 9,
+          "method": "unwrap",
+          "snippet": "self.per_tool\n            .lock()\n            .unwrap()",
+          "receiver": "self.per_tool\n            .lock()",
+          "context": "with_resultSelf",
+          "classification": "proven_invariant",
+          "reason": "mutex / rwlock acquisition on internal non-poisoned state"
+        },
+        {
+          "file": "crates/test-support/src/lib.rs",
+          "line": 150,
+          "column": 9,
+          "method": "unwrap",
+          "snippet": "self.invoked.lock().unwrap()",
+          "receiver": "self.invoked.lock()",
+          "context": "invokeResult<String, String>",
+          "classification": "proven_invariant",
+          "reason": "mutex / rwlock acquisition on internal non-poisoned state"
+        },
+        {
+          "file": "crates/test-support/src/lib.rs",
+          "line": 151,
+          "column": 24,
+          "method": "unwrap",
+          "snippet": "self.per_tool.lock().unwrap()",
+          "receiver": "self.per_tool.lock()",
+          "context": "invokeResult<String, String>",
+          "classification": "proven_invariant",
+          "reason": "mutex / rwlock acquisition on internal non-poisoned state"
+        },
+        {
+          "file": "crates/test-support/src/lib.rs",
+          "line": 155,
+          "column": 9,
+          "method": "unwrap",
+          "snippet": "self.default_result.lock().unwrap()",
+          "receiver": "self.default_result.lock()",
+          "context": "invokeResult<String, String>",
+          "classification": "proven_invariant",
+          "reason": "mutex / rwlock acquisition on internal non-poisoned state"
+        }
+      ]
+    },
+    "crates/tui/src/main.rs": {
+      "proven_invariant": 1,
+      "local_failure": 0,
+      "process_fatal": 0,
+      "total": 1,
+      "occurrences": [
+        {
+          "file": "crates/tui/src/main.rs",
+          "line": 65,
+          "column": 5,
+          "method": "expect",
+          "snippet": "ctrlc::set_handler(move || {\n        quit_flag.store(true, Ordering::Relaxed);\n    })\n    .expect(\"failed to set Ctrl+C/SIGTERM handler\")",
+          "receiver": "ctrlc::set_handler(move || {\n        quit_flag.store(true, Ordering::Relaxed);\n    })",
+          "context": "mainResult<(), Box<dyn std::error::Error>>",
+          "classification": "proven_invariant",
+          "reason": "statically proven invariant or startup runtime boundary"
+        }
+      ]
+    }
+  }
+}

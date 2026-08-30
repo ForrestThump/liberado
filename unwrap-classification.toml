@@ -1,0 +1,190 @@
+# Production unwraps classification and process_fatal ratchet.
+#
+# Waivers follow the same typed artifact pattern as module-health.toml:
+# path, metric, ceiling, reason, reviewed_on.
+
+[thresholds]
+process_fatal_new = 0
+local_failure_new = 0
+
+[[waiver]]
+path = "crates/cli/src/docs_cmd.rs"
+metric = "process_fatal"
+ceiling = 1
+reason = "File parent resolution during docs scan"
+reviewed_on = "2026-08-30"
+
+[[waiver]]
+path = "crates/cli/src/docs_meta_cmd.rs"
+metric = "process_fatal"
+ceiling = 3
+reason = "Regex and section capture in docs meta parser"
+reviewed_on = "2026-08-30"
+
+[[waiver]]
+path = "crates/cli/src/mutants_cmd.rs"
+metric = "process_fatal"
+ceiling = 1
+reason = "Mutants score string parsing"
+reviewed_on = "2026-08-30"
+
+[[waiver]]
+path = "crates/cli/src/mutants_cmd_ledger.rs"
+metric = "process_fatal"
+ceiling = 1
+reason = "Ledger date and baseline parsing"
+reviewed_on = "2026-08-30"
+
+[[waiver]]
+path = "crates/cli/src/shepherd_cmd.rs"
+metric = "process_fatal"
+ceiling = 3
+reason = "Shepherd worktree path and branch name resolution"
+reviewed_on = "2026-08-30"
+
+[[waiver]]
+path = "crates/coder-agent/src/fanout.rs"
+metric = "process_fatal"
+ceiling = 2
+reason = "Fanout worktree path resolution"
+reviewed_on = "2026-08-30"
+
+[[waiver]]
+path = "crates/coder-agent/src/progress.rs"
+metric = "process_fatal"
+ceiling = 1
+reason = "Progress bar duration conversion"
+reviewed_on = "2026-08-30"
+
+[[waiver]]
+path = "crates/coder-tools/src/git.rs"
+metric = "process_fatal"
+ceiling = 1
+reason = "Git diff header extraction"
+reviewed_on = "2026-08-30"
+
+[[waiver]]
+path = "crates/coder-tools/src/hashline.rs"
+metric = "process_fatal"
+ceiling = 2
+reason = "Hashline diff patch application"
+reviewed_on = "2026-08-30"
+
+[[waiver]]
+path = "crates/common/src/frontmatter.rs"
+metric = "process_fatal"
+ceiling = 1
+reason = "Frontmatter line split index"
+reviewed_on = "2026-08-30"
+
+[[waiver]]
+path = "crates/common/src/local_time.rs"
+metric = "process_fatal"
+ceiling = 1
+reason = "Time offset formatting"
+reviewed_on = "2026-08-30"
+
+[[waiver]]
+path = "crates/common/src/proposal.rs"
+metric = "process_fatal"
+ceiling = 4
+reason = "Proposal note signature extraction and timestamp formatting"
+reviewed_on = "2026-08-30"
+
+[[waiver]]
+path = "crates/config-loader/src/chain.rs"
+metric = "process_fatal"
+ceiling = 1
+reason = "Config chain loader default fallback"
+reviewed_on = "2026-08-30"
+
+[[waiver]]
+path = "crates/cost/src/lib.rs"
+metric = "process_fatal"
+ceiling = 1
+reason = "Cost model token calculation"
+reviewed_on = "2026-08-30"
+
+[[waiver]]
+path = "crates/cost/src/main.rs"
+metric = "process_fatal"
+ceiling = 1
+reason = "Cost CLI argument float parsing"
+reviewed_on = "2026-08-30"
+
+[[waiver]]
+path = "crates/daemon/src/lib.rs"
+metric = "process_fatal"
+ceiling = 3
+reason = "Daemon runtime initialization and port binding"
+reviewed_on = "2026-08-30"
+
+[[waiver]]
+path = "crates/harness-eval/src/transport.rs"
+metric = "process_fatal"
+ceiling = 1
+reason = "Transport response stream deserialization"
+reviewed_on = "2026-08-30"
+
+[[waiver]]
+path = "crates/heuristics-tuner/src/coder_search.rs"
+metric = "process_fatal"
+ceiling = 1
+reason = "Tuner parameter candidate extraction"
+reviewed_on = "2026-08-30"
+
+[[waiver]]
+path = "crates/heuristics-tuner/src/search.rs"
+metric = "process_fatal"
+ceiling = 1
+reason = "Search score ranking comparison"
+reviewed_on = "2026-08-30"
+
+[[waiver]]
+path = "crates/heuristics-tuner/src/tool_loop_search.rs"
+metric = "process_fatal"
+ceiling = 1
+reason = "Tool loop parameter evaluation"
+reviewed_on = "2026-08-30"
+
+[[waiver]]
+path = "crates/markdown/src/lib.rs"
+metric = "process_fatal"
+ceiling = 3
+reason = "Markdown parser AST traversal indices"
+reviewed_on = "2026-08-30"
+
+[[waiver]]
+path = "crates/mcp/src/pool.rs"
+metric = "process_fatal"
+ceiling = 1
+reason = "Pool checkout guard dropped during process shutdown"
+reviewed_on = "2026-08-30"
+
+[[waiver]]
+path = "crates/orchestrator/src/lib.rs"
+metric = "process_fatal"
+ceiling = 1
+reason = "Orchestrator session task channel send"
+reviewed_on = "2026-08-30"
+
+[[waiver]]
+path = "crates/provider-free-proxy/src/bin/liberado-free-proxy.rs"
+metric = "process_fatal"
+ceiling = 1
+reason = "Axum TCP listener startup"
+reviewed_on = "2026-08-30"
+
+[[waiver]]
+path = "crates/provider-openai-compat/src/lib_wire_seam.rs"
+metric = "process_fatal"
+ceiling = 5
+reason = "Wire seam SSE line extraction and json token parse"
+reviewed_on = "2026-08-30"
+
+[[waiver]]
+path = "crates/server/src/t1_conformance.rs"
+metric = "process_fatal"
+ceiling = 8
+reason = "T1 conformance test harness internal setup assertions"
+reviewed_on = "2026-08-30"

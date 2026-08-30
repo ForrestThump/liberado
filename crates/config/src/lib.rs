@@ -632,6 +632,10 @@ mod survivor_tests;
 mod coder_tuning_arrival_tests;
 
 #[cfg(test)]
+#[path = "safe_default_arrival_tests.rs"]
+mod safe_default_arrival_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use liberado_common::Capability;

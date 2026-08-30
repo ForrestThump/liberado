@@ -5542,6 +5542,8 @@ dependencies = [
  "tokio",
  "toml 0.8.23",
  "tracing-subscriber",
+ "tree-sitter",
+ "tree-sitter-rust",
 ]
 
 [[package]]
@@ -6270,6 +6272,8 @@ dependencies = [
  "serde_json",
  "tokio",
  "toml 0.8.23",
+ "tree-sitter",
+ "tree-sitter-rust",
 ]
 
 [[package]]

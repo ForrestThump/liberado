@@ -44,6 +44,12 @@ The host-stable function ratchet is configured in `function-complexity.toml` and
 functions must stay under the configured ceiling. A persistent exception must name one exact file
 and function and include an explicit ceiling, reason, and review date.
 
+The unwraps classifier and ratchet are configured in `unwrap-classification.toml` and committed
+in `unwrap-classification-baseline.json`. The AST classifier walks production `.unwrap()` and
+`.expect()` calls, categorizing them into proven invariants, local failures, and process-fatal unwraps.
+New process-fatal unwraps are blocked by CI without a narrow, reviewed waiver. Operator recipes include
+`just unwrap-classification` (or `cargo liberado ci unwraps`) and `just unwrap-ratchet`.
+
 ## Operator recipes
 
 The cross-platform operator recipes call the Rust CLI and read host-specific values from
