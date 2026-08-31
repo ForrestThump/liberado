@@ -79,6 +79,7 @@ fn workflow_has_no_privileged_compilation_path() {
     for job in [
         "early-lint",
         "test",
+        "webui",
         "module-health",
         "crap",
         "doc-links",
@@ -136,6 +137,51 @@ fn deploy_image_job_publishes_to_ghcr_with_least_privilege() {
     assert!(
         !text[..start].contains("packages: write"),
         "packages: write must stay on the image job, not the workflow default"
+    );
+    assert!(
+        body.contains("needs: [dependency-security, early-lint, test, webui, module-health"),
+        "deploy-image must wait for the fast validation jobs"
+    );
+    assert!(
+        body.contains("contains(github.event.pull_request.labels.*.name, 'deploy-image')"),
+        "pull-request deploy images must require an explicit deploy-image label"
+    );
+}
+
+#[test]
+fn webui_release_build_covers_the_advertised_contract() {
+    let root = repository_root();
+    let workflow =
+        std::fs::read_to_string(root.join(".github/workflows/ci.yml")).expect("read CI workflow");
+
+    assert!(workflow.contains("  webui:\n"));
+    assert!(workflow.contains("rustup target add wasm32-unknown-unknown"));
+    assert!(workflow.contains("dx build -r -p liberado-webui --web"));
+    assert!(workflow.contains("test -f \"${bundle}/manifest.json\""));
+    assert!(workflow.contains("test -f \"${bundle}/sw.js\""));
+}
+
+#[test]
+fn workspace_rust_version_matches_the_pinned_ci_toolchain() {
+    let root = repository_root();
+    let workspace: toml::Value = std::fs::read_to_string(root.join("Cargo.toml"))
+        .expect("read workspace manifest")
+        .parse()
+        .expect("parse workspace manifest");
+    let toolchain: toml::Value = std::fs::read_to_string(root.join("rust-toolchain.toml"))
+        .expect("read pinned toolchain")
+        .parse()
+        .expect("parse pinned toolchain");
+    let rust_version = workspace["workspace"]["package"]["rust-version"]
+        .as_str()
+        .expect("workspace rust-version");
+    let channel = toolchain["toolchain"]["channel"]
+        .as_str()
+        .expect("pinned toolchain channel");
+
+    assert_eq!(
+        rust_version, channel,
+        "the application supports one compiler"
     );
 }
 

@@ -57,6 +57,11 @@ dx build -r -p liberado-webui --web                                    # release
 The release bundle lands in `target/dx/liberado-webui/release/web/public`, which the
 daemon serves via `ServeDir` (constant `DIST_DIR` in `crates/server/src/lib.rs`).
 
+CI builds this exact release bundle in its fast WebUI job. It also checks the PWA
+entry files (`index.html`, `manifest.json`, and `sw.js`). The deploy image builds
+automatically on `main`; add the `deploy-image` label to a pull request to request
+an image build for that branch.
+
 ### Install as an app (PWA)
 
 The crate-root `index.html` plus `public/manifest.json`, `public/sw.js`, and the

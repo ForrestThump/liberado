@@ -14,8 +14,8 @@
 # machine, this pin starts doing real work locally too, and can then track a newer release.
 #
 # Bumping: raise `channel`, run the CI commands locally, fix whatever the newer lints find, and
-# commit the bump together with the fixes. `rust-version` in Cargo.toml (1.91) is a separate thing —
-# the minimum a consumer needs, not the one we build with.
+# commit the bump together with the fixes. `rust-version` in Cargo.toml tracks the
+# application-supported compiler, so update both values together.
 [toolchain]
 channel = "1.94.1"
 components = ["rustfmt", "clippy", "llvm-tools-preview"]

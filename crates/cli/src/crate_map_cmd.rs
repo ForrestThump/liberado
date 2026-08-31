@@ -46,46 +46,47 @@ pub struct CrateInfo {
     pub deps: Vec<String>,
 }
 
-fn value(line: &str) -> Option<&str> {
-    line.split_once('=')
-        .map(|(_, value)| value.trim().trim_matches('"'))
-}
-
 fn read_crate(path: &Path) -> std::io::Result<Option<CrateInfo>> {
     let text = fs::read_to_string(path.join("Cargo.toml"))?;
-    let mut info = CrateInfo {
+    let manifest: toml::Value = toml::from_str(&text).map_err(|error| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("parse {}: {error}", path.join("Cargo.toml").display()),
+        )
+    })?;
+    let package = manifest.get("package").and_then(toml::Value::as_table);
+    let metadata = package
+        .and_then(|package| package.get("metadata"))
+        .and_then(toml::Value::as_table)
+        .and_then(|metadata| metadata.get("liberado"))
+        .and_then(toml::Value::as_table);
+    let info = CrateInfo {
         dir: path
             .file_name()
             .unwrap_or_default()
             .to_string_lossy()
             .into_owned(),
-        ..Default::default()
+        name: package
+            .and_then(|package| package.get("name"))
+            .and_then(toml::Value::as_str)
+            .unwrap_or_default()
+            .to_owned(),
+        description: package
+            .and_then(|package| package.get("description"))
+            .and_then(toml::Value::as_str)
+            .unwrap_or_default()
+            .to_owned(),
+        role: metadata
+            .and_then(|metadata| metadata.get("role"))
+            .and_then(toml::Value::as_str)
+            .unwrap_or_default()
+            .to_owned(),
+        deps: manifest
+            .get("dependencies")
+            .and_then(toml::Value::as_table)
+            .map(|dependencies| dependencies.keys().cloned().collect())
+            .unwrap_or_default(),
     };
-    let mut section = String::new();
-    for line in text.lines() {
-        let trimmed = line.trim();
-        if trimmed.starts_with('[') && trimmed.ends_with(']') {
-            section = trimmed[1..trimmed.len() - 1].to_owned();
-            continue;
-        }
-        if section == "package" {
-            if trimmed.starts_with("name") {
-                info.name = value(trimmed).unwrap_or_default().to_owned();
-            } else if trimmed.starts_with("description") {
-                info.description = value(trimmed).unwrap_or_default().to_owned();
-            }
-        } else if section == "package.metadata.liberado" && trimmed.starts_with("role") {
-            info.role = value(trimmed).unwrap_or_default().to_owned();
-        } else if section == "dependencies" && trimmed.contains('=') {
-            let dep = trimmed.split('=').next().unwrap_or_default().trim();
-            if dep
-                .chars()
-                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
-            {
-                info.deps.push(dep.to_owned());
-            }
-        }
-    }
     Ok((!info.name.is_empty()).then_some(info))
 }
 

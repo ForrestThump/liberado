@@ -14,7 +14,7 @@ exclude = [
 
 [workspace.package]
 edition = "2024"
-rust-version = "1.91"
+rust-version = "1.94.1"
 license = "MIT"
 authors = ["Shiloh Mangus"]
 repository = "https://github.com/shilohmangus/liberado"
