@@ -44,6 +44,7 @@ mod coding_run;
 mod done;
 mod interactive;
 mod permission;
+mod prompt_support;
 mod provider;
 mod session_store;
 mod stdin_guard;
@@ -54,6 +55,10 @@ use wire::{
     emit_tool_call_update, emit_user_message_chunk, pop_tool_call_id, push_tool_call_id,
 };
 
+use prompt_support::{
+    coding_verdict, drain_coding_events, emit_finish_report, persist_coding_state,
+    preserved_worktree_report, render_face_prompt_result,
+};
 use provider::{
     CatalogModel, build_provider, description_for, display_name_for, load_model_catalog,
 };
@@ -1215,29 +1220,6 @@ async fn finish_coding_run(
     emit_finish_report(sink, sid, outcome.as_deref(), &preserved)
 }
 
-async fn preserved_worktree_report(workspace: &std::path::Path, label: &str) -> String {
-    match coding_run::preserve_worktree(workspace, label).await {
-        Ok(Some(sha)) => format!(
-            "\n**Committed:** `{sha}` on `{}`\n",
-            state_branch(workspace)
-        ),
-        Ok(None) => String::new(),
-        Err(e) => format!("\n**Could not preserve work:** {e}\n"),
-    }
-}
-
-fn emit_finish_report(
-    sink: &dyn WireSink,
-    sid: &str,
-    outcome: Option<&str>,
-    preserved: &str,
-) -> Result<(), String> {
-    if let Some(report) = outcome {
-        emit_agent_text_chunk(sink, sid, report)?;
-    }
-    emit_agent_text_chunk(sink, sid, preserved)
-}
-
 async fn run_goal_prompt(
     bridge: Arc<Bridge>,
     sink: &dyn WireSink,
@@ -1338,18 +1320,6 @@ async fn run_goal_prompt(
     return finish_coding_tail(bridge, sink, sid, &workspace, joined).await;
 }
 
-fn drain_coding_events(
-    sink: &dyn WireSink,
-    sid: &str,
-    events: &mut mpsc::Receiver<liberado_session::SessionEvent>,
-    pending_tool_ids: &mut Vec<(String, String)>,
-) -> Result<(), String> {
-    while let Ok(event) = events.try_recv() {
-        render_coding_event(sink, sid, &event, pending_tool_ids)?;
-    }
-    Ok(())
-}
-
 /// Persist the finished round's coding state, report the outcome, and write the run artifact.
 ///
 /// Persist only after the pack finished (not mid-cancel). Preserve the workspace on failure
@@ -1379,25 +1349,6 @@ async fn finish_coding_tail(
     Ok(json!({ "stopReason": "end_turn" }))
 }
 
-async fn persist_coding_state(bridge: &Bridge, sid: &str, state: coding_run::CodingSessionState) {
-    if let Some(session) = bridge.acp_sessions.lock().await.get_mut(sid) {
-        session.coding = state;
-    }
-}
-
-fn coding_verdict(
-    sink: &dyn WireSink,
-    sid: &str,
-    outcome: Result<coding_run::CodingRoundOutcome, String>,
-) -> Result<(&'static str, Option<String>), String> {
-    match outcome {
-        Ok(result) => Ok(("done", Some(result.render()))),
-        Err(error) => {
-            emit_agent_text_chunk(sink, sid, &format!("\n**Coding pack error:** {error}\n"))?;
-            Ok(("failed", None))
-        }
-    }
-}
 /// Best-effort branch name for the report line. Cosmetic only — never fails the run.
 fn state_branch(workspace: &std::path::Path) -> String {
     // `std_command`, not `std::process::Command::new` — this is the ACP bridge, whose stdin is
@@ -1585,24 +1536,6 @@ async fn run_face_prompt(
     }
 
     render_face_prompt_result(sink, sid, result)
-}
-
-fn render_face_prompt_result(
-    sink: &dyn WireSink,
-    sid: &str,
-    result: Option<Result<(), String>>,
-) -> Result<Value, String> {
-    match result {
-        None => {
-            let _ = emit_agent_text_chunk(sink, sid, "\n*(cancelled)*\n");
-            Ok(json!({ "stopReason": "cancelled" }))
-        }
-        Some(Ok(())) => Ok(json!({ "stopReason": "end_turn" })),
-        Some(Err(e)) => {
-            emit_agent_text_chunk(sink, sid, &format!("\n**Face mode error:** {e}\n"))?;
-            Ok(json!({ "stopReason": "end_turn" }))
-        }
-    }
 }
 
 /// Open or rebuild the converse handle so it matches the session's current mode.

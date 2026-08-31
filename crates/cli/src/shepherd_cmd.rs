@@ -16,6 +16,9 @@ use std::{
     time::Duration,
 };
 
+mod tick_support;
+use tick_support::handle_settled_tick;
+
 const RERUN: &str = "shepherd:ci-rerun";
 const READY: &str = "shepherd:ready";
 const BLOCKED: &str = "shepherd:blocked";
@@ -1100,18 +1103,6 @@ fn tick(cfg: &Config, pr: &mut Pr, dry: bool) -> Result<(), Box<dyn std::error::
         return Ok(());
     }
     handle_settled_tick(cfg, pr, dry)
-}
-
-fn handle_settled_tick(
-    cfg: &Config,
-    pr: &mut Pr,
-    dry: bool,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let (new, old, run) = ci_delta(cfg, pr)?;
-    if !new.is_empty() {
-        return handle_new_failures(cfg, pr, dry, &new, &old, &run);
-    }
-    handle_clean(cfg, pr, dry, &old)
 }
 
 fn seed(cfg: &Config, path: &Path, dry: bool) -> Result<(), Box<dyn std::error::Error>> {

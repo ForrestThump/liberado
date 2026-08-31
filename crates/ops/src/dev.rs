@@ -7,6 +7,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::DevelopmentConfig;
 
+#[cfg(test)]
+#[path = "dev/regression_tests.rs"]
+mod regression_tests;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DevAction {
     StartDaemon,
@@ -439,25 +443,5 @@ mod tests {
 
         assert!(error.contains("exited before"), "{error}");
         assert!(!path.exists(), "the stale process record must be removed");
-    }
-
-    #[test]
-    fn detached_spawn_writes_a_process_record_and_missing_stop_is_safe() {
-        let repository = tempfile::tempdir().unwrap();
-        spawn_detached(
-            repository.path(),
-            "probe",
-            Path::new("rustc"),
-            &["--version".into()],
-            &[],
-        )
-        .unwrap();
-        let record = process_file(repository.path(), "probe");
-        assert!(record.is_file());
-        let decoded: ProcessRecord =
-            serde_json::from_slice(&std::fs::read(record).unwrap()).unwrap();
-        assert_eq!(decoded.program, "rustc");
-
-        stop_process(repository.path(), "absent").unwrap();
     }
 }
