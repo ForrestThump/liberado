@@ -5,7 +5,7 @@ authority: normative
 domain: ci
 canonical_for: local-readiness
 open_items: false
-last_verified: 2026-08-30
+last_verified: 2026-08-31
 ---
 
 # Local readiness
@@ -53,7 +53,11 @@ result and avoids running the coverage suite twice before the WSL check.
 The host-stable function ratchet is configured in `function-complexity.toml` and committed in
 `function-complexity-baseline.json`. Existing functions may not gain cyclomatic complexity. New
 functions must stay under the configured ceiling. A persistent exception must name one exact file
-and function and include an explicit ceiling, reason, and review date.
+and function and include an explicit ceiling, reason, and review date. The check fails if its
+generated report or committed baseline cannot be read and decoded.
+
+The coverage-sensitive CRAP ceiling is 49.9. New functions must remain below 50, while the
+per-function Linux baseline prevents existing functions from spending the remaining margin.
 
 The unwraps classifier and ratchet are configured in `unwrap-classification.toml` and committed
 in `unwrap-classification-baseline.json`. The AST classifier walks production `.unwrap()` and

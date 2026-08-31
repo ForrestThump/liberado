@@ -16,6 +16,9 @@ that is above a review boundary cannot get worse. A new file must stay below
 the hard new-file ceilings in `module-health.toml`. This is a review signal,
 not proof that a file has a bad design.
 
+The check reuses a current generated JSON report when one is available and runs the analyzer when
+it is not. An unreadable or invalid report is an error; it never becomes an empty healthy report.
+
 Use a `[[waiver]]` only after review shows that a large file is cohesive, such
 as a declarative protocol table. A waiver names one file, one metric, a reason,
 a review date, and a hard ceiling. It does not disable the other metrics.
