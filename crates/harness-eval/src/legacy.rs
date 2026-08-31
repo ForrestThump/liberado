@@ -1533,7 +1533,7 @@ fn record_runner_build(
                 layout.artifacts.join("runner-build.stderr.log"),
                 format!("{error}\n"),
             )?;
-            return Err(format!("Liberado runner build failed: {error}").into());
+            Err(format!("Liberado runner build failed: {error}").into())
         }
     }
 }
