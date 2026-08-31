@@ -188,12 +188,20 @@ pub(crate) fn vacate_cargo_target_image() -> Result<(), Box<dyn std::error::Erro
     if !exe_lives_in_cargo_target(&exe) {
         return Ok(());
     }
+    let dest = vacated_image_destination(&exe)?;
+    move_running_image(&exe, &dest)
+}
+
+fn vacated_image_destination(exe: &Path) -> Result<PathBuf, Box<dyn std::error::Error>> {
     let dest_dir = repository_root()?.join(".liberado");
     std::fs::create_dir_all(&dest_dir)?;
-    let dest = match exe.extension() {
+    Ok(match exe.extension() {
         Some(ext) => dest_dir.join(VACATED_BIN).with_extension(ext),
         None => dest_dir.join(VACATED_BIN),
-    };
+    })
+}
+
+fn move_running_image(exe: &Path, dest: &Path) -> Result<(), Box<dyn std::error::Error>> {
     let _ = std::fs::remove_file(&dest);
     std::fs::rename(&exe, &dest).map_err(|error| {
         io::Error::new(
@@ -280,7 +288,12 @@ fn write_and_stage_ratcheted_baseline(log: &CiLog) -> Result<(), Box<dyn std::er
         return Ok(());
     }
     write_baseline(log)?;
-    match stage_ratcheted_baseline(&log.root)? {
+    announce_staged_baseline(stage_ratcheted_baseline(&log.root)?);
+    Ok(())
+}
+
+fn announce_staged_baseline(outcome: StageOutcome) {
+    match outcome {
         StageOutcome::Unchanged => {
             eprintln!("[liberado ci] {BASELINE_FILE} unchanged");
         }
@@ -293,7 +306,6 @@ fn write_and_stage_ratcheted_baseline(log: &CiLog) -> Result<(), Box<dyn std::er
             eprintln!("[liberado ci] amended {BASELINE_FILE} onto HEAD");
         }
     }
-    Ok(())
 }
 
 fn generate_lcov(log: &CiLog) -> Result<(), Box<dyn std::error::Error>> {

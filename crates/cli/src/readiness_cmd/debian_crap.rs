@@ -21,6 +21,38 @@ pub(super) fn run(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn run_from_windows(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    let context = windows_run_context(root)?;
+    prepare_debian_workspace(
+        &context.distro,
+        &context.account.user,
+        &context.linux_bundle,
+        &context.layout.workspace,
+        &context.head,
+    )?;
+    build_driver(
+        &context.distro,
+        &context.account,
+        &context.layout.workspace,
+        &context.layout.driver_target,
+    )?;
+    run_driver(
+        &context.distro,
+        &context.account,
+        &context.layout.workspace,
+        &context.layout.driver_target,
+        &context.layout.coverage_target,
+    )
+}
+
+struct WindowsRunContext {
+    distro: String,
+    account: WslAccount,
+    head: String,
+    linux_bundle: String,
+    layout: CacheLayout,
+}
+
+fn windows_run_context(root: &Path) -> Result<WindowsRunContext, Box<dyn std::error::Error>> {
     let distro =
         std::env::var("LIBERADO_DEBIAN_WSL_DISTRO").unwrap_or_else(|_| DEFAULT_DISTRO.into());
     let account = wsl_account(&distro)?;
@@ -29,22 +61,13 @@ fn run_from_windows(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
     let linux_bundle = wsl_path(&bundle, &distro)?;
     let cache_key = cache_key(root)?;
     let layout = cache_layout(&account.home, &cache_key);
-
-    prepare_debian_workspace(
-        &distro,
-        &account.user,
-        &linux_bundle,
-        &layout.workspace,
-        &head,
-    )?;
-    build_driver(&distro, &account, &layout.workspace, &layout.driver_target)?;
-    run_driver(
-        &distro,
-        &account,
-        &layout.workspace,
-        &layout.driver_target,
-        &layout.coverage_target,
-    )
+    Ok(WindowsRunContext {
+        distro,
+        account,
+        head,
+        linux_bundle,
+        layout,
+    })
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -99,6 +122,16 @@ fn prepare_debian_workspace(
     workspace: &str,
     head: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    ensure_debian_workspace(distro, user, bundle, workspace)?;
+    refresh_debian_workspace(distro, user, bundle, workspace, head)
+}
+
+fn ensure_debian_workspace(
+    distro: &str,
+    user: &str,
+    bundle: &str,
+    workspace: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
     let parent = workspace
         .rsplit_once('/')
         .map_or(workspace, |(parent, _)| parent);
@@ -110,6 +143,16 @@ fn prepare_debian_workspace(
             &["git", "clone", "--quiet", bundle, workspace],
         )?;
     }
+    Ok(())
+}
+
+fn refresh_debian_workspace(
+    distro: &str,
+    user: &str,
+    bundle: &str,
+    workspace: &str,
+    head: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
     checked_wsl(
         distro,
         user,

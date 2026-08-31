@@ -13,7 +13,7 @@ use chat_client_contract::native::{SseDecoder, SseEvent};
 use chat_client_contract::{SessionEvent, SessionEventKind};
 use futures::StreamExt;
 use std::io::Write as _;
-use tokio::io::{AsyncBufReadExt, BufReader, stdin};
+use tokio::io::{AsyncBufRead, AsyncBufReadExt, BufReader, stdin};
 
 /// Where to find the daemon server when `LIBERADO_SERVER` is unset.
 const DEFAULT_SERVER: &str = "http://127.0.0.1:4201";
@@ -70,10 +70,7 @@ pub async fn run(resume: Option<String>) -> Result<(), Box<dyn std::error::Error
     // stdout is the conversation; stderr carries logs and errors. Read prompts one line at a time.
     let mut lines = BufReader::new(stdin()).lines();
     loop {
-        print!("> ");
-        std::io::stdout().flush()?;
-
-        let Some(line) = lines.next_line().await? else {
+        let Some(line) = read_line(&mut lines).await? else {
             break; // EOF (Ctrl-D)
         };
         match classify_line(&line) {
@@ -85,6 +82,14 @@ pub async fn run(resume: Option<String>) -> Result<(), Box<dyn std::error::Error
         }
     }
     Ok(())
+}
+
+async fn read_line<R: AsyncBufRead + Unpin>(
+    lines: &mut tokio::io::Lines<R>,
+) -> Result<Option<String>, Box<dyn std::error::Error>> {
+    print!("> ");
+    std::io::stdout().flush()?;
+    Ok(lines.next_line().await?)
 }
 
 /// Send one message; a turn-level error (not a connection error, which `turn` reports itself)
@@ -227,7 +232,7 @@ fn truncate(text: &str, max: usize) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{LineAction, classify_line, dispatch, truncate, turn};
+    use super::{LineAction, classify_line, dispatch, read_line, truncate, turn};
     use chat_client_contract::native::SseEvent;
 
     fn ev(event: &str, data: &str) -> SseEvent {
@@ -478,5 +483,17 @@ mod tests {
             classify_line("  hello there \n"),
             LineAction::Send("hello there")
         );
+    }
+
+    #[tokio::test]
+    async fn line_reader_returns_owned_lines_and_eof() {
+        use tokio::io::AsyncBufReadExt as _;
+        let input = &b"hello\n"[..];
+        let mut lines = tokio::io::BufReader::new(input).lines();
+        assert_eq!(
+            read_line(&mut lines).await.unwrap().as_deref(),
+            Some("hello")
+        );
+        assert!(read_line(&mut lines).await.unwrap().is_none());
     }
 }

@@ -185,3 +185,125 @@ fn validate_waivers(config: &Config, current: &Report) -> Result<(), Box<dyn std
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    const CLEAN_CONFIG: &str = r#"
+[thresholds]
+process_fatal_new = 0
+local_failure_new = 0
+"#;
+
+    fn write_clean_workspace(root: &Path) {
+        std::fs::write(root.join(CONFIG_FILE), CLEAN_CONFIG).unwrap();
+        let source = root.join("crates/sample/src");
+        std::fs::create_dir_all(&source).unwrap();
+        std::fs::write(source.join("lib.rs"), "pub fn clean() {}\n").unwrap();
+    }
+
+    #[test]
+    fn check_accepts_a_baseline_free_clean_tree_and_writes_evidence() {
+        let root = tempdir().unwrap();
+        write_clean_workspace(root.path());
+
+        check(root.path()).unwrap();
+
+        let current = root.path().join(CURRENT_FILE);
+        assert!(current.is_file());
+        let report: Report = serde_json::from_slice(&std::fs::read(current).unwrap()).unwrap();
+        assert_eq!(report.summary.files_scanned, 1);
+        assert_eq!(report.summary.total_unwraps, 0);
+    }
+
+    #[test]
+    fn load_config_rejects_missing_stale_incomplete_and_duplicate_waivers() {
+        let root = tempdir().unwrap();
+        assert!(
+            load_config(root.path())
+                .unwrap_err()
+                .to_string()
+                .contains("missing")
+        );
+
+        std::fs::write(
+            root.path().join(CONFIG_FILE),
+            format!(
+                "{CLEAN_CONFIG}\n[[waiver]]\npath = \"missing.rs\"\nmetric = \"total\"\nceiling = 1\nreason = \"\"\nreviewed_on = \"\"\n"
+            ),
+        )
+        .unwrap();
+        assert!(
+            load_config(root.path())
+                .unwrap_err()
+                .to_string()
+                .contains("needs reason")
+        );
+
+        std::fs::write(
+            root.path().join(CONFIG_FILE),
+            format!(
+                "{CLEAN_CONFIG}\n[[waiver]]\npath = \"missing.rs\"\nmetric = \"total\"\nceiling = 1\nreason = \"legacy\"\nreviewed_on = \"2026-08-31\"\n"
+            ),
+        )
+        .unwrap();
+        assert!(
+            load_config(root.path())
+                .unwrap_err()
+                .to_string()
+                .contains("stale")
+        );
+
+        std::fs::write(root.path().join("tracked.rs"), "fn tracked() {}\n").unwrap();
+        let waiver = "\n[[waiver]]\npath = \"tracked.rs\"\nmetric = \"total\"\nceiling = 1\nreason = \"legacy\"\nreviewed_on = \"2026-08-31\"\n";
+        std::fs::write(
+            root.path().join(CONFIG_FILE),
+            format!("{CLEAN_CONFIG}{waiver}{waiver}"),
+        )
+        .unwrap();
+        assert!(
+            load_config(root.path())
+                .unwrap_err()
+                .to_string()
+                .contains("duplicate")
+        );
+    }
+
+    #[test]
+    fn waiver_validation_checks_each_metric_and_its_ceiling() {
+        let mut report = Report::default();
+        report.files.insert(
+            "tracked.rs".into(),
+            FileUnwrapMetrics {
+                proven_invariant: 1,
+                local_failure: 2,
+                process_fatal: 3,
+                total: 6,
+                ..Default::default()
+            },
+        );
+        for (metric, ceiling) in [
+            (Metric::ProvenInvariant, 0),
+            (Metric::LocalFailure, 1),
+            (Metric::ProcessFatal, 2),
+            (Metric::Total, 5),
+        ] {
+            let config = Config {
+                thresholds: Thresholds {
+                    process_fatal_new: 0,
+                    local_failure_new: 0,
+                },
+                waiver: vec![Waiver {
+                    path: "tracked.rs".into(),
+                    metric,
+                    ceiling,
+                    reason: "test".into(),
+                    reviewed_on: "2026-08-31".into(),
+                }],
+            };
+            assert!(validate_waivers(&config, &report).is_err());
+        }
+    }
+}

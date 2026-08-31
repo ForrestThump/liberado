@@ -112,11 +112,24 @@ fn run_smoke_probe(
 ) -> Result<(bool, String, String, String), Box<dyn std::error::Error>> {
     let temp = tempfile::tempdir()?;
     initialize_smoke_repository(temp.path())?;
-    let request_path = temp.path().join("request.json");
+    let request_path = write_smoke_request(temp.path())?;
+    execute_smoke_runner(root, runner, &request_path)
+}
+
+fn write_smoke_request(workspace: &Path) -> Result<PathBuf, Box<dyn std::error::Error>> {
+    let request_path = workspace.join("request.json");
     fs::write(
         &request_path,
-        serde_json::to_vec_pretty(&smoke_request(temp.path()))?,
+        serde_json::to_vec_pretty(&smoke_request(workspace))?,
     )?;
+    Ok(request_path)
+}
+
+fn execute_smoke_runner(
+    root: &Path,
+    runner: &Path,
+    request_path: &Path,
+) -> Result<(bool, String, String, String), Box<dyn std::error::Error>> {
     let provider = smoke_provider();
     let output = std_command(runner)
         .args([
@@ -147,12 +160,21 @@ fn cmd_smoke(args: &mut dyn Iterator<Item = String>) -> Result<(), Box<dyn std::
 
     println!("== process boundary smoke (expects provider key or clean failure) ==");
     let (success, stdout, stderr, status) = run_smoke_probe(&root, &runner)?;
+    classify_smoke_result(success, &stdout, &stderr, &status)
+}
+
+fn classify_smoke_result(
+    success: bool,
+    stdout: &str,
+    stderr: &str,
+    status: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
     if success {
         println!("OK: live provider completed a coding run");
         return Ok(());
     }
 
-    if smoke_boundary_reached(stdout.as_str(), stderr.as_str()) {
+    if smoke_boundary_reached(stdout, stderr) {
         println!("OK: runner reached the provider boundary without credentials");
         println!("  exit status: {status}");
         return Ok(());
@@ -534,9 +556,9 @@ fn cmd_import(args: &mut dyn Iterator<Item = String>) -> Result<(), Box<dyn std:
 #[cfg(test)]
 mod tests {
     use super::{
-        cmd_compare, cmd_compare_reset, cmd_diff, cmd_import, cmd_trace, default_trace_dirs,
-        reject_sibling_links, run_git_capture, smoke_arg_check, smoke_boundary_reached,
-        smoke_request,
+        classify_smoke_result, cmd_compare, cmd_compare_reset, cmd_diff, cmd_import, cmd_trace,
+        default_trace_dirs, initialize_smoke_repository, reject_sibling_links, run_git_capture,
+        smoke_arg_check, smoke_boundary_reached, smoke_request,
     };
     use std::fs;
     use std::path::{Path, PathBuf};
@@ -586,6 +608,30 @@ mod tests {
         assert!(!smoke_boundary_reached("", "segmentation fault"));
         assert!(!smoke_boundary_reached("", ""));
         assert!(!smoke_boundary_reached("build failed", ""));
+    }
+
+    #[test]
+    fn smoke_result_accepts_success_or_provider_boundary_and_rejects_early_failure() {
+        classify_smoke_result(true, "", "", "exit 0").unwrap();
+        classify_smoke_result(false, "", "API key required", "exit 1").unwrap();
+        let error = classify_smoke_result(false, "build failed", "boom", "exit 2")
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("build failed"));
+        assert!(error.contains("exit 2"));
+    }
+
+    #[test]
+    fn smoke_repository_is_a_real_committed_git_workspace() {
+        let root = tempfile::tempdir().unwrap();
+        initialize_smoke_repository(root.path()).unwrap();
+        assert!(root.path().join("README.md").is_file());
+        let head = std::process::Command::new("git")
+            .args(["-C", root.path().to_str().unwrap(), "rev-parse", "HEAD"])
+            .output()
+            .unwrap();
+        assert!(head.status.success());
+        assert!(!head.stdout.is_empty());
     }
 
     #[test]
