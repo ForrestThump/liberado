@@ -17,7 +17,7 @@ description = "A demo | crate"
 [package.metadata.liberado]
 role = "tooling"
 [dependencies]
-liberado-common = { workspace = true }
+liberado-common.workspace = true
 sysmap-core = { workspace = true }
 serde = { workspace = true }
 "#,

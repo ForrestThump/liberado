@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
+    types: [opened, synchronize, reopened, labeled]
   workflow_dispatch:
 
 concurrency:
@@ -118,6 +119,53 @@ jobs:
 
       - name: Standalone branch cleaner tests
         run: python -m unittest scripts/test_cleanup_merged_branches.py
+
+  # The native workspace excludes this WASM-only surface. Build the same release
+  # bundle the deploy image serves, so UI errors return in minutes rather than
+  # after a complete Docker image build.
+  webui:
+    name: WebUI WASM release build
+    needs: [dependency-security, early-lint]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout liberado without credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Rust toolchain (from rust-toolchain.toml)
+        run: rustup show
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+
+      - name: Add the WebAssembly target
+        run: rustup target add wasm32-unknown-unknown
+
+      - name: Install the pinned Dioxus CLI
+        env:
+          DX_VERSION: 0.7.10
+          DX_SHA256: 4363e4ed2a3f1eb7f4d38d2d59aed59ce43271c44c16b425e92c89a64761fbe7
+        run: |
+          set -euo pipefail
+          curl -fsSL -o "${RUNNER_TEMP}/dx.tar.gz" "https://github.com/DioxusLabs/dioxus/releases/download/v${DX_VERSION}/dx-x86_64-unknown-linux-gnu.tar.gz"
+          echo "${DX_SHA256}  ${RUNNER_TEMP}/dx.tar.gz" | sha256sum -c -
+          mkdir -p "${RUNNER_TEMP}/dioxus-cli/bin"
+          tar -xzf "${RUNNER_TEMP}/dx.tar.gz" -C "${RUNNER_TEMP}/dioxus-cli/bin"
+          chmod +x "${RUNNER_TEMP}/dioxus-cli/bin/dx"
+          echo "${RUNNER_TEMP}/dioxus-cli/bin" >> "${GITHUB_PATH}"
+
+      - name: Build the release bundle
+        run: dx build -r -p liberado-webui --web
+
+      - name: Verify the PWA release shell
+        run: |
+          set -euo pipefail
+          bundle=target/dx/liberado-webui/release/web/public
+          test -f "${bundle}/index.html"
+          test -f "${bundle}/manifest.json"
+          test -f "${bundle}/sw.js"
+          python3 -c 'import json, sys; json.load(open(sys.argv[1], encoding="utf-8"))' "${bundle}/manifest.json"
 
   module-health:
     name: Module health regression (ubuntu-latest)
@@ -261,7 +309,9 @@ jobs:
   # because the Dockerfile compiles the workspace (including build scripts).
   deploy-image:
     name: deploy image (GHCR)
-    needs: dependency-security
+    # Automatic on main; PR images need an explicit maintainer label.
+    if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'deploy-image')
+    needs: [dependency-security, early-lint, test, webui, module-health, crap, doc-links, rustdoc]
     runs-on: ubuntu-latest
     timeout-minutes: 180
     permissions:

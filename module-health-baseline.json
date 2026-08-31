@@ -342,10 +342,10 @@
     "cyclomatic": 4
   },
   "crates/cli/src/crate_map_cmd.rs": {
-    "ploc": 201,
-    "lloc": 71,
-    "functions": 19,
-    "cyclomatic": 72
+    "ploc": 203,
+    "lloc": 56,
+    "functions": 23,
+    "cyclomatic": 64
   },
   "crates/cli/src/crate_map_cmd_role_tests.rs": {
     "ploc": 22,
