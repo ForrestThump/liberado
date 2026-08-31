@@ -16,7 +16,7 @@
 //!   liberado ci                      full local CI; ratchet and stage/amend crap-baseline.json
 //!   liberado ci check                ship preflight (fmt, clippy, tests, deny)
 //!   liberado ci crap                 compare CRAP scores to crap-baseline.json (no write)
-//!   liberado ci ready                fast Windows/Debian checks + readiness receipt
+//!   liberado ci ready                final checks + exact Linux CRAP + readiness receipt
 //!   liberado ci verify-ready         reject a stale readiness receipt
 //!   liberado ci crap-linux           native Debian CRAP; Debian WSL on Windows
 //!   liberado ci ratchet              check, write baseline, then stage or amend it

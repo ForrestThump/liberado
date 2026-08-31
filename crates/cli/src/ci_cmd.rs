@@ -60,6 +60,24 @@ const CRAP_CEILING: &str = "150";
 /// a filtered write would make a 4→50 jump look like a new function under 150.
 const CRAP_REGRESSION_MIN: &str = "10";
 
+/// Report generation must not enforce `.cargo-crap.toml`'s `fail-above` policy. The explicit
+/// compare that follows owns pass/fail and prints the offending functions. An effectively
+/// unreachable threshold overrides the configured 150 ceiling for this report-only command.
+const CRAP_REPORT_THRESHOLD: &str = "1e308";
+const CRAP_REPORT_ARGS: &[&str] = &[
+    "crap",
+    "--workspace",
+    "--lcov",
+    LCOV_FILE,
+    "--format",
+    "json",
+    "--threshold",
+    CRAP_REPORT_THRESHOLD,
+    "--sort",
+    "file",
+    "--output",
+];
+
 /// llvm-cov flags live here, never after `--`. After `--` they become
 /// test-binary arguments, and libtest rejects them (`Unrecognized option`).
 /// `--ignore-run-fail` still writes the LCOV when a test is red (the test
@@ -113,6 +131,7 @@ const CRAP_CEILING_GH: &str = "\
 A function is above the 150 CRAP ceiling. Split it or add tests. \
 New functions must land at or below 150.";
 
+mod coverage_tools;
 /// Dispatch `liberado ci …`. No subcommand means the local full run (gates + ratchet).
 mod dispatch;
 
@@ -355,22 +374,9 @@ fn write_baseline(log: &CiLog) -> Result<(), Box<dyn std::error::Error>> {
 
 fn write_crap_json(log: &CiLog, output: &str) -> Result<(), Box<dyn std::error::Error>> {
     require_crap(&log.root)?;
-    run_cmd(
-        log,
-        "cargo",
-        &[
-            "crap",
-            "--workspace",
-            "--lcov",
-            LCOV_FILE,
-            "--format",
-            "json",
-            "--sort",
-            "file",
-            "--output",
-            output,
-        ],
-    )?;
+    let mut args = CRAP_REPORT_ARGS.to_vec();
+    args.push(output);
+    run_cmd(log, "cargo", &args)?;
     relativize_json_file(&log.root, output)
 }
 
@@ -600,7 +606,7 @@ pub(crate) fn run_cmd(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let program = program.as_ref();
     let gate = begin_cmd(log, program, args)?;
-    finish_cmd(log, gate, spawn_to_log(log, program, args))
+    finish_cmd(log, gate, coverage_tools::spawn_to_log(log, program, args))
 }
 
 struct GateStart {
@@ -624,23 +630,6 @@ fn begin_cmd(
         program: shown,
         start: std::fs::metadata(&log.path)?.len(),
     })
-}
-
-fn spawn_to_log(
-    log: &CiLog,
-    program: &OsStr,
-    args: &[&str],
-) -> io::Result<std::process::ExitStatus> {
-    let stdout = std::fs::OpenOptions::new().append(true).open(&log.path)?;
-    let stderr = std::fs::OpenOptions::new().append(true).open(&log.path)?;
-    std_command(program)
-        .args(args)
-        .current_dir(&log.root)
-        .stdin(Stdio::null())
-        .stdout(stdout)
-        .stderr(stderr)
-        .env("CARGO_TERM_COLOR", "never")
-        .status()
 }
 
 fn finish_cmd(

@@ -4,9 +4,9 @@ Liberado is a personal AI operating layer: a daemon that runs agent sessions aga
 vault, with chat surfaces (TUI, WebUI, Telegram) and domain **packs** (coding first).
 
 This file is the orientation an agent needs before touching anything. It is deliberately short —
-everything else is a pointer, because 150+ docs read in full is worse than none. Run `just ci`
-before you push: that is the same set GitHub runs, plus the CRAP ratchet. A green local run is how
-you keep GitHub from sending the work back.
+everything else is a pointer, because 150+ docs read in full is worse than none. Run `just push`
+to validate and push: it runs full local CI, exact Linux CRAP, and final receipt checks. A green
+local run is how you keep GitHub from sending the work back.
 
 ## Build and test
 
@@ -20,8 +20,9 @@ not required; leftover directories stay gitignored if present.
 ```bash
 just ci                                        # full local CI + CRAP ratchet; run before you push
 just preflight                                 # fmt / clippy / test / deny, no llvm-cov
-just ready                                     # fast Windows/Debian gate + HEAD/tree receipt
+just ready                                     # final gate + exact Linux CRAP + HEAD/tree receipt
 just crap-linux                                # exact Debian CRAP; uses Debian WSL on Windows
+just push                                      # canonical full validation and push path
 # a green `just ci` is a few lines. Failures are extracted. Full log: .liberado/ci.log
 cargo test --workspace --no-fail-fast          # --no-fail-fast matters; see below
 cargo clippy --workspace --exclude liberado-webui --all-targets -- -D warnings
@@ -85,19 +86,20 @@ best score for each function, scored on Ubuntu (the GitHub job's host). GitHub o
 (`liberado ci crap` / job `CRAP regression`); it never writes the file. A function at 50 that goes
 to 60 fails, even under the 150 ceiling. A current score below 10 is ignored, so a 4→5 move does
 not fail the job. New functions must land at or below 150. Linux `just ci`
-runs that same per-function compare and may rewrite the file. Windows `just ci` checks the 150
-ceiling only — coverage numbers are host-sensitive and a Windows compare false-fails. Do not raise
-the file by hand. Split the function or add tests. cargo-crap matches **file + function name**,
+runs that same per-function compare and may rewrite the file. On other hosts, `just ci` defers
+coverage to the exact Linux check that `just ready` runs natively or through Debian WSL. Host
+coverage numbers are not a reliable proxy. Do not raise the file by hand. Split the function or
+add tests. cargo-crap matches **file + function name**,
 not line number: adding a line above a function does not reset its score. Adding branches
 inside it does, and GitHub will fail. A green `just ci` is a few lines; the full child log
 is always `.liberado/ci.log`.
 
 **A rebase invalidates every earlier check.** A merge, rebase, conflict resolution, amend, or base
-update changes the artifact under review. Run `just ready` after the final commit. If Rust control
-flow changed, also run `just crap-linux`; it runs natively on Debian and through Debian under WSL
-on Windows. `just ready` writes a gitignored receipt bound to HEAD and the complete tracked and
-untracked tree. Install the committed pre-push verifier once with `just setup-hooks`; `just push`
-also refuses a missing or stale receipt. Do not treat validation from before a rebase as evidence.
+update changes the artifact under review. Use `just push` after the final commit. It runs full local
+CI, then `just ready`; readiness includes exact Linux CRAP, natively on Debian and through Debian
+under WSL on Windows. The commands write gitignored receipts bound to HEAD and the complete tracked
+and untracked tree. `just ready` installs the committed pre-push verifier automatically, and
+`just push` refuses missing or stale evidence. Do not treat validation from before a rebase as evidence.
 
 **Gates compare against the base commit, not against green.** Preflight
 (`crates/coder-sandbox/src/preflight.rs`) fails only on failures *absent from the base*, so a red

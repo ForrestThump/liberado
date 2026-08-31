@@ -5,18 +5,24 @@ authority: normative
 domain: ci
 canonical_for: local-readiness
 open_items: false
-last_verified: 2026-08-21
+last_verified: 2026-08-30
 ---
 
 # Local readiness
 
-`just ready` is the fast pre-push gate on Windows and Debian. It checks formatting, locked
-metadata, workspace Clippy, architecture and workflow rules, module health, host-stable
-per-function complexity, and documentation contracts. Success writes `.liberado/ready.json`.
+`just push` is the canonical ship command on Windows and Debian. It runs full local CI, then
+`just ready`, verifies the final receipt, and pushes. `just ready` requires a full-CI receipt for
+the same commit and tree. It checks formatting, locked metadata, workspace Clippy, changed-package
+tests, architecture and workflow rules, module health, host-stable per-function complexity,
+documentation contracts, and the exact Linux CRAP gate. Success writes `.liberado/ready.json`.
 
-The receipt binds the current commit, tracked changes, and untracked files. A commit, amend,
-merge, rebase, conflict resolution, or content change makes it stale. `just verify-ready`, the
-committed pre-push hook, and `just push` reject a stale receipt. Enable the hook with:
+Full CI writes `.liberado/ci-ready.json`. The exact Linux CRAP check writes
+`.liberado/crap-linux-ready.json`. The final receipt accepts both results only when all three
+receipts bind the current commit, tracked changes, and untracked files. A commit, amend, merge,
+rebase, conflict resolution, or content change makes them stale.
+
+`just ready` installs the committed pre-push hook automatically. `just verify-ready`, the hook,
+and `just push` reject a stale or old-contract receipt. Manual installation remains available:
 
 ```console check=false
 just setup-hooks
@@ -27,8 +33,9 @@ They compare `HEAD` with its merge base on `origin/main`; an isolated repository
 `HEAD^`. A contract-bearing source change must update the document named by `docs-audit.toml` or
 carry a narrow, reviewed waiver.
 
-Coverage-sensitive CRAP remains a Debian authority. Run `just crap-linux` after Rust control-flow
-changes. It runs natively on Debian/Linux. On Windows it maps the checkout into the Debian WSL
+Coverage-sensitive CRAP remains a Debian authority and is part of every final readiness run.
+`just crap-linux` remains available for a focused check. It runs natively on Debian/Linux. On
+Windows it maps the checkout into the Debian WSL
 distribution, bundles the clean committed `HEAD` into a managed Linux-native workspace, and runs
 the same Rust CLI command there. The native workspace prevents Windows worktree metadata and
 coverage objects from contaminating Linux tests or reports. Driver and coverage artifacts use
@@ -38,6 +45,10 @@ Debian-compatible distribution uses another name. The runner selects the first n
 permission-sensitive tests retain their meaning; set `LIBERADO_DEBIAN_WSL_USER` to choose another
 login. Windows checkout paths are changed to forward-slash form before `wslpath` maps the bundle,
 so a worktree such as `C:\tmp\review` keeps each path component intact.
+
+On Linux, `just ci` also runs and ratchets CRAP directly. On other hosts it defers CRAP to final
+readiness. This avoids treating host-sensitive coverage as a proxy for the authoritative Linux
+result and avoids running the coverage suite twice before the WSL check.
 
 The host-stable function ratchet is configured in `function-complexity.toml` and committed in
 `function-complexity-baseline.json`. Existing functions may not gain cyclomatic complexity. New
