@@ -134,33 +134,29 @@ impl MemoryServer {
     }
 }
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // MUST write to stderr, never stdout — stdout carries the MCP JSON-RPC protocol stream.
+fn init_tracing() {
+    // stderr only: stdout carries the MCP JSON-RPC protocol stream.
     tracing_subscriber::fmt()
         .with_writer(std::io::stderr)
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .init();
+}
 
-    // `load_config(None)` is all-defaults (no file read) — resolve the real config dir, or the
-    // vault_path check below fires even with a valid topology.toml (this binary once shipped
-    // that bug: config was never loaded, so it could never start).
+async fn open_memory_vault() -> Result<Vault, Box<dyn std::error::Error>> {
     let config_dir = liberado_config::config_dir();
     let (config, _provenance) = liberado_config::load_config(config_dir.as_deref())?;
     if config.topology.vault_path.as_os_str().is_empty() {
         return Err("topology.vault_path is required (set it in topology.toml)".into());
     }
+    Ok(Vault::open("memory", config.topology.vault_path).await?)
+}
 
-    let vault = Vault::open("memory", config.topology.vault_path.clone()).await?;
+type MemoryModels = (Arc<dyn EmbeddingEngine>, Option<Arc<dyn Reranker>>);
 
-    // Deliberately its own small model, not the vault-wide default — memory notes are short
-    // (facts/preferences/guidance directives), so a smaller embedding model is enough and keeps
-    // this MCP's process footprint down.
+fn memory_models() -> Result<MemoryModels, Box<dyn std::error::Error>> {
     let model =
         std::env::var("LIBERADO_MEMORY_MODEL").unwrap_or_else(|_| "bge-small-en-v1.5".to_string());
     let embedder: Arc<dyn EmbeddingEngine> = Arc::new(FastembedEngine::new(&model, None)?);
-
-    // Off by default — reranking loads a second ONNX model at startup, opt in explicitly.
     let reranker: Option<Arc<dyn Reranker>> =
         if reranker_requested(std::env::var("LIBERADO_MEMORY_RERANK")) {
             let rerank_model = std::env::var("LIBERADO_MEMORY_RERANK_MODEL")
@@ -169,7 +165,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         } else {
             None
         };
+    Ok((embedder, reranker))
+}
 
+async fn open_memory_server(
+    vault: Vault,
+    embedder: Arc<dyn EmbeddingEngine>,
+    reranker: Option<Arc<dyn Reranker>>,
+) -> Result<MemoryServer, Box<dyn std::error::Error>> {
     let general = MemoryStore::open(
         vault.clone(),
         "memory/general",
@@ -186,15 +189,31 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         MemoryStoreConfig::default(),
     )
     .await?;
-
-    // Cheap at expected memory-note volumes; see MemoryStore::rebuild_all's doc comment.
     general.rebuild_all().await?;
     procedural.rebuild_all().await?;
+    Ok(MemoryServer::new(Arc::new(general), Arc::new(procedural)))
+}
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // MUST write to stderr, never stdout — stdout carries the MCP JSON-RPC protocol stream.
+    init_tracing();
+
+    // `load_config(None)` is all-defaults (no file read) — resolve the real config dir, or the
+    // vault_path check below fires even with a valid topology.toml (this binary once shipped
+    // that bug: config was never loaded, so it could never start).
+    let vault = open_memory_vault().await?;
+
+    // Deliberately its own small model, not the vault-wide default — memory notes are short
+    // (facts/preferences/guidance directives), so a smaller embedding model is enough and keeps
+    // this MCP's process footprint down.
+    let (embedder, reranker) = memory_models()?;
+
+    // Off by default — reranking loads a second ONNX model at startup, opt in explicitly.
+    let server = open_memory_server(vault, embedder, reranker).await?;
 
     tracing::info!("liberado-memory-mcp starting");
-    MemoryServer::new(Arc::new(general), Arc::new(procedural))
-        .run_stdio()
-        .await?;
+    server.run_stdio().await?;
     Ok(())
 }
 

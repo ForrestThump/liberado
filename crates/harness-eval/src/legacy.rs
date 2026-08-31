@@ -1496,15 +1496,20 @@ fn ensure_liberado_runner(
 ) -> Result<PathBuf, Box<dyn Error>> {
     let binary = liberado_runner_path(layout, args.liberado_bin.as_deref());
     if args.liberado_bin.is_some() {
-        if binary.is_file() {
-            return Ok(binary);
-        }
-        return Err(format!("Liberado runner does not exist: {}", binary.display()).into());
+        return require_runner(binary, "Liberado runner does not exist");
     }
     if binary.is_file() {
         return Ok(binary);
     }
 
+    build_liberado_runner(manifest, layout)?;
+    require_runner(binary, "Liberado runner build succeeded but did not create")
+}
+
+fn build_liberado_runner(
+    manifest: &CompareManifest,
+    layout: &HarnessLayout,
+) -> Result<(), Box<dyn Error>> {
     let mut cmd = command("cargo");
     cmd.args(["build", "--locked", "-p", "liberado-coder-runner"])
         .current_dir(&layout.worktree)
@@ -1514,20 +1519,15 @@ fn ensure_liberado_runner(
         "cargo build --locked -p liberado-coder-runner",
         Duration::from_secs(manifest.compile_timeout_secs),
     );
+    record_runner_build(layout, output)
+}
+
+fn record_runner_build(
+    layout: &HarnessLayout,
+    output: Result<std::process::Output, Box<dyn Error>>,
+) -> Result<(), Box<dyn Error>> {
     match output {
-        Ok(output) => {
-            fs::write(
-                layout.artifacts.join("runner-build.stdout.log"),
-                &output.stdout,
-            )?;
-            fs::write(
-                layout.artifacts.join("runner-build.stderr.log"),
-                &output.stderr,
-            )?;
-            if !output.status.success() {
-                return Err(format!("Liberado runner build failed with {}", output.status).into());
-            }
-        }
+        Ok(output) => record_runner_build_output(layout, output),
         Err(error) => {
             fs::write(
                 layout.artifacts.join("runner-build.stderr.log"),
@@ -1536,14 +1536,31 @@ fn ensure_liberado_runner(
             return Err(format!("Liberado runner build failed: {error}").into());
         }
     }
+}
+
+fn record_runner_build_output(
+    layout: &HarnessLayout,
+    output: std::process::Output,
+) -> Result<(), Box<dyn Error>> {
+    fs::write(
+        layout.artifacts.join("runner-build.stdout.log"),
+        &output.stdout,
+    )?;
+    fs::write(
+        layout.artifacts.join("runner-build.stderr.log"),
+        &output.stderr,
+    )?;
+    if !output.status.success() {
+        return Err(format!("Liberado runner build failed with {}", output.status).into());
+    }
+    Ok(())
+}
+
+fn require_runner(binary: PathBuf, message: &str) -> Result<PathBuf, Box<dyn Error>> {
     if binary.is_file() {
         Ok(binary)
     } else {
-        Err(format!(
-            "Liberado runner build succeeded but did not create: {}",
-            binary.display()
-        )
-        .into())
+        Err(format!("{message}: {}", binary.display()).into())
     }
 }
 

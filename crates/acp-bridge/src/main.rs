@@ -1211,21 +1211,31 @@ async fn finish_coding_run(
     label: &str,
     outcome: Option<String>,
 ) -> Result<(), String> {
-    let preserved = match coding_run::preserve_worktree(workspace, label).await {
+    let preserved = preserved_worktree_report(workspace, label).await;
+    emit_finish_report(sink, sid, outcome.as_deref(), &preserved)
+}
+
+async fn preserved_worktree_report(workspace: &std::path::Path, label: &str) -> String {
+    match coding_run::preserve_worktree(workspace, label).await {
         Ok(Some(sha)) => format!(
             "\n**Committed:** `{sha}` on `{}`\n",
             state_branch(workspace)
         ),
         Ok(None) => String::new(),
         Err(e) => format!("\n**Could not preserve work:** {e}\n"),
-    };
+    }
+}
+
+fn emit_finish_report(
+    sink: &dyn WireSink,
+    sid: &str,
+    outcome: Option<&str>,
+    preserved: &str,
+) -> Result<(), String> {
     if let Some(report) = outcome {
         emit_agent_text_chunk(sink, sid, &report)?;
-        emit_agent_text_chunk(sink, sid, &preserved)?;
-    } else {
-        emit_agent_text_chunk(sink, sid, &preserved)?;
     }
-    Ok(())
+    emit_agent_text_chunk(sink, sid, preserved)
 }
 
 async fn run_goal_prompt(
@@ -1323,11 +1333,21 @@ async fn run_goal_prompt(
 
     // Events buffered between the task finishing and the join landing would otherwise be lost —
     // typically the last tool result, which is the one a reader most wants.
-    while let Ok(event) = ev_rx.try_recv() {
-        render_coding_event(sink, sid, &event, &mut pending_tool_ids)?;
-    }
+    drain_coding_events(sink, sid, &mut ev_rx, &mut pending_tool_ids)?;
 
     return finish_coding_tail(bridge, sink, sid, &workspace, joined).await;
+}
+
+fn drain_coding_events(
+    sink: &dyn WireSink,
+    sid: &str,
+    events: &mut mpsc::Receiver<liberado_session::SessionEvent>,
+    pending_tool_ids: &mut Vec<(String, String)>,
+) -> Result<(), String> {
+    while let Ok(event) = events.try_recv() {
+        render_coding_event(sink, sid, &event, pending_tool_ids)?;
+    }
+    Ok(())
 }
 
 /// Persist the finished round's coding state, report the outcome, and write the run artifact.
@@ -1350,22 +1370,33 @@ async fn finish_coding_tail(
     let (state, outcome) = joined.map_err(|e| format!("coding task panicked: {e}"))?;
 
     // Persist coding state only when the pack finished (not mid-cancel).
-    if let Some(sess) = bridge.acp_sessions.lock().await.get_mut(sid) {
-        sess.coding = state;
-    }
+    persist_coding_state(&bridge, sid, state).await;
 
     // Preserve before reporting, and on the failure path too: a failed run's diff is the
     // evidence for why it failed, and it is just as lost if nobody commits it.
-    let label = if outcome.is_ok() { "done" } else { "failed" };
-    let verdict = match outcome {
-        Ok(result) => Some(result.render()),
-        Err(e) => {
-            emit_agent_text_chunk(sink, sid, &format!("\n**Coding pack error:** {e}\n"))?;
-            None
-        }
-    };
+    let (label, verdict) = coding_verdict(sink, sid, outcome)?;
     finish_coding_run(sink, sid, workspace, label, verdict).await?;
     Ok(json!({ "stopReason": "end_turn" }))
+}
+
+async fn persist_coding_state(bridge: &Bridge, sid: &str, state: coding_run::CodingSessionState) {
+    if let Some(session) = bridge.acp_sessions.lock().await.get_mut(sid) {
+        session.coding = state;
+    }
+}
+
+fn coding_verdict(
+    sink: &dyn WireSink,
+    sid: &str,
+    outcome: Result<coding_run::CodingRoundOutcome, String>,
+) -> Result<(&'static str, Option<String>), String> {
+    match outcome {
+        Ok(result) => Ok(("done", Some(result.render()))),
+        Err(error) => {
+            emit_agent_text_chunk(sink, sid, &format!("\n**Coding pack error:** {error}\n"))?;
+            Ok(("failed", None))
+        }
+    }
 }
 /// Best-effort branch name for the report line. Cosmetic only — never fails the run.
 fn state_branch(workspace: &std::path::Path) -> String {
@@ -1553,6 +1584,14 @@ async fn run_face_prompt(
         sess.face_daemon_session = daemon_session;
     }
 
+    render_face_prompt_result(sink, sid, result)
+}
+
+fn render_face_prompt_result(
+    sink: &dyn WireSink,
+    sid: &str,
+    result: Option<Result<(), String>>,
+) -> Result<Value, String> {
     match result {
         None => {
             let _ = emit_agent_text_chunk(sink, sid, "\n*(cancelled)*\n");
