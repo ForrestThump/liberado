@@ -56,18 +56,18 @@ pub fn is_production_source(rel_path: &str) -> bool {
     if !p.starts_with("crates/") || !p.contains("/src/") || !p.ends_with(".rs") {
         return false;
     }
-    if p.contains("/tests/")
-        || p.ends_with("/tests.rs")
-        || p.ends_with("_tests.rs")
-        || p.contains("/test_support/")
-        || p.contains("/examples/")
-        || p.contains("test_fixtures")
-        || p.contains("test_helpers")
-        || p.contains("test_util")
-    {
-        return false;
-    }
-    true
+    !is_test_support_path(&p)
+}
+
+fn is_test_support_path(path: &str) -> bool {
+    path.contains("/tests/")
+        || path.ends_with("/tests.rs")
+        || path.ends_with("_tests.rs")
+        || path.contains("/test_support/")
+        || path.contains("/examples/")
+        || path.contains("test_fixtures")
+        || path.contains("test_helpers")
+        || path.contains("test_util")
 }
 
 pub fn analyze_tree(root: &Path) -> Result<Report, Box<dyn std::error::Error>> {
@@ -369,6 +369,23 @@ fn classify_unwrap(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn production_source_filter_excludes_test_support_paths() {
+        assert!(is_production_source("crates/sample/src/lib.rs"));
+        assert!(is_production_source("crates/sample/src/runtime/worker.rs"));
+        assert!(!is_production_source("README.md"));
+        assert!(!is_production_source("crates/sample/tests/e2e.rs"));
+        assert!(!is_production_source("crates/sample/src/tests.rs"));
+        assert!(!is_production_source("crates/sample/src/runtime_tests.rs"));
+        assert!(!is_production_source(
+            "crates/sample/src/test_support/repo.rs"
+        ));
+        assert!(!is_production_source("crates/sample/src/examples/demo.rs"));
+        assert!(!is_production_source("crates/sample/src/test_fixtures.rs"));
+        assert!(!is_production_source("crates/sample/src/test_helpers.rs"));
+        assert!(!is_production_source("crates/sample/src/test_util.rs"));
+    }
 
     #[test]
     fn test_classify_simple_unwraps() {
