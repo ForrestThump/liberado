@@ -1233,7 +1233,7 @@ fn emit_finish_report(
     preserved: &str,
 ) -> Result<(), String> {
     if let Some(report) = outcome {
-        emit_agent_text_chunk(sink, sid, &report)?;
+        emit_agent_text_chunk(sink, sid, report)?;
     }
     emit_agent_text_chunk(sink, sid, preserved)
 }

@@ -202,8 +202,8 @@ fn vacated_image_destination(exe: &Path) -> Result<PathBuf, Box<dyn std::error::
 }
 
 fn move_running_image(exe: &Path, dest: &Path) -> Result<(), Box<dyn std::error::Error>> {
-    let _ = std::fs::remove_file(&dest);
-    std::fs::rename(&exe, &dest).map_err(|error| {
+    let _ = std::fs::remove_file(dest);
+    std::fs::rename(exe, dest).map_err(|error| {
         io::Error::new(
             error.kind(),
             format!(
