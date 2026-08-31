@@ -8,10 +8,13 @@
 //! constructed desired list. **Not** agent self-registration of MCPs.
 
 use std::collections::{HashMap, HashSet};
+use std::path::Path;
 use std::sync::Arc;
 
 use liberado_common::{CapabilityCatalog, McpDescriptor};
-use liberado_config::{Config, McpConfig, McpTransport, managed_binary_path, mcp_install_dir};
+use liberado_config::{
+    Config, McpConfig, McpTransport, config_dir, managed_binary_path, mcp_install_dir,
+};
 use liberado_mcp::{HttpConnector, McpConnector, McpRegistry, StdioConnector};
 
 use crate::docker_argv;
@@ -81,8 +84,21 @@ impl LiveMcpController {
     /// Reload topology MCP peers from the process config dir (`load_config`), validate whole
     /// config, then apply only the MCP peer set. Other config sections are re-read for validation
     /// but not hot-applied (out of scope).
+    ///
+    /// The config dir is resolved here (not at the call site) because `load_config(None)` means
+    /// "all defaults", not "resolve the config dir": passing `None` loads an empty topology with
+    /// no `vault_path`, which fails validation with `topology.vault_path is required` and turns
+    /// every reload into a 400 that silently keeps the stale peer set.
     pub fn reload_from_config_dir(&self) -> Result<McpApplyReport, McpApplyError> {
-        let (config, _prov) = liberado_config::load_config(None).map_err(|e| McpApplyError {
+        self.reload_from_dir(config_dir().as_deref())
+    }
+
+    /// Core of [`Self::reload_from_config_dir`], taking the resolved config dir explicitly so the
+    /// load/validate/apply path is testable without process-global env state. `None` is the same
+    /// "all defaults" contract `load_config` documents — and therefore the same validation failure
+    /// (no `vault_path`), which is exactly the bug this seam exists to make visible.
+    fn reload_from_dir(&self, dir: Option<&Path>) -> Result<McpApplyReport, McpApplyError> {
+        let (config, _prov) = liberado_config::load_config(dir).map_err(|e| McpApplyError {
             message: format!("reload: failed to load config: {e}"),
         })?;
         config.validate().map_err(|e| McpApplyError {
@@ -509,6 +525,140 @@ mod tests {
         );
         // Peer is on the wired factory surface after empty→apply.
         assert!(registry.names().contains(&"vault".to_string()));
+    }
+
+    /// Regression for the reload-ignores-the-config-dir bug: `reload_from_config_dir` used to pass
+    /// `None` to `load_config` ("all defaults"), so the real topology on disk was never read and
+    /// every hot-reload died with `topology.vault_path is required`. The seam now takes the dir
+    /// explicitly, so this asserts a directory with a valid topology actually applies its peers.
+    #[test]
+    fn reload_from_dir_applies_peers_from_a_real_config_directory() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            dir.path().join("topology.toml"),
+            r#"
+vault_path = "/tmp/liberado-test-vault"
+
+[[mcps]]
+name = "tasks-mcp"
+description = "create and complete tasks"
+consequence = "reversible"
+transport = { kind = "stdio", command = "tasks-mcp", args = [] }
+writes_vault = false
+"#,
+        )
+        .expect("write topology.toml");
+
+        let controller = LiveMcpController::empty();
+        let report = controller
+            .reload_from_dir(Some(dir.path()))
+            .expect("a valid topology in a real dir must reload");
+
+        assert_eq!(
+            report.enabled,
+            vec!["tasks-mcp".to_string()],
+            "the enabled peer from the on-disk topology must be applied"
+        );
+        assert!(
+            controller
+                .registry()
+                .names()
+                .contains(&"tasks-mcp".to_string())
+        );
+        assert!(
+            controller
+                .catalog()
+                .routing_descriptors()
+                .iter()
+                .any(|d| d.name == "tasks-mcp"),
+            "the routed catalog must include the reloaded peer"
+        );
+    }
+
+    /// Pins the `None` = "all defaults" contract that made the bug invisible: with no directory,
+    /// the load must fail on the missing `vault_path` rather than silently succeeding on an empty
+    /// topology. This is the failure the broken endpoint was reporting on every reload.
+    #[test]
+    fn reload_from_dir_with_no_directory_reports_missing_vault_path() {
+        let controller = LiveMcpController::empty();
+        let err = controller
+            .reload_from_dir(None)
+            .expect_err("no directory is all-defaults and must be rejected");
+        assert!(
+            err.message.contains("vault_path is required"),
+            "the error must name the missing vault path, got: {}",
+            err.message
+        );
+    }
+
+    /// The wrapper itself: `reload_from_config_dir` must read the directory `config_dir()`
+    /// resolves (tier-1 `LIBERADO_CONFIG_DIR`), not pass `None`. Exercises the production entry
+    /// point end to end so a revert of the fix fails here, not silently at runtime.
+    #[test]
+    fn reload_from_config_dir_reads_the_librarado_config_dir_env() {
+        use std::ffi::OsString;
+        use std::sync::{Mutex, OnceLock};
+
+        static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        let _lock = ENV_LOCK
+            .get_or_init(|| Mutex::new(()))
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+
+        struct Guard {
+            config: Option<OsString>,
+            data: Option<OsString>,
+        }
+        impl Drop for Guard {
+            fn drop(&mut self) {
+                unsafe {
+                    match self.config.take() {
+                        Some(v) => std::env::set_var("LIBERADO_CONFIG_DIR", v),
+                        None => std::env::remove_var("LIBERADO_CONFIG_DIR"),
+                    }
+                    match self.data.take() {
+                        Some(v) => std::env::set_var("LIBERADO_DATA_DIR", v),
+                        None => std::env::remove_var("LIBERADO_DATA_DIR"),
+                    }
+                }
+            }
+        }
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let data = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            dir.path().join("topology.toml"),
+            r#"
+vault_path = "/tmp/liberado-test-vault"
+
+[[mcps]]
+name = "env-dir-mcp"
+description = "reachable only through config_dir resolution"
+consequence = "read_only"
+transport = { kind = "stdio", command = "env-dir-mcp", args = [] }
+"#,
+        )
+        .expect("write topology.toml");
+
+        let _guard = Guard {
+            config: std::env::var_os("LIBERADO_CONFIG_DIR"),
+            data: std::env::var_os("LIBERADO_DATA_DIR"),
+        };
+        unsafe {
+            std::env::set_var("LIBERADO_CONFIG_DIR", dir.path());
+            std::env::set_var("LIBERADO_DATA_DIR", data.path());
+        }
+
+        let controller = LiveMcpController::empty();
+        let report = controller
+            .reload_from_config_dir()
+            .expect("the wrapper must resolve and read the config dir");
+
+        assert_eq!(
+            report.enabled,
+            vec!["env-dir-mcp".to_string()],
+            "the peer from the config-dir topology must be applied"
+        );
     }
 }
 
