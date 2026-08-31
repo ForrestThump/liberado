@@ -19,29 +19,44 @@ enum CiCommand {
     ModulesRatchet,
     Complexity,
     ComplexityRatchet,
+    Unwraps,
+    UnwrapsRatchet,
     Ready,
     VerifyReady,
 }
+
+use std::path::Path;
+
+const CI_COMMANDS: &[(&str, CiCommand)] = &[
+    ("check", CiCommand::Check),
+    ("crap", CiCommand::Crap),
+    ("crap-linux", CiCommand::CrapLinux),
+    ("ratchet", CiCommand::Ratchet),
+    ("modules", CiCommand::Modules),
+    ("modules-ratchet", CiCommand::ModulesRatchet),
+    ("complexity", CiCommand::Complexity),
+    ("complexity-ratchet", CiCommand::ComplexityRatchet),
+    ("unwraps", CiCommand::Unwraps),
+    ("unwraps-ratchet", CiCommand::UnwrapsRatchet),
+    ("ready", CiCommand::Ready),
+    ("verify-ready", CiCommand::VerifyReady),
+];
 
 fn parse_command(
     verb: Option<&str>,
     has_no_extra_args: bool,
 ) -> Result<CiCommand, Box<dyn std::error::Error>> {
-    let command = match verb {
-        None => CiCommand::Local,
-        Some("check") if has_no_extra_args => CiCommand::Check,
-        Some("crap") if has_no_extra_args => CiCommand::Crap,
-        Some("crap-linux") if has_no_extra_args => CiCommand::CrapLinux,
-        Some("ratchet") if has_no_extra_args => CiCommand::Ratchet,
-        Some("modules") if has_no_extra_args => CiCommand::Modules,
-        Some("modules-ratchet") if has_no_extra_args => CiCommand::ModulesRatchet,
-        Some("complexity") if has_no_extra_args => CiCommand::Complexity,
-        Some("complexity-ratchet") if has_no_extra_args => CiCommand::ComplexityRatchet,
-        Some("ready") if has_no_extra_args => CiCommand::Ready,
-        Some("verify-ready") if has_no_extra_args => CiCommand::VerifyReady,
-        _ => return Err(USAGE.into()),
-    };
-    Ok(command)
+    if !has_no_extra_args && verb.is_some() {
+        return Err(USAGE.into());
+    }
+    match verb {
+        None => Ok(CiCommand::Local),
+        Some(v) => CI_COMMANDS
+            .iter()
+            .find(|(name, _)| *name == v)
+            .map(|(_, cmd)| *cmd)
+            .ok_or_else(|| USAGE.into()),
+    }
 }
 
 fn execute(command: CiCommand) -> Result<(), Box<dyn std::error::Error>> {
@@ -61,6 +76,14 @@ fn execute_health(command: CiCommand) -> Result<(), Box<dyn std::error::Error>> 
     match command {
         CiCommand::Modules => crate::module_health_cmd::check(&repository_root()?),
         CiCommand::ModulesRatchet => crate::module_health_cmd::ratchet(&repository_root()?),
+        command => execute_unwraps(command),
+    }
+}
+
+fn execute_unwraps(command: CiCommand) -> Result<(), Box<dyn std::error::Error>> {
+    match command {
+        CiCommand::Unwraps => crate::unwrap_classification_cmd::check(&repository_root()?),
+        CiCommand::UnwrapsRatchet => crate::unwrap_classification_cmd::ratchet(&repository_root()?),
         command => execute_readiness(command),
     }
 }
@@ -86,7 +109,12 @@ fn execute_complexity(command: CiCommand) -> Result<(), Box<dyn std::error::Erro
 
 fn local_run(log: &CiLog) -> Result<(), Box<dyn std::error::Error>> {
     check(log)?;
-    local_audits(log)
+    finish_local_run(log)
+}
+
+fn finish_local_run(log: &CiLog) -> Result<(), Box<dyn std::error::Error>> {
+    local_audits(log)?;
+    crate::readiness_cmd::record_full_ci(&log.root)
 }
 
 fn local_audits(log: &CiLog) -> Result<(), Box<dyn std::error::Error>> {
@@ -95,9 +123,28 @@ fn local_audits(log: &CiLog) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn ratchet_quality(log: &CiLog) -> Result<(), Box<dyn std::error::Error>> {
-    crate::module_health_cmd::check(&log.root)?;
-    crap_ratchet(log)?;
-    crate::module_health_cmd::ratchet(&log.root)
+    run_quality_checks(&log.root)?;
+    run_host_crap(log)?;
+    run_quality_ratchets(&log.root)
+}
+
+fn run_host_crap(log: &CiLog) -> Result<(), Box<dyn std::error::Error>> {
+    if cfg!(target_os = "linux") {
+        crap_ratchet(log)
+    } else {
+        eprintln!("[liberado ci] host CRAP deferred; final readiness runs the exact Linux gate");
+        Ok(())
+    }
+}
+
+fn run_quality_checks(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    crate::module_health_cmd::check(root)?;
+    crate::unwrap_classification_cmd::check(root)
+}
+
+fn run_quality_ratchets(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    crate::module_health_cmd::ratchet(root)?;
+    crate::unwrap_classification_cmd::ratchet(root)
 }
 
 #[cfg(test)]

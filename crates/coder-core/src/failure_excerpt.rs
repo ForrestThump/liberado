@@ -90,8 +90,14 @@ fn is_failure_line(line: &str) -> bool {
         || lower.contains("test result: failed")
         || lower.contains("could not compile")
         || lower.contains("regressed")
-        || lower.contains("crap check failed")
+        || is_crap_failure(line, &lower)
         || (line.contains('┆') && line.contains('+') && !line.contains("NEW"))
+}
+
+fn is_crap_failure(line: &str, lower: &str) -> bool {
+    lower.contains("crap check failed")
+        || lower.contains("function(s) exceed crap threshold")
+        || (line.contains('✗') && line.contains('┆'))
 }
 
 fn strip_ansi(text: &str) -> String {

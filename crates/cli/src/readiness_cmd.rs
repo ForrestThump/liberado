@@ -11,10 +11,18 @@ use std::process::Stdio;
 mod debian_crap;
 
 const RECEIPT_FILE: &str = ".liberado/ready.json";
+const CI_RECEIPT_FILE: &str = ".liberado/ci-ready.json";
+const CRAP_RECEIPT_FILE: &str = ".liberado/crap-linux-ready.json";
+const RECEIPT_VERSION: u32 = 2;
+const CI_RECEIPT_KIND: &str = "full-ci";
+const CRAP_RECEIPT_KIND: &str = "linux-crap";
+const READY_RECEIPT_KIND: &str = "ready";
+const REQUIRED_READY_CHECKS: &[&str] = &["full-local-ci", "exact-linux-crap"];
 
 #[derive(Debug, Deserialize, Serialize)]
 struct Receipt {
     version: u32,
+    kind: String,
     head: String,
     tree_sha256: String,
     rustc: String,
@@ -65,56 +73,137 @@ pub(crate) fn audit_docs(root: &Path) -> Result<(), Box<dyn std::error::Error>> 
 }
 
 pub fn ready(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    prepare_ready(root)?;
+    finish_ready(root)
+}
+
+fn prepare_ready(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    verify_evidence(
+        root,
+        CI_RECEIPT_FILE,
+        CI_RECEIPT_KIND,
+        "run `just ci` after the final commit",
+    )?;
     compile_gate(root)?;
     test_changed_packages(root)?;
-    audits(root)?;
-    write_receipt(root)?;
+    audits(root)
+}
+
+fn finish_ready(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    crap_linux(root)?;
+    verify_evidence(
+        root,
+        CRAP_RECEIPT_FILE,
+        CRAP_RECEIPT_KIND,
+        "run `just crap-linux` after the final commit",
+    )?;
+    write_receipt(root, RECEIPT_FILE, READY_RECEIPT_KIND, ready_checks())?;
     eprintln!("[ready] OK; receipt: {RECEIPT_FILE}");
     Ok(())
 }
 
 pub fn verify(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
-    let bytes = std::fs::read(root.join(RECEIPT_FILE))
-        .map_err(|_| "no readiness receipt; run `just ready` after the last commit or rebase")?;
-    let receipt: Receipt = serde_json::from_slice(&bytes)?;
-    let head = git_text(root, &["rev-parse", "HEAD"])?;
-    let tree_sha256 = tree_fingerprint(root)?;
-    if receipt.head != head || receipt.tree_sha256 != tree_sha256 {
-        return Err(
-            "readiness receipt is stale; HEAD or the working tree changed. Run `just ready` again"
-                .into(),
-        );
+    let receipt = verify_evidence(
+        root,
+        RECEIPT_FILE,
+        READY_RECEIPT_KIND,
+        "run `just ready` after the last commit or rebase",
+    )?;
+    if !REQUIRED_READY_CHECKS
+        .iter()
+        .all(|required| receipt.checks.iter().any(|check| check == required))
+    {
+        return Err("readiness receipt predates the full-CI and exact-Linux-CRAP contract; run `just ready` again".into());
     }
-    eprintln!("[ready] receipt matches HEAD {head}");
+    eprintln!("[ready] receipt matches HEAD {}", receipt.head);
     Ok(())
 }
 
-pub fn crap_linux(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
-    debian_crap::run(root)
+fn verify_evidence(
+    root: &Path,
+    file: &str,
+    kind: &str,
+    recovery: &str,
+) -> Result<Receipt, Box<dyn std::error::Error>> {
+    let bytes =
+        std::fs::read(root.join(file)).map_err(|_| format!("no {kind} receipt; {recovery}"))?;
+    let receipt: Receipt = serde_json::from_slice(&bytes)
+        .map_err(|error| format!("invalid {kind} receipt; {recovery}: {error}"))?;
+    let head = git_text(root, &["rev-parse", "HEAD"])?;
+    let tree_sha256 = tree_fingerprint(root)?;
+    if receipt.version != RECEIPT_VERSION
+        || receipt.kind != kind
+        || receipt.head != head
+        || receipt.tree_sha256 != tree_sha256
+    {
+        return Err(format!(
+            "{kind} receipt is stale or from an older contract; HEAD or the working tree changed. {recovery}"
+        )
+        .into());
+    }
+    Ok(receipt)
 }
 
-fn write_receipt(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
+pub fn crap_linux(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    debian_crap::run(root)?;
+    write_receipt(
+        root,
+        CRAP_RECEIPT_FILE,
+        CRAP_RECEIPT_KIND,
+        vec!["exact-linux-crap".into()],
+    )?;
+    eprintln!("[ready] exact Linux CRAP receipt: {CRAP_RECEIPT_FILE}");
+    Ok(())
+}
+
+pub(crate) fn record_full_ci(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    write_receipt(
+        root,
+        CI_RECEIPT_FILE,
+        CI_RECEIPT_KIND,
+        vec!["full-local-ci".into()],
+    )?;
+    eprintln!("[liberado ci] readiness receipt: {CI_RECEIPT_FILE}");
+    Ok(())
+}
+
+fn ready_checks() -> Vec<String> {
+    [
+        "full-local-ci",
+        "fmt",
+        "locked-metadata",
+        "clippy",
+        "changed-package-tests",
+        "module-health",
+        "function-complexity",
+        "docs-audit",
+        "exact-linux-crap",
+    ]
+    .into_iter()
+    .map(str::to_string)
+    .collect()
+}
+
+fn write_receipt(
+    root: &Path,
+    file: &str,
+    kind: &str,
+    checks: Vec<String>,
+) -> Result<(), Box<dyn std::error::Error>> {
     std::fs::create_dir_all(root.join(".liberado"))?;
     let receipt = Receipt {
-        version: 1,
+        version: RECEIPT_VERSION,
+        kind: kind.into(),
         head: git_text(root, &["rev-parse", "HEAD"])?,
         tree_sha256: tree_fingerprint(root)?,
         rustc: command_text(root, "rustc", &["--version"])?,
         host: format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH),
         completed_at: chrono::Utc::now().to_rfc3339(),
-        checks: vec![
-            "fmt".into(),
-            "locked-metadata".into(),
-            "clippy".into(),
-            "changed-package-tests".into(),
-            "module-health".into(),
-            "function-complexity".into(),
-            "docs-audit".into(),
-        ],
+        checks,
     };
     let mut json = serde_json::to_string_pretty(&receipt)?;
     json.push('\n');
-    std::fs::write(root.join(RECEIPT_FILE), json)?;
+    std::fs::write(root.join(file), json)?;
     Ok(())
 }
 
@@ -245,7 +334,10 @@ fn command_text(
 
 #[cfg(test)]
 mod tests {
-    use super::{Receipt, tree_fingerprint};
+    use super::{
+        CI_RECEIPT_KIND, RECEIPT_VERSION, REQUIRED_READY_CHECKS, Receipt, ready_checks,
+        tree_fingerprint, verify_evidence, write_receipt,
+    };
     use std::fs;
     use std::process::Command;
     use tempfile::tempdir;
@@ -268,7 +360,8 @@ mod tests {
         git(temp.path(), &["config", "user.email", "test@example.com"]);
         git(temp.path(), &["config", "user.name", "Test"]);
         fs::write(temp.path().join("tracked.txt"), "one").unwrap();
-        git(temp.path(), &["add", "tracked.txt"]);
+        fs::write(temp.path().join(".gitignore"), ".liberado/\n").unwrap();
+        git(temp.path(), &["add", "tracked.txt", ".gitignore"]);
         git(temp.path(), &["commit", "-m", "base"]);
         let base = tree_fingerprint(temp.path()).unwrap();
         fs::write(temp.path().join("tracked.txt"), "two").unwrap();
@@ -281,7 +374,8 @@ mod tests {
     #[test]
     fn receipt_schema_round_trips() {
         let receipt = Receipt {
-            version: 1,
+            version: RECEIPT_VERSION,
+            kind: "ready".into(),
             head: "abc".into(),
             tree_sha256: "def".into(),
             rustc: "rustc test".into(),
@@ -292,6 +386,63 @@ mod tests {
         let json = serde_json::to_string(&receipt).unwrap();
         let decoded: Receipt = serde_json::from_str(&json).unwrap();
         assert_eq!(decoded.head, "abc");
+    }
+
+    #[test]
+    fn final_receipt_contract_names_full_ci_and_exact_linux_crap() {
+        let checks = ready_checks();
+        assert!(
+            REQUIRED_READY_CHECKS
+                .iter()
+                .all(|required| checks.iter().any(|check| check == required))
+        );
+    }
+
+    #[test]
+    fn evidence_receipt_is_bound_to_kind_head_and_tree() {
+        let temp = tempdir().unwrap();
+        git(temp.path(), &["init"]);
+        git(temp.path(), &["config", "user.email", "test@example.com"]);
+        git(temp.path(), &["config", "user.name", "Test"]);
+        fs::write(temp.path().join("tracked.txt"), "one").unwrap();
+        fs::write(temp.path().join(".gitignore"), ".liberado/\n").unwrap();
+        git(temp.path(), &["add", "tracked.txt", ".gitignore"]);
+        git(temp.path(), &["commit", "-m", "base"]);
+
+        write_receipt(
+            temp.path(),
+            ".liberado/evidence.json",
+            CI_RECEIPT_KIND,
+            vec!["full-local-ci".into()],
+        )
+        .unwrap();
+        verify_evidence(
+            temp.path(),
+            ".liberado/evidence.json",
+            CI_RECEIPT_KIND,
+            "rerun",
+        )
+        .unwrap();
+        assert!(
+            verify_evidence(
+                temp.path(),
+                ".liberado/evidence.json",
+                "wrong-kind",
+                "rerun"
+            )
+            .is_err()
+        );
+
+        fs::write(temp.path().join("tracked.txt"), "two").unwrap();
+        assert!(
+            verify_evidence(
+                temp.path(),
+                ".liberado/evidence.json",
+                CI_RECEIPT_KIND,
+                "rerun"
+            )
+            .is_err()
+        );
     }
 
     #[test]

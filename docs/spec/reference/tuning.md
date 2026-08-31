@@ -519,3 +519,8 @@ declared model there is nothing to take a percentage *of*, so resolution falls t
 `[[models]]` are different tables. The role override picks the slug to call; the catalog entry is
 what the daemon knows about it. Pointing a role at a slug does not declare it. The two must name the
 slug **identically** — matching is exact, not fuzzy.
+
+**"How are safe defaults and missing gates verified?"** → Optional gates across `policy.toml`,
+`topology.toml`, and `tuning.toml` follow fail-closed defaults (`proposal_only` for unzoned writes,
+empty capability grants for unlisted actors, and refuse-by-default for unknown projects). These are
+mechanically verified against real file loading and provenance arrival in `safe_default_arrival_tests.rs`.

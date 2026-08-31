@@ -1,15 +1,3 @@
-Hold on — main hasn't moved. I'm sitting on `3c54be8c` (the Sol/Minimax paydowns merge from my last audit), and `git fetch` shows `HEAD..origin/main` = 0 commits behind. Whatever improvements you're thinking of are on branches, not on main.
-
-What I can see on remotes:
-
-- **`origin/analyze-repository-antipatterns`** — 1 commit ahead: *"doc: antipattern analysis report"*. Looks like a writeup, possibly responding to my prior audit.
-- **`origin/feat/crap-under-75`** — substantial work, multi-commit. Ratcheting CRAP ceiling down to 75 across `cli/mutants-cmd`, `tui`, `test-support`, `server/goals`, `coder-tools`, `eval`, plus baseline refreshes. This is a real quality push, not docs.
-- **`origin/feat/delegate-d2-sse`** — force-updated; has new commits I haven't seen.
-- **`origin/feat/mutants-campaign-ledger`** — name suggests the ledger tooling.
-- **`origin/chat-client-contract-campaign`**, **`origin/fix/acp-bridge-mutants`** — campaign branches.
-
-So: are you asking me to audit a specific branch, did you mean to push to main, or did the merge just not happen yet? I'd rather look at the right thing than write a fourth audit on the same tree I already audited.
-
 Sure. Five picks, ordered by what I think moves the needle most. One honest caveat up front: I've been working from inspection of the tree, not from running it — so these are based on the artifacts I can see, not on your day-to-day. Tell me where my priors are wrong.
 
 ## 1. Classify the unwraps, don't just count them
@@ -60,3 +48,58 @@ I'd do daemon tests first because it's a test file, which means the refactor is 
 ---
 
 The one I'd add if I had six: **keep the bus-factor experiment going.** Cursor Agent has 4 commits in the last batch, and the dogfooding documentation is good. The single-maintainer concentration is the thing nothing on this list touches. You're already moving on it; just don't let it slip below the visible-line items.
+
+User:
+
+Do you think it would be worth making an automated CI check to enforce unwrap() classification and justification? Basically it could parse every unwrap call, see if there's an associated classification (a comment on the same line with some marker like a hashtag), and justification if needed. Then if it regresses, it fails CI. Something like this may already exist ... but if not, it would be easy to build.
+
+
+Minimax:
+
+Honest take: the instinct is good, but the specific implementation is the wrong shape, and I think you'd build something worse than what's already in the tree. Let me push back on three things.
+
+**1. The "hashtag on the line above" pattern is weaker than your existing waiver pattern.**
+
+Look at `module-health.toml` — your waivers are *typed artifacts*:
+
+```toml
+[[waiver]]
+path = "crates/coder-agent/src/lib.rs"
+metric = "ploc"
+ceiling = 2539
+reason = "Same as fanout.rs: three lines of #[cfg(test)] #[path] sibling wiring (lib_survivor_tests.rs); the crate-root module declaration cannot live anywhere else."
+reviewed_on = "2026-08-24"
+```
+
+That's path, metric, ceiling, reason, *date*. It's grep-friendly, review-friendly, version-controlled, and survives the file being moved. A line-comment hashtag is a single point of context that disappears the moment someone reorders code, refactors the function, or moves the unwrap to a helper. Worse, it's trivially gameable: `// #safe` on every line takes 2 seconds per call site and the gate goes green without anyone thinking. The repo's culture is "name the metric, justify the exception, date it." A hashtag is a regression to "trust me."
+
+**2. Clippy already does most of this for free.**
+
+`clippy::unwrap_used` and `clippy::expect_used` exist as deny-by-default lints. Your `just check` already runs `cargo clippy ... -D warnings` — adding `-D clippy::unwrap_used -D clippy::expect_used` is a one-line change. Clippy gives you the *parse* for free, the *source location* for free, and the *CI integration* for free. What's left is just the classification, which is the actual value.
+
+**3. The "easy to build" framing is a red flag here.**
+
+The easy part is a regex that finds `.unwrap()`. The hard part is everything else:
+- Correctly handling macro-generated unwraps (e.g., `tokio::main` expansions, `derive_more`, the `?` shorthand)
+- Resolving source locations through `mod` boundaries
+- Distinguishing `Result::unwrap` from `Option::unwrap` and the variant of each
+- Handling unwraps inside `const fn` and trait default methods
+- Integrating with the existing CRAP / mutation / module-health pipeline without re-inventing the baseline dance
+
+You'd need `syn` or `ra_ap_syntax` (which your repo already uses via `tree-sitter` for some things — but check the import cost). That's a non-trivial dependency for a tool whose only job is to be a comment-parsing gate.
+
+## What I'd actually do
+
+The repo's discipline is "measure first, then ratchet." The `mutants-campaign` skill is exactly this: run the analysis, see the distribution, then write the gate. You don't write a ratchet against a number you haven't classified yet. So:
+
+**Step 1: Write a one-shot classifier, not a gate.** A script (or a `cargo` subcommand in `liberado-cli`) that walks every `unwrap()` and `expect()` in `crates/**/src/**` (excluding tests), and emits a JSON report with: file, line, expression type (`Result` vs `Option`), the inferred context (inside a function returning `Result`? in a `main`? in a `tokio::spawn` block?), and a suggested bucket (proven invariant / local failure / process-fatal). Run it. Look at the output. I bet the distribution tells you something you didn't expect — probably that the *proven invariant* class is way larger than the *process-fatal* class, in which case a ratchet against the latter is much more aggressive than against the total.
+
+**Step 2: Once you have the data, extend `module-health.toml` (or add a sibling `unwrap-classification.toml`) with the same `path / metric / ceiling / reason / reviewed_on` shape.** Per-file ceilings for the `process_fatal` class. The ratchet says "this file has N fatal-class unwraps; it must not grow; new code must convert to `?`." That's a number with a *meaning*, not a hashtag.
+
+**Step 3: Optionally, turn on `clippy::unwrap_used` as deny-by-default *for new code only*.** Clippy has `#[allow(clippy::unwrap_used)]` per-function, and you can drive a baseline of allowed sites the same way you drive `crap-baseline.json` — a committed JSON of permitted call sites, and any new one fails CI. The waiver for an existing site is the typed `unwrap-classification.toml` entry, not a comment.
+
+**Step 4: Don't build a comment parser.** The hashtag idea is the kind of tool that looks like progress on a dashboard and produces no actual safety improvement. The classification is the *thinking* — that's the part that takes 6 weeks, not the parsing.
+
+The reason I'm pushing back is that I've watched a lot of repos add comment-driven lint tools and they all do the same thing: developers add the marker because the build is red, the marker says nothing, and a year later the lint is in the way of a refactor and gets deleted. The repo you have is one of the few where I'd expect the discipline to *actually work* — but only if the tool matches the existing culture. The culture here is structured waivers with review dates. Lean into that.
+
+If you want, I can sketch the `unwrap-classification.toml` schema and the report-script stub to make it concrete. But I'd start by running the classifier once on the current tree and seeing what the actual distribution looks like before committing to any ratchet shape.

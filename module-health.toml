@@ -60,9 +60,9 @@ reviewed_on = "2026-08-24"
 [[waiver]]
 path = "crates/coder-agent/src/lib.rs"
 metric = "ploc"
-ceiling = 2539
-reason = "Same as fanout.rs: three lines of #[cfg(test)] #[path] sibling wiring (lib_survivor_tests.rs); the crate-root module declaration cannot live anywhere else."
-reviewed_on = "2026-08-24"
+ceiling = 1320
+reason = "Same as fanout.rs: #[cfg(test)] #[path] sibling wiring (lib_tests.rs, lib_disposition_tests.rs, lib_survivor_tests.rs); the crate-root module declaration cannot live anywhere else."
+reviewed_on = "2026-08-30"
 
 [[waiver]]
 path = "crates/telegram-approvals/src/lib.rs"
@@ -99,31 +99,3 @@ ceiling = 1397
 reason = "Same as executor lib.rs: three lines of sibling-test module wiring (risk_gated_survivor_tests.rs)."
 reviewed_on = "2026-08-25"
 
-# daemon survivors sibling test file: four metrics over every boundary.
-[[waiver]]
-path = "crates/daemon/src/tests.rs"
-metric = "ploc"
-ceiling = 3900
-reason = "Sibling survivor-test file for the daemon crate's mutation campaign; the size is accumulated scenario coverage where each test owns its fixture and splitting scatters shared builders without shrinking what a reader holds."
-reviewed_on = "2026-08-27"
-
-[[waiver]]
-path = "crates/daemon/src/tests.rs"
-metric = "lloc"
-ceiling = 1010
-reason = "Same file as the ploc waiver: long scenario bodies are the point of end-to-end daemon tests."
-reviewed_on = "2026-08-27"
-
-[[waiver]]
-path = "crates/daemon/src/tests.rs"
-metric = "functions"
-ceiling = 125
-reason = "One #[tokio::test]/#[test] per mutant killed; function count tracks campaign coverage by design."
-reviewed_on = "2026-08-27"
-
-[[waiver]]
-path = "crates/daemon/src/tests.rs"
-metric = "cyclomatic"
-ceiling = 235
-reason = "Branchiness lives in assertions about state machines, not in production control flow."
-reviewed_on = "2026-08-27"

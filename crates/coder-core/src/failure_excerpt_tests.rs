@@ -88,6 +88,20 @@ fn extract_caps_and_names_the_log_when_asked() {
 }
 
 #[test]
+fn extract_names_a_crap_ceiling_offender() {
+    let log = "\
+│ ✗ ┆ 306.0 ┆ 17 ┆ 0.0% ┆ Args::parse_task_run ┆ crates/coder-runner/src/main.rs:605 │
+✗ 1/4169 function(s) exceed CRAP threshold 150.
+";
+    let extracted = extract_failures(log);
+    assert!(extracted.contains("Args::parse_task_run"), "{extracted}");
+    assert!(
+        extracted.contains("exceed CRAP threshold 150"),
+        "{extracted}"
+    );
+}
+
+#[test]
 fn strip_ansi_is_applied_before_matching() {
     let colored = "\u{1b}[31merror[E0425]\u{1b}[0m: missing\n";
     assert!(extract_failures(colored).contains("error[E0425]"));

@@ -42,9 +42,9 @@ check:
     cargo clippy --locked --workspace --exclude liberado-webui --all-targets -- -D warnings -D clippy::cognitive_complexity
 
 # Full local CI. Includes the host-stable module-health ratchet on every OS.
-# Linux also runs the same per-function CRAP compare GitHub runs
-# (a score that went up fails and is named — fix it before you push).
-# Windows checks the 150 ceiling only; coverage is host-sensitive.
+# Linux also runs the same per-function CRAP compare GitHub runs.
+# Other hosts defer coverage to `just ready`, which runs the exact Linux gate
+# natively or through Debian WSL. Host coverage is not a reliable proxy.
 # The baseline is not rewritten while that check is red. On Linux success,
 # rewrite `crap-baseline.json`. If the tree is otherwise clean, a Linux
 # rewrite is amended onto HEAD. GitHub never writes that file.
@@ -71,19 +71,23 @@ dependency-security:
 preflight:
     cargo run --locked --quiet -p liberado-cli -- ci check
 
-# Fast cross-platform pre-push gate. Writes a receipt bound to HEAD and the tree.
-ready:
+# Final cross-platform pre-push gate. Requires a current full-CI receipt, runs
+# the exact Linux CRAP check (native on Linux, Debian WSL on Windows), and writes
+# one receipt bound to HEAD and the complete tree.
+ready: setup-hooks
     cargo run --locked --quiet -p liberado-cli -- ci ready
 
 # Refuse when HEAD or any tracked/untracked source changed after `just ready`.
 verify-ready:
     cargo run --locked --quiet -p liberado-cli -- ci verify-ready
 
-# Push the current branch only when its readiness receipt is current.
-push: verify-ready
+# Canonical ship path: full local CI, final platform-neutral readiness, receipt
+# verification, then push. This also installs the committed pre-push hook.
+push: ci ready verify-ready
     git push
 
-# Install the committed cross-platform pre-push receipt verifier.
+# Install the committed cross-platform pre-push receipt verifier. `just ready`
+# and `just push` do this automatically; this recipe remains useful after clone.
 setup-hooks:
     git config core.hooksPath .githooks
 
@@ -105,6 +109,14 @@ module-health:
 # Check first, then replace the structural-health baseline with current values.
 module-health-ratchet:
     cargo run --locked --quiet -p liberado-cli -- ci modules-ratchet
+
+# Classify production Rust unwraps against the committed baseline and waivers.
+unwrap-classification:
+    cargo run --locked --quiet -p liberado-cli -- ci unwraps
+
+# Check first, then replace the unwrap classification baseline with current values.
+unwrap-ratchet:
+    cargo run --locked --quiet -p liberado-cli -- ci unwraps-ratchet
 
 # Validate the Rust-native PR shepherd's failure-identity and state-machine guards.
 shepherd-self-test:

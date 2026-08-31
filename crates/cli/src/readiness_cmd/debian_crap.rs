@@ -8,6 +8,7 @@ const DEFAULT_DISTRO: &str = "Debian";
 const WSL_USER_ENV: &str = "LIBERADO_DEBIAN_WSL_USER";
 
 pub(super) fn run(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    require_clean_commit(root)?;
     if cfg!(target_os = "linux") {
         return crate::ci_cmd::crap_for_root(root);
     }
@@ -20,7 +21,6 @@ pub(super) fn run(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn run_from_windows(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
-    require_clean_commit(root)?;
     let distro =
         std::env::var("LIBERADO_DEBIAN_WSL_DISTRO").unwrap_or_else(|_| DEFAULT_DISTRO.into());
     let account = wsl_account(&distro)?;

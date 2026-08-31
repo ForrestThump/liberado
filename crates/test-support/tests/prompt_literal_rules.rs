@@ -57,7 +57,10 @@ fn is_exempt(path: &Path) -> bool {
     if p.ends_with("coder-core/src/lib.rs") {
         return true;
     }
-    p.contains("/tests/") || p.ends_with("/tests.rs") || p.contains("/test_support/")
+    p.contains("/tests/")
+        || p.ends_with("/tests.rs")
+        || p.ends_with("_tests.rs")
+        || p.contains("/test_support/")
 }
 
 fn crates_dir() -> PathBuf {

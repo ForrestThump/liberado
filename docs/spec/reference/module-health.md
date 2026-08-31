@@ -52,6 +52,11 @@ the exact wiring lines and exclude implementation growth. `crates/cost/src/lib.r
 uses this form for the split `latency_report.rs` module and its compatibility
 fixture field; the report implementation stays outside the waived root.
 
+Similarly, god-file test suites (`crates/daemon/src/tests.rs` and `crates/coder-agent/src/lib.rs`)
+are partitioned into modular sibling files (`crates/daemon/src/tests/*.rs`, `lib_unit_tests.rs`,
+`lib_loop_tests.rs`, `lib_disposition_tests.rs`) to eliminate monolithic test blocks and preserve
+clean module health without synthetic waivers.
+
 After an accepted improvement, run `just module-health-ratchet` and commit the
 lower baseline. GitHub runs only the read-only comparison.
 

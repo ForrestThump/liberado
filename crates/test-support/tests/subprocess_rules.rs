@@ -37,7 +37,10 @@ fn is_exempt(path: &Path) -> bool {
     }
     // Test code. Fixtures spawn throwaway git repos and are free to do it directly; the rule
     // protects the daemon and the packs, not the harness.
-    p.contains("/tests/") || p.ends_with("/tests.rs") || p.contains("/test_support/")
+    p.contains("/tests/")
+        || p.ends_with("/tests.rs")
+        || p.ends_with("_tests.rs")
+        || p.contains("/test_support/")
 }
 
 /// Source lines of `file` that lie above the first `#[cfg(test)]`, with 1-based numbers.

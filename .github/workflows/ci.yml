@@ -75,12 +75,9 @@ jobs:
           cargo test --locked -p liberado-test-support --test workflow_security_rules
 
       - name: Host-stable function complexity
-        # CRAP at 0% coverage is c²+c. The configured cyclomatic ceiling is 20,
-        # so 420 is the equivalent cargo-crap ceiling for new functions.
-        run: >-
-          cargo crap --workspace --missing pessimistic --threshold 420
-          --baseline function-complexity-baseline.json --fail-regression --fail-above
-          --format human --sort file
+        # Use the same policy implementation as `just ready`. The raw cargo-crap
+        # defaults belong to the coverage-sensitive CRAP gate, not this gate.
+        run: cargo run --locked -p liberado-cli -- ci complexity
 
   test:
     name: test (${{ matrix.os }})

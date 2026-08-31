@@ -147,19 +147,31 @@ fn pre_push_hook_requires_a_current_readiness_receipt() {
     let justfile = std::fs::read_to_string(root.join("justfile")).expect("read justfile");
     assert!(hook.contains("ci verify-ready"));
     assert!(justfile.contains("git config core.hooksPath .githooks"));
-    assert!(justfile.contains("push: verify-ready"));
+    assert!(
+        justfile.contains("ready: setup-hooks"),
+        "the readiness path must install the committed hook automatically"
+    );
+    assert!(
+        justfile.contains("push: ci ready verify-ready"),
+        "the canonical push path must run full CI and final readiness"
+    );
+    let readiness = std::fs::read_to_string(root.join("crates/cli/src/readiness_cmd.rs"))
+        .expect("read readiness contract");
+    assert!(readiness.contains("crap_linux(root)?"));
+    assert!(readiness.contains("full-local-ci"));
+    assert!(readiness.contains("exact-linux-crap"));
 }
 
 #[test]
-fn early_complexity_ceiling_matches_the_committed_policy() {
+fn early_complexity_uses_the_same_native_policy_as_local_readiness() {
     let root = repository_root();
     let workflow =
         std::fs::read_to_string(root.join(".github/workflows/ci.yml")).expect("read CI workflow");
     let policy = std::fs::read_to_string(root.join("function-complexity.toml"))
         .expect("read complexity policy");
     assert!(policy.contains("new_function_ceiling = 20"));
-    assert!(workflow.contains("--threshold 420"));
-    assert!(workflow.contains("--fail-regression --fail-above"));
+    assert!(workflow.contains("cargo run --locked -p liberado-cli -- ci complexity"));
+    assert!(!workflow.contains("--threshold 420"));
 }
 
 #[test]

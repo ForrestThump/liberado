@@ -3,12 +3,12 @@
 use super::{
     BASELINE_FILE, CI_LOG_FILE, CRAP_CEILING, CRAP_CEILING_GH, CRAP_CEILING_HINT,
     CRAP_COMPARE_SUMMARY, CRAP_EMPTY_BASELINE, CRAP_HOST_CEILING_ONLY, CRAP_REGRESSION_GH,
-    CRAP_REGRESSION_HINT, CRAP_REGRESSION_MIN, CiLog, EXTRACT_MAX_LINES, LCOV_FILE, LLVM_COV_ARGS,
-    StageOutcome, announce_compare, baseline_has_entries, compare_args, compare_banners,
-    compare_to_baseline, crap_failure_hint, emit_crap_failure, exe_lives_in_cargo_target,
-    extract_ci_failures, git, porcelain_path, relativize_json_file, relativize_lcov,
-    repo_relative_source_path, repository_root, run_cmd, stage_ratcheted_baseline,
-    uses_per_function_ratchet,
+    CRAP_REGRESSION_HINT, CRAP_REGRESSION_MIN, CRAP_REPORT_ARGS, CRAP_REPORT_THRESHOLD, CiLog,
+    EXTRACT_MAX_LINES, LCOV_FILE, LLVM_COV_ARGS, StageOutcome, announce_compare,
+    baseline_has_entries, compare_args, compare_banners, compare_to_baseline, crap_failure_hint,
+    emit_crap_failure, exe_lives_in_cargo_target, extract_ci_failures, git, porcelain_path,
+    relativize_json_file, relativize_lcov, repo_relative_source_path, repository_root, run_cmd,
+    stage_ratcheted_baseline, uses_per_function_ratchet,
 };
 use liberado_common::process::std_command;
 use std::fs;
@@ -330,6 +330,25 @@ fn compare_args_always_enforce_the_150_ceiling() {
     assert!(ratchet.contains(&"--baseline"));
     assert!(ratchet.contains(&"--min"));
     assert!(ratchet.contains(&CRAP_REGRESSION_MIN));
+}
+
+#[test]
+fn report_generation_defers_policy_to_the_explicit_compare() {
+    assert!(
+        CRAP_REPORT_THRESHOLD.parse::<f64>().unwrap() > 1e100,
+        "report generation needs an effectively unreachable threshold"
+    );
+    let threshold_at = CRAP_REPORT_ARGS
+        .iter()
+        .position(|&flag| flag == "--threshold")
+        .expect("report generation must override the configured fail-above threshold");
+    assert_eq!(
+        CRAP_REPORT_ARGS.get(threshold_at + 1),
+        Some(&CRAP_REPORT_THRESHOLD)
+    );
+    assert!(!CRAP_REPORT_ARGS.contains(&"--fail-regression"));
+    assert!(!CRAP_REPORT_ARGS.contains(&"--fail-above"));
+    assert_eq!(CRAP_REPORT_ARGS.last(), Some(&"--output"));
 }
 
 #[test]

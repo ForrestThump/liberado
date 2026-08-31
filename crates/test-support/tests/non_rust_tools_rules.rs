@@ -98,10 +98,38 @@ fn collect_tools(root: &Path, directory: &Path, tools: &mut Vec<String>) {
         let path = entry.path();
         let name = entry.file_name();
         if path.is_dir() {
-            if [".git", ".liberado", "target", "turbomcp", "turbovault"]
-                .iter()
-                .any(|ignored| name == *ignored)
-            {
+            let name_str = name.to_string_lossy();
+            if [
+                ".git",
+                ".liberado",
+                ".kilo",
+                ".codex",
+                ".claude",
+                ".worktrees",
+                ".pytest_cache",
+                ".tmp",
+                "target",
+                "turbomcp",
+                "turbovault",
+                "subagent-manager-mcp-master",
+                "node_modules",
+                "cline",
+                "deepagents",
+                "grok-build",
+                "harness-bench",
+                "hermes-agent",
+                "kimi-code",
+                "oh-my-pi",
+                "opencode",
+                "paseo",
+                "pi",
+                "swarm-forge",
+            ]
+            .iter()
+            .any(|ignored| {
+                name_str == *ignored
+                    || name_str.starts_with("liberado-") && path.parent() == Some(root)
+            }) {
                 continue;
             }
             collect_tools(root, &path, tools);
