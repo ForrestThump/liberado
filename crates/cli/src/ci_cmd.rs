@@ -18,7 +18,7 @@
 //! its own work.
 //!
 //! Coverage is host-sensitive. Non-Linux `just ci` / `liberado ci crap` checks
-//! the 150 ceiling only (`--fail-above`). The per-function ratchet
+//! the 49.9 ceiling only (`--fail-above`). The per-function ratchet
 //! (`--fail-regression`) runs on Linux, which is GitHub's Ubuntu job.
 //! A current score below 10 is not a regression: cargo-crap `--min` drops it
 //! before the detector runs, so a 4→5 move does not fail the job.
@@ -52,17 +52,17 @@ const CI_LOG_FILE: &str = ".liberado/ci.log";
 const EXTRACT_MAX_LINES: usize = liberado_coder_core::FAILURE_EXTRACT_MAX_LINES;
 
 /// New-function / `--fail-above` ceiling. Must match `.cargo-crap.toml` `threshold`.
-const CRAP_CEILING: &str = "150";
+const CRAP_CEILING: &str = "49.9";
 
 /// cargo-crap `--min` keeps functions with `crap >= min`. Passing 10 drops a
 /// current score below 10, so a 4→5 move is not a regression. Do not put this
 /// in `.cargo-crap.toml`: that file is also read when writing the baseline, and
-/// a filtered write would make a 4→50 jump look like a new function under 150.
+/// a filtered write would make a 4→50 jump look like a new function under the ceiling.
 const CRAP_REGRESSION_MIN: &str = "10";
 
 /// Report generation must not enforce `.cargo-crap.toml`'s `fail-above` policy. The explicit
 /// compare that follows owns pass/fail and prints the offending functions. An effectively
-/// unreachable threshold overrides the configured 150 ceiling for this report-only command.
+/// unreachable threshold overrides the configured ceiling for this report-only command.
 const CRAP_REPORT_THRESHOLD: &str = "1e308";
 const CRAP_REPORT_ARGS: &[&str] = &[
     "crap",
@@ -97,7 +97,7 @@ const LLVM_COV_ARGS: &[&str] = &[
 /// Printed after `cargo crap` exits non-zero when a per-function score rose.
 const CRAP_REGRESSION_HINT: &str = "\
 CRAP check failed. A function's score went up vs crap-baseline.json \
-(per-function ratchet: 50 cannot become 60, even under the 150 ceiling). \
+(per-function ratchet: 40 cannot become 45, even under the 49.9 ceiling). \
 A current score below 10 is ignored. cargo-crap named the functions above. \
 Split the function or add tests until each score is at or below its baseline. \
 Do not raise the baseline. `just ci` will not rewrite it while this check is red. \
@@ -105,8 +105,8 @@ Fix locally, then push.";
 
 /// Printed after `cargo crap` exits non-zero when the baseline is still empty.
 const CRAP_CEILING_HINT: &str = "\
-CRAP check failed. A function is above the 150 ceiling (`--fail-above`). \
-Split it or add tests. New functions must land at or below 150.";
+CRAP check failed. A function is above the 49.9 ceiling (`--fail-above`). \
+Split it or add tests. New functions must land below 50.";
 
 /// One-line GitHub Actions annotation (newlines are not legal in `::error`).
 const CRAP_REGRESSION_GH: &str = "\
@@ -116,7 +116,7 @@ Do not raise the baseline. Linux `just ci` or this Ubuntu job is the check that 
 
 /// Banner when this host is not Linux: do not run `--fail-regression` here.
 const CRAP_HOST_CEILING_ONLY: &str = "\
-[liberado ci] this host is not Linux — ceiling only (150). \
+[liberado ci] this host is not Linux — ceiling only (49.9). \
 GitHub's Ubuntu job runs the per-function ratchet.";
 
 const CRAP_EMPTY_BASELINE: &str = "\
@@ -125,11 +125,11 @@ A green Linux `liberado ci ratchet` fills the per-function ratchet.";
 
 const CRAP_COMPARE_SUMMARY: &str = "\
 [liberado ci] CRAP compare against crap-baseline.json \
-(per-function ratchet on Linux; scores below 10 are ignored; 150 is the new-function ceiling)";
+(per-function ratchet on Linux; scores below 10 are ignored; 49.9 is the new-function ceiling)";
 
 const CRAP_CEILING_GH: &str = "\
-A function is above the 150 CRAP ceiling. Split it or add tests. \
-New functions must land at or below 150.";
+A function is above the 49.9 CRAP ceiling. Split it or add tests. \
+New functions must land below 50.";
 
 mod coverage_tools;
 /// Dispatch `liberado ci …`. No subcommand means the local full run (gates + ratchet).
