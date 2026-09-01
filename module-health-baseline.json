@@ -198,10 +198,10 @@
     "cyclomatic": 21
   },
   "crates/bootstrap/src/mcp_apply.rs": {
-    "ploc": 423,
-    "lloc": 115,
-    "functions": 32,
-    "cyclomatic": 63
+    "ploc": 525,
+    "lloc": 139,
+    "functions": 39,
+    "cyclomatic": 76
   },
   "crates/bootstrap/src/mcp_apply_survivor_tests.rs": {
     "ploc": 98,
@@ -3402,10 +3402,10 @@
     "cyclomatic": 15
   },
   "crates/webui/src/components/chat.rs": {
-    "ploc": 1149,
+    "ploc": 1133,
     "lloc": 305,
     "functions": 82,
-    "cyclomatic": 208
+    "cyclomatic": 207
   },
   "crates/webui/src/components/chat_tests.rs": {
     "ploc": 147,
@@ -3456,10 +3456,10 @@
     "cyclomatic": 33
   },
   "crates/webui/src/components/profile_browser.rs": {
-    "ploc": 205,
-    "lloc": 56,
-    "functions": 24,
-    "cyclomatic": 44
+    "ploc": 240,
+    "lloc": 64,
+    "functions": 28,
+    "cyclomatic": 49
   },
   "crates/webui/src/components/profiles_panel.rs": {
     "ploc": 87,
@@ -3510,16 +3510,16 @@
     "cyclomatic": 11
   },
   "crates/webui/src/main.rs": {
-    "ploc": 228,
+    "ploc": 235,
     "lloc": 66,
     "functions": 31,
     "cyclomatic": 51
   },
   "crates/webui/src/pwa.rs": {
-    "ploc": 263,
-    "lloc": 99,
-    "functions": 29,
-    "cyclomatic": 60
+    "ploc": 297,
+    "lloc": 115,
+    "functions": 30,
+    "cyclomatic": 61
   },
   "crates/webui/src/theme.rs": {
     "ploc": 293,

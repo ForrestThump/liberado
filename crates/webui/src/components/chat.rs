@@ -563,31 +563,6 @@ pub fn Chat(
         div {
             class: "{chat_cls}",
 
-            {
-                // **Always rendered**, including with no profile set. It used to appear only once a
-                // profile was chosen, which meant a new chat showed no control at all — you could
-                // change a profile you already had, and had no way to acquire one except by knowing
-                // `/profile` existed. A control that only exists after you have used it is not a
-                // control.
-                //
-                // Shown in the conversation rather than in a menu: a profile changes what this chat
-                // can do, and an authority you have to go looking for is one you will forget.
-                let name = active_profile();
-                let cls = if name.is_some() { "profile-chip set" } else { "profile-chip" };
-                let label = name.unwrap_or_else(|| "default".to_string());
-                rsx! {
-                    button {
-                        class: "{cls}",
-                        r#type: "button",
-                        title: "Session profile for this chat — click to change",
-                        onclick: move |_| profile_browser_open.set(true),
-                        span { class: "profile-chip-label", "profile" }
-                        span { class: "profile-chip-name", "{label}" }
-                        span { class: "profile-chip-caret", IconChevronDown {} }
-                    }
-                }
-            }
-
             if incognito() {
                 // Stated where the conversation is, not only on the button in the header — the
                 // wrong thing to be unsure about mid-chat is whether it is being recorded. The

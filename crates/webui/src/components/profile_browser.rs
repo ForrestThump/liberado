@@ -1,8 +1,9 @@
-//! The session-profile picker behind `/profile`.
+//! The session-profile picker behind `/profile`, and the header chip that opens it.
 //!
 //! Data and action only; the filter box, keyboard handling and dismissal live in
 //! [`crate::components::picker::Picker`], shared with `/model` and `/theme`. Adding this was a list
-//! and a callback, which is what the shell was extracted for.
+//! and a callback, which is what the shell was extracted for. The chip sits in the app header so
+//! it does not take a row out of the transcript.
 //!
 //! Reads `GET /api/profiles` and switches with `POST /api/conversations/{id}/profile`.
 //!
@@ -19,6 +20,7 @@ use dioxus::prelude::*;
 use serde::Deserialize;
 
 use crate::components::picker::Picker;
+use crate::icons::IconChevronDown;
 
 /// One row of `GET /api/profiles`.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -216,6 +218,49 @@ pub fn ProfileBrowser(
     }
 }
 
+/// The name the header chip shows. Unset is the word "default", not a blank — a new chat used
+/// to render no control at all, and the way back in was knowing `/profile` existed.
+fn chip_label(profile: Option<&str>) -> &str {
+    profile.unwrap_or("default")
+}
+
+/// `set` is the louder style. Unset must read quieter, or every new chat looks configured.
+fn chip_class(profile: Option<&str>) -> &'static str {
+    if profile.is_some() {
+        "profile-chip set"
+    } else {
+        "profile-chip"
+    }
+}
+
+/// The always-visible session-profile control.
+///
+/// Lives in the header rather than in the conversation: a profile changes what this chat can
+/// do, and an authority you have to go looking for is one you will forget. Always rendered,
+/// including with no profile set — a control that only exists after you have used it is not
+/// a control.
+///
+/// Opening is a callback rather than a local `open.set(true)` because the picker itself is
+/// rendered inside `Chat`. The owner switches to that view when needed, or the overlay would
+/// open onto a screen that is not mounted.
+#[component]
+pub fn ProfileChip(active_profile: Signal<Option<String>>, on_open: EventHandler<()>) -> Element {
+    let name = active_profile();
+    let cls = chip_class(name.as_deref());
+    let label = chip_label(name.as_deref());
+    rsx! {
+        button {
+            class: "{cls}",
+            r#type: "button",
+            title: "Session profile for this chat — click to change",
+            onclick: move |_| on_open.call(()),
+            span { class: "profile-chip-label", "profile" }
+            span { class: "profile-chip-name", "{label}" }
+            span { class: "profile-chip-caret", IconChevronDown {} }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -281,5 +326,15 @@ mod tests {
         );
         assert_eq!(label_for(&row("plain", None)), "plain");
         assert_eq!(label_for(&row("blank", Some("   "))), "blank");
+    }
+
+    /// Unset must still name something, or the chip vanishes and a new chat has no way in
+    /// except `/profile`. "default" is the absence of a choice, not a profile called that.
+    #[test]
+    fn the_chip_reads_unset_as_default() {
+        assert_eq!(chip_label(None), "default");
+        assert_eq!(chip_label(Some("basic-chat")), "basic-chat");
+        assert_eq!(chip_class(None), "profile-chip");
+        assert_eq!(chip_class(Some("basic-chat")), "profile-chip set");
     }
 }
