@@ -91,6 +91,16 @@ pub struct Topology {
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub roles: HashMap<ModelRole, RoleOverride>,
 
+    /// Turn ceiling for the short adaptive `ExecuteDirect` worker. `None` →
+    /// `liberado_orchestrator::DIRECT_MAX_TURNS`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub direct_max_turns: Option<u32>,
+
+    /// Turn ceiling for a normal acting subagent. `None` →
+    /// `liberado_executor::DEFAULT_MAX_TURNS`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subagent_max_turns: Option<u32>,
+
     /// Turn ceiling for a **read-only** subagent — research, review, summarisation. `None` →
     /// `liberado_orchestrator::RESEARCH_MAX_TURNS`.
     ///
@@ -178,6 +188,10 @@ pub struct MainAgentConfig {
     /// Optional full override of the main-agent system prompt. When unset, uses the built-in
     /// human-interfacer prompt (if `delegation_mode`) or the short legacy prompt otherwise.
     pub system_prompt: Option<String>,
+    /// Tool-using turns allowed for one conversation response. `None` →
+    /// `liberado_executor::DEFAULT_MAX_TURNS`. The executor grants one additional tool-free turn
+    /// only to summarize when this ceiling is reached.
+    pub max_turns: Option<u32>,
     /// Automatic context compaction for long conversations (CH3). See
     /// `docs/spec/reference/tuning.md`. All fields defaulted; an absent table is the shipped
     /// behavior (compaction on).
@@ -385,6 +399,7 @@ impl Default for MainAgentConfig {
         Self {
             delegation_mode: true,
             system_prompt: None,
+            max_turns: None,
             compaction: CompactionSettings::default(),
         }
     }
@@ -393,6 +408,8 @@ impl Default for MainAgentConfig {
 impl Default for Topology {
     fn default() -> Self {
         Self {
+            direct_max_turns: None,
+            subagent_max_turns: None,
             research_max_turns: None,
             report_sink: None,
             vault_path: PathBuf::new(),
@@ -414,6 +431,32 @@ impl Default for Topology {
             webui: WebUiConfig::default(),
             roles: HashMap::new(),
         }
+    }
+}
+
+#[cfg(test)]
+mod turn_budget_config_tests {
+    use super::*;
+
+    #[test]
+    fn every_turn_budget_parses_at_its_documented_scope() {
+        let topology: Topology = toml::from_str(
+            r#"
+                vault_path = "/vault"
+                direct_max_turns = 8
+                subagent_max_turns = 20
+                research_max_turns = 30
+
+                [main_agent]
+                max_turns = 12
+            "#,
+        )
+        .unwrap();
+
+        assert_eq!(topology.direct_max_turns, Some(8));
+        assert_eq!(topology.subagent_max_turns, Some(20));
+        assert_eq!(topology.research_max_turns, Some(30));
+        assert_eq!(topology.main_agent.max_turns, Some(12));
     }
 }
 

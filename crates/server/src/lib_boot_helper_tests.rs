@@ -64,6 +64,19 @@ fn vault_path_cli_argument_wins_then_config_then_error() {
     );
 }
 
+#[test]
+fn main_agent_budget_reads_the_configured_ceiling_and_keeps_the_default() {
+    let default = liberado_config::MainAgentConfig::default();
+    assert_eq!(
+        main_agent_budget(&default).max_turns,
+        liberado_executor::DEFAULT_MAX_TURNS
+    );
+
+    let mut configured = default;
+    configured.max_turns = Some(12);
+    assert_eq!(main_agent_budget(&configured).max_turns, 12);
+}
+
 fn tool(name: &str) -> liberado_provider::ToolDef {
     liberado_provider::ToolDef {
         name: name.into(),

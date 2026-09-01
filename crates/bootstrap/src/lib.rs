@@ -687,6 +687,12 @@ fn build_orchestrator_infra(
         guard.signer.clone(),
     )
     .with_subagent_provider(subagent_providers.worker.clone());
+    if let Some(max_turns) = config.topology.direct_max_turns {
+        infra = infra.with_direct_max_turns(max_turns);
+    }
+    if let Some(max_turns) = config.topology.subagent_max_turns {
+        infra = infra.with_subagent_max_turns(max_turns);
+    }
     if let Some(max_turns) = config.topology.research_max_turns {
         infra = infra.with_research_max_turns(max_turns);
     }

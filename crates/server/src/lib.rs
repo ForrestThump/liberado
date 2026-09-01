@@ -823,6 +823,14 @@ struct SessionEngine {
     goals: Arc<liberado_session::GoalSessionHub>,
 }
 
+fn main_agent_budget(config: &liberado_config::MainAgentConfig) -> Budget {
+    Budget::new(
+        config
+            .max_turns
+            .unwrap_or(liberado_executor::DEFAULT_MAX_TURNS),
+    )
+}
+
 async fn build_chat(
     providers: &liberado_bootstrap::RoleProviders,
     mcp: McpRegistry,
@@ -873,7 +881,7 @@ async fn build_chat(
 
     let mut sessions = ChatSessions::new(
         store,
-        Executor::new(provider.clone(), Budget::default()),
+        Executor::new(provider.clone(), main_agent_budget(main_agent_cfg)),
         runtime,
     )
     .with_system_prompt(system_prompt)

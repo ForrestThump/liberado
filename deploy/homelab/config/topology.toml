@@ -10,9 +10,13 @@ provider = "openrouter"
 # Single source of truth for local wall-clock (Texas / US Central). Cron expressions below stay UTC;
 # the daemon stamps "Local time: …" onto schedule/webhook goals from this zone.
 timezone = "America/Chicago"
+direct_max_turns = 8
+subagent_max_turns = 20
+research_max_turns = 30
 
 [main_agent]
 delegation_mode = true
+max_turns = 12
 
 # --- Report delivery --------------------------------------------------------------------------
 # Where a subagent's report goes when the dispatcher routes it with `delivery = Vault`.

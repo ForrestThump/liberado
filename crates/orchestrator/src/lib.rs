@@ -328,6 +328,10 @@ pub struct OrchestratorInfra {
     signer: ProposalSigner,
     /// Turn ceiling for read-only subagent work, applied to every pool built from this infra.
     research_max_turns: u32,
+    /// Turn ceiling for short adaptive direct work.
+    direct_max_turns: u32,
+    /// Turn ceiling for normal acting subagent work.
+    subagent_max_turns: u32,
     /// Vault report sink shared by every pool built from this infra.
     report_sink: Option<ReportSink>,
 }
@@ -350,6 +354,8 @@ impl OrchestratorInfra {
             risk_waivers: liberado_common::RiskWaiverSet::empty(),
             proposals_dir,
             signer,
+            direct_max_turns: DIRECT_MAX_TURNS,
+            subagent_max_turns: liberado_executor::DEFAULT_MAX_TURNS,
             research_max_turns: RESEARCH_MAX_TURNS,
             report_sink: None,
         }
@@ -375,6 +381,18 @@ impl OrchestratorInfra {
     /// treatment the per-role model settings get.
     pub fn with_research_max_turns(mut self, max_turns: u32) -> Self {
         self.research_max_turns = max_turns;
+        self
+    }
+
+    /// Set the direct-worker turn ceiling for every pool.
+    pub fn with_direct_max_turns(mut self, max_turns: u32) -> Self {
+        self.direct_max_turns = max_turns;
+        self
+    }
+
+    /// Set the normal acting-subagent turn ceiling for every pool.
+    pub fn with_subagent_max_turns(mut self, max_turns: u32) -> Self {
+        self.subagent_max_turns = max_turns;
         self
     }
 
@@ -407,8 +425,8 @@ impl OrchestratorInfra {
             signer: self.signer.clone(),
             pool_name: pool_name.into(),
             source: DEFAULT_SOURCE.to_string(),
-            direct_budget: Budget::new(DIRECT_MAX_TURNS),
-            subagent_budget: Budget::default(),
+            direct_budget: Budget::new(self.direct_max_turns),
+            subagent_budget: Budget::new(self.subagent_max_turns),
             research_budget: Budget::new(self.research_max_turns),
             notifier: None,
             report_sink: self.report_sink.clone(),
@@ -2674,6 +2692,26 @@ mod tests {
     fn with_research_budget_overrides_the_default() {
         let orch = orchestrator_with_catalog(Vec::new()).with_research_budget(Budget::new(12));
         assert_eq!(orch.research_budget.max_turns, 12);
+    }
+
+    #[test]
+    fn infra_applies_configured_direct_normal_and_research_budgets_to_each_pool() {
+        let provider = Arc::new(MockProvider::with_script("mock", vec![]));
+        let infra = OrchestratorInfra::new(
+            provider,
+            Arc::new(liberado_common::CapabilityCatalog::new()),
+            Vec::new(),
+            std::env::temp_dir(),
+            ProposalSigner::random(),
+        )
+        .with_direct_max_turns(8)
+        .with_subagent_max_turns(20)
+        .with_research_max_turns(30);
+        let orch = infra.for_pool(NoopFactory, CapabilitySet::empty(), "default");
+
+        assert_eq!(orch.direct_budget.max_turns, 8);
+        assert_eq!(orch.subagent_budget.max_turns, 20);
+        assert_eq!(orch.research_budget.max_turns, 30);
     }
 
     #[test]
