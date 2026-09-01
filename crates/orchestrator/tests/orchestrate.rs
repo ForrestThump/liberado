@@ -4,9 +4,9 @@
 use std::sync::{Arc, Mutex};
 
 use liberado_common::{
-    BlockReason, Capability, CapabilitySet, Consequence, Delivery, Depth, DispatchAction,
-    DispatchDecision, Outcome, Proposal, ProposalSigner, ProposalStatus, ProposedAction, ToolCall,
-    WriteProvenance,
+    ApprovedGuard, BlockReason, Capability, CapabilitySet, Consequence, Delivery, Depth,
+    DispatchAction, DispatchDecision, McpDescriptor, Outcome, Proposal, ProposalSigner,
+    ProposalStatus, ProposedAction, ToolCall, WriteProvenance,
 };
 use liberado_executor::SUBMIT_REPORT_TOOL;
 use liberado_orchestrator::{Disposition, Orchestrator, OrchestratorError, SubDispatch};
@@ -828,6 +828,69 @@ async fn execute_approved_subagent_dispatches_the_approved_goal() {
     let invoked = invoked.lock().unwrap();
     assert_eq!(invoked.len(), 1);
     assert_eq!(invoked[0].name, "decisions-mcp:list_recent");
+}
+
+#[tokio::test]
+async fn execute_approved_adaptive_goal_skips_only_its_approved_magnitude_guard() {
+    let script = vec![
+        CompletionResponse::tool_calls(vec![ToolInvocation::new(
+            "c1",
+            "tasks-mcp:delete_all",
+            serde_json::json!({}),
+        )]),
+        submit_report_response(),
+    ];
+    let provider = Arc::new(MockProvider::with_script("mock", script));
+    let runtime = InvocationRecordingRuntime::default();
+    let invoked = runtime.invoked.clone();
+    let signer = ProposalSigner::random();
+    let dir = tempfile::tempdir().unwrap();
+    let capabilities = CapabilitySet::from_iter([Capability::ExecuteMcp("tasks-mcp".into())]);
+    let descriptor = McpDescriptor {
+        name: "tasks-mcp".into(),
+        description: "task operations".into(),
+        consequence: Consequence::Reversible,
+        provenance: None,
+        default_zone: None,
+        tool_zones: Vec::new(),
+        zone_from_arg: None,
+        write_tools: Vec::new(),
+    };
+    let orch = Orchestrator::new(
+        provider,
+        InvocationRecordingFactory { runtime },
+        capabilities.clone(),
+        vec![("tasks-mcp".into(), Consequence::Reversible)],
+        vec![descriptor],
+        Vec::new(),
+        dir.path().to_path_buf(),
+        signer.clone(),
+        "default",
+    );
+    let proposal = Proposal::pending(
+        "delete-tasks",
+        "delete-tasks",
+        "liberado",
+        ProposedAction::AdaptiveGoal {
+            goal: "delete all tasks".into(),
+            capabilities,
+            relevant_mcps: vec!["tasks-mcp".into()],
+            delivery: Delivery::Summarize,
+            approved_guard: ApprovedGuard::Magnitude,
+        },
+        "the human approved this sweeping task goal",
+    );
+    let mut proposal = signer.sign(proposal).into_proposal();
+    proposal.status = ProposalStatus::Approved;
+
+    let report = orch.execute_approved(&proposal).await.expect("execute");
+    assert_eq!(report.outcome, Outcome::Succeeded);
+    assert_eq!(invoked.lock().unwrap().len(), 1);
+    assert_eq!(invoked.lock().unwrap()[0].name, "tasks-mcp:delete_all");
+    assert!(
+        !dir.path().join("proposals").exists(),
+        "the already-approved magnitude guard must not create another proposal"
+    );
 }
 
 #[tokio::test]

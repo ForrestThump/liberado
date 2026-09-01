@@ -31,7 +31,7 @@ use std::time::Duration;
 
 use liberado_common::{
     CapabilityCatalog, CapabilitySet, DEFAULT_POOL, Event, EventSource, ProposalSigner,
-    UserTimezone, WriteClass,
+    RiskWaiverSet, UserTimezone, WriteClass,
 };
 use liberado_dispatcher::Dispatcher;
 use liberado_notify::Notifier;
@@ -59,6 +59,7 @@ impl Daemon {
             proposal_reap_interval: DEFAULT_PROPOSAL_REAP_INTERVAL,
             session_profile_caps: HashMap::new(),
             pools: HashMap::new(),
+            risk_waivers: RiskWaiverSet::empty(),
             signer: ProposalSigner::random(),
             approvals: None,
             notifier: None,
@@ -120,6 +121,17 @@ impl Daemon {
     /// `profile`, the reactor uses that grant; an unknown name is fail-closed (no session).
     pub fn with_session_profile_caps(mut self, caps: HashMap<String, CapabilitySet>) -> Self {
         self.session_profile_caps = caps;
+        self
+    }
+
+    /// Apply the policy-wide risk waivers to current and future dispatcher pools.
+    pub fn with_risk_waivers(mut self, waivers: RiskWaiverSet) -> Self {
+        self.risk_waivers = waivers.clone();
+        for pool in self.pools.values_mut() {
+            if let Some(context) = &mut pool.dispatcher {
+                context.risk_waivers = waivers.clone();
+            }
+        }
         self
     }
 
@@ -258,6 +270,7 @@ impl Daemon {
             capabilities,
             reaction_depth: DEFAULT_REACTION_DEPTH,
             zone_write_classes: Vec::new(),
+            risk_waivers: self.risk_waivers.clone(),
         });
         self
     }

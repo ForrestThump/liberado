@@ -8,6 +8,8 @@
 
 mod api;
 mod cron_delivery;
+mod main_agent_budget;
+use main_agent_budget::main_agent_budget;
 mod hooks;
 mod latency;
 mod shutdown;
@@ -27,7 +29,7 @@ use axum::Router;
 use liberado_common::{CapabilityCatalog, CapabilitySet, WriteProvenance};
 use liberado_daemon::Daemon;
 use liberado_dispatcher::Dispatcher;
-use liberado_executor::{Budget, Executor, ToolRuntime};
+use liberado_executor::{Executor, ToolRuntime};
 use liberado_main_agent::ChatSessions;
 use liberado_mcp::McpRegistry;
 use liberado_provider::Provider;
@@ -873,7 +875,7 @@ async fn build_chat(
 
     let mut sessions = ChatSessions::new(
         store,
-        Executor::new(provider.clone(), Budget::default()),
+        Executor::new(provider.clone(), main_agent_budget(main_agent_cfg)),
         runtime,
     )
     .with_system_prompt(system_prompt)
@@ -885,6 +887,7 @@ async fn build_chat(
         guard.signer.clone(),
     )
     .with_zone_guards(guard.zone_catalog, guard.zone_write_classes)
+    .with_risk_waivers(config.policy.risk_waiver_set())
     .with_live_catalog(catalog.clone())
     .with_dispatcher_capabilities(dispatcher_caps)
     .with_delegation_mode(main_agent_cfg.delegation_mode);

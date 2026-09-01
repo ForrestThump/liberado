@@ -386,7 +386,7 @@ impl Config {
                 "tuning.concurrency.max_reaction_depth must be >= 1".into(),
             ));
         }
-        Ok(())
+        self.validate_turn_budgets()
     }
 
     /// `[tuning.capture]` parses and validates. `inbox_ignore_globs`, `inbox_path`,

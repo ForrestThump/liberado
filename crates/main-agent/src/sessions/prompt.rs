@@ -2,6 +2,7 @@
 
 use super::super::*;
 use super::test_fixtures::*;
+use crate::HUMAN_INTERFACE_SYSTEM_PROMPT;
 
 /// The nudge must qualify the system prompt, not arrive as if the user said it â€” a model treats
 /// those very differently.

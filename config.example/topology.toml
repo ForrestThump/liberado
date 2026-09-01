@@ -24,6 +24,12 @@ vault_path = "/path/to/vault"
 # needs to hold *deltas* — you don't have to redeclare deepseek/openrouter just to select one.
 # provider = "deepseek"
 
+# Agent turn ceilings. Each is a work budget, not a reply budget: conversational agents receive
+# one additional tool-free turn to summarize after they reach their configured ceiling.
+# direct_max_turns = 8       # short adaptive ExecuteDirect work (compiled default: 4)
+# subagent_max_turns = 20    # normal delegated acting work (compiled default: 8)
+# research_max_turns = 30    # read-only research/review work (compiled default: 30)
+
 # Coding project roots (coding-tui S3 / G4). A coding goal may only touch a path under one of these;
 # undeclared directories are refused (fail-closed). `/goal in <name>` picks by `name`; the daemon
 # injects the absolute `workspace_root` before the coding pack runs. Roots must be absolute.
@@ -126,6 +132,7 @@ enabled = true
 # main-agent keys at load time. Compaction settings live in [main_agent.compaction] at the end.
 [main_agent]
 delegation_mode = true
+# max_turns = 12             # face-agent tool turns per user message (compiled default: 8)
 # system_prompt = """optional full override of the human-interface system prompt"""
 
 # Declared inference backends — every one is built by the single, generic

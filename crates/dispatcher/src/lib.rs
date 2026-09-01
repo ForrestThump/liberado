@@ -16,6 +16,7 @@
 //! it is bounded on both sides — malformed output degrades to a safe `Clarify` rather than
 //! crashing (Decision 13), and the guards constrain the result regardless of what the model said.
 
+mod downgrade;
 pub mod guards;
 
 use std::hash::{Hash, Hasher};
@@ -55,6 +56,11 @@ pub struct DispatchRequest {
     /// falls back to the same conservative default `Policy::write_class` itself uses
     /// (`WriteClass::ProposalOnly`) — see `guards::zone_write_class`.
     pub zone_write_classes: Vec<(String, liberado_common::WriteClass)>,
+    /// Declarative risk waivers loaded from `policy.toml` — used by the magnitude guard to
+    /// suppress itself for matching tool calls. Defaults to empty (the unchanged pre-feature
+    /// behaviour). Set this from `Policy::risk_waiver_set` at the bootstrap site so the guard
+    /// pipeline and the runtime guard (`RiskGatedToolRuntime`) see the same set.
+    pub risk_waivers: liberado_common::RiskWaiverSet,
 }
 
 /// Errors that abort a dispatch. Malformed model output does **not** appear here — it is handled
@@ -139,28 +145,33 @@ impl Dispatcher {
             sanitize_decision_mcps(&mut classified, &req.catalog);
             log_classified_decision(&classified, &self.provider.model());
 
-            let decision =
-                match guards::evaluate(&classified, req, &self.tuning, self.max_reaction_depth) {
-                    Some(reason) => {
-                        tracing::Span::current().record("downgrade", format_args!("{reason:?}"));
-                        tracing::info!(
-                            classified = %classified.action,
-                            confidence = classified.confidence,
-                            model = %self.provider.model(),
-                            "dispatch decision downgraded by guard"
-                        );
-                        downgrade(classified, reason)
-                    }
-                    None => {
-                        tracing::info!(
-                            action = %classified.action,
-                            confidence = classified.confidence,
-                            model = %self.provider.model(),
-                            "dispatch decision"
-                        );
-                        classified
-                    }
-                };
+            let decision = match guards::evaluate_detailed(
+                &classified,
+                req,
+                &self.tuning,
+                self.max_reaction_depth,
+            ) {
+                Some(violation) => {
+                    let reason = violation.reason;
+                    tracing::Span::current().record("downgrade", format_args!("{reason:?}"));
+                    tracing::info!(
+                        classified = %classified.action,
+                        confidence = classified.confidence,
+                        model = %self.provider.model(),
+                        "dispatch decision downgraded by guard"
+                    );
+                    downgrade(classified, req, violation)
+                }
+                None => {
+                    tracing::info!(
+                        action = %classified.action,
+                        confidence = classified.confidence,
+                        model = %self.provider.model(),
+                        "dispatch decision"
+                    );
+                    classified
+                }
+            };
 
             tracing::Span::current().record("action", format_args!("{}", decision.action.label()));
             tracing::Span::current().record("confidence", decision.confidence);
@@ -601,25 +612,17 @@ fn clarify_fallback() -> DispatchDecision {
     }
 }
 
-/// Resolve a guard violation to a downgraded decision. A high-consequence or zone-restricted block
-/// on a *concrete* `ExecuteDirect` (a non-empty seed call list — a known action like "send this
-/// email") or on a `DispatchSubagent` (which always carries a restated goal — the classifier's one
-/// required field, so there is always something concrete enough to propose) becomes a `Propose`,
-/// carrying the action for human approval (Decision 11). Every other case stays a `Clarify` — the
-/// most conservative output when there is nothing concrete to propose. `ZoneRestricted` (§6 #2)
-/// gets the exact same treatment as `HighConsequence` here — both are "a human needs to approve
-/// this specific action before it runs," just gated on a different axis (target zone vs. general
-/// riskiness) — there's no reason for one to produce a `Propose` and the other only a `Clarify`.
-///
-/// TODO: the one still-deferred fuzzy case is an empty-seed `ExecuteDirect` (including a bare
-/// magnitude-gate hit with no seed calls) — there is no fixed action to propose, since
-/// `ExecuteDirect` carries no goal of its own (unlike `DispatchSubagent`); the caller's `goal`
-/// isn't threaded into this function today. Approving it would mean "run the adaptive loop on this
-/// goal," which needs the same runtime-gated-execution shape `Orchestrator::execute_approved`'s
-/// `Subagent` arm now has — likely a `ProposedAction::AdaptiveGoal { goal, relevant_mcps }` run via
-/// `Task::new(DIRECT_INSTRUCTIONS, goal)` under a gated runtime, mirroring `Orchestrator::run`'s
-/// `ExecuteDirect` arm. Left for a follow-up rather than folded in here.
-fn downgrade(classified: DispatchDecision, reason: BlockReason) -> DispatchDecision {
+/// Resolve a guard violation to a downgraded decision. Human-approvable violations preserve a
+/// concrete action. Seeded direct calls preserve the calls; a subagent preserves its goal and
+/// scope; and an empty-seed direct action preserves an [`ProposedAction::AdaptiveGoal`] containing
+/// the exact goal, capability ceiling, MCP narrowing, delivery, and precise guard being approved.
+/// This last form closes the old ask → confirm → reclassify → ask loop.
+fn downgrade(
+    classified: DispatchDecision,
+    req: &DispatchRequest,
+    violation: guards::GuardViolation,
+) -> DispatchDecision {
+    let reason = violation.reason;
     let confidence = classified.confidence;
     let rationale = classified.rationale;
 
@@ -649,28 +652,14 @@ fn downgrade(classified: DispatchDecision, reason: BlockReason) -> DispatchDecis
         reason,
         BlockReason::HighConsequence | BlockReason::ZoneRestricted
     ) {
-        match classified.action {
-            DispatchAction::ExecuteDirect { seed_calls, .. } if !seed_calls.is_empty() => {
-                return downgrade_to_propose_tool_calls(seed_calls, confidence, rationale);
-            }
-            DispatchAction::DispatchSubagent {
-                goal,
-                capabilities,
-                allowed_mcps,
-                success_criteria,
-                ..
-            } => {
-                return downgrade_to_propose_subagent(
-                    goal,
-                    capabilities,
-                    allowed_mcps,
-                    success_criteria,
-                    confidence,
-                    rationale,
-                );
-            }
-            _ => {}
-        }
+        return crate::downgrade::downgrade_approvable(
+            classified.action,
+            req,
+            violation,
+            confidence,
+            rationale,
+            reason,
+        );
     }
     downgrade_to_clarify(confidence, reason)
 }
@@ -679,7 +668,7 @@ fn downgrade(classified: DispatchDecision, reason: BlockReason) -> DispatchDecis
 /// original decision's seed calls (as the proposed action), confidence, and rationale. Takes the
 /// exact payload rather than the whole `DispatchDecision` — the caller's match arm is what proves
 /// this is a concrete `ExecuteDirect`, so there is nothing left to assert (or panic on) in here.
-fn downgrade_to_propose_tool_calls(
+pub(crate) fn downgrade_to_propose_tool_calls(
     seed_calls: Vec<ToolCall>,
     confidence: f32,
     rationale: String,
@@ -699,7 +688,7 @@ fn downgrade_to_propose_tool_calls(
 /// `Orchestrator::execute_approved` dispatches the subagent exactly as scoped here once a human
 /// approves it. Takes the exact payload rather than the whole `DispatchDecision`, same reasoning as
 /// `downgrade_to_propose_tool_calls` above.
-fn downgrade_to_propose_subagent(
+pub(crate) fn downgrade_to_propose_subagent(
     goal: String,
     capabilities: CapabilitySet,
     allowed_mcps: Vec<String>,
@@ -724,7 +713,7 @@ fn downgrade_to_propose_subagent(
 
 /// Build the conservative `Clarify` a guard downgrade resolves to, preserving the model's
 /// confidence for the trace.
-fn downgrade_to_clarify(confidence: f32, reason: BlockReason) -> DispatchDecision {
+pub(crate) fn downgrade_to_clarify(confidence: f32, reason: BlockReason) -> DispatchDecision {
     DispatchDecision {
         action: DispatchAction::Clarify {
             questions: vec![clarify_question(reason)],

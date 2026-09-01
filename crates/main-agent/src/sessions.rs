@@ -54,7 +54,7 @@ use std::sync::{Arc, Mutex};
 
 use liberado_common::{
     Capability, CapabilityCatalog, CapabilitySet, Consequence, DEFAULT_POOL, DispatchAction,
-    McpDescriptor, ProposalSigner, WriteClass, mcp_of,
+    McpDescriptor, ProposalSigner, RiskWaiverSet, WriteClass, mcp_of,
 };
 use liberado_conversation_store::{
     Author, ConversationHeader, ConversationStore, MessageNode, NewConversation, NewNode,
@@ -65,6 +65,9 @@ use liberado_executor::{AgentEvent, ExecError, Executor, RiskGatedToolRuntime, T
 use liberado_mcp::ScopedRuntime;
 use liberado_provider::{Message, Provider, Role};
 use liberado_session::{DomainHint, GoalSessionHub, GoalSpec, SessionGrant, SessionOrigin};
+
+#[path = "sessions_waivers.rs"]
+mod waivers;
 use thiserror::Error;
 use tokio::sync::broadcast;
 use tokio::sync::mpsc::Sender;
@@ -73,7 +76,7 @@ use crate::compaction::{
     self, COMPACTION_AUTHOR, COMPACTION_TAIL_AUTHOR, CompactionConfig, CompactionTriggerTable,
 };
 use crate::face::{DispatchBridge, FaceRuntime};
-use crate::{Conversation, DEFAULT_SYSTEM_PROMPT, HUMAN_INTERFACE_SYSTEM_PROMPT};
+use crate::{Conversation, DEFAULT_SYSTEM_PROMPT};
 
 /// Max display length for the cheap first-line default title (UTF-8 chars).
 const DEFAULT_TITLE_MAX_CHARS: usize = 72;
@@ -250,6 +253,9 @@ pub struct ChatSessions {
     live_catalog: Option<Arc<CapabilityCatalog>>,
     /// `(zone, write_class)` pairs from `Policy.zones` for the same check.
     zone_write_classes: Vec<(String, WriteClass)>,
+    /// Declarative risk waivers from `policy.toml`. Passed through to the dispatcher pre-flight
+    /// magnitude guard and every runtime gate built here.
+    risk_waivers: RiskWaiverSet,
     /// Capability grants for RiskGatedToolRuntime capability checking.
     capabilities: CapabilitySet,
     /// The vault's `proposals/` directory — a `proposals/` subdirectory under this holds proposal
@@ -326,6 +332,7 @@ impl ChatSessions {
             zone_catalog: Vec::new(),
             live_catalog: None,
             zone_write_classes: Vec::new(),
+            risk_waivers: RiskWaiverSet::empty(),
             capabilities: CapabilitySet::empty(),
             proposals_dir: PathBuf::new(),
             signer: ProposalSigner::random(),
@@ -405,35 +412,6 @@ impl ChatSessions {
         let model = self.peek_turn_model(session).await;
         let table = engine.triggers.lock().unwrap_or_else(|p| p.into_inner());
         Some(table.for_model(model.as_deref()))
-    }
-
-    /// Override the system prompt written as the root node of new conversations.
-    pub fn with_system_prompt(mut self, prompt: impl Into<String>) -> Self {
-        self.system_prompt = prompt.into();
-        self
-    }
-
-    /// Attach the goal session hub so `delegate` and non-`ExecuteDirect` pre-turn work run as
-    /// hosted sessions (one-execution-engine E4). Without this, face-agent mode has no `delegate`
-    /// tool and non-`ExecuteDirect` classifications fall through as plain answers about the failure.
-    pub fn with_goal_hub(mut self, hub: Arc<GoalSessionHub>) -> Self {
-        self.goals = Some(hub);
-        self.rebuild_face_bridge();
-        self
-    }
-
-    /// Enable face-agent / human-interfacer mode (built-in `delegate` tool; no pre-turn fleet).
-    ///
-    /// When enabled and a hub is attached, applies [`HUMAN_INTERFACE_SYSTEM_PROMPT`] unless a
-    /// custom prompt was already set via [`with_system_prompt`](Self::with_system_prompt) *after*
-    /// this call — prefer setting the prompt explicitly from config in the host.
-    pub fn with_delegation_mode(mut self, enabled: bool) -> Self {
-        self.delegation_mode = enabled;
-        if enabled && self.system_prompt == DEFAULT_SYSTEM_PROMPT {
-            self.system_prompt = HUMAN_INTERFACE_SYSTEM_PROMPT.to_string();
-        }
-        self.rebuild_face_bridge();
-        self
     }
 
     /// Ceiling used for dispatcher classification and delegated worker sessions.
@@ -1388,7 +1366,8 @@ impl ChatSessions {
             session.to_string(),
             self.signer.clone(),
             DEFAULT_POOL,
-        );
+        )
+        .with_risk_waivers(self.risk_waivers.clone());
         if let Some(cat) = &self.live_catalog {
             gated = gated.with_live_catalog(cat.clone());
         }
@@ -1549,6 +1528,7 @@ impl ChatSessions {
             capabilities: dispatch_caps.clone(),
             reaction_depth: 0, // user-initiated, not a background reaction
             zone_write_classes: self.zone_write_classes.clone(),
+            risk_waivers: self.risk_waivers.clone(),
         };
         let decision = match dispatcher.dispatch(&req).await {
             Ok(decision) => decision,
@@ -1711,7 +1691,8 @@ impl ChatSessions {
             session.to_string(),
             self.signer.clone(),
             DEFAULT_POOL,
-        );
+        )
+        .with_risk_waivers(self.risk_waivers.clone());
         if let Some(cat) = &self.live_catalog {
             gated = gated.with_live_catalog(cat.clone());
         }

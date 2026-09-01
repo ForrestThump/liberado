@@ -4,8 +4,8 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use liberado_common::{
-    Capability, CapabilitySet, Consequence, DEFAULT_TIMEZONE, ModelProfile, ModelRole,
-    ReasoningLevel, UserTimezone, Zone,
+    Capability, CapabilitySet, Consequence, ModelProfile, ModelRole, ReasoningLevel, UserTimezone,
+    Zone,
 };
 use serde::{Deserialize, Serialize};
 
@@ -24,7 +24,7 @@ pub struct Topology {
     /// onto cron/webhook goals and available via [`Topology::user_timezone`] / [`UserTimezone`]
     /// anywhere a caller wants to inject now into agent context. **Not** applied to cron
     /// *expressions* (those remain UTC); only to human-facing local-time context.
-    /// Default: [`DEFAULT_TIMEZONE`] (`America/Chicago`). Validated at load time.
+    /// Default: [`liberado_common::DEFAULT_TIMEZONE`] (`America/Chicago`). Validated at load time.
     pub timezone: String,
     /// Unix domain socket the daemon listens on for TUI/client attach (Decision 2).
     pub daemon_socket: PathBuf,
@@ -90,6 +90,16 @@ pub struct Topology {
     /// config — no rebuild. See `docs/future-work/latency-and-routing-observability-plan.md` §3.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub roles: HashMap<ModelRole, RoleOverride>,
+
+    /// Turn ceiling for the short adaptive `ExecuteDirect` worker. `None` →
+    /// `liberado_orchestrator::DIRECT_MAX_TURNS`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub direct_max_turns: Option<u32>,
+
+    /// Turn ceiling for a normal acting subagent. `None` →
+    /// `liberado_executor::DEFAULT_MAX_TURNS`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subagent_max_turns: Option<u32>,
 
     /// Turn ceiling for a **read-only** subagent — research, review, summarisation. `None` →
     /// `liberado_orchestrator::RESEARCH_MAX_TURNS`.
@@ -178,6 +188,10 @@ pub struct MainAgentConfig {
     /// Optional full override of the main-agent system prompt. When unset, uses the built-in
     /// human-interfacer prompt (if `delegation_mode`) or the short legacy prompt otherwise.
     pub system_prompt: Option<String>,
+    /// Tool-using turns allowed for one conversation response. `None` →
+    /// `liberado_executor::DEFAULT_MAX_TURNS`. The executor grants one additional tool-free turn
+    /// only to summarize when this ceiling is reached.
+    pub max_turns: Option<u32>,
     /// Automatic context compaction for long conversations (CH3). See
     /// `docs/spec/reference/tuning.md`. All fields defaulted; an absent table is the shipped
     /// behavior (compaction on).
@@ -385,37 +399,15 @@ impl Default for MainAgentConfig {
         Self {
             delegation_mode: true,
             system_prompt: None,
+            max_turns: None,
             compaction: CompactionSettings::default(),
         }
     }
 }
 
-impl Default for Topology {
-    fn default() -> Self {
-        Self {
-            research_max_turns: None,
-            report_sink: None,
-            vault_path: PathBuf::new(),
-            timezone: DEFAULT_TIMEZONE.to_string(),
-            daemon_socket: PathBuf::from("/run/liberado/daemon.sock"),
-            provider: "deepseek".to_string(),
-            providers: default_providers(),
-            acp: AcpConfig::default(),
-            models: Vec::new(),
-            model_roles: HashMap::new(),
-            mcps: Vec::new(),
-            hooks: Vec::new(),
-            schedules: Vec::new(),
-            pools: Vec::new(),
-            session_profiles: Vec::new(),
-            projects: Vec::new(),
-            shepherd: ShepherdConfig::default(),
-            main_agent: MainAgentConfig::default(),
-            webui: WebUiConfig::default(),
-            roles: HashMap::new(),
-        }
-    }
-}
+#[cfg(test)]
+#[path = "topology_turn_budget_tests.rs"]
+mod turn_budget_config_tests;
 
 /// Configuration for the PR shepherd. It observes forge checks; project preflight remains the
 /// separate local command policy under [`ProjectConfig::preflight`].
@@ -477,7 +469,7 @@ impl Topology {
 /// plain string literals here rather than `liberado_provider_openai_compat::OpenAiCompatibleProvider`'s
 /// constants: this crate must not depend on a concrete provider crate (that would invert the
 /// intended layering, config is foundational, providers are not).
-fn default_providers() -> Vec<ProviderProfile> {
+pub(crate) fn default_providers() -> Vec<ProviderProfile> {
     vec![
         ProviderProfile {
             name: "deepseek".to_string(),

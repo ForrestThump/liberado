@@ -2,7 +2,7 @@
 
 use liberado_common::{
     BlockReason, Capability, CapabilitySet, Consequence, Delivery, DispatchAction,
-    DispatchDecision, McpDescriptor, ProposalSigner, ToolCall,
+    DispatchDecision, McpDescriptor, ProposalSigner, RiskWaiverSet, ToolCall,
 };
 use liberado_config_loader::DispatchTuning;
 use liberado_dispatcher::guards::evaluate;
@@ -42,6 +42,7 @@ async fn guard_conformance_capability_gap_agrees_both_sides() {
         capabilities: caps.clone(),
         reaction_depth: 0,
         zone_write_classes: Vec::new(),
+        risk_waivers: RiskWaiverSet::empty(),
     };
     assert_eq!(
         evaluate(&decision, &req, &DispatchTuning::default(), 4),
@@ -116,6 +117,7 @@ async fn guard_conformance_consequence_agrees_on_external_mcp() {
         capabilities: caps.clone(),
         reaction_depth: 0,
         zone_write_classes: Vec::new(),
+        risk_waivers: RiskWaiverSet::empty(),
     };
     assert_eq!(
         evaluate(&decision, &req, &DispatchTuning::default(), 4),
@@ -191,6 +193,7 @@ async fn guard_conformance_magnitude_agrees_on_sweeping_destructive() {
         capabilities: caps.clone(),
         reaction_depth: 0,
         zone_write_classes: Vec::new(),
+        risk_waivers: RiskWaiverSet::empty(),
     };
     assert_eq!(
         evaluate(&decision, &req, &DispatchTuning::default(), 4),

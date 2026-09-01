@@ -195,13 +195,6 @@ const CLEAR_VERB_FOLLOWERS: &[&str] = &[
     "up",
 ];
 
-/// Whole-word quantifiers that make an action sweeping.
-///
-/// `any` / `each` are intentionally omitted: they appear constantly in benign English
-/// ("any details", "each field") and, combined with false-positive destructive stems, over-gated
-/// read goals. Strong quantifiers (`all` / `every` / `entire` / `everything`) remain.
-const SWEEPING_WORDS: &[&str] = &["all", "every", "everything", "entire"];
-
 fn words(text: &str) -> impl Iterator<Item = String> + '_ {
     text.split(|c: char| !c.is_alphanumeric())
         .filter(|w| !w.is_empty())
@@ -228,14 +221,12 @@ pub fn mentions_destructive(text: &str) -> bool {
     false
 }
 
-/// Classify how far-reaching `text` is. `Sweeping` when a universal quantifier is present as a whole
-/// word (so "install" does not match "all").
+/// Classify how far-reaching `text` is. `Sweeping` when a universal quantifier is present as a
+/// whole word (so "install" does not match "all"), or when `entire` qualifies a known collection.
+/// `entire` + one concrete object stays bounded: "remove the entire line" names one target, not a
+/// set. Runtime structural checks still enforce the exact tool/path arguments before a write.
 pub fn assess_magnitude(text: &str) -> Magnitude {
-    if words(text).any(|w| SWEEPING_WORDS.contains(&w.as_str())) {
-        Magnitude::Sweeping
-    } else {
-        Magnitude::Bounded
-    }
+    crate::sweeping::classify(text)
 }
 
 /// The combined high-stakes signal magnitude contributes to the consequence gate: a **sweeping
@@ -540,7 +531,7 @@ impl CapabilitySet {
 
                     #[test]
                     fn proptest_sweeping_words_detected(
-                        word in proptest::sample::select(SWEEPING_WORDS),
+                        word in proptest::sample::select(crate::sweeping::SWEEPING_WORDS),
                     ) {
                         prop_assert_eq!(assess_magnitude(word), Magnitude::Sweeping);
                     }
@@ -548,7 +539,7 @@ impl CapabilitySet {
                     #[test]
                     fn proptest_sweeping_destructive_combines(
                         stem in proptest::sample::select(DESTRUCTIVE_STEMS),
-                        sweeping in proptest::sample::select(SWEEPING_WORDS),
+                        sweeping in proptest::sample::select(crate::sweeping::SWEEPING_WORDS),
                     ) {
                         let phrase = format!("{} {} notes", stem, sweeping);
                         prop_assert!(is_sweeping_destructive(&phrase));
@@ -556,7 +547,7 @@ impl CapabilitySet {
 
                     #[test]
                     fn proptest_sweeping_without_destructive_is_false(
-                        sweeping in proptest::sample::select(SWEEPING_WORDS),
+                        sweeping in proptest::sample::select(crate::sweeping::SWEEPING_WORDS),
                     ) {
                         let phrase = format!("summarize {} my notes", sweeping);
                         prop_assert!(!is_sweeping_destructive(&phrase));

@@ -8,6 +8,8 @@
 //! `McpRegistry` that is not shareable across instances, so the pack holds one
 //! (dispatcher, orchestrator) pair per pool name.
 
+mod waivers;
+
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -15,7 +17,9 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use liberado_coder_core::CommandPolicy;
 use liberado_coder_sandbox::{Workspace, WorktreeWorkspace};
-use liberado_common::{CapabilityCatalog, DEFAULT_POOL, PROPOSALS_DIR, SignedProposal, WriteClass};
+use liberado_common::{
+    CapabilityCatalog, DEFAULT_POOL, PROPOSALS_DIR, RiskWaiverSet, SignedProposal, WriteClass,
+};
 use liberado_dispatcher::{DispatchRequest, Dispatcher};
 use liberado_notify::Notifier;
 use liberado_orchestrator::{Disposition, Orchestrator, SubDispatch};
@@ -45,6 +49,9 @@ pub struct DispatchPack {
     /// `(zone, write_class)` pairs for the zone-write-class guard — default-pool values; additional
     /// pools currently share this (v1, same as the daemon's pre-pack configuration).
     zone_write_classes: Vec<(String, WriteClass)>,
+    /// Declarative risk waivers from `policy.toml`. Passed through to every dispatch the pack
+    /// runs, so the pre-flight magnitude guard sees the same set the runtime guard does.
+    risk_waivers: RiskWaiverSet,
     reaction_depth: u32,
     /// Where a `Propose` disposition writes its draft note (`proposals_dir/proposals/<id>.md`).
     proposals_dir: PathBuf,
@@ -63,6 +70,9 @@ impl DispatchPack {
             pools: HashMap::new(),
             catalog,
             zone_write_classes,
+            // Default empty for the legacy entry point; the bootstrap path wires the loaded
+            // `Policy` via the setter below.
+            risk_waivers: RiskWaiverSet::empty(),
             reaction_depth,
             proposals_dir,
             notifier: None,
@@ -391,6 +401,7 @@ impl DomainPackRunner for DispatchPack {
             capabilities: ctx.grant.capabilities.clone(),
             reaction_depth: self.reaction_depth,
             zone_write_classes: self.zone_write_classes.clone(),
+            risk_waivers: self.risk_waivers.clone(),
         };
 
         // Tag every inference this pack triggers (dispatcher classification + orchestrator loop)

@@ -23,12 +23,32 @@
 
 use liberado_common::CONSEQUENCE_GATE;
 use liberado_common::{
-    BlockReason, Consequence, DispatchAction, DispatchDecision, bare_tool_name, instruction_scope,
-    is_sweeping_destructive, mcp_of, zone_write_restriction,
+    BlockReason, Consequence, DispatchAction, DispatchDecision, WaiverTarget, bare_tool_name,
+    instruction_scope, is_sweeping_destructive, mcp_of, write_target, zone_write_restriction,
 };
 use liberado_config_loader::DispatchTuning;
 
-use crate::DispatchRequest;
+use crate::{DispatchRequest, McpDescriptor};
+
+/// The precise guard that rejected a classified action. `BlockReason` is intentionally coarser
+/// for the public wire format, but approval continuation needs to know which one-time runtime
+/// exception the human authorized.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum GuardKind {
+    AskHumanCapability,
+    McpGrant,
+    Consequence,
+    ZoneWriteClass,
+    Magnitude,
+    ReactionDepth,
+    ConfidenceFloor,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct GuardViolation {
+    pub guard: GuardKind,
+    pub reason: BlockReason,
+}
 
 /// Evaluate the guards against a classified decision. Returns the [`BlockReason`] of the first
 /// (highest-priority) violation, or `None` if the decision passes unchanged. The caller downgrades
@@ -42,6 +62,15 @@ pub fn evaluate(
     tuning: &DispatchTuning,
     max_reaction_depth: u32,
 ) -> Option<BlockReason> {
+    evaluate_detailed(decision, req, tuning, max_reaction_depth).map(|violation| violation.reason)
+}
+
+pub(crate) fn evaluate_detailed(
+    decision: &DispatchDecision,
+    req: &DispatchRequest,
+    tuning: &DispatchTuning,
+    max_reaction_depth: u32,
+) -> Option<GuardViolation> {
     // A Clarify is the most conservative action — *when somebody can answer it*.
     //
     // For an actor holding no `AskHuman` capability there is no one, so a question is not a
@@ -53,7 +82,7 @@ pub fn evaluate(
     if matches!(decision.action, DispatchAction::Clarify { .. }) {
         if !req.capabilities.grants_ask_human() {
             return blocked(
-                "ask_human_capability",
+                GuardKind::AskHumanCapability,
                 BlockReason::Unattended,
                 "Clarify requires an interlocutor and this actor holds no AskHuman capability",
             );
@@ -82,7 +111,7 @@ pub fn evaluate(
                 "capability gap: action references something not in the dispatcher grant"
             );
             return blocked(
-                "mcp_grant",
+                GuardKind::McpGrant,
                 BlockReason::CapabilityGap,
                 &format!("action references '{reference}', which the grant does not include"),
             );
@@ -96,7 +125,7 @@ pub fn evaluate(
     let consequence = max_consequence(&decision.action, req);
     if consequence >= CONSEQUENCE_GATE {
         return blocked(
-            "consequence",
+            GuardKind::Consequence,
             BlockReason::HighConsequence,
             &format!("an MCP in scope is rated {consequence:?} (gate {CONSEQUENCE_GATE:?})"),
         );
@@ -109,7 +138,7 @@ pub fn evaluate(
     // `RiskGatedToolRuntime`.
     if zone_restricted(&decision.action, req) {
         return blocked(
-            "zone_write_class",
+            GuardKind::ZoneWriteClass,
             BlockReason::ZoneRestricted,
             "a seed call targets a zone that is not directly agent-writable",
         );
@@ -123,23 +152,42 @@ pub fn evaluate(
     // Scoped to the *instruction* — a goal that merely narrates a past deletion in a trailing
     // `Context:` section is not asking for one. See `instruction_scope`'s doc comment for the
     // live false positive that motivated this.
+    //
+    // Waiver: a `[[risk_waivers]]` entry that covers every (tool, zone) this action would touch
+    // suppresses this gate. Waivers do not grant authority — that is the capability check above;
+    // they only say "for these tool calls, the magnitude heuristic adds no safety beyond the
+    // structural checks already run." Today the typical waiver covers a read-only MCP wholesale
+    // or a path-addressed read tool in zones the agent routinely fetches.
     let instruction = instruction_scope(&req.goal);
     if is_sweeping_destructive(instruction) {
-        return blocked(
-            "magnitude",
-            BlockReason::HighConsequence,
-            &format!(
-                "instruction reads as sweeping+destructive ({} of {} goal chars scanned)",
-                instruction.len(),
-                req.goal.len()
-            ),
+        let targets = magnitude_targets(&decision.action, &req.catalog);
+        let waived = req
+            .risk_waivers
+            .all_magnitude_waived(targets.iter().map(|(tool, zone)| WaiverTarget {
+                qualified_tool: tool,
+                zone: zone.as_deref(),
+            }));
+        if !waived {
+            return blocked(
+                GuardKind::Magnitude,
+                BlockReason::HighConsequence,
+                &format!(
+                    "instruction reads as sweeping+destructive ({} of {} goal chars scanned)",
+                    instruction.len(),
+                    req.goal.len()
+                ),
+            );
+        }
+        tracing::info!(
+            targets = ?targets,
+            "magnitude gate suppressed by risk waiver — instruction matched but every target is waived"
         );
     }
 
     // (4) Reaction-depth guard — halt runaway background cascades.
     if req.reaction_depth >= max_reaction_depth {
         return blocked(
-            "reaction_depth",
+            GuardKind::ReactionDepth,
             BlockReason::DepthLimit,
             &format!("depth {} >= max {max_reaction_depth}", req.reaction_depth),
         );
@@ -150,7 +198,7 @@ pub fn evaluate(
     // deferred); `Clarify` was already excluded above.
     if decision.confidence < tuning.clarify_threshold_write {
         return blocked(
-            "confidence_floor",
+            GuardKind::ConfidenceFloor,
             BlockReason::LowConfidence,
             &format!(
                 "confidence {:.2} < threshold {:.2}",
@@ -170,9 +218,9 @@ pub fn evaluate(
 /// apart required re-running the heuristic offline against the goal text — the log could not answer
 /// it. `guard=` closes that, and matches the field name `RiskGatedToolRuntime::authority_decision`
 /// uses on the runtime side, so one grep covers both enforcement points.
-fn blocked(guard: &'static str, reason: BlockReason, detail: &str) -> Option<BlockReason> {
-    tracing::warn!(guard, ?reason, detail = %detail, "pre-flight guard blocked the action");
-    Some(reason)
+fn blocked(guard: GuardKind, reason: BlockReason, detail: &str) -> Option<GuardViolation> {
+    tracing::warn!(guard = ?guard, ?reason, detail = %detail, "pre-flight guard blocked the action");
+    Some(GuardViolation { guard, reason })
 }
 
 /// The MCPs an action would invoke. The tool-name convention is `"<mcp>:<tool>"`; a bare name is
@@ -257,483 +305,47 @@ fn zone_restricted(action: &DispatchAction, req: &DispatchRequest) -> bool {
     })
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::McpDescriptor;
-    use liberado_common::{
-        Capability, CapabilitySet, Consequence, Delivery, Depth, ToolCall, Zone,
-    };
-
-    fn req(capabilities: CapabilitySet, reaction_depth: u32) -> DispatchRequest {
-        DispatchRequest {
-            goal: "do the thing".into(),
-            catalog: vec![McpDescriptor {
-                name: "tasks-mcp".into(),
-                description: "task ops".into(),
-                consequence: Consequence::Reversible,
-                provenance: None,
-                default_zone: None,
-                tool_zones: Vec::new(),
-                zone_from_arg: None,
-                write_tools: Vec::new(),
-            }],
-            capabilities,
-            reaction_depth,
-            zone_write_classes: Vec::new(),
+/// Per-call resolution the magnitude gate consults: each entry is `(tool, zone)`. The
+/// `String`s are owned so a closure-built iterator can yield borrows outliving it. The
+/// caller turns these into [`liberado_common::WaiverTarget`]s.
+fn magnitude_targets(
+    action: &DispatchAction,
+    catalog: &[McpDescriptor],
+) -> Vec<(String, Option<String>)> {
+    match action {
+        DispatchAction::ExecuteDirect {
+            seed_calls,
+            relevant_mcps,
+            ..
+        } => seed_calls
+            .iter()
+            .map(|call| {
+                let mcp = mcp_of(&call.tool);
+                let bare = bare_tool_name(&call.tool);
+                // Resolve the call's target zone against the catalog. `WriteTarget::Zone(name)`
+                // is the only branch that produces a Some(zone); reads and undeterminable writes
+                // both yield None so a zone-restricted waiver does not accidentally match.
+                let zone = catalog
+                    .iter()
+                    .find(|d| d.name == mcp)
+                    .and_then(|d| match write_target(d, bare, &call.args) {
+                        liberado_common::WriteTarget::Zone(name) => Some(name),
+                        _ => None,
+                    });
+                (call.tool.clone(), zone)
+            })
+            // Relevant MCPs are the adaptive scope beyond the concrete opening calls. A bare MCP
+            // target can only match a whole-MCP waiver: tool- or zone-filtered waivers correctly
+            // refuse to make claims about calls the classifier has not named yet.
+            .chain(relevant_mcps.iter().map(|mcp| (mcp.clone(), None)))
+            .collect(),
+        DispatchAction::DispatchSubagent { allowed_mcps, .. } => {
+            allowed_mcps.iter().map(|mcp| (mcp.clone(), None)).collect()
         }
-    }
-
-    fn clarify_decision() -> DispatchDecision {
-        DispatchDecision {
-            action: DispatchAction::Clarify {
-                questions: vec!["which one?".into()],
-                what_blocked: BlockReason::Ambiguous,
-            },
-            confidence: 0.9,
-            rationale: "test".into(),
-        }
-    }
-
-    /// A cron holds no `AskHuman`, so a `Clarify` is a dead end: delivered to nobody, run spent.
-    /// The homelab's `dispatcher` grant already omitted the capability — the dispatcher just never
-    /// read it, and a live evening-debrief burned a run on "how should I proceed?" at 01:55.
-    #[test]
-    fn an_unattended_actor_may_not_be_asked_to_clarify() {
-        let unattended = granted("tasks-mcp"); // no AskHuman
-        let reason = evaluate(
-            &clarify_decision(),
-            &req(unattended, 0),
-            &DispatchTuning::default(),
-            5,
-        );
-        assert_eq!(reason, Some(BlockReason::Unattended));
-    }
-
-    /// A seed call names a concrete tool, so a per-tool grant must be read at that precision here
-    /// rather than collapsed to its MCP. Collapsing it passed pre-flight and left the refusal to the
-    /// runtime gate — safe, but it spent a dispatch turn to reach an error nameable up front.
-    #[test]
-    fn a_partial_grant_blocks_an_ungranted_seed_call_at_preflight() {
-        let partial = CapabilitySet::from_iter([Capability::ExecuteTool("tasks-mcp:list".into())]);
-
-        let allowed = evaluate(
-            &execute_direct("tasks-mcp:list", 0.95),
-            &req(partial.clone(), 0),
-            &DispatchTuning::default(),
-            5,
-        );
-        assert_eq!(allowed, None, "the granted tool must pass");
-
-        let refused = evaluate(
-            &execute_direct("tasks-mcp:delete_all", 0.95),
-            &req(partial, 0),
-            &DispatchTuning::default(),
-            5,
-        );
-        assert_eq!(
-            refused,
-            Some(BlockReason::CapabilityGap),
-            "another tool on the same MCP is not granted, and the MCP-level question cannot see that"
-        );
-    }
-
-    /// The consequence gate reads its declaration per MCP, so it has to keep resolving qualified tool
-    /// names back to their server. If it stopped, every `ExecuteDirect` would score `ReadOnly` and the
-    /// gate would silently pass the actions it exists to catch.
-    #[test]
-    fn consequence_is_still_resolved_for_a_qualified_seed_call() {
-        // `tasks-mcp` is declared `Reversible` in `req`; the catalog is keyed by bare MCP name.
-        let caps = CapabilitySet::from_iter([Capability::ExecuteMcp("tasks-mcp".into())]);
-        let action = execute_direct("tasks-mcp:list", 0.95);
-        assert_eq!(
-            max_consequence(&action.action, &req(caps, 0)),
-            Consequence::Reversible,
-            "a qualified tool name must still resolve to its MCP's declared consequence"
-        );
-    }
-
-    /// ...and an actor that *can* ask is untouched: Clarify remains the conservative answer there.
-    #[test]
-    fn an_interactive_actor_may_still_clarify() {
-        let mut interactive = granted("tasks-mcp");
-        interactive.grant(Capability::AskHuman);
-        let reason = evaluate(
-            &clarify_decision(),
-            &req(interactive, 0),
-            &DispatchTuning::default(),
-            5,
-        );
-        assert_eq!(reason, None);
-    }
-
-    fn execute_direct(tool: &str, confidence: f32) -> DispatchDecision {
-        DispatchDecision {
-            action: DispatchAction::ExecuteDirect {
-                seed_calls: vec![ToolCall {
-                    tool: tool.into(),
-                    args: serde_json::json!({}),
-                }],
-                relevant_mcps: Vec::new(),
-                delivery: Delivery::Summarize,
-            },
-            confidence,
-            rationale: "test".into(),
-        }
-    }
-
-    fn granted(mcp: &str) -> CapabilitySet {
-        CapabilitySet::from_iter([
-            Capability::ExecuteMcp(mcp.into()),
-            // a zone read, just to show unrelated caps don't matter
-            Capability::Read(Zone::vault("tasks")),
-        ])
-    }
-
-    #[test]
-    fn high_confidence_granted_call_passes_through() {
-        let d = execute_direct("tasks-mcp:add", 0.95);
-        assert_eq!(
-            evaluate(
-                &d,
-                &req(granted("tasks-mcp"), 0),
-                &DispatchTuning::default(),
-                4
-            ),
-            None
-        );
-    }
-
-    #[test]
-    fn ungranted_mcp_is_a_capability_gap() {
-        let d = execute_direct("email-mcp:send", 0.95);
-        assert_eq!(
-            evaluate(
-                &d,
-                &req(granted("tasks-mcp"), 0),
-                &DispatchTuning::default(),
-                4
-            ),
-            Some(BlockReason::CapabilityGap)
-        );
-    }
-
-    #[test]
-    fn bare_tool_name_is_treated_as_mcp_name() {
-        let d = execute_direct("tasks-mcp", 0.95);
-        assert_eq!(
-            evaluate(
-                &d,
-                &req(granted("tasks-mcp"), 0),
-                &DispatchTuning::default(),
-                4
-            ),
-            None
-        );
-    }
-
-    #[test]
-    fn external_action_is_gated_by_consequence() {
-        // Granted and confident — but it would send a message out of the system. Confirm first.
-        let request = DispatchRequest {
-            goal: "email my boss".into(),
-            catalog: vec![McpDescriptor {
-                name: "email".into(),
-                description: "send email".into(),
-                consequence: Consequence::External,
-                provenance: None,
-                default_zone: None,
-                tool_zones: Vec::new(),
-                zone_from_arg: None,
-                write_tools: Vec::new(),
-            }],
-            capabilities: granted("email"),
-            reaction_depth: 0,
-            zone_write_classes: Vec::new(),
-        };
-        let d = execute_direct("email:send", 0.95);
-        assert_eq!(
-            evaluate(&d, &request, &DispatchTuning::default(), 4),
-            Some(BlockReason::HighConsequence)
-        );
-    }
-
-    #[test]
-    fn reversible_git_tracked_write_is_not_gated() {
-        // A write to a git-tracked vault is recoverable — reversibility is the safety net, so the
-        // consequence gate lets it flow even at the same confidence the email was blocked at.
-        let request = DispatchRequest {
-            goal: "write a note".into(),
-            catalog: vec![McpDescriptor {
-                name: "vault".into(),
-                description: "git-tracked Obsidian vault".into(),
-                consequence: Consequence::Reversible,
-                provenance: None,
-                default_zone: None,
-                tool_zones: Vec::new(),
-                zone_from_arg: None,
-                write_tools: Vec::new(),
-            }],
-            capabilities: granted("vault"),
-            reaction_depth: 0,
-            zone_write_classes: Vec::new(),
-        };
-        let d = execute_direct("vault:write", 0.95);
-        assert_eq!(evaluate(&d, &request, &DispatchTuning::default(), 4), None);
-    }
-
-    #[test]
-    fn sweeping_destructive_goal_is_gated_by_magnitude() {
-        // The eval's case: a git-tracked vault (Reversible, so the consequence gate passes), but the
-        // goal is sweeping-destructive — the magnitude gate must still downgrade it.
-        let request = DispatchRequest {
-            goal: "delete all of my notes".into(),
-            catalog: vec![McpDescriptor {
-                name: "vault".into(),
-                description: "git-tracked vault".into(),
-                consequence: Consequence::Reversible,
-                provenance: None,
-                default_zone: None,
-                tool_zones: Vec::new(),
-                zone_from_arg: None,
-                write_tools: Vec::new(),
-            }],
-            capabilities: granted("vault"),
-            reaction_depth: 0,
-            zone_write_classes: Vec::new(),
-        };
-        let d = execute_direct("vault:delete", 0.95);
-        assert_eq!(
-            evaluate(&d, &request, &DispatchTuning::default(), 4),
-            Some(BlockReason::HighConsequence)
-        );
-    }
-
-    #[test]
-    fn reaction_depth_limit_downgrades() {
-        let d = execute_direct("tasks-mcp:add", 0.95);
-        // At the cap, even a granted high-confidence call is halted.
-        assert_eq!(
-            evaluate(
-                &d,
-                &req(granted("tasks-mcp"), 4),
-                &DispatchTuning::default(),
-                4
-            ),
-            Some(BlockReason::DepthLimit)
-        );
-    }
-
-    #[test]
-    fn low_confidence_downgrades() {
-        let d = execute_direct("tasks-mcp:add", 0.5); // below default write threshold 0.7
-        assert_eq!(
-            evaluate(
-                &d,
-                &req(granted("tasks-mcp"), 0),
-                &DispatchTuning::default(),
-                4
-            ),
-            Some(BlockReason::LowConfidence)
-        );
-    }
-
-    #[test]
-    fn capability_gap_outranks_low_confidence() {
-        // Both a capability gap and low confidence apply; the more fundamental one is reported.
-        let d = execute_direct("email-mcp:send", 0.1);
-        assert_eq!(
-            evaluate(
-                &d,
-                &req(granted("tasks-mcp"), 0),
-                &DispatchTuning::default(),
-                4
-            ),
-            Some(BlockReason::CapabilityGap)
-        );
-    }
-
-    #[test]
-    fn execute_direct_requires_relevant_mcps_granted() {
-        // seed_calls references a granted MCP, but relevant_mcps names one that isn't — the
-        // narrowing hint gets the same capability-gap protection as seed_calls and allowed_mcps.
-        let d = DispatchDecision {
-            action: DispatchAction::ExecuteDirect {
-                seed_calls: vec![ToolCall {
-                    tool: "tasks-mcp:add".into(),
-                    args: serde_json::json!({}),
-                }],
-                relevant_mcps: vec!["tasks-mcp".into(), "email-mcp".into()],
-                delivery: Delivery::Summarize,
-            },
-            confidence: 0.95,
-            rationale: "test".into(),
-        };
-        assert_eq!(
-            evaluate(
-                &d,
-                &req(granted("tasks-mcp"), 0),
-                &DispatchTuning::default(),
-                4
-            ),
-            Some(BlockReason::CapabilityGap)
-        );
-    }
-
-    #[test]
-    fn execute_direct_with_only_granted_relevant_mcps_passes() {
-        let d = DispatchDecision {
-            action: DispatchAction::ExecuteDirect {
-                seed_calls: Vec::new(),
-                relevant_mcps: vec!["tasks-mcp".into()],
-                delivery: Delivery::Summarize,
-            },
-            confidence: 0.95,
-            rationale: "test".into(),
-        };
-        assert_eq!(
-            evaluate(
-                &d,
-                &req(granted("tasks-mcp"), 0),
-                &DispatchTuning::default(),
-                4
-            ),
-            None
-        );
-    }
-
-    #[test]
-    fn subagent_requires_all_allowed_mcps_granted() {
-        let d = DispatchDecision {
-            action: DispatchAction::DispatchSubagent {
-                goal: "review".into(),
-                capabilities: CapabilitySet::empty(),
-                allowed_mcps: vec!["tasks-mcp".into(), "decisions-mcp".into()],
-                success_criteria: vec![],
-                artifact_target: None,
-                model: None,
-                correlation_id: "c1".into(),
-                delivery: Delivery::Summarize,
-                depth: Depth::Normal,
-            },
-            confidence: 0.95,
-            rationale: "test".into(),
-        };
-        // Only tasks-mcp granted → the missing decisions-mcp is a capability gap.
-        assert_eq!(
-            evaluate(
-                &d,
-                &req(granted("tasks-mcp"), 0),
-                &DispatchTuning::default(),
-                4
-            ),
-            Some(BlockReason::CapabilityGap)
-        );
-    }
-
-    /// A Clarify skips the *other* guards — confidence floor, depth limit — because asking is
-    /// already the conservative answer. Renamed from `clarify_is_never_downgraded`: that was true
-    /// unconditionally until the AskHuman guard, and "never" is now wrong. The exemption holds only
-    /// when someone can actually answer, so this fixture must grant `AskHuman` to test it.
-    #[test]
-    fn clarify_skips_the_other_guards_when_a_human_is_reachable() {
-        let d = DispatchDecision {
-            action: DispatchAction::Clarify {
-                questions: vec!["which?".into()],
-                what_blocked: BlockReason::Ambiguous,
-            },
-            confidence: 0.0, // would trip the confidence floor if it applied
-            rationale: "test".into(),
-        };
-        let mut caps = CapabilitySet::empty();
-        caps.grant(Capability::AskHuman);
-        assert_eq!(
-            evaluate(&d, &req(caps, 9), &DispatchTuning::default(), 4),
-            None
-        );
-    }
-
-    /// A `vault` MCP request whose seed call targets `write_review` (declared to write to the
-    /// `reviews` zone), granted and `Reversible` (so the consequence gate alone would pass it) —
-    /// isolating the zone-write-class guard from the consequence gate it sits next to.
-    fn vault_request(
-        zone_write_classes: Vec<(&str, liberado_common::WriteClass)>,
-    ) -> DispatchRequest {
-        DispatchRequest {
-            goal: "write a review note".into(),
-            catalog: vec![McpDescriptor {
-                name: "vault".into(),
-                description: "git-tracked vault".into(),
-                consequence: Consequence::Reversible,
-                provenance: None,
-                default_zone: Some("tasks".into()),
-                tool_zones: vec![("write_review".into(), Some("reviews".into()))],
-                zone_from_arg: None,
-                write_tools: Vec::new(),
-            }],
-            capabilities: granted("vault"),
-            reaction_depth: 0,
-            zone_write_classes: zone_write_classes
-                .into_iter()
-                .map(|(z, wc)| (z.to_string(), wc))
-                .collect(),
-        }
-    }
-
-    #[test]
-    fn write_to_a_proposal_only_zone_is_zone_restricted() {
-        use liberado_common::WriteClass;
-        let d = execute_direct("vault:write_review", 0.95);
-        let request = vault_request(vec![("reviews", WriteClass::ProposalOnly)]);
-        assert_eq!(
-            evaluate(&d, &request, &DispatchTuning::default(), 4),
-            Some(BlockReason::ZoneRestricted)
-        );
-    }
-
-    #[test]
-    fn write_to_an_agent_writable_zone_passes() {
-        use liberado_common::WriteClass;
-        let d = execute_direct("vault:write_review", 0.95);
-        let request = vault_request(vec![("reviews", WriteClass::AgentWritable)]);
-        assert_eq!(evaluate(&d, &request, &DispatchTuning::default(), 4), None);
-    }
-
-    #[test]
-    fn unlisted_zone_fails_safe_to_zone_restricted() {
-        // "reviews" isn't in zone_write_classes at all -- must fail safe (ProposalOnly), not
-        // silently pass just because nothing was configured.
-        use liberado_common::WriteClass;
-        let d = execute_direct("vault:write_review", 0.95);
-        let request = vault_request(vec![("tasks", WriteClass::AgentWritable)]);
-        assert_eq!(
-            evaluate(&d, &request, &DispatchTuning::default(), 4),
-            Some(BlockReason::ZoneRestricted)
-        );
-    }
-
-    #[test]
-    fn a_tool_not_opted_into_zone_tracking_is_not_zone_restricted() {
-        // "add" isn't in vault's `tool_zones` and there's a `default_zone`, so it inherits
-        // "tasks" -- this specifically checks a tool from a *different*, zone-untracked MCP
-        // (tasks-mcp, no default_zone/tool_zones at all) isn't affected by the vault-only
-        // zone_write_classes above -- it should pass regardless of what zones are restricted.
-        use liberado_common::WriteClass;
-        let d = execute_direct("tasks-mcp:add", 0.95);
-        let request = DispatchRequest {
-            zone_write_classes: vec![("reviews".to_string(), WriteClass::ProposalOnly)],
-            ..req(granted("tasks-mcp"), 0)
-        };
-        assert_eq!(evaluate(&d, &request, &DispatchTuning::default(), 4), None);
-    }
-
-    #[test]
-    fn confidence_at_the_write_threshold_is_not_low_confidence() {
-        let tuning = DispatchTuning::default();
-        let d = execute_direct("tasks-mcp:add", tuning.clarify_threshold_write);
-        assert_eq!(
-            evaluate(&d, &req(granted("tasks-mcp"), 0), &tuning, 4),
-            None
-        );
+        DispatchAction::Clarify { .. } | DispatchAction::Propose { .. } => Vec::new(),
     }
 }
+
+#[cfg(test)]
+#[path = "guards_tests.rs"]
+mod tests;

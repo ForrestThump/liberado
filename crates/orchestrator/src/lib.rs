@@ -29,8 +29,8 @@ use liberado_common::{
     ProposedAction, Report, SignedProposal, ToolCall, WriteClass, WriteProvenance, mcp_of,
 };
 use liberado_executor::{
-    Budget, ExecError, Executor, LoopProfile, RiskGatedToolRuntime, RuntimeFactory,
-    RuntimeSetupError, SUBMIT_REPORT_TOOL, Task, ToolRuntime,
+    Budget, ExecError, Executor, LoopProfile, RuntimeFactory, RuntimeSetupError,
+    SUBMIT_REPORT_TOOL, Task, ToolRuntime,
 };
 use liberado_notify::Notifier;
 use liberado_provider::{Provider, ToolDef, ToolInvocation};
@@ -40,6 +40,8 @@ use tokio::sync::Semaphore;
 use tracing::Instrument;
 
 /// Default `source` recorded in write provenance for orchestrated executions.
+mod approved;
+
 pub const DEFAULT_SOURCE: &str = "liberado-executor";
 
 /// The one tool call that lands a [`Delivery::Vault`] report, as declared in `topology.toml`.
@@ -270,6 +272,10 @@ pub struct Orchestrator {
     live_catalog: Option<Arc<liberado_common::CapabilityCatalog>>,
     /// `(zone, write_class)` pairs from `Policy.zones` for the same check.
     zone_write_classes: Vec<(String, WriteClass)>,
+    /// Declarative risk waivers from `policy.toml`. Passed through to every `gate` runtime
+    /// built by this orchestrator so the runtime magnitude guard sees the same waivers the
+    /// dispatcher's pre-flight guard does. Empty = unchanged pre-feature behaviour.
+    risk_waivers: liberado_common::RiskWaiverSet,
     /// Base directory for proposal files a runtime-level downgrade writes (see `gate`).
     proposals_dir: PathBuf,
     /// Signs proposals built by the `Propose` arm and this orchestrator's own runtime-level `gate`
@@ -317,10 +323,17 @@ pub struct OrchestratorInfra {
     /// Shared live catalog — gate consequence/zone data is refreshed from here after MCP apply.
     live_catalog: Arc<liberado_common::CapabilityCatalog>,
     zone_write_classes: Vec<(String, WriteClass)>,
+    /// Declarative risk waivers from `policy.toml`. Passed through to every pool so the
+    /// runtime magnitude guard and the dispatcher's pre-flight guard see the same set.
+    risk_waivers: liberado_common::RiskWaiverSet,
     proposals_dir: PathBuf,
     signer: ProposalSigner,
     /// Turn ceiling for read-only subagent work, applied to every pool built from this infra.
     research_max_turns: u32,
+    /// Turn ceiling for short adaptive direct work.
+    direct_max_turns: u32,
+    /// Turn ceiling for normal acting subagent work.
+    subagent_max_turns: u32,
     /// Vault report sink shared by every pool built from this infra.
     report_sink: Option<ReportSink>,
 }
@@ -338,8 +351,13 @@ impl OrchestratorInfra {
             provider,
             live_catalog,
             zone_write_classes,
+            // Default: empty. Operators opt in via `with_risk_waivers` once the
+            // bootstrap wires the loaded `Policy` through.
+            risk_waivers: liberado_common::RiskWaiverSet::empty(),
             proposals_dir,
             signer,
+            direct_max_turns: DIRECT_MAX_TURNS,
+            subagent_max_turns: liberado_executor::DEFAULT_MAX_TURNS,
             research_max_turns: RESEARCH_MAX_TURNS,
             report_sink: None,
         }
@@ -386,12 +404,13 @@ impl OrchestratorInfra {
             zone_catalog: self.live_catalog.descriptors(),
             live_catalog: Some(self.live_catalog.clone()),
             zone_write_classes: self.zone_write_classes.clone(),
+            risk_waivers: self.risk_waivers.clone(),
             proposals_dir: self.proposals_dir.clone(),
             signer: self.signer.clone(),
             pool_name: pool_name.into(),
             source: DEFAULT_SOURCE.to_string(),
-            direct_budget: Budget::new(DIRECT_MAX_TURNS),
-            subagent_budget: Budget::default(),
+            direct_budget: Budget::new(self.direct_max_turns),
+            subagent_budget: Budget::new(self.subagent_max_turns),
             research_budget: Budget::new(self.research_max_turns),
             notifier: None,
             report_sink: self.report_sink.clone(),
@@ -421,6 +440,9 @@ impl Orchestrator {
             zone_catalog,
             live_catalog: None,
             zone_write_classes,
+            // Default empty for the legacy entry point; the bootstrap-driven infra path
+            // wires the loaded `Policy` via `with_risk_waivers`.
+            risk_waivers: liberado_common::RiskWaiverSet::empty(),
             proposals_dir,
             signer,
             pool_name: pool_name.into(),
@@ -1190,24 +1212,7 @@ impl Orchestrator {
                     )
                     .await
                 }
-                other => {
-                    // VaultWrite/External/Other aren't produced by v1 emit; refuse defensively
-                    // rather than error so the daemon can mark the proposal done and not retry
-                    // forever.
-                    tracing::warn!(
-                        action = ?other,
-                        "approved proposal action is not executable in v1"
-                    );
-                    Ok(Report {
-                        outcome: Outcome::Failed,
-                        summary: "proposed action type is not executable in v1".into(),
-                        artifacts: Vec::new(),
-                        new_high_signal_facts: Vec::new(),
-                        deferred_to_human: false,
-                        follow_up: None,
-                        repeat_calls: 0,
-                    })
-                }
+                other => self.execute_approved_other(proposal, other).await,
             }
         }
         .instrument(span)
@@ -1506,46 +1511,20 @@ impl Orchestrator {
         goal_context: impl Into<String>,
         correlation_base: impl Into<String>,
     ) -> (Arc<dyn ToolRuntime>, Arc<AtomicBool>) {
-        let deferral_flag = Arc::new(AtomicBool::new(false));
-        // Prefer live catalog so peers added via hot-reload still get consequence/zone gates.
-        let (consequences, zones) = if let Some(cat) = &self.live_catalog {
-            (cat.consequence_catalog(), cat.descriptors())
-        } else {
-            (self.consequence_catalog.clone(), self.zone_catalog.clone())
-        };
-        let mut gated = RiskGatedToolRuntime::new(
-            Arc::from(runtime),
-            capabilities,
-            consequences,
-            zones,
-            self.zone_write_classes.clone(),
-            self.proposals_dir.clone(),
-            goal_context.into(),
-            correlation_base.into(),
-            self.signer.clone(),
-            self.pool_name.clone(),
-        )
-        .with_deferral_flag(deferral_flag.clone());
-        if let Some(cat) = &self.live_catalog {
-            gated = gated.with_live_catalog(cat.clone());
-        }
-        if let Some(notifier) = &self.notifier {
-            gated = gated.with_notifier(notifier.clone());
-        }
-        (Arc::new(gated), deferral_flag)
+        self.gate_with_approved_guard(runtime, capabilities, goal_context, correlation_base, None)
     }
 }
 
 /// Read a gate's deferral flag as a boolean — `true` iff the gated runtime raised a proposal /
 /// permission-request during the run and surfaced it out-of-band (see [`Orchestrator::gate`]).
-fn deferred_flag_of(flag: &Arc<AtomicBool>) -> bool {
+pub(crate) fn deferred_flag_of(flag: &Arc<AtomicBool>) -> bool {
     flag.load(Ordering::Relaxed)
 }
 
 /// A runtime that exposes no tools — used for `ExecuteDirect` when the acting component holds no
 /// `ExecuteMcp` grants at all, so an empty allow-list can't be mistaken for "everything visible"
 /// (see `Orchestrator::run`'s `ExecuteDirect` arm).
-struct NoMcpRuntime;
+pub(crate) struct NoMcpRuntime;
 
 #[async_trait]
 impl ToolRuntime for NoMcpRuntime {
