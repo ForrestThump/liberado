@@ -164,10 +164,18 @@ watch, then restore. Verify the restore.
 ### Turn budgets — `topology.toml`
 
 ```toml
-research_max_turns = 30          # ceiling for depth = "deep" subagents
+direct_max_turns = 8             # short adaptive ExecuteDirect work (default 4)
+subagent_max_turns = 20          # normal acting subagents (default 8)
+research_max_turns = 30          # read-only research/review work (default 30)
+
+[main_agent]
+max_turns = 12                   # face-agent tool work per user message (default 8)
 ```
 
-The dispatcher chooses `depth` (`shallow`/`normal`/`deep`) per dispatch; this caps the deep end.
+The dispatcher chooses the execution path. These deployment ceilings prevent that routing choice
+from deciding whether real work can finish. When the main agent reaches its ceiling, Liberado
+withdraws its tools and grants one final response-only turn, so the user gets an honest status
+instead of a bare budget error.
 
 ### Coding repository context — `tuning.toml`
 
@@ -470,8 +478,8 @@ These are **not** config fields. Changing one is a code edit plus a rebuild. Eac
 | Constant | Value | Why not config |
 |---|---|---|
 | `CONSEQUENCE_GATE` | `Irreversible` | The safety threshold itself. Two independent guards read it; making it operator-editable makes "how dangerous is too dangerous" a runtime accident |
-| `DEFAULT_MAX_TURNS` | 8 | Baseline subagent budget. `depth` + `research_max_turns` are the intended knobs |
-| `DIRECT_MAX_TURNS` | 4 | `ExecuteDirect` is the "a few steps clearly suffice" path; a large value contradicts the routing decision |
+| `DEFAULT_MAX_TURNS` | 8 | Fallback face and normal-subagent budget when topology does not override it |
+| `DIRECT_MAX_TURNS` | 4 | Fallback `ExecuteDirect` budget when topology does not override it |
 | `WRAP_UP_TURNS` | 3 | Reserve for filing partial work at budget exhaustion |
 | `DOOM_LOOP_THRESHOLD` | 3 | Repeats before the loop guard fires |
 | `ARG_SIMILARITY_THRESHOLD` | 0.2 | Near-duplicate argument detection (semantic profile only) |

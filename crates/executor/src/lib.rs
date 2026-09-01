@@ -23,6 +23,7 @@
 //! depends on the trait, so it is testable with a mock runtime and a `MockProvider`.
 
 mod budget;
+mod conversation_reserve;
 mod loop_guard;
 mod mvl;
 mod risk_gated;
@@ -200,6 +201,11 @@ pub const DEFAULT_MAX_TURNS: u32 = 8;
 /// `max_turns + DOOM_LOOP_RECOVERY_BONUS_TURNS + WRAP_UP_TURNS`.
 pub const WRAP_UP_TURNS: u32 = 3;
 
+/// One tool-free turn reserved for a conversational agent to tell the human what happened after
+/// it spends the configured work budget. This prevents a successful final tool call from ending as
+/// a transport error with no reply, while still forbidding more work beyond the ceiling.
+pub const CONVERSATION_WRAP_UP_TURNS: u32 = 1;
+
 /// Appended once if the model answers in prose without filing a `Report`. Deliberately offers
 /// *both* options (keep going, or finish) rather than unconditionally pushing to wrap up — an
 /// earlier wording ("Before finishing, call `submit_report`...") biased a model that paused to
@@ -281,6 +287,14 @@ fn wrap_up_directive(resource: &str, reserve: u32) -> String {
          with what you already have: the findings gathered so far, and a plain statement of what \
          you did not get to. Set `outcome` to `PartiallySucceeded`, or `Failed` if nothing useful \
          was gathered. An incomplete report is worth far more to the caller than none."
+    )
+}
+
+fn conversation_wrap_up_directive(resource: &str) -> String {
+    format!(
+        "You have run out of {resource}. All tools are now withdrawn. Reply to the human now with \
+         a concise, honest summary of what succeeded, what failed, and what remains. Do not call \
+         another tool."
     )
 }
 
@@ -1188,10 +1202,17 @@ impl Executor {
         );
         let _enter = span.enter();
         tracing::debug!(model = %self.active_model(), "starting conversational stream turn");
-        let tools = runtime.catalog();
+        let mut tools = runtime.catalog();
         self.mvl_start(None);
         let result = async {
-            for turn in 1..=self.budget.max_turns {
+            let final_turn = conversation_reserve::conversation_final_turn(self.budget.max_turns);
+            for turn in 1..=final_turn {
+                conversation_reserve::enter_if_exhausted(
+                    turn,
+                    self.budget.max_turns,
+                    &mut tools,
+                    messages,
+                );
                 let request = CompletionRequest::new(messages.clone())
                     .with_tools(tools.clone())
                     .with_model(self.model.clone());
@@ -1213,20 +1234,12 @@ impl Executor {
                 self.mvl_completion(turn, &response);
 
                 messages.push(assistant_turn(&response));
-                if response.tool_calls.is_empty() {
-                    self.mvl_end("succeeded", "model finished");
-                    return Ok(()); // the prose answer was streamed as tokens
+                if self
+                    .finish_stream_turn(turn, runtime, &response, events, messages)
+                    .await?
+                {
+                    return Ok(());
                 }
-
-                for call in &response.tool_calls {
-                    if let Some(call_id) = self
-                        .invoke_stream_tool(runtime, call, turn, events, messages)
-                        .await?
-                    {
-                        return Err(ExecError::AwaitingHuman { call_id });
-                    }
-                }
-                tracing::info!(turn, tools = response.tool_calls.len(), "turn used tools");
             }
 
             // This loop ends only by running out of turns; the extra limits are checked in
@@ -1605,23 +1618,16 @@ impl Executor {
             self.budget.exhausted_extra(usage)
         };
         let name = exhausted?;
-        if *wrapping_up || !policy.salvageable || !matches!(mode, Mode::Report) {
-            return Some(name);
-        }
-        *wrapping_up = true;
-        *max_turns = turn + WRAP_UP_TURNS - 1;
-        // Withdraw everything but the finish tool, so the reserve cannot be spent
-        // continuing the work it was granted to conclude.
-        tools.retain(|t| t.name == SUBMIT_REPORT_TOOL);
-        messages.push(Message::user(wrap_up_directive(name, WRAP_UP_TURNS)));
-        tracing::warn!(
+        conversation_reserve::after_named_exhaustion(
+            wrapping_up,
+            max_turns,
+            tools,
+            messages,
             turn,
-            resource = name,
-            reserve = WRAP_UP_TURNS,
-            "budget exhausted on salvageable work; granting wrap-up reserve to file a \
-             partial report"
-        );
-        None
+            name,
+            mode,
+            policy,
+        )
     }
 
     /// Handle a prose-only completion: conversational modes end with the spoken text; report mode
@@ -4508,6 +4514,9 @@ mod tests {
         assert_eq!(answer, "the answer is 42");
         assert_eq!(messages.len(), 5);
     }
+
+    #[path = "conversation_reserve_tests.rs"]
+    mod conversation_reserve_tests;
 
     // ── converse_stream budget exhaustion ────────────────────────────
 

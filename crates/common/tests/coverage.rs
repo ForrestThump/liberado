@@ -286,6 +286,13 @@ fn proposed_action_variants_round_trip() {
         tool: "x".into(),
         args: serde_json::json!({}),
     }]));
+    round_trip(ProposedAction::AdaptiveGoal {
+        goal: "delete all archived tasks".into(),
+        capabilities: CapabilitySet::from_iter([Capability::ExecuteMcp("tasks".into())]),
+        relevant_mcps: vec!["tasks".into()],
+        delivery: Delivery::Summarize,
+        approved_guard: ApprovedGuard::Magnitude,
+    });
     round_trip(ProposedAction::VaultWrite {
         path: "decisions/x.md".into(),
         content_summary: "log decision".into(),

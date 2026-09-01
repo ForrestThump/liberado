@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use liberado_common::{
     CapabilityCatalog, CapabilitySet, DispatchDecision, Event, EventSource, ProposalSigner,
-    UserTimezone, WriteClass,
+    RiskWaiverSet, UserTimezone, WriteClass,
 };
 use liberado_dispatcher::{DispatchRequest, Dispatcher};
 use liberado_notify::Notifier;
@@ -93,6 +93,9 @@ pub(crate) struct DispatcherContext {
     /// `(zone, write_class)` pairs from `Policy.zones` — what the zone-write-class guard (§6 #2)
     /// checks a seed call's resolved target zone against.
     pub(crate) zone_write_classes: Vec<(String, WriteClass)>,
+    /// Declarative risk waivers from `policy.toml` — passed through to the dispatcher so the
+    /// pre-flight magnitude guard sees the same set the runtime guard does.
+    pub(crate) risk_waivers: RiskWaiverSet,
 }
 
 impl DispatcherContext {
@@ -119,6 +122,7 @@ impl DispatcherContext {
             capabilities: self.capabilities.clone(),
             reaction_depth: self.reaction_depth,
             zone_write_classes: self.zone_write_classes.clone(),
+            risk_waivers: self.risk_waivers.clone(),
         }
     }
 }
@@ -158,6 +162,9 @@ pub struct Daemon {
     /// populate it and no other call site needs to change. Additional named pools are opt-in via
     /// `with_pool_dispatcher`/`with_pool_orchestrator`.
     pub(crate) pools: HashMap<String, DaemonPool>,
+    /// Policy-wide guard waivers copied into every dispatcher context. Stored at daemon scope so
+    /// pool construction and waiver configuration are order-independent.
+    pub(crate) risk_waivers: RiskWaiverSet,
     /// Verifies a proposal's integrity signature before treating an approval edit as actionable
     /// (see `handle_proposal_change`). Defaults to a fresh random key at `open()` — production
     /// wiring overrides it via [`with_proposal_signer`](Self::with_proposal_signer) with the same

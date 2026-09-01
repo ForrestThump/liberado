@@ -10,9 +10,13 @@ provider = "openrouter"
 # Single source of truth for local wall-clock (Texas / US Central). Cron expressions below stay UTC;
 # the daemon stamps "Local time: …" onto schedule/webhook goals from this zone.
 timezone = "America/Chicago"
+direct_max_turns = 8
+subagent_max_turns = 20
+research_max_turns = 30
 
 [main_agent]
 delegation_mode = true
+max_turns = 12
 
 # --- Report delivery --------------------------------------------------------------------------
 # Where a subagent's report goes when the dispatcher routes it with `delivery = Vault`.
@@ -226,12 +230,17 @@ transport = { kind = "http", url = "https://mcp.deepwiki.com" }
 # now accepts "City, State"; liberado-caldav-mcp list_events resolves relative hrefs + accepts more
 # datetime shapes. (Both MCPs build-from-URL @master.)
 #
+# CALENDAR OUT 2026-08-31. liberado-caldav-mcp is not currently deployed (operator directive that
+# gated the AI profile off also took this out). The three brief schedules were rewritten to drop
+# the calendar steps and lean on turbovault + weather + search-orchestrator. If caldav-mcp returns,
+# add the calendar steps back to the goals in this file AND in services/liberado/config/topology.toml.
+#
 # Times are UTC (cron_expr has no timezone field). Operator wall-clock is topology.timezone
 # (America/Chicago). CDT = UTC-5; CST = UTC-6 — re-check these offsets when DST flips.
 #   daily  06:55 CDT = 11:55Z | evening 20:55 CDT = 01:55Z | weekly Sun 18:55 CDT = Mon 23:55Z.
 # Goals can say "today" / "this evening"; the daemon prepends "Local time: … (America/Chicago)."
 # when each schedule fires. Place names in goals should match where you actually live.
-# Goals adapted to Liberado's tools: caldav / weather / search-orchestrator / turbovault.
+# Goals adapted to Liberado's tools: weather / search-orchestrator / turbovault.
 # "Send to user" is gone: the daemon delivers the session summary automatically.
 # =============================================================================
 
@@ -283,11 +292,10 @@ enabled = true
 cron_expr = "0 55 11 * * * *"   # 11:55 UTC = 06:55 America/Chicago CDT
 goal = """
 Produce a concise morning brief. Your final summary IS the brief delivered to the user, so make it the report.
-1. Today's calendar events via liberado-caldav-mcp (list_calendars, then list_events for today).
-2. Current weather and today's forecast via liberado-weather-mcp (use my usual home area unless I said otherwise).
-3. Incomplete tasks from turbovault (filter: incomplete only) — the primary task source.
-4. Three noteworthy headlines from the past 24 hours via liberado-search-orchestrator-mcp — one line each.
-Deliver: today's schedule, weather snapshot, open tasks, and the 3 headlines, ending with a single focus suggestion if one stands out. Keep it tight — no filler.
+1. Current weather and today's forecast via liberado-weather-mcp (use my usual home area unless I said otherwise).
+2. Incomplete tasks from turbovault (filter: incomplete only) — the primary task source.
+3. Three noteworthy headlines from the past 24 hours via liberado-search-orchestrator-mcp — one line each.
+Deliver: weather snapshot, open tasks, and the 3 headlines, ending with a single focus suggestion if one stands out. Keep it tight — no filler.
 """
 
 [[schedules]]
@@ -296,10 +304,9 @@ enabled = true
 cron_expr = "0 55 1 * * * *"    # 01:55 UTC = 20:55 America/Chicago CDT (previous evening)
 goal = """
 Produce a grounded end-of-day evening debrief. Your final summary IS the message delivered to the user.
-1. Today's calendar events via liberado-caldav-mcp — what was scheduled.
-2. Task status in turbovault — what's still open vs completed today.
-3. Tomorrow's calendar via liberado-caldav-mcp (list_events for tomorrow).
-Deliver a brief evening summary: how the day looked, open items carrying into tomorrow, and tomorrow's schedule preview. Close with one short reflection or suggested next action if something stands out. Concise, not a status report.
+1. Task status in turbovault — what's still open vs completed today (pull today's entries from Journal/ as well, for context).
+2. Quick scan of freed-today items: list tasks completed today in turbovault and the day's journal entries.
+Deliver a brief evening summary: how the day looked on paper, open items carrying into tomorrow. Close with one short reflection or suggested next action if something stands out. Concise, not a status report.
 """
 
 [[schedules]]
@@ -308,9 +315,8 @@ enabled = true
 cron_expr = "0 55 23 * * SUN *"  # 23:55 UTC Sun = 18:55 America/Chicago CDT
 goal = """
 Produce a weekly review. Your final summary IS the review delivered to the user.
-1. Calendar for the past 7 days via liberado-caldav-mcp — what happened this week.
-2. Calendar for the coming 7 days via liberado-caldav-mcp — what's ahead.
-3. turbovault tasks: completed this week, still open, anything overdue.
-4. A brief weekly news digest via liberado-search-orchestrator-mcp — 3–5 headlines worth knowing.
-Deliver sections: **This Week** (what happened, tasks completed), **Next Week** (upcoming calendar, priorities), **Open Items** (unresolved tasks), **News Digest**, and a short **Weekly Focus** — one clear intention for the coming week. Honest and grounded, not motivational filler.
+1. turbovault tasks: completed this week, still open, anything overdue.
+2. Journal/ entries from the past 7 days — a short digest of what was logged.
+3. A brief weekly news digest via liberado-search-orchestrator-mcp — 3–5 headlines worth knowing.
+Deliver sections: **This Week** (what happened, tasks completed, journal digest), **Next Week** (upcoming priorities from open tasks), **Open Items** (unresolved tasks), **News Digest**, and a short **Weekly Focus** — one clear intention for the coming week. Honest and grounded, not motivational filler.
 """

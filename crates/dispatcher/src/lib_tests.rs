@@ -1,9 +1,14 @@
 //! Split from `lib.rs` for module-health boundaries.
 
 use super::*;
-use liberado_common::{Capability, Consequence, Delivery, Depth, ToolCall, WriteClass};
+use liberado_common::{
+    Capability, Consequence, Delivery, Depth, RiskWaiverSet, ToolCall, WriteClass,
+};
 use liberado_provider::{CompletionResponse, MockProvider, ResponseFormat};
 use std::sync::Mutex;
+
+#[path = "lib_tests_waiver.rs"]
+mod waiver_tests;
 
 /// One recorded `record_tool_selection` call: (goal, chosen MCP, offered MCP names).
 type RecordedSelection = (String, Option<String>, Vec<String>);
@@ -62,6 +67,7 @@ fn request(capabilities: CapabilitySet, reaction_depth: u32) -> DispatchRequest 
         capabilities,
         reaction_depth,
         zone_write_classes: Vec::new(),
+        risk_waivers: RiskWaiverSet::empty(),
     }
 }
 fn execute_direct(tool: &str, confidence: f32) -> DispatchDecision {
@@ -269,6 +275,7 @@ async fn high_consequence_concrete_action_is_downgraded_to_propose() {
         capabilities: caps("email"),
         reaction_depth: 0,
         zone_write_classes: Vec::new(),
+        risk_waivers: RiskWaiverSet::empty(),
     };
     let mock = scripted(&execute_direct("email:send", 0.95));
     let dispatcher = Dispatcher::new(mock, DispatchTuning::default(), 4);
@@ -306,6 +313,7 @@ async fn zone_restricted_concrete_action_is_downgraded_to_propose() {
         capabilities: caps("vault"),
         reaction_depth: 0,
         zone_write_classes: vec![("reviews".into(), liberado_common::WriteClass::ProposalOnly)],
+        risk_waivers: RiskWaiverSet::empty(),
     };
     let mock = scripted(&execute_direct("vault:write_review", 0.95));
     let dispatcher = Dispatcher::new(mock, DispatchTuning::default(), 4);
@@ -342,6 +350,7 @@ async fn high_consequence_subagent_is_downgraded_to_propose() {
         capabilities: caps("email"),
         reaction_depth: 0,
         zone_write_classes: Vec::new(),
+        risk_waivers: RiskWaiverSet::empty(),
     };
     let decision = DispatchDecision {
         action: DispatchAction::DispatchSubagent {
@@ -381,46 +390,6 @@ async fn high_consequence_subagent_is_downgraded_to_propose() {
             );
         }
         other => panic!("expected Propose(Subagent), got {other:?}"),
-    }
-}
-#[tokio::test]
-async fn high_consequence_without_concrete_call_stays_clarify() {
-    // A sweeping-destructive goal trips the magnitude gate, but with an *empty* seed list there
-    // is no concrete action to propose — so it stays the conservative Clarify.
-    let request = DispatchRequest {
-        goal: "delete all of my notes".into(),
-        catalog: vec![McpDescriptor {
-            name: "vault".into(),
-            description: "git-tracked vault".into(),
-            consequence: Consequence::Reversible,
-            provenance: None,
-            default_zone: None,
-            tool_zones: Vec::new(),
-            zone_from_arg: None,
-            write_tools: Vec::new(),
-        }],
-        capabilities: caps("vault"),
-        reaction_depth: 0,
-        zone_write_classes: Vec::new(),
-    };
-    let decision = DispatchDecision {
-        action: DispatchAction::ExecuteDirect {
-            seed_calls: Vec::new(),
-            relevant_mcps: Vec::new(),
-            delivery: Delivery::Summarize,
-        },
-        confidence: 0.95,
-        rationale: "test".into(),
-    };
-    let mock = scripted(&decision);
-    let dispatcher = Dispatcher::new(mock, DispatchTuning::default(), 4);
-
-    let out = dispatcher.dispatch(&request).await.unwrap();
-    match out.action {
-        DispatchAction::Clarify { what_blocked, .. } => {
-            assert_eq!(what_blocked, BlockReason::HighConsequence)
-        }
-        other => panic!("expected Clarify(HighConsequence), got {other:?}"),
     }
 }
 #[tokio::test]
@@ -890,6 +859,7 @@ fn sanitize_empty_relevant_mcps_means_full_grant_not_capability_gap() {
         capabilities: caps("turbovault"),
         reaction_depth: 0,
         zone_write_classes: Vec::new(),
+        risk_waivers: RiskWaiverSet::empty(),
     };
     assert!(guards::evaluate(&d, &req, &DispatchTuning::default(), 4).is_none());
 }
@@ -1108,6 +1078,30 @@ fn every_block_reason_the_schema_offers_is_a_real_one() {
         );
     }
 }
+
+#[test]
+fn every_block_reason_has_actionable_clarification_text() {
+    let cases = [
+        (BlockReason::CapabilityGap, "capability"),
+        (BlockReason::HighConsequence, "far-reaching"),
+        (BlockReason::ZoneRestricted, "needs your review"),
+        (BlockReason::DepthLimit, "reaction chain"),
+        (BlockReason::LowConfidence, "confirm the intent"),
+        (BlockReason::UnusableOutput, "could not be read"),
+        (BlockReason::Unattended, "nothing was done"),
+        (BlockReason::Ambiguous, "which interpretation"),
+        (BlockReason::MissingParam, "required detail"),
+    ];
+
+    for (reason, expected) in cases {
+        let question = clarify_question(reason);
+        assert!(
+            question.contains(expected),
+            "{reason:?} must explain the block and next action: {question}"
+        );
+    }
+}
+
 #[test]
 fn the_schema_satisfies_strict_mode_rules() {
     fn check(node: &serde_json::Value, path: &str) {

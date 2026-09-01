@@ -13,7 +13,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use liberado_common::{Capability, CapabilitySet};
+use liberado_common::{Capability, CapabilitySet, RiskWaiverSet};
 use liberado_dispatcher::{DispatchRequest, Dispatcher, McpDescriptor};
 use liberado_eval::{Scenario, ScenarioOutcome, scenarios};
 use liberado_provider::Provider;
@@ -268,6 +268,7 @@ async fn score_one(
         ),
         reaction_depth: 0,
         zone_write_classes: Vec::new(),
+        risk_waivers: RiskWaiverSet::empty(),
     };
 
     let decision = dispatcher.dispatch(&request).await.ok()?;

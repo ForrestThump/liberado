@@ -12,7 +12,7 @@
 use std::sync::Arc;
 
 use liberado_common::DispatchDecision;
-use liberado_common::{Capability, CapabilitySet};
+use liberado_common::{Capability, CapabilitySet, RiskWaiverSet};
 use liberado_config_loader::{ConcurrencyTuning, DispatchTuning};
 use liberado_dispatcher::{DispatchRequest, Dispatcher, McpDescriptor};
 use liberado_eval::{ScenarioOutcome, scenarios, score};
@@ -73,6 +73,7 @@ fn build_request(s: &liberado_eval::Scenario) -> DispatchRequest {
         ),
         reaction_depth: 0,
         zone_write_classes: Vec::new(),
+        risk_waivers: RiskWaiverSet::empty(),
     }
 }
 

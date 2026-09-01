@@ -134,6 +134,7 @@ impl ConfigBuilder {
 
 #[cfg(test)]
 mod tests {
+    include!("builder_turn_budget_tests.rs");
     use super::*;
     use liberado_common::{
         Capability, Consequence, DEFAULT_POOL, Error, ModelProfile, ModelRole, ModelTier,
@@ -149,7 +150,6 @@ mod tests {
     #[test]
     fn capabilities_for_unions_matching_component_grants_and_dedups() {
         let policy = Policy {
-            zones: Vec::new(),
             grants: vec![
                 Grant {
                     component: "dispatcher".into(),
@@ -167,7 +167,7 @@ mod tests {
                     ],
                 },
             ],
-            secret_refs: Vec::new(),
+            ..Default::default()
         };
 
         let caps = policy.capabilities_for("dispatcher");
@@ -181,7 +181,6 @@ mod tests {
     #[test]
     fn capabilities_for_excludes_grants_of_other_components() {
         let policy = Policy {
-            zones: Vec::new(),
             grants: vec![
                 Grant {
                     component: "main-agent".into(),
@@ -192,7 +191,7 @@ mod tests {
                     capabilities: vec![Capability::ExecuteMcp("rentcast-mcp".into())],
                 },
             ],
-            secret_refs: Vec::new(),
+            ..Default::default()
         };
 
         let main_agent = policy.capabilities_for("main-agent");

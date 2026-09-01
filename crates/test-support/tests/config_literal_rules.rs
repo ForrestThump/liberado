@@ -273,3 +273,29 @@ fn production_entry_points_call_the_shared_assembler() {
         "server::run must pass resolved coder tuning into CodingSessionPack"
     );
 }
+
+/// Risk waivers are security policy, not passive configuration. Keep every production guard
+/// assembly path bound to the loaded policy so a refactor cannot leave the setting parseable but
+/// inert.
+#[test]
+fn risk_waivers_reach_every_production_guard_assembly_path() {
+    let bootstrap_path = crates_dir().join("bootstrap/src/lib.rs");
+    let bootstrap = std::fs::read_to_string(&bootstrap_path)
+        .unwrap_or_else(|error| panic!("read {}: {error}", bootstrap_path.display()));
+    assert!(
+        bootstrap
+            .matches("with_risk_waivers(config.policy.risk_waiver_set())")
+            .count()
+            >= 3,
+        "bootstrap must pass loaded risk waivers to the daemon dispatcher, orchestrator infra, \
+         and dispatch pack"
+    );
+
+    let server_path = crates_dir().join("server/src/lib.rs");
+    let server = std::fs::read_to_string(&server_path)
+        .unwrap_or_else(|error| panic!("read {}: {error}", server_path.display()));
+    assert!(
+        server.contains("with_risk_waivers(config.policy.risk_waiver_set())"),
+        "server chat assembly must pass loaded risk waivers to ChatSessions"
+    );
+}

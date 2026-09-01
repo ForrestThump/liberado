@@ -19,6 +19,9 @@ use thiserror::Error;
 use crate::capability::{Capability, CapabilitySet};
 use crate::dispatch::ToolCall;
 
+#[path = "proposal_summary.rs"]
+mod proposal_summary;
+
 /// The directory (relative to a vault root) proposal notes live under. Every consumer that reads,
 /// writes, or watches proposal files agrees on this one name — `liberado-daemon`,
 /// `liberado-telegram-approvals`, and `liberado-executor`'s `RiskGatedToolRuntime` each used to
@@ -65,6 +68,19 @@ pub enum GrantScope {
     Everywhere,
 }
 
+/// The risk guard whose decision a human approved for an adaptive goal.
+///
+/// This is deliberately separate from the configurable risk-waiver [`crate::Guard`]. An approval
+/// is a signed, one-proposal authorization for one goal and scope; it must not become an operator
+/// switch that disables a guard for unrelated work.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ApprovedGuard {
+    Consequence,
+    Magnitude,
+    ZoneWriteClass,
+}
+
 /// The concrete action a proposal would perform once approved.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum ProposedAction {
@@ -85,6 +101,22 @@ pub enum ProposedAction {
         allowed_mcps: Vec<String>,
         #[serde(default)]
         success_criteria: Vec<String>,
+    },
+    /// Run the direct executor adaptively after a human approves the exact goal and MCP scope.
+    ///
+    /// This is the approval form for an `ExecuteDirect` decision with no seed calls. The runtime
+    /// still enforces capability, target-zone resolution, and every guard except the one recorded
+    /// in `approved_guard`; otherwise the approved goal would immediately re-trigger the same
+    /// preflight guard and create an approval loop.
+    AdaptiveGoal {
+        goal: String,
+        #[serde(default)]
+        capabilities: CapabilitySet,
+        #[serde(default)]
+        relevant_mcps: Vec<String>,
+        #[serde(default)]
+        delivery: crate::Delivery,
+        approved_guard: ApprovedGuard,
     },
     /// Write/replace a vault note.
     VaultWrite {
@@ -389,10 +421,12 @@ impl ProposedAction {
             }
             ProposedAction::Subagent {
                 goal, allowed_mcps, ..
-            } => {
-                let mcps = allowed_mcps.join(", ");
-                format!("dispatch a subagent for: {goal} (mcps: {mcps})")
             }
+            | ProposedAction::AdaptiveGoal {
+                goal,
+                relevant_mcps: allowed_mcps,
+                ..
+            } => proposal_summary::dispatch_or_adaptive_summary(self, goal, allowed_mcps),
             ProposedAction::VaultWrite { path, .. } => format!("write vault note `{path}`"),
             ProposedAction::External { description } => format!("external action: {description}"),
             ProposedAction::Other(value) => format!("other action: {value}"),
