@@ -4,7 +4,7 @@
     "proven_invariant": 61,
     "local_failure": 0,
     "process_fatal": 50,
-    "files_scanned": 413,
+    "files_scanned": 420,
     "files_with_unwraps": 49
   },
   "files": {
@@ -155,7 +155,7 @@
       "occurrences": [
         {
           "file": "crates/cli/src/shepherd_cmd.rs",
-          "line": 453,
+          "line": 456,
           "column": 16,
           "method": "unwrap",
           "snippet": "Regex::new(r\"\\btest\\s+(\\S+)\\s+\\.\\.\\.\\s+FAILED\\b\").unwrap()",
@@ -166,7 +166,7 @@
         },
         {
           "file": "crates/cli/src/shepherd_cmd.rs",
-          "line": 454,
+          "line": 457,
           "column": 17,
           "method": "unwrap",
           "snippet": "Regex::new(r\"\\b(error(\\[[A-Z]\\d+\\])?:|error: could not compile)\").unwrap()",
@@ -177,7 +177,7 @@
         },
         {
           "file": "crates/cli/src/shepherd_cmd.rs",
-          "line": 470,
+          "line": 473,
           "column": 27,
           "method": "unwrap",
           "snippet": "key.split_once('|').unwrap()",
@@ -188,7 +188,7 @@
         },
         {
           "file": "crates/cli/src/shepherd_cmd.rs",
-          "line": 700,
+          "line": 703,
           "column": 5,
           "method": "expect",
           "snippet": "reqwest::blocking::Client::builder()\n        .timeout(Duration::from_secs(30))\n        .build()\n        .expect(\"HTTP client\")",
@@ -199,7 +199,7 @@
         },
         {
           "file": "crates/cli/src/shepherd_cmd.rs",
-          "line": 1043,
+          "line": 1046,
           "column": 32,
           "method": "unwrap",
           "snippet": "path.parent().unwrap()",
