@@ -227,6 +227,44 @@ async fn best_effort_with_every_connector_healthy_matches_runtime_for() {
 }
 
 #[tokio::test]
+async fn runtime_for_a_broad_scope_keeps_healthy_peers_when_one_is_offline() {
+    let registry = registry().register("weather", FailingConnector);
+
+    let runtime = registry.runtime_for(&[], prov()).await.unwrap();
+    let names: Vec<String> = runtime
+        .catalog()
+        .iter()
+        .map(|tool| tool.name.clone())
+        .collect();
+
+    assert!(names.contains(&"tasks:add".to_string()), "{names:?}");
+    assert!(names.contains(&"memory:store".to_string()), "{names:?}");
+    assert!(!names.iter().any(|name| name.starts_with("weather:")));
+}
+
+#[tokio::test]
+async fn runtime_for_one_offline_peer_still_reports_the_setup_failure() {
+    let registry = McpRegistry::new().register("weather", FailingConnector);
+    let error = match registry.runtime_for(&["weather".into()], prov()).await {
+        Ok(_) => panic!("one explicitly selected offline peer must fail loudly"),
+        Err(error) => error,
+    };
+    assert!(!error.to_string().is_empty());
+}
+
+#[tokio::test]
+async fn runtime_for_a_broad_scope_fails_when_every_selected_peer_is_offline() {
+    let registry = McpRegistry::new()
+        .register("weather", FailingConnector)
+        .register("calendar", FailingConnector);
+    let error = match registry.runtime_for(&[], prov()).await {
+        Ok(_) => panic!("an empty catalog is not success when every selected peer failed"),
+        Err(error) => error,
+    };
+    assert!(error.to_string().contains("all selected MCPs failed"));
+}
+
+#[tokio::test]
 async fn best_effort_connects_concurrently_not_sequentially() {
     // Three servers each delayed ~200ms: if connections ran sequentially this would take ~600ms.
     // Bound generously above one delay period to avoid CI flakiness while still catching a

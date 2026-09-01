@@ -276,7 +276,15 @@ impl McpRegistry {
         &self,
         provenance: WriteProvenance,
     ) -> (Box<dyn ToolRuntime>, Vec<String>) {
-        let names = self.names();
+        self.connect_selected_best_effort(self.names(), provenance)
+            .await
+    }
+
+    async fn connect_selected_best_effort(
+        &self,
+        names: Vec<String>,
+        provenance: WriteProvenance,
+    ) -> (Box<dyn ToolRuntime>, Vec<String>) {
         let attempts = names.into_iter().map(|name| {
             let provenance = provenance.clone();
             async move {
@@ -321,6 +329,24 @@ impl RuntimeFactory for McpRegistry {
                 .cloned()
                 .collect()
         };
+
+        // One explicitly selected peer failing is the task failing, so keep that error loud. With
+        // a broader adaptive scope, one unrelated offline peer must not prevent healthy selected
+        // peers from serving their tools. The live catalog is marked degraded by `acquire`, so the
+        // next classification also stops offering the failed peer.
+        if selected.len() > 1 {
+            let selected_count = selected.len();
+            let (runtime, failed) = self
+                .connect_selected_best_effort(selected, provenance)
+                .await;
+            if failed.len() == selected_count {
+                return Err(RuntimeSetupError(format!(
+                    "all selected MCPs failed to connect: {}",
+                    failed.join(", ")
+                )));
+            }
+            return Ok(runtime);
+        }
 
         let mut servers = Vec::with_capacity(selected.len());
         for name in selected {
