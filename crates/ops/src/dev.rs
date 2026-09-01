@@ -7,6 +7,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::DevelopmentConfig;
 
+#[cfg(test)]
+#[path = "dev/regression_tests.rs"]
+mod regression_tests;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DevAction {
     StartDaemon,

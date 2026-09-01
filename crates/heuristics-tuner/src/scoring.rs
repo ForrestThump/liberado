@@ -182,25 +182,14 @@ pub async fn score_candidate(
 ) -> CandidateFitness {
     let mut set = tokio::task::JoinSet::new();
     for scenario in scenario_subset(max_scenarios) {
-        for provider in scoring_providers {
-            let dispatcher = Arc::new(
-                Dispatcher::new(
-                    provider.clone(),
-                    liberado_config::DispatchTuning::default(),
-                    liberado_config::ConcurrencyTuning::default().max_reaction_depth,
-                )
-                .with_system_prompt(prompt),
-            );
-            let model = provider.model().to_string();
-            for _ in 0..samples_per_scenario {
-                if !budget.spend() {
-                    continue;
-                }
-                let dispatcher = Arc::clone(&dispatcher);
-                let model = model.clone();
-                set.spawn(async move { score_one(&dispatcher, scenario, model).await });
-            }
-        }
+        schedule_scenario_trials(
+            &mut set,
+            prompt,
+            scoring_providers,
+            samples_per_scenario,
+            budget,
+            scenario,
+        );
     }
 
     let mut by_name: HashMap<&'static str, ScoredScenario> = HashMap::new();
@@ -220,6 +209,34 @@ pub async fn score_candidate(
         }
     }
     aggregate(by_name.into_values().collect())
+}
+
+fn schedule_scenario_trials(
+    set: &mut tokio::task::JoinSet<Option<(Scenario, ScenarioTrial)>>,
+    prompt: &str,
+    scoring_providers: &[Arc<dyn Provider>],
+    samples_per_scenario: usize,
+    budget: &Budget,
+    scenario: Scenario,
+) {
+    for provider in scoring_providers {
+        let dispatcher = Arc::new(
+            Dispatcher::new(
+                provider.clone(),
+                liberado_config::DispatchTuning::default(),
+                liberado_config::ConcurrencyTuning::default().max_reaction_depth,
+            )
+            .with_system_prompt(prompt),
+        );
+        let model = provider.model().to_string();
+        for _ in 0..samples_per_scenario {
+            if budget.spend() {
+                let dispatcher = Arc::clone(&dispatcher);
+                let model = model.clone();
+                set.spawn(async move { score_one(&dispatcher, scenario, model).await });
+            }
+        }
+    }
 }
 
 async fn score_one(

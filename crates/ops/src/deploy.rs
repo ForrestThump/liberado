@@ -194,6 +194,10 @@ pub fn latency_homelab(config: &HomelabConfig, json: bool) -> Result<(), String>
         ])
         .output()
         .map_err(|error| format!("read remote latency journal: {error}"))?;
+    render_latency_output(output, json)
+}
+
+fn render_latency_output(output: std::process::Output, json: bool) -> Result<(), String> {
     if !output.status.success() {
         return Err(format!(
             "read remote latency journal: {}",
@@ -286,6 +290,42 @@ pub(crate) fn validate_remote_config(config: &HomelabConfig) -> Result<(), Strin
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::process::ExitStatus;
+    use tempfile::tempdir;
+
+    #[cfg(unix)]
+    fn status(code: i32) -> ExitStatus {
+        use std::os::unix::process::ExitStatusExt;
+        ExitStatus::from_raw(code << 8)
+    }
+
+    #[cfg(windows)]
+    fn status(code: i32) -> ExitStatus {
+        use std::os::windows::process::ExitStatusExt;
+        ExitStatus::from_raw(code as u32)
+    }
+
+    fn git(repository: &Path, args: &[&str]) {
+        assert!(
+            liberado_common::process::std_command("git")
+                .args(args)
+                .current_dir(repository)
+                .status()
+                .unwrap()
+                .success()
+        );
+    }
+
+    fn committed_repository() -> tempfile::TempDir {
+        let root = tempdir().unwrap();
+        git(root.path(), &["init"]);
+        git(root.path(), &["config", "user.email", "test@example.com"]);
+        git(root.path(), &["config", "user.name", "Test"]);
+        std::fs::write(root.path().join("tracked.txt"), "one\n").unwrap();
+        git(root.path(), &["add", "tracked.txt"]);
+        git(root.path(), &["commit", "-m", "base"]);
+        root
+    }
 
     fn config() -> HomelabConfig {
         HomelabConfig {
@@ -319,5 +359,40 @@ mod tests {
         let mut bad = config();
         bad.build_dir = "build; reboot".into();
         assert!(validate_remote_config(&bad).is_err());
+    }
+
+    #[test]
+    fn dry_run_deploy_resolves_a_clean_commit_and_rejects_dirty_head() {
+        let root = committed_repository();
+        let options = DeployOptions {
+            dry_run: true,
+            ..DeployOptions::default()
+        };
+        deploy_homelab(root.path(), &config(), &options).unwrap();
+
+        std::fs::write(root.path().join("tracked.txt"), "dirty\n").unwrap();
+        let error = deploy_homelab(root.path(), &config(), &options).unwrap_err();
+        assert!(error.contains("dirty working tree"));
+    }
+
+    #[test]
+    fn latency_output_rejects_remote_failure_and_accepts_empty_journal() {
+        let failed = std::process::Output {
+            status: status(1),
+            stdout: Vec::new(),
+            stderr: b"remote unavailable".to_vec(),
+        };
+        assert!(
+            render_latency_output(failed, false)
+                .unwrap_err()
+                .contains("remote unavailable")
+        );
+
+        let empty = std::process::Output {
+            status: status(0),
+            stdout: Vec::new(),
+            stderr: Vec::new(),
+        };
+        render_latency_output(empty, true).unwrap();
     }
 }

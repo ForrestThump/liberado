@@ -82,3 +82,38 @@ fn display_arg(arg: &str) -> String {
         format!("{arg:?}")
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn rustc_step(args: &[&str], stdin: Option<&str>) -> CommandSpec {
+        CommandSpec {
+            label: "exercise command runner".into(),
+            program: "rustc".into(),
+            args: args.iter().map(|value| (*value).into()).collect(),
+            cwd: Some(std::env::current_dir().unwrap()),
+            stdin: stdin.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn command_runner_covers_success_stdin_and_failure_statuses() {
+        rustc_step(&["--version"], None).run().unwrap();
+        let failure = rustc_step(&["--definitely-not-a-rustc-option"], Some("ignored"))
+            .run()
+            .unwrap_err();
+        assert!(failure.contains("failed with"));
+    }
+
+    #[test]
+    fn command_plan_executes_each_step_and_stops_on_failure() {
+        let plan = CommandPlan {
+            steps: vec![
+                rustc_step(&["--version"], None),
+                rustc_step(&["--definitely-not-a-rustc-option"], None),
+            ],
+        };
+        assert!(plan.execute().is_err());
+    }
+}

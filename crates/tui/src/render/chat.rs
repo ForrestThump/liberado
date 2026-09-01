@@ -16,6 +16,9 @@ use crate::render::kind_color;
 use crate::tuning::*;
 use crate::ui::c;
 
+mod assistant;
+use assistant::{assistant_span, push_assistant_code_block, push_assistant_heading};
+
 /// The joined view, snapshot as owned clones so the render loop can borrow `app.md_cache`
 /// mutably below. The primary-chat path stays zero-copy (borrows `app.messages`); only the cold
 /// joined path clones, and a specialist transcript is small.
@@ -366,31 +369,8 @@ fn push_assistant_message(
     for md in md_lines.iter() {
         match md {
             MarkdownLine::Paragraph(spans) => {
-                let line_spans: Vec<Span> = spans
-                    .iter()
-                    .map(|s| {
-                        let mut style = Style::default().fg(c(&th.chat_assistant_text, "#c0c0c0"));
-                        if s.style.bold {
-                            style = style
-                                .fg(c(&th.md_bold, "#ffffff"))
-                                .add_modifier(Modifier::BOLD);
-                        }
-                        if s.style.italic {
-                            style = style
-                                .fg(c(&th.md_italic, "#c0c0c0"))
-                                .add_modifier(Modifier::ITALIC);
-                        }
-                        if s.style.code {
-                            style = Style::default().fg(c(&th.md_code, "#ffff00"));
-                        }
-                        if s.style.link {
-                            style = Style::default()
-                                .fg(c(&th.md_link, "#8080ff"))
-                                .add_modifier(Modifier::UNDERLINED);
-                        }
-                        Span::styled(s.text.clone(), style)
-                    })
-                    .collect();
+                let line_spans: Vec<Span> =
+                    spans.iter().map(|span| assistant_span(span, th)).collect();
                 if !line_spans.is_empty() {
                     lines.push(Line::from(line_spans));
                 }
@@ -398,34 +378,7 @@ fn push_assistant_message(
             MarkdownLine::CodeBlock {
                 language,
                 lines: code,
-            } => {
-                let lang = language.as_deref().unwrap_or("");
-                let header = if lang.is_empty() {
-                    "```".into()
-                } else {
-                    format!("```{lang}")
-                };
-                lines.push(Line::from(Span::styled(
-                    header,
-                    Style::default()
-                        .fg(c(&th.code_block_header, "#808000"))
-                        .add_modifier(Modifier::DIM),
-                )));
-                for cl in code {
-                    lines.push(Line::from(Span::styled(
-                        cl.clone(),
-                        Style::default()
-                            .fg(c(&th.code_block_fg, "#c0c0c0"))
-                            .bg(c(&th.code_block_bg, "#303030")),
-                    )));
-                }
-                lines.push(Line::from(Span::styled(
-                    "```",
-                    Style::default()
-                        .fg(c(&th.code_block_header, "#808000"))
-                        .add_modifier(Modifier::DIM),
-                )));
-            }
+            } => push_assistant_code_block(lines, language.as_deref(), code, th),
             MarkdownLine::Bullet(item) => {
                 lines.push(Line::from(vec![
                     Span::styled("  • ", Style::default().fg(c(&th.md_bullet, "#00ffff"))),
@@ -436,17 +389,7 @@ fn push_assistant_message(
                 ]));
             }
             MarkdownLine::Heading(level, text) => {
-                let bold = if *level <= HEADING_BOLD_THRESHOLD {
-                    Modifier::BOLD
-                } else {
-                    Modifier::empty()
-                };
-                lines.push(Line::from(Span::styled(
-                    text.clone(),
-                    Style::default()
-                        .fg(c(&th.md_heading, "#ffffff"))
-                        .add_modifier(bold),
-                )));
+                push_assistant_heading(lines, *level, text, th);
             }
             MarkdownLine::HorizontalRule => {
                 lines.push(Line::from(Span::styled(

@@ -15,6 +15,9 @@ use liberado_coder_core::{
 use liberado_common::process::std_command;
 use serde_json::json;
 
+mod smoke_support;
+use smoke_support::{classify_smoke_result, execute_smoke_runner, write_smoke_request};
+
 /// Default directories searched when resolving a session id (cwd-relative + common local path).
 fn default_trace_dirs() -> Vec<PathBuf> {
     let mut dirs = vec![PathBuf::from("coder-traces")];
@@ -112,30 +115,8 @@ fn run_smoke_probe(
 ) -> Result<(bool, String, String, String), Box<dyn std::error::Error>> {
     let temp = tempfile::tempdir()?;
     initialize_smoke_repository(temp.path())?;
-    let request_path = temp.path().join("request.json");
-    fs::write(
-        &request_path,
-        serde_json::to_vec_pretty(&smoke_request(temp.path()))?,
-    )?;
-    let provider = smoke_provider();
-    let output = std_command(runner)
-        .args([
-            "--request",
-            request_path.to_str().ok_or("request path is not UTF-8")?,
-        ])
-        .env("LIBERADO_CODER_PROVIDER", provider)
-        .current_dir(root)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()?;
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-    Ok((
-        output.status.success(),
-        stdout,
-        stderr,
-        format!("{}", output.status),
-    ))
+    let request_path = write_smoke_request(temp.path())?;
+    execute_smoke_runner(root, runner, &request_path)
 }
 
 fn cmd_smoke(args: &mut dyn Iterator<Item = String>) -> Result<(), Box<dyn std::error::Error>> {
@@ -147,22 +128,7 @@ fn cmd_smoke(args: &mut dyn Iterator<Item = String>) -> Result<(), Box<dyn std::
 
     println!("== process boundary smoke (expects provider key or clean failure) ==");
     let (success, stdout, stderr, status) = run_smoke_probe(&root, &runner)?;
-    if success {
-        println!("OK: live provider completed a coding run");
-        return Ok(());
-    }
-
-    if smoke_boundary_reached(stdout.as_str(), stderr.as_str()) {
-        println!("OK: runner reached the provider boundary without credentials");
-        println!("  exit status: {status}");
-        return Ok(());
-    }
-
-    let combined = format!("{stdout}\n{stderr}")
-        .to_lowercase()
-        .trim()
-        .to_string();
-    Err(format!("coder smoke failed with {status}:\n{combined}").into())
+    classify_smoke_result(success, &stdout, &stderr, &status)
 }
 
 /// Classify a failed runner invocation: did it reach the provider boundary without

@@ -178,6 +178,10 @@ fn smoke_initialize(binary: &Path) -> Result<(), String> {
     let output = child
         .wait_with_output()
         .map_err(|error| format!("wait for ACP smoke test: {error}"))?;
+    validate_smoke_output(output)
+}
+
+fn validate_smoke_output(output: std::process::Output) -> Result<(), String> {
     if !output.status.success() {
         return Err(format!(
             "ACP smoke failed: {}",
@@ -211,6 +215,7 @@ fn run_status(repository: &Path, program: &str, args: &[&str]) -> Result<(), Str
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::tempdir;
 
     #[test]
     fn provider_merge_preserves_unrelated_configuration() {
@@ -235,5 +240,30 @@ mod tests {
         }))
         .unwrap();
         assert!(providers_mut(&mut root).is_err());
+    }
+
+    #[test]
+    fn provider_config_write_preserves_existing_fields_and_creates_backup() {
+        let root = tempdir().unwrap();
+        let home = root.path().join("paseo");
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::write(home.join("config.json"), r#"{"theme":"dark"}"#).unwrap();
+        let config = PaseoConfig {
+            home: Some(home.clone()),
+            binary: Some(root.path().join("liberado-acp")),
+            ..PaseoConfig::default()
+        };
+        let binary = config.binary.as_deref().unwrap();
+
+        let path = write_provider_config(root.path(), &config, binary).unwrap();
+        let value: Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+        assert_eq!(value["theme"], "dark");
+        assert!(value.pointer("/agents/providers/liberado").is_some());
+        assert!(
+            std::fs::read_dir(&home)
+                .unwrap()
+                .flatten()
+                .any(|entry| entry.file_name().to_string_lossy().ends_with(".bak"))
+        );
     }
 }
