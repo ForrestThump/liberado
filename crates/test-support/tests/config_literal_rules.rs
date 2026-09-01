@@ -240,9 +240,15 @@ fn production_entry_points_call_the_shared_assembler() {
         "pub async fn run_coding_round(",
         "async fn apply_ship_bar(",
     );
+    let acp_assembly = production_section(
+        "acp-bridge/src/coding_run/round_support.rs",
+        "pub(super) fn assemble_round_request(",
+        "pub(super) fn update_round_state(",
+    );
     assert!(
-        acp.contains("let assembled = assemble_production_run(")
-            && acp.contains("liberado_coder_agent::assemble::entry::acp_surface("),
+        acp.contains("let request = assemble_round_request(")
+            && acp_assembly.contains("assemble_production_run(")
+            && acp_assembly.contains("liberado_coder_agent::assemble::entry::acp_surface("),
         "ACP run_coding_round must use the shared assembly path"
     );
 
