@@ -6,7 +6,7 @@
 
 use super::*;
 use async_trait::async_trait;
-use liberado_common::{Capability, CapabilitySet, RiskWaiverSet, Zone};
+use liberado_common::{Capability, CapabilitySet, Zone};
 
 /// Minimal inner runtime: records invocations, returns a fixed result.
 struct MockInner {

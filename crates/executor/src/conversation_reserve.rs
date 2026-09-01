@@ -80,6 +80,7 @@ pub(crate) fn grant_report_or_spoken_reserve(
 }
 
 /// Remaining exhaustion policy after the resource name is known.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn after_named_exhaustion(
     wrapping_up: &mut bool,
     max_turns: &mut u32,

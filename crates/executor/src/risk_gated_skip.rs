@@ -1,4 +1,4 @@
-//! Proposal-side risk guards extracted from [`super::RiskGatedToolRuntime::invoke`].
+//! Proposal-side risk guards extracted from [`super::RiskGatedToolRuntime`].
 
 use liberado_common::{ApprovedGuard, Consequence, WriteTarget, is_sweeping_destructive};
 use liberado_provider::ToolInvocation;

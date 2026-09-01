@@ -6,8 +6,8 @@ use chrono::{Duration as ChronoDuration, Utc};
 use liberado_common::{
     ApprovalDecision, ApprovalLedger, Capability, CapabilityCatalog, CapabilitySet, Consequence,
     DEFAULT_POOL, Delivery, DispatchAction, DispatchDecision, GrantScope, McpDescriptor, Outcome,
-    Proposal, ProposalSigner, ProposalStatus, ProposedAction, Report, RiskWaiverSet, ToolCall,
-    WriteClass, WriteProvenance, session_grants,
+    Proposal, ProposalSigner, ProposalStatus, ProposedAction, Report, ToolCall, WriteClass,
+    WriteProvenance, session_grants,
 };
 use liberado_config_loader::DispatchTuning;
 use liberado_dispatcher::Dispatcher;
