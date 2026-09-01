@@ -4,7 +4,7 @@ use super::super::*;
 use super::test_fixtures::*;
 use liberado_common::{
     Capability, CapabilityCatalog, CapabilitySet, Delivery, DispatchAction, DispatchDecision,
-    Event, EventPayload,
+    Event, EventPayload, Guard, RiskWaiver, RiskWaiverSet,
 };
 use liberado_config_loader::DispatchTuning;
 use liberado_dispatcher::Dispatcher;
@@ -15,6 +15,62 @@ use liberado_test_support::CallRecordingFactory;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc::unbounded_channel;
+
+#[tokio::test]
+async fn risk_waivers_reach_pools_regardless_of_builder_order() {
+    let waiver = RiskWaiver {
+        mcp: "tasks-mcp".into(),
+        match_tools: None,
+        match_zones: None,
+        guard: Guard::Magnitude,
+    };
+    let waivers = RiskWaiverSet {
+        waivers: [waiver].into_iter().collect(),
+    };
+    let dispatcher = || {
+        Dispatcher::new(
+            Arc::new(MockProvider::with_script("dispatch", [])),
+            DispatchTuning::default(),
+            4,
+        )
+    };
+
+    let (before, _dir) = temp_daemon().await;
+    let before = before
+        .with_risk_waivers(waivers.clone())
+        .with_pool_dispatcher(
+            "before",
+            dispatcher(),
+            Arc::new(CapabilityCatalog::new()),
+            CapabilitySet::empty(),
+        );
+    assert!(
+        before.pools["before"]
+            .dispatcher
+            .as_ref()
+            .unwrap()
+            .risk_waivers
+            .covers(Guard::Magnitude, "tasks-mcp:list", None)
+    );
+
+    let (after, _dir) = temp_daemon().await;
+    let after = after
+        .with_pool_dispatcher(
+            "after",
+            dispatcher(),
+            Arc::new(CapabilityCatalog::new()),
+            CapabilitySet::empty(),
+        )
+        .with_risk_waivers(waivers);
+    assert!(
+        after.pools["after"]
+            .dispatcher
+            .as_ref()
+            .unwrap()
+            .risk_waivers
+            .covers(Guard::Magnitude, "tasks-mcp:list", None)
+    );
+}
 
 #[tokio::test]
 async fn pools_are_authority_segregated() {

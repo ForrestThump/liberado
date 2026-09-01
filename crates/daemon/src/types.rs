@@ -162,6 +162,9 @@ pub struct Daemon {
     /// populate it and no other call site needs to change. Additional named pools are opt-in via
     /// `with_pool_dispatcher`/`with_pool_orchestrator`.
     pub(crate) pools: HashMap<String, DaemonPool>,
+    /// Policy-wide guard waivers copied into every dispatcher context. Stored at daemon scope so
+    /// pool construction and waiver configuration are order-independent.
+    pub(crate) risk_waivers: RiskWaiverSet,
     /// Verifies a proposal's integrity signature before treating an approval edit as actionable
     /// (see `handle_proposal_change`). Defaults to a fresh random key at `open()` — production
     /// wiring overrides it via [`with_proposal_signer`](Self::with_proposal_signer) with the same

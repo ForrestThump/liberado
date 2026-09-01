@@ -89,11 +89,14 @@ impl RiskWaiver {
             return false;
         }
         if let Some(tools) = &self.match_tools
+            && !tools.is_empty()
             && !tools.iter().any(|t| t == bare_tool_name(tool))
         {
             return false;
         }
-        if let Some(zones) = &self.match_zones {
+        if let Some(zones) = &self.match_zones
+            && !zones.is_empty()
+        {
             // A zone-restricted waiver only matches when the call has a concrete zone to
             // compare. "No zone" (a read, or a write with an unresolved path) does not
             // accidentally match a list of specific zones.
@@ -185,11 +188,9 @@ impl RiskWaiverSet {
     {
         let mut iter = targets.into_iter();
         let Some(first) = iter.next() else {
-            // No targets at all — vacuously waived, but a no-target action never reaches
-            // this code path in practice (magnitude guards gate on action, not on no
-            // action). Returning true here is the safe default; the caller has nothing to
-            // gate anyway.
-            return true;
+            // A waiver must cover a concrete target. Treating an empty target list as waived
+            // would suppress the guard when the classifier did not identify any MCP or tool.
+            return false;
         };
         let first_ok = self.covers(Guard::Magnitude, first.qualified_tool, first.zone);
         if !first_ok {
@@ -260,6 +261,13 @@ mod tests {
     }
 
     #[test]
+    fn empty_filter_lists_are_wildcards() {
+        let waiver = w("turbovault", Some(vec![]), Some(vec![]), Guard::Magnitude);
+        assert!(waiver.covers("turbovault:read_note", None));
+        assert!(waiver.covers("turbovault:write_note", Some("Tasks")));
+    }
+
+    #[test]
     fn waiver_target_from_write_target_zone() {
         let zone_target = WriteTarget::Zone("Tasks".into());
         let t = WaiverTarget::from_write_target("turbovault:write_note", &zone_target);
@@ -323,6 +331,16 @@ mod tests {
             zone: None,
         }];
         assert!(!set.all_magnitude_waived(read));
+    }
+
+    #[test]
+    fn empty_target_list_is_not_waived() {
+        let set = RiskWaiverSet {
+            waivers: [w("weather", None, None, Guard::Magnitude)]
+                .into_iter()
+                .collect(),
+        };
+        assert!(!set.all_magnitude_waived([]));
     }
 
     #[test]

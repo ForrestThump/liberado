@@ -577,6 +577,51 @@ fn waiver_suppresses_magnitude_for_targeted_read_then_write() {
     );
 }
 
+#[test]
+fn whole_mcp_waiver_covers_adaptive_direct_scope_without_seed_calls() {
+    let mut r = req_with_waivers(
+        granted("tasks-mcp"),
+        0,
+        vec![waiver_for("tasks-mcp", None, None)],
+    );
+    r.goal = "Remove the obsolete line but keep everything else exactly as-is.".into();
+    let d = DispatchDecision {
+        action: DispatchAction::ExecuteDirect {
+            seed_calls: Vec::new(),
+            relevant_mcps: vec!["tasks-mcp".into()],
+            delivery: Delivery::Summarize,
+        },
+        confidence: 0.9,
+        rationale: "adaptive task edit".into(),
+    };
+
+    assert_eq!(evaluate(&d, &r, &DispatchTuning::default(), 4), None);
+}
+
+#[test]
+fn tool_filtered_waiver_does_not_cover_unknown_adaptive_calls() {
+    let mut r = req_with_waivers(
+        granted("tasks-mcp"),
+        0,
+        vec![waiver_for("tasks-mcp", Some(vec!["read_note"]), None)],
+    );
+    r.goal = "Remove every obsolete task.".into();
+    let d = DispatchDecision {
+        action: DispatchAction::ExecuteDirect {
+            seed_calls: Vec::new(),
+            relevant_mcps: vec!["tasks-mcp".into()],
+            delivery: Delivery::Summarize,
+        },
+        confidence: 0.9,
+        rationale: "adaptive task edit".into(),
+    };
+
+    assert_eq!(
+        evaluate(&d, &r, &DispatchTuning::default(), 4),
+        Some(BlockReason::HighConsequence)
+    );
+}
+
 /// A waiver that only covers the read tool does NOT cover the write — the magnitude heuristic
 /// still fires because the action has a non-waived surface.
 #[test]

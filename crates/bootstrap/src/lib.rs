@@ -476,6 +476,7 @@ pub fn configure_daemon(
     // `reap_interval_secs = 0` actually disables the reaper when no API key is set.
     let daemon = daemon
         .with_proposal_reap_interval(config.tuning.proposals.reap_interval_secs)
+        .with_risk_waivers(config.policy.risk_waiver_set())
         .with_session_profile_caps(session_profile_caps(config))
         .with_inbox_ignore_globs(config.tuning.capture.inbox_ignore_globs.clone())
         .with_capture_scope(
@@ -687,7 +688,8 @@ fn build_orchestrator_infra(
         guard.proposals_dir.clone(),
         guard.signer.clone(),
     )
-    .with_subagent_provider(subagent_providers.worker.clone());
+    .with_subagent_provider(subagent_providers.worker.clone())
+    .with_risk_waivers(config.policy.risk_waiver_set());
     infra = turn_budgets::apply_turn_budgets(infra, config);
     if let Some(sink) = report_sink(&config.topology) {
         infra = infra.with_report_sink(sink);
@@ -782,7 +784,8 @@ pub fn build_dispatch_pack(
         guard.zone_write_classes.clone(),
         DEFAULT_REACTION_DEPTH_FOR_PACK,
         guard.proposals_dir.clone(),
-    );
+    )
+    .with_risk_waivers(config.policy.risk_waiver_set());
     if let Some(n) = &notifier {
         pack = pack.with_notifier(n.clone());
     }

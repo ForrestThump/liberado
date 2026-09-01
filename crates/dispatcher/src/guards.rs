@@ -23,8 +23,8 @@
 
 use liberado_common::CONSEQUENCE_GATE;
 use liberado_common::{
-    BlockReason, Consequence, DispatchAction, DispatchDecision, bare_tool_name, instruction_scope,
-    is_sweeping_destructive, mcp_of, write_target, zone_write_restriction,
+    BlockReason, Consequence, DispatchAction, DispatchDecision, WaiverTarget, bare_tool_name,
+    instruction_scope, is_sweeping_destructive, mcp_of, write_target, zone_write_restriction,
 };
 use liberado_config_loader::DispatchTuning;
 
@@ -161,10 +161,12 @@ pub(crate) fn evaluate_detailed(
     let instruction = instruction_scope(&req.goal);
     if is_sweeping_destructive(instruction) {
         let targets = magnitude_targets(&decision.action, &req.catalog);
-        let waived = targets.iter().all(|(tool, zone)| {
-            req.risk_waivers
-                .covers(liberado_common::Guard::Magnitude, tool, zone.as_deref())
-        }) && !targets.is_empty();
+        let waived = req
+            .risk_waivers
+            .all_magnitude_waived(targets.iter().map(|(tool, zone)| WaiverTarget {
+                qualified_tool: tool,
+                zone: zone.as_deref(),
+            }));
         if !waived {
             return blocked(
                 GuardKind::Magnitude,
@@ -311,7 +313,11 @@ fn magnitude_targets(
     catalog: &[McpDescriptor],
 ) -> Vec<(String, Option<String>)> {
     match action {
-        DispatchAction::ExecuteDirect { seed_calls, .. } => seed_calls
+        DispatchAction::ExecuteDirect {
+            seed_calls,
+            relevant_mcps,
+            ..
+        } => seed_calls
             .iter()
             .map(|call| {
                 let mcp = mcp_of(&call.tool);
@@ -328,6 +334,10 @@ fn magnitude_targets(
                     });
                 (call.tool.clone(), zone)
             })
+            // Relevant MCPs are the adaptive scope beyond the concrete opening calls. A bare MCP
+            // target can only match a whole-MCP waiver: tool- or zone-filtered waivers correctly
+            // refuse to make claims about calls the classifier has not named yet.
+            .chain(relevant_mcps.iter().map(|mcp| (mcp.clone(), None)))
             .collect(),
         DispatchAction::DispatchSubagent { allowed_mcps, .. } => {
             allowed_mcps.iter().map(|mcp| (mcp.clone(), None)).collect()

@@ -1078,6 +1078,30 @@ fn every_block_reason_the_schema_offers_is_a_real_one() {
         );
     }
 }
+
+#[test]
+fn every_block_reason_has_actionable_clarification_text() {
+    let cases = [
+        (BlockReason::CapabilityGap, "capability"),
+        (BlockReason::HighConsequence, "far-reaching"),
+        (BlockReason::ZoneRestricted, "needs your review"),
+        (BlockReason::DepthLimit, "reaction chain"),
+        (BlockReason::LowConfidence, "confirm the intent"),
+        (BlockReason::UnusableOutput, "could not be read"),
+        (BlockReason::Unattended, "nothing was done"),
+        (BlockReason::Ambiguous, "which interpretation"),
+        (BlockReason::MissingParam, "required detail"),
+    ];
+
+    for (reason, expected) in cases {
+        let question = clarify_question(reason);
+        assert!(
+            question.contains(expected),
+            "{reason:?} must explain the block and next action: {question}"
+        );
+    }
+}
+
 #[test]
 fn the_schema_satisfies_strict_mode_rules() {
     fn check(node: &serde_json::Value, path: &str) {

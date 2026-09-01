@@ -887,6 +887,7 @@ async fn build_chat(
         guard.signer.clone(),
     )
     .with_zone_guards(guard.zone_catalog, guard.zone_write_classes)
+    .with_risk_waivers(config.policy.risk_waiver_set())
     .with_live_catalog(catalog.clone())
     .with_dispatcher_capabilities(dispatcher_caps)
     .with_delegation_mode(main_agent_cfg.delegation_mode);
