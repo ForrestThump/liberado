@@ -134,6 +134,7 @@ impl ConfigBuilder {
 
 #[cfg(test)]
 mod tests {
+    include!("builder_turn_budget_tests.rs");
     use super::*;
     use liberado_common::{
         Capability, Consequence, DEFAULT_POOL, Error, ModelProfile, ModelRole, ModelTier,
@@ -149,7 +150,6 @@ mod tests {
     #[test]
     fn capabilities_for_unions_matching_component_grants_and_dedups() {
         let policy = Policy {
-            zones: Vec::new(),
             grants: vec![
                 Grant {
                     component: "dispatcher".into(),
@@ -167,8 +167,7 @@ mod tests {
                     ],
                 },
             ],
-            secret_refs: Vec::new(),
-            risk_waivers: Vec::new(),
+            ..Default::default()
         };
 
         let caps = policy.capabilities_for("dispatcher");
@@ -182,7 +181,6 @@ mod tests {
     #[test]
     fn capabilities_for_excludes_grants_of_other_components() {
         let policy = Policy {
-            zones: Vec::new(),
             grants: vec![
                 Grant {
                     component: "main-agent".into(),
@@ -193,8 +191,7 @@ mod tests {
                     capabilities: vec![Capability::ExecuteMcp("rentcast-mcp".into())],
                 },
             ],
-            secret_refs: Vec::new(),
-            risk_waivers: Vec::new(),
+            ..Default::default()
         };
 
         let main_agent = policy.capabilities_for("main-agent");
@@ -1390,27 +1387,6 @@ clarify_threshold_read = 0.8
         cfg.tuning.concurrency.max_reaction_depth = 0;
         let err = cfg.validate().unwrap_err();
         assert!(err.to_string().contains("max_reaction_depth"));
-    }
-
-    #[test]
-    fn zero_turn_budgets_fail_validation_with_the_exact_key() {
-        for key in [
-            "topology.direct_max_turns",
-            "topology.subagent_max_turns",
-            "topology.research_max_turns",
-            "topology.main_agent.max_turns",
-        ] {
-            let mut cfg = validatable();
-            match key {
-                "topology.direct_max_turns" => cfg.topology.direct_max_turns = Some(0),
-                "topology.subagent_max_turns" => cfg.topology.subagent_max_turns = Some(0),
-                "topology.research_max_turns" => cfg.topology.research_max_turns = Some(0),
-                "topology.main_agent.max_turns" => cfg.topology.main_agent.max_turns = Some(0),
-                _ => unreachable!(),
-            }
-            let err = cfg.validate().unwrap_err().to_string();
-            assert!(err.contains(key), "{key} produced: {err}");
-        }
     }
 
     /// A session profile that declares authority and references a zone not in policy.zones.

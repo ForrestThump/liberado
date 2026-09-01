@@ -319,41 +319,57 @@ impl RuntimeFactory for McpRegistry {
         allowed_mcps: &[String],
         provenance: WriteProvenance,
     ) -> Result<Box<dyn ToolRuntime>, RuntimeSetupError> {
-        let selected: Vec<String> = if allowed_mcps.is_empty() {
-            self.names()
-        } else {
-            let known: HashSet<String> = self.names().into_iter().collect();
-            allowed_mcps
-                .iter()
-                .filter(|name| known.contains(name.as_str()))
-                .cloned()
-                .collect()
-        };
+        self.runtime_for_selected(self.select_registered(allowed_mcps), provenance)
+            .await
+    }
+}
 
-        // One explicitly selected peer failing is the task failing, so keep that error loud. With
-        // a broader adaptive scope, one unrelated offline peer must not prevent healthy selected
-        // peers from serving their tools. The live catalog is marked degraded by `acquire`, so the
-        // next classification also stops offering the failed peer.
-        if selected.len() > 1 {
-            let selected_count = selected.len();
-            let (runtime, failed) = self
-                .connect_selected_best_effort(selected, provenance)
-                .await;
-            if failed.len() == selected_count {
-                return Err(RuntimeSetupError(format!(
-                    "all selected MCPs failed to connect: {}",
-                    failed.join(", ")
-                )));
-            }
-            return Ok(runtime);
+impl McpRegistry {
+    fn select_registered(&self, allowed_mcps: &[String]) -> Vec<String> {
+        if allowed_mcps.is_empty() {
+            return self.names();
         }
+        let known: HashSet<String> = self.names().into_iter().collect();
+        allowed_mcps
+            .iter()
+            .filter(|name| known.contains(name.as_str()))
+            .cloned()
+            .collect()
+    }
 
+    async fn runtime_for_selected(
+        &self,
+        selected: Vec<String>,
+        provenance: WriteProvenance,
+    ) -> Result<Box<dyn ToolRuntime>, RuntimeSetupError> {
+        if selected.len() > 1 {
+            return self.runtime_for_broad_scope(selected, provenance).await;
+        }
         let mut servers = Vec::with_capacity(selected.len());
         for name in selected {
             let runtime = self.acquire(&name, provenance.clone()).await?;
             servers.push((name, runtime));
         }
         Ok(Box::new(MultiMcpRuntime::new(servers)))
+    }
+
+    /// Broad adaptive scopes must keep healthy peers when one selected MCP is offline.
+    async fn runtime_for_broad_scope(
+        &self,
+        selected: Vec<String>,
+        provenance: WriteProvenance,
+    ) -> Result<Box<dyn ToolRuntime>, RuntimeSetupError> {
+        let selected_count = selected.len();
+        let (runtime, failed) = self
+            .connect_selected_best_effort(selected, provenance)
+            .await;
+        if failed.len() == selected_count {
+            return Err(RuntimeSetupError(format!(
+                "all selected MCPs failed to connect: {}",
+                failed.join(", ")
+            )));
+        }
+        Ok(runtime)
     }
 }
 

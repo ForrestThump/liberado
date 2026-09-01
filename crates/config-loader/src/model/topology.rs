@@ -4,8 +4,8 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use liberado_common::{
-    Capability, CapabilitySet, Consequence, DEFAULT_TIMEZONE, ModelProfile, ModelRole,
-    ReasoningLevel, UserTimezone, Zone,
+    Capability, CapabilitySet, Consequence, ModelProfile, ModelRole, ReasoningLevel, UserTimezone,
+    Zone,
 };
 use serde::{Deserialize, Serialize};
 
@@ -24,7 +24,7 @@ pub struct Topology {
     /// onto cron/webhook goals and available via [`Topology::user_timezone`] / [`UserTimezone`]
     /// anywhere a caller wants to inject now into agent context. **Not** applied to cron
     /// *expressions* (those remain UTC); only to human-facing local-time context.
-    /// Default: [`DEFAULT_TIMEZONE`] (`America/Chicago`). Validated at load time.
+    /// Default: [`liberado_common::DEFAULT_TIMEZONE`] (`America/Chicago`). Validated at load time.
     pub timezone: String,
     /// Unix domain socket the daemon listens on for TUI/client attach (Decision 2).
     pub daemon_socket: PathBuf,
@@ -405,60 +405,9 @@ impl Default for MainAgentConfig {
     }
 }
 
-impl Default for Topology {
-    fn default() -> Self {
-        Self {
-            direct_max_turns: None,
-            subagent_max_turns: None,
-            research_max_turns: None,
-            report_sink: None,
-            vault_path: PathBuf::new(),
-            timezone: DEFAULT_TIMEZONE.to_string(),
-            daemon_socket: PathBuf::from("/run/liberado/daemon.sock"),
-            provider: "deepseek".to_string(),
-            providers: default_providers(),
-            acp: AcpConfig::default(),
-            models: Vec::new(),
-            model_roles: HashMap::new(),
-            mcps: Vec::new(),
-            hooks: Vec::new(),
-            schedules: Vec::new(),
-            pools: Vec::new(),
-            session_profiles: Vec::new(),
-            projects: Vec::new(),
-            shepherd: ShepherdConfig::default(),
-            main_agent: MainAgentConfig::default(),
-            webui: WebUiConfig::default(),
-            roles: HashMap::new(),
-        }
-    }
-}
-
 #[cfg(test)]
-mod turn_budget_config_tests {
-    use super::*;
-
-    #[test]
-    fn every_turn_budget_parses_at_its_documented_scope() {
-        let topology: Topology = toml::from_str(
-            r#"
-                vault_path = "/vault"
-                direct_max_turns = 8
-                subagent_max_turns = 20
-                research_max_turns = 30
-
-                [main_agent]
-                max_turns = 12
-            "#,
-        )
-        .unwrap();
-
-        assert_eq!(topology.direct_max_turns, Some(8));
-        assert_eq!(topology.subagent_max_turns, Some(20));
-        assert_eq!(topology.research_max_turns, Some(30));
-        assert_eq!(topology.main_agent.max_turns, Some(12));
-    }
-}
+#[path = "topology_turn_budget_tests.rs"]
+mod turn_budget_config_tests;
 
 /// Configuration for the PR shepherd. It observes forge checks; project preflight remains the
 /// separate local command policy under [`ProjectConfig::preflight`].
@@ -520,7 +469,7 @@ impl Topology {
 /// plain string literals here rather than `liberado_provider_openai_compat::OpenAiCompatibleProvider`'s
 /// constants: this crate must not depend on a concrete provider crate (that would invert the
 /// intended layering, config is foundational, providers are not).
-fn default_providers() -> Vec<ProviderProfile> {
+pub(crate) fn default_providers() -> Vec<ProviderProfile> {
     vec![
         ProviderProfile {
             name: "deepseek".to_string(),

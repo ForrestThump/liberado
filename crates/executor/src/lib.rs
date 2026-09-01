@@ -23,6 +23,7 @@
 //! depends on the trait, so it is testable with a mock runtime and a `MockProvider`.
 
 mod budget;
+mod conversation_reserve;
 mod loop_guard;
 mod mvl;
 mod risk_gated;
@@ -1204,19 +1205,14 @@ impl Executor {
         let mut tools = runtime.catalog();
         self.mvl_start(None);
         let result = async {
-            let final_turn = self
-                .budget
-                .max_turns
-                .saturating_add(CONVERSATION_WRAP_UP_TURNS);
+            let final_turn = conversation_reserve::conversation_final_turn(self.budget.max_turns);
             for turn in 1..=final_turn {
-                if turn > self.budget.max_turns {
-                    tools.clear();
-                    messages.push(Message::user(conversation_wrap_up_directive("turns")));
-                    tracing::warn!(
-                        turn,
-                        "conversation work budget exhausted; granting one tool-free response turn"
-                    );
-                }
+                conversation_reserve::enter_if_exhausted(
+                    turn,
+                    self.budget.max_turns,
+                    &mut tools,
+                    messages,
+                );
                 let request = CompletionRequest::new(messages.clone())
                     .with_tools(tools.clone())
                     .with_model(self.model.clone());
@@ -1238,34 +1234,12 @@ impl Executor {
                 self.mvl_completion(turn, &response);
 
                 messages.push(assistant_turn(&response));
-                if response.tool_calls.is_empty() {
-                    self.mvl_end("succeeded", "model finished");
-                    return Ok(()); // the prose answer was streamed as tokens
+                if self
+                    .finish_stream_turn(turn, runtime, &response, events, messages)
+                    .await?
+                {
+                    return Ok(());
                 }
-
-                if turn > self.budget.max_turns {
-                    for call in &response.tool_calls {
-                        messages.push(Message::tool_result(
-                            &call.id,
-                            "Tool call refused: this turn was reserved for the final response.",
-                        ));
-                    }
-                    self.mvl_end("failed", "model called tools during response-only reserve");
-                    return Err(ExecError::BudgetExceeded {
-                        resource: "turns",
-                        turns: self.budget.max_turns,
-                    });
-                }
-
-                for call in &response.tool_calls {
-                    if let Some(call_id) = self
-                        .invoke_stream_tool(runtime, call, turn, events, messages)
-                        .await?
-                    {
-                        return Err(ExecError::AwaitingHuman { call_id });
-                    }
-                }
-                tracing::info!(turn, tools = response.tool_calls.len(), "turn used tools");
             }
 
             // This loop ends only by running out of turns; the extra limits are checked in
@@ -1644,35 +1618,16 @@ impl Executor {
             self.budget.exhausted_extra(usage)
         };
         let name = exhausted?;
-        if !*wrapping_up && matches!(mode, Mode::Conversational) {
-            *wrapping_up = true;
-            *max_turns = turn;
-            tools.clear();
-            messages.push(Message::user(conversation_wrap_up_directive(name)));
-            tracing::warn!(
-                turn,
-                resource = name,
-                "conversation work budget exhausted; granting one tool-free response turn"
-            );
-            return None;
-        }
-        if *wrapping_up || !policy.salvageable || !matches!(mode, Mode::Report) {
-            return Some(name);
-        }
-        *wrapping_up = true;
-        *max_turns = turn + WRAP_UP_TURNS - 1;
-        // Withdraw everything but the finish tool, so the reserve cannot be spent
-        // continuing the work it was granted to conclude.
-        tools.retain(|t| t.name == SUBMIT_REPORT_TOOL);
-        messages.push(Message::user(wrap_up_directive(name, WRAP_UP_TURNS)));
-        tracing::warn!(
+        conversation_reserve::after_named_exhaustion(
+            wrapping_up,
+            max_turns,
+            tools,
+            messages,
             turn,
-            resource = name,
-            reserve = WRAP_UP_TURNS,
-            "budget exhausted on salvageable work; granting wrap-up reserve to file a \
-             partial report"
-        );
-        None
+            name,
+            mode,
+            policy,
+        )
     }
 
     /// Handle a prose-only completion: conversational modes end with the spoken text; report mode
@@ -4560,37 +4515,8 @@ mod tests {
         assert_eq!(messages.len(), 5);
     }
 
-    #[tokio::test]
-    async fn converse_messages_reserves_a_tool_free_final_response() {
-        let (provider, exec) = executor(
-            vec![
-                call_tool("search"),
-                CompletionResponse::text("Search succeeded; here is the result."),
-            ],
-            Budget::new(1),
-        );
-        let runtime = MockToolRuntime::new(&["search"], Ok("data".into()));
-        let mut messages = vec![Message::system("helper"), Message::user("find")];
-
-        let answer = exec
-            .converse_messages(&runtime, &mut messages)
-            .await
-            .unwrap();
-
-        assert_eq!(answer, "Search succeeded; here is the result.");
-        let requests = provider.received_requests();
-        assert_eq!(requests.len(), 2);
-        assert!(
-            requests[1].tools.is_empty(),
-            "the reserve must not permit more work"
-        );
-        assert!(
-            requests[1]
-                .messages
-                .iter()
-                .any(|m| m.content.contains("All tools are now withdrawn"))
-        );
-    }
+    #[path = "conversation_reserve_tests.rs"]
+    mod conversation_reserve_tests;
 
     // ── converse_stream budget exhaustion ────────────────────────────
 
@@ -4613,28 +4539,6 @@ mod tests {
             msg.contains("BudgetExceeded") || msg.contains("turns"),
             "got: {msg}"
         );
-    }
-
-    #[tokio::test]
-    async fn converse_stream_reserves_a_tool_free_final_response() {
-        let (provider, exec) = executor(
-            vec![
-                call_tool("search"),
-                CompletionResponse::text("Search succeeded; here is the result."),
-            ],
-            Budget::new(1),
-        );
-        let runtime = MockToolRuntime::new(&["search"], Ok("data".into()));
-        let (tx, _rx) = tokio::sync::mpsc::channel(64);
-        let mut messages = vec![Message::system("helper"), Message::user("find")];
-
-        exec.converse_stream(&runtime, &mut messages, &tx)
-            .await
-            .unwrap();
-
-        let requests = provider.received_requests();
-        assert_eq!(requests.len(), 2);
-        assert!(requests[1].tools.is_empty());
     }
 
     struct ParkOnAsk {

@@ -72,7 +72,6 @@ fn gate(caps: CapabilitySet) -> (RiskGatedToolRuntime, Arc<std::sync::Mutex<Vec<
         "authority-suite".into(),
         ProposalSigner::random(),
         "default",
-        RiskWaiverSet::empty(),
     );
     (rt, ran)
 }

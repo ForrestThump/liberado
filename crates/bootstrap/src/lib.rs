@@ -22,6 +22,7 @@ pub use liberado_config::{
 };
 
 mod mcp_apply;
+mod turn_budgets;
 pub use mcp_apply::{LiveMcpController, McpApplyError, McpApplyReport, apply_mcp_peer_set};
 
 use std::collections::HashMap;
@@ -687,15 +688,7 @@ fn build_orchestrator_infra(
         guard.signer.clone(),
     )
     .with_subagent_provider(subagent_providers.worker.clone());
-    if let Some(max_turns) = config.topology.direct_max_turns {
-        infra = infra.with_direct_max_turns(max_turns);
-    }
-    if let Some(max_turns) = config.topology.subagent_max_turns {
-        infra = infra.with_subagent_max_turns(max_turns);
-    }
-    if let Some(max_turns) = config.topology.research_max_turns {
-        infra = infra.with_research_max_turns(max_turns);
-    }
+    infra = turn_budgets::apply_turn_budgets(infra, config);
     if let Some(sink) = report_sink(&config.topology) {
         infra = infra.with_report_sink(sink);
     }

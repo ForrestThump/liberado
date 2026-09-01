@@ -121,7 +121,6 @@ async fn an_undeclared_zone_without_a_grant_is_deferred_not_executed() {
         "ta-undeclared".into(),
         ProposalSigner::random(),
         "default",
-        RiskWaiverSet::empty(),
     )
     .with_notifier(Arc::new(AlwaysOkNotifier));
 
@@ -168,7 +167,6 @@ async fn a_held_undeclared_zone_write_runs_direct() {
         "ta-held".into(),
         ProposalSigner::random(),
         "default",
-        RiskWaiverSet::empty(),
     );
 
     let result = rt

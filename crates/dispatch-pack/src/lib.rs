@@ -8,6 +8,8 @@
 //! `McpRegistry` that is not shareable across instances, so the pack holds one
 //! (dispatcher, orchestrator) pair per pool name.
 
+mod waivers;
+
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -75,13 +77,6 @@ impl DispatchPack {
             proposals_dir,
             notifier: None,
         }
-    }
-
-    /// Set the risk-waiver set propagated to every dispatch the pack runs. Mirrors the
-    /// orchestrator's own `with_risk_waivers` so the two enforcement points see one set.
-    pub fn with_risk_waivers(mut self, waivers: RiskWaiverSet) -> Self {
-        self.risk_waivers = waivers;
-        self
     }
 
     pub fn with_notifier(mut self, notifier: Arc<dyn Notifier>) -> Self {

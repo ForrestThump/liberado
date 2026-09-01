@@ -1224,7 +1224,6 @@ async fn runtime_gated_downgrade_lands_in_the_vault_and_executes_once_approved()
         "runtime-gate-test".into(),
         signer.clone(),
         "default",
-        RiskWaiverSet::empty(),
     );
     let call = ToolInvocation::new(
         "c1",

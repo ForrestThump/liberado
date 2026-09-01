@@ -510,7 +510,6 @@ mod tests {
             "corr".into(),
             ProposalSigner::random(),
             "default",
-            RiskWaiverSet::empty(),
         )
         .with_live_catalog(catalog.clone());
 

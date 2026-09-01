@@ -24,13 +24,13 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use async_trait::async_trait;
 use liberado_common::{
-    ApprovedGuard, BlockReason, CONSEQUENCE_GATE, Capability, CapabilitySet, Consequence, Delivery,
-    Depth, DispatchAction, DispatchDecision, McpDescriptor, Outcome, Proposal, ProposalSigner,
+    BlockReason, CONSEQUENCE_GATE, Capability, CapabilitySet, Consequence, Delivery, Depth,
+    DispatchAction, DispatchDecision, McpDescriptor, Outcome, Proposal, ProposalSigner,
     ProposedAction, Report, SignedProposal, ToolCall, WriteClass, WriteProvenance, mcp_of,
 };
 use liberado_executor::{
-    Budget, ExecError, Executor, LoopProfile, RiskGatedToolRuntime, RuntimeFactory,
-    RuntimeSetupError, SUBMIT_REPORT_TOOL, Task, ToolRuntime,
+    Budget, ExecError, Executor, LoopProfile, RuntimeFactory, RuntimeSetupError,
+    SUBMIT_REPORT_TOOL, Task, ToolRuntime,
 };
 use liberado_notify::Notifier;
 use liberado_provider::{Provider, ToolDef, ToolInvocation};
@@ -40,6 +40,8 @@ use tokio::sync::Semaphore;
 use tracing::Instrument;
 
 /// Default `source` recorded in write provenance for orchestrated executions.
+mod approved;
+
 pub const DEFAULT_SOURCE: &str = "liberado-executor";
 
 /// The one tool call that lands a [`Delivery::Vault`] report, as declared in `topology.toml`.
@@ -381,24 +383,6 @@ impl OrchestratorInfra {
     /// treatment the per-role model settings get.
     pub fn with_research_max_turns(mut self, max_turns: u32) -> Self {
         self.research_max_turns = max_turns;
-        self
-    }
-
-    /// Set the direct-worker turn ceiling for every pool.
-    pub fn with_direct_max_turns(mut self, max_turns: u32) -> Self {
-        self.direct_max_turns = max_turns;
-        self
-    }
-
-    /// Set the normal acting-subagent turn ceiling for every pool.
-    pub fn with_subagent_max_turns(mut self, max_turns: u32) -> Self {
-        self.subagent_max_turns = max_turns;
-        self
-    }
-
-    /// Set the risk-waiver set propagated to every pool's runtime magnitude guard.
-    pub fn with_risk_waivers(mut self, waivers: liberado_common::RiskWaiverSet) -> Self {
-        self.risk_waivers = waivers;
         self
     }
 
@@ -1228,41 +1212,7 @@ impl Orchestrator {
                     )
                     .await
                 }
-                ProposedAction::AdaptiveGoal {
-                    goal,
-                    capabilities,
-                    relevant_mcps,
-                    delivery,
-                    approved_guard,
-                } => {
-                    self.execute_approved_adaptive_goal(
-                        proposal,
-                        goal,
-                        capabilities,
-                        relevant_mcps,
-                        delivery,
-                        *approved_guard,
-                    )
-                    .await
-                }
-                other => {
-                    // VaultWrite/External/Other aren't produced by v1 emit; refuse defensively
-                    // rather than error so the daemon can mark the proposal done and not retry
-                    // forever.
-                    tracing::warn!(
-                        action = ?other,
-                        "approved proposal action is not executable in v1"
-                    );
-                    Ok(Report {
-                        outcome: Outcome::Failed,
-                        summary: "proposed action type is not executable in v1".into(),
-                        artifacts: Vec::new(),
-                        new_high_signal_facts: Vec::new(),
-                        deferred_to_human: false,
-                        follow_up: None,
-                        repeat_calls: 0,
-                    })
-                }
+                other => self.execute_approved_other(proposal, other).await,
             }
         }
         .instrument(span)
@@ -1324,70 +1274,6 @@ impl Orchestrator {
             follow_up: None,
             repeat_calls: 0,
         })
-    }
-
-    /// Execute a signed empty-seed direct goal without sending it back through classification.
-    /// The exact approved guard is skipped once for this run; capability, target resolution, and
-    /// every other runtime guard remain active for each adaptive call.
-    async fn execute_approved_adaptive_goal(
-        &self,
-        proposal: &Proposal,
-        goal: &str,
-        capabilities: &CapabilitySet,
-        relevant_mcps: &[String],
-        delivery: &Delivery,
-        approved_guard: ApprovedGuard,
-    ) -> Result<Report, OrchestratorError> {
-        let effective = self.capabilities.narrow(capabilities);
-        let granted = effective.granted_mcps();
-        let allowed_mcps: Vec<String> = if relevant_mcps.is_empty() {
-            granted
-        } else {
-            granted
-                .into_iter()
-                .filter(|name| relevant_mcps.contains(name))
-                .collect()
-        };
-        let research = self.delivery_consequence_ok(&allowed_mcps);
-        let mut instructions = DIRECT_INSTRUCTIONS.to_string();
-        instructions.push_str(&self.output_contract(delivery, &allowed_mcps, research));
-        let task = Task::new(instructions, goal);
-
-        tracing::info!(
-            proposal_id = %proposal.id,
-            ?approved_guard,
-            max_turns = self.direct_budget.max_turns,
-            mcps = allowed_mcps.len(),
-            "executing approved adaptive goal"
-        );
-
-        let mut report = if allowed_mcps.is_empty() {
-            self.execute(&self.direct_budget, &NoMcpRuntime, task)
-                .await?
-        } else {
-            let provenance =
-                WriteProvenance::agent(self.source.clone(), proposal.correlation_id.as_str());
-            let runtime = self.factory.runtime_for(&allowed_mcps, provenance).await?;
-            let (runtime, deferral) = self.gate_with_approved_guard(
-                runtime,
-                effective,
-                goal,
-                proposal.correlation_id.as_str(),
-                Some(approved_guard),
-            );
-            Self::instrument_catalog(&allowed_mcps, &*runtime);
-            let mut report = self.execute(&self.direct_budget, &*runtime, task).await?;
-            report.deferred_to_human = deferred_flag_of(&deferral);
-            report
-        };
-        self.deliver(
-            &mut report,
-            delivery,
-            &allowed_mcps,
-            proposal.correlation_id.as_str(),
-        )
-        .await?;
-        Ok(report)
     }
 
     /// `execute_approved`'s `Subagent` arm: dispatch the approved goal to a subagent scoped to
@@ -1627,59 +1513,18 @@ impl Orchestrator {
     ) -> (Arc<dyn ToolRuntime>, Arc<AtomicBool>) {
         self.gate_with_approved_guard(runtime, capabilities, goal_context, correlation_base, None)
     }
-
-    fn gate_with_approved_guard(
-        &self,
-        runtime: Box<dyn ToolRuntime>,
-        capabilities: CapabilitySet,
-        goal_context: impl Into<String>,
-        correlation_base: impl Into<String>,
-        approved_guard: Option<ApprovedGuard>,
-    ) -> (Arc<dyn ToolRuntime>, Arc<AtomicBool>) {
-        let deferral_flag = Arc::new(AtomicBool::new(false));
-        // Prefer live catalog so peers added via hot-reload still get consequence/zone gates.
-        let (consequences, zones) = if let Some(cat) = &self.live_catalog {
-            (cat.consequence_catalog(), cat.descriptors())
-        } else {
-            (self.consequence_catalog.clone(), self.zone_catalog.clone())
-        };
-        let mut gated = RiskGatedToolRuntime::new(
-            Arc::from(runtime),
-            capabilities,
-            consequences,
-            zones,
-            self.zone_write_classes.clone(),
-            self.proposals_dir.clone(),
-            goal_context.into(),
-            correlation_base.into(),
-            self.signer.clone(),
-            self.pool_name.clone(),
-            self.risk_waivers.clone(),
-        )
-        .with_deferral_flag(deferral_flag.clone());
-        if let Some(guard) = approved_guard {
-            gated = gated.with_approved_guard(guard);
-        }
-        if let Some(cat) = &self.live_catalog {
-            gated = gated.with_live_catalog(cat.clone());
-        }
-        if let Some(notifier) = &self.notifier {
-            gated = gated.with_notifier(notifier.clone());
-        }
-        (Arc::new(gated), deferral_flag)
-    }
 }
 
 /// Read a gate's deferral flag as a boolean — `true` iff the gated runtime raised a proposal /
 /// permission-request during the run and surfaced it out-of-band (see [`Orchestrator::gate`]).
-fn deferred_flag_of(flag: &Arc<AtomicBool>) -> bool {
+pub(crate) fn deferred_flag_of(flag: &Arc<AtomicBool>) -> bool {
     flag.load(Ordering::Relaxed)
 }
 
 /// A runtime that exposes no tools — used for `ExecuteDirect` when the acting component holds no
 /// `ExecuteMcp` grants at all, so an empty allow-list can't be mistaken for "everything visible"
 /// (see `Orchestrator::run`'s `ExecuteDirect` arm).
-struct NoMcpRuntime;
+pub(crate) struct NoMcpRuntime;
 
 #[async_trait]
 impl ToolRuntime for NoMcpRuntime {
@@ -2692,26 +2537,6 @@ mod tests {
     fn with_research_budget_overrides_the_default() {
         let orch = orchestrator_with_catalog(Vec::new()).with_research_budget(Budget::new(12));
         assert_eq!(orch.research_budget.max_turns, 12);
-    }
-
-    #[test]
-    fn infra_applies_configured_direct_normal_and_research_budgets_to_each_pool() {
-        let provider = Arc::new(MockProvider::with_script("mock", vec![]));
-        let infra = OrchestratorInfra::new(
-            provider,
-            Arc::new(liberado_common::CapabilityCatalog::new()),
-            Vec::new(),
-            std::env::temp_dir(),
-            ProposalSigner::random(),
-        )
-        .with_direct_max_turns(8)
-        .with_subagent_max_turns(20)
-        .with_research_max_turns(30);
-        let orch = infra.for_pool(NoopFactory, CapabilitySet::empty(), "default");
-
-        assert_eq!(orch.direct_budget.max_turns, 8);
-        assert_eq!(orch.subagent_budget.max_turns, 20);
-        assert_eq!(orch.research_budget.max_turns, 30);
     }
 
     #[test]

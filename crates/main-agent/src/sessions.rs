@@ -65,6 +65,9 @@ use liberado_executor::{AgentEvent, ExecError, Executor, RiskGatedToolRuntime, T
 use liberado_mcp::ScopedRuntime;
 use liberado_provider::{Message, Provider, Role};
 use liberado_session::{DomainHint, GoalSessionHub, GoalSpec, SessionGrant, SessionOrigin};
+
+#[path = "sessions_waivers.rs"]
+mod waivers;
 use thiserror::Error;
 use tokio::sync::broadcast;
 use tokio::sync::mpsc::Sender;
@@ -73,7 +76,7 @@ use crate::compaction::{
     self, COMPACTION_AUTHOR, COMPACTION_TAIL_AUTHOR, CompactionConfig, CompactionTriggerTable,
 };
 use crate::face::{DispatchBridge, FaceRuntime};
-use crate::{Conversation, DEFAULT_SYSTEM_PROMPT, HUMAN_INTERFACE_SYSTEM_PROMPT};
+use crate::{Conversation, DEFAULT_SYSTEM_PROMPT};
 
 /// Max display length for the cheap first-line default title (UTF-8 chars).
 const DEFAULT_TITLE_MAX_CHARS: usize = 72;
@@ -411,35 +414,6 @@ impl ChatSessions {
         Some(table.for_model(model.as_deref()))
     }
 
-    /// Override the system prompt written as the root node of new conversations.
-    pub fn with_system_prompt(mut self, prompt: impl Into<String>) -> Self {
-        self.system_prompt = prompt.into();
-        self
-    }
-
-    /// Attach the goal session hub so `delegate` and non-`ExecuteDirect` pre-turn work run as
-    /// hosted sessions (one-execution-engine E4). Without this, face-agent mode has no `delegate`
-    /// tool and non-`ExecuteDirect` classifications fall through as plain answers about the failure.
-    pub fn with_goal_hub(mut self, hub: Arc<GoalSessionHub>) -> Self {
-        self.goals = Some(hub);
-        self.rebuild_face_bridge();
-        self
-    }
-
-    /// Enable face-agent / human-interfacer mode (built-in `delegate` tool; no pre-turn fleet).
-    ///
-    /// When enabled and a hub is attached, applies [`HUMAN_INTERFACE_SYSTEM_PROMPT`] unless a
-    /// custom prompt was already set via [`with_system_prompt`](Self::with_system_prompt) *after*
-    /// this call — prefer setting the prompt explicitly from config in the host.
-    pub fn with_delegation_mode(mut self, enabled: bool) -> Self {
-        self.delegation_mode = enabled;
-        if enabled && self.system_prompt == DEFAULT_SYSTEM_PROMPT {
-            self.system_prompt = HUMAN_INTERFACE_SYSTEM_PROMPT.to_string();
-        }
-        self.rebuild_face_bridge();
-        self
-    }
-
     /// Ceiling used for dispatcher classification and delegated worker sessions.
     /// Defaults to the main-agent capability set when never set.
     pub fn with_dispatcher_capabilities(mut self, caps: CapabilitySet) -> Self {
@@ -497,13 +471,6 @@ impl ChatSessions {
     /// Prefer live catalog lookups in per-turn RiskGated gates (topology MCP hot-reload).
     pub fn with_live_catalog(mut self, catalog: Arc<CapabilityCatalog>) -> Self {
         self.live_catalog = Some(catalog);
-        self
-    }
-
-    /// Set the risk-waiver set passed through to the dispatcher's pre-flight magnitude guard
-    /// and every runtime gate. Empty by default — the heuristic fires as before.
-    pub fn with_risk_waivers(mut self, waivers: RiskWaiverSet) -> Self {
-        self.risk_waivers = waivers;
         self
     }
 
@@ -1399,8 +1366,8 @@ impl ChatSessions {
             session.to_string(),
             self.signer.clone(),
             DEFAULT_POOL,
-            self.risk_waivers.clone(),
-        );
+        )
+        .with_risk_waivers(self.risk_waivers.clone());
         if let Some(cat) = &self.live_catalog {
             gated = gated.with_live_catalog(cat.clone());
         }
@@ -1724,8 +1691,8 @@ impl ChatSessions {
             session.to_string(),
             self.signer.clone(),
             DEFAULT_POOL,
-            self.risk_waivers.clone(),
-        );
+        )
+        .with_risk_waivers(self.risk_waivers.clone());
         if let Some(cat) = &self.live_catalog {
             gated = gated.with_live_catalog(cat.clone());
         }

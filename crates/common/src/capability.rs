@@ -195,31 +195,6 @@ const CLEAR_VERB_FOLLOWERS: &[&str] = &[
     "up",
 ];
 
-/// Whole-word quantifiers that always make an action sweeping.
-///
-/// `any` / `each` are intentionally omitted: they appear constantly in benign English
-/// ("any details", "each field") and, combined with false-positive destructive stems, over-gated
-/// read goals. `entire` is handled separately in [`assess_magnitude`]: it can qualify either a
-/// collection ("the entire inbox") or one bounded object ("the entire line").
-const SWEEPING_WORDS: &[&str] = &["all", "every", "everything"];
-
-/// Collective objects for which "the entire …" genuinely means a bulk target.
-///
-/// A singular concrete object such as a line, task, note, or file is deliberately absent:
-/// deleting that whole object is destructive, but its magnitude is still bounded.
-const ENTIRE_SWEEPING_TARGETS: &[&str] = &[
-    "account",
-    "archive",
-    "collection",
-    "database",
-    "directory",
-    "folder",
-    "inbox",
-    "repository",
-    "vault",
-    "workspace",
-];
-
 fn words(text: &str) -> impl Iterator<Item = String> + '_ {
     text.split(|c: char| !c.is_alphanumeric())
         .filter(|w| !w.is_empty())
@@ -251,16 +226,7 @@ pub fn mentions_destructive(text: &str) -> bool {
 /// `entire` + one concrete object stays bounded: "remove the entire line" names one target, not a
 /// set. Runtime structural checks still enforce the exact tool/path arguments before a write.
 pub fn assess_magnitude(text: &str) -> Magnitude {
-    let tokens: Vec<String> = words(text).collect();
-    if tokens.iter().any(|w| SWEEPING_WORDS.contains(&w.as_str()))
-        || tokens.windows(2).any(|window| {
-            window[0] == "entire" && ENTIRE_SWEEPING_TARGETS.contains(&window[1].as_str())
-        })
-    {
-        Magnitude::Sweeping
-    } else {
-        Magnitude::Bounded
-    }
+    crate::sweeping::classify(text)
 }
 
 /// The combined high-stakes signal magnitude contributes to the consequence gate: a **sweeping
@@ -565,7 +531,7 @@ impl CapabilitySet {
 
                     #[test]
                     fn proptest_sweeping_words_detected(
-                        word in proptest::sample::select(SWEEPING_WORDS),
+                        word in proptest::sample::select(crate::sweeping::SWEEPING_WORDS),
                     ) {
                         prop_assert_eq!(assess_magnitude(word), Magnitude::Sweeping);
                     }
@@ -573,7 +539,7 @@ impl CapabilitySet {
                     #[test]
                     fn proptest_sweeping_destructive_combines(
                         stem in proptest::sample::select(DESTRUCTIVE_STEMS),
-                        sweeping in proptest::sample::select(SWEEPING_WORDS),
+                        sweeping in proptest::sample::select(crate::sweeping::SWEEPING_WORDS),
                     ) {
                         let phrase = format!("{} {} notes", stem, sweeping);
                         prop_assert!(is_sweeping_destructive(&phrase));
@@ -581,7 +547,7 @@ impl CapabilitySet {
 
                     #[test]
                     fn proptest_sweeping_without_destructive_is_false(
-                        sweeping in proptest::sample::select(SWEEPING_WORDS),
+                        sweeping in proptest::sample::select(crate::sweeping::SWEEPING_WORDS),
                     ) {
                         let phrase = format!("summarize {} my notes", sweeping);
                         prop_assert!(!is_sweeping_destructive(&phrase));
@@ -799,12 +765,6 @@ Context: the user asked twice."
 
         // Bounded destructive — a single scoped change is not gated by magnitude.
         assert!(!is_sweeping_destructive("delete the note tmp.md"));
-        assert!(!is_sweeping_destructive(
-            "remove the entire line containing Mom's September birthday gift"
-        ));
-        assert!(!is_sweeping_destructive(
-            "delete this task with the entire line removed"
-        ));
         // Sweeping but not destructive — reading everything is fine.
         assert!(!is_sweeping_destructive("summarize all my notes"));
         // Whole-word matching: "install" must not trip the "all" quantifier.

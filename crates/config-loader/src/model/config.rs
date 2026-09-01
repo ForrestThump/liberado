@@ -341,7 +341,6 @@ impl Config {
     pub fn validate(&self) -> Result<()> {
         self.validate_vault_and_timezone()?;
         self.validate_tuning_bounds()?;
-        self.validate_turn_budgets()?;
         self.capture_unimplemented_warning();
         self.validate_capture_schedule()?;
         self.validate_maintenance_schedules()?;
@@ -387,30 +386,7 @@ impl Config {
                 "tuning.concurrency.max_reaction_depth must be >= 1".into(),
             ));
         }
-        Ok(())
-    }
-
-    fn validate_turn_budgets(&self) -> Result<()> {
-        for (name, value) in [
-            ("topology.direct_max_turns", self.topology.direct_max_turns),
-            (
-                "topology.subagent_max_turns",
-                self.topology.subagent_max_turns,
-            ),
-            (
-                "topology.research_max_turns",
-                self.topology.research_max_turns,
-            ),
-            (
-                "topology.main_agent.max_turns",
-                self.topology.main_agent.max_turns,
-            ),
-        ] {
-            if value == Some(0) {
-                return Err(Error::Config(format!("{name} must be >= 1")));
-            }
-        }
-        Ok(())
+        self.validate_turn_budgets()
     }
 
     /// `[tuning.capture]` parses and validates. `inbox_ignore_globs`, `inbox_path`,

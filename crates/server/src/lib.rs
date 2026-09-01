@@ -8,6 +8,8 @@
 
 mod api;
 mod cron_delivery;
+mod main_agent_budget;
+use main_agent_budget::main_agent_budget;
 mod hooks;
 mod latency;
 mod shutdown;
@@ -27,7 +29,7 @@ use axum::Router;
 use liberado_common::{CapabilityCatalog, CapabilitySet, WriteProvenance};
 use liberado_daemon::Daemon;
 use liberado_dispatcher::Dispatcher;
-use liberado_executor::{Budget, Executor, ToolRuntime};
+use liberado_executor::{Executor, ToolRuntime};
 use liberado_main_agent::ChatSessions;
 use liberado_mcp::McpRegistry;
 use liberado_provider::Provider;
@@ -821,14 +823,6 @@ struct SessionEngine {
     store: Arc<SessionStore>,
     /// Goal sessions — including `delegate` — run here, not in a second inline orchestrator.
     goals: Arc<liberado_session::GoalSessionHub>,
-}
-
-fn main_agent_budget(config: &liberado_config::MainAgentConfig) -> Budget {
-    Budget::new(
-        config
-            .max_turns
-            .unwrap_or(liberado_executor::DEFAULT_MAX_TURNS),
-    )
 }
 
 async fn build_chat(

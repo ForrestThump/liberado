@@ -71,7 +71,6 @@ async fn guard_conformance_capability_gap_agrees_both_sides() {
         "t1-guards-cap".into(),
         ProposalSigner::random(),
         "default",
-        RiskWaiverSet::empty(),
     );
     let runtime_result = rt
         .invoke(&ToolInvocation::new(
@@ -147,7 +146,6 @@ async fn guard_conformance_consequence_agrees_on_external_mcp() {
         "t1-guards-consequence".into(),
         ProposalSigner::random(),
         "default",
-        RiskWaiverSet::empty(),
     );
     let runtime_result = rt
         .invoke(&ToolInvocation::new(
@@ -224,7 +222,6 @@ async fn guard_conformance_magnitude_agrees_on_sweeping_destructive() {
         "t1-guards-magnitude".into(),
         ProposalSigner::random(),
         "default",
-        RiskWaiverSet::empty(),
     );
     let runtime_result = rt
         .invoke(&ToolInvocation::new(

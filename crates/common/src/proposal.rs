@@ -19,6 +19,9 @@ use thiserror::Error;
 use crate::capability::{Capability, CapabilitySet};
 use crate::dispatch::ToolCall;
 
+#[path = "proposal_summary.rs"]
+mod proposal_summary;
+
 /// The directory (relative to a vault root) proposal notes live under. Every consumer that reads,
 /// writes, or watches proposal files agrees on this one name — `liberado-daemon`,
 /// `liberado-telegram-approvals`, and `liberado-executor`'s `RiskGatedToolRuntime` each used to
@@ -418,21 +421,12 @@ impl ProposedAction {
             }
             ProposedAction::Subagent {
                 goal, allowed_mcps, ..
-            } => {
-                let mcps = allowed_mcps.join(", ");
-                format!("dispatch a subagent for: {goal} (mcps: {mcps})")
             }
-            ProposedAction::AdaptiveGoal {
+            | ProposedAction::AdaptiveGoal {
                 goal,
-                relevant_mcps,
-                approved_guard,
+                relevant_mcps: allowed_mcps,
                 ..
-            } => {
-                let mcps = relevant_mcps.join(", ");
-                format!(
-                    "run approved adaptive goal: {goal} (mcps: {mcps}; approved guard: {approved_guard:?})"
-                )
-            }
+            } => proposal_summary::dispatch_or_adaptive_summary(self, goal, allowed_mcps),
             ProposedAction::VaultWrite { path, .. } => format!("write vault note `{path}`"),
             ProposedAction::External { description } => format!("external action: {description}"),
             ProposedAction::Other(value) => format!("other action: {value}"),
@@ -513,27 +507,6 @@ mod tests {
         let back = Proposal::from_note(&p.to_note()).unwrap();
         assert_eq!(back, p);
         assert_eq!(back.status, ProposalStatus::Pending);
-    }
-
-    #[test]
-    fn note_round_trips_an_approved_adaptive_goal_scope() {
-        let p = Proposal::pending(
-            "prop-adaptive-1",
-            "prop-adaptive-1",
-            "liberado",
-            ProposedAction::AdaptiveGoal {
-                goal: "delete all archived tasks".into(),
-                capabilities: CapabilitySet::from_iter([
-                    crate::capability::Capability::ExecuteMcp("tasks-mcp".into()),
-                ]),
-                relevant_mcps: vec!["tasks-mcp".into()],
-                delivery: crate::Delivery::Summarize,
-                approved_guard: ApprovedGuard::Magnitude,
-            },
-            "The human must approve the exact sweeping goal",
-        );
-        let back = Proposal::from_note(&p.to_note()).unwrap();
-        assert_eq!(back, p);
     }
 
     #[test]
