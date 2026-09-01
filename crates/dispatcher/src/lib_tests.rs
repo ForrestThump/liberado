@@ -390,9 +390,9 @@ async fn high_consequence_subagent_is_downgraded_to_propose() {
     }
 }
 #[tokio::test]
-async fn high_consequence_without_concrete_call_stays_clarify() {
-    // A sweeping-destructive goal trips the magnitude gate, but with an *empty* seed list there
-    // is no concrete action to propose — so it stays the conservative Clarify.
+async fn high_consequence_without_seed_calls_proposes_the_exact_adaptive_goal() {
+    // A sweeping-destructive goal with an empty seed list preserves the signed goal and scope.
+    // Approval can then resume it without sending the same prose through classification again.
     let request = DispatchRequest {
         goal: "delete all of my notes".into(),
         catalog: vec![McpDescriptor {
@@ -424,11 +424,45 @@ async fn high_consequence_without_concrete_call_stays_clarify() {
 
     let out = dispatcher.dispatch(&request).await.unwrap();
     match out.action {
-        DispatchAction::Clarify { what_blocked, .. } => {
-            assert_eq!(what_blocked, BlockReason::HighConsequence)
+        DispatchAction::Propose {
+            proposed_action:
+                liberado_common::ProposedAction::AdaptiveGoal {
+                    goal,
+                    capabilities,
+                    relevant_mcps,
+                    delivery,
+                    approved_guard,
+                },
+            ..
+        } => {
+            assert_eq!(goal, "delete all of my notes");
+            assert!(capabilities.grants_mcp("vault"));
+            assert!(relevant_mcps.is_empty());
+            assert_eq!(delivery, Delivery::Summarize);
+            assert_eq!(approved_guard, liberado_common::ApprovedGuard::Magnitude);
         }
-        other => panic!("expected Clarify(HighConsequence), got {other:?}"),
+        other => panic!("expected Propose(AdaptiveGoal), got {other:?}"),
     }
+}
+
+#[tokio::test]
+async fn deleting_one_entire_named_line_is_bounded_and_executes_directly() {
+    let mut request = request(caps("tasks-mcp"), 0);
+    request.goal = "Remove the entire line containing Mom's September birthday gift".into();
+    let decision = DispatchDecision {
+        action: DispatchAction::ExecuteDirect {
+            seed_calls: Vec::new(),
+            relevant_mcps: vec!["tasks-mcp".into()],
+            delivery: Delivery::Summarize,
+        },
+        confidence: 0.95,
+        rationale: "one exact task line".into(),
+    };
+    let mock = scripted(&decision);
+    let dispatcher = Dispatcher::new(mock, DispatchTuning::default(), 4);
+
+    let out = dispatcher.dispatch(&request).await.unwrap();
+    assert!(matches!(out.action, DispatchAction::ExecuteDirect { .. }));
 }
 #[tokio::test]
 async fn deep_reaction_is_halted() {

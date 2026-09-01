@@ -22,8 +22,8 @@ use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 use liberado_common::{
-    BlockReason, CapabilitySet, Delivery, DispatchAction, DispatchDecision, GuidanceHit,
-    ProposedAction, ToolCall, ToolGuidanceSource, mcp_of,
+    ApprovedGuard, BlockReason, CapabilitySet, Delivery, DispatchAction, DispatchDecision,
+    GuidanceHit, ProposedAction, ToolCall, ToolGuidanceSource, mcp_of,
 };
 use liberado_config_loader::DispatchTuning;
 use liberado_provider::{CompletionRequest, Message, Provider, ProviderError, complete_json};
@@ -144,28 +144,33 @@ impl Dispatcher {
             sanitize_decision_mcps(&mut classified, &req.catalog);
             log_classified_decision(&classified, &self.provider.model());
 
-            let decision =
-                match guards::evaluate(&classified, req, &self.tuning, self.max_reaction_depth) {
-                    Some(reason) => {
-                        tracing::Span::current().record("downgrade", format_args!("{reason:?}"));
-                        tracing::info!(
-                            classified = %classified.action,
-                            confidence = classified.confidence,
-                            model = %self.provider.model(),
-                            "dispatch decision downgraded by guard"
-                        );
-                        downgrade(classified, reason)
-                    }
-                    None => {
-                        tracing::info!(
-                            action = %classified.action,
-                            confidence = classified.confidence,
-                            model = %self.provider.model(),
-                            "dispatch decision"
-                        );
-                        classified
-                    }
-                };
+            let decision = match guards::evaluate_detailed(
+                &classified,
+                req,
+                &self.tuning,
+                self.max_reaction_depth,
+            ) {
+                Some(violation) => {
+                    let reason = violation.reason;
+                    tracing::Span::current().record("downgrade", format_args!("{reason:?}"));
+                    tracing::info!(
+                        classified = %classified.action,
+                        confidence = classified.confidence,
+                        model = %self.provider.model(),
+                        "dispatch decision downgraded by guard"
+                    );
+                    downgrade(classified, req, violation)
+                }
+                None => {
+                    tracing::info!(
+                        action = %classified.action,
+                        confidence = classified.confidence,
+                        model = %self.provider.model(),
+                        "dispatch decision"
+                    );
+                    classified
+                }
+            };
 
             tracing::Span::current().record("action", format_args!("{}", decision.action.label()));
             tracing::Span::current().record("confidence", decision.confidence);
@@ -606,25 +611,17 @@ fn clarify_fallback() -> DispatchDecision {
     }
 }
 
-/// Resolve a guard violation to a downgraded decision. A high-consequence or zone-restricted block
-/// on a *concrete* `ExecuteDirect` (a non-empty seed call list — a known action like "send this
-/// email") or on a `DispatchSubagent` (which always carries a restated goal — the classifier's one
-/// required field, so there is always something concrete enough to propose) becomes a `Propose`,
-/// carrying the action for human approval (Decision 11). Every other case stays a `Clarify` — the
-/// most conservative output when there is nothing concrete to propose. `ZoneRestricted` (§6 #2)
-/// gets the exact same treatment as `HighConsequence` here — both are "a human needs to approve
-/// this specific action before it runs," just gated on a different axis (target zone vs. general
-/// riskiness) — there's no reason for one to produce a `Propose` and the other only a `Clarify`.
-///
-/// TODO: the one still-deferred fuzzy case is an empty-seed `ExecuteDirect` (including a bare
-/// magnitude-gate hit with no seed calls) — there is no fixed action to propose, since
-/// `ExecuteDirect` carries no goal of its own (unlike `DispatchSubagent`); the caller's `goal`
-/// isn't threaded into this function today. Approving it would mean "run the adaptive loop on this
-/// goal," which needs the same runtime-gated-execution shape `Orchestrator::execute_approved`'s
-/// `Subagent` arm now has — likely a `ProposedAction::AdaptiveGoal { goal, relevant_mcps }` run via
-/// `Task::new(DIRECT_INSTRUCTIONS, goal)` under a gated runtime, mirroring `Orchestrator::run`'s
-/// `ExecuteDirect` arm. Left for a follow-up rather than folded in here.
-fn downgrade(classified: DispatchDecision, reason: BlockReason) -> DispatchDecision {
+/// Resolve a guard violation to a downgraded decision. Human-approvable violations preserve a
+/// concrete action. Seeded direct calls preserve the calls; a subagent preserves its goal and
+/// scope; and an empty-seed direct action preserves an [`ProposedAction::AdaptiveGoal`] containing
+/// the exact goal, capability ceiling, MCP narrowing, delivery, and precise guard being approved.
+/// This last form closes the old ask → confirm → reclassify → ask loop.
+fn downgrade(
+    classified: DispatchDecision,
+    req: &DispatchRequest,
+    violation: guards::GuardViolation,
+) -> DispatchDecision {
+    let reason = violation.reason;
     let confidence = classified.confidence;
     let rationale = classified.rationale;
 
@@ -655,8 +652,25 @@ fn downgrade(classified: DispatchDecision, reason: BlockReason) -> DispatchDecis
         BlockReason::HighConsequence | BlockReason::ZoneRestricted
     ) {
         match classified.action {
-            DispatchAction::ExecuteDirect { seed_calls, .. } if !seed_calls.is_empty() => {
-                return downgrade_to_propose_tool_calls(seed_calls, confidence, rationale);
+            DispatchAction::ExecuteDirect {
+                seed_calls,
+                relevant_mcps,
+                delivery,
+            } => {
+                if !seed_calls.is_empty() {
+                    return downgrade_to_propose_tool_calls(seed_calls, confidence, rationale);
+                }
+                if let Some(approved_guard) = approved_guard(violation.guard) {
+                    return downgrade_to_propose_adaptive_goal(
+                        req.goal.clone(),
+                        req.capabilities.clone(),
+                        relevant_mcps,
+                        delivery,
+                        approved_guard,
+                        confidence,
+                        rationale,
+                    );
+                }
             }
             DispatchAction::DispatchSubagent {
                 goal,
@@ -678,6 +692,44 @@ fn downgrade(classified: DispatchDecision, reason: BlockReason) -> DispatchDecis
         }
     }
     downgrade_to_clarify(confidence, reason)
+}
+
+fn approved_guard(guard: guards::GuardKind) -> Option<ApprovedGuard> {
+    match guard {
+        guards::GuardKind::Consequence => Some(ApprovedGuard::Consequence),
+        guards::GuardKind::Magnitude => Some(ApprovedGuard::Magnitude),
+        guards::GuardKind::ZoneWriteClass => Some(ApprovedGuard::ZoneWriteClass),
+        guards::GuardKind::AskHumanCapability
+        | guards::GuardKind::McpGrant
+        | guards::GuardKind::ReactionDepth
+        | guards::GuardKind::ConfidenceFloor => None,
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn downgrade_to_propose_adaptive_goal(
+    goal: String,
+    capabilities: CapabilitySet,
+    relevant_mcps: Vec<String>,
+    delivery: Delivery,
+    approved_guard: ApprovedGuard,
+    confidence: f32,
+    rationale: String,
+) -> DispatchDecision {
+    DispatchDecision {
+        action: DispatchAction::Propose {
+            proposed_action: ProposedAction::AdaptiveGoal {
+                goal,
+                capabilities,
+                relevant_mcps,
+                delivery,
+                approved_guard,
+            },
+            rationale: rationale.clone(),
+        },
+        confidence,
+        rationale,
+    }
 }
 
 /// Build the `Propose` a high-consequence concrete `ExecuteDirect` downgrades to, preserving the

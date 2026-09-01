@@ -24,8 +24,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use async_trait::async_trait;
 use liberado_common::{
-    BlockReason, CONSEQUENCE_GATE, Capability, CapabilitySet, Consequence, Delivery, Depth,
-    DispatchAction, DispatchDecision, McpDescriptor, Outcome, Proposal, ProposalSigner,
+    ApprovedGuard, BlockReason, CONSEQUENCE_GATE, Capability, CapabilitySet, Consequence, Delivery,
+    Depth, DispatchAction, DispatchDecision, McpDescriptor, Outcome, Proposal, ProposalSigner,
     ProposedAction, Report, SignedProposal, ToolCall, WriteClass, WriteProvenance, mcp_of,
 };
 use liberado_executor::{
@@ -1210,6 +1210,23 @@ impl Orchestrator {
                     )
                     .await
                 }
+                ProposedAction::AdaptiveGoal {
+                    goal,
+                    capabilities,
+                    relevant_mcps,
+                    delivery,
+                    approved_guard,
+                } => {
+                    self.execute_approved_adaptive_goal(
+                        proposal,
+                        goal,
+                        capabilities,
+                        relevant_mcps,
+                        delivery,
+                        *approved_guard,
+                    )
+                    .await
+                }
                 other => {
                     // VaultWrite/External/Other aren't produced by v1 emit; refuse defensively
                     // rather than error so the daemon can mark the proposal done and not retry
@@ -1289,6 +1306,70 @@ impl Orchestrator {
             follow_up: None,
             repeat_calls: 0,
         })
+    }
+
+    /// Execute a signed empty-seed direct goal without sending it back through classification.
+    /// The exact approved guard is skipped once for this run; capability, target resolution, and
+    /// every other runtime guard remain active for each adaptive call.
+    async fn execute_approved_adaptive_goal(
+        &self,
+        proposal: &Proposal,
+        goal: &str,
+        capabilities: &CapabilitySet,
+        relevant_mcps: &[String],
+        delivery: &Delivery,
+        approved_guard: ApprovedGuard,
+    ) -> Result<Report, OrchestratorError> {
+        let effective = self.capabilities.narrow(capabilities);
+        let granted = effective.granted_mcps();
+        let allowed_mcps: Vec<String> = if relevant_mcps.is_empty() {
+            granted
+        } else {
+            granted
+                .into_iter()
+                .filter(|name| relevant_mcps.contains(name))
+                .collect()
+        };
+        let research = self.delivery_consequence_ok(&allowed_mcps);
+        let mut instructions = DIRECT_INSTRUCTIONS.to_string();
+        instructions.push_str(&self.output_contract(delivery, &allowed_mcps, research));
+        let task = Task::new(instructions, goal);
+
+        tracing::info!(
+            proposal_id = %proposal.id,
+            ?approved_guard,
+            max_turns = self.direct_budget.max_turns,
+            mcps = allowed_mcps.len(),
+            "executing approved adaptive goal"
+        );
+
+        let mut report = if allowed_mcps.is_empty() {
+            self.execute(&self.direct_budget, &NoMcpRuntime, task)
+                .await?
+        } else {
+            let provenance =
+                WriteProvenance::agent(self.source.clone(), proposal.correlation_id.as_str());
+            let runtime = self.factory.runtime_for(&allowed_mcps, provenance).await?;
+            let (runtime, deferral) = self.gate_with_approved_guard(
+                runtime,
+                effective,
+                goal,
+                proposal.correlation_id.as_str(),
+                Some(approved_guard),
+            );
+            Self::instrument_catalog(&allowed_mcps, &*runtime);
+            let mut report = self.execute(&self.direct_budget, &*runtime, task).await?;
+            report.deferred_to_human = deferred_flag_of(&deferral);
+            report
+        };
+        self.deliver(
+            &mut report,
+            delivery,
+            &allowed_mcps,
+            proposal.correlation_id.as_str(),
+        )
+        .await?;
+        Ok(report)
     }
 
     /// `execute_approved`'s `Subagent` arm: dispatch the approved goal to a subagent scoped to
@@ -1526,6 +1607,17 @@ impl Orchestrator {
         goal_context: impl Into<String>,
         correlation_base: impl Into<String>,
     ) -> (Arc<dyn ToolRuntime>, Arc<AtomicBool>) {
+        self.gate_with_approved_guard(runtime, capabilities, goal_context, correlation_base, None)
+    }
+
+    fn gate_with_approved_guard(
+        &self,
+        runtime: Box<dyn ToolRuntime>,
+        capabilities: CapabilitySet,
+        goal_context: impl Into<String>,
+        correlation_base: impl Into<String>,
+        approved_guard: Option<ApprovedGuard>,
+    ) -> (Arc<dyn ToolRuntime>, Arc<AtomicBool>) {
         let deferral_flag = Arc::new(AtomicBool::new(false));
         // Prefer live catalog so peers added via hot-reload still get consequence/zone gates.
         let (consequences, zones) = if let Some(cat) = &self.live_catalog {
@@ -1547,6 +1639,9 @@ impl Orchestrator {
             self.risk_waivers.clone(),
         )
         .with_deferral_flag(deferral_flag.clone());
+        if let Some(guard) = approved_guard {
+            gated = gated.with_approved_guard(guard);
+        }
         if let Some(cat) = &self.live_catalog {
             gated = gated.with_live_catalog(cat.clone());
         }

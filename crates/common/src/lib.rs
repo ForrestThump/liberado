@@ -80,8 +80,8 @@ pub use model::{
     ModelChoice, ModelProfile, ModelRole, ModelTier, ModelTokenPrices, ReasoningLevel, RequiredCaps,
 };
 pub use proposal::{
-    GrantScope, PROPOSALS_DIR, Proposal, ProposalNoteError, ProposalSigner, ProposalStatus,
-    ProposedAction, SignedProposal,
+    ApprovedGuard, GrantScope, PROPOSALS_DIR, Proposal, ProposalNoteError, ProposalSigner,
+    ProposalStatus, ProposedAction, SignedProposal,
 };
 pub use provenance::{HUMAN_SOURCE, PROVENANCE_KEY, WriteProvenance};
 pub use risk_waiver::{Guard, RiskWaiver, RiskWaiverSet, WaiverTarget};

@@ -30,6 +30,26 @@ use liberado_config_loader::DispatchTuning;
 
 use crate::{DispatchRequest, McpDescriptor};
 
+/// The precise guard that rejected a classified action. `BlockReason` is intentionally coarser
+/// for the public wire format, but approval continuation needs to know which one-time runtime
+/// exception the human authorized.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum GuardKind {
+    AskHumanCapability,
+    McpGrant,
+    Consequence,
+    ZoneWriteClass,
+    Magnitude,
+    ReactionDepth,
+    ConfidenceFloor,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct GuardViolation {
+    pub guard: GuardKind,
+    pub reason: BlockReason,
+}
+
 /// Evaluate the guards against a classified decision. Returns the [`BlockReason`] of the first
 /// (highest-priority) violation, or `None` if the decision passes unchanged. The caller downgrades
 /// to a `Clarify` carrying this reason.
@@ -42,6 +62,15 @@ pub fn evaluate(
     tuning: &DispatchTuning,
     max_reaction_depth: u32,
 ) -> Option<BlockReason> {
+    evaluate_detailed(decision, req, tuning, max_reaction_depth).map(|violation| violation.reason)
+}
+
+pub(crate) fn evaluate_detailed(
+    decision: &DispatchDecision,
+    req: &DispatchRequest,
+    tuning: &DispatchTuning,
+    max_reaction_depth: u32,
+) -> Option<GuardViolation> {
     // A Clarify is the most conservative action — *when somebody can answer it*.
     //
     // For an actor holding no `AskHuman` capability there is no one, so a question is not a
@@ -53,7 +82,7 @@ pub fn evaluate(
     if matches!(decision.action, DispatchAction::Clarify { .. }) {
         if !req.capabilities.grants_ask_human() {
             return blocked(
-                "ask_human_capability",
+                GuardKind::AskHumanCapability,
                 BlockReason::Unattended,
                 "Clarify requires an interlocutor and this actor holds no AskHuman capability",
             );
@@ -82,7 +111,7 @@ pub fn evaluate(
                 "capability gap: action references something not in the dispatcher grant"
             );
             return blocked(
-                "mcp_grant",
+                GuardKind::McpGrant,
                 BlockReason::CapabilityGap,
                 &format!("action references '{reference}', which the grant does not include"),
             );
@@ -96,7 +125,7 @@ pub fn evaluate(
     let consequence = max_consequence(&decision.action, req);
     if consequence >= CONSEQUENCE_GATE {
         return blocked(
-            "consequence",
+            GuardKind::Consequence,
             BlockReason::HighConsequence,
             &format!("an MCP in scope is rated {consequence:?} (gate {CONSEQUENCE_GATE:?})"),
         );
@@ -109,7 +138,7 @@ pub fn evaluate(
     // `RiskGatedToolRuntime`.
     if zone_restricted(&decision.action, req) {
         return blocked(
-            "zone_write_class",
+            GuardKind::ZoneWriteClass,
             BlockReason::ZoneRestricted,
             "a seed call targets a zone that is not directly agent-writable",
         );
@@ -138,7 +167,7 @@ pub fn evaluate(
         }) && !targets.is_empty();
         if !waived {
             return blocked(
-                "magnitude",
+                GuardKind::Magnitude,
                 BlockReason::HighConsequence,
                 &format!(
                     "instruction reads as sweeping+destructive ({} of {} goal chars scanned)",
@@ -156,7 +185,7 @@ pub fn evaluate(
     // (4) Reaction-depth guard — halt runaway background cascades.
     if req.reaction_depth >= max_reaction_depth {
         return blocked(
-            "reaction_depth",
+            GuardKind::ReactionDepth,
             BlockReason::DepthLimit,
             &format!("depth {} >= max {max_reaction_depth}", req.reaction_depth),
         );
@@ -167,7 +196,7 @@ pub fn evaluate(
     // deferred); `Clarify` was already excluded above.
     if decision.confidence < tuning.clarify_threshold_write {
         return blocked(
-            "confidence_floor",
+            GuardKind::ConfidenceFloor,
             BlockReason::LowConfidence,
             &format!(
                 "confidence {:.2} < threshold {:.2}",
@@ -187,9 +216,9 @@ pub fn evaluate(
 /// apart required re-running the heuristic offline against the goal text — the log could not answer
 /// it. `guard=` closes that, and matches the field name `RiskGatedToolRuntime::authority_decision`
 /// uses on the runtime side, so one grep covers both enforcement points.
-fn blocked(guard: &'static str, reason: BlockReason, detail: &str) -> Option<BlockReason> {
-    tracing::warn!(guard, ?reason, detail = %detail, "pre-flight guard blocked the action");
-    Some(reason)
+fn blocked(guard: GuardKind, reason: BlockReason, detail: &str) -> Option<GuardViolation> {
+    tracing::warn!(guard = ?guard, ?reason, detail = %detail, "pre-flight guard blocked the action");
+    Some(GuardViolation { guard, reason })
 }
 
 /// The MCPs an action would invoke. The tool-name convention is `"<mcp>:<tool>"`; a bare name is

@@ -195,12 +195,30 @@ const CLEAR_VERB_FOLLOWERS: &[&str] = &[
     "up",
 ];
 
-/// Whole-word quantifiers that make an action sweeping.
+/// Whole-word quantifiers that always make an action sweeping.
 ///
 /// `any` / `each` are intentionally omitted: they appear constantly in benign English
 /// ("any details", "each field") and, combined with false-positive destructive stems, over-gated
-/// read goals. Strong quantifiers (`all` / `every` / `entire` / `everything`) remain.
-const SWEEPING_WORDS: &[&str] = &["all", "every", "everything", "entire"];
+/// read goals. `entire` is handled separately in [`assess_magnitude`]: it can qualify either a
+/// collection ("the entire inbox") or one bounded object ("the entire line").
+const SWEEPING_WORDS: &[&str] = &["all", "every", "everything"];
+
+/// Collective objects for which "the entire …" genuinely means a bulk target.
+///
+/// A singular concrete object such as a line, task, note, or file is deliberately absent:
+/// deleting that whole object is destructive, but its magnitude is still bounded.
+const ENTIRE_SWEEPING_TARGETS: &[&str] = &[
+    "account",
+    "archive",
+    "collection",
+    "database",
+    "directory",
+    "folder",
+    "inbox",
+    "repository",
+    "vault",
+    "workspace",
+];
 
 fn words(text: &str) -> impl Iterator<Item = String> + '_ {
     text.split(|c: char| !c.is_alphanumeric())
@@ -228,10 +246,17 @@ pub fn mentions_destructive(text: &str) -> bool {
     false
 }
 
-/// Classify how far-reaching `text` is. `Sweeping` when a universal quantifier is present as a whole
-/// word (so "install" does not match "all").
+/// Classify how far-reaching `text` is. `Sweeping` when a universal quantifier is present as a
+/// whole word (so "install" does not match "all"), or when `entire` qualifies a known collection.
+/// `entire` + one concrete object stays bounded: "remove the entire line" names one target, not a
+/// set. Runtime structural checks still enforce the exact tool/path arguments before a write.
 pub fn assess_magnitude(text: &str) -> Magnitude {
-    if words(text).any(|w| SWEEPING_WORDS.contains(&w.as_str())) {
+    let tokens: Vec<String> = words(text).collect();
+    if tokens.iter().any(|w| SWEEPING_WORDS.contains(&w.as_str()))
+        || tokens.windows(2).any(|window| {
+            window[0] == "entire" && ENTIRE_SWEEPING_TARGETS.contains(&window[1].as_str())
+        })
+    {
         Magnitude::Sweeping
     } else {
         Magnitude::Bounded
@@ -774,6 +799,12 @@ Context: the user asked twice."
 
         // Bounded destructive — a single scoped change is not gated by magnitude.
         assert!(!is_sweeping_destructive("delete the note tmp.md"));
+        assert!(!is_sweeping_destructive(
+            "remove the entire line containing Mom's September birthday gift"
+        ));
+        assert!(!is_sweeping_destructive(
+            "delete this task with the entire line removed"
+        ));
         // Sweeping but not destructive — reading everything is fine.
         assert!(!is_sweeping_destructive("summarize all my notes"));
         // Whole-word matching: "install" must not trip the "all" quantifier.

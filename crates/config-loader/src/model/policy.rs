@@ -196,20 +196,8 @@ mod proptest_tests {
         // Duplicates collapse.
         assert_eq!(set.waivers.len(), 2);
         // The match fields survive the round-trip.
-        assert!(set.covers(
-            Guard::Magnitude,
-            "weather:get_forecast",
-            None
-        ));
-        assert!(set.covers(
-            Guard::Magnitude,
-            "vault:read_note",
-            Some("Tasks")
-        ));
-        assert!(!set.covers(
-            Guard::Magnitude,
-            "vault:read_note",
-            Some("Life")
-        ));
+        assert!(set.covers(Guard::Magnitude, "weather:get_forecast", None));
+        assert!(set.covers(Guard::Magnitude, "vault:read_note", Some("Tasks")));
+        assert!(!set.covers(Guard::Magnitude, "vault:read_note", Some("Life")));
     }
 }

@@ -42,9 +42,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use async_trait::async_trait;
 use liberado_common::{
-    Capability, CapabilityCatalog, CapabilitySet, Consequence, McpDescriptor, Proposal,
-    ProposalSigner, ProposedAction, RiskWaiverSet, SignedProposal, WriteClass, WriteTarget, Zone,
-    bare_tool_name, is_sweeping_destructive, mcp_of, names_single_write_target, write_target,
+    ApprovedGuard, Capability, CapabilityCatalog, CapabilitySet, Consequence, McpDescriptor,
+    Proposal, ProposalSigner, ProposedAction, RiskWaiverSet, SignedProposal, WriteClass,
+    WriteTarget, Zone, bare_tool_name, is_sweeping_destructive, mcp_of, names_single_write_target,
+    write_target,
 };
 use liberado_notify::Notifier;
 use liberado_provider::{ToolDef, ToolInvocation};
@@ -76,6 +77,9 @@ pub struct RiskGatedToolRuntime {
     /// (mcp, tool, zone) suppresses the magnitude guard for this call. Does not affect any
     /// other guard; the capability and consequence checks still gate normally.
     risk_waivers: RiskWaiverSet,
+    /// One guard already authorized by the signed proposal that started this adaptive run.
+    /// Capability and target resolution are never bypassed, and every other risk guard remains on.
+    approved_guard: Option<ApprovedGuard>,
     /// Base directory for proposal files. Proposals are written to `proposals_dir/proposals/`.
     proposals_dir: PathBuf,
     /// The current user message / goal context used for magnitude assessment.
@@ -155,7 +159,14 @@ impl RiskGatedToolRuntime {
             fail_next_create_dir: Arc::new(AtomicBool::new(false)),
             fail_next_write: Arc::new(AtomicBool::new(false)),
             risk_waivers,
+            approved_guard: None,
         }
+    }
+
+    /// Mark one risk guard as already approved for this signed adaptive-goal execution.
+    pub fn with_approved_guard(mut self, guard: ApprovedGuard) -> Self {
+        self.approved_guard = Some(guard);
+        self
     }
 
     /// Prefer the live capability catalog for consequence + zone resolution on every invoke
@@ -373,7 +384,9 @@ impl ToolRuntime for RiskGatedToolRuntime {
             }
 
             // 3. If consequence >= Irreversible, downgrade to proposal.
-            if consequence >= Consequence::Irreversible {
+            if consequence >= Consequence::Irreversible
+                && self.approved_guard != Some(ApprovedGuard::Consequence)
+            {
                 self.authority_decision(
                     "consequence",
                     "proposal",
@@ -417,7 +430,9 @@ impl ToolRuntime for RiskGatedToolRuntime {
                     None => !WriteClass::default().allows_direct_agent_write(),
                 }
             });
-            if let Some(zone) = restricted_zone {
+            if let Some(zone) = restricted_zone
+                && self.approved_guard != Some(ApprovedGuard::ZoneWriteClass)
+            {
                 self.authority_decision(
                     "zone_write_class",
                     "proposal",
@@ -483,7 +498,10 @@ impl ToolRuntime for RiskGatedToolRuntime {
                 self.risk_waivers
                     .covers(liberado_common::Guard::Magnitude, &call.name, zone)
             };
-            if !call_waived && (sweeping_payload || is_sweeping_destructive(&full_context)) {
+            if self.approved_guard != Some(ApprovedGuard::Magnitude)
+                && !call_waived
+                && (sweeping_payload || is_sweeping_destructive(&full_context))
+            {
                 self.authority_decision(
                     "magnitude",
                     "proposal",
