@@ -207,6 +207,7 @@ fn safe_repository_path(repository: &Path, relative: &Path, name: &str) -> Resul
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::tempdir;
 
     fn config() -> HomelabConfig {
         HomelabConfig {
@@ -235,5 +236,38 @@ mod tests {
         assert!(safe_repository_path(Path::new("repo"), Path::new("../outside"), "x").is_err());
         assert!(safe_repository_path(Path::new("repo"), Path::new("docs"), "x").is_err());
         assert!(safe_repository_path(Path::new("repo"), Path::new("target/dist"), "x").is_ok());
+    }
+
+    #[test]
+    fn bundle_validation_requires_index_wasm_and_no_debug_sections() {
+        let root = tempdir().unwrap();
+        let dist = root.path();
+        assert!(
+            validate_webui_bundle(dist)
+                .unwrap_err()
+                .contains("no WebUI bundle")
+        );
+
+        std::fs::write(dist.join("index.html"), "<!doctype html>").unwrap();
+        assert!(
+            validate_webui_bundle(dist)
+                .unwrap_err()
+                .contains("read WebUI assets")
+        );
+
+        let assets = dist.join("assets");
+        std::fs::create_dir(&assets).unwrap();
+        std::fs::write(assets.join("app.js"), "javascript").unwrap();
+        assert!(
+            validate_webui_bundle(dist)
+                .unwrap_err()
+                .contains("no .wasm files")
+        );
+
+        std::fs::write(assets.join("app.wasm"), b"\0asm release").unwrap();
+        validate_webui_bundle(dist).unwrap();
+
+        std::fs::write(assets.join("app.wasm"), b"\0asm .debug_info").unwrap();
+        assert!(validate_webui_bundle(dist).unwrap_err().contains("DWARF"));
     }
 }

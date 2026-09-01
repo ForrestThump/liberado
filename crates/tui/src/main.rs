@@ -94,18 +94,24 @@ async fn run_loop(
         if runner.should_quit.load(Ordering::Relaxed) {
             break;
         }
-
-        if event::poll(POLL_INTERVAL)? {
-            handle_terminal_event(runner, event::read()?).await;
-        }
-
-        drain_actions(runner, action_rx).await;
-
-        // T1.3: skip full redraw when state is unchanged and nothing is animating.
-        draw_if_needed(terminal, runner, &spinner_origin).await?;
+        run_loop_iteration(terminal, runner, action_rx, &spinner_origin).await?;
     }
 
     Ok(())
+}
+
+async fn run_loop_iteration(
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    runner: &EffectRunner,
+    action_rx: &mut mpsc::Receiver<Action>,
+    spinner_origin: &Instant,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if event::poll(POLL_INTERVAL)? {
+        handle_terminal_event(runner, event::read()?).await;
+    }
+    drain_actions(runner, action_rx).await;
+    // T1.3: skip full redraw when state is unchanged and nothing is animating.
+    draw_if_needed(terminal, runner, spinner_origin).await
 }
 
 /// Dispatch one terminal event into the app and run the effects it produced.
@@ -212,32 +218,39 @@ fn spawn_poller(tx: mpsc::Sender<Action>, server: String, client: reqwest::Clien
             let status_result = api::fetch_status(&client, &server).await;
             let (new_connected, new_failures, status_actions) =
                 poll_step(connected, failures, status_result);
-            for action in status_actions {
-                if tx.try_send(action).is_err() {
-                    tracing::warn!("action channel full, dropping status action");
-                }
-            }
+            enqueue_status_actions(&tx, status_actions);
             connected = new_connected;
             failures = new_failures;
 
             // Reactions feed is intentionally not shown in the sparse layout.
             // Conversations still poll so /session browser stays fresh.
-            match api::fetch_conversations(&client, &server).await {
-                Ok(convs) => {
-                    if tx.try_send(Action::ConversationsUpdate(convs)).is_err() {
-                        tracing::warn!("action channel full, dropping ConversationsUpdate");
-                    }
-                }
-                Err(e) => {
-                    tracing::warn!(error = %e, "conversations poll failed");
-                }
-            }
-
-            if tx.try_send(Action::Tick).is_err() {
-                tracing::warn!("action channel full, dropping Tick");
-            }
+            poll_conversations(&tx, &client, &server).await;
+            send_poller_action(&tx, Action::Tick, "Tick");
         }
     });
+}
+
+fn enqueue_status_actions(tx: &mpsc::Sender<Action>, actions: Vec<Action>) {
+    for action in actions {
+        send_poller_action(tx, action, "status action");
+    }
+}
+
+async fn poll_conversations(tx: &mpsc::Sender<Action>, client: &reqwest::Client, server: &str) {
+    match api::fetch_conversations(client, server).await {
+        Ok(conversations) => send_poller_action(
+            tx,
+            Action::ConversationsUpdate(conversations),
+            "ConversationsUpdate",
+        ),
+        Err(error) => tracing::warn!(error = %error, "conversations poll failed"),
+    }
+}
+
+fn send_poller_action(tx: &mpsc::Sender<Action>, action: Action, label: &str) {
+    if tx.try_send(action).is_err() {
+        tracing::warn!("action channel full, dropping {label}");
+    }
 }
 
 #[cfg(test)]

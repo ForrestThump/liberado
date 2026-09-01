@@ -89,11 +89,21 @@ fn execute_unwraps(command: CiCommand) -> Result<(), Box<dyn std::error::Error>>
 }
 
 fn execute_readiness(command: CiCommand) -> Result<(), Box<dyn std::error::Error>> {
+    if let Some(action) = readiness_action(command) {
+        action(&repository_root()?)
+    } else {
+        execute_complexity(command)
+    }
+}
+
+type ReadinessAction = fn(&std::path::Path) -> Result<(), Box<dyn std::error::Error>>;
+
+fn readiness_action(command: CiCommand) -> Option<ReadinessAction> {
     match command {
-        CiCommand::CrapLinux => crate::readiness_cmd::crap_linux(&repository_root()?),
-        CiCommand::Ready => crate::readiness_cmd::ready(&repository_root()?),
-        CiCommand::VerifyReady => crate::readiness_cmd::verify(&repository_root()?),
-        command => execute_complexity(command),
+        CiCommand::CrapLinux => Some(crate::readiness_cmd::crap_linux),
+        CiCommand::Ready => Some(crate::readiness_cmd::ready),
+        CiCommand::VerifyReady => Some(crate::readiness_cmd::verify),
+        _ => None,
     }
 }
 

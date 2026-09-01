@@ -367,6 +367,10 @@ fn classify_unwrap(
 }
 
 #[cfg(test)]
+#[path = "classifier/regression_tests.rs"]
+mod regression_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 

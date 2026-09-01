@@ -312,7 +312,7 @@ fn regression_hint_tells_an_agent_not_to_raise_the_baseline() {
 }
 
 #[test]
-fn compare_args_always_enforce_the_150_ceiling() {
+fn compare_args_always_enforce_the_configured_ceiling() {
     let ceiling = compare_args(false);
     assert!(ceiling.contains(&"--fail-above"));
     assert!(ceiling.contains(&"--threshold"));
@@ -376,9 +376,9 @@ fn cargo_crap_toml_threshold_matches_the_ci_ceiling() {
         .and_then(Path::parent)
         .expect("crate is crates/cli");
     let toml = std::fs::read_to_string(root.join(".cargo-crap.toml")).expect("toml");
-    let expected = format!("threshold = {CRAP_CEILING}.0");
+    let expected = format!("threshold = {CRAP_CEILING}");
     assert!(
-        toml.contains(&expected),
+        toml.lines().any(|line| line.trim() == expected),
         ".cargo-crap.toml must set {expected}; got:\n{toml}"
     );
     assert!(

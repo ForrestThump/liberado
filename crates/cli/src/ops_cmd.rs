@@ -252,4 +252,37 @@ mod tests {
         }
         assert!(parse_dev_action("unknown").is_err());
     }
+
+    #[test]
+    fn operations_entry_points_cover_usage_and_config_load_failures() {
+        assert!(run_deploy(&mut std::iter::empty()).is_err());
+        assert!(run_paseo(&mut ["wrong".to_string()].into_iter()).is_err());
+        assert!(run_ops(&mut ["wrong".to_string()].into_iter()).is_err());
+
+        let missing = "definitely-missing-operations-config.toml";
+        assert!(
+            run_deploy(
+                &mut ["homelab", "--config", missing]
+                    .into_iter()
+                    .map(str::to_string),
+            )
+            .is_err()
+        );
+        assert!(
+            run_paseo(
+                &mut ["install", "--config", missing]
+                    .into_iter()
+                    .map(str::to_string),
+            )
+            .is_err()
+        );
+        assert!(
+            run_ops(
+                &mut ["config", "check", "--config", missing]
+                    .into_iter()
+                    .map(str::to_string),
+            )
+            .is_err()
+        );
+    }
 }

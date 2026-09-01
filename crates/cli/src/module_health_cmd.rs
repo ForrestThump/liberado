@@ -65,7 +65,7 @@ pub fn check(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
     let config = load_config(root)?;
     let current = analysis::analyze(root)?;
     write_report(&root.join(CURRENT_FILE), &current)?;
-    let baseline: Report = serde_json::from_slice(&std::fs::read(root.join(BASELINE_FILE))?)?;
+    let baseline = read_report(&root.join(BASELINE_FILE))?;
     compare(&config, &baseline, &current)?;
     eprintln!(
         "[module health] ok: {} production Rust files",
@@ -74,23 +74,33 @@ pub fn check(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+fn read_report(path: &Path) -> Result<Report, Box<dyn std::error::Error>> {
+    Ok(serde_json::from_slice(&std::fs::read(path)?)?)
+}
+
 /// The current report for a ratchet: compare against the existing baseline when there is one,
 /// otherwise produce an initial report from a fresh analysis. Split from [`ratchet`] so the
 /// driver stays under the complexity ceiling; the analysis half runs the real tool and is
 /// covered by `just ci` itself.
 fn current_report(root: &Path) -> Result<Report, Box<dyn std::error::Error>> {
     if root.join(BASELINE_FILE).is_file() {
-        check(root)?;
-        Ok(serde_json::from_slice(&std::fs::read(
-            root.join(CURRENT_FILE),
-        )?)?)
+        existing_report(root)
     } else {
-        load_config(root)?;
-        let report = analysis::analyze(root)?;
-        write_report(&root.join(CURRENT_FILE), &report)?;
-        eprintln!("[module health] creating initial baseline");
-        Ok(report)
+        initial_report(root)
     }
+}
+
+fn existing_report(root: &Path) -> Result<Report, Box<dyn std::error::Error>> {
+    check(root)?;
+    read_report(&root.join(CURRENT_FILE))
+}
+
+fn initial_report(root: &Path) -> Result<Report, Box<dyn std::error::Error>> {
+    load_config(root)?;
+    let report = analysis::analyze(root)?;
+    write_report(&root.join(CURRENT_FILE), &report)?;
+    eprintln!("[module health] creating initial baseline");
+    Ok(report)
 }
 
 pub fn ratchet(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
@@ -287,6 +297,7 @@ fn write_report(path: &Path, report: &Report) -> Result<(), Box<dyn std::error::
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::tempdir;
 
     fn config() -> Config {
         Config {
@@ -426,6 +437,45 @@ mod tests {
                 &BTreeMap::from([("crates/a/src/big.rs".into(), grown)])
             )
             .is_err()
+        );
+    }
+
+    #[test]
+    fn collect_json_recurses_and_keeps_only_json_files() {
+        let root = tempdir().unwrap();
+        std::fs::create_dir_all(root.path().join("nested/deeper")).unwrap();
+        std::fs::write(root.path().join("root.json"), "{}").unwrap();
+        std::fs::write(root.path().join("nested/deeper/report.json"), "{}").unwrap();
+        std::fs::write(root.path().join("nested/notes.txt"), "ignore").unwrap();
+        let mut paths = Vec::new();
+        collect_json(root.path(), &mut paths).unwrap();
+        paths.sort();
+        assert_eq!(paths.len(), 2);
+        assert!(paths.iter().all(|path| path.extension().unwrap() == "json"));
+    }
+
+    #[test]
+    fn waiver_validation_accepts_valid_and_rejects_invalid_metadata() {
+        let root = tempdir().unwrap();
+        let source = "crates/demo/src/lib.rs";
+        std::fs::create_dir_all(root.path().join(source).parent().unwrap()).unwrap();
+        std::fs::write(root.path().join(source), "fn demo() {}\n").unwrap();
+        let mut cfg = config();
+        cfg.waiver.push(Waiver {
+            path: source.into(),
+            metric: Metric::Ploc,
+            ceiling: 200,
+            reason: "generated table".into(),
+            reviewed_on: "2026-08-31".into(),
+        });
+        validate_waivers(root.path(), &cfg).unwrap();
+
+        cfg.waiver[0].reason.clear();
+        assert!(
+            validate_waivers(root.path(), &cfg)
+                .unwrap_err()
+                .to_string()
+                .contains("reason")
         );
     }
 }

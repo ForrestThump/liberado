@@ -337,6 +337,10 @@ fn read_text(path: &Path) -> std::io::Result<String> {
 }
 
 #[cfg(test)]
+#[path = "docs_audit_cmd/regression_tests.rs"]
+mod regression_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 

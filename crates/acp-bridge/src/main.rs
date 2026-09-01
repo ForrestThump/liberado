@@ -44,6 +44,7 @@ mod coding_run;
 mod done;
 mod interactive;
 mod permission;
+mod prompt_support;
 mod provider;
 mod session_store;
 mod stdin_guard;
@@ -54,6 +55,10 @@ use wire::{
     emit_tool_call_update, emit_user_message_chunk, pop_tool_call_id, push_tool_call_id,
 };
 
+use prompt_support::{
+    coding_verdict, drain_coding_events, emit_finish_report, persist_coding_state,
+    preserved_worktree_report, render_face_prompt_result,
+};
 use provider::{
     CatalogModel, build_provider, description_for, display_name_for, load_model_catalog,
 };
@@ -1211,21 +1216,8 @@ async fn finish_coding_run(
     label: &str,
     outcome: Option<String>,
 ) -> Result<(), String> {
-    let preserved = match coding_run::preserve_worktree(workspace, label).await {
-        Ok(Some(sha)) => format!(
-            "\n**Committed:** `{sha}` on `{}`\n",
-            state_branch(workspace)
-        ),
-        Ok(None) => String::new(),
-        Err(e) => format!("\n**Could not preserve work:** {e}\n"),
-    };
-    if let Some(report) = outcome {
-        emit_agent_text_chunk(sink, sid, &report)?;
-        emit_agent_text_chunk(sink, sid, &preserved)?;
-    } else {
-        emit_agent_text_chunk(sink, sid, &preserved)?;
-    }
-    Ok(())
+    let preserved = preserved_worktree_report(workspace, label).await;
+    emit_finish_report(sink, sid, outcome.as_deref(), &preserved)
 }
 
 async fn run_goal_prompt(
@@ -1323,9 +1315,7 @@ async fn run_goal_prompt(
 
     // Events buffered between the task finishing and the join landing would otherwise be lost —
     // typically the last tool result, which is the one a reader most wants.
-    while let Ok(event) = ev_rx.try_recv() {
-        render_coding_event(sink, sid, &event, &mut pending_tool_ids)?;
-    }
+    drain_coding_events(sink, sid, &mut ev_rx, &mut pending_tool_ids)?;
 
     return finish_coding_tail(bridge, sink, sid, &workspace, joined).await;
 }
@@ -1350,23 +1340,15 @@ async fn finish_coding_tail(
     let (state, outcome) = joined.map_err(|e| format!("coding task panicked: {e}"))?;
 
     // Persist coding state only when the pack finished (not mid-cancel).
-    if let Some(sess) = bridge.acp_sessions.lock().await.get_mut(sid) {
-        sess.coding = state;
-    }
+    persist_coding_state(&bridge, sid, state).await;
 
     // Preserve before reporting, and on the failure path too: a failed run's diff is the
     // evidence for why it failed, and it is just as lost if nobody commits it.
-    let label = if outcome.is_ok() { "done" } else { "failed" };
-    let verdict = match outcome {
-        Ok(result) => Some(result.render()),
-        Err(e) => {
-            emit_agent_text_chunk(sink, sid, &format!("\n**Coding pack error:** {e}\n"))?;
-            None
-        }
-    };
+    let (label, verdict) = coding_verdict(sink, sid, outcome)?;
     finish_coding_run(sink, sid, workspace, label, verdict).await?;
     Ok(json!({ "stopReason": "end_turn" }))
 }
+
 /// Best-effort branch name for the report line. Cosmetic only — never fails the run.
 fn state_branch(workspace: &std::path::Path) -> String {
     // `std_command`, not `std::process::Command::new` — this is the ACP bridge, whose stdin is
@@ -1553,17 +1535,7 @@ async fn run_face_prompt(
         sess.face_daemon_session = daemon_session;
     }
 
-    match result {
-        None => {
-            let _ = emit_agent_text_chunk(sink, sid, "\n*(cancelled)*\n");
-            Ok(json!({ "stopReason": "cancelled" }))
-        }
-        Some(Ok(())) => Ok(json!({ "stopReason": "end_turn" })),
-        Some(Err(e)) => {
-            emit_agent_text_chunk(sink, sid, &format!("\n**Face mode error:** {e}\n"))?;
-            Ok(json!({ "stopReason": "end_turn" }))
-        }
-    }
+    render_face_prompt_result(sink, sid, result)
 }
 
 /// Open or rebuild the converse handle so it matches the session's current mode.

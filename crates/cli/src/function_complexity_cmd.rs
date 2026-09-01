@@ -51,14 +51,18 @@ type Key = (String, String, usize);
 pub fn check(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
     let config = load_config(root)?;
     generate(root)?;
-    let baseline: Report = serde_json::from_slice(&std::fs::read(root.join(BASELINE_FILE))?)?;
-    let current: Report = serde_json::from_slice(&std::fs::read(root.join(CURRENT_FILE))?)?;
+    let baseline = read_report(&root.join(BASELINE_FILE))?;
+    let current = read_report(&root.join(CURRENT_FILE))?;
     compare(&config, &baseline, &current)?;
     eprintln!(
         "[function complexity] ok: {} functions",
         current.entries.len()
     );
     Ok(())
+}
+
+fn read_report(path: &Path) -> Result<Report, Box<dyn std::error::Error>> {
+    Ok(serde_json::from_slice(&std::fs::read(path)?)?)
 }
 
 pub fn ratchet(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
