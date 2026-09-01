@@ -1,7 +1,9 @@
 //! Split from `lib.rs` for module-health boundaries.
 
 use super::*;
-use liberado_common::{Capability, Consequence, Delivery, Depth, ToolCall, WriteClass};
+use liberado_common::{
+    Capability, Consequence, Delivery, Depth, RiskWaiverSet, ToolCall, WriteClass,
+};
 use liberado_provider::{CompletionResponse, MockProvider, ResponseFormat};
 use std::sync::Mutex;
 
@@ -62,6 +64,7 @@ fn request(capabilities: CapabilitySet, reaction_depth: u32) -> DispatchRequest 
         capabilities,
         reaction_depth,
         zone_write_classes: Vec::new(),
+        risk_waivers: RiskWaiverSet::empty(),
     }
 }
 fn execute_direct(tool: &str, confidence: f32) -> DispatchDecision {
@@ -269,6 +272,7 @@ async fn high_consequence_concrete_action_is_downgraded_to_propose() {
         capabilities: caps("email"),
         reaction_depth: 0,
         zone_write_classes: Vec::new(),
+        risk_waivers: RiskWaiverSet::empty(),
     };
     let mock = scripted(&execute_direct("email:send", 0.95));
     let dispatcher = Dispatcher::new(mock, DispatchTuning::default(), 4);
@@ -306,6 +310,7 @@ async fn zone_restricted_concrete_action_is_downgraded_to_propose() {
         capabilities: caps("vault"),
         reaction_depth: 0,
         zone_write_classes: vec![("reviews".into(), liberado_common::WriteClass::ProposalOnly)],
+        risk_waivers: RiskWaiverSet::empty(),
     };
     let mock = scripted(&execute_direct("vault:write_review", 0.95));
     let dispatcher = Dispatcher::new(mock, DispatchTuning::default(), 4);
@@ -342,6 +347,7 @@ async fn high_consequence_subagent_is_downgraded_to_propose() {
         capabilities: caps("email"),
         reaction_depth: 0,
         zone_write_classes: Vec::new(),
+        risk_waivers: RiskWaiverSet::empty(),
     };
     let decision = DispatchDecision {
         action: DispatchAction::DispatchSubagent {
@@ -402,6 +408,7 @@ async fn high_consequence_without_concrete_call_stays_clarify() {
         capabilities: caps("vault"),
         reaction_depth: 0,
         zone_write_classes: Vec::new(),
+        risk_waivers: RiskWaiverSet::empty(),
     };
     let decision = DispatchDecision {
         action: DispatchAction::ExecuteDirect {
@@ -890,6 +897,7 @@ fn sanitize_empty_relevant_mcps_means_full_grant_not_capability_gap() {
         capabilities: caps("turbovault"),
         reaction_depth: 0,
         zone_write_classes: Vec::new(),
+        risk_waivers: RiskWaiverSet::empty(),
     };
     assert!(guards::evaluate(&d, &req, &DispatchTuning::default(), 4).is_none());
 }

@@ -50,6 +50,7 @@ pub mod path;
 pub mod process;
 pub mod proposal;
 pub mod provenance;
+pub mod risk_waiver;
 pub mod session_grants;
 
 pub use capability::CONSEQUENCE_GATE;
@@ -83,3 +84,4 @@ pub use proposal::{
     ProposedAction, SignedProposal,
 };
 pub use provenance::{HUMAN_SOURCE, PROVENANCE_KEY, WriteProvenance};
+pub use risk_waiver::{Guard, RiskWaiver, RiskWaiverSet, WaiverTarget};

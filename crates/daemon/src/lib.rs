@@ -31,7 +31,7 @@ use std::time::Duration;
 
 use liberado_common::{
     CapabilityCatalog, CapabilitySet, DEFAULT_POOL, Event, EventSource, ProposalSigner,
-    UserTimezone, WriteClass,
+    RiskWaiverSet, UserTimezone, WriteClass,
 };
 use liberado_dispatcher::Dispatcher;
 use liberado_notify::Notifier;
@@ -258,6 +258,7 @@ impl Daemon {
             capabilities,
             reaction_depth: DEFAULT_REACTION_DEPTH,
             zone_write_classes: Vec::new(),
+            risk_waivers: RiskWaiverSet::empty(),
         });
         self
     }

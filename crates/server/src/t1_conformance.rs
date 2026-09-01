@@ -21,7 +21,8 @@ use axum::Router;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use liberado_common::{
-    Capability, CapabilitySet, Consequence, McpDescriptor, ProposalSigner, WriteClass, Zone,
+    Capability, CapabilitySet, Consequence, McpDescriptor, ProposalSigner, RiskWaiverSet,
+    WriteClass, Zone,
 };
 use liberado_conversation_store::{Author, ConversationStore, NewNode, Ulid};
 use liberado_executor::{RiskGatedToolRuntime, ToolRuntime};
@@ -1208,6 +1209,7 @@ fn risk_gate(caps: CapabilitySet) -> (RiskGatedToolRuntime, Arc<std::sync::Mutex
         "t1-l6".into(),
         ProposalSigner::random(),
         "default",
+        RiskWaiverSet::empty(),
     );
     (rt, ran)
 }

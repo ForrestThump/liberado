@@ -55,6 +55,11 @@ pub struct DispatchRequest {
     /// falls back to the same conservative default `Policy::write_class` itself uses
     /// (`WriteClass::ProposalOnly`) — see `guards::zone_write_class`.
     pub zone_write_classes: Vec<(String, liberado_common::WriteClass)>,
+    /// Declarative risk waivers loaded from `policy.toml` — used by the magnitude guard to
+    /// suppress itself for matching tool calls. Defaults to empty (the unchanged pre-feature
+    /// behaviour). Set this from `Policy::risk_waiver_set` at the bootstrap site so the guard
+    /// pipeline and the runtime guard (`RiskGatedToolRuntime`) see the same set.
+    pub risk_waivers: liberado_common::RiskWaiverSet,
 }
 
 /// Errors that abort a dispatch. Malformed model output does **not** appear here — it is handled

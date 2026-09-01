@@ -43,8 +43,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use async_trait::async_trait;
 use liberado_common::{
     Capability, CapabilityCatalog, CapabilitySet, Consequence, McpDescriptor, Proposal,
-    ProposalSigner, ProposedAction, SignedProposal, WriteClass, WriteTarget, Zone, bare_tool_name,
-    is_sweeping_destructive, mcp_of, names_single_write_target, write_target,
+    ProposalSigner, ProposedAction, RiskWaiverSet, SignedProposal, WriteClass, WriteTarget, Zone,
+    bare_tool_name, is_sweeping_destructive, mcp_of, names_single_write_target, write_target,
 };
 use liberado_notify::Notifier;
 use liberado_provider::{ToolDef, ToolInvocation};
@@ -72,6 +72,10 @@ pub struct RiskGatedToolRuntime {
     /// `WriteClass::default()` (`ProposalOnly`), the same conservative default
     /// `Policy::write_class` itself uses for an unlisted zone.
     zone_write_classes: Vec<(String, WriteClass)>,
+    /// Declarative risk waivers loaded from `policy.toml`. A waiver matching the call's
+    /// (mcp, tool, zone) suppresses the magnitude guard for this call. Does not affect any
+    /// other guard; the capability and consequence checks still gate normally.
+    risk_waivers: RiskWaiverSet,
     /// Base directory for proposal files. Proposals are written to `proposals_dir/proposals/`.
     proposals_dir: PathBuf,
     /// The current user message / goal context used for magnitude assessment.
@@ -118,6 +122,8 @@ impl RiskGatedToolRuntime {
     /// * `correlation_base` - A unique base string for naming generated proposals.
     /// * `signer` - Signs every downgraded proposal (see [`Proposal::integrity`]'s doc comment).
     /// * `pool_name` - The owning `Orchestrator`'s pool name, stamped onto every proposal built here.
+    /// * `risk_waivers` - Risk waivers from `policy.toml`. Empty by default — the magnitude heuristic
+    ///   fires as it did before this feature shipped.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         inner: Arc<dyn ToolRuntime>,
@@ -130,6 +136,7 @@ impl RiskGatedToolRuntime {
         correlation_base: String,
         signer: ProposalSigner,
         pool_name: impl Into<String>,
+        risk_waivers: RiskWaiverSet,
     ) -> Self {
         Self {
             inner,
@@ -147,6 +154,7 @@ impl RiskGatedToolRuntime {
             notified_deferral: Arc::new(AtomicBool::new(false)),
             fail_next_create_dir: Arc::new(AtomicBool::new(false)),
             fail_next_write: Arc::new(AtomicBool::new(false)),
+            risk_waivers,
         }
     }
 
@@ -455,7 +463,27 @@ impl ToolRuntime for RiskGatedToolRuntime {
             );
             let sweeping_payload =
                 !names_one_target && is_sweeping_destructive(&call.arguments.to_string());
-            if sweeping_payload || is_sweeping_destructive(&full_context) {
+            // Risk-waiver check: if the operator declared a waiver in `policy.toml` that
+            // matches this call's resolved (mcp, tool, zone), suppress the magnitude gate
+            // for it. A read on a read-only MCP, or a path-addressed read on a listed zone,
+            // is the typical match — exactly the live false-positive shape
+            // (`01M087A4ZTAV965HWEQHSSN6RR`, 2026-08-17).
+            //
+            // The waiver does not affect any other guard (capability, consequence,
+            // zone-write-class). It only relaxes the prose heuristic below.
+            //
+            // Reuses the `write_target` already resolved by the zone-write-class check above —
+            // resolving twice would be wasted work and would risk drift if the resolution rules
+            // ever changed.
+            let call_waived = {
+                let zone = match &write_target {
+                    WriteTarget::Zone(name) => Some(name.as_str()),
+                    WriteTarget::NotAWrite | WriteTarget::Undeterminable(_) => None,
+                };
+                self.risk_waivers
+                    .covers(liberado_common::Guard::Magnitude, &call.name, zone)
+            };
+            if !call_waived && (sweeping_payload || is_sweeping_destructive(&full_context)) {
                 self.authority_decision(
                     "magnitude",
                     "proposal",
@@ -920,6 +948,7 @@ mod tests {
             "test-correlation".into(),
             ProposalSigner::random(),
             "default",
+            RiskWaiverSet::empty(),
         )
     }
 
@@ -988,6 +1017,7 @@ mod tests {
             "test-email".into(),
             signer.clone(),
             "default",
+            RiskWaiverSet::empty(),
         );
 
         let call = ToolInvocation::new("c1", "email-mcp:send", serde_json::json!({"to": "boss"}));
@@ -1039,6 +1069,7 @@ mod tests {
             "test-deferral".into(),
             ProposalSigner::random(),
             "default",
+            RiskWaiverSet::empty(),
         );
         if let Some(n) = notifier {
             rt = rt.with_notifier(Arc::new(n));
@@ -1108,6 +1139,7 @@ mod tests {
             "test-perm-deferral".into(),
             ProposalSigner::random(),
             "default",
+            RiskWaiverSet::empty(),
         )
         .with_notifier(Arc::new(MockNotifier { ok: true }));
 
@@ -1175,6 +1207,7 @@ mod tests {
             "test-write-failure".into(),
             ProposalSigner::random(),
             "default",
+            RiskWaiverSet::empty(),
         );
 
         let call = ToolInvocation::new("c1", "email-mcp:send", serde_json::json!({"to": "boss"}));
@@ -1209,6 +1242,7 @@ mod tests {
             "test-sweep".into(),
             ProposalSigner::random(),
             "default",
+            RiskWaiverSet::empty(),
         );
 
         let call =
@@ -1258,6 +1292,7 @@ mod tests {
             "test-zone".into(),
             ProposalSigner::random(),
             "default",
+            RiskWaiverSet::empty(),
         );
 
         let call = ToolInvocation::new(
@@ -1293,6 +1328,7 @@ mod tests {
             "test-zone-ok".into(),
             ProposalSigner::random(),
             "default",
+            RiskWaiverSet::empty(),
         );
 
         let call = ToolInvocation::new(
@@ -1323,6 +1359,7 @@ mod tests {
             "test-zone-untracked".into(),
             ProposalSigner::random(),
             "default",
+            RiskWaiverSet::empty(),
         );
 
         let call = ToolInvocation::new(
@@ -1358,6 +1395,7 @@ mod tests {
             "live-notify-test".into(),
             ProposalSigner::random(),
             "default",
+            RiskWaiverSet::empty(),
         )
         .with_notifier(Arc::new(notifier));
 
@@ -1392,6 +1430,7 @@ mod tests {
             "test-f1".into(),
             ProposalSigner::random(),
             "default",
+            RiskWaiverSet::empty(),
         );
 
         let call = ToolInvocation::new("c1", "vault:write_review", serde_json::json!({"c": "..."}));
@@ -1445,6 +1484,7 @@ mod tests {
                 "test-path".into(),
                 ProposalSigner::random(),
                 "default",
+                RiskWaiverSet::empty(),
             )
         };
 
@@ -1520,6 +1560,7 @@ mod tests {
             "test-undeclared-granted".into(),
             ProposalSigner::random(),
             "default",
+            RiskWaiverSet::empty(),
         );
         let result = rt
             .invoke(&ToolInvocation::new(
@@ -1556,6 +1597,7 @@ mod tests {
             "test-undeclared-ungranted".into(),
             ProposalSigner::random(),
             "default",
+            RiskWaiverSet::empty(),
         );
         let refused = rt2
             .invoke(&ToolInvocation::new(
@@ -1611,6 +1653,7 @@ mod magnitude_reads_structure_first {
             "test-magnitude".into(),
             ProposalSigner::random(),
             "default",
+            RiskWaiverSet::empty(),
         )
     }
 
@@ -1748,6 +1791,247 @@ mod magnitude_reads_structure_first {
     }
 }
 
+/// Risk-waiver regressions for the runtime magnitude guard.
+///
+/// These mirror the dispatcher's pre-flight waivers but operate on a single live call, not the
+/// goal text in aggregate. The waivers must match the call's resolved (mcp, tool, zone), and
+/// they must NOT affect capability / consequence / zone-write-class guards — only magnitude.
+#[cfg(test)]
+mod magnitude_respects_risk_waivers {
+    use super::tests::*;
+    use super::*;
+    use liberado_common::{Guard, RiskWaiver};
+
+    fn turbovault_descriptor() -> McpDescriptor {
+        McpDescriptor {
+            name: "turbovault".into(),
+            description: "path-addressed vault".into(),
+            consequence: Consequence::Reversible,
+            provenance: None,
+            default_zone: None,
+            tool_zones: Vec::new(),
+            zone_from_arg: Some("path".into()),
+            write_tools: vec!["write_note".into(), "delete_note".into()],
+        }
+    }
+
+    fn gate_with_waivers(
+        dir: &std::path::Path,
+        inner: Arc<MockInner>,
+        descriptor: McpDescriptor,
+        goal: &str,
+        consequence_catalog: Vec<(String, Consequence)>,
+        waivers: RiskWaiverSet,
+    ) -> RiskGatedToolRuntime {
+        let mcp = descriptor.name.clone();
+        RiskGatedToolRuntime::new(
+            inner,
+            CapabilitySet::from_iter([
+                Capability::ExecuteMcp(mcp.clone()),
+                Capability::Write(Zone::vault("Tasks")),
+            ]),
+            consequence_catalog,
+            vec![descriptor],
+            vec![("Tasks".to_string(), WriteClass::AgentWritable)],
+            dir.to_path_buf(),
+            goal.into(),
+            "test-waiver".into(),
+            ProposalSigner::random(),
+            "default",
+            waivers,
+        )
+    }
+
+    fn waiver(mcp: &str, tools: Option<Vec<&str>>, zones: Option<Vec<&str>>) -> RiskWaiver {
+        RiskWaiver {
+            mcp: mcp.into(),
+            match_tools: tools.map(|t| t.into_iter().map(String::from).collect()),
+            match_zones: zones.map(|z| z.into_iter().map(String::from).collect()),
+            guard: Guard::Magnitude,
+        }
+    }
+
+    /// The live false positive — the goal text contains both sweeping (`everything`) and
+    /// destructive (`Remove`) words, but every actual call is a path-addressed, scoped
+    /// operation. Without a waiver, the magnitude guard downgrades to a proposal.
+    #[tokio::test]
+    async fn a_waiver_matching_every_call_suppresses_magnitude() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let inner = Arc::new(MockInner::new(
+            &["turbovault:read_note", "turbovault:write_note"],
+            Ok("wrote".into()),
+        ));
+        let goal = "Read Tasks/Main.md. Then write it back, removing two specific lines. \
+                    Keep everything else in the file exactly as-is.";
+
+        // No waiver: the gate fires.
+        let rt = gate_with_waivers(
+            dir.path(),
+            inner.clone(),
+            turbovault_descriptor(),
+            goal,
+            vec![],
+            RiskWaiverSet::empty(),
+        );
+        let read_call = ToolInvocation::new(
+            "c1",
+            "turbovault:read_note",
+            serde_json::json!({"path": "Tasks/Main.md"}),
+        );
+        let msg = rt
+            .invoke(&read_call)
+            .await
+            .expect("read should be tool result");
+        assert!(
+            msg.contains("PROPOSAL CREATED"),
+            "without a waiver, the read call must trip magnitude: {msg}"
+        );
+
+        // With a waiver covering the read tool wholesale: the gate is suppressed for the read call.
+        let rt = gate_with_waivers(
+            dir.path(),
+            inner.clone(),
+            turbovault_descriptor(),
+            goal,
+            vec![],
+            RiskWaiverSet {
+                waivers: [waiver(
+                    "turbovault",
+                    Some(vec!["read_note"]),
+                    None, // no zone restriction — reads don't resolve a zone here
+                )]
+                .into_iter()
+                .collect(),
+            },
+        );
+        let msg = rt.invoke(&read_call).await.expect("read with waiver");
+        assert!(
+            !msg.contains("PROPOSAL CREATED"),
+            "a covering waiver must suppress magnitude: {msg}"
+        );
+        assert_eq!(msg, "wrote", "the inner runtime must execute the read");
+    }
+
+    /// A waiver that matches the read but not the write tool means the magnitude heuristic
+    /// still fires when the write is attempted. Waivers don't widen.
+    #[tokio::test]
+    async fn a_partial_waiver_does_not_suppress_magnitude_for_uncovered_calls() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let inner = Arc::new(MockInner::new(
+            &["turbovault:write_note"],
+            Ok("wrote".into()),
+        ));
+        let goal = "Delete all my notes and remove everything else.";
+        let rt = gate_with_waivers(
+            dir.path(),
+            inner.clone(),
+            turbovault_descriptor(),
+            goal,
+            vec![],
+            RiskWaiverSet {
+                waivers: [waiver(
+                    "turbovault",
+                    Some(vec!["read_note"]), // only the read, not the write
+                    None,
+                )]
+                .into_iter()
+                .collect(),
+            },
+        );
+        let write_call = ToolInvocation::new(
+            "c1",
+            "turbovault:write_note",
+            serde_json::json!({"path": "Tasks/Other.md", "content": "stuff"}),
+        );
+        let msg = rt
+            .invoke(&write_call)
+            .await
+            .expect("write should be tool result");
+        assert!(
+            msg.contains("PROPOSAL CREATED"),
+            "a partial waiver leaves the write call's magnitude gate firing: {msg}"
+        );
+    }
+
+    /// A waiver for the same MCP but a different tool does not match.
+    #[tokio::test]
+    async fn a_waiver_for_a_different_tool_does_not_match() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let inner = Arc::new(MockInner::new(
+            &["turbovault:write_note"],
+            Ok("wrote".into()),
+        ));
+        let goal = "Delete every note.";
+        let rt = gate_with_waivers(
+            dir.path(),
+            inner.clone(),
+            turbovault_descriptor(),
+            goal,
+            vec![],
+            RiskWaiverSet {
+                waivers: [waiver(
+                    "turbovault",
+                    Some(vec!["read_note"]), // covers read, NOT write
+                    None,
+                )]
+                .into_iter()
+                .collect(),
+            },
+        );
+        let write_call = ToolInvocation::new(
+            "c1",
+            "turbovault:write_note",
+            serde_json::json!({"path": "Tasks/Main.md", "content": "x"}),
+        );
+        let msg = rt.invoke(&write_call).await.expect("write");
+        assert!(
+            msg.contains("PROPOSAL CREATED"),
+            "a waiver matching only `read_note` does not cover `write_note`: {msg}"
+        );
+    }
+
+    /// Waivers do not affect other guards. A call to an `External`-rated MCP must still be
+    /// gated by the consequence gate even when a magnitude waiver covers it.
+    #[tokio::test]
+    async fn a_magnitude_waiver_does_not_bypass_consequence() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let inner = Arc::new(MockInner::new(&["email:send"], Ok("sent".into())));
+        let email_descriptor = McpDescriptor {
+            name: "email".into(),
+            description: "send email".into(),
+            consequence: Consequence::External,
+            provenance: None,
+            default_zone: None,
+            tool_zones: Vec::new(),
+            zone_from_arg: None,
+            write_tools: Vec::new(),
+        };
+        let rt = gate_with_waivers(
+            dir.path(),
+            inner.clone(),
+            email_descriptor,
+            "send to everyone",
+            vec![(String::from("email"), Consequence::External)],
+            RiskWaiverSet {
+                waivers: [waiver("email", None, None)].into_iter().collect(),
+            },
+        );
+        let call = ToolInvocation::new("c1", "email:send", serde_json::json!({"to": "everyone"}));
+        // The call returns Ok(...) when downgraded (a tool result, not an error). The
+        // consequence gate is what should produce that downgrade.
+        let result = rt.invoke(&call).await;
+        assert!(
+            result.is_ok(),
+            "a consequence downgrade is a tool result, not an error: {result:?}"
+        );
+        let msg = result.unwrap();
+        assert!(
+            msg.contains("PROPOSAL CREATED"),
+            "the consequence gate (not the magnitude waiver) must downgrade this: {msg}"
+        );
+    }
+}
+
 #[cfg(test)]
 mod one_intent_one_prompt {
     use super::tests::*;
@@ -1765,6 +2049,7 @@ mod one_intent_one_prompt {
             "test-dedup".into(),
             ProposalSigner::random(),
             "default",
+            RiskWaiverSet::empty(),
         )
     }
 

@@ -1,6 +1,6 @@
 //! Policy section: zones and grants.
 
-use liberado_common::{Capability, CapabilitySet, WriteClass};
+use liberado_common::{Capability, CapabilitySet, RiskWaiver, RiskWaiverSet, WriteClass};
 use serde::{Deserialize, Serialize};
 
 // ---------------------------------------------------------------------------
@@ -16,6 +16,10 @@ pub struct Policy {
     pub grants: Vec<Grant>,
     /// Names of secrets referenced by components (resolved from env/systemd, never inlined).
     pub secret_refs: Vec<String>,
+    /// Declarative waivers: for matching tool calls, suppress a named guard (today: the
+    /// magnitude heuristic). Validated at load time — a waiver referencing an unknown MCP
+    /// or undeclared zone refuses to boot. See `validation::validate_risk_waivers`.
+    pub risk_waivers: Vec<RiskWaiver>,
 }
 
 impl Policy {
@@ -43,6 +47,15 @@ impl Policy {
             .flat_map(|g| g.capabilities.iter().cloned())
             .collect()
     }
+
+    /// The validated, deduplicated waiver set for runtime guard lookups. Cheap to clone
+    /// (the inner set is already deduplicated by the loader); called once per process at
+    /// bootstrap and again on topology hot-reload.
+    pub fn risk_waiver_set(&self) -> RiskWaiverSet {
+        RiskWaiverSet {
+            waivers: self.risk_waivers.iter().cloned().collect(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -62,6 +75,7 @@ pub struct Grant {
 #[cfg(test)]
 mod proptest_tests {
     use super::*;
+    use liberado_common::{Guard, RiskWaiver};
     use proptest::prelude::*;
 
     fn arb_write_class() -> impl Strategy<Value = WriteClass> {
@@ -144,5 +158,58 @@ mod proptest_tests {
                 WriteClass::ProposalOnly
             );
         }
+    }
+
+    #[test]
+    fn risk_waiver_set_round_trips_through_serialized_policy() {
+        // End-to-end: a policy with risk_waivers serializes, deserializes, and produces a
+        // RiskWaiverSet the runtime can use. Pin the surface the executor and dispatcher
+        // depend on (deduplication, mcp/guard fields preserved).
+        let policy = Policy {
+            zones: Vec::new(),
+            grants: Vec::new(),
+            secret_refs: Vec::new(),
+            risk_waivers: vec![
+                RiskWaiver {
+                    mcp: "weather".into(),
+                    match_tools: None,
+                    match_zones: None,
+                    guard: Guard::Magnitude,
+                },
+                RiskWaiver {
+                    mcp: "weather".into(),
+                    match_tools: None,
+                    match_zones: None,
+                    guard: Guard::Magnitude,
+                },
+                RiskWaiver {
+                    mcp: "vault".into(),
+                    match_tools: Some(vec!["read_note".into()]),
+                    match_zones: Some(vec!["Tasks".into()]),
+                    guard: Guard::Magnitude,
+                },
+            ],
+        };
+        let toml = toml::to_string(&policy).expect("serialize");
+        let parsed: Policy = toml::from_str(&toml).expect("deserialize");
+        let set = parsed.risk_waiver_set();
+        // Duplicates collapse.
+        assert_eq!(set.waivers.len(), 2);
+        // The match fields survive the round-trip.
+        assert!(set.covers(
+            Guard::Magnitude,
+            "weather:get_forecast",
+            None
+        ));
+        assert!(set.covers(
+            Guard::Magnitude,
+            "vault:read_note",
+            Some("Tasks")
+        ));
+        assert!(!set.covers(
+            Guard::Magnitude,
+            "vault:read_note",
+            Some("Life")
+        ));
     }
 }

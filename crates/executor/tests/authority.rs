@@ -17,7 +17,8 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use liberado_common::{
-    Capability, CapabilitySet, Consequence, McpDescriptor, ProposalSigner, WriteClass, Zone,
+    Capability, CapabilitySet, Consequence, McpDescriptor, ProposalSigner, RiskWaiverSet,
+    WriteClass, Zone,
 };
 use liberado_executor::{RiskGatedToolRuntime, ToolRuntime};
 use liberado_provider::{ToolDef, ToolInvocation};
@@ -71,6 +72,7 @@ fn gate(caps: CapabilitySet) -> (RiskGatedToolRuntime, Arc<std::sync::Mutex<Vec<
         "authority-suite".into(),
         ProposalSigner::random(),
         "default",
+        RiskWaiverSet::empty(),
     );
     (rt, ran)
 }

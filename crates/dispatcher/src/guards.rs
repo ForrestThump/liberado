@@ -24,11 +24,11 @@
 use liberado_common::CONSEQUENCE_GATE;
 use liberado_common::{
     BlockReason, Consequence, DispatchAction, DispatchDecision, bare_tool_name, instruction_scope,
-    is_sweeping_destructive, mcp_of, zone_write_restriction,
+    is_sweeping_destructive, mcp_of, write_target, zone_write_restriction,
 };
 use liberado_config_loader::DispatchTuning;
 
-use crate::DispatchRequest;
+use crate::{DispatchRequest, McpDescriptor};
 
 /// Evaluate the guards against a classified decision. Returns the [`BlockReason`] of the first
 /// (highest-priority) violation, or `None` if the decision passes unchanged. The caller downgrades
@@ -123,16 +123,33 @@ pub fn evaluate(
     // Scoped to the *instruction* — a goal that merely narrates a past deletion in a trailing
     // `Context:` section is not asking for one. See `instruction_scope`'s doc comment for the
     // live false positive that motivated this.
+    //
+    // Waiver: a `[[risk_waivers]]` entry that covers every (tool, zone) this action would touch
+    // suppresses this gate. Waivers do not grant authority — that is the capability check above;
+    // they only say "for these tool calls, the magnitude heuristic adds no safety beyond the
+    // structural checks already run." Today the typical waiver covers a read-only MCP wholesale
+    // or a path-addressed read tool in zones the agent routinely fetches.
     let instruction = instruction_scope(&req.goal);
     if is_sweeping_destructive(instruction) {
-        return blocked(
-            "magnitude",
-            BlockReason::HighConsequence,
-            &format!(
-                "instruction reads as sweeping+destructive ({} of {} goal chars scanned)",
-                instruction.len(),
-                req.goal.len()
-            ),
+        let targets = magnitude_targets(&decision.action, &req.catalog);
+        let waived = targets.iter().all(|(tool, zone)| {
+            req.risk_waivers
+                .covers(liberado_common::Guard::Magnitude, tool, zone.as_deref())
+        }) && !targets.is_empty();
+        if !waived {
+            return blocked(
+                "magnitude",
+                BlockReason::HighConsequence,
+                &format!(
+                    "instruction reads as sweeping+destructive ({} of {} goal chars scanned)",
+                    instruction.len(),
+                    req.goal.len()
+                ),
+            );
+        }
+        tracing::info!(
+            targets = ?targets,
+            "magnitude gate suppressed by risk waiver — instruction matched but every target is waived"
         );
     }
 
@@ -257,12 +274,46 @@ fn zone_restricted(action: &DispatchAction, req: &DispatchRequest) -> bool {
     })
 }
 
+/// Per-call resolution the magnitude gate consults: each entry is `(tool, zone)`. The
+/// `String`s are owned so a closure-built iterator can yield borrows outliving it. The
+/// caller turns these into [`WaiverTarget`]s.
+fn magnitude_targets(
+    action: &DispatchAction,
+    catalog: &[McpDescriptor],
+) -> Vec<(String, Option<String>)> {
+    match action {
+        DispatchAction::ExecuteDirect { seed_calls, .. } => seed_calls
+            .iter()
+            .map(|call| {
+                let mcp = mcp_of(&call.tool);
+                let bare = bare_tool_name(&call.tool);
+                // Resolve the call's target zone against the catalog. `WriteTarget::Zone(name)`
+                // is the only branch that produces a Some(zone); reads and undeterminable writes
+                // both yield None so a zone-restricted waiver does not accidentally match.
+                let zone = catalog
+                    .iter()
+                    .find(|d| d.name == mcp)
+                    .and_then(|d| match write_target(d, bare, &call.args) {
+                        liberado_common::WriteTarget::Zone(name) => Some(name),
+                        _ => None,
+                    });
+                (call.tool.clone(), zone)
+            })
+            .collect(),
+        DispatchAction::DispatchSubagent { allowed_mcps, .. } => {
+            allowed_mcps.iter().map(|mcp| (mcp.clone(), None)).collect()
+        }
+        DispatchAction::Clarify { .. } | DispatchAction::Propose { .. } => Vec::new(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::McpDescriptor;
     use liberado_common::{
-        Capability, CapabilitySet, Consequence, Delivery, Depth, ToolCall, Zone,
+        Capability, CapabilitySet, Consequence, Delivery, Depth, RiskWaiverSet, ToolCall,
+        WriteClass, Zone,
     };
 
     fn req(capabilities: CapabilitySet, reaction_depth: u32) -> DispatchRequest {
@@ -281,6 +332,7 @@ mod tests {
             capabilities,
             reaction_depth,
             zone_write_classes: Vec::new(),
+            risk_waivers: RiskWaiverSet::empty(),
         }
     }
 
@@ -450,6 +502,7 @@ mod tests {
             capabilities: granted("email"),
             reaction_depth: 0,
             zone_write_classes: Vec::new(),
+            risk_waivers: RiskWaiverSet::empty(),
         };
         let d = execute_direct("email:send", 0.95);
         assert_eq!(
@@ -477,6 +530,7 @@ mod tests {
             capabilities: granted("vault"),
             reaction_depth: 0,
             zone_write_classes: Vec::new(),
+            risk_waivers: RiskWaiverSet::empty(),
         };
         let d = execute_direct("vault:write", 0.95);
         assert_eq!(evaluate(&d, &request, &DispatchTuning::default(), 4), None);
@@ -501,6 +555,7 @@ mod tests {
             capabilities: granted("vault"),
             reaction_depth: 0,
             zone_write_classes: Vec::new(),
+            risk_waivers: RiskWaiverSet::empty(),
         };
         let d = execute_direct("vault:delete", 0.95);
         assert_eq!(
@@ -677,6 +732,7 @@ mod tests {
                 .into_iter()
                 .map(|(z, wc)| (z.to_string(), wc))
                 .collect(),
+            risk_waivers: RiskWaiverSet::empty(),
         }
     }
 
@@ -734,6 +790,228 @@ mod tests {
         assert_eq!(
             evaluate(&d, &req(granted("tasks-mcp"), 0), &tuning, 4),
             None
+        );
+    }
+
+    // --- Risk waiver (#3) --------------------------------------------------------------------
+    //
+    // The magnitude heuristic gates goals whose text reads as "sweeping destructive". A waiver
+    // declared in `policy.toml` and matching every (tool, zone) the action would touch suppresses
+    // this gate. The capability gate above remains the authority boundary — a waiver without a
+    // matching grant is still refused.
+
+    fn req_with_waivers(
+        capabilities: CapabilitySet,
+        reaction_depth: u32,
+        waivers: Vec<liberado_common::RiskWaiver>,
+    ) -> DispatchRequest {
+        let mut r = req(capabilities, reaction_depth);
+        r.risk_waivers = RiskWaiverSet {
+            waivers: waivers.into_iter().collect(),
+        };
+        r
+    }
+
+    fn waiver_for(
+        mcp: &str,
+        tools: Option<Vec<&str>>,
+        zones: Option<Vec<&str>>,
+    ) -> liberado_common::RiskWaiver {
+        liberado_common::RiskWaiver {
+            mcp: mcp.into(),
+            match_tools: tools.map(|t| t.into_iter().map(String::from).collect()),
+            match_zones: zones.map(|z| z.into_iter().map(String::from).collect()),
+            guard: liberado_common::Guard::Magnitude,
+        }
+    }
+
+    /// The live false positive: "Read Tasks/Main.md in full. Then write it back with exactly these
+    /// changes: … Remove the line containing … completely. Keep everything else in the file
+    /// exactly as-is." — the literal session `01M087A4ZTAV965HWEQHSSN6RR` (2026-08-17). A waiver
+    /// covering the read+write pair lets it through.
+    #[test]
+    fn waiver_suppresses_magnitude_for_targeted_read_then_write() {
+        let goal = "Read Tasks/Main.md in full. Then write it back with exactly these changes: \
+                    Remove the line containing 'X' completely. Keep everything else in the file \
+                    exactly as-is.";
+        let mut r = req(granted("tasks-mcp"), 0);
+        r.goal = goal.into();
+        r.zone_write_classes = vec![("tasks".into(), WriteClass::AgentWritable)];
+        r.catalog = vec![McpDescriptor {
+            name: "tasks-mcp".into(),
+            description: "task ops".into(),
+            consequence: Consequence::Reversible,
+            provenance: None,
+            default_zone: Some("tasks".into()),
+            tool_zones: Vec::new(),
+            zone_from_arg: None,
+            write_tools: Vec::new(),
+        }];
+        let d = DispatchDecision {
+            action: DispatchAction::ExecuteDirect {
+                seed_calls: vec![
+                    ToolCall {
+                        tool: "tasks-mcp:read".into(),
+                        args: serde_json::json!({}),
+                    },
+                    ToolCall {
+                        tool: "tasks-mcp:write".into(),
+                        args: serde_json::json!({}),
+                    },
+                ],
+                relevant_mcps: vec![],
+                delivery: Delivery::Summarize,
+            },
+            confidence: 0.9,
+            rationale: "test".into(),
+        };
+        // Without a waiver: the magnitude heuristic still fires.
+        let blocked = evaluate(&d, &r, &DispatchTuning::default(), 4);
+        assert_eq!(
+            blocked,
+            Some(BlockReason::HighConsequence),
+            "the goal must trip the magnitude gate before any waiver exists"
+        );
+
+        // With a waiver covering both tools: the gate is suppressed and the action passes.
+        let waived = req_with_waivers(
+            granted("tasks-mcp"),
+            0,
+            vec![waiver_for("tasks-mcp", Some(vec!["read", "write"]), None)],
+        );
+        let mut waived = waived;
+        waived.goal = r.goal.clone();
+        waived.catalog = r.catalog.clone();
+        waived.zone_write_classes = r.zone_write_classes.clone();
+        assert_eq!(
+            evaluate(&d, &waived, &DispatchTuning::default(), 4),
+            None,
+            "a covering waiver must suppress the magnitude gate"
+        );
+    }
+
+    /// A waiver that only covers the read tool does NOT cover the write — the magnitude heuristic
+    /// still fires because the action has a non-waived surface.
+    #[test]
+    fn partial_waiver_does_not_suppress_magnitude() {
+        let goal = "Remove everything and keep nothing else.";
+        let mut r = req(granted("tasks-mcp"), 0);
+        r.goal = goal.into();
+        r.zone_write_classes = vec![("tasks".into(), WriteClass::AgentWritable)];
+        let d = DispatchDecision {
+            action: DispatchAction::ExecuteDirect {
+                seed_calls: vec![
+                    ToolCall {
+                        tool: "tasks-mcp:read".into(),
+                        args: serde_json::json!({}),
+                    },
+                    ToolCall {
+                        tool: "tasks-mcp:write".into(),
+                        args: serde_json::json!({}),
+                    },
+                ],
+                relevant_mcps: vec![],
+                delivery: Delivery::Summarize,
+            },
+            confidence: 0.9,
+            rationale: "test".into(),
+        };
+        let partial = req_with_waivers(
+            granted("tasks-mcp"),
+            0,
+            vec![waiver_for("tasks-mcp", Some(vec!["read"]), None)],
+        );
+        let mut partial = partial;
+        partial.goal = r.goal.clone();
+        partial.catalog = r.catalog.clone();
+        partial.zone_write_classes = r.zone_write_classes.clone();
+        assert_eq!(
+            evaluate(&d, &partial, &DispatchTuning::default(), 4),
+            Some(BlockReason::HighConsequence),
+            "partial coverage: the write tool's reach is not waived, so the heuristic still fires"
+        );
+    }
+
+    /// Waivers do not grant authority. A waiver for an MCP the agent cannot invoke is caught by
+    /// the capability guard above, before the magnitude gate runs.
+    #[test]
+    fn waiver_does_not_grant_authority() {
+        let goal = "Do all the things.";
+        let mut r = req(granted("other-mcp"), 0);
+        r.goal = goal.into();
+        r.catalog = vec![
+            McpDescriptor {
+                name: "other-mcp".into(),
+                description: "other".into(),
+                consequence: Consequence::Reversible,
+                provenance: None,
+                default_zone: None,
+                tool_zones: Vec::new(),
+                zone_from_arg: None,
+                write_tools: Vec::new(),
+            },
+            McpDescriptor {
+                name: "forbidden-mcp".into(),
+                description: "forbidden".into(),
+                consequence: Consequence::Reversible,
+                provenance: None,
+                default_zone: None,
+                tool_zones: Vec::new(),
+                zone_from_arg: None,
+                write_tools: Vec::new(),
+            },
+        ];
+        let d = DispatchDecision {
+            action: DispatchAction::ExecuteDirect {
+                seed_calls: vec![ToolCall {
+                    tool: "forbidden-mcp:do_it".into(),
+                    args: serde_json::json!({}),
+                }],
+                relevant_mcps: vec![],
+                delivery: Delivery::Summarize,
+            },
+            confidence: 0.9,
+            rationale: "test".into(),
+        };
+        let waived = req_with_waivers(
+            granted("other-mcp"),
+            0,
+            vec![waiver_for("forbidden-mcp", None, None)],
+        );
+        let mut waived = waived;
+        waived.goal = r.goal.clone();
+        waived.catalog = r.catalog.clone();
+        assert_eq!(
+            evaluate(&d, &waived, &DispatchTuning::default(), 4),
+            Some(BlockReason::CapabilityGap),
+            "a waiver does not bypass the capability grant; the agent still cannot reach the MCP"
+        );
+    }
+
+    /// An `ExecuteDirect` with no seed calls ("let the executor decide every step") has no
+    /// `(tool, zone)` targets for the magnitude waiver to match — so an empty waiver set must
+    /// not accidentally waive the gate. The previous mutation `|| targets.is_empty()` would
+    /// have done exactly that, and only this test would have caught it.
+    #[test]
+    fn empty_target_list_does_not_waive_magnitude() {
+        let goal = "Delete all my notes and remove everything else.";
+        let mut r = req(granted("tasks-mcp"), 0);
+        r.goal = goal.into();
+        r.zone_write_classes = vec![("tasks".into(), WriteClass::AgentWritable)];
+        let d = DispatchDecision {
+            action: DispatchAction::ExecuteDirect {
+                seed_calls: Vec::new(),
+                relevant_mcps: Vec::new(),
+                delivery: Delivery::Summarize,
+            },
+            confidence: 0.9,
+            rationale: "test".into(),
+        };
+        // No waivers configured: must still trip.
+        assert_eq!(
+            evaluate(&d, &r, &DispatchTuning::default(), 4),
+            Some(BlockReason::HighConsequence),
+            "no seed calls means no waiver targets; the magnitude gate still fires on the goal"
         );
     }
 }

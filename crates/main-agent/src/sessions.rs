@@ -54,7 +54,7 @@ use std::sync::{Arc, Mutex};
 
 use liberado_common::{
     Capability, CapabilityCatalog, CapabilitySet, Consequence, DEFAULT_POOL, DispatchAction,
-    McpDescriptor, ProposalSigner, WriteClass, mcp_of,
+    McpDescriptor, ProposalSigner, RiskWaiverSet, WriteClass, mcp_of,
 };
 use liberado_conversation_store::{
     Author, ConversationHeader, ConversationStore, MessageNode, NewConversation, NewNode,
@@ -250,6 +250,9 @@ pub struct ChatSessions {
     live_catalog: Option<Arc<CapabilityCatalog>>,
     /// `(zone, write_class)` pairs from `Policy.zones` for the same check.
     zone_write_classes: Vec<(String, WriteClass)>,
+    /// Declarative risk waivers from `policy.toml`. Passed through to the dispatcher pre-flight
+    /// magnitude guard and every runtime gate built here.
+    risk_waivers: RiskWaiverSet,
     /// Capability grants for RiskGatedToolRuntime capability checking.
     capabilities: CapabilitySet,
     /// The vault's `proposals/` directory — a `proposals/` subdirectory under this holds proposal
@@ -326,6 +329,7 @@ impl ChatSessions {
             zone_catalog: Vec::new(),
             live_catalog: None,
             zone_write_classes: Vec::new(),
+            risk_waivers: RiskWaiverSet::empty(),
             capabilities: CapabilitySet::empty(),
             proposals_dir: PathBuf::new(),
             signer: ProposalSigner::random(),
@@ -493,6 +497,13 @@ impl ChatSessions {
     /// Prefer live catalog lookups in per-turn RiskGated gates (topology MCP hot-reload).
     pub fn with_live_catalog(mut self, catalog: Arc<CapabilityCatalog>) -> Self {
         self.live_catalog = Some(catalog);
+        self
+    }
+
+    /// Set the risk-waiver set passed through to the dispatcher's pre-flight magnitude guard
+    /// and every runtime gate. Empty by default — the heuristic fires as before.
+    pub fn with_risk_waivers(mut self, waivers: RiskWaiverSet) -> Self {
+        self.risk_waivers = waivers;
         self
     }
 
@@ -1388,6 +1399,7 @@ impl ChatSessions {
             session.to_string(),
             self.signer.clone(),
             DEFAULT_POOL,
+            self.risk_waivers.clone(),
         );
         if let Some(cat) = &self.live_catalog {
             gated = gated.with_live_catalog(cat.clone());
@@ -1549,6 +1561,7 @@ impl ChatSessions {
             capabilities: dispatch_caps.clone(),
             reaction_depth: 0, // user-initiated, not a background reaction
             zone_write_classes: self.zone_write_classes.clone(),
+            risk_waivers: self.risk_waivers.clone(),
         };
         let decision = match dispatcher.dispatch(&req).await {
             Ok(decision) => decision,
@@ -1711,6 +1724,7 @@ impl ChatSessions {
             session.to_string(),
             self.signer.clone(),
             DEFAULT_POOL,
+            self.risk_waivers.clone(),
         );
         if let Some(cat) = &self.live_catalog {
             gated = gated.with_live_catalog(cat.clone());

@@ -227,6 +227,36 @@ fn validate_hook_secrets(config: &Config) -> Result<(), ConfigLoadError> {
     Ok(())
 }
 
+/// 7. Every `[[risk_waivers]]` entry must reference an MCP that exists, and every zone named in
+///    `match_zones` must be a declared `[[zones]]`.
+///
+/// The risk waiver feature exists to suppress the magnitude heuristic for reads — a config that
+/// names a non-existent MCP, or a zone no `[[zones]]` block declares, would silently never match
+/// at all. Catching it at boot is the same fail-fast discipline the rest of the loader uses: a
+/// refused config with a clear message is better than a config that runs and never does the thing
+/// the operator wrote it for.
+fn validate_risk_waivers(config: &Config) -> Result<(), ConfigLoadError> {
+    for waiver in &config.policy.risk_waivers {
+        if !config.topology.mcps.iter().any(|m| m.name == waiver.mcp) {
+            return Err(validation_error(format!(
+                "risk_waiver references unknown MCP '{}' (not in topology.mcps)",
+                waiver.mcp
+            )));
+        }
+        if let Some(zones) = &waiver.match_zones {
+            for zone in zones {
+                if !config.policy.zones.iter().any(|z| &z.zone == zone) {
+                    return Err(validation_error(format!(
+                        "risk_waiver for MCP '{}' references undeclared zone '{zone}'",
+                        waiver.mcp
+                    )));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Validate cross-cutting invariants that span [`Config`] sections.
 ///
 /// Returns the first violation found. Each error message names the offending entry so the user
@@ -237,6 +267,7 @@ pub fn validate_merged_config(config: &Config) -> Result<(), ConfigLoadError> {
     validate_report_sink(config)?;
     validate_policy_secrets(config)?;
     validate_hook_secrets(config)?;
+    validate_risk_waivers(config)?;
     Ok(())
 }
 /// The bare name a zone capability references, regardless of vault/named kind — both
@@ -307,6 +338,7 @@ mod tests {
                     ],
                 }],
                 secret_refs: vec![],
+                risk_waivers: vec![],
             },
         );
         assert!(validate_merged_config(&cfg).is_ok());
@@ -326,6 +358,7 @@ mod tests {
                     capabilities: vec![Capability::Write(Zone::vault("decisions"))],
                 }],
                 secret_refs: vec![],
+                risk_waivers: vec![],
             },
         );
         let err = validate_merged_config(&cfg).unwrap_err();
@@ -345,6 +378,7 @@ mod tests {
                     capabilities: vec![Capability::ExecuteMcp("ghost-mcp".into())],
                 }],
                 secret_refs: vec![],
+                risk_waivers: vec![],
             },
         );
         let err = validate_merged_config(&cfg).unwrap_err();
@@ -368,6 +402,7 @@ mod tests {
                         capabilities: vec![cap],
                     }],
                     secret_refs: vec![],
+                    risk_waivers: vec![],
                 },
             )
         };
@@ -403,6 +438,7 @@ mod tests {
                 zones: vec![],
                 grants: vec![],
                 secret_refs: vec!["LIBERADO_TEST_DEFINITELY_UNSET_SECRET_XYZZY".into()],
+                risk_waivers: vec![],
             },
         );
         let err = validate_merged_config(&cfg).unwrap_err();
@@ -431,6 +467,7 @@ mod tests {
                 zones: vec![],
                 grants: vec![],
                 secret_refs: vec![],
+                risk_waivers: vec![],
             },
         );
         let err = validate_merged_config(&cfg).unwrap_err();
@@ -450,6 +487,7 @@ mod tests {
                 zones: vec![],
                 grants: vec![],
                 secret_refs: vec![],
+                risk_waivers: vec![],
             },
         );
         assert!(validate_merged_config(&cfg).is_ok());
@@ -610,5 +648,105 @@ mod tests {
             ..sink("turbovault", "write_note")
         });
         assert!(validate_merged_config(&config(topology, Policy::default())).is_err());
+    }
+
+    // --- Risk waivers (#7) ---------------------------------------------------------------------
+    //
+    // The risk-waiver feature exists to suppress the magnitude heuristic for reads. A waiver that
+    // names a non-existent MCP, or a zone no `[[zones]]` block declares, would silently never
+    // match — catching it at boot is the same fail-fast discipline the rest of the loader uses.
+
+    fn waiver(
+        mcp: &str,
+        zones: Option<Vec<&str>>,
+        tools: Option<Vec<&str>>,
+    ) -> liberado_common::RiskWaiver {
+        liberado_common::RiskWaiver {
+            mcp: mcp.into(),
+            match_tools: tools.map(|t| t.into_iter().map(String::from).collect()),
+            match_zones: zones.map(|z| z.into_iter().map(String::from).collect()),
+            guard: liberado_common::Guard::Magnitude,
+        }
+    }
+
+    #[test]
+    fn risk_waiver_with_no_zones_or_tools_passes() {
+        let cfg = config(
+            topology_with_mcp("weather-mcp"),
+            Policy {
+                zones: vec![],
+                grants: vec![],
+                secret_refs: vec![],
+                risk_waivers: vec![waiver("weather-mcp", None, None)],
+            },
+        );
+        assert!(validate_merged_config(&cfg).is_ok());
+    }
+
+    #[test]
+    fn risk_waiver_referencing_unknown_mcp_is_refused() {
+        let cfg = config(
+            topology_with_mcp("weather-mcp"),
+            Policy {
+                zones: vec![],
+                grants: vec![],
+                secret_refs: vec![],
+                risk_waivers: vec![waiver("ghost-mcp", None, None)],
+            },
+        );
+        let err = validate_merged_config(&cfg).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("unknown MCP"), "got: {msg}");
+        assert!(msg.contains("ghost-mcp"), "should name the offender: {msg}");
+    }
+
+    #[test]
+    fn risk_waiver_referencing_undeclared_zone_is_refused() {
+        let cfg = config(
+            topology_with_mcp("turbovault"),
+            Policy {
+                zones: vec![ZonePolicy {
+                    zone: "tasks".into(),
+                    write_class: liberado_common::WriteClass::AgentWritable,
+                }],
+                grants: vec![],
+                secret_refs: vec![],
+                risk_waivers: vec![waiver("turbovault", Some(vec!["finance"]), None)],
+            },
+        );
+        let err = validate_merged_config(&cfg).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("undeclared zone"), "got: {msg}");
+        assert!(msg.contains("finance"), "should name the zone: {msg}");
+    }
+
+    #[test]
+    fn risk_waiver_with_declared_zones_passes() {
+        let cfg = config(
+            topology_with_mcp("turbovault"),
+            Policy {
+                zones: vec![
+                    ZonePolicy {
+                        zone: "Tasks".into(),
+                        write_class: liberado_common::WriteClass::AgentWritable,
+                    },
+                    ZonePolicy {
+                        zone: "Work".into(),
+                        write_class: liberado_common::WriteClass::AgentWritable,
+                    },
+                ],
+                grants: vec![],
+                secret_refs: vec![],
+                risk_waivers: vec![waiver(
+                    "turbovault",
+                    Some(vec!["Tasks", "Work"]),
+                    Some(vec!["read_note"]),
+                )],
+            },
+        );
+        assert!(
+            validate_merged_config(&cfg).is_ok(),
+            "a waiver with declared zones and a real MCP must pass"
+        );
     }
 }

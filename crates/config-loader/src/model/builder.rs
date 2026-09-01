@@ -168,6 +168,7 @@ mod tests {
                 },
             ],
             secret_refs: Vec::new(),
+            risk_waivers: Vec::new(),
         };
 
         let caps = policy.capabilities_for("dispatcher");
@@ -193,6 +194,7 @@ mod tests {
                 },
             ],
             secret_refs: Vec::new(),
+            risk_waivers: Vec::new(),
         };
 
         let main_agent = policy.capabilities_for("main-agent");

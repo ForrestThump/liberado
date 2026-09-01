@@ -270,6 +270,10 @@ pub struct Orchestrator {
     live_catalog: Option<Arc<liberado_common::CapabilityCatalog>>,
     /// `(zone, write_class)` pairs from `Policy.zones` for the same check.
     zone_write_classes: Vec<(String, WriteClass)>,
+    /// Declarative risk waivers from `policy.toml`. Passed through to every `gate` runtime
+    /// built by this orchestrator so the runtime magnitude guard sees the same waivers the
+    /// dispatcher's pre-flight guard does. Empty = unchanged pre-feature behaviour.
+    risk_waivers: liberado_common::RiskWaiverSet,
     /// Base directory for proposal files a runtime-level downgrade writes (see `gate`).
     proposals_dir: PathBuf,
     /// Signs proposals built by the `Propose` arm and this orchestrator's own runtime-level `gate`
@@ -317,6 +321,9 @@ pub struct OrchestratorInfra {
     /// Shared live catalog — gate consequence/zone data is refreshed from here after MCP apply.
     live_catalog: Arc<liberado_common::CapabilityCatalog>,
     zone_write_classes: Vec<(String, WriteClass)>,
+    /// Declarative risk waivers from `policy.toml`. Passed through to every pool so the
+    /// runtime magnitude guard and the dispatcher's pre-flight guard see the same set.
+    risk_waivers: liberado_common::RiskWaiverSet,
     proposals_dir: PathBuf,
     signer: ProposalSigner,
     /// Turn ceiling for read-only subagent work, applied to every pool built from this infra.
@@ -338,6 +345,9 @@ impl OrchestratorInfra {
             provider,
             live_catalog,
             zone_write_classes,
+            // Default: empty. Operators opt in via `with_risk_waivers` once the
+            // bootstrap wires the loaded `Policy` through.
+            risk_waivers: liberado_common::RiskWaiverSet::empty(),
             proposals_dir,
             signer,
             research_max_turns: RESEARCH_MAX_TURNS,
@@ -368,6 +378,12 @@ impl OrchestratorInfra {
         self
     }
 
+    /// Set the risk-waiver set propagated to every pool's runtime magnitude guard.
+    pub fn with_risk_waivers(mut self, waivers: liberado_common::RiskWaiverSet) -> Self {
+        self.risk_waivers = waivers;
+        self
+    }
+
     /// Build the [`Orchestrator`] for one pool: only what's actually pool-specific — its
     /// [`RuntimeFactory`], its capability ceiling, and its name — combined with this shared infra.
     pub fn for_pool(
@@ -386,6 +402,7 @@ impl OrchestratorInfra {
             zone_catalog: self.live_catalog.descriptors(),
             live_catalog: Some(self.live_catalog.clone()),
             zone_write_classes: self.zone_write_classes.clone(),
+            risk_waivers: self.risk_waivers.clone(),
             proposals_dir: self.proposals_dir.clone(),
             signer: self.signer.clone(),
             pool_name: pool_name.into(),
@@ -421,6 +438,9 @@ impl Orchestrator {
             zone_catalog,
             live_catalog: None,
             zone_write_classes,
+            // Default empty for the legacy entry point; the bootstrap-driven infra path
+            // wires the loaded `Policy` via `with_risk_waivers`.
+            risk_waivers: liberado_common::RiskWaiverSet::empty(),
             proposals_dir,
             signer,
             pool_name: pool_name.into(),
@@ -1524,6 +1544,7 @@ impl Orchestrator {
             correlation_base.into(),
             self.signer.clone(),
             self.pool_name.clone(),
+            self.risk_waivers.clone(),
         )
         .with_deferral_flag(deferral_flag.clone());
         if let Some(cat) = &self.live_catalog {

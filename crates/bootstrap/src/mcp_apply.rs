@@ -452,7 +452,7 @@ mod tests {
 
     #[tokio::test]
     async fn live_catalog_gate_refuses_write_without_zone_capability_after_apply() {
-        use liberado_common::{Capability, CapabilitySet, ProposalSigner};
+        use liberado_common::{Capability, CapabilitySet, ProposalSigner, RiskWaiverSet};
         use liberado_executor::{RiskGatedToolRuntime, ToolRuntime};
         use liberado_provider::{ToolDef, ToolInvocation};
         use std::path::PathBuf;
@@ -510,6 +510,7 @@ mod tests {
             "corr".into(),
             ProposalSigner::random(),
             "default",
+            RiskWaiverSet::empty(),
         )
         .with_live_catalog(catalog.clone());
 
