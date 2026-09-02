@@ -166,7 +166,7 @@ The system shouldn't stay laser-focused on prompt wording. Periodically (not eve
 run a broader, less structured pass: hand a model the architecture docs, the current
 scenario pass/fail breakdown, and recent failure patterns, and ask it to critique the *architecture*
 — not propose a prompt tweak, but suggest structural ideas worth trying. Output lands as a dated
-idea/report doc (same shape as `docs/ideas/*.md` or the `Dreams/*.md` reports) for human review —
+idea/report doc under `docs/future-work/ideas/` for human review —
 read-only suggestions, never auto-actioned, since there's no deterministic "dispose" step for an
 architecture idea the way there is for a scored prompt candidate.
 
