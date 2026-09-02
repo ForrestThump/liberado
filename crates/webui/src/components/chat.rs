@@ -2,6 +2,7 @@ use dioxus::prelude::*;
 
 use chat_client_contract::ChatMessage;
 
+use crate::components::chat_submission::submission_text;
 use crate::components::markdown::MarkdownText;
 use crate::components::model_browser::ModelBrowser;
 use crate::components::picker::Picker;
@@ -128,23 +129,6 @@ async fn fetch_conversation(api_base: &str, conv_id: &str) -> Result<LoadedConve
 /// wiping it is what made Send look silent after a stream failure.
 fn clear_transcript_on_missing_id(has_session: bool, has_ghost: bool) -> bool {
     has_session && !has_ghost
-}
-
-/// Resolve what one submit gesture runs. Palette rows carry an exact command so they never depend
-/// on a preceding signal update; form/keyboard submits still accept the highlighted completion.
-fn submission_text(
-    raw: &str,
-    selected: usize,
-    palette_dismissed: bool,
-    picked_command: Option<&str>,
-) -> String {
-    if let Some(command) = picked_command {
-        return command.trim().to_string();
-    }
-    match liberado_commands::accept_completion(raw, selected) {
-        Some(completed) if !palette_dismissed => completed.trim().to_string(),
-        _ => raw.trim().to_string(),
-    }
 }
 
 // ── Chat component ──────────────────────────────────────────────────────────
