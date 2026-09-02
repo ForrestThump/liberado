@@ -1,11 +1,12 @@
 //! Split from `ci_cmd.rs` for module-health boundaries.
 
+use super::new_function_ceiling::compare_args;
 use super::{
     BASELINE_FILE, CI_LOG_FILE, CRAP_CEILING, CRAP_CEILING_GH, CRAP_CEILING_HINT,
     CRAP_COMPARE_SUMMARY, CRAP_EMPTY_BASELINE, CRAP_HOST_CEILING_ONLY, CRAP_REGRESSION_GH,
     CRAP_REGRESSION_HINT, CRAP_REGRESSION_MIN, CRAP_REPORT_ARGS, CRAP_REPORT_THRESHOLD, CiLog,
     EXTRACT_MAX_LINES, LCOV_FILE, LLVM_COV_ARGS, StageOutcome, announce_compare,
-    baseline_has_entries, compare_args, compare_banners, compare_to_baseline, crap_failure_hint,
+    baseline_has_entries, compare_banners, compare_to_baseline, crap_failure_hint,
     emit_crap_failure, exe_lives_in_cargo_target, extract_ci_failures, git, porcelain_path,
     relativize_json_file, relativize_lcov, repo_relative_source_path, repository_root, run_cmd,
     stage_ratcheted_baseline, uses_per_function_ratchet,
@@ -312,8 +313,8 @@ fn regression_hint_tells_an_agent_not_to_raise_the_baseline() {
 }
 
 #[test]
-fn compare_args_always_enforce_the_configured_ceiling() {
-    let ceiling = compare_args(false);
+fn compare_args_apply_fail_above_only_when_the_baseline_is_empty() {
+    let ceiling = compare_args(false, true);
     assert!(ceiling.contains(&"--fail-above"));
     assert!(ceiling.contains(&"--threshold"));
     assert!(ceiling.contains(&CRAP_CEILING));
@@ -322,14 +323,23 @@ fn compare_args_always_enforce_the_configured_ceiling() {
         !ceiling.contains(&"--min"),
         "ceiling-only must not hide low scores from a later reader of the argv"
     );
-    let ratchet = compare_args(true);
-    assert!(ratchet.contains(&"--fail-above"));
-    assert!(ratchet.contains(&"--threshold"));
-    assert!(ratchet.contains(&CRAP_CEILING));
+    let ratchet = compare_args(true, false);
+    assert!(
+        !ratchet.contains(&"--fail-above"),
+        "a filled baseline has entries above the new-function ceiling; --fail-above would fail them"
+    );
     assert!(ratchet.contains(&"--fail-regression"));
     assert!(ratchet.contains(&"--baseline"));
+    assert!(ratchet.contains(&"--format"));
+    assert!(ratchet.contains(&"--output"));
+    assert!(ratchet.contains(&super::DELTA_REPORT));
     assert!(ratchet.contains(&"--min"));
     assert!(ratchet.contains(&CRAP_REGRESSION_MIN));
+
+    let host_ceiling = compare_args(false, false);
+    assert!(host_ceiling.contains(&"--baseline"));
+    assert!(host_ceiling.contains(&super::DELTA_REPORT));
+    assert!(!host_ceiling.contains(&"--fail-regression"));
 }
 
 #[test]
@@ -354,7 +364,7 @@ fn report_generation_defers_policy_to_the_explicit_compare() {
 #[test]
 fn regression_compare_drops_current_scores_below_ten() {
     assert_eq!(CRAP_REGRESSION_MIN, "10");
-    let ratchet = compare_args(true);
+    let ratchet = compare_args(true, false);
     let min_at = ratchet
         .iter()
         .position(|&flag| flag == "--min")
@@ -366,9 +376,8 @@ fn regression_compare_drops_current_scores_below_ten() {
     );
 }
 
-/// A toml that still names a higher ceiling would let `cargo crap` (no flags)
-/// and this check disagree. The CI argv is explicit; the file must still
-/// match so a bare `cargo crap --fail-above` is the same gate.
+/// The toml names the new-function ceiling. `fail-above` stays off there because
+/// existing baseline entries sit above 30; Liberado applies the ceiling itself.
 #[test]
 fn cargo_crap_toml_threshold_matches_the_ci_ceiling() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -387,6 +396,10 @@ fn cargo_crap_toml_threshold_matches_the_ci_ceiling() {
             .any(|line| line.trim_start().starts_with("min")),
         "min in .cargo-crap.toml would also filter baseline writes; got:\n{toml}"
     );
+    assert!(
+        toml.lines().any(|line| line.trim() == "fail-above = false"),
+        "fail-above must stay off: existing functions sit above the new-function ceiling; got:\n{toml}"
+    );
 }
 
 #[test]
@@ -397,7 +410,7 @@ fn per_function_ratchet_runs_only_on_linux_with_a_filled_baseline() {
         cfg!(target_os = "linux"),
         "a filled baseline still does not run --fail-regression off Linux"
     );
-    let args = compare_args(uses_per_function_ratchet(true));
+    let args = compare_args(uses_per_function_ratchet(true), false);
     assert_eq!(
         args.contains(&"--fail-regression"),
         cfg!(target_os = "linux")

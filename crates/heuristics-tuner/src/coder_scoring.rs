@@ -506,6 +506,10 @@ fn run(root: &Path, cmd: &[&str]) -> Result<(), String> {
 }
 
 #[cfg(test)]
+#[path = "coder_scoring_breakdown_tests.rs"]
+mod breakdown_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use liberado_provider::{CompletionResponse, MockProvider, ToolInvocation};

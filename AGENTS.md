@@ -84,14 +84,15 @@ complete failure set — comparing a branch against its base is meaningless with
 **Run `just ci` before you push — CRAP is a per-function ratchet.** `crap-baseline.json` is the last
 best score for each function, scored on Ubuntu (the GitHub job's host). GitHub only *reads* it
 (`liberado ci crap` / job `CRAP regression`); it never writes the file. A function at 40 that goes
-to 45 fails, even under the 49.9 ceiling. A current score below 10 is ignored, so a 4→5 move does
-not fail the job. New functions must land below 50. Linux `just ci`
+to 45 fails, even under the 29.9 new-function ceiling. A current score below 10 is ignored, so a 4→5 move does
+not fail the job. New functions must land below 30. Existing functions may sit above 30; the per-function ratchet holds them. Linux `just ci`
 runs that same per-function compare and may rewrite the file. On other hosts, `just ci` defers
 coverage to the exact Linux check that `just ready` runs natively or through Debian WSL. Host
 coverage numbers are not a reliable proxy. Do not raise the file by hand. Split the function or
-add tests. cargo-crap matches **file + function name**,
-not line number: adding a line above a function does not reset its score. Adding branches
-inside it does, and GitHub will fail. A green `just ci` is a few lines; the full child log
+add tests. cargo-crap first matches **file + function name + line**, then uses move-aware
+fallbacks: adding a line above a function does not reset its score, and duplicate same-name
+entries stay distinct. Adding branches inside it does, and GitHub will fail. A green `just ci`
+is a few lines; the full child log
 is always `.liberado/ci.log`.
 
 **A rebase invalidates every earlier check.** A merge, rebase, conflict resolution, amend, or base

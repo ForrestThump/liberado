@@ -4,14 +4,16 @@
 # The committed ratchet lives in `crap-baseline.json`. GitHub only compares
 # against that file (`--fail-regression`). Coverage is host-sensitive: the
 # committed scores are Ubuntu's (the CRAP job's host). A green Linux
-# `just ci` rewrites the file. Windows checks the 49.9 ceiling only and
-# does not write: a Windows `--fail-regression` false-fails (explain_write
-# moved +127). Never write the baseline from GitHub Actions: a bot commit
-# races every open PR.
+# `just ci` rewrites the file. Windows checks the 29.9 new-function ceiling
+# only and does not write: a Windows `--fail-regression` false-fails
+# (explain_write moved +127). Never write the baseline from GitHub Actions:
+# a bot commit races every open PR.
 #
-# `threshold` is the hard ceiling for *new* functions (`--fail-above`). The
-# per-function ratchet is `--fail-regression` against the baseline, which is
-# how scores go down and stay down. Lower this ceiling once the tail is gone.
+# `threshold` is the hard ceiling for *new* functions. Existing baseline
+# entries may sit above 30, so `fail-above` is off here: a bare `cargo crap
+# --fail-above` would fail the tail. `liberado ci crap` applies this ceiling
+# to entries cargo-crap's move-aware delta matcher classifies as new. The
+# per-function ratchet is `--fail-regression` against the baseline.
 # Do not set `min` here. `liberado ci crap` passes `--min 10` only on the
 # Linux regression compare; a config `min` would also strip low scores from
 # baseline writes and hide a 4→50 jump as a new function under the ceiling.
@@ -23,8 +25,8 @@
 #
 # `sort = file` keeps baseline diffs reviewable: a score change touches one
 # entry instead of reshuffling the whole file.
-threshold = 49.9
-fail-above = true
+threshold = 29.9
+fail-above = false
 missing = "skip"
 sort = "file"
 epsilon = 0.5

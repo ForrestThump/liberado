@@ -18,8 +18,11 @@
 //! its own work.
 //!
 //! Coverage is host-sensitive. Non-Linux `just ci` / `liberado ci crap` checks
-//! the 49.9 ceiling only (`--fail-above`). The per-function ratchet
-//! (`--fail-regression`) runs on Linux, which is GitHub's Ubuntu job.
+//! the 29.9 new-function ceiling only. Existing baseline entries may sit above
+//! 30; cargo-crap `--fail-above` would fail them, so Liberado applies the
+//! ceiling to entries cargo-crap's move-aware delta matcher classifies as new.
+//! The per-function ratchet (`--fail-regression`) runs on Linux, which is
+//! GitHub's Ubuntu job.
 //! A current score below 10 is not a regression: cargo-crap `--min` drops it
 //! before the detector runs, so a 4→5 move does not fail the job.
 //!
@@ -46,13 +49,16 @@ const CARGO_CRAP_VERSION: &str = "0.4.3";
 const BASELINE_FILE: &str = "crap-baseline.json";
 const LCOV_FILE: &str = ".liberado/crap.lcov";
 const CURRENT_REPORT: &str = ".liberado/crap-current.json";
+const DELTA_REPORT: &str = ".liberado/crap-delta.json";
 const USAGE: &str = "usage: liberado ci [check|crap|crap-linux|ratchet|modules|modules-ratchet|complexity|complexity-ratchet|unwraps|unwraps-ratchet|ready|verify-ready]";
 const VACATED_BIN: &str = "liberado-ci";
 const CI_LOG_FILE: &str = ".liberado/ci.log";
 const EXTRACT_MAX_LINES: usize = liberado_coder_core::FAILURE_EXTRACT_MAX_LINES;
 
-/// New-function / `--fail-above` ceiling. Must match `.cargo-crap.toml` `threshold`.
-const CRAP_CEILING: &str = "49.9";
+/// New-function ceiling. Must match `.cargo-crap.toml` `threshold`.
+/// Existing baseline entries may sit above this score; only functions that
+/// cargo-crap classifies as new are failed against it.
+const CRAP_CEILING: &str = "29.9";
 
 /// cargo-crap `--min` keeps functions with `crap >= min`. Passing 10 drops a
 /// current score below 10, so a 4→5 move is not a regression. Do not put this
@@ -97,16 +103,17 @@ const LLVM_COV_ARGS: &[&str] = &[
 /// Printed after `cargo crap` exits non-zero when a per-function score rose.
 const CRAP_REGRESSION_HINT: &str = "\
 CRAP check failed. A function's score went up vs crap-baseline.json \
-(per-function ratchet: 40 cannot become 45, even under the 49.9 ceiling). \
+(per-function ratchet: 40 cannot become 45, even under the 29.9 new-function ceiling). \
 A current score below 10 is ignored. cargo-crap named the functions above. \
 Split the function or add tests until each score is at or below its baseline. \
 Do not raise the baseline. `just ci` will not rewrite it while this check is red. \
 Fix locally, then push.";
 
-/// Printed after `cargo crap` exits non-zero when the baseline is still empty.
+/// Printed after a new function exceeds the ceiling, or when the baseline is empty.
 const CRAP_CEILING_HINT: &str = "\
-CRAP check failed. A function is above the 49.9 ceiling (`--fail-above`). \
-Split it or add tests. New functions must land below 50.";
+CRAP check failed. A new function is above the 29.9 ceiling. \
+Split it or add tests. New functions must land below 30. \
+Existing functions may sit above 30; the per-function ratchet holds them.";
 
 /// One-line GitHub Actions annotation (newlines are not legal in `::error`).
 const CRAP_REGRESSION_GH: &str = "\
@@ -116,8 +123,8 @@ Do not raise the baseline. Linux `just ci` or this Ubuntu job is the check that 
 
 /// Banner when this host is not Linux: do not run `--fail-regression` here.
 const CRAP_HOST_CEILING_ONLY: &str = "\
-[liberado ci] this host is not Linux — ceiling only (49.9). \
-GitHub's Ubuntu job runs the per-function ratchet.";
+[liberado ci] this host is not Linux — new-function ceiling only (29.9). \
+Existing functions are not compared here; GitHub's Ubuntu job runs the per-function ratchet.";
 
 const CRAP_EMPTY_BASELINE: &str = "\
 [liberado ci] crap-baseline.json has no entries yet — ceiling only (`--fail-above`). \
@@ -125,15 +132,16 @@ A green Linux `liberado ci ratchet` fills the per-function ratchet.";
 
 const CRAP_COMPARE_SUMMARY: &str = "\
 [liberado ci] CRAP compare against crap-baseline.json \
-(per-function ratchet on Linux; scores below 10 are ignored; 49.9 is the new-function ceiling)";
+(per-function ratchet on Linux; scores below 10 are ignored; 29.9 is the new-function ceiling)";
 
 const CRAP_CEILING_GH: &str = "\
-A function is above the 49.9 CRAP ceiling. Split it or add tests. \
-New functions must land below 50.";
+A new function is above the 29.9 CRAP ceiling. Split it or add tests. \
+New functions must land below 30.";
 
 mod coverage_tools;
 /// Dispatch `liberado ci …`. No subcommand means the local full run (gates + ratchet).
 mod dispatch;
+mod new_function_ceiling;
 mod runtime_support;
 
 pub use dispatch::run;
@@ -281,8 +289,7 @@ fn generate_lcov(log: &CiLog) -> Result<(), Box<dyn std::error::Error>> {
 fn compare_to_baseline(log: &CiLog) -> Result<(), Box<dyn std::error::Error>> {
     require_crap(&log.root)?;
     let fail_regression = announce_compare(log)?;
-    run_cmd(log, "cargo", &compare_args(fail_regression))
-        .map_err(|error| emit_crap_failure(fail_regression, error))
+    new_function_ceiling::compare(log, fail_regression)
 }
 
 /// Record host/baseline banners in the log. Ceiling-only and empty-baseline
@@ -316,33 +323,11 @@ fn uses_per_function_ratchet(baseline_has_entries: bool) -> bool {
     baseline_has_entries && cfg!(target_os = "linux")
 }
 
-fn compare_args(fail_regression: bool) -> Vec<&'static str> {
-    let mut args = vec![
-        "crap",
-        "--workspace",
-        "--lcov",
-        LCOV_FILE,
-        "--fail-above",
-        "--threshold",
-        CRAP_CEILING,
-    ];
-    if fail_regression {
-        args.extend_from_slice(&[
-            "--min",
-            CRAP_REGRESSION_MIN,
-            "--baseline",
-            BASELINE_FILE,
-            "--fail-regression",
-        ]);
-    }
-    args
-}
-
 fn write_baseline(log: &CiLog) -> Result<(), Box<dyn std::error::Error>> {
     write_crap_json(log, BASELINE_FILE)
 }
 
-fn write_crap_json(log: &CiLog, output: &str) -> Result<(), Box<dyn std::error::Error>> {
+pub(super) fn write_crap_json(log: &CiLog, output: &str) -> Result<(), Box<dyn std::error::Error>> {
     require_crap(&log.root)?;
     let mut args = CRAP_REPORT_ARGS.to_vec();
     args.push(output);
@@ -547,6 +532,10 @@ mod crap_failure;
 #[cfg(test)]
 #[path = "ci_cmd/crap_failure_tests.rs"]
 mod crap_failure_tests;
+
+#[cfg(test)]
+#[path = "ci_cmd/new_function_ceiling_tests.rs"]
+mod new_function_ceiling_tests;
 
 fn crap_failure_hint(has_ratchet: bool) -> &'static str {
     if has_ratchet {

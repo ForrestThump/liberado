@@ -247,6 +247,14 @@ mod tests {
     }
 
     #[test]
+    fn max_turns_cover_every_tier() {
+        assert_eq!(max_turns_for_tier(CoderTier::Smoke), 10);
+        assert_eq!(max_turns_for_tier(CoderTier::Core), 14);
+        assert_eq!(max_turns_for_tier(CoderTier::Stress), 20);
+        assert_eq!(max_turns_for_tier(CoderTier::Greenfield), 28);
+    }
+
+    #[test]
     fn select_beam_disqualifies_unsafe() {
         let scored = vec![
             (

@@ -501,6 +501,14 @@ mod tests {
     use super::*;
 
     #[test]
+    fn tier_as_str_covers_every_variant() {
+        assert_eq!(CoderTier::Smoke.as_str(), "smoke");
+        assert_eq!(CoderTier::Core.as_str(), "core");
+        assert_eq!(CoderTier::Stress.as_str(), "stress");
+        assert_eq!(CoderTier::Greenfield.as_str(), "greenfield");
+    }
+
+    #[test]
     fn curriculum_is_ordered_smoke_then_core_then_stress() {
         let scenarios = coder_scenarios();
         assert!(scenarios.len() >= 8);

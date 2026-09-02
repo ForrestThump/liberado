@@ -46,4 +46,6 @@ pub use liberado_session::Visibility;
 pub use ulid::Ulid;
 
 #[cfg(test)]
+mod leaf_path_tests;
+#[cfg(test)]
 mod tests;
