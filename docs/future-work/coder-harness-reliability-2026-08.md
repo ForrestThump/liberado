@@ -14,8 +14,9 @@ read [Where the numbers came from](#where-the-numbers-came-from) before quoting 
 
 Compare 3 (F12, 2026-08-13) later showed that compile and thinking worked while repair feedback
 reduced a failing suite to `cargo exited 101`. PR #170 fixed the excerpt selection. The controlled
-multi-harness baseline remains open in the backlog; the one-task comparison is available in git
-history when incident detail is required.
+multi-harness baseline remains open in the backlog
+([`cross-harness-baseline.md`](cross-harness-baseline.md)); the one-task comparison is available
+in git history when incident detail is required.
 
 **Who this is for**: anyone picking up the coding pack. It records what was measured, what was
 fixed, and — more usefully — **which plausible ideas were tried and did not work**, so the next

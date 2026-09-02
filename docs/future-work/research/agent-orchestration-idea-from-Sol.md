@@ -1,3 +1,22 @@
+---
+kind: finding
+status: historical
+authority: advisory
+domain: coding-harness
+canonical_for: coding-worker-control-plane-source
+open_items: false
+---
+
+# Source conversation — coding-worker control plane
+
+**Status**: historical source. Not a plan.
+**The spec is** [`../coding-worker-control-plane.md`](../coding-worker-control-plane.md).
+**Do not implement from this file.** Agents must not take work from it.
+
+The text below is the original conversation, kept as provenance.
+
+---
+
 Yes. That’s probably the architectural move that makes Liberado more useful before its own coding loop is “good enough.”
 
 You don’t actually need Liberado to be the best coding harness. You can make it the control plane.

@@ -24,7 +24,7 @@ unblocked item. Do not skip a code dependency.
 
 | Order | Item | Dependency |
 |---:|---|---|
-| **1** | **0.7 / C3 — publish the controlled cross-harness baseline** | The comparison infrastructure and ship-bar excerpt fix are present. This is a report, not another harness change. |
+| **1** | **0.7 / C3 — publish the controlled cross-harness baseline** | The comparison infrastructure and ship-bar excerpt fix are present. This is a report, not another harness change. Spec: [`cross-harness-baseline.md`](cross-harness-baseline.md). |
 | **2** | **C5 — measure the completion gate** | Run after the baseline produces a non-zero finish rate. Do not change the default first. |
 | **3** | **A1 — read one day of deployed token-economics data** | Measure the existing production system before changing its tool catalogue. |
 | **4** | **A2 — narrow the tool catalogue** | Blocked on A1. Change only what the measurement supports. |
@@ -37,7 +37,10 @@ unblocked item. Do not skip a code dependency.
 
 ### 0.7 / C3 — controlled cross-harness baseline
 
-Instrument pinned Liberado, Pi, Hermes, and Deep Agents versions. Use the same task, repository
+The experiment spec is [`cross-harness-baseline.md`](cross-harness-baseline.md). That file is the
+authority for what C3 is, what does not close it, the adapter gap, and the published-report bar.
+
+Short form: instrument pinned Liberado, Pi, Hermes, and Deep Agents. Use the same task, repository
 commit, model, provider, sampling settings, and resource limits. Keep each harness's native system
 prompt and tool schemas. Run repeats where cost permits.
 
@@ -50,15 +53,16 @@ Report:
 - Trace-linked failure classes.
 
 A single comparison without Hermes is evidence, not this baseline. Do not rank harnesses or change
-`max_turns` from that sample. See
-[`harness-comparisons.md`](../spec/reference/harness-comparisons.md) and
+`max_turns` from that sample. Runner contract:
+[`harness-comparisons.md`](../spec/reference/harness-comparisons.md). Cost-lever research:
 [`harness-study-2026-08.md`](harness-study-2026-08.md).
 
 ### C5 — completion-gate measurement
 
-Run the same controlled task set with `[coder.gate] enabled` off and on. Measure accepted results,
-model calls, cost, and repair. The gate costs `1 + fresh_reviewers` model calls per attempt. Keep it
-default-off until the result supports a change.
+Run the same controlled task set as C3
+([`cross-harness-baseline.md`](cross-harness-baseline.md)) with `[coder.gate] enabled` off and on.
+Measure accepted results, model calls, cost, and repair. The gate costs `1 + fresh_reviewers` model
+calls per attempt. Keep it default-off until the result supports a change.
 
 ### A1 — deployed token-economics read
 
@@ -109,6 +113,13 @@ currently render in the joined pane. Follow
 Focused search is sufficient today. Do not schedule an always-on repository map until measurement
 shows that missing context, rather than missing files, limits accepted results. If the item reopens,
 keep goal-context ranking in the kernel and source-tree or symbol-graph work in the coding pack.
+
+### Coding-worker control plane
+
+Liberado as scheduler over interchangeable coding CLIs. Draft:
+[`coding-worker-control-plane.md`](coding-worker-control-plane.md). Do not implement from that
+file. C3 is the evidence gate. The native loop is one worker, not the thing to make dramatically
+smarter in the meantime.
 
 ## Branch and integration rule
 
