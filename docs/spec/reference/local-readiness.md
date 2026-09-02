@@ -5,7 +5,7 @@ authority: normative
 domain: ci
 canonical_for: local-readiness
 open_items: false
-last_verified: 2026-08-31
+last_verified: 2026-09-02
 ---
 
 # Local readiness
@@ -56,8 +56,11 @@ functions must stay under the configured ceiling. A persistent exception must na
 and function and include an explicit ceiling, reason, and review date. The check fails if its
 generated report or committed baseline cannot be read and decoded.
 
-The coverage-sensitive CRAP ceiling is 49.9. New functions must remain below 50, while the
-per-function Linux baseline prevents existing functions from spending the remaining margin.
+The coverage-sensitive CRAP ceiling is 29.9. New functions must remain below 30. Existing
+functions may sit above 30; the per-function Linux baseline prevents those scores from rising.
+cargo-crap `--fail-above` is not applied to the whole report, because that would fail the
+known tail. `liberado ci crap` applies the ceiling only to functions that are not in
+`crap-baseline.json`.
 
 The unwraps classifier and ratchet are configured in `unwrap-classification.toml` and committed
 in `unwrap-classification-baseline.json`. The AST classifier walks production `.unwrap()` and

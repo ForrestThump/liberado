@@ -413,6 +413,14 @@ fn validate_accepts_well_formed_model_assignment() {
 }
 
 #[test]
+fn reasoning_level_as_str_covers_every_variant() {
+    assert_eq!(ReasoningLevel::Off.as_str(), "off");
+    assert_eq!(ReasoningLevel::Low.as_str(), "low");
+    assert_eq!(ReasoningLevel::Medium.as_str(), "medium");
+    assert_eq!(ReasoningLevel::High.as_str(), "high");
+}
+
+#[test]
 fn config_serde_round_trips() {
     let mut cfg = Config::default();
     cfg.topology.vault_path = "/home/shiloh/vault".into();

@@ -487,12 +487,16 @@ fn render_report(report: &ComparisonReport) -> String {
 }
 
 #[cfg(test)]
+#[path = "journal_lease_tests.rs"]
+mod lease_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::contract::*;
     use chrono::Utc;
 
-    fn spec() -> JobSpec {
+    pub(crate) fn spec() -> JobSpec {
         JobSpec {
             version: JOB_SPEC_VERSION,
             job_id: JobId::new(),

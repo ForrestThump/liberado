@@ -498,6 +498,10 @@ fn cmd_import(args: &mut dyn Iterator<Item = String>) -> Result<(), Box<dyn std:
 }
 
 #[cfg(test)]
+#[path = "coder_cmd_import_tests.rs"]
+mod import_tests;
+
+#[cfg(test)]
 mod tests {
     use super::{
         cmd_compare, cmd_compare_reset, cmd_diff, cmd_import, cmd_trace, default_trace_dirs,

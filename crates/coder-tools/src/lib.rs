@@ -3600,7 +3600,7 @@ edition = \"2021\"
         );
     }
 
-    fn init_temp_git_repo(dir: &std::path::Path) {
+    pub(crate) fn init_temp_git_repo(dir: &std::path::Path) {
         let run = |args: &[&str]| {
             let out = std::process::Command::new("git")
                 .args(args)

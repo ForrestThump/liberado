@@ -300,10 +300,10 @@
     "cyclomatic": 58
   },
   "crates/cli/src/ci_cmd.rs": {
-    "ploc": 520,
-    "lloc": 132,
-    "functions": 46,
-    "cyclomatic": 139
+    "ploc": 504,
+    "lloc": 130,
+    "functions": 44,
+    "cyclomatic": 137
   },
   "crates/cli/src/ci_cmd/announce_compare_tests.rs": {
     "ploc": 19,
@@ -335,6 +335,18 @@
     "functions": 19,
     "cyclomatic": 60
   },
+  "crates/cli/src/ci_cmd/new_function_ceiling.rs": {
+    "ploc": 115,
+    "lloc": 32,
+    "functions": 16,
+    "cyclomatic": 40
+  },
+  "crates/cli/src/ci_cmd/new_function_ceiling_tests.rs": {
+    "ploc": 53,
+    "lloc": 20,
+    "functions": 6,
+    "cyclomatic": 7
+  },
   "crates/cli/src/ci_cmd/runtime_support.rs": {
     "ploc": 41,
     "lloc": 7,
@@ -342,8 +354,8 @@
     "cyclomatic": 13
   },
   "crates/cli/src/ci_cmd_tests.rs": {
-    "ploc": 432,
-    "lloc": 181,
+    "ploc": 438,
+    "lloc": 180,
     "functions": 33,
     "cyclomatic": 38
   },
@@ -354,7 +366,7 @@
     "cyclomatic": 2
   },
   "crates/cli/src/coder_cmd.rs": {
-    "ploc": 673,
+    "ploc": 676,
     "lloc": 280,
     "functions": 59,
     "cyclomatic": 179
@@ -364,6 +376,12 @@
     "lloc": 25,
     "functions": 5,
     "cyclomatic": 12
+  },
+  "crates/cli/src/coder_cmd_import_tests.rs": {
+    "ploc": 58,
+    "lloc": 21,
+    "functions": 4,
+    "cyclomatic": 7
   },
   "crates/cli/src/compare_cmd.rs": {
     "ploc": 10,
@@ -1176,10 +1194,10 @@
     "cyclomatic": 113
   },
   "crates/coder-tools/src/git_error_tests.rs": {
-    "ploc": 139,
-    "lloc": 70,
-    "functions": 10,
-    "cyclomatic": 11
+    "ploc": 242,
+    "lloc": 99,
+    "functions": 14,
+    "cyclomatic": 15
   },
   "crates/coder-tools/src/git_tests.rs": {
     "ploc": 58,
@@ -1986,10 +2004,16 @@
     "cyclomatic": 139
   },
   "crates/harness-eval/src/journal.rs": {
-    "ploc": 560,
+    "ploc": 563,
     "lloc": 190,
     "functions": 51,
     "cyclomatic": 155
+  },
+  "crates/harness-eval/src/journal_lease_tests.rs": {
+    "ploc": 51,
+    "lloc": 24,
+    "functions": 4,
+    "cyclomatic": 7
   },
   "crates/harness-eval/src/legacy.rs": {
     "ploc": 2871,
@@ -2052,22 +2076,28 @@
     "cyclomatic": 9
   },
   "crates/heuristics-tuner/src/coder_scenarios.rs": {
-    "ploc": 469,
-    "lloc": 37,
-    "functions": 17,
-    "cyclomatic": 33
+    "ploc": 476,
+    "lloc": 41,
+    "functions": 18,
+    "cyclomatic": 34
   },
   "crates/heuristics-tuner/src/coder_scoring.rs": {
-    "ploc": 546,
+    "ploc": 549,
     "lloc": 110,
     "functions": 48,
     "cyclomatic": 105
   },
+  "crates/heuristics-tuner/src/coder_scoring_breakdown_tests.rs": {
+    "ploc": 49,
+    "lloc": 4,
+    "functions": 1,
+    "cyclomatic": 2
+  },
   "crates/heuristics-tuner/src/coder_search.rs": {
-    "ploc": 288,
-    "lloc": 60,
-    "functions": 20,
-    "cyclomatic": 30
+    "ploc": 295,
+    "lloc": 64,
+    "functions": 21,
+    "cyclomatic": 31
   },
   "crates/heuristics-tuner/src/config.rs": {
     "ploc": 328,
@@ -3083,8 +3113,14 @@
     "functions": 87,
     "cyclomatic": 185
   },
+  "crates/session-store/src/leaf_path_tests.rs": {
+    "ploc": 132,
+    "lloc": 36,
+    "functions": 9,
+    "cyclomatic": 11
+  },
   "crates/session-store/src/lib.rs": {
-    "ploc": 8,
+    "ploc": 10,
     "lloc": 0,
     "functions": 0,
     "cyclomatic": 1

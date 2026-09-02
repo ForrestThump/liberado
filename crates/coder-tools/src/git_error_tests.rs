@@ -188,3 +188,110 @@ fn log_format_routing() {
         "empty format falls back to the default walk: {empty_format:?}"
     );
 }
+
+#[tokio::test]
+async fn git_fetch_rejects_empty_branch() {
+    let dir = tempfile::tempdir().unwrap();
+    crate::tests::init_temp_git_repo(dir.path());
+    let runtime = crate::CodingToolRuntime::new(
+        dir.path(),
+        liberado_coder_core::CommandPolicy::default(),
+        liberado_coder_core::PathPolicy::default(),
+    )
+    .unwrap();
+    let err = runtime
+        .invoke_json(
+            "git_fetch",
+            serde_json::json!({"remote": "origin", "branch": ""}),
+        )
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("must not be empty"));
+}
+
+#[tokio::test]
+async fn git_fetch_rejects_dash_prefixed_branch() {
+    let dir = tempfile::tempdir().unwrap();
+    crate::tests::init_temp_git_repo(dir.path());
+    let runtime = crate::CodingToolRuntime::new(
+        dir.path(),
+        liberado_coder_core::CommandPolicy::default(),
+        liberado_coder_core::PathPolicy::default(),
+    )
+    .unwrap();
+    let err = runtime
+        .invoke_json(
+            "git_fetch",
+            serde_json::json!({"remote": "origin", "branch": "--depth"}),
+        )
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("must not start with '-'"));
+}
+
+#[tokio::test]
+async fn git_fetch_reports_a_missing_remote() {
+    let dir = tempfile::tempdir().unwrap();
+    crate::tests::init_temp_git_repo(dir.path());
+    let runtime = crate::CodingToolRuntime::new(
+        dir.path(),
+        liberado_coder_core::CommandPolicy::default(),
+        liberado_coder_core::PathPolicy::default(),
+    )
+    .unwrap();
+    let result = runtime
+        .invoke_json("git_fetch", serde_json::json!({"remote": "no-such-remote"}))
+        .await
+        .expect("a git failure is a result, not a tool error");
+    assert_ne!(result["exit_code"], 0);
+    assert!(!result["stderr"].as_str().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn git_fetch_from_a_local_origin() {
+    let dir = tempfile::tempdir().unwrap();
+    crate::tests::init_temp_git_repo(dir.path());
+    let bare = tempfile::tempdir().unwrap();
+    let init = std::process::Command::new("git")
+        .args(["init", "--bare", "--quiet"])
+        .current_dir(bare.path())
+        .output()
+        .unwrap();
+    assert!(
+        init.status.success(),
+        "{}",
+        String::from_utf8_lossy(&init.stderr)
+    );
+    let origin = bare.path().display().to_string().replace('\\', "/");
+    let add = std::process::Command::new("git")
+        .args(["remote", "add", "origin", &origin])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(
+        add.status.success(),
+        "{}",
+        String::from_utf8_lossy(&add.stderr)
+    );
+    let push = std::process::Command::new("git")
+        .args(["push", "--quiet", "origin", "HEAD"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(
+        push.status.success(),
+        "{}",
+        String::from_utf8_lossy(&push.stderr)
+    );
+    let runtime = crate::CodingToolRuntime::new(
+        dir.path(),
+        liberado_coder_core::CommandPolicy::default(),
+        liberado_coder_core::PathPolicy::default(),
+    )
+    .unwrap();
+    let result = runtime
+        .invoke_json("git_fetch", serde_json::json!({"remote": "origin"}))
+        .await
+        .expect("fetch from a local origin must be a result");
+    assert_eq!(result["exit_code"], 0, "{result}");
+}
