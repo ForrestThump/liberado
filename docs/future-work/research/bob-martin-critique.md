@@ -59,7 +59,7 @@ Rough shape of the tree:
 - ~241 Markdown files
 - 18 `ARCHITECTURE.md` files
 - 19 ADRs
-- a `Dreams/` folder of agent “consolidation passes”
+- agent “consolidation passes” recorded during the project’s early development
 - a `Skills/` folder including `crap-harden-campaign.md` and `mutants-campaign.md`
 
 The code constantly points at “Decision 5,” “Decision 7,” “Decision 17.” That’s institutional memory leaking into the source. Clean Code wants names that say what the software *does*, not which meeting authorized it.
@@ -95,7 +95,7 @@ That reads as process substituting for craft. Bob has given whole talks on that 
 
 ## 6. It looks grown by agents, for agents
 
-`AGENTS.md`, `Dreams/`, `Skills/`, `prompts/coder/`, “future agent sessions orient fast and don’t repeat mistakes.” The architecture docs are written like a briefing packet for the next model, not like a program a human can hold in working memory.
+`AGENTS.md`, `Skills/`, `prompts/coder/`, “future agent sessions orient fast and don’t repeat mistakes.” The architecture docs are written like a briefing packet for the next model, not like a program a human can hold in working memory.
 
 From the outside, Liberado looks like an LLM was allowed to *keep adding seams* every time it got confused: another crate, another Decision, another frozen contract, another conformance tier. Confusion got encoded as structure. That’s the smell.
 
