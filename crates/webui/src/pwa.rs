@@ -202,6 +202,44 @@ mod tests {
         assert!(!composer.contains("position: absolute"), "{composer}");
     }
 
+    /// The chip used to sit above the transcript and cost a whole row of chat. It belongs
+    /// in the header, with the brand shrunk and the version gone so that row stays 3.5rem.
+    #[test]
+    fn profile_chip_lives_in_the_header_not_the_transcript() {
+        let css = read_crate_file("src/styles/main.css");
+        let app = read_crate_file("src/main.rs");
+        let chat = read_crate_file("src/components/chat.rs");
+        let chip = css_rule(&css, ".profile-chip");
+        let brand = css_rule(&css, ".brand");
+        let header = css_rule(&css, ".app-header-inner");
+
+        assert!(chip.contains("margin: 0"), "{chip}");
+        assert!(!chip.contains("align-self: flex-start"), "{chip}");
+        assert!(brand.contains("font-size: 1rem"), "{brand}");
+        assert!(header.contains("height: 3.5rem"), "{header}");
+        let app_header = css_rule(&css, ".app-header");
+        assert!(
+            app_header.contains("min-width: 0"),
+            "header must not stretch the app to its min-content on a phone: {app_header}"
+        );
+        assert!(
+            !css.contains(".brand-version"),
+            "version next to the brand costs header width the chip now needs"
+        );
+        assert!(
+            app.contains("ProfileChip"),
+            "the chip is a header control, owned by App"
+        );
+        assert!(
+            !app.contains("brand-version"),
+            "the version number was removed to make room"
+        );
+        assert!(
+            !chat.contains("profile-chip"),
+            "the chip must not sit in the transcript"
+        );
+    }
+
     #[test]
     fn shipped_icons_are_the_claimed_png_sizes() {
         assert_eq!(

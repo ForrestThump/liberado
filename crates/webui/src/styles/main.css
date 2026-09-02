@@ -45,6 +45,8 @@ body {
 .app {
     height: 100%;
     min-height: 0;
+    min-width: 0;
+    width: 100%;
     background: var(--lib-app-bg);
     color: var(--lib-chat-assistant-text);
     display: flex;
@@ -62,6 +64,11 @@ body {
     background: color-mix(in srgb, var(--lib-app-bg) 90%, transparent);
     backdrop-filter: blur(4px);
     flex-shrink: 0;
+    /* Column-flex items default to min-width: auto, which is the header's min-content.
+       Without this the chip + brand + nav stretch the whole app past the viewport and
+       clip Chat/Status and the Send button on a phone. */
+    min-width: 0;
+    width: 100%;
 }
 
 .app-header-inner {
@@ -69,15 +76,21 @@ body {
     margin: 0;
     padding: 0 1rem;
     height: 3.5rem;
+    width: 100%;
+    min-width: 0;
     display: flex;
     align-items: center;
     justify-content: space-between;
+    gap: 0.5rem;
 }
 
 .brand-group {
     display: flex;
     align-items: center;
-    gap: 0.75rem;
+    gap: 0.5rem;
+    min-width: 0;
+    flex: 1;
+    overflow: hidden;
 }
 
 /* Sidebar toggle. Sits in the header so that a hidden conversation list costs zero layout width —
@@ -110,15 +123,11 @@ body {
 }
 
 .brand {
-    font-size: 1.25rem;
+    font-size: 1rem;
     font-weight: 700;
     color: var(--lib-accent);
     letter-spacing: -0.01em;
-}
-
-.brand-version {
-    font-size: 0.8125rem;
-    color: var(--lib-status-bar-text);
+    flex-shrink: 0;
 }
 
 /* ── Sidebar toggle in header ────────────────────────────────────────────── */
@@ -148,6 +157,7 @@ body {
     background: var(--lib-surface);
     border-radius: 0.5rem;
     padding: 0.25rem;
+    flex-shrink: 0;
 }
 
 .nav-btn {
@@ -223,14 +233,45 @@ body {
     .incognito-label {
         display: none;
     }
+
+    .app-header-inner {
+        padding: 0 0.5rem;
+        gap: 0.375rem;
+    }
+
+    .brand-group {
+        gap: 0.25rem;
+    }
+
+    .brand {
+        font-size: 0.9375rem;
+    }
+
+    .nav {
+        padding: 0.125rem;
+    }
+
+    .nav-btn {
+        padding: 0.25rem 0.5rem;
+        font-size: 0.8125rem;
+    }
+
+    .incognito-btn {
+        padding: 0.25rem 0.375rem;
+        margin-right: 0;
+    }
+
+    .menu-btn {
+        padding: 0.375rem 0.25rem;
+    }
 }
 
+/* Header chip. Lives next to the brand so it does not take a whole row out of the transcript. */
 .profile-chip {
-    align-self: flex-start;
     display: flex;
     align-items: center;
-    gap: 0.4375rem;
-    margin: 0.5rem 1rem 0;
+    gap: 0.375rem;
+    margin: 0;
     padding: 0.1875rem 0.5rem;
     border: 1px solid var(--lib-border);
     border-radius: 999px;
@@ -239,7 +280,9 @@ body {
     font-family: inherit;
     font-size: 0.75rem;
     cursor: pointer;
-    flex-shrink: 0;
+    min-width: 0;
+    flex-shrink: 1;
+    white-space: nowrap;
 }
 
 .profile-chip:hover {
@@ -256,6 +299,11 @@ body {
 .profile-chip-name {
     font-weight: 600;
     color: var(--lib-chat-assistant-text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+    max-width: 9rem;
 }
 
 /* Unset reads quieter than set: "default" is the absence of a choice, and rendering it as loudly as
@@ -269,6 +317,25 @@ body {
     opacity: 0.5;
     display: inline-flex;
     align-items: center;
+}
+
+/* Must stay AFTER the .profile-chip-* rules above: a media query adds no specificity, so
+   whichever rule comes last wins. The "profile" prefix is the first thing worth dropping
+   when the header has to hold brand, chip, and nav. */
+@media (max-width: 560px) {
+    .profile-chip-label {
+        display: none;
+    }
+
+    .profile-chip {
+        border-color: transparent;
+        background: transparent;
+        padding: 0.125rem 0.25rem;
+    }
+
+    .profile-chip-name {
+        max-width: 5.5rem;
+    }
 }
 
 .profile-chip-caret .icon {
@@ -343,6 +410,7 @@ body {
     display: flex;
     flex: 1;
     min-height: 0;
+    min-width: 0;
     position: relative;
     overflow: hidden;
 }
@@ -454,6 +522,14 @@ body {
     color: color-mix(in srgb, var(--lib-sidebar-text) 50%, transparent);
 }
 
+.sidebar-gesture-hint {
+    margin: 0;
+    padding: 0.35rem 0.75rem 0;
+    color: var(--lib-status-bar-text);
+    font-size: 0.6875rem;
+    text-align: center;
+}
+
 .search-result-snippet {
     font-size: 0.6875rem;
     color: var(--lib-status-bar-text);
@@ -521,11 +597,15 @@ body {
     background: transparent;
     cursor: pointer;
     color: var(--lib-sidebar-text);
-    transition: background 0.1s;
+    box-shadow: inset 0 0 0 1px transparent;
+    transition: background 0.12s, box-shadow 0.12s;
 }
 
 .conv-item:hover {
     background: var(--lib-surface);
+    box-shadow:
+        inset 0 0 0 1px color-mix(in srgb, var(--lib-accent) 72%, transparent),
+        0 0 12px color-mix(in srgb, var(--lib-accent) 22%, transparent);
 }
 
 .conv-item-active {
@@ -574,6 +654,7 @@ body {
     gap: 0;
     flex: 1;
     min-height: 0;
+    min-width: 0;
     padding: 0;
     position: relative;
     overflow: hidden;
@@ -857,6 +938,7 @@ body {
     flex-direction: column;
     gap: 0.5rem;
     flex-shrink: 0;
+    min-width: 0;
     padding: 0.5rem 1rem 0.75rem;
     background: var(--lib-app-bg);
 }
@@ -877,6 +959,7 @@ body {
     background: color-mix(in srgb, var(--lib-app-bg) 82%, var(--lib-surface));
     box-shadow: 0 8px 28px rgba(0, 0, 0, 0.35);
     flex-shrink: 0;
+    min-width: 0;
 }
 
 .input-bar:focus-within {
@@ -885,6 +968,7 @@ body {
 
 .input {
     flex: 1;
+    min-width: 0;
     background: var(--lib-input-bg);
     color: var(--lib-input-text);
     border: 1px solid var(--lib-input-border-unfocused);
@@ -2041,52 +2125,60 @@ body {
 
 /* ── Conversation row options menu ───────────────────────────────────────── */
 
-/* `relative` so the confirm popover can anchor to this row rather than the scroll container —
-   the menu has to appear next to the button that opened it. */
+/* The row owns the action sheet, but the sheet itself is fixed to the viewport below. */
 .conv-item-row {
     position: relative;
-    display: flex;
-    align-items: stretch;
-    gap: 0.125rem;
+    display: block;
 }
 
 .conv-item-row .conv-item {
-    flex: 1;
+    width: 100%;
     min-width: 0;
+    touch-action: pan-y;
+    user-select: none;
 }
 
-.conv-item-menu-btn {
-    flex-shrink: 0;
-    padding: 0 0.4rem;
-    border: none;
-    border-radius: 0.375rem;
-    background: transparent;
-    color: var(--lib-status-bar-text);
-    font-size: 1rem;
-    line-height: 1;
-    cursor: pointer;
-    transition: background 0.12s, color 0.12s;
+/* A fixed action-sheet backdrop avoids clipping inside the scrolling conversation list, including
+   when the user holds the final visible row. */
+.conv-menu-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 80;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 1rem;
+    background: rgba(0, 0, 0, 0.48);
 }
 
-.conv-item-menu-btn:hover {
-    background: var(--lib-surface);
-    color: var(--lib-chat-assistant-text);
-}
-
-/* Anchored to the row's right edge, just under the button. z-index clears sibling rows so a menu
-   opened on the last visible row is not clipped behind the one after it. */
 .conv-menu {
-    position: absolute;
-    top: 100%;
-    right: 0;
-    z-index: 20;
-    width: 13rem;
-    margin-top: 0.125rem;
-    padding: 0.5rem;
+    width: min(24rem, 100%);
+    padding: 0.75rem;
     border: 1px solid var(--lib-border);
-    border-radius: 0.5rem;
+    border-radius: 0.75rem;
     background: var(--lib-surface);
     box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+}
+
+/* Desktop has room for a contextual popover: place it beside the exact chat row that opened it.
+   Mobile keeps the dialog centered because a side popover would consume most of the viewport. */
+@media (min-width: 769px) {
+    .conv-menu-backdrop {
+        display: block;
+        /* Keep the conversation column exposed. A second right-click can then reach another row
+           and move this same menu instead of hitting the invisible dismissal layer. */
+        left: var(--conv-menu-left, 18rem);
+        padding: 0;
+        background: transparent;
+    }
+
+    .conv-menu {
+        position: fixed;
+        top: var(--conv-menu-top, 4rem);
+        left: var(--conv-menu-left, 18rem);
+        width: 22rem;
+        max-width: calc(100vw - var(--conv-menu-left, 18rem) - 1rem);
+    }
 }
 
 .conv-menu-label {
@@ -2107,6 +2199,33 @@ body {
     margin-top: 0.5rem;
 }
 
+.conv-menu-actions.stacked {
+    flex-direction: column;
+}
+
+.conv-menu-input {
+    width: 100%;
+    margin-top: 0.5rem;
+    padding: 0.5rem 0.6rem;
+    border: 1px solid var(--lib-border);
+    border-radius: 0.375rem;
+    outline: none;
+    background: color-mix(in srgb, var(--lib-app-bg) 75%, transparent);
+    color: var(--lib-chat-assistant-text);
+    font: inherit;
+    font-size: 0.8125rem;
+}
+
+.conv-menu-input:focus {
+    border-color: var(--lib-accent);
+}
+
+.conv-menu-error {
+    margin-top: 0.35rem;
+    color: var(--lib-tool-err);
+    font-size: 0.6875rem;
+}
+
 .conv-menu-btn {
     flex: 1;
     padding: 0.3rem 0.5rem;
@@ -2124,6 +2243,11 @@ body {
     background: color-mix(in srgb, var(--lib-app-bg) 60%, transparent);
 }
 
+.conv-menu-btn.primary {
+    border-color: var(--lib-accent);
+    color: var(--lib-accent);
+}
+
 /* The destructive action reads as destructive. It is irreversible and removes the log from disk. */
 .conv-menu-btn.danger {
     border-color: var(--lib-tool-err);
@@ -2134,8 +2258,8 @@ body {
     background: color-mix(in srgb, var(--lib-tool-err) 15%, transparent);
 }
 
-.sidebar-delete-error {
-    margin: 0 0.75rem 0.5rem;
+.conv-menu-error.server {
+    margin: 0 0 0.5rem;
     padding: 0.35rem 0.5rem;
     border: 1px solid var(--lib-tool-err);
     border-radius: 0.375rem;

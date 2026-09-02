@@ -2,6 +2,7 @@ use dioxus::prelude::*;
 
 use chat_client_contract::ChatMessage;
 
+use crate::components::chat_submission::submission_text;
 use crate::components::markdown::MarkdownText;
 use crate::components::model_browser::ModelBrowser;
 use crate::components::picker::Picker;
@@ -393,16 +394,19 @@ pub fn Chat(
         sending.set(false);
     };
 
-    // `use_callback` (not a plain closure) so the same handle is `Copy` and can be moved into both
-    // `onsubmit` and the textarea's `onkeydown` without a "closure moved twice" conflict.
-    let submit = use_callback(move |_: ()| {
+    // `use_callback` (not a plain closure) so the same handle is `Copy` and can be moved into the
+    // palette, form and textarea without a "closure moved twice" conflict. A palette tap supplies
+    // the exact command; ordinary Send/Enter passes `None` and resolves the current input below.
+    let submit = use_callback(move |picked_command: Option<String>| {
         let raw = input.read().clone();
         // Enter accepts the selected palette match without needing Tab first, so `/hel` + Enter runs
         // `/help`. Same rule and same function as the TUI's `send_message`.
-        let text = match liberado_commands::accept_completion(&raw, slash_index()) {
-            Some(completed) if !palette_dismissed() => completed.trim().to_string(),
-            _ => raw.trim().to_string(),
-        };
+        let text = submission_text(
+            &raw,
+            slash_index(),
+            palette_dismissed(),
+            picked_command.as_deref(),
+        );
         if text.is_empty() || sending() {
             return;
         }
@@ -563,31 +567,6 @@ pub fn Chat(
         div {
             class: "{chat_cls}",
 
-            {
-                // **Always rendered**, including with no profile set. It used to appear only once a
-                // profile was chosen, which meant a new chat showed no control at all — you could
-                // change a profile you already had, and had no way to acquire one except by knowing
-                // `/profile` existed. A control that only exists after you have used it is not a
-                // control.
-                //
-                // Shown in the conversation rather than in a menu: a profile changes what this chat
-                // can do, and an authority you have to go looking for is one you will forget.
-                let name = active_profile();
-                let cls = if name.is_some() { "profile-chip set" } else { "profile-chip" };
-                let label = name.unwrap_or_else(|| "default".to_string());
-                rsx! {
-                    button {
-                        class: "{cls}",
-                        r#type: "button",
-                        title: "Session profile for this chat — click to change",
-                        onclick: move |_| profile_browser_open.set(true),
-                        span { class: "profile-chip-label", "profile" }
-                        span { class: "profile-chip-name", "{label}" }
-                        span { class: "profile-chip-caret", IconChevronDown {} }
-                    }
-                }
-            }
-
             if incognito() {
                 // Stated where the conversation is, not only on the button in the header — the
                 // wrong thing to be unsure about mid-chat is whether it is being recorded. The
@@ -703,15 +682,10 @@ pub fn Chat(
                 SlashPalette {
                     input: input(),
                     selected: slash_index(),
-                    // A tap is the phone's Tab. Fill the input rather than running it, so a
-                    // command that takes an argument can still have one typed.
-                    on_pick: move |idx: usize| {
-                        if let Some(filled) = liberado_commands::complete_commands(&input(), idx) {
-                            input.set(filled);
-                            slash_index.set(idx);
-                            resize_input_to_content();
-                            focus_chat_input();
-                        }
+                    // A tap is the phone's select-and-run gesture. The row hands us its exact
+                    // command so state/render timing cannot accidentally submit the old prefix.
+                    on_run: move |command: String| {
+                        submit.call(Some(command));
                     },
                 }
             }
@@ -720,7 +694,7 @@ pub fn Chat(
                 class: "input-bar",
                 onsubmit: move |evt| {
                     evt.prevent_default();
-                    submit.call(());
+                    submit.call(None);
                 },
                 // Wraps the textarea so the ghost mirror can sit exactly under it. `.input` keeps
                 // its own metrics; this only supplies the positioning context.
@@ -799,7 +773,7 @@ pub fn Chat(
                                         && !e.modifiers().contains(Modifiers::SHIFT) =>
                                 {
                                     e.prevent_default();
-                                    submit.call(());
+                                    submit.call(None);
                                 }
                                 // `enter_key = "newline"` — Ctrl/Cmd+Enter is the deliberate send.
                                 // Plain Enter deliberately matches *no* arm below, so it falls to
@@ -813,7 +787,7 @@ pub fn Chat(
                                             || e.modifiers().contains(Modifiers::META)) =>
                                 {
                                     e.prevent_default();
-                                    submit.call(());
+                                    submit.call(None);
                                 }
                                 _ => {}
                             }

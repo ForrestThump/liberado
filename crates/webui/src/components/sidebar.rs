@@ -2,6 +2,7 @@ use dioxus::prelude::*;
 
 use chat_client_contract::{ConvHeader, ConversationSearchResponse, ConversationSearchResult};
 
+use crate::components::conversation_row::ConversationRow;
 use crate::components::mcp_panel::McpPanel;
 use crate::icons::IconChevronLeft;
 
@@ -39,6 +40,22 @@ async fn delete_conversation(api_base: &str, id: &str) -> Result<(), String> {
         Ok(())
     } else {
         Err(format!("Delete failed: HTTP {}", resp.status().as_u16()))
+    }
+}
+
+/// `PATCH /api/conversations/{id}` — update only the conversation's display title.
+async fn rename_conversation(api_base: &str, id: &str, title: &str) -> Result<(), String> {
+    let url = format!("{api_base}/api/conversations/{id}");
+    let resp = reqwest::Client::new()
+        .patch(&url)
+        .json(&serde_json::json!({ "title": title }))
+        .send()
+        .await
+        .map_err(|e| format!("Failed to reach daemon: {e}"))?;
+    if (200..300).contains(&resp.status().as_u16()) {
+        Ok(())
+    } else {
+        Err(format!("Rename failed: HTTP {}", resp.status().as_u16()))
     }
 }
 
@@ -84,7 +101,7 @@ fn collapse_after_pick(mut collapsed: Signal<bool>) {
     }
 }
 
-fn relative_time(iso: &str) -> String {
+pub(super) fn relative_time(iso: &str) -> String {
     let parsed = chrono::DateTime::parse_from_rfc3339(iso)
         .or_else(|_| chrono::DateTime::parse_from_rfc3339(&format!("{iso}Z")))
         .or_else(|_| {
@@ -121,7 +138,7 @@ fn relative_time(iso: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{conv_title, conversations_error_label, delete_accepted, relative_time};
+    use super::{conversations_error_label, delete_accepted, relative_time};
 
     fn ago(dur: chrono::Duration) -> String {
         (chrono::Utc::now() - dur).to_rfc3339()
@@ -234,16 +251,6 @@ mod tests {
             "Could not load conversations."
         );
     }
-
-    /// An unnamed conversation reads as "Untitled" in both the conversation list and search results.
-    #[test]
-    fn empty_titles_are_untitled() {
-        assert_eq!(conv_title(&Some("A title".into())), "A title");
-        assert_eq!(conv_title(&Some(String::new())), "Untitled");
-        assert_eq!(conv_title(&None), "Untitled");
-        // Whitespace is not emptiness — matches the `!is_empty()` guard.
-        assert_eq!(conv_title(&Some("  ".into())), "  ");
-    }
 }
 
 #[component]
@@ -267,12 +274,13 @@ pub fn Sidebar(
     });
 
     let mut search_query = use_signal(String::new);
-    // Which row's menu is open, by conversation id. Held here rather than per row so opening one
-    // closes another — two open menus at once is just clutter.
+    // Which row's action sheet is open, by conversation id. Held here rather than per row so
+    // opening one closes another — two open sheets at once is just clutter.
     let mut menu_for = use_signal(|| None::<String>);
-    let mut delete_error = use_signal(|| None::<String>);
+    let mut action_error = use_signal(|| None::<String>);
 
-    let search_results = use_resource({
+    #[cfg_attr(not(target_arch = "wasm32"), allow(unused_mut))]
+    let mut search_results = use_resource({
         let base = api_base.clone();
         move || {
             let q = search_query.read().trim().to_string();
@@ -287,6 +295,15 @@ pub fn Sidebar(
         }
     });
 
+    let open_menu = use_callback(move |id: String| {
+        menu_for.set(Some(id));
+        action_error.set(None);
+    });
+    let close_menu = use_callback(move |_: ()| {
+        menu_for.set(None);
+        action_error.set(None);
+    });
+
     let toggle = move |_| collapsed.set(!collapsed());
 
     let delete_conv = {
@@ -298,20 +315,44 @@ pub fn Sidebar(
                 match delete_conversation(&base, &id).await {
                     Ok(()) => {
                         menu_for.set(None);
-                        delete_error.set(None);
+                        action_error.set(None);
                         // Viewing the one just deleted? Fall back to a fresh chat rather than
                         // leaving the pane showing a conversation that no longer exists.
                         if active_conv_id.read().as_deref() == Some(id.as_str()) {
                             active_conv_id.set(None);
                         }
                         conversations.restart();
+                        search_results.restart();
                     }
-                    Err(e) => delete_error.set(Some(e)),
+                    Err(e) => action_error.set(Some(e)),
                 }
             });
             #[cfg(not(target_arch = "wasm32"))]
             {
                 let _ = (base, id);
+            }
+        })
+    };
+
+    let rename_conv = {
+        let base = api_base.clone();
+        use_callback(move |(id, title): (String, String)| {
+            let base = base.clone();
+            #[cfg(target_arch = "wasm32")]
+            wasm_bindgen_futures::spawn_local(async move {
+                match rename_conversation(&base, &id, &title).await {
+                    Ok(()) => {
+                        menu_for.set(None);
+                        action_error.set(None);
+                        conversations.restart();
+                        search_results.restart();
+                    }
+                    Err(e) => action_error.set(Some(e)),
+                }
+            });
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                let _ = (base, id, title);
             }
         })
     };
@@ -365,8 +406,9 @@ pub fn Sidebar(
                     oninput: move |evt| search_query.set(evt.value()),
                 }
             }
-            if let Some(err) = delete_error() {
-                p { class: "sidebar-delete-error", "{err}" }
+            p {
+                class: "sidebar-gesture-hint",
+                "Press and hold a chat for rename or delete."
             }
             div {
                 class: "sidebar-list",
@@ -380,18 +422,30 @@ pub fn Sidebar(
                             } else {
                                 rsx! {
                                     for result in list {
-                                        SearchResultItem {
+                                        ConversationRow {
                                             key: "{result.conversation_id}",
-                                            result: result.clone(),
+                                            id: result.conversation_id.clone(),
+                                            title: result.title.clone(),
+                                            created_at: result.created_at.clone(),
+                                            snippets: result.matches.iter()
+                                                .map(|item| item.content_snippet.clone())
+                                                .collect::<Vec<_>>(),
                                             is_active: active_conv_id.read().as_deref() == Some(&result.conversation_id),
+                                            menu_open: menu_for.read().as_deref() == Some(&result.conversation_id),
+                                            action_error: action_error(),
                                             on_select: {
                                                 let mut active = active_conv_id;
                                                 let id = result.conversation_id.clone();
                                                 move |_| {
+                                                    menu_for.set(None);
                                                     active.set(Some(id.clone()));
                                                     collapse_after_pick(collapsed);
                                                 }
                                             },
+                                            on_menu_open: open_menu,
+                                            on_menu_close: close_menu,
+                                            on_delete: delete_conv,
+                                            on_rename: rename_conv,
                                         }
                                     }
                                 }
@@ -417,31 +471,28 @@ pub fn Sidebar(
                             } else {
                                 rsx! {
                                     for conv in list {
-                                        ConvItem {
+                                        ConversationRow {
                                             key: "{conv.id}",
-                                            conv: conv.clone(),
+                                            id: conv.id.clone(),
+                                            title: conv.title.clone(),
+                                            created_at: conv.created_at.clone(),
+                                            snippets: Vec::new(),
                                             is_active: active_conv_id.read().as_deref() == Some(&conv.id),
                                             menu_open: menu_for.read().as_deref() == Some(&conv.id),
+                                            action_error: action_error(),
                                             on_select: {
                                                 let mut active = active_conv_id;
                                                 let id = conv.id.clone();
                                                 move |_| {
+                                                    menu_for.set(None);
                                                     active.set(Some(id.clone()));
                                                     collapse_after_pick(collapsed);
                                                 }
                                             },
-                                            on_menu_toggle: {
-                                                let id = conv.id.clone();
-                                                move |_| {
-                                                    let already = menu_for.read().as_deref() == Some(id.as_str());
-                                                    menu_for.set(if already { None } else { Some(id.clone()) });
-                                                    delete_error.set(None);
-                                                }
-                                            },
-                                            on_delete: {
-                                                let id = conv.id.clone();
-                                                move |_| delete_conv.call(id.clone())
-                                            },
+                                            on_menu_open: open_menu,
+                                            on_menu_close: close_menu,
+                                            on_delete: delete_conv,
+                                            on_rename: rename_conv,
                                         }
                                     }
                                 }
@@ -474,128 +525,6 @@ pub fn Sidebar(
             div {
                 class: "sidebar-footer",
                 McpPanel { api_base: api_base.clone() }
-            }
-        }
-    }
-}
-
-/// The row's title, or "Untitled" when it is missing or empty. Shared by the conversation row and
-/// the search-result row so the two lists cannot disagree about what an unnamed conversation is
-/// called. Whitespace-only titles pass through — the guard is `!is_empty()`, not `!trim().is_empty()`.
-fn conv_title(title: &Option<String>) -> &str {
-    match title {
-        Some(t) if !t.is_empty() => t.as_str(),
-        _ => "Untitled",
-    }
-}
-
-#[component]
-fn ConvItem(
-    conv: ConvHeader,
-    is_active: bool,
-    menu_open: bool,
-    on_select: EventHandler<MouseEvent>,
-    on_menu_toggle: EventHandler<MouseEvent>,
-    on_delete: EventHandler<MouseEvent>,
-) -> Element {
-    let cls = if is_active {
-        "conv-item conv-item-active"
-    } else {
-        "conv-item"
-    };
-    let title = conv_title(&conv.title);
-
-    // A row wrapping two buttons, not one big button: the options control has to be its own button,
-    // and a button nested inside a button is invalid HTML that browsers resolve by dropping events.
-    rsx! {
-        div {
-            class: "conv-item-row",
-            button {
-                class: "{cls}",
-                onclick: move |evt| on_select.call(evt),
-                div {
-                    class: "conv-item-title",
-                    "{title}"
-                }
-                div {
-                    class: "conv-item-time",
-                    "{relative_time(&conv.created_at)}"
-                }
-            }
-            button {
-                class: "conv-item-menu-btn",
-                r#type: "button",
-                title: "Conversation options",
-                // Opening the menu must not also select the row.
-                onclick: move |evt: MouseEvent| {
-                    evt.stop_propagation();
-                    on_menu_toggle.call(evt);
-                },
-                "\u{22EF}"
-            }
-            if menu_open {
-                div {
-                    class: "conv-menu",
-                    onclick: move |evt: MouseEvent| evt.stop_propagation(),
-                    p { class: "conv-menu-label", "Delete permanently?" }
-                    p { class: "conv-menu-note", "Removes it from disk. There is no undo." }
-                    div {
-                        class: "conv-menu-actions",
-                        button {
-                            class: "conv-menu-btn danger",
-                            r#type: "button",
-                            onclick: move |evt: MouseEvent| {
-                                evt.stop_propagation();
-                                on_delete.call(evt);
-                            },
-                            "Delete"
-                        }
-                        button {
-                            class: "conv-menu-btn",
-                            r#type: "button",
-                            onclick: move |evt: MouseEvent| {
-                                evt.stop_propagation();
-                                on_menu_toggle.call(evt);
-                            },
-                            "Cancel"
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-#[component]
-fn SearchResultItem(
-    result: ConversationSearchResult,
-    is_active: bool,
-    on_select: EventHandler<MouseEvent>,
-) -> Element {
-    let cls = if is_active {
-        "conv-item conv-item-active"
-    } else {
-        "conv-item"
-    };
-    let title = conv_title(&result.title);
-
-    rsx! {
-        button {
-            class: "{cls}",
-            onclick: move |evt| on_select.call(evt),
-            div {
-                class: "conv-item-title",
-                "{title}"
-            }
-            div {
-                class: "conv-item-time",
-                "{relative_time(&result.created_at)}"
-            }
-            for m in result.matches.iter() {
-                div {
-                    class: "search-result-snippet",
-                    "{m.content_snippet}"
-                }
             }
         }
     }

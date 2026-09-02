@@ -13,6 +13,7 @@ mod theme;
 use components::chat::Chat;
 use components::dashboard::Dashboard;
 use components::incognito::IncognitoToggle;
+use components::profile_browser::ProfileChip;
 use components::sidebar::Sidebar;
 use icons::IconMenu;
 
@@ -160,7 +161,7 @@ fn App() -> Element {
     let palette_visible = use_signal(|| false);
     // The session-profile picker, and which profile the open chat runs under. Both live here for
     // the same reason the other pickers do: `App` owns the Back-gesture layer stack.
-    let profile_browser_open = use_signal(|| false);
+    let mut profile_browser_open = use_signal(|| false);
     let active_profile = use_signal(|| None::<String>);
     let palette_dismissed = use_signal(|| false);
     // `mut` because the header's menu button toggles it (see below).
@@ -270,7 +271,17 @@ fn App() -> Element {
                             IconMenu {}
                         }
                         span { class: "brand", "Liberado" }
-                        span { class: "brand-version", "v0.1" }
+                        // Profile chip sits here so it does not take a row out of the transcript.
+                        ProfileChip {
+                            active_profile,
+                            on_open: move |_| {
+                                // The picker is rendered inside `Chat`. Switching first means a
+                                // click from Status still opens it, rather than setting a flag on a
+                                // view that is not mounted.
+                                view.set("chat");
+                                profile_browser_open.set(true);
+                            },
+                        }
                     }
                     nav {
                         class: "nav",

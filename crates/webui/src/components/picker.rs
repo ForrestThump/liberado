@@ -51,9 +51,21 @@ fn filtered(items: &[String], query: &str) -> Vec<String> {
         .collect()
 }
 
+/// Resolve the row that keyboard navigation and visual highlighting should start from.
+///
+/// `explicit` is set only after the user moves through the list or starts filtering. Until then,
+/// following `current` lets a picker that loads its items asynchronously settle on the active row
+/// as soon as that row arrives.
+fn highlighted_index(rows: &[String], current: Option<&str>, explicit: Option<usize>) -> usize {
+    explicit
+        .filter(|index| *index < rows.len())
+        .or_else(|| current.and_then(|item| rows.iter().position(|row| row == item)))
+        .unwrap_or(0)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{MAX_ROWS, filtered};
+    use super::{MAX_ROWS, filtered, highlighted_index};
 
     fn list(items: &[&str]) -> Vec<String> {
         items.iter().map(|s| s.to_string()).collect()
@@ -90,6 +102,20 @@ mod tests {
         // "m1" matches m1 + m10…m19 = 11 rows; well under the cap.
         assert_eq!(filtered(&items, "m1").len(), 11);
     }
+
+    #[test]
+    fn active_item_is_initially_highlighted() {
+        let items = list(&["(default)", "web-search", "turbovault", "no-tools"]);
+        assert_eq!(highlighted_index(&items, Some("turbovault"), None), 2);
+    }
+
+    #[test]
+    fn explicit_navigation_takes_precedence_and_is_bounds_checked() {
+        let items = list(&["(default)", "turbovault"]);
+        assert_eq!(highlighted_index(&items, Some("turbovault"), Some(0)), 0);
+        assert_eq!(highlighted_index(&items, Some("turbovault"), Some(99)), 1);
+        assert_eq!(highlighted_index(&items, Some("missing"), None), 0);
+    }
 }
 
 #[component]
@@ -110,7 +136,7 @@ pub fn Picker(
 ) -> Element {
     let mut open = open;
     let mut query = use_signal(String::new);
-    let mut highlighted = use_signal(|| 0usize);
+    let mut highlighted = use_signal(|| None::<usize>);
 
     // Runs after the panel is in the DOM, so the element exists to focus.
     use_effect(focus_filter_input);
@@ -118,10 +144,11 @@ pub fn Picker(
     let close = use_callback(move |_: ()| {
         open.set(false);
         query.set(String::new());
-        highlighted.set(0);
+        highlighted.set(None);
     });
 
     let rows = filtered(&items, query.read().as_str());
+    let selected_index = highlighted_index(&rows, current.as_deref(), highlighted());
     let rows_for_keys = rows.clone();
 
     let on_key = move |e: Event<KeyboardData>| match e.key() {
@@ -131,18 +158,18 @@ pub fn Picker(
         }
         Key::Enter => {
             e.prevent_default();
-            if let Some(item) = rows_for_keys.get(highlighted()) {
+            if let Some(item) = rows_for_keys.get(selected_index) {
                 on_pick.call(item.clone());
             }
         }
         Key::ArrowDown => {
             e.prevent_default();
             let max = rows_for_keys.len().saturating_sub(1);
-            highlighted.set((highlighted() + 1).min(max));
+            highlighted.set(Some((selected_index + 1).min(max)));
         }
         Key::ArrowUp => {
             e.prevent_default();
-            highlighted.set(highlighted().saturating_sub(1));
+            highlighted.set(Some(selected_index.saturating_sub(1)));
         }
         _ => {}
     };
@@ -170,7 +197,7 @@ pub fn Picker(
                     value: "{query}",
                     oninput: move |e| {
                         query.set(e.value());
-                        highlighted.set(0);
+                        highlighted.set(Some(0));
                     },
                     onkeydown: on_key,
                 }
@@ -188,7 +215,7 @@ pub fn Picker(
                         for (i, item) in rows.iter().enumerate() {
                             {
                                 let is_current = current.as_deref() == Some(item.as_str());
-                                let cls = if i == highlighted() { "picker-row active" } else { "picker-row" };
+                                let cls = if i == selected_index { "picker-row active" } else { "picker-row" };
                                 let pick = item.clone();
                                 rsx! {
                                     button {
@@ -197,7 +224,7 @@ pub fn Picker(
                                         r#type: "button",
                                         // The pointer moves the same index the arrows do, so the two
                                         // never disagree about which row Enter would take.
-                                        onmouseenter: move |_| highlighted.set(i),
+                                        onmouseenter: move |_| highlighted.set(Some(i)),
                                         onclick: move |_| on_pick.call(pick.clone()),
                                         span { class: "picker-row-name", "{item}" }
                                         if is_current {

@@ -9,6 +9,21 @@ fn url(session: Option<&str>, model: Option<&str>) -> String {
     stream_url(BASE, "hi", session, false, None, model)
 }
 
+#[test]
+fn a_palette_tap_runs_the_picked_command_not_the_typed_prefix() {
+    assert_eq!(
+        submission_text("/pro", 0, false, Some("/profile")),
+        "/profile"
+    );
+    assert_eq!(submission_text("/mo", 0, false, Some("/model")), "/model");
+}
+
+#[test]
+fn keyboard_submit_still_accepts_the_selected_completion() {
+    assert_eq!(submission_text("/hel", 0, false, None), "/help");
+    assert_eq!(submission_text("  hello  ", 0, false, None), "hello");
+}
+
 /// The regression this function was extracted for. A model picked for an existing conversation
 /// has to survive alongside `session`; when the two were arms of one match it could not, and the
 /// symptom was a turn quietly answering on the wrong model rather than any kind of error.
