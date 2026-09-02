@@ -2145,10 +2145,9 @@ body {
     inset: 0;
     z-index: 80;
     display: flex;
-    align-items: flex-end;
+    align-items: center;
     justify-content: center;
     padding: 1rem;
-    padding-bottom: max(1rem, env(safe-area-inset-bottom));
     background: rgba(0, 0, 0, 0.48);
 }
 
@@ -2162,7 +2161,7 @@ body {
 }
 
 /* Desktop has room for a contextual popover: place it beside the exact chat row that opened it.
-   Mobile keeps the bottom sheet above because a side popover would consume most of the viewport. */
+   Mobile keeps the dialog centered because a side popover would consume most of the viewport. */
 @media (min-width: 769px) {
     .conv-menu-backdrop {
         display: block;
