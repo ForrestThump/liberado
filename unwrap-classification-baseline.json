@@ -4,7 +4,7 @@
     "proven_invariant": 61,
     "local_failure": 0,
     "process_fatal": 50,
-    "files_scanned": 420,
+    "files_scanned": 436,
     "files_with_unwraps": 49
   },
   "files": {
@@ -512,7 +512,7 @@
       "occurrences": [
         {
           "file": "crates/common/src/proposal.rs",
-          "line": 312,
+          "line": 344,
           "column": 23,
           "method": "expect",
           "snippet": "<Hmac<Sha256> as Mac>::new_from_slice(&self.key)\n            .expect(\"HMAC accepts a key of any length\")",
@@ -523,7 +523,7 @@
         },
         {
           "file": "crates/common/src/proposal.rs",
-          "line": 320,
+          "line": 352,
           "column": 27,
           "method": "expect",
           "snippet": "serde_json::to_vec(&proposal.proposed_action)\n            .expect(\"ProposedAction serializes to JSON\")",
@@ -534,7 +534,7 @@
         },
         {
           "file": "crates/common/src/proposal.rs",
-          "line": 328,
+          "line": 360,
           "column": 28,
           "method": "expect",
           "snippet": "serde_json::to_vec(cap).expect(\"Capability serializes to JSON\")",
@@ -545,7 +545,7 @@
         },
         {
           "file": "crates/common/src/proposal.rs",
-          "line": 372,
+          "line": 404,
           "column": 9,
           "method": "expect",
           "snippet": "write!(s, \"{b:02x}\").expect(\"writing to a String cannot fail\")",
@@ -621,7 +621,7 @@
       "occurrences": [
         {
           "file": "crates/daemon/src/lib.rs",
-          "line": 148,
+          "line": 160,
           "column": 9,
           "method": "expect",
           "snippet": "self.event_tx\n            .as_ref()\n            .expect(\"event_sender() called after run() already started\")",
@@ -632,7 +632,7 @@
         },
         {
           "file": "crates/daemon/src/lib.rs",
-          "line": 312,
+          "line": 325,
           "column": 28,
           "method": "expect",
           "snippet": "self\n            .event_rx\n            .take()\n            .expect(\"Daemon::run must only be called once\")",
@@ -643,7 +643,7 @@
         },
         {
           "file": "crates/daemon/src/lib.rs",
-          "line": 318,
+          "line": 331,
           "column": 24,
           "method": "expect",
           "snippet": "self\n            .event_tx\n            .take()\n            .expect(\"Daemon::run must only be called once\")",
@@ -896,7 +896,7 @@
       "occurrences": [
         {
           "file": "crates/orchestrator/src/lib.rs",
-          "line": 1361,
+          "line": 1366,
           "column": 26,
           "method": "expect",
           "snippet": "semaphore\n                .clone()\n                .acquire_owned()\n                .await\n                .expect(\"semaphore is local to this call and never closed\")",

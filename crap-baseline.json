@@ -7810,8 +7810,8 @@
       "function": "take_workspace_checkpoint",
       "line": 1247,
       "cyclomatic": 3.0,
-      "coverage": 92.85714285714286,
-      "crap": 3.003279883381924,
+      "coverage": 100.0,
+      "crap": 3.0,
       "crate": "liberado-coder-agent"
     },
     {
@@ -8548,8 +8548,8 @@
       "function": "CodingSessionPack::run_one_attempt",
       "line": 540,
       "cyclomatic": 5.0,
-      "coverage": 87.09677419354838,
-      "crap": 5.053707495552348,
+      "coverage": 90.32258064516128,
+      "crap": 5.022657849686147,
       "crate": "liberado-coder-agent"
     },
     {
@@ -10870,8 +10870,8 @@
       "function": "ShadowGit::run_git",
       "line": 252,
       "cyclomatic": 3.0,
-      "coverage": 75.0,
-      "crap": 3.140625,
+      "coverage": 100.0,
+      "crap": 3.0,
       "crate": "liberado-coder-sandbox"
     },
     {
