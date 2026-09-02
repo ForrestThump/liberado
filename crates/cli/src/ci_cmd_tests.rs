@@ -330,8 +330,16 @@ fn compare_args_apply_fail_above_only_when_the_baseline_is_empty() {
     );
     assert!(ratchet.contains(&"--fail-regression"));
     assert!(ratchet.contains(&"--baseline"));
+    assert!(ratchet.contains(&"--format"));
+    assert!(ratchet.contains(&"--output"));
+    assert!(ratchet.contains(&super::DELTA_REPORT));
     assert!(ratchet.contains(&"--min"));
     assert!(ratchet.contains(&CRAP_REGRESSION_MIN));
+
+    let host_ceiling = compare_args(false, false);
+    assert!(host_ceiling.contains(&"--baseline"));
+    assert!(host_ceiling.contains(&super::DELTA_REPORT));
+    assert!(!host_ceiling.contains(&"--fail-regression"));
 }
 
 #[test]

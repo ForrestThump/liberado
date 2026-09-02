@@ -20,8 +20,9 @@
 //! Coverage is host-sensitive. Non-Linux `just ci` / `liberado ci crap` checks
 //! the 29.9 new-function ceiling only. Existing baseline entries may sit above
 //! 30; cargo-crap `--fail-above` would fail them, so Liberado applies the
-//! ceiling to functions that are not in `crap-baseline.json`. The per-function
-//! ratchet (`--fail-regression`) runs on Linux, which is GitHub's Ubuntu job.
+//! ceiling to entries cargo-crap's move-aware delta matcher classifies as new.
+//! The per-function ratchet (`--fail-regression`) runs on Linux, which is
+//! GitHub's Ubuntu job.
 //! A current score below 10 is not a regression: cargo-crap `--min` drops it
 //! before the detector runs, so a 4→5 move does not fail the job.
 //!
@@ -48,14 +49,15 @@ const CARGO_CRAP_VERSION: &str = "0.4.3";
 const BASELINE_FILE: &str = "crap-baseline.json";
 const LCOV_FILE: &str = ".liberado/crap.lcov";
 const CURRENT_REPORT: &str = ".liberado/crap-current.json";
+const DELTA_REPORT: &str = ".liberado/crap-delta.json";
 const USAGE: &str = "usage: liberado ci [check|crap|crap-linux|ratchet|modules|modules-ratchet|complexity|complexity-ratchet|unwraps|unwraps-ratchet|ready|verify-ready]";
 const VACATED_BIN: &str = "liberado-ci";
 const CI_LOG_FILE: &str = ".liberado/ci.log";
 const EXTRACT_MAX_LINES: usize = liberado_coder_core::FAILURE_EXTRACT_MAX_LINES;
 
 /// New-function ceiling. Must match `.cargo-crap.toml` `threshold`.
-/// Existing baseline entries may sit above this score; only functions absent
-/// from `crap-baseline.json` are failed against it.
+/// Existing baseline entries may sit above this score; only functions that
+/// cargo-crap classifies as new are failed against it.
 const CRAP_CEILING: &str = "29.9";
 
 /// cargo-crap `--min` keeps functions with `crap >= min`. Passing 10 drops a

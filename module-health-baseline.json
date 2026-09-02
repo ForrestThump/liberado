@@ -300,7 +300,7 @@
     "cyclomatic": 58
   },
   "crates/cli/src/ci_cmd.rs": {
-    "ploc": 503,
+    "ploc": 504,
     "lloc": 129,
     "functions": 44,
     "cyclomatic": 136
@@ -336,16 +336,16 @@
     "cyclomatic": 60
   },
   "crates/cli/src/ci_cmd/new_function_ceiling.rs": {
-    "ploc": 116,
-    "lloc": 33,
-    "functions": 16,
-    "cyclomatic": 41
+    "ploc": 110,
+    "lloc": 28,
+    "functions": 12,
+    "cyclomatic": 26
   },
   "crates/cli/src/ci_cmd/new_function_ceiling_tests.rs": {
-    "ploc": 53,
-    "lloc": 20,
-    "functions": 6,
-    "cyclomatic": 7
+    "ploc": 79,
+    "lloc": 15,
+    "functions": 8,
+    "cyclomatic": 9
   },
   "crates/cli/src/ci_cmd/runtime_support.rs": {
     "ploc": 41,
@@ -354,8 +354,8 @@
     "cyclomatic": 13
   },
   "crates/cli/src/ci_cmd_tests.rs": {
-    "ploc": 438,
-    "lloc": 180,
+    "ploc": 445,
+    "lloc": 187,
     "functions": 33,
     "cyclomatic": 38
   },

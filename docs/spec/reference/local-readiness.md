@@ -59,8 +59,8 @@ generated report or committed baseline cannot be read and decoded.
 The coverage-sensitive CRAP ceiling is 29.9. New functions must remain below 30. Existing
 functions may sit above 30; the per-function Linux baseline prevents those scores from rising.
 cargo-crap `--fail-above` is not applied to the whole report, because that would fail the
-known tail. `liberado ci crap` applies the ceiling only to functions that are not in
-`crap-baseline.json`.
+known tail. `liberado ci crap` applies the ceiling only to entries that cargo-crap's
+move-aware baseline matcher classifies as new. This preserves distinct same-name functions.
 
 The unwraps classifier and ratchet are configured in `unwrap-classification.toml` and committed
 in `unwrap-classification-baseline.json`. The AST classifier walks production `.unwrap()` and

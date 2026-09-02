@@ -89,9 +89,10 @@ not fail the job. New functions must land below 30. Existing functions may sit a
 runs that same per-function compare and may rewrite the file. On other hosts, `just ci` defers
 coverage to the exact Linux check that `just ready` runs natively or through Debian WSL. Host
 coverage numbers are not a reliable proxy. Do not raise the file by hand. Split the function or
-add tests. cargo-crap matches **file + function name**,
-not line number: adding a line above a function does not reset its score. Adding branches
-inside it does, and GitHub will fail. A green `just ci` is a few lines; the full child log
+add tests. cargo-crap first matches **file + function name + line**, then uses move-aware
+fallbacks: adding a line above a function does not reset its score, and duplicate same-name
+entries stay distinct. Adding branches inside it does, and GitHub will fail. A green `just ci`
+is a few lines; the full child log
 is always `.liberado/ci.log`.
 
 **A rebase invalidates every earlier check.** A merge, rebase, conflict resolution, amend, or base
