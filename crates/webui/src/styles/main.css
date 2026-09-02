@@ -2157,6 +2157,24 @@ body {
     box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
 }
 
+/* Desktop has room for a contextual popover: place it beside the exact chat row that opened it.
+   Mobile keeps the bottom sheet above because a side popover would consume most of the viewport. */
+@media (min-width: 769px) {
+    .conv-menu-backdrop {
+        display: block;
+        padding: 0;
+        background: transparent;
+    }
+
+    .conv-menu {
+        position: fixed;
+        top: var(--conv-menu-top, 4rem);
+        left: var(--conv-menu-left, 18rem);
+        width: 22rem;
+        max-width: calc(100vw - var(--conv-menu-left, 18rem) - 1rem);
+    }
+}
+
 .conv-menu-label {
     font-size: 0.8125rem;
     font-weight: 600;

@@ -13,6 +13,12 @@ const LONG_PRESS_MS: f64 = 550.0;
 /// input and the submit path avoids a pasted essay turning the sidebar into unusable data.
 const MAX_TITLE_CHARS: usize = 120;
 
+/// Conservative height used to keep every desktop action-sheet view above the viewport bottom.
+/// The actual sheet is usually shorter; reserving the tallest view prevents a Rename/Delete switch
+/// from making it jump.
+const DESKTOP_MENU_MAX_HEIGHT: f64 = 240.0;
+const DESKTOP_MENU_GUTTER: f64 = 8.0;
+
 async fn fetch_conversations(api_base: String) -> Result<Vec<ConvHeader>, String> {
     let url = format!("{api_base}/api/conversations");
     let resp = reqwest::get(&url)
@@ -79,6 +85,39 @@ fn normalized_title(raw: &str) -> Result<String, &'static str> {
 
 fn is_long_press(start_ms: f64, end_ms: f64) -> bool {
     end_ms - start_ms >= LONG_PRESS_MS
+}
+
+fn clamped_desktop_menu_top(row_top: f64, viewport_height: f64) -> f64 {
+    let max_top =
+        (viewport_height - DESKTOP_MENU_MAX_HEIGHT - DESKTOP_MENU_GUTTER).max(DESKTOP_MENU_GUTTER);
+    row_top.clamp(DESKTOP_MENU_GUTTER, max_top)
+}
+
+#[cfg(target_arch = "wasm32")]
+fn desktop_menu_style(row_dom_id: &str) -> String {
+    let Some(window) = web_sys::window() else {
+        return String::new();
+    };
+    let Some(row) = window
+        .document()
+        .and_then(|document| document.get_element_by_id(row_dom_id))
+    else {
+        return String::new();
+    };
+    let bounds = row.get_bounding_client_rect();
+    let viewport_height = window
+        .inner_height()
+        .ok()
+        .and_then(|height| height.as_f64())
+        .unwrap_or(720.0);
+    let top = clamped_desktop_menu_top(bounds.top(), viewport_height);
+    let left = bounds.right() + DESKTOP_MENU_GUTTER;
+    format!("--conv-menu-top:{top}px;--conv-menu-left:{left}px")
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn desktop_menu_style(_row_dom_id: &str) -> String {
+    String::new()
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -171,8 +210,8 @@ fn relative_time(iso: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        LONG_PRESS_MS, conv_title, conversations_error_label, delete_accepted, is_long_press,
-        normalized_title, relative_time,
+        DESKTOP_MENU_GUTTER, LONG_PRESS_MS, clamped_desktop_menu_top, conv_title,
+        conversations_error_label, delete_accepted, is_long_press, normalized_title, relative_time,
     };
 
     fn ago(dur: chrono::Duration) -> String {
@@ -315,6 +354,13 @@ mod tests {
             normalized_title(&too_long),
             Err("Keep the title under 120 characters.")
         );
+    }
+
+    #[test]
+    fn desktop_action_sheet_stays_inside_the_viewport() {
+        assert_eq!(clamped_desktop_menu_top(100.0, 900.0), 100.0);
+        assert_eq!(clamped_desktop_menu_top(-20.0, 900.0), DESKTOP_MENU_GUTTER);
+        assert_eq!(clamped_desktop_menu_top(850.0, 900.0), 652.0);
     }
 }
 
@@ -629,11 +675,13 @@ fn ConversationRow(
 ) -> Element {
     let initial_title = title.clone().unwrap_or_default();
     let display_title = conv_title(&title).to_string();
+    let row_dom_id = format!("conversation-row-{id}");
     let mut action_view = use_signal(|| ConversationActionView::Actions);
     let mut draft_title = use_signal(move || initial_title.clone());
     let mut validation_error = use_signal(|| None::<&'static str>);
     let mut touch_started_at = use_signal(|| None::<f64>);
     let mut suppress_next_select = use_signal(|| false);
+    let mut menu_position_style = use_signal(String::new);
 
     let cls = if is_active {
         "conv-item conv-item-active"
@@ -642,11 +690,13 @@ fn ConversationRow(
     };
     let open_actions = use_callback({
         let id = id.clone();
+        let row_dom_id = row_dom_id.clone();
         let existing_title = title.clone().unwrap_or_default();
         move |_: ()| {
             action_view.set(ConversationActionView::Actions);
             draft_title.set(existing_title.clone());
             validation_error.set(None);
+            menu_position_style.set(desktop_menu_style(&row_dom_id));
             on_menu_open.call(id.clone());
         }
     });
@@ -659,6 +709,7 @@ fn ConversationRow(
 
     rsx! {
         div {
+            id: "{row_dom_id}",
             class: "conv-item-row",
             button {
                 class: "{cls}",
@@ -713,6 +764,7 @@ fn ConversationRow(
             if menu_open {
                 div {
                     class: "conv-menu-backdrop",
+                    style: "{menu_position_style}",
                     onclick: move |_| close_actions.call(()),
                     div {
                         class: "conv-menu",
