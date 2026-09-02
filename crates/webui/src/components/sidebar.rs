@@ -766,6 +766,14 @@ fn ConversationRow(
                     class: "conv-menu-backdrop",
                     style: "{menu_position_style}",
                     onclick: move |_| close_actions.call(()),
+                    // On desktop the sidebar remains exposed, so another row receives its own
+                    // context-menu event. Everywhere else on the backdrop, suppress the browser's
+                    // native menu and dismiss ours.
+                    oncontextmenu: move |evt| {
+                        evt.prevent_default();
+                        evt.stop_propagation();
+                        close_actions.call(());
+                    },
                     div {
                         class: "conv-menu",
                         onclick: move |evt: MouseEvent| evt.stop_propagation(),
