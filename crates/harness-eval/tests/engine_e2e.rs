@@ -114,10 +114,12 @@ fn worker_harness_spec(repository: &Path, task: &Path) -> JobSpec {
             HarnessRequest {
                 id: "liberado".to_string(),
                 binary: Some(worker_bin.into()),
+                git_sha: None,
             },
             HarnessRequest {
                 id: "pi".to_string(),
                 binary: Some(worker_bin.into()),
+                git_sha: None,
             },
         ],
         run_order: vec!["liberado".to_string(), "pi".to_string()],
@@ -270,10 +272,12 @@ fn engine_succeeds_when_both_harnesses_pass() {
             HarnessRequest {
                 id: "liberado".to_string(),
                 binary: Some(ok_harness.clone()),
+                git_sha: None,
             },
             HarnessRequest {
                 id: "pi".to_string(),
                 binary: Some(ok_harness),
+                git_sha: None,
             },
         ],
         run_order: vec!["liberado".to_string(), "pi".to_string()],

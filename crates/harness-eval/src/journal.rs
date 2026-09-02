@@ -507,6 +507,7 @@ mod tests {
             harnesses: vec![HarnessRequest {
                 id: "liberado".to_string(),
                 binary: None,
+                git_sha: None,
             }],
             run_order: vec!["liberado".to_string()],
             model: ModelPins {

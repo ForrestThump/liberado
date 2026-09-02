@@ -96,6 +96,22 @@ pub struct HarnessRequest {
     pub id: String,
     #[serde(default)]
     pub binary: Option<PathBuf>,
+    /// Upstream git commit this binary was built from. Recorded for C3 pins.
+    ///
+    /// Omitted from serialization when unset so existing Liberado/Pi job JSON
+    /// and experiment ids stay stable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub git_sha: Option<String>,
+}
+
+impl HarnessRequest {
+    pub fn new(id: impl Into<String>) -> Self {
+        Self {
+            id: id.into(),
+            binary: None,
+            git_sha: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -186,21 +202,8 @@ pub struct JobSpec {
     pub experiment_id: String,
 }
 
-/// The default run order: Liberado first, then pi. This is the historical order and the fallback
-/// when a job does not declare one.
-pub fn default_run_order() -> Vec<String> {
-    vec!["liberado".to_string(), "pi".to_string()]
-}
-
-/// Alternate the run order for a new job so the systematic "first harness" bias cancels out across
-/// jobs. Even job counts run Liberado first; odd counts run pi first.
-pub fn alternate_run_order(job_count: usize) -> Vec<String> {
-    if job_count.is_multiple_of(2) {
-        default_run_order()
-    } else {
-        vec!["pi".to_string(), "liberado".to_string()]
-    }
-}
+mod harness_ids;
+pub use harness_ids::*;
 
 fn validate_job_version(version: u32) -> Result<(), String> {
     if version != JOB_SPEC_VERSION {
@@ -209,19 +212,39 @@ fn validate_job_version(version: u32) -> Result<(), String> {
     Ok(())
 }
 
-/// Harness ids must be known and unique.
+/// Harness ids must be known and unique. Hermes and Deep Agents are only valid as part of the
+/// four-harness C3 set. Liberado/Pi one- and two-harness jobs stay valid.
 fn validate_harness_list(harnesses: &[HarnessRequest]) -> Result<(), String> {
+    validate_unique_known_harnesses(harnesses)?;
+    require_four_way_when_c3(harnesses)
+}
+
+fn validate_unique_known_harnesses(harnesses: &[HarnessRequest]) -> Result<(), String> {
     if harnesses.is_empty() {
         return Err("at least one harness is required".to_string());
     }
     let mut ids = std::collections::BTreeSet::new();
     for harness in harnesses {
-        if !matches!(harness.id.as_str(), "liberado" | "pi") {
+        if !is_known_harness_id(&harness.id) {
             return Err(format!("unsupported harness '{}'", harness.id));
         }
         if !ids.insert(&harness.id) {
             return Err(format!("duplicate harness '{}'", harness.id));
         }
+    }
+    Ok(())
+}
+
+fn require_four_way_when_c3(harnesses: &[HarnessRequest]) -> Result<(), String> {
+    let id_list: Vec<&str> = harnesses.iter().map(|h| h.id.as_str()).collect();
+    let wants_c3 = id_list
+        .iter()
+        .any(|id| matches!(*id, HARNESS_HERMES | HARNESS_DEEPAGENTS));
+    if wants_c3 && !is_four_way_set(&id_list) {
+        return Err(
+            "hermes and deepagents require the four-harness C3 set (liberado, pi, hermes, deepagents)"
+                .to_string(),
+        );
     }
     Ok(())
 }
@@ -533,107 +556,5 @@ pub fn sha256(bytes: &[u8]) -> String {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn spec() -> JobSpec {
-        JobSpec {
-            version: JOB_SPEC_VERSION,
-            job_id: JobId::new(),
-            submitted_at: Utc::now(),
-            repository: PathBuf::from("C:/repo"),
-            base_revision: "main".to_string(),
-            task: TaskBundle::new("task.txt", "Fix the item".to_string()).unwrap(),
-            harnesses: vec![
-                HarnessRequest {
-                    id: "liberado".to_string(),
-                    binary: None,
-                },
-                HarnessRequest {
-                    id: "pi".to_string(),
-                    binary: None,
-                },
-            ],
-            run_order: default_run_order(),
-            model: ModelPins {
-                provider: "openrouter".to_string(),
-                model: "deepseek/test".to_string(),
-                base_url: "https://openrouter.ai/api/v1".to_string(),
-                credential_alias: "openrouter-default".to_string(),
-                thinking: "high".to_string(),
-                max_turns: 400,
-                sampling: SAMPLING_OMITTED.to_string(),
-            },
-            limits: ResourceLimits::default(),
-            verifier: VerifierProfile::WorkspaceTests,
-            task_aware_context: true,
-            acceptance: None,
-            experiment: None,
-            experiment_id: String::new(),
-        }
-        .finalize()
-        .unwrap()
-    }
-
-    #[test]
-    fn immutable_pin_change_invalidates_experiment_id() {
-        let mut value = spec();
-        value.model.max_turns -= 1;
-        assert!(value.validate().unwrap_err().contains("experiment id"));
-    }
-
-    #[test]
-    fn task_content_is_bound_to_its_digest() {
-        let mut value = spec();
-        value.task.text.push_str(" changed");
-        assert!(value.validate().unwrap_err().contains("task digest"));
-    }
-
-    #[test]
-    fn verifier_repairs_are_opt_in_for_fair_comparisons() {
-        assert_eq!(ResourceLimits::default().verifier_repair_attempts, 0);
-    }
-
-    #[test]
-    fn sampling_pin_rejects_values_not_applied_by_either_client() {
-        let mut value = spec();
-        value.model.sampling = "0.1".to_string();
-        assert!(value.validate().unwrap_err().contains("sampling"));
-    }
-
-    #[test]
-    fn run_order_must_be_a_permutation_of_harness_ids() {
-        let mut value = spec();
-        value.run_order = vec!["pi".to_string()];
-        assert!(
-            value
-                .validate()
-                .unwrap_err()
-                .contains("run_order must be a permutation")
-        );
-
-        let mut value = spec();
-        value.run_order = vec!["pi".to_string(), "pi".to_string()];
-        assert!(
-            value
-                .validate()
-                .unwrap_err()
-                .contains("run_order must be a permutation")
-        );
-    }
-
-    #[test]
-    fn run_order_is_not_part_of_the_experiment_id() {
-        let mut value = spec();
-        let id = value.experiment_id.clone();
-        value.run_order = vec!["pi".to_string(), "liberado".to_string()];
-        assert_eq!(value.compute_experiment_id().unwrap(), id);
-    }
-
-    #[test]
-    fn alternate_run_order_flips_on_parity() {
-        assert_eq!(alternate_run_order(0), vec!["liberado", "pi"]);
-        assert_eq!(alternate_run_order(1), vec!["pi", "liberado"]);
-        assert_eq!(alternate_run_order(2), vec!["liberado", "pi"]);
-    }
-}
+#[path = "contract_tests.rs"]
+mod tests;

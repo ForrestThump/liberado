@@ -15,6 +15,22 @@ pub struct HarnessExecution {
     pub exit_code: i32,
 }
 
+/// Default PATH program for an external harness. Liberado is built from the pinned worktree
+/// and has no PATH default.
+pub fn default_path_program(harness_id: &str) -> Option<&'static str> {
+    match harness_id {
+        "pi" => Some(if cfg!(windows) { "pi.cmd" } else { "pi" }),
+        "hermes" => Some(if cfg!(windows) {
+            "hermes.cmd"
+        } else {
+            "hermes"
+        }),
+        // Coding CLI from langchain-ai/deepagents (`deepagents-code` / `dcode`).
+        "deepagents" => Some(if cfg!(windows) { "dcode.cmd" } else { "dcode" }),
+        _ => None,
+    }
+}
+
 /// One harness launch implementation.
 ///
 /// The coordinator owns worktrees, common pins, the verifier, preservation, and result
@@ -34,4 +50,21 @@ pub trait HarnessAdapter {
     /// The prompt is passed the way this harness expects it (raw text for Liberado, an `@file`
     /// reference for pi).
     fn run(&self, prompt: &str, stem: &str) -> Result<i32, Box<dyn Error>>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::default_path_program;
+
+    #[test]
+    fn path_defaults_cover_the_external_c3_harnesses() {
+        assert!(default_path_program("pi").is_some());
+        assert!(default_path_program("hermes").is_some());
+        assert_eq!(
+            default_path_program("deepagents").map(|name| name.trim_end_matches(".cmd")),
+            Some("dcode")
+        );
+        assert!(default_path_program("liberado").is_none());
+        assert!(default_path_program("cline").is_none());
+    }
 }
