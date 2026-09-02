@@ -43,9 +43,9 @@ pub fn SlashPalette(
     /// disagrees with what completion would do.
     input: String,
     selected: usize,
-    /// Tapping a row accepts it — the phone equivalent of Tab, and the reason this is a list of
-    /// buttons rather than styled text.
-    on_pick: EventHandler<usize>,
+    /// Tapping a row runs that exact command — the phone equivalent of selecting it and pressing
+    /// Enter, and the reason this is a list of buttons rather than styled text.
+    on_run: EventHandler<String>,
 ) -> Element {
     let matches = matches_for(&input);
     if matches.is_empty() {
@@ -57,12 +57,12 @@ pub fn SlashPalette(
 
     let hint = if total > MAX_VISIBLE {
         format!(
-            "{}/{} \u{00B7} Tab fill \u{00B7} Enter run",
+            "{}/{} \u{00B7} Tap run \u{00B7} Tab fill \u{00B7} Enter run",
             selected + 1,
             total
         )
     } else {
-        "Tab fill \u{00B7} Enter run".to_string()
+        "Tap run \u{00B7} Tab fill \u{00B7} Enter run".to_string()
     };
 
     rsx! {
@@ -76,6 +76,7 @@ pub fn SlashPalette(
                 for (offset, spec) in matches[start..end].iter().enumerate() {
                     {
                         let idx = start + offset;
+                        let command = spec.insert.to_string();
                         let cls = if idx == selected {
                             "slash-row selected"
                         } else {
@@ -86,7 +87,7 @@ pub fn SlashPalette(
                                 key: "{spec.name}",
                                 class: "{cls}",
                                 r#type: "button",
-                                onclick: move |_| on_pick.call(idx),
+                                onclick: move |_| on_run.call(command.clone()),
                                 span { class: "slash-row-name", "{spec.name}" }
                                 span { class: "slash-row-desc", "{spec.description}" }
                             }
