@@ -10,7 +10,7 @@ use std::path::Path;
 
 use super::{
     BASELINE_FILE, CRAP_CEILING, CRAP_REGRESSION_MIN, CURRENT_REPORT, CiLog, LCOV_FILE,
-    baseline_has_entries, emit_crap_failure, run_cmd,
+    baseline_has_entries, emit_crap_failure, run_cmd, write_crap_json,
 };
 
 pub(super) fn compare(
@@ -20,17 +20,18 @@ pub(super) fn compare(
     let fail_above = !baseline_has_entries(&log.root.join(BASELINE_FILE));
     run_cmd(log, "cargo", &compare_args(fail_regression, fail_above))
         .map_err(|error| emit_crap_failure(fail_regression, error))?;
-    apply_ceiling_when_baseline_exists(&log.root, fail_above)
+    apply_ceiling_when_baseline_exists(log, fail_above)
 }
 
 fn apply_ceiling_when_baseline_exists(
-    root: &Path,
+    log: &CiLog,
     fail_above: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     if fail_above {
         return Ok(());
     }
-    enforce(root, CRAP_CEILING).map_err(|error| emit_crap_failure(false, error))
+    write_crap_json(log, CURRENT_REPORT)?;
+    enforce(&log.root, CRAP_CEILING).map_err(|error| emit_crap_failure(false, error))
 }
 
 pub(super) fn compare_args(fail_regression: bool, fail_above: bool) -> Vec<&'static str> {

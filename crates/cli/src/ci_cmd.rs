@@ -252,7 +252,6 @@ pub(crate) fn crap_for_root(root: &Path) -> Result<(), Box<dyn std::error::Error
 /// Check, then replace `crap-baseline.json` with this run's scores.
 fn crap_ratchet(log: &CiLog) -> Result<(), Box<dyn std::error::Error>> {
     generate_lcov(log)?;
-    write_crap_json(log, CURRENT_REPORT)?;
     compare_to_baseline(log)?;
     write_and_stage_ratcheted_baseline(log)
 }
@@ -326,7 +325,7 @@ fn write_baseline(log: &CiLog) -> Result<(), Box<dyn std::error::Error>> {
     write_crap_json(log, BASELINE_FILE)
 }
 
-fn write_crap_json(log: &CiLog, output: &str) -> Result<(), Box<dyn std::error::Error>> {
+pub(super) fn write_crap_json(log: &CiLog, output: &str) -> Result<(), Box<dyn std::error::Error>> {
     require_crap(&log.root)?;
     let mut args = CRAP_REPORT_ARGS.to_vec();
     args.push(output);
