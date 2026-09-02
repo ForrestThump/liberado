@@ -49,7 +49,9 @@ Authority model: [doc-authority.md](spec/reference/doc-authority.md).
 | [docs/future-work/coder-eval-curriculum.md](future-work/coder-eval-curriculum.md) | plan | active | implementation | coding-harness | coder-eval-curriculum |
 | [docs/future-work/coder-harness-reliability-2026-08.md](future-work/coder-harness-reliability-2026-08.md) | finding | active | evidence | coding-harness | coder-harness-reliability-2026-08 |
 | [docs/future-work/coding-tui-plan.md](future-work/coding-tui-plan.md) | plan | active | implementation | coding-harness | coding-tui |
+| [docs/future-work/coding-worker-control-plane.md](future-work/coding-worker-control-plane.md) | plan | draft | advisory | coding-harness | coding-worker-control-plane |
 | [docs/future-work/context-compaction-viewport-rearchitecture.md](future-work/context-compaction-viewport-rearchitecture.md) | plan | active | implementation | chat | context-compaction-viewport |
+| [docs/future-work/cross-harness-baseline.md](future-work/cross-harness-baseline.md) | plan | active | implementation | coding-harness | cross-harness-baseline |
 | [docs/future-work/harness-study-2026-08.md](future-work/harness-study-2026-08.md) | finding | active | advisory | coding-harness | harness-study-2026-08 |
 | [docs/future-work/heuristics-tuning-engine-plan.md](future-work/heuristics-tuning-engine-plan.md) | plan | active | implementation | tuning | heuristics-tuning-engine |
 | [docs/future-work/latency-and-routing-observability-plan.md](future-work/latency-and-routing-observability-plan.md) | plan | active | implementation | observability | latency-routing-observability |
@@ -61,6 +63,9 @@ Authority model: [doc-authority.md](spec/reference/doc-authority.md).
 | [docs/future-work/parallel-deliverables-2026-08-round-3.md](future-work/parallel-deliverables-2026-08-round-3.md) | plan | active | implementation | process | parallel-deliverables-r3 |
 | [docs/future-work/paseo-liberado-integration-roadmap.md](future-work/paseo-liberado-integration-roadmap.md) | plan | active | implementation | acp | paseo-liberado-integration |
 | [docs/future-work/pr-dispatch-vtcode-no-write-finding.md](future-work/pr-dispatch-vtcode-no-write-finding.md) | finding | active | evidence | coding-harness | vtcode-no-write |
+| [docs/future-work/research/README.md](future-work/research/README.md) | index | active | advisory | docs | — |
+| [docs/future-work/research/agent-orchestration-idea-from-Sol.md](future-work/research/agent-orchestration-idea-from-Sol.md) | finding | historical | advisory | coding-harness | coding-worker-control-plane-source |
+| [docs/future-work/research/bob-martin-critique.md](future-work/research/bob-martin-critique.md) | finding | historical | advisory | coding-harness | bob-martin-critique |
 | [docs/future-work/rust-native-agentic-coder-plan.md](future-work/rust-native-agentic-coder-plan.md) | plan | active | implementation | coding-harness | agentic-mesh-coding-pack |
 | [docs/future-work/sysmap-generic-core-plan.md](future-work/sysmap-generic-core-plan.md) | plan | active | implementation | tooling | — |
 | [docs/future-work/token-cost-accounting-plan.md](future-work/token-cost-accounting-plan.md) | plan | active | implementation | token-economics | token-cost-accounting |

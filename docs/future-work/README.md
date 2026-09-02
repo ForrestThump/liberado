@@ -29,6 +29,7 @@ ongoing findings, and current evidence. Implemented and superseded plans are arc
 | [coder-harness-reliability-2026-08.md](coder-harness-reliability-2026-08.md) | finding | coding-harness | evidence |
 | [coding-tui-plan.md](coding-tui-plan.md) | plan | coding-harness | implementation |
 | [context-compaction-viewport-rearchitecture.md](context-compaction-viewport-rearchitecture.md) | plan | chat | implementation |
+| [cross-harness-baseline.md](cross-harness-baseline.md) | plan | coding-harness | implementation |
 | [harness-study-2026-08.md](harness-study-2026-08.md) | finding | coding-harness | advisory |
 | [heuristics-tuning-engine-plan.md](heuristics-tuning-engine-plan.md) | plan | tuning | implementation |
 | [latency-and-routing-observability-plan.md](latency-and-routing-observability-plan.md) | plan | observability | implementation |
@@ -55,6 +56,7 @@ Prefer archive/ for completed plans.
 | Doc | Status | Kind |
 |-----|--------|------|
 | [cadence-triggered-maintenance-agents.md](cadence-triggered-maintenance-agents.md) | draft | plan |
+| [coding-worker-control-plane.md](coding-worker-control-plane.md) | draft | plan |
 | [model-knob-profiles.md](model-knob-profiles.md) | draft | plan |
 
 Start every planning session at [roadmap.md](../roadmap.md).

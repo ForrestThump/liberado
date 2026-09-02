@@ -84,6 +84,7 @@ resource budget. Tool style and turn count are diagnostic measures, not the prod
 Do this in order:
 
 1. Publish the controlled cross-harness baseline described by backlog item 0.7 / C3.
+   Spec: [`cross-harness-baseline.md`](future-work/cross-harness-baseline.md).
 2. Measure the completion gate off and on before changing its default.
 3. Change one evidence-selected mechanism at a time.
 4. Finish dedicated goal-view panes after measurement and unattended correctness work.
@@ -98,7 +99,8 @@ Report:
 
 Read [`coder-harness-reliability-2026-08.md`](future-work/coder-harness-reliability-2026-08.md)
 before proposing a coding-pack fix. It records failed hypotheses as well as successful repairs.
-Use [`harness-comparisons.md`](spec/reference/harness-comparisons.md) for the controlled-run contract.
+Use [`harness-comparisons.md`](spec/reference/harness-comparisons.md) for the controlled-run
+contract. The experiment itself is [`cross-harness-baseline.md`](future-work/cross-harness-baseline.md).
 
 ### Goal, graph, loop, and surface order
 
@@ -126,6 +128,8 @@ These documents preserve possible directions. They are not selectable work:
 - [Per-model knob profiles](future-work/model-knob-profiles.md), until controlled runs justify them.
 - [Cadence-triggered maintenance agents](future-work/cadence-triggered-maintenance-agents.md), until
   ordinary unattended goals are reliable.
+- [Coding-worker control plane](future-work/coding-worker-control-plane.md), until C3 is published
+  and that table shows a reason to run an external harness as a production worker.
 - Tier 2 model-in-the-loop conformance, unless a change cannot be verified deterministically.
 
 The active implementation order is always the

@@ -53,7 +53,7 @@ build output out of the window is the single highest-value change on this list.
 **Landed (PR #167).** Command output that exceeds the cap, and any oversized tool result when the
 executor has a spill directory, is written under `.liberado/offload`. The model sees a head+tail
 preview plus a `read_file` path. A controlled rerun that measures accepted-result cost is still
-0.7 / C3.
+0.7 / C3 ([`cross-harness-baseline.md`](cross-harness-baseline.md)).
 
 It also fixes a correctness problem we already hit: a 120s command timeout once returned *no output
 at all*, and a 500-character clip dropped the part of a compiler error that explained the run.
@@ -196,14 +196,17 @@ one setting.
 3. ~~**Emit both streams from Liberado's common executor/provider boundary.**~~ Landed in PR #151
    (backlog 0.6).
 4. **Instrument the three pinned forks and establish the repeated baseline.** This is one item
-   shared by backlog 0.7 and C3. It is also the rerun that should say whether 0.9 paid for itself.
-   Compare 4 on B1 is n = 1 and does not close this. The ship-bar excerpt is still last-N lines
-   of the test log (a passing `wire` crate on compares 4 and 9); prefer FAILED / error lines
-   or the first failing package.
+   shared by backlog 0.7 and C3. The experiment spec is
+   [`cross-harness-baseline.md`](cross-harness-baseline.md). It is also the rerun that should say
+   whether 0.9 paid for itself. Compare 4 on B1 is n = 1 and does not close this. The ship-bar
+   excerpt is still last-N lines of the test log (a passing `wire` crate on compares 4 and 9);
+   prefer FAILED / error lines or the first failing package.
 5. **Measure the completion gate against that baseline.** Do not change its default from one or two
    anecdotes.
 6. ~~**Implement one evidence-selected lever.**~~ Landed in PR #167 (tool-output offload). Retain
-   it only if the 0.7 rerun improves accepted-result cost or quality.
+   it only if the 0.7 rerun
+   ([`cross-harness-baseline.md`](cross-harness-baseline.md)) improves accepted-result cost or
+   quality.
 7. **Mutation landed check** (#6), **side-effect classification** (#5), cache work (#3) and
    compaction file-op lists (#4) follow when evidence supports them or a correctness task touches
    that area.

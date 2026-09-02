@@ -2,6 +2,10 @@
 
 **Status**: current
 
+This page is the runner contract: how `liberado coder compare` pins a job, launches harnesses, and
+preserves artifacts. The C3 experiment that uses this runner — four harnesses, repeats, published
+score — is [`cross-harness-baseline.md`](../../future-work/cross-harness-baseline.md).
+
 `liberado coder compare` owns the durable infrastructure for a Liberado/Pi comparison. Do not
 assemble long-lived run policy in PowerShell. A wrapper can supply arguments, but worktree setup,
 build-cache isolation, process order, Git preservation, and artifact collection are compiled Rust
