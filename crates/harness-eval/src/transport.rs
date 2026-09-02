@@ -395,6 +395,7 @@ mod tests {
             harnesses: vec![HarnessRequest {
                 id: "pi".to_string(),
                 binary: None,
+                git_sha: None,
             }],
             run_order: vec!["pi".to_string()],
             model: ModelPins {
@@ -470,6 +471,7 @@ mod tests {
             harnesses: vec![HarnessRequest {
                 id: "pi".to_string(),
                 binary: None,
+                git_sha: None,
             }],
             run_order: vec!["pi".to_string()],
             model: ModelPins {
@@ -533,6 +535,7 @@ mod tests {
             harnesses: vec![HarnessRequest {
                 id: "liberado".to_string(),
                 binary: None,
+                git_sha: None,
             }],
             run_order: vec!["liberado".to_string()],
             model: ModelPins {

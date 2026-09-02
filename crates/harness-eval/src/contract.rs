@@ -96,6 +96,22 @@ pub struct HarnessRequest {
     pub id: String,
     #[serde(default)]
     pub binary: Option<PathBuf>,
+    /// Upstream git commit this binary was built from. Recorded for C3 pins.
+    ///
+    /// Omitted from serialization when unset so existing Liberado/Pi job JSON
+    /// and experiment ids stay stable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub git_sha: Option<String>,
+}
+
+impl HarnessRequest {
+    pub fn new(id: impl Into<String>) -> Self {
+        Self {
+            id: id.into(),
+            binary: None,
+            git_sha: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -186,19 +202,89 @@ pub struct JobSpec {
     pub experiment_id: String,
 }
 
+/// Known comparison harness ids. New adapters must be added here and to
+/// [`is_supported_adapter_set`] before the coordinator will launch them.
+pub const HARNESS_LIBERADO: &str = "liberado";
+pub const HARNESS_PI: &str = "pi";
+pub const HARNESS_HERMES: &str = "hermes";
+pub const HARNESS_DEEPAGENTS: &str = "deepagents";
+
 /// The default run order: Liberado first, then pi. This is the historical order and the fallback
 /// when a job does not declare one.
 pub fn default_run_order() -> Vec<String> {
-    vec!["liberado".to_string(), "pi".to_string()]
+    vec![HARNESS_LIBERADO.to_string(), HARNESS_PI.to_string()]
 }
 
-/// Alternate the run order for a new job so the systematic "first harness" bias cancels out across
-/// jobs. Even job counts run Liberado first; odd counts run pi first.
+/// Canonical four-harness C3 order. Rotation starts here so "who runs first" is fair.
+pub fn default_four_way_run_order() -> Vec<String> {
+    vec![
+        HARNESS_LIBERADO.to_string(),
+        HARNESS_PI.to_string(),
+        HARNESS_HERMES.to_string(),
+        HARNESS_DEEPAGENTS.to_string(),
+    ]
+}
+
+pub fn is_known_harness_id(id: &str) -> bool {
+    matches!(
+        id,
+        HARNESS_LIBERADO | HARNESS_PI | HARNESS_HERMES | HARNESS_DEEPAGENTS
+    )
+}
+
+fn sorted_ids<'a>(ids: &'a [&str]) -> Vec<&'a str> {
+    let mut sorted = ids.to_vec();
+    sorted.sort_unstable();
+    sorted
+}
+
+/// Liberado/Pi two-harness jobs. The historical v1 set.
+pub fn is_two_way_set(ids: &[&str]) -> bool {
+    sorted_ids(ids) == [HARNESS_LIBERADO, HARNESS_PI]
+}
+
+/// C3 four-harness set. Sorted comparison so request order does not matter.
+pub fn is_four_way_set(ids: &[&str]) -> bool {
+    sorted_ids(ids)
+        == [
+            HARNESS_DEEPAGENTS,
+            HARNESS_HERMES,
+            HARNESS_LIBERADO,
+            HARNESS_PI,
+        ]
+}
+
+/// The coordinator prepares worktrees for two-way Liberado/Pi jobs or the four-way C3 set.
+pub fn is_supported_adapter_set(ids: &[&str]) -> bool {
+    is_two_way_set(ids) || is_four_way_set(ids)
+}
+
+/// Alternate the run order for a new two-way job so the systematic "first harness" bias cancels
+/// out across jobs. Even job counts run Liberado first; odd counts run pi first.
 pub fn alternate_run_order(job_count: usize) -> Vec<String> {
-    if job_count.is_multiple_of(2) {
+    rotate_run_order(job_count, &default_run_order())
+}
+
+/// Rotate `harness_ids` so each job starts with a different harness. Two-way jobs keep today's
+/// Liberado/pi alternation because that is `rotate_left` on [`default_run_order`].
+pub fn rotate_run_order(job_count: usize, harness_ids: &[String]) -> Vec<String> {
+    if harness_ids.is_empty() {
+        return Vec::new();
+    }
+    let mut order = harness_ids.to_vec();
+    let shift = job_count % order.len();
+    order.rotate_left(shift);
+    order
+}
+
+/// Canonical order used as the rotation base for a requested set.
+pub fn canonical_run_order(ids: &[&str]) -> Vec<String> {
+    if is_four_way_set(ids) {
+        default_four_way_run_order()
+    } else if is_two_way_set(ids) {
         default_run_order()
     } else {
-        vec!["pi".to_string(), "liberado".to_string()]
+        ids.iter().map(|id| (*id).to_string()).collect()
     }
 }
 
@@ -209,19 +295,30 @@ fn validate_job_version(version: u32) -> Result<(), String> {
     Ok(())
 }
 
-/// Harness ids must be known and unique.
+/// Harness ids must be known and unique. Hermes and Deep Agents are only valid as part of the
+/// four-harness C3 set. Liberado/Pi one- and two-harness jobs stay valid.
 fn validate_harness_list(harnesses: &[HarnessRequest]) -> Result<(), String> {
     if harnesses.is_empty() {
         return Err("at least one harness is required".to_string());
     }
     let mut ids = std::collections::BTreeSet::new();
     for harness in harnesses {
-        if !matches!(harness.id.as_str(), "liberado" | "pi") {
+        if !is_known_harness_id(&harness.id) {
             return Err(format!("unsupported harness '{}'", harness.id));
         }
         if !ids.insert(&harness.id) {
             return Err(format!("duplicate harness '{}'", harness.id));
         }
+    }
+    let id_list: Vec<&str> = harnesses.iter().map(|h| h.id.as_str()).collect();
+    let wants_c3 = id_list
+        .iter()
+        .any(|id| matches!(*id, HARNESS_HERMES | HARNESS_DEEPAGENTS));
+    if wants_c3 && !is_four_way_set(&id_list) {
+        return Err(
+            "hermes and deepagents require the four-harness C3 set (liberado, pi, hermes, deepagents)"
+                .to_string(),
+        );
     }
     Ok(())
 }
@@ -548,10 +645,12 @@ mod tests {
                 HarnessRequest {
                     id: "liberado".to_string(),
                     binary: None,
+                    git_sha: None,
                 },
                 HarnessRequest {
                     id: "pi".to_string(),
                     binary: None,
+                    git_sha: None,
                 },
             ],
             run_order: default_run_order(),
@@ -635,5 +734,83 @@ mod tests {
         assert_eq!(alternate_run_order(0), vec!["liberado", "pi"]);
         assert_eq!(alternate_run_order(1), vec!["pi", "liberado"]);
         assert_eq!(alternate_run_order(2), vec!["liberado", "pi"]);
+    }
+
+    #[test]
+    fn four_way_harness_list_is_accepted() {
+        let mut value = spec();
+        value.harnesses = vec![
+            HarnessRequest::new("liberado"),
+            HarnessRequest::new("pi"),
+            HarnessRequest::new("hermes"),
+            HarnessRequest::new("deepagents"),
+        ];
+        value.run_order = default_four_way_run_order();
+        value = value.finalize().unwrap();
+        value.validate().unwrap();
+    }
+
+    #[test]
+    fn unknown_harness_id_is_rejected() {
+        let mut value = spec();
+        value.harnesses = vec![
+            HarnessRequest::new("liberado"),
+            HarnessRequest::new("cline"),
+        ];
+        value.run_order = vec!["liberado".into(), "cline".into()];
+        let err = value.finalize().unwrap_err();
+        assert!(err.contains("unsupported harness 'cline'"), "{err}");
+    }
+
+    #[test]
+    fn hermes_without_the_four_way_set_is_rejected() {
+        let mut value = spec();
+        value.harnesses = vec![
+            HarnessRequest::new("liberado"),
+            HarnessRequest::new("pi"),
+            HarnessRequest::new("hermes"),
+        ];
+        value.run_order = vec!["liberado".into(), "pi".into(), "hermes".into()];
+        let err = value.finalize().unwrap_err();
+        assert!(err.contains("four-harness C3 set"), "{err}");
+    }
+
+    #[test]
+    fn four_way_run_order_rotates_fairly() {
+        let ids = default_four_way_run_order();
+        assert_eq!(
+            rotate_run_order(0, &ids),
+            vec!["liberado", "pi", "hermes", "deepagents"]
+        );
+        assert_eq!(
+            rotate_run_order(1, &ids),
+            vec!["pi", "hermes", "deepagents", "liberado"]
+        );
+        assert_eq!(
+            rotate_run_order(2, &ids),
+            vec!["hermes", "deepagents", "liberado", "pi"]
+        );
+        assert_eq!(
+            rotate_run_order(3, &ids),
+            vec!["deepagents", "liberado", "pi", "hermes"]
+        );
+        assert_eq!(rotate_run_order(4, &ids), ids);
+    }
+
+    #[test]
+    fn known_harness_ids_are_the_c3_set() {
+        assert!(is_known_harness_id("liberado"));
+        assert!(is_known_harness_id("pi"));
+        assert!(is_known_harness_id("hermes"));
+        assert!(is_known_harness_id("deepagents"));
+        assert!(!is_known_harness_id("deep-agents"));
+        assert!(is_supported_adapter_set(&["liberado", "pi"]));
+        assert!(is_supported_adapter_set(&[
+            "deepagents",
+            "hermes",
+            "liberado",
+            "pi"
+        ]));
+        assert!(!is_supported_adapter_set(&["liberado", "pi", "hermes"]));
     }
 }

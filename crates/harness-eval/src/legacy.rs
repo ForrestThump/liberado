@@ -71,6 +71,10 @@ pub(crate) struct RunArgs {
     acceptance_overlay: Option<PathBuf>,
     liberado_bin: Option<PathBuf>,
     pi_bin: Option<PathBuf>,
+    hermes_bin: Option<PathBuf>,
+    deep_agents_bin: Option<PathBuf>,
+    hermes_git_sha: Option<String>,
+    deep_agents_git_sha: Option<String>,
     cancel_file: Option<PathBuf>,
 }
 
@@ -171,6 +175,7 @@ pub fn prepare(args: &[String]) -> Result<(), Box<dyn Error>> {
         &opts.revision,
         &base_commit,
         opts.compile_timeout_secs,
+        &["liberado", "pi"],
     )
 }
 
@@ -183,6 +188,7 @@ pub(crate) fn prepare_parsed(
     revision: &str,
     base_commit: &str,
     compile_timeout_secs: u64,
+    harness_ids: &[&str],
 ) -> Result<(), Box<dyn Error>> {
     let run_root = child_process_path(run_root);
     let source_root = child_process_path(source_root);
@@ -202,7 +208,7 @@ pub(crate) fn prepare_parsed(
     fs::create_dir_all(&artifacts)?;
 
     let mut harnesses = BTreeMap::new();
-    for name in ["liberado", "pi"] {
+    for name in harness_ids {
         let layout = HarnessLayout {
             worktree: worktrees.join(name),
             target_dir: targets.join(name),
@@ -211,7 +217,7 @@ pub(crate) fn prepare_parsed(
         fs::create_dir_all(&layout.target_dir)?;
         fs::create_dir_all(layout.artifacts.join("traces"))?;
         fs::create_dir_all(layout.artifacts.join("sessions"))?;
-        harnesses.insert(name.to_string(), layout);
+        harnesses.insert((*name).to_string(), layout);
     }
 
     let result = prepare_worktrees(&source_root, base_commit, &harnesses);
@@ -260,7 +266,8 @@ pub fn run(args: &[String]) -> Result<(), Box<dyn Error>> {
              [--thinking <level>] [--max-turns <n>] [--run-timeout-secs <n>] \
              [--verifier-repair-attempts <n>] [--task-aware-context] \
              [--acceptance-overlay <dir>] \
-             [--liberado-bin <path>] [--pi-bin <path>]"
+             [--liberado-bin <path>] [--pi-bin <path>] \
+             [--hermes-bin <path>] [--deep-agents-bin <path>]"
         );
         return Ok(());
     }
@@ -288,36 +295,12 @@ pub(crate) fn run_parsed(
         "prewarming isolated Cargo caches (timeout {}s each)",
         manifest.compile_timeout_secs
     );
-    for harness in ["liberado", "pi"] {
+    for harness in manifest.harnesses.keys() {
         warm_harness(&manifest, harness)?;
     }
 
     let run_slug = run_slug(&manifest.run_root);
-    let liberado_session = format!("{run_slug}-liberado");
-    let pi_session = format!("{run_slug}-pi");
-    let liberado = LiberadoAdapter {
-        manifest: &manifest,
-        args: &parsed,
-        task: &task,
-        session_id: &liberado_session,
-        credential: &credential,
-    };
-    let pi = PiAdapter {
-        manifest: &manifest,
-        args: &parsed,
-        session_id: &pi_session,
-        credential: &credential,
-    };
-    let mut adapters: Vec<&dyn HarnessAdapter> = vec![&liberado, &pi];
-    // Run in the declared order, not a hardcoded one. Unknown ids (rejected earlier by the job
-    // spec) sort last and therefore never run.
-    adapters.sort_by_key(|adapter| {
-        parsed
-            .run_order
-            .iter()
-            .position(|id| id.as_str() == adapter.id())
-            .unwrap_or(usize::MAX)
-    });
+    let adapters = adapters_for_run(&manifest, &parsed, &task, &credential, &run_slug);
 
     // Every adapter must be ready before the first paid model request.
     let preflights: std::collections::BTreeMap<String, Result<AdapterPreflight, String>> = adapters
@@ -408,6 +391,10 @@ pub(crate) fn run_args_from_spec(
             .map(|a| job_root.join(&a.directory)),
         liberado_bin: None,
         pi_bin: None,
+        hermes_bin: None,
+        deep_agents_bin: None,
+        hermes_git_sha: None,
+        deep_agents_git_sha: None,
         cancel_file: Some(job_root.join("cancel-requested")),
     };
     for harness in &spec.harnesses {
@@ -415,6 +402,15 @@ pub(crate) fn run_args_from_spec(
             match harness.id.as_str() {
                 "liberado" => args.liberado_bin = Some(binary.clone()),
                 "pi" => args.pi_bin = Some(binary.clone()),
+                "hermes" => args.hermes_bin = Some(binary.clone()),
+                "deepagents" => args.deep_agents_bin = Some(binary.clone()),
+                _ => {}
+            }
+        }
+        if let Some(sha) = &harness.git_sha {
+            match harness.id.as_str() {
+                "hermes" => args.hermes_git_sha = Some(sha.clone()),
+                "deepagents" => args.deep_agents_git_sha = Some(sha.clone()),
                 _ => {}
             }
         }
@@ -550,7 +546,7 @@ fn bounded_feedback(text: &str, max_bytes: usize) -> String {
 pub fn save(args: &[String]) -> Result<(), Box<dyn Error>> {
     if args == ["-h"] || args == ["--help"] {
         println!(
-            "usage: liberado coder compare save <run-dir> <liberado|pi> \
+            "usage: liberado coder compare save <run-dir> <liberado|pi|hermes|deepagents> \
              [--session-id <id>] [--exit-code <n>] [--verifier-exit-code <n>]"
         );
         return Ok(());
@@ -590,7 +586,9 @@ pub fn save(args: &[String]) -> Result<(), Box<dyn Error>> {
         index += 1;
     }
     if positional.len() != 2 {
-        return Err("usage: liberado coder compare save <run-dir> <liberado|pi>".into());
+        return Err(
+            "usage: liberado coder compare save <run-dir> <liberado|pi|hermes|deepagents>".into(),
+        );
     }
     let manifest = load_manifest(Path::new(&positional[0]))?;
     save_result(
@@ -647,6 +645,10 @@ fn parse_run_args(args: &[String]) -> Result<RunArgs, Box<dyn Error>> {
         acceptance_overlay: parsed.acceptance_overlay,
         liberado_bin: parsed.liberado_bin,
         pi_bin: parsed.pi_bin,
+        hermes_bin: parsed.hermes_bin,
+        deep_agents_bin: parsed.deep_agents_bin,
+        hermes_git_sha: parsed.hermes_git_sha,
+        deep_agents_git_sha: parsed.deep_agents_git_sha,
         cancel_file: parsed.cancel_file,
     })
 }
@@ -671,6 +673,10 @@ struct RunArgsBuilder {
     acceptance_overlay: Option<PathBuf>,
     liberado_bin: Option<PathBuf>,
     pi_bin: Option<PathBuf>,
+    hermes_bin: Option<PathBuf>,
+    deep_agents_bin: Option<PathBuf>,
+    hermes_git_sha: Option<String>,
+    deep_agents_git_sha: Option<String>,
     cancel_file: Option<PathBuf>,
 }
 
@@ -696,6 +702,10 @@ impl Default for RunArgsBuilder {
             acceptance_overlay: None,
             liberado_bin: None,
             pi_bin: None,
+            hermes_bin: None,
+            deep_agents_bin: None,
+            hermes_git_sha: None,
+            deep_agents_git_sha: None,
             cancel_file: None,
         }
     }
@@ -754,7 +764,29 @@ string_run_flag!(thinking_flag, "--thinking", thinking);
 path_run_flag!(task_flag, "--task", task);
 path_run_flag!(liberado_bin_flag, "--liberado-bin", liberado_bin);
 path_run_flag!(pi_bin_flag, "--pi-bin", pi_bin);
+path_run_flag!(hermes_bin_flag, "--hermes-bin", hermes_bin);
+path_run_flag!(deep_agents_bin_flag, "--deep-agents-bin", deep_agents_bin);
 path_run_flag!(cancel_file_flag, "--cancel-file", cancel_file);
+
+fn hermes_git_sha_flag(
+    args: &[String],
+    index: &mut usize,
+    parsed: &mut RunArgsBuilder,
+) -> Result<(), Box<dyn Error>> {
+    *index += 1;
+    parsed.hermes_git_sha = Some(value(args, *index, "--hermes-git-sha")?.to_string());
+    Ok(())
+}
+
+fn deep_agents_git_sha_flag(
+    args: &[String],
+    index: &mut usize,
+    parsed: &mut RunArgsBuilder,
+) -> Result<(), Box<dyn Error>> {
+    *index += 1;
+    parsed.deep_agents_git_sha = Some(value(args, *index, "--deep-agents-git-sha")?.to_string());
+    Ok(())
+}
 
 bool_run_flag!(
     task_aware_context_flag,
@@ -868,6 +900,10 @@ const RUN_FLAG_HANDLERS: &[(&str, FlagHandler)] = &[
     ("--acceptance-overlay", acceptance_overlay_flag),
     ("--liberado-bin", liberado_bin_flag),
     ("--pi-bin", pi_bin_flag),
+    ("--hermes-bin", hermes_bin_flag),
+    ("--deep-agents-bin", deep_agents_bin_flag),
+    ("--hermes-git-sha", hermes_git_sha_flag),
+    ("--deep-agents-git-sha", deep_agents_git_sha_flag),
     ("--cancel-file", cancel_file_flag),
 ];
 
@@ -1068,25 +1104,43 @@ fn write_run_pins(
         .map(overlay_fingerprint)
         .transpose()?
         .unwrap_or_else(|| "none".into());
-    fs::write(
-        manifest.run_root.join("pins.txt"),
-        format!(
-            "base_revision={}\nbase_commit={}\nprovider={}\nmodel={}\nthinking={}\nliberado_max_turns={}\npi_turn_cap=unset (pi native default)\ntool_surface=native (full tool catalog)\nrun_order={}\ncompile_timeout_secs={}\nverifier_repair_attempts={}\ntask_aware_context={}\nacceptance_overlay_hash={}\nsampling={}\n",
-            manifest.base_revision,
-            manifest.base_commit,
-            args.provider,
-            args.model,
-            args.thinking,
-            args.max_turns,
-            args.run_order.join(","),
-            manifest.compile_timeout_secs,
-            args.verifier_repair_attempts,
-            args.task_aware_context,
-            overlay_hash,
-            args.sampling,
-        ),
-    )?;
+    let mut pins = format!(
+        "base_revision={}\nbase_commit={}\nprovider={}\nmodel={}\nthinking={}\nliberado_max_turns={}\npi_turn_cap=unset (pi native default)\ntool_surface=native (full tool catalog)\nrun_order={}\ncompile_timeout_secs={}\nverifier_repair_attempts={}\ntask_aware_context={}\nacceptance_overlay_hash={}\nsampling={}\n",
+        manifest.base_revision,
+        manifest.base_commit,
+        args.provider,
+        args.model,
+        args.thinking,
+        args.max_turns,
+        args.run_order.join(","),
+        manifest.compile_timeout_secs,
+        args.verifier_repair_attempts,
+        args.task_aware_context,
+        overlay_hash,
+        args.sampling,
+    );
+    if args.run_order.iter().any(|id| id == "hermes") {
+        pins.push_str(&format!(
+            "hermes_bin={}\nhermes_git_sha={}\nhermes_turn_cap=unset (hermes native default; CLI --max-turns default 500)\n",
+            pin_bin(args.hermes_bin.as_deref(), "hermes"),
+            args.hermes_git_sha.as_deref().unwrap_or("unset"),
+        ));
+    }
+    if args.run_order.iter().any(|id| id == "deepagents") {
+        pins.push_str(&format!(
+            "deepagents_bin={}\ndeepagents_git_sha={}\ndeepagents_turn_cap=unset (deepagents native default; headless HITL safety cap 50)\n",
+            pin_bin(args.deep_agents_bin.as_deref(), "dcode"),
+            args.deep_agents_git_sha.as_deref().unwrap_or("unset"),
+        ));
+    }
+    fs::write(manifest.run_root.join("pins.txt"), pins)?;
     Ok(())
+}
+
+fn pin_bin(explicit: Option<&Path>, path_default: &str) -> String {
+    explicit
+        .map(path_text)
+        .unwrap_or_else(|| format!("PATH:{path_default}"))
 }
 
 fn capture_acceptance_overlay(
@@ -1326,11 +1380,56 @@ fn verify_harness(
     exit
 }
 
+fn adapters_for_run<'a>(
+    manifest: &'a CompareManifest,
+    args: &'a RunArgs,
+    task: &'a str,
+    credential: &'a ResolvedCredential,
+    run_slug: &str,
+) -> Vec<Box<dyn HarnessAdapter + 'a>> {
+    let mut adapters: Vec<Box<dyn HarnessAdapter + 'a>> = Vec::new();
+    for id in &args.run_order {
+        if !manifest.harnesses.contains_key(id) {
+            continue;
+        }
+        let session_id = format!("{run_slug}-{id}");
+        match id.as_str() {
+            "liberado" => adapters.push(Box::new(LiberadoAdapter {
+                manifest,
+                args,
+                task,
+                session_id,
+                credential,
+            })),
+            "pi" => adapters.push(Box::new(PiAdapter {
+                manifest,
+                args,
+                session_id,
+                credential,
+            })),
+            "hermes" => adapters.push(Box::new(HermesAdapter {
+                manifest,
+                args,
+                session_id,
+                credential,
+            })),
+            "deepagents" => adapters.push(Box::new(DeepAgentsAdapter {
+                manifest,
+                args,
+                session_id,
+                credential,
+            })),
+            _ => {}
+        }
+    }
+    adapters
+}
+
 struct LiberadoAdapter<'a> {
     manifest: &'a CompareManifest,
     args: &'a RunArgs,
     task: &'a str,
-    session_id: &'a str,
+    session_id: String,
     credential: &'a ResolvedCredential,
 }
 
@@ -1340,7 +1439,7 @@ impl HarnessAdapter for LiberadoAdapter<'_> {
     }
 
     fn session_id(&self) -> &str {
-        self.session_id
+        &self.session_id
     }
 
     fn preflight(&self) -> Result<AdapterPreflight, Box<dyn Error>> {
@@ -1357,7 +1456,7 @@ impl HarnessAdapter for LiberadoAdapter<'_> {
             self.manifest,
             self.args,
             self.task,
-            self.session_id,
+            &self.session_id,
             self.credential,
             "session",
         )?;
@@ -1373,7 +1472,7 @@ impl HarnessAdapter for LiberadoAdapter<'_> {
             self.manifest,
             self.args,
             prompt,
-            self.session_id,
+            &self.session_id,
             self.credential,
             stem,
         )
@@ -1383,7 +1482,7 @@ impl HarnessAdapter for LiberadoAdapter<'_> {
 struct PiAdapter<'a> {
     manifest: &'a CompareManifest,
     args: &'a RunArgs,
-    session_id: &'a str,
+    session_id: String,
     credential: &'a ResolvedCredential,
 }
 
@@ -1393,7 +1492,7 @@ impl HarnessAdapter for PiAdapter<'_> {
     }
 
     fn session_id(&self) -> &str {
-        self.session_id
+        &self.session_id
     }
 
     fn preflight(&self) -> Result<AdapterPreflight, Box<dyn Error>> {
@@ -1417,7 +1516,7 @@ impl HarnessAdapter for PiAdapter<'_> {
             self.manifest,
             self.args,
             &prompt,
-            self.session_id,
+            &self.session_id,
             self.credential,
             "session",
         )?;
@@ -1441,11 +1540,152 @@ impl HarnessAdapter for PiAdapter<'_> {
             self.manifest,
             self.args,
             &prompt_arg,
-            self.session_id,
+            &self.session_id,
             self.credential,
             stem,
         )
     }
+}
+
+struct HermesAdapter<'a> {
+    manifest: &'a CompareManifest,
+    args: &'a RunArgs,
+    session_id: String,
+    credential: &'a ResolvedCredential,
+}
+
+impl HarnessAdapter for HermesAdapter<'_> {
+    fn id(&self) -> &'static str {
+        "hermes"
+    }
+
+    fn session_id(&self) -> &str {
+        &self.session_id
+    }
+
+    fn preflight(&self) -> Result<AdapterPreflight, Box<dyn Error>> {
+        preflight_external_bin(
+            self.id(),
+            "Hermes",
+            self.args.hermes_bin.as_deref(),
+            crate::adapter::default_path_program(self.id()),
+        )
+    }
+
+    fn launch(&self) -> Result<HarnessExecution, Box<dyn Error>> {
+        let prompt = self.manifest.run_root.join("task.txt");
+        let exit_code = run_hermes(
+            self.manifest,
+            self.args,
+            &prompt,
+            &self.session_id,
+            self.credential,
+            "session",
+        )?;
+        Ok(HarnessExecution {
+            harness: self.id().to_string(),
+            session_id: self.session_id.clone(),
+            exit_code,
+        })
+    }
+
+    fn run(&self, prompt: &str, stem: &str) -> Result<i32, Box<dyn Error>> {
+        let path = self
+            .manifest
+            .run_root
+            .join("artifacts")
+            .join("hermes")
+            .join(format!("{stem}.prompt.txt"));
+        fs::write(&path, prompt)?;
+        run_hermes(
+            self.manifest,
+            self.args,
+            &path,
+            &self.session_id,
+            self.credential,
+            stem,
+        )
+    }
+}
+
+struct DeepAgentsAdapter<'a> {
+    manifest: &'a CompareManifest,
+    args: &'a RunArgs,
+    session_id: String,
+    credential: &'a ResolvedCredential,
+}
+
+impl HarnessAdapter for DeepAgentsAdapter<'_> {
+    fn id(&self) -> &'static str {
+        "deepagents"
+    }
+
+    fn session_id(&self) -> &str {
+        &self.session_id
+    }
+
+    fn preflight(&self) -> Result<AdapterPreflight, Box<dyn Error>> {
+        preflight_external_bin(
+            self.id(),
+            "Deep Agents",
+            self.args.deep_agents_bin.as_deref(),
+            crate::adapter::default_path_program(self.id()),
+        )
+    }
+
+    fn launch(&self) -> Result<HarnessExecution, Box<dyn Error>> {
+        let prompt = self.manifest.run_root.join("task.txt");
+        let exit_code = run_deepagents(
+            self.manifest,
+            self.args,
+            &prompt,
+            &self.session_id,
+            self.credential,
+            "session",
+        )?;
+        Ok(HarnessExecution {
+            harness: self.id().to_string(),
+            session_id: self.session_id.clone(),
+            exit_code,
+        })
+    }
+
+    fn run(&self, prompt: &str, stem: &str) -> Result<i32, Box<dyn Error>> {
+        let path = self
+            .manifest
+            .run_root
+            .join("artifacts")
+            .join("deepagents")
+            .join(format!("{stem}.prompt.txt"));
+        fs::write(&path, prompt)?;
+        run_deepagents(
+            self.manifest,
+            self.args,
+            &path,
+            &self.session_id,
+            self.credential,
+            stem,
+        )
+    }
+}
+
+fn preflight_external_bin(
+    harness: &str,
+    label: &str,
+    explicit: Option<&Path>,
+    path_default: Option<&str>,
+) -> Result<AdapterPreflight, Box<dyn Error>> {
+    let executable = explicit
+        .map(PathBuf::from)
+        .or_else(|| path_default.map(PathBuf::from))
+        .ok_or_else(|| format!("no executable configured for harness '{harness}'"))?;
+    if explicit.is_some() && !executable.is_file() {
+        return Err(format!("{label} binary does not exist: {}", executable.display()).into());
+    }
+    Ok(AdapterPreflight {
+        harness: harness.to_string(),
+        executable: path_text(&executable),
+    })
 }
 
 fn run_liberado(
@@ -1582,6 +1822,77 @@ fn run_pi(
         args.run_timeout_secs,
         args.cancel_file.as_deref(),
     )
+}
+
+fn run_hermes(
+    manifest: &CompareManifest,
+    args: &RunArgs,
+    prompt_file: &Path,
+    _session_id: &str,
+    credential: &ResolvedCredential,
+    stem: &str,
+) -> Result<i32, Box<dyn Error>> {
+    let layout = harness(manifest, "hermes")?;
+    let binary = args.hermes_bin.clone().unwrap_or_else(|| {
+        PathBuf::from(crate::adapter::default_path_program("hermes").unwrap_or("hermes"))
+    });
+    let home = layout.artifacts.join("home");
+    fs::create_dir_all(&home)?;
+    let mut cmd = std_command(&binary);
+    cmd.args(["chat", "--oneshot", "--query-file"])
+        .arg(prompt_file)
+        .args(["--provider", &args.provider, "--model", &args.model])
+        .args(["--reasoning", &args.thinking, "--yolo", "--source", "tool"])
+        .current_dir(&layout.worktree)
+        .env("CARGO_TARGET_DIR", &layout.target_dir)
+        .env("HERMES_HOME", &home)
+        .env(&args.api_key_env, credential.expose());
+    execute_logged(
+        &mut cmd,
+        layout,
+        stem,
+        args.run_timeout_secs,
+        args.cancel_file.as_deref(),
+    )
+}
+
+fn run_deepagents(
+    manifest: &CompareManifest,
+    args: &RunArgs,
+    prompt_file: &Path,
+    _session_id: &str,
+    credential: &ResolvedCredential,
+    stem: &str,
+) -> Result<i32, Box<dyn Error>> {
+    let layout = harness(manifest, "deepagents")?;
+    let binary = args.deep_agents_bin.clone().unwrap_or_else(|| {
+        PathBuf::from(crate::adapter::default_path_program("deepagents").unwrap_or("dcode"))
+    });
+    let home = layout.artifacts.join("home");
+    fs::create_dir_all(&home)?;
+    let model = deepagents_model(&args.provider, &args.model);
+    let mut cmd = std_command(&binary);
+    cmd.args(["--stdin", "--model", &model, "--shell-allow-list", "all"])
+        .current_dir(&layout.worktree)
+        .stdin(Stdio::from(File::open(prompt_file)?))
+        .env("CARGO_TARGET_DIR", &layout.target_dir)
+        .env("DEEPAGENTS_HOME", &home)
+        .env(&args.api_key_env, credential.expose());
+    execute_logged(
+        &mut cmd,
+        layout,
+        stem,
+        args.run_timeout_secs,
+        args.cancel_file.as_deref(),
+    )
+}
+
+fn deepagents_model(provider: &str, model: &str) -> String {
+    if model.contains(':') {
+        model.to_string()
+    } else {
+        format!("{provider}:{model}")
+    }
 }
 
 fn execute_logged(
@@ -1967,20 +2278,23 @@ mod tests {
     use super::run_or_record_launch_error;
     use super::{
         CompareManifest, DEFAULT_API_KEY_ENV, DEFAULT_BASE_URL, DEFAULT_MAX_TURNS, DEFAULT_MODEL,
-        DEFAULT_PROVIDER, DEFAULT_RUN_TIMEOUT_SECS, DEFAULT_THINKING, HarnessLayout, RunArgs,
-        SAMPLING_OMITTED, absolute, absolute_unchecked, bounded_feedback,
-        capture_acceptance_overlay, copy_path_dependency_tree, copy_traces, copy_tree,
-        default_run_order, ensure_install_target_is_safe, execute_logged, git_capture, git_status,
-        git_worktree_add, liberado_runner_path, overlay_files, overlay_fingerprint, parse_run_args,
-        path_text, repairable_verifier_exit, run_args_from_spec, run_async_command, run_slug,
-        save_result, toml_string, value, verifier_feedback, write_run_config, write_run_pins,
+        DEFAULT_PROVIDER, DEFAULT_RUN_TIMEOUT_SECS, DEFAULT_THINKING, DeepAgentsAdapter,
+        HarnessLayout, HermesAdapter, RunArgs, SAMPLING_OMITTED, absolute, absolute_unchecked,
+        bounded_feedback, capture_acceptance_overlay, copy_path_dependency_tree, copy_traces,
+        copy_tree, deepagents_model, default_run_order, ensure_install_target_is_safe,
+        execute_logged, git_capture, git_status, git_worktree_add, liberado_runner_path,
+        overlay_files, overlay_fingerprint, parse_run_args, path_text, repairable_verifier_exit,
+        run_args_from_spec, run_async_command, run_slug, save_result, toml_string, value,
+        verifier_feedback, write_run_config, write_run_pins,
     };
     #[cfg(windows)]
     use super::{prepare, remove_job_worktrees};
+    use crate::adapter::HarnessAdapter;
     use crate::contract::{
         AcceptanceBundle, HarnessRequest, JOB_SPEC_VERSION, JobId, JobSpec, ModelPins,
         ResourceLimits, TaskBundle, VerifierProfile,
     };
+    use crate::preflight::ResolvedCredential;
     use chrono::Utc;
     use liberado_common::process::command;
     use std::collections::BTreeMap;
@@ -2100,6 +2414,10 @@ mod tests {
             acceptance_overlay: None,
             liberado_bin: None,
             pi_bin: None,
+            hermes_bin: None,
+            deep_agents_bin: None,
+            hermes_git_sha: None,
+            deep_agents_git_sha: None,
             cancel_file: None,
         }
     }
@@ -2126,6 +2444,95 @@ mod tests {
         assert!(pins.contains("sampling=omitted"));
         assert!(!pins.contains("client default"));
         assert!(!pins.contains("temperature omitted"));
+        assert!(!pins.contains("hermes_turn_cap"));
+        assert!(!pins.contains("deepagents_turn_cap"));
+    }
+
+    #[test]
+    fn four_way_pins_record_native_turn_caps_not_liberado_400() {
+        let (_temp, manifest) = compare_manifest();
+        let mut args = run_args();
+        args.run_order = crate::contract::default_four_way_run_order();
+        args.hermes_bin = Some(PathBuf::from("/opt/hermes"));
+        args.deep_agents_bin = Some(PathBuf::from("/opt/dcode"));
+        args.hermes_git_sha = Some("aaa111".into());
+        args.deep_agents_git_sha = Some("bbb222".into());
+        write_run_pins(&manifest, &args, None).unwrap();
+        let pins = fs::read_to_string(manifest.run_root.join("pins.txt")).unwrap();
+        assert!(pins.contains("hermes_turn_cap=unset"));
+        assert!(pins.contains("deepagents_turn_cap=unset"));
+        assert!(pins.contains("hermes_git_sha=aaa111"));
+        assert!(pins.contains("deepagents_git_sha=bbb222"));
+        assert!(!pins.contains("hermes_turn_cap=400"));
+        assert!(!pins.contains("deepagents_turn_cap=400"));
+    }
+
+    #[test]
+    fn hermes_and_deepagents_preflight_fail_when_binary_is_missing() {
+        let (_temp, manifest) = compare_manifest();
+        let mut args = run_args();
+        args.hermes_bin = Some(PathBuf::from("/definitely-missing-hermes"));
+        args.deep_agents_bin = Some(PathBuf::from("/definitely-missing-dcode"));
+        let hermes = HermesAdapter {
+            manifest: &manifest,
+            args: &args,
+            session_id: "s-hermes".into(),
+            credential: &ResolvedCredential::new("secret".into()),
+        };
+        let err = hermes.preflight().unwrap_err();
+        assert!(err.to_string().contains("does not exist"), "{err}");
+        let deep = DeepAgentsAdapter {
+            manifest: &manifest,
+            args: &args,
+            session_id: "s-deep".into(),
+            credential: &ResolvedCredential::new("secret".into()),
+        };
+        let err = deep.preflight().unwrap_err();
+        assert!(err.to_string().contains("does not exist"), "{err}");
+    }
+
+    #[test]
+    fn known_external_ids_are_accepted_by_preflight_when_binary_exists() {
+        let temp = tempfile::tempdir().unwrap();
+        let hermes_bin = temp.path().join("hermes");
+        let dcode_bin = temp.path().join("dcode");
+        fs::write(&hermes_bin, "#!/bin/sh\n").unwrap();
+        fs::write(&dcode_bin, "#!/bin/sh\n").unwrap();
+        let (_temp, manifest) = compare_manifest();
+        let mut args = run_args();
+        args.hermes_bin = Some(hermes_bin.clone());
+        args.deep_agents_bin = Some(dcode_bin.clone());
+        let credential = ResolvedCredential::new("secret".into());
+        let hermes = HermesAdapter {
+            manifest: &manifest,
+            args: &args,
+            session_id: "s-hermes".into(),
+            credential: &credential,
+        };
+        let report = hermes.preflight().unwrap();
+        assert_eq!(report.harness, "hermes");
+        assert!(report.executable.contains("hermes"));
+        let deep = DeepAgentsAdapter {
+            manifest: &manifest,
+            args: &args,
+            session_id: "s-deep".into(),
+            credential: &credential,
+        };
+        let report = deep.preflight().unwrap();
+        assert_eq!(report.harness, "deepagents");
+        assert!(report.executable.contains("dcode"));
+    }
+
+    #[test]
+    fn deepagents_model_prefixes_provider_when_the_model_has_no_colon() {
+        assert_eq!(
+            deepagents_model("openrouter", "deepseek/deepseek-v4-flash"),
+            "openrouter:deepseek/deepseek-v4-flash"
+        );
+        assert_eq!(
+            deepagents_model("openrouter", "openrouter:deepseek/deepseek-v4-flash"),
+            "openrouter:deepseek/deepseek-v4-flash"
+        );
     }
 
     #[test]
@@ -2310,10 +2717,12 @@ mod tests {
                 HarnessRequest {
                     id: "liberado".to_string(),
                     binary: Some(PathBuf::from("liberado.exe")),
+                    git_sha: None,
                 },
                 HarnessRequest {
                     id: "pi".to_string(),
                     binary: Some(PathBuf::from("pi.exe")),
+                    git_sha: None,
                 },
             ],
             run_order: vec!["pi".to_string(), "liberado".to_string()],
@@ -2368,6 +2777,8 @@ mod tests {
         );
         assert_eq!(args.liberado_bin, Some(PathBuf::from("liberado.exe")));
         assert_eq!(args.pi_bin, Some(PathBuf::from("pi.exe")));
+        assert!(args.hermes_bin.is_none());
+        assert!(args.deep_agents_bin.is_none());
         assert_eq!(args.cancel_file, Some(job_root.join("cancel-requested")));
     }
 
@@ -2414,6 +2825,10 @@ mod tests {
             "liberado.exe".to_string(),
             "--pi-bin".to_string(),
             "pi.exe".to_string(),
+            "--hermes-bin".to_string(),
+            "hermes.exe".to_string(),
+            "--deep-agents-bin".to_string(),
+            "dcode.exe".to_string(),
             "--cancel-file".to_string(),
             "cancel.txt".to_string(),
         ])
@@ -2436,6 +2851,8 @@ mod tests {
         );
         assert_eq!(args.liberado_bin, Some(PathBuf::from("liberado.exe")));
         assert_eq!(args.pi_bin, Some(PathBuf::from("pi.exe")));
+        assert_eq!(args.hermes_bin, Some(PathBuf::from("hermes.exe")));
+        assert_eq!(args.deep_agents_bin, Some(PathBuf::from("dcode.exe")));
         assert_eq!(args.cancel_file, Some(PathBuf::from("cancel.txt")));
     }
 

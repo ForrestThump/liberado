@@ -86,7 +86,7 @@ fn disk_reserve_check(
 fn check_harness_binaries(spec: &JobSpec) -> Result<(), Box<dyn Error>> {
     for harness in &spec.harnesses {
         match harness.id.as_str() {
-            "liberado" => {
+            crate::contract::HARNESS_LIBERADO => {
                 if let Some(binary) = &harness.binary
                     && !binary.is_file()
                 {
@@ -97,21 +97,37 @@ fn check_harness_binaries(spec: &JobSpec) -> Result<(), Box<dyn Error>> {
                     .into());
                 }
             }
-            "pi" => {
-                if let Some(binary) = &harness.binary {
-                    if !binary.is_file() {
-                        return Err(
-                            format!("Pi binary does not exist: {}", binary.display()).into()
-                        );
-                    }
-                } else {
-                    require_program(if cfg!(windows) { "pi.cmd" } else { "pi" })?;
-                }
+            crate::contract::HARNESS_PI => {
+                check_external_binary(harness, "Pi", "pi")?;
+            }
+            crate::contract::HARNESS_HERMES => {
+                check_external_binary(harness, "Hermes", "hermes")?;
+            }
+            crate::contract::HARNESS_DEEPAGENTS => {
+                check_external_binary(harness, "Deep Agents", "deepagents")?;
             }
             other => return Err(format!("unsupported harness '{other}'").into()),
         }
     }
     Ok(())
+}
+
+fn check_external_binary(
+    harness: &crate::contract::HarnessRequest,
+    label: &str,
+    harness_id: &str,
+) -> Result<(), Box<dyn Error>> {
+    if let Some(binary) = &harness.binary {
+        if binary.is_file() {
+            Ok(())
+        } else {
+            Err(format!("{label} binary does not exist: {}", binary.display()).into())
+        }
+    } else {
+        let program = crate::adapter::default_path_program(harness_id)
+            .ok_or_else(|| format!("no PATH default for harness '{harness_id}'"))?;
+        require_program(program)
+    }
 }
 
 /// Resolve the environment the model credential must come from, then load the secret.
@@ -395,6 +411,7 @@ mod tests {
             harnesses: vec![HarnessRequest {
                 id: "liberado".to_string(),
                 binary: Some(repository.join("runner.exe")),
+                git_sha: None,
             }],
             run_order: vec!["liberado".to_string()],
             model: ModelPins {
@@ -469,10 +486,12 @@ mod tests {
                 HarnessRequest {
                     id: "liberado".to_string(),
                     binary: Some(fake.clone()),
+                    git_sha: None,
                 },
                 HarnessRequest {
                     id: "pi".to_string(),
                     binary: Some(fake),
+                    git_sha: None,
                 },
             ],
             run_order: default_run_order(),
@@ -556,6 +575,7 @@ mod tests {
             harnesses: vec![HarnessRequest {
                 id: "liberado".to_string(),
                 binary: None,
+                git_sha: None,
             }],
             run_order: vec!["liberado".to_string()],
             model: ModelPins {
@@ -624,5 +644,38 @@ mod tests {
         assert!(err.to_string().contains("exceeds worker policy"), "{err}");
 
         unsafe { std::env::remove_var("LIBERADO_PREFLIGHT_DENY_KEY") };
+    }
+
+    #[test]
+    fn missing_external_binary_fails_before_any_paid_work() {
+        let temp = tempfile::tempdir().unwrap();
+        let missing = temp.path().join("no-such-hermes");
+        let err = check_external_binary(
+            &HarnessRequest {
+                id: "hermes".to_string(),
+                binary: Some(missing.clone()),
+                git_sha: None,
+            },
+            "Hermes",
+            "hermes",
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("does not exist"), "{err}");
+        assert!(
+            err.to_string().contains(&missing.display().to_string()),
+            "{err}"
+        );
+
+        let err = check_external_binary(
+            &HarnessRequest {
+                id: "deepagents".to_string(),
+                binary: Some(temp.path().join("no-such-dcode")),
+                git_sha: None,
+            },
+            "Deep Agents",
+            "deepagents",
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("does not exist"), "{err}");
     }
 }

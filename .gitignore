@@ -21,6 +21,11 @@ desktop.ini
 /turbomcp/
 /turbovault/
 
+# Local MIT harness checkouts for C3 measurement. Not path dependencies.
+/pi/
+/hermes-agent/
+/deepagents/
+
 # Not-for-deploy scratch (subagent-manager: operator directive — do not deploy)
 /subagent-manager-mcp-master/
 /subagent-manager-mcp-master.zip

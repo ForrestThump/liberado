@@ -181,14 +181,14 @@ fn prepare_worktrees(
 ) -> Result<Stage<()>, Box<dyn Error>> {
     let mut ids = harness_ids(ctx.spec);
     ids.sort();
-    if ids != ["liberado", "pi"] {
+    if !is_supported_adapter_set(&ids) {
         return Ok(Stage::Finished(Box::new(finish_failure(
             ctx.store,
             ctx.spec,
             ctx.started_at,
             ctx.tracker,
             FailureClass::HostInfrastructureFailure,
-            "the v1 coordinator requires the liberado and pi adapters".to_string(),
+            "the v1 coordinator requires the liberado and pi adapters, or the four-harness C3 set (liberado, pi, hermes, deepagents)".to_string(),
             BTreeMap::new(),
             Some(preflight.base_commit.clone()),
         )?)));
@@ -205,6 +205,7 @@ fn prepare_worktrees(
         &preflight.base_commit,
         &preflight.base_commit,
         ctx.spec.limits.compile_timeout_secs,
+        &ids,
     ) {
         return Ok(Stage::Finished(Box::new(finish_failure(
             ctx.store,
@@ -602,6 +603,19 @@ mod tests {
     use std::path::PathBuf;
 
     #[test]
+    fn coordinator_accepts_two_way_and_four_way_adapter_sets() {
+        assert!(is_supported_adapter_set(&["liberado", "pi"]));
+        assert!(is_supported_adapter_set(&[
+            "hermes",
+            "deepagents",
+            "pi",
+            "liberado"
+        ]));
+        assert!(!is_supported_adapter_set(&["liberado"]));
+        assert!(!is_supported_adapter_set(&["liberado", "pi", "hermes"]));
+    }
+
+    #[test]
     fn missing_harness_results_are_host_infrastructure_failures() {
         let temp = tempfile::tempdir().unwrap();
         let store = JobStore::new(temp.path().join("jobs"));
@@ -668,10 +682,12 @@ mod tests {
                 HarnessRequest {
                     id: "liberado".to_string(),
                     binary: Some(fake.clone()),
+                    git_sha: None,
                 },
                 HarnessRequest {
                     id: "pi".to_string(),
                     binary: Some(fake),
+                    git_sha: None,
                 },
             ],
             run_order: default_run_order(),
@@ -926,10 +942,12 @@ mod tests {
                 HarnessRequest {
                     id: "liberado".to_string(),
                     binary: None,
+                    git_sha: None,
                 },
                 HarnessRequest {
                     id: "pi".to_string(),
                     binary: None,
+                    git_sha: None,
                 },
             ],
             run_order: default_run_order(),
@@ -1008,10 +1026,12 @@ mod tests {
                 HarnessRequest {
                     id: "liberado".to_string(),
                     binary: None,
+                    git_sha: None,
                 },
                 HarnessRequest {
                     id: "pi".to_string(),
                     binary: None,
+                    git_sha: None,
                 },
             ],
             run_order: default_run_order(),

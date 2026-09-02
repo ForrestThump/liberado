@@ -6,7 +6,8 @@ This page is the runner contract: how `liberado coder compare` pins a job, launc
 preserves artifacts. The C3 experiment that uses this runner — four harnesses, repeats, published
 score — is [`cross-harness-baseline.md`](../../future-work/cross-harness-baseline.md).
 
-`liberado coder compare` owns the durable infrastructure for a Liberado/Pi comparison. Do not
+`liberado coder compare` owns the durable infrastructure for Liberado/Pi comparisons and for the
+four-harness C3 set (Liberado, Pi, Hermes, Deep Agents). Do not
 assemble long-lived run policy in PowerShell. A wrapper can supply arguments, but worktree setup,
 build-cache isolation, process order, Git preservation, and artifact collection are compiled Rust
 code in `crates/harness-eval/`. The CLI is a thin argument surface over that crate.
@@ -144,9 +145,14 @@ JSONL or malformed result JSON. On Windows, each paid harness process is assigne
 with `KILL_ON_JOB_CLOSE`, so cancellation and the wall-clock limit terminate its process tree.
 
 The adapter contract keeps harness-specific launch behavior narrow. The coordinator owns experiment
-order, worktrees, common verification, result preservation, and classification. The initial adapters
-are Liberado and Pi. A later Cline adapter must implement the same boundary and produce the common
-result and MVL artifacts; it does not get to change comparison policy.
+order, worktrees, common verification, result preservation, and classification. The compiled
+adapters are Liberado, Pi, and thin external-process launchers for Hermes and Deep Agents. A job
+is either the historical Liberado/Pi pair or the four-harness C3 set. A later Cline adapter must
+implement the same boundary and produce the common result and MVL artifacts; it does not get to
+change comparison policy. Do not vendor those harnesses as path dependencies; pin their git
+commits and pass `--hermes-bin` / `--deep-agents-bin`. Native turn budgets stay native
+(`pi_turn_cap=unset`, `hermes_turn_cap=unset`, `deepagents_turn_cap=unset`). Do not copy
+Liberado's 400.
 
 ## Prepare
 
@@ -223,10 +229,11 @@ inside Liberado's granted scope — otherwise the comparison measures policy, no
 that needs out-of-scope writes is a declared experiment variable, not a silent default.
 
 The baseline records its fairness decisions in `pins.txt` so no silent default can split two runs:
-`tool_surface=native` (neither harness's tool catalog is narrowed), `pi_turn_cap=unset` (pi runs
-its native turn budget while `liberado_max_turns` records the Liberado cap), `run_order` (the order
-the harnesses ran, alternated per job so the systematic "first harness" bias cancels out), and
-`sampling=omitted` (no temperature is passed to either client). `sampling` is also part of the
+`tool_surface=native` (no harness's tool catalog is narrowed), `pi_turn_cap=unset` (pi runs
+its native turn budget while `liberado_max_turns` records the Liberado cap), `hermes_turn_cap=unset`
+and `deepagents_turn_cap=unset` on four-way jobs (native caps; do not copy Liberado's 400),
+`run_order` (the order the harnesses ran, rotated per job so the systematic "first harness" bias
+cancels out), and `sampling=omitted` (no temperature is passed to either client). `sampling` is also part of the
 immutable job pins, so it appears in `experiment.json` and changes the experiment id when it
 changes. `run_order` is recorded in `report.json` but is deliberately not part of the experiment
 id: two runs of the same experiment differ only in order and must share an id. The coordinator

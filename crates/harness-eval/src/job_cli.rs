@@ -22,8 +22,8 @@ pub fn run(args: &[String]) -> Result<(), Box<dyn Error>> {
 
 pub fn usage() -> &'static str {
     "usage:\n  \
-     liberado coder compare submit --task <file> [pins] [--wait] [--no-spawn]\n  \
-     liberado coder compare doctor --task <file> [pins]\n  \
+     liberado coder compare submit --task <file> [pins] [--harnesses <ids>] [--wait] [--no-spawn]\n  \
+     liberado coder compare doctor --task <file> [pins] [--harnesses <ids>]\n  \
      liberado coder compare status <job-id> [--source <repo>]\n  \
      liberado coder compare await <job-id> [--timeout-secs <n>] [--stall-secs <n>] [--source <repo>]\n  \
      liberado coder compare cancel <job-id> [--source <repo>]\n  \
@@ -46,8 +46,13 @@ struct SubmitArgs {
     max_turns: u32,
     task_aware_context: bool,
     acceptance_overlay: Option<PathBuf>,
+    harnesses: Option<Vec<String>>,
     liberado_bin: Option<PathBuf>,
     pi_bin: Option<PathBuf>,
+    hermes_bin: Option<PathBuf>,
+    deep_agents_bin: Option<PathBuf>,
+    hermes_git_sha: Option<String>,
+    deep_agents_git_sha: Option<String>,
     hypothesis: Option<String>,
     variable: Option<String>,
     wait: bool,
@@ -71,8 +76,13 @@ impl Default for SubmitArgs {
             max_turns: 400,
             task_aware_context: false,
             acceptance_overlay: None,
+            harnesses: None,
             liberado_bin: None,
             pi_bin: None,
+            hermes_bin: None,
+            deep_agents_bin: None,
+            hermes_git_sha: None,
+            deep_agents_git_sha: None,
             hypothesis: None,
             variable: None,
             wait: false,
@@ -158,6 +168,32 @@ path_flag!(
 );
 path_flag!(liberado_bin_flag, "--liberado-bin", liberado_bin);
 path_flag!(pi_bin_flag, "--pi-bin", pi_bin);
+path_flag!(hermes_bin_flag, "--hermes-bin", hermes_bin);
+path_flag!(deep_agents_bin_flag, "--deep-agents-bin", deep_agents_bin);
+opt_string_flag!(hermes_git_sha_flag, "--hermes-git-sha", hermes_git_sha);
+opt_string_flag!(
+    deep_agents_git_sha_flag,
+    "--deep-agents-git-sha",
+    deep_agents_git_sha
+);
+
+fn harnesses_flag(
+    args: &[String],
+    index: &mut usize,
+    parsed: &mut SubmitArgs,
+) -> Result<(), Box<dyn Error>> {
+    let raw = next(args, index, "--harnesses")?;
+    let ids: Vec<String> = raw
+        .split(',')
+        .map(|part| part.trim().to_string())
+        .filter(|part| !part.is_empty())
+        .collect();
+    if ids.is_empty() {
+        return Err("--harnesses must name at least one harness".into());
+    }
+    parsed.harnesses = Some(ids);
+    Ok(())
+}
 
 bool_flag!(
     task_aware_context_flag,
@@ -252,13 +288,18 @@ const COMMON_FLAG_HANDLERS: &[(&str, FlagHandler)] = &[
     ("--minimum-free-gib", minimum_free_gib_flag),
     ("--task-aware-context", task_aware_context_flag),
     ("--acceptance-overlay", acceptance_overlay_flag),
+    ("--harnesses", harnesses_flag),
+    ("--liberado-bin", liberado_bin_flag),
+    ("--pi-bin", pi_bin_flag),
+    ("--hermes-bin", hermes_bin_flag),
+    ("--deep-agents-bin", deep_agents_bin_flag),
+    ("--hermes-git-sha", hermes_git_sha_flag),
+    ("--deep-agents-git-sha", deep_agents_git_sha_flag),
 ];
 
 /// Flags `compare submit` accepts on top of the common set (spawn/wait/experiment controls).
 const SUBMIT_ONLY_FLAG_HANDLERS: &[(&str, FlagHandler)] = &[
     ("--verifier-repair-attempts", verifier_repair_flag),
-    ("--liberado-bin", liberado_bin_flag),
-    ("--pi-bin", pi_bin_flag),
     ("--hypothesis", hypothesis_flag),
     ("--variable", variable_flag),
     ("--wait", wait_flag),
@@ -304,6 +345,55 @@ fn resolve_repository(parsed: &SubmitArgs) -> Result<PathBuf, Box<dyn Error>> {
 
 /// Queue the comparison job: task check, runner-lock refusal, experiment pairing, run-order
 /// alternation, then the immutable job capture.
+fn resolve_harness_ids(parsed: &SubmitArgs) -> Vec<String> {
+    if let Some(ids) = &parsed.harnesses {
+        return ids.clone();
+    }
+    if parsed.hermes_bin.is_some()
+        || parsed.deep_agents_bin.is_some()
+        || parsed.hermes_git_sha.is_some()
+        || parsed.deep_agents_git_sha.is_some()
+    {
+        return default_four_way_run_order();
+    }
+    default_run_order()
+}
+
+fn harness_requests(parsed: &SubmitArgs) -> Result<Vec<HarnessRequest>, Box<dyn Error>> {
+    let ids = resolve_harness_ids(parsed);
+    if (parsed.hermes_bin.is_some() || parsed.hermes_git_sha.is_some())
+        && !ids.iter().any(|id| id == "hermes")
+    {
+        return Err("--hermes-bin/--hermes-git-sha requires hermes in the harness list".into());
+    }
+    if (parsed.deep_agents_bin.is_some() || parsed.deep_agents_git_sha.is_some())
+        && !ids.iter().any(|id| id == "deepagents")
+    {
+        return Err(
+            "--deep-agents-bin/--deep-agents-git-sha requires deepagents in the harness list"
+                .into(),
+        );
+    }
+    Ok(ids
+        .into_iter()
+        .map(|id| HarnessRequest {
+            binary: match id.as_str() {
+                "liberado" => parsed.liberado_bin.clone(),
+                "pi" => parsed.pi_bin.clone(),
+                "hermes" => parsed.hermes_bin.clone(),
+                "deepagents" => parsed.deep_agents_bin.clone(),
+                _ => None,
+            },
+            git_sha: match id.as_str() {
+                "hermes" => parsed.hermes_git_sha.clone(),
+                "deepagents" => parsed.deep_agents_git_sha.clone(),
+                _ => None,
+            },
+            id,
+        })
+        .collect())
+}
+
 fn queue_job(parsed: &SubmitArgs, repository: &Path) -> Result<JobSpec, Box<dyn Error>> {
     let task_file = parsed
         .task
@@ -325,21 +415,19 @@ fn queue_job(parsed: &SubmitArgs, repository: &Path) -> Result<JobSpec, Box<dyn 
     };
     // Alternate the run order per job so the systematic "first harness" bias cancels out across
     // jobs. The order is recorded in report.json; it is not part of the experiment id.
-    let run_order = alternate_run_order(JobStore::for_repository(repository).job_count()?);
+    let harnesses = harness_requests(parsed)?;
+    let run_order = {
+        let ids: Vec<&str> = harnesses.iter().map(|h| h.id.as_str()).collect();
+        rotate_run_order(
+            JobStore::for_repository(repository).job_count()?,
+            &canonical_run_order(&ids),
+        )
+    };
     transport::submit(transport::SubmitOptions {
         repository: repository.to_path_buf(),
         base_revision: parsed.commit.clone(),
         task_file,
-        harnesses: vec![
-            HarnessRequest {
-                id: "liberado".to_string(),
-                binary: parsed.liberado_bin.clone(),
-            },
-            HarnessRequest {
-                id: "pi".to_string(),
-                binary: parsed.pi_bin.clone(),
-            },
-        ],
+        harnesses,
         run_order,
         model: ModelPins {
             provider: parsed.provider.clone(),
@@ -417,21 +505,15 @@ fn doctor(args: &[String]) -> Result<(), Box<dyn Error>> {
         .task
         .clone()
         .ok_or("compare doctor requires --task <file>")?;
+    let harnesses = harness_requests(&parsed)?;
+    let run_order =
+        canonical_run_order(&harnesses.iter().map(|h| h.id.as_str()).collect::<Vec<_>>());
     let options = transport::SubmitOptions {
         repository: repository.clone(),
         base_revision: parsed.commit.clone(),
         task_file,
-        harnesses: vec![
-            HarnessRequest {
-                id: "liberado".into(),
-                binary: None,
-            },
-            HarnessRequest {
-                id: "pi".into(),
-                binary: None,
-            },
-        ],
-        run_order: default_run_order(),
+        harnesses,
+        run_order,
         model: ModelPins {
             provider: parsed.provider.clone(),
             model: parsed.model.clone(),
@@ -1022,5 +1104,114 @@ mod tests {
             err.to_string().contains("worker policy is unavailable"),
             "{err}"
         );
+    }
+
+    fn write_worker_policy(repository: &Path, allow_binary_overrides: bool) {
+        let mut policy = WorkerPolicy::for_repository(repository.to_path_buf());
+        policy.allow_binary_overrides = allow_binary_overrides;
+        policy.minimum_free_bytes = 0;
+        policy.estimated_build_bytes_per_harness = 0;
+        let dir = repository.join(".liberado");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join("harness-worker.json"),
+            serde_json::to_string_pretty(&policy).unwrap(),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn submit_default_stays_two_way_liberado_pi() {
+        let temp = committed_repo();
+        let repository = temp.path().join("repo");
+        let task = task_file(&temp);
+        run(&[
+            "submit".into(),
+            "--source".into(),
+            repository.to_string_lossy().into_owned(),
+            "--task".into(),
+            task.to_string_lossy().into_owned(),
+            "--commit".into(),
+            "HEAD".into(),
+            "--no-spawn".into(),
+        ])
+        .expect("two-way submit must queue");
+        let store = JobStore::for_repository(&repository);
+        let spec = store.load_spec(&store.accepted_jobs().unwrap()[0]).unwrap();
+        let ids: Vec<&str> = spec.harnesses.iter().map(|h| h.id.as_str()).collect();
+        assert_eq!(ids, ["liberado", "pi"]);
+    }
+
+    #[test]
+    fn submit_four_way_when_c3_bins_are_named() {
+        let temp = committed_repo();
+        let repository = temp.path().join("repo");
+        let task = task_file(&temp);
+        let hermes = temp.path().join("hermes");
+        let dcode = temp.path().join("dcode");
+        fs::write(&hermes, "x").unwrap();
+        fs::write(&dcode, "x").unwrap();
+        run(&[
+            "submit".into(),
+            "--source".into(),
+            repository.to_string_lossy().into_owned(),
+            "--task".into(),
+            task.to_string_lossy().into_owned(),
+            "--commit".into(),
+            "HEAD".into(),
+            "--hermes-bin".into(),
+            hermes.to_string_lossy().into_owned(),
+            "--deep-agents-bin".into(),
+            dcode.to_string_lossy().into_owned(),
+            "--hermes-git-sha".into(),
+            "aaa111".into(),
+            "--deep-agents-git-sha".into(),
+            "bbb222".into(),
+            "--no-spawn".into(),
+        ])
+        .expect("four-way submit must queue");
+        let store = JobStore::for_repository(&repository);
+        let spec = store.load_spec(&store.accepted_jobs().unwrap()[0]).unwrap();
+        let mut ids: Vec<&str> = spec.harnesses.iter().map(|h| h.id.as_str()).collect();
+        ids.sort();
+        assert_eq!(ids, ["deepagents", "hermes", "liberado", "pi"]);
+        let hermes = spec.harnesses.iter().find(|h| h.id == "hermes").unwrap();
+        assert_eq!(hermes.git_sha.as_deref(), Some("aaa111"));
+        assert_eq!(spec.run_order.len(), 4);
+    }
+
+    #[test]
+    fn doctor_four_way_fails_clearly_when_a_bin_is_missing() {
+        let temp = committed_repo();
+        let repository = temp.path().join("repo");
+        write_worker_policy(&repository, true);
+        let task = task_file(&temp);
+        let ok = temp.path().join("ok-bin");
+        fs::write(&ok, "x").unwrap();
+        // A directory canonicalizes but is not a file, so preflight fails before any credential
+        // lookup or model call.
+        let missing = temp.path().join("missing-hermes");
+        fs::create_dir(&missing).unwrap();
+        let err = run(&[
+            "doctor".into(),
+            "--source".into(),
+            repository.to_string_lossy().into_owned(),
+            "--task".into(),
+            task.to_string_lossy().into_owned(),
+            "--commit".into(),
+            "HEAD".into(),
+            "--harnesses".into(),
+            "liberado,pi,hermes,deepagents".into(),
+            "--pi-bin".into(),
+            ok.to_string_lossy().into_owned(),
+            "--hermes-bin".into(),
+            missing.to_string_lossy().into_owned(),
+            "--deep-agents-bin".into(),
+            ok.to_string_lossy().into_owned(),
+        ])
+        .unwrap_err();
+        let text = err.to_string();
+        assert!(text.contains("does not exist"), "{text}");
+        assert!(text.to_ascii_lowercase().contains("hermes"), "{text}");
     }
 }
