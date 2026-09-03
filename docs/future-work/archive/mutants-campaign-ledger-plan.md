@@ -1,10 +1,11 @@
 ---
 kind: plan
-status: active
+status: implemented
 authority: advisory
 domain: correctness
-open_items: true
-last_verified: 2026-08-21
+open_items: false
+last_verified: 2026-09-03
+verified_against: 1be2ace27ed49497ffef344b67aa6c7d87ed43c9
 ---
 
 # Mutants campaign ledger — implementation plan
@@ -75,7 +76,7 @@ Thin wrappers only — no logic in `justfile`:
 - `just mutants-record <name>` → `liberado mutants record <name>`
 - `just mutants-report` / `just mutants-next`
 
-Agent playbook: [`Skills/mutants-campaign.md`](../../Skills/mutants-campaign.md).
+Agent playbook: [`Skills/mutants-campaign.md`](../../../Skills/mutants-campaign.md).
 
 **Not** wired into `just ci`, `just preflight`, or `just ready`.
 
@@ -92,7 +93,7 @@ Skip `testing` and `tooling` roles by default; `--all` includes them.
 ## Initial seed
 
 `mutants-ledger.json` seeds the 13 crates documented in
-[`mutation-testing-plan.md`](../validation/mutation-testing-plan.md) with `commit: null`,
+[`mutation-testing-plan.md`](../../validation/mutation-testing-plan.md) with `commit: null`,
 `source: "markdown-seed"`, and counts from the per-crate reports.
 
 ## Tests

@@ -42,6 +42,7 @@ Authority model: [doc-authority.md](spec/reference/doc-authority.md).
 | [docs/future-work/archive/delegated-work-is-discarded-at-the-seam.md](future-work/archive/delegated-work-is-discarded-at-the-seam.md) | finding | implemented | evidence | delegation | delegated-work-seam |
 | [docs/future-work/archive/docs_fixup.md](future-work/archive/docs_fixup.md) | plan | implemented | advisory | docs | docs-lifecycle |
 | [docs/future-work/archive/harness-comparison-redesign-2026-08.md](future-work/archive/harness-comparison-redesign-2026-08.md) | plan | implemented | advisory | coding-harness | harness-comparison-redesign |
+| [docs/future-work/archive/mutants-campaign-ledger-plan.md](future-work/archive/mutants-campaign-ledger-plan.md) | plan | implemented | advisory | correctness | — |
 | [docs/future-work/archive/parallel-deliverables-2026-08-round-2.md](future-work/archive/parallel-deliverables-2026-08-round-2.md) | plan | implemented | advisory | process | parallel-deliverables-r2 |
 | [docs/future-work/archive/parallel-deliverables-2026-08.md](future-work/archive/parallel-deliverables-2026-08.md) | plan | implemented | advisory | process | parallel-deliverables-r1 |
 | [docs/future-work/backlog.md](future-work/backlog.md) | plan | active | implementation | product | implementation-backlog |
@@ -59,7 +60,6 @@ Authority model: [doc-authority.md](spec/reference/doc-authority.md).
 | [docs/future-work/mcp-forge-backlog.md](future-work/mcp-forge-backlog.md) | plan | active | implementation | mcp | mcp-forge-backlog |
 | [docs/future-work/mcp-suite-standardization.md](future-work/mcp-suite-standardization.md) | plan | active | implementation | mcp | mcp-suite-standardization |
 | [docs/future-work/model-knob-profiles.md](future-work/model-knob-profiles.md) | plan | draft | advisory | tuning | model-knob-profiles |
-| [docs/future-work/mutants-campaign-ledger-plan.md](future-work/mutants-campaign-ledger-plan.md) | plan | active | advisory | correctness | — |
 | [docs/future-work/parallel-deliverables-2026-08-round-3.md](future-work/parallel-deliverables-2026-08-round-3.md) | plan | active | implementation | process | parallel-deliverables-r3 |
 | [docs/future-work/paseo-liberado-integration-roadmap.md](future-work/paseo-liberado-integration-roadmap.md) | plan | active | implementation | acp | paseo-liberado-integration |
 | [docs/future-work/pr-dispatch-vtcode-no-write-finding.md](future-work/pr-dispatch-vtcode-no-write-finding.md) | finding | active | evidence | coding-harness | vtcode-no-write |
