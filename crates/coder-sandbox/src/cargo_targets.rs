@@ -21,6 +21,10 @@ use liberado_coder_core::WorkspaceBuildConfig;
 mod identity;
 use identity::source_key;
 
+#[path = "cargo_targets_attach.rs"]
+mod attach;
+use attach::attach_shared;
+
 /// Why a build may or may not share a cache.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TargetClass {
@@ -312,40 +316,7 @@ fn lease(
     }
 }
 
-fn attach_shared(path: &Path, class: TargetClass) -> Result<(), TargetError> {
-    let lock = lock_path_for(path);
-    if lock.is_file() {
-        match read_lock_class(&lock) {
-            Some(existing) if existing == class && class.may_share() => {}
-            Some(existing) if existing != class => {
-                return Err(TargetError::Incompatible {
-                    path: path.to_path_buf(),
-                    existing,
-                    requested: class,
-                });
-            }
-            Some(existing) => {
-                if lock_holder_alive(&lock) {
-                    return Err(TargetError::Busy {
-                        path: path.to_path_buf(),
-                        class: existing,
-                    });
-                }
-            }
-            None => {
-                if lock_holder_alive(&lock) {
-                    return Err(TargetError::Busy {
-                        path: path.to_path_buf(),
-                        class,
-                    });
-                }
-            }
-        }
-    }
-    stamp_class(path, class)
-}
-
-fn stamp_class(dir: &Path, class: TargetClass) -> Result<(), TargetError> {
+pub(super) fn stamp_class(dir: &Path, class: TargetClass) -> Result<(), TargetError> {
     fs::create_dir_all(dir).map_err(|e| io_err(dir, e))?;
     let stamp = class_stamp(dir);
     if stamp.is_file() {
@@ -433,7 +404,7 @@ fn isolated_is_reclaimable(path: &Path, older_than: Duration) -> bool {
         .is_ok_and(|age| age >= older_than)
 }
 
-fn lock_holder_alive(path: &Path) -> bool {
+pub(super) fn lock_holder_alive(path: &Path) -> bool {
     match read_lock_pid(path) {
         Some(0) | None => false,
         Some(pid) => process_is_alive(pid),
@@ -444,7 +415,7 @@ fn read_lock_pid(path: &Path) -> Option<u32> {
     lock_field(path, "pid=")?.parse().ok()
 }
 
-fn read_lock_class(path: &Path) -> Option<TargetClass> {
+pub(super) fn read_lock_class(path: &Path) -> Option<TargetClass> {
     TargetClass::parse(&lock_field(path, "class=")?)
 }
 
@@ -462,7 +433,7 @@ fn class_stamp(dir: &Path) -> PathBuf {
     dir.join(".liberado-target-class")
 }
 
-fn lock_path_for(dir: &Path) -> PathBuf {
+pub(super) fn lock_path_for(dir: &Path) -> PathBuf {
     dir.join(".liberado-target.lock")
 }
 

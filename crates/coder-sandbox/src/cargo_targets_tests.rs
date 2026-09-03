@@ -186,6 +186,102 @@ fn a_class_stamp_refuses_an_incompatible_reuse() {
     ));
 }
 
+fn plant_shared_ordinary_lock(pool: &TargetPool, source: &Path, body: &str) {
+    let shared = pool.shared_path(source, TargetClass::Ordinary);
+    std::fs::create_dir_all(&shared).unwrap();
+    std::fs::write(shared.join(".liberado-target.lock"), body).unwrap();
+}
+
+#[test]
+fn leftover_ordinary_lock_still_shares() {
+    let (dir, pool) = pool();
+    let source = dir.path().join("repo");
+    std::fs::create_dir_all(&source).unwrap();
+    plant_shared_ordinary_lock(
+        &pool,
+        &source,
+        &format!("class=ordinary\npid={}\n", std::process::id()),
+    );
+
+    let lease = pool
+        .allocate(&ordinary_request(&source, Some("a")))
+        .unwrap();
+    assert_eq!(lease.kind(), TargetKind::Shared);
+    assert_eq!(
+        std::fs::read_to_string(lease.path().join(".liberado-target-class")).unwrap(),
+        "ordinary"
+    );
+}
+
+#[test]
+fn leftover_coverage_lock_refuses_ordinary_share() {
+    let (dir, pool) = pool();
+    let source = dir.path().join("repo");
+    std::fs::create_dir_all(&source).unwrap();
+    plant_shared_ordinary_lock(&pool, &source, "class=coverage\npid=0\n");
+
+    let err = pool
+        .allocate(&ordinary_request(&source, Some("a")))
+        .expect_err("a leftover coverage lock must not become the ordinary cache");
+    assert!(matches!(
+        err,
+        TargetError::Incompatible {
+            existing: TargetClass::Coverage,
+            requested: TargetClass::Ordinary,
+            ..
+        }
+    ));
+}
+
+#[test]
+fn leftover_lock_without_class_and_a_live_holder_falls_back_to_isolated() {
+    let (dir, pool) = pool();
+    let source = dir.path().join("repo");
+    std::fs::create_dir_all(&source).unwrap();
+    plant_shared_ordinary_lock(&pool, &source, &format!("pid={}\n", std::process::id()));
+
+    let lease = pool
+        .allocate(&ordinary_request(&source, Some("busy-fallback")))
+        .unwrap();
+    assert_eq!(
+        lease.kind(),
+        TargetKind::Isolated,
+        "a live unreadable lock must not attach; allocate_shared falls back"
+    );
+    assert!(lease.path().starts_with(pool.root().join("isolated")));
+}
+
+#[test]
+fn leftover_lock_without_class_and_a_dead_holder_still_shares() {
+    let (dir, pool) = pool();
+    let source = dir.path().join("repo");
+    std::fs::create_dir_all(&source).unwrap();
+    plant_shared_ordinary_lock(&pool, &source, "pid=0\n");
+
+    let lease = pool
+        .allocate(&ordinary_request(&source, Some("a")))
+        .unwrap();
+    assert_eq!(lease.kind(), TargetKind::Shared);
+}
+
+#[test]
+fn leftover_lock_without_class_and_a_live_holder_needs_a_job_id() {
+    let (dir, pool) = pool();
+    let source = dir.path().join("repo");
+    std::fs::create_dir_all(&source).unwrap();
+    plant_shared_ordinary_lock(&pool, &source, &format!("pid={}\n", std::process::id()));
+
+    let err = pool
+        .allocate(&ordinary_request(&source, None))
+        .expect_err("Busy without a job id cannot isolate");
+    assert!(matches!(
+        err,
+        TargetError::MissingJobId {
+            class: TargetClass::Ordinary,
+        }
+    ));
+}
+
 #[test]
 fn isolated_lock_is_exclusive_while_the_holder_lives() {
     let (dir, pool) = pool();
