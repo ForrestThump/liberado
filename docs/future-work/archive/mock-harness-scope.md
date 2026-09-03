@@ -1,4 +1,17 @@
+---
+kind: plan
+status: implemented
+authority: advisory
+domain: correctness
+open_items: false
+last_verified: 2026-09-03
+verified_against: 7fb2c995
+---
+
 # Mock API Harness — Scope
+
+**Status:** Implemented. This archived plan records the design and completion checklist. Current
+behavior lives in the test helpers, their Rustdoc, and their tests.
 
 **Goal:** Unlock the remaining IO/network/clock coverage gaps without requiring real API keys or filesystem state.
 

@@ -35,14 +35,16 @@ Tests are **current** executable evidence. A mutation report is **historical** e
 - **Per-crate reports:** [`mutation-testing/`](mutation-testing/) — one report per hardened crate (Phase 1 + Phase 4) plus the original 2026-07-23 first-pass report.
 - **Summary:** [`mutation-testing-plan.md`](mutation-testing-plan.md) — the aggregate plan + results that ties the per-crate reports together.
 - **Correctness artifacts:** [`coverage-gaps.md`](coverage-gaps.md) — known uncovered code paths (IO/network/clock-gated, tracing-only, defaults).
-- The mock-harness design ([`impl/mock-harness-scope.md`](../impl/mock-harness-scope.md)) is a forward design plan ("what to build"), not a correctness artifact, so it lives in `docs/impl/`.
+- The completed mock-harness design is retained in the
+  [future-work archive](../future-work/archive/mock-harness-scope.md). Current behavior lives in
+  the test-helper code, Rustdoc, and tests.
 
 | Doc | Role |
 |-----|------|
 | [mutation-testing-plan.md](mutation-testing-plan.md) | **Summary** — master plan + Phase 1–5 results across 13 crates |
 | [mutation-testing/](mutation-testing/) | Per-crate mutation-testing reports (Phase 1 + Phase 4) |
 | [coverage-gaps.md](coverage-gaps.md) | Known uncovered code paths — IO/network/clock-gated, tracing-only, defaults |
-| [impl/mock-harness-scope.md](../impl/mock-harness-scope.md) | Test-infrastructure design — scriptable error mocks, FrozenClock, filesystem stubs |
+| [future-work/archive/mock-harness-scope.md](../future-work/archive/mock-harness-scope.md) | Historical test-infrastructure design — scriptable error mocks, FrozenClock, filesystem stubs |
 
 ## Per-crate reports ([`mutation-testing/`](mutation-testing/))
 
@@ -65,4 +67,6 @@ Tests are **current** executable evidence. A mutation report is **historical** e
 
 **Naming notes:** `mutation-testing-report-v2.md` was renamed to `mutation-testing-report-dispatcher.md`. It covers only the dispatcher crate, not a second version of the overall mutation-testing program. `mutation-testing-report.md` — the original first-pass report — was renamed `mutation-testing-report-phase0-2026-07-23.md` to distinguish it from the aggregate plan.
 
-**Related:** [coverage-gaps.md](coverage-gaps.md) for known uncovered code paths; [impl/mock-harness-scope.md](../impl/mock-harness-scope.md) for test infrastructure design; [docs/README.md](../README.md) for the full docs map.
+**Related:** [coverage-gaps.md](coverage-gaps.md) for known uncovered code paths;
+[mock-harness-scope.md](../future-work/archive/mock-harness-scope.md) for the historical test
+infrastructure design; [docs/README.md](../README.md) for the full docs map.
