@@ -1974,10 +1974,10 @@
     "cyclomatic": 3
   },
   "crates/harness-eval/src/adapter.rs": {
-    "ploc": 19,
-    "lloc": 0,
-    "functions": 0,
-    "cyclomatic": 2
+    "ploc": 49,
+    "lloc": 8,
+    "functions": 3,
+    "cyclomatic": 12
   },
   "crates/harness-eval/src/bin/worker.rs": {
     "ploc": 4,
@@ -1986,25 +1986,55 @@
     "cyclomatic": 2
   },
   "crates/harness-eval/src/contract.rs": {
-    "ploc": 545,
-    "lloc": 89,
-    "functions": 42,
-    "cyclomatic": 96
+    "ploc": 472,
+    "lloc": 65,
+    "functions": 37,
+    "cyclomatic": 94
+  },
+  "crates/harness-eval/src/contract/harness_ids.rs": {
+    "ploc": 62,
+    "lloc": 8,
+    "functions": 11,
+    "cyclomatic": 16
+  },
+  "crates/harness-eval/src/contract_tests.rs": {
+    "ploc": 168,
+    "lloc": 64,
+    "functions": 13,
+    "cyclomatic": 14
   },
   "crates/harness-eval/src/engine.rs": {
-    "ploc": 946,
-    "lloc": 236,
-    "functions": 41,
-    "cyclomatic": 108
+    "ploc": 540,
+    "lloc": 118,
+    "functions": 27,
+    "cyclomatic": 93
+  },
+  "crates/harness-eval/src/engine_tests.rs": {
+    "ploc": 422,
+    "lloc": 122,
+    "functions": 15,
+    "cyclomatic": 17
   },
   "crates/harness-eval/src/job_cli.rs": {
-    "ploc": 925,
-    "lloc": 257,
-    "functions": 48,
-    "cyclomatic": 139
+    "ploc": 488,
+    "lloc": 121,
+    "functions": 33,
+    "cyclomatic": 110
+  },
+  "crates/harness-eval/src/job_cli/harnesses.rs": {
+    "ploc": 142,
+    "lloc": 27,
+    "functions": 13,
+    "cyclomatic": 43
+  },
+  "crates/harness-eval/src/job_cli_tests.rs": {
+    "ploc": 491,
+    "lloc": 179,
+    "functions": 24,
+    "cyclomatic": 34
   },
   "crates/harness-eval/src/journal.rs": {
-    "ploc": 563,
+    "ploc": 564,
     "lloc": 190,
     "functions": 51,
     "cyclomatic": 155
@@ -2016,16 +2046,28 @@
     "cyclomatic": 7
   },
   "crates/harness-eval/src/legacy.rs": {
-    "ploc": 2871,
-    "lloc": 942,
-    "functions": 160,
-    "cyclomatic": 481
+    "ploc": 1896,
+    "lloc": 525,
+    "functions": 119,
+    "cyclomatic": 442
+  },
+  "crates/harness-eval/src/legacy/external.rs": {
+    "ploc": 240,
+    "lloc": 30,
+    "functions": 23,
+    "cyclomatic": 42
   },
   "crates/harness-eval/src/legacy/runner_support.rs": {
     "ploc": 55,
     "lloc": 10,
     "functions": 4,
     "cyclomatic": 12
+  },
+  "crates/harness-eval/src/legacy_tests.rs": {
+    "ploc": 1168,
+    "lloc": 501,
+    "functions": 49,
+    "cyclomatic": 61
   },
   "crates/harness-eval/src/lib.rs": {
     "ploc": 33,
@@ -2040,19 +2082,25 @@
     "cyclomatic": 49
   },
   "crates/harness-eval/src/preflight.rs": {
-    "ploc": 572,
-    "lloc": 192,
-    "functions": 34,
-    "cyclomatic": 106
+    "ploc": 343,
+    "lloc": 86,
+    "functions": 32,
+    "cyclomatic": 105
+  },
+  "crates/harness-eval/src/preflight_tests.rs": {
+    "ploc": 279,
+    "lloc": 110,
+    "functions": 7,
+    "cyclomatic": 8
   },
   "crates/harness-eval/src/transport.rs": {
-    "ploc": 584,
+    "ploc": 587,
     "lloc": 242,
     "functions": 40,
     "cyclomatic": 121
   },
   "crates/harness-eval/src/worker.rs": {
-    "ploc": 240,
+    "ploc": 241,
     "lloc": 81,
     "functions": 10,
     "cyclomatic": 38
