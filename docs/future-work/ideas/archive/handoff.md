@@ -3,8 +3,10 @@
 # Liberado â€” Handoff (2026-07-08)
 
 Current-state handoff. Kept in sync after each session arc. For the authoritative system map read
-[`../../../spec/architecture/overview.md`](../../../spec/architecture/overview.md); for build/run/configure read
-the root [`AGENTS.md`](../../../../AGENTS.md); for the development process (how to
+[`../../../spec/architecture/overview.md`](../../../spec/architecture/overview.md); for build/test read
+the root [`AGENTS.md`](../../../../AGENTS.md); for run/configure read
+[`crates/cli/ARCHITECTURE.md`](../../../../crates/cli/ARCHITECTURE.md) and
+[`docs/spec/config-spec.md`](../../../spec/config-spec.md); for the development process (how to
 research, plan, delegate, test, commit) read
 [`../../../impl/development-workflow.md`](../../../impl/development-workflow.md); for the chat
 API contract read [`../../../spec/reference/api.md`](../../../spec/reference/api.md); for the rationale behind any
