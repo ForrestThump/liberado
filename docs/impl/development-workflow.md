@@ -2,10 +2,11 @@
 
 **Audience**: a fresh planning/architectural agent (or human) picking up this project cold, with no
 memory of prior sessions, who needs to independently research, plan, delegate to subagents, implement,
-and ship work at the same quality bar this project has been held to. The root `AGENTS.md`
-covers *build/run mechanics*; `docs/spec/architecture/*.md` covers *what's built*; this doc covers *how work
-here actually gets done* — the process, judgment calls, and conventions that produced the work recorded
-in `docs/future-work/`. Read this before touching code on a new branch.
+and ship work at the same quality bar this project has been held to. The root `AGENTS.md` covers
+*how to build and test*; `crates/cli/ARCHITECTURE.md` and `docs/spec/config-spec.md` cover *how to run
+and configure*; `docs/spec/architecture/*.md` covers *what's built*; this doc covers *how work here
+actually gets done* — the process, judgment calls, and conventions that produced the work recorded in
+`docs/future-work/`. Read this before touching code on a new branch.
 
 **Origin**: written 2026-07-02, distilled from a single long session that shipped two safety fixes
 (MCP connection isolation, runtime-level tool gating), a three-tier hygiene pass (crate coupling,
