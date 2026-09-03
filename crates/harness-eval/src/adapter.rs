@@ -58,9 +58,22 @@ mod tests {
 
     #[test]
     fn path_defaults_cover_the_external_c3_harnesses() {
-        assert!(default_path_program("pi").is_some());
-        assert!(default_path_program("hermes").is_some());
-        assert!(default_path_program("deepagents").is_some());
+        assert_eq!(
+            default_path_program("pi"),
+            Some(if cfg!(windows) { "pi.cmd" } else { "pi" })
+        );
+        assert_eq!(
+            default_path_program("hermes"),
+            Some(if cfg!(windows) {
+                "hermes.exe"
+            } else {
+                "hermes"
+            })
+        );
+        assert_eq!(
+            default_path_program("deepagents"),
+            Some(if cfg!(windows) { "dcode.exe" } else { "dcode" })
+        );
         assert!(default_path_program("liberado").is_none());
         assert!(default_path_program("cline").is_none());
     }
