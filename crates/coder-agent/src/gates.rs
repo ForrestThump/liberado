@@ -256,9 +256,7 @@ pub async fn baseline_test_failures(
     let spec = liberado_coder_sandbox::liberado_ship_preflight_spec();
     let mut steps = std::collections::BTreeSet::new();
     steps.insert("test".to_string());
-    let target_owned = std::env::var_os("CARGO_TARGET_DIR")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| workspace.join("target"));
+    let target_owned = liberado_coder_sandbox::baseline_target_dir(None, workspace);
     let opts = liberado_coder_sandbox::BaselineOptions {
         project_root: workspace,
         base_sha: baseline_sha,

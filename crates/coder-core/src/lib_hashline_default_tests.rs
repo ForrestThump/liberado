@@ -63,6 +63,11 @@ fn the_command_timeout_clears_a_workspace_build() {
 #[test]
 fn the_shared_cache_is_opt_in() {
     assert!(WorkspaceBuildConfig::default().shared_target_dir.is_none());
+    assert!(
+        WorkspaceBuildConfig::default()
+            .managed_target_root
+            .is_none()
+    );
 }
 
 /// The number in `config.example/tuning.toml` must be the number the code uses.

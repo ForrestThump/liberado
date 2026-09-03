@@ -41,6 +41,7 @@ use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
 mod ask_human;
 mod coding_run;
+mod converse_support;
 mod done;
 mod interactive;
 mod permission;
@@ -49,6 +50,7 @@ mod provider;
 mod session_store;
 mod stdin_guard;
 mod wire;
+mod workspace_targets;
 
 use wire::{
     JsonRpcErrorBody, JsonRpcIncoming, StdoutWire, WireSink, emit_agent_text_chunk, emit_tool_call,
@@ -356,29 +358,6 @@ fn report_config_dir(config_dir: &Option<std::path::PathBuf>) {
     }
 }
 
-/// Point every child process at the shared build cache, once, before anything runs.
-///
-/// Set on this process rather than threaded through each command builder because it has to reach
-/// three places that construct their own runners — the model's `run_command`, the verifier
-/// pipeline, and the warm-up build — and a cache that two of the three use is a cache that warms
-/// a directory the third ignores. Inheritance makes them agree by construction.
-///
-/// Correct here specifically because tuning is loaded once, above, and every session this bridge
-/// serves shares it. A daemon serving sessions with *different* coder configs could not do this
-/// and would have to thread the value.
-///
-/// SAFETY: single-threaded startup, before any session or task exists.
-fn apply_shared_target_dir(shared_target_dir: &Option<String>) {
-    if let Some(dir) = shared_target_dir
-        .as_deref()
-        .map(str::trim)
-        .filter(|d| !d.is_empty())
-    {
-        unsafe { std::env::set_var("CARGO_TARGET_DIR", dir) };
-        tracing::info!(target_dir = %dir, "coding worktrees share one cargo build cache");
-    }
-}
-
 /// Spawn `session/prompt` on a task so `session/cancel` can be read mid-turn. Refuses with a
 /// JSON-RPC error when another prompt is already in flight or the session id is missing/empty.
 /// Returns once the task is registered in `in_flight`.
@@ -450,8 +429,11 @@ fn missing_session_error() -> JsonRpcErrorBody {
 }
 
 /// Resolve every piece of startup state the bridge needs: provider, catalog, config (with the
-/// resolution tier reported before anything depends on it), the shared build-cache override, and
-/// the declared authority grant. Refuses to serve when the configured grant is missing.
+/// resolution tier reported before anything depends on it), and the declared authority grant.
+/// Refuses to serve when the configured grant is missing.
+///
+/// Ordinary Cargo cache identity is not resolved here. It is applied per job from the
+/// session's project root once a worktree exists.
 async fn resolve_bridge_startup() -> Result<Arc<Bridge>, Box<dyn std::error::Error>> {
     let resolved = build_provider()?;
     let catalog = load_model_catalog(
@@ -471,7 +453,6 @@ async fn resolve_bridge_startup() -> Result<Arc<Bridge>, Box<dyn std::error::Err
     let config_dir = liberado_config::config_dir();
     let coder_tuning = coding_run::load_coder_tuning(config_dir.as_deref())?;
     report_config_dir(&config_dir);
-    apply_shared_target_dir(&coder_tuning.workspace_build.shared_target_dir);
     // `[acp]` from the same config the coding pack reads, so the prompt and the turn budget are
     // versioned prose in a file rather than JSON strings pasted into another tool's config.
     let acp_config = coding_run::load_acp_config(config_dir.as_deref());
@@ -1570,51 +1551,13 @@ async fn ensure_converse(bridge: &Bridge, sid: &str) -> Result<Arc<SessionHandle
         }
     };
     if let Some(handle) = reuse {
+        converse_support::reapply_coding_workspace_targets(bridge, mode, &cwd);
         return Ok(handle);
     }
 
-    let stored = if live_history.is_empty() {
-        session_store::load(sid)
-            .ok()
-            .flatten()
-            .map(|r| r.messages)
-            .unwrap_or_default()
-    } else {
-        live_history
-    };
-
-    let handle = if mode.uses_coding_tools() {
-        let permission = permission_attach(bridge, sid, &cwd);
-        let parts = interactive::prepare_coding_converse(
-            &cwd,
-            sid,
-            &bridge.coder_tuning,
-            ask_human::may_ask_human(&bridge.local_grant),
-            bridge.config_dir.as_deref(),
-            permission,
-        )
-        .await?;
-        open_handle(
-            sid,
-            Arc::clone(&bridge.provider),
-            bridge.max_turns,
-            parts.system,
-            &stored,
-            parts.tools,
-            true,
-        )
-    } else {
-        open_handle(
-            sid,
-            Arc::clone(&bridge.provider),
-            bridge.max_turns,
-            chat_system_prompt(&cwd, bridge.system_prompt.as_deref()),
-            &stored,
-            Arc::new(NoTools),
-            false,
-        )
-    };
-    let handle = Arc::new(handle);
+    let stored = converse_support::stored_converse_turns(sid, live_history);
+    let handle =
+        Arc::new(converse_support::open_converse_handle(bridge, sid, mode, &cwd, &stored).await?);
     if let Some(sess) = bridge.acp_sessions.lock().await.get_mut(sid) {
         sess.converse = Some(Arc::clone(&handle));
     }

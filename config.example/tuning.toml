@@ -100,17 +100,28 @@
 
 # Build cache and pre-run warm-up.
 #
-# `shared_target_dir` points every coding worktree at one CARGO_TARGET_DIR. A worktree starts with
-# no cache, so its first compile rebuilds the whole dependency graph — 706 of this workspace's 770
-# packages are registry crates, which are keyed by name/version rather than by path and so are
-# reusable across worktrees. Workspace crates live at different paths and get their own artifacts;
-# they coexist rather than collide.
+# `shared_target_dir` is an exact CARGO_TARGET_DIR. C3 writes this per harness so comparison
+# worktrees never share a cache. Existing operators can keep pointing every ordinary coding
+# worktree at one directory.
 #
-# ONE RUN AT A TIME. Cargo takes an exclusive lock on a target directory. Concurrent builds do not
-# corrupt each other, they queue — measured: the second prints "Blocking waiting for file lock" and
-# waits out the first. With a command timeout in play, a run queued behind a cold build times out
-# having done nothing. Sharing across concurrent runs needs a lock-free compiler cache (sccache),
-# not this setting.
+# `managed_target_root` is the class-aware pool. Ordinary jobs from one source root share
+# `<root>/shared/<source>/ordinary`. Coverage, mutation, and comparison jobs stay under
+# `<root>/isolated/<class>/<job>`. ACP hashes the session's project root, not the
+# bridge process CWD. See docs/spec/reference/cargo-targets.md.
+#
+# A worktree starts with no cache, so its first compile rebuilds the whole dependency graph —
+# 706 of this workspace's 770 packages are registry crates, which are keyed by name/version
+# rather than by path and so are reusable across worktrees. Workspace crates live at different
+# paths and get their own artifacts; they coexist rather than collide.
+#
+# ONE ORDINARY RUN AT A TIME on a shared cache. Cargo takes an exclusive lock on a target
+# directory. Concurrent builds do not corrupt each other, they queue — measured: the second
+# prints "Blocking waiting for file lock" and waits out the first. With a command timeout in
+# play, a run queued behind a cold build times out having done nothing. Sharing across
+# concurrent ordinary runs needs a lock-free compiler cache (sccache), not this setting.
+# Incompatible classes never attach to the shared ordinary path.
+#
+# Both keys stay unset by default. Unset means each worktree keeps its own `target/`.
 #
 # `warmup` builds the workspace before the model is sent anything. It proves the baseline compiles
 # — so a failure is the model's doing, not a question for a trace — and it keeps the provider's
@@ -118,6 +129,7 @@
 # cached prefix and bills those tokens twice.
 # [coder.workspace]
 # shared_target_dir = "C:/Users/you/.liberado/shared-target"
+# managed_target_root = "C:/Users/you/.liberado/cargo-targets"
 # warmup = true
 # warmup_timeout_secs = 1800
 

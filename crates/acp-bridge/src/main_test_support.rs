@@ -15,6 +15,13 @@ pub(crate) fn test_bridge() -> Arc<Bridge> {
 }
 
 pub(crate) fn test_bridge_with(provider: Arc<dyn Provider>) -> Arc<Bridge> {
+    test_bridge_with_tuning(provider, liberado_coder_core::CoderTuning::default())
+}
+
+pub(crate) fn test_bridge_with_tuning(
+    provider: Arc<dyn Provider>,
+    coder_tuning: liberado_coder_core::CoderTuning,
+) -> Arc<Bridge> {
     Arc::new(Bridge {
         provider,
         backend: "mock".into(),
@@ -22,7 +29,7 @@ pub(crate) fn test_bridge_with(provider: Arc<dyn Provider>) -> Arc<Bridge> {
         current_model: Mutex::new("mock-model".into()),
         default_mode: AgentMode::Coding,
         max_turns: 8,
-        coder_tuning: liberado_coder_core::CoderTuning::default(),
+        coder_tuning,
         config_dir: None,
         local_grant: liberado_common::CapabilitySet::empty(),
         system_prompt: None,
@@ -30,6 +37,11 @@ pub(crate) fn test_bridge_with(provider: Arc<dyn Provider>) -> Arc<Bridge> {
         permissions: Arc::new(permission::PermissionBroker::new()),
     })
 }
+
+/// Serializes tests that read or write process-wide `CARGO_TARGET_DIR`.
+///
+/// Tokio mutex so async converse tests can hold the guard across `.await`.
+pub(crate) static TARGET_ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 /// Captures ACP notifications and JSON-RPC responses instead of writing stdout
 /// (for MockProvider turns and dispatch-loop tests).

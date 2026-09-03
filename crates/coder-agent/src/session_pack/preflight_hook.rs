@@ -203,7 +203,7 @@ pub async fn run_ship_preflight(
         match base_commit(workspace).await {
             Some(base_sha) => {
                 let cache_dir = baseline_cache_dir();
-                let target_dir = workspace.join("target");
+                let target_dir = liberado_coder_sandbox::baseline_target_dir(None, workspace);
                 let opts = liberado_coder_sandbox::BaselineOptions {
                     project_root: workspace,
                     base_sha: &base_sha,

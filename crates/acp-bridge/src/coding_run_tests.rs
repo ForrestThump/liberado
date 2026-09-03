@@ -193,25 +193,54 @@ fn render_lists_files_changed_only_when_there_are_any() {
     );
 }
 
-/// `workspace_env` carries the shared build cache to children verbatim; blanks
-/// and absents contribute nothing. (Trimming is apply_shared_target_dir's job.)
+/// `workspace_env` carries a real ordinary cache only. Blanks and absents stay
+/// worktree-local. An exact `shared_target_dir` is trimmed and used as-is so C3
+/// pins do not move.
 #[test]
 fn workspace_env_carries_only_a_real_shared_target_dir() {
+    let workspace = tempfile::tempdir().unwrap();
     let mut tuning = CoderTuning::default();
-    assert!(workspace_env(&tuning).is_empty(), "nothing configured");
+    assert!(
+        workspace_env(&tuning, workspace.path()).is_empty(),
+        "nothing configured"
+    );
 
     tuning.workspace_build.shared_target_dir = Some("  ".into());
     assert!(
-        workspace_env(&tuning).is_empty(),
+        workspace_env(&tuning, workspace.path()).is_empty(),
         "blank is not a directory"
     );
 
     tuning.workspace_build.shared_target_dir = Some(" target/shared ".into());
-    let env = workspace_env(&tuning);
+    let env = workspace_env(&tuning, workspace.path());
     assert_eq!(
         env.get("CARGO_TARGET_DIR"),
-        Some(&" target/shared ".to_string()),
-        "passed through untouched; downstream trims"
+        Some(&"target/shared".to_string()),
+        "exact pin is trimmed and used as CARGO_TARGET_DIR"
+    );
+
+    let managed = workspace.path().join("managed");
+    tuning.workspace_build.shared_target_dir = None;
+    tuning.workspace_build.managed_target_root = Some(managed.to_string_lossy().into_owned());
+    let env = workspace_env(&tuning, workspace.path());
+    let dir = env.get("CARGO_TARGET_DIR").expect("managed ordinary cache");
+    assert!(
+        Path::new(dir).starts_with(&managed),
+        "managed root must own the ordinary cache: {dir}"
+    );
+
+    let worktree = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(worktree.path()).unwrap();
+    let from_worktree = workspace_env(&tuning, worktree.path());
+    assert_ne!(
+        from_worktree.get("CARGO_TARGET_DIR"),
+        env.get("CARGO_TARGET_DIR"),
+        "a durable worktree path must not reuse another repo's ordinary cache"
+    );
+    assert_eq!(
+        workspace_env(&tuning, workspace.path()).get("CARGO_TARGET_DIR"),
+        env.get("CARGO_TARGET_DIR"),
+        "warm-up and the applied ordinary cache must share the session project root"
     );
 }
 
@@ -312,7 +341,7 @@ async fn a_disabled_warmup_never_consults_the_tree() {
     let dir = broken_manifest_workspace();
     let mut tuning = CoderTuning::default();
     tuning.workspace_build.warmup = false;
-    warm_workspace_if_configured(&tuning, dir.path())
+    warm_workspace_if_configured(&tuning, dir.path(), dir.path())
         .await
         .expect("warmup=false must return without inspecting anything");
 }
@@ -324,7 +353,7 @@ async fn an_enabled_warmup_refuses_a_tree_that_does_not_compile() {
     let dir = broken_manifest_workspace();
     let mut tuning = CoderTuning::default();
     tuning.workspace_build.warmup = true;
-    let err = warm_workspace_if_configured(&tuning, dir.path())
+    let err = warm_workspace_if_configured(&tuning, dir.path(), dir.path())
         .await
         .expect_err("a broken baseline must refuse the run");
     assert!(

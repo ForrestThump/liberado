@@ -281,7 +281,11 @@ pub async fn run_coding_round(
     // together.
     //
     // Affordable only because of the shared target dir; see `WorkspaceBuildConfig`.
-    warm_workspace_if_configured(tuning, &workspace).await?;
+    //
+    // Identity is the client's project root, not this process CWD and not the
+    // durable worktree path. Worktrees from one repo share; unrelated repos do not.
+    crate::workspace_targets::apply_workspace_targets(&tuning.workspace_build, &project_root);
+    warm_workspace_if_configured(tuning, &workspace, &project_root).await?;
 
     let backend = LiberadoLoopBackend::with_provider_factory(factory);
     // Scope the live tap around the *whole* run. The pack's emitters are task-locals several
@@ -400,13 +404,14 @@ async fn remediate_if_needed(
 async fn warm_workspace_if_configured(
     tuning: &CoderTuning,
     workspace: &Path,
+    source_root: &Path,
 ) -> Result<(), String> {
     if !tuning.workspace_build.warmup {
         return Ok(());
     }
     let outcome = liberado_coder_sandbox::warmup::warm_workspace(
         workspace,
-        &workspace_env(tuning),
+        &workspace_env(tuning, source_root),
         std::time::Duration::from_secs(tuning.workspace_build.warmup_timeout_secs),
     )
     .await;
@@ -695,16 +700,16 @@ fn is_git_repo(path: &Path) -> bool {
 
 /// Environment every command in a coding worktree runs with.
 ///
-/// One function so the warm-up build and the run's own commands cannot end up pointed at
-/// different caches — which would make the warm-up warm a directory nobody then uses.
-fn workspace_env(tuning: &CoderTuning) -> std::collections::BTreeMap<String, String> {
-    let mut env = std::collections::BTreeMap::new();
-    if let Some(dir) = &tuning.workspace_build.shared_target_dir
-        && !dir.trim().is_empty()
-    {
-        env.insert("CARGO_TARGET_DIR".to_string(), dir.clone());
-    }
-    env
+/// `source_root` is the session project root (client cwd), not this process CWD and not
+/// the durable worktree path. One function so the warm-up build and the run's own
+/// commands cannot end up pointed at different caches — which would make the warm-up
+/// warm a directory nobody then uses.
+fn workspace_env(
+    tuning: &CoderTuning,
+    source_root: &Path,
+) -> std::collections::BTreeMap<String, String> {
+    liberado_coder_sandbox::ordinary_target_env(&tuning.workspace_build, source_root)
+        .unwrap_or_default()
 }
 
 /// A per-role view of one connection profile.

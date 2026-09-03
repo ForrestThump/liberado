@@ -20,6 +20,7 @@ fn the_documented_workspace_section_reaches_the_config() {
     let toml = r#"
 [coder.workspace]
 shared_target_dir = "/tmp/shared"
+managed_target_root = "/tmp/managed-targets"
 warmup = false
 warmup_timeout_secs = 42
 "#;
@@ -31,6 +32,11 @@ warmup_timeout_secs = 42
         tuning.workspace_build.shared_target_dir.as_deref(),
         Some("/tmp/shared"),
         "the key an operator is told to write must reach the field"
+    );
+    assert_eq!(
+        tuning.workspace_build.managed_target_root.as_deref(),
+        Some("/tmp/managed-targets"),
+        "managed_target_root must parse from [coder.workspace]"
     );
     assert!(!tuning.workspace_build.warmup);
     assert_eq!(tuning.workspace_build.warmup_timeout_secs, 42);
