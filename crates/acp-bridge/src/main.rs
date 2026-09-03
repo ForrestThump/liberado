@@ -49,6 +49,7 @@ mod provider;
 mod session_store;
 mod stdin_guard;
 mod wire;
+mod workspace_targets;
 
 use wire::{
     JsonRpcErrorBody, JsonRpcIncoming, StdoutWire, WireSink, emit_agent_text_chunk, emit_tool_call,
@@ -356,29 +357,6 @@ fn report_config_dir(config_dir: &Option<std::path::PathBuf>) {
     }
 }
 
-/// Point every child process at the shared build cache, once, before anything runs.
-///
-/// Set on this process rather than threaded through each command builder because it has to reach
-/// three places that construct their own runners — the model's `run_command`, the verifier
-/// pipeline, and the warm-up build — and a cache that two of the three use is a cache that warms
-/// a directory the third ignores. Inheritance makes them agree by construction.
-///
-/// Correct here specifically because tuning is loaded once, above, and every session this bridge
-/// serves shares it. A daemon serving sessions with *different* coder configs could not do this
-/// and would have to thread the value.
-///
-/// SAFETY: single-threaded startup, before any session or task exists.
-fn apply_shared_target_dir(shared_target_dir: &Option<String>) {
-    if let Some(dir) = shared_target_dir
-        .as_deref()
-        .map(str::trim)
-        .filter(|d| !d.is_empty())
-    {
-        unsafe { std::env::set_var("CARGO_TARGET_DIR", dir) };
-        tracing::info!(target_dir = %dir, "coding worktrees share one cargo build cache");
-    }
-}
-
 /// Spawn `session/prompt` on a task so `session/cancel` can be read mid-turn. Refuses with a
 /// JSON-RPC error when another prompt is already in flight or the session id is missing/empty.
 /// Returns once the task is registered in `in_flight`.
@@ -471,7 +449,8 @@ async fn resolve_bridge_startup() -> Result<Arc<Bridge>, Box<dyn std::error::Err
     let config_dir = liberado_config::config_dir();
     let coder_tuning = coding_run::load_coder_tuning(config_dir.as_deref())?;
     report_config_dir(&config_dir);
-    apply_shared_target_dir(&coder_tuning.workspace_build.shared_target_dir);
+    let source_root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    workspace_targets::apply_workspace_targets(&coder_tuning.workspace_build, &source_root);
     // `[acp]` from the same config the coding pack reads, so the prompt and the turn budget are
     // versioned prose in a file rather than JSON strings pasted into another tool's config.
     let acp_config = coding_run::load_acp_config(config_dir.as_deref());

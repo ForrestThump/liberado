@@ -193,25 +193,40 @@ fn render_lists_files_changed_only_when_there_are_any() {
     );
 }
 
-/// `workspace_env` carries the shared build cache to children verbatim; blanks
-/// and absents contribute nothing. (Trimming is apply_shared_target_dir's job.)
+/// `workspace_env` carries a real ordinary cache only. Blanks and absents stay
+/// worktree-local. An exact `shared_target_dir` is trimmed and used as-is so C3
+/// pins do not move.
 #[test]
 fn workspace_env_carries_only_a_real_shared_target_dir() {
+    let workspace = tempfile::tempdir().unwrap();
     let mut tuning = CoderTuning::default();
-    assert!(workspace_env(&tuning).is_empty(), "nothing configured");
+    assert!(
+        workspace_env(&tuning, workspace.path()).is_empty(),
+        "nothing configured"
+    );
 
     tuning.workspace_build.shared_target_dir = Some("  ".into());
     assert!(
-        workspace_env(&tuning).is_empty(),
+        workspace_env(&tuning, workspace.path()).is_empty(),
         "blank is not a directory"
     );
 
     tuning.workspace_build.shared_target_dir = Some(" target/shared ".into());
-    let env = workspace_env(&tuning);
+    let env = workspace_env(&tuning, workspace.path());
     assert_eq!(
         env.get("CARGO_TARGET_DIR"),
-        Some(&" target/shared ".to_string()),
-        "passed through untouched; downstream trims"
+        Some(&"target/shared".to_string()),
+        "exact pin is trimmed and used as CARGO_TARGET_DIR"
+    );
+
+    let managed = workspace.path().join("managed");
+    tuning.workspace_build.shared_target_dir = None;
+    tuning.workspace_build.managed_target_root = Some(managed.to_string_lossy().into_owned());
+    let env = workspace_env(&tuning, workspace.path());
+    let dir = env.get("CARGO_TARGET_DIR").expect("managed ordinary cache");
+    assert!(
+        Path::new(dir).starts_with(&managed),
+        "managed root must own the ordinary cache: {dir}"
     );
 }
 

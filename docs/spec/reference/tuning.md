@@ -369,6 +369,7 @@ All optional, all defaulted. The ones worth knowing:
 | `proposals` | `reap_interval_secs` | how often expired proposals are swept |
 | `capture` | `inbox_path`, `capture_paths`, `ready_flag`, `hold_flag`, settle windows, ignore globs | inbox capture + watcher scope (F12) |
 | `maintenance` | git commit + maintenance schedules, `prune_requires_proposal` | vault housekeeping |
+| `coder.workspace` | `shared_target_dir`, `managed_target_root`, `warmup`, `warmup_timeout_secs` | ordinary Cargo cache reuse; see [`cargo-targets.md`](cargo-targets.md) |
 
 ---
 

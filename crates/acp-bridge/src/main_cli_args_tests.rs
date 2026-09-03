@@ -58,23 +58,39 @@ fn positional_args_are_ignored_not_errors() {
 }
 
 #[test]
-fn apply_shared_target_dir_sets_trimmed_and_ignores_blank() {
+fn apply_workspace_targets_sets_trimmed_and_ignores_blank() {
     let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let saved = std::env::var("CARGO_TARGET_DIR").ok();
+    let cwd = std::env::current_dir().expect("cwd");
 
-    apply_shared_target_dir(&None);
+    crate::workspace_targets::apply_workspace_targets(
+        &liberado_coder_core::WorkspaceBuildConfig::default(),
+        &cwd,
+    );
     assert_eq!(
         std::env::var("CARGO_TARGET_DIR").ok(),
         saved,
         "no setting must leave the environment alone"
     );
-    apply_shared_target_dir(&Some("   ".into()));
+    crate::workspace_targets::apply_workspace_targets(
+        &liberado_coder_core::WorkspaceBuildConfig {
+            shared_target_dir: Some("   ".into()),
+            ..Default::default()
+        },
+        &cwd,
+    );
     assert_eq!(
         std::env::var("CARGO_TARGET_DIR").ok(),
         saved,
         "a whitespace-only setting must be ignored, not blank out the cache"
     );
-    apply_shared_target_dir(&Some("  target/shared  ".into()));
+    crate::workspace_targets::apply_workspace_targets(
+        &liberado_coder_core::WorkspaceBuildConfig {
+            shared_target_dir: Some("  target/shared  ".into()),
+            ..Default::default()
+        },
+        &cwd,
+    );
     assert_eq!(
         std::env::var("CARGO_TARGET_DIR").as_deref(),
         Ok("target/shared"),

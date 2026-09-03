@@ -54,6 +54,11 @@ name = "local readiness policy"
 sources = ["function-complexity.toml", "crates/cli/src/function_complexity_cmd.rs", "crates/cli/src/readiness_cmd.rs", ".githooks/", "justfile"]
 documents = ["docs/spec/reference/local-readiness.md"]
 
+[[impact]]
+name = "managed cargo targets"
+sources = ["crates/coder-sandbox/src/cargo_targets.rs"]
+documents = ["docs/spec/reference/cargo-targets.md"]
+
 # Narrow, persistent exceptions are allowed only for a source path and must carry
 # review evidence. Add these only after a human confirms that no prose changed.
 #

@@ -406,7 +406,7 @@ async fn warm_workspace_if_configured(
     }
     let outcome = liberado_coder_sandbox::warmup::warm_workspace(
         workspace,
-        &workspace_env(tuning),
+        &workspace_env(tuning, workspace),
         std::time::Duration::from_secs(tuning.workspace_build.warmup_timeout_secs),
     )
     .await;
@@ -697,14 +697,12 @@ fn is_git_repo(path: &Path) -> bool {
 ///
 /// One function so the warm-up build and the run's own commands cannot end up pointed at
 /// different caches — which would make the warm-up warm a directory nobody then uses.
-fn workspace_env(tuning: &CoderTuning) -> std::collections::BTreeMap<String, String> {
-    let mut env = std::collections::BTreeMap::new();
-    if let Some(dir) = &tuning.workspace_build.shared_target_dir
-        && !dir.trim().is_empty()
-    {
-        env.insert("CARGO_TARGET_DIR".to_string(), dir.clone());
-    }
-    env
+fn workspace_env(
+    tuning: &CoderTuning,
+    workspace: &Path,
+) -> std::collections::BTreeMap<String, String> {
+    liberado_coder_sandbox::ordinary_target_env(&tuning.workspace_build, workspace)
+        .unwrap_or_default()
 }
 
 /// A per-role view of one connection profile.

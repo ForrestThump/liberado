@@ -4,6 +4,7 @@
 //! enforces command policy, caps command output, and defines the traits future Docker/remote
 //! sandboxes will implement.
 
+mod cargo_targets;
 mod checkpoint;
 mod merge;
 mod path_deps;
@@ -11,6 +12,10 @@ mod preflight;
 mod preflight_baseline;
 pub mod warmup;
 mod worktree_registry;
+pub use cargo_targets::{
+    TargetAllocation, TargetClass, TargetError, TargetKind, TargetLease, TargetPool, TargetRequest,
+    baseline_target_dir, ordinary_target_env, resolve_ordinary,
+};
 pub use checkpoint::{Checkpoint, CheckpointError, ShadowGit};
 pub use merge::{
     ConflictSides, MergeAttempt, MergeError, add_worktree_on_branch, branch_tip, commit_merge,

@@ -632,9 +632,19 @@ pub struct WorkspaceBuildConfig {
     /// which is worse than giving it its own cache. Sharing safely across concurrent runs needs
     /// a lock-free compiler cache such as `sccache`, not this.
     ///
-    /// Unset means each worktree keeps its own `target/`.
+    /// Unset means each worktree keeps its own `target/` unless
+    /// [`Self::managed_target_root`] is set.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shared_target_dir: Option<String>,
+    /// Optional pool root for class-aware shared and isolated Cargo targets.
+    ///
+    /// Ordinary jobs from one source root share `<root>/shared/<source>/ordinary`.
+    /// Coverage, mutation, and comparison jobs use `<root>/isolated/<class>/<job>`.
+    /// When [`Self::shared_target_dir`] is also set, that exact path still wins for
+    /// ordinary coding (C3 pins and existing operators). Unset keeps worktree-local
+    /// `target/` — this field does not change coding-pack defaults.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub managed_target_root: Option<String>,
     /// Build the workspace once, before the model is given anything.
     ///
     /// Two reasons, and the second is the expensive one.
@@ -667,6 +677,7 @@ impl Default for WorkspaceBuildConfig {
     fn default() -> Self {
         Self {
             shared_target_dir: None,
+            managed_target_root: None,
             warmup: default_warmup(),
             warmup_timeout_secs: default_warmup_timeout(),
         }

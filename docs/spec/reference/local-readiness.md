@@ -103,3 +103,7 @@ These recipes build through `CARGO_TARGET_DIR=target/liberado-invoke` so the inv
 collides with `target/debug`. Per-crate baseline timeouts live in the CLI's
 `build_mutants_command`; add an entry there when a crate's unmutated baseline exceeds the 3s
 floor on a cold cache.
+
+Coverage, mutation, and comparison jobs stay on isolated targets. Ordinary coding worktrees
+may share a managed cache when `[coder.workspace]` names one. See
+[`cargo-targets.md`](cargo-targets.md).

@@ -182,7 +182,8 @@ checkout.
 
 The Cargo target directories are separate. Never share one target directory across comparison
 worktrees. Cargo can otherwise reuse freshness state or a same-named workspace binary from the
-wrong checkout.
+wrong checkout. Ordinary coding may use a managed shared cache; C3 must not. See
+[`cargo-targets.md`](cargo-targets.md).
 
 `targets/` is rebuildable Cargo state. Durable jobs remove it after artifacts and archive
 refs are saved unless `retain_build_caches` is enabled in the executor policy. They also remove
