@@ -1550,6 +1550,12 @@ async fn ensure_converse(bridge: &Bridge, sid: &str) -> Result<Arc<SessionHandle
         }
     };
     if let Some(handle) = reuse {
+        // A later prompt on this handle must not inherit another session's
+        // process-wide CARGO_TARGET_DIR. Apply after every reuse, not only
+        // when the converse is first created.
+        if mode.uses_coding_tools() {
+            workspace_targets::apply_workspace_targets(&bridge.coder_tuning.workspace_build, &cwd);
+        }
         return Ok(handle);
     }
 

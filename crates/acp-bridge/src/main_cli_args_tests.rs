@@ -59,7 +59,7 @@ fn positional_args_are_ignored_not_errors() {
 
 #[test]
 fn apply_workspace_targets_sets_trimmed_and_ignores_blank() {
-    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = TARGET_ENV_LOCK.blocking_lock();
     let saved = std::env::var("CARGO_TARGET_DIR").ok();
     let cwd = std::env::current_dir().expect("cwd");
 
@@ -70,7 +70,7 @@ fn apply_workspace_targets_sets_trimmed_and_ignores_blank() {
     assert_eq!(
         std::env::var("CARGO_TARGET_DIR").ok(),
         saved,
-        "no setting must leave the environment alone"
+        "no setting must leave an operator-exported cache alone"
     );
     crate::workspace_targets::apply_workspace_targets(
         &liberado_coder_core::WorkspaceBuildConfig {
@@ -105,7 +105,7 @@ fn apply_workspace_targets_sets_trimmed_and_ignores_blank() {
 
 #[test]
 fn apply_workspace_targets_uses_the_given_source_root_not_process_cwd() {
-    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = TARGET_ENV_LOCK.blocking_lock();
     let saved = std::env::var("CARGO_TARGET_DIR").ok();
     let dir = tempfile::tempdir().expect("tempdir");
     let repo_a = dir.path().join("repo-a");
@@ -142,4 +142,45 @@ fn apply_workspace_targets_uses_the_given_source_root_not_process_cwd() {
         path_b, path_cwd,
         "a job must not inherit the ACP process CWD cache"
     );
+}
+
+#[test]
+fn apply_workspace_targets_clears_a_stale_session_cache_on_fallback() {
+    let _guard = TARGET_ENV_LOCK.blocking_lock();
+    let saved = std::env::var("CARGO_TARGET_DIR").ok();
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = dir.path().join("repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    let managed = dir.path().join("managed");
+    let build = liberado_coder_core::WorkspaceBuildConfig {
+        managed_target_root: Some(managed.to_string_lossy().into_owned()),
+        ..Default::default()
+    };
+
+    crate::workspace_targets::apply_workspace_targets(&build, &repo);
+    let applied = std::env::var("CARGO_TARGET_DIR").expect("managed cache");
+    crate::workspace_targets::apply_workspace_targets(
+        &liberado_coder_core::WorkspaceBuildConfig::default(),
+        &repo,
+    );
+    assert!(
+        std::env::var("CARGO_TARGET_DIR").is_err(),
+        "worktree-local must not keep another session's CARGO_TARGET_DIR ({applied})"
+    );
+
+    crate::workspace_targets::apply_workspace_targets(&build, &repo);
+    let ordinary = liberado_coder_sandbox::TargetPool::new(&managed)
+        .shared_path(&repo, liberado_coder_sandbox::TargetClass::Ordinary);
+    std::fs::create_dir_all(&ordinary).unwrap();
+    std::fs::write(ordinary.join(".liberado-target-class"), "coverage").unwrap();
+    crate::workspace_targets::apply_workspace_targets(&build, &repo);
+    assert!(
+        std::env::var("CARGO_TARGET_DIR").is_err(),
+        "an allocation error must not leave a previous session's CARGO_TARGET_DIR"
+    );
+
+    match saved {
+        Some(v) => unsafe { std::env::set_var("CARGO_TARGET_DIR", v) },
+        None => unsafe { std::env::remove_var("CARGO_TARGET_DIR") },
+    }
 }

@@ -608,6 +608,61 @@ fn chat_system_prompt_uses_configured_text_when_present() {
 }
 
 #[tokio::test]
+async fn ensure_converse_reapplies_the_project_cache_when_a_handle_is_reused() {
+    let store = TempDir::new().unwrap();
+    let _sessions = lock_sessions_dir(&store);
+    let _env = TARGET_ENV_LOCK.lock().await;
+    let saved = std::env::var("CARGO_TARGET_DIR").ok();
+    let dir = TempDir::new().unwrap();
+    let repo_a = dir.path().join("repo-a");
+    let repo_b = dir.path().join("repo-b");
+    std::fs::create_dir_all(&repo_a).unwrap();
+    std::fs::create_dir_all(&repo_b).unwrap();
+    let mut tuning = liberado_coder_core::CoderTuning::default();
+    tuning.workspace_build.managed_target_root =
+        Some(dir.path().join("managed").to_string_lossy().into_owned());
+    let bridge = test_bridge_with_tuning(Arc::new(MockProvider::with_script("mock", [])), tuning);
+
+    let sid_a = handle_session_new(&bridge, &json!({ "cwd": repo_a.display().to_string() }))
+        .await
+        .unwrap()["sessionId"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let sid_b = handle_session_new(&bridge, &json!({ "cwd": repo_b.display().to_string() }))
+        .await
+        .unwrap()["sessionId"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let handle_a1 = ensure_converse(&bridge, &sid_a).await.unwrap();
+    let cache_a = std::env::var("CARGO_TARGET_DIR").expect("session A cache");
+    let _handle_b = ensure_converse(&bridge, &sid_b).await.unwrap();
+    let cache_b = std::env::var("CARGO_TARGET_DIR").expect("session B cache");
+    let handle_a2 = ensure_converse(&bridge, &sid_a).await.unwrap();
+    let cache_a_again = std::env::var("CARGO_TARGET_DIR").expect("reused session A cache");
+
+    match saved {
+        Some(v) => unsafe { std::env::set_var("CARGO_TARGET_DIR", v) },
+        None => unsafe { std::env::remove_var("CARGO_TARGET_DIR") },
+    }
+
+    assert!(
+        Arc::ptr_eq(&handle_a1, &handle_a2),
+        "the second prompt must reuse the existing converse handle"
+    );
+    assert_ne!(
+        cache_a, cache_b,
+        "two project roots must not share one ordinary cache"
+    );
+    assert_eq!(
+        cache_a_again, cache_a,
+        "a reused handle must reapply its own project cache, not inherit session B"
+    );
+}
+
+#[tokio::test]
 async fn ensure_converse_refuses_goal_mode() {
     let store = TempDir::new().unwrap();
     let _guards = lock_sessions_dir(&store);
