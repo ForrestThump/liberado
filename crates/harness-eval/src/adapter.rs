@@ -21,12 +21,12 @@ pub fn default_path_program(harness_id: &str) -> Option<&'static str> {
     match harness_id {
         "pi" => Some(if cfg!(windows) { "pi.cmd" } else { "pi" }),
         "hermes" => Some(if cfg!(windows) {
-            "hermes.cmd"
+            "hermes.exe"
         } else {
             "hermes"
         }),
         // Coding CLI from langchain-ai/deepagents (`deepagents-code` / `dcode`).
-        "deepagents" => Some(if cfg!(windows) { "dcode.cmd" } else { "dcode" }),
+        "deepagents" => Some(if cfg!(windows) { "dcode.exe" } else { "dcode" }),
         _ => None,
     }
 }
@@ -60,11 +60,15 @@ mod tests {
     fn path_defaults_cover_the_external_c3_harnesses() {
         assert!(default_path_program("pi").is_some());
         assert!(default_path_program("hermes").is_some());
-        assert_eq!(
-            default_path_program("deepagents").map(|name| name.trim_end_matches(".cmd")),
-            Some("dcode")
-        );
+        assert!(default_path_program("deepagents").is_some());
         assert!(default_path_program("liberado").is_none());
         assert!(default_path_program("cline").is_none());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn python_tool_installers_use_windows_executables() {
+        assert_eq!(default_path_program("hermes"), Some("hermes.exe"));
+        assert_eq!(default_path_program("deepagents"), Some("dcode.exe"));
     }
 }
