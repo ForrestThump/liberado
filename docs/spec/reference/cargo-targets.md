@@ -57,16 +57,19 @@ Resolution for an ordinary coding run:
    `<root>/shared/<source-hash>/ordinary`.
 3. Otherwise — worktree-local `target/`.
 
-ACP applies this once per job from the session's project root (the
-client cwd), after the worktree exists. Warm-up still builds in the
-durable worktree, but the cache identity is that project root, so
-worktrees of one repo share and unrelated repos do not. `run_command`
-and ship-bar baseline inherit the same allocation.
+ACP applies this on every coding prompt from the session's project root
+(the client cwd), including a reused interactive converse handle.
+Warm-up still builds in the durable worktree, but the cache identity is
+that project root, so worktrees of one repo share and unrelated repos do
+not. `run_command` and ship-bar baseline inherit the same allocation. A
+worktree-local result or allocation error clears a `CARGO_TARGET_DIR`
+this process previously applied, so a later session cannot inherit it.
 
-The source hash keeps the canonical path's case on a case-sensitive
-filesystem. `/work/Repo` and `/work/repo` are distinct roots and must
-not share a cache. Case is folded only when a case-flipped name opens
-the same directory (Windows and default macOS).
+The source hash folds case per path component, and only when that
+component itself has a case-flipped alias to the same directory. A
+case-insensitive ancestor such as `/Volumes` must not lowercase a
+case-sensitive leaf. `/work/Repo` and `/work/repo` on Linux stay
+distinct.
 
 Coverage, mutation, and comparison callers do not read these keys for their
 artifact dirs. They keep the isolated paths they already own.
@@ -119,6 +122,7 @@ cargo-mutants, or a C3 harness at that directory.
 
 Ship-bar baseline computation honors a live `CARGO_TARGET_DIR` before it
 falls back to `workspace/target`. When ACP applies a managed or exact
-shared ordinary cache for the session's project root, warm-up, model
-`run_command`, and baseline compare use the same directory. Unchanged
-crates then increment instead of filling a new worktree `target/`.
+shared ordinary cache for the session's project root on that prompt,
+warm-up, model `run_command`, and baseline compare use the same
+directory. Unchanged crates then increment instead of filling a new
+worktree `target/`.

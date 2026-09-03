@@ -77,6 +77,42 @@ fn case_distinct_roots_keep_distinct_ordinary_caches_on_a_case_sensitive_filesys
 }
 
 #[test]
+fn case_sensitive_leaves_under_a_case_insensitive_ancestor_stay_distinct() {
+    let ancestor_only = |path: &Path| {
+        path.file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.eq_ignore_ascii_case("CiRoot"))
+    };
+    let upper = Path::new("/CiRoot/Repo");
+    let lower = Path::new("/CiRoot/repo");
+    let folded_upper = identity::fold_canonical_path(upper, ancestor_only);
+    let folded_lower = identity::fold_canonical_path(lower, ancestor_only);
+    assert_ne!(
+        folded_upper, folded_lower,
+        "a case-insensitive ancestor must not lowercase a case-sensitive leaf"
+    );
+    assert!(
+        folded_upper.contains("Repo"),
+        "the sensitive leaf must keep its case: {folded_upper}"
+    );
+    assert!(
+        folded_lower.contains("repo"),
+        "the sensitive leaf must keep its case: {folded_lower}"
+    );
+    assert!(
+        folded_upper.to_ascii_lowercase().starts_with("/ciroot/"),
+        "the insensitive ancestor still folds: {folded_upper}"
+    );
+
+    let fold_all = |_path: &Path| true;
+    assert_eq!(
+        identity::fold_canonical_path(upper, fold_all),
+        identity::fold_canonical_path(lower, fold_all),
+        "uniform case-insensitive trees still share one key"
+    );
+}
+
+#[test]
 fn a_worktree_does_not_inherit_another_project_root_ordinary_cache() {
     let dir = tempfile::tempdir().expect("tempdir");
     let project = dir.path().join("project");
