@@ -133,7 +133,8 @@ real network/process infrastructure.
 **Decision:** Build a mock harness in `liberado-test-support` and `liberado-common` to
 unblock ~35 testable gaps.
 
-### Harness Implementation (see `docs/impl/mock-harness-scope.md` for full checklist)
+### Harness Implementation (see the archived
+[`mock-harness-scope.md`](../future-work/archive/mock-harness-scope.md) for the completed checklist)
 
 | Step | What | Status |
 |------|------|:------:|

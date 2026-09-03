@@ -42,6 +42,7 @@ Authority model: [doc-authority.md](spec/reference/doc-authority.md).
 | [docs/future-work/archive/delegated-work-is-discarded-at-the-seam.md](future-work/archive/delegated-work-is-discarded-at-the-seam.md) | finding | implemented | evidence | delegation | delegated-work-seam |
 | [docs/future-work/archive/docs_fixup.md](future-work/archive/docs_fixup.md) | plan | implemented | advisory | docs | docs-lifecycle |
 | [docs/future-work/archive/harness-comparison-redesign-2026-08.md](future-work/archive/harness-comparison-redesign-2026-08.md) | plan | implemented | advisory | coding-harness | harness-comparison-redesign |
+| [docs/future-work/archive/mock-harness-scope.md](future-work/archive/mock-harness-scope.md) | plan | implemented | advisory | correctness | — |
 | [docs/future-work/archive/mutants-campaign-ledger-plan.md](future-work/archive/mutants-campaign-ledger-plan.md) | plan | implemented | advisory | correctness | — |
 | [docs/future-work/archive/parallel-deliverables-2026-08-round-2.md](future-work/archive/parallel-deliverables-2026-08-round-2.md) | plan | implemented | advisory | process | parallel-deliverables-r2 |
 | [docs/future-work/archive/parallel-deliverables-2026-08-round-3.md](future-work/archive/parallel-deliverables-2026-08-round-3.md) | plan | implemented | advisory | process | parallel-deliverables-r3 |
