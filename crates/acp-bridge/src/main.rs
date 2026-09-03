@@ -41,6 +41,7 @@ use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
 mod ask_human;
 mod coding_run;
+mod converse_support;
 mod done;
 mod interactive;
 mod permission;
@@ -1550,57 +1551,13 @@ async fn ensure_converse(bridge: &Bridge, sid: &str) -> Result<Arc<SessionHandle
         }
     };
     if let Some(handle) = reuse {
-        // A later prompt on this handle must not inherit another session's
-        // process-wide CARGO_TARGET_DIR. Apply after every reuse, not only
-        // when the converse is first created.
-        if mode.uses_coding_tools() {
-            workspace_targets::apply_workspace_targets(&bridge.coder_tuning.workspace_build, &cwd);
-        }
+        converse_support::reapply_coding_workspace_targets(bridge, mode, &cwd);
         return Ok(handle);
     }
 
-    let stored = if live_history.is_empty() {
-        session_store::load(sid)
-            .ok()
-            .flatten()
-            .map(|r| r.messages)
-            .unwrap_or_default()
-    } else {
-        live_history
-    };
-
-    let handle = if mode.uses_coding_tools() {
-        let permission = permission_attach(bridge, sid, &cwd);
-        let parts = interactive::prepare_coding_converse(
-            &cwd,
-            sid,
-            &bridge.coder_tuning,
-            ask_human::may_ask_human(&bridge.local_grant),
-            bridge.config_dir.as_deref(),
-            permission,
-        )
-        .await?;
-        open_handle(
-            sid,
-            Arc::clone(&bridge.provider),
-            bridge.max_turns,
-            parts.system,
-            &stored,
-            parts.tools,
-            true,
-        )
-    } else {
-        open_handle(
-            sid,
-            Arc::clone(&bridge.provider),
-            bridge.max_turns,
-            chat_system_prompt(&cwd, bridge.system_prompt.as_deref()),
-            &stored,
-            Arc::new(NoTools),
-            false,
-        )
-    };
-    let handle = Arc::new(handle);
+    let stored = converse_support::stored_converse_turns(sid, live_history);
+    let handle =
+        Arc::new(converse_support::open_converse_handle(bridge, sid, mode, &cwd, &stored).await?);
     if let Some(sess) = bridge.acp_sessions.lock().await.get_mut(sid) {
         sess.converse = Some(Arc::clone(&handle));
     }
