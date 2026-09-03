@@ -63,6 +63,11 @@ durable worktree, but the cache identity is that project root, so
 worktrees of one repo share and unrelated repos do not. `run_command`
 and ship-bar baseline inherit the same allocation.
 
+The source hash keeps the canonical path's case on a case-sensitive
+filesystem. `/work/Repo` and `/work/repo` are distinct roots and must
+not share a cache. Case is folded only when a case-flipped name opens
+the same directory (Windows and default macOS).
+
 Coverage, mutation, and comparison callers do not read these keys for their
 artifact dirs. They keep the isolated paths they already own.
 

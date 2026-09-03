@@ -52,6 +52,31 @@ fn distinct_source_roots_do_not_share() {
 }
 
 #[test]
+fn case_distinct_roots_keep_distinct_ordinary_caches_on_a_case_sensitive_filesystem() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let upper = dir.path().join("Repo");
+    let lower = dir.path().join("repo");
+    std::fs::create_dir(&upper).unwrap();
+    let pool = TargetPool::new(dir.path().join("pool"));
+    match std::fs::create_dir(&lower) {
+        Ok(()) => {
+            assert_ne!(
+                pool.shared_path(&upper, TargetClass::Ordinary),
+                pool.shared_path(&lower, TargetClass::Ordinary),
+                "Linux-style distinct roots must not share a cache"
+            );
+        }
+        Err(_) => {
+            assert_eq!(
+                pool.shared_path(&upper, TargetClass::Ordinary),
+                pool.shared_path(&lower, TargetClass::Ordinary),
+                "a case-insensitive filesystem treats the two spellings as one root"
+            );
+        }
+    }
+}
+
+#[test]
 fn a_worktree_does_not_inherit_another_project_root_ordinary_cache() {
     let dir = tempfile::tempdir().expect("tempdir");
     let project = dir.path().join("project");
