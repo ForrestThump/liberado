@@ -4,7 +4,7 @@
 
 Current-state handoff. Kept in sync after each session arc. For the authoritative system map read
 [`../../../spec/architecture/overview.md`](../../../spec/architecture/overview.md); for build/run/configure read
-[`../../../impl/AGENTS.md`](../../../impl/AGENTS.md); for the development process (how to
+the root [`AGENTS.md`](../../../../AGENTS.md); for the development process (how to
 research, plan, delegate, test, commit) read
 [`../../../impl/development-workflow.md`](../../../impl/development-workflow.md); for the chat
 API contract read [`../../../spec/reference/api.md`](../../../spec/reference/api.md); for the rationale behind any
@@ -248,7 +248,7 @@ shape of gap the in-flight deliberation is aimed at.
   spawned processes). A co-resident MCP process can write directly to the vault â€” why writer-identity
   verification (hardening audit item 1) needs OS-level isolation, not a code patch.
 - **WASM builds need the rustup toolchain, not the standalone Rust install on PATH** â€” full
-  explanation: [`../../../impl/AGENTS.md`](../../../impl/AGENTS.md#building-the-wasm-frontend).
+  explanation: the [`webui` README](../../../../crates/webui/README.md#build-commands).
 
 ---
 
