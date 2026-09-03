@@ -228,6 +228,20 @@ fn workspace_env_carries_only_a_real_shared_target_dir() {
         Path::new(dir).starts_with(&managed),
         "managed root must own the ordinary cache: {dir}"
     );
+
+    let worktree = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(worktree.path()).unwrap();
+    let from_worktree = workspace_env(&tuning, worktree.path());
+    assert_ne!(
+        from_worktree.get("CARGO_TARGET_DIR"),
+        env.get("CARGO_TARGET_DIR"),
+        "a durable worktree path must not reuse another repo's ordinary cache"
+    );
+    assert_eq!(
+        workspace_env(&tuning, workspace.path()).get("CARGO_TARGET_DIR"),
+        env.get("CARGO_TARGET_DIR"),
+        "warm-up and the applied ordinary cache must share the session project root"
+    );
 }
 
 /// `[acp]` from real config reaches the caller; a broken load falls back to defaults.
@@ -327,7 +341,7 @@ async fn a_disabled_warmup_never_consults_the_tree() {
     let dir = broken_manifest_workspace();
     let mut tuning = CoderTuning::default();
     tuning.workspace_build.warmup = false;
-    warm_workspace_if_configured(&tuning, dir.path())
+    warm_workspace_if_configured(&tuning, dir.path(), dir.path())
         .await
         .expect("warmup=false must return without inspecting anything");
 }
@@ -339,7 +353,7 @@ async fn an_enabled_warmup_refuses_a_tree_that_does_not_compile() {
     let dir = broken_manifest_workspace();
     let mut tuning = CoderTuning::default();
     tuning.workspace_build.warmup = true;
-    let err = warm_workspace_if_configured(&tuning, dir.path())
+    let err = warm_workspace_if_configured(&tuning, dir.path(), dir.path())
         .await
         .expect_err("a broken baseline must refuse the run");
     assert!(

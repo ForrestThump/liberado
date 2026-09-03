@@ -32,6 +32,7 @@ pub async fn prepare_coding_converse(
     permission: Option<crate::permission::PermissionAttach>,
 ) -> Result<CodingConverse, String> {
     let workspace = coding_run::prepare_workspace(cwd, session_id).await?;
+    crate::workspace_targets::apply_workspace_targets(&tuning.workspace_build, cwd);
     // Project identity is the client's cwd. The durable worktree is not under the
     // declared root, so matching on it would drop the configured bar.
     let spec = coding_run::interactive_preflight_spec(config_dir, cwd);

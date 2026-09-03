@@ -428,8 +428,11 @@ fn missing_session_error() -> JsonRpcErrorBody {
 }
 
 /// Resolve every piece of startup state the bridge needs: provider, catalog, config (with the
-/// resolution tier reported before anything depends on it), the shared build-cache override, and
-/// the declared authority grant. Refuses to serve when the configured grant is missing.
+/// resolution tier reported before anything depends on it), and the declared authority grant.
+/// Refuses to serve when the configured grant is missing.
+///
+/// Ordinary Cargo cache identity is not resolved here. It is applied per job from the
+/// session's project root once a worktree exists.
 async fn resolve_bridge_startup() -> Result<Arc<Bridge>, Box<dyn std::error::Error>> {
     let resolved = build_provider()?;
     let catalog = load_model_catalog(
@@ -449,8 +452,6 @@ async fn resolve_bridge_startup() -> Result<Arc<Bridge>, Box<dyn std::error::Err
     let config_dir = liberado_config::config_dir();
     let coder_tuning = coding_run::load_coder_tuning(config_dir.as_deref())?;
     report_config_dir(&config_dir);
-    let source_root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    workspace_targets::apply_workspace_targets(&coder_tuning.workspace_build, &source_root);
     // `[acp]` from the same config the coding pack reads, so the prompt and the turn budget are
     // versioned prose in a file rather than JSON strings pasted into another tool's config.
     let acp_config = coding_run::load_acp_config(config_dir.as_deref());

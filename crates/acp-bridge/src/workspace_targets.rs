@@ -1,13 +1,17 @@
-//! Apply the managed ordinary Cargo cache to ACP coding runs.
+//! Apply the managed ordinary Cargo cache to one ACP coding job.
+//!
+//! Call this with the session's project root (the client cwd), after the
+//! worktree exists, not with the bridge process CWD at startup. Coverage,
+//! mutation, and comparison jobs do not use this process env.
 
 use std::path::Path;
 
 use liberado_coder_core::WorkspaceBuildConfig;
 
-/// Point child processes at the managed ordinary cache.
+/// Point child processes at the ordinary cache for `source_root`.
 ///
-/// Safe at single-threaded startup. Coverage, mutation, and comparison jobs
-/// do not use this process env; they keep isolated targets.
+/// `source_root` is the repo this job is of. Durable worktrees from that root
+/// share one allocation. A different client cwd gets a different hash.
 pub fn apply_workspace_targets(build: &WorkspaceBuildConfig, source_root: &Path) {
     match liberado_coder_sandbox::resolve_ordinary(build, source_root) {
         Ok(allocation) if allocation.kind != liberado_coder_sandbox::TargetKind::WorktreeLocal => {

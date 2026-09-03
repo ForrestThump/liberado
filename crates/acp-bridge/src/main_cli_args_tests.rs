@@ -102,3 +102,44 @@ fn apply_workspace_targets_sets_trimmed_and_ignores_blank() {
         None => unsafe { std::env::remove_var("CARGO_TARGET_DIR") },
     }
 }
+
+#[test]
+fn apply_workspace_targets_uses_the_given_source_root_not_process_cwd() {
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let saved = std::env::var("CARGO_TARGET_DIR").ok();
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo_a = dir.path().join("repo-a");
+    let repo_b = dir.path().join("repo-b");
+    std::fs::create_dir_all(&repo_a).unwrap();
+    std::fs::create_dir_all(&repo_b).unwrap();
+    let build = liberado_coder_core::WorkspaceBuildConfig {
+        managed_target_root: Some(dir.path().join("managed").to_string_lossy().into_owned()),
+        ..Default::default()
+    };
+
+    crate::workspace_targets::apply_workspace_targets(&build, &repo_a);
+    let path_a = std::env::var("CARGO_TARGET_DIR").expect("repo-a cache");
+    crate::workspace_targets::apply_workspace_targets(&build, &repo_b);
+    let path_b = std::env::var("CARGO_TARGET_DIR").expect("repo-b cache");
+    let cwd = std::env::current_dir().expect("cwd");
+    crate::workspace_targets::apply_workspace_targets(&build, &cwd);
+    let path_cwd = std::env::var("CARGO_TARGET_DIR").expect("process-cwd cache");
+
+    match saved {
+        Some(v) => unsafe { std::env::set_var("CARGO_TARGET_DIR", v) },
+        None => unsafe { std::env::remove_var("CARGO_TARGET_DIR") },
+    }
+
+    assert_ne!(
+        path_a, path_b,
+        "unrelated project roots must not inherit one ordinary cache"
+    );
+    assert_ne!(
+        path_a, path_cwd,
+        "a job must not inherit the ACP process CWD cache"
+    );
+    assert_ne!(
+        path_b, path_cwd,
+        "a job must not inherit the ACP process CWD cache"
+    );
+}

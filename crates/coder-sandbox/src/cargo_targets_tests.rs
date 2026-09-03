@@ -52,6 +52,26 @@ fn distinct_source_roots_do_not_share() {
 }
 
 #[test]
+fn a_worktree_does_not_inherit_another_project_root_ordinary_cache() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let project = dir.path().join("project");
+    let worktree = dir.path().join("coding-worktrees").join("sess-1");
+    std::fs::create_dir_all(&project).unwrap();
+    std::fs::create_dir_all(&worktree).unwrap();
+    let build = WorkspaceBuildConfig {
+        managed_target_root: Some(dir.path().join("managed").to_string_lossy().into_owned()),
+        ..WorkspaceBuildConfig::default()
+    };
+    let from_project = resolve_ordinary(&build, &project).unwrap();
+    let from_worktree = resolve_ordinary(&build, &worktree).unwrap();
+    assert_eq!(from_project.kind, TargetKind::Shared);
+    assert_ne!(
+        from_project.path, from_worktree.path,
+        "managed identity is the job's source root, not a sibling worktree or process CWD"
+    );
+}
+
+#[test]
 fn coverage_mutation_and_comparison_never_use_the_ordinary_shared_path() {
     let (dir, pool) = pool();
     let source = dir.path().join("repo");

@@ -106,7 +106,8 @@
 #
 # `managed_target_root` is the class-aware pool. Ordinary jobs from one source root share
 # `<root>/shared/<source>/ordinary`. Coverage, mutation, and comparison jobs stay under
-# `<root>/isolated/<class>/<job>`. See docs/spec/reference/cargo-targets.md.
+# `<root>/isolated/<class>/<job>`. ACP hashes the session's project root, not the
+# bridge process CWD. See docs/spec/reference/cargo-targets.md.
 #
 # A worktree starts with no cache, so its first compile rebuilds the whole dependency graph —
 # 706 of this workspace's 770 packages are registry crates, which are keyed by name/version

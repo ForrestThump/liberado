@@ -57,6 +57,12 @@ Resolution for an ordinary coding run:
    `<root>/shared/<source-hash>/ordinary`.
 3. Otherwise — worktree-local `target/`.
 
+ACP applies this once per job from the session's project root (the
+client cwd), after the worktree exists. Warm-up still builds in the
+durable worktree, but the cache identity is that project root, so
+worktrees of one repo share and unrelated repos do not. `run_command`
+and ship-bar baseline inherit the same allocation.
+
 Coverage, mutation, and comparison callers do not read these keys for their
 artifact dirs. They keep the isolated paths they already own.
 
@@ -108,6 +114,6 @@ cargo-mutants, or a C3 harness at that directory.
 
 Ship-bar baseline computation honors a live `CARGO_TARGET_DIR` before it
 falls back to `workspace/target`. When ACP applies a managed or exact
-shared ordinary cache at startup, warm-up, model `run_command`, and
-baseline compare use the same directory. Unchanged crates then increment
-instead of filling a new worktree `target/`.
+shared ordinary cache for the session's project root, warm-up, model
+`run_command`, and baseline compare use the same directory. Unchanged
+crates then increment instead of filling a new worktree `target/`.
