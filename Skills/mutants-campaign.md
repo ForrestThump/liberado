@@ -10,7 +10,8 @@
 **Start here.** The ledger is the machine scoreboard; markdown reports under
 `docs/validation/mutation-testing/` are human triage notes (often historical).
 
-Plan reference: [`docs/future-work/mutants-campaign-ledger-plan.md`](../docs/future-work/mutants-campaign-ledger-plan.md).
+Implementation history:
+[`docs/future-work/archive/mutants-campaign-ledger-plan.md`](../docs/future-work/archive/mutants-campaign-ledger-plan.md).
 
 ## Three layers (do not merge)
 

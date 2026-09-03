@@ -34,6 +34,7 @@ Everything removed from this directory remains in git history.
 | [mcp-homelab-wire-plan.md](mcp-homelab-wire-plan.md) | Homelab MCP wire-up — largely landed |
 | [human-todo.md](human-todo.md) | Operator checklist snapshot |
 | [webui-flesh-out-plan.md](webui-flesh-out-plan.md) | WebUI flesh-out — all 5 phases implemented; design reference only |
+| [mutants-campaign-ledger-plan.md](mutants-campaign-ledger-plan.md) | Mutation campaign ledger CLI and recipes — implemented; live operation is in the skill |
 | *Other retained records* | Same directory — treat as historical |
 
 Living roadmap: [`../../roadmap.md`](../../roadmap.md) · Future work index: [`../README.md`](../README.md).
