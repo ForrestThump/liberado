@@ -2,10 +2,11 @@
 
 **Audience**: a fresh planning/architectural agent (or human) picking up this project cold, with no
 memory of prior sessions, who needs to independently research, plan, delegate to subagents, implement,
-and ship work at the same quality bar this project has been held to. `docs/impl/AGENTS.md`
-covers *build/run mechanics*; `docs/spec/architecture/*.md` covers *what's built*; this doc covers *how work
-here actually gets done* — the process, judgment calls, and conventions that produced the work recorded
-in `docs/future-work/`. Read this before touching code on a new branch.
+and ship work at the same quality bar this project has been held to. The root `AGENTS.md` covers
+*how to build and test*; `crates/cli/ARCHITECTURE.md` and `docs/spec/config-spec.md` cover *how to run
+and configure*; `docs/spec/architecture/*.md` covers *what's built*; this doc covers *how work here
+actually gets done* — the process, judgment calls, and conventions that produced the work recorded in
+`docs/future-work/`. Read this before touching code on a new branch.
 
 **Origin**: written 2026-07-02, distilled from a single long session that shipped two safety fixes
 (MCP connection isolation, runtime-level tool gating), a three-tier hygiene pass (crate coupling,
@@ -202,7 +203,8 @@ Don't duplicate what already exists elsewhere — this doc is process, not archi
 | What is this system, at a high level? | `docs/spec/architecture/overview.md` |
 | Why does it exist / how does it compare to alternatives? | `docs/spec/architecture/positioning.md` |
 | The seam/modularity plan | `docs/spec/architecture/modularity.md` |
-| How do I build/run/configure it? | `docs/impl/AGENTS.md` |
+| How do I build and test it? | Root `AGENTS.md` |
+| How do I run and configure it? | `crates/cli/ARCHITECTURE.md` and `docs/spec/config-spec.md` |
 | What's the phased roadmap, what's landed, what's next? | `docs/roadmap.md` |
 | Why was decision N made? | `docs/decisions/ADR-NNNN-*.md` |
 | Per-crate design detail | `crates/<name>/ARCHITECTURE.md` (each crate has one) |
