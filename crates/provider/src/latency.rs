@@ -31,7 +31,7 @@ pub enum AgentRole {
     Dispatcher,
     Orchestrator,
     /// Delegated subagent work — journaled separately from the orchestrator's own direct execution
-    /// so delegation vs. doing-it-directly is measurable (see `docs/future-work/
+    /// so delegation vs. doing-it-directly is measurable (see `docs/future-work/archive/
     /// parallel-deliverables-2026-08-round-3.md` §2).
     Subagent,
     Unknown,

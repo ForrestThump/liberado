@@ -1,30 +1,30 @@
 ---
 kind: plan
-status: active
-authority: implementation
+status: implemented
+authority: advisory
 domain: process
 canonical_for: parallel-deliverables-r3
-open_items: true
+open_items: false
 ---
 
-# Round 3 — status and remaining work
+# Round 3 — completed deliverables
 
-Written 2026-08-02. **Rewritten 2026-08-03** after §1 closed, to be executable by someone who has
-not read the rest of this repo.
+Written 2026-08-02. Rewritten 2026-08-03 after §1 closed. Archived 2026-09-03 after
+the remaining selectable deliverables were verified in code and git history.
 
 ## Status
 
 | # | Deliverable | State |
 |---|---|---|
 | 1 | Delegated findings reach the face | ✅ **Done.** Payload fix landed `e0fde79` (2026-08-02); boundary tests PR #39 (2026-08-03). The `ExecuteDirect` residual closed as B1 (PR #162). |
-| 2 | Subagent vs direct execution in the journal | 🔴 **Open — do this first.** Spelled out below. |
-| 3a | Measure redundant tool calls | 🟡 **Open, delegable.** |
-| 3b | Stop paying for redundant tool calls | 🔒 **Reserved** — safety judgement, not delegated. |
+| 2 | Subagent vs direct execution in the journal | ✅ **Done.** Landed in PR #40. |
+| 3a | Measure redundant tool calls | ✅ **Done.** Landed in PR #41; cost reporting followed in PR #44. |
+| 3b | Stop paying for redundant tool calls | Historical caution only. It was never selectable work. Current implementation work comes only from `backlog.md`. |
 
 **§1's residual is closed (B1, PR #162).** `ExecuteDirect` now carries `Delivery`. A research chat
 relay gets `relay_directive`; acting work stays short; vault delivery files the report. A blanket
 `relay_directive` on every direct run is still wrong — that is the 92.8% token bucket. Reasoning in
-[`delegated-work-is-discarded-at-the-seam.md`](archive/delegated-work-is-discarded-at-the-seam.md).
+[`delegated-work-is-discarded-at-the-seam.md`](delegated-work-is-discarded-at-the-seam.md).
 
 ---
 
@@ -81,7 +81,7 @@ found a better one, say so in the PR and implement this anyway.
 
 **Add a fourth `AgentRole` variant, and a second metered provider instance for the subagent path.**
 
-**Step 1 — the variant.** [`crates/provider/src/latency.rs:29`](../../crates/provider/src/latency.rs#L29):
+**Step 1 — the variant.** [`crates/provider/src/latency.rs:29`](../../../crates/provider/src/latency.rs#L29):
 
 ```rust
 pub enum AgentRole {
@@ -97,10 +97,10 @@ plus its arm in `as_str()`, returning `"subagent"`.
 
 > ⚠️ **`MeteredProvider`'s doc comment is wrong.** It says *"role/correlation come from the
 > task-local `scope` at each seam"*. Only `CORRELATION` is task-local
-> ([latency.rs:47](../../crates/provider/src/latency.rs#L47)); **`role` is bound at construction**,
+> ([latency.rs:47](../../../crates/provider/src/latency.rs#L47)); **`role` is bound at construction**,
 > and no role scope exists. Fix that comment while you are in there. Do not build on it.
 
-**Step 2 — the second instance.** [`crates/bootstrap/src/lib.rs:203`](../../crates/bootstrap/src/lib.rs#L203)
+**Step 2 — the second instance.** [`crates/bootstrap/src/lib.rs:203`](../../../crates/bootstrap/src/lib.rs#L203)
 builds one provider for all orchestrator work:
 
 ```rust
@@ -111,7 +111,7 @@ Build a second one tagged `AgentRole::Subagent` and hand it to the `Orchestrator
 config — **only the role label differs.**
 
 **Step 3 — use it at exactly the subagent call sites.** In
-[`crates/orchestrator/src/lib.rs`](../../crates/orchestrator/src/lib.rs), five places execute:
+[`crates/orchestrator/src/lib.rs`](../../../crates/orchestrator/src/lib.rs), five places execute:
 
 | line | what | role after this change |
 |---|---|---|
