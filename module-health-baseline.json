@@ -900,28 +900,34 @@
     "cyclomatic": 76
   },
   "crates/coder-core/src/control_plane.rs": {
-    "ploc": 487,
-    "lloc": 124,
-    "functions": 17,
-    "cyclomatic": 63
+    "ploc": 603,
+    "lloc": 168,
+    "functions": 24,
+    "cyclomatic": 97
   },
   "crates/coder-core/src/control_plane/opencode.rs": {
-    "ploc": 450,
-    "lloc": 118,
-    "functions": 35,
-    "cyclomatic": 100
+    "ploc": 402,
+    "lloc": 91,
+    "functions": 31,
+    "cyclomatic": 93
+  },
+  "crates/coder-core/src/control_plane/opencode/adapter.rs": {
+    "ploc": 268,
+    "lloc": 54,
+    "functions": 29,
+    "cyclomatic": 59
   },
   "crates/coder-core/src/control_plane/supervisor.rs": {
-    "ploc": 119,
-    "lloc": 21,
-    "functions": 3,
-    "cyclomatic": 20
+    "ploc": 157,
+    "lloc": 26,
+    "functions": 6,
+    "cyclomatic": 29
   },
   "crates/coder-core/src/control_plane_tests.rs": {
-    "ploc": 561,
-    "lloc": 177,
-    "functions": 26,
-    "cyclomatic": 32
+    "ploc": 846,
+    "lloc": 288,
+    "functions": 34,
+    "cyclomatic": 44
   },
   "crates/coder-core/src/failure_excerpt.rs": {
     "ploc": 105,

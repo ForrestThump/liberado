@@ -4,12 +4,14 @@ status: draft
 authority: advisory
 domain: coding-harness
 canonical_for: coding-worker-control-plane
-open_items: false
+open_items: true
 ---
 
 # Coding-worker control plane
 
-**Status**: draft. Not scheduled. Not selectable from the backlog.
+**Status**: draft prototype. Not scheduled or selectable from the backlog. An explicitly requested
+implementation branch now exercises the seam, durable ledger, and first external adapter while the
+C3 evidence gate remains open.
 **Evidence gate**: the published C3 baseline in
 [`cross-harness-baseline.md`](cross-harness-baseline.md).
 **Source**: conversation captured in
@@ -215,6 +217,12 @@ pub enum TaskEventKind {
         run_id: String,
         worker_id: String,
         resumed_session_id: Option<String>,
+    },
+    WorkerFinished {
+        run_id: String,
+        status: WorkerStatus,
+        external_session_id: Option<String>,
+        blocking_issue: Option<String>,
     },
     CommitProduced {
         commit_sha: String,
@@ -458,4 +466,5 @@ Promote this file from `draft` to `active` and add a backlog row only after:
    benchmark.
 3. The first slice in §9 is small enough for one PR.
 
-Until then, agents must not take implementation work from this document.
+Until then, agents must not select more implementation work from this document without an explicit
+user request. Keep prototype claims separate from the still-unpublished C3 evidence.

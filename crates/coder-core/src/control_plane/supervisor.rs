@@ -8,6 +8,7 @@ use super::{
     TaskEventKind, TaskLedger, WorkerPort, WorkerRunRequest, WorkerRunResult,
 };
 use chrono::Utc;
+use std::path::Path;
 use std::sync::Arc;
 
 /// Orchestrates task lifecycles, event ledgers, and worker dispatch.
@@ -39,7 +40,8 @@ impl ControlPlaneSupervisor {
             },
         );
 
-        let mut ledger = TaskLedger::new(initial_event)?;
+        let tasks_root = Path::new(&req.worktree).join(".liberado").join("tasks");
+        let mut ledger = TaskLedger::create_in(tasks_root, initial_event)?;
         let record = ledger.project()?;
 
         // 2. Synthesize prompt
@@ -70,6 +72,7 @@ impl ControlPlaneSupervisor {
 
         // 4. Collect result
         let result = self.worker.collect(&handle)?;
+        append_worker_finished(&mut ledger, &handle, &result)?;
 
         // 5. Append commits produced
         for commit in &result.commits {
@@ -109,21 +112,36 @@ impl ControlPlaneSupervisor {
         ledger.append(fail_evt.clone())?;
         let updated_record = ledger.project()?;
 
-        // Preserve previous external session ID for continuity
-        let last_session_id = updated_record
-            .external_session_id
-            .clone()
-            .unwrap_or_default();
-        let handle = RunHandle::new(
-            format!("run-kickback-{}", Utc::now().timestamp_millis()),
-            self.worker.id(),
-            &updated_record.task_id,
-        )
-        .with_session_id(last_session_id)
-        .with_worktree(updated_record.worktree.clone());
-
-        // Kickback worker repair attempt
-        let resume_handle = self.worker.resume(&handle, &fail_evt)?;
+        let continuation_prompt = ContinuationContextBuilder::build(&updated_record);
+        let can_resume = updated_record.prior_worker.as_deref() == Some(self.worker.id())
+            && updated_record
+                .external_session_id
+                .as_deref()
+                .is_some_and(|id| !id.trim().is_empty());
+        let resume_handle = if can_resume {
+            let session_id = updated_record.external_session_id.clone().ok_or_else(|| {
+                ControlPlaneError::Protocol("resumable task omitted its session id".into())
+            })?;
+            let handle = RunHandle::new(
+                format!("run-kickback-{}", Utc::now().timestamp_millis()),
+                self.worker.id(),
+                &updated_record.task_id,
+                updated_record.worktree.clone(),
+            )
+            .with_session_id(session_id)
+            .with_continuation_prompt(continuation_prompt);
+            self.worker.resume(&handle, &fail_evt)?
+        } else {
+            self.worker.start(&WorkerRunRequest {
+                task_id: updated_record.task_id.clone(),
+                objective: updated_record.objective.clone(),
+                worktree: updated_record.worktree.clone(),
+                branch: updated_record.branch.clone(),
+                base_ref: updated_record.base_ref.clone(),
+                prompt: continuation_prompt,
+                session_id: None,
+            })?
+        };
 
         ledger.append(TaskEvent::new(
             format!("evt-{}-resumed", resume_handle.run_id),
@@ -136,6 +154,7 @@ impl ControlPlaneSupervisor {
         ))?;
 
         let result = self.worker.collect(&resume_handle)?;
+        append_worker_finished(ledger, &resume_handle, &result)?;
 
         for commit in &result.commits {
             ledger.append(TaskEvent::new(
@@ -151,4 +170,21 @@ impl ControlPlaneSupervisor {
 
         Ok(result)
     }
+}
+
+fn append_worker_finished(
+    ledger: &mut TaskLedger,
+    handle: &RunHandle,
+    result: &WorkerRunResult,
+) -> Result<(), ControlPlaneError> {
+    ledger.append(TaskEvent::new(
+        format!("evt-{}-finished", handle.run_id),
+        &handle.task_id,
+        TaskEventKind::WorkerFinished {
+            run_id: handle.run_id.clone(),
+            status: result.status,
+            external_session_id: result.external_session_id.clone(),
+            blocking_issue: result.blocking_issue.clone(),
+        },
+    ))
 }

@@ -4,189 +4,19 @@
 //! This adapter manages session handshakes, model configuration (e.g. OpenRouter DeepSeek),
 //! permission auto-approvals, tool turn collection, and git artifact inspection.
 
-use super::{
-    ControlPlaneError, RunHandle, TaskEvent, WorkerPort, WorkerRunRequest, WorkerRunResult,
-    WorkerStatus,
-};
-use chrono::Utc;
+use super::{ControlPlaneError, TaskEvent, WorkerRunResult, WorkerStatus};
 use liberado_common::process::std_command;
-use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use std::collections::HashMap;
+use std::collections::BTreeSet;
 use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
-use std::sync::{Arc, RwLock};
+use std::sync::atomic::{AtomicU64, Ordering};
 
-/// Configuration for the OpenCode external worker.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct OpenCodeWorkerConfig {
-    pub executable: Option<String>,
-    pub model: String,
-    pub auto_approve: bool,
-}
+static RUN_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
-impl Default for OpenCodeWorkerConfig {
-    fn default() -> Self {
-        Self {
-            executable: None,
-            model: "openrouter/~deepseek/deepseek-v4-flash-latest".into(),
-            auto_approve: true,
-        }
-    }
-}
-
-/// Worker implementation driving OpenCode via ACP JSON-RPC.
-pub struct OpenCodeWorker {
-    config: OpenCodeWorkerConfig,
-    results: Arc<RwLock<HashMap<String, WorkerRunResult>>>,
-}
-
-impl OpenCodeWorker {
-    pub fn new(config: OpenCodeWorkerConfig) -> Self {
-        Self {
-            config,
-            results: Arc::new(RwLock::new(HashMap::new())),
-        }
-    }
-
-    pub fn config(&self) -> &OpenCodeWorkerConfig {
-        &self.config
-    }
-
-    /// Spawns the ACP server process.
-    fn spawn_acp_process(&self, worktree: &str) -> Result<std::process::Child, ControlPlaneError> {
-        let mut cmd = if cfg!(windows) {
-            let mut c = std_command("cmd");
-            c.args(["/c", "opencode", "acp"]);
-            c
-        } else {
-            let exe = self.config.executable.as_deref().unwrap_or("opencode");
-            let mut c = std_command(exe);
-            c.arg("acp");
-            c
-        };
-
-        cmd.current_dir(worktree);
-        cmd.stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped());
-
-        cmd.spawn().map_err(ControlPlaneError::Io)
-    }
-
-    /// Execute a full ACP turn in the designated worktree.
-    pub fn execute_turn(
-        &self,
-        worktree: &str,
-        prompt: &str,
-        resumed_session_id: Option<&str>,
-    ) -> Result<(WorkerRunResult, String), ControlPlaneError> {
-        let mut child = self.spawn_acp_process(worktree)?;
-        let (mut stdin, mut reader) = take_stdio(&mut child)?;
-
-        let (session_id, assistant_summary, stop_reason) = run_acp_session(
-            &mut stdin,
-            &mut reader,
-            worktree,
-            &self.config.model,
-            resumed_session_id,
-            prompt,
-            self.config.auto_approve,
-        )?;
-
-        drop(stdin);
-        let _ = child.kill();
-
-        let (commits, files_changed) = inspect_git_worktree(worktree);
-        let result = build_worker_result(
-            &stop_reason,
-            &assistant_summary,
-            commits,
-            files_changed,
-            session_id.clone(),
-        );
-
-        Ok((result, session_id))
-    }
-}
-
-impl WorkerPort for OpenCodeWorker {
-    fn id(&self) -> &str {
-        "opencode"
-    }
-
-    fn start(&self, req: &WorkerRunRequest) -> Result<RunHandle, ControlPlaneError> {
-        let run_id = format!("run-{}", Utc::now().timestamp_millis());
-        let (result, session_id) =
-            self.execute_turn(&req.worktree, &req.prompt, req.session_id.as_deref())?;
-
-        let handle = RunHandle::new(run_id.clone(), self.id(), req.task_id.clone())
-            .with_session_id(session_id)
-            .with_worktree(req.worktree.clone());
-
-        if let Ok(mut lock) = self.results.write() {
-            lock.insert(run_id, result);
-        }
-
-        Ok(handle)
-    }
-
-    fn resume(
-        &self,
-        handle: &RunHandle,
-        event: &TaskEvent,
-    ) -> Result<RunHandle, ControlPlaneError> {
-        let resume_prompt = synthesize_resume_prompt(event);
-        let run_id = format!("run-{}", Utc::now().timestamp_millis());
-        let worktree = handle.worktree.as_deref().unwrap_or(".");
-        let (result, session_id) = self.execute_turn(
-            worktree,
-            &resume_prompt,
-            handle.external_session_id.as_deref(),
-        )?;
-
-        let mut new_handle = RunHandle::new(run_id.clone(), self.id(), handle.task_id.clone())
-            .with_session_id(session_id);
-        if let Some(wt) = &handle.worktree {
-            new_handle = new_handle.with_worktree(wt.clone());
-        }
-
-        if let Ok(mut lock) = self.results.write() {
-            lock.insert(run_id, result);
-        }
-
-        Ok(new_handle)
-    }
-
-    fn status(&self, handle: &RunHandle) -> Result<WorkerStatus, ControlPlaneError> {
-        let lock = self
-            .results
-            .read()
-            .map_err(|_| ControlPlaneError::EmptyHistory)?;
-        if let Some(res) = lock.get(&handle.run_id) {
-            Ok(res.status)
-        } else {
-            Ok(WorkerStatus::Waiting)
-        }
-    }
-
-    fn cancel(&self, handle: &RunHandle) -> Result<(), ControlPlaneError> {
-        if let Ok(mut lock) = self.results.write() {
-            lock.remove(&handle.run_id);
-        }
-        Ok(())
-    }
-
-    fn collect(&self, handle: &RunHandle) -> Result<WorkerRunResult, ControlPlaneError> {
-        let mut lock = self
-            .results
-            .write()
-            .map_err(|_| ControlPlaneError::EmptyHistory)?;
-        lock.remove(&handle.run_id).ok_or_else(|| {
-            ControlPlaneError::InvalidInitialEvent(format!("no result for run {}", handle.run_id))
-        })
-    }
-}
+mod adapter;
+pub(crate) use adapter::GitSnapshot;
+pub use adapter::{OpenCodeWorker, OpenCodeWorkerConfig};
 
 pub(crate) fn synthesize_resume_prompt(event: &TaskEvent) -> String {
     match &event.payload {
@@ -225,11 +55,11 @@ pub(crate) fn build_worker_result(
     files_changed: Vec<String>,
     session_id: String,
 ) -> WorkerRunResult {
-    let is_error = stop_reason.contains("error");
-    let status = if is_error {
-        WorkerStatus::Failed
-    } else {
+    let completed = stop_reason == "end_turn";
+    let status = if completed {
         WorkerStatus::Completed
+    } else {
+        WorkerStatus::Failed
     };
 
     WorkerRunResult {
@@ -239,14 +69,33 @@ pub(crate) fn build_worker_result(
         files_changed,
         tests_run: 0,
         tests_passed: 0,
-        blocking_issue: if is_error {
-            Some(stop_reason.to_string())
-        } else {
+        blocking_issue: if completed {
             None
+        } else {
+            Some(format!("worker stopped with reason '{stop_reason}'"))
         },
         recommended_next_action: None,
         external_session_id: Some(session_id),
     }
+}
+
+fn failed_worker_result(message: &str, session_id: Option<String>) -> WorkerRunResult {
+    WorkerRunResult {
+        status: WorkerStatus::Failed,
+        summary: String::new(),
+        commits: Vec::new(),
+        files_changed: Vec::new(),
+        tests_run: 0,
+        tests_passed: 0,
+        blocking_issue: Some(message.to_string()),
+        recommended_next_action: None,
+        external_session_id: session_id,
+    }
+}
+
+fn next_run_id() -> String {
+    let sequence = RUN_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    format!("run-{}-{sequence}", chrono::Utc::now().timestamp_millis())
 }
 
 pub(crate) fn take_stdio(
@@ -326,38 +175,34 @@ pub(crate) fn init_acp_session(
             "params": {
                 "protocolVersion": 1,
                 "clientInfo": { "name": "liberado", "version": "0.1.0" },
-                "capabilities": {}
+                "clientCapabilities": {}
             }
         }),
     )?;
     read_response_until_id(reader, 1)?;
 
-    // 2. Create or reuse session
+    // 2. Create or restore the session in this newly spawned ACP process.
     let session_id = match resumed_session_id {
-        Some(id) if !id.trim().is_empty() => id.to_string(),
-        _ => {
+        Some(id) if !id.trim().is_empty() => {
             send_rpc(
                 stdin,
                 json!({
                     "jsonrpc": "2.0",
                     "id": 2,
-                    "method": "session/new",
+                    "method": "session/load",
                     "params": {
+                        "sessionId": id,
                         "cwd": worktree,
                         "mcpServers": []
                     }
                 }),
             )?;
-            let res = read_response_until_id(reader, 2)?;
-            res["sessionId"]
-                .as_str()
-                .ok_or_else(|| {
-                    ControlPlaneError::Serialization(serde::de::Error::custom(
-                        "missing sessionId in session/new response",
-                    ))
-                })?
-                .to_string()
+            match read_response_until_id(reader, 2) {
+                Ok(_) => id.to_string(),
+                Err(_) => create_acp_session(stdin, reader, worktree, 5)?,
+            }
         }
+        _ => create_acp_session(stdin, reader, worktree, 2)?,
     };
 
     // 3. Configure Model
@@ -374,9 +219,34 @@ pub(crate) fn init_acp_session(
             }
         }),
     )?;
-    let _ = read_response_until_id(reader, 3);
+    read_response_until_id(reader, 3)?;
 
     Ok(session_id)
+}
+
+fn create_acp_session(
+    stdin: &mut impl Write,
+    reader: &mut impl BufRead,
+    worktree: &str,
+    request_id: i64,
+) -> Result<String, ControlPlaneError> {
+    send_rpc(
+        stdin,
+        json!({
+            "jsonrpc": "2.0",
+            "id": request_id,
+            "method": "session/new",
+            "params": {
+                "cwd": worktree,
+                "mcpServers": []
+            }
+        }),
+    )?;
+    let response = read_response_until_id(reader, request_id)?;
+    response["sessionId"]
+        .as_str()
+        .map(str::to_string)
+        .ok_or_else(|| ControlPlaneError::Protocol("session/new response omitted sessionId".into()))
 }
 
 pub(crate) fn drain_prompt_turn(
@@ -385,16 +255,17 @@ pub(crate) fn drain_prompt_turn(
     auto_approve: bool,
 ) -> Result<(String, String), ControlPlaneError> {
     let mut assistant_summary = String::new();
-    let mut stop_reason = String::new();
     let mut line_buf = String::new();
 
-    loop {
+    let stop_reason = loop {
         line_buf.clear();
         let bytes_read = reader
             .read_line(&mut line_buf)
             .map_err(ControlPlaneError::Io)?;
         if bytes_read == 0 {
-            break;
+            return Err(ControlPlaneError::Protocol(
+                "ACP process closed stdout before session/prompt completed".into(),
+            ));
         }
 
         let Ok(msg) = serde_json::from_str::<Value>(&line_buf) else {
@@ -403,15 +274,15 @@ pub(crate) fn drain_prompt_turn(
 
         if msg.get("method").and_then(|v| v.as_str()) == Some("session/request_permission") {
             if let Some(req_id) = msg.get("id") {
-                let outcome = if auto_approve { "accepted" } else { "rejected" };
-                let _ = send_rpc(
+                let result = permission_result(&msg, auto_approve);
+                send_rpc(
                     stdin,
                     json!({
                         "jsonrpc": "2.0",
                         "id": req_id,
-                        "result": { "outcome": { "outcome": outcome } }
+                        "result": result
                     }),
-                );
+                )?;
             }
             continue;
         }
@@ -429,14 +300,45 @@ pub(crate) fn drain_prompt_turn(
         }
 
         if msg.get("id").and_then(|v| v.as_i64()) == Some(4) {
-            if let Some(reason) = msg.pointer("/result/stopReason").and_then(|v| v.as_str()) {
-                stop_reason = reason.to_string();
+            if let Some(error) = msg.get("error") {
+                return Err(ControlPlaneError::Protocol(format!(
+                    "session/prompt failed: {error}"
+                )));
             }
-            break;
+            if let Some(reason) = msg.pointer("/result/stopReason").and_then(|v| v.as_str()) {
+                break reason.to_string();
+            } else {
+                return Err(ControlPlaneError::Protocol(
+                    "session/prompt response omitted stopReason".into(),
+                ));
+            }
         }
-    }
+    };
 
     Ok((assistant_summary, stop_reason))
+}
+
+fn permission_result(message: &Value, auto_approve: bool) -> Value {
+    if auto_approve {
+        let options = message.pointer("/params/options").and_then(Value::as_array);
+        let allow = options.and_then(|options| {
+            options
+                .iter()
+                .find(|option| option.get("kind").and_then(Value::as_str) == Some("allow_always"))
+                .or_else(|| {
+                    options.iter().find(|option| {
+                        option.get("kind").and_then(Value::as_str) == Some("allow_once")
+                    })
+                })
+        });
+        if let Some(option_id) = allow
+            .and_then(|option| option.get("optionId"))
+            .and_then(Value::as_str)
+        {
+            return json!({ "outcome": { "outcome": "selected", "optionId": option_id } });
+        }
+    }
+    json!({ "outcome": { "outcome": "cancelled" } })
 }
 
 pub(crate) fn send_rpc(stdin: &mut impl Write, msg: Value) -> Result<(), ControlPlaneError> {
@@ -475,38 +377,67 @@ pub(crate) fn read_response_until_id(
     }
 }
 
-pub(crate) fn inspect_git_worktree(worktree: &str) -> (Vec<String>, Vec<String>) {
-    let mut files = Vec::new();
-    let mut commits = Vec::new();
-
+pub(crate) fn capture_git_snapshot(worktree: &str) -> Result<GitSnapshot, ControlPlaneError> {
     let path = Path::new(worktree);
-    let mut status_cmd = std_command("git");
-    status_cmd.args(["status", "--porcelain"]);
-    if path.is_dir() {
-        status_cmd.current_dir(path);
+    if !path.is_dir() {
+        return Err(ControlPlaneError::Protocol(format!(
+            "worker worktree does not exist: {worktree}"
+        )));
     }
-    let status_output = status_cmd.output().ok().filter(|o| o.status.success());
-    if let Some(output) = status_output {
-        let out_str = String::from_utf8_lossy(&output.stdout);
-        for line in out_str.lines() {
-            if line.len() > 3 {
-                files.push(line[3..].trim().to_string());
+    let head = git_output(path, &["rev-parse", "HEAD"])?;
+    Ok(GitSnapshot {
+        head: head.trim().to_string(),
+    })
+}
+
+pub(crate) fn inspect_git_worktree(
+    worktree: &str,
+    baseline: &GitSnapshot,
+) -> Result<(Vec<String>, Vec<String>), ControlPlaneError> {
+    let path = Path::new(worktree);
+    if !path.is_dir() {
+        return Err(ControlPlaneError::Protocol(format!(
+            "worker worktree does not exist: {worktree}"
+        )));
+    }
+
+    let range = format!("{}..HEAD", baseline.head);
+    let commits = git_output(path, &["rev-list", "--reverse", &range])?
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(str::to_string)
+        .collect();
+
+    let mut files = BTreeSet::new();
+    for file in git_output(path, &["diff", "--name-only", &range])?.lines() {
+        if !file.trim().is_empty() {
+            files.insert(file.trim().to_string());
+        }
+    }
+    for line in git_output(path, &["status", "--porcelain"])?.lines() {
+        if line.len() > 3 {
+            let changed = line[3..].trim();
+            if let Some((_, destination)) = changed.rsplit_once(" -> ") {
+                files.insert(destination.to_string());
+            } else if !changed.is_empty() {
+                files.insert(changed.to_string());
             }
         }
     }
 
-    let mut log_cmd = std_command("git");
-    log_cmd.args(["log", "-n", "1", "--format=%H"]);
-    if path.is_dir() {
-        log_cmd.current_dir(path);
-    }
-    let log_output = log_cmd.output().ok().filter(|o| o.status.success());
-    if let Some(output) = log_output {
-        let commit = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        if !commit.is_empty() {
-            commits.push(commit);
-        }
-    }
+    Ok((commits, files.into_iter().collect()))
+}
 
-    (commits, files)
+fn git_output(path: &Path, args: &[&str]) -> Result<String, ControlPlaneError> {
+    let output = std_command("git").args(args).current_dir(path).output()?;
+    if !output.status.success() {
+        return Err(ControlPlaneError::Protocol(format!(
+            "git {} failed in {}: {}",
+            args.join(" "),
+            path.display(),
+            String::from_utf8_lossy(&output.stderr).trim()
+        )));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }

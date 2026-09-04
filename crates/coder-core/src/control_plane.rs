@@ -8,7 +8,9 @@
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use std::fs::{File, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
+use std::path::{Path, PathBuf};
 use thiserror::Error;
 
 pub mod opencode;
@@ -61,6 +63,18 @@ pub enum ControlPlaneError {
 
     #[error("serialization error: {0}")]
     Serialization(#[from] serde_json::Error),
+
+    #[error("worker protocol error: {0}")]
+    Protocol(String),
+
+    #[error("worker run '{0}' was not found")]
+    RunNotFound(String),
+
+    #[error("task id '{0}' is not a safe path component")]
+    InvalidTaskId(String),
+
+    #[error("duplicate event id '{0}'")]
+    DuplicateEventId(String),
 }
 
 /// Identifier handle for an active or completed worker execution run.
@@ -71,8 +85,9 @@ pub struct RunHandle {
     pub task_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub external_session_id: Option<String>,
+    pub worktree: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub worktree: Option<String>,
+    pub continuation_prompt: Option<String>,
 }
 
 impl RunHandle {
@@ -80,13 +95,15 @@ impl RunHandle {
         run_id: impl Into<String>,
         worker_id: impl Into<String>,
         task_id: impl Into<String>,
+        worktree: impl Into<String>,
     ) -> Self {
         Self {
             run_id: run_id.into(),
             worker_id: worker_id.into(),
             task_id: task_id.into(),
             external_session_id: None,
-            worktree: None,
+            worktree: worktree.into(),
+            continuation_prompt: None,
         }
     }
 
@@ -95,8 +112,8 @@ impl RunHandle {
         self
     }
 
-    pub fn with_worktree(mut self, worktree: impl Into<String>) -> Self {
-        self.worktree = Some(worktree.into());
+    pub fn with_continuation_prompt(mut self, prompt: impl Into<String>) -> Self {
+        self.continuation_prompt = Some(prompt.into());
         self
     }
 }
@@ -220,6 +237,12 @@ pub enum TaskEventKind {
         run_id: String,
         worker_id: String,
         resumed_session_id: Option<String>,
+    },
+    WorkerFinished {
+        run_id: String,
+        status: WorkerStatus,
+        external_session_id: Option<String>,
+        blocking_issue: Option<String>,
     },
     CommitProduced {
         commit_sha: String,
@@ -362,6 +385,20 @@ impl TaskRecord {
                     self.external_session_id = Some(session.clone());
                 }
             }
+            TaskEventKind::WorkerFinished {
+                status,
+                external_session_id,
+                blocking_issue,
+                ..
+            } => {
+                if let Some(session) = external_session_id {
+                    self.external_session_id = Some(session.clone());
+                }
+                if *status == WorkerStatus::Failed {
+                    self.status = TaskStatus::Failed;
+                    self.current_diagnosis = blocking_issue.clone();
+                }
+            }
             TaskEventKind::CommitProduced {
                 commit_sha,
                 files_changed,
@@ -421,6 +458,7 @@ impl TaskRecord {
 pub struct TaskLedger {
     task_id: String,
     events: Vec<TaskEvent>,
+    ledger_path: Option<PathBuf>,
 }
 
 impl TaskLedger {
@@ -436,7 +474,31 @@ impl TaskLedger {
         Ok(Self {
             task_id,
             events: vec![initial_event],
+            ledger_path: None,
         })
+    }
+
+    /// Create a disk-backed ledger under `<tasks_root>/<task_id>/ledger.jsonl`.
+    pub fn create_in(
+        tasks_root: impl AsRef<Path>,
+        initial_event: TaskEvent,
+    ) -> Result<Self, ControlPlaneError> {
+        validate_task_id(&initial_event.task_id)?;
+        let task_id = initial_event.task_id.clone();
+        let mut ledger = Self::new(initial_event)?;
+        let task_dir = tasks_root.as_ref().join(task_id);
+        std::fs::create_dir_all(&task_dir)?;
+        let ledger_path = task_dir.join("ledger.jsonl");
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&ledger_path)?;
+        write_event(&mut file, &ledger.events[0])?;
+        file.sync_all()?;
+
+        ledger.ledger_path = Some(ledger_path);
+        ledger.write_projection_cache()?;
+        Ok(ledger)
     }
 
     /// Append a new event to the ledger history.
@@ -447,7 +509,20 @@ impl TaskLedger {
                 ledger_task_id: self.task_id.clone(),
             });
         }
+        if self
+            .events
+            .iter()
+            .any(|existing| existing.event_id == event.event_id)
+        {
+            return Err(ControlPlaneError::DuplicateEventId(event.event_id));
+        }
+        if let Some(path) = &self.ledger_path {
+            let mut file = OpenOptions::new().append(true).open(path)?;
+            write_event(&mut file, &event)?;
+            file.sync_all()?;
+        }
         self.events.push(event);
+        self.write_projection_cache()?;
         Ok(())
     }
 
@@ -480,6 +555,20 @@ impl TaskLedger {
 
     /// Deserialize a ledger from a JSONL reader.
     pub fn load_from_reader(reader: impl std::io::Read) -> Result<Self, ControlPlaneError> {
+        Self::load(reader, None)
+    }
+
+    /// Load a disk-backed ledger and continue append-flushed persistence.
+    pub fn load_from_path(path: impl AsRef<Path>) -> Result<Self, ControlPlaneError> {
+        let path = path.as_ref().to_path_buf();
+        let file = File::open(&path)?;
+        Self::load(file, Some(path))
+    }
+
+    fn load(
+        reader: impl std::io::Read,
+        ledger_path: Option<PathBuf>,
+    ) -> Result<Self, ControlPlaneError> {
         let buf = BufReader::new(reader);
         let mut events = Vec::new();
         for line in buf.lines() {
@@ -511,8 +600,49 @@ impl TaskLedger {
             )));
         }
 
-        Ok(Self { task_id, events })
+        let mut seen = std::collections::HashSet::new();
+        for event in &events {
+            if !seen.insert(&event.event_id) {
+                return Err(ControlPlaneError::DuplicateEventId(event.event_id.clone()));
+            }
+        }
+
+        Ok(Self {
+            task_id,
+            events,
+            ledger_path,
+        })
     }
+
+    fn write_projection_cache(&self) -> Result<(), ControlPlaneError> {
+        let Some(ledger_path) = &self.ledger_path else {
+            return Ok(());
+        };
+        let task_path = ledger_path.with_file_name("task.json");
+        let bytes = serde_json::to_vec_pretty(&self.project()?)?;
+        std::fs::write(task_path, bytes)?;
+        Ok(())
+    }
+}
+
+fn validate_task_id(task_id: &str) -> Result<(), ControlPlaneError> {
+    let path = Path::new(task_id);
+    let mut components = path.components();
+    let is_one_normal_component =
+        matches!(components.next(), Some(std::path::Component::Normal(_)))
+            && components.next().is_none()
+            && !task_id.trim().is_empty();
+    if is_one_normal_component {
+        Ok(())
+    } else {
+        Err(ControlPlaneError::InvalidTaskId(task_id.to_string()))
+    }
+}
+
+fn write_event(writer: &mut impl Write, event: &TaskEvent) -> Result<(), ControlPlaneError> {
+    serde_json::to_writer(&mut *writer, event)?;
+    writer.write_all(b"\n")?;
+    Ok(())
 }
 
 /// Synthesizes structured markdown prompts for continuation across worker boundaries.

@@ -231,6 +231,41 @@ fn ledger_serialization_round_trip() {
 }
 
 #[test]
+fn disk_ledger_appends_one_flushed_event_and_restores_projection() {
+    let temp = tempfile::TempDir::new().expect("tempdir");
+    let initial = sample_created_event("task-durable");
+    let mut ledger = TaskLedger::create_in(temp.path(), initial).expect("create persistent ledger");
+    ledger
+        .append(TaskEvent::new(
+            "evt-worker",
+            "task-durable",
+            TaskEventKind::WorkerStarted {
+                run_id: "run-1".into(),
+                worker_id: "opencode".into(),
+                resumed_session_id: None,
+            },
+        ))
+        .expect("append event");
+
+    let ledger_path = temp.path().join("task-durable/ledger.jsonl");
+    let persisted = std::fs::read_to_string(&ledger_path).expect("read ledger");
+    assert_eq!(persisted.lines().count(), 2);
+    let restored = TaskLedger::load_from_path(&ledger_path).expect("restore ledger");
+    assert_eq!(restored.project().unwrap().status, TaskStatus::Running);
+    assert!(temp.path().join("task-durable/task.json").is_file());
+}
+
+#[test]
+fn disk_ledger_rejects_path_traversal_task_ids() {
+    let temp = tempfile::TempDir::new().expect("tempdir");
+    let event = sample_created_event("../outside");
+    assert!(matches!(
+        TaskLedger::create_in(temp.path(), event),
+        Err(ControlPlaneError::InvalidTaskId(_))
+    ));
+}
+
+#[test]
 fn continuation_context_builder_generates_markdown() {
     let initial = sample_created_event("task-341");
     let mut ledger = TaskLedger::new(initial).expect("ledger");
@@ -276,6 +311,7 @@ struct MockWorker {
     received_requests: std::sync::Mutex<Vec<WorkerRunRequest>>,
     received_resumes: std::sync::Mutex<Vec<(RunHandle, TaskEvent)>>,
     return_commits: std::sync::Mutex<Vec<Vec<String>>>,
+    session_id: Option<String>,
 }
 
 impl MockWorker {
@@ -284,6 +320,14 @@ impl MockWorker {
             received_requests: std::sync::Mutex::new(Vec::new()),
             received_resumes: std::sync::Mutex::new(Vec::new()),
             return_commits: std::sync::Mutex::new(return_commits),
+            session_id: Some("mock-session-123".into()),
+        }
+    }
+
+    fn without_session(return_commits: Vec<Vec<String>>) -> Self {
+        Self {
+            session_id: None,
+            ..Self::new(return_commits)
         }
     }
 }
@@ -294,10 +338,21 @@ impl WorkerPort for MockWorker {
     }
 
     fn start(&self, req: &WorkerRunRequest) -> Result<RunHandle, ControlPlaneError> {
-        self.received_requests.lock().unwrap().push(req.clone());
-        Ok(RunHandle::new("mock-run-1", self.id(), &req.task_id)
-            .with_session_id("mock-session-123")
-            .with_worktree(req.worktree.clone()))
+        let run_number = {
+            let mut requests = self.received_requests.lock().unwrap();
+            requests.push(req.clone());
+            requests.len()
+        };
+        let mut handle = RunHandle::new(
+            format!("mock-run-{run_number}"),
+            self.id(),
+            &req.task_id,
+            &req.worktree,
+        );
+        if let Some(session_id) = &self.session_id {
+            handle = handle.with_session_id(session_id.clone());
+        }
+        Ok(handle)
     }
 
     fn resume(
@@ -309,9 +364,12 @@ impl WorkerPort for MockWorker {
             .lock()
             .unwrap()
             .push((handle.clone(), event.clone()));
-        Ok(RunHandle::new("mock-run-2", self.id(), &handle.task_id)
-            .with_session_id("mock-session-123")
-            .with_worktree(handle.worktree.clone().unwrap_or_default()))
+        let mut resumed =
+            RunHandle::new("mock-run-2", self.id(), &handle.task_id, &handle.worktree);
+        if let Some(session_id) = &self.session_id {
+            resumed = resumed.with_session_id(session_id.clone());
+        }
+        Ok(resumed)
     }
 
     fn status(&self, _handle: &RunHandle) -> Result<WorkerStatus, ControlPlaneError> {
@@ -338,20 +396,21 @@ impl WorkerPort for MockWorker {
             tests_passed: 2,
             blocking_issue: None,
             recommended_next_action: None,
-            external_session_id: Some("mock-session-123".into()),
+            external_session_id: self.session_id.clone(),
         })
     }
 }
 
 #[test]
 fn supervisor_dispatch_task_initializes_ledger_and_records_run() {
+    let temp = tempfile::TempDir::new().expect("tempdir");
     let mock = std::sync::Arc::new(MockWorker::new(vec![vec!["commit-aaa".into()]]));
     let supervisor = ControlPlaneSupervisor::new(mock.clone());
 
     let req = DispatchTaskRequest::new(
         "task-400",
         "Fix query parser regex",
-        "worktrees/task-400",
+        temp.path().to_string_lossy(),
         "feat/query-parser",
         "main",
     )
@@ -371,17 +430,23 @@ fn supervisor_dispatch_task_initializes_ledger_and_records_run() {
         Some("mock-session-123")
     );
     assert_eq!(record.commits, vec!["commit-aaa".to_string()]);
-    assert_eq!(record.worktree, "worktrees/task-400");
+    assert_eq!(record.worktree, temp.path().to_string_lossy());
 
     // Verify request delivered to worker
     let reqs = mock.received_requests.lock().unwrap();
     assert_eq!(reqs.len(), 1);
     assert_eq!(reqs[0].task_id, "task-400");
-    assert_eq!(reqs[0].worktree, "worktrees/task-400");
+    assert_eq!(reqs[0].worktree, temp.path().to_string_lossy());
+    assert!(
+        temp.path()
+            .join(".liberado/tasks/task-400/ledger.jsonl")
+            .is_file()
+    );
 }
 
 #[test]
 fn supervisor_handle_ci_failure_triggers_worker_kickback() {
+    let temp = tempfile::TempDir::new().expect("tempdir");
     let mock = std::sync::Arc::new(MockWorker::new(vec![
         vec!["commit-init".into()],
         vec!["commit-repair".into()],
@@ -391,7 +456,7 @@ fn supervisor_handle_ci_failure_triggers_worker_kickback() {
     let req = DispatchTaskRequest::new(
         "task-401",
         "Add telemetry tracing",
-        "worktrees/task-401",
+        temp.path().to_string_lossy(),
         "feat/tracing",
         "main",
     )
@@ -419,7 +484,13 @@ fn supervisor_handle_ci_failure_triggers_worker_kickback() {
         handle.external_session_id.as_deref(),
         Some("mock-session-123")
     );
-    assert_eq!(handle.worktree.as_deref(), Some("worktrees/task-401"));
+    assert_eq!(handle.worktree, temp.path().to_string_lossy());
+    assert!(
+        handle
+            .continuation_prompt
+            .as_deref()
+            .is_some_and(|prompt| prompt.contains("Add telemetry tracing"))
+    );
 
     assert!(matches!(
         event.payload,
@@ -436,11 +507,159 @@ fn supervisor_handle_ci_failure_triggers_worker_kickback() {
 }
 
 #[test]
+fn supervisor_restarts_without_session_using_full_task_context() {
+    let temp = tempfile::TempDir::new().expect("tempdir");
+    let mock = std::sync::Arc::new(MockWorker::without_session(vec![Vec::new(), Vec::new()]));
+    let supervisor = ControlPlaneSupervisor::new(mock.clone());
+    let req = DispatchTaskRequest::new(
+        "task-fresh-repair",
+        "Keep the objective across workers",
+        temp.path().to_string_lossy(),
+        "feat/context",
+        "main",
+    )
+    .with_acceptance_criteria(vec!["The repair sees this criterion".into()]);
+    let (mut ledger, _) = supervisor.dispatch_task(&req).expect("dispatch");
+
+    supervisor
+        .handle_ci_failure(
+            &mut ledger,
+            vec!["context_test".into()],
+            Some("expected context".into()),
+        )
+        .expect("fresh repair");
+
+    assert!(mock.received_resumes.lock().unwrap().is_empty());
+    let requests = mock.received_requests.lock().unwrap();
+    assert_eq!(requests.len(), 2);
+    let prompt = &requests[1].prompt;
+    assert!(prompt.contains("Keep the objective across workers"));
+    assert!(prompt.contains("The repair sees this criterion"));
+    assert!(prompt.contains("context_test"));
+    assert!(prompt.contains("expected context"));
+}
+
+#[test]
 fn opencode_worker_config_defaults() {
     let cfg = OpenCodeWorkerConfig::default();
     assert_eq!(cfg.model, "openrouter/~deepseek/deepseek-v4-flash-latest");
     assert!(cfg.auto_approve);
     assert!(cfg.executable.is_none());
+}
+
+#[test]
+fn opencode_start_returns_running_handle_and_cancel_terminates_it() {
+    let temp = tempfile::TempDir::new().expect("tempdir");
+    let path = temp.path();
+    for args in [
+        vec!["init"],
+        vec!["config", "user.name", "Test Agent"],
+        vec!["config", "user.email", "agent@test.local"],
+    ] {
+        assert!(
+            std::process::Command::new("git")
+                .args(args)
+                .current_dir(path)
+                .status()
+                .expect("git setup")
+                .success()
+        );
+    }
+    std::fs::write(path.join("README.md"), "test").expect("write fixture");
+    for args in [vec!["add", "README.md"], vec!["commit", "-m", "initial"]] {
+        assert!(
+            std::process::Command::new("git")
+                .args(args)
+                .current_dir(path)
+                .status()
+                .expect("git commit")
+                .success()
+        );
+    }
+
+    #[cfg(windows)]
+    let executable = {
+        let script = path.join("fake-opencode.cmd");
+        std::fs::write(&script, "@echo off\r\nping -n 30 127.0.0.1 >nul\r\n")
+            .expect("write fake ACP server");
+        script
+    };
+    #[cfg(unix)]
+    let executable = {
+        use std::os::unix::fs::PermissionsExt;
+        let script = path.join("fake-opencode");
+        std::fs::write(&script, "#!/bin/sh\nsleep 30 >/dev/null 2>&1\n")
+            .expect("write fake ACP server");
+        let mut permissions = std::fs::metadata(&script).unwrap().permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&script, permissions).unwrap();
+        script
+    };
+
+    let worker = OpenCodeWorker::new(OpenCodeWorkerConfig {
+        executable: Some(executable.to_string_lossy().into_owned()),
+        ..OpenCodeWorkerConfig::default()
+    });
+    let request = WorkerRunRequest {
+        task_id: "task-cancel".into(),
+        objective: "cancel test".into(),
+        worktree: path.to_string_lossy().into_owned(),
+        branch: "master".into(),
+        base_ref: "HEAD".into(),
+        prompt: "wait".into(),
+        session_id: None,
+    };
+
+    let started = std::time::Instant::now();
+    let handle = worker.start(&request).expect("start worker");
+    assert!(started.elapsed() < std::time::Duration::from_secs(2));
+    assert_eq!(worker.status(&handle).unwrap(), WorkerStatus::Running);
+    worker.cancel(&handle).expect("cancel worker");
+    let result = worker.collect(&handle).expect("collect cancellation");
+    assert_eq!(result.status, WorkerStatus::Failed);
+    assert_eq!(
+        result.blocking_issue.as_deref(),
+        Some("worker run was cancelled")
+    );
+
+    let prior_handle = RunHandle::new(
+        "prior-run",
+        worker.id(),
+        "task-cancel",
+        path.to_string_lossy(),
+    )
+    .with_session_id("session-to-resume")
+    .with_continuation_prompt("Original task context");
+    let failure = TaskEvent::new(
+        "evt-resume-test",
+        "task-cancel",
+        TaskEventKind::CiFailed {
+            run_id: Some("prior-run".into()),
+            failures: vec!["resume_test".into()],
+            failure_log_excerpt: Some("repair this failure".into()),
+        },
+    );
+    let resumed = worker
+        .resume(&prior_handle, &failure)
+        .expect("resume worker");
+    assert_eq!(
+        resumed.external_session_id.as_deref(),
+        Some("session-to-resume")
+    );
+    assert!(
+        resumed
+            .continuation_prompt
+            .as_deref()
+            .is_some_and(|prompt| prompt.contains("Original task context"))
+    );
+    worker.cancel(&resumed).expect("cancel resumed worker");
+    assert_eq!(
+        worker
+            .collect(&resumed)
+            .expect("collect resumed worker")
+            .status,
+        WorkerStatus::Failed
+    );
 }
 
 #[test]
@@ -491,6 +710,7 @@ fn opencode_init_acp_session_new_and_resumed() {
     // 2. Resumed session
     let resumed_responses = concat!(
         "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"protocolVersion\":1}}\n",
+        "{\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{}}\n",
         "{\"jsonrpc\":\"2.0\",\"id\":3,\"result\":{}}\n"
     );
     let mut stdin_resumed = Vec::new();
@@ -504,13 +724,40 @@ fn opencode_init_acp_session_new_and_resumed() {
     )
     .expect("init resumed session");
     assert_eq!(resumed_id, "ses_resumed_999");
+    let resumed_requests = String::from_utf8(stdin_resumed).expect("utf8 requests");
+    assert!(resumed_requests.contains("\"method\":\"session/load\""));
+    assert!(resumed_requests.contains("\"sessionId\":\"ses_resumed_999\""));
+}
+
+#[test]
+fn opencode_init_starts_fresh_when_session_load_is_rejected() {
+    let responses = concat!(
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"protocolVersion\":1}}\n",
+        "{\"jsonrpc\":\"2.0\",\"id\":2,\"error\":{\"message\":\"unknown session\"}}\n",
+        "{\"jsonrpc\":\"2.0\",\"id\":5,\"result\":{\"sessionId\":\"ses_fresh\"}}\n",
+        "{\"jsonrpc\":\"2.0\",\"id\":3,\"result\":{}}\n"
+    );
+    let mut stdin = Vec::new();
+    let mut reader = std::io::BufReader::new(std::io::Cursor::new(responses));
+    let session_id = opencode::init_acp_session(
+        &mut stdin,
+        &mut reader,
+        "worktrees/wt",
+        "model",
+        Some("ses_missing"),
+    )
+    .expect("fall back to a new session");
+    assert_eq!(session_id, "ses_fresh");
+    let requests = String::from_utf8(stdin).expect("utf8 requests");
+    assert!(requests.contains("\"method\":\"session/load\""));
+    assert!(requests.contains("\"method\":\"session/new\""));
 }
 
 #[test]
 fn opencode_drain_prompt_turn_handles_permissions_and_chunks() {
     let input = concat!(
         "not valid json\n",
-        "{\"jsonrpc\":\"2.0\",\"id\":50,\"method\":\"session/request_permission\",\"params\":{}}\n",
+        "{\"jsonrpc\":\"2.0\",\"id\":50,\"method\":\"session/request_permission\",\"params\":{\"options\":[{\"optionId\":\"allow-once\",\"kind\":\"allow_once\"}]}}\n",
         "{\"params\":{\"update\":{\"sessionUpdate\":\"agent_message_chunk\",\"content\":{\"text\":\"hello \"}}}}\n",
         "{\"params\":{\"update\":{\"sessionUpdate\":\"agent_message_chunk\",\"content\":{\"text\":\"world\"}}}}\n",
         "{\"jsonrpc\":\"2.0\",\"id\":4,\"result\":{\"stopReason\":\"end_turn\"}}\n"
@@ -521,6 +768,36 @@ fn opencode_drain_prompt_turn_handles_permissions_and_chunks() {
         opencode::drain_prompt_turn(&mut stdin, &mut reader, true).expect("drain prompt");
     assert_eq!(summary, "hello world");
     assert_eq!(stop_reason, "end_turn");
+    let permission_response = String::from_utf8(stdin).expect("utf8 response");
+    assert!(permission_response.contains("\"outcome\":\"selected\""));
+    assert!(permission_response.contains("\"optionId\":\"allow-once\""));
+}
+
+#[test]
+fn opencode_permission_rejection_uses_cancelled_outcome() {
+    let input = concat!(
+        "{\"jsonrpc\":\"2.0\",\"id\":50,\"method\":\"session/request_permission\",\"params\":{\"options\":[]}}\n",
+        "{\"jsonrpc\":\"2.0\",\"id\":4,\"result\":{\"stopReason\":\"end_turn\"}}\n"
+    );
+    let mut stdin = Vec::new();
+    let mut reader = std::io::BufReader::new(std::io::Cursor::new(input));
+    opencode::drain_prompt_turn(&mut stdin, &mut reader, false).expect("drain prompt");
+    let response = String::from_utf8(stdin).expect("utf8 response");
+    assert!(response.contains("\"outcome\":\"cancelled\""));
+}
+
+#[test]
+fn opencode_prompt_eof_and_rpc_error_are_failures() {
+    let mut empty = std::io::BufReader::new(std::io::Cursor::new(""));
+    let eof = opencode::drain_prompt_turn(&mut Vec::new(), &mut empty, true)
+        .expect_err("EOF before the response must fail");
+    assert!(eof.to_string().contains("closed stdout"));
+
+    let input = "{\"jsonrpc\":\"2.0\",\"id\":4,\"error\":{\"message\":\"boom\"}}\n";
+    let mut reader = std::io::BufReader::new(std::io::Cursor::new(input));
+    let rpc = opencode::drain_prompt_turn(&mut Vec::new(), &mut reader, true)
+        .expect_err("RPC error must fail");
+    assert!(rpc.to_string().contains("session/prompt failed"));
 }
 
 #[test]
@@ -575,7 +852,10 @@ fn opencode_build_worker_result_variants() {
         "ses-1".into(),
     );
     assert_eq!(res_err.status, WorkerStatus::Failed);
-    assert_eq!(res_err.blocking_issue.as_deref(), Some("error: timeout"));
+    assert_eq!(
+        res_err.blocking_issue.as_deref(),
+        Some("worker stopped with reason 'error: timeout'")
+    );
 }
 
 #[test]
@@ -606,9 +886,32 @@ fn opencode_inspect_git_worktree_runs_safely() {
         .current_dir(path)
         .status();
 
-    let (commits, files) = opencode::inspect_git_worktree(path.to_str().unwrap());
-    assert_eq!(commits.len(), 1);
+    let baseline = opencode::capture_git_snapshot(path.to_str().unwrap()).expect("snapshot");
+    let (commits, files) =
+        opencode::inspect_git_worktree(path.to_str().unwrap(), &baseline).expect("inspect no-op");
+    assert!(commits.is_empty(), "the pre-run HEAD is not worker output");
     assert!(files.is_empty());
+
+    std::fs::write(path.join("worker.txt"), "worker output").unwrap();
+    let (commits, files) =
+        opencode::inspect_git_worktree(path.to_str().unwrap(), &baseline).expect("inspect dirty");
+    assert!(commits.is_empty());
+    assert_eq!(files, vec!["worker.txt"]);
+
+    std::process::Command::new("git")
+        .args(["add", "worker.txt"])
+        .current_dir(path)
+        .status()
+        .expect("git add worker output");
+    std::process::Command::new("git")
+        .args(["commit", "-m", "worker output"])
+        .current_dir(path)
+        .status()
+        .expect("git commit worker output");
+    let (commits, files) =
+        opencode::inspect_git_worktree(path.to_str().unwrap(), &baseline).expect("inspect commit");
+    assert_eq!(commits.len(), 1);
+    assert_eq!(files, vec!["worker.txt"]);
 }
 
 #[test]
