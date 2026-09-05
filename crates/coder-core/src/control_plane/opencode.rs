@@ -15,6 +15,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 static RUN_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
 mod adapter;
+mod process_tree;
 pub(crate) use adapter::GitSnapshot;
 pub use adapter::{OpenCodeWorker, OpenCodeWorkerConfig};
 

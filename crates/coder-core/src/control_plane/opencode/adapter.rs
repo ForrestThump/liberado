@@ -1,12 +1,12 @@
 use super::{
     build_worker_result, capture_git_snapshot, failed_worker_result, inspect_git_worktree,
-    next_run_id, run_acp_session, synthesize_resume_prompt, take_stdio,
+    next_run_id, process_tree::ContainedProcess, run_acp_session, synthesize_resume_prompt,
+    take_stdio,
 };
 use crate::control_plane::{
     ControlPlaneError, RunHandle, TaskEvent, WorkerPort, WorkerRunRequest, WorkerRunResult,
     WorkerStatus,
 };
-use liberado_common::process::std_command;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -22,12 +22,12 @@ struct RunState {
 struct ActiveRun {
     state: Mutex<RunState>,
     ready: Condvar,
-    child: Mutex<Option<std::process::Child>>,
+    child: Mutex<Option<ContainedProcess>>,
     cancelled: AtomicBool,
 }
 
 impl ActiveRun {
-    fn new(child: std::process::Child) -> Self {
+    fn new(child: ContainedProcess) -> Self {
         Self {
             state: Mutex::new(RunState {
                 status: WorkerStatus::Running,
@@ -55,8 +55,7 @@ impl ActiveRun {
             .lock()
             .unwrap_or_else(|poison| poison.into_inner());
         if let Some(mut child) = child.take() {
-            let _ = child.kill();
-            let _ = child.wait();
+            child.terminate();
         }
     }
 }
@@ -102,8 +101,8 @@ impl OpenCodeWorker {
         &self.config
     }
 
-    /// Spawns the ACP server process.
-    fn spawn_acp_process(&self, worktree: &str) -> Result<std::process::Child, ControlPlaneError> {
+    /// Spawns the ACP server process in its own process group or job object.
+    fn spawn_acp_process(&self, worktree: &str) -> Result<ContainedProcess, ControlPlaneError> {
         let default_executable = if cfg!(windows) {
             "opencode.cmd"
         } else {
@@ -114,15 +113,7 @@ impl OpenCodeWorker {
             .executable
             .as_deref()
             .unwrap_or(default_executable);
-        let mut cmd = std_command(executable);
-        cmd.arg("acp");
-
-        cmd.current_dir(worktree);
-        cmd.stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::null());
-
-        cmd.spawn().map_err(ControlPlaneError::Io)
+        ContainedProcess::spawn_acp(executable, worktree)
     }
 
     fn launch_turn(
@@ -134,11 +125,10 @@ impl OpenCodeWorker {
     ) -> Result<RunHandle, ControlPlaneError> {
         let baseline = capture_git_snapshot(worktree)?;
         let mut child = self.spawn_acp_process(worktree)?;
-        let (mut stdin, mut reader) = match take_stdio(&mut child) {
+        let (mut stdin, mut reader) = match take_stdio(child.child_mut()) {
             Ok(streams) => streams,
             Err(error) => {
-                let _ = child.kill();
-                let _ = child.wait();
+                child.terminate();
                 return Err(error);
             }
         };

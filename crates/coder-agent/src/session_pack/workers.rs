@@ -6,7 +6,8 @@ use std::time::Duration;
 
 use liberado_coder_core::{
     CoderBackend, CoderError, CoderRunRequest, CoderRunResult, ControlPlaneConfig,
-    NATIVE_WORKER_ID, WorkerPort, WorkerRunRequest, WorkerRunResult, WorkerStatus,
+    ControlPlaneSupervisor, DispatchTaskRequest, NATIVE_WORKER_ID, SupervisedRun, WorkerPort,
+    WorkerRunResult, WorkerStatus,
 };
 use liberado_common::Outcome;
 
@@ -103,14 +104,12 @@ async fn run_external(
     request: CoderRunRequest,
     cancel: &mut tokio::sync::watch::Receiver<bool>,
 ) -> Result<RegistryRun, CoderError> {
-    let run_request = external_request(&request);
-    let handle = worker
-        .start(&run_request)
-        .map_err(|error| CoderError::Backend(error.to_string()))?;
+    let supervisor = ControlPlaneSupervisor::new(worker.clone());
+    let mut run = start_supervised(&supervisor, &request)?;
 
     loop {
-        let status = worker
-            .status(&handle)
+        let status = supervisor
+            .poll_status(&run)
             .map_err(|error| CoderError::Backend(error.to_string()))?;
         if matches!(status, WorkerStatus::Completed | WorkerStatus::Failed) {
             break;
@@ -118,20 +117,38 @@ async fn run_external(
         tokio::select! {
             _ = tokio::time::sleep(Duration::from_millis(100)) => {}
             _ = cancellation_requested(cancel) => {
-                worker.cancel(&handle).map_err(|error| CoderError::Backend(error.to_string()))?;
-                let _ = worker.collect(&handle);
-                return Ok(RegistryRun::Cancelled);
+                return cancel_supervised(&supervisor, &mut run);
             }
         }
     }
 
-    let result = worker
-        .collect(&handle)
+    let result = supervisor
+        .finish_run(&mut run)
         .map_err(|error| CoderError::Backend(error.to_string()))?;
     Ok(RegistryRun::Finished(Box::new(normalize_result(
         worker.id(),
         result,
     ))))
+}
+
+fn start_supervised(
+    supervisor: &ControlPlaneSupervisor,
+    request: &CoderRunRequest,
+) -> Result<SupervisedRun, CoderError> {
+    supervisor
+        .start_run(&dispatch_request(request), Some(external_prompt(request)))
+        .map_err(|error| CoderError::Backend(error.to_string()))
+}
+
+fn cancel_supervised(
+    supervisor: &ControlPlaneSupervisor,
+    run: &mut SupervisedRun,
+) -> Result<RegistryRun, CoderError> {
+    supervisor
+        .cancel_run(run)
+        .map_err(|error| CoderError::Backend(error.to_string()))?;
+    let _ = supervisor.finish_run(run);
+    Ok(RegistryRun::Cancelled)
 }
 
 async fn cancellation_requested(cancel: &mut tokio::sync::watch::Receiver<bool>) {
@@ -146,16 +163,16 @@ async fn cancellation_requested(cancel: &mut tokio::sync::watch::Receiver<bool>)
     std::future::pending().await
 }
 
-fn external_request(request: &CoderRunRequest) -> WorkerRunRequest {
-    WorkerRunRequest {
+fn dispatch_request(request: &CoderRunRequest) -> DispatchTaskRequest {
+    DispatchTaskRequest {
         task_id: request.task.id.clone(),
         objective: request.task.description.clone(),
+        acceptance_criteria: request.task.success_criteria.clone(),
         worktree: request.workspace.root.clone(),
         branch: current_branch(&request.workspace.root)
             .unwrap_or_else(|| request.workspace.base_ref.clone()),
         base_ref: request.workspace.base_ref.clone(),
-        prompt: external_prompt(request),
-        session_id: None,
+        repo: request.workspace.repo.clone(),
     }
 }
 

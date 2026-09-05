@@ -5,7 +5,7 @@
 
 use super::{
     ContinuationContextBuilder, ControlPlaneError, DispatchTaskRequest, RunHandle, TaskEvent,
-    TaskEventKind, TaskLedger, WorkerPort, WorkerRunRequest, WorkerRunResult,
+    TaskEventKind, TaskLedger, WorkerPort, WorkerRunRequest, WorkerRunResult, WorkerStatus,
 };
 use chrono::Utc;
 use std::path::Path;
@@ -14,6 +14,29 @@ use std::sync::Arc;
 /// Orchestrates task lifecycles, event ledgers, and worker dispatch.
 pub struct ControlPlaneSupervisor {
     worker: Arc<dyn WorkerPort>,
+}
+
+/// One in-flight worker run plus the durable ledger that records its lifecycle.
+pub struct SupervisedRun {
+    handle: RunHandle,
+    ledger: TaskLedger,
+}
+
+impl SupervisedRun {
+    /// Handle the worker returned for this run.
+    pub fn handle(&self) -> &RunHandle {
+        &self.handle
+    }
+
+    /// Durable ledger for this task.
+    pub fn ledger(&self) -> &TaskLedger {
+        &self.ledger
+    }
+
+    /// Consume the run and return the ledger after the worker has finished.
+    pub fn into_ledger(self) -> TaskLedger {
+        self.ledger
+    }
 }
 
 impl ControlPlaneSupervisor {
@@ -26,68 +49,48 @@ impl ControlPlaneSupervisor {
         &self,
         req: &DispatchTaskRequest,
     ) -> Result<(TaskLedger, WorkerRunResult), ControlPlaneError> {
-        // 1. Initial TaskCreated event
-        let initial_event = TaskEvent::new(
-            format!("evt-{}-created", req.task_id),
-            &req.task_id,
-            TaskEventKind::TaskCreated {
-                objective: req.objective.clone(),
-                acceptance_criteria: req.acceptance_criteria.clone(),
-                worktree: req.worktree.clone(),
-                branch: req.branch.clone(),
-                base_ref: req.base_ref.clone(),
-                repo: req.repo.clone(),
-            },
-        );
+        let mut run = self.start_run(req, None)?;
+        let result = self.finish_run(&mut run)?;
+        Ok((run.into_ledger(), result))
+    }
 
-        let tasks_root = Path::new(&req.worktree).join(".liberado").join("tasks");
-        let mut ledger = TaskLedger::create_in(tasks_root, initial_event)?;
-        let record = ledger.project()?;
-
-        // 2. Synthesize prompt
-        let prompt = ContinuationContextBuilder::build(&record);
-
-        let run_req = WorkerRunRequest {
-            task_id: req.task_id.clone(),
-            objective: req.objective.clone(),
-            worktree: req.worktree.clone(),
-            branch: req.branch.clone(),
-            base_ref: req.base_ref.clone(),
-            prompt,
-            session_id: None,
+    /// Create the durable ledger and start the worker without blocking on collect.
+    ///
+    /// `prompt` overrides the continuation builder so a session pack can keep its
+    /// existing task markdown (context, instructions, prior feedback).
+    pub fn start_run(
+        &self,
+        req: &DispatchTaskRequest,
+        prompt: Option<String>,
+    ) -> Result<SupervisedRun, ControlPlaneError> {
+        let mut ledger = create_task_ledger(req)?;
+        let prompt = match prompt {
+            Some(prompt) => prompt,
+            None => ContinuationContextBuilder::build(&ledger.project()?),
         };
+        let handle = self.worker.start(&worker_request(req, prompt))?;
+        record_worker_started(&mut ledger, &handle, self.worker.id())?;
+        Ok(SupervisedRun { handle, ledger })
+    }
 
-        // 3. Launch worker
-        let handle = self.worker.start(&run_req)?;
+    /// Poll the worker for the current run status.
+    pub fn poll_status(&self, run: &SupervisedRun) -> Result<WorkerStatus, ControlPlaneError> {
+        self.worker.status(&run.handle)
+    }
 
-        ledger.append(TaskEvent::new(
-            format!("evt-{}-started", handle.run_id),
-            &req.task_id,
-            TaskEventKind::WorkerStarted {
-                run_id: handle.run_id.clone(),
-                worker_id: self.worker.id().to_string(),
-                resumed_session_id: handle.external_session_id.clone(),
-            },
-        ))?;
+    /// Ask the worker to stop the run. The caller still collects to record the finish event.
+    pub fn cancel_run(&self, run: &SupervisedRun) -> Result<(), ControlPlaneError> {
+        self.worker.cancel(&run.handle)
+    }
 
-        // 4. Collect result
-        let result = self.worker.collect(&handle)?;
-        append_worker_finished(&mut ledger, &handle, &result)?;
-
-        // 5. Append commits produced
-        for commit in &result.commits {
-            ledger.append(TaskEvent::new(
-                format!("evt-{}-commit", &commit[..commit.len().min(8)]),
-                &req.task_id,
-                TaskEventKind::CommitProduced {
-                    commit_sha: commit.clone(),
-                    message: result.summary.clone(),
-                    files_changed: result.files_changed.clone(),
-                },
-            ))?;
-        }
-
-        Ok((ledger, result))
+    /// Collect the worker result and append finish plus commit events to the ledger.
+    pub fn finish_run(
+        &self,
+        run: &mut SupervisedRun,
+    ) -> Result<WorkerRunResult, ControlPlaneError> {
+        let result = self.worker.collect(&run.handle)?;
+        record_finished_run(&mut run.ledger, &run.handle, &result)?;
+        Ok(result)
     }
 
     /// Automatically handle a CI failure on an existing task ledger by kicking back to the worker.
@@ -155,21 +158,63 @@ impl ControlPlaneSupervisor {
 
         let result = self.worker.collect(&resume_handle)?;
         append_worker_finished(ledger, &resume_handle, &result)?;
-
-        for commit in &result.commits {
-            ledger.append(TaskEvent::new(
-                format!("evt-{}-repair-commit", &commit[..commit.len().min(8)]),
-                &updated_record.task_id,
-                TaskEventKind::CommitProduced {
-                    commit_sha: commit.clone(),
-                    message: result.summary.clone(),
-                    files_changed: result.files_changed.clone(),
-                },
-            ))?;
-        }
-
+        append_commits(ledger, &resume_handle, &result, "repair-commit")?;
         Ok(result)
     }
+}
+
+fn create_task_ledger(req: &DispatchTaskRequest) -> Result<TaskLedger, ControlPlaneError> {
+    let initial_event = TaskEvent::new(
+        format!("evt-{}-created", req.task_id),
+        &req.task_id,
+        TaskEventKind::TaskCreated {
+            objective: req.objective.clone(),
+            acceptance_criteria: req.acceptance_criteria.clone(),
+            worktree: req.worktree.clone(),
+            branch: req.branch.clone(),
+            base_ref: req.base_ref.clone(),
+            repo: req.repo.clone(),
+        },
+    );
+    let tasks_root = Path::new(&req.worktree).join(".liberado").join("tasks");
+    TaskLedger::create_in(tasks_root, initial_event)
+}
+
+fn worker_request(req: &DispatchTaskRequest, prompt: String) -> WorkerRunRequest {
+    WorkerRunRequest {
+        task_id: req.task_id.clone(),
+        objective: req.objective.clone(),
+        worktree: req.worktree.clone(),
+        branch: req.branch.clone(),
+        base_ref: req.base_ref.clone(),
+        prompt,
+        session_id: None,
+    }
+}
+
+fn record_worker_started(
+    ledger: &mut TaskLedger,
+    handle: &RunHandle,
+    worker_id: &str,
+) -> Result<(), ControlPlaneError> {
+    ledger.append(TaskEvent::new(
+        format!("evt-{}-started", handle.run_id),
+        &handle.task_id,
+        TaskEventKind::WorkerStarted {
+            run_id: handle.run_id.clone(),
+            worker_id: worker_id.to_string(),
+            resumed_session_id: handle.external_session_id.clone(),
+        },
+    ))
+}
+
+fn record_finished_run(
+    ledger: &mut TaskLedger,
+    handle: &RunHandle,
+    result: &WorkerRunResult,
+) -> Result<(), ControlPlaneError> {
+    append_worker_finished(ledger, handle, result)?;
+    append_commits(ledger, handle, result, "commit")
 }
 
 fn append_worker_finished(
@@ -187,4 +232,24 @@ fn append_worker_finished(
             blocking_issue: result.blocking_issue.clone(),
         },
     ))
+}
+
+fn append_commits(
+    ledger: &mut TaskLedger,
+    handle: &RunHandle,
+    result: &WorkerRunResult,
+    kind: &str,
+) -> Result<(), ControlPlaneError> {
+    for commit in &result.commits {
+        ledger.append(TaskEvent::new(
+            format!("evt-{}-{kind}", &commit[..commit.len().min(8)]),
+            &handle.task_id,
+            TaskEventKind::CommitProduced {
+                commit_sha: commit.clone(),
+                message: result.summary.clone(),
+                files_changed: result.files_changed.clone(),
+            },
+        ))?;
+    }
+    Ok(())
 }

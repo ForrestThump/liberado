@@ -11,6 +11,8 @@
 mod coherence;
 pub mod control_plane;
 #[cfg(test)]
+mod control_plane_cancel_tests;
+#[cfg(test)]
 mod control_plane_tests;
 mod failure_excerpt;
 mod intake;
@@ -21,8 +23,8 @@ mod verify;
 pub use control_plane::{
     ContinuationContextBuilder, ControlPlaneConfig, ControlPlaneError, ControlPlaneSupervisor,
     DispatchTaskRequest, NATIVE_WORKER_ID, OpenCodeWorker, OpenCodeWorkerConfig, RunHandle,
-    TaskEvent, TaskEventKind, TaskLedger, TaskRecord, TaskStatus, WorkerAdapterConfig, WorkerPort,
-    WorkerRunRequest, WorkerRunResult, WorkerStatus,
+    SupervisedRun, TaskEvent, TaskEventKind, TaskLedger, TaskRecord, TaskStatus,
+    WorkerAdapterConfig, WorkerPort, WorkerRunRequest, WorkerRunResult, WorkerStatus,
 };
 
 pub use trace_view::{

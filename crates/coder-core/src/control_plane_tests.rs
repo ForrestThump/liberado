@@ -986,3 +986,37 @@ fn opencode_run_acp_session_round_trip() {
     assert_eq!(summary, "all set");
     assert_eq!(stop_reason, "end_turn");
 }
+
+#[test]
+fn supervisor_start_run_uses_session_prompt_and_records_lifecycle() {
+    let temp = tempfile::TempDir::new().expect("tempdir");
+    let mock = std::sync::Arc::new(MockWorker::new(vec![vec!["commit-bbb".into()]]));
+    let supervisor = ControlPlaneSupervisor::new(mock.clone());
+    let req = DispatchTaskRequest::new(
+        "task-session",
+        "Keep the session prompt",
+        temp.path().to_string_lossy(),
+        "feat/session-prompt",
+        "main",
+    )
+    .with_acceptance_criteria(vec!["Session markdown is preserved".into()]);
+
+    let mut run = supervisor
+        .start_run(&req, Some("# Task\nKeep the session prompt".into()))
+        .expect("start supervised run");
+    assert!(
+        run.ledger()
+            .events()
+            .iter()
+            .any(|event| matches!(event.payload, TaskEventKind::WorkerStarted { .. }))
+    );
+    let result = supervisor.finish_run(&mut run).expect("finish");
+    assert_eq!(result.commits, vec!["commit-bbb".to_string()]);
+    let reqs = mock.received_requests.lock().unwrap();
+    assert_eq!(reqs[0].prompt, "# Task\nKeep the session prompt");
+    assert!(
+        temp.path()
+            .join(".liberado/tasks/task-session/task.json")
+            .is_file()
+    );
+}

@@ -380,8 +380,9 @@ repair, alternate order) is the opposite of production policy (repair, resume, e
 
 ## 8. What is missing
 
-- Connect coding-session runs to the durable task ledger. The ledger exists, but the session path
-  does not yet write its worker lifecycle into it.
+- External coding-session runs now go through `ControlPlaneSupervisor` and write worker lifecycle
+  events to `.liberado/tasks/<task_id>/ledger.jsonl` plus the derived `task.json`. Native
+  `liberado-loop` is still the in-process backend and is not yet a `WorkerPort`.
 - Feed Shepherd CI and review events into that ledger, then resume the selected worker from the
   reconstructed task record.
 - Resume across harnesses from the task record when the original session is gone.

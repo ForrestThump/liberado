@@ -19,7 +19,7 @@ pub mod supervisor;
 
 pub use config::{ControlPlaneConfig, NATIVE_WORKER_ID, WorkerAdapterConfig};
 pub use opencode::{OpenCodeWorker, OpenCodeWorkerConfig};
-pub use supervisor::ControlPlaneSupervisor;
+pub use supervisor::{ControlPlaneSupervisor, SupervisedRun};
 
 /// Lifecycle status for an external or native worker process.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
