@@ -9,11 +9,23 @@
 //! first consumed by the coding pack; see `docs/spec/architecture/verifiers.md`.
 
 mod coherence;
+pub mod control_plane;
+#[cfg(test)]
+mod control_plane_cancel_tests;
+#[cfg(test)]
+mod control_plane_tests;
 mod failure_excerpt;
 mod intake;
 mod trace_view;
 mod tuning;
 mod verify;
+
+pub use control_plane::{
+    ContinuationContextBuilder, ControlPlaneConfig, ControlPlaneError, ControlPlaneSupervisor,
+    DispatchTaskRequest, NATIVE_WORKER_ID, OpenCodeWorker, OpenCodeWorkerConfig, RunHandle,
+    SupervisedRun, TaskEvent, TaskEventKind, TaskLedger, TaskRecord, TaskStatus,
+    WorkerAdapterConfig, WorkerPort, WorkerRunRequest, WorkerRunResult, WorkerStatus,
+};
 
 pub use trace_view::{
     CallView, Divergence, FailedCall, ForeignTraceFormat, MessagesExport, RunView, SideBySide,

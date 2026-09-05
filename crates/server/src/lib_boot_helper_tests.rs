@@ -77,6 +77,21 @@ fn main_agent_budget_reads_the_configured_ceiling_and_keeps_the_default() {
     assert_eq!(main_agent_budget(&configured).max_turns, 12);
 }
 
+#[test]
+fn coding_pack_refuses_an_unknown_configured_worker() {
+    let mut config = liberado_bootstrap::Config::default();
+    config.tuning.coder = Some(
+        serde_json::from_value(serde_json::json!({
+            "control_plane": { "default_worker": "missing-worker" }
+        }))
+        .expect("raw coder tuning"),
+    );
+    let error = coding_pack::coder_tuning_from_config(&config)
+        .expect_err("invalid worker config must stop coding-pack assembly");
+
+    assert!(error.to_string().contains("missing-worker"));
+}
+
 fn tool(name: &str) -> liberado_provider::ToolDef {
     liberado_provider::ToolDef {
         name: name.into(),

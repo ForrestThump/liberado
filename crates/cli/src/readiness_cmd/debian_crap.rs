@@ -28,6 +28,7 @@ fn run_from_windows(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
         &context.linux_bundle,
         &context.layout.workspace,
         &context.head,
+        &context.layout.temp_dir,
     )?;
     build_driver(
         &context.distro,
@@ -41,6 +42,7 @@ fn run_from_windows(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
         &context.layout.workspace,
         &context.layout.driver_target,
         &context.layout.coverage_target,
+        &context.layout.temp_dir,
     )
 }
 
@@ -75,6 +77,7 @@ struct CacheLayout {
     workspace: String,
     driver_target: String,
     coverage_target: String,
+    temp_dir: String,
 }
 
 fn cache_layout(home: &str, cache_key: &str) -> CacheLayout {
@@ -83,6 +86,7 @@ fn cache_layout(home: &str, cache_key: &str) -> CacheLayout {
         workspace: format!("{root}/workspace"),
         driver_target: format!("{root}/driver-target"),
         coverage_target: format!("{root}/coverage-target"),
+        temp_dir: format!("{root}/tmp"),
     }
 }
 
@@ -121,8 +125,9 @@ fn prepare_debian_workspace(
     bundle: &str,
     workspace: &str,
     head: &str,
+    temp_dir: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    ensure_debian_workspace(distro, user, bundle, workspace)?;
+    ensure_debian_workspace(distro, user, bundle, workspace, temp_dir)?;
     refresh_debian_workspace(distro, user, bundle, workspace, head)
 }
 
@@ -131,11 +136,12 @@ fn ensure_debian_workspace(
     user: &str,
     bundle: &str,
     workspace: &str,
+    temp_dir: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let parent = workspace
         .rsplit_once('/')
         .map_or(workspace, |(parent, _)| parent);
-    checked_wsl(distro, user, &["mkdir", "-p", parent])?;
+    checked_wsl(distro, user, &["mkdir", "-p", parent, temp_dir])?;
     if !wsl_success(distro, user, &["test", "-d", &format!("{workspace}/.git")])? {
         checked_wsl(
             distro,
@@ -223,15 +229,25 @@ fn run_driver(
     workspace: &str,
     driver_target: &str,
     coverage_target: &str,
+    temp_dir: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let path_env = format!("PATH={}", cargo_path(&account.home));
     let coverage_env = format!("CARGO_TARGET_DIR={coverage_target}");
+    let temp_env = format!("TMPDIR={temp_dir}");
     let executable = format!("{driver_target}/debug/liberado");
     checked_wsl_at(
         distro,
         &account.user,
         workspace,
-        &["env", &path_env, &coverage_env, &executable, "ci", "crap"],
+        &[
+            "env",
+            &path_env,
+            &coverage_env,
+            &temp_env,
+            &executable,
+            "ci",
+            "crap",
+        ],
     )?;
     Ok(())
 }
@@ -422,6 +438,20 @@ mod tests {
         assert_ne!(layout.driver_target, layout.coverage_target);
         assert!(layout.driver_target.ends_with("/driver-target"));
         assert!(layout.coverage_target.ends_with("/coverage-target"));
+        assert!(layout.temp_dir.ends_with("/tmp"));
+    }
+
+    #[test]
+    fn linux_driver_routes_test_temp_files_to_the_cache_disk() {
+        let source = include_str!("debian_crap.rs");
+        let run_driver = source
+            .split_once("fn run_driver(")
+            .and_then(|(_, tail)| tail.split_once("fn cargo_path("))
+            .map(|(body, _)| body)
+            .expect("run_driver source");
+        assert!(run_driver.contains("let temp_env = format!(\"TMPDIR={temp_dir}\")"));
+        assert!(run_driver.contains("&temp_env"));
+        assert!(source.contains("[\"mkdir\", \"-p\", parent, temp_dir]"));
     }
 
     #[test]

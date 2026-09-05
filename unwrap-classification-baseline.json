@@ -4,7 +4,7 @@
     "proven_invariant": 61,
     "local_failure": 0,
     "process_fatal": 50,
-    "files_scanned": 440,
+    "files_scanned": 453,
     "files_with_unwraps": 49
   },
   "files": {
@@ -346,7 +346,7 @@
       "occurrences": [
         {
           "file": "crates/coder-agent/src/session_pack.rs",
-          "line": 231,
+          "line": 253,
           "column": 10,
           "method": "expect",
           "snippet": "self.hub.lock().expect(\"coding pack hub mutex\")",
@@ -357,7 +357,7 @@
         },
         {
           "file": "crates/coder-agent/src/session_pack.rs",
-          "line": 235,
+          "line": 257,
           "column": 9,
           "method": "expect",
           "snippet": "self.hub.lock().expect(\"coding pack hub mutex\")",

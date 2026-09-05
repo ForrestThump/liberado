@@ -30,9 +30,12 @@ fn succeeded() -> Report {
 /// phrase, so the classifier routes it as a host failure deterministically.
 fn broken_workspace_with_host_phrase() -> tempfile::TempDir {
     let dir = tempfile::tempdir().unwrap();
+    // Keep this package identity distinct from the green probe. Coverage runs
+    // share CARGO_TARGET_DIR across tests, so equal identities can reuse the
+    // other probe's concurrent cargo-check result.
     std::fs::write(
         dir.path().join("Cargo.toml"),
-        "[package]\nname=\"probe\"\nversion=\"0.0.0\"\nedition=\"2021\"\n",
+        "[package]\nname=\"broken-probe\"\nversion=\"0.0.0\"\nedition=\"2021\"\n",
     )
     .unwrap();
     std::fs::create_dir_all(dir.path().join("src")).unwrap();

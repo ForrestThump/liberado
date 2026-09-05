@@ -12,8 +12,9 @@ use liberado_common::{Error, Result};
 
 use crate::{
     CoderCommandConfig, CoderGateConfig, CoderRoleConfig, CoderRunConfig, CommandPolicy,
-    EditConfig, HashlineConfig, LIBERADO_LOOP_BACKEND, PathPolicy, PipelinePolicy, ProgressPolicy,
-    SandboxSpec, SessionCriticConfig, VerifierSpec, WorkspaceBuildConfig,
+    ControlPlaneConfig, EditConfig, HashlineConfig, LIBERADO_LOOP_BACKEND, PathPolicy,
+    PipelinePolicy, ProgressPolicy, SandboxSpec, SessionCriticConfig, VerifierSpec,
+    WorkspaceBuildConfig,
 };
 use serde::{Deserialize, Serialize};
 
@@ -93,6 +94,9 @@ pub struct CoderTuning {
     /// `[tuning.coder.repo_map]` — Aider-style repository map for cold-start context.
     #[serde(default)]
     pub repo_map: RepoMapConfig,
+    /// External coding workers and the default selection policy.
+    #[serde(default)]
+    pub control_plane: ControlPlaneConfig,
 }
 
 /// Configuration for the Aider-style repository map feature.
@@ -185,11 +189,22 @@ impl CoderTuning {
         validate_tuning_path_policy(&self.path_policy)?;
         validate_tuning_progress(&self.progress)?;
         validate_tuning_validation_command(self.validation_command.as_ref())?;
-        self.hashline
-            .validate()
-            .map_err(|e| Error::Config(format!("tuning.coder.{e}")))?;
+        validate_hashline_and_control_plane(&self.hashline, &self.control_plane)?;
         Ok(())
     }
+}
+
+fn validate_hashline_and_control_plane(
+    hashline: &HashlineConfig,
+    control_plane: &ControlPlaneConfig,
+) -> Result<()> {
+    hashline
+        .validate()
+        .map_err(|e| Error::Config(format!("tuning.coder.{e}")))?;
+    control_plane
+        .validate()
+        .map_err(|e| Error::Config(format!("tuning.coder.control_plane: {e}")))?;
+    Ok(())
 }
 
 fn validate_tuning_backend(backend: &str) -> Result<()> {
@@ -303,6 +318,7 @@ impl Default for CoderTuning {
             prompt_dir: None,
             offered_tools: None,
             repo_map: RepoMapConfig::default(),
+            control_plane: ControlPlaneConfig::default(),
         }
     }
 }

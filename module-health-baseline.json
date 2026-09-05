@@ -522,10 +522,10 @@
     "cyclomatic": 97
   },
   "crates/cli/src/readiness_cmd/debian_crap.rs": {
-    "ploc": 405,
-    "lloc": 75,
-    "functions": 36,
-    "cyclomatic": 87
+    "ploc": 434,
+    "lloc": 82,
+    "functions": 39,
+    "cyclomatic": 90
   },
   "crates/cli/src/shepherd_cmd.rs": {
     "ploc": 1065,
@@ -786,19 +786,25 @@
     "cyclomatic": 23
   },
   "crates/coder-agent/src/session_pack.rs": {
-    "ploc": 365,
-    "lloc": 82,
-    "functions": 24,
-    "cyclomatic": 55
+    "ploc": 382,
+    "lloc": 85,
+    "functions": 25,
+    "cyclomatic": 56
+  },
+  "crates/coder-agent/src/session_pack/attempt.rs": {
+    "ploc": 130,
+    "lloc": 14,
+    "functions": 3,
+    "cyclomatic": 14
   },
   "crates/coder-agent/src/session_pack/build.rs": {
-    "ploc": 772,
-    "lloc": 154,
-    "functions": 27,
-    "cyclomatic": 97
+    "ploc": 661,
+    "lloc": 140,
+    "functions": 25,
+    "cyclomatic": 89
   },
   "crates/coder-agent/src/session_pack/build_survivor_tests.rs": {
-    "ploc": 627,
+    "ploc": 628,
     "lloc": 177,
     "functions": 37,
     "cyclomatic": 57
@@ -851,6 +857,18 @@
     "functions": 52,
     "cyclomatic": 85
   },
+  "crates/coder-agent/src/session_pack/worker_tests.rs": {
+    "ploc": 400,
+    "lloc": 97,
+    "functions": 21,
+    "cyclomatic": 32
+  },
+  "crates/coder-agent/src/session_pack/workers.rs": {
+    "ploc": 224,
+    "lloc": 36,
+    "functions": 27,
+    "cyclomatic": 51
+  },
   "crates/coder-agent/src/trace.rs": {
     "ploc": 422,
     "lloc": 96,
@@ -886,6 +904,54 @@
     "lloc": 96,
     "functions": 48,
     "cyclomatic": 76
+  },
+  "crates/coder-core/src/control_plane.rs": {
+    "ploc": 607,
+    "lloc": 168,
+    "functions": 24,
+    "cyclomatic": 97
+  },
+  "crates/coder-core/src/control_plane/config.rs": {
+    "ploc": 100,
+    "lloc": 14,
+    "functions": 7,
+    "cyclomatic": 23
+  },
+  "crates/coder-core/src/control_plane/opencode.rs": {
+    "ploc": 403,
+    "lloc": 91,
+    "functions": 31,
+    "cyclomatic": 93
+  },
+  "crates/coder-core/src/control_plane/opencode/adapter.rs": {
+    "ploc": 260,
+    "lloc": 48,
+    "functions": 29,
+    "cyclomatic": 59
+  },
+  "crates/coder-core/src/control_plane/opencode/process_tree.rs": {
+    "ploc": 121,
+    "lloc": 38,
+    "functions": 8,
+    "cyclomatic": 21
+  },
+  "crates/coder-core/src/control_plane/supervisor.rs": {
+    "ploc": 213,
+    "lloc": 26,
+    "functions": 18,
+    "cyclomatic": 46
+  },
+  "crates/coder-core/src/control_plane_cancel_tests.rs": {
+    "ploc": 140,
+    "lloc": 47,
+    "functions": 8,
+    "cyclomatic": 14
+  },
+  "crates/coder-core/src/control_plane_tests.rs": {
+    "ploc": 908,
+    "lloc": 306,
+    "functions": 37,
+    "cyclomatic": 48
   },
   "crates/coder-core/src/failure_excerpt.rs": {
     "ploc": 105,
@@ -924,7 +990,7 @@
     "cyclomatic": 48
   },
   "crates/coder-core/src/lib.rs": {
-    "ploc": 860,
+    "ploc": 874,
     "lloc": 43,
     "functions": 49,
     "cyclomatic": 114
@@ -996,10 +1062,10 @@
     "cyclomatic": 32
   },
   "crates/coder-core/src/tuning.rs": {
-    "ploc": 338,
-    "lloc": 62,
-    "functions": 28,
-    "cyclomatic": 78
+    "ploc": 352,
+    "lloc": 64,
+    "functions": 30,
+    "cyclomatic": 82
   },
   "crates/coder-core/src/tuning_documented_key_tests.rs": {
     "ploc": 97,
@@ -2148,10 +2214,10 @@
     "cyclomatic": 31
   },
   "crates/heuristics-tuner/src/config.rs": {
-    "ploc": 328,
-    "lloc": 58,
-    "functions": 32,
-    "cyclomatic": 53
+    "ploc": 319,
+    "lloc": 56,
+    "functions": 31,
+    "cyclomatic": 51
   },
   "crates/heuristics-tuner/src/config_load_tests.rs": {
     "ploc": 47,
@@ -3017,6 +3083,12 @@
     "functions": 2,
     "cyclomatic": 3
   },
+  "crates/server/src/coding_pack.rs": {
+    "ploc": 42,
+    "lloc": 9,
+    "functions": 3,
+    "cyclomatic": 9
+  },
   "crates/server/src/cron_delivery.rs": {
     "ploc": 100,
     "lloc": 17,
@@ -3066,16 +3138,16 @@
     "cyclomatic": 5
   },
   "crates/server/src/lib.rs": {
-    "ploc": 904,
-    "lloc": 230,
-    "functions": 48,
-    "cyclomatic": 110
+    "ploc": 884,
+    "lloc": 219,
+    "functions": 47,
+    "cyclomatic": 105
   },
   "crates/server/src/lib_boot_helper_tests.rs": {
-    "ploc": 132,
-    "lloc": 59,
-    "functions": 13,
-    "cyclomatic": 17
+    "ploc": 145,
+    "lloc": 64,
+    "functions": 14,
+    "cyclomatic": 18
   },
   "crates/server/src/lib_prompt_preview_tests.rs": {
     "ploc": 75,

@@ -8,7 +8,6 @@
 use liberado_coder_core::{
     CoderRoleConfig, CoderRunRequest, CoderTask, CodingMode, GoalContract, SandboxSpec,
 };
-use liberado_common::Outcome;
 use liberado_session::{
     GoalResult, GoalSpec, InputChannel, PackContext, PackError, SessionEvent, SessionEventKind,
     TerminalKind,
@@ -18,6 +17,7 @@ use std::sync::Arc;
 use tokio::sync::mpsc::Sender;
 
 use super::CodingSessionPack;
+use super::attempt::AttemptOutcome;
 use super::policies::WorkspacePolicies;
 use crate::CodingGoalPayload;
 
@@ -264,7 +264,15 @@ impl CodingSessionPack {
             //  * it BROKE (`Setup`/`Sandbox`/`Provider`/`Tool`/`Backend`) — the environment failed.
             //    No human answer fixes a dead sandbox, so fail fast rather than page someone.
             let outcome = self
-                .run_one_attempt(session_id, &model, &request, &events, &mut cancel)
+                .run_one_attempt(
+                    session_id,
+                    &model,
+                    ctx.overrides(),
+                    payload_json,
+                    &request,
+                    &events,
+                    &mut cancel,
+                )
                 .await?;
             let (ok, summary, artifacts, diagnostics) = match outcome {
                 AttemptOutcome::Broken(result) => return Ok(result),
@@ -535,125 +543,6 @@ impl CodingSessionPack {
         }
     }
 
-    /// Race one coding attempt against cancel (best-effort; LiberadoLoopBackend is not
-    /// cancel-aware), then classify how it ended.
-    async fn run_one_attempt(
-        &self,
-        session_id: &str,
-        model: &str,
-        request: &CoderRunRequest,
-        events: &Sender<SessionEvent>,
-        cancel: &mut tokio::sync::watch::Receiver<bool>,
-    ) -> Result<AttemptOutcome, PackError> {
-        let _ = events
-            .send(SessionEvent::new(
-                session_id,
-                SessionEventKind::RoleStarted {
-                    role: "coder".into(),
-                    model: model.to_string(),
-                },
-            ))
-            .await;
-
-        use crate::live::LIVE_GATE;
-        let run_fut = LIVE_GATE.scope(
-            (events.clone(), session_id.to_string()),
-            self.backend.run(request.clone()),
-        );
-        tokio::pin!(run_fut);
-
-        let result = tokio::select! {
-            r = &mut run_fut => r,
-            _ = cancel.changed() => {
-                if *cancel.borrow() {
-                    return Err(PackError::Cancelled);
-                }
-                run_fut.await
-            }
-        };
-
-        let _ = events
-            .send(SessionEvent::new(
-                session_id,
-                SessionEventKind::RoleFinished {
-                    role: "coder".into(),
-                },
-            ))
-            .await;
-
-        match result {
-            Ok(r) => {
-                let ok = r.outcome == Outcome::Succeeded;
-                // Completion-gate votes stream live via C2 (LIVE_GATE task-local);
-                // the file changes are the evidence they are about, so surface them first.
-                for change in &r.file_changes {
-                    let _ = events
-                        .send(SessionEvent::new(
-                            session_id,
-                            SessionEventKind::FileChanged {
-                                path: change.path.clone(),
-                                change: change.change.clone(),
-                            },
-                        ))
-                        .await;
-                }
-                let _ = events
-                    .send(SessionEvent::new(
-                        session_id,
-                        SessionEventKind::ValidationFinished {
-                            ok,
-                            summary: r
-                                .validation_notes
-                                .clone()
-                                .unwrap_or_else(|| r.summary.clone()),
-                        },
-                    ))
-                    .await;
-                Ok(AttemptOutcome::Verdict {
-                    ok,
-                    summary: r.summary,
-                    artifacts: r.files_changed,
-                    diagnostics: r.diagnostics,
-                })
-            }
-            Err(e) if crate::is_stuck_error(&e) => {
-                let msg = e.to_string();
-                let _ = events
-                    .send(SessionEvent::new(
-                        session_id,
-                        SessionEventKind::ValidationFinished {
-                            ok: false,
-                            summary: msg.clone(),
-                        },
-                    ))
-                    .await;
-                Ok(AttemptOutcome::Verdict {
-                    ok: false,
-                    summary: msg,
-                    artifacts: Vec::new(),
-                    diagnostics: serde_json::json!({"error": "coder_backend", "stuck": true}),
-                })
-            }
-            Err(e) => {
-                let msg = e.to_string();
-                let _ = events
-                    .send(SessionEvent::new(
-                        session_id,
-                        SessionEventKind::Failed {
-                            message: msg.clone(),
-                        },
-                    ))
-                    .await;
-                Ok(AttemptOutcome::Broken(GoalResult {
-                    terminal: TerminalKind::Failed,
-                    summary: msg,
-                    artifacts: vec![],
-                    diagnostics: serde_json::json!({"error": "coder_backend"}),
-                }))
-            }
-        }
-    }
-
     /// Ask the human how to proceed after a failed attempt. `Guidance` folds into the next
     /// attempt; the terminal answers carry no attempt state, so the caller builds their
     /// GoalResult from the attempt's artifacts and diagnostics.
@@ -693,20 +582,6 @@ impl CodingSessionPack {
             Some(guidance) => HumanAnswer::Guidance(guidance),
         })
     }
-}
-
-/// How one coding attempt ended.
-enum AttemptOutcome {
-    /// The attempt ran and produced a verdict (pass/fail, or a stuck error) — continue the loop.
-    Verdict {
-        ok: bool,
-        summary: String,
-        artifacts: Vec<String>,
-        diagnostics: serde_json::Value,
-    },
-    /// The environment broke (`Setup`/`Sandbox`/`Provider`/`Tool`/`Backend`) — the goal fails
-    /// now; no human answer fixes a dead sandbox.
-    Broken(GoalResult),
 }
 
 /// What the human said to a mid-run question.
