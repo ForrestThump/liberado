@@ -75,6 +75,15 @@ impl CodingSessionPack {
             ))
             .await;
 
+        Self::classify_attempt_result(session_id, result, events).await
+    }
+
+    /// Emit attempt-side events and map backend success/failure into an [`AttemptOutcome`].
+    async fn classify_attempt_result(
+        session_id: &str,
+        result: Result<liberado_coder_core::CoderRunResult, liberado_coder_core::CoderError>,
+        events: &Sender<SessionEvent>,
+    ) -> Result<AttemptOutcome, PackError> {
         match result {
             Ok(run) => {
                 let ok = run.outcome == Outcome::Succeeded;
