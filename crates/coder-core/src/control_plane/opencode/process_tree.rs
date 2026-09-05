@@ -91,7 +91,7 @@ fn kill_descendants(process: &mut ContainedProcess) {
 #[cfg(windows)]
 #[derive(Debug)]
 struct WindowsJob {
-    handle: std::os::windows::io::OwnedHandle,
+    _handle: std::os::windows::io::OwnedHandle,
 }
 
 #[cfg(windows)]
@@ -125,7 +125,7 @@ impl WindowsJob {
         let assigned = configured != 0
             && unsafe { AssignProcessToJobObject(job, child.as_raw_handle().cast()) } != 0;
         if assigned {
-            return Ok(Self { handle });
+            return Ok(Self { _handle: handle });
         }
         Err(ControlPlaneError::Io(std::io::Error::other(
             "could not contain the OpenCode process tree in a Windows job object",
