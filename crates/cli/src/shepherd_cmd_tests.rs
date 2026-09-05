@@ -1,5 +1,7 @@
 //! Split from `shepherd_cmd.rs` for module-health boundaries.
 
+use super::actions::{CleanAction, FailureAction, next_clean_action, next_failure_action};
+use super::prompts::{cold_review_prompt, kickback_prompt, note};
 use super::*;
 
 fn test_config(root: PathBuf) -> Config {
@@ -334,6 +336,8 @@ fn settled_review_labels_only_on_success_and_preserves_dry_run_state() {
         title: "test".into(),
         branch: "test".into(),
         base_sha: String::new(),
+        head_sha: String::new(),
+        url: String::new(),
         labels: Vec::new(),
     };
     let path = pending(&cfg, pr.number);
@@ -393,6 +397,8 @@ fn prompts_keep_unattended_guardrails() {
         title: "title".into(),
         branch: "branch".into(),
         base_sha: String::new(),
+        head_sha: String::new(),
+        url: String::new(),
         labels: Vec::new(),
     };
     let failures = BTreeSet::from(["test|case".into()]);
@@ -480,6 +486,8 @@ fn pr(labels: &[&str]) -> Pr {
         title: "t".into(),
         branch: "b".into(),
         base_sha: String::new(),
+        head_sha: String::new(),
+        url: String::new(),
         labels: labels.iter().map(|s| s.to_string()).collect(),
     }
 }

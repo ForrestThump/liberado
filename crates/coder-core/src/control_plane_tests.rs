@@ -174,7 +174,7 @@ fn ledger_event_lifecycle_projection() {
     assert_eq!(rec.status, TaskStatus::Running);
     assert_eq!(rec.prior_worker.as_deref(), Some("liberado-native"));
 
-    // 6. Tests passed & CI Passed
+    // 6. Tests passed & CI Passed — evidence only. CI pass cannot complete the PR task.
     ledger
         .append(TaskEvent::new(
             "evt-007",
@@ -191,7 +191,9 @@ fn ledger_event_lifecycle_projection() {
         .unwrap();
 
     let rec = ledger.project().unwrap();
-    assert_eq!(rec.status, TaskStatus::Completed);
+    assert_eq!(rec.ci_state, CiState::Passed);
+    assert_ne!(rec.status, TaskStatus::Completed);
+    assert!(!rec.is_pr_ready());
     assert!(rec.failures.is_empty());
     assert!(rec.latest_failure_excerpt.is_none());
 }

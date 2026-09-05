@@ -173,6 +173,7 @@ fn dispatch_request(request: &CoderRunRequest) -> DispatchTaskRequest {
             .unwrap_or_else(|| request.workspace.base_ref.clone()),
         base_ref: request.workspace.base_ref.clone(),
         repo: request.workspace.repo.clone(),
+        ledger_root: None,
     }
 }
 
