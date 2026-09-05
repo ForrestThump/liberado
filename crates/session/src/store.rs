@@ -30,6 +30,9 @@ use crate::event::{SessionEvent, SessionEventKind};
 use crate::goal::{GoalResult, GoalSessionRecord, SessionStatus, TerminalKind};
 use crate::record_store::TurnAuthor;
 
+#[path = "store_insert.rs"]
+mod store_insert;
+
 const EVENT_CHANNEL_CAPACITY: usize = 256;
 
 #[derive(Debug)]
@@ -139,7 +142,7 @@ impl GoalSessionStore {
     /// fatal to a running session). No-op for an in-memory store.
     fn append(&self, id: &str, line: &LogLine) {
         let Some(dir) = &self.dir else { return };
-        let path = dir.join(format!("{}.jsonl", sanitize_id(id)));
+        let path = dir.join(format!("{}.jsonl", store_insert::sanitize_id(id)));
         let mut serialized = match serde_json::to_string(line) {
             Ok(s) => s,
             Err(e) => {
@@ -178,36 +181,6 @@ impl GoalSessionStore {
                 bus,
             },
         );
-    }
-
-    pub async fn insert_if_absent(
-        &self,
-        record: GoalSessionRecord,
-    ) -> crate::record_store::InsertOutcome {
-        use crate::record_store::InsertOutcome;
-
-        let id = record.id.clone();
-        let mut map = self.inner.lock().await;
-        if map.contains_key(&id) {
-            return InsertOutcome::Existing;
-        }
-        self.append(
-            &id,
-            &LogLine::Start {
-                record: Box::new(record.clone()),
-            },
-        );
-        let (bus, _) = broadcast::channel(EVENT_CHANNEL_CAPACITY);
-        map.insert(
-            id,
-            SessionInner {
-                record,
-                events: Vec::new(),
-                turns: Vec::new(),
-                bus,
-            },
-        );
-        InsertOutcome::Inserted
     }
 
     pub async fn get(&self, id: &str) -> Option<GoalSessionRecord> {
@@ -418,19 +391,6 @@ fn replay_file(path: &Path) -> Option<SessionInner> {
         turns: Vec::new(),
         bus,
     })
-}
-
-/// Make a session id safe as a filename (ULIDs already are; a client-supplied id might not be).
-fn sanitize_id(id: &str) -> String {
-    id.chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
-                c
-            } else {
-                '_'
-            }
-        })
-        .collect()
 }
 
 /// The kernel's view of this store (S5′). Delegates to the inherent methods above — keeping those
@@ -704,15 +664,15 @@ mod tests {
 
     #[test]
     fn sanitize_id_preserves_allowed_chars() {
-        assert_eq!(sanitize_id("abc123"), "abc123");
-        assert_eq!(sanitize_id("a-b_c"), "a-b_c");
+        assert_eq!(store_insert::sanitize_id("abc123"), "abc123");
+        assert_eq!(store_insert::sanitize_id("a-b_c"), "a-b_c");
     }
 
     #[test]
     fn sanitize_id_replaces_disallowed_chars() {
-        assert_eq!(sanitize_id("a/b.c"), "a_b_c");
-        assert_eq!(sanitize_id("hello world"), "hello_world");
-        assert_eq!(sanitize_id("a👋b"), "a_b");
+        assert_eq!(store_insert::sanitize_id("a/b.c"), "a_b_c");
+        assert_eq!(store_insert::sanitize_id("hello world"), "hello_world");
+        assert_eq!(store_insert::sanitize_id("a👋b"), "a_b");
     }
 
     #[tokio::test]
