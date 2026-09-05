@@ -9,7 +9,8 @@ open_items: true
 
 # Coding-worker control plane
 
-**Status**: draft prototype. Not scheduled or selectable from the backlog. An explicitly requested
+**Status**: draft prototype. Slice 0 (ledger contract) and Slice 1 (shepherd records one PR
+lifecycle) have landed. Not scheduled or selectable from the backlog. An explicitly requested
 implementation branch now exercises the seam, durable ledger, first external adapter, and
 configuration-driven coding-session routing while the C3 evidence gate remains open.
 **Evidence gate**: the published C3 baseline in
@@ -136,7 +137,8 @@ Liberado owns a durable task. The unit of continuity is the append-only ledger o
 
 ### 4.1 Storage layout
 
-Each task is stored under `.liberado/tasks/<task_id>/`:
+Each task is stored under the repository-scoped durable root `.liberado/tasks/<task_id>/`
+(not under a disposable worker worktree as the sole home):
 
 ```text
 .liberado/tasks/<task_id>/
@@ -378,24 +380,38 @@ The comparison adapter and the production worker port share a shape (start a har
 worktree, collect a result). They do not share a type. Comparison policy (native first-pass, no
 repair, alternate order) is the opposite of production policy (repair, resume, escalate).
 
-## 8. What is missing
+## 8. What has landed, and what is still missing
 
-- External coding-session runs now go through `ControlPlaneSupervisor` and write worker lifecycle
-  events to `.liberado/tasks/<task_id>/ledger.jsonl` plus the derived `task.json`. Native
-  `liberado-loop` is still the in-process backend and is not yet a `WorkerPort`.
-- Feed Shepherd CI and review events into that ledger, then resume the selected worker from the
-  reconstructed task record.
-- Resume across harnesses from the task record when the original session is gone.
-- Subscription-aware routing.
+**Slice 0 — ledger contract.** Task, run, goal, provider-session, PR, revision, and GitHub-run stay
+separate identities. Projection uses orthogonal evidence (disposition, active run, revision, CI,
+review, counters). A PR is ready only when a controller binds head SHA plus separate CI and review
+evidence. `CiPassed` or `ReviewApproved` alone cannot complete a task. Command ids make duplicate
+observations a no-op. The durable root is `<repo>/.liberado/tasks/` (worktree is a lease). Load
+recovers a truncated last JSONL line and writes the projection atomically under a one-writer lock.
+
+**Slice 1 — shepherd records.** `liberado shepherd` mirrors the facts it already uses (PR link, head
+revision, CI, rerun, repair request, review request, ready, blocked) into that ledger. Labels and
+pending-review files stay as compatibility projections. `--dry-run` writes nothing. Repeated polls
+are idempotent. Dispatch behavior is unchanged: no new worker launch.
+
+Still missing (do not implement from this file without an explicit request):
+
+- **Slice 2** — CI-repair dispatch from the ledger (resume or start a worker). After CI repair,
+  structured PR review is next; it is not Slice 2.
+- Native `liberado-loop` remains the in-process backend. Common ledger recording comes first; do
+  not force native behind a synchronous `WorkerPort` yet.
+- Resume across harnesses when the original session is gone.
+- Role packs, cadence, quota optimizer, and subscription-aware routing.
+- Grok Bot stays external. The ledger designs for exactly one controller lease per PR
+  (`grok-bot` | `liberado-shepherd`).
+- Human merge remains the hard gate. No auto-merge. No silent metered API fallback.
 
 The prototype can now declare named OpenCode workers in `[coder.control_plane.workers]`, select a
 default worker, and override it per goal or `[[session_profiles]]`. The same coding session engine
 still owns workspace policy and post-run gates. An unknown worker fails closed instead of silently
 falling back to the native loop.
 
-That is the whole gap.
-
-## 9. First slice: The CI-repair ledger
+## 9. Next slice: The CI-repair dispatch
 
 One worker, one job, one ledger. Not a framework.
 
@@ -438,7 +454,8 @@ Acceptance for that slice:
      actual harness process to verify that session continuation, file mutations, and failure handling
      work reliably before enabling in automated routing.
 4. **Step 4: Shepherd integration**
-   Wire `shepherd_cmd.rs` to write task events to the ledger and invoke `WorkerPort` for kickbacks.
+   Slice 1 writes shepherd facts to the ledger. Slice 2 (not landed) may invoke `WorkerPort` for
+   kickbacks. Do not add a fourth orchestrator.
 
 ## 11. Constraints (why this stays a draft)
 

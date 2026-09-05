@@ -6,9 +6,10 @@
 use super::{
     ContinuationContextBuilder, ControlPlaneError, DispatchTaskRequest, RunHandle, TaskEvent,
     TaskEventKind, TaskLedger, WorkerPort, WorkerRunRequest, WorkerRunResult, WorkerStatus,
+    tasks_root_from_worktree,
 };
 use chrono::Utc;
-use std::path::Path;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 /// Orchestrates task lifecycles, event ledgers, and worker dispatch.
@@ -176,7 +177,11 @@ fn create_task_ledger(req: &DispatchTaskRequest) -> Result<TaskLedger, ControlPl
             repo: req.repo.clone(),
         },
     );
-    let tasks_root = Path::new(&req.worktree).join(".liberado").join("tasks");
+    let tasks_root = req
+        .ledger_root
+        .as_deref()
+        .map(PathBuf::from)
+        .unwrap_or_else(|| tasks_root_from_worktree(&req.worktree));
     TaskLedger::create_in(tasks_root, initial_event)
 }
 

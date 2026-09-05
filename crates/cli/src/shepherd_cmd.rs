@@ -16,7 +16,11 @@ use std::{
     time::Duration,
 };
 
+mod actions;
+mod prompts;
+mod record;
 mod tick_support;
+use record::ShepherdFact;
 use tick_support::handle_settled_tick;
 
 const RERUN: &str = "shepherd:ci-rerun";
@@ -233,6 +237,8 @@ struct Pr {
     title: String,
     branch: String,
     base_sha: String,
+    head_sha: String,
+    url: String,
     labels: Vec<String>,
 }
 impl Pr {
@@ -614,7 +620,7 @@ fn prs(cfg: &Config) -> Result<Vec<Pr>, Box<dyn std::error::Error>> {
             "--limit",
             "50",
             "--json",
-            "number,title,headRefName,baseRefOid,labels,isDraft",
+            "number,title,headRefName,baseRefOid,headRefOid,url,labels,isDraft",
         ],
     )?;
     Ok(response
@@ -628,6 +634,8 @@ fn prs(cfg: &Config) -> Result<Vec<Pr>, Box<dyn std::error::Error>> {
                 title: r["title"].as_str()?.into(),
                 branch: r["headRefName"].as_str()?.into(),
                 base_sha: r["baseRefOid"].as_str().unwrap_or("").into(),
+                head_sha: r["headRefOid"].as_str().unwrap_or("").into(),
+                url: r["url"].as_str().unwrap_or("").into(),
                 labels: r["labels"]
                     .as_array()?
                     .iter()
@@ -822,6 +830,14 @@ fn settle_with(
                 labeler(pr, format!("shepherd:review-{round}"));
                 let _ = fs::remove_file(path);
             }
+            record::record_facts(
+                cfg,
+                pr,
+                dry,
+                &[ShepherdFact::ReviewApproved {
+                    round: round as usize,
+                }],
+            )?;
             Ok(ReviewTransition::Labeled)
         }
         ReviewTransition::Failed => {
@@ -833,226 +849,6 @@ fn settle_with(
         ReviewTransition::None => unreachable!("status transition is never none"),
     }
 }
-fn note(set: &BTreeSet<String>) -> String {
-    if set.is_empty() {
-        String::new()
-    } else {
-        format!(
-            "{} failures were already on base; do not fix them:\n{}\n",
-            set.len(),
-            set.iter()
-                .take(10)
-                .map(|s| format!("  - {s}"))
-                .collect::<Vec<_>>()
-                .join("\n")
-        )
-    }
-}
-
-fn kickback_prompt(pr: &Pr, failures: &BTreeSet<String>, old: &BTreeSet<String>) -> String {
-    let list = failures
-        .iter()
-        .map(|failure| format!("  - {failure}"))
-        .collect::<Vec<_>>()
-        .join("\n");
-    format!(
-        "Pull request #{} (branch `{}`: {}) introduced {} new CI failure(s).\n\nNew failures:\n{}\n\n{}Do this:\n1. `git fetch origin` and check out `{}`.\n2. Reproduce a new failure locally before changing anything. A fix you never watched fail is a guess.\n3. Fix the cause. Do not delete, skip, or `#[ignore]` a test to get green. If a test is genuinely wrong, explain why in the commit message.\n4. Commit and push to `{}`.\n\nStay inside this scope. Do not refactor, reformat, or fix unrelated things.",
-        pr.number,
-        pr.branch,
-        pr.title,
-        failures.len(),
-        list,
-        note(old),
-        pr.branch,
-        pr.branch,
-    )
-}
-
-fn cold_review_prompt(cfg: &Config, pr: &Pr, round: usize, old: &BTreeSet<String>) -> String {
-    format!(
-        "Cold review of pull request #{} (branch `{}`: {}). Round {} of {}.\n\nYou have no prior context on this change. Review it as written.\n\n1. `git fetch origin`, check out `{}`, and read `git diff origin/{}...HEAD`.\n2. Find real problems: bugs, missing edge cases, security holes, or broken invariants. Ignore style and formatting; CI already enforces those.\n3. For each suspicion, read the actual code and classify it as Real, Exaggerated, or Hallucinated. Fix only what is Real.\n4. For each real fix, add a test that fails without it and passes with it. Run it both ways; a test you never watched fail proves nothing.\n5. Commit and push to `{}`. If you found nothing Real, push nothing and say so.\n\n{}",
-        pr.number,
-        pr.branch,
-        pr.title,
-        round,
-        cfg.cold_reviews,
-        pr.branch,
-        cfg.base,
-        pr.branch,
-        note(old),
-    )
-}
-
-/// What a PR with fresh CI failures should get, decided from facts alone so tests can pin the
-/// escalation ladder without `gh` or a daemon on the wire: rerun once, then kick back up to the
-/// cap (a free slot required), then block.
-#[derive(Debug, PartialEq, Eq)]
-enum FailureAction {
-    Rerun,
-    Blocked,
-    WaitForSlot,
-    Kickback,
-}
-
-fn next_failure_action(
-    has_rerun: bool,
-    kicks: usize,
-    max_kickbacks: usize,
-    slot_free: impl FnOnce() -> bool,
-) -> FailureAction {
-    if !has_rerun {
-        FailureAction::Rerun
-    } else if kicks >= max_kickbacks {
-        FailureAction::Blocked
-    } else if !slot_free() {
-        FailureAction::WaitForSlot
-    } else {
-        FailureAction::Kickback
-    }
-}
-
-/// The clean-PR mirror of [`next_failure_action`]: ready once the cold-review cap is met,
-/// otherwise spend a free slot on one more cold review.
-#[derive(Debug, PartialEq, Eq)]
-enum CleanAction {
-    Ready,
-    WaitForSlot,
-    Review { round: usize },
-}
-
-fn next_clean_action(
-    reviews: usize,
-    cold_reviews: usize,
-    slot_free: impl FnOnce() -> bool,
-) -> CleanAction {
-    if reviews >= cold_reviews {
-        CleanAction::Ready
-    } else if !slot_free() {
-        CleanAction::WaitForSlot
-    } else {
-        CleanAction::Review { round: reviews + 1 }
-    }
-}
-
-/// A PR with fresh CI failures: rerun once, then kick back a goal (up to the cap), then block.
-///
-/// Every arm ends the tick for this PR, so the caller does not fall through to the cold-review
-/// path while failures are new.
-fn handle_new_failures(
-    cfg: &Config,
-    pr: &mut Pr,
-    dry: bool,
-    new: &BTreeSet<String>,
-    old: &BTreeSet<String>,
-    run: &Option<Value>,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let kicks = pr.count("shepherd:kickback-");
-    let action = next_failure_action(pr.has(RERUN), kicks, cfg.max_kickbacks, || {
-        active_goals(cfg) < cfg.max_concurrent
-    });
-    match action {
-        FailureAction::Rerun => rerun_failed_run(cfg, pr, dry, run),
-        FailureAction::Blocked => block_pr(cfg, pr, dry),
-        // Waiting for a budget slot ends this PR's tick without side effects.
-        FailureAction::WaitForSlot => Ok(()),
-        FailureAction::Kickback => kickback(cfg, pr, dry, new, old, kicks),
-    }
-}
-
-/// First sighting of fresh failures: rerun CI once before doing anything else.
-fn rerun_failed_run(
-    cfg: &Config,
-    pr: &mut Pr,
-    dry: bool,
-    run: &Option<Value>,
-) -> Result<(), Box<dyn std::error::Error>> {
-    if !dry && let Some(id) = run.as_ref().and_then(|r| r["databaseId"].as_u64()) {
-        let id = id.to_string();
-        let _ = gh(cfg, &["run", "rerun", &id, "--failed"], false);
-        label(cfg, pr, RERUN.into())
-    }
-    Ok(())
-}
-
-fn block_pr(cfg: &Config, pr: &mut Pr, dry: bool) -> Result<(), Box<dyn std::error::Error>> {
-    if !dry {
-        label(cfg, pr, BLOCKED.into())
-    }
-    Ok(())
-}
-
-fn kickback(
-    cfg: &Config,
-    pr: &mut Pr,
-    dry: bool,
-    new: &BTreeSet<String>,
-    old: &BTreeSet<String>,
-    kicks: usize,
-) -> Result<(), Box<dyn std::error::Error>> {
-    if !dry {
-        let prompt = kickback_prompt(pr, new, old);
-        if let Some(id) = start_goal(cfg, prompt, 0) {
-            label(cfg, pr, format!("shepherd:kickback-{}", kicks + 1));
-            remove_label(cfg, pr, RERUN);
-            log(
-                cfg,
-                "kickback_started",
-                json!({"pr":pr.number,"session":id}),
-            )
-        }
-    }
-    Ok(())
-}
-
-/// A PR whose CI is now clean: ready it once the cold-review cap is met, otherwise spend a
-/// budget slot on a cold review.
-fn handle_clean(
-    cfg: &Config,
-    pr: &mut Pr,
-    dry: bool,
-    old: &BTreeSet<String>,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let reviews = pr.count("shepherd:review-");
-    let action = next_clean_action(reviews, cfg.cold_reviews, || {
-        active_goals(cfg) < cfg.max_concurrent
-    });
-    match action {
-        CleanAction::Ready => mark_ready(cfg, pr, dry),
-        // Waiting for a budget slot ends this PR's tick without side effects.
-        CleanAction::WaitForSlot => Ok(()),
-        CleanAction::Review { round } => start_cold_review(cfg, pr, dry, old, round),
-    }
-}
-
-fn mark_ready(cfg: &Config, pr: &mut Pr, dry: bool) -> Result<(), Box<dyn std::error::Error>> {
-    if !dry {
-        label(cfg, pr, READY.into())
-    }
-    Ok(())
-}
-
-/// Spend a budget slot on one cold review and record the pending round so `settle` can find it.
-fn start_cold_review(
-    cfg: &Config,
-    pr: &Pr,
-    dry: bool,
-    old: &BTreeSet<String>,
-    round: usize,
-) -> Result<(), Box<dyn std::error::Error>> {
-    if !dry {
-        let prompt = cold_review_prompt(cfg, pr, round, old);
-        if let Some(id) = start_goal(cfg, prompt, cfg.cold_turns) {
-            let path = pending(cfg, pr.number);
-            fs::create_dir_all(path.parent().unwrap())?;
-            fs::write(
-                path,
-                serde_json::to_vec(&json!({"session_id":id,"round":round}))?,
-            )?
-        }
-    }
-    Ok(())
-}
-
 /// Pure gate: whether the CI signal is too weak for `tick` to act. `pending` and `none` both mean
 /// the checks have not produced a settled outcome, so `tick` returns without touching the PR. Kept
 /// separate from `settle`, which has side effects (it may wait or label) and must not run on a nil
@@ -1096,6 +892,7 @@ fn tick(cfg: &Config, pr: &mut Pr, dry: bool) -> Result<(), Box<dyn std::error::
     if pr.terminal() {
         return Ok(());
     }
+    record::record_facts(cfg, pr, dry, &[])?;
     if tick_idle(ci_status(cfg, pr)?) {
         return Ok(());
     }
