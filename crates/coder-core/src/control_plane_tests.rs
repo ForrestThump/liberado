@@ -47,6 +47,7 @@ fn ledger_rejects_non_task_created_as_first_event() {
             commit_sha: "abc1234".into(),
             message: "initial commit".into(),
             files_changed: vec!["src/lib.rs".into()],
+            revision: None,
         },
     );
     let result = TaskLedger::new(event);
@@ -109,6 +110,7 @@ fn ledger_event_lifecycle_projection() {
                 commit_sha: "c0ffee1".into(),
                 message: "Add directory walk".into(),
                 files_changed: vec!["crates/vault/src/lib.rs".into()],
+                revision: None,
             },
         ))
         .unwrap();
@@ -221,6 +223,7 @@ fn ledger_serialization_round_trip() {
                 commit_sha: "fedcba9".into(),
                 message: "feat: implemented".into(),
                 files_changed: vec!["Cargo.toml".into()],
+                revision: None,
             },
         ))
         .unwrap();
@@ -350,6 +353,7 @@ fn continuation_context_builder_generates_markdown() {
                 commit_sha: "a1b2c3d".into(),
                 message: "Initial walker".into(),
                 files_changed: vec!["crates/vault/src/lib.rs".into()],
+                revision: None,
             },
         ))
         .unwrap();
@@ -536,6 +540,15 @@ fn supervisor_executes_one_requested_repair() {
     .with_acceptance_criteria(vec!["Trace spans must be named".into()]);
 
     let (mut ledger, _result) = supervisor.dispatch_task(&req).expect("dispatch");
+    ledger
+        .append(TaskEvent::new(
+            "evt-head-repair",
+            "task-401",
+            TaskEventKind::HeadRevisionObserved {
+                sha: "repair-head".into(),
+            },
+        ))
+        .expect("observe repair head");
 
     // Handle CI failure kickback
     let repair_result = supervisor
@@ -543,6 +556,7 @@ fn supervisor_executes_one_requested_repair() {
             &mut ledger,
             vec!["test_trace_span_timing".into()],
             Some("assertion failed: duration > 0".into()),
+            Some("repair-head".into()),
         )
         .expect("handle CI failure");
 
@@ -577,6 +591,14 @@ fn supervisor_executes_one_requested_repair() {
         record.external_session_id.as_deref(),
         Some("mock-session-123")
     );
+    assert!(ledger.events().iter().any(|event| matches!(
+        &event.payload,
+        TaskEventKind::CommitProduced {
+            commit_sha,
+            revision: Some(revision),
+            ..
+        } if commit_sha == "commit-repair" && revision == "repair-head"
+    )));
 }
 
 #[test]
@@ -599,6 +621,7 @@ fn supervisor_restarts_without_session_using_full_task_context() {
             &mut ledger,
             vec!["context_test".into()],
             Some("expected context".into()),
+            None,
         )
         .expect("fresh repair");
 

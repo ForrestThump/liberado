@@ -263,19 +263,32 @@ fn apply_worker(record: &mut TaskRecord, kind: &TaskEventKind) -> bool {
         TaskEventKind::CommitProduced {
             commit_sha,
             files_changed,
+            revision,
             ..
         } => {
-            if !record.commits.contains(commit_sha) {
-                record.commits.push(commit_sha.clone());
-            }
-            for path in files_changed {
-                if !record.files_changed.contains(path) {
-                    record.files_changed.push(path.clone());
-                }
-            }
+            apply_commit(record, commit_sha, files_changed, revision);
             true
         }
         _ => false,
+    }
+}
+
+fn apply_commit(
+    record: &mut TaskRecord,
+    commit_sha: &str,
+    files_changed: &[String],
+    revision: &Option<String>,
+) {
+    if revision.is_some() && revision != &record.head_revision {
+        return;
+    }
+    if !record.commits.iter().any(|commit| commit == commit_sha) {
+        record.commits.push(commit_sha.to_string());
+    }
+    for path in files_changed {
+        if !record.files_changed.contains(path) {
+            record.files_changed.push(path.clone());
+        }
     }
 }
 

@@ -34,6 +34,8 @@ pub enum TaskEventKind {
         commit_sha: String,
         message: String,
         files_changed: Vec<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        revision: Option<String>,
     },
     TestsPassed {
         tests_run: u32,

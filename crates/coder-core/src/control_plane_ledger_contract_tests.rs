@@ -67,6 +67,40 @@ fn stale_worker_failure_cannot_block_a_newer_head() {
     assert_eq!(record.disposition, TaskDisposition::Open);
 }
 
+#[test]
+fn stale_successful_repair_cannot_change_a_newer_head() {
+    let mut ledger = TaskLedger::new(created("task-stale-success")).unwrap();
+    observe_head(&mut ledger, "old-head");
+    observe_head(&mut ledger, "new-head");
+    append(
+        &mut ledger,
+        "evt-old-run-finished",
+        TaskEventKind::WorkerFinished {
+            run_id: "run-old".into(),
+            status: WorkerStatus::Completed,
+            external_session_id: None,
+            blocking_issue: None,
+            revision: Some("old-head".into()),
+        },
+    );
+    append(
+        &mut ledger,
+        "evt-old-repair-commit",
+        TaskEventKind::CommitProduced {
+            commit_sha: "stale-commit".into(),
+            message: "repair old head".into(),
+            files_changed: vec!["src/stale.rs".into()],
+            revision: Some("old-head".into()),
+        },
+    );
+
+    let record = ledger.project().unwrap();
+    assert_eq!(record.head_revision.as_deref(), Some("new-head"));
+    assert_eq!(record.disposition, TaskDisposition::Open);
+    assert!(record.commits.is_empty());
+    assert!(record.files_changed.is_empty());
+}
+
 fn approve_review(ledger: &mut TaskLedger, round: usize) {
     append(
         ledger,

@@ -180,7 +180,7 @@ fn run_repair(
         ));
     }
     let result = supervisor
-        .execute_repair_command(&mut ledger, Vec::new(), None)
+        .execute_repair_command(&mut ledger, Vec::new(), None, Some(repair.revision.clone()))
         .map_err(|error| CoderError::Backend(error.to_string()))?;
     Ok(RegistryRun::Finished(Box::new(normalize_result(
         worker_id, result,

@@ -100,8 +100,10 @@ impl ControlPlaneSupervisor {
         ledger: &mut TaskLedger,
         failures: Vec<String>,
         failure_log_excerpt: Option<String>,
+        requested_revision: Option<String>,
     ) -> Result<WorkerRunResult, ControlPlaneError> {
         let record = ledger.project()?;
+        let repair_revision = requested_revision.or_else(|| record.head_revision.clone());
 
         let fail_evt = TaskEvent::new(
             format!("evt-cifail-{}", Utc::now().timestamp_millis()),
@@ -158,13 +160,14 @@ impl ControlPlaneSupervisor {
         ))?;
 
         let result = self.worker.collect(&resume_handle)?;
-        append_worker_finished(
+        append_worker_finished(ledger, &resume_handle, &result, repair_revision.clone())?;
+        append_commits(
             ledger,
             &resume_handle,
             &result,
-            updated_record.head_revision.clone(),
+            "repair-commit",
+            repair_revision,
         )?;
-        append_commits(ledger, &resume_handle, &result, "repair-commit")?;
         Ok(result)
     }
 }
@@ -224,7 +227,7 @@ fn record_finished_run(
     result: &WorkerRunResult,
 ) -> Result<(), ControlPlaneError> {
     append_worker_finished(ledger, handle, result, None)?;
-    append_commits(ledger, handle, result, "commit")
+    append_commits(ledger, handle, result, "commit", None)
 }
 
 fn append_worker_finished(
@@ -251,6 +254,7 @@ fn append_commits(
     handle: &RunHandle,
     result: &WorkerRunResult,
     kind: &str,
+    revision: Option<String>,
 ) -> Result<(), ControlPlaneError> {
     for commit in &result.commits {
         ledger.append(TaskEvent::new(
@@ -260,6 +264,7 @@ fn append_commits(
                 commit_sha: commit.clone(),
                 message: result.summary.clone(),
                 files_changed: result.files_changed.clone(),
+                revision: revision.clone(),
             },
         ))?;
     }
