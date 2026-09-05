@@ -22,15 +22,21 @@ pub(super) enum AttemptOutcome {
 
 impl CodingSessionPack {
     /// Race one coding attempt against cancellation, then classify how it ended.
+    #[allow(clippy::too_many_arguments)]
     pub(super) async fn run_one_attempt(
         &self,
         session_id: &str,
         model: &str,
-        worker_id: &str,
+        overrides: &serde_json::Value,
+        payload: &serde_json::Value,
         request: &CoderRunRequest,
         events: &Sender<SessionEvent>,
         cancel: &mut tokio::sync::watch::Receiver<bool>,
     ) -> Result<AttemptOutcome, PackError> {
+        let worker_id = self
+            .workers
+            .select(overrides, payload)
+            .map_err(|error| PackError::Setup(error.to_string()))?;
         let _ = events
             .send(SessionEvent::new(
                 session_id,
@@ -45,7 +51,7 @@ impl CodingSessionPack {
             .scope(
                 (events.clone(), session_id.to_string()),
                 self.workers
-                    .run(worker_id, &self.backend, request.clone(), cancel),
+                    .run(&worker_id, &self.backend, request.clone(), cancel),
             )
             .await;
         let result = match result {

@@ -162,10 +162,6 @@ impl CodingSessionPack {
         // (plan = restricted write preset; explore = read-only preset).
         let policies =
             WorkspacePolicies::resolve(ctx.overrides(), payload_json, self.hashline.clone());
-        let worker_id = self
-            .workers
-            .select(ctx.overrides(), payload_json)
-            .map_err(|error| PackError::Setup(error.to_string()))?;
         let prompt = policies.coder_prompt(
             payload_json,
             // Loaded from prompts/coder/session-pack-coder.md, not a literal: the daemon path's
@@ -271,7 +267,8 @@ impl CodingSessionPack {
                 .run_one_attempt(
                     session_id,
                     &model,
-                    &worker_id,
+                    ctx.overrides(),
+                    payload_json,
                     &request,
                     &events,
                     &mut cancel,

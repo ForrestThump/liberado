@@ -228,7 +228,7 @@ fn run_driver(
     coverage_target: &str,
     temp_dir: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    checked_wsl(distro, &account.user, &["mkdir", "-p", temp_dir])?;
+    ensure_driver_temp_dir(distro, account, temp_dir)?;
     let path_env = format!("PATH={}", cargo_path(&account.home));
     let coverage_env = format!("CARGO_TARGET_DIR={coverage_target}");
     let temp_env = format!("TMPDIR={temp_dir}");
@@ -247,6 +247,15 @@ fn run_driver(
             "crap",
         ],
     )?;
+    Ok(())
+}
+
+fn ensure_driver_temp_dir(
+    distro: &str,
+    account: &WslAccount,
+    temp_dir: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    checked_wsl(distro, &account.user, &["mkdir", "-p", temp_dir])?;
     Ok(())
 }
 

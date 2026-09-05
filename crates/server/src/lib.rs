@@ -10,7 +10,7 @@ mod api;
 mod coding_pack;
 mod cron_delivery;
 mod main_agent_budget;
-use coding_pack::build_coding_pack;
+use coding_pack::{build_coding_pack, load_server_config};
 use main_agent_budget::main_agent_budget;
 mod hooks;
 mod latency;
@@ -70,7 +70,8 @@ pub async fn run(vault_path: String) -> Result<(), Box<dyn std::error::Error>> {
 
     // Load + validate the config up front (Decision 14 fail-fast). A bad config is a hard error
     // here rather than a half-booted daemon; the message names the file/setting to fix.
-    let (config, _) = liberado_bootstrap::load_config(liberado_bootstrap::config_dir().as_deref())?;
+    let (config, _, coder_tuning) =
+        load_server_config(liberado_bootstrap::config_dir().as_deref())?;
 
     // Resolve the vault path CLI-over-config: the `run` argument wins (the CLI always supplies one);
     // an empty argument falls back to `topology.vault_path`. Both empty is a hard error.
@@ -120,8 +121,9 @@ pub async fn run(vault_path: String) -> Result<(), Box<dyn std::error::Error>> {
         &mcp_registry,
         &guidance,
         &sessions,
+        &coder_tuning,
     )
-    .await?;
+    .await;
 
     let (chat, chat_tools, chat_tool_names) = build_chat(
         &providers,
@@ -581,7 +583,8 @@ async fn build_goal_hub(
     mcp_registry: &McpRegistry,
     guidance: &Option<Arc<dyn liberado_common::ToolGuidanceSource>>,
     sessions: &Arc<SessionStore>,
-) -> Result<Arc<liberado_session::GoalSessionHub>, Box<dyn std::error::Error>> {
+    coder_tuning: &liberado_coder_core::CoderTuning,
+) -> Arc<liberado_session::GoalSessionHub> {
     let mut goals_hub = liberado_session::GoalSessionHub::new(SessionStore::clone(sessions));
     let coding_pack = register_goal_packs(
         &mut goals_hub,
@@ -592,8 +595,9 @@ async fn build_goal_hub(
         capability_catalog,
         mcp_registry,
         guidance,
-    )?;
-    Ok(finalize_goal_hub(goals_hub, config, coding_pack).await)
+        coder_tuning,
+    );
+    finalize_goal_hub(goals_hub, config, coding_pack).await
 }
 
 /// Register the goal-hub's domain packs: life-ops demo always; coding when a provider is
@@ -610,10 +614,11 @@ fn register_goal_packs(
     capability_catalog: &Arc<CapabilityCatalog>,
     mcp_registry: &McpRegistry,
     guidance: &Option<Arc<dyn liberado_common::ToolGuidanceSource>>,
-) -> Result<Option<Arc<liberado_coder_agent::CodingSessionPack>>, Box<dyn std::error::Error>> {
+    coder_tuning: &liberado_coder_core::CoderTuning,
+) -> Option<Arc<liberado_coder_agent::CodingSessionPack>> {
     goals_hub.register_pack(Arc::new(liberado_session::LifeOpsDemoRunner));
     // Coding pack: hold Arc so we can attach the hub after `Arc::new` (S6 child goal sessions).
-    let coding_pack = build_coding_pack(provider, config)?;
+    let coding_pack = build_coding_pack(provider, config, coder_tuning);
     if let Some(pack) = coding_pack.as_ref() {
         goals_hub.register_pack(Arc::clone(pack) as Arc<dyn liberado_session::DomainPackRunner>);
     }
@@ -632,7 +637,7 @@ fn register_goal_packs(
     } else {
         info!("goal session packs: life only (no provider)");
     }
-    Ok(coding_pack)
+    coding_pack
 }
 
 /// Tail of goal-hub assembly: attach the out-of-band alert (E5), reconcile orphaned parked

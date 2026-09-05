@@ -189,14 +189,22 @@ impl CoderTuning {
         validate_tuning_path_policy(&self.path_policy)?;
         validate_tuning_progress(&self.progress)?;
         validate_tuning_validation_command(self.validation_command.as_ref())?;
-        self.hashline
-            .validate()
-            .map_err(|e| Error::Config(format!("tuning.coder.{e}")))?;
-        self.control_plane
-            .validate()
-            .map_err(|e| Error::Config(format!("tuning.coder.control_plane: {e}")))?;
+        validate_hashline_and_control_plane(&self.hashline, &self.control_plane)?;
         Ok(())
     }
+}
+
+fn validate_hashline_and_control_plane(
+    hashline: &HashlineConfig,
+    control_plane: &ControlPlaneConfig,
+) -> Result<()> {
+    hashline
+        .validate()
+        .map_err(|e| Error::Config(format!("tuning.coder.{e}")))?;
+    control_plane
+        .validate()
+        .map_err(|e| Error::Config(format!("tuning.coder.control_plane: {e}")))?;
+    Ok(())
 }
 
 fn validate_tuning_backend(backend: &str) -> Result<()> {

@@ -86,13 +86,8 @@ fn coding_pack_refuses_an_unknown_configured_worker() {
         }))
         .expect("raw coder tuning"),
     );
-    let provider: Arc<dyn liberado_provider::Provider> =
-        Arc::new(liberado_provider::MockProvider::new("test-model"));
-
-    let error = match build_coding_pack(Some(&provider), &config) {
-        Ok(_) => panic!("invalid worker config must stop coding-pack assembly"),
-        Err(error) => error,
-    };
+    let error = coding_pack::coder_tuning_from_config(&config)
+        .expect_err("invalid worker config must stop coding-pack assembly");
 
     assert!(error.to_string().contains("missing-worker"));
 }
