@@ -106,7 +106,7 @@ pub struct TaskRecord {
     pub review_round: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ready_evidence: Option<ReadyEvidence>,
-    /// SHA of the CI observation that set [`ci_state`]. Not written by `ReadyDecided`.
+    /// SHA of the CI observation that set [`Self::ci_state`]. Not written by `ReadyDecided`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ci_evidence_sha: Option<String>,
     /// SHA bound when review was last approved or rejected. Not written by `ReadyDecided`.
