@@ -106,6 +106,12 @@ pub struct TaskRecord {
     pub review_round: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ready_evidence: Option<ReadyEvidence>,
+    /// SHA of the CI observation that set [`ci_state`]. Not written by `ReadyDecided`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ci_evidence_sha: Option<String>,
+    /// SHA bound when review was last approved or rejected. Not written by `ReadyDecided`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review_evidence_sha: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -157,6 +163,8 @@ impl TaskRecord {
             repair_count: 0,
             review_round: 0,
             ready_evidence: None,
+            ci_evidence_sha: None,
+            review_evidence_sha: None,
             created_at: event.timestamp,
             updated_at: event.timestamp,
         })
@@ -169,18 +177,38 @@ impl TaskRecord {
     }
 
     /// Ready only when a controller bound a head SHA plus separate CI and review evidence.
+    ///
+    /// `ReadyDecided` records the decision. It does not create CI or review state.
+    /// Those must already exist for the same SHA, run, and review round.
     pub fn is_pr_ready(&self) -> bool {
         let Some(evidence) = &self.ready_evidence else {
             return false;
         };
         self.disposition == TaskDisposition::Ready
             && self.status == TaskStatus::Completed
-            && !evidence.head_sha.is_empty()
-            && evidence.ci_github_run_id.is_some()
-            && evidence.review_round > 0
-            && self.ci_state == CiState::Passed
-            && self.review_state == ReviewState::Approved
+            && ready_head_matches(self, evidence)
+            && ready_ci_matches(self, evidence)
+            && ready_review_matches(self, evidence)
     }
+}
+
+fn ready_head_matches(record: &TaskRecord, evidence: &ReadyEvidence) -> bool {
+    !evidence.head_sha.is_empty()
+        && record.head_revision.as_deref() == Some(evidence.head_sha.as_str())
+}
+
+fn ready_ci_matches(record: &TaskRecord, evidence: &ReadyEvidence) -> bool {
+    record.ci_state == CiState::Passed
+        && evidence.ci_github_run_id.is_some()
+        && record.github_run_id == evidence.ci_github_run_id
+        && record.ci_evidence_sha.as_deref() == Some(evidence.head_sha.as_str())
+}
+
+fn ready_review_matches(record: &TaskRecord, evidence: &ReadyEvidence) -> bool {
+    record.review_state == ReviewState::Approved
+        && evidence.review_round > 0
+        && record.review_round == evidence.review_round
+        && record.review_evidence_sha.as_deref() == Some(evidence.head_sha.as_str())
 }
 
 fn apply_kind(record: &mut TaskRecord, kind: &TaskEventKind) {
@@ -320,12 +348,14 @@ fn apply_evidence(record: &mut TaskRecord, kind: &TaskEventKind) -> bool {
             record.status = TaskStatus::Repairing;
             record.review_state = ReviewState::Rejected;
             record.review_round = (*round).max(1) as u32;
+            record.review_evidence_sha = record.head_revision.clone();
             record.current_diagnosis = Some(diagnosis.clone());
             true
         }
         TaskEventKind::ReviewApproved { round, .. } => {
             record.review_state = ReviewState::Approved;
             record.review_round = (*round).max(1) as u32;
+            record.review_evidence_sha = record.head_revision.clone();
             record.current_diagnosis = None;
             true
         }
@@ -343,11 +373,15 @@ fn apply_ci_observed(
     record.github_run_id = github_run_id.or(record.github_run_id);
     if let Some(sha) = head_sha {
         record.head_revision = Some(sha.to_string());
+        record.ci_evidence_sha = Some(sha.to_string());
     }
     record.ci_state = match state {
         "success" | "passed" => {
             record.failures.clear();
             record.latest_failure_excerpt = None;
+            if record.ci_evidence_sha.is_none() {
+                record.ci_evidence_sha = record.head_revision.clone();
+            }
             CiState::Passed
         }
         "failure" | "error" | "cancelled" | "timed_out" => {
@@ -359,6 +393,24 @@ fn apply_ci_observed(
         "pending" | "queued" | "in_progress" => CiState::Pending,
         _ => record.ci_state,
     };
+}
+
+fn apply_ready_decided(
+    record: &mut TaskRecord,
+    head_sha: &str,
+    ci_github_run_id: Option<u64>,
+    review_round: u32,
+) {
+    record.disposition = TaskDisposition::Ready;
+    record.status = TaskStatus::Completed;
+    record.ready_evidence = Some(ReadyEvidence {
+        head_sha: head_sha.to_string(),
+        ci_github_run_id,
+        review_round,
+    });
+    record.failures.clear();
+    record.latest_failure_excerpt = None;
+    record.current_diagnosis = None;
 }
 
 fn apply_decision(record: &mut TaskRecord, kind: &TaskEventKind) {
@@ -392,23 +444,7 @@ fn apply_decision(record: &mut TaskRecord, kind: &TaskEventKind) {
             ci_github_run_id,
             review_round,
         } => {
-            record.disposition = TaskDisposition::Ready;
-            record.status = TaskStatus::Completed;
-            record.head_revision = Some(head_sha.clone());
-            record.github_run_id = ci_github_run_id.or(record.github_run_id);
-            record.review_round = (*review_round).max(record.review_round);
-            if ci_github_run_id.is_some() {
-                record.ci_state = CiState::Passed;
-            }
-            record.review_state = ReviewState::Approved;
-            record.ready_evidence = Some(ReadyEvidence {
-                head_sha: head_sha.clone(),
-                ci_github_run_id: *ci_github_run_id,
-                review_round: *review_round,
-            });
-            record.failures.clear();
-            record.latest_failure_excerpt = None;
-            record.current_diagnosis = None;
+            apply_ready_decided(record, head_sha, *ci_github_run_id, *review_round);
         }
         TaskEventKind::BlockedDecided { reason } => {
             record.disposition = TaskDisposition::Blocked;

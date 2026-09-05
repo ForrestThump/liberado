@@ -1,7 +1,7 @@
 //! Durable append-only task ledger with crash recovery and one-writer locking.
 
 use std::fs::{File, OpenOptions};
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 
 use fs4::fs_std::FileExt;
@@ -93,24 +93,49 @@ impl TaskLedger {
                 ledger_task_id: self.task_id.clone(),
             });
         }
+        if let Some(path) = self.ledger_path.clone() {
+            return self.record_locked(&path, event);
+        }
+        self.commit_in_memory(event)
+    }
+
+    fn record_locked(&mut self, path: &Path, event: TaskEvent) -> Result<bool, ControlPlaneError> {
+        let task_dir = path.parent().ok_or_else(|| {
+            ControlPlaneError::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "ledger path has no parent directory",
+            ))
+        })?;
+        let _lock = acquire_lock(task_dir)?;
+        self.reload_unlocked(path)?;
         if self.is_duplicate(&event) {
             return Ok(false);
         }
         reject_lease_conflict(self, &event)?;
-        if let Some(path) = self.ledger_path.clone() {
-            let task_dir = path.parent().ok_or_else(|| {
-                ControlPlaneError::Io(std::io::Error::new(
-                    std::io::ErrorKind::InvalidInput,
-                    "ledger path has no parent directory",
-                ))
-            })?;
-            let _lock = acquire_lock(task_dir)?;
-            let mut file = OpenOptions::new().append(true).open(&path)?;
-            write_event(&mut file, &event)?;
-            self.events.push(event);
-            self.write_projection_cache()?;
-            return Ok(true);
+        let mut file = OpenOptions::new().append(true).open(path)?;
+        write_event(&mut file, &event)?;
+        self.events.push(event);
+        self.write_projection_cache()?;
+        Ok(true)
+    }
+
+    fn reload_unlocked(&mut self, path: &Path) -> Result<(), ControlPlaneError> {
+        let fresh = load_unlocked(path)?;
+        if fresh.task_id != self.task_id {
+            return Err(ControlPlaneError::TaskIdMismatch {
+                event_task_id: fresh.task_id,
+                ledger_task_id: self.task_id.clone(),
+            });
         }
+        self.events = fresh.events;
+        Ok(())
+    }
+
+    fn commit_in_memory(&mut self, event: TaskEvent) -> Result<bool, ControlPlaneError> {
+        if self.is_duplicate(&event) {
+            return Ok(false);
+        }
+        reject_lease_conflict(self, &event)?;
         self.events.push(event);
         Ok(true)
     }
@@ -246,17 +271,20 @@ fn load_from_lines(
 }
 
 fn load_recovering(reader: impl std::io::Read) -> Result<(TaskLedger, bool), ControlPlaneError> {
-    let buf = BufReader::new(reader);
+    let mut bytes = Vec::new();
+    {
+        let mut buf = BufReader::new(reader);
+        buf.read_to_end(&mut bytes)?;
+    }
+    let records = split_jsonl_records(&bytes);
     let mut events = Vec::new();
     let mut seen = std::collections::HashSet::new();
     let mut truncated = false;
-    let lines: Vec<String> = buf.lines().collect::<Result<_, _>>()?;
-    for (index, line) in lines.iter().enumerate() {
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
+    for (index, record) in records.iter().enumerate() {
+        if record_is_blank(record) {
             continue;
         }
-        match serde_json::from_str::<TaskEvent>(trimmed) {
+        match parse_jsonl_record(record) {
             Ok(event) => {
                 if !seen.insert(event.event_id.clone()) {
                     return Err(ControlPlaneError::DuplicateEventId(event.event_id));
@@ -264,12 +292,12 @@ fn load_recovering(reader: impl std::io::Read) -> Result<(TaskLedger, bool), Con
                 events.push(event);
             }
             Err(error) => {
-                let rest_empty = lines[index + 1..].iter().all(|row| row.trim().is_empty());
+                let rest_empty = records[index + 1..].iter().all(|row| record_is_blank(row));
                 if rest_empty {
                     truncated = true;
                     break;
                 }
-                return Err(ControlPlaneError::Serialization(error));
+                return Err(error);
             }
         }
     }
@@ -299,6 +327,24 @@ fn load_recovering(reader: impl std::io::Read) -> Result<(TaskLedger, bool), Con
         },
         truncated,
     ))
+}
+
+fn split_jsonl_records(bytes: &[u8]) -> Vec<&[u8]> {
+    bytes.split(|byte| *byte == b'\n').collect()
+}
+
+fn record_is_blank(record: &[u8]) -> bool {
+    record
+        .iter()
+        .all(|byte| byte.is_ascii_whitespace() || *byte == b'\r')
+}
+
+fn parse_jsonl_record(record: &[u8]) -> Result<TaskEvent, ControlPlaneError> {
+    let text = std::str::from_utf8(record).map_err(|error| {
+        ControlPlaneError::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, error))
+    })?;
+    let trimmed = text.trim().trim_end_matches('\r');
+    Ok(serde_json::from_str(trimmed)?)
 }
 
 fn persist_complete_events(path: &Path, events: &[TaskEvent]) -> Result<(), ControlPlaneError> {

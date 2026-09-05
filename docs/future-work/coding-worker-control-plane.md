@@ -385,9 +385,13 @@ repair, alternate order) is the opposite of production policy (repair, resume, e
 **Slice 0 — ledger contract.** Task, run, goal, provider-session, PR, revision, and GitHub-run stay
 separate identities. Projection uses orthogonal evidence (disposition, active run, revision, CI,
 review, counters). A PR is ready only when a controller binds head SHA plus separate CI and review
-evidence. `CiPassed` or `ReviewApproved` alone cannot complete a task. Command ids make duplicate
-observations a no-op. The durable root is `<repo>/.liberado/tasks/` (worktree is a lease). Load
-recovers a truncated last JSONL line and writes the projection atomically under a one-writer lock.
+evidence. `CiPassed`, `ReviewApproved`, or `ReadyDecided` alone cannot complete a task. Ready
+requires the exact head SHA plus separately recorded CI and review evidence for that same SHA.
+Command ids make duplicate observations a no-op: disk writers reload under the exclusive lock
+before they append. The durable root is the main repository's `<repo>/.liberado/tasks/`
+(resolved through `git rev-parse --git-common-dir`; a worktree path is a lease only). Load
+recovers a truncated last JSONL fragment at any byte boundary, including mid-UTF-8, and writes
+the projection atomically under a one-writer lock.
 
 **Slice 1 — shepherd records.** `liberado shepherd` mirrors the facts it already uses (PR link, head
 revision, CI, rerun, repair request, review request, ready, blocked) into that ledger. Labels and

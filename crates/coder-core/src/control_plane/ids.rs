@@ -78,5 +78,6 @@ fn git_repo_root(worktree: &Path) -> Option<PathBuf> {
     } else {
         worktree.join(git_dir)
     };
+    let git_dir = git_dir.canonicalize().unwrap_or(git_dir);
     git_dir.parent().map(Path::to_path_buf)
 }
