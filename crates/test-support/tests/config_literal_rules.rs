@@ -264,13 +264,13 @@ fn production_entry_points_call_the_shared_assembler() {
     );
 
     let server = production_section(
-        "server/src/lib.rs",
-        "pub async fn run(vault_path: String)",
-        "pub fn config_check(",
+        "server/src/coding_pack.rs",
+        "pub(super) fn build_coding_pack(",
+        "Ok(Some(Arc::new(pack)))",
     );
     assert!(
-        server.contains("pack = pack.with_tuning(coder_tuning);"),
-        "server::run must pass resolved coder tuning into CodingSessionPack"
+        server.contains(".with_tuning(coder_tuning)"),
+        "server coding-pack assembly must pass resolved tuning into CodingSessionPack"
     );
 }
 

@@ -12,8 +12,9 @@ use liberado_common::{Error, Result};
 
 use crate::{
     CoderCommandConfig, CoderGateConfig, CoderRoleConfig, CoderRunConfig, CommandPolicy,
-    EditConfig, HashlineConfig, LIBERADO_LOOP_BACKEND, PathPolicy, PipelinePolicy, ProgressPolicy,
-    SandboxSpec, SessionCriticConfig, VerifierSpec, WorkspaceBuildConfig,
+    ControlPlaneConfig, EditConfig, HashlineConfig, LIBERADO_LOOP_BACKEND, PathPolicy,
+    PipelinePolicy, ProgressPolicy, SandboxSpec, SessionCriticConfig, VerifierSpec,
+    WorkspaceBuildConfig,
 };
 use serde::{Deserialize, Serialize};
 
@@ -93,6 +94,9 @@ pub struct CoderTuning {
     /// `[tuning.coder.repo_map]` — Aider-style repository map for cold-start context.
     #[serde(default)]
     pub repo_map: RepoMapConfig,
+    /// External coding workers and the default selection policy.
+    #[serde(default)]
+    pub control_plane: ControlPlaneConfig,
 }
 
 /// Configuration for the Aider-style repository map feature.
@@ -188,6 +192,9 @@ impl CoderTuning {
         self.hashline
             .validate()
             .map_err(|e| Error::Config(format!("tuning.coder.{e}")))?;
+        self.control_plane
+            .validate()
+            .map_err(|e| Error::Config(format!("tuning.coder.control_plane: {e}")))?;
         Ok(())
     }
 }
@@ -303,6 +310,7 @@ impl Default for CoderTuning {
             prompt_dir: None,
             offered_tools: None,
             repo_map: RepoMapConfig::default(),
+            control_plane: ControlPlaneConfig::default(),
         }
     }
 }

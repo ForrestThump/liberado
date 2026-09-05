@@ -10,8 +10,8 @@ open_items: true
 # Coding-worker control plane
 
 **Status**: draft prototype. Not scheduled or selectable from the backlog. An explicitly requested
-implementation branch now exercises the seam, durable ledger, and first external adapter while the
-C3 evidence gate remains open.
+implementation branch now exercises the seam, durable ledger, first external adapter, and
+configuration-driven coding-session routing while the C3 evidence gate remains open.
 **Evidence gate**: the published C3 baseline in
 [`cross-harness-baseline.md`](cross-harness-baseline.md).
 **Source**: conversation captured in
@@ -380,11 +380,17 @@ repair, alternate order) is the opposite of production policy (repair, resume, e
 
 ## 8. What is missing
 
-- A task ledger that outlives a session.
-- Production use of an external harness as a worker.
+- Connect coding-session runs to the durable task ledger. The ledger exists, but the session path
+  does not yet write its worker lifecycle into it.
+- Feed Shepherd CI and review events into that ledger, then resume the selected worker from the
+  reconstructed task record.
 - Resume across harnesses from the task record when the original session is gone.
-- Normalized `RunResult` independent of harness prose.
 - Subscription-aware routing.
+
+The prototype can now declare named OpenCode workers in `[coder.control_plane.workers]`, select a
+default worker, and override it per goal or `[[session_profiles]]`. The same coding session engine
+still owns workspace policy and post-run gates. An unknown worker fails closed instead of silently
+falling back to the native loop.
 
 That is the whole gap.
 
@@ -418,8 +424,10 @@ Acceptance for that slice:
 2. **Step 2: Continuation context builder (`crates/coder-core`)**
    Implement `ContinuationContextBuilder` to turn a `TaskRecord` + CI failure excerpts into a
    normalized continuation prompt.
-3. **Step 3: Worker adapter implementations**
-   Implement `NativeWorkerAdapter` (delegating to the Liberado coding pack) and external adapters.
+3. **Step 3: Worker adapter implementations (prototype in progress)**
+   The coding session registry now keeps the existing native backend as its default and can launch
+   a named OpenCode `WorkerPort` from TOML. A later cleanup can put the native backend behind the
+   same port after the external lifecycle is proven in production.
    - For harnesses that expose ACP (Agent Control Protocol) servers (e.g. Gemini `--acp`, Copilot ACP,
      Cursor ACP), we can adapt orchestration infrastructure from Paseo
      ([`https://github.com/getpaseo/paseo`](https://github.com/getpaseo/paseo), available locally under `paseo/`),

@@ -111,6 +111,15 @@ domain = "coding"
 component = "coding-unattended"
 enabled = true
 
+# Select a configured external worker without changing scheduling or coding-pack code.
+# [[session_profiles]]
+# name = "coding-opencode-unattended"
+# domain = "coding"
+# component = "coding-unattended"
+# enabled = true
+# [session_profiles.overrides.control_plane]
+# worker = "opencode"
+
 # [[session_profiles]]
 # name = "coding-plan"
 # domain = "coding"

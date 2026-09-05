@@ -19,9 +19,10 @@ mod tuning;
 mod verify;
 
 pub use control_plane::{
-    ContinuationContextBuilder, ControlPlaneError, ControlPlaneSupervisor, DispatchTaskRequest,
-    OpenCodeWorker, OpenCodeWorkerConfig, RunHandle, TaskEvent, TaskEventKind, TaskLedger,
-    TaskRecord, TaskStatus, WorkerPort, WorkerRunRequest, WorkerRunResult, WorkerStatus,
+    ContinuationContextBuilder, ControlPlaneConfig, ControlPlaneError, ControlPlaneSupervisor,
+    DispatchTaskRequest, NATIVE_WORKER_ID, OpenCodeWorker, OpenCodeWorkerConfig, RunHandle,
+    TaskEvent, TaskEventKind, TaskLedger, TaskRecord, TaskStatus, WorkerAdapterConfig, WorkerPort,
+    WorkerRunRequest, WorkerRunResult, WorkerStatus,
 };
 
 pub use trace_view::{

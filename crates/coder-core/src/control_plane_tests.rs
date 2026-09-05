@@ -1,4 +1,5 @@
 use super::control_plane::*;
+use crate::CoderTuning;
 
 fn sample_created_event(task_id: &str) -> TaskEvent {
     TaskEvent::new(
@@ -545,6 +546,51 @@ fn opencode_worker_config_defaults() {
     assert_eq!(cfg.model, "openrouter/~deepseek/deepseek-v4-flash-latest");
     assert!(cfg.auto_approve);
     assert!(cfg.executable.is_none());
+}
+
+#[test]
+fn coder_tuning_builds_a_named_control_plane_worker_registry() {
+    let value: toml::Value = toml::from_str(
+        r#"
+[control_plane]
+default_worker = "paid-opencode"
+
+[control_plane.workers.paid-opencode]
+kind = "open_code"
+executable = "opencode-custom"
+model = "openrouter/test-model"
+auto_approve = false
+"#,
+    )
+    .expect("control-plane TOML");
+
+    let tuning = CoderTuning::from_value(Some(&value)).expect("valid worker config");
+    assert_eq!(tuning.control_plane.default_worker, "paid-opencode");
+    assert!(matches!(
+        tuning.control_plane.workers.get("paid-opencode"),
+        Some(WorkerAdapterConfig::OpenCode {
+            executable: Some(executable),
+            model,
+            auto_approve: false,
+        }) if executable == "opencode-custom" && model == "openrouter/test-model"
+    ));
+}
+
+#[test]
+fn control_plane_rejects_an_unknown_default_worker_at_load_time() {
+    let value: toml::Value = toml::from_str(
+        r#"
+[control_plane]
+default_worker = "missing"
+"#,
+    )
+    .expect("control-plane TOML");
+
+    let error = CoderTuning::from_value(Some(&value)).expect_err("unknown worker must fail");
+    assert!(
+        error.to_string().contains("names no configured worker"),
+        "{error}"
+    );
 }
 
 #[test]

@@ -7,8 +7,10 @@
 //! us doesn't fight over it).
 
 mod api;
+mod coding_pack;
 mod cron_delivery;
 mod main_agent_budget;
+use coding_pack::build_coding_pack;
 use main_agent_budget::main_agent_budget;
 mod hooks;
 mod latency;
@@ -119,7 +121,7 @@ pub async fn run(vault_path: String) -> Result<(), Box<dyn std::error::Error>> {
         &guidance,
         &sessions,
     )
-    .await;
+    .await?;
 
     let (chat, chat_tools, chat_tool_names) = build_chat(
         &providers,
@@ -579,7 +581,7 @@ async fn build_goal_hub(
     mcp_registry: &McpRegistry,
     guidance: &Option<Arc<dyn liberado_common::ToolGuidanceSource>>,
     sessions: &Arc<SessionStore>,
-) -> Arc<liberado_session::GoalSessionHub> {
+) -> Result<Arc<liberado_session::GoalSessionHub>, Box<dyn std::error::Error>> {
     let mut goals_hub = liberado_session::GoalSessionHub::new(SessionStore::clone(sessions));
     let coding_pack = register_goal_packs(
         &mut goals_hub,
@@ -590,8 +592,8 @@ async fn build_goal_hub(
         capability_catalog,
         mcp_registry,
         guidance,
-    );
-    finalize_goal_hub(goals_hub, config, coding_pack).await
+    )?;
+    Ok(finalize_goal_hub(goals_hub, config, coding_pack).await)
 }
 
 /// Register the goal-hub's domain packs: life-ops demo always; coding when a provider is
@@ -608,10 +610,10 @@ fn register_goal_packs(
     capability_catalog: &Arc<CapabilityCatalog>,
     mcp_registry: &McpRegistry,
     guidance: &Option<Arc<dyn liberado_common::ToolGuidanceSource>>,
-) -> Option<Arc<liberado_coder_agent::CodingSessionPack>> {
+) -> Result<Option<Arc<liberado_coder_agent::CodingSessionPack>>, Box<dyn std::error::Error>> {
     goals_hub.register_pack(Arc::new(liberado_session::LifeOpsDemoRunner));
     // Coding pack: hold Arc so we can attach the hub after `Arc::new` (S6 child goal sessions).
-    let coding_pack = build_coding_pack(provider, config);
+    let coding_pack = build_coding_pack(provider, config)?;
     if let Some(pack) = coding_pack.as_ref() {
         goals_hub.register_pack(Arc::clone(pack) as Arc<dyn liberado_session::DomainPackRunner>);
     }
@@ -630,7 +632,7 @@ fn register_goal_packs(
     } else {
         info!("goal session packs: life only (no provider)");
     }
-    coding_pack
+    Ok(coding_pack)
 }
 
 /// Tail of goal-hub assembly: attach the out-of-band alert (E5), reconcile orphaned parked
@@ -688,43 +690,6 @@ fn log_endpoint_summary() {
          GET /api/goals/{{id}}/stream  — SSE goal session events\n  /  — static frontend (build \
          with `dx build` from crates/webui/)"
     );
-}
-
-/// Build the coding pack for the goal hub, when a provider is attached. A malformed `[coder]`
-/// section used to be swallowed by `if let Ok(..)`, so the pack silently kept its defaults and the
-/// operator's settings did nothing — with no line anywhere saying why. Cost an hour of "why is my
-/// configured model being ignored"; say it out loud instead.
-fn build_coding_pack(
-    provider: Option<&Arc<dyn Provider>>,
-    config: &liberado_bootstrap::Config,
-) -> Option<Arc<liberado_coder_agent::CodingSessionPack>> {
-    let p = provider?;
-    let work_parent = liberado_bootstrap::data_dir().join("goal-workspaces");
-    let _ = std::fs::create_dir_all(&work_parent);
-    let mut pack = liberado_coder_agent::CodingSessionPack::new(p.clone(), work_parent)
-        .with_max_concurrent_coding_subagents(
-            config.tuning.dispatch.max_concurrent_coding_subagents,
-        );
-    match liberado_coder_core::CoderTuning::from_value(config.tuning.coder.as_ref()) {
-        Ok(coder_tuning) => {
-            // One call: keeps pack fields and the shared production assembly path
-            // on the same CoderTuning (backlog 0.4).
-            pack = pack.with_tuning(coder_tuning);
-        }
-        Err(e) => {
-            tracing::error!(
-                error = %e,
-                "[coder] tuning section is invalid and was IGNORED; the coding pack is running on built-in defaults, not your config"
-            );
-        }
-    }
-    // Without this the pack's provider factory returns the daemon's provider for every
-    // role, so the coder's configured model is ignored and the run reports a model
-    // name nothing resolves.
-    if let Some(factory) = liberado_bootstrap::CoderRoleProviderFactory::for_config(config) {
-        pack = pack.with_provider_factory(std::sync::Arc::new(factory));
-    }
-    Some(Arc::new(pack))
 }
 
 /// Load + validate the config and print a concise summary — the `liberado config check` subcommand.

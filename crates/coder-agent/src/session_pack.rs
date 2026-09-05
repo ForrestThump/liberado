@@ -20,12 +20,17 @@
 //! skips intake and builds directly from the description, exactly as before S7, rather than
 //! blocking on questions nobody will answer.
 
+mod attempt;
 mod build;
 mod intake;
 mod policies;
 pub(crate) mod preflight_hook;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+#[path = "session_pack/worker_tests.rs"]
+mod worker_tests;
+mod workers;
 
 #[cfg(test)]
 #[path = "session_pack/run_tests.rs"]
@@ -54,6 +59,8 @@ pub struct CodingSessionPack {
     /// mid-build answer actually reaches the *next* attempt — is only testable if a double can
     /// stand in here.
     backend: Arc<dyn CoderBackend>,
+    /// Configured external workers. The native backend remains the fail-safe default.
+    workers: workers::WorkerRegistry,
     /// The intake model. Held separately from the backend because intake is a *different phase*
     /// with a different job: it reasons about the goal, it does not touch the workspace.
     provider: Arc<dyn Provider>,
@@ -107,6 +114,7 @@ impl CodingSessionPack {
     pub fn new(provider: Arc<dyn Provider>, default_workspace_parent: PathBuf) -> Self {
         Self {
             backend: Arc::new(LiberadoLoopBackend::new(provider.clone())),
+            workers: workers::WorkerRegistry::default(),
             provider,
             default_workspace_parent,
             hub: std::sync::Mutex::new(None),
@@ -129,6 +137,7 @@ impl CodingSessionPack {
     ) -> Self {
         Self {
             backend,
+            workers: workers::WorkerRegistry::default(),
             provider,
             default_workspace_parent,
             hub: std::sync::Mutex::new(None),
@@ -155,6 +164,7 @@ impl CodingSessionPack {
     /// Preferred over piecemeal `with_*` for production wiring: one call keeps the shared assembly
     /// path and the convenience fields in lockstep.
     pub fn with_tuning(mut self, tuning: liberado_coder_core::CoderTuning) -> Self {
+        self.workers = workers::WorkerRegistry::from_config(&tuning.control_plane);
         self.hashline = tuning.hashline.clone();
         self.coder_role = tuning.coder.clone();
         self.gate = tuning.gate.clone();
@@ -162,6 +172,18 @@ impl CodingSessionPack {
         self.trace_dir = tuning.trace_dir.clone();
         self.trace_formats = tuning.trace_formats.clone();
         self.tuning = tuning;
+        self
+    }
+
+    /// Register an external worker for composition roots and deterministic tests.
+    ///
+    /// Production normally uses [`Self::with_tuning`], which builds these entries from TOML.
+    pub fn with_worker(
+        mut self,
+        name: impl Into<String>,
+        worker: Arc<dyn liberado_coder_core::WorkerPort>,
+    ) -> Self {
+        self.workers.register(name, worker);
         self
     }
 

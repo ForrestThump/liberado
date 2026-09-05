@@ -55,6 +55,17 @@
 # backend = "liberado-loop"     # the only backend; the name is kept for config compatibility
 # trace_dir = "coder-traces"    # durable replay artifacts for PR factory, evals, and future TUI
 
+# Coding-worker registry. The native loop stays the default when this table is absent. A session
+# profile can select a named worker with `overrides.control_plane.worker` in topology.toml.
+# [coder.control_plane]
+# default_worker = "liberado-loop"
+#
+# [coder.control_plane.workers.opencode]
+# kind = "open_code"
+# executable = "opencode"       # use "opencode.cmd" when required by the Windows installation
+# model = "openrouter/~deepseek/deepseek-v4-flash-latest"
+# auto_approve = true
+
 # Where the harness reads its model prompts from.
 #
 # Unset means `prompts/coder/` inside the workspace the run is operating on, which for a coding

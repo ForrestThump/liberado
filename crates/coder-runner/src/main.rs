@@ -1426,7 +1426,8 @@ mod preserve_work_tests {
     use std::time::Duration;
     /// Minimal git repo with one committed file. Identity is passed with `-c` rather than
     /// configured — `user.email`/`user.name` exist on every dev machine and on no CI runner.
-    fn temp_repo() -> tempfile::TempDir {
+    async fn temp_repo() -> (tokio::sync::MutexGuard<'static, ()>, tempfile::TempDir) {
+        let guard = ENV_LOCK.lock().await;
         let dir = tempfile::tempdir().expect("tempdir");
         let p = dir.path().to_string_lossy().to_string();
         let run = |args: &[&str]| {
@@ -1455,7 +1456,7 @@ mod preserve_work_tests {
             "-m",
             "seed",
         ]);
-        dir
+        (guard, dir)
     }
 
     fn git(repo: &Path, args: &[&str]) -> String {
@@ -1595,7 +1596,7 @@ mod preserve_work_tests {
     /// the outer timeout turns that into a named failure instead of a stalled suite.
     #[tokio::test]
     async fn a_signal_commits_the_work_and_ends_the_run() {
-        let repo = temp_repo();
+        let (_guard, repo) = temp_repo().await;
         std::fs::write(repo.path().join("work.txt"), "saved-on-term\n").expect("write");
 
         let end = tokio::time::timeout(
@@ -1629,7 +1630,7 @@ mod preserve_work_tests {
     /// committing twice would strand the run's output on a branch it never returns to.
     #[tokio::test]
     async fn a_run_that_finishes_first_is_left_alone() {
-        let repo = temp_repo();
+        let (_guard, repo) = temp_repo().await;
         std::fs::write(repo.path().join("work.txt"), "still working\n").expect("write");
 
         let end = run_or_preserve(
@@ -1659,7 +1660,7 @@ mod preserve_work_tests {
 
     #[tokio::test]
     async fn the_branch_name_carries_the_supplied_id() {
-        let repo = temp_repo();
+        let (_guard, repo) = temp_repo().await;
         std::fs::write(repo.path().join("work.txt"), "output\n").expect("write");
 
         preserve_work(repo.path(), "fix-compile-error", false)
@@ -1676,7 +1677,7 @@ mod preserve_work_tests {
 
     #[tokio::test]
     async fn a_clean_worktree_produces_no_commit() {
-        let repo = temp_repo();
+        let (_guard, repo) = temp_repo().await;
         assert!(!is_dirty(repo.path()), "precondition: tree must be clean");
 
         preserve_work(repo.path(), "clean-test", false)
@@ -1692,8 +1693,7 @@ mod preserve_work_tests {
     /// The unattended case: no global git identity, which is every CI runner.
     #[tokio::test]
     async fn a_dirty_worktree_is_committed_with_no_global_git_identity() {
-        let _guard = ENV_LOCK.lock().await;
-        let repo = temp_repo();
+        let (_guard, repo) = temp_repo().await;
         std::fs::write(repo.path().join("work.txt"), "agent output\n").expect("write");
 
         // An empty config file that survives the test: a config that was deleted mid-run would
@@ -1726,7 +1726,7 @@ mod preserve_work_tests {
     /// finish_run: a succeeded run with a session id records the round and returns Ok.
     #[tokio::test]
     async fn finish_run_success_records_the_round() {
-        let dir = temp_repo();
+        let (_guard, dir) = temp_repo().await;
         let result = liberado_coder_core::CoderRunResult {
             backend: "test".into(),
             outcome: Outcome::Succeeded,
@@ -1763,7 +1763,7 @@ mod preserve_work_tests {
     /// finish_run: a failed outcome is an error naming the outcome.
     #[tokio::test]
     async fn finish_run_failed_outcome_is_an_error() {
-        let dir = temp_repo();
+        let (_guard, dir) = temp_repo().await;
         let result = liberado_coder_core::CoderRunResult {
             backend: "test".into(),
             outcome: Outcome::Failed,

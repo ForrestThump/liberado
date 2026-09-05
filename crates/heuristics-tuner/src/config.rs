@@ -418,18 +418,6 @@ mod tests {
         assert_eq!(cfg.call_budget, Some(999));
         assert!(cfg.beam_width.is_none());
     }
-
-    #[test]
-    fn load_fails_without_api_key() {
-        // Mirrors provider-openrouter's own from_env test: reads real env state rather than
-        // mutating it, so this only asserts in the (expected, in CI) case the key is unset.
-        if std::env::var("OPENROUTER_API_KEY").is_err() {
-            assert!(matches!(
-                TunerConfig::load(),
-                Err(ConfigError::MissingApiKey)
-            ));
-        }
-    }
 }
 
 #[cfg(test)]

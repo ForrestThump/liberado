@@ -13,9 +13,11 @@ use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use thiserror::Error;
 
+mod config;
 pub mod opencode;
 pub mod supervisor;
 
+pub use config::{ControlPlaneConfig, NATIVE_WORKER_ID, WorkerAdapterConfig};
 pub use opencode::{OpenCodeWorker, OpenCodeWorkerConfig};
 pub use supervisor::ControlPlaneSupervisor;
 
@@ -75,6 +77,9 @@ pub enum ControlPlaneError {
 
     #[error("duplicate event id '{0}'")]
     DuplicateEventId(String),
+
+    #[error("invalid control-plane config: {0}")]
+    InvalidConfig(String),
 }
 
 /// Identifier handle for an active or completed worker execution run.
