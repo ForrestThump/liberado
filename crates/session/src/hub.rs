@@ -199,10 +199,8 @@ impl GoalSessionHub {
         // A controller retries the same durable command after a crash. Returning the existing
         // session closes the start/response gap without replacing its transcript or spawning a
         // second worker run.
-        if let Some(id) = goal.id.as_deref()
-            && self.store.get(id).await.is_some()
-        {
-            return Ok(id.to_string());
+        if let Some(id) = self.existing_session_id(&goal).await {
+            return Ok(id);
         }
 
         let interactive = grant.grants_ask_human();
@@ -222,15 +220,7 @@ impl GoalSessionHub {
         // `send_input`; *dropping* it here (rather than storing it) closes the channel, so a pack
         // that tries to await input on an unpermitted session gets `Closed` immediately instead of
         // hanging until its idle budget expires.
-        if interactive {
-            self.inputs.lock().await.insert(id.clone(), input_tx);
-        } else {
-            drop(input_tx);
-            debug!(
-                session = %id,
-                "session grant omits AskHuman — running non-interactively (input channel closed)"
-            );
-        }
+        Self::register_input(&self.inputs, &id, interactive, input_tx).await;
         let idle_budget = goal.max_idle_secs.map(Duration::from_secs);
         let inputs = InputChannel::new(input_rx, idle_budget);
 
