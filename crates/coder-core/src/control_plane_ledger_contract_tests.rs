@@ -135,10 +135,23 @@ fn ready_decided_alone_cannot_mark_a_task_ready() {
     open_pr(&mut ledger);
     decide_ready(&mut ledger, "abc123def456", 77, 2);
     let record = ledger.project().unwrap();
-    assert_eq!(record.disposition, TaskDisposition::Ready);
     assert_eq!(record.ci_state, CiState::Unknown);
     assert_eq!(record.review_state, ReviewState::None);
-    assert!(!record.is_pr_ready());
+    assert_projected_not_complete(&record);
+}
+
+#[test]
+fn ready_decided_without_evidence_does_not_project_ready_or_completed() {
+    let mut ledger = TaskLedger::new(created("task-ready-proj")).expect("ledger");
+    open_pr(&mut ledger);
+    let before = ledger.project().unwrap();
+    decide_ready(&mut ledger, "abc123def456", 77, 2);
+    let record = ledger.project().unwrap();
+    assert_eq!(record.disposition, before.disposition);
+    assert_eq!(record.status, before.status);
+    assert_ne!(record.disposition, TaskDisposition::Ready);
+    assert_ne!(record.status, TaskStatus::Completed);
+    assert_projected_not_complete(&record);
 }
 
 #[test]
@@ -148,7 +161,7 @@ fn ready_without_ci_cannot_mark_a_task_ready() {
     observe_head(&mut ledger, "abc123def456");
     approve_review(&mut ledger, 2);
     decide_ready(&mut ledger, "abc123def456", 77, 2);
-    assert!(!ledger.project().unwrap().is_pr_ready());
+    assert_projected_not_complete(&ledger.project().unwrap());
 }
 
 #[test]
@@ -158,7 +171,7 @@ fn ready_without_review_cannot_mark_a_task_ready() {
     observe_head(&mut ledger, "abc123def456");
     observe_ci(&mut ledger, "abc123def456", 77);
     decide_ready(&mut ledger, "abc123def456", 77, 2);
-    assert!(!ledger.project().unwrap().is_pr_ready());
+    assert_projected_not_complete(&ledger.project().unwrap());
 }
 
 #[test]
@@ -169,7 +182,7 @@ fn ready_with_mismatched_head_cannot_mark_a_task_ready() {
     observe_ci(&mut ledger, "aaaaaaaaaaaa", 77);
     approve_review(&mut ledger, 2);
     decide_ready(&mut ledger, "bbbbbbbbbbbb", 77, 2);
-    assert!(!ledger.project().unwrap().is_pr_ready());
+    assert_projected_not_complete(&ledger.project().unwrap());
 }
 
 #[test]
@@ -180,7 +193,7 @@ fn ready_with_mismatched_run_cannot_mark_a_task_ready() {
     observe_ci(&mut ledger, "abc123def456", 77);
     approve_review(&mut ledger, 2);
     decide_ready(&mut ledger, "abc123def456", 88, 2);
-    assert!(!ledger.project().unwrap().is_pr_ready());
+    assert_projected_not_complete(&ledger.project().unwrap());
 }
 
 #[test]
@@ -196,6 +209,20 @@ fn ready_with_stale_review_cannot_mark_a_task_ready() {
     assert_eq!(
         record.review_evidence_sha.as_deref(),
         Some("oldheadoldhead")
+    );
+    assert_projected_not_complete(&record);
+}
+
+fn assert_projected_not_complete(record: &TaskRecord) {
+    assert_ne!(
+        record.disposition,
+        TaskDisposition::Ready,
+        "ReadyDecided must not project Ready without bound CI and review evidence"
+    );
+    assert_ne!(
+        record.status,
+        TaskStatus::Completed,
+        "ReadyDecided must not project Completed without bound CI and review evidence"
     );
     assert!(!record.is_pr_ready());
 }

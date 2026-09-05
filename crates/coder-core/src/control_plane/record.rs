@@ -178,8 +178,8 @@ impl TaskRecord {
 
     /// Ready only when a controller bound a head SHA plus separate CI and review evidence.
     ///
-    /// `ReadyDecided` records the decision. It does not create CI or review state.
-    /// Those must already exist for the same SHA, run, and review round.
+    /// `ReadyDecided` records the claim. It does not create CI or review state, and it
+    /// does not set Ready or Completed unless that evidence already matches the claim.
     pub fn is_pr_ready(&self) -> bool {
         let Some(evidence) = &self.ready_evidence else {
             return false;
@@ -401,16 +401,26 @@ fn apply_ready_decided(
     ci_github_run_id: Option<u64>,
     review_round: u32,
 ) {
-    record.disposition = TaskDisposition::Ready;
-    record.status = TaskStatus::Completed;
-    record.ready_evidence = Some(ReadyEvidence {
+    let evidence = ReadyEvidence {
         head_sha: head_sha.to_string(),
         ci_github_run_id,
         review_round,
-    });
-    record.failures.clear();
-    record.latest_failure_excerpt = None;
-    record.current_diagnosis = None;
+    };
+    let accepted = ready_claim_matches(record, &evidence);
+    record.ready_evidence = Some(evidence);
+    if accepted {
+        record.disposition = TaskDisposition::Ready;
+        record.status = TaskStatus::Completed;
+        record.failures.clear();
+        record.latest_failure_excerpt = None;
+        record.current_diagnosis = None;
+    }
+}
+
+fn ready_claim_matches(record: &TaskRecord, evidence: &ReadyEvidence) -> bool {
+    ready_head_matches(record, evidence)
+        && ready_ci_matches(record, evidence)
+        && ready_review_matches(record, evidence)
 }
 
 fn apply_decision(record: &mut TaskRecord, kind: &TaskEventKind) {

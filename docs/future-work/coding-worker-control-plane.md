@@ -385,8 +385,10 @@ repair, alternate order) is the opposite of production policy (repair, resume, e
 **Slice 0 — ledger contract.** Task, run, goal, provider-session, PR, revision, and GitHub-run stay
 separate identities. Projection uses orthogonal evidence (disposition, active run, revision, CI,
 review, counters). A PR is ready only when a controller binds head SHA plus separate CI and review
-evidence. `CiPassed`, `ReviewApproved`, or `ReadyDecided` alone cannot complete a task. Ready
-requires the exact head SHA plus separately recorded CI and review evidence for that same SHA.
+evidence. `CiPassed`, `ReviewApproved`, or `ReadyDecided` alone cannot complete a task. A Ready
+decision does not set disposition Ready or status Completed unless that bound evidence
+already exists for the same SHA. Ready requires the exact head SHA plus separately
+recorded CI and review evidence for that same SHA.
 Command ids make duplicate observations a no-op: disk writers reload under the exclusive lock
 before they append. The durable root is the main repository's `<repo>/.liberado/tasks/`
 (resolved through `git rev-parse --git-common-dir`; a worktree path is a lease only). Load
