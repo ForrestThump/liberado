@@ -484,22 +484,40 @@ impl TaskLedger {
     }
 
     /// Create a disk-backed ledger under `<tasks_root>/<task_id>/ledger.jsonl`.
+    ///
+    /// If the ledger already exists for the same task ID, it is loaded from disk
+    /// rather than overwritten or failing with `AlreadyExists`.
     pub fn create_in(
         tasks_root: impl AsRef<Path>,
         initial_event: TaskEvent,
     ) -> Result<Self, ControlPlaneError> {
         validate_task_id(&initial_event.task_id)?;
-        let task_id = initial_event.task_id.clone();
         let mut ledger = Self::new(initial_event)?;
-        let task_dir = tasks_root.as_ref().join(task_id);
+        let task_dir = tasks_root.as_ref().join(&ledger.task_id);
         std::fs::create_dir_all(&task_dir)?;
         let ledger_path = task_dir.join("ledger.jsonl");
-        let mut file = OpenOptions::new()
+
+        let mut file = match OpenOptions::new()
             .write(true)
             .create_new(true)
-            .open(&ledger_path)?;
+            .open(&ledger_path)
+        {
+            Ok(file) => file,
+            Err(err) => {
+                if err.kind() == std::io::ErrorKind::AlreadyExists {
+                    let existing = Self::load_from_path(&ledger_path)?;
+                    if existing.task_id != ledger.task_id {
+                        return Err(ControlPlaneError::TaskIdMismatch {
+                            event_task_id: ledger.task_id,
+                            ledger_task_id: existing.task_id,
+                        });
+                    }
+                    return Ok(existing);
+                }
+                return Err(ControlPlaneError::Io(err));
+            }
+        };
         write_event(&mut file, &ledger.events[0])?;
-        file.sync_all()?;
 
         ledger.ledger_path = Some(ledger_path);
         ledger.write_projection_cache()?;
@@ -524,7 +542,6 @@ impl TaskLedger {
         if let Some(path) = &self.ledger_path {
             let mut file = OpenOptions::new().append(true).open(path)?;
             write_event(&mut file, &event)?;
-            file.sync_all()?;
         }
         self.events.push(event);
         self.write_projection_cache()?;
@@ -644,9 +661,10 @@ fn validate_task_id(task_id: &str) -> Result<(), ControlPlaneError> {
     }
 }
 
-fn write_event(writer: &mut impl Write, event: &TaskEvent) -> Result<(), ControlPlaneError> {
-    serde_json::to_writer(&mut *writer, event)?;
-    writer.write_all(b"\n")?;
+fn write_event(file: &mut File, event: &TaskEvent) -> Result<(), ControlPlaneError> {
+    serde_json::to_writer(&mut *file, event)?;
+    file.write_all(b"\n")?;
+    file.sync_all()?;
     Ok(())
 }
 

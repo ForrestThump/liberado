@@ -257,6 +257,75 @@ fn disk_ledger_appends_one_flushed_event_and_restores_projection() {
 }
 
 #[test]
+fn disk_ledger_create_in_reloads_existing_for_same_task_id() {
+    let temp = tempfile::TempDir::new().expect("tempdir");
+    let initial = sample_created_event("task-retry");
+    let mut ledger = TaskLedger::create_in(temp.path(), initial).expect("create persistent ledger");
+    ledger
+        .append(TaskEvent::new(
+            "evt-worker",
+            "task-retry",
+            TaskEventKind::WorkerStarted {
+                run_id: "run-1".into(),
+                worker_id: "opencode".into(),
+                resumed_session_id: None,
+            },
+        ))
+        .expect("append event");
+    assert_eq!(ledger.events().len(), 2);
+
+    let retry_event = TaskEvent::new(
+        "evt-retry-001",
+        "task-retry",
+        TaskEventKind::TaskCreated {
+            objective: "Retry objective".into(),
+            acceptance_criteria: vec![],
+            worktree: "worktrees/task-retry".into(),
+            branch: "feat/retry".into(),
+            base_ref: "main".into(),
+            repo: None,
+        },
+    );
+    let mut reloaded =
+        TaskLedger::create_in(temp.path(), retry_event).expect("reload existing persistent ledger");
+
+    assert_eq!(reloaded.events().len(), 2);
+    assert_eq!(reloaded.events()[0].event_id, "evt-001");
+    assert_eq!(reloaded.events()[1].event_id, "evt-worker");
+
+    reloaded
+        .append(TaskEvent::new(
+            "evt-completed",
+            "task-retry",
+            TaskEventKind::WorkerFinished {
+                run_id: "run-1".into(),
+                status: WorkerStatus::Completed,
+                external_session_id: None,
+                blocking_issue: None,
+            },
+        ))
+        .expect("append after reload");
+
+    assert_eq!(reloaded.events().len(), 3);
+    let ledger_path = temp.path().join("task-retry/ledger.jsonl");
+    let persisted = std::fs::read_to_string(&ledger_path).expect("read ledger");
+    assert_eq!(persisted.lines().count(), 3);
+
+    // Mismatched task_id fails closed
+    let mismatch_dir = temp.path().join("task-mismatch");
+    std::fs::create_dir_all(&mismatch_dir).expect("mismatch dir");
+    std::fs::copy(&ledger_path, mismatch_dir.join("ledger.jsonl")).expect("copy ledger");
+    let mismatch_err = TaskLedger::create_in(temp.path(), sample_created_event("task-mismatch"));
+    assert!(matches!(
+        mismatch_err,
+        Err(ControlPlaneError::TaskIdMismatch {
+            event_task_id,
+            ledger_task_id,
+        }) if event_task_id == "task-mismatch" && ledger_task_id == "task-retry"
+    ));
+}
+
+#[test]
 fn disk_ledger_rejects_path_traversal_task_ids() {
     let temp = tempfile::TempDir::new().expect("tempdir");
     let event = sample_created_event("../outside");
