@@ -1,6 +1,7 @@
 use super::prompts::{cold_review_prompt, kickback_prompt};
 use super::record::{self, ShepherdFact};
 use super::*;
+use sha2::{Digest, Sha256};
 
 /// What a PR with fresh CI failures should get, decided from facts alone so tests can pin the
 /// escalation ladder without `gh` or a daemon on the wire: rerun once, then kick back up to the
@@ -142,11 +143,7 @@ fn kickback(
     let kick = kicks + 1;
     let task_id = liberado_coder_core::shepherd_task_id(cfg.repository.as_deref(), pr.number);
     let command_id = format!("repair:{}:{}:{kick}", pr.number, pr.head_sha);
-    let goal_id = format!(
-        "shepherd-repair-{}-{}-{kick}",
-        pr.number,
-        short_sha(&pr.head_sha)
-    );
+    let goal_id = repair_goal_id(&command_id);
     let Some(github_run_id) = run.as_ref().and_then(|value| value["databaseId"].as_u64()) else {
         return Ok(());
     };
@@ -188,8 +185,11 @@ fn kickback(
     Ok(())
 }
 
-fn short_sha(sha: &str) -> &str {
-    &sha[..sha.len().min(12)]
+fn repair_goal_id(command_id: &str) -> String {
+    let digest = Sha256::digest(command_id.as_bytes());
+    let mut bytes = [0; 16];
+    bytes.copy_from_slice(&digest[..16]);
+    ulid::Ulid::from(u128::from_be_bytes(bytes)).to_string()
 }
 
 /// A PR whose CI is now clean: ready it once the cold-review cap is met, otherwise spend a

@@ -142,6 +142,52 @@ fn current_head_worker_finish_must_match_the_active_run() {
 }
 
 #[test]
+fn stale_worker_finish_cannot_apply_after_the_active_run_clears() {
+    let mut ledger = TaskLedger::new(created("task-cleared-worker-run")).unwrap();
+    observe_head(&mut ledger, "current-head");
+    append(
+        &mut ledger,
+        "evt-run-started",
+        TaskEventKind::WorkerStarted {
+            run_id: "run-current".into(),
+            worker_id: "worker-current".into(),
+            resumed_session_id: None,
+        },
+    );
+    append(
+        &mut ledger,
+        "evt-run-finished",
+        TaskEventKind::WorkerFinished {
+            run_id: "run-current".into(),
+            status: WorkerStatus::Completed,
+            external_session_id: Some("session-current".into()),
+            blocking_issue: None,
+            revision: Some("current-head".into()),
+        },
+    );
+    append(
+        &mut ledger,
+        "evt-stale-run-finished",
+        TaskEventKind::WorkerFinished {
+            run_id: "run-stale".into(),
+            status: WorkerStatus::Failed,
+            external_session_id: Some("session-stale".into()),
+            blocking_issue: Some("stale repair failed".into()),
+            revision: Some("current-head".into()),
+        },
+    );
+
+    let record = ledger.project().unwrap();
+    assert_eq!(record.active_run_id, None);
+    assert_eq!(
+        record.external_session_id.as_deref(),
+        Some("session-current")
+    );
+    assert_eq!(record.disposition, TaskDisposition::Open);
+    assert_eq!(record.current_diagnosis, None);
+}
+
+#[test]
 fn stale_successful_repair_cannot_change_a_newer_head() {
     let mut ledger = TaskLedger::new(created("task-stale-success")).unwrap();
     observe_head(&mut ledger, "old-head");

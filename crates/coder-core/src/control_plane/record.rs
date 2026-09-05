@@ -241,10 +241,7 @@ fn apply_worker(record: &mut TaskRecord, kind: &TaskEventKind) -> bool {
             revision,
         } => {
             let applies_to_head = revision.is_none() || revision == &record.head_revision;
-            let applies_to_run = record
-                .active_run_id
-                .as_deref()
-                .is_none_or(|active| active == run_id);
+            let applies_to_run = record.active_run_id.as_deref() == Some(run_id.as_str());
             if !applies_to_head || !applies_to_run {
                 return true;
             }

@@ -33,6 +33,16 @@ fn sample_pr(labels: &[&str]) -> Pr {
 }
 
 #[test]
+fn repair_goal_id_is_a_stable_ulid_for_the_command() {
+    let command = "repair:7:abc1234:1";
+    let first = repair_goal_id(command);
+
+    assert!(first.parse::<ulid::Ulid>().is_ok(), "{first}");
+    assert_eq!(first, repair_goal_id(command));
+    assert_ne!(first, repair_goal_id("repair:7:abc1234:2"));
+}
+
+#[test]
 fn pending_parent_rejects_a_root_path() {
     let err = pending_parent(Path::new("/")).unwrap_err().to_string();
     assert!(err.contains("no parent"), "{err}");
