@@ -5,16 +5,10 @@ use std::collections::HashMap;
 use tokio::sync::mpsc;
 use tracing::debug;
 
-use crate::goal::GoalSpec;
 use crate::hub::GoalSessionHub;
 use crate::runner::HumanInput;
 
 impl GoalSessionHub {
-    pub(super) async fn existing_session_id(&self, goal: &GoalSpec) -> Option<String> {
-        let id = goal.id.as_deref()?;
-        self.store().get(id).await.map(|_| id.to_string())
-    }
-
     pub(super) async fn register_input(
         inputs: &tokio::sync::Mutex<HashMap<String, mpsc::Sender<HumanInput>>>,
         session_id: &str,

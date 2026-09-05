@@ -27,7 +27,7 @@ use liberado_conversation_store::{
 };
 use liberado_provider::Message;
 use liberado_session::{
-    GoalResult, GoalSessionRecord, SessionEvent, SessionEventKind, SessionGrant,
+    GoalResult, GoalSessionRecord, InsertOutcome, SessionEvent, SessionEventKind, SessionGrant,
     SessionRecordStore, SessionStatus, TurnAuthor,
 };
 use serde::{Deserialize, Serialize};
@@ -788,6 +788,10 @@ impl ConversationStore for SessionStore {
 #[async_trait]
 impl SessionRecordStore for SessionStore {
     async fn insert(&self, record: GoalSessionRecord) {
+        let _ = self.insert_if_absent(record).await;
+    }
+
+    async fn insert_if_absent(&self, record: GoalSessionRecord) -> InsertOutcome {
         // The kernel mints ids as `String`; honor it so a session keeps one identity end to end.
         let id = record.id.parse::<Ulid>().unwrap_or_else(|_| Ulid::new());
         let header = SessionHeader {
@@ -820,9 +824,13 @@ impl SessionRecordStore for SessionStore {
             // resumed. Incognito is a property of a human sitting at a chat surface asking for it.
             ephemeral: false,
         };
+        let mut map = self.inner.lock().await;
+        if map.contains_key(&id) {
+            return InsertOutcome::Existing;
+        }
         self.append_line(id, &Record::Header(Box::new(header.clone())));
         let (bus, _) = broadcast::channel(EVENT_CHANNEL_CAPACITY);
-        self.inner.lock().await.insert(
+        map.insert(
             id,
             Live {
                 header,
@@ -831,6 +839,7 @@ impl SessionRecordStore for SessionStore {
                 bus,
             },
         );
+        InsertOutcome::Inserted
     }
 
     async fn get(&self, id: &str) -> Option<GoalSessionRecord> {

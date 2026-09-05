@@ -11,6 +11,7 @@ use crate::event::{SessionEvent, SessionEventKind};
 use crate::goal::{
     GoalResult, GoalSessionRecord, GoalSpec, SessionGrant, SessionStatus, TerminalKind, Visibility,
 };
+use crate::record_store::InsertOutcome;
 use crate::record_store::{SessionRecordStore, TurnAuthor};
 use crate::runner::{DomainPackRunner, HumanInput, InputChannel, PackContext, PackError};
 
@@ -196,13 +197,6 @@ impl GoalSessionHub {
             return Err("goal description must not be empty".into());
         }
 
-        // A controller retries the same durable command after a crash. Returning the existing
-        // session closes the start/response gap without replacing its transcript or spawning a
-        // second worker run.
-        if let Some(id) = self.existing_session_id(&goal).await {
-            return Ok(id);
-        }
-
         let interactive = grant.grants_ask_human();
         let record = match visibility {
             Visibility::Foreground => GoalSessionRecord::with_grant(goal.clone(), grant),
@@ -210,7 +204,9 @@ impl GoalSessionHub {
         };
         let id = record.id.clone();
         goal.id = Some(id.clone());
-        self.store.insert(record).await;
+        if self.store.insert_if_absent(record).await == InsertOutcome::Existing {
+            return Ok(id);
+        }
 
         let (cancel_tx, cancel_rx) = watch::channel(false);
         self.cancels.lock().await.insert(id.clone(), cancel_tx);

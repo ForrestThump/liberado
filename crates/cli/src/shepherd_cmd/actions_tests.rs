@@ -90,6 +90,19 @@ fn dry_kickback_does_not_label_the_pr() {
 }
 
 #[test]
+fn kickback_without_a_github_run_id_fails_closed() {
+    let temp = tempfile::tempdir().unwrap();
+    let cfg = test_config(temp.path().to_path_buf());
+    let mut pr = sample_pr(&[RERUN]);
+    let new = BTreeSet::from(["job|test".into()]);
+
+    kickback(&cfg, &mut pr, false, &new, &BTreeSet::new(), 0, &None).unwrap();
+
+    assert_eq!(pr.labels, vec![RERUN]);
+    assert!(!cfg.root.join(".liberado").exists());
+}
+
+#[test]
 fn dry_new_failures_rerun_does_not_label() {
     let temp = tempfile::tempdir().unwrap();
     let cfg = test_config(temp.path().to_path_buf());

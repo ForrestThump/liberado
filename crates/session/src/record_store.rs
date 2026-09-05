@@ -34,6 +34,13 @@ use tokio::sync::broadcast;
 use crate::event::SessionEvent;
 use crate::goal::{GoalResult, GoalSessionRecord, SessionStatus};
 
+/// Result of atomically claiming a stable session id.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InsertOutcome {
+    Inserted,
+    Existing,
+}
+
 /// Who produced a **turn** — a conversational message in a session's transcript.
 ///
 /// Deliberately not `liberado_provider::Role`, and deliberately not
@@ -56,6 +63,10 @@ pub enum TurnAuthor {
 pub trait SessionRecordStore: Send + Sync {
     /// Record a new session (status `Pending`), and open its event bus.
     async fn insert(&self, record: GoalSessionRecord);
+
+    /// Insert `record` only when its id is absent. The existence check and insertion must occur
+    /// under one store lock so concurrent retries cannot both start the same durable goal.
+    async fn insert_if_absent(&self, record: GoalSessionRecord) -> InsertOutcome;
 
     async fn get(&self, id: &str) -> Option<GoalSessionRecord>;
 

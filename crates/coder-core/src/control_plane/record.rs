@@ -234,18 +234,25 @@ fn apply_worker(record: &mut TaskRecord, kind: &TaskEventKind) -> bool {
             true
         }
         TaskEventKind::WorkerFinished {
+            run_id,
             status,
             external_session_id,
             blocking_issue,
             revision,
-            ..
         } => {
+            let applies_to_head = revision.is_none() || revision == &record.head_revision;
+            let applies_to_run = record
+                .active_run_id
+                .as_deref()
+                .is_none_or(|active| active == run_id);
+            if !applies_to_head || !applies_to_run {
+                return true;
+            }
             record.active_run_id = None;
             if let Some(session) = external_session_id {
                 record.external_session_id = Some(session.clone());
             }
-            let applies_to_head = revision.is_none() || revision == &record.head_revision;
-            if *status == WorkerStatus::Failed && applies_to_head {
+            if *status == WorkerStatus::Failed {
                 record.status = TaskStatus::Failed;
                 record.disposition = TaskDisposition::Failed;
                 record.current_diagnosis = blocking_issue.clone();

@@ -147,10 +147,9 @@ fn kickback(
         pr.number,
         short_sha(&pr.head_sha)
     );
-    let github_run_id = run
-        .as_ref()
-        .and_then(|value| value["databaseId"].as_u64())
-        .unwrap_or(0);
+    let Some(github_run_id) = run.as_ref().and_then(|value| value["databaseId"].as_u64()) else {
+        return Ok(());
+    };
     let cause_event_id = format!("evt-ci-{}-{github_run_id}-failure", pr.number);
     record::record_facts(
         cfg,

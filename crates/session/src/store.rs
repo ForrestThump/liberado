@@ -180,6 +180,36 @@ impl GoalSessionStore {
         );
     }
 
+    pub async fn insert_if_absent(
+        &self,
+        record: GoalSessionRecord,
+    ) -> crate::record_store::InsertOutcome {
+        use crate::record_store::InsertOutcome;
+
+        let id = record.id.clone();
+        let mut map = self.inner.lock().await;
+        if map.contains_key(&id) {
+            return InsertOutcome::Existing;
+        }
+        self.append(
+            &id,
+            &LogLine::Start {
+                record: Box::new(record.clone()),
+            },
+        );
+        let (bus, _) = broadcast::channel(EVENT_CHANNEL_CAPACITY);
+        map.insert(
+            id,
+            SessionInner {
+                record,
+                events: Vec::new(),
+                turns: Vec::new(),
+                bus,
+            },
+        );
+        InsertOutcome::Inserted
+    }
+
     pub async fn get(&self, id: &str) -> Option<GoalSessionRecord> {
         self.inner.lock().await.get(id).map(|s| s.record.clone())
     }
@@ -410,6 +440,12 @@ fn sanitize_id(id: &str) -> String {
 impl crate::record_store::SessionRecordStore for GoalSessionStore {
     async fn insert(&self, record: GoalSessionRecord) {
         GoalSessionStore::insert(self, record).await
+    }
+    async fn insert_if_absent(
+        &self,
+        record: GoalSessionRecord,
+    ) -> crate::record_store::InsertOutcome {
+        GoalSessionStore::insert_if_absent(self, record).await
     }
     async fn get(&self, id: &str) -> Option<GoalSessionRecord> {
         GoalSessionStore::get(self, id).await
