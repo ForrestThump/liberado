@@ -1,5 +1,8 @@
 //! Split from `shepherd_cmd.rs` for module-health boundaries.
 
+use super::actions::{CleanAction, FailureAction, next_clean_action, next_failure_action};
+use super::prompts::{cold_review_prompt, kickback_prompt, note};
+use super::record::{self, ShepherdFact};
 use super::*;
 
 fn test_config(root: PathBuf) -> Config {
@@ -334,6 +337,8 @@ fn settled_review_labels_only_on_success_and_preserves_dry_run_state() {
         title: "test".into(),
         branch: "test".into(),
         base_sha: String::new(),
+        head_sha: String::new(),
+        url: String::new(),
         labels: Vec::new(),
     };
     let path = pending(&cfg, pr.number);
@@ -393,6 +398,8 @@ fn prompts_keep_unattended_guardrails() {
         title: "title".into(),
         branch: "branch".into(),
         base_sha: String::new(),
+        head_sha: String::new(),
+        url: String::new(),
         labels: Vec::new(),
     };
     let failures = BTreeSet::from(["test|case".into()]);
@@ -480,6 +487,8 @@ fn pr(labels: &[&str]) -> Pr {
         title: "t".into(),
         branch: "b".into(),
         base_sha: String::new(),
+        head_sha: String::new(),
+        url: String::new(),
         labels: labels.iter().map(|s| s.to_string()).collect(),
     }
 }
@@ -728,4 +737,120 @@ fn invocation_carries_the_secondary_flags() {
             watch: false
         }
     );
+}
+
+fn sample_pr(number: u64, head_sha: &str) -> Pr {
+    Pr {
+        number,
+        title: "feat".into(),
+        branch: "feat/x".into(),
+        base_sha: "bbbb".into(),
+        head_sha: head_sha.into(),
+        url: format!("https://github.com/ForrestThump/liberado/pull/{number}"),
+        labels: Vec::new(),
+    }
+}
+
+#[test]
+fn shepherd_dry_run_writes_no_task_ledger() {
+    let temp = tempfile::tempdir().unwrap();
+    let cfg = test_config(temp.path().to_path_buf());
+    let pr = sample_pr(12, "aaa111");
+    let recorded = record::record_facts(
+        &cfg,
+        &pr,
+        true,
+        &[ShepherdFact::Ci {
+            github_run_id: Some(9),
+            state: "success".into(),
+            failures: Vec::new(),
+        }],
+    )
+    .unwrap();
+    assert!(recorded.is_none());
+    assert!(
+        !temp.path().join(".liberado/tasks").exists(),
+        "dry-run must not create the durable ledger root"
+    );
+}
+
+#[test]
+fn shepherd_repeated_facts_are_idempotent_and_survive_reload() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut cfg = test_config(temp.path().to_path_buf());
+    cfg.repository = Some("ForrestThump/liberado".into());
+    let pr = sample_pr(15, "ccc222ddd333");
+    let facts = [
+        ShepherdFact::Ci {
+            github_run_id: Some(88),
+            state: "failure".into(),
+            failures: vec!["job|test".into()],
+        },
+        ShepherdFact::Rerun {
+            github_run_id: Some(88),
+        },
+        ShepherdFact::Repair {
+            goal_id: Some("goal-a".into()),
+            reason: "1 new CI failures".into(),
+            kick: 1,
+        },
+    ];
+    let first = record::record_facts(&cfg, &pr, false, &facts)
+        .unwrap()
+        .expect("live record");
+    assert_eq!(first.rerun_count, 1);
+    assert_eq!(first.repair_count, 1);
+    assert_eq!(first.pull_request_number, Some(15));
+    assert_eq!(first.head_revision.as_deref(), Some("ccc222ddd333"));
+    assert_eq!(first.controller.as_deref(), Some("liberado-shepherd"));
+    assert!(!first.is_pr_ready());
+    let first_len = record::open_recorded(&cfg, &pr).unwrap().events().len();
+
+    let second = record::record_facts(&cfg, &pr, false, &facts)
+        .unwrap()
+        .expect("repeat record");
+    assert_eq!(second.rerun_count, first.rerun_count);
+    assert_eq!(second.repair_count, first.repair_count);
+    let second_len = record::open_recorded(&cfg, &pr).unwrap().events().len();
+    assert_eq!(second_len, first_len);
+
+    let reloaded = record::open_recorded(&cfg, &pr).unwrap();
+    let restored = reloaded.project().unwrap();
+    assert_eq!(restored.rerun_count, 1);
+    assert_eq!(restored.repair_count, 1);
+    assert_eq!(restored.github_run_id, Some(88));
+    assert_eq!(reloaded.events().len(), first_len);
+}
+
+#[test]
+fn shepherd_ready_binds_head_ci_and_review() {
+    let temp = tempfile::tempdir().unwrap();
+    let cfg = test_config(temp.path().to_path_buf());
+    let pr = sample_pr(3, "fff444");
+    let ready = record::record_facts(
+        &cfg,
+        &pr,
+        false,
+        &[
+            ShepherdFact::Ci {
+                github_run_id: Some(21),
+                state: "success".into(),
+                failures: Vec::new(),
+            },
+            ShepherdFact::ReviewApproved { round: 2 },
+            ShepherdFact::Ready {
+                github_run_id: Some(21),
+                review_round: 2,
+            },
+        ],
+    )
+    .unwrap()
+    .expect("ready record");
+    assert!(ready.is_pr_ready());
+    assert_eq!(ready.ready_evidence.as_ref().unwrap().head_sha, "fff444");
+    assert_eq!(
+        ready.ready_evidence.as_ref().unwrap().ci_github_run_id,
+        Some(21)
+    );
+    assert_eq!(ready.status, liberado_coder_core::TaskStatus::Completed);
 }
