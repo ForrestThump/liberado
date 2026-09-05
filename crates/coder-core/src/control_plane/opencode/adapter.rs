@@ -194,6 +194,14 @@ impl OpenCodeWorker {
     }
 }
 
+const _: () = {
+    const fn assert_worker_port<T: WorkerPort>() {}
+    const fn check() {
+        assert_worker_port::<OpenCodeWorker>();
+    }
+    check();
+};
+
 impl WorkerPort for OpenCodeWorker {
     fn id(&self) -> &str {
         "opencode"
