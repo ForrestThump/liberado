@@ -266,11 +266,22 @@ fn production_entry_points_call_the_shared_assembler() {
     let server = production_section(
         "server/src/coding_pack.rs",
         "pub(super) fn build_coding_pack(",
-        "Ok(Some(Arc::new(pack)))",
+        "Some(Arc::new(pack))",
     );
     assert!(
-        server.contains(".with_tuning(coder_tuning)"),
+        server.contains(".with_tuning(coder_tuning.clone())"),
         "server coding-pack assembly must pass resolved tuning into CodingSessionPack"
+    );
+
+    let server_root = std::fs::read_to_string(crates_dir().join("server/src/lib.rs"))
+        .expect("read server composition root");
+    let server_config = std::fs::read_to_string(crates_dir().join("server/src/coding_pack.rs"))
+        .expect("read server coding config helper");
+    assert!(
+        server_root.contains("load_server_config(")
+            && server_root.contains("&coder_tuning,")
+            && server_config.contains("let coder_tuning = coder_tuning_from_config(&config)?;"),
+        "server startup must validate coder tuning once and pass it into goal-pack assembly"
     );
 }
 
