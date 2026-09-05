@@ -4,6 +4,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::coding_goal::ControlPlaneRepair;
 use liberado_coder_core::{
     CoderBackend, CoderError, CoderRunRequest, CoderRunResult, ControlPlaneConfig,
     ControlPlaneSupervisor, DispatchTaskRequest, NATIVE_WORKER_ID, SupervisedRun, WorkerPort,
@@ -66,12 +67,18 @@ impl WorkerRegistry {
         selected: &str,
         native: &Arc<dyn CoderBackend>,
         request: CoderRunRequest,
+        repair: Option<&ControlPlaneRepair>,
         cancel: &mut tokio::sync::watch::Receiver<bool>,
     ) -> Result<RegistryRun, CoderError> {
         if *cancel.borrow() {
             return Ok(RegistryRun::Cancelled);
         }
         if selected == NATIVE_WORKER_ID {
+            if repair.is_some() {
+                return Err(CoderError::Backend(
+                    "CI repair requires a configured external control-plane worker".into(),
+                ));
+            }
             let run = native.run(request);
             tokio::pin!(run);
             return tokio::select! {
@@ -83,7 +90,7 @@ impl WorkerRegistry {
         let worker = self.external.get(selected).cloned().ok_or_else(|| {
             CoderError::Backend(format!("coding worker '{selected}' is not configured"))
         })?;
-        run_external(worker, request, cancel).await
+        run_external(worker, request, repair, cancel).await
     }
 }
 
@@ -102,9 +109,13 @@ fn worker_name(root: &serde_json::Value) -> Option<&str> {
 async fn run_external(
     worker: Arc<dyn WorkerPort>,
     request: CoderRunRequest,
+    repair: Option<&ControlPlaneRepair>,
     cancel: &mut tokio::sync::watch::Receiver<bool>,
 ) -> Result<RegistryRun, CoderError> {
     let supervisor = ControlPlaneSupervisor::new(worker.clone());
+    if let Some(repair) = repair {
+        return run_repair(&supervisor, worker.id(), &request, repair);
+    }
     let mut run = start_supervised(&supervisor, &request)?;
 
     loop {
@@ -128,6 +139,51 @@ async fn run_external(
     Ok(RegistryRun::Finished(Box::new(normalize_result(
         worker.id(),
         result,
+    ))))
+}
+
+fn run_repair(
+    supervisor: &ControlPlaneSupervisor,
+    worker_id: &str,
+    request: &CoderRunRequest,
+    repair: &ControlPlaneRepair,
+) -> Result<RegistryRun, CoderError> {
+    let path = liberado_coder_core::tasks_root_from_worktree(&request.workspace.root)
+        .join(&repair.task_id)
+        .join("ledger.jsonl");
+    let mut ledger = liberado_coder_core::TaskLedger::load_from_path(path)
+        .map_err(|error| CoderError::Backend(error.to_string()))?;
+    let requested = ledger.events().iter().any(|event| {
+        event.command_id.as_deref() == Some(repair.command_id.as_str())
+            && matches!(
+                &event.payload,
+                liberado_coder_core::TaskEventKind::RepairRequested {
+                    cause_event_id: Some(cause),
+                    ..
+                } if cause == &repair.cause_event_id
+            )
+    });
+    if !requested {
+        return Err(CoderError::Backend(
+            "repair command is absent from the task ledger".into(),
+        ));
+    }
+    if ledger
+        .project()
+        .map_err(|error| CoderError::Backend(error.to_string()))?
+        .head_revision
+        .as_deref()
+        != Some(repair.revision.as_str())
+    {
+        return Err(CoderError::Backend(
+            "repair command revision is stale".into(),
+        ));
+    }
+    let result = supervisor
+        .execute_repair_command(&mut ledger, Vec::new(), None)
+        .map_err(|error| CoderError::Backend(error.to_string()))?;
+    Ok(RegistryRun::Finished(Box::new(normalize_result(
+        worker_id, result,
     ))))
 }
 

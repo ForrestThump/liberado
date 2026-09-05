@@ -196,6 +196,15 @@ impl GoalSessionHub {
             return Err("goal description must not be empty".into());
         }
 
+        // A controller retries the same durable command after a crash. Returning the existing
+        // session closes the start/response gap without replacing its transcript or spawning a
+        // second worker run.
+        if let Some(id) = goal.id.as_deref()
+            && self.store.get(id).await.is_some()
+        {
+            return Ok(id.to_string());
+        }
+
         let interactive = grant.grants_ask_human();
         let record = match visibility {
             Visibility::Foreground => GoalSessionRecord::with_grant(goal.clone(), grant),

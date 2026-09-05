@@ -446,6 +446,30 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn repeated_client_goal_id_does_not_start_a_second_run() {
+        let mut hub = GoalSessionHub::new(GoalSessionStore::new());
+        hub.register_pack(Arc::new(LifeOpsDemoRunner));
+        let hub = Arc::new(hub);
+        let goal = GoalSpec {
+            id: Some("stable-repair-command".into()),
+            description: "capture one durable note".into(),
+            success_criteria: vec![],
+            domain: DomainHint::Life,
+            max_turns: 0,
+            max_idle_secs: None,
+            origin: None,
+            profile: None,
+            payload: serde_json::json!({}),
+        };
+
+        let first = hub.start(goal.clone()).await.unwrap();
+        let second = hub.start(goal).await.unwrap();
+
+        assert_eq!(first, second);
+        assert_eq!(hub.list().await.len(), 1);
+    }
+
+    #[tokio::test]
     async fn interactive_session_idle_budget_terminates_budget_exhausted() {
         let mut hub = GoalSessionHub::new(GoalSessionStore::new());
         hub.register_pack(Arc::new(LifeOpsDemoRunner));

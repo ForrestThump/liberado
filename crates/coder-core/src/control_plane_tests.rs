@@ -304,6 +304,7 @@ fn disk_ledger_create_in_reloads_existing_for_same_task_id() {
                 status: WorkerStatus::Completed,
                 external_session_id: None,
                 blocking_issue: None,
+                revision: None,
             },
         ))
         .expect("append after reload");
@@ -517,7 +518,7 @@ fn supervisor_dispatch_task_initializes_ledger_and_records_run() {
 }
 
 #[test]
-fn supervisor_handle_ci_failure_triggers_worker_kickback() {
+fn supervisor_executes_one_requested_repair() {
     let temp = tempfile::TempDir::new().expect("tempdir");
     let mock = std::sync::Arc::new(MockWorker::new(vec![
         vec!["commit-init".into()],
@@ -538,7 +539,7 @@ fn supervisor_handle_ci_failure_triggers_worker_kickback() {
 
     // Handle CI failure kickback
     let repair_result = supervisor
-        .handle_ci_failure(
+        .execute_repair_command(
             &mut ledger,
             vec!["test_trace_span_timing".into()],
             Some("assertion failed: duration > 0".into()),
@@ -594,7 +595,7 @@ fn supervisor_restarts_without_session_using_full_task_context() {
     let (mut ledger, _) = supervisor.dispatch_task(&req).expect("dispatch");
 
     supervisor
-        .handle_ci_failure(
+        .execute_repair_command(
             &mut ledger,
             vec!["context_test".into()],
             Some("expected context".into()),

@@ -76,7 +76,7 @@ fn dry_kickback_does_not_label_the_pr() {
     let cfg = test_config(temp.path().to_path_buf());
     let mut pr = sample_pr(&[RERUN]);
     let new = BTreeSet::from(["job|test".into()]);
-    kickback(&cfg, &mut pr, true, &new, &BTreeSet::new(), 0).unwrap();
+    kickback(&cfg, &mut pr, true, &new, &BTreeSet::new(), 0, &None).unwrap();
     assert!(
         !pr.labels
             .iter()

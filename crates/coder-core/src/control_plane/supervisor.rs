@@ -94,8 +94,8 @@ impl ControlPlaneSupervisor {
         Ok(result)
     }
 
-    /// Automatically handle a CI failure on an existing task ledger by kicking back to the worker.
-    pub fn handle_ci_failure(
+    /// Execute one repair that the controller already requested in the task ledger.
+    pub fn execute_repair_command(
         &self,
         ledger: &mut TaskLedger,
         failures: Vec<String>,
@@ -158,7 +158,12 @@ impl ControlPlaneSupervisor {
         ))?;
 
         let result = self.worker.collect(&resume_handle)?;
-        append_worker_finished(ledger, &resume_handle, &result)?;
+        append_worker_finished(
+            ledger,
+            &resume_handle,
+            &result,
+            updated_record.head_revision.clone(),
+        )?;
         append_commits(ledger, &resume_handle, &result, "repair-commit")?;
         Ok(result)
     }
@@ -218,7 +223,7 @@ fn record_finished_run(
     handle: &RunHandle,
     result: &WorkerRunResult,
 ) -> Result<(), ControlPlaneError> {
-    append_worker_finished(ledger, handle, result)?;
+    append_worker_finished(ledger, handle, result, None)?;
     append_commits(ledger, handle, result, "commit")
 }
 
@@ -226,6 +231,7 @@ fn append_worker_finished(
     ledger: &mut TaskLedger,
     handle: &RunHandle,
     result: &WorkerRunResult,
+    revision: Option<String>,
 ) -> Result<(), ControlPlaneError> {
     ledger.append(TaskEvent::new(
         format!("evt-{}-finished", handle.run_id),
@@ -235,6 +241,7 @@ fn append_worker_finished(
             status: result.status,
             external_session_id: result.external_session_id.clone(),
             blocking_issue: result.blocking_issue.clone(),
+            revision,
         },
     ))
 }

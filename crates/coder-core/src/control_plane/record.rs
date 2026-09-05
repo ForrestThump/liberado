@@ -237,13 +237,15 @@ fn apply_worker(record: &mut TaskRecord, kind: &TaskEventKind) -> bool {
             status,
             external_session_id,
             blocking_issue,
+            revision,
             ..
         } => {
             record.active_run_id = None;
             if let Some(session) = external_session_id {
                 record.external_session_id = Some(session.clone());
             }
-            if *status == WorkerStatus::Failed {
+            let applies_to_head = revision.is_none() || revision == &record.head_revision;
+            if *status == WorkerStatus::Failed && applies_to_head {
                 record.status = TaskStatus::Failed;
                 record.disposition = TaskDisposition::Failed;
                 record.current_diagnosis = blocking_issue.clone();
@@ -439,7 +441,9 @@ fn apply_repair_decision(record: &mut TaskRecord, kind: &TaskEventKind) {
             record.rerun_count = record.rerun_count.saturating_add(1);
             record.github_run_id = github_run_id.or(record.github_run_id);
         }
-        TaskEventKind::RepairRequested { goal_id, reason } => {
+        TaskEventKind::RepairRequested {
+            goal_id, reason, ..
+        } => {
             record.repair_count = record.repair_count.saturating_add(1);
             record.status = TaskStatus::Repairing;
             record.current_diagnosis = Some(reason.clone());

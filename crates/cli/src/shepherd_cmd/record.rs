@@ -20,6 +20,7 @@ pub(super) enum ShepherdFact {
         goal_id: Option<String>,
         reason: String,
         kick: usize,
+        cause_event_id: String,
     },
     ReviewRequested {
         round: usize,
@@ -157,12 +158,14 @@ fn fact_event(task_id: &str, pr: &Pr, fact: &ShepherdFact) -> TaskEvent {
             goal_id,
             reason,
             kick,
+            cause_event_id,
         } => TaskEvent::new(
             format!("evt-repair-{}-{kick}", pr.number),
             task_id,
             TaskEventKind::RepairRequested {
                 goal_id: goal_id.clone(),
                 reason: reason.clone(),
+                cause_event_id: Some(cause_event_id.clone()),
             },
         )
         .with_command_id(format!("repair:{}:{}:{kick}", pr.number, pr.head_sha)),

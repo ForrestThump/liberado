@@ -88,7 +88,7 @@ fn apply_failure_action(
         FailureAction::WaitForSlot => Ok(()),
         FailureAction::Kickback => {
             let kicks = pr.count("shepherd:kickback-");
-            kickback(cfg, pr, dry, new, old, kicks)
+            kickback(cfg, pr, dry, new, old, kicks, run)
         }
     }
 }
@@ -134,66 +134,63 @@ fn kickback(
     new: &BTreeSet<String>,
     old: &BTreeSet<String>,
     kicks: usize,
+    run: &Option<Value>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let goal_id = launch_kickback(cfg, pr, dry, new, old, kicks);
-    record_repair_if_started(cfg, pr, dry, new, kicks, goal_id)
-}
-
-fn launch_kickback(
-    cfg: &Config,
-    pr: &mut Pr,
-    dry: bool,
-    new: &BTreeSet<String>,
-    old: &BTreeSet<String>,
-    kicks: usize,
-) -> Option<String> {
     if dry {
-        return None;
+        return Ok(());
     }
-    start_and_label_kickback(cfg, pr, new, old, kicks)
-}
-
-fn start_and_label_kickback(
-    cfg: &Config,
-    pr: &mut Pr,
-    new: &BTreeSet<String>,
-    old: &BTreeSet<String>,
-    kicks: usize,
-) -> Option<String> {
+    let kick = kicks + 1;
+    let task_id = liberado_coder_core::shepherd_task_id(cfg.repository.as_deref(), pr.number);
+    let command_id = format!("repair:{}:{}:{kick}", pr.number, pr.head_sha);
+    let goal_id = format!(
+        "shepherd-repair-{}-{}-{kick}",
+        pr.number,
+        short_sha(&pr.head_sha)
+    );
+    let github_run_id = run
+        .as_ref()
+        .and_then(|value| value["databaseId"].as_u64())
+        .unwrap_or(0);
+    let cause_event_id = format!("evt-ci-{}-{github_run_id}-failure", pr.number);
+    record::record_facts(
+        cfg,
+        pr,
+        false,
+        &[ShepherdFact::Repair {
+            goal_id: Some(goal_id.clone()),
+            reason: format!("{} new CI failures", new.len()),
+            kick,
+            cause_event_id: cause_event_id.clone(),
+        }],
+    )?;
     let prompt = kickback_prompt(pr, new, old);
-    let id = start_goal(cfg, prompt, 0)?;
-    label(cfg, pr, format!("shepherd:kickback-{}", kicks + 1));
+    let id = start_goal_with(
+        cfg,
+        prompt,
+        0,
+        Some(&goal_id),
+        json!({
+            "control_plane": {
+                "task_id": task_id,
+                "command_id": command_id,
+                "cause_event_id": cause_event_id,
+                "revision": pr.head_sha,
+            }
+        }),
+    )
+    .ok_or("repair task service did not accept the command")?;
+    label(cfg, pr, format!("shepherd:kickback-{kick}"));
     remove_label(cfg, pr, RERUN);
     log(
         cfg,
         "kickback_started",
         json!({"pr":pr.number,"session":id}),
     );
-    Some(id)
+    Ok(())
 }
 
-fn record_repair_if_started(
-    cfg: &Config,
-    pr: &Pr,
-    dry: bool,
-    new: &BTreeSet<String>,
-    kicks: usize,
-    goal_id: Option<String>,
-) -> Result<(), Box<dyn std::error::Error>> {
-    if !dry && goal_id.is_none() {
-        return Ok(());
-    }
-    record::record_facts(
-        cfg,
-        pr,
-        dry,
-        &[ShepherdFact::Repair {
-            goal_id,
-            reason: format!("{} new CI failures", new.len()),
-            kick: kicks + 1,
-        }],
-    )?;
-    Ok(())
+fn short_sha(sha: &str) -> &str {
+    &sha[..sha.len().min(12)]
 }
 
 /// A PR whose CI is now clean: ready it once the cold-review cap is met, otherwise spend a

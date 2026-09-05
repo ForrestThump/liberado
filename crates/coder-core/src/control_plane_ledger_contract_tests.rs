@@ -45,6 +45,28 @@ fn observe_ci(ledger: &mut TaskLedger, sha: &str, run: u64) {
     );
 }
 
+#[test]
+fn stale_worker_failure_cannot_block_a_newer_head() {
+    let mut ledger = TaskLedger::new(created("task-stale-worker")).unwrap();
+    observe_head(&mut ledger, "old-head");
+    observe_head(&mut ledger, "new-head");
+    append(
+        &mut ledger,
+        "evt-old-run-finished",
+        TaskEventKind::WorkerFinished {
+            run_id: "run-old".into(),
+            status: WorkerStatus::Failed,
+            external_session_id: None,
+            blocking_issue: Some("old repair failed".into()),
+            revision: Some("old-head".into()),
+        },
+    );
+
+    let record = ledger.project().unwrap();
+    assert_eq!(record.head_revision.as_deref(), Some("new-head"));
+    assert_eq!(record.disposition, TaskDisposition::Open);
+}
+
 fn approve_review(ledger: &mut TaskLedger, round: usize) {
     append(
         ledger,
@@ -371,6 +393,7 @@ fn duplicate_command_ids_do_not_write_a_second_event() {
                 TaskEventKind::RepairRequested {
                     goal_id: Some("goal-1".into()),
                     reason: "new CI failures".into(),
+                    cause_event_id: Some("evt-ci".into()),
                 },
             )
             .with_command_id("repair:5:aaa:1"),
@@ -384,6 +407,7 @@ fn duplicate_command_ids_do_not_write_a_second_event() {
                 TaskEventKind::RepairRequested {
                     goal_id: Some("goal-1".into()),
                     reason: "new CI failures".into(),
+                    cause_event_id: Some("evt-ci".into()),
                 },
             )
             .with_command_id("repair:5:aaa:1"),

@@ -77,6 +77,7 @@ fn shepherd_repeated_facts_are_idempotent_and_survive_reload() {
             goal_id: Some("goal-a".into()),
             reason: "1 new CI failures".into(),
             kick: 1,
+            cause_event_id: "evt-ci-7-88-failure".into(),
         },
     ];
     let first = record_facts(&cfg, &pr, false, &facts)

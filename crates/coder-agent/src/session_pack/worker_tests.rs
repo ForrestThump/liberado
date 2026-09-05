@@ -229,7 +229,7 @@ async fn false_cancel_notification_does_not_stop_an_external_worker() {
     cancel_tx.send(false).unwrap();
 
     let outcome = registry
-        .run("configured-worker", &native, request, &mut cancel)
+        .run("configured-worker", &native, request, None, &mut cancel)
         .await
         .expect("worker result");
 
@@ -319,7 +319,7 @@ async fn external_worker_run_records_durable_ledger_events() {
     let (_cancel_tx, mut cancel) = tokio::sync::watch::channel(false);
 
     let outcome = registry
-        .run("configured-worker", &native, request, &mut cancel)
+        .run("configured-worker", &native, request, None, &mut cancel)
         .await
         .expect("worker result");
 
@@ -385,7 +385,7 @@ async fn true_session_cancellation_invokes_worker_port_cancel() {
     let workspace = tempfile::tempdir().unwrap();
     let request = registry_request("session-cancel", workspace.path());
     let (cancel_tx, mut cancel) = tokio::sync::watch::channel(false);
-    let run = registry.run("configured-worker", &native, request, &mut cancel);
+    let run = registry.run("configured-worker", &native, request, None, &mut cancel);
     tokio::pin!(run);
 
     let started = std::time::Instant::now();
