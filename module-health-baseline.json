@@ -534,10 +534,10 @@
     "cyclomatic": 97
   },
   "crates/cli/src/readiness_cmd/debian_crap.rs": {
-    "ploc": 405,
-    "lloc": 75,
-    "functions": 36,
-    "cyclomatic": 87
+    "ploc": 434,
+    "lloc": 82,
+    "functions": 39,
+    "cyclomatic": 90
   },
   "crates/cli/src/shepherd_cmd.rs": {
     "ploc": 1065,
@@ -804,16 +804,16 @@
     "cyclomatic": 56
   },
   "crates/coder-agent/src/session_pack/attempt.rs": {
-    "ploc": 124,
-    "lloc": 13,
-    "functions": 2,
-    "cyclomatic": 12
+    "ploc": 130,
+    "lloc": 14,
+    "functions": 3,
+    "cyclomatic": 14
   },
   "crates/coder-agent/src/session_pack/build.rs": {
-    "ploc": 664,
-    "lloc": 141,
-    "functions": 26,
-    "cyclomatic": 91
+    "ploc": 661,
+    "lloc": 140,
+    "functions": 25,
+    "cyclomatic": 89
   },
   "crates/coder-agent/src/session_pack/build_survivor_tests.rs": {
     "ploc": 628,
@@ -1062,10 +1062,10 @@
     "cyclomatic": 32
   },
   "crates/coder-core/src/tuning.rs": {
-    "ploc": 345,
-    "lloc": 63,
-    "functions": 29,
-    "cyclomatic": 80
+    "ploc": 352,
+    "lloc": 64,
+    "functions": 30,
+    "cyclomatic": 82
   },
   "crates/coder-core/src/tuning_documented_key_tests.rs": {
     "ploc": 102,
@@ -3108,10 +3108,10 @@
     "cyclomatic": 3
   },
   "crates/server/src/coding_pack.rs": {
-    "ploc": 22,
+    "ploc": 42,
     "lloc": 9,
-    "functions": 1,
-    "cyclomatic": 4
+    "functions": 3,
+    "cyclomatic": 9
   },
   "crates/server/src/cron_delivery.rs": {
     "ploc": 100,
@@ -3162,16 +3162,16 @@
     "cyclomatic": 5
   },
   "crates/server/src/lib.rs": {
-    "ploc": 879,
+    "ploc": 884,
     "lloc": 219,
     "functions": 47,
-    "cyclomatic": 108
+    "cyclomatic": 105
   },
   "crates/server/src/lib_boot_helper_tests.rs": {
-    "ploc": 149,
-    "lloc": 65,
+    "ploc": 145,
+    "lloc": 64,
     "functions": 14,
-    "cyclomatic": 20
+    "cyclomatic": 18
   },
   "crates/server/src/lib_prompt_preview_tests.rs": {
     "ploc": 75,
