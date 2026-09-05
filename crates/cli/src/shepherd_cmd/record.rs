@@ -3,7 +3,7 @@
 use super::*;
 use liberado_coder_core::{
     CONTROLLER_LIBERADO_SHEPHERD, TaskEvent, TaskEventKind, TaskLedger, TaskRecord,
-    durable_tasks_root, shepherd_task_id,
+    shepherd_task_id, tasks_root_from_worktree,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -75,7 +75,7 @@ fn open_pr_ledger(
         },
     )
     .with_command_id(format!("create:{task_id}"));
-    let mut ledger = TaskLedger::create_in(durable_tasks_root(&cfg.root), created)?;
+    let mut ledger = TaskLedger::create_in(tasks_root_from_worktree(&cfg.root), created)?;
     ledger.append(
         TaskEvent::new(
             format!("evt-{task_id}-lease"),
@@ -233,8 +233,12 @@ pub(super) fn open_recorded(
     pr: &Pr,
 ) -> Result<TaskLedger, Box<dyn std::error::Error>> {
     let task_id = shepherd_task_id(cfg.repository.as_deref(), pr.number);
-    let path = durable_tasks_root(&cfg.root)
+    let path = tasks_root_from_worktree(&cfg.root)
         .join(task_id)
         .join("ledger.jsonl");
     Ok(TaskLedger::load_from_path(path)?)
 }
+
+#[cfg(test)]
+#[path = "record_tests.rs"]
+mod record_tests;

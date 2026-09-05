@@ -825,21 +825,7 @@ fn settle_with(
     };
     match review_transition(status_lookup(id).as_deref()) {
         ReviewTransition::Waiting => Ok(ReviewTransition::Waiting),
-        ReviewTransition::Labeled => {
-            if !dry {
-                labeler(pr, format!("shepherd:review-{round}"));
-                let _ = fs::remove_file(path);
-            }
-            record::record_facts(
-                cfg,
-                pr,
-                dry,
-                &[ShepherdFact::ReviewApproved {
-                    round: round as usize,
-                }],
-            )?;
-            Ok(ReviewTransition::Labeled)
-        }
+        ReviewTransition::Labeled => apply_labeled_review(cfg, pr, dry, round, &path, &mut labeler),
         ReviewTransition::Failed => {
             if !dry {
                 let _ = fs::remove_file(path);
@@ -849,6 +835,30 @@ fn settle_with(
         ReviewTransition::None => unreachable!("status transition is never none"),
     }
 }
+
+fn apply_labeled_review(
+    cfg: &Config,
+    pr: &mut Pr,
+    dry: bool,
+    round: u64,
+    path: &Path,
+    labeler: &mut impl FnMut(&mut Pr, String),
+) -> Result<ReviewTransition, Box<dyn std::error::Error>> {
+    if !dry {
+        labeler(pr, format!("shepherd:review-{round}"));
+        let _ = fs::remove_file(path);
+    }
+    record::record_facts(
+        cfg,
+        pr,
+        dry,
+        &[ShepherdFact::ReviewApproved {
+            round: round as usize,
+        }],
+    )?;
+    Ok(ReviewTransition::Labeled)
+}
+
 /// Pure gate: whether the CI signal is too weak for `tick` to act. `pending` and `none` both mean
 /// the checks have not produced a settled outcome, so `tick` returns without touching the PR. Kept
 /// separate from `settle`, which has side effects (it may wait or label) and must not run on a nil
