@@ -61,9 +61,14 @@ fn isolate_group(cmd: &mut std::process::Command) {
         use std::os::unix::process::CommandExt;
         cmd.process_group(0);
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
     {
-        let _ = cmd;
+        use std::os::windows::process::CommandExt;
+        use windows_sys::Win32::System::Threading::CREATE_SUSPENDED;
+        // Born suspended so AssignProcessToJobObject wins the race against the
+        // child's first CreateProcess. `start` / CREATE_BREAKAWAY_FROM_JOB is
+        // still refused: the job does not set JOB_OBJECT_LIMIT_BREAKAWAY_OK.
+        cmd.creation_flags(CREATE_SUSPENDED);
     }
 }
 
@@ -125,12 +130,61 @@ impl WindowsJob {
         let assigned = configured != 0
             && unsafe { AssignProcessToJobObject(job, child.as_raw_handle().cast()) } != 0;
         if assigned {
+            resume_primary_thread(child.id())?;
             return Ok(Self { _handle: handle });
         }
         Err(ControlPlaneError::Io(std::io::Error::other(
             "could not contain the OpenCode process tree in a Windows job object",
         )))
     }
+}
+
+/// Resume the thread left paused by `CREATE_SUSPENDED` after the job owns it.
+#[cfg(windows)]
+fn resume_primary_thread(pid: u32) -> Result<(), ControlPlaneError> {
+    use std::mem::{size_of, zeroed};
+    use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
+    use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
+    use windows_sys::Win32::System::Diagnostics::ToolHelp::{
+        CreateToolhelp32Snapshot, TH32CS_SNAPTHREAD, THREADENTRY32, Thread32First, Thread32Next,
+    };
+
+    let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0) };
+    if snapshot == INVALID_HANDLE_VALUE || snapshot.is_null() {
+        return Err(ControlPlaneError::Io(std::io::Error::last_os_error()));
+    }
+    // SAFETY: `CreateToolhelp32Snapshot` returned a new exclusive snapshot handle.
+    let snapshot = unsafe { OwnedHandle::from_raw_handle(snapshot) };
+    let mut entry = unsafe { zeroed::<THREADENTRY32>() };
+    entry.dwSize = size_of::<THREADENTRY32>() as u32;
+    let mut more = unsafe { Thread32First(snapshot.as_raw_handle().cast(), &mut entry) };
+    while more != 0 {
+        if entry.th32OwnerProcessID == pid {
+            return resume_thread(entry.th32ThreadID);
+        }
+        more = unsafe { Thread32Next(snapshot.as_raw_handle().cast(), &mut entry) };
+    }
+    Err(ControlPlaneError::Io(std::io::Error::other(
+        "contained OpenCode process has no thread to resume",
+    )))
+}
+
+#[cfg(windows)]
+fn resume_thread(thread_id: u32) -> Result<(), ControlPlaneError> {
+    use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
+    use windows_sys::Win32::System::Threading::{OpenThread, ResumeThread, THREAD_SUSPEND_RESUME};
+
+    let thread = unsafe { OpenThread(THREAD_SUSPEND_RESUME, 0, thread_id) };
+    if thread.is_null() {
+        return Err(ControlPlaneError::Io(std::io::Error::last_os_error()));
+    }
+    // SAFETY: `OpenThread` returned a new exclusive thread handle.
+    let thread = unsafe { OwnedHandle::from_raw_handle(thread) };
+    let previous = unsafe { ResumeThread(thread.as_raw_handle().cast()) };
+    if previous == u32::MAX {
+        return Err(ControlPlaneError::Io(std::io::Error::last_os_error()));
+    }
+    Ok(())
 }
 
 const _: () = {

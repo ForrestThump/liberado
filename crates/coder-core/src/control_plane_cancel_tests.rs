@@ -99,32 +99,18 @@ fn init_git_repo(path: &std::path::Path) {
 fn write_descendant_worker(path: &std::path::Path, marker: &std::path::Path) -> std::path::PathBuf {
     #[cfg(windows)]
     {
-        let _ = marker;
-        // Relative marker + a second script: `start /b` needs a console, the worker
-        // has none (piped stdio), and an absolute 8.3 path inside `start` quotes
-        // is a common Windows CI miss. `start ""` creates a new console process
-        // that still inherits the job object.
-        let descendant = path.join("descendant.cmd");
+        assert_eq!(
+            marker.file_name().and_then(|name| name.to_str()),
+            Some("descendant.marker"),
+            "Windows fixture writes the worktree-relative marker name"
+        );
         std::fs::write(
-            &descendant,
-            "@echo off\r\n\
-             echo alive>>descendant.marker\r\n\
-             echo alive>>descendant.marker\r\n\
-             echo alive>>descendant.marker\r\n\
-             :loop\r\n\
-             echo alive>>descendant.marker\r\n\
-             ping -n 2 127.0.0.1 >nul\r\n\
-             goto loop\r\n",
+            path.join("descendant.cmd"),
+            windows_descendant_writer_script(),
         )
         .expect("write descendant writer");
         let script = path.join("fake-opencode.cmd");
-        std::fs::write(
-            &script,
-            "@echo off\r\n\
-             start \"\" /min cmd.exe /c descendant.cmd\r\n\
-             ping -n 30 127.0.0.1 >nul\r\n",
-        )
-        .expect("write fake ACP server");
+        std::fs::write(&script, windows_fake_opencode_script()).expect("write fake ACP server");
         script
     }
     #[cfg(unix)]
@@ -146,11 +132,55 @@ fn write_descendant_worker(path: &std::path::Path, marker: &std::path::Path) -> 
     }
 }
 
+/// Parent ACP fake: spawn a child `cmd` that inherits the job, then wait.
+///
+/// `start` (including `start /b` and `start "" /min`) asks for a new console
+/// and often `CREATE_BREAKAWAY_FROM_JOB`. The job refuses breakaway, so that
+/// writer never starts — or it starts outside the job and cancel misses it.
+/// A nested `cmd /c` is an ordinary child and stays contained.
+fn windows_fake_opencode_script() -> &'static str {
+    "@echo off\r\ncmd /c descendant.cmd\r\n"
+}
+
+/// Descendant writer: three lines immediately, then keep writing until killed.
+fn windows_descendant_writer_script() -> &'static str {
+    "@echo off\r\n\
+     echo alive>>\"descendant.marker\"\r\n\
+     echo alive>>\"descendant.marker\"\r\n\
+     echo alive>>\"descendant.marker\"\r\n\
+     :loop\r\n\
+     echo alive>>\"descendant.marker\"\r\n\
+     ping 192.0.2.1 -n 1 -w 100 >nul\r\n\
+     goto loop\r\n"
+}
+
+#[test]
+fn windows_descendant_fixture_stays_inside_the_job() {
+    let parent = windows_fake_opencode_script();
+    let writer = windows_descendant_writer_script();
+    assert!(
+        !parent.to_ascii_lowercase().contains("start"),
+        "start breakaway-from-job either fails or escapes the job: {parent}"
+    );
+    assert!(
+        parent.contains("cmd /c descendant.cmd"),
+        "parent must spawn a nested cmd child: {parent}"
+    );
+    assert!(
+        writer.contains("descendant.marker"),
+        "writer must use the worktree-relative marker: {writer}"
+    );
+    assert!(
+        !writer.contains(":\\"),
+        "absolute Windows paths break inside cmd quoting: {writer}"
+    );
+}
+
 fn wait_for_marker(path: &std::path::Path, min_lines: usize) {
     let started = std::time::Instant::now();
     while marker_lines(path) < min_lines {
         assert!(
-            started.elapsed() < std::time::Duration::from_secs(10),
+            started.elapsed() < std::time::Duration::from_secs(3),
             "descendant never started writing to {}",
             path.display()
         );
