@@ -21,7 +21,7 @@ mod prompts;
 mod record;
 mod tick_support;
 use record::ShepherdFact;
-use tick_support::handle_settled_tick;
+use tick_support::tick_live;
 
 const RERUN: &str = "shepherd:ci-rerun";
 const READY: &str = "shepherd:ready";
@@ -902,14 +902,7 @@ fn tick(cfg: &Config, pr: &mut Pr, dry: bool) -> Result<(), Box<dyn std::error::
     if pr.terminal() {
         return Ok(());
     }
-    record::record_facts(cfg, pr, dry, &[])?;
-    if tick_idle(ci_status(cfg, pr)?) {
-        return Ok(());
-    }
-    if settle(cfg, pr, dry)? == ReviewTransition::Waiting {
-        return Ok(());
-    }
-    handle_settled_tick(cfg, pr, dry)
+    tick_live(cfg, pr, dry)
 }
 
 fn seed(cfg: &Config, path: &Path, dry: bool) -> Result<(), Box<dyn std::error::Error>> {
