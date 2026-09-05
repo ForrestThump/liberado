@@ -424,6 +424,11 @@ fn ready_claim_matches(record: &TaskRecord, evidence: &ReadyEvidence) -> bool {
 }
 
 fn apply_decision(record: &mut TaskRecord, kind: &TaskEventKind) {
+    apply_repair_decision(record, kind);
+    apply_gate_decision(record, kind);
+}
+
+fn apply_repair_decision(record: &mut TaskRecord, kind: &TaskEventKind) {
     match kind {
         TaskEventKind::Escalated { reason } => {
             record.status = TaskStatus::Escalated;
@@ -442,6 +447,12 @@ fn apply_decision(record: &mut TaskRecord, kind: &TaskEventKind) {
                 record.goal_id = Some(id.clone());
             }
         }
+        _ => {}
+    }
+}
+
+fn apply_gate_decision(record: &mut TaskRecord, kind: &TaskEventKind) {
+    match kind {
         TaskEventKind::ReviewRequested { round, goal_id } => {
             record.review_state = ReviewState::Requested;
             record.review_round = (*round).max(1) as u32;
