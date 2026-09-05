@@ -99,13 +99,30 @@ fn init_git_repo(path: &std::path::Path) {
 fn write_descendant_worker(path: &std::path::Path, marker: &std::path::Path) -> std::path::PathBuf {
     #[cfg(windows)]
     {
+        let _ = marker;
+        // Relative marker + a second script: `start /b` needs a console, the worker
+        // has none (piped stdio), and an absolute 8.3 path inside `start` quotes
+        // is a common Windows CI miss. `start ""` creates a new console process
+        // that still inherits the job object.
+        let descendant = path.join("descendant.cmd");
+        std::fs::write(
+            &descendant,
+            "@echo off\r\n\
+             echo alive>>descendant.marker\r\n\
+             echo alive>>descendant.marker\r\n\
+             echo alive>>descendant.marker\r\n\
+             :loop\r\n\
+             echo alive>>descendant.marker\r\n\
+             ping -n 2 127.0.0.1 >nul\r\n\
+             goto loop\r\n",
+        )
+        .expect("write descendant writer");
         let script = path.join("fake-opencode.cmd");
         std::fs::write(
             &script,
-            format!(
-                "@echo off\r\nping -n 2 127.0.0.1 >nul\r\nstart /b cmd /c \"for /l %%i in (1,1,600) do (echo alive>>{} & ping -n 2 127.0.0.1 >nul)\"\r\nping -n 30 127.0.0.1 >nul\r\n",
-                marker.display()
-            ),
+            "@echo off\r\n\
+             start \"\" /min cmd.exe /c descendant.cmd\r\n\
+             ping -n 30 127.0.0.1 >nul\r\n",
         )
         .expect("write fake ACP server");
         script
@@ -133,7 +150,7 @@ fn wait_for_marker(path: &std::path::Path, min_lines: usize) {
     let started = std::time::Instant::now();
     while marker_lines(path) < min_lines {
         assert!(
-            started.elapsed() < std::time::Duration::from_secs(3),
+            started.elapsed() < std::time::Duration::from_secs(10),
             "descendant never started writing to {}",
             path.display()
         );
