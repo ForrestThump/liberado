@@ -28,6 +28,7 @@ fn run_from_windows(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
         &context.linux_bundle,
         &context.layout.workspace,
         &context.head,
+        &context.layout.temp_dir,
     )?;
     build_driver(
         &context.distro,
@@ -124,8 +125,9 @@ fn prepare_debian_workspace(
     bundle: &str,
     workspace: &str,
     head: &str,
+    temp_dir: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    ensure_debian_workspace(distro, user, bundle, workspace)?;
+    ensure_debian_workspace(distro, user, bundle, workspace, temp_dir)?;
     refresh_debian_workspace(distro, user, bundle, workspace, head)
 }
 
@@ -134,11 +136,12 @@ fn ensure_debian_workspace(
     user: &str,
     bundle: &str,
     workspace: &str,
+    temp_dir: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let parent = workspace
         .rsplit_once('/')
         .map_or(workspace, |(parent, _)| parent);
-    checked_wsl(distro, user, &["mkdir", "-p", parent])?;
+    checked_wsl(distro, user, &["mkdir", "-p", parent, temp_dir])?;
     if !wsl_success(distro, user, &["test", "-d", &format!("{workspace}/.git")])? {
         checked_wsl(
             distro,
@@ -228,7 +231,6 @@ fn run_driver(
     coverage_target: &str,
     temp_dir: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    ensure_driver_temp_dir(distro, account, temp_dir)?;
     let path_env = format!("PATH={}", cargo_path(&account.home));
     let coverage_env = format!("CARGO_TARGET_DIR={coverage_target}");
     let temp_env = format!("TMPDIR={temp_dir}");
@@ -247,15 +249,6 @@ fn run_driver(
             "crap",
         ],
     )?;
-    Ok(())
-}
-
-fn ensure_driver_temp_dir(
-    distro: &str,
-    account: &WslAccount,
-    temp_dir: &str,
-) -> Result<(), Box<dyn std::error::Error>> {
-    checked_wsl(distro, &account.user, &["mkdir", "-p", temp_dir])?;
     Ok(())
 }
 
@@ -458,6 +451,7 @@ mod tests {
             .expect("run_driver source");
         assert!(run_driver.contains("let temp_env = format!(\"TMPDIR={temp_dir}\")"));
         assert!(run_driver.contains("&temp_env"));
+        assert!(source.contains("[\"mkdir\", \"-p\", parent, temp_dir]"));
     }
 
     #[test]
