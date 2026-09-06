@@ -221,6 +221,17 @@ fn fact_event(cfg: &Config, task_id: &str, pr: &Pr, fact: &ShepherdFact) -> Task
             },
         )
         .with_command_id(format!("review-ok:{}:{}:{round}", pr.number, pr.head_sha)),
+        other => terminal_or_review_event(cfg, task_id, pr, other),
+    }
+}
+
+fn terminal_or_review_event(
+    cfg: &Config,
+    task_id: &str,
+    pr: &Pr,
+    fact: &ShepherdFact,
+) -> TaskEvent {
+    match fact {
         ShepherdFact::Ready {
             github_run_id,
             review_round,
