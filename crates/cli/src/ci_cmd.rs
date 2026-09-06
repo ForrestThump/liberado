@@ -140,11 +140,15 @@ A new function is above the 29.9 CRAP ceiling. Split it or add tests. \
 New functions must land below 30.";
 
 mod coverage_tools;
+mod crap_baseline_ratchet;
 /// Dispatch `liberado ci …`. No subcommand means the local full run (gates + ratchet).
 mod dispatch;
 mod new_function_ceiling;
 mod runtime_support;
 
+#[cfg(test)]
+pub(super) use crap_baseline_ratchet::keep_worse_existing_crap_entries;
+use crap_baseline_ratchet::{write_after_success, write_and_stage_ratcheted_baseline};
 pub use dispatch::run;
 use runtime_support::{announce_staged_baseline, move_running_image, vacated_image_destination};
 
@@ -260,30 +264,6 @@ fn crap_ratchet(log: &CiLog) -> Result<(), Box<dyn std::error::Error>> {
     })
 }
 
-fn write_after_success(
-    check: Result<(), Box<dyn std::error::Error>>,
-    write: impl FnOnce() -> Result<(), Box<dyn std::error::Error>>,
-) -> Result<(), Box<dyn std::error::Error>> {
-    check?;
-    write()
-}
-
-/// The baseline-write half of [`crap_ratchet`], split so each driver stays under the complexity
-/// ceiling. Linux-only by policy: GitHub's Ubuntu job is the host of truth for per-function
-/// scores, and coverage numbers are host-sensitive.
-fn write_and_stage_ratcheted_baseline(log: &CiLog) -> Result<(), Box<dyn std::error::Error>> {
-    if !cfg!(target_os = "linux") {
-        eprintln!(
-            "[liberado ci] {BASELINE_FILE} write is Linux-only \
-             (GitHub's Ubuntu job is the host of truth). Compared only."
-        );
-        return Ok(());
-    }
-    write_baseline(log)?;
-    announce_staged_baseline(stage_ratcheted_baseline(&log.root)?);
-    Ok(())
-}
-
 fn generate_lcov(log: &CiLog) -> Result<(), Box<dyn std::error::Error>> {
     require_tool(
         &log.root,
@@ -334,82 +314,7 @@ fn uses_per_function_ratchet(baseline_has_entries: bool) -> bool {
 }
 
 fn write_baseline(log: &CiLog) -> Result<(), Box<dyn std::error::Error>> {
-    write_crap_json(log, CURRENT_REPORT)?;
-    ratchet_crap_baseline(&log.root)
-}
-
-fn ratchet_crap_baseline(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
-    let baseline_path = root.join(BASELINE_FILE);
-    let current_path = root.join(CURRENT_REPORT);
-    let mut current: Value = serde_json::from_slice(&std::fs::read(&current_path)?)?;
-    if baseline_path.is_file() {
-        let old: Value = serde_json::from_slice(&std::fs::read(&baseline_path)?)?;
-        keep_worse_existing_crap_entries(&old, &mut current)?;
-    }
-    let serialized = serde_json::to_string_pretty(&current)?;
-    std::fs::write(baseline_path, format!("{serialized}\n"))?;
-    Ok(())
-}
-
-/// Keep the complete old measurement when either ratcheted metric got worse. Keeping the
-/// entry intact also prevents a coverage drop that raised CRAP from entering the baseline.
-fn keep_worse_existing_crap_entries(
-    old: &Value,
-    current: &mut Value,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let old_entries = old
-        .get("entries")
-        .and_then(Value::as_array)
-        .ok_or("CRAP baseline has no entries array")?;
-    let current_entries = current
-        .get_mut("entries")
-        .and_then(Value::as_array_mut)
-        .ok_or("current CRAP report has no entries array")?;
-    let mut used = vec![false; old_entries.len()];
-    for entry in current_entries {
-        let Some((old_index, old_entry)) = closest_matching_crap_entry(old_entries, &used, entry)
-        else {
-            continue;
-        };
-        used[old_index] = true;
-        if crap_metric(entry, "crap")? > crap_metric(old_entry, "crap")?
-            || crap_metric(entry, "cyclomatic")? > crap_metric(old_entry, "cyclomatic")?
-        {
-            *entry = old_entry.clone();
-        }
-    }
-    Ok(())
-}
-
-fn closest_matching_crap_entry<'a>(
-    old_entries: &'a [Value],
-    used: &[bool],
-    current: &Value,
-) -> Option<(usize, &'a Value)> {
-    let current_line = current.get("line").and_then(Value::as_u64).unwrap_or(0);
-    old_entries
-        .iter()
-        .enumerate()
-        .filter(|(index, old)| !used[*index] && same_crap_function(old, current))
-        .min_by_key(|(_, old)| {
-            old.get("line")
-                .and_then(Value::as_u64)
-                .unwrap_or(0)
-                .abs_diff(current_line)
-        })
-}
-
-fn same_crap_function(left: &Value, right: &Value) -> bool {
-    ["file", "function", "crate"]
-        .iter()
-        .all(|field| left.get(field) == right.get(field))
-}
-
-fn crap_metric(entry: &Value, field: &str) -> Result<f64, Box<dyn std::error::Error>> {
-    entry
-        .get(field)
-        .and_then(Value::as_f64)
-        .ok_or_else(|| format!("CRAP entry has no numeric {field}").into())
+    crap_baseline_ratchet::write_ratcheted_baseline(log)
 }
 
 pub(super) fn write_crap_json(log: &CiLog, output: &str) -> Result<(), Box<dyn std::error::Error>> {
