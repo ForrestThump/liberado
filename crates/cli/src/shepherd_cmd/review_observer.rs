@@ -2,8 +2,8 @@
 
 use super::*;
 use liberado_coder_core::pr_review::{
-    CheckConclusion, PullRequestSnapshot, ReviewCycle, ReviewPolicy, ShaChecks, WakeSignal,
-    check_endpoints, observe, review_eligible, valid_full_sha,
+    ReviewCycle, ReviewPolicy, ShaChecks, WakeSignal, check_endpoints, collect_github_checks,
+    observe, pull_request_snapshot, review_eligible, valid_full_sha,
 };
 
 pub(super) fn validate_review_config(
@@ -108,28 +108,11 @@ pub(super) fn dry_run(
         &project.repository,
         &format!("/repos/{}/pulls/{number}", project.repository),
     )?;
-    let head_sha = pr_value
-        .pointer("/head/sha")
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_string();
-    let head_repo = pr_value
-        .pointer("/head/repo/full_name")
-        .and_then(Value::as_str);
-    let base_repo = pr_value
-        .pointer("/base/repo/full_name")
-        .and_then(Value::as_str);
-    let pr = PullRequestSnapshot {
-        repository: project.repository.clone(),
-        number,
-        head_sha: head_sha.clone(),
-        open: pr_value["state"] == "open",
-        draft: pr_value["draft"].as_bool().unwrap_or(true),
-        fork_head: head_repo != base_repo,
-    };
+    let pr = pull_request_snapshot(&project.repository, &pr_value)
+        .ok_or("pull request snapshot is incomplete")?;
     let mut observed = Vec::new();
     for endpoint in check_endpoints(&project.repository, requested_sha) {
-        collect_checks(&api(&project.repository, &endpoint)?, &mut observed);
+        observed.extend(collect_github_checks(&api(&project.repository, &endpoint)?));
     }
     let policy = ReviewPolicy {
         controller: project.controller.clone().unwrap_or_default(),
@@ -162,7 +145,7 @@ pub(super) fn dry_run(
         title: String::new(),
         branch: String::new(),
         base_sha: String::new(),
-        head_sha: head_sha.clone(),
+        head_sha: pr.head_sha.clone(),
         url: String::new(),
         labels: Vec::new(),
     };
@@ -170,7 +153,7 @@ pub(super) fn dry_run(
     let _ = record::record_observer_intents(&cfg, &ledger_pr, true, &intents)?;
     println!(
         "{}",
-        json!({"repository":project.repository,"pr":number,"requested_sha":requested_sha,"observed_sha":head_sha,"eligible":eligible,"writes":false,"lease":false})
+        json!({"repository":project.repository,"pr":number,"requested_sha":requested_sha,"observed_sha":pr.head_sha,"eligible":eligible,"writes":false,"lease":false})
     );
     Ok(())
 }
@@ -187,38 +170,14 @@ fn api(_repository: &str, endpoint: &str) -> Result<Value, Box<dyn std::error::E
     Ok(serde_json::from_slice(&output.stdout)?)
 }
 
-fn collect_checks(value: &Value, target: &mut Vec<(String, CheckConclusion)>) {
-    let rows = value["check_runs"]
-        .as_array()
-        .or_else(|| value["statuses"].as_array());
-    for row in rows.into_iter().flatten() {
-        let Some(name) = row["name"].as_str().or_else(|| row["context"].as_str()) else {
-            continue;
-        };
-        let raw = row["conclusion"]
-            .as_str()
-            .or_else(|| row["state"].as_str())
-            .unwrap_or("");
-        let conclusion = if raw.eq_ignore_ascii_case("success") {
-            CheckConclusion::Success
-        } else if matches!(raw, "pending" | "queued" | "in_progress") {
-            CheckConclusion::Pending
-        } else {
-            CheckConclusion::Failure
-        };
-        target.push((name.into(), conclusion));
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use liberado_coder_core::pr_review::CheckConclusion;
     #[test]
     fn check_parser_accepts_only_success() {
-        let mut checks = Vec::new();
-        collect_checks(
+        let checks = collect_github_checks(
             &json!({"check_runs":[{"name":"CI","conclusion":"success"},{"name":"skip","conclusion":"neutral"}]}),
-            &mut checks,
         );
         assert_eq!(
             checks,
@@ -227,5 +186,16 @@ mod tests {
                 ("skip".into(), CheckConclusion::Failure)
             ]
         );
+    }
+
+    #[test]
+    fn review_path_does_not_call_old_check_helpers() {
+        let src = include_str!("review_observer.rs");
+        let old_status = format!("check_{}", "status(");
+        assert!(!src.contains(&old_status));
+        let old_helper = format!("pr {}", "checks");
+        assert!(!src.contains(&old_helper));
+        let identity = format!("{}Thump", "Forrest");
+        assert!(!src.contains(&identity));
     }
 }

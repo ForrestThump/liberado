@@ -1,7 +1,9 @@
 //! Bounded, read-only GitHub polling for daemon-native PR review.
 
 use liberado_coder_core::pr_review::{
-    CheckConclusion, ReviewPolicy, ShaChecks, bounded_pages, check_endpoints, required_checks_pass,
+    CycleFact, ObserverIntent, ReviewCycle, ReviewPolicy, ShaChecks, bounded_pages,
+    check_endpoints, collect_github_checks, controller_lease_required, pull_request_snapshot,
+    ready_for_review_commit, reconcile_snapshot, review_cycle, slice01_records,
 };
 use liberado_coder_core::{
     TaskEvent, TaskEventKind, TaskLedger, shepherd_task_id, tasks_root_from_worktree,
@@ -97,122 +99,84 @@ async fn observe_pr(
     token: &str,
     row: &Value,
 ) -> Result<(), String> {
-    let number = row["number"].as_u64().ok_or("pull request has no number")?;
-    let sha = row
-        .pointer("/head/sha")
-        .and_then(Value::as_str)
-        .ok_or("pull request has no head SHA")?;
-    let task_id = shepherd_task_id(Some(&project.repository), number);
+    let pr = pull_request_snapshot(&project.repository, row)
+        .ok_or_else(|| "pull request snapshot is incomplete".to_string())?;
+    let task_id = shepherd_task_id(Some(&project.repository), pr.number);
     let root = topology
         .projects
         .iter()
         .find(|item| item.name == project.coding_project)
         .map(|item| item.root.as_path())
         .ok_or("coding project root is missing")?;
-    let mut ledger = open_ledger(root, project, number, &task_id)?;
-    let prior_tip = ledger
+    let policy = review_policy(project);
+    let mut ledger = open_ledger(root, &policy, project, pr.number, &task_id)?;
+    let cycle = cycle_from_ledger(&ledger);
+    let prior_tip = last_observed_tip(&ledger);
+    let ready = marked_ready(client, topology, project, token, &pr.head_sha, pr.number).await?;
+    let checks = fetch_checks(client, token, &project.repository, &pr.head_sha).await?;
+    let intents = reconcile_snapshot(&policy, &pr, &cycle, &checks, prior_tip.as_deref(), ready);
+    record_intents(
+        &mut ledger,
+        &task_id,
+        &project.repository,
+        pr.number,
+        &intents,
+    )
+}
+
+pub(crate) fn review_policy(project: &ShepherdProjectConfig) -> ReviewPolicy {
+    ReviewPolicy {
+        controller: project.controller.clone().unwrap_or_default(),
+        check_names: project.check_names.clone(),
+        shadow: project.controller.as_deref() != Some("liberado-shepherd"),
+    }
+}
+
+pub(crate) fn cycle_from_ledger(ledger: &TaskLedger) -> ReviewCycle {
+    review_cycle(
+        ledger
+            .events()
+            .iter()
+            .filter_map(|event| cycle_fact(&event.payload)),
+    )
+}
+
+fn last_observed_tip(ledger: &TaskLedger) -> Option<String> {
+    ledger
         .events()
         .iter()
         .rev()
         .find_map(|event| match &event.payload {
             TaskEventKind::HeadRevisionObserved { sha } => Some(sha.clone()),
             _ => None,
-        });
-    let armed = ledger
-        .events()
-        .iter()
-        .rev()
-        .find_map(|event| match &event.payload {
-            TaskEventKind::ReadyArmed { head_sha, .. } => Some(head_sha.clone()),
-            _ => None,
-        });
-    if let Some(old_sha) = prior_tip.filter(|old| old != sha)
-        && armed.as_deref() == Some(old_sha.as_str())
-    {
-        append(
-            &mut ledger,
-            &task_id,
-            format!("review-sync:{number}:{old_sha}:{sha}"),
-            TaskEventKind::ReviewSynchronizeIntent {
-                old_sha,
-                new_sha: sha.into(),
-            },
-        )?;
-    }
-    append(
-        &mut ledger,
-        &task_id,
-        format!("tip:{number}:{sha}"),
-        TaskEventKind::HeadRevisionObserved { sha: sha.into() },
-    )?;
-    if row["state"] == "closed" {
-        append(
-            &mut ledger,
-            &task_id,
-            format!("review-close:{number}:{sha}"),
-            TaskEventKind::PullRequestClosed {
-                head_sha: sha.into(),
-            },
-        )?;
-        return Ok(());
-    }
-    if row["draft"].as_bool().unwrap_or(true) {
-        append(
-            &mut ledger,
-            &task_id,
-            format!("review-draft:{number}:{sha}"),
-            TaskEventKind::ReviewDraftObserved {
-                head_sha: sha.into(),
-            },
-        )?;
-    }
-    let target = ReadyTarget {
-        number,
-        sha,
-        task_id: &task_id,
-    };
-    record_ready_events(client, topology, project, token, target, &mut ledger).await?;
-    let checks = fetch_checks(client, token, &project.repository, sha).await?;
-    let policy = ReviewPolicy {
-        controller: project.controller.clone().unwrap_or_default(),
-        check_names: project.check_names.clone(),
-        shadow: project.controller.as_deref() != Some("liberado-shepherd"),
-    };
-    let passed = required_checks_pass(&policy, sha, &checks);
-    append(
-        &mut ledger,
-        &task_id,
-        format!("review-ci:{number}:{sha}:{passed}"),
-        TaskEventKind::CiObserved {
-            github_run_id: None,
-            head_sha: Some(sha.into()),
-            state: if passed { "success" } else { "pending" }.into(),
-            failures: Vec::new(),
-        },
-    )?;
-    Ok(())
+        })
 }
 
-#[derive(Clone, Copy)]
-struct ReadyTarget<'a> {
-    number: u64,
-    sha: &'a str,
-    task_id: &'a str,
+pub(crate) fn cycle_fact(kind: &TaskEventKind) -> Option<CycleFact> {
+    match kind {
+        TaskEventKind::ReadyArmed { head_sha, .. } => Some(CycleFact::Armed {
+            sha: head_sha.clone(),
+        }),
+        TaskEventKind::ReviewDraftObserved { .. } | TaskEventKind::ReviewDraftConverted { .. } => {
+            Some(CycleFact::Draft)
+        }
+        TaskEventKind::PullRequestClosed { .. } => Some(CycleFact::Closed),
+        TaskEventKind::ReviewSynchronizeIntent { .. } => Some(CycleFact::Synchronized),
+        TaskEventKind::ReviewPublished { head_sha, .. } => Some(CycleFact::Published {
+            sha: head_sha.clone(),
+        }),
+        _ => None,
+    }
 }
 
-async fn record_ready_events(
+async fn marked_ready(
     client: &Client,
     topology: &Topology,
     project: &ShepherdProjectConfig,
     token: &str,
-    target: ReadyTarget<'_>,
-    ledger: &mut TaskLedger,
-) -> Result<(), String> {
-    let ReadyTarget {
-        number,
-        sha,
-        task_id,
-    } = target;
+    sha: &str,
+    number: u64,
+) -> Result<bool, String> {
     let review = &topology.shepherd.review;
     for page in bounded_pages(review.max_pages) {
         let path = format!(
@@ -223,35 +187,22 @@ async fn record_ready_events(
         let Some(rows) = value.as_array() else {
             return Err("pull event list was not an array".into());
         };
-        for row in rows {
-            if row["event"] != "ready_for_review" {
-                continue;
-            }
-            let Some(commit) = row["commit_id"].as_str().filter(|commit| *commit == sha) else {
-                continue;
-            };
-            let event_id = row["id"].as_u64().unwrap_or(0);
-            append(
-                ledger,
-                task_id,
-                format!("review-arm:{number}:{commit}:{event_id}"),
-                TaskEventKind::ReadyArmed {
-                    repository: project.repository.clone(),
-                    pr_number: number,
-                    head_sha: commit.into(),
-                    source: "ready_for_review".into(),
-                },
-            )?;
+        if rows
+            .iter()
+            .any(|row| ready_for_review_commit(row) == Some(sha))
+        {
+            return Ok(true);
         }
         if rows.len() < review.page_size {
             break;
         }
     }
-    Ok(())
+    Ok(false)
 }
 
 fn open_ledger(
     root: &Path,
+    policy: &ReviewPolicy,
     project: &ShepherdProjectConfig,
     number: u64,
     task_id: &str,
@@ -273,7 +224,7 @@ fn open_ledger(
     .with_command_id(format!("create:{task_id}"));
     let mut ledger = TaskLedger::create_in(tasks_root_from_worktree(root), created)
         .map_err(|e| e.to_string())?;
-    if project.controller.as_deref() == Some("liberado-shepherd") {
+    if controller_lease_required(policy) {
         append(
             &mut ledger,
             task_id,
@@ -284,6 +235,73 @@ fn open_ledger(
         )?;
     }
     Ok(ledger)
+}
+
+pub(crate) fn record_intents(
+    ledger: &mut TaskLedger,
+    task_id: &str,
+    repository: &str,
+    number: u64,
+    intents: &[ObserverIntent],
+) -> Result<(), String> {
+    for intent in intents.iter().filter(|intent| slice01_records(intent)) {
+        let Some((command, kind)) = intent_event(repository, number, intent) else {
+            continue;
+        };
+        append(ledger, task_id, command, kind)?;
+    }
+    Ok(())
+}
+
+pub(crate) fn intent_event(
+    repository: &str,
+    number: u64,
+    intent: &ObserverIntent,
+) -> Option<(String, TaskEventKind)> {
+    Some(match intent {
+        ObserverIntent::Arm { sha } => (
+            format!("review-arm:{number}:{sha}"),
+            TaskEventKind::ReadyArmed {
+                repository: repository.into(),
+                pr_number: number,
+                head_sha: sha.clone(),
+                source: "ready_for_review".into(),
+            },
+        ),
+        ObserverIntent::ObserveTip { sha } => (
+            format!("tip:{number}:{sha}"),
+            TaskEventKind::HeadRevisionObserved { sha: sha.clone() },
+        ),
+        ObserverIntent::ObserveCi { sha, passed } => (
+            format!("review-ci:{number}:{sha}:{passed}"),
+            TaskEventKind::CiObserved {
+                github_run_id: None,
+                head_sha: Some(sha.clone()),
+                state: if *passed { "success" } else { "pending" }.into(),
+                failures: Vec::new(),
+            },
+        ),
+        ObserverIntent::ObserveDraft { sha } => (
+            format!("review-draft:{number}:{sha}"),
+            TaskEventKind::ReviewDraftObserved {
+                head_sha: sha.clone(),
+            },
+        ),
+        ObserverIntent::SynchronizeDraftAndNote { old_sha, new_sha } => (
+            format!("review-sync:{number}:{old_sha}:{new_sha}"),
+            TaskEventKind::ReviewSynchronizeIntent {
+                old_sha: old_sha.clone(),
+                new_sha: new_sha.clone(),
+            },
+        ),
+        ObserverIntent::Close { sha } => (
+            format!("review-close:{number}:{sha}"),
+            TaskEventKind::PullRequestClosed {
+                head_sha: sha.clone(),
+            },
+        ),
+        ObserverIntent::Eligible { .. } => return None,
+    })
 }
 
 fn append(
@@ -306,26 +324,7 @@ async fn fetch_checks(
     let mut checks = Vec::new();
     for endpoint in check_endpoints(repository, sha) {
         let value = github(client, token, &endpoint).await?;
-        let rows = value["check_runs"]
-            .as_array()
-            .or_else(|| value["statuses"].as_array());
-        for row in rows.into_iter().flatten() {
-            let Some(name) = row["name"].as_str().or_else(|| row["context"].as_str()) else {
-                continue;
-            };
-            let raw = row["conclusion"]
-                .as_str()
-                .or_else(|| row["state"].as_str())
-                .unwrap_or("");
-            let state = if raw.eq_ignore_ascii_case("success") {
-                CheckConclusion::Success
-            } else if matches!(raw, "pending" | "queued" | "in_progress") {
-                CheckConclusion::Pending
-            } else {
-                CheckConclusion::Failure
-            };
-            checks.push((name.into(), state));
-        }
+        checks.extend(collect_github_checks(&value));
     }
     Ok(ShaChecks {
         sha: sha.into(),
@@ -348,3 +347,7 @@ async fn github(client: &Client, token: &str, path: &str) -> Result<Value, Strin
         .await
         .map_err(|e| e.to_string())
 }
+
+#[cfg(test)]
+#[path = "pr_review_observer_tests.rs"]
+mod pr_review_observer_tests;

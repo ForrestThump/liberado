@@ -4,6 +4,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::ReviewWorkerConfig;
+
 pub const REVIEW_SCHEMA_VERSION: &str = "liberado.pr-review.v1";
 pub const POLICY_VERSION: &str = "daemon-pr-review-v1";
 pub const MAX_PROMPT_BYTES: usize = 64 * 1024;
@@ -206,9 +208,173 @@ pub enum ObserverIntent {
     Arm { sha: String },
     ObserveTip { sha: String },
     ObserveCi { sha: String, passed: bool },
+    ObserveDraft { sha: String },
     Eligible { sha: String },
     SynchronizeDraftAndNote { old_sha: String, new_sha: String },
     Close { sha: String },
+}
+
+/// Durable facts used to rebuild [`ReviewCycle`] after a restart.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CycleFact {
+    Armed { sha: String },
+    Draft,
+    Closed,
+    Synchronized,
+    Published { sha: String },
+}
+
+pub fn review_cycle(facts: impl IntoIterator<Item = CycleFact>) -> ReviewCycle {
+    let mut cycle = ReviewCycle {
+        armed_sha: None,
+        accepted_sha: None,
+    };
+    for fact in facts {
+        match fact {
+            CycleFact::Armed { sha } => cycle.armed_sha = Some(sha),
+            CycleFact::Draft | CycleFact::Closed | CycleFact::Synchronized => {
+                cycle.armed_sha = None;
+            }
+            CycleFact::Published { sha } => cycle.accepted_sha = Some(sha),
+        }
+    }
+    cycle
+}
+
+/// Poll-derived wake. Webhook `review_requested` never appears here; it cannot arm.
+pub fn poll_signal(
+    pr: &PullRequestSnapshot,
+    cycle: &ReviewCycle,
+    prior_tip: Option<&str>,
+    ready_for_current: bool,
+) -> WakeSignal {
+    if !pr.open {
+        return WakeSignal::Closed;
+    }
+    if let Some(old_sha) = prior_tip.filter(|old| *old != pr.head_sha.as_str())
+        && (cycle.armed_sha.as_deref() == Some(old_sha)
+            || cycle.accepted_sha.as_deref() == Some(old_sha))
+    {
+        return WakeSignal::Synchronize {
+            old_sha: old_sha.to_string(),
+        };
+    }
+    if pr.draft {
+        return WakeSignal::ConvertedToDraft;
+    }
+    if ready_for_current {
+        return WakeSignal::ReadyForReview {
+            sha: pr.head_sha.clone(),
+        };
+    }
+    WakeSignal::Poll
+}
+
+/// Shared daemon/CLI observation: derive the poll signal, then apply [`observe`].
+pub fn reconcile_snapshot(
+    policy: &ReviewPolicy,
+    pr: &PullRequestSnapshot,
+    cycle: &ReviewCycle,
+    checks: &ShaChecks,
+    prior_tip: Option<&str>,
+    ready_for_current: bool,
+) -> Vec<ObserverIntent> {
+    observe(
+        policy,
+        pr,
+        cycle,
+        checks,
+        poll_signal(pr, cycle, prior_tip, ready_for_current),
+    )
+}
+
+pub fn parse_check_conclusion(conclusion: Option<&str>, status: Option<&str>) -> CheckConclusion {
+    let raw = conclusion.or(status).unwrap_or("");
+    if raw.eq_ignore_ascii_case("success") {
+        CheckConclusion::Success
+    } else if matches!(
+        raw.to_ascii_lowercase().as_str(),
+        "pending" | "queued" | "in_progress" | "waiting" | ""
+    ) {
+        CheckConclusion::Pending
+    } else {
+        CheckConclusion::Failure
+    }
+}
+
+pub fn collect_github_checks(value: &serde_json::Value) -> Vec<(String, CheckConclusion)> {
+    let rows = value["check_runs"]
+        .as_array()
+        .or_else(|| value["statuses"].as_array());
+    rows.into_iter()
+        .flatten()
+        .filter_map(|row| {
+            let name = row["name"].as_str().or_else(|| row["context"].as_str())?;
+            let conclusion = parse_check_conclusion(
+                row["conclusion"].as_str(),
+                row["status"].as_str().or_else(|| row["state"].as_str()),
+            );
+            Some((name.to_string(), conclusion))
+        })
+        .collect()
+}
+
+pub fn pull_request_snapshot(
+    repository: &str,
+    value: &serde_json::Value,
+) -> Option<PullRequestSnapshot> {
+    let head_repo = value
+        .pointer("/head/repo/full_name")
+        .and_then(|v| v.as_str());
+    let base_repo = value
+        .pointer("/base/repo/full_name")
+        .and_then(|v| v.as_str());
+    Some(PullRequestSnapshot {
+        repository: repository.to_string(),
+        number: value["number"].as_u64()?,
+        head_sha: value.pointer("/head/sha")?.as_str()?.to_string(),
+        open: value["state"].as_str() == Some("open"),
+        draft: value["draft"].as_bool().unwrap_or(true),
+        fork_head: head_repo.is_none() || base_repo.is_none() || head_repo != base_repo,
+    })
+}
+
+pub fn ready_for_review_commit(value: &serde_json::Value) -> Option<&str> {
+    (value["event"].as_str() == Some("ready_for_review"))
+        .then(|| value["commit_id"].as_str())
+        .flatten()
+}
+
+/// Disabled workers yield no argv. Slices 0/1 never spawn the returned command.
+pub fn review_process_argv(worker: &ReviewWorkerConfig, schema_path: &str) -> Option<Vec<String>> {
+    if !worker.enabled() {
+        return None;
+    }
+    Some(match worker {
+        ReviewWorkerConfig::GrokBuild { executable, .. } => {
+            prepend_exe(executable, grok_review_args(schema_path))
+        }
+        ReviewWorkerConfig::Codex { executable, .. } => {
+            prepend_exe(executable, codex_review_args("base", "head", schema_path))
+        }
+        ReviewWorkerConfig::Antigravity { executable, .. } => {
+            prepend_exe(executable, antigravity_review_args(schema_path))
+        }
+        ReviewWorkerConfig::CursorLocal { executable, .. } => {
+            prepend_exe(executable, cursor_review_args())
+        }
+        ReviewWorkerConfig::OpenaiCompatible { .. } => return None,
+    })
+}
+
+fn prepend_exe(executable: &str, args: Vec<String>) -> Vec<String> {
+    let mut command = vec![executable.to_string()];
+    command.extend(args);
+    command
+}
+
+pub fn slice01_records(intent: &ObserverIntent) -> bool {
+    !matches!(intent, ObserverIntent::Eligible { .. })
 }
 
 pub fn required_checks_pass(policy: &ReviewPolicy, head_sha: &str, observed: &ShaChecks) -> bool {
@@ -268,7 +434,12 @@ pub fn observe(
             });
             return intents;
         }
-        WakeSignal::ConvertedToDraft => next.armed_sha = None,
+        WakeSignal::ConvertedToDraft => {
+            next.armed_sha = None;
+            intents.push(ObserverIntent::ObserveDraft {
+                sha: pr.head_sha.clone(),
+            });
+        }
         WakeSignal::Closed => {
             intents.push(ObserverIntent::Close {
                 sha: pr.head_sha.clone(),
@@ -307,243 +478,5 @@ pub fn bounded_pages(max_pages: usize) -> impl Iterator<Item = usize> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn valid(sha: &str) -> String {
-        serde_json::json!({"schema":REVIEW_SCHEMA_VERSION,"reviewed_sha":sha,"summary":"clean","findings":[]}).to_string()
-    }
-
-    #[test]
-    fn success_requires_exact_full_sha_and_valid_schema() {
-        let sha = "a".repeat(40);
-        assert!(ReviewResult::parse_success(&valid(&sha), &sha).is_ok());
-        assert_eq!(
-            ReviewResult::parse_success(&valid(&"b".repeat(40)), &sha),
-            Err(ReviewResultError::StaleSha)
-        );
-        assert_eq!(
-            ReviewResult::parse_success("{}", &sha),
-            Err(ReviewResultError::Malformed)
-        );
-        assert_eq!(
-            ReviewResult::parse_success(&valid("abc"), "abc"),
-            Err(ReviewResultError::StaleSha)
-        );
-    }
-
-    #[test]
-    fn codex_failure_fixtures_are_distinct_and_402_is_not_exhaustion() {
-        assert_eq!(
-            classify_codex_failure("ERROR: You've hit your usage limit. Try again at 1:00 PM"),
-            WorkerFailure::Exhausted
-        );
-        assert_eq!(
-            classify_codex_failure("HTTP 429: rate limit"),
-            WorkerFailure::RateLimited
-        );
-        assert_eq!(
-            classify_codex_failure("Unauthorized: authentication failed"),
-            WorkerFailure::Auth
-        );
-        assert_eq!(
-            classify_codex_failure("Permission denied by sandbox"),
-            WorkerFailure::Permission
-        );
-        assert_eq!(
-            classify_codex_failure("operation timed out"),
-            WorkerFailure::Timeout
-        );
-        assert_eq!(
-            classify_codex_failure("HTTP 402 Payment Required"),
-            WorkerFailure::ModelFailure
-        );
-        assert_eq!(
-            classify_codex_failure("model returned an error"),
-            WorkerFailure::ModelFailure
-        );
-    }
-
-    #[test]
-    fn codex_command_is_read_only_and_sha_pinned() {
-        let args = codex_review_args("base", "head", "schema.json");
-        assert_eq!(
-            args,
-            [
-                "exec",
-                "review",
-                "--sandbox",
-                "read-only",
-                "--json",
-                "--output-schema",
-                "schema.json",
-                "--base",
-                "base",
-                "--commit",
-                "head"
-            ]
-        );
-    }
-
-    #[test]
-    fn adapter_commands_are_frozen_without_execution() {
-        assert_eq!(
-            grok_review_args("schema"),
-            ["review", "--headless", "--schema", "schema"]
-        );
-        assert_eq!(
-            antigravity_review_args("schema"),
-            [
-                "--print",
-                "--output-format",
-                "stream-json",
-                "--schema",
-                "schema"
-            ]
-        );
-        assert_eq!(cursor_review_args(), ["--mode", "ask", "--print"]);
-    }
-
-    fn policy() -> ReviewPolicy {
-        ReviewPolicy {
-            controller: "liberado-shepherd".into(),
-            check_names: vec!["CI".into()],
-            shadow: false,
-        }
-    }
-    fn pr(repo: &str, sha: &str) -> PullRequestSnapshot {
-        PullRequestSnapshot {
-            repository: repo.into(),
-            number: 1,
-            head_sha: sha.into(),
-            open: true,
-            draft: false,
-            fork_head: false,
-        }
-    }
-    fn checks(sha: &str, conclusion: CheckConclusion) -> ShaChecks {
-        ShaChecks {
-            sha: sha.into(),
-            checks: vec![("CI".into(), conclusion)],
-        }
-    }
-
-    #[test]
-    fn eligibility_is_sha_exact_success_only_and_rejects_forks() {
-        let a = "a".repeat(40);
-        let b = "b".repeat(40);
-        let cycle = ReviewCycle {
-            armed_sha: Some(a.clone()),
-            accepted_sha: None,
-        };
-        assert!(review_eligible(
-            &policy(),
-            &pr("one/repo", &a),
-            &cycle,
-            &checks(&a, CheckConclusion::Success)
-        ));
-        assert!(!review_eligible(
-            &policy(),
-            &pr("one/repo", &a),
-            &cycle,
-            &checks(&b, CheckConclusion::Success)
-        ));
-        assert!(!review_eligible(
-            &policy(),
-            &pr("one/repo", &a),
-            &cycle,
-            &checks(&a, CheckConclusion::Pending)
-        ));
-        let mut fork = pr("one/repo", &a);
-        fork.fork_head = true;
-        assert!(!review_eligible(
-            &policy(),
-            &fork,
-            &cycle,
-            &checks(&a, CheckConclusion::Success)
-        ));
-    }
-
-    #[test]
-    fn wake_rules_do_not_infer_an_arm() {
-        let sha = "a".repeat(40);
-        let empty = ReviewCycle {
-            armed_sha: None,
-            accepted_sha: None,
-        };
-        for signal in [
-            WakeSignal::Poll,
-            WakeSignal::ReviewRequested,
-            WakeSignal::Opened,
-        ] {
-            assert!(
-                !observe(
-                    &policy(),
-                    &pr("one/repo", &sha),
-                    &empty,
-                    &checks(&sha, CheckConclusion::Success),
-                    signal
-                )
-                .iter()
-                .any(|intent| matches!(
-                    intent,
-                    ObserverIntent::Arm { .. } | ObserverIntent::Eligible { .. }
-                ))
-            );
-        }
-    }
-
-    #[test]
-    fn synchronize_is_one_draft_note_intent_and_never_review() {
-        let old = "a".repeat(40);
-        let new = "b".repeat(40);
-        let cycle = ReviewCycle {
-            armed_sha: Some(old.clone()),
-            accepted_sha: None,
-        };
-        let intents = observe(
-            &policy(),
-            &pr("one/repo", &new),
-            &cycle,
-            &checks(&new, CheckConclusion::Success),
-            WakeSignal::Synchronize { old_sha: old },
-        );
-        assert_eq!(
-            intents
-                .iter()
-                .filter(|i| matches!(i, ObserverIntent::SynchronizeDraftAndNote { .. }))
-                .count(),
-            1
-        );
-        assert!(
-            !intents
-                .iter()
-                .any(|i| matches!(i, ObserverIntent::Eligible { .. }))
-        );
-    }
-
-    #[test]
-    fn repository_identity_and_shadow_lease_are_explicit() {
-        assert_ne!(
-            pr("one/repo", &"a".repeat(40)),
-            pr("two/repo", &"a".repeat(40))
-        );
-        let mut p = policy();
-        p.shadow = true;
-        assert!(!controller_lease_required(&p));
-    }
-
-    #[test]
-    fn api_paths_are_sha_exact_and_page_iteration_is_bounded() {
-        let paths = check_endpoints("owner/repo", "abc");
-        assert_eq!(
-            paths[0],
-            "/repos/owner/repo/commits/abc/check-runs?filter=latest&per_page=100"
-        );
-        assert_eq!(
-            paths[1],
-            "/repos/owner/repo/commits/abc/status?per_page=100"
-        );
-        assert_eq!(bounded_pages(3).collect::<Vec<_>>(), [1, 2, 3]);
-    }
-}
+#[path = "pr_review_tests.rs"]
+mod tests;

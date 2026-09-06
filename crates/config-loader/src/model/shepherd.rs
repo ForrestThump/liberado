@@ -146,3 +146,77 @@ fn env_ref(value: &str) -> bool {
             .bytes()
             .all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit() || byte == b'_')
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn native_project() -> ShepherdProjectConfig {
+        ShepherdProjectConfig {
+            name: "example".into(),
+            repository: "owner/repo".into(),
+            coding_project: "example".into(),
+            base_branch: "main".into(),
+            profile: "coding-unattended".into(),
+            check_names: vec!["CI".into()],
+            max_kickbacks: None,
+            cold_reviews: Some(0),
+            cold_review_max_turns: None,
+            max_concurrent_goals: None,
+            poll_seconds: None,
+            controller: Some("liberado-shepherd".into()),
+            review_profile: Some("coding-review-unattended".into()),
+            gate: Some("ready_and_green_tip".into()),
+            auth: Some("github".into()),
+        }
+    }
+
+    fn with_auth(mut shepherd: ShepherdConfig) -> ShepherdConfig {
+        shepherd.auth.push(ShepherdAuthConfig {
+            name: "github".into(),
+            kind: "token".into(),
+            token_ref: "LIBERADO_GITHUB_TOKEN".into(),
+            webhook_secret_ref: Some("LIBERADO_GITHUB_WEBHOOK_SECRET".into()),
+            expected_login: None,
+        });
+        shepherd
+    }
+
+    #[test]
+    fn native_review_policy_is_fail_closed() {
+        let mut shepherd = with_auth(ShepherdConfig {
+            projects: vec![native_project()],
+            ..ShepherdConfig::default()
+        });
+        assert!(validate(&shepherd).is_ok());
+        shepherd.projects[0].cold_reviews = Some(2);
+        assert!(validate(&shepherd).is_err());
+        shepherd.projects[0].cold_reviews = Some(0);
+        shepherd.projects[0].check_names.clear();
+        assert!(validate(&shepherd).is_err());
+        shepherd.projects[0].check_names = vec!["CI".into()];
+        shepherd.auth[0].token_ref = "github_pat_literal".into();
+        assert!(validate(&shepherd).is_err());
+    }
+
+    #[test]
+    fn polling_bounds_and_no_hardcoded_repository() {
+        let mut shepherd = ShepherdConfig {
+            review: ShepherdReviewConfig {
+                enabled: true,
+                delivery: "webhook".into(),
+                poll_seconds: 120,
+                reconcile_on_start: true,
+                max_pages: 10,
+                page_size: 100,
+            },
+            ..ShepherdConfig::default()
+        };
+        assert!(validate(&shepherd).is_err());
+        shepherd.review.delivery = "poll".into();
+        shepherd.review.page_size = 0;
+        assert!(validate(&shepherd).is_err());
+        let identity = format!("{}Thump", "Forrest");
+        assert!(!include_str!("shepherd.rs").contains(&identity));
+    }
+}

@@ -798,3 +798,38 @@ fn invocation_carries_the_secondary_flags() {
         }
     );
 }
+
+#[test]
+fn review_invocation_is_dry_run_only() {
+    let sha = "a".repeat(40);
+    let parsed = parse_invocation(&argv(&[
+        "review",
+        "--project",
+        "example",
+        "--pr",
+        "12",
+        "--sha",
+        &sha,
+        "--dry-run",
+    ]))
+    .unwrap();
+    assert_eq!(
+        parsed.mode,
+        Invocation::ReviewDryRun {
+            project: "example".into(),
+            pr: 12,
+            sha: sha.clone()
+        }
+    );
+    let error = parse_invocation(&argv(&[
+        "review",
+        "--project",
+        "example",
+        "--pr",
+        "12",
+        "--sha",
+        &sha,
+    ]))
+    .unwrap_err();
+    assert!(error.contains("dry-run"), "{error}");
+}
