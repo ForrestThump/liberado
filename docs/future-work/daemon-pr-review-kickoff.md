@@ -360,16 +360,17 @@ explicit ownership and no ability to arm review.
 - Cursor cloud, paid emergency route, or cross-harness conversation continuity.
 - Any hardcoded Liberado repository identity or URL.
 
-## Remaining Forrest checklist
+## Forrest approval (locked 2026-09-05 ~10:28 PM CT)
 
-- [ ] Approve checklist C: immutable COMMENT plus a separate blocker checkbox issue comment that
-  Liberado never reads.
-- [ ] Approve explicit nonempty `check_names` for Slices 1–3; defer branch-protection discovery.
-- [ ] Approve a fine-grained PAT plus `expected_login` for the first writes; defer a GitHub App.
-- [ ] Approve one normal review per SHA + policy version, with audited CLI repeats.
-- [ ] Approve declared order with Grok disabled until headless proof; Codex starts production.
-- [ ] Confirm daemon-owned synchronize-to-draft plus one short old-to-new SHA note.
-- [ ] Confirm human merge stays the hard gate and fallback cannot spend money without a future
-  explicit policy.
+ForrestThump approved Sol pass 2 (`6a189518`) and all checklist defaults:
 
-Approval of all seven lets Maintainer dispatch Slices 0 and 1 without another architecture choice.
+1. Checklist C — immutable COMMENT + separate SHA-pinned checkbox issue comment.
+2. Explicit nonempty `check_names` for Slices 1–3 (fail-closed).
+3. Fine-grained PAT + `expected_login` for initial write slices.
+4. One normal review per SHA + policy version; audited CLI for rare same-tip repeats.
+5. Grok first in declared order but `enabled=false` until headless proof; Codex first enabled production reviewer.
+6. Daemon-owned synchronize-to-draft + one short old→new SHA note.
+7. Human merge remains the hard gate; no paid fallback without a later explicit policy.
+
+Slices 0 and 1 need no further architecture decision. Implementation may proceed.
+
