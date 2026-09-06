@@ -33,6 +33,28 @@ fn sample_pr(labels: &[&str]) -> Pr {
 }
 
 #[test]
+fn repair_goal_id_is_a_stable_ulid_for_the_command() {
+    let command = "repair:7:abc1234:1";
+    let first = repair_goal_id(command);
+
+    assert!(first.parse::<ulid::Ulid>().is_ok(), "{first}");
+    assert_eq!(first, repair_goal_id(command));
+
+    let second = repair_goal_id("repair:7:abc1234:2");
+    assert_ne!(first, second);
+    assert!(
+        first < second,
+        "ULIDs should be time sortable based on kicks"
+    );
+
+    let pr8 = repair_goal_id("repair:8:xyz:1");
+    assert!(
+        second < pr8,
+        "ULIDs should be time sortable based on PR number"
+    );
+}
+
+#[test]
 fn pending_parent_rejects_a_root_path() {
     let err = pending_parent(Path::new("/")).unwrap_err().to_string();
     assert!(err.contains("no parent"), "{err}");
@@ -76,7 +98,7 @@ fn dry_kickback_does_not_label_the_pr() {
     let cfg = test_config(temp.path().to_path_buf());
     let mut pr = sample_pr(&[RERUN]);
     let new = BTreeSet::from(["job|test".into()]);
-    kickback(&cfg, &mut pr, true, &new, &BTreeSet::new(), 0).unwrap();
+    kickback(&cfg, &mut pr, true, &new, &BTreeSet::new(), 0, &None).unwrap();
     assert!(
         !pr.labels
             .iter()
@@ -87,6 +109,19 @@ fn dry_kickback_does_not_label_the_pr() {
         pr.has(RERUN),
         "--dry-run must leave the rerun label in place"
     );
+}
+
+#[test]
+fn kickback_without_a_github_run_id_fails_closed() {
+    let temp = tempfile::tempdir().unwrap();
+    let cfg = test_config(temp.path().to_path_buf());
+    let mut pr = sample_pr(&[RERUN]);
+    let new = BTreeSet::from(["job|test".into()]);
+
+    kickback(&cfg, &mut pr, false, &new, &BTreeSet::new(), 0, &None).unwrap();
+
+    assert_eq!(pr.labels, vec![RERUN]);
+    assert!(!cfg.root.join(".liberado").exists());
 }
 
 #[test]

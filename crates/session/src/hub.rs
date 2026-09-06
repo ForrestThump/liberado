@@ -11,6 +11,7 @@ use crate::event::{SessionEvent, SessionEventKind};
 use crate::goal::{
     GoalResult, GoalSessionRecord, GoalSpec, SessionGrant, SessionStatus, TerminalKind, Visibility,
 };
+use crate::record_store::InsertOutcome;
 use crate::record_store::{SessionRecordStore, TurnAuthor};
 use crate::runner::{DomainPackRunner, HumanInput, InputChannel, PackContext, PackError};
 
@@ -203,7 +204,9 @@ impl GoalSessionHub {
         };
         let id = record.id.clone();
         goal.id = Some(id.clone());
-        self.store.insert(record).await;
+        if self.store.insert_if_absent(record).await == InsertOutcome::Existing {
+            return Ok(id);
+        }
 
         let (cancel_tx, cancel_rx) = watch::channel(false);
         self.cancels.lock().await.insert(id.clone(), cancel_tx);
@@ -213,15 +216,7 @@ impl GoalSessionHub {
         // `send_input`; *dropping* it here (rather than storing it) closes the channel, so a pack
         // that tries to await input on an unpermitted session gets `Closed` immediately instead of
         // hanging until its idle budget expires.
-        if interactive {
-            self.inputs.lock().await.insert(id.clone(), input_tx);
-        } else {
-            drop(input_tx);
-            debug!(
-                session = %id,
-                "session grant omits AskHuman — running non-interactively (input channel closed)"
-            );
-        }
+        Self::register_input(&self.inputs, &id, interactive, input_tx).await;
         let idle_budget = goal.max_idle_secs.map(Duration::from_secs);
         let inputs = InputChannel::new(input_rx, idle_budget);
 

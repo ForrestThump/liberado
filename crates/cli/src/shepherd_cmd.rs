@@ -713,8 +713,18 @@ fn client() -> reqwest::blocking::Client {
         .build()
         .expect("HTTP client")
 }
-fn start_goal(cfg: &Config, description: String, max_turns: u32) -> Option<String> {
-    let body = json!({"description":description,"domain":"coding","max_turns":max_turns,"profile":cfg.profile,"payload":{"project":cfg.project,"interactive":false}});
+fn start_goal_with(
+    cfg: &Config,
+    description: String,
+    max_turns: u32,
+    id: Option<&str>,
+    extra_payload: Value,
+) -> Option<String> {
+    let mut payload = json!({"project":cfg.project,"interactive":false});
+    if let (Some(target), Some(extra)) = (payload.as_object_mut(), extra_payload.as_object()) {
+        target.extend(extra.clone());
+    }
+    let body = json!({"id":id,"description":description,"domain":"coding","max_turns":max_turns,"profile":cfg.profile,"payload":payload});
     let v: Value = client()
         .post(format!("{}/api/goals", cfg.daemon))
         .json(&body)
@@ -726,6 +736,9 @@ fn start_goal(cfg: &Config, description: String, max_turns: u32) -> Option<Strin
         .as_str()
         .or_else(|| v["session_id"].as_str())
         .map(str::to_owned)
+}
+fn start_goal(cfg: &Config, description: String, max_turns: u32) -> Option<String> {
+    start_goal_with(cfg, description, max_turns, None, json!({}))
 }
 fn active_goals(cfg: &Config) -> usize {
     let v: Value = match client()

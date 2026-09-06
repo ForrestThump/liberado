@@ -234,11 +234,17 @@ fn apply_worker(record: &mut TaskRecord, kind: &TaskEventKind) -> bool {
             true
         }
         TaskEventKind::WorkerFinished {
+            run_id,
             status,
             external_session_id,
             blocking_issue,
-            ..
+            revision,
         } => {
+            let applies_to_head = revision.is_none() || revision == &record.head_revision;
+            let applies_to_run = record.active_run_id.as_deref() == Some(run_id.as_str());
+            if !applies_to_head || !applies_to_run {
+                return true;
+            }
             record.active_run_id = None;
             if let Some(session) = external_session_id {
                 record.external_session_id = Some(session.clone());
@@ -261,19 +267,37 @@ fn apply_worker(record: &mut TaskRecord, kind: &TaskEventKind) -> bool {
         TaskEventKind::CommitProduced {
             commit_sha,
             files_changed,
+            revision,
+            run_id,
             ..
         } => {
-            if !record.commits.contains(commit_sha) {
-                record.commits.push(commit_sha.clone());
-            }
-            for path in files_changed {
-                if !record.files_changed.contains(path) {
-                    record.files_changed.push(path.clone());
-                }
-            }
+            apply_commit(record, commit_sha, files_changed, revision, run_id);
             true
         }
         _ => false,
+    }
+}
+
+fn apply_commit(
+    record: &mut TaskRecord,
+    commit_sha: &str,
+    files_changed: &[String],
+    revision: &Option<String>,
+    run_id: &Option<String>,
+) {
+    if revision.is_some() && revision != &record.head_revision {
+        return;
+    }
+    if run_id.is_some() && run_id.as_deref() != record.active_run_id.as_deref() {
+        return;
+    }
+    if !record.commits.iter().any(|commit| commit == commit_sha) {
+        record.commits.push(commit_sha.to_string());
+    }
+    for path in files_changed {
+        if !record.files_changed.contains(path) {
+            record.files_changed.push(path.clone());
+        }
     }
 }
 
@@ -439,7 +463,9 @@ fn apply_repair_decision(record: &mut TaskRecord, kind: &TaskEventKind) {
             record.rerun_count = record.rerun_count.saturating_add(1);
             record.github_run_id = github_run_id.or(record.github_run_id);
         }
-        TaskEventKind::RepairRequested { goal_id, reason } => {
+        TaskEventKind::RepairRequested {
+            goal_id, reason, ..
+        } => {
             record.repair_count = record.repair_count.saturating_add(1);
             record.status = TaskStatus::Repairing;
             record.current_diagnosis = Some(reason.clone());

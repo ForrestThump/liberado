@@ -101,10 +101,11 @@ fn test_live_opencode_dispatch() {
 
     // 4. Test CI kickback repair flow
     let repair_result = supervisor
-        .handle_ci_failure(
+        .execute_repair_command(
             &mut ledger,
             vec!["Lint failure: CONTRIBUTING.md missing Code of Conduct section".into()],
             Some("CONTRIBUTING.md: check failed: no Code of Conduct section found".into()),
+            None,
         )
         .expect("handle ci failure");
 

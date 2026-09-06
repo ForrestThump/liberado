@@ -13,7 +13,10 @@ mod event;
 mod goal;
 pub use goal::check_session_invariants;
 mod hub;
+mod hub_start;
 mod life_demo;
+#[cfg(test)]
+mod life_demo_idempotency_tests;
 mod record_store;
 mod runner;
 mod store;
@@ -29,7 +32,7 @@ pub use goal::{
 };
 pub use hub::{GoalSessionHub, SendInputError, SessionAlert, SessionSnapshot};
 pub use life_demo::LifeOpsDemoRunner;
-pub use record_store::{SessionRecordStore, TurnAuthor};
+pub use record_store::{InsertOutcome, SessionRecordStore, TurnAuthor};
 pub use runner::{
     DomainPackRunner, HumanInput, InputChannel, InputOutcome, PackContext, PackError,
 };

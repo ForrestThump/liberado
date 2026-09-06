@@ -47,6 +47,8 @@ fn ledger_rejects_non_task_created_as_first_event() {
             commit_sha: "abc1234".into(),
             message: "initial commit".into(),
             files_changed: vec!["src/lib.rs".into()],
+            revision: None,
+            run_id: None,
         },
     );
     let result = TaskLedger::new(event);
@@ -109,6 +111,8 @@ fn ledger_event_lifecycle_projection() {
                 commit_sha: "c0ffee1".into(),
                 message: "Add directory walk".into(),
                 files_changed: vec!["crates/vault/src/lib.rs".into()],
+                revision: None,
+                run_id: None,
             },
         ))
         .unwrap();
@@ -221,6 +225,8 @@ fn ledger_serialization_round_trip() {
                 commit_sha: "fedcba9".into(),
                 message: "feat: implemented".into(),
                 files_changed: vec!["Cargo.toml".into()],
+                revision: None,
+                run_id: None,
             },
         ))
         .unwrap();
@@ -304,6 +310,7 @@ fn disk_ledger_create_in_reloads_existing_for_same_task_id() {
                 status: WorkerStatus::Completed,
                 external_session_id: None,
                 blocking_issue: None,
+                revision: None,
             },
         ))
         .expect("append after reload");
@@ -349,6 +356,8 @@ fn continuation_context_builder_generates_markdown() {
                 commit_sha: "a1b2c3d".into(),
                 message: "Initial walker".into(),
                 files_changed: vec!["crates/vault/src/lib.rs".into()],
+                revision: None,
+                run_id: None,
             },
         ))
         .unwrap();
@@ -517,7 +526,7 @@ fn supervisor_dispatch_task_initializes_ledger_and_records_run() {
 }
 
 #[test]
-fn supervisor_handle_ci_failure_triggers_worker_kickback() {
+fn supervisor_executes_one_requested_repair() {
     let temp = tempfile::TempDir::new().expect("tempdir");
     let mock = std::sync::Arc::new(MockWorker::new(vec![
         vec!["commit-init".into()],
@@ -535,13 +544,23 @@ fn supervisor_handle_ci_failure_triggers_worker_kickback() {
     .with_acceptance_criteria(vec!["Trace spans must be named".into()]);
 
     let (mut ledger, _result) = supervisor.dispatch_task(&req).expect("dispatch");
+    ledger
+        .append(TaskEvent::new(
+            "evt-head-repair",
+            "task-401",
+            TaskEventKind::HeadRevisionObserved {
+                sha: "repair-head".into(),
+            },
+        ))
+        .expect("observe repair head");
 
     // Handle CI failure kickback
     let repair_result = supervisor
-        .handle_ci_failure(
+        .execute_repair_command(
             &mut ledger,
             vec!["test_trace_span_timing".into()],
             Some("assertion failed: duration > 0".into()),
+            Some("repair-head".into()),
         )
         .expect("handle CI failure");
 
@@ -576,6 +595,14 @@ fn supervisor_handle_ci_failure_triggers_worker_kickback() {
         record.external_session_id.as_deref(),
         Some("mock-session-123")
     );
+    assert!(ledger.events().iter().any(|event| matches!(
+        &event.payload,
+        TaskEventKind::CommitProduced {
+            commit_sha,
+            revision: Some(revision),
+            ..
+        } if commit_sha == "commit-repair" && revision == "repair-head"
+    )));
 }
 
 #[test]
@@ -594,10 +621,11 @@ fn supervisor_restarts_without_session_using_full_task_context() {
     let (mut ledger, _) = supervisor.dispatch_task(&req).expect("dispatch");
 
     supervisor
-        .handle_ci_failure(
+        .execute_repair_command(
             &mut ledger,
             vec!["context_test".into()],
             Some("expected context".into()),
+            None,
         )
         .expect("fresh repair");
 

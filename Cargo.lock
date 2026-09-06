@@ -5544,6 +5544,7 @@ dependencies = [
  "tracing-subscriber",
  "tree-sitter",
  "tree-sitter-rust",
+ "ulid",
 ]
 
 [[package]]
