@@ -46,8 +46,8 @@ check:
 # Other hosts defer coverage to `just ready`, which runs the exact Linux gate
 # natively or through Debian WSL. Host coverage is not a reliable proxy.
 # The baseline is not rewritten while that check is red. On Linux success,
-# rewrite `crap-baseline.json`. If the tree is otherwise clean, a Linux
-# rewrite is amended onto HEAD. GitHub never writes that file.
+# ratchet `crap-baseline.json` without saving worse existing scores. If the tree
+# is otherwise clean, a Linux update is amended onto HEAD. GitHub never writes it.
 # Console: log path, one ok/FAILED per gate, extracted errors on red.
 # Full child output: `.liberado/ci.log`.
 ci:
@@ -106,7 +106,7 @@ function-complexity-ratchet:
 module-health:
     cargo run --locked --quiet -p liberado-cli -- ci modules
 
-# Check first, then replace the structural-health baseline with current values.
+# Check first, then save only non-worsening structural-health values.
 module-health-ratchet:
     cargo run --locked --quiet -p liberado-cli -- ci modules-ratchet
 

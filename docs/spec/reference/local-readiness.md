@@ -46,9 +46,12 @@ permission-sensitive tests retain their meaning; set `LIBERADO_DEBIAN_WSL_USER` 
 login. Windows checkout paths are changed to forward-slash form before `wslpath` maps the bundle,
 so a worktree such as `C:\tmp\review` keeps each path component intact.
 
-On Linux, `just ci` also runs and ratchets CRAP directly. On other hosts it defers CRAP to final
-readiness. This avoids treating host-sensitive coverage as a proxy for the authoritative Linux
-result and avoids running the coverage suite twice before the WSL check.
+On Linux, `just ci` also runs and ratchets CRAP directly. The write adds passing new functions and
+saves improvements. If an existing function has worse CRAP or cyclomatic complexity, the write
+keeps its old complete entry. Thus, an ignored score increase below the CRAP floor cannot raise the
+baseline. A regression that the check rejects cannot write. On other hosts, `just ci` defers CRAP
+to final readiness. This avoids treating host-sensitive coverage as a proxy for the authoritative
+Linux result and avoids running the coverage suite twice before the WSL check.
 
 The host-stable function ratchet is configured in `function-complexity.toml` and committed in
 `function-complexity-baseline.json`. Existing functions may not gain cyclomatic complexity. New
