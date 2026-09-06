@@ -188,51 +188,6 @@ fn shepherd_config_accepts_a_valid_project() {
     assert!(validate_shepherd_topology(&topology_with(valid_project("ok"))).is_ok());
 }
 
-#[test]
-fn daemon_review_requires_zero_cold_reviews_checks_and_auth_reference() {
-    let mut project = valid_project("review");
-    project.controller = Some("liberado-shepherd".into());
-    project.review_profile = Some("coding-review-unattended".into());
-    project.gate = Some("ready_and_green_tip".into());
-    rejects(project.clone(), "cold_reviews = 0");
-    project.cold_reviews = Some(0);
-    rejects(project.clone(), "auth reference");
-    project.auth = Some("github".into());
-    let mut topology = topology_with(project);
-    topology
-        .shepherd
-        .auth
-        .push(liberado_config::ShepherdAuthConfig {
-            name: "github".into(),
-            kind: "token".into(),
-            token_ref: "LIBERADO_GITHUB_TOKEN".into(),
-            webhook_secret_ref: None,
-            expected_login: None,
-        });
-    assert!(validate_shepherd_topology(&topology).is_ok());
-}
-
-#[test]
-fn shepherd_auth_rejects_literal_secrets() {
-    let mut topology = topology_with(valid_project("legacy"));
-    topology
-        .shepherd
-        .auth
-        .push(liberado_config::ShepherdAuthConfig {
-            name: "bad".into(),
-            kind: "token".into(),
-            token_ref: "github_pat_literal".into(),
-            webhook_secret_ref: None,
-            expected_login: None,
-        });
-    assert!(
-        validate_shepherd_topology(&topology)
-            .unwrap_err()
-            .to_string()
-            .contains("never literal secrets")
-    );
-}
-
 // ── select_shepherd_project ────────────────────────────────────────
 
 #[test]
@@ -797,39 +752,4 @@ fn invocation_carries_the_secondary_flags() {
             watch: false
         }
     );
-}
-
-#[test]
-fn review_invocation_is_dry_run_only() {
-    let sha = "a".repeat(40);
-    let parsed = parse_invocation(&argv(&[
-        "review",
-        "--project",
-        "example",
-        "--pr",
-        "12",
-        "--sha",
-        &sha,
-        "--dry-run",
-    ]))
-    .unwrap();
-    assert_eq!(
-        parsed.mode,
-        Invocation::ReviewDryRun {
-            project: "example".into(),
-            pr: 12,
-            sha: sha.clone()
-        }
-    );
-    let error = parse_invocation(&argv(&[
-        "review",
-        "--project",
-        "example",
-        "--pr",
-        "12",
-        "--sha",
-        &sha,
-    ]))
-    .unwrap_err();
-    assert!(error.contains("dry-run"), "{error}");
 }

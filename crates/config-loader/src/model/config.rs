@@ -357,7 +357,6 @@ impl Config {
         self.validate_session_profiles()?;
         self.validate_profile_stamp()?;
         self.validate_projects()?;
-        super::shepherd::validate(&self.topology.shepherd)?;
         Ok(())
     }
 
@@ -773,7 +772,7 @@ impl Config {
                 )));
             }
         }
-        Ok(())
+        super::shepherd::validate(&self.topology.shepherd)
     }
 }
 
