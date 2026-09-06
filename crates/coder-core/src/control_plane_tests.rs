@@ -112,7 +112,7 @@ fn ledger_event_lifecycle_projection() {
                 message: "Add directory walk".into(),
                 files_changed: vec!["crates/vault/src/lib.rs".into()],
                 revision: None,
-            run_id: None,
+                run_id: None,
             },
         ))
         .unwrap();
@@ -226,7 +226,7 @@ fn ledger_serialization_round_trip() {
                 message: "feat: implemented".into(),
                 files_changed: vec!["Cargo.toml".into()],
                 revision: None,
-            run_id: None,
+                run_id: None,
             },
         ))
         .unwrap();
@@ -357,7 +357,7 @@ fn continuation_context_builder_generates_markdown() {
                 message: "Initial walker".into(),
                 files_changed: vec!["crates/vault/src/lib.rs".into()],
                 revision: None,
-            run_id: None,
+                run_id: None,
             },
         ))
         .unwrap();

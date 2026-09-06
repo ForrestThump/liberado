@@ -9241,8 +9241,8 @@
       "function": "cancellation_requested",
       "line": 210,
       "cyclomatic": 4.0,
-      "coverage": 90.0,
-      "crap": 4.016,
+      "coverage": 80.0,
+      "crap": 4.128,
       "crate": "liberado-coder-agent"
     },
     {
@@ -9806,7 +9806,7 @@
     {
       "file": "crates/coder-core/src/control_plane/events.rs",
       "function": "TaskEvent::new",
-      "line": 121,
+      "line": 123,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -9815,7 +9815,7 @@
     {
       "file": "crates/coder-core/src/control_plane/events.rs",
       "function": "TaskEvent::with_command_id",
-      "line": 135,
+      "line": 137,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -10544,7 +10544,7 @@
     {
       "file": "crates/coder-core/src/control_plane/record.rs",
       "function": "apply_ci_observed",
-      "line": 385,
+      "line": 390,
       "cyclomatic": 8.0,
       "coverage": 89.28571428571429,
       "crap": 8.07871720116618,
@@ -10553,16 +10553,16 @@
     {
       "file": "crates/coder-core/src/control_plane/record.rs",
       "function": "apply_commit",
-      "line": 280,
-      "cyclomatic": 6.0,
+      "line": 281,
+      "cyclomatic": 8.0,
       "coverage": 100.0,
-      "crap": 6.0,
+      "crap": 8.0,
       "crate": "liberado-coder-core"
     },
     {
       "file": "crates/coder-core/src/control_plane/record.rs",
       "function": "apply_decision",
-      "line": 445,
+      "line": 450,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -10571,7 +10571,7 @@
     {
       "file": "crates/coder-core/src/control_plane/record.rs",
       "function": "apply_evidence",
-      "line": 326,
+      "line": 331,
       "cyclomatic": 10.0,
       "coverage": 79.06976744186046,
       "crap": 10.916900398707032,
@@ -10580,7 +10580,7 @@
     {
       "file": "crates/coder-core/src/control_plane/record.rs",
       "function": "apply_gate_decision",
-      "line": 475,
+      "line": 480,
       "cyclomatic": 6.0,
       "coverage": 47.61904761904761,
       "crap": 11.17395529640428,
@@ -10598,7 +10598,7 @@
     {
       "file": "crates/coder-core/src/control_plane/record.rs",
       "function": "apply_ready_decided",
-      "line": 417,
+      "line": 422,
       "cyclomatic": 2.0,
       "coverage": 100.0,
       "crap": 2.0,
@@ -10607,7 +10607,7 @@
     {
       "file": "crates/coder-core/src/control_plane/record.rs",
       "function": "apply_repair_decision",
-      "line": 450,
+      "line": 455,
       "cyclomatic": 6.0,
       "coverage": 75.0,
       "crap": 6.5625,
@@ -10616,7 +10616,7 @@
     {
       "file": "crates/coder-core/src/control_plane/record.rs",
       "function": "apply_repo",
-      "line": 299,
+      "line": 304,
       "cyclomatic": 8.0,
       "coverage": 80.95238095238095,
       "crap": 8.442284850448116,
@@ -10643,7 +10643,7 @@
     {
       "file": "crates/coder-core/src/control_plane/record.rs",
       "function": "ready_claim_matches",
-      "line": 439,
+      "line": 444,
       "cyclomatic": 3.0,
       "coverage": 100.0,
       "crap": 3.0,
@@ -10762,8 +10762,8 @@
       "function": "append_commits",
       "line": 252,
       "cyclomatic": 3.0,
-      "coverage": 95.0,
-      "crap": 3.001125,
+      "coverage": 95.23809523809524,
+      "crap": 3.000971817298348,
       "crate": "liberado-coder-core"
     },
     {

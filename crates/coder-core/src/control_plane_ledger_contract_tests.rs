@@ -251,8 +251,14 @@ fn stale_commit_produced_cannot_pollute_active_run() {
     let record = ledger.project().unwrap();
     assert_eq!(record.active_run_id.as_deref(), Some("run-current"));
     assert_eq!(record.head_revision.as_deref(), Some("current-head"));
-    assert!(record.commits.is_empty(), "a stale commit produced must not pollute commits");
-    assert!(record.files_changed.is_empty(), "a stale commit produced must not pollute files_changed");
+    assert!(
+        record.commits.is_empty(),
+        "a stale commit produced must not pollute commits"
+    );
+    assert!(
+        record.files_changed.is_empty(),
+        "a stale commit produced must not pollute files_changed"
+    );
 }
 
 fn approve_review(ledger: &mut TaskLedger, round: usize) {
