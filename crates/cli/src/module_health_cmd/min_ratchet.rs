@@ -8,14 +8,19 @@ use std::path::Path;
 
 pub(super) fn write(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
     let current = current_report(root)?;
+    let ratcheted = report_to_write(root, current)?;
+    write_report(&root.join(BASELINE_FILE), &ratcheted)?;
+    eprintln!("[module health] ratcheted {BASELINE_FILE}");
+    Ok(())
+}
+
+fn report_to_write(root: &Path, current: Report) -> Result<Report, Box<dyn std::error::Error>> {
     let ratcheted = if root.join(BASELINE_FILE).is_file() {
         ratcheted_report(&read_report(&root.join(BASELINE_FILE))?, &current)
     } else {
         current
     };
-    write_report(&root.join(BASELINE_FILE), &ratcheted)?;
-    eprintln!("[module health] ratcheted {BASELINE_FILE}");
-    Ok(())
+    Ok(ratcheted)
 }
 
 /// Compare against the existing baseline when there is one. Otherwise, produce an initial

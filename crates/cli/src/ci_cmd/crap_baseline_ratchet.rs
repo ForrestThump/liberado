@@ -28,15 +28,30 @@ pub(super) fn write_and_stage_ratcheted_baseline(
     Ok(())
 }
 
-fn ratchet_crap_baseline(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
+pub(crate) fn ratchet_crap_baseline(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
     let baseline_path = root.join(BASELINE_FILE);
     let current_path = root.join(CURRENT_REPORT);
-    let mut current: Value = serde_json::from_slice(&std::fs::read(&current_path)?)?;
+    let current: Value = serde_json::from_slice(&std::fs::read(&current_path)?)?;
+    let ratcheted = ratcheted_crap_report(&baseline_path, current)?;
+    write_crap_report(&baseline_path, &ratcheted)
+}
+
+fn ratcheted_crap_report(
+    baseline_path: &Path,
+    mut current: Value,
+) -> Result<Value, Box<dyn std::error::Error>> {
     if baseline_path.is_file() {
-        let old: Value = serde_json::from_slice(&std::fs::read(&baseline_path)?)?;
+        let old: Value = serde_json::from_slice(&std::fs::read(baseline_path)?)?;
         keep_worse_existing_crap_entries(&old, &mut current)?;
     }
-    let serialized = serde_json::to_string_pretty(&current)?;
+    Ok(current)
+}
+
+fn write_crap_report(
+    baseline_path: &Path,
+    report: &Value,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let serialized = serde_json::to_string_pretty(report)?;
     std::fs::write(baseline_path, format!("{serialized}\n"))?;
     Ok(())
 }

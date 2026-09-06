@@ -4,12 +4,12 @@ use super::new_function_ceiling::compare_args;
 use super::{
     BASELINE_FILE, CI_LOG_FILE, CRAP_CEILING, CRAP_CEILING_GH, CRAP_CEILING_HINT,
     CRAP_COMPARE_SUMMARY, CRAP_EMPTY_BASELINE, CRAP_HOST_CEILING_ONLY, CRAP_REGRESSION_GH,
-    CRAP_REGRESSION_HINT, CRAP_REGRESSION_MIN, CRAP_REPORT_ARGS, CRAP_REPORT_THRESHOLD, CiLog,
-    EXTRACT_MAX_LINES, LCOV_FILE, LLVM_COV_ARGS, StageOutcome, announce_compare,
-    baseline_has_entries, compare_banners, compare_to_baseline, crap_failure_hint,
-    emit_crap_failure, exe_lives_in_cargo_target, extract_ci_failures, git,
-    keep_worse_existing_crap_entries, porcelain_path, relativize_json_file, relativize_lcov,
-    repo_relative_source_path, repository_root, run_cmd, stage_ratcheted_baseline,
+    CRAP_REGRESSION_HINT, CRAP_REGRESSION_MIN, CRAP_REPORT_ARGS, CRAP_REPORT_THRESHOLD,
+    CURRENT_REPORT, CiLog, EXTRACT_MAX_LINES, LCOV_FILE, LLVM_COV_ARGS, StageOutcome,
+    announce_compare, baseline_has_entries, compare_banners, compare_to_baseline,
+    crap_failure_hint, emit_crap_failure, exe_lives_in_cargo_target, extract_ci_failures, git,
+    keep_worse_existing_crap_entries, porcelain_path, ratchet_crap_baseline, relativize_json_file,
+    relativize_lcov, repo_relative_source_path, repository_root, run_cmd, stage_ratcheted_baseline,
     uses_per_function_ratchet, write_after_success,
 };
 use liberado_common::process::std_command;
@@ -411,6 +411,42 @@ fn crap_improvement_and_passing_new_function_are_saved() {
     keep_worse_existing_crap_entries(&old, &mut current).unwrap();
 
     assert_eq!(current["entries"], serde_json::json!([improved, new_entry]));
+}
+
+#[test]
+fn crap_ratchet_writes_the_best_complete_report() {
+    let temp = tempdir().unwrap();
+    let root = temp.path();
+    fs::create_dir(root.join(".liberado")).unwrap();
+    let old_entry = crap_entry(4.016, 4.0, 99.0);
+    let mut new_entry = crap_entry(2.0, 2.0, 100.0);
+    new_entry["function"] = "new_function".into();
+    let old = crap_report(serde_json::json!([old_entry.clone()]));
+    let current = crap_report(serde_json::json!([
+        crap_entry(4.128, 4.0, 98.0),
+        new_entry.clone()
+    ]));
+    fs::write(
+        root.join(BASELINE_FILE),
+        serde_json::to_vec_pretty(&old).unwrap(),
+    )
+    .unwrap();
+    fs::write(
+        root.join(CURRENT_REPORT),
+        serde_json::to_vec_pretty(&current).unwrap(),
+    )
+    .unwrap();
+
+    ratchet_crap_baseline(root).unwrap();
+
+    let saved: serde_json::Value =
+        serde_json::from_slice(&fs::read(root.join(BASELINE_FILE)).unwrap()).unwrap();
+    assert_eq!(saved["entries"], serde_json::json!([old_entry, new_entry]));
+    assert!(
+        fs::read_to_string(root.join(BASELINE_FILE))
+            .unwrap()
+            .ends_with('\n')
+    );
 }
 
 #[test]

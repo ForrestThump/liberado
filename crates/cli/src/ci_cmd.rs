@@ -147,7 +147,7 @@ mod new_function_ceiling;
 mod runtime_support;
 
 #[cfg(test)]
-pub(super) use crap_baseline_ratchet::keep_worse_existing_crap_entries;
+pub(super) use crap_baseline_ratchet::{keep_worse_existing_crap_entries, ratchet_crap_baseline};
 use crap_baseline_ratchet::{write_after_success, write_and_stage_ratcheted_baseline};
 pub use dispatch::run;
 use runtime_support::{announce_staged_baseline, move_running_image, vacated_image_destination};
