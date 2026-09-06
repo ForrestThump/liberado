@@ -1,6 +1,6 @@
 ---
-kind: critique
-status: proposed
+kind: finding
+status: historical
 authority: advisory
 domain: coding-control-plane
 canonical_for: daemon-pr-review-kickoff-grok46-critique

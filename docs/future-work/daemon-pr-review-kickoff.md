@@ -1,6 +1,6 @@
 ---
 kind: plan
-status: proposed
+status: active
 authority: advisory
 domain: coding-control-plane
 canonical_for: daemon-pr-review-kickoff
@@ -9,8 +9,8 @@ open_items: true
 
 # Daemon-native pull-request review kickoff
 
-**Status**: revised authoritative proposal after PR #243 and Grok 4.6 review. This plan is for
-Forrest's approval. It does not authorize product implementation.
+**Status**: active. Forrest approved Sol pass 2 and the seven checklist defaults (2026-09-05).
+Slices 0–1 are in draft PR #244; later slices remain open.
 
 ## Decision
 

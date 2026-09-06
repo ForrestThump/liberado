@@ -55,6 +55,8 @@ Authority model: [doc-authority.md](spec/reference/doc-authority.md).
 | [docs/future-work/coding-worker-control-plane.md](future-work/coding-worker-control-plane.md) | plan | draft | advisory | coding-harness | coding-worker-control-plane |
 | [docs/future-work/context-compaction-viewport-rearchitecture.md](future-work/context-compaction-viewport-rearchitecture.md) | plan | active | implementation | chat | context-compaction-viewport |
 | [docs/future-work/cross-harness-baseline.md](future-work/cross-harness-baseline.md) | plan | active | implementation | coding-harness | cross-harness-baseline |
+| [docs/future-work/daemon-pr-review-kickoff-grok46-critique.md](future-work/daemon-pr-review-kickoff-grok46-critique.md) | finding | historical | advisory | coding-control-plane | daemon-pr-review-kickoff-grok46-critique |
+| [docs/future-work/daemon-pr-review-kickoff.md](future-work/daemon-pr-review-kickoff.md) | plan | active | advisory | coding-control-plane | daemon-pr-review-kickoff |
 | [docs/future-work/harness-study-2026-08.md](future-work/harness-study-2026-08.md) | finding | active | advisory | coding-harness | harness-study-2026-08 |
 | [docs/future-work/heuristics-tuning-engine-plan.md](future-work/heuristics-tuning-engine-plan.md) | plan | active | implementation | tuning | heuristics-tuning-engine |
 | [docs/future-work/latency-and-routing-observability-plan.md](future-work/latency-and-routing-observability-plan.md) | plan | active | implementation | observability | latency-routing-observability |
