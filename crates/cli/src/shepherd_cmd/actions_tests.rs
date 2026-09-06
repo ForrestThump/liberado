@@ -39,7 +39,19 @@ fn repair_goal_id_is_a_stable_ulid_for_the_command() {
 
     assert!(first.parse::<ulid::Ulid>().is_ok(), "{first}");
     assert_eq!(first, repair_goal_id(command));
-    assert_ne!(first, repair_goal_id("repair:7:abc1234:2"));
+
+    let second = repair_goal_id("repair:7:abc1234:2");
+    assert_ne!(first, second);
+    assert!(
+        first < second,
+        "ULIDs should be time sortable based on kicks"
+    );
+
+    let pr8 = repair_goal_id("repair:8:xyz:1");
+    assert!(
+        second < pr8,
+        "ULIDs should be time sortable based on PR number"
+    );
 }
 
 #[test]

@@ -186,10 +186,19 @@ fn kickback(
 }
 
 fn repair_goal_id(command_id: &str) -> String {
+    let mut timestamp_ms = 1_700_000_000_000_u64;
+    let parts: Vec<&str> = command_id.split(':').collect();
+    #[allow(clippy::collapsible_if)]
+    if let ["repair", pr_str, _, kick_str] = parts.as_slice() {
+        if let (Ok(pr), Ok(kick)) = (pr_str.parse::<u64>(), kick_str.parse::<u64>()) {
+            timestamp_ms += pr * 86_400_000 + kick * 3_600_000;
+        }
+    }
+
     let digest = Sha256::digest(command_id.as_bytes());
     let mut bytes = [0; 16];
     bytes.copy_from_slice(&digest[..16]);
-    ulid::Ulid::from(u128::from_be_bytes(bytes)).to_string()
+    ulid::Ulid::from_parts(timestamp_ms, u128::from_be_bytes(bytes)).to_string()
 }
 
 /// A PR whose CI is now clean: ready it once the cold-review cap is met, otherwise spend a
