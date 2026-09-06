@@ -176,7 +176,6 @@ fn load_shepherd_topology() -> Result<liberado_config::Topology, Box<dyn std::er
 fn validate_shepherd_topology(
     topology: &liberado_config::Topology,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    review_observer::validate_review_config(topology)?;
     let declared_projects: BTreeSet<_> = topology
         .projects
         .iter()
@@ -233,7 +232,7 @@ fn validate_shepherd_topology(
             }
         }
     }
-    Ok(())
+    review_observer::validate_review_config(topology)
 }
 
 #[derive(Clone)]
@@ -261,8 +260,10 @@ impl Pr {
 }
 
 pub fn run(args: impl Iterator<Item = String>) -> Result<(), Box<dyn std::error::Error>> {
-    let args: Vec<_> = args.collect();
-    let parsed = parse_invocation(&args)?;
+    dispatch_parsed(parse_invocation(&args.collect::<Vec<_>>())?)
+}
+
+fn dispatch_parsed(parsed: ParsedInvocation) -> Result<(), Box<dyn std::error::Error>> {
     match parsed.mode {
         Invocation::SelfTest => self_test(),
         Invocation::ConfigCheck { ref project } => config_check(project.as_deref()),

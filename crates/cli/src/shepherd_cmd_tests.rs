@@ -22,7 +22,7 @@ fn test_config(root: PathBuf) -> Config {
 }
 #[test]
 fn parser_is_platform_specific_and_preserves_step_failure() {
-    self_test().unwrap()
+    run(["--self-test".into()].into_iter()).unwrap()
 }
 #[test]
 fn preexisting_note_is_bounded() {

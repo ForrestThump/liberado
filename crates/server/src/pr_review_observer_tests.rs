@@ -81,6 +81,16 @@ fn disabled_review_starts_no_task() {
     assert!(spawn(&topology).is_none());
 }
 
+#[tokio::test]
+async fn enabled_review_starts_a_background_task() {
+    let mut topology = Topology::default();
+    topology.shepherd.review.enabled = true;
+    topology.shepherd.review.poll_seconds = 3600;
+    topology.shepherd.review.reconcile_on_start = false;
+    let handle = spawn(&topology).expect("enabled observer starts a task");
+    handle.abort();
+}
+
 #[test]
 fn shadow_controller_holds_no_lease() {
     let grok = project("grok-bot");

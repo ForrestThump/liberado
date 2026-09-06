@@ -242,6 +242,12 @@ fn fact_event(cfg: &Config, task_id: &str, pr: &Pr, fact: &ShepherdFact) -> Task
             },
         )
         .with_command_id(format!("blocked:{}:{}", pr.number, pr.head_sha)),
+        other => review_ledger_event(cfg, task_id, pr, other),
+    }
+}
+
+fn review_ledger_event(cfg: &Config, task_id: &str, pr: &Pr, fact: &ShepherdFact) -> TaskEvent {
+    match fact {
         ShepherdFact::ReadyArmed { source } => TaskEvent::new(
             format!("evt-review-arm-{}-{}", pr.number, short_sha(&pr.head_sha)),
             task_id,
@@ -274,6 +280,7 @@ fn fact_event(cfg: &Config, task_id: &str, pr: &Pr, fact: &ShepherdFact) -> Task
             },
         )
         .with_command_id(format!("review-close:{}:{}", pr.number, pr.head_sha)),
+        _ => unreachable!("repair facts are handled by fact_event"),
     }
 }
 

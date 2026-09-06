@@ -1,9 +1,10 @@
 //! Bounded, read-only GitHub polling for daemon-native PR review.
 
 use liberado_coder_core::pr_review::{
-    CycleFact, ObserverIntent, ReviewCycle, ReviewPolicy, ShaChecks, bounded_pages,
-    check_endpoints, collect_github_checks, controller_lease_required, pull_request_snapshot,
-    ready_for_review_commit, reconcile_snapshot, review_cycle, slice01_records,
+    CycleFact, ObserverIntent, PullRequestSnapshot, ReviewCycle, ReviewPolicy, ShaChecks,
+    bounded_pages, check_endpoints, collect_github_checks, controller_lease_required,
+    pull_request_snapshot, ready_for_review_commit, reconcile_snapshot, review_cycle,
+    slice01_records,
 };
 use liberado_coder_core::{
     TaskEvent, TaskEventKind, TaskLedger, shepherd_task_id, tasks_root_from_worktree,
@@ -17,39 +18,56 @@ use serde_json::Value;
 use std::{path::Path, time::Duration};
 
 pub(crate) fn spawn(topology: &Topology) -> Option<tokio::task::JoinHandle<()>> {
-    let review = &topology.shepherd.review;
-    if !review.enabled {
-        return None;
+    topology
+        .shepherd
+        .review
+        .enabled
+        .then(|| tokio::spawn(poll_forever(topology.clone())))
+}
+
+async fn poll_forever(topology: Topology) {
+    let mut ticker =
+        tokio::time::interval(Duration::from_secs(topology.shepherd.review.poll_seconds));
+    if !topology.shepherd.review.reconcile_on_start {
+        ticker.tick().await;
     }
-    let topology = topology.clone();
-    Some(tokio::spawn(async move {
-        let mut ticker =
-            tokio::time::interval(Duration::from_secs(topology.shepherd.review.poll_seconds));
-        if !topology.shepherd.review.reconcile_on_start {
-            ticker.tick().await;
+    loop {
+        ticker.tick().await;
+        if let Err(error) = reconcile(&topology).await {
+            tracing::warn!(%error, "PR review observer pass failed");
         }
-        loop {
-            ticker.tick().await;
-            if let Err(error) = reconcile(&topology).await {
-                tracing::warn!(%error, "PR review observer pass failed");
-            }
-        }
-    }))
+    }
 }
 
 async fn reconcile(topology: &Topology) -> Result<(), String> {
-    let client = Client::builder()
+    let client = http_client()?;
+    poll_all(&client, topology).await
+}
+
+fn http_client() -> Result<Client, String> {
+    Client::builder()
         .timeout(Duration::from_secs(30))
         .build()
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| e.to_string())
+}
+
+async fn poll_all(client: &Client, topology: &Topology) -> Result<(), String> {
     for project in &topology.shepherd.projects {
-        if project.controller.is_none() {
-            continue;
-        }
-        let token = token_for(topology, project)?;
-        poll_project(&client, topology, project, &token).await?;
+        poll_configured(client, topology, project).await?;
     }
     Ok(())
+}
+
+async fn poll_configured(
+    client: &Client,
+    topology: &Topology,
+    project: &ShepherdProjectConfig,
+) -> Result<(), String> {
+    if project.controller.is_none() {
+        return Ok(());
+    }
+    let token = token_for(topology, project)?;
+    poll_project(client, topology, project, &token).await
 }
 
 fn token_for(topology: &Topology, project: &ShepherdProjectConfig) -> Result<String, String> {
@@ -72,22 +90,42 @@ async fn poll_project(
     project: &ShepherdProjectConfig,
     token: &str,
 ) -> Result<(), String> {
-    let review = &topology.shepherd.review;
-    for page in bounded_pages(review.max_pages) {
-        let path = format!(
-            "/repos/{}/pulls?state=all&sort=updated&direction=desc&per_page={}&page={page}",
-            project.repository, review.page_size
-        );
-        let rows = github(client, token, &path).await?;
-        let Some(rows) = rows.as_array() else {
-            return Err("pull list was not an array".into());
-        };
-        for row in rows {
-            observe_pr(client, topology, project, token, row).await?;
-        }
-        if rows.len() < review.page_size {
+    for page in bounded_pages(topology.shepherd.review.max_pages) {
+        if !poll_page(client, topology, project, token, page).await? {
             break;
         }
+    }
+    Ok(())
+}
+
+async fn poll_page(
+    client: &Client,
+    topology: &Topology,
+    project: &ShepherdProjectConfig,
+    token: &str,
+    page: usize,
+) -> Result<bool, String> {
+    let path = format!(
+        "/repos/{}/pulls?state=all&sort=updated&direction=desc&per_page={}&page={page}",
+        project.repository, topology.shepherd.review.page_size
+    );
+    let rows = github(client, token, &path).await?;
+    observe_rows(client, topology, project, token, &rows).await?;
+    Ok(rows.as_array().map(|rows| rows.len()).unwrap_or(0) >= topology.shepherd.review.page_size)
+}
+
+async fn observe_rows(
+    client: &Client,
+    topology: &Topology,
+    project: &ShepherdProjectConfig,
+    token: &str,
+    rows: &Value,
+) -> Result<(), String> {
+    let Some(rows) = rows.as_array() else {
+        return Err("pull list was not an array".into());
+    };
+    for row in rows {
+        observe_pr(client, topology, project, token, row).await?;
     }
     Ok(())
 }
@@ -99,6 +137,24 @@ async fn observe_pr(
     token: &str,
     row: &Value,
 ) -> Result<(), String> {
+    let prepared = prepare_observation(topology, project, row)?;
+    finish_observation(client, topology, project, token, prepared).await
+}
+
+struct PreparedObservation {
+    pr: PullRequestSnapshot,
+    task_id: String,
+    policy: ReviewPolicy,
+    ledger: TaskLedger,
+    cycle: ReviewCycle,
+    prior_tip: Option<String>,
+}
+
+fn prepare_observation(
+    topology: &Topology,
+    project: &ShepherdProjectConfig,
+    row: &Value,
+) -> Result<PreparedObservation, String> {
     let pr = pull_request_snapshot(&project.repository, row)
         .ok_or_else(|| "pull request snapshot is incomplete".to_string())?;
     let task_id = shepherd_task_id(Some(&project.repository), pr.number);
@@ -109,17 +165,49 @@ async fn observe_pr(
         .map(|item| item.root.as_path())
         .ok_or("coding project root is missing")?;
     let policy = review_policy(project);
-    let mut ledger = open_ledger(root, &policy, project, pr.number, &task_id)?;
+    let ledger = open_ledger(root, &policy, project, pr.number, &task_id)?;
     let cycle = cycle_from_ledger(&ledger);
     let prior_tip = last_observed_tip(&ledger);
-    let ready = marked_ready(client, topology, project, token, &pr.head_sha, pr.number).await?;
-    let checks = fetch_checks(client, token, &project.repository, &pr.head_sha).await?;
-    let intents = reconcile_snapshot(&policy, &pr, &cycle, &checks, prior_tip.as_deref(), ready);
+    Ok(PreparedObservation {
+        pr,
+        task_id,
+        policy,
+        ledger,
+        cycle,
+        prior_tip,
+    })
+}
+
+async fn finish_observation(
+    client: &Client,
+    topology: &Topology,
+    project: &ShepherdProjectConfig,
+    token: &str,
+    mut prepared: PreparedObservation,
+) -> Result<(), String> {
+    let ready = marked_ready(
+        client,
+        topology,
+        project,
+        token,
+        &prepared.pr.head_sha,
+        prepared.pr.number,
+    )
+    .await?;
+    let checks = fetch_checks(client, token, &project.repository, &prepared.pr.head_sha).await?;
+    let intents = reconcile_snapshot(
+        &prepared.policy,
+        &prepared.pr,
+        &prepared.cycle,
+        &checks,
+        prepared.prior_tip.as_deref(),
+        ready,
+    );
     record_intents(
-        &mut ledger,
-        &task_id,
+        &mut prepared.ledger,
+        &prepared.task_id,
         &project.repository,
-        pr.number,
+        prepared.pr.number,
         &intents,
     )
 }
@@ -177,27 +265,46 @@ async fn marked_ready(
     sha: &str,
     number: u64,
 ) -> Result<bool, String> {
-    let review = &topology.shepherd.review;
-    for page in bounded_pages(review.max_pages) {
-        let path = format!(
-            "/repos/{}/issues/{number}/events?per_page={}&page={page}",
-            project.repository, review.page_size
-        );
-        let value = github(client, token, &path).await?;
-        let Some(rows) = value.as_array() else {
-            return Err("pull event list was not an array".into());
-        };
-        if rows
-            .iter()
-            .any(|row| ready_for_review_commit(row) == Some(sha))
-        {
+    for page in bounded_pages(topology.shepherd.review.max_pages) {
+        let scan = ready_page(client, topology, project, token, sha, number, page).await?;
+        if scan.found {
             return Ok(true);
         }
-        if rows.len() < review.page_size {
+        if !scan.more {
             break;
         }
     }
     Ok(false)
+}
+
+struct ReadyScan {
+    found: bool,
+    more: bool,
+}
+
+async fn ready_page(
+    client: &Client,
+    topology: &Topology,
+    project: &ShepherdProjectConfig,
+    token: &str,
+    sha: &str,
+    number: u64,
+    page: usize,
+) -> Result<ReadyScan, String> {
+    let path = format!(
+        "/repos/{}/issues/{number}/events?per_page={}&page={page}",
+        project.repository, topology.shepherd.review.page_size
+    );
+    let value = github(client, token, &path).await?;
+    let rows = value
+        .as_array()
+        .ok_or_else(|| "pull event list was not an array".to_string())?;
+    Ok(ReadyScan {
+        found: rows
+            .iter()
+            .any(|row| ready_for_review_commit(row) == Some(sha)),
+        more: rows.len() >= topology.shepherd.review.page_size,
+    })
 }
 
 fn open_ledger(

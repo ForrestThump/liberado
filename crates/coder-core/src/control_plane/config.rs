@@ -58,10 +58,9 @@ impl ControlPlaneConfig {
             }
             worker.validate(name)?;
         }
-        for (name, worker) in &self.review_workers {
-            worker.validate(name)?;
-        }
-        Ok(())
+        self.review_workers
+            .iter()
+            .try_for_each(|(name, worker)| worker.validate(name))
     }
 
     pub fn enabled_review_workers(&self) -> impl Iterator<Item = (&str, &ReviewWorkerConfig)> {

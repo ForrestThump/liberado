@@ -2,8 +2,8 @@
 
 use super::*;
 use liberado_coder_core::pr_review::{
-    ReviewCycle, ReviewPolicy, ShaChecks, WakeSignal, check_endpoints, collect_github_checks,
-    observe, pull_request_snapshot, review_eligible, valid_full_sha,
+    PullRequestSnapshot, ReviewCycle, ReviewPolicy, ShaChecks, WakeSignal, check_endpoints,
+    collect_github_checks, observe, pull_request_snapshot, review_eligible, valid_full_sha,
 };
 
 pub(super) fn validate_review_config(
@@ -97,45 +97,93 @@ pub(super) fn dry_run(
     number: u64,
     requested_sha: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    if !valid_full_sha(requested_sha) {
-        return Err("--sha must be a full 40-character hexadecimal SHA".into());
-    }
+    println!("{}", dry_run_report(project_name, number, requested_sha)?);
+    Ok(())
+}
+
+fn dry_run_report(
+    project_name: &str,
+    number: u64,
+    requested_sha: &str,
+) -> Result<String, Box<dyn std::error::Error>> {
+    let sha = require_full_sha(requested_sha)?;
+    let loaded = load_dry_run(project_name, number, sha)?;
+    render_dry_run(project_name, number, sha, loaded)
+}
+
+fn require_full_sha(requested_sha: &str) -> Result<&str, Box<dyn std::error::Error>> {
+    valid_full_sha(requested_sha)
+        .then_some(requested_sha)
+        .ok_or_else(|| "--sha must be a full 40-character hexadecimal SHA".into())
+}
+
+struct DryRunLoad {
+    project: liberado_config::ShepherdProjectConfig,
+    pr: PullRequestSnapshot,
+    checks: ShaChecks,
+}
+
+fn load_dry_run(
+    project_name: &str,
+    number: u64,
+    requested_sha: &str,
+) -> Result<DryRunLoad, Box<dyn std::error::Error>> {
     let topology = load_shepherd_topology()?;
     validate_shepherd_topology(&topology)?;
     let project = select_shepherd_project(Some(project_name), &topology.shepherd.projects)?
-        .ok_or("missing shepherd project")?;
+        .ok_or("missing shepherd project")?
+        .clone();
     let pr_value = api(
         &project.repository,
         &format!("/repos/{}/pulls/{number}", project.repository),
     )?;
     let pr = pull_request_snapshot(&project.repository, &pr_value)
         .ok_or("pull request snapshot is incomplete")?;
+    Ok(DryRunLoad {
+        checks: load_sha_checks(&project.repository, requested_sha)?,
+        project,
+        pr,
+    })
+}
+
+fn load_sha_checks(
+    repository: &str,
+    requested_sha: &str,
+) -> Result<ShaChecks, Box<dyn std::error::Error>> {
     let mut observed = Vec::new();
-    for endpoint in check_endpoints(&project.repository, requested_sha) {
-        observed.extend(collect_github_checks(&api(&project.repository, &endpoint)?));
+    for endpoint in check_endpoints(repository, requested_sha) {
+        observed.extend(collect_github_checks(&api(repository, &endpoint)?));
     }
+    Ok(ShaChecks {
+        sha: requested_sha.to_string(),
+        checks: observed,
+    })
+}
+
+fn render_dry_run(
+    project_name: &str,
+    number: u64,
+    requested_sha: &str,
+    loaded: DryRunLoad,
+) -> Result<String, Box<dyn std::error::Error>> {
     let policy = ReviewPolicy {
-        controller: project.controller.clone().unwrap_or_default(),
-        check_names: project.check_names.clone(),
+        controller: loaded.project.controller.clone().unwrap_or_default(),
+        check_names: loaded.project.check_names.clone(),
         shadow: true,
     };
     let cycle = ReviewCycle {
         armed_sha: Some(requested_sha.to_string()),
         accepted_sha: None,
     };
-    let checks = ShaChecks {
-        sha: requested_sha.to_string(),
-        checks: observed,
-    };
-    let eligible = review_eligible(&policy, &pr, &cycle, &checks);
+    let eligible = review_eligible(&policy, &loaded.pr, &cycle, &loaded.checks);
     let intents = observe(
         &policy,
-        &pr,
+        &loaded.pr,
         &ReviewCycle {
             armed_sha: None,
             accepted_sha: None,
         },
-        &checks,
+        &loaded.checks,
         WakeSignal::ReadyForReview {
             sha: requested_sha.to_string(),
         },
@@ -145,17 +193,22 @@ pub(super) fn dry_run(
         title: String::new(),
         branch: String::new(),
         base_sha: String::new(),
-        head_sha: pr.head_sha.clone(),
+        head_sha: loaded.pr.head_sha.clone(),
         url: String::new(),
         labels: Vec::new(),
     };
     let cfg = Config::load(Some(project_name))?;
     let _ = record::record_observer_intents(&cfg, &ledger_pr, true, &intents)?;
-    println!(
-        "{}",
-        json!({"repository":project.repository,"pr":number,"requested_sha":requested_sha,"observed_sha":pr.head_sha,"eligible":eligible,"writes":false,"lease":false})
-    );
-    Ok(())
+    Ok(json!({
+        "repository": loaded.project.repository,
+        "pr": number,
+        "requested_sha": requested_sha,
+        "observed_sha": loaded.pr.head_sha,
+        "eligible": eligible,
+        "writes": false,
+        "lease": false
+    })
+    .to_string())
 }
 
 fn api(_repository: &str, endpoint: &str) -> Result<Value, Box<dyn std::error::Error>> {
@@ -197,5 +250,16 @@ mod tests {
         assert!(!src.contains(&old_helper));
         let identity = format!("{}Thump", "Forrest");
         assert!(!src.contains(&identity));
+    }
+
+    #[test]
+    fn dry_run_rejects_a_short_sha_before_any_process() {
+        let error = dry_run("example", 1, "abc").unwrap_err().to_string();
+        assert!(
+            error.contains("full 40-character hexadecimal SHA"),
+            "{error}"
+        );
+        assert!(require_full_sha("abc").is_err());
+        assert!(require_full_sha(&"a".repeat(40)).is_ok());
     }
 }
