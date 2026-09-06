@@ -204,6 +204,31 @@ fn synchronize_records_one_intent_and_draft_disarms() {
 }
 
 #[test]
+fn ready_scan_stops_on_found_or_last_page() {
+    assert_eq!(
+        scan_outcome(ReadyScan {
+            found: true,
+            more: true
+        }),
+        Some(true)
+    );
+    assert_eq!(
+        scan_outcome(ReadyScan {
+            found: false,
+            more: false
+        }),
+        Some(false)
+    );
+    assert_eq!(
+        scan_outcome(ReadyScan {
+            found: false,
+            more: true
+        }),
+        None
+    );
+}
+
+#[test]
 fn observer_source_is_read_only_and_config_driven() {
     let src = include_str!("pr_review_observer.rs");
     assert!(src.contains(".get("));

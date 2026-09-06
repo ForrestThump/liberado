@@ -266,12 +266,10 @@ async fn marked_ready(
     number: u64,
 ) -> Result<bool, String> {
     for page in bounded_pages(topology.shepherd.review.max_pages) {
-        let scan = ready_page(client, topology, project, token, sha, number, page).await?;
-        if scan.found {
-            return Ok(true);
-        }
-        if !scan.more {
-            break;
+        if let Some(found) =
+            scan_outcome(ready_page(client, topology, project, token, sha, number, page).await?)
+        {
+            return Ok(found);
         }
     }
     Ok(false)
@@ -280,6 +278,10 @@ async fn marked_ready(
 struct ReadyScan {
     found: bool,
     more: bool,
+}
+
+fn scan_outcome(scan: ReadyScan) -> Option<bool> {
+    scan.found.then_some(true).or((!scan.more).then_some(false))
 }
 
 async fn ready_page(

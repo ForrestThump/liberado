@@ -128,22 +128,47 @@ fn load_dry_run(
     number: u64,
     requested_sha: &str,
 ) -> Result<DryRunLoad, Box<dyn std::error::Error>> {
-    let topology = load_shepherd_topology()?;
-    validate_shepherd_topology(&topology)?;
-    let project = select_shepherd_project(Some(project_name), &topology.shepherd.projects)?
-        .ok_or("missing shepherd project")?
-        .clone();
-    let pr_value = api(
-        &project.repository,
-        &format!("/repos/{}/pulls/{number}", project.repository),
-    )?;
-    let pr = pull_request_snapshot(&project.repository, &pr_value)
-        .ok_or("pull request snapshot is incomplete")?;
+    let project = load_dry_run_project(project_name)?;
     Ok(DryRunLoad {
         checks: load_sha_checks(&project.repository, requested_sha)?,
+        pr: load_dry_run_pr(&project, number)?,
         project,
-        pr,
     })
+}
+
+fn load_dry_run_project(
+    project_name: &str,
+) -> Result<liberado_config::ShepherdProjectConfig, Box<dyn std::error::Error>> {
+    selected_dry_run_project(project_name, &validated_topology()?)
+}
+
+fn validated_topology() -> Result<liberado_config::Topology, Box<dyn std::error::Error>> {
+    let topology = load_shepherd_topology()?;
+    validate_shepherd_topology(&topology)?;
+    Ok(topology)
+}
+
+fn selected_dry_run_project(
+    project_name: &str,
+    topology: &liberado_config::Topology,
+) -> Result<liberado_config::ShepherdProjectConfig, Box<dyn std::error::Error>> {
+    select_shepherd_project(Some(project_name), &topology.shepherd.projects)?
+        .cloned()
+        .ok_or_else(|| "missing shepherd project".into())
+}
+
+fn load_dry_run_pr(
+    project: &liberado_config::ShepherdProjectConfig,
+    number: u64,
+) -> Result<PullRequestSnapshot, Box<dyn std::error::Error>> {
+    pull_request_snapshot(
+        &project.repository,
+        &api(
+            &project.repository,
+            &format!("/repos/{}/pulls/{number}", project.repository),
+        )?,
+    )
+    .ok_or_else(|| "pull request snapshot is incomplete".into())
 }
 
 fn load_sha_checks(
@@ -227,6 +252,7 @@ fn api(_repository: &str, endpoint: &str) -> Result<Value, Box<dyn std::error::E
 mod tests {
     use super::*;
     use liberado_coder_core::pr_review::CheckConclusion;
+    use liberado_config::Topology;
     #[test]
     fn check_parser_accepts_only_success() {
         let checks = collect_github_checks(
@@ -261,5 +287,14 @@ mod tests {
         );
         assert!(require_full_sha("abc").is_err());
         assert!(require_full_sha(&"a".repeat(40)).is_ok());
+    }
+
+    #[test]
+    fn selected_dry_run_project_requires_a_named_row() {
+        let topology = Topology::default();
+        let error = selected_dry_run_project("example", &topology)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("unknown shepherd project"), "{error}");
     }
 }
