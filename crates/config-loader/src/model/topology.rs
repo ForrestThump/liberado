@@ -3,6 +3,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use super::shepherd::ShepherdConfig;
 use liberado_common::{
     Capability, CapabilitySet, Consequence, ModelProfile, ModelRole, ReasoningLevel, UserTimezone,
     Zone,
@@ -408,49 +409,6 @@ impl Default for MainAgentConfig {
 #[cfg(test)]
 #[path = "topology_turn_budget_tests.rs"]
 mod turn_budget_config_tests;
-
-/// Configuration for the PR shepherd. It observes forge checks; project preflight remains the
-/// separate local command policy under [`ProjectConfig::preflight`].
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
-pub struct ShepherdConfig {
-    #[serde(default)]
-    pub projects: Vec<ShepherdProjectConfig>,
-}
-
-/// One repository the shepherd may operate on.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ShepherdProjectConfig {
-    /// Stable selector passed to `liberado shepherd --project <name>`.
-    pub name: String,
-    /// GitHub `OWNER/REPOSITORY`; passed to `gh --repo`, so this need not be the CLI checkout.
-    pub repository: String,
-    /// Declared coding project that the daemon authorizes for repair goals.
-    pub coding_project: String,
-    #[serde(default = "default_main_branch")]
-    pub base_branch: String,
-    #[serde(default = "default_shepherd_profile")]
-    pub profile: String,
-    /// Exact GitHub check/job names to compare. Empty means every reported check.
-    #[serde(default)]
-    pub check_names: Vec<String>,
-    #[serde(default)]
-    pub max_kickbacks: Option<usize>,
-    #[serde(default)]
-    pub cold_reviews: Option<usize>,
-    #[serde(default)]
-    pub cold_review_max_turns: Option<u32>,
-    #[serde(default)]
-    pub max_concurrent_goals: Option<usize>,
-    #[serde(default)]
-    pub poll_seconds: Option<u64>,
-}
-
-fn default_main_branch() -> String {
-    "main".into()
-}
-fn default_shepherd_profile() -> String {
-    "coding-unattended".into()
-}
 
 impl Topology {
     /// Resolve [`Self::timezone`] to a validated [`UserTimezone`].

@@ -65,6 +65,21 @@
 # executable = "opencode"       # use "opencode.cmd" when required by the Windows installation
 # model = "openrouter/~deepseek/deepseek-v4-flash-latest"
 # auto_approve = true
+#
+# PR review workers are inert declarations in Slices 0/1. Disabled adapters are never admitted
+# and no review process is started. Keep Grok and Cursor disabled until live evidence exists.
+# [coder.control_plane.review_workers.grok-build]
+# kind = "grok_build"
+# executable = "/path/to/grok"
+# enabled = false
+# [coder.control_plane.review_workers.codex]
+# kind = "codex"
+# executable = "/path/to/codex"
+# enabled = true
+# [coder.control_plane.review_workers.cursor-local]
+# kind = "cursor_local"
+# executable = "/path/to/agent"
+# enabled = false
 
 # Where the harness reads its model prompts from.
 #

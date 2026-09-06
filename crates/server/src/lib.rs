@@ -14,6 +14,7 @@ use coding_pack::{build_coding_pack, load_server_config};
 use main_agent_budget::main_agent_budget;
 mod hooks;
 mod latency;
+mod pr_review_observer;
 mod shutdown;
 mod state;
 mod sticky;
@@ -72,6 +73,7 @@ pub async fn run(vault_path: String) -> Result<(), Box<dyn std::error::Error>> {
     // here rather than a half-booted daemon; the message names the file/setting to fix.
     let (config, _, coder_tuning) =
         load_server_config(liberado_bootstrap::config_dir().as_deref())?;
+    let _review_observer = pr_review_observer::spawn(&config.topology);
 
     // Resolve the vault path CLI-over-config: the `run` argument wins (the CLI always supplies one);
     // an empty argument falls back to `topology.vault_path`. Both empty is a hard error.

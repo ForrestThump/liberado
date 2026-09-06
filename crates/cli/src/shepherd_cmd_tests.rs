@@ -74,6 +74,10 @@ fn shepherd_config_rejects_unknown_coding_project() {
             cold_review_max_turns: None,
             max_concurrent_goals: None,
             poll_seconds: None,
+            controller: None,
+            review_profile: None,
+            gate: None,
+            auth: None,
         });
     assert!(
         validate_shepherd_topology(&topology)
@@ -97,6 +101,10 @@ fn valid_project(name: &str) -> liberado_config::ShepherdProjectConfig {
         cold_review_max_turns: None,
         max_concurrent_goals: None,
         poll_seconds: None,
+        controller: None,
+        review_profile: None,
+        gate: None,
+        auth: None,
     }
 }
 
@@ -180,6 +188,51 @@ fn shepherd_config_accepts_a_valid_project() {
     assert!(validate_shepherd_topology(&topology_with(valid_project("ok"))).is_ok());
 }
 
+#[test]
+fn daemon_review_requires_zero_cold_reviews_checks_and_auth_reference() {
+    let mut project = valid_project("review");
+    project.controller = Some("liberado-shepherd".into());
+    project.review_profile = Some("coding-review-unattended".into());
+    project.gate = Some("ready_and_green_tip".into());
+    rejects(project.clone(), "cold_reviews = 0");
+    project.cold_reviews = Some(0);
+    rejects(project.clone(), "auth reference");
+    project.auth = Some("github".into());
+    let mut topology = topology_with(project);
+    topology
+        .shepherd
+        .auth
+        .push(liberado_config::ShepherdAuthConfig {
+            name: "github".into(),
+            kind: "token".into(),
+            token_ref: "LIBERADO_GITHUB_TOKEN".into(),
+            webhook_secret_ref: None,
+            expected_login: None,
+        });
+    assert!(validate_shepherd_topology(&topology).is_ok());
+}
+
+#[test]
+fn shepherd_auth_rejects_literal_secrets() {
+    let mut topology = topology_with(valid_project("legacy"));
+    topology
+        .shepherd
+        .auth
+        .push(liberado_config::ShepherdAuthConfig {
+            name: "bad".into(),
+            kind: "token".into(),
+            token_ref: "github_pat_literal".into(),
+            webhook_secret_ref: None,
+            expected_login: None,
+        });
+    assert!(
+        validate_shepherd_topology(&topology)
+            .unwrap_err()
+            .to_string()
+            .contains("never literal secrets")
+    );
+}
+
 // ── select_shepherd_project ────────────────────────────────────────
 
 #[test]
@@ -229,6 +282,10 @@ fn apply_project_copies_every_field() {
         cold_review_max_turns: Some(9),
         max_concurrent_goals: Some(4),
         poll_seconds: Some(30),
+        controller: None,
+        review_profile: None,
+        gate: None,
+        auth: None,
     };
     cfg.apply_project(&project);
     assert_eq!(cfg.repository.as_deref(), Some("owner/repo"));
@@ -656,6 +713,10 @@ fn apply_project_overrides_only_the_fields_it_declares() {
         cold_review_max_turns: None,
         max_concurrent_goals: None,
         poll_seconds: None,
+        controller: None,
+        review_profile: None,
+        gate: None,
+        auth: None,
     };
     cfg.apply_project(&project);
     assert_eq!(cfg.repository.as_deref(), Some("owner/repo"));

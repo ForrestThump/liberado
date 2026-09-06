@@ -10,6 +10,7 @@ mod builder;
 mod config;
 mod config_turn_budgets;
 mod policy;
+mod shepherd;
 mod topology;
 mod topology_default;
 mod tuning;
@@ -17,14 +18,16 @@ mod tuning;
 pub use builder::ConfigBuilder;
 pub use config::{CodingAuthError, CodingWorkspaceAuth, Config, GrantParts, ResolvedProfile};
 pub use policy::{Grant, Policy, ZonePolicy};
+pub use shepherd::{
+    ShepherdAuthConfig, ShepherdConfig, ShepherdProjectConfig, ShepherdReviewConfig,
+};
 pub use topology::{
     AcpConfig, COMPACTION_TRIGGER_PCT_DEFAULT, COMPACTION_TRIGGER_TOKENS_FALLBACK,
     CompactionSettings, CompactionTriggerSource, CronSchedule, EnterKey, HookConfig,
     MainAgentConfig, McpConfig, McpGrant, McpTransport, ModelCompactionSettings, PoolConfig,
     PreflightProfileConfig, PreflightStepConfig, ProjectConfig, ProjectPreflightConfig,
-    ProviderProfile, ReportSinkConfig, RoleOverride, SessionProfile, ShepherdConfig,
-    ShepherdProjectConfig, ToolImpact, Topology, WebUiConfig, managed_binary_path,
-    resolve_declared_zone,
+    ProviderProfile, ReportSinkConfig, RoleOverride, SessionProfile, ToolImpact, Topology,
+    WebUiConfig, managed_binary_path, resolve_declared_zone,
 };
 pub use tuning::{
     CURRENT_SCHEMA_VERSION, CaptureTuning, ConcurrencyTuning, ContextTuning, CronDeliveryTuning,

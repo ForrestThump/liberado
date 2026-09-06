@@ -41,6 +41,7 @@ async-trait = { workspace = true }
 tracing = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+reqwest = { workspace = true }
 chrono = { workspace = true }
 axum = { version = "0.8", features = ["json"] }
 tower-http = { version = "0.6", features = ["cors", "fs", "compression-gzip"] }
@@ -75,4 +76,3 @@ label = "inject event (event_sender)"
 to = "liberado-main-agent"
 kind = "control"
 label = "chat turn"
-

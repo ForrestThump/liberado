@@ -178,6 +178,7 @@ fn worker_selection_is_payload_then_profile_then_configured_default() {
     let registry = super::workers::WorkerRegistry::from_config(&ControlPlaneConfig {
         default_worker: "configured-default".into(),
         workers,
+        review_workers: Default::default(),
     });
 
     assert_eq!(

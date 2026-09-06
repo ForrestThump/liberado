@@ -78,6 +78,30 @@ vault_path = "/path/to/vault"
 # cold_review_max_turns = 60
 # max_concurrent_goals = 2
 # poll_seconds = 120
+#
+# Daemon-native review is opt-in and observes only in Slices 0/1. Repository identity stays in
+# this deployment file; no source default names an owner or repository.
+# [shepherd.review]
+# enabled = false
+# delivery = "poll"
+# poll_seconds = 120
+# reconcile_on_start = true
+# max_pages = 10
+# page_size = 100
+# [[shepherd.auth]]
+# name = "github"
+# kind = "token"
+# token_ref = "LIBERADO_GITHUB_TOKEN"
+# webhook_secret_ref = "LIBERADO_GITHUB_WEBHOOK_SECRET"
+# expected_login = "your-login"
+#
+# For an enabled native-review project, also set:
+# controller = "liberado-shepherd"
+# review_profile = "coding-review-unattended"
+# gate = "ready_and_green_tip"
+# auth = "github"
+# cold_reviews = 0
+# check_names = ["CI"]
 
 # Coding modes. Each is a preset over the existing path/command policy — not a separate permission
 # system — selected by the goal payload `mode` ("plan" | "explore"), or by the older

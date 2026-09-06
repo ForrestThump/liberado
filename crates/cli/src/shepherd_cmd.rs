@@ -19,6 +19,7 @@ use std::{
 mod actions;
 mod prompts;
 mod record;
+mod review_observer;
 mod tick_support;
 use record::ShepherdFact;
 use tick_support::tick_live;
@@ -173,6 +174,7 @@ fn load_shepherd_topology() -> Result<liberado_config::Topology, Box<dyn std::er
 fn validate_shepherd_topology(
     topology: &liberado_config::Topology,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    review_observer::validate_review_config(topology)?;
     let declared_projects: BTreeSet<_> = topology
         .projects
         .iter()
@@ -231,6 +233,7 @@ fn validate_shepherd_topology(
     }
     Ok(())
 }
+
 #[derive(Clone)]
 struct Pr {
     number: u64,
@@ -262,8 +265,18 @@ impl Pr {
 #[derive(Debug, PartialEq, Eq)]
 enum Invocation {
     SelfTest,
-    ConfigCheck { project: Option<String> },
-    Drive { once: bool, watch: bool },
+    ConfigCheck {
+        project: Option<String>,
+    },
+    Drive {
+        once: bool,
+        watch: bool,
+    },
+    ReviewDryRun {
+        project: String,
+        pr: u64,
+        sha: String,
+    },
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -286,6 +299,27 @@ fn parse_invocation(args: &[String]) -> Result<ParsedInvocation, String> {
         .find(|a| a[0] == "--seed")
         .map(|a| PathBuf::from(&a[1]));
     let reset_baselines = args.iter().any(|a| a == "--reset-baselines");
+
+    if args.first().is_some_and(|arg| arg == "review") {
+        let project = project.clone().ok_or("review requires --project <name>")?;
+        let pr = option_value(args, "--pr")
+            .ok_or("review requires --pr <number>")?
+            .parse()
+            .map_err(|_| "--pr must be a number")?;
+        let sha = option_value(args, "--sha")
+            .ok_or("review requires --sha <full-sha>")?
+            .to_string();
+        if !dry_run {
+            return Err("Slices 0/1 permit only `shepherd review --dry-run`".into());
+        }
+        return Ok(ParsedInvocation {
+            mode: Invocation::ReviewDryRun { project, pr, sha },
+            dry_run,
+            project: None,
+            seed,
+            reset_baselines,
+        });
+    }
 
     if args.iter().any(|a| a == "--self-test") {
         return Ok(ParsedInvocation {
@@ -334,7 +368,18 @@ pub fn run(args: impl Iterator<Item = String>) -> Result<(), Box<dyn std::error:
         Invocation::SelfTest => self_test(),
         Invocation::ConfigCheck { ref project } => config_check(project.as_deref()),
         Invocation::Drive { once, watch } => drive(&parsed, once, watch),
+        Invocation::ReviewDryRun {
+            ref project,
+            pr,
+            ref sha,
+        } => review_observer::dry_run(project, pr, sha),
     }
+}
+
+fn option_value<'a>(args: &'a [String], name: &str) -> Option<&'a str> {
+    args.windows(2)
+        .find(|pair| pair[0] == name)
+        .map(|pair| pair[1].as_str())
 }
 
 fn drive(

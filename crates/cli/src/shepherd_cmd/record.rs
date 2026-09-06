@@ -1,6 +1,7 @@
 //! Mirror shepherd facts into the durable task ledger. Record only; no new dispatch.
 
 use super::*;
+use liberado_coder_core::pr_review::ObserverIntent;
 use liberado_coder_core::{
     CONTROLLER_LIBERADO_SHEPHERD, TaskEvent, TaskEventKind, TaskLedger, TaskRecord,
     shepherd_task_id, tasks_root_from_worktree,
@@ -36,6 +37,14 @@ pub(super) enum ShepherdFact {
     Blocked {
         reason: String,
     },
+    ReadyArmed {
+        source: String,
+    },
+    SynchronizeIntent {
+        old_sha: String,
+        new_sha: String,
+    },
+    Closed,
 }
 
 pub(super) fn record_facts(
@@ -50,9 +59,34 @@ pub(super) fn record_facts(
     let task_id = shepherd_task_id(cfg.repository.as_deref(), pr.number);
     let mut ledger = open_pr_ledger(cfg, pr, &task_id)?;
     for fact in facts {
-        ledger.append(fact_event(&task_id, pr, fact))?;
+        ledger.append(fact_event(cfg, &task_id, pr, fact))?;
     }
     Ok(Some(ledger.project()?))
+}
+
+pub(super) fn record_observer_intents(
+    cfg: &Config,
+    pr: &Pr,
+    dry: bool,
+    intents: &[ObserverIntent],
+) -> Result<Option<TaskRecord>, Box<dyn std::error::Error>> {
+    let facts: Vec<_> = intents
+        .iter()
+        .filter_map(|intent| match intent {
+            ObserverIntent::Arm { .. } => Some(ShepherdFact::ReadyArmed {
+                source: "ready_for_review".into(),
+            }),
+            ObserverIntent::SynchronizeDraftAndNote { old_sha, new_sha } => {
+                Some(ShepherdFact::SynchronizeIntent {
+                    old_sha: old_sha.clone(),
+                    new_sha: new_sha.clone(),
+                })
+            }
+            ObserverIntent::Close { .. } => Some(ShepherdFact::Closed),
+            _ => None,
+        })
+        .collect();
+    record_facts(cfg, pr, dry, &facts)
 }
 
 fn open_pr_ledger(
@@ -116,7 +150,7 @@ fn open_pr_ledger(
     Ok(ledger)
 }
 
-fn fact_event(task_id: &str, pr: &Pr, fact: &ShepherdFact) -> TaskEvent {
+fn fact_event(cfg: &Config, task_id: &str, pr: &Pr, fact: &ShepherdFact) -> TaskEvent {
     match fact {
         ShepherdFact::Ci {
             github_run_id,
@@ -208,6 +242,38 @@ fn fact_event(task_id: &str, pr: &Pr, fact: &ShepherdFact) -> TaskEvent {
             },
         )
         .with_command_id(format!("blocked:{}:{}", pr.number, pr.head_sha)),
+        ShepherdFact::ReadyArmed { source } => TaskEvent::new(
+            format!("evt-review-arm-{}-{}", pr.number, short_sha(&pr.head_sha)),
+            task_id,
+            TaskEventKind::ReadyArmed {
+                repository: cfg.repository.clone().unwrap_or_default(),
+                pr_number: pr.number,
+                head_sha: pr.head_sha.clone(),
+                source: source.clone(),
+            },
+        )
+        .with_command_id(format!("review-arm:{}:{}", pr.number, pr.head_sha)),
+        ShepherdFact::SynchronizeIntent { old_sha, new_sha } => TaskEvent::new(
+            format!("evt-review-sync-{}-{}", pr.number, short_sha(new_sha)),
+            task_id,
+            TaskEventKind::ReviewSynchronizeIntent {
+                old_sha: old_sha.clone(),
+                new_sha: new_sha.clone(),
+            },
+        )
+        .with_command_id(format!("review-sync:{}:{old_sha}:{new_sha}", pr.number)),
+        ShepherdFact::Closed => TaskEvent::new(
+            format!(
+                "evt-review-closed-{}-{}",
+                pr.number,
+                short_sha(&pr.head_sha)
+            ),
+            task_id,
+            TaskEventKind::PullRequestClosed {
+                head_sha: pr.head_sha.clone(),
+            },
+        )
+        .with_command_id(format!("review-close:{}:{}", pr.number, pr.head_sha)),
     }
 }
 
