@@ -108,6 +108,39 @@ fn shepherd_repeated_facts_are_idempotent_and_survive_reload() {
 }
 
 #[test]
+fn review_arm_and_synchronize_intent_are_restart_stable() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut cfg = test_config(temp.path().to_path_buf());
+    cfg.repository = Some("owner/repo".into());
+    let pr = sample_pr(16, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
+    let facts = [
+        ShepherdFact::ReadyArmed {
+            source: "ready_for_review".into(),
+        },
+        ShepherdFact::SynchronizeIntent {
+            old_sha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into(),
+            new_sha: pr.head_sha.clone(),
+        },
+    ];
+    record_facts(&cfg, &pr, false, &facts).unwrap();
+    let count = open_recorded(&cfg, &pr).unwrap().events().len();
+    record_facts(&cfg, &pr, false, &facts).unwrap();
+    let ledger = open_recorded(&cfg, &pr).unwrap();
+    assert_eq!(ledger.events().len(), count);
+    assert_eq!(
+        ledger
+            .events()
+            .iter()
+            .filter(|event| matches!(
+                event.payload,
+                liberado_coder_core::TaskEventKind::ReviewSynchronizeIntent { .. }
+            ))
+            .count(),
+        1
+    );
+}
+
+#[test]
 fn shepherd_ready_binds_head_ci_and_review() {
     let temp = tempfile::tempdir().unwrap();
     let cfg = test_config(temp.path().to_path_buf());

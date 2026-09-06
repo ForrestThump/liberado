@@ -14,6 +14,7 @@ use coding_pack::{build_coding_pack, load_server_config};
 use main_agent_budget::main_agent_budget;
 mod hooks;
 mod latency;
+mod pr_review_observer;
 mod shutdown;
 mod state;
 mod sticky;

@@ -105,6 +105,53 @@ pub enum TaskEventKind {
     GoalLinked {
         goal_id: String,
     },
+    ReadyArmed {
+        repository: String,
+        pr_number: u64,
+        head_sha: String,
+        source: String,
+    },
+    ReviewCommandIssued {
+        command_id: String,
+        head_sha: String,
+    },
+    ReviewWorkerUnavailable {
+        run_id: String,
+        worker_id: String,
+        reason: String,
+    },
+    ReviewRunFinished {
+        run_id: String,
+        worker_id: String,
+        head_sha: String,
+        artifact_digest: String,
+    },
+    ReviewPublished {
+        head_sha: String,
+        review_id: u64,
+        login: String,
+    },
+    ReviewChecklistPublished {
+        head_sha: String,
+        comment_id: u64,
+    },
+    ReviewDraftConverted {
+        head_sha: String,
+    },
+    ReviewStale {
+        expected_sha: String,
+        observed_sha: String,
+    },
+    PullRequestClosed {
+        head_sha: String,
+    },
+    ReviewDraftObserved {
+        head_sha: String,
+    },
+    ReviewSynchronizeIntent {
+        old_sha: String,
+        new_sha: String,
+    },
 }
 
 /// Envelope for one discrete append-only event in a task ledger.

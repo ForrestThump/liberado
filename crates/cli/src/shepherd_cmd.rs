@@ -17,9 +17,12 @@ use std::{
 };
 
 mod actions;
+mod invocation;
 mod prompts;
 mod record;
+mod review_observer;
 mod tick_support;
+use invocation::{Invocation, ParsedInvocation, parse_invocation};
 use record::ShepherdFact;
 use tick_support::tick_live;
 
@@ -229,8 +232,9 @@ fn validate_shepherd_topology(
             }
         }
     }
-    Ok(())
+    review_observer::validate_review_config(topology)
 }
+
 #[derive(Clone)]
 struct Pr {
     number: u64,
@@ -255,85 +259,20 @@ impl Pr {
     }
 }
 
-/// One parsed shepherd invocation: which mode was asked for and with what modifiers.
-///
-/// Parsing is pure so the usage rules (a mode is required; `config` demands `check`; `--project`
-/// takes the next argument) are testable without a repository or a daemon behind them.
-#[derive(Debug, PartialEq, Eq)]
-enum Invocation {
-    SelfTest,
-    ConfigCheck { project: Option<String> },
-    Drive { once: bool, watch: bool },
-}
-
-#[derive(Debug, PartialEq, Eq)]
-struct ParsedInvocation {
-    mode: Invocation,
-    dry_run: bool,
-    project: Option<String>,
-    seed: Option<PathBuf>,
-    reset_baselines: bool,
-}
-
-fn parse_invocation(args: &[String]) -> Result<ParsedInvocation, String> {
-    let dry_run = args.iter().any(|a| a == "--dry-run");
-    let project = args
-        .windows(2)
-        .find(|a| a[0] == "--project")
-        .map(|a| a[1].clone());
-    let seed = args
-        .windows(2)
-        .find(|a| a[0] == "--seed")
-        .map(|a| PathBuf::from(&a[1]));
-    let reset_baselines = args.iter().any(|a| a == "--reset-baselines");
-
-    if args.iter().any(|a| a == "--self-test") {
-        return Ok(ParsedInvocation {
-            mode: Invocation::SelfTest,
-            dry_run,
-            project,
-            seed,
-            reset_baselines,
-        });
-    }
-    if args.first().is_some_and(|arg| arg == "config") {
-        if args.get(1).is_none_or(|arg| arg != "check") {
-            return Err("usage: liberado shepherd config check [--project <name>]".into());
-        }
-        return Ok(ParsedInvocation {
-            mode: Invocation::ConfigCheck {
-                project: project.clone(),
-            },
-            dry_run,
-            project,
-            seed,
-            reset_baselines,
-        });
-    }
-    let once = args.iter().any(|a| a == "--once");
-    let watch = args.iter().any(|a| a == "--watch");
-    if !(once || watch || seed.is_some()) {
-        return Err(
-            "usage: liberado shepherd <--once|--watch|--seed FILE> [--project <name>] [--dry-run]\n       liberado shepherd config check [--project <name>]\n       liberado shepherd --self-test"
-                .into(),
-        );
-    }
-    Ok(ParsedInvocation {
-        mode: Invocation::Drive { once, watch },
-        dry_run,
-        project,
-        seed,
-        reset_baselines,
-    })
-}
-
 pub fn run(args: impl Iterator<Item = String>) -> Result<(), Box<dyn std::error::Error>> {
-    let args: Vec<_> = args.collect();
-    let parsed = parse_invocation(&args)?;
+    dispatch_parsed(parse_invocation(&args.collect::<Vec<_>>())?)
+}
+
+fn dispatch_parsed(parsed: ParsedInvocation) -> Result<(), Box<dyn std::error::Error>> {
     match parsed.mode {
         Invocation::SelfTest => self_test(),
         Invocation::ConfigCheck { ref project } => config_check(project.as_deref()),
         Invocation::Drive { once, watch } => drive(&parsed, once, watch),
+        Invocation::ReviewDryRun {
+            ref project,
+            pr,
+            ref sha,
+        } => review_observer::dry_run(project, pr, sha),
     }
 }
 
@@ -968,6 +907,9 @@ fn self_test() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+#[cfg(test)]
+#[path = "shepherd_cmd/review_config_tests.rs"]
+mod review_config_tests;
 #[cfg(test)]
 #[path = "shepherd_cmd_tests.rs"]
 mod shepherd_cmd_tests;
