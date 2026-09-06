@@ -1861,8 +1861,8 @@
       "function": "sessions_dir",
       "line": 46,
       "cyclomatic": 2.0,
-      "coverage": 88.88888888888889,
-      "crap": 2.0054869684499312,
+      "coverage": 100.0,
+      "crap": 2.0,
       "crate": "liberado-acp-bridge"
     },
     {
