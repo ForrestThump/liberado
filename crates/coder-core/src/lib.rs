@@ -18,6 +18,7 @@ mod control_plane_ledger_contract_tests;
 mod control_plane_tests;
 mod failure_excerpt;
 mod intake;
+pub mod pr_review;
 mod trace_view;
 mod tuning;
 mod verify;
@@ -25,10 +26,10 @@ mod verify;
 pub use control_plane::{
     CONTROLLER_GROK_BOT, CONTROLLER_LIBERADO_SHEPHERD, CiState, ContinuationContextBuilder,
     ControlPlaneConfig, ControlPlaneError, ControlPlaneSupervisor, DispatchTaskRequest,
-    NATIVE_WORKER_ID, OpenCodeWorker, OpenCodeWorkerConfig, ReadyEvidence, ReviewState, RunHandle,
-    SupervisedRun, TaskDisposition, TaskEvent, TaskEventKind, TaskLedger, TaskRecord, TaskStatus,
-    WorkerAdapterConfig, WorkerPort, WorkerRunRequest, WorkerRunResult, WorkerStatus,
-    durable_tasks_root, shepherd_task_id, tasks_root_from_worktree,
+    NATIVE_WORKER_ID, OpenCodeWorker, OpenCodeWorkerConfig, ReadyEvidence, ReviewState,
+    ReviewWorkerConfig, RunHandle, SupervisedRun, TaskDisposition, TaskEvent, TaskEventKind,
+    TaskLedger, TaskRecord, TaskStatus, WorkerAdapterConfig, WorkerPort, WorkerRunRequest,
+    WorkerRunResult, WorkerStatus, durable_tasks_root, shepherd_task_id, tasks_root_from_worktree,
 };
 
 pub use trace_view::{

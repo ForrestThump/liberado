@@ -772,7 +772,7 @@ impl Config {
                 )));
             }
         }
-        Ok(())
+        super::shepherd::validate(&self.topology.shepherd)
     }
 }
 
