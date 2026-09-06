@@ -36,6 +36,8 @@ pub enum TaskEventKind {
         files_changed: Vec<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         revision: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        run_id: Option<String>,
     },
     TestsPassed {
         tests_run: u32,

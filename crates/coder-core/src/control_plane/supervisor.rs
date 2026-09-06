@@ -160,14 +160,14 @@ impl ControlPlaneSupervisor {
         ))?;
 
         let result = self.worker.collect(&resume_handle)?;
-        append_worker_finished(ledger, &resume_handle, &result, repair_revision.clone())?;
         append_commits(
             ledger,
             &resume_handle,
             &result,
             "repair-commit",
-            repair_revision,
+            repair_revision.clone(),
         )?;
+        append_worker_finished(ledger, &resume_handle, &result, repair_revision)?;
         Ok(result)
     }
 }
@@ -226,8 +226,8 @@ fn record_finished_run(
     handle: &RunHandle,
     result: &WorkerRunResult,
 ) -> Result<(), ControlPlaneError> {
-    append_worker_finished(ledger, handle, result, None)?;
-    append_commits(ledger, handle, result, "commit", None)
+    append_commits(ledger, handle, result, "commit", None)?;
+    append_worker_finished(ledger, handle, result, None)
 }
 
 fn append_worker_finished(
@@ -265,6 +265,7 @@ fn append_commits(
                 message: result.summary.clone(),
                 files_changed: result.files_changed.clone(),
                 revision: revision.clone(),
+                run_id: Some(handle.run_id.clone()),
             },
         ))?;
     }

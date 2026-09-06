@@ -211,6 +211,7 @@ fn stale_successful_repair_cannot_change_a_newer_head() {
             message: "repair old head".into(),
             files_changed: vec!["src/stale.rs".into()],
             revision: Some("old-head".into()),
+            run_id: Some("run-old".into()),
         },
     );
 
@@ -219,6 +220,39 @@ fn stale_successful_repair_cannot_change_a_newer_head() {
     assert_eq!(record.disposition, TaskDisposition::Open);
     assert!(record.commits.is_empty());
     assert!(record.files_changed.is_empty());
+}
+
+#[test]
+fn stale_commit_produced_cannot_pollute_active_run() {
+    let mut ledger = TaskLedger::new(created("task-stale-commit")).unwrap();
+    observe_head(&mut ledger, "old-head");
+    observe_head(&mut ledger, "current-head");
+    append(
+        &mut ledger,
+        "evt-run-started",
+        TaskEventKind::WorkerStarted {
+            run_id: "run-current".into(),
+            worker_id: "worker-current".into(),
+            resumed_session_id: None,
+        },
+    );
+    append(
+        &mut ledger,
+        "evt-stale-commit",
+        TaskEventKind::CommitProduced {
+            commit_sha: "stale-commit-sha".into(),
+            message: "repair on current head by a superseded worker".into(),
+            files_changed: vec!["src/stale.rs".into()],
+            revision: Some("current-head".into()),
+            run_id: Some("run-superseded".into()),
+        },
+    );
+
+    let record = ledger.project().unwrap();
+    assert_eq!(record.active_run_id.as_deref(), Some("run-current"));
+    assert_eq!(record.head_revision.as_deref(), Some("current-head"));
+    assert!(record.commits.is_empty(), "a stale commit produced must not pollute commits");
+    assert!(record.files_changed.is_empty(), "a stale commit produced must not pollute files_changed");
 }
 
 fn approve_review(ledger: &mut TaskLedger, round: usize) {

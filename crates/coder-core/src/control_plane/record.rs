@@ -268,9 +268,10 @@ fn apply_worker(record: &mut TaskRecord, kind: &TaskEventKind) -> bool {
             commit_sha,
             files_changed,
             revision,
+            run_id,
             ..
         } => {
-            apply_commit(record, commit_sha, files_changed, revision);
+            apply_commit(record, commit_sha, files_changed, revision, run_id);
             true
         }
         _ => false,
@@ -282,8 +283,12 @@ fn apply_commit(
     commit_sha: &str,
     files_changed: &[String],
     revision: &Option<String>,
+    run_id: &Option<String>,
 ) {
     if revision.is_some() && revision != &record.head_revision {
+        return;
+    }
+    if run_id.is_some() && run_id.as_deref() != record.active_run_id.as_deref() {
         return;
     }
     if !record.commits.iter().any(|commit| commit == commit_sha) {
