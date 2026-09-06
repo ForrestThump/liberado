@@ -9241,8 +9241,8 @@
       "function": "cancellation_requested",
       "line": 210,
       "cyclomatic": 4.0,
-      "coverage": 80.0,
-      "crap": 4.128,
+      "coverage": 90.0,
+      "crap": 4.016,
       "crate": "liberado-coder-agent"
     },
     {
