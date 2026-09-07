@@ -178,6 +178,7 @@ fn worker_selection_is_payload_then_profile_then_configured_default() {
     let registry = super::workers::WorkerRegistry::from_config(&ControlPlaneConfig {
         default_worker: "configured-default".into(),
         workers,
+        review_workers: Default::default(),
     });
 
     assert_eq!(
@@ -229,7 +230,7 @@ async fn false_cancel_notification_does_not_stop_an_external_worker() {
     cancel_tx.send(false).unwrap();
 
     let outcome = registry
-        .run("configured-worker", &native, request, &mut cancel)
+        .run("configured-worker", &native, request, None, &mut cancel)
         .await
         .expect("worker result");
 
@@ -319,7 +320,7 @@ async fn external_worker_run_records_durable_ledger_events() {
     let (_cancel_tx, mut cancel) = tokio::sync::watch::channel(false);
 
     let outcome = registry
-        .run("configured-worker", &native, request, &mut cancel)
+        .run("configured-worker", &native, request, None, &mut cancel)
         .await
         .expect("worker result");
 
@@ -385,7 +386,7 @@ async fn true_session_cancellation_invokes_worker_port_cancel() {
     let workspace = tempfile::tempdir().unwrap();
     let request = registry_request("session-cancel", workspace.path());
     let (cancel_tx, mut cancel) = tokio::sync::watch::channel(false);
-    let run = registry.run("configured-worker", &native, request, &mut cancel);
+    let run = registry.run("configured-worker", &native, request, None, &mut cancel);
     tokio::pin!(run);
 
     let started = std::time::Instant::now();
@@ -429,4 +430,136 @@ async fn true_session_cancellation_invokes_worker_port_cancel() {
             .iter()
             .any(|event| matches!(event.payload, TaskEventKind::WorkerFinished { .. }))
     );
+}
+
+#[tokio::test]
+async fn repair_run_rejects_missing_ledger_command() {
+    use liberado_coder_core::{TaskEvent, TaskEventKind, TaskLedger};
+
+    let native: Arc<dyn liberado_coder_core::CoderBackend> = Arc::new(ScriptedBackend {
+        seen: Arc::new(std::sync::Mutex::new(Vec::new())),
+        fail_attempts: 0,
+    });
+    let external = Arc::new(ImmediateWorker::new());
+    let mut registry = super::workers::WorkerRegistry::default();
+    registry.register("test-external", external.clone());
+    let workspace = tempfile::tempdir().unwrap();
+    let task_id = "repair-missing";
+    let request = registry_request(task_id, workspace.path());
+    let tasks_root = liberado_coder_core::tasks_root_from_worktree(&request.workspace.root);
+    let created = TaskEvent::new(
+        "evt-created",
+        task_id,
+        TaskEventKind::TaskCreated {
+            objective: "repair".into(),
+            acceptance_criteria: vec!["green".into()],
+            worktree: request.workspace.root.clone(),
+            branch: "feat/test".into(),
+            base_ref: "main".into(),
+            repo: None,
+        },
+    );
+    TaskLedger::create_in(&tasks_root, created).expect("ledger");
+
+    let repair = crate::coding_goal::ControlPlaneRepair {
+        task_id: task_id.into(),
+        command_id: "cmd-missing".into(),
+        cause_event_id: "cause-1".into(),
+        revision: "rev-1".into(),
+    };
+    let (_cancel_tx, mut cancel) = tokio::sync::watch::channel(false);
+    let outcome = registry
+        .run(
+            "test-external",
+            &native,
+            request,
+            Some(&repair),
+            &mut cancel,
+        )
+        .await;
+    let err = match outcome {
+        Err(error) => error,
+        Ok(_) => panic!("missing repair command must fail"),
+    };
+    assert!(
+        err.to_string().contains("absent from the task ledger"),
+        "{err}"
+    );
+    assert_eq!(external.starts.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn repair_run_rejects_stale_revision() {
+    use liberado_coder_core::{TaskEvent, TaskEventKind, TaskLedger};
+
+    let native: Arc<dyn liberado_coder_core::CoderBackend> = Arc::new(ScriptedBackend {
+        seen: Arc::new(std::sync::Mutex::new(Vec::new())),
+        fail_attempts: 0,
+    });
+    let external = Arc::new(ImmediateWorker::new());
+    let mut registry = super::workers::WorkerRegistry::default();
+    registry.register("test-external", external.clone());
+    let workspace = tempfile::tempdir().unwrap();
+    let task_id = "repair-stale";
+    let request = registry_request(task_id, workspace.path());
+    let tasks_root = liberado_coder_core::tasks_root_from_worktree(&request.workspace.root);
+    let created = TaskEvent::new(
+        "evt-created",
+        task_id,
+        TaskEventKind::TaskCreated {
+            objective: "repair".into(),
+            acceptance_criteria: vec!["green".into()],
+            worktree: request.workspace.root.clone(),
+            branch: "feat/test".into(),
+            base_ref: "main".into(),
+            repo: None,
+        },
+    );
+    let mut ledger = TaskLedger::create_in(&tasks_root, created).expect("ledger");
+    ledger
+        .append(TaskEvent::new(
+            "evt-head",
+            task_id,
+            TaskEventKind::HeadRevisionObserved {
+                sha: "head-current".into(),
+            },
+        ))
+        .expect("head");
+    ledger
+        .append(
+            TaskEvent::new(
+                "evt-repair",
+                task_id,
+                TaskEventKind::RepairRequested {
+                    goal_id: None,
+                    reason: "flake".into(),
+                    cause_event_id: Some("cause-9".into()),
+                },
+            )
+            .with_command_id("cmd-stale"),
+        )
+        .expect("repair requested");
+
+    let repair = crate::coding_goal::ControlPlaneRepair {
+        task_id: task_id.into(),
+        command_id: "cmd-stale".into(),
+        cause_event_id: "cause-9".into(),
+        revision: "head-old".into(),
+    };
+    let (_cancel_tx, mut cancel) = tokio::sync::watch::channel(false);
+    let outcome = registry
+        .run(
+            "test-external",
+            &native,
+            request,
+            Some(&repair),
+            &mut cancel,
+        )
+        .await;
+    let err = match outcome {
+        Err(error) => error,
+        Ok(_) => panic!("stale repair revision must fail"),
+    };
+    assert!(err.to_string().contains("revision is stale"), "{err}");
+    assert_eq!(external.starts.load(Ordering::SeqCst), 0);
 }

@@ -77,6 +77,7 @@ fn shepherd_repeated_facts_are_idempotent_and_survive_reload() {
             goal_id: Some("goal-a".into()),
             reason: "1 new CI failures".into(),
             kick: 1,
+            cause_event_id: "evt-ci-7-88-failure".into(),
         },
     ];
     let first = record_facts(&cfg, &pr, false, &facts)
@@ -104,6 +105,39 @@ fn shepherd_repeated_facts_are_idempotent_and_survive_reload() {
     assert_eq!(restored.repair_count, 1);
     assert_eq!(restored.github_run_id, Some(88));
     assert_eq!(reloaded.events().len(), first_len);
+}
+
+#[test]
+fn review_arm_and_synchronize_intent_are_restart_stable() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut cfg = test_config(temp.path().to_path_buf());
+    cfg.repository = Some("owner/repo".into());
+    let pr = sample_pr(16, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
+    let facts = [
+        ShepherdFact::ReadyArmed {
+            source: "ready_for_review".into(),
+        },
+        ShepherdFact::SynchronizeIntent {
+            old_sha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into(),
+            new_sha: pr.head_sha.clone(),
+        },
+    ];
+    record_facts(&cfg, &pr, false, &facts).unwrap();
+    let count = open_recorded(&cfg, &pr).unwrap().events().len();
+    record_facts(&cfg, &pr, false, &facts).unwrap();
+    let ledger = open_recorded(&cfg, &pr).unwrap();
+    assert_eq!(ledger.events().len(), count);
+    assert_eq!(
+        ledger
+            .events()
+            .iter()
+            .filter(|event| matches!(
+                event.payload,
+                liberado_coder_core::TaskEventKind::ReviewSynchronizeIntent { .. }
+            ))
+            .count(),
+        1
+    );
 }
 
 #[test]

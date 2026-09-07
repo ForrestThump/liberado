@@ -188,7 +188,10 @@ impl CodingSessionPack {
             reasoning: None,
         };
 
-        let mut task = CoderTask::new(session_id, &goal.description);
+        let task_id = payload
+            .control_plane()
+            .map_or(session_id, |repair| repair.task_id.as_str());
+        let mut task = CoderTask::new(task_id, &goal.description);
         task.success_criteria = goal.success_criteria.clone();
 
         // Explore is read-only: HostLocal is enough (no worktree isolation required for readers).

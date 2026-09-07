@@ -22,7 +22,7 @@ fn test_config(root: PathBuf) -> Config {
 }
 #[test]
 fn parser_is_platform_specific_and_preserves_step_failure() {
-    self_test().unwrap()
+    run(["--self-test".into()].into_iter()).unwrap()
 }
 #[test]
 fn preexisting_note_is_bounded() {
@@ -74,6 +74,10 @@ fn shepherd_config_rejects_unknown_coding_project() {
             cold_review_max_turns: None,
             max_concurrent_goals: None,
             poll_seconds: None,
+            controller: None,
+            review_profile: None,
+            gate: None,
+            auth: None,
         });
     assert!(
         validate_shepherd_topology(&topology)
@@ -97,6 +101,10 @@ fn valid_project(name: &str) -> liberado_config::ShepherdProjectConfig {
         cold_review_max_turns: None,
         max_concurrent_goals: None,
         poll_seconds: None,
+        controller: None,
+        review_profile: None,
+        gate: None,
+        auth: None,
     }
 }
 
@@ -229,6 +237,10 @@ fn apply_project_copies_every_field() {
         cold_review_max_turns: Some(9),
         max_concurrent_goals: Some(4),
         poll_seconds: Some(30),
+        controller: None,
+        review_profile: None,
+        gate: None,
+        auth: None,
     };
     cfg.apply_project(&project);
     assert_eq!(cfg.repository.as_deref(), Some("owner/repo"));
@@ -656,6 +668,10 @@ fn apply_project_overrides_only_the_fields_it_declares() {
         cold_review_max_turns: None,
         max_concurrent_goals: None,
         poll_seconds: None,
+        controller: None,
+        review_profile: None,
+        gate: None,
+        auth: None,
     };
     cfg.apply_project(&project);
     assert_eq!(cfg.repository.as_deref(), Some("owner/repo"));

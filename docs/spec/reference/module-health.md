@@ -18,6 +18,9 @@ not proof that a file has a bad design.
 
 The check reuses a current generated JSON report when one is available and runs the analyzer when
 it is not. An unreadable or invalid report is an error; it never becomes an empty healthy report.
+After a successful check, the ratchet adds passing new files and saves lower metrics. For each
+existing file, it keeps the old value when current PLOC, LLOC, function count, or cyclomatic
+complexity is higher. Growth below a review boundary can pass, but it cannot raise the baseline.
 
 Use a `[[waiver]]` only after review shows that a large file is cohesive, such
 as a declarative protocol table. A waiver names one file, one metric, a reason,
@@ -63,7 +66,7 @@ are partitioned into modular sibling files (`crates/daemon/src/tests/*.rs`, `lib
 clean module health without synthetic waivers.
 
 After an accepted improvement, run `just module-health-ratchet` and commit the
-lower baseline. GitHub runs only the read-only comparison.
+lower baseline. The command does not save worse values. GitHub runs only the read-only comparison.
 
 ## License
 

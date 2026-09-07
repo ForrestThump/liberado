@@ -5544,6 +5544,7 @@ dependencies = [
  "tracing-subscriber",
  "tree-sitter",
  "tree-sitter-rust",
+ "ulid",
 ]
 
 [[package]]
@@ -6163,6 +6164,7 @@ dependencies = [
  "liberado-telegram-approvals",
  "liberado-test-support",
  "liberado-vault",
+ "reqwest 0.12.28",
  "serde",
  "serde_json",
  "serde_urlencoded",

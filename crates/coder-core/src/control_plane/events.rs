@@ -27,11 +27,17 @@ pub enum TaskEventKind {
         status: WorkerStatus,
         external_session_id: Option<String>,
         blocking_issue: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        revision: Option<String>,
     },
     CommitProduced {
         commit_sha: String,
         message: String,
         files_changed: Vec<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        revision: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        run_id: Option<String>,
     },
     TestsPassed {
         tests_run: u32,
@@ -81,6 +87,8 @@ pub enum TaskEventKind {
     RepairRequested {
         goal_id: Option<String>,
         reason: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cause_event_id: Option<String>,
     },
     ReviewRequested {
         round: usize,
@@ -96,6 +104,53 @@ pub enum TaskEventKind {
     },
     GoalLinked {
         goal_id: String,
+    },
+    ReadyArmed {
+        repository: String,
+        pr_number: u64,
+        head_sha: String,
+        source: String,
+    },
+    ReviewCommandIssued {
+        command_id: String,
+        head_sha: String,
+    },
+    ReviewWorkerUnavailable {
+        run_id: String,
+        worker_id: String,
+        reason: String,
+    },
+    ReviewRunFinished {
+        run_id: String,
+        worker_id: String,
+        head_sha: String,
+        artifact_digest: String,
+    },
+    ReviewPublished {
+        head_sha: String,
+        review_id: u64,
+        login: String,
+    },
+    ReviewChecklistPublished {
+        head_sha: String,
+        comment_id: u64,
+    },
+    ReviewDraftConverted {
+        head_sha: String,
+    },
+    ReviewStale {
+        expected_sha: String,
+        observed_sha: String,
+    },
+    PullRequestClosed {
+        head_sha: String,
+    },
+    ReviewDraftObserved {
+        head_sha: String,
+    },
+    ReviewSynchronizeIntent {
+        old_sha: String,
+        new_sha: String,
     },
 }
 

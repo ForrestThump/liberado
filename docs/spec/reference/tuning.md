@@ -390,6 +390,17 @@ project/profile, and retry/review limits. A configured check that GitHub does no
 PR waiting; this prevents a renamed check or typo from being treated as success. `liberado shepherd
 config check --project <name>` prints the resolved policy before any forge mutation or goal start.
 
+Daemon-native PR review (Slices 0–1) is opt-in on the same project row. `[shepherd.review]` defaults
+to `enabled = false` and, when enabled, may only `delivery = "poll"` with bounded `poll_seconds`,
+`max_pages`, and `page_size`. `[[shepherd.auth]]` names a token by environment reference
+(`token_ref`, optional `webhook_secret_ref`); literal secrets are rejected. A project with
+`controller = "liberado-shepherd"` must set `cold_reviews = 0`, nonempty `check_names`,
+`review_profile`, `gate = "ready_and_green_tip"`, and a declared `auth` name. Repository identity
+stays in that deployment row; the source tree has no default owner/repository URL. Shadow
+observation (`controller` other than `liberado-shepherd`) records ledger facts and does not claim
+the controller lease. `liberado shepherd review --project <name> --pr <n> --sha <full-sha> --dry-run`
+uses the same SHA-exact eligibility as the daemon observer and writes nothing.
+
 The shepherd compares GitHub check/job conclusions. Local commands and their normal successful
 exit code (`0`) remain under `[projects.preflight]`; do not duplicate CI commands in the shepherd.
 

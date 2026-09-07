@@ -28,6 +28,8 @@ pub struct CodingGoalPayload {
     fanout_child: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     write_scope: Option<DispatchWriteScope>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    control_plane: Option<ControlPlaneRepair>,
     /// Pack-owned extensions. This preserves forwards compatibility without making the session
     /// kernel understand coding controls.
     #[serde(flatten)]
@@ -85,11 +87,24 @@ impl CodingGoalPayload {
         self.write_scope.as_ref()
     }
 
+    pub fn control_plane(&self) -> Option<&ControlPlaneRepair> {
+        self.control_plane.as_ref()
+    }
+
     /// Record the configuration-resolved project root. A client path never survives this rewrite.
     pub fn set_authorized_workspace(&mut self, project: String, workspace_root: String) {
         self.project = Some(project);
         self.workspace_root = Some(workspace_root);
     }
+}
+
+/// Identity of one shepherd-issued repair command.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ControlPlaneRepair {
+    pub task_id: String,
+    pub command_id: String,
+    pub cause_event_id: String,
+    pub revision: String,
 }
 
 #[cfg(test)]

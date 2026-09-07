@@ -94,14 +94,16 @@ impl ControlPlaneSupervisor {
         Ok(result)
     }
 
-    /// Automatically handle a CI failure on an existing task ledger by kicking back to the worker.
-    pub fn handle_ci_failure(
+    /// Execute one repair that the controller already requested in the task ledger.
+    pub fn execute_repair_command(
         &self,
         ledger: &mut TaskLedger,
         failures: Vec<String>,
         failure_log_excerpt: Option<String>,
+        requested_revision: Option<String>,
     ) -> Result<WorkerRunResult, ControlPlaneError> {
         let record = ledger.project()?;
+        let repair_revision = requested_revision.or_else(|| record.head_revision.clone());
 
         let fail_evt = TaskEvent::new(
             format!("evt-cifail-{}", Utc::now().timestamp_millis()),
@@ -158,8 +160,14 @@ impl ControlPlaneSupervisor {
         ))?;
 
         let result = self.worker.collect(&resume_handle)?;
-        append_worker_finished(ledger, &resume_handle, &result)?;
-        append_commits(ledger, &resume_handle, &result, "repair-commit")?;
+        append_commits(
+            ledger,
+            &resume_handle,
+            &result,
+            "repair-commit",
+            repair_revision.clone(),
+        )?;
+        append_worker_finished(ledger, &resume_handle, &result, repair_revision)?;
         Ok(result)
     }
 }
@@ -218,14 +226,15 @@ fn record_finished_run(
     handle: &RunHandle,
     result: &WorkerRunResult,
 ) -> Result<(), ControlPlaneError> {
-    append_worker_finished(ledger, handle, result)?;
-    append_commits(ledger, handle, result, "commit")
+    append_commits(ledger, handle, result, "commit", None)?;
+    append_worker_finished(ledger, handle, result, None)
 }
 
 fn append_worker_finished(
     ledger: &mut TaskLedger,
     handle: &RunHandle,
     result: &WorkerRunResult,
+    revision: Option<String>,
 ) -> Result<(), ControlPlaneError> {
     ledger.append(TaskEvent::new(
         format!("evt-{}-finished", handle.run_id),
@@ -235,6 +244,7 @@ fn append_worker_finished(
             status: result.status,
             external_session_id: result.external_session_id.clone(),
             blocking_issue: result.blocking_issue.clone(),
+            revision,
         },
     ))
 }
@@ -244,6 +254,7 @@ fn append_commits(
     handle: &RunHandle,
     result: &WorkerRunResult,
     kind: &str,
+    revision: Option<String>,
 ) -> Result<(), ControlPlaneError> {
     for commit in &result.commits {
         ledger.append(TaskEvent::new(
@@ -253,6 +264,8 @@ fn append_commits(
                 commit_sha: commit.clone(),
                 message: result.summary.clone(),
                 files_changed: result.files_changed.clone(),
+                revision: revision.clone(),
+                run_id: Some(handle.run_id.clone()),
             },
         ))?;
     }

@@ -9,8 +9,8 @@ open_items: true
 
 # Coding-worker control plane
 
-**Status**: draft prototype. Slice 0 (ledger contract) and Slice 1 (shepherd records one PR
-lifecycle) have landed. Not scheduled or selectable from the backlog. An explicitly requested
+**Status**: draft prototype. Slices 0–2 have landed: the ledger contract, shepherd PR recording,
+and one idempotent post-rerun CI repair through the daemon task service. An explicitly requested
 implementation branch now exercises the seam, durable ledger, first external adapter, and
 configuration-driven coding-session routing while the C3 evidence gate remains open.
 **Evidence gate**: the published C3 baseline in
@@ -400,10 +400,18 @@ revision, CI, rerun, repair request, review request, ready, blocked) into that l
 pending-review files stay as compatibility projections. `--dry-run` writes nothing. Repeated polls
 are idempotent. Dispatch behavior is unchanged: no new worker launch.
 
+**Slice 2 — one CI repair.** Shepherd records one stable `RepairRequested` command before it calls
+the daemon. The daemon goal ID is derived from that command, so restart returns the existing
+durable session instead of launching another worker. The coding pack selects the configured worker,
+keeps its existing worktree policy, and records external-worker run facts in the same PR task
+ledger. A worker finish is bound to the repair revision and cannot change a newer head's
+disposition.
+
 Still missing (do not implement from this file without an explicit request):
 
-- **Slice 2** — CI-repair dispatch from the ledger (resume or start a worker). After CI repair,
-  structured PR review is next; it is not Slice 2.
+- **Slice 3** — native `liberado-loop` ledger parity without forcing it behind `WorkerPort`.
+- **Slice 4** — structured PR review results. This is the next policy feature after CI repair.
+- **Slice 5+** — role presets, cadence, quota optimization, and later operating policy.
 - Native `liberado-loop` remains the in-process backend. Common ledger recording comes first; do
   not force native behind a synchronous `WorkerPort` yet.
 - Resume across harnesses when the original session is gone.
@@ -417,7 +425,7 @@ default worker, and override it per goal or `[[session_profiles]]`. The same cod
 still owns workspace policy and post-run gates. An unknown worker fails closed instead of silently
 falling back to the native loop.
 
-## 9. Next slice: The CI-repair dispatch
+## 9. Next slice: Native ledger parity
 
 One worker, one job, one ledger. Not a framework.
 

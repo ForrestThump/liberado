@@ -1,10 +1,10 @@
 {
   "summary": {
-    "total_unwraps": 111,
+    "total_unwraps": 110,
     "proven_invariant": 61,
     "local_failure": 0,
-    "process_fatal": 50,
-    "files_scanned": 453,
+    "process_fatal": 49,
+    "files_scanned": 472,
     "files_with_unwraps": 49
   },
   "files": {
@@ -150,12 +150,12 @@
     "crates/cli/src/shepherd_cmd.rs": {
       "proven_invariant": 2,
       "local_failure": 0,
-      "process_fatal": 3,
-      "total": 5,
+      "process_fatal": 2,
+      "total": 4,
       "occurrences": [
         {
           "file": "crates/cli/src/shepherd_cmd.rs",
-          "line": 456,
+          "line": 401,
           "column": 16,
           "method": "unwrap",
           "snippet": "Regex::new(r\"\\btest\\s+(\\S+)\\s+\\.\\.\\.\\s+FAILED\\b\").unwrap()",
@@ -166,7 +166,7 @@
         },
         {
           "file": "crates/cli/src/shepherd_cmd.rs",
-          "line": 457,
+          "line": 402,
           "column": 17,
           "method": "unwrap",
           "snippet": "Regex::new(r\"\\b(error(\\[[A-Z]\\d+\\])?:|error: could not compile)\").unwrap()",
@@ -177,7 +177,7 @@
         },
         {
           "file": "crates/cli/src/shepherd_cmd.rs",
-          "line": 473,
+          "line": 418,
           "column": 27,
           "method": "unwrap",
           "snippet": "key.split_once('|').unwrap()",
@@ -188,23 +188,12 @@
         },
         {
           "file": "crates/cli/src/shepherd_cmd.rs",
-          "line": 703,
+          "line": 650,
           "column": 5,
           "method": "expect",
           "snippet": "reqwest::blocking::Client::builder()\n        .timeout(Duration::from_secs(30))\n        .build()\n        .expect(\"HTTP client\")",
           "receiver": "reqwest::blocking::Client::builder()\n        .timeout(Duration::from_secs(30))\n        .build()",
           "context": "clientreqwest::blocking::Client",
-          "classification": "process_fatal",
-          "reason": "production path unwrap requiring conversion to Result or waiver"
-        },
-        {
-          "file": "crates/cli/src/shepherd_cmd.rs",
-          "line": 1046,
-          "column": 32,
-          "method": "unwrap",
-          "snippet": "path.parent().unwrap()",
-          "receiver": "path.parent()",
-          "context": "start_cold_reviewResult<(), Box<dyn std::error::Error>>",
           "classification": "process_fatal",
           "reason": "production path unwrap requiring conversion to Result or waiver"
         }
@@ -218,7 +207,7 @@
       "occurrences": [
         {
           "file": "crates/coder-agent/src/coding_goal.rs",
-          "line": 52,
+          "line": 54,
           "column": 9,
           "method": "expect",
           "snippet": "serde_json::to_value(self).expect(\"CodingGoalPayload always serializes\")",
@@ -229,7 +218,7 @@
         },
         {
           "file": "crates/coder-agent/src/coding_goal.rs",
-          "line": 57,
+          "line": 59,
           "column": 9,
           "method": "expect",
           "snippet": "serde_json::to_value(self).expect(\"CodingGoalPayload always serializes\")",
@@ -1446,7 +1435,7 @@
       "occurrences": [
         {
           "file": "crates/session-store/src/jsonl.rs",
-          "line": 101,
+          "line": 104,
           "column": 9,
           "method": "expect",
           "snippet": "self.ids\n            .lock()\n            .expect(\"id generator mutex poisoned\")",
@@ -1457,7 +1446,7 @@
         },
         {
           "file": "crates/session-store/src/jsonl.rs",
-          "line": 244,
+          "line": 247,
           "column": 9,
           "method": "expect",
           "snippet": "self.write_locks\n            .lock()\n            .expect(\"write-lock registry poisoned\")",
@@ -1468,7 +1457,7 @@
         },
         {
           "file": "crates/session-store/src/jsonl.rs",
-          "line": 421,
+          "line": 424,
           "column": 26,
           "method": "expect",
           "snippet": "prefix.last().expect(\"non-empty\")",
@@ -1487,7 +1476,7 @@
       "occurrences": [
         {
           "file": "crates/session/src/hub.rs",
-          "line": 230,
+          "line": 225,
           "column": 20,
           "method": "expect",
           "snippet": "self.packs.get(&domain).expect(\"checked above\")",

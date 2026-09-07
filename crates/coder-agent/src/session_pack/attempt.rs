@@ -37,6 +37,7 @@ impl CodingSessionPack {
             .workers
             .select(overrides, payload)
             .map_err(|error| PackError::Setup(error.to_string()))?;
+        let repair_payload = crate::CodingGoalPayload::parse(payload).map_err(PackError::Setup)?;
         let _ = events
             .send(SessionEvent::new(
                 session_id,
@@ -50,8 +51,13 @@ impl CodingSessionPack {
         let result = crate::live::LIVE_GATE
             .scope(
                 (events.clone(), session_id.to_string()),
-                self.workers
-                    .run(&worker_id, &self.backend, request.clone(), cancel),
+                self.workers.run(
+                    &worker_id,
+                    &self.backend,
+                    request.clone(),
+                    repair_payload.control_plane(),
+                    cancel,
+                ),
             )
             .await;
         let result = match result {
@@ -69,6 +75,15 @@ impl CodingSessionPack {
             ))
             .await;
 
+        Self::classify_attempt_result(session_id, result, events).await
+    }
+
+    /// Emit attempt-side events and map backend success/failure into an [`AttemptOutcome`].
+    async fn classify_attempt_result(
+        session_id: &str,
+        result: Result<liberado_coder_core::CoderRunResult, liberado_coder_core::CoderError>,
+        events: &Sender<SessionEvent>,
+    ) -> Result<AttemptOutcome, PackError> {
         match result {
             Ok(run) => {
                 let ok = run.outcome == Outcome::Succeeded;

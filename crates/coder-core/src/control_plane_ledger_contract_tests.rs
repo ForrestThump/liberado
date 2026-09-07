@@ -45,6 +45,222 @@ fn observe_ci(ledger: &mut TaskLedger, sha: &str, run: u64) {
     );
 }
 
+#[test]
+fn stale_worker_failure_cannot_block_a_newer_head() {
+    let mut ledger = TaskLedger::new(created("task-stale-worker")).unwrap();
+    observe_head(&mut ledger, "old-head");
+    observe_head(&mut ledger, "new-head");
+    append(
+        &mut ledger,
+        "evt-old-run-finished",
+        TaskEventKind::WorkerFinished {
+            run_id: "run-old".into(),
+            status: WorkerStatus::Failed,
+            external_session_id: None,
+            blocking_issue: Some("old repair failed".into()),
+            revision: Some("old-head".into()),
+        },
+    );
+
+    let record = ledger.project().unwrap();
+    assert_eq!(record.head_revision.as_deref(), Some("new-head"));
+    assert_eq!(record.disposition, TaskDisposition::Open);
+}
+
+#[test]
+fn stale_worker_finish_cannot_clear_a_newer_active_run() {
+    let mut ledger = TaskLedger::new(created("task-stale-worker-run")).unwrap();
+    observe_head(&mut ledger, "old-head");
+    append(
+        &mut ledger,
+        "evt-old-run-started",
+        TaskEventKind::WorkerStarted {
+            run_id: "run-old".into(),
+            worker_id: "worker-old".into(),
+            resumed_session_id: None,
+        },
+    );
+    observe_head(&mut ledger, "new-head");
+    append(
+        &mut ledger,
+        "evt-new-run-started",
+        TaskEventKind::WorkerStarted {
+            run_id: "run-new".into(),
+            worker_id: "worker-new".into(),
+            resumed_session_id: None,
+        },
+    );
+    append(
+        &mut ledger,
+        "evt-old-run-finished",
+        TaskEventKind::WorkerFinished {
+            run_id: "run-old".into(),
+            status: WorkerStatus::Failed,
+            external_session_id: Some("session-old".into()),
+            blocking_issue: Some("old repair failed".into()),
+            revision: Some("old-head".into()),
+        },
+    );
+
+    let record = ledger.project().unwrap();
+    assert_eq!(record.active_run_id.as_deref(), Some("run-new"));
+    assert_eq!(record.external_session_id, None);
+    assert_eq!(record.status, TaskStatus::Running);
+    assert_eq!(record.disposition, TaskDisposition::Open);
+}
+
+#[test]
+fn current_head_worker_finish_must_match_the_active_run() {
+    let mut ledger = TaskLedger::new(created("task-wrong-worker-run")).unwrap();
+    observe_head(&mut ledger, "current-head");
+    append(
+        &mut ledger,
+        "evt-new-run-started",
+        TaskEventKind::WorkerStarted {
+            run_id: "run-new".into(),
+            worker_id: "worker-new".into(),
+            resumed_session_id: None,
+        },
+    );
+    append(
+        &mut ledger,
+        "evt-old-run-finished",
+        TaskEventKind::WorkerFinished {
+            run_id: "run-old".into(),
+            status: WorkerStatus::Failed,
+            external_session_id: Some("session-old".into()),
+            blocking_issue: Some("superseded run failed".into()),
+            revision: Some("current-head".into()),
+        },
+    );
+
+    let record = ledger.project().unwrap();
+    assert_eq!(record.active_run_id.as_deref(), Some("run-new"));
+    assert_eq!(record.external_session_id, None);
+    assert_eq!(record.status, TaskStatus::Running);
+    assert_eq!(record.disposition, TaskDisposition::Open);
+}
+
+#[test]
+fn stale_worker_finish_cannot_apply_after_the_active_run_clears() {
+    let mut ledger = TaskLedger::new(created("task-cleared-worker-run")).unwrap();
+    observe_head(&mut ledger, "current-head");
+    append(
+        &mut ledger,
+        "evt-run-started",
+        TaskEventKind::WorkerStarted {
+            run_id: "run-current".into(),
+            worker_id: "worker-current".into(),
+            resumed_session_id: None,
+        },
+    );
+    append(
+        &mut ledger,
+        "evt-run-finished",
+        TaskEventKind::WorkerFinished {
+            run_id: "run-current".into(),
+            status: WorkerStatus::Completed,
+            external_session_id: Some("session-current".into()),
+            blocking_issue: None,
+            revision: Some("current-head".into()),
+        },
+    );
+    append(
+        &mut ledger,
+        "evt-stale-run-finished",
+        TaskEventKind::WorkerFinished {
+            run_id: "run-stale".into(),
+            status: WorkerStatus::Failed,
+            external_session_id: Some("session-stale".into()),
+            blocking_issue: Some("stale repair failed".into()),
+            revision: Some("current-head".into()),
+        },
+    );
+
+    let record = ledger.project().unwrap();
+    assert_eq!(record.active_run_id, None);
+    assert_eq!(
+        record.external_session_id.as_deref(),
+        Some("session-current")
+    );
+    assert_eq!(record.disposition, TaskDisposition::Open);
+    assert_eq!(record.current_diagnosis, None);
+}
+
+#[test]
+fn stale_successful_repair_cannot_change_a_newer_head() {
+    let mut ledger = TaskLedger::new(created("task-stale-success")).unwrap();
+    observe_head(&mut ledger, "old-head");
+    observe_head(&mut ledger, "new-head");
+    append(
+        &mut ledger,
+        "evt-old-run-finished",
+        TaskEventKind::WorkerFinished {
+            run_id: "run-old".into(),
+            status: WorkerStatus::Completed,
+            external_session_id: None,
+            blocking_issue: None,
+            revision: Some("old-head".into()),
+        },
+    );
+    append(
+        &mut ledger,
+        "evt-old-repair-commit",
+        TaskEventKind::CommitProduced {
+            commit_sha: "stale-commit".into(),
+            message: "repair old head".into(),
+            files_changed: vec!["src/stale.rs".into()],
+            revision: Some("old-head".into()),
+            run_id: Some("run-old".into()),
+        },
+    );
+
+    let record = ledger.project().unwrap();
+    assert_eq!(record.head_revision.as_deref(), Some("new-head"));
+    assert_eq!(record.disposition, TaskDisposition::Open);
+    assert!(record.commits.is_empty());
+    assert!(record.files_changed.is_empty());
+}
+
+#[test]
+fn stale_commit_produced_cannot_pollute_active_run() {
+    let mut ledger = TaskLedger::new(created("task-stale-commit")).unwrap();
+    observe_head(&mut ledger, "old-head");
+    observe_head(&mut ledger, "current-head");
+    append(
+        &mut ledger,
+        "evt-run-started",
+        TaskEventKind::WorkerStarted {
+            run_id: "run-current".into(),
+            worker_id: "worker-current".into(),
+            resumed_session_id: None,
+        },
+    );
+    append(
+        &mut ledger,
+        "evt-stale-commit",
+        TaskEventKind::CommitProduced {
+            commit_sha: "stale-commit-sha".into(),
+            message: "repair on current head by a superseded worker".into(),
+            files_changed: vec!["src/stale.rs".into()],
+            revision: Some("current-head".into()),
+            run_id: Some("run-superseded".into()),
+        },
+    );
+
+    let record = ledger.project().unwrap();
+    assert_eq!(record.active_run_id.as_deref(), Some("run-current"));
+    assert_eq!(record.head_revision.as_deref(), Some("current-head"));
+    assert!(
+        record.commits.is_empty(),
+        "a stale commit produced must not pollute commits"
+    );
+    assert!(
+        record.files_changed.is_empty(),
+        "a stale commit produced must not pollute files_changed"
+    );
+}
+
 fn approve_review(ledger: &mut TaskLedger, round: usize) {
     append(
         ledger,
@@ -371,6 +587,7 @@ fn duplicate_command_ids_do_not_write_a_second_event() {
                 TaskEventKind::RepairRequested {
                     goal_id: Some("goal-1".into()),
                     reason: "new CI failures".into(),
+                    cause_event_id: Some("evt-ci".into()),
                 },
             )
             .with_command_id("repair:5:aaa:1"),
@@ -384,6 +601,7 @@ fn duplicate_command_ids_do_not_write_a_second_event() {
                 TaskEventKind::RepairRequested {
                     goal_id: Some("goal-1".into()),
                     reason: "new CI failures".into(),
+                    cause_event_id: Some("evt-ci".into()),
                 },
             )
             .with_command_id("repair:5:aaa:1"),
