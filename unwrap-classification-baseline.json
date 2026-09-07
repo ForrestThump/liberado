@@ -572,7 +572,7 @@
       "occurrences": [
         {
           "file": "crates/cost/src/lib.rs",
-          "line": 290,
+          "line": 294,
           "column": 28,
           "method": "expect",
           "snippet": "cur.take().expect(\"just inserted\")",
