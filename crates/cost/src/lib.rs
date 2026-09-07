@@ -16,6 +16,10 @@ mod price;
 mod report;
 mod rollup;
 
+#[cfg(test)]
+#[path = "survivor_tests.rs"]
+mod survivor_tests;
+
 pub use journal::{
     JournalEvent, LoadError, child_to_parent_map, load_dispatch_parent_map, load_latency_events,
     load_latency_events_from_str,

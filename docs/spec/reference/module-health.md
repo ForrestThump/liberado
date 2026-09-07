@@ -55,8 +55,10 @@ last accepted measurement — this change does not raise it.
 The same narrow rule applies when a production crate root crosses its boundary
 only because it declares and exports a new sibling module. The waiver must name
 the exact wiring lines and exclude implementation growth. `crates/cost/src/lib.rs`
-uses this form for the split `latency_report.rs` module and its compatibility
-fixture field; the report implementation stays outside the waived root.
+uses this form for the split `latency_report.rs` module, its compatibility
+fixture field, and the `#[cfg(test)] #[path]` sibling wiring that declares
+`survivor_tests.rs`; the report and survivor-test implementations stay outside
+the waived root.
 
 Similarly, god-file test suites (`crates/daemon/src/tests.rs` and `crates/coder-agent/src/lib.rs`)
 are partitioned into modular sibling files (`crates/daemon/src/tests/*.rs`, `lib_unit_tests.rs`,

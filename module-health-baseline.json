@@ -1907,6 +1907,12 @@
     "functions": 32,
     "cyclomatic": 80
   },
+  "crates/cost/src/survivor_tests.rs": {
+    "ploc": 580,
+    "lloc": 144,
+    "functions": 24,
+    "cyclomatic": 32
+  },
   "crates/cron/src/lib.rs": {
     "ploc": 269,
     "lloc": 82,
