@@ -733,7 +733,7 @@ pub async fn ensure_session_worktree(
         let _ = std::fs::remove_dir_all(&dest);
     }
 
-    match create_linked_worktree(&parent_root, &dest).await {
+    match create_linked_worktree(&parent_root, &dest, None).await {
         Ok(()) => {}
         Err(e) => {
             // Concurrent ensure (tests / double start): path appeared between check and add.
@@ -755,7 +755,11 @@ pub async fn ensure_session_worktree(
 const GIT_TIMEOUT: Duration = liberado_common::process::DEFAULT_COMMAND_TIMEOUT;
 
 /// Create a linked worktree at `dest` from `parent_root` (must not already exist).
-async fn create_linked_worktree(parent_root: &Path, dest: &Path) -> Result<(), SandboxError> {
+async fn create_linked_worktree(
+    parent_root: &Path,
+    dest: &Path,
+    revision: Option<&str>,
+) -> Result<(), SandboxError> {
     let parent_cli = path_for_cli(parent_root);
     let dest_cli = path_for_cli(dest);
 
@@ -779,8 +783,14 @@ async fn create_linked_worktree(parent_root: &Path, dest: &Path) -> Result<(), S
     }
 
     let mut add = liberado_common::process::command("git");
-    add.args(["-C", &parent_cli])
-        .args(["worktree", "add", "--no-checkout", &dest_cli]);
+    add.args(["-C", &parent_cli]).args(["worktree", "add"]);
+    if revision.is_some() {
+        add.arg("--detach");
+    }
+    add.args(["--no-checkout", &dest_cli]);
+    if let Some(revision) = revision {
+        add.arg(revision);
+    }
     let output = liberado_common::process::output_within(&mut add, "git worktree add", GIT_TIMEOUT)
         .await
         .map_err(|e| SandboxError::Spawn(format!("git worktree add: {e}")))?;
@@ -794,7 +804,7 @@ async fn create_linked_worktree(parent_root: &Path, dest: &Path) -> Result<(), S
     let mut checkout = liberado_common::process::command("git");
     checkout
         .args(["-C", &dest_cli])
-        .args(["checkout", "HEAD", "--"]);
+        .args(["checkout", revision.unwrap_or("HEAD"), "--"]);
     let output =
         liberado_common::process::output_within(&mut checkout, "git checkout", GIT_TIMEOUT)
             .await
@@ -845,6 +855,49 @@ impl WorktreeWorkspace {
         worktrees_base: &Path,
         command_policy: CommandPolicy,
     ) -> Result<Self, SandboxError> {
+        Self::new_inner(
+            parent_root,
+            session_id,
+            worktrees_base,
+            command_policy,
+            None,
+        )
+        .await
+    }
+
+    /// Create a fresh detached worktree at an exact revision.
+    ///
+    /// This is the review counterpart to [`Self::new`]: the caller binds the observed PR head,
+    /// while the review process receives a read-only command policy of its own.
+    pub async fn new_at(
+        parent_root: &Path,
+        revision: &str,
+        session_id: &str,
+        worktrees_base: &Path,
+        command_policy: CommandPolicy,
+    ) -> Result<Self, SandboxError> {
+        if revision.trim().is_empty() {
+            return Err(SandboxError::MissingRoot(
+                "pinned worktree revision is empty".into(),
+            ));
+        }
+        Self::new_inner(
+            parent_root,
+            session_id,
+            worktrees_base,
+            command_policy,
+            Some(revision),
+        )
+        .await
+    }
+
+    async fn new_inner(
+        parent_root: &Path,
+        session_id: &str,
+        worktrees_base: &Path,
+        command_policy: CommandPolicy,
+        revision: Option<&str>,
+    ) -> Result<Self, SandboxError> {
         let parent_root = parent_root
             .canonicalize()
             .map_err(|_| SandboxError::MissingRoot(parent_root.display().to_string()))?;
@@ -861,7 +914,7 @@ impl WorktreeWorkspace {
             let _ = std::fs::remove_dir_all(&dest);
         }
 
-        create_linked_worktree(&parent_root, &dest).await?;
+        create_linked_worktree(&parent_root, &dest, revision).await?;
 
         let inner = HostWorkspace::new(&dest, command_policy)?;
 

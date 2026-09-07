@@ -220,6 +220,18 @@ fn apply_kind(record: &mut TaskRecord, kind: &TaskEventKind) {
 
 fn apply_worker(record: &mut TaskRecord, kind: &TaskEventKind) -> bool {
     match kind {
+        TaskEventKind::ReviewCommandIssued { command_id, .. } => {
+            record.active_run_id = Some(command_id.clone());
+            true
+        }
+        TaskEventKind::ReviewWorkerUnavailable { run_id, .. }
+        | TaskEventKind::ReviewRunFinished { run_id, .. }
+        | TaskEventKind::ReviewStale { run_id, .. } => {
+            if record.active_run_id.as_deref() == Some(run_id.as_str()) {
+                record.active_run_id = None;
+            }
+            true
+        }
         TaskEventKind::WorkerStarted {
             run_id,
             worker_id,

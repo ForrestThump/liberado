@@ -17,7 +17,10 @@ pub(super) fn load_server_config(
 > {
     let (config, provenance) = liberado_bootstrap::load_config(dir)?;
     let coder_tuning = coder_tuning_from_config(&config)?;
-    let _review_observer = crate::pr_review_observer::spawn(&config.topology);
+    let _review_observer = crate::pr_review_observer::spawn(
+        &config.topology,
+        coder_tuning.control_plane.review_workers.clone(),
+    );
     Ok((config, provenance, coder_tuning))
 }
 
