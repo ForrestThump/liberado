@@ -1,6 +1,8 @@
 //! File-level structural health ratchet backed by Mozilla rust-code-analysis.
+//! A passing write keeps each old metric when the current measurement is higher.
 
 mod analysis;
+mod min_ratchet;
 
 use liberado_common::process::std_command;
 use serde::{Deserialize, Serialize};
@@ -78,36 +80,8 @@ fn read_report(path: &Path) -> Result<Report, Box<dyn std::error::Error>> {
     Ok(serde_json::from_slice(&std::fs::read(path)?)?)
 }
 
-/// The current report for a ratchet: compare against the existing baseline when there is one,
-/// otherwise produce an initial report from a fresh analysis. Split from [`ratchet`] so the
-/// driver stays under the complexity ceiling; the analysis half runs the real tool and is
-/// covered by `just ci` itself.
-fn current_report(root: &Path) -> Result<Report, Box<dyn std::error::Error>> {
-    if root.join(BASELINE_FILE).is_file() {
-        existing_report(root)
-    } else {
-        initial_report(root)
-    }
-}
-
-fn existing_report(root: &Path) -> Result<Report, Box<dyn std::error::Error>> {
-    check(root)?;
-    read_report(&root.join(CURRENT_FILE))
-}
-
-fn initial_report(root: &Path) -> Result<Report, Box<dyn std::error::Error>> {
-    load_config(root)?;
-    let report = analysis::analyze(root)?;
-    write_report(&root.join(CURRENT_FILE), &report)?;
-    eprintln!("[module health] creating initial baseline");
-    Ok(report)
-}
-
 pub fn ratchet(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
-    let current = current_report(root)?;
-    write_report(&root.join(BASELINE_FILE), &current)?;
-    eprintln!("[module health] ratcheted {BASELINE_FILE}");
-    Ok(())
+    min_ratchet::write(root)
 }
 
 fn load_config(root: &Path) -> Result<Config, Box<dyn std::error::Error>> {

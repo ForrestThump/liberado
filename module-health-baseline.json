@@ -23,6 +23,12 @@
     "functions": 28,
     "cyclomatic": 33
   },
+  "crates/acp-bridge/src/converse_support.rs": {
+    "ploc": 62,
+    "lloc": 8,
+    "functions": 4,
+    "cyclomatic": 9
+  },
   "crates/acp-bridge/src/done.rs": {
     "ploc": 361,
     "lloc": 69,
@@ -197,6 +203,12 @@
     "functions": 12,
     "cyclomatic": 18
   },
+  "crates/acp-bridge/src/workspace_targets.rs": {
+    "ploc": 38,
+    "lloc": 17,
+    "functions": 5,
+    "cyclomatic": 11
+  },
   "crates/bootstrap/src/lib.rs": {
     "ploc": 965,
     "lloc": 226,
@@ -300,10 +312,10 @@
     "cyclomatic": 58
   },
   "crates/cli/src/ci_cmd.rs": {
-    "ploc": 504,
-    "lloc": 129,
+    "ploc": 497,
+    "lloc": 123,
     "functions": 44,
-    "cyclomatic": 136
+    "cyclomatic": 132
   },
   "crates/cli/src/ci_cmd/announce_compare_tests.rs": {
     "ploc": 19,
@@ -316,6 +328,12 @@
     "lloc": 39,
     "functions": 10,
     "cyclomatic": 28
+  },
+  "crates/cli/src/ci_cmd/crap_baseline_ratchet.rs": {
+    "ploc": 111,
+    "lloc": 28,
+    "functions": 14,
+    "cyclomatic": 39
   },
   "crates/cli/src/ci_cmd/crap_failure.rs": {
     "ploc": 23,
@@ -468,16 +486,22 @@
     "cyclomatic": 2
   },
   "crates/cli/src/module_health_cmd.rs": {
-    "ploc": 434,
-    "lloc": 107,
-    "functions": 29,
-    "cyclomatic": 97
+    "ploc": 414,
+    "lloc": 98,
+    "functions": 26,
+    "cyclomatic": 87
   },
   "crates/cli/src/module_health_cmd/analysis.rs": {
     "ploc": 126,
     "lloc": 38,
     "functions": 6,
     "cyclomatic": 27
+  },
+  "crates/cli/src/module_health_cmd/min_ratchet.rs": {
+    "ploc": 87,
+    "lloc": 20,
+    "functions": 10,
+    "cyclomatic": 21
   },
   "crates/cli/src/mutants_cmd.rs": {
     "ploc": 550,
@@ -1210,6 +1234,30 @@
     "lloc": 51,
     "functions": 7,
     "cyclomatic": 8
+  },
+  "crates/coder-sandbox/src/cargo_targets.rs": {
+    "ploc": 399,
+    "lloc": 83,
+    "functions": 55,
+    "cyclomatic": 131
+  },
+  "crates/coder-sandbox/src/cargo_targets_attach.rs": {
+    "ploc": 44,
+    "lloc": 10,
+    "functions": 5,
+    "cyclomatic": 10
+  },
+  "crates/coder-sandbox/src/cargo_targets_identity.rs": {
+    "ploc": 91,
+    "lloc": 40,
+    "functions": 8,
+    "cyclomatic": 31
+  },
+  "crates/coder-sandbox/src/cargo_targets_tests.rs": {
+    "ploc": 382,
+    "lloc": 161,
+    "functions": 27,
+    "cyclomatic": 33
   },
   "crates/coder-sandbox/src/checkpoint.rs": {
     "ploc": 232,

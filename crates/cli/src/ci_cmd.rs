@@ -5,8 +5,9 @@
 //! `crap-baseline.json` is the last best per-function score. GitHub only *reads* it
 //! (`liberado ci crap` / `--fail-regression`, keyed by file + function name, not
 //! line). A local `liberado ci` run that stays
-//! green *writes* it (`liberado ci ratchet`). That is the same check-vs-write split
-//! as `liberado docs crate-map` / `--write`.
+//! green *ratchets* it (`liberado ci ratchet`). Existing functions only take
+//! non-worsening measurements; ignored low-score noise is not saved. That is
+//! the same check-vs-write split as `liberado docs crate-map` / `--write`.
 //!
 //! GitHub must not rewrite the file. Coverage is host-sensitive, and a bot commit
 //! on `main` races every open PR.
@@ -139,11 +140,15 @@ A new function is above the 29.9 CRAP ceiling. Split it or add tests. \
 New functions must land below 30.";
 
 mod coverage_tools;
+mod crap_baseline_ratchet;
 /// Dispatch `liberado ci …`. No subcommand means the local full run (gates + ratchet).
 mod dispatch;
 mod new_function_ceiling;
 mod runtime_support;
 
+#[cfg(test)]
+pub(super) use crap_baseline_ratchet::{keep_worse_existing_crap_entries, ratchet_crap_baseline};
+use crap_baseline_ratchet::{write_after_success, write_and_stage_ratcheted_baseline};
 pub use dispatch::run;
 use runtime_support::{announce_staged_baseline, move_running_image, vacated_image_destination};
 
@@ -235,7 +240,7 @@ fn check(log: &CiLog) -> Result<(), Box<dyn std::error::Error>> {
     crate::branch_cleaner_ci::run(log)
 }
 
-/// Full local CI: the ship preflight, then the CRAP check, then rewrite and stage the baseline.
+/// Full local CI: the ship preflight, then the CRAP check, then ratchet and stage the baseline.
 /// Compare the current tree against `crap-baseline.json`. Never writes the baseline.
 ///
 /// Always writes `.liberado/crap-current.json` (gitignored) so a red GitHub job
@@ -251,27 +256,12 @@ pub(crate) fn crap_for_root(root: &Path) -> Result<(), Box<dyn std::error::Error
     crap_check(&CiLog::create(root)?)
 }
 
-/// Check, then replace `crap-baseline.json` with this run's scores.
+/// Check, then update `crap-baseline.json` with new functions and non-worsening scores.
 fn crap_ratchet(log: &CiLog) -> Result<(), Box<dyn std::error::Error>> {
     generate_lcov(log)?;
-    compare_to_baseline(log)?;
-    write_and_stage_ratcheted_baseline(log)
-}
-
-/// The baseline-write half of [`crap_ratchet`], split so each driver stays under the complexity
-/// ceiling. Linux-only by policy: GitHub's Ubuntu job is the host of truth for per-function
-/// scores, and coverage numbers are host-sensitive.
-fn write_and_stage_ratcheted_baseline(log: &CiLog) -> Result<(), Box<dyn std::error::Error>> {
-    if !cfg!(target_os = "linux") {
-        eprintln!(
-            "[liberado ci] {BASELINE_FILE} write is Linux-only \
-             (GitHub's Ubuntu job is the host of truth). Compared only."
-        );
-        return Ok(());
-    }
-    write_baseline(log)?;
-    announce_staged_baseline(stage_ratcheted_baseline(&log.root)?);
-    Ok(())
+    write_after_success(compare_to_baseline(log), || {
+        write_and_stage_ratcheted_baseline(log)
+    })
 }
 
 fn generate_lcov(log: &CiLog) -> Result<(), Box<dyn std::error::Error>> {
@@ -324,7 +314,7 @@ fn uses_per_function_ratchet(baseline_has_entries: bool) -> bool {
 }
 
 fn write_baseline(log: &CiLog) -> Result<(), Box<dyn std::error::Error>> {
-    write_crap_json(log, BASELINE_FILE)
+    crap_baseline_ratchet::write_ratcheted_baseline(log)
 }
 
 pub(super) fn write_crap_json(log: &CiLog, output: &str) -> Result<(), Box<dyn std::error::Error>> {
