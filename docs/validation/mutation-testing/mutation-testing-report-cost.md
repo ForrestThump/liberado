@@ -20,29 +20,28 @@ The post-fix campaign reduced survivors by 27. Of those 27 mutants, 26 moved to 
 - `price.rs`: `price_event` rate guards, including missing input or output rates and cached-input fallback behavior.
 - `report.rs`: output assertions for `format_report`, `fmt_money`, `fmt_opt_u32`, and `truncate`.
 - `rollup.rs`: arithmetic and guard coverage through multi-hop `report_from_parts` assertions.
-- Batch 7 (`journal.rs`): a `load_latency_events` fixture that checks parsed event data.
+- Batch 7 (`journal.rs`): a `load_latency_events` fixture that checks parsed event data, plus a tip-added assertion that `child_to_parent_map` collects each supplied pair.
 
 Batch 6 is not complete. The `main.rs` dispatch arms still need CLI stdout assertions; `tests/cli.rs` currently checks exit codes only.
 
 ## Known-equivalent / accepted (do not fix — documented)
 
-- `journal.rs:246` `child_to_parent_map` — about 5 mutations (function body replaced with `HashMap::new()` / `from_iter` constant forms). Production value equals `Default::default()` for `HashMap<String,String>`. Unkillable per the skill (`Struct-literal field deletions where production value equals Default::default()`).
 - `journal.rs:47` `default_kind` — about 2 mutants (body → `String::new()` / `"xyzzy"`). Productive callers rely on the literal `"llm_call"`; the mutation is only killable when the literal is asserted directly, which this branch added for `default_data_dir` but not for the kind constant. Leave to a follow-up if any loader begins asserting it.
 - `lib.rs:269` (`<` → `>=` / `>=` → `>`) in `run_delegation_cost`: the skill's `usize`-boundary caveat (`>= 0` always true) applies specifically when the loop exits at the boundary; here the close guard pairs with it, so it is distinct, and the fixtures above cover both directions.
 
 ## Remaining survivors
 
-About 42 survivors remain after the post-fix campaign. They are grouped here because the current evidence does not support a precise per-file census:
+The recorded post-fix campaign has 42 survivors. The tip adds `child_to_parent_map` coverage after that campaign, so the ledger count remains historical until the next complete run. The recorded survivors are grouped here because the current evidence does not support a precise per-file census:
 
 - `main.rs` dispatch arms, mainly CLI behavior that needs stdout assertions rather than exit-code-only checks.
-- Known-equivalent or accepted mutations in `journal.rs`, as documented above.
+- The accepted `default_kind` mutation in `journal.rs`, as documented above.
 - Other residual survivors that need a follow-up campaign and triage before they can be classified precisely.
 
 ## Evidence
 
 - Before row: `mutants-ledger.json`, `package=liberado-cost`, `recorded_at=2026-09-05`, `commit=425c58ad`, `counts={viable:269, caught:189, survived:69, timeout:11, unviable:20}`.
 - After row: `mutants-ledger.json`, `package=liberado-cost`, `recorded_at=2026-09-06`, `commit=b59f208d`, `counts={viable:269, caught:215, survived:42, timeout:12, unviable:20}`.
-- Tip coverage is present in `crates/cost/src/survivor_tests.rs` for batches 1–3, `price_event`, report formatting helpers, rollup arithmetic through `report_from_parts`, and the Batch 7 journal loader fixture.
+- Tip coverage is present in `crates/cost/src/survivor_tests.rs` for batches 1–3, `price_event`, report formatting helpers, rollup arithmetic through `report_from_parts`, the Batch 7 journal loader fixture, and `child_to_parent_map` constant-return replacements.
 
 ## Next steps
 

@@ -83,6 +83,42 @@ fn node(author: &str, cid: &str, content: &str) -> String {
     .to_string()
 }
 
+const DEFAULT_DATA_DIR_CHILD_CASE: &str = "LIBERADO_COST_DEFAULT_DATA_DIR_CHILD_CASE";
+
+#[test]
+fn default_data_dir_child_probe() {
+    let Some(expected) = std::env::var_os(DEFAULT_DATA_DIR_CHILD_CASE) else {
+        return;
+    };
+    assert_eq!(default_data_dir(), PathBuf::from(expected));
+}
+
+fn assert_default_data_dir_in_child(expected: &Path, configured: Option<&Path>) {
+    let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+    command
+        .args([
+            "--exact",
+            "survivor_tests::default_data_dir_child_probe",
+            "--nocapture",
+        ])
+        .env(DEFAULT_DATA_DIR_CHILD_CASE, expected);
+    match configured {
+        Some(path) => {
+            command.env("LIBERADO_DATA_DIR", path);
+        }
+        None => {
+            command.env_remove("LIBERADO_DATA_DIR");
+        }
+    }
+    let output = command.output().unwrap();
+    assert!(
+        output.status.success(),
+        "child data-dir probe failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
 /// `default_data_dir` reads `LIBERADO_DATA_DIR` and falls back to `./.liberado` in CWD when
 /// unset. The fallback is a literal path — a body replaced with `Default::default()` returns
 /// an empty `PathBuf` and breaks every caller that joins `latency/` or `dispatches/` onto it.
@@ -90,50 +126,13 @@ fn node(author: &str, cid: &str, content: &str) -> String {
 /// env read while keeping the fallback cannot hide.
 #[test]
 fn default_data_dir_falls_back_to_dot_liberado() {
-    // Defensive: if a previous test left the variable set, save and clear it for this call.
-    let saved = std::env::var("LIBERADO_DATA_DIR").ok();
-    // SAFETY: this is a unit test that owns its process-wide state for the duration of the
-    // assertion; the variable is restored before the test returns.
-    unsafe {
-        std::env::remove_var("LIBERADO_DATA_DIR");
-    }
-    let got = default_data_dir();
-    if let Some(v) = saved {
-        // SAFETY: see above.
-        unsafe {
-            std::env::set_var("LIBERADO_DATA_DIR", v);
-        }
-    }
-    assert_eq!(
-        got,
-        PathBuf::from(".liberado"),
-        "fallback must be the literal `.liberado`, not an empty PathBuf"
-    );
+    assert_default_data_dir_in_child(Path::new(".liberado"), None);
 }
 
 #[test]
 fn default_data_dir_respects_lib_env_override() {
-    let saved = std::env::var("LIBERADO_DATA_DIR").ok();
-    let sentinel = "/tmp/liberado-cost-sentinel-data-dir-xyzzy";
-    // SAFETY: this test owns `LIBERADO_DATA_DIR` for its body; previous value is restored
-    // before returning so concurrent tests in the same binary see the original state.
-    unsafe {
-        std::env::set_var("LIBERADO_DATA_DIR", sentinel);
-    }
-    let got = default_data_dir();
-    match saved {
-        Some(v) => unsafe {
-            std::env::set_var("LIBERADO_DATA_DIR", v);
-        },
-        None => unsafe {
-            std::env::remove_var("LIBERADO_DATA_DIR");
-        },
-    }
-    assert_eq!(
-        got,
-        PathBuf::from(sentinel),
-        "LIBERADO_DATA_DIR must win over the fallback"
-    );
+    let sentinel = Path::new("liberado-cost-sentinel-data-dir-xyzzy");
+    assert_default_data_dir_in_child(sentinel, Some(sentinel));
 }
 
 /// `context_tokens_for_data_dir` walks the journal tail and returns the newest face call's
@@ -301,8 +300,9 @@ fn scan_session_log_does_not_emit_a_row_for_an_unpaired_assistant_turn() {
 // ── price_event guard mutations (lines 76-78) ──────────────────────
 
 /// `price_event` must return `cost_unknown = true` when a required rate is missing for the
-/// token side that is present. A mutation on any of the three `> 0` conditions can turn
-/// `unknown(true)` into a priced result (or vice versa). The fixtures below cover all 8.
+/// token side that is present. Mutations on the `> 0` conditions can turn `unknown(true)`
+/// into a priced result (or vice versa). These fixtures exercise the missing-rate and fallback
+/// paths; the campaign report records the residual boundary mutants separately.
 #[test]
 fn price_event_missing_output_rate_is_unpriceable() {
     let prices = PriceTable::new();
@@ -414,7 +414,7 @@ fn format_report_contains_money_and_conversation_name() {
     );
 }
 
-/// `fmt_money` with `Some(x)` must contain "$$", not "".
+/// `fmt_money` with `Some(x)` must contain "$", not "".
 #[test]
 fn fmt_money_includes_dollar_for_some() {
     assert!(
@@ -449,9 +449,10 @@ fn fmt_money_includes_dollar_for_some() {
 /// `String::new()` would make every truncated field empty.
 #[test]
 fn truncate_shortens_long_ids() {
+    let conversation_id = "01VERYVERYVERYVERYVERYVERYVERYVERYLONGCONV00000000000";
     let s = crate::report::format_report(&Report {
         conversations: vec![crate::rollup::ConversationRollup {
-            conversation_id: "01VERYVERYVERYVERYVERYVERYVERYVERYLONGCONV00000000000".into(),
+            conversation_id: conversation_id.into(),
             calls: 1,
             prompt_tokens: None,
             completion_tokens: None,
@@ -472,8 +473,8 @@ fn truncate_shortens_long_ids() {
         total_repeat_calls: None,
     });
     assert!(
-        s.contains("…") || s.contains("01VERYVERYVERYVERYVERYVERYVERYVERYLONGCONV".split_at(35).0),
-        "truncate must clip long ids to 36 chars; got no ellipsis or full id"
+        s.contains("…") && !s.contains(conversation_id),
+        "truncate must add an ellipsis and remove the full id; got:\n{s}"
     );
 }
 
@@ -530,11 +531,10 @@ fn rollup_build_report_completes_for_multi_hop_turn() {
     assert_eq!(report.event_count, 2);
 }
 
-/// `rollup.rs` mutations (line 104 guard, 120 `!=`, 256 `+=`, 352 `||`, 375 `||`,
-/// 406 `+=`, 441/443 `+=`) — all covered by asserting the rollup table contents
-/// from `report_from_parts`, which exercises the rollup pipeline fully.
+/// This assertion exercises the rollup pipeline through `report_from_parts`. The campaign
+/// report keeps residual guard and arithmetic mutants in the remaining-survivor count.
 /// Batch 6 — main.rs dispatch mutations (11 mutations) — will follow.
-/// Batch 7 — journal.rs arithmetic / match-guard mutations (4 mutations) — will follow.
+/// Batch 7 — journal.rs fixtures appear below.
 /// `run_delegation_cost` walks the journal + dispatch map and emits one
 /// `DelegationCostSample` per consecutive pair of turns. A body replaced with `Ok(vec![])`
 /// would drop every sample; this test asserts at least one fires from a populated journal.
@@ -767,4 +767,15 @@ fn journal_load_latency_events_reads_valid_jsonl() {
     let events = load_latency_events(&latency_journal_path(dir.path())).unwrap();
     assert_eq!(events.len(), 1);
     assert_eq!(events[0].prompt_tokens, Some(100));
+}
+
+#[test]
+fn child_to_parent_map_collects_each_supplied_pair() {
+    let map = child_to_parent_map([
+        ("child-a".to_string(), "parent-a".to_string()),
+        ("child-b".to_string(), "parent-b".to_string()),
+    ]);
+    assert_eq!(map.len(), 2);
+    assert_eq!(map.get("child-a").map(String::as_str), Some("parent-a"));
+    assert_eq!(map.get("child-b").map(String::as_str), Some("parent-b"));
 }
