@@ -10,8 +10,8 @@ use tokio::sync::{Mutex, Notify, mpsc, watch};
 use crate::runner::{DomainPackRunner, InputChannel, PackContext, PackError};
 use crate::{
     DomainHint, GoalResult, GoalSessionHub, GoalSessionRecord, GoalSessionStore, GoalSpec,
-    SessionAlert, SessionEvent, SessionEventKind, SessionGrant, SessionRecordStore, SessionStatus,
-    TerminalKind, TurnAuthor, Visibility, check_session_invariants,
+    ReviewerKind, SessionAlert, SessionEvent, SessionEventKind, SessionGrant, SessionRecordStore,
+    SessionStatus, TerminalKind, TurnAuthor, Visibility, check_session_invariants,
 };
 
 fn goal(id: &str) -> GoalSpec {
@@ -147,6 +147,13 @@ fn origin_constructors_and_invariants_reject_invalid_session_state() {
         GoalSessionRecord::background(goal("background"), SessionGrant::default());
     background_waiting.awaiting_input = true;
     assert!(check_session_invariants(&background_waiting).is_err());
+}
+
+#[test]
+fn reviewer_kind_display_is_the_stable_wire_label() {
+    assert_eq!(ReviewerKind::Gatekeeper.to_string(), "gatekeeper");
+    assert_eq!(ReviewerKind::Fresh.to_string(), "fresh");
+    assert_eq!(ReviewerKind::Strategist.to_string(), "strategist");
 }
 
 #[tokio::test]
