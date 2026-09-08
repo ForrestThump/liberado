@@ -10,7 +10,8 @@ open_items: true
 # Daemon-native pull-request review kickoff
 
 **Status**: active. Forrest approved Sol pass 2 and the seven checklist defaults (2026-09-05).
-Slices 0–1 are on main (PR #244). Slice 2 (one pinned Codex review, no GitHub writes) is in progress; later slices remain open.
+Slices 0–2 are on main: Slices 0–1 via PR #244 and Slice 2 via PR #247 (2026-09-08).
+Slice 3 is next; later slices remain open.
 
 ## Decision
 
@@ -373,4 +374,3 @@ ForrestThump approved Sol pass 2 (`6a189518`) and all checklist defaults:
 7. Human merge remains the hard gate; no paid fallback without a later explicit policy.
 
 Slices 0 and 1 need no further architecture decision. Implementation may proceed.
-
