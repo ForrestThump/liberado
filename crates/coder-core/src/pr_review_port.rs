@@ -69,7 +69,7 @@ impl CodexReviewPort {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     fn with_env(mut self, name: &str, value: &str) -> Self {
         self.extra_env.push((name.into(), value.into()));
         self

@@ -1,10 +1,14 @@
+#[cfg(unix)]
 use std::path::{Path, PathBuf};
 
+#[cfg(unix)]
 use tempfile::TempDir;
 
 use super::*;
+#[cfg(unix)]
 use crate::pr_review::REVIEW_SCHEMA_VERSION;
 
+#[cfg(unix)]
 struct RepoFixture {
     _dir: TempDir,
     root: PathBuf,
@@ -14,6 +18,7 @@ struct RepoFixture {
     schema: PathBuf,
 }
 
+#[cfg(unix)]
 impl RepoFixture {
     fn new() -> Self {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -68,6 +73,7 @@ impl RepoFixture {
     }
 }
 
+#[cfg(unix)]
 fn git(root: &Path, args: &[&str]) {
     let output = liberado_common::process::std_command("git")
         .args(args)
@@ -81,6 +87,7 @@ fn git(root: &Path, args: &[&str]) {
     );
 }
 
+#[cfg(unix)]
 fn rev_parse(root: &Path, revision: &str) -> String {
     let output = liberado_common::process::std_command("git")
         .args(["rev-parse", revision])
@@ -128,6 +135,7 @@ esac
     path
 }
 
+#[cfg(unix)]
 fn valid_result(sha: &str) -> String {
     serde_json::json!({
         "schema": REVIEW_SCHEMA_VERSION,

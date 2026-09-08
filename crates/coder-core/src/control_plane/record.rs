@@ -219,19 +219,10 @@ fn apply_kind(record: &mut TaskRecord, kind: &TaskEventKind) {
 }
 
 fn apply_worker(record: &mut TaskRecord, kind: &TaskEventKind) -> bool {
+    if apply_review_worker(record, kind) {
+        return true;
+    }
     match kind {
-        TaskEventKind::ReviewCommandIssued { command_id, .. } => {
-            record.active_run_id = Some(command_id.clone());
-            true
-        }
-        TaskEventKind::ReviewWorkerUnavailable { run_id, .. }
-        | TaskEventKind::ReviewRunFinished { run_id, .. }
-        | TaskEventKind::ReviewStale { run_id, .. } => {
-            if record.active_run_id.as_deref() == Some(run_id.as_str()) {
-                record.active_run_id = None;
-            }
-            true
-        }
         TaskEventKind::WorkerStarted {
             run_id,
             worker_id,
@@ -252,9 +243,7 @@ fn apply_worker(record: &mut TaskRecord, kind: &TaskEventKind) -> bool {
             blocking_issue,
             revision,
         } => {
-            let applies_to_head = revision.is_none() || revision == &record.head_revision;
-            let applies_to_run = record.active_run_id.as_deref() == Some(run_id.as_str());
-            if !applies_to_head || !applies_to_run {
+            if !worker_finish_applies(record, revision, run_id) {
                 return true;
             }
             record.active_run_id = None;
@@ -288,6 +277,33 @@ fn apply_worker(record: &mut TaskRecord, kind: &TaskEventKind) -> bool {
         }
         _ => false,
     }
+}
+
+fn apply_review_worker(record: &mut TaskRecord, kind: &TaskEventKind) -> bool {
+    match kind {
+        TaskEventKind::ReviewCommandIssued { command_id, .. } => {
+            record.active_run_id = Some(command_id.clone());
+            true
+        }
+        TaskEventKind::ReviewWorkerUnavailable { run_id, .. }
+        | TaskEventKind::ReviewRunFinished { run_id, .. }
+        | TaskEventKind::ReviewStale { run_id, .. } => {
+            clear_review_run(record, run_id);
+            true
+        }
+        _ => false,
+    }
+}
+
+fn clear_review_run(record: &mut TaskRecord, run_id: &str) {
+    if record.active_run_id.as_deref() == Some(run_id) {
+        record.active_run_id = None;
+    }
+}
+
+fn worker_finish_applies(record: &TaskRecord, revision: &Option<String>, run_id: &str) -> bool {
+    (revision.is_none() || revision == &record.head_revision)
+        && record.active_run_id.as_deref() == Some(run_id)
 }
 
 fn apply_commit(

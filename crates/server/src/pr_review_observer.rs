@@ -107,12 +107,30 @@ async fn finish_observation(
         prepared.prior_tip.as_deref(),
         ready,
     );
+    record_and_dispatch(
+        topology,
+        project,
+        &mut prepared,
+        row,
+        &intents,
+        review_workers,
+    )
+}
+
+fn record_and_dispatch(
+    topology: &Topology,
+    project: &ShepherdProjectConfig,
+    prepared: &mut PreparedObservation,
+    row: &Value,
+    intents: &[ObserverIntent],
+    review_workers: &BTreeMap<String, ReviewWorkerConfig>,
+) -> Result<(), String> {
     record_intents(
         &mut prepared.ledger,
         &prepared.task_id,
         &project.repository,
         prepared.pr.number,
-        &intents,
+        intents,
     )?;
     let coding_root = coding_root(topology, project)?;
     let base_sha = row
@@ -129,7 +147,7 @@ async fn finish_observation(
         base_sha: &base_sha,
         coding_root: &coding_root,
         review_workers,
-        intents: &intents,
+        intents,
         shadow: prepared.policy.shadow,
     })
 }

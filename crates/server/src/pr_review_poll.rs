@@ -54,12 +54,32 @@ async fn poll_configured(
     project: &ShepherdProjectConfig,
     review_workers: &BTreeMap<String, ReviewWorkerConfig>,
 ) -> Result<(), String> {
-    if project.controller.is_none() {
+    let Some(token) = configured_token(topology, project)? else {
         return Ok(());
-    }
-    let token = token_for(topology, project)?;
+    };
+    poll_pages(client, topology, project, &token, review_workers).await
+}
+
+fn configured_token(
+    topology: &Topology,
+    project: &ShepherdProjectConfig,
+) -> Result<Option<String>, String> {
+    project
+        .controller
+        .as_ref()
+        .map(|_| token_for(topology, project))
+        .transpose()
+}
+
+async fn poll_pages(
+    client: &Client,
+    topology: &Topology,
+    project: &ShepherdProjectConfig,
+    token: &str,
+    review_workers: &BTreeMap<String, ReviewWorkerConfig>,
+) -> Result<(), String> {
     for page in bounded_pages(topology.shepherd.review.max_pages) {
-        if !poll_page(client, topology, project, &token, page, review_workers).await? {
+        if !poll_page(client, topology, project, token, page, review_workers).await? {
             break;
         }
     }

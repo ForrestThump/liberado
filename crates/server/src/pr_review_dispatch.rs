@@ -75,24 +75,26 @@ fn pin_checkout(repo_root: &Path, sha: &str) -> Result<PathBuf, String> {
         .join(".liberado")
         .join("review-worktrees")
         .join(short);
-    if dest.is_dir() {
-        let head = git_stdout(&dest, &["rev-parse", "HEAD"])?;
-        if head.trim() == sha {
-            return Ok(dest);
-        }
+    if checkout_matches(&dest, sha)? {
+        return Ok(dest);
     }
+    replace_checkout(repo_root, &dest, sha)?;
+    Ok(dest)
+}
+
+fn checkout_matches(dest: &Path, sha: &str) -> Result<bool, String> {
+    if !dest.is_dir() {
+        return Ok(false);
+    }
+    Ok(git_stdout(dest, &["rev-parse", "HEAD"])?.trim() == sha)
+}
+
+fn replace_checkout(repo_root: &Path, dest: &Path, sha: &str) -> Result<(), String> {
     let _ = std::fs::create_dir_all(dest.parent().unwrap_or(repo_root));
-    if dest.exists() {
-        let _ = std_command("git")
-            .args(["worktree", "remove", "--force"])
-            .arg(&dest)
-            .current_dir(repo_root)
-            .status();
-        let _ = std::fs::remove_dir_all(&dest);
-    }
+    remove_existing_checkout(repo_root, dest);
     let status = std_command("git")
         .args(["worktree", "add", "--detach"])
-        .arg(&dest)
+        .arg(dest)
         .arg(sha)
         .current_dir(repo_root)
         .status()
@@ -100,7 +102,19 @@ fn pin_checkout(repo_root: &Path, sha: &str) -> Result<PathBuf, String> {
     if !status.success() {
         return Err(format!("failed to pin review checkout at {sha}"));
     }
-    Ok(dest)
+    Ok(())
+}
+
+fn remove_existing_checkout(repo_root: &Path, dest: &Path) {
+    if !dest.exists() {
+        return;
+    }
+    let _ = std_command("git")
+        .args(["worktree", "remove", "--force"])
+        .arg(dest)
+        .current_dir(repo_root)
+        .status();
+    let _ = std::fs::remove_dir_all(dest);
 }
 
 fn write_schema_outside(workspace: &Path) -> Result<PathBuf, String> {
