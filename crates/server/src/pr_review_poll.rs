@@ -38,12 +38,23 @@ async fn reconcile(
     topology: &Topology,
     review_workers: &BTreeMap<String, ReviewWorkerConfig>,
 ) -> Result<(), String> {
-    let client = Client::builder()
+    poll_projects(&http_client()?, topology, review_workers).await
+}
+
+fn http_client() -> Result<Client, String> {
+    Client::builder()
         .timeout(Duration::from_secs(30))
         .build()
-        .map_err(|e| e.to_string())?;
+        .map_err(|error| error.to_string())
+}
+
+async fn poll_projects(
+    client: &Client,
+    topology: &Topology,
+    review_workers: &BTreeMap<String, ReviewWorkerConfig>,
+) -> Result<(), String> {
     for project in &topology.shepherd.projects {
-        poll_configured(&client, topology, project, review_workers).await?;
+        poll_configured(client, topology, project, review_workers).await?;
     }
     Ok(())
 }
