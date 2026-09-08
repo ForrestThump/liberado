@@ -19,6 +19,9 @@ mod life_demo;
 mod life_demo_idempotency_tests;
 mod record_store;
 mod runner;
+#[cfg(test)]
+#[path = "session_survivor_tests.rs"]
+mod session_survivor_tests;
 mod store;
 
 pub use completion_gate::{
