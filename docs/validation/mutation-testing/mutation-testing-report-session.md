@@ -45,3 +45,33 @@ All remaining survivors are getter returns, trait default impls, serde helpers, 
 | `store.rs:201,417` | `subscribe` → `None` | No test subscribes via this method |
 | `store.rs:246,433` | `set_status` → `()` | All callers check status via `get()`, not return value |
 | `store.rs:320` | `delete match arm HumanInput` in `replay_file` | Replay order: Finish line's record doesn't carry `awaiting_input`; assertion checked at session level |
+
+## Refresh 2026-09-08
+
+**Status:** historical  
+**Authority:** evidence
+
+Campaign commit: `d61d6341e241c8f6727fbf8c9888a3b8cb9a5e56`  
+Ledger row: `2026-09-08`
+
+| Metric | Fresh baseline | After coverage | Delta |
+|---|---:|---:|---:|
+| Viable | 196 | 196 | â€” |
+| Caught | 146 | 178 | **+32** |
+| Missed | 45 | 8 | **âˆ’37** |
+| Timeout | 5 | 10 | +5 |
+
+The new public-API tests cover session origin and invariants, pack context forwarding,
+durable replay, background starts, lifecycle waiting and parking, host accounting, alerts,
+reviewer labels, and the default event-bus contract.
+
+The eight survivors are accepted equivalents or observability-only changes:
+
+| Location | Mutant | Reason |
+|---|---|---|
+| `completion_gate.rs:354` | `>` to `>=` | With zero reviewers, the separate quorum comparison still rejects approval. |
+| `goal.rs:395` | `||` to `&&` | The later result/finished consistency invariant rejects each one-sided state. |
+| `hub.rs:264` | terminal-event guard to `false` | The next loop iteration observes the durable terminal snapshot; the externally visible result is unchanged. |
+| `hub.rs:371` | three `finished > 0` changes | Controls an info log only. |
+| `record_store.rs:97` | default subscriber count to `0` | This is the existing literal default. |
+| `store.rs:100` | delete `!` | Controls the rehydration info log only. |
