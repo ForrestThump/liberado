@@ -130,6 +130,18 @@ pub enum TaskEventKind {
         head_sha: String,
         review_id: u64,
         login: String,
+        #[serde(default)]
+        command_id: String,
+        #[serde(default)]
+        run_id: String,
+        #[serde(default)]
+        worker_id: String,
+        #[serde(default)]
+        artifact_digest: String,
+        #[serde(default)]
+        policy_version: String,
+        #[serde(default)]
+        review_key: String,
     },
     ReviewChecklistPublished {
         head_sha: String,

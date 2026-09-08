@@ -26,7 +26,7 @@ pub struct ShepherdAuthConfig {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct ShepherdReviewConfig {
     pub enabled: bool,
     pub delivery: String,
@@ -34,6 +34,7 @@ pub struct ShepherdReviewConfig {
     pub reconcile_on_start: bool,
     pub max_pages: usize,
     pub page_size: usize,
+    pub harness_order: Vec<String>,
 }
 
 impl Default for ShepherdReviewConfig {
@@ -45,6 +46,7 @@ impl Default for ShepherdReviewConfig {
             reconcile_on_start: true,
             max_pages: 10,
             page_size: 100,
+            harness_order: Vec::new(),
         }
     }
 }
@@ -88,6 +90,33 @@ fn default_shepherd_profile() -> String {
 }
 
 pub(super) fn validate(shepherd: &ShepherdConfig) -> Result<()> {
+    let active_writer = shepherd.review.enabled
+        && shepherd
+            .projects
+            .iter()
+            .any(|project| project.controller.as_deref() == Some("liberado-shepherd"));
+    if active_writer && shepherd.review.harness_order.is_empty() {
+        return Err(Error::Config(
+            "shepherd.review.harness_order is required for native review".into(),
+        ));
+    }
+    let order: std::collections::BTreeSet<_> = shepherd
+        .review
+        .harness_order
+        .iter()
+        .map(String::as_str)
+        .collect();
+    if order.len() != shepherd.review.harness_order.len()
+        || shepherd
+            .review
+            .harness_order
+            .iter()
+            .any(|id| id.trim().is_empty())
+    {
+        return Err(Error::Config(
+            "shepherd.review.harness_order must contain unique nonempty worker ids".into(),
+        ));
+    }
     if shepherd.review.enabled
         && (shepherd.review.delivery != "poll"
             || shepherd.review.poll_seconds == 0
@@ -135,6 +164,21 @@ pub(super) fn validate(shepherd: &ShepherdConfig) -> Result<()> {
                 "shepherd project '{}' has invalid native-review policy",
                 project.name
             )));
+        }
+        if shepherd.review.enabled && project.controller.as_deref() == Some("liberado-shepherd") {
+            let auth = project
+                .auth
+                .as_deref()
+                .and_then(|name| shepherd.auth.iter().find(|auth| auth.name == name));
+            if auth
+                .and_then(|auth| auth.expected_login.as_deref())
+                .is_none_or(|login| login.trim().is_empty())
+            {
+                return Err(Error::Config(format!(
+                    "shepherd project '{}' requires auth.expected_login for review writes",
+                    project.name
+                )));
+            }
         }
     }
     Ok(())
@@ -209,6 +253,7 @@ mod tests {
                 reconcile_on_start: true,
                 max_pages: 10,
                 page_size: 100,
+                harness_order: Vec::new(),
             },
             ..ShepherdConfig::default()
         };
@@ -218,5 +263,44 @@ mod tests {
         assert!(validate(&shepherd).is_err());
         let identity = format!("{}Thump", "Forrest");
         assert!(!include_str!("shepherd.rs").contains(&identity));
+    }
+
+    #[test]
+    fn writer_requires_expected_login_and_harness_order() {
+        let mut shepherd = with_auth(ShepherdConfig {
+            projects: vec![native_project()],
+            review: ShepherdReviewConfig {
+                enabled: true,
+                delivery: "poll".into(),
+                poll_seconds: 120,
+                reconcile_on_start: true,
+                max_pages: 10,
+                page_size: 100,
+                harness_order: Vec::new(),
+            },
+            ..ShepherdConfig::default()
+        });
+        assert!(validate(&shepherd).is_err());
+        shepherd.review.harness_order = vec!["codex".into()];
+        assert!(validate(&shepherd).is_err());
+        shepherd.auth[0].expected_login = Some("operator".into());
+        assert!(validate(&shepherd).is_ok());
+        shepherd.review.harness_order = vec!["codex".into(), "codex".into()];
+        assert!(validate(&shepherd).is_err());
+    }
+
+    #[test]
+    fn review_config_rejects_unknown_publication_override_keys() {
+        let raw = r#"
+            enabled = true
+            delivery = "poll"
+            poll_seconds = 120
+            reconcile_on_start = true
+            max_pages = 10
+            page_size = 100
+            harness_order = ["codex"]
+            review_event = "APPROVE"
+        "#;
+        assert!(toml::from_str::<ShepherdReviewConfig>(raw).is_err());
     }
 }

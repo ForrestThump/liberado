@@ -20,6 +20,7 @@ pub(crate) struct DispatchRequest<'a> {
     pub base_sha: &'a str,
     pub coding_root: &'a Path,
     pub review_workers: &'a BTreeMap<String, ReviewWorkerConfig>,
+    pub harness_order: &'a [String],
     pub intents: &'a [ObserverIntent],
     pub shadow: bool,
 }
@@ -35,11 +36,11 @@ pub(crate) fn maybe_dispatch(req: DispatchRequest<'_>) -> Result<(), String> {
     {
         return Ok(());
     }
-    let Some((worker_id, worker)) = req
-        .review_workers
-        .iter()
-        .find(|(_, worker)| matches!(worker, ReviewWorkerConfig::Codex { enabled: true, .. }))
-    else {
+    let Some((worker_id, worker)) = req.harness_order.iter().find_map(|id| {
+        req.review_workers
+            .get_key_value(id)
+            .filter(|(_, worker)| matches!(worker, ReviewWorkerConfig::Codex { enabled: true, .. }))
+    }) else {
         return Ok(());
     };
     let ReviewWorkerConfig::Codex { executable, .. } = worker else {
@@ -60,11 +61,7 @@ pub(crate) fn maybe_dispatch(req: DispatchRequest<'_>) -> Result<(), String> {
         schema_path,
     };
     let port = CodexReviewPort::new(executable);
-    let artifact_dir = request
-        .workspace
-        .parent()
-        .unwrap_or(request.workspace.as_path())
-        .join("artifacts");
+    let artifact_dir = req.coding_root.join(".liberado").join("review-artifacts");
     let _ = issue_review(req.ledger, &port, worker_id, &request, &artifact_dir)?;
     Ok(())
 }

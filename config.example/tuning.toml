@@ -76,6 +76,13 @@
 # kind = "codex"
 # executable = "/path/to/codex"
 # enabled = true
+# # Slice 4: OpenCode is a distinct open_code harness after Codex; keep disabled until smoke + cost policy.
+# [coder.control_plane.review_workers.opencode]
+# kind = "open_code"
+# executable = "/path/to/opencode"
+# model = "PROVIDER/MODEL"
+# permission_mode = "deny_writes"
+# enabled = false
 # [coder.control_plane.review_workers.cursor-local]
 # kind = "cursor_local"
 # executable = "/path/to/agent"

@@ -1,6 +1,7 @@
 //! Bounded, read-only GitHub polling for daemon-native PR review.
 
 use crate::pr_review_dispatch::{DispatchRequest, maybe_dispatch};
+use crate::pr_review_publish::publish_for_pr;
 use liberado_coder_core::ReviewWorkerConfig;
 use liberado_coder_core::pr_review::{
     CycleFact, ObserverIntent, PullRequestSnapshot, ReviewCycle, ReviewPolicy, ShaChecks,
@@ -110,6 +111,7 @@ async fn finish_observation(
     record_and_dispatch(
         topology,
         project,
+        token,
         &mut prepared,
         row,
         &intents,
@@ -120,6 +122,7 @@ async fn finish_observation(
 fn record_and_dispatch(
     topology: &Topology,
     project: &ShepherdProjectConfig,
+    token: &str,
     prepared: &mut PreparedObservation,
     row: &Value,
     intents: &[ObserverIntent],
@@ -147,9 +150,22 @@ fn record_and_dispatch(
         base_sha: &base_sha,
         coding_root: &coding_root,
         review_workers,
+        harness_order: &topology.shepherd.review.harness_order,
         intents,
         shadow: prepared.policy.shadow,
-    })
+    })?;
+    let changed = std::collections::BTreeSet::new();
+    publish_for_pr(
+        &mut prepared.ledger,
+        topology,
+        project,
+        token,
+        &coding_root,
+        &prepared.task_id,
+        prepared.pr.number,
+        prepared.policy.shadow,
+        &changed,
+    )
 }
 
 fn coding_root(topology: &Topology, project: &ShepherdProjectConfig) -> Result<PathBuf, String> {
@@ -199,9 +215,27 @@ pub(crate) fn cycle_fact(kind: &TaskEventKind) -> Option<CycleFact> {
         }
         TaskEventKind::PullRequestClosed { .. } => Some(CycleFact::Closed),
         TaskEventKind::ReviewSynchronizeIntent { .. } => Some(CycleFact::Synchronized),
-        TaskEventKind::ReviewPublished { head_sha, .. } => Some(CycleFact::Published {
-            sha: head_sha.clone(),
-        }),
+        TaskEventKind::ReviewPublished {
+            head_sha,
+            review_key,
+            policy_version,
+            ..
+        } => {
+            let policy = if policy_version.is_empty() {
+                liberado_coder_core::pr_review::POLICY_VERSION
+            } else {
+                policy_version.as_str()
+            };
+            let key = if review_key.is_empty() {
+                format!("legacy@{head_sha}:{policy}")
+            } else {
+                review_key.clone()
+            };
+            Some(CycleFact::Published {
+                sha: head_sha.clone(),
+                review_key: key,
+            })
+        }
         _ => None,
     }
 }

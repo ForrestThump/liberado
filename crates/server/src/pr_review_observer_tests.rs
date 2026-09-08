@@ -116,6 +116,7 @@ fn eligible_intent_is_not_written_and_restart_is_stable() {
     let cycle = ReviewCycle {
         armed_sha: Some(sha.clone()),
         accepted_sha: None,
+        accepted_review_key: None,
     };
     let intents = reconcile_snapshot(
         &policy(false),

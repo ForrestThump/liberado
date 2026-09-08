@@ -36,6 +36,7 @@ fn shadow_or_missing_eligible_does_not_require_workers() {
         base_sha: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
         coding_root: Path::new("/tmp"),
         review_workers: &workers,
+        harness_order: &["codex".into()],
         intents: &intents,
         shadow: true,
     })
@@ -70,6 +71,7 @@ fn disabled_codex_does_not_issue() {
         base_sha: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
         coding_root: Path::new("/tmp"),
         review_workers: &workers,
+        harness_order: &["codex".into()],
         intents: &intents,
         shadow: false,
     })

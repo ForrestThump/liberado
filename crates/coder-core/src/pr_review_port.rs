@@ -199,7 +199,7 @@ fn classify_output(request: &ReviewInvokeRequest, output: CapturedOutput) -> Rev
             };
         }
     };
-    match ReviewResult::parse_success(stdout, &request.expected_sha) {
+    match crate::pr_review::parse_codex_success(stdout, &request.expected_sha) {
         Ok(result) => finished(result),
         Err(ReviewResultError::Malformed) => ReviewInvokeOutcome::Failed {
             reason: "Codex review returned malformed result JSON".into(),
