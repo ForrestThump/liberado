@@ -90,12 +90,16 @@ fn default_shepherd_profile() -> String {
 }
 
 pub(super) fn validate(shepherd: &ShepherdConfig) -> Result<()> {
-    let active_writer = shepherd.review.enabled
-        && shepherd
-            .projects
-            .iter()
-            .any(|project| project.controller.as_deref() == Some("liberado-shepherd"));
-    if active_writer && shepherd.review.harness_order.is_empty() {
+    validate_harness_order(shepherd)?;
+    validate_polling(&shepherd.review)?;
+    let names = validate_auth(&shepherd.auth)?;
+    validate_projects(shepherd, &names)
+}
+
+fn validate_harness_order(shepherd: &ShepherdConfig) -> Result<()> {
+    let native_review_enabled =
+        shepherd.review.enabled && shepherd.projects.iter().any(is_native_review_project);
+    if native_review_enabled && shepherd.review.harness_order.is_empty() {
         return Err(Error::Config(
             "shepherd.review.harness_order is required for native review".into(),
         ));
@@ -117,25 +121,30 @@ pub(super) fn validate(shepherd: &ShepherdConfig) -> Result<()> {
             "shepherd.review.harness_order must contain unique nonempty worker ids".into(),
         ));
     }
-    if shepherd.review.enabled
-        && (shepherd.review.delivery != "poll"
-            || shepherd.review.poll_seconds == 0
-            || shepherd.review.max_pages == 0
-            || !(1..=100).contains(&shepherd.review.page_size))
+    Ok(())
+}
+
+fn validate_polling(review: &ShepherdReviewConfig) -> Result<()> {
+    if review.enabled
+        && (review.delivery != "poll"
+            || review.poll_seconds == 0
+            || review.max_pages == 0
+            || !(1..=100).contains(&review.page_size))
     {
         return Err(Error::Config(
             "shepherd.review polling bounds are invalid".into(),
         ));
     }
-    let names: std::collections::BTreeSet<_> = shepherd
-        .auth
-        .iter()
-        .map(|auth| auth.name.as_str())
-        .collect();
-    if names.len() != shepherd.auth.len() {
+    Ok(())
+}
+
+fn validate_auth(auth_entries: &[ShepherdAuthConfig]) -> Result<std::collections::BTreeSet<&str>> {
+    let names: std::collections::BTreeSet<_> =
+        auth_entries.iter().map(|auth| auth.name.as_str()).collect();
+    if names.len() != auth_entries.len() {
         return Err(Error::Config("shepherd auth names must be unique".into()));
     }
-    for auth in &shepherd.auth {
+    for auth in auth_entries {
         if auth.kind != "token"
             || !env_ref(&auth.token_ref)
             || auth
@@ -149,39 +158,61 @@ pub(super) fn validate(shepherd: &ShepherdConfig) -> Result<()> {
             )));
         }
     }
+    Ok(names)
+}
+
+fn validate_projects(
+    shepherd: &ShepherdConfig,
+    auth_names: &std::collections::BTreeSet<&str>,
+) -> Result<()> {
     for project in &shepherd.projects {
-        if project.controller.as_deref() == Some("liberado-shepherd")
-            && (project.cold_reviews != Some(0)
-                || project.check_names.is_empty()
-                || project.review_profile.as_deref().is_none_or(str::is_empty)
-                || project.gate.as_deref() != Some("ready_and_green_tip")
-                || project
-                    .auth
-                    .as_deref()
-                    .is_none_or(|name| !names.contains(name)))
-        {
+        if is_native_review_project(project) && !valid_native_review_policy(project, auth_names) {
             return Err(Error::Config(format!(
                 "shepherd project '{}' has invalid native-review policy",
                 project.name
             )));
         }
-        if shepherd.review.enabled && project.controller.as_deref() == Some("liberado-shepherd") {
-            let auth = project
-                .auth
-                .as_deref()
-                .and_then(|name| shepherd.auth.iter().find(|auth| auth.name == name));
-            if auth
-                .and_then(|auth| auth.expected_login.as_deref())
-                .is_none_or(|login| login.trim().is_empty())
-            {
-                return Err(Error::Config(format!(
-                    "shepherd project '{}' requires auth.expected_login for review writes",
-                    project.name
-                )));
-            }
+        if shepherd.review.enabled
+            && is_native_review_project(project)
+            && !has_expected_login(project, &shepherd.auth)
+        {
+            return Err(Error::Config(format!(
+                "shepherd project '{}' requires auth.expected_login for review writes",
+                project.name
+            )));
         }
     }
     Ok(())
+}
+
+fn is_native_review_project(project: &ShepherdProjectConfig) -> bool {
+    project.controller.as_deref() == Some("liberado-shepherd")
+}
+
+fn valid_native_review_policy(
+    project: &ShepherdProjectConfig,
+    auth_names: &std::collections::BTreeSet<&str>,
+) -> bool {
+    project.cold_reviews == Some(0)
+        && !project.check_names.is_empty()
+        && project
+            .review_profile
+            .as_deref()
+            .is_some_and(|name| !name.is_empty())
+        && project.gate.as_deref() == Some("ready_and_green_tip")
+        && project
+            .auth
+            .as_deref()
+            .is_some_and(|name| auth_names.contains(name))
+}
+
+fn has_expected_login(project: &ShepherdProjectConfig, auth: &[ShepherdAuthConfig]) -> bool {
+    project
+        .auth
+        .as_deref()
+        .and_then(|name| auth.iter().find(|entry| entry.name == name))
+        .and_then(|entry| entry.expected_login.as_deref())
+        .is_some_and(|login| !login.trim().is_empty())
 }
 
 fn env_ref(value: &str) -> bool {

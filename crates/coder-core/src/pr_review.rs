@@ -5,6 +5,9 @@
 use serde::{Deserialize, Serialize};
 
 use crate::ReviewWorkerConfig;
+pub use crate::pr_review_cycle::review_key;
+use crate::pr_review_cycle::tip_already_accepted;
+pub use crate::pr_review_parse::parse_codex_success;
 
 pub const REVIEW_SCHEMA_VERSION: &str = "liberado.pr-review.v1";
 pub const POLICY_VERSION: &str = "daemon-pr-review-v1";
@@ -73,49 +76,6 @@ impl ReviewResult {
         }
         Ok(result)
     }
-}
-
-/// Extract a result from either the legacy plain object or Codex `--json` JSONL events.
-///
-/// TODO(slice-3 residual): replace the synthetic JSONL fixture with a live `codex exec review
-/// --json` capture once quota allows. Until then, keep fail-closed JSONL extraction and do not
-/// treat the Slice-2 single-object stdout fixture as the only production framing.
-pub fn parse_codex_success(
-    output: &str,
-    expected_sha: &str,
-) -> Result<ReviewResult, ReviewResultError> {
-    if output.len() > MAX_RAW_OUTPUT_BYTES {
-        return Err(ReviewResultError::Malformed);
-    }
-    match ReviewResult::parse_success(output, expected_sha) {
-        Ok(result) => return Ok(result),
-        Err(ReviewResultError::StaleSha) => return Err(ReviewResultError::StaleSha),
-        Err(ReviewResultError::Malformed) => {}
-    }
-    let mut chosen: Option<ReviewResult> = None;
-    for line in output.lines().filter(|line| !line.trim().is_empty()) {
-        let event: serde_json::Value =
-            serde_json::from_str(line).map_err(|_| ReviewResultError::Malformed)?;
-        let text = event
-            .get("type")
-            .and_then(|value| value.as_str())
-            .filter(|kind| *kind == "item.completed")
-            .and_then(|_| event.get("item"))
-            .filter(|item| {
-                item.get("type").and_then(|value| value.as_str()) == Some("agent_message")
-            })
-            .and_then(|item| item.get("text"))
-            .and_then(|value| value.as_str());
-        let Some(text) = text else { continue };
-        let Ok(result) = ReviewResult::parse_success(text, expected_sha) else {
-            continue;
-        };
-        if chosen.as_ref().is_some_and(|old| old != &result) {
-            return Err(ReviewResultError::Malformed);
-        }
-        chosen = Some(result);
-    }
-    chosen.ok_or(ReviewResultError::Malformed)
 }
 
 pub fn valid_full_sha(value: &str) -> bool {
@@ -319,10 +279,6 @@ pub fn poll_signal(
     WakeSignal::Poll
 }
 
-pub fn review_key(repository: &str, pr_number: u64, sha: &str, policy_version: &str) -> String {
-    format!("{repository}#{pr_number}@{sha}:{policy_version}")
-}
-
 /// Shared daemon/CLI observation: derive the poll signal, then apply [`observe`].
 pub fn reconcile_snapshot(
     policy: &ReviewPolicy,
@@ -459,13 +415,6 @@ pub fn review_eligible(
         && cycle.armed_sha.as_deref() == Some(pr.head_sha.as_str())
         && !tip_already_accepted(cycle, pr)
         && required_checks_pass(policy, &pr.head_sha, checks)
-}
-
-fn tip_already_accepted(cycle: &ReviewCycle, pr: &PullRequestSnapshot) -> bool {
-    let key = review_key(&pr.repository, pr.number, &pr.head_sha, POLICY_VERSION);
-    cycle.accepted_review_key.as_deref() == Some(key.as_str())
-        || (cycle.accepted_review_key.is_none()
-            && cycle.accepted_sha.as_deref() == Some(pr.head_sha.as_str()))
 }
 
 pub fn observe(

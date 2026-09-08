@@ -87,12 +87,27 @@ before anything starts. Examples of what it rejects:
 - Unknown keys in `[main_agent]`, including top-level keys placed below that table header.
 - Out-of-range tunables (e.g. `MAX_CONCURRENT_SUBAGENTS = 0`).
 
+### 4.1 Shepherd review validation
+
+Daemon-native review adds strict deployment checks:
+
+- `[shepherd.review].harness_order` contains unique, nonempty worker IDs. It is required and cannot
+  be empty when review is enabled for a `controller = "liberado-shepherd"` project.
+- Each such writer project names a `[[shepherd.auth]]` row. When review is enabled, that auth row
+  has a nonempty `expected_login` so publication can verify the authenticated forge identity.
+- Both `[shepherd.review]` and `[[shepherd.auth]]` deny unknown fields. Misspelled publication or
+  identity controls therefore stop config loading.
+
+The Slice-4 order reserves `open_code` immediately after Codex. Its worker stays
+`enabled = false` until that adapter is wired and validated. Slice 3 does not implement OpenCode and
+does not treat it as an OpenAI-compatible or free-router worker.
+
 Surfaced two ways:
 - **On daemon startup** — refuses to start, prints actionable errors.
 - **`liberado config check`** — validates the merged config without starting the daemon (CI-able;
   run after any `ssh` edit before restarting).
 
-## 4.1 Machine-owned overlays and install secrets
+## 4.2 Machine-owned overlays and install secrets
 
 Two files live outside the three section files and are written by the running system, never by hand:
 
@@ -111,7 +126,7 @@ Two files live outside the three section files and are written by the running sy
   ephemeral key and warns - proposals created then simply fail verification
   after a restart, which is the safe direction (rejected, not accepted).
 
-## 4.2 Pack-section arrival is a composition contract
+## 4.3 Pack-section arrival is a composition contract
 
 A value that parses is not a value the runtime uses. `[coder]` rides through
 `liberado-config` as an opaque `toml::Value`. The coding pack assembles it with

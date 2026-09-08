@@ -392,14 +392,24 @@ config check --project <name>` prints the resolved policy before any forge mutat
 
 Daemon-native PR review (Slices 0–1) is opt-in on the same project row. `[shepherd.review]` defaults
 to `enabled = false` and, when enabled, may only `delivery = "poll"` with bounded `poll_seconds`,
-`max_pages`, and `page_size`. `[[shepherd.auth]]` names a token by environment reference
-(`token_ref`, optional `webhook_secret_ref`); literal secrets are rejected. A project with
-`controller = "liberado-shepherd"` must set `cold_reviews = 0`, nonempty `check_names`,
-`review_profile`, `gate = "ready_and_green_tip"`, and a declared `auth` name. Repository identity
-stays in that deployment row; the source tree has no default owner/repository URL. Shadow
+`max_pages`, and `page_size`. Its `harness_order` must contain unique, nonempty worker IDs. It is
+required and nonempty when review is enabled for a project whose controller is
+`liberado-shepherd`. `[[shepherd.auth]]` names a token by environment reference (`token_ref`,
+optional `webhook_secret_ref`); literal secrets are rejected. Each writer project's auth row must
+also set a nonempty `expected_login` when review is enabled. The loader rejects unknown fields in
+both `[shepherd.review]` and `[[shepherd.auth]]`.
+
+A project with `controller = "liberado-shepherd"` must set `cold_reviews = 0`, nonempty
+`check_names`, `review_profile`, `gate = "ready_and_green_tip"`, and a declared `auth` name.
+Repository identity stays in that deployment row; the source tree has no default owner/repository
+URL. Shadow
 observation (`controller` other than `liberado-shepherd`) records ledger facts and does not claim
 the controller lease. `liberado shepherd review --project <name> --pr <n> --sha <full-sha> --dry-run`
 uses the same SHA-exact eligibility as the daemon observer and writes nothing.
+
+OpenCode is reserved for Slice 4 as the explicit `open_code` harness after Codex in
+`harness_order`. Keep its worker `enabled = false`: this setting documents the locked order but is
+not wired in Slice 3. Do not map it to an OpenAI-compatible or free-router worker.
 
 The shepherd compares GitHub check/job conclusions. Local commands and their normal successful
 exit code (`0`) remain under `[projects.preflight]`; do not duplicate CI commands in the shepherd.

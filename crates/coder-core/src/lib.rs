@@ -20,6 +20,8 @@ mod failure_excerpt;
 mod intake;
 pub mod pr_review;
 pub mod pr_review_admission;
+mod pr_review_cycle;
+mod pr_review_parse;
 pub mod pr_review_port;
 pub mod pr_review_publish;
 mod trace_view;
