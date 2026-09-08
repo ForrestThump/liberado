@@ -48,10 +48,10 @@ All remaining survivors are getter returns, trait default impls, serde helpers, 
 
 ## Refresh 2026-09-08
 
-**Status:** historical  
+**Status:** historical
 **Authority:** evidence
 
-Campaign commit: `d61d6341e241c8f6727fbf8c9888a3b8cb9a5e56`  
+Campaign commit: `d61d6341e241c8f6727fbf8c9888a3b8cb9a5e56`
 Ledger row: `2026-09-08`
 
 | Metric | Fresh baseline | After coverage | Delta |
