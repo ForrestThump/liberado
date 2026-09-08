@@ -5,7 +5,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use tokio::sync::{Mutex, Notify, mpsc, watch};
+use tokio::sync::{Mutex, Notify, broadcast, mpsc, watch};
 
 use crate::runner::{DomainPackRunner, InputChannel, PackContext, PackError};
 use crate::{
@@ -125,6 +125,48 @@ impl DomainPackRunner for NeverEndingPack {
     }
 }
 
+struct DefaultSubscriberStore;
+
+#[async_trait::async_trait]
+impl SessionRecordStore for DefaultSubscriberStore {
+    async fn insert(&self, _record: GoalSessionRecord) {}
+
+    async fn insert_if_absent(&self, _record: GoalSessionRecord) -> crate::InsertOutcome {
+        crate::InsertOutcome::Inserted
+    }
+
+    async fn get(&self, _id: &str) -> Option<GoalSessionRecord> {
+        None
+    }
+
+    async fn list(&self) -> Vec<GoalSessionRecord> {
+        vec![]
+    }
+
+    async fn events(&self, _id: &str) -> Option<Vec<SessionEvent>> {
+        None
+    }
+
+    async fn subscribe(
+        &self,
+        _id: &str,
+    ) -> Option<(Vec<SessionEvent>, broadcast::Receiver<SessionEvent>)> {
+        None
+    }
+
+    async fn push_event(&self, _event: SessionEvent) {}
+
+    async fn append_turn(&self, _session_id: &str, _author: TurnAuthor, _content: String) {}
+
+    async fn turns(&self, _session_id: &str) -> Vec<(TurnAuthor, String)> {
+        vec![]
+    }
+
+    async fn set_status(&self, _id: &str, _status: SessionStatus) {}
+
+    async fn finish(&self, _id: &str, _status: SessionStatus, _result: GoalResult) {}
+}
+
 #[test]
 fn origin_constructors_and_invariants_reject_invalid_session_state() {
     let conversation = crate::SessionOrigin::from_conversation("conversation-42");
@@ -154,6 +196,14 @@ fn reviewer_kind_display_is_the_stable_wire_label() {
     assert_eq!(ReviewerKind::Gatekeeper.to_string(), "gatekeeper");
     assert_eq!(ReviewerKind::Fresh.to_string(), "fresh");
     assert_eq!(ReviewerKind::Strategist.to_string(), "strategist");
+}
+
+#[tokio::test]
+async fn stores_without_an_event_bus_report_zero_subscribers() {
+    assert_eq!(
+        DefaultSubscriberStore.live_subscriber_count("unused").await,
+        0
+    );
 }
 
 #[tokio::test]
@@ -281,6 +331,7 @@ async fn await_terminal_ignores_progress_and_returns_only_after_the_finished_eve
     struct GatedPack {
         progressed: Arc<Notify>,
         finish: Arc<Notify>,
+        held_events: Arc<Mutex<Option<mpsc::Sender<SessionEvent>>>>,
     }
 
     #[async_trait::async_trait]
@@ -309,6 +360,7 @@ async fn await_terminal_ignores_progress_and_returns_only_after_the_finished_eve
                 .unwrap();
             self.progressed.notify_one();
             self.finish.notified().await;
+            *self.held_events.lock().await = Some(events.clone());
             Ok(GoalResult {
                 terminal: TerminalKind::Succeeded,
                 summary: "completed after progress".into(),
@@ -320,10 +372,12 @@ async fn await_terminal_ignores_progress_and_returns_only_after_the_finished_eve
 
     let progressed = Arc::new(Notify::new());
     let finish = Arc::new(Notify::new());
+    let held_events = Arc::new(Mutex::new(None));
     let mut hub = GoalSessionHub::new(GoalSessionStore::new());
     hub.register_pack(Arc::new(GatedPack {
         progressed: progressed.clone(),
         finish: finish.clone(),
+        held_events: held_events.clone(),
     }));
     let hub = Arc::new(hub);
     let id = hub.start(goal("wait-for-terminal")).await.unwrap();
@@ -345,6 +399,7 @@ async fn await_terminal_ignores_progress_and_returns_only_after_the_finished_eve
         .unwrap()
         .unwrap();
     assert_eq!(snapshot.session.status, SessionStatus::Succeeded);
+    held_events.lock().await.take();
 }
 
 #[tokio::test]
