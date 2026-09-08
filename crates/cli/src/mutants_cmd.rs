@@ -203,6 +203,10 @@ const TIMEOUT_OVERRIDES: &[(&str, &str, &str)] = &[
     // reaper and waits a 1s tick) pushes the unmutated baseline past 3s on a
     // cold target/mutants cache, timing out the run before any mutant starts.
     ("liberado-daemon", "20", "20"),
+    // Session lifecycle mutants deliberately suppress completion signals. The
+    // test binary then needs more than the 3s floor to report the failed wait
+    // and let cargo-mutants restore the in-place source file on Windows.
+    ("liberado-session", "10", "30"),
 ];
 
 fn build_mutants_command(package: &str, profile: RunProfile) -> String {

@@ -310,6 +310,9 @@ fn build_mutants_command_uses_longer_timeout_for_cli() {
     let free_proxy = build_mutants_command("liberado-provider-free-proxy", RunProfile::Default);
     assert!(free_proxy.contains("--timeout 30"));
     assert!(free_proxy.contains("--minimum-test-timeout 30"));
+    let session = build_mutants_command("liberado-session", RunProfile::Default);
+    assert!(session.contains("--timeout 10"));
+    assert!(session.contains("--minimum-test-timeout 30"));
 }
 
 #[test]
