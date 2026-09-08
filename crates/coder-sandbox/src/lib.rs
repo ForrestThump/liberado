@@ -12,6 +12,7 @@ mod preflight;
 mod preflight_baseline;
 pub mod warmup;
 mod worktree_registry;
+mod worktree_setup;
 pub use cargo_targets::{
     TargetAllocation, TargetClass, TargetError, TargetKind, TargetLease, TargetPool, TargetRequest,
     baseline_target_dir, ordinary_target_env, resolve_ordinary,
@@ -733,7 +734,7 @@ pub async fn ensure_session_worktree(
         let _ = std::fs::remove_dir_all(&dest);
     }
 
-    match create_linked_worktree(&parent_root, &dest).await {
+    match create_linked_worktree(&parent_root, &dest, None).await {
         Ok(()) => {}
         Err(e) => {
             // Concurrent ensure (tests / double start): path appeared between check and add.
@@ -747,72 +748,7 @@ pub async fn ensure_session_worktree(
     )?))
 }
 
-/// Ceiling for the git plumbing that sets up a worktree.
-///
-/// These are local, near-instant operations — a healthy `worktree prune` is ~15ms. The bound
-/// exists to convert a wedged subprocess into a reported error, not to police slow disks, so it
-/// is set far above any legitimate duration.
-const GIT_TIMEOUT: Duration = liberado_common::process::DEFAULT_COMMAND_TIMEOUT;
-
-/// Create a linked worktree at `dest` from `parent_root` (must not already exist).
-async fn create_linked_worktree(parent_root: &Path, dest: &Path) -> Result<(), SandboxError> {
-    let parent_cli = path_for_cli(parent_root);
-    let dest_cli = path_for_cli(dest);
-
-    let _registry = crate::worktree_registry::lock().await;
-    #[cfg(test)]
-    let _depth = crate::worktree_registry::enter_probe();
-
-    // Bounded, because this is the path that hung. `process::command` nulls the child's stdin
-    // so it can no longer inherit the ACP bridge's JSON-RPC wire — the actual bug, which cost a
-    // Paseo prompt 19 silent minutes — and `output_within` makes sure that if some *other*
-    // external call ever wedges here, it surfaces as an error in 30s rather than as a spinner
-    // with no end. The two are separate properties: one prevents the hang, the other keeps the
-    // next unknown hang diagnosable.
-    let mut prune = liberado_common::process::command("git");
-    prune.args(["-C", &parent_cli]).args(["worktree", "prune"]);
-    // Stale registrations are advisory; a prune that fails or times out must not block the add.
-    if let Err(e) =
-        liberado_common::process::output_within(&mut prune, "git worktree prune", GIT_TIMEOUT).await
-    {
-        tracing::warn!(%e, "git worktree prune did not complete; continuing to worktree add");
-    }
-
-    let mut add = liberado_common::process::command("git");
-    add.args(["-C", &parent_cli])
-        .args(["worktree", "add", "--no-checkout", &dest_cli]);
-    let output = liberado_common::process::output_within(&mut add, "git worktree add", GIT_TIMEOUT)
-        .await
-        .map_err(|e| SandboxError::Spawn(format!("git worktree add: {e}")))?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(SandboxError::Spawn(format!(
-            "git worktree add failed: {stderr}"
-        )));
-    }
-
-    let mut checkout = liberado_common::process::command("git");
-    checkout
-        .args(["-C", &dest_cli])
-        .args(["checkout", "HEAD", "--"]);
-    let output =
-        liberado_common::process::output_within(&mut checkout, "git checkout", GIT_TIMEOUT)
-            .await
-            .map_err(|e| SandboxError::Spawn(format!("git checkout in worktree: {e}")))?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let _ = std::fs::remove_dir_all(dest);
-        return Err(SandboxError::Spawn(format!(
-            "git checkout in worktree failed: {stderr}"
-        )));
-    }
-
-    // Leftover gitignored path-deps are copied when the parent manifest still declares them.
-    // The current root pin is git+tag, so this is a no-op unless a path dep remains.
-    crate::path_deps::provision_path_deps(parent_root, dest).await;
-
-    Ok(())
-}
+use worktree_setup::create_linked_worktree;
 
 /// A git-worktree-isolated workspace. On construction, `git worktree add --no-checkout`
 /// creates a linked worktree under `<data>/worktrees/<session-id>/`, then the working tree
@@ -845,6 +781,23 @@ impl WorktreeWorkspace {
         worktrees_base: &Path,
         command_policy: CommandPolicy,
     ) -> Result<Self, SandboxError> {
+        Self::new_inner(
+            parent_root,
+            session_id,
+            worktrees_base,
+            command_policy,
+            None,
+        )
+        .await
+    }
+
+    async fn new_inner(
+        parent_root: &Path,
+        session_id: &str,
+        worktrees_base: &Path,
+        command_policy: CommandPolicy,
+        revision: Option<&str>,
+    ) -> Result<Self, SandboxError> {
         let parent_root = parent_root
             .canonicalize()
             .map_err(|_| SandboxError::MissingRoot(parent_root.display().to_string()))?;
@@ -861,7 +814,7 @@ impl WorktreeWorkspace {
             let _ = std::fs::remove_dir_all(&dest);
         }
 
-        create_linked_worktree(&parent_root, &dest).await?;
+        create_linked_worktree(&parent_root, &dest, revision).await?;
 
         let inner = HostWorkspace::new(&dest, command_policy)?;
 

@@ -139,6 +139,7 @@ pub enum TaskEventKind {
         head_sha: String,
     },
     ReviewStale {
+        run_id: String,
         expected_sha: String,
         observed_sha: String,
     },

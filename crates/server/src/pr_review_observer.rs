@@ -1,5 +1,7 @@
 //! Bounded, read-only GitHub polling for daemon-native PR review.
 
+use crate::pr_review_dispatch::{DispatchRequest, maybe_dispatch};
+use liberado_coder_core::ReviewWorkerConfig;
 use liberado_coder_core::pr_review::{
     CycleFact, ObserverIntent, PullRequestSnapshot, ReviewCycle, ReviewPolicy, ShaChecks,
     bounded_pages, check_endpoints, collect_github_checks, controller_lease_required,
@@ -15,130 +17,30 @@ use reqwest::{
     header::{ACCEPT, AUTHORIZATION, USER_AGENT},
 };
 use serde_json::Value;
-use std::{path::Path, time::Duration};
+use std::collections::BTreeMap;
+use std::{path::Path, path::PathBuf};
 
-pub(crate) fn spawn(topology: &Topology) -> Option<tokio::task::JoinHandle<()>> {
-    topology
-        .shepherd
-        .review
-        .enabled
-        .then(|| tokio::spawn(poll_forever(topology.clone())))
-}
+pub(crate) use crate::pr_review_poll::spawn;
 
-async fn poll_forever(topology: Topology) {
-    let mut ticker =
-        tokio::time::interval(Duration::from_secs(topology.shepherd.review.poll_seconds));
-    if !topology.shepherd.review.reconcile_on_start {
-        ticker.tick().await;
-    }
-    loop {
-        ticker.tick().await;
-        if let Err(error) = reconcile(&topology).await {
-            tracing::warn!(%error, "PR review observer pass failed");
-        }
-    }
-}
-
-async fn reconcile(topology: &Topology) -> Result<(), String> {
-    let client = http_client()?;
-    poll_all(&client, topology).await
-}
-
-fn http_client() -> Result<Client, String> {
-    Client::builder()
-        .timeout(Duration::from_secs(30))
-        .build()
-        .map_err(|e| e.to_string())
-}
-
-async fn poll_all(client: &Client, topology: &Topology) -> Result<(), String> {
-    for project in &topology.shepherd.projects {
-        poll_configured(client, topology, project).await?;
-    }
-    Ok(())
-}
-
-async fn poll_configured(
-    client: &Client,
-    topology: &Topology,
-    project: &ShepherdProjectConfig,
-) -> Result<(), String> {
-    if project.controller.is_none() {
-        return Ok(());
-    }
-    let token = token_for(topology, project)?;
-    poll_project(client, topology, project, &token).await
-}
-
-fn token_for(topology: &Topology, project: &ShepherdProjectConfig) -> Result<String, String> {
-    let name = project
-        .auth
-        .as_deref()
-        .ok_or_else(|| format!("{} has no shepherd auth", project.name))?;
-    let auth = topology
-        .shepherd
-        .auth
-        .iter()
-        .find(|auth| auth.name == name)
-        .ok_or_else(|| format!("{} names unknown shepherd auth {name}", project.name))?;
-    std::env::var(&auth.token_ref).map_err(|_| format!("{} is not set", auth.token_ref))
-}
-
-async fn poll_project(
-    client: &Client,
-    topology: &Topology,
-    project: &ShepherdProjectConfig,
-    token: &str,
-) -> Result<(), String> {
-    for page in bounded_pages(topology.shepherd.review.max_pages) {
-        if !poll_page(client, topology, project, token, page).await? {
-            break;
-        }
-    }
-    Ok(())
-}
-
-async fn poll_page(
-    client: &Client,
-    topology: &Topology,
-    project: &ShepherdProjectConfig,
-    token: &str,
-    page: usize,
-) -> Result<bool, String> {
-    let path = format!(
-        "/repos/{}/pulls?state=all&sort=updated&direction=desc&per_page={}&page={page}",
-        project.repository, topology.shepherd.review.page_size
-    );
-    let rows = github(client, token, &path).await?;
-    observe_rows(client, topology, project, token, &rows).await?;
-    Ok(rows.as_array().map(|rows| rows.len()).unwrap_or(0) >= topology.shepherd.review.page_size)
-}
-
-async fn observe_rows(
-    client: &Client,
-    topology: &Topology,
-    project: &ShepherdProjectConfig,
-    token: &str,
-    rows: &Value,
-) -> Result<(), String> {
-    let Some(rows) = rows.as_array() else {
-        return Err("pull list was not an array".into());
-    };
-    for row in rows {
-        observe_pr(client, topology, project, token, row).await?;
-    }
-    Ok(())
-}
-
-async fn observe_pr(
+pub(super) async fn observe_pr(
     client: &Client,
     topology: &Topology,
     project: &ShepherdProjectConfig,
     token: &str,
     row: &Value,
+    review_workers: &BTreeMap<String, ReviewWorkerConfig>,
 ) -> Result<(), String> {
     let prepared = prepare_observation(topology, project, row)?;
-    finish_observation(client, topology, project, token, prepared).await
+    finish_observation(
+        client,
+        topology,
+        project,
+        token,
+        prepared,
+        review_workers,
+        row,
+    )
+    .await
 }
 
 struct PreparedObservation {
@@ -184,6 +86,8 @@ async fn finish_observation(
     project: &ShepherdProjectConfig,
     token: &str,
     mut prepared: PreparedObservation,
+    review_workers: &BTreeMap<String, ReviewWorkerConfig>,
+    row: &Value,
 ) -> Result<(), String> {
     let ready = marked_ready(
         client,
@@ -203,13 +107,58 @@ async fn finish_observation(
         prepared.prior_tip.as_deref(),
         ready,
     );
+    record_and_dispatch(
+        topology,
+        project,
+        &mut prepared,
+        row,
+        &intents,
+        review_workers,
+    )
+}
+
+fn record_and_dispatch(
+    topology: &Topology,
+    project: &ShepherdProjectConfig,
+    prepared: &mut PreparedObservation,
+    row: &Value,
+    intents: &[ObserverIntent],
+    review_workers: &BTreeMap<String, ReviewWorkerConfig>,
+) -> Result<(), String> {
     record_intents(
         &mut prepared.ledger,
         &prepared.task_id,
         &project.repository,
         prepared.pr.number,
-        &intents,
-    )
+        intents,
+    )?;
+    let coding_root = coding_root(topology, project)?;
+    let base_sha = row
+        .pointer("/base/sha")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    maybe_dispatch(DispatchRequest {
+        ledger: &mut prepared.ledger,
+        task_id: &prepared.task_id,
+        repository: &project.repository,
+        pr_number: prepared.pr.number,
+        head_sha: &prepared.pr.head_sha,
+        base_sha: &base_sha,
+        coding_root: &coding_root,
+        review_workers,
+        intents,
+        shadow: prepared.policy.shadow,
+    })
+}
+
+fn coding_root(topology: &Topology, project: &ShepherdProjectConfig) -> Result<PathBuf, String> {
+    topology
+        .projects
+        .iter()
+        .find(|item| item.name == project.coding_project)
+        .map(|item| item.root.clone())
+        .ok_or_else(|| "coding project root is missing".into())
 }
 
 pub(crate) fn review_policy(project: &ShepherdProjectConfig) -> ReviewPolicy {
@@ -441,7 +390,7 @@ async fn fetch_checks(
     })
 }
 
-async fn github(client: &Client, token: &str, path: &str) -> Result<Value, String> {
+pub(super) async fn github(client: &Client, token: &str, path: &str) -> Result<Value, String> {
     client
         .get(format!("https://api.github.com{path}"))
         .header(USER_AGENT, "liberado-pr-review-observer")

@@ -7,6 +7,7 @@ use liberado_coder_core::pr_review::{
 };
 use liberado_coder_core::{TaskEvent, TaskEventKind, TaskLedger};
 use liberado_config::{ShepherdProjectConfig, Topology};
+use std::collections::BTreeMap;
 
 fn policy(shadow: bool) -> ReviewPolicy {
     ReviewPolicy {
@@ -78,7 +79,7 @@ fn ledger(task_id: &str) -> TaskLedger {
 fn disabled_review_starts_no_task() {
     let topology = Topology::default();
     assert!(!topology.shepherd.review.enabled);
-    assert!(spawn(&topology).is_none());
+    assert!(spawn(&topology, BTreeMap::new()).is_none());
 }
 
 #[tokio::test]
@@ -87,7 +88,7 @@ async fn enabled_review_starts_a_background_task() {
     topology.shepherd.review.enabled = true;
     topology.shepherd.review.poll_seconds = 3600;
     topology.shepherd.review.reconcile_on_start = false;
-    let handle = spawn(&topology).expect("enabled observer starts a task");
+    let handle = spawn(&topology, BTreeMap::new()).expect("enabled observer starts a task");
     handle.abort();
 }
 

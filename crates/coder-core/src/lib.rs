@@ -19,6 +19,8 @@ mod control_plane_tests;
 mod failure_excerpt;
 mod intake;
 pub mod pr_review;
+pub mod pr_review_admission;
+pub mod pr_review_port;
 mod trace_view;
 mod tuning;
 mod verify;
