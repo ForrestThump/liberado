@@ -16,6 +16,7 @@ mod hooks;
 mod latency;
 mod pr_review_dispatch;
 mod pr_review_observer;
+mod pr_review_poll;
 mod shutdown;
 mod state;
 mod sticky;
