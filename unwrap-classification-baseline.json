@@ -4,7 +4,7 @@
     "proven_invariant": 61,
     "local_failure": 0,
     "process_fatal": 49,
-    "files_scanned": 472,
+    "files_scanned": 477,
     "files_with_unwraps": 49
   },
   "files": {
@@ -117,7 +117,7 @@
       "occurrences": [
         {
           "file": "crates/cli/src/mutants_cmd.rs",
-          "line": 426,
+          "line": 430,
           "column": 22,
           "method": "unwrap",
           "snippet": "latest_sha.unwrap()",
