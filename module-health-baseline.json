@@ -1139,6 +1139,30 @@
     "functions": 38,
     "cyclomatic": 99
   },
+  "crates/coder-core/src/pr_review_admission.rs": {
+    "ploc": 176,
+    "lloc": 18,
+    "functions": 14,
+    "cyclomatic": 41
+  },
+  "crates/coder-core/src/pr_review_admission_tests.rs": {
+    "ploc": 158,
+    "lloc": 46,
+    "functions": 7,
+    "cyclomatic": 10
+  },
+  "crates/coder-core/src/pr_review_port.rs": {
+    "ploc": 328,
+    "lloc": 70,
+    "functions": 42,
+    "cyclomatic": 110
+  },
+  "crates/coder-core/src/pr_review_port_tests.rs": {
+    "ploc": 236,
+    "lloc": 62,
+    "functions": 14,
+    "cyclomatic": 19
+  },
   "crates/coder-core/src/pr_review_tests.rs": {
     "ploc": 406,
     "lloc": 91,
@@ -1272,10 +1296,10 @@
     "cyclomatic": 17
   },
   "crates/coder-sandbox/src/lib.rs": {
-    "ploc": 737,
-    "lloc": 187,
-    "functions": 71,
-    "cyclomatic": 182
+    "ploc": 716,
+    "lloc": 165,
+    "functions": 69,
+    "cyclomatic": 175
   },
   "crates/coder-sandbox/src/lib_git_helper_tests.rs": {
     "ploc": 66,
@@ -1390,6 +1414,12 @@
     "lloc": 3,
     "functions": 4,
     "cyclomatic": 8
+  },
+  "crates/coder-sandbox/src/worktree_setup.rs": {
+    "ploc": 81,
+    "lloc": 29,
+    "functions": 4,
+    "cyclomatic": 14
   },
   "crates/coder-tools/src/fuzzy_match.rs": {
     "ploc": 355,
@@ -3329,17 +3359,35 @@
     "functions": 1,
     "cyclomatic": 2
   },
+  "crates/server/src/pr_review_dispatch.rs": {
+    "ploc": 134,
+    "lloc": 36,
+    "functions": 12,
+    "cyclomatic": 31
+  },
+  "crates/server/src/pr_review_dispatch_tests.rs": {
+    "ploc": 80,
+    "lloc": 12,
+    "functions": 3,
+    "cyclomatic": 4
+  },
   "crates/server/src/pr_review_observer.rs": {
-    "ploc": 431,
-    "lloc": 55,
-    "functions": 46,
-    "cyclomatic": 100
+    "ploc": 387,
+    "lloc": 33,
+    "functions": 35,
+    "cyclomatic": 74
   },
   "crates/server/src/pr_review_observer_tests.rs": {
     "ploc": 228,
     "lloc": 57,
     "functions": 13,
     "cyclomatic": 15
+  },
+  "crates/server/src/pr_review_poll.rs": {
+    "ploc": 140,
+    "lloc": 23,
+    "functions": 19,
+    "cyclomatic": 36
   },
   "crates/server/src/shutdown.rs": {
     "ploc": 184,
