@@ -199,6 +199,7 @@ fn render_dry_run(
     let cycle = ReviewCycle {
         armed_sha: Some(requested_sha.to_string()),
         accepted_sha: None,
+        accepted_review_key: None,
     };
     let eligible = review_eligible(&policy, &loaded.pr, &cycle, &loaded.checks);
     let intents = observe(
@@ -207,6 +208,7 @@ fn render_dry_run(
         &ReviewCycle {
             armed_sha: None,
             accepted_sha: None,
+            accepted_review_key: None,
         },
         &loaded.checks,
         WakeSignal::ReadyForReview {

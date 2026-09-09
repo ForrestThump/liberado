@@ -25,6 +25,13 @@ fn success_requires_exact_full_sha_and_valid_schema() {
 }
 
 #[test]
+fn extracts_codex_jsonl_result() {
+    let output = include_str!("../tests/fixtures/codex_review_jsonl_success.jsonl");
+    let result = parse_codex_success(output, &"a".repeat(40)).unwrap();
+    assert_eq!(result.summary, "No blocking issues.");
+}
+
+#[test]
 fn codex_failure_fixtures_are_distinct_and_402_is_not_exhaustion() {
     assert_eq!(
         classify_codex_failure("ERROR: You've hit your usage limit. Try again at 1:00 PM"),
@@ -127,6 +134,7 @@ fn eligibility_is_sha_exact_success_only_and_rejects_forks() {
     let cycle = ReviewCycle {
         armed_sha: Some(a.clone()),
         accepted_sha: None,
+        accepted_review_key: None,
     };
     assert!(review_eligible(
         &policy(),
@@ -162,6 +170,7 @@ fn wake_rules_do_not_infer_an_arm() {
     let empty = ReviewCycle {
         armed_sha: None,
         accepted_sha: None,
+        accepted_review_key: None,
     };
     for signal in [
         WakeSignal::Poll,
@@ -192,6 +201,7 @@ fn synchronize_is_one_draft_note_intent_and_never_review() {
     let cycle = ReviewCycle {
         armed_sha: Some(old.clone()),
         accepted_sha: None,
+        accepted_review_key: None,
     };
     let intents = observe(
         &policy(),
@@ -250,6 +260,7 @@ fn accepted_sha_and_non_success_conclusions_cannot_pass() {
     let cycle = ReviewCycle {
         armed_sha: Some(a.clone()),
         accepted_sha: Some(a.clone()),
+        accepted_review_key: Some(review_key("one/repo", 1, &a, POLICY_VERSION)),
     };
     assert!(!review_eligible(
         &policy(),
@@ -261,6 +272,7 @@ fn accepted_sha_and_non_success_conclusions_cannot_pass() {
         let armed = ReviewCycle {
             armed_sha: Some(a.clone()),
             accepted_sha: None,
+            accepted_review_key: None,
         };
         assert!(!review_eligible(
             &policy(),
@@ -295,6 +307,7 @@ fn poll_ready_open_does_not_arm_and_review_request_never_arrives() {
     let empty = ReviewCycle {
         armed_sha: None,
         accepted_sha: None,
+        accepted_review_key: None,
     };
     let intents = reconcile_snapshot(
         &policy(),
@@ -420,4 +433,72 @@ fn github_payloads_and_disabled_grok_start_no_process() {
         let _ = std::process::Command::new(&argv[0]);
     }
     assert!(!started);
+}
+
+#[test]
+fn jsonl_fixture_extracts_final_agent_message() {
+    let fixture = include_str!("../tests/fixtures/codex_review_jsonl_success.jsonl");
+    let sha = "a".repeat(40);
+    let result = parse_codex_success(fixture, &sha).expect("jsonl fixture");
+    assert_eq!(result.reviewed_sha, sha);
+    assert!(result.findings.is_empty());
+}
+
+#[test]
+fn jsonl_rejects_conflicting_agent_messages() {
+    let sha = "a".repeat(40);
+    let one = format!(
+        "{{\"schema\":\"{}\",\"reviewed_sha\":\"{sha}\",\"summary\":\"one\",\"findings\":[]}}",
+        REVIEW_SCHEMA_VERSION
+    );
+    let two = format!(
+        "{{\"schema\":\"{}\",\"reviewed_sha\":\"{sha}\",\"summary\":\"two\",\"findings\":[]}}",
+        REVIEW_SCHEMA_VERSION
+    );
+    let line = |text: &str| {
+        serde_json::json!({
+            "type": "item.completed",
+            "item": {"id": "1", "type": "agent_message", "text": text}
+        })
+        .to_string()
+    };
+    let output = format!(
+        "{}
+{}
+",
+        line(&one),
+        line(&two)
+    );
+    assert!(matches!(
+        parse_codex_success(&output, &sha),
+        Err(ReviewResultError::Malformed)
+    ));
+}
+
+#[test]
+fn jsonl_rejects_duplicate_and_trailing_invalid_agent_messages() {
+    let sha = "a".repeat(40);
+    let result = format!(
+        "{{\"schema\":\"{}\",\"reviewed_sha\":\"{sha}\",\"summary\":\"one\",\"findings\":[]}}",
+        REVIEW_SCHEMA_VERSION
+    );
+    let line = |text: &str| {
+        serde_json::json!({
+            "type": "item.completed",
+            "item": {"id": "1", "type": "agent_message", "text": text}
+        })
+        .to_string()
+    };
+
+    let duplicate = format!("{}\n{}\n", line(&result), line(&result));
+    assert!(matches!(
+        parse_codex_success(&duplicate, &sha),
+        Err(ReviewResultError::Malformed)
+    ));
+
+    let trailing_invalid = format!("{}\n{}\n", line(&result), line("not review JSON"));
+    assert!(matches!(
+        parse_codex_success(&trailing_invalid, &sha),
+        Err(ReviewResultError::Malformed)
+    ));
 }

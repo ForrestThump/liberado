@@ -54,7 +54,9 @@ async fn poll_projects(
     review_workers: &BTreeMap<String, ReviewWorkerConfig>,
 ) -> Result<(), String> {
     for project in &topology.shepherd.projects {
-        poll_configured(client, topology, project, review_workers).await?;
+        if let Err(error) = poll_configured(client, topology, project, review_workers).await {
+            tracing::warn!(project = %project.name, %error, "PR review project reconciliation failed");
+        }
     }
     Ok(())
 }

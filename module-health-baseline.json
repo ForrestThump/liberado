@@ -1151,6 +1151,18 @@
     "functions": 7,
     "cyclomatic": 10
   },
+  "crates/coder-core/src/pr_review_cycle.rs": {
+    "ploc": 10,
+    "lloc": 1,
+    "functions": 2,
+    "cyclomatic": 5
+  },
+  "crates/coder-core/src/pr_review_parse.rs": {
+    "ploc": 35,
+    "lloc": 12,
+    "functions": 10,
+    "cyclomatic": 19
+  },
   "crates/coder-core/src/pr_review_port.rs": {
     "ploc": 328,
     "lloc": 70,
@@ -1162,6 +1174,18 @@
     "lloc": 62,
     "functions": 14,
     "cyclomatic": 19
+  },
+  "crates/coder-core/src/pr_review_publish.rs": {
+    "ploc": 434,
+    "lloc": 76,
+    "functions": 38,
+    "cyclomatic": 109
+  },
+  "crates/coder-core/src/pr_review_publish_tests.rs": {
+    "ploc": 438,
+    "lloc": 148,
+    "functions": 24,
+    "cyclomatic": 33
   },
   "crates/coder-core/src/pr_review_tests.rs": {
     "ploc": 406,
@@ -3359,8 +3383,14 @@
     "functions": 1,
     "cyclomatic": 2
   },
+  "crates/server/src/pr_review_diff.rs": {
+    "ploc": 138,
+    "lloc": 48,
+    "functions": 13,
+    "cyclomatic": 28
+  },
   "crates/server/src/pr_review_dispatch.rs": {
-    "ploc": 134,
+    "ploc": 131,
     "lloc": 36,
     "functions": 12,
     "cyclomatic": 31
@@ -3388,6 +3418,12 @@
     "lloc": 23,
     "functions": 19,
     "cyclomatic": 36
+  },
+  "crates/server/src/pr_review_publish.rs": {
+    "ploc": 320,
+    "lloc": 44,
+    "functions": 58,
+    "cyclomatic": 96
   },
   "crates/server/src/shutdown.rs": {
     "ploc": 184,

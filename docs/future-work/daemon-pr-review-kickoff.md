@@ -11,7 +11,7 @@ open_items: true
 
 **Status**: active. Forrest approved Sol pass 2 and the seven checklist defaults (2026-09-05).
 Slices 0–2 are on main: Slices 0–1 via PR #244 and Slice 2 via PR #247 (2026-09-08).
-Slice 3 is next; later slices remain open.
+Slice 3 (COMMENT/checklist/draft publication saga) is in progress; later slices remain open.
 
 ## Decision
 
@@ -86,7 +86,7 @@ max_concurrent_reviews = 1
 review_event = "COMMENT"
 blocker_action = "draft"
 on_synchronize = "draft_if_armed"
-harness_order = ["grok-build", "codex", "antigravity", "cursor-local", "free-router"]
+harness_order = ["codex", "open_code", "grok-build", "antigravity", "cursor-local", "free-router"]
 
 [[shepherd.projects]]
 name = "example"
@@ -109,9 +109,16 @@ enabled = false
 [tuning.coder.control_plane.review_workers.codex]
 kind = "codex"
 executable = "/home/box/.local/bin/codex"
-output = "jsonl"
-sandbox = "read-only"
 enabled = true
+
+# Slice 4: OpenCode is a distinct harness after Codex (Forrest lock 2026-09-08).
+# Not free-router / openai_compatible. Keep disabled until read-only smoke + no-cost/paid policy.
+[tuning.coder.control_plane.review_workers.opencode]
+kind = "open_code"
+executable = "/home/box/.local/bin/opencode"
+model = "PROVIDER/MODEL"
+permission_mode = "deny_writes"
+enabled = false
 
 [tuning.coder.control_plane.review_workers.antigravity]
 kind = "antigravity"
@@ -301,20 +308,30 @@ cooldown; no repair port/result/approval semantics are emitted.
 ### Slice 3 — COMMENT, checklist, and draft sagas
 
 Publish one immutable COMMENT. For blockers, publish the separate checklist and draft the matching
-PR. Execute synchronize-to-draft/note intent. Do not repair or merge.
+PR. Execute synchronize-to-draft/note intent. Do not repair or merge. Publication uses a separate
+GitHub effect port (not `ReviewPort`). Markers and accepted keys include `policy_version`.
+`harness_order` is real config (Codex-only execution still). Codex stdout extraction accepts legacy
+single-object JSON and documented JSONL `item.completed`/`agent_message` framing; a live capture
+remains a residual when quota blocks collection.
 
 Acceptance: only COMMENT is used; out-of-diff findings fall back to body; one checklist is created;
 checkbox edits have no effect; restart resumes only missing steps; SHA/login guards precede every
-write; synchronize creates at most one draft/note; no merge path exists.
+write; synchronize creates at most one draft/note; no merge path exists; `expected_login` required
+for writers; harnesses never receive GitHub credentials.
 
 ### Slice 4 — Enabled-worker fallback
 
-Add proven Grok, Antigravity, Cursor-local, and free-router adapters. Admit the enabled subset in
-declared order. Do not wait for Grok to ship Codex-first operation.
+Add proven adapters in `harness_order`. Forrest lock (2026-09-08): OpenCode is an explicit
+`open_code` worker kind **after Codex** (not a free-router alias). Keep `enabled=false` until an
+unattended read-only smoke succeeds and the selected provider/model is proved no-cost (or Forrest
+approves a named paid policy). Also add Antigravity, Cursor-local, and free-router as enabled
+only with captured evidence. Grok stays declared but disabled until headless proof. Do not wait
+for Grok to ship Codex-first operation.
 
 Acceptance: typed exhaustion advances once and normal failure stops; disabled adapters do not
-start; cooldowns survive restart; agy uses near 30 minutes; Cursor cloud is absent; free-router
-makes no paid or unknown-price request.
+start; cooldowns survive restart; OpenCode denies write permissions and strips forge credentials;
+agy uses near 30 minutes; Cursor cloud is absent; free-router makes no paid or unknown-price
+request.
 
 ### Slice 5 — Webhook accelerator
 

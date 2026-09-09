@@ -1,6 +1,7 @@
 //! Bounded, read-only GitHub polling for daemon-native PR review.
 
 use crate::pr_review_dispatch::{DispatchRequest, maybe_dispatch};
+use crate::pr_review_publish::{PublishObservation, publish_for_observation};
 use liberado_coder_core::ReviewWorkerConfig;
 use liberado_coder_core::pr_review::{
     CycleFact, ObserverIntent, PullRequestSnapshot, ReviewCycle, ReviewPolicy, ShaChecks,
@@ -85,10 +86,30 @@ async fn finish_observation(
     topology: &Topology,
     project: &ShepherdProjectConfig,
     token: &str,
-    mut prepared: PreparedObservation,
+    prepared: PreparedObservation,
     review_workers: &BTreeMap<String, ReviewWorkerConfig>,
     row: &Value,
 ) -> Result<(), String> {
+    let intents = reconcile_observation(client, topology, project, token, &prepared).await?;
+    let publication = record_and_dispatch(
+        topology,
+        project,
+        token,
+        prepared,
+        row,
+        &intents,
+        review_workers,
+    )?;
+    publish_for_observation(publication).await
+}
+
+async fn reconcile_observation(
+    client: &Client,
+    topology: &Topology,
+    project: &ShepherdProjectConfig,
+    token: &str,
+    prepared: &PreparedObservation,
+) -> Result<Vec<ObserverIntent>, String> {
     let ready = marked_ready(
         client,
         topology,
@@ -99,45 +120,27 @@ async fn finish_observation(
     )
     .await?;
     let checks = fetch_checks(client, token, &project.repository, &prepared.pr.head_sha).await?;
-    let intents = reconcile_snapshot(
+    Ok(reconcile_snapshot(
         &prepared.policy,
         &prepared.pr,
         &prepared.cycle,
         &checks,
         prepared.prior_tip.as_deref(),
         ready,
-    );
-    record_and_dispatch(
-        topology,
-        project,
-        &mut prepared,
-        row,
-        &intents,
-        review_workers,
-    )
+    ))
 }
 
 fn record_and_dispatch(
     topology: &Topology,
     project: &ShepherdProjectConfig,
-    prepared: &mut PreparedObservation,
+    token: &str,
+    mut prepared: PreparedObservation,
     row: &Value,
     intents: &[ObserverIntent],
     review_workers: &BTreeMap<String, ReviewWorkerConfig>,
-) -> Result<(), String> {
-    record_intents(
-        &mut prepared.ledger,
-        &prepared.task_id,
-        &project.repository,
-        prepared.pr.number,
-        intents,
-    )?;
-    let coding_root = coding_root(topology, project)?;
-    let base_sha = row
-        .pointer("/base/sha")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
+) -> Result<PublishObservation, String> {
+    let coding_root = record_and_coding_root(topology, project, &mut prepared, intents)?;
+    let base_sha = base_sha(row);
     maybe_dispatch(DispatchRequest {
         ledger: &mut prepared.ledger,
         task_id: &prepared.task_id,
@@ -147,9 +150,45 @@ fn record_and_dispatch(
         base_sha: &base_sha,
         coding_root: &coding_root,
         review_workers,
+        harness_order: &topology.shepherd.review.harness_order,
         intents,
         shadow: prepared.policy.shadow,
+    })?;
+    Ok(PublishObservation {
+        ledger: prepared.ledger,
+        topology: topology.clone(),
+        project: project.clone(),
+        token: token.to_owned(),
+        coding_root,
+        task_id: prepared.task_id,
+        pr_number: prepared.pr.number,
+        base_sha,
+        head_sha: prepared.pr.head_sha,
+        shadow: prepared.policy.shadow,
     })
+}
+
+fn record_and_coding_root(
+    topology: &Topology,
+    project: &ShepherdProjectConfig,
+    prepared: &mut PreparedObservation,
+    intents: &[ObserverIntent],
+) -> Result<PathBuf, String> {
+    record_intents(
+        &mut prepared.ledger,
+        &prepared.task_id,
+        &project.repository,
+        prepared.pr.number,
+        intents,
+    )?;
+    coding_root(topology, project)
+}
+
+fn base_sha(row: &Value) -> String {
+    row.pointer("/base/sha")
+        .and_then(|value| value.as_str())
+        .unwrap_or("")
+        .to_owned()
 }
 
 fn coding_root(topology: &Topology, project: &ShepherdProjectConfig) -> Result<PathBuf, String> {
@@ -199,10 +238,30 @@ pub(crate) fn cycle_fact(kind: &TaskEventKind) -> Option<CycleFact> {
         }
         TaskEventKind::PullRequestClosed { .. } => Some(CycleFact::Closed),
         TaskEventKind::ReviewSynchronizeIntent { .. } => Some(CycleFact::Synchronized),
-        TaskEventKind::ReviewPublished { head_sha, .. } => Some(CycleFact::Published {
-            sha: head_sha.clone(),
-        }),
+        TaskEventKind::ReviewPublished {
+            head_sha,
+            review_key,
+            policy_version,
+            ..
+        } => Some(published_cycle_fact(head_sha, review_key, policy_version)),
         _ => None,
+    }
+}
+
+fn published_cycle_fact(head_sha: &str, review_key: &str, policy_version: &str) -> CycleFact {
+    let policy = if policy_version.is_empty() {
+        liberado_coder_core::pr_review::POLICY_VERSION
+    } else {
+        policy_version
+    };
+    let review_key = if review_key.is_empty() {
+        format!("legacy@{head_sha}:{policy}")
+    } else {
+        review_key.to_owned()
+    };
+    CycleFact::Published {
+        sha: head_sha.to_owned(),
+        review_key,
     }
 }
 

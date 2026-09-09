@@ -5,6 +5,9 @@
 use serde::{Deserialize, Serialize};
 
 use crate::ReviewWorkerConfig;
+pub use crate::pr_review_cycle::review_key;
+use crate::pr_review_cycle::tip_already_accepted;
+pub use crate::pr_review_parse::parse_codex_success;
 
 pub const REVIEW_SCHEMA_VERSION: &str = "liberado.pr-review.v1";
 pub const POLICY_VERSION: &str = "daemon-pr-review-v1";
@@ -16,6 +19,7 @@ pub const REQUIRED_GITHUB_PERMISSIONS: &[&str] = &[
     "metadata:read",
     "contents:read",
     "pull_requests:read",
+    "pull_requests:write",
     "checks:read",
     "statuses:read",
 ];
@@ -177,6 +181,7 @@ pub struct ReviewPolicy {
 pub struct ReviewCycle {
     pub armed_sha: Option<String>,
     pub accepted_sha: Option<String>,
+    pub accepted_review_key: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -221,13 +226,14 @@ pub enum CycleFact {
     Draft,
     Closed,
     Synchronized,
-    Published { sha: String },
+    Published { sha: String, review_key: String },
 }
 
 pub fn review_cycle(facts: impl IntoIterator<Item = CycleFact>) -> ReviewCycle {
     let mut cycle = ReviewCycle {
         armed_sha: None,
         accepted_sha: None,
+        accepted_review_key: None,
     };
     for fact in facts {
         match fact {
@@ -235,7 +241,10 @@ pub fn review_cycle(facts: impl IntoIterator<Item = CycleFact>) -> ReviewCycle {
             CycleFact::Draft | CycleFact::Closed | CycleFact::Synchronized => {
                 cycle.armed_sha = None;
             }
-            CycleFact::Published { sha } => cycle.accepted_sha = Some(sha),
+            CycleFact::Published { sha, review_key } => {
+                cycle.accepted_sha = Some(sha);
+                cycle.accepted_review_key = Some(review_key);
+            }
         }
     }
     cycle
@@ -404,7 +413,7 @@ pub fn review_eligible(
         && !pr.draft
         && !pr.fork_head
         && cycle.armed_sha.as_deref() == Some(pr.head_sha.as_str())
-        && cycle.accepted_sha.as_deref() != Some(pr.head_sha.as_str())
+        && !tip_already_accepted(cycle, pr)
         && required_checks_pass(policy, &pr.head_sha, checks)
 }
 
