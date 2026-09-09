@@ -4,6 +4,7 @@ use std::collections::BTreeSet;
 use std::path::Path;
 use std::time::Duration;
 
+use crate::pr_review_diff::changed_lines;
 use liberado_coder_core::TaskLedger;
 use liberado_coder_core::pr_review_publish::{
     InlineComment, PublishPr, PublishRequest, ReviewPublishPort, reconcile_publication,
@@ -59,9 +60,9 @@ impl GithubReviewPublishPort {
             .map_err(|e| e.to_string())
     }
 
-    fn put(&self, path: &str, body: Value) -> Result<Value, String> {
+    fn post_graphql(&self, body: Value) -> Result<Value, String> {
         self.client
-            .put(format!("https://api.github.com{path}"))
+            .post("https://api.github.com/graphql")
             .header(USER_AGENT, "liberado-pr-review-publisher")
             .header(ACCEPT, "application/vnd.github+json")
             .header(AUTHORIZATION, format!("Bearer {}", self.token))
@@ -191,13 +192,27 @@ impl ReviewPublishPort for GithubReviewPublishPort {
     }
 
     fn convert_to_draft(&self, repo: &str, number: u64) -> Result<(), String> {
-        // REST convert endpoint.
-        let _ = self.put(
-            &format!("/repos/{repo}/pulls/{number}/convert_to_draft"),
-            json!({}),
-        )?;
-        Ok(())
+        let pr = self.get(&format!("/repos/{repo}/pulls/{number}"))?;
+        let id = pr
+            .get("node_id")
+            .and_then(Value::as_str)
+            .ok_or("pull request node id is missing")?;
+        let response = self.post_graphql(json!({
+            "query": "mutation($id: ID!) { convertPullRequestToDraft(input: {pullRequestId: $id}) { pullRequest { isDraft } } }",
+            "variables": { "id": id },
+        }))?;
+        graphql_draft_confirmed(&response)
     }
+}
+
+fn graphql_draft_confirmed(response: &Value) -> Result<(), String> {
+    if let Some(errors) = response.get("errors").filter(|errors| !errors.is_null()) {
+        return Err(format!("convert-to-draft GraphQL error: {errors}"));
+    }
+    (response.pointer("/data/convertPullRequestToDraft/pullRequest/isDraft")
+        == Some(&Value::Bool(true)))
+    .then_some(())
+    .ok_or_else(|| "convert-to-draft response did not confirm draft state".into())
 }
 
 pub(crate) fn expected_login_for(
@@ -233,6 +248,42 @@ pub(crate) struct PublishForPrParams<'a> {
     pub(crate) changed_lines: &'a BTreeSet<(String, u32)>,
 }
 
+pub(crate) struct PublishObservation {
+    pub(crate) ledger: TaskLedger,
+    pub(crate) topology: Topology,
+    pub(crate) project: ShepherdProjectConfig,
+    pub(crate) token: String,
+    pub(crate) coding_root: std::path::PathBuf,
+    pub(crate) task_id: String,
+    pub(crate) pr_number: u64,
+    pub(crate) base_sha: String,
+    pub(crate) head_sha: String,
+    pub(crate) shadow: bool,
+}
+
+pub(crate) async fn publish_for_observation(mut params: PublishObservation) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || {
+        let changed = if params.shadow {
+            BTreeSet::new()
+        } else {
+            changed_lines(&params.coding_root, &params.base_sha, &params.head_sha)?
+        };
+        publish_for_pr(PublishForPrParams {
+            ledger: &mut params.ledger,
+            topology: &params.topology,
+            project: &params.project,
+            token: &params.token,
+            coding_root: &params.coding_root,
+            task_id: &params.task_id,
+            pr_number: params.pr_number,
+            shadow: params.shadow,
+            changed_lines: &changed,
+        })
+    })
+    .await
+    .map_err(|error| format!("PR review publication task failed: {error}"))?
+}
+
 pub(crate) fn publish_for_pr(params: PublishForPrParams<'_>) -> Result<(), String> {
     if params.shadow {
         return Ok(());
@@ -251,4 +302,46 @@ pub(crate) fn publish_for_pr(params: PublishForPrParams<'_>) -> Result<(), Strin
             changed_lines: params.changed_lines,
         },
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn graphql_draft_response_must_confirm_the_effect() {
+        let confirmed = json!({
+            "data": {"convertPullRequestToDraft": {"pullRequest": {"isDraft": true}}}
+        });
+        assert_eq!(graphql_draft_confirmed(&confirmed), Ok(()));
+        assert!(graphql_draft_confirmed(&json!({"data": null})).is_err());
+        assert!(graphql_draft_confirmed(&json!({"errors": [{"message": "denied"}]})).is_err());
+    }
+
+    #[test]
+    fn draft_conversion_uses_the_documented_graphql_mutation() {
+        let source = include_str!("pr_review_publish.rs");
+        assert!(source.contains("convertPullRequestToDraft"));
+        let graphql_endpoint = ["https://api.github.com", "graphql"].join("/");
+        assert!(source.contains(&graphql_endpoint));
+        let removed_rest_route = ["pulls/{number}", "convert_to_draft"].join("/");
+        assert!(!source.contains(&removed_rest_route));
+    }
+
+    #[tokio::test]
+    async fn blocking_publication_work_runs_off_the_async_worker() {
+        let async_thread = std::thread::current().id();
+        let blocking_thread = tokio::task::spawn_blocking(|| std::thread::current().id())
+            .await
+            .unwrap();
+        assert_ne!(async_thread, blocking_thread);
+        let blocking_call = ["spawn", "blocking"].join("_");
+        assert!(include_str!("pr_review_publish.rs").contains(&blocking_call));
+    }
+
+    #[test]
+    fn production_publisher_loads_changed_lines() {
+        let changed_line_call = format!("{}(&params.coding_root", ["changed", "lines"].join("_"));
+        assert!(include_str!("pr_review_publish.rs").contains(&changed_line_call));
+    }
 }

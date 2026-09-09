@@ -14,6 +14,8 @@ pub const REVIEW_EVENT: &str = "COMMENT";
 pub const BLOCKER_ACTION: &str = "draft";
 /// Locked synchronize policy. Config cannot override this.
 pub const ON_SYNCHRONIZE: &str = "draft_if_armed";
+/// Leave room below GitHub's request-body ceiling for JSON framing.
+pub const MAX_PUBLISH_BODY_BYTES: usize = 60 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PublishPr {
@@ -179,8 +181,10 @@ fn publish_blockers_if_needed(
         )?;
     }
     if !has_draft(ledger, &run.sha) {
-        guard_ready(port, req, &run.sha)?;
-        port.convert_to_draft(req.repository, req.pr_number)?;
+        let draft = guard_matching_head(port, req, &run.sha)?;
+        if !draft {
+            port.convert_to_draft(req.repository, req.pr_number)?;
+        }
         append(
             ledger,
             req.task_id,
@@ -293,8 +297,9 @@ fn ensure_synchronize_comment(
     {
         return Ok(());
     }
-    let body =
-        format!("{marker}\n\nHead moved `{old_sha}` → `{new_sha}`. Prior review cycle superseded.");
+    let body = capped_body(format!(
+        "{marker}\n\nHead moved `{old_sha}` → `{new_sha}`. Prior review cycle superseded."
+    ));
     port.create_issue_comment(req.repository, req.pr_number, &body)
         .map(|_| ())
 }
@@ -348,6 +353,19 @@ fn guard_ready(
         return Err("publication guard failed".into());
     }
     Ok(())
+}
+
+fn guard_matching_head(
+    port: &dyn ReviewPublishPort,
+    req: &PublishRequest<'_>,
+    sha: &str,
+) -> Result<bool, String> {
+    let pr = port.read_pr(req.repository, req.pr_number)?;
+    let login = port.authenticated_login()?;
+    if !pr.open || pr.head_sha != sha || login != req.expected_login {
+        return Err("publication guard failed".into());
+    }
+    Ok(pr.draft)
 }
 
 fn published_review(ledger: &TaskLedger, key: &str) -> Option<u64> {
@@ -405,7 +423,7 @@ pub fn render_review(
             inline.push(InlineComment {
                 path: finding.path.clone(),
                 line,
-                body: format!("`{}`: {}", finding.id, finding.explanation),
+                body: capped_body(format!("`{}`: {}", finding.id, finding.explanation)),
             });
         } else {
             body.push_str(&format!(
@@ -414,7 +432,7 @@ pub fn render_review(
             ));
         }
     }
-    (body, inline)
+    (capped_body(body), inline)
 }
 
 pub fn render_checklist(marker: &str, blockers: &[&ReviewFinding]) -> String {
@@ -425,6 +443,21 @@ pub fn render_checklist(marker: &str, blockers: &[&ReviewFinding]) -> String {
             finding.id, finding.explanation
         ));
     }
+    capped_body(body)
+}
+
+fn capped_body(mut body: String) -> String {
+    const NOTICE: &str = "\n\n[truncated by Liberado]";
+    if body.len() <= MAX_PUBLISH_BODY_BYTES {
+        return body;
+    }
+    let keep = MAX_PUBLISH_BODY_BYTES.saturating_sub(NOTICE.len());
+    let mut boundary = keep.min(body.len());
+    while !body.is_char_boundary(boundary) {
+        boundary -= 1;
+    }
+    body.truncate(boundary);
+    body.push_str(NOTICE);
     body
 }
 

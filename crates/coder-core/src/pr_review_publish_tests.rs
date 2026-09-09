@@ -254,6 +254,77 @@ fn blockers_create_one_checklist_and_draft() {
 }
 
 #[test]
+fn crash_after_draft_success_records_the_missing_fact() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().to_path_buf();
+    let sha = sha(13);
+    let review = result(&sha, true, true);
+    let (mut ledger, digest) = ledger_with_finished(&root, &sha, &review);
+    let key = review_key("o/r", 7, &sha, POLICY_VERSION);
+    append(
+        &mut ledger,
+        "task-1",
+        format!("publish:{key}"),
+        TaskEventKind::ReviewPublished {
+            head_sha: sha.clone(),
+            review_id: 100,
+            login: "me".into(),
+            command_id: "run-1".into(),
+            run_id: "run-1".into(),
+            worker_id: "codex".into(),
+            artifact_digest: digest,
+            policy_version: POLICY_VERSION.into(),
+            review_key: key.clone(),
+        },
+    )
+    .unwrap();
+    append(
+        &mut ledger,
+        "task-1",
+        format!("checklist:{key}"),
+        TaskEventKind::ReviewChecklistPublished {
+            head_sha: sha.clone(),
+            comment_id: 200,
+        },
+    )
+    .unwrap();
+    let port = MockPort {
+        login: "me".into(),
+        pr: RefCell::new(PublishPr {
+            head_sha: sha.clone(),
+            draft: true,
+            open: true,
+        }),
+        ..MockPort::default()
+    };
+    let changed = BTreeSet::from([("src/lib.rs".into(), 10)]);
+
+    reconcile_publication(&mut ledger, &port, &req(&root, "me", &changed)).unwrap();
+
+    assert_eq!(*port.drafts.borrow(), 0);
+    assert!(has_draft(&ledger, &sha));
+}
+
+#[test]
+fn rendered_github_bodies_are_utf8_safe_and_capped() {
+    let sha = sha(14);
+    let mut review = result(&sha, true, false);
+    review.summary = "🦀".repeat(MAX_PUBLISH_BODY_BYTES);
+    review.findings[0].explanation = "🦀".repeat(MAX_PUBLISH_BODY_BYTES);
+    let changed = BTreeSet::from([("src/lib.rs".into(), 99)]);
+
+    let (body, inline) = render_review("marker", &review, &changed);
+    let checklist = render_checklist("marker", &[&review.findings[0]]);
+
+    assert!(body.len() <= MAX_PUBLISH_BODY_BYTES);
+    assert!(inline[0].body.len() <= MAX_PUBLISH_BODY_BYTES);
+    assert!(checklist.len() <= MAX_PUBLISH_BODY_BYTES);
+    assert!(body.ends_with("[truncated by Liberado]"));
+    assert!(inline[0].body.ends_with("[truncated by Liberado]"));
+    assert!(checklist.ends_with("[truncated by Liberado]"));
+}
+
+#[test]
 fn crash_after_github_success_finds_marker() {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().to_path_buf();

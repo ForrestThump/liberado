@@ -474,3 +474,31 @@ fn jsonl_rejects_conflicting_agent_messages() {
         Err(ReviewResultError::Malformed)
     ));
 }
+
+#[test]
+fn jsonl_rejects_duplicate_and_trailing_invalid_agent_messages() {
+    let sha = "a".repeat(40);
+    let result = format!(
+        "{{\"schema\":\"{}\",\"reviewed_sha\":\"{sha}\",\"summary\":\"one\",\"findings\":[]}}",
+        REVIEW_SCHEMA_VERSION
+    );
+    let line = |text: &str| {
+        serde_json::json!({
+            "type": "item.completed",
+            "item": {"id": "1", "type": "agent_message", "text": text}
+        })
+        .to_string()
+    };
+
+    let duplicate = format!("{}\n{}\n", line(&result), line(&result));
+    assert!(matches!(
+        parse_codex_success(&duplicate, &sha),
+        Err(ReviewResultError::Malformed)
+    ));
+
+    let trailing_invalid = format!("{}\n{}\n", line(&result), line("not review JSON"));
+    assert!(matches!(
+        parse_codex_success(&trailing_invalid, &sha),
+        Err(ReviewResultError::Malformed)
+    ));
+}

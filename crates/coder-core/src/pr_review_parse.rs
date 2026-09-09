@@ -34,13 +34,10 @@ pub fn parse_codex_success(
             .and_then(|item| item.get("text"))
             .and_then(|value| value.as_str());
         let Some(text) = text else { continue };
-        let Ok(result) = ReviewResult::parse_success(text, expected_sha) else {
-            continue;
-        };
-        if chosen.as_ref().is_some_and(|old| old != &result) {
+        if chosen.is_some() {
             return Err(ReviewResultError::Malformed);
         }
-        chosen = Some(result);
+        chosen = Some(ReviewResult::parse_success(text, expected_sha)?);
     }
     chosen.ok_or(ReviewResultError::Malformed)
 }

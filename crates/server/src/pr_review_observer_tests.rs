@@ -206,6 +206,15 @@ fn synchronize_records_one_intent_and_draft_disarms() {
 }
 
 #[test]
+fn base_sha_reads_the_nested_value_and_defaults_when_absent() {
+    assert_eq!(
+        base_sha(&serde_json::json!({"base": {"sha": "base"}})),
+        "base"
+    );
+    assert_eq!(base_sha(&serde_json::json!({})), "");
+}
+
+#[test]
 fn ready_scan_stops_on_found_or_last_page() {
     assert_eq!(
         scan_outcome(ReadyScan {
