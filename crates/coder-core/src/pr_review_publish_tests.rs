@@ -1,6 +1,6 @@
 use std::cell::RefCell;
 use std::collections::{BTreeSet, HashMap};
-use std::path::PathBuf;
+use std::path::Path;
 
 use super::*;
 use crate::pr_review::{
@@ -122,7 +122,7 @@ fn result(sha: &str, blocker: bool, in_diff: bool) -> ReviewResult {
     }
 }
 
-fn ledger_with_finished(root: &PathBuf, sha: &str, result: &ReviewResult) -> (TaskLedger, String) {
+fn ledger_with_finished(root: &Path, sha: &str, result: &ReviewResult) -> (TaskLedger, String) {
     let bytes = serialize_review_result(result).unwrap();
     let digest = artifact_digest(&bytes);
     std::fs::create_dir_all(root.join(".liberado/review-artifacts")).unwrap();
@@ -141,7 +141,7 @@ fn ledger_with_finished(root: &PathBuf, sha: &str, result: &ReviewResult) -> (Ta
         },
     )
     .with_command_id("create");
-    let mut ledger = TaskLedger::create_in(root.as_path(), created).unwrap();
+    let mut ledger = TaskLedger::create_in(root, created).unwrap();
     ledger
         .append(
             TaskEvent::new(
@@ -161,7 +161,7 @@ fn ledger_with_finished(root: &PathBuf, sha: &str, result: &ReviewResult) -> (Ta
 }
 
 fn req<'a>(
-    root: &'a PathBuf,
+    root: &'a Path,
     login: &'a str,
     changed: &'a BTreeSet<(String, u32)>,
 ) -> PublishRequest<'a> {
@@ -298,4 +298,102 @@ fn policy_version_separates_keys() {
     let b = review_key("o/r", 1, &sha(5), "daemon-pr-review-v2");
     assert_ne!(a, b);
     assert!(review_marker("o/r", 1, &sha(5)).contains("daemon-pr-review-v1"));
+}
+
+fn ledger_with_sync(old_sha: &str, new_sha: &str) -> TaskLedger {
+    let mut ledger = TaskLedger::new(TaskEvent::new(
+        "evt-created",
+        "task-1",
+        TaskEventKind::TaskCreated {
+            objective: "o".into(),
+            acceptance_criteria: vec![],
+            worktree: "/tmp".into(),
+            branch: "b".into(),
+            base_ref: "main".into(),
+            repo: Some("o/r".into()),
+        },
+    ))
+    .unwrap();
+    append(
+        &mut ledger,
+        "task-1",
+        format!("sync:{old_sha}:{new_sha}"),
+        TaskEventKind::ReviewSynchronizeIntent {
+            old_sha: old_sha.into(),
+            new_sha: new_sha.into(),
+        },
+    )
+    .unwrap();
+    ledger
+}
+
+#[test]
+fn synchronize_intent_drafts_notes_and_fences_once() {
+    let tmp = tempfile::tempdir().unwrap();
+    let old_sha = sha(6);
+    let new_sha = sha(7);
+    let mut ledger = ledger_with_sync(&old_sha, &new_sha);
+    let port = MockPort {
+        login: "me".into(),
+        pr: RefCell::new(PublishPr {
+            head_sha: new_sha.clone(),
+            draft: false,
+            open: true,
+        }),
+        ..MockPort::default()
+    };
+    let changed = BTreeSet::new();
+    let request = req(tmp.path(), "me", &changed);
+
+    execute_synchronize_intents(&mut ledger, &port, &request).unwrap();
+    execute_synchronize_intents(&mut ledger, &port, &request).unwrap();
+
+    assert_eq!(*port.drafts.borrow(), 1);
+    assert_eq!(*port.created_comments.borrow(), 1);
+}
+
+#[test]
+fn synchronize_intent_skips_a_stale_target() {
+    let tmp = tempfile::tempdir().unwrap();
+    let old_sha = sha(8);
+    let new_sha = sha(9);
+    let mut ledger = ledger_with_sync(&old_sha, &new_sha);
+    let port = MockPort {
+        login: "me".into(),
+        pr: RefCell::new(PublishPr {
+            head_sha: sha(10),
+            draft: false,
+            open: true,
+        }),
+        ..MockPort::default()
+    };
+    let changed = BTreeSet::new();
+
+    execute_synchronize_intents(&mut ledger, &port, &req(tmp.path(), "me", &changed)).unwrap();
+
+    assert_eq!(*port.drafts.borrow(), 0);
+    assert_eq!(*port.created_comments.borrow(), 0);
+}
+
+#[test]
+fn synchronize_intent_rejects_a_login_mismatch() {
+    let tmp = tempfile::tempdir().unwrap();
+    let old_sha = sha(11);
+    let new_sha = sha(12);
+    let mut ledger = ledger_with_sync(&old_sha, &new_sha);
+    let port = MockPort {
+        login: "other".into(),
+        pr: RefCell::new(PublishPr {
+            head_sha: new_sha,
+            draft: true,
+            open: true,
+        }),
+        ..MockPort::default()
+    };
+    let changed = BTreeSet::new();
+
+    let error = execute_synchronize_intents(&mut ledger, &port, &req(tmp.path(), "me", &changed))
+        .unwrap_err();
+
+    assert!(error.contains("login mismatch"));
 }

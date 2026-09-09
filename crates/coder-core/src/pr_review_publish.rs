@@ -201,7 +201,14 @@ fn execute_synchronize_intents(
     port: &dyn ReviewPublishPort,
     req: &PublishRequest<'_>,
 ) -> Result<(), String> {
-    let intents: Vec<(String, String)> = ledger
+    for (old_sha, new_sha) in synchronize_intents(ledger) {
+        execute_synchronize_intent(ledger, port, req, &old_sha, &new_sha)?;
+    }
+    Ok(())
+}
+
+fn synchronize_intents(ledger: &TaskLedger) -> Vec<(String, String)> {
+    ledger
         .events()
         .iter()
         .filter_map(|event| match &event.payload {
@@ -210,46 +217,86 @@ fn execute_synchronize_intents(
             }
             _ => None,
         })
-        .collect();
-    for (old_sha, new_sha) in intents {
-        let command = format!("sync-done:{}:{old_sha}:{new_sha}", req.pr_number);
-        if ledger
-            .events()
-            .iter()
-            .any(|event| event.command_id.as_deref() == Some(command.as_str()))
-        {
-            continue;
-        }
-        let login = port.authenticated_login()?;
-        if login != req.expected_login {
-            return Err("publication guard failed: login mismatch".into());
-        }
-        let pr = port.read_pr(req.repository, req.pr_number)?;
-        if !pr.open || pr.head_sha != new_sha {
-            continue;
-        }
-        if !pr.draft {
-            port.convert_to_draft(req.repository, req.pr_number)?;
-        }
-        let marker = sync_marker(req.repository, req.pr_number, &old_sha, &new_sha);
-        if port
-            .find_issue_comment_by_marker(req.repository, req.pr_number, &marker)?
-            .is_none()
-        {
-            let body = format!(
-                "{marker}\n\nHead moved `{old_sha}` → `{new_sha}`. Prior review cycle superseded."
-            );
-            let _ = port.create_issue_comment(req.repository, req.pr_number, &body)?;
-        }
-        // Idempotency fence only — synchronize already has ReviewSynchronizeIntent.
-        append(
-            ledger,
-            req.task_id,
-            command,
-            TaskEventKind::ReviewDraftConverted { head_sha: new_sha },
-        )?;
+        .collect()
+}
+
+fn execute_synchronize_intent(
+    ledger: &mut TaskLedger,
+    port: &dyn ReviewPublishPort,
+    req: &PublishRequest<'_>,
+    old_sha: &str,
+    new_sha: &str,
+) -> Result<(), String> {
+    let command = format!("sync-done:{}:{old_sha}:{new_sha}", req.pr_number);
+    if command_recorded(ledger, &command) {
+        return Ok(());
     }
-    Ok(())
+    let Some(draft) = guard_synchronize(port, req, new_sha)? else {
+        return Ok(());
+    };
+    ensure_synchronize_draft(port, req, draft)?;
+    ensure_synchronize_comment(port, req, old_sha, new_sha)?;
+    append(
+        ledger,
+        req.task_id,
+        command,
+        TaskEventKind::ReviewDraftConverted {
+            head_sha: new_sha.to_owned(),
+        },
+    )
+}
+
+fn command_recorded(ledger: &TaskLedger, command: &str) -> bool {
+    ledger
+        .events()
+        .iter()
+        .any(|event| event.command_id.as_deref() == Some(command))
+}
+
+fn guard_synchronize(
+    port: &dyn ReviewPublishPort,
+    req: &PublishRequest<'_>,
+    new_sha: &str,
+) -> Result<Option<bool>, String> {
+    if port.authenticated_login()? != req.expected_login {
+        return Err("publication guard failed: login mismatch".into());
+    }
+    let pr = port.read_pr(req.repository, req.pr_number)?;
+    if !pr.open || pr.head_sha != new_sha {
+        return Ok(None);
+    }
+    Ok(Some(pr.draft))
+}
+
+fn ensure_synchronize_draft(
+    port: &dyn ReviewPublishPort,
+    req: &PublishRequest<'_>,
+    draft: bool,
+) -> Result<(), String> {
+    if draft {
+        Ok(())
+    } else {
+        port.convert_to_draft(req.repository, req.pr_number)
+    }
+}
+
+fn ensure_synchronize_comment(
+    port: &dyn ReviewPublishPort,
+    req: &PublishRequest<'_>,
+    old_sha: &str,
+    new_sha: &str,
+) -> Result<(), String> {
+    let marker = sync_marker(req.repository, req.pr_number, old_sha, new_sha);
+    if port
+        .find_issue_comment_by_marker(req.repository, req.pr_number, &marker)?
+        .is_some()
+    {
+        return Ok(());
+    }
+    let body =
+        format!("{marker}\n\nHead moved `{old_sha}` → `{new_sha}`. Prior review cycle superseded.");
+    port.create_issue_comment(req.repository, req.pr_number, &body)
+        .map(|_| ())
 }
 
 #[derive(Debug, Clone)]

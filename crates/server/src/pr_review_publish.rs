@@ -221,32 +221,34 @@ pub(crate) fn expected_login_for(
         .ok_or_else(|| format!("{name} expected_login is required for review writes"))
 }
 
-pub(crate) fn publish_for_pr(
-    ledger: &mut TaskLedger,
-    topology: &Topology,
-    project: &ShepherdProjectConfig,
-    token: &str,
-    coding_root: &Path,
-    task_id: &str,
-    pr_number: u64,
-    shadow: bool,
-    changed_lines: &BTreeSet<(String, u32)>,
-) -> Result<(), String> {
-    if shadow {
+pub(crate) struct PublishForPrParams<'a> {
+    pub(crate) ledger: &'a mut TaskLedger,
+    pub(crate) topology: &'a Topology,
+    pub(crate) project: &'a ShepherdProjectConfig,
+    pub(crate) token: &'a str,
+    pub(crate) coding_root: &'a Path,
+    pub(crate) task_id: &'a str,
+    pub(crate) pr_number: u64,
+    pub(crate) shadow: bool,
+    pub(crate) changed_lines: &'a BTreeSet<(String, u32)>,
+}
+
+pub(crate) fn publish_for_pr(params: PublishForPrParams<'_>) -> Result<(), String> {
+    if params.shadow {
         return Ok(());
     }
-    let expected_login = expected_login_for(topology, project)?;
-    let port = GithubReviewPublishPort::new(token)?;
+    let expected_login = expected_login_for(params.topology, params.project)?;
+    let port = GithubReviewPublishPort::new(params.token)?;
     reconcile_publication(
-        ledger,
+        params.ledger,
         &port,
         &PublishRequest {
-            task_id,
-            repository: &project.repository,
-            pr_number,
+            task_id: params.task_id,
+            repository: &params.project.repository,
+            pr_number: params.pr_number,
             expected_login: &expected_login,
-            coding_root,
-            changed_lines,
+            coding_root: params.coding_root,
+            changed_lines: params.changed_lines,
         },
     )
 }

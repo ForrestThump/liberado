@@ -243,3 +243,83 @@ fn observer_source_is_read_only_and_config_driven() {
     assert!(!src.contains("std::process::Command"));
     assert!(!src.contains("Command::new"));
 }
+
+#[test]
+fn cycle_facts_cover_each_persisted_cycle_event() {
+    assert!(matches!(
+        cycle_fact(&TaskEventKind::ReadyArmed {
+            repository: "owner/repo".into(),
+            pr_number: 9,
+            head_sha: "armed".into(),
+            source: "ready_for_review".into(),
+        }),
+        Some(CycleFact::Armed { sha }) if sha == "armed"
+    ));
+    assert_eq!(
+        cycle_fact(&TaskEventKind::ReviewDraftObserved {
+            head_sha: "draft".into()
+        }),
+        Some(CycleFact::Draft)
+    );
+    assert_eq!(
+        cycle_fact(&TaskEventKind::ReviewDraftConverted {
+            head_sha: "draft".into()
+        }),
+        Some(CycleFact::Draft)
+    );
+    assert_eq!(
+        cycle_fact(&TaskEventKind::PullRequestClosed {
+            head_sha: "closed".into()
+        }),
+        Some(CycleFact::Closed)
+    );
+    assert_eq!(
+        cycle_fact(&TaskEventKind::ReviewSynchronizeIntent {
+            old_sha: "old".into(),
+            new_sha: "new".into(),
+        }),
+        Some(CycleFact::Synchronized)
+    );
+}
+
+#[test]
+fn published_cycle_fact_preserves_key_and_builds_legacy_fallback() {
+    assert_eq!(
+        published_cycle_fact("sha", "key", "policy"),
+        CycleFact::Published {
+            sha: "sha".into(),
+            review_key: "key".into(),
+        }
+    );
+    assert_eq!(
+        published_cycle_fact("sha", "", ""),
+        CycleFact::Published {
+            sha: "sha".into(),
+            review_key: format!(
+                "legacy@sha:{}",
+                liberado_coder_core::pr_review::POLICY_VERSION
+            ),
+        }
+    );
+    assert_eq!(
+        cycle_fact(&TaskEventKind::ReviewPublished {
+            head_sha: "sha".into(),
+            review_id: 1,
+            login: "bot".into(),
+            command_id: "command".into(),
+            run_id: "run".into(),
+            worker_id: "worker".into(),
+            artifact_digest: "digest".into(),
+            policy_version: "policy".into(),
+            review_key: "key".into(),
+        }),
+        Some(CycleFact::Published {
+            sha: "sha".into(),
+            review_key: "key".into(),
+        })
+    );
+    assert_eq!(
+        cycle_fact(&TaskEventKind::HeadRevisionObserved { sha: "sha".into() }),
+        None
+    );
+}
