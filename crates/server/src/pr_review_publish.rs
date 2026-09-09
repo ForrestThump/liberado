@@ -1,14 +1,8 @@
 //! GitHub publication adapter for Slice 3. Credentials stay in shepherd.
 
-use std::collections::BTreeSet;
-use std::path::Path;
 use std::time::Duration;
 
-use crate::pr_review_diff::changed_lines;
-use liberado_coder_core::TaskLedger;
-use liberado_coder_core::pr_review_publish::{
-    InlineComment, PublishPr, PublishRequest, ReviewPublishPort, reconcile_publication,
-};
+use liberado_coder_core::pr_review_publish::{InlineComment, PublishPr, ReviewPublishPort};
 use liberado_config::{ShepherdProjectConfig, Topology};
 use reqwest::blocking::Client;
 use reqwest::header::{ACCEPT, AUTHORIZATION, USER_AGENT};
@@ -236,74 +230,6 @@ pub(crate) fn expected_login_for(
         .ok_or_else(|| format!("{name} expected_login is required for review writes"))
 }
 
-pub(crate) struct PublishForPrParams<'a> {
-    pub(crate) ledger: &'a mut TaskLedger,
-    pub(crate) topology: &'a Topology,
-    pub(crate) project: &'a ShepherdProjectConfig,
-    pub(crate) token: &'a str,
-    pub(crate) coding_root: &'a Path,
-    pub(crate) task_id: &'a str,
-    pub(crate) pr_number: u64,
-    pub(crate) shadow: bool,
-    pub(crate) changed_lines: &'a BTreeSet<(String, u32)>,
-}
-
-pub(crate) struct PublishObservation {
-    pub(crate) ledger: TaskLedger,
-    pub(crate) topology: Topology,
-    pub(crate) project: ShepherdProjectConfig,
-    pub(crate) token: String,
-    pub(crate) coding_root: std::path::PathBuf,
-    pub(crate) task_id: String,
-    pub(crate) pr_number: u64,
-    pub(crate) base_sha: String,
-    pub(crate) head_sha: String,
-    pub(crate) shadow: bool,
-}
-
-pub(crate) async fn publish_for_observation(mut params: PublishObservation) -> Result<(), String> {
-    tokio::task::spawn_blocking(move || {
-        let changed = if params.shadow {
-            BTreeSet::new()
-        } else {
-            changed_lines(&params.coding_root, &params.base_sha, &params.head_sha)?
-        };
-        publish_for_pr(PublishForPrParams {
-            ledger: &mut params.ledger,
-            topology: &params.topology,
-            project: &params.project,
-            token: &params.token,
-            coding_root: &params.coding_root,
-            task_id: &params.task_id,
-            pr_number: params.pr_number,
-            shadow: params.shadow,
-            changed_lines: &changed,
-        })
-    })
-    .await
-    .map_err(|error| format!("PR review publication task failed: {error}"))?
-}
-
-pub(crate) fn publish_for_pr(params: PublishForPrParams<'_>) -> Result<(), String> {
-    if params.shadow {
-        return Ok(());
-    }
-    let expected_login = expected_login_for(params.topology, params.project)?;
-    let port = GithubReviewPublishPort::new(params.token)?;
-    reconcile_publication(
-        params.ledger,
-        &port,
-        &PublishRequest {
-            task_id: params.task_id,
-            repository: &params.project.repository,
-            pr_number: params.pr_number,
-            expected_login: &expected_login,
-            coding_root: params.coding_root,
-            changed_lines: params.changed_lines,
-        },
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -326,22 +252,5 @@ mod tests {
         assert!(source.contains(&graphql_endpoint));
         let removed_rest_route = ["pulls/{number}", "convert_to_draft"].join("/");
         assert!(!source.contains(&removed_rest_route));
-    }
-
-    #[tokio::test]
-    async fn blocking_publication_work_runs_off_the_async_worker() {
-        let async_thread = std::thread::current().id();
-        let blocking_thread = tokio::task::spawn_blocking(|| std::thread::current().id())
-            .await
-            .unwrap();
-        assert_ne!(async_thread, blocking_thread);
-        let blocking_call = ["spawn", "blocking"].join("_");
-        assert!(include_str!("pr_review_publish.rs").contains(&blocking_call));
-    }
-
-    #[test]
-    fn production_publisher_loads_changed_lines() {
-        let changed_line_call = format!("{}(&params.coding_root", ["changed", "lines"].join("_"));
-        assert!(include_str!("pr_review_publish.rs").contains(&changed_line_call));
     }
 }

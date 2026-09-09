@@ -142,7 +142,7 @@ async fn observe_rows(
         return Err("pull list was not an array".into());
     };
     for row in rows {
-        super::pr_review_observer::observe_pr(
+        if let Err(error) = super::pr_review_observer::observe_pr(
             client,
             topology,
             project,
@@ -150,7 +150,51 @@ async fn observe_rows(
             row,
             review_workers,
         )
-        .await?;
+        .await
+        {
+            let pr_number = row.get("number").and_then(Value::as_u64);
+            tracing::warn!(project = %project.name, ?pr_number, %error, "PR review reconciliation failed");
+        }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn one_invalid_pr_does_not_fail_the_page() {
+        let topology = Topology::default();
+        let project = ShepherdProjectConfig {
+            name: "example".into(),
+            repository: "owner/repo".into(),
+            coding_project: "missing".into(),
+            base_branch: "main".into(),
+            profile: "coding-unattended".into(),
+            check_names: Vec::new(),
+            max_kickbacks: None,
+            cold_reviews: Some(0),
+            cold_review_max_turns: None,
+            max_concurrent_goals: None,
+            poll_seconds: None,
+            controller: None,
+            review_profile: None,
+            gate: None,
+            auth: None,
+        };
+        let rows = serde_json::json!([{"number": 1}]);
+        assert!(
+            observe_rows(
+                &Client::new(),
+                &topology,
+                &project,
+                "unused",
+                &rows,
+                &BTreeMap::new(),
+            )
+            .await
+            .is_ok()
+        );
+    }
 }

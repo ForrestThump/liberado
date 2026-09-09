@@ -24,16 +24,28 @@ unblocked item. Do not skip a code dependency.
 
 | Order | Item | Dependency |
 |---:|---|---|
-| **1** | **0.7 / C3 — publish the controlled cross-harness baseline** | The comparison infrastructure and ship-bar excerpt fix are present. This is a report, not another harness change. Spec: [`cross-harness-baseline.md`](cross-harness-baseline.md). |
-| **2** | **C5 — measure the completion gate** | Run after the baseline produces a non-zero finish rate. Do not change the default first. |
-| **3** | **A1 — read one day of deployed token-economics data** | Measure the existing production system before changing its tool catalogue. |
-| **4** | **A2 — narrow the tool catalogue** | Blocked on A1. Change only what the measurement supports. |
-| **5** | **E4 — add directory enumeration in TurboVault** | External prerequisite for E2. Record the upstream commit. |
-| **6** | **E5 — stop the TurboMCP SSE reconnect storm** | External reliability work; restore useful homelab diagnostics. |
-| **7** | **E2 — implement the inbox layer** | E4 must land first. The design is settled in the inbox specification. |
-| **8** | **C4 — finish dedicated goal-view panes** | Useful surface work, but it does not block measurement or unattended shipping. |
+| **1** | **R1 — prove Codex-only daemon PR review and one-repository cutover** | Slices 0–3 and remote PR acquisition are present. Run the restart, clean, blocker, synchronize, and remote-only-head cases from [`daemon-pr-review-kickoff.md`](daemon-pr-review-kickoff.md). Publish the evidence before Slice 4. |
+| **2** | **0.7 / C3 — publish the controlled cross-harness baseline** | The comparison infrastructure and ship-bar excerpt fix are present. This is a report, not another harness change. Spec: [`cross-harness-baseline.md`](cross-harness-baseline.md). |
+| **3** | **C5 — measure the completion gate** | Run after the baseline produces a non-zero finish rate. Do not change the default first. |
+| **4** | **A1 — read one day of deployed token-economics data** | Measure the existing production system before changing its tool catalogue. |
+| **5** | **A2 — narrow the tool catalogue** | Blocked on A1. Change only what the measurement supports. |
+| **6** | **E4 — add directory enumeration in TurboVault** | External prerequisite for E2. Record the upstream commit. |
+| **7** | **E5 — stop the TurboMCP SSE reconnect storm** | External reliability work; restore useful homelab diagnostics. |
+| **8** | **E2 — implement the inbox layer** | E4 must land first. The design is settled in the inbox specification. |
+| **9** | **C4 — finish dedicated goal-view panes** | Useful surface work, but it does not block measurement or unattended shipping. |
 
 ## Acceptance context
+
+### R1 — Codex-only daemon PR review dogfood
+
+Use one repository and one writer. Start a PR as draft on a branch that is absent from the daemon
+host, mark it ready, and let the configured checks become green. Prove one clean COMMENT and one
+blocker COMMENT plus checklist and draft conversion. Restart between GitHub publication and ledger
+completion, then prove that marker reconciliation creates no duplicate. Push a new commit and prove
+that it does not run until a new `ready_for_review` transition arms that exact SHA.
+
+Record the image SHA, PR/SHA review keys, GitHub review and checklist IDs, daemon restart evidence,
+and the absence of a second writer. Do not begin Slice 4 worker fallback until this proof passes.
 
 ### 0.7 / C3 — controlled cross-harness baseline
 

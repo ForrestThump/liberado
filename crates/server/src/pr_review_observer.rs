@@ -1,7 +1,7 @@
 //! Bounded, read-only GitHub polling for daemon-native PR review.
 
 use crate::pr_review_dispatch::{DispatchRequest, maybe_dispatch};
-use crate::pr_review_publish::{PublishObservation, publish_for_observation};
+use crate::pr_review_publish_flow::{PublishObservation, publish_for_observation};
 use liberado_coder_core::ReviewWorkerConfig;
 use liberado_coder_core::pr_review::{
     CycleFact, ObserverIntent, PullRequestSnapshot, ReviewCycle, ReviewPolicy, ShaChecks,
@@ -148,7 +148,9 @@ fn record_and_dispatch(
         pr_number: prepared.pr.number,
         head_sha: &prepared.pr.head_sha,
         base_sha: &base_sha,
+        base_branch: &project.base_branch,
         coding_root: &coding_root,
+        token,
         review_workers,
         harness_order: &topology.shepherd.review.harness_order,
         intents,
