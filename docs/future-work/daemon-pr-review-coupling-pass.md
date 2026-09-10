@@ -1,24 +1,25 @@
 ---
 kind: finding
-status: active
+status: historical
 authority: advisory
 domain: coding-control-plane
 canonical_for: daemon-pr-review-coupling-pass
-open_items: true
+open_items: false
 ---
 
 # Sol coupling pass — daemon PR review after Slice 2
 
-**Status**: advisory sibling to
-[`daemon-pr-review-kickoff.md`](daemon-pr-review-kickoff.md). It reviews main at `4be02711`, after
-PRs #244 and #247. It does not authorize application-code changes.
+**Status**: historical coupling review of main at `4be02711`, after PRs #244 and #247. Slice 3
+landed in PR #249. The current implementation and remaining work are in
+[`daemon-pr-review-kickoff.md`](daemon-pr-review-kickoff.md) and the implementation backlog. This
+file does not authorize application-code changes.
 
 ## Verdict
 
-Ship Slice 3 as the publication saga. Do not put a generic trigger/task abstraction in front of
-it.
+Slice 3 landed as the publication saga. It did not put a generic trigger/task abstraction in front
+of it.
 
-Slices 0–2 already contain the two useful narrow seams:
+At the reviewed commit, Slices 0–2 contained the two useful narrow seams:
 
 - `review_eligible` plus `ObserverIntent::Eligible` separates eligibility from execution.
 - `ReviewPort::invoke(ReviewInvokeRequest)` separates one review task from its Codex adapter.
@@ -43,7 +44,7 @@ The implementation has a sound basic split:
 | One review invocation | `ReviewPort` and `ReviewInvokeRequest` | Keep. This is the thin harness-neutral task port. |
 | Codex process | `CodexReviewPort` | Keep as one adapter, not as the routing layer. |
 | Admission | `pr_review_admission` and `active_run_id` | Keep the fence, but split command identity from attempt identity before fallback. |
-| Publication | none | Add in Slice 3 as a separate effect port and saga. |
+| Publication | none at reviewed commit | Added in Slice 3 as a separate effect port and saga. |
 
 Good safety properties are already mechanical. The checkout is pinned and checked for changes.
 Forge environment variables are removed. The result has a versioned schema and reviewed SHA.
@@ -329,17 +330,16 @@ can charge money, it is not an allowed fallback under the current no-paid policy
 - Poll reconciliation from long-running worker execution, using the existing background/session
   ownership and ledger.
 
-### Add in Slice 3
+### Added in Slice 3
 
 - A GitHub publication effect port.
 - A restart-safe publication saga coordinator.
 - A policy-versioned accepted key and GitHub marker.
 - Required writer identity checks.
 
-## Plan updates
+## Plan updates (completed by Slice 3)
 
-The canonical status should say that Slices 0–2 are on main through PRs #244 and #247 and that
-Slice 3 is next.
+The canonical status now records Slices 0–3 on main through PR #249.
 
 Before Slice 4 starts, update the canonical plan to state these implementation corrections:
 

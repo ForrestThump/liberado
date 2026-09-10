@@ -390,14 +390,20 @@ project/profile, and retry/review limits. A configured check that GitHub does no
 PR waiting; this prevents a renamed check or typo from being treated as success. `liberado shepherd
 config check --project <name>` prints the resolved policy before any forge mutation or goal start.
 
-Daemon-native PR review (Slices 0–1) is opt-in on the same project row. `[shepherd.review]` defaults
-to `enabled = false` and, when enabled, may only `delivery = "poll"` with bounded `poll_seconds`,
+Daemon-native PR review is opt-in on the same project row. `[shepherd.review]` defaults to
+`enabled = false` and, when enabled, may only `delivery = "poll"` with bounded `poll_seconds`,
 `max_pages`, and `page_size`. Its `harness_order` must contain unique, nonempty worker IDs. It is
 required and nonempty when review is enabled for a project whose controller is
 `liberado-shepherd`. `[[shepherd.auth]]` names a token by environment reference (`token_ref`,
 optional `webhook_secret_ref`); literal secrets are rejected. Each writer project's auth row must
 also set a nonempty `expected_login` when review is enabled. The loader rejects unknown fields in
 both `[shepherd.review]` and `[[shepherd.auth]]`.
+
+For an eligible same-repository PR, shepherd fetches GitHub's exact `refs/pull/<number>/head` and
+the configured `base_branch` into private refs below `refs/liberado/reviews/`. It verifies that the
+fetched head matches the SHA admitted by the observer before it creates a detached worktree. The
+PR branch does not need to exist in the local checkout. The configured token authenticates this
+fetch but is removed from the Codex environment. Fork-head PRs remain ineligible.
 
 A project with `controller = "liberado-shepherd"` must set `cold_reviews = 0`, nonempty
 `check_names`, `review_profile`, `gate = "ready_and_green_tip"`, and a declared `auth` name.

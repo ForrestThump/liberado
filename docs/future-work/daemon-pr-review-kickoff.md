@@ -10,8 +10,9 @@ open_items: true
 # Daemon-native pull-request review kickoff
 
 **Status**: active. Forrest approved Sol pass 2 and the seven checklist defaults (2026-09-05).
-Slices 0–2 are on main: Slices 0–1 via PR #244 and Slice 2 via PR #247 (2026-09-08).
-Slice 3 (COMMENT/checklist/draft publication saga) is in progress; later slices remain open.
+Slices 0–3 are on main: Slices 0–1 via PR #244, Slice 2 via PR #247, and Slice 3 via PR #249
+(2026-09-08). Codex-only homelab dogfood and cutover proof are active; later worker and webhook
+slices remain open.
 
 ## Decision
 
@@ -22,6 +23,12 @@ One `[[shepherd.projects]]` row owns repair and review policy for each repositor
 `ready_for_review` arms that exact head SHA. Liberado starts one review only after configured
 checks succeed on the same SHA. Events only wake reconciliation; current GitHub API state is
 authority. `review_requested` never arms or bypasses the gate.
+
+An eligible review does not depend on a local branch. Shepherd fetches GitHub's exact
+`refs/pull/<number>/head` plus the configured base branch into private `refs/liberado/reviews/`
+refs, verifies the observed head SHA, and then creates the detached review worktree. Fetch failure
+occurs before the durable command fence, so a later poll can retry it. The token stays with
+shepherd and does not enter the Codex process.
 
 The declared worker order is Grok Build, Codex, Antigravity (`agy`), Cursor local, and the
 free-proxy/OpenRouter router. Only enabled workers enter admission. Fallback needs typed
@@ -298,8 +305,9 @@ eligibility; fork heads fail; shadow holds no lease.
 
 ### Slice 2 — One pinned Codex review, no GitHub writes
 
-Issue one command through the review port in a pinned checkout. Store structured result and new
-events.
+Issue one command through the review port in a pinned checkout. Acquire the exact same-repository
+GitHub PR head when its commit is not present locally; do not require a developer to fetch its
+branch. Store structured result and new events.
 
 Acceptance: crash recovery starts at most one run; all SHAs match; changed tip is stale; no forge
 credentials or out-of-scope writes exist; malformed output fails; exact Codex exhaustion records
@@ -349,7 +357,9 @@ review/checklist IDs, and draft result.
 
 Acceptance: shadow has no writes/lease; one controller acts; a live cycle survives restart; a
 blocker drafts; push does not review and restores draft; green CI plus a new ready transition makes
-one review; disabling admission preserves history.
+one review; a PR branch absent from the daemon host is fetched and reviewed; disabling admission
+preserves history. One malformed or incompatible historical PR does not stop other PRs in the poll
+page.
 
 Every slice must pass preflight, mutation proof for claimed gates, the CRAP ratchet, and
 `cargo metadata --locked`. Never raise a baseline or add a waiver.
@@ -359,7 +369,8 @@ Every slice must pass preflight, mutation proof for claimed gates, the CRAP ratc
 1. Add policy to the existing project row with `controller = "grok-bot"`,
    `cold_reviews = 0`, and daemon shadow observation. Keep current Grok Bot writes.
 2. Compare arms, SHA-exact checks, and intended actions for several ready cycles.
-3. Prove polling, Codex COMMENT, restart, blocker draft, and synchronize draft in a test repo.
+3. Prove polling, remote-only PR acquisition, Codex COMMENT, restart, blocker draft, and
+   synchronize draft in a test repo.
 4. Stop the Grok Bot listener for the target repo. Confirm it cannot dispatch, comment, or draft.
 5. Transfer to `liberado-shepherd` and enable writes for that row.
 6. Use only the Liberado CLI escape hatch. Do not keep Grok Bot as a parallel manual controller.

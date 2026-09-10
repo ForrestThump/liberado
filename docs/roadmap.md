@@ -81,6 +81,11 @@ belongs in the architecture and configuration references, not in this roadmap.
 The target is a merge-ready result under a fixed task, repository commit, model, provider, and
 resource budget. Tool style and turn count are diagnostic measures, not the product result.
 
+Before another review worker is enabled, prove the Codex-only daemon review path on one repository.
+The proof must include a remote-only PR head, restart-safe publication, a clean review, and a
+blocker that produces the checklist and draft conversion. The ordered acceptance work is backlog
+item R1.
+
 Do this in order:
 
 1. Publish the controlled cross-harness baseline described by backlog item 0.7 / C3.

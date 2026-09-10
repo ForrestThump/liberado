@@ -3420,10 +3420,16 @@
     "cyclomatic": 36
   },
   "crates/server/src/pr_review_publish.rs": {
-    "ploc": 320,
-    "lloc": 44,
-    "functions": 58,
-    "cyclomatic": 96
+    "ploc": 235,
+    "lloc": 32,
+    "functions": 51,
+    "cyclomatic": 83
+  },
+  "crates/server/src/pr_review_publish_flow.rs": {
+    "ploc": 166,
+    "lloc": 21,
+    "functions": 12,
+    "cyclomatic": 24
   },
   "crates/server/src/shutdown.rs": {
     "ploc": 184,
