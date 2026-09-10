@@ -1,6 +1,6 @@
 ---
 kind: finding
-status: complete
+status: historical
 authority: advisory
 domain: coding-control-plane
 canonical_for: daemon-pr-review-coupling-pass
