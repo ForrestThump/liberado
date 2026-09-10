@@ -108,8 +108,8 @@ fn structured_result_is_stored_and_never_becomes_repair_or_approval() {
     let path = record_review_outcome(
         &mut ledger,
         task_id,
-        command_id,
         "codex",
+        command_id,
         &sha,
         dir.path(),
         ReviewInvokeOutcome::Finished {
@@ -148,8 +148,8 @@ fn exact_exhaustion_records_worker_unavailable_and_clears_the_fence() {
     record_review_outcome(
         &mut ledger,
         task_id,
-        command_id,
         "codex",
+        command_id,
         &sha,
         Path::new("/unused"),
         ReviewInvokeOutcome::Unavailable {
@@ -163,4 +163,35 @@ fn exact_exhaustion_records_worker_unavailable_and_clears_the_fence() {
             if run_id == command_id && reason == "exhausted"
     )));
     assert_eq!(ledger.project().unwrap().active_run_id, None);
+}
+
+#[test]
+fn failed_review_does_not_admit_a_fallback_run() {
+    let task_id = "pr-owner-repo-7";
+    let command_id = "review-failed";
+    let sha = "a".repeat(40);
+    let mut ledger = TaskLedger::new(created(task_id)).unwrap();
+    assert!(admit_review_command(&mut ledger, task_id, command_id, &sha).unwrap());
+    record_review_outcome(
+        &mut ledger,
+        task_id,
+        "codex",
+        command_id,
+        &sha,
+        Path::new("/unused"),
+        ReviewInvokeOutcome::Failed {
+            reason: "review failed: model_failure".into(),
+        },
+    )
+    .unwrap();
+    assert!(
+        !admit_review_run(
+            &mut ledger,
+            task_id,
+            command_id,
+            &format!("{command_id}:open_code"),
+            "open_code",
+        )
+        .unwrap()
+    );
 }

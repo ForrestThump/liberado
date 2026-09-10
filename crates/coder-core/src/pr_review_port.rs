@@ -13,7 +13,8 @@ use sha2::{Digest, Sha256};
 
 use crate::pr_review::{
     MAX_RAW_OUTPUT_BYTES, ReviewResult, ReviewResultError, WorkerFailure, classify_codex_failure,
-    codex_review_args, valid_full_sha,
+    classify_opencode_failure, codex_review_args, opencode_review_args, parse_opencode_success,
+    review_prompt, valid_full_sha,
 };
 
 /// JSON Schema supplied to `codex exec review`.
@@ -78,44 +79,59 @@ impl CodexReviewPort {
 
 impl ReviewPort for CodexReviewPort {
     fn invoke(&self, request: &ReviewInvokeRequest) -> ReviewInvokeOutcome {
-        if let Some(reason) = invalid_request(request) {
-            return ReviewInvokeOutcome::Failed { reason };
-        }
-        let observed = match workspace_head(&request.workspace) {
-            Ok(sha) => sha,
-            Err(reason) => return ReviewInvokeOutcome::Failed { reason },
-        };
-        if observed != request.expected_sha {
-            return stale(request, observed);
-        }
-        if !commit_exists(&request.workspace, &request.base_sha) {
-            return ReviewInvokeOutcome::Failed {
-                reason: "base SHA is not a commit in the pinned checkout".into(),
-            };
-        }
-        if !workspace_is_clean(&request.workspace) {
-            return ReviewInvokeOutcome::Failed {
-                reason: "pinned review checkout is not clean".into(),
-            };
-        }
+        invoke_process(
+            request,
+            || self.run(request),
+            parse_codex_or_fail,
+            classify_codex_failure,
+        )
+    }
+}
 
-        let output = match self.run(request) {
-            Ok(output) => output,
-            Err(reason) => return ReviewInvokeOutcome::Failed { reason },
-        };
-        let observed = match workspace_head(&request.workspace) {
-            Ok(sha) => sha,
-            Err(reason) => return ReviewInvokeOutcome::Failed { reason },
-        };
-        if observed != request.expected_sha {
-            return stale(request, observed);
+#[derive(Debug, Clone)]
+pub struct OpenCodeReviewPort {
+    executable: PathBuf,
+    model: String,
+    extra_env: Vec<(String, String)>,
+}
+
+impl OpenCodeReviewPort {
+    pub fn new(executable: impl Into<PathBuf>, model: impl Into<String>) -> Self {
+        Self {
+            executable: executable.into(),
+            model: model.into(),
+            extra_env: Vec::new(),
         }
-        if !workspace_is_clean(&request.workspace) {
-            return ReviewInvokeOutcome::Failed {
-                reason: "review worker modified the pinned checkout".into(),
-            };
-        }
-        classify_output(request, output)
+    }
+
+    #[cfg(all(test, unix))]
+    fn with_env(mut self, name: &str, value: &str) -> Self {
+        self.extra_env.push((name.into(), value.into()));
+        self
+    }
+
+    fn run(&self, request: &ReviewInvokeRequest) -> Result<CapturedOutput, String> {
+        let schema = request.schema_path.to_string_lossy();
+        let prompt = review_prompt(&request.base_sha, &request.expected_sha);
+        let mut command = liberado_common::process::std_command(&self.executable);
+        command
+            .args(opencode_review_args(&self.model, &schema, &prompt))
+            .current_dir(&request.workspace)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        apply_review_env(&mut command, &self.extra_env);
+        capture(command)
+    }
+}
+
+impl ReviewPort for OpenCodeReviewPort {
+    fn invoke(&self, request: &ReviewInvokeRequest) -> ReviewInvokeOutcome {
+        invoke_process(
+            request,
+            || self.run(request),
+            parse_opencode_success,
+            classify_opencode_failure,
+        )
     }
 }
 
@@ -132,24 +148,94 @@ impl CodexReviewPort {
             .current_dir(&request.workspace)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
-        command.envs(self.extra_env.iter().map(|(name, value)| (name, value)));
-        for (name, _) in std::env::vars_os() {
-            if is_forge_environment(&name) {
-                command.env_remove(name);
-            }
-        }
-        for (name, _) in &self.extra_env {
-            if is_forge_environment(OsStr::new(name)) {
-                command.env_remove(name);
-            }
-        }
+        apply_review_env(&mut command, &self.extra_env);
         capture(command)
     }
 }
 
+fn apply_review_env(command: &mut std::process::Command, extra_env: &[(String, String)]) {
+    command.envs(extra_env.iter().map(|(name, value)| (name, value)));
+    for (name, _) in std::env::vars_os() {
+        if is_forge_environment(&name) {
+            command.env_remove(name);
+        }
+    }
+    for (name, _) in extra_env {
+        if is_forge_environment(OsStr::new(name)) {
+            command.env_remove(name);
+        }
+    }
+}
+
+fn invoke_process(
+    request: &ReviewInvokeRequest,
+    run: impl FnOnce() -> Result<CapturedOutput, String>,
+    parse: fn(&str, &str) -> Result<ReviewResult, ReviewResultError>,
+    classify: fn(&str) -> WorkerFailure,
+) -> ReviewInvokeOutcome {
+    if let Some(reason) = invalid_request(request) {
+        return ReviewInvokeOutcome::Failed { reason };
+    }
+    if let Some(outcome) = workspace_not_ready(request) {
+        return outcome;
+    }
+    let output = match run() {
+        Ok(output) => output,
+        Err(reason) => return ReviewInvokeOutcome::Failed { reason },
+    };
+    if let Some(outcome) = workspace_changed(request) {
+        return outcome;
+    }
+    classify_output(request, output, parse, classify)
+}
+
+fn workspace_not_ready(request: &ReviewInvokeRequest) -> Option<ReviewInvokeOutcome> {
+    let observed = match workspace_head(&request.workspace) {
+        Ok(sha) => sha,
+        Err(reason) => return Some(ReviewInvokeOutcome::Failed { reason }),
+    };
+    if observed != request.expected_sha {
+        return Some(stale(request, observed));
+    }
+    if !commit_exists(&request.workspace, &request.base_sha) {
+        return Some(ReviewInvokeOutcome::Failed {
+            reason: "base SHA is not a commit in the pinned checkout".into(),
+        });
+    }
+    if !workspace_is_clean(&request.workspace) {
+        return Some(ReviewInvokeOutcome::Failed {
+            reason: "pinned review checkout is not clean".into(),
+        });
+    }
+    None
+}
+
+fn workspace_changed(request: &ReviewInvokeRequest) -> Option<ReviewInvokeOutcome> {
+    let observed = match workspace_head(&request.workspace) {
+        Ok(sha) => sha,
+        Err(reason) => return Some(ReviewInvokeOutcome::Failed { reason }),
+    };
+    if observed != request.expected_sha {
+        return Some(stale(request, observed));
+    }
+    if !workspace_is_clean(&request.workspace) {
+        return Some(ReviewInvokeOutcome::Failed {
+            reason: "review worker modified the pinned checkout".into(),
+        });
+    }
+    None
+}
+
+fn parse_codex_or_fail(
+    stdout: &str,
+    expected_sha: &str,
+) -> Result<ReviewResult, ReviewResultError> {
+    crate::pr_review::parse_codex_success(stdout, expected_sha)
+}
+
 fn invalid_request(request: &ReviewInvokeRequest) -> Option<String> {
-    if request.command_id.is_empty() || request.command_id != request.run_id {
-        return Some("review command and run IDs must be equal and nonempty".into());
+    if request.command_id.trim().is_empty() || request.run_id.trim().is_empty() {
+        return Some("review command and run IDs must be nonempty".into());
     }
     if request.task_id.trim().is_empty()
         || request.repository.trim().is_empty()
@@ -173,21 +259,30 @@ fn stale(request: &ReviewInvokeRequest, observed: String) -> ReviewInvokeOutcome
     }
 }
 
-fn classify_output(request: &ReviewInvokeRequest, output: CapturedOutput) -> ReviewInvokeOutcome {
+fn classify_output(
+    request: &ReviewInvokeRequest,
+    output: CapturedOutput,
+    parse: fn(&str, &str) -> Result<ReviewResult, ReviewResultError>,
+    classify: fn(&str) -> WorkerFailure,
+) -> ReviewInvokeOutcome {
     if output.overflow {
         return ReviewInvokeOutcome::Failed {
             reason: format!("review output exceeded {MAX_RAW_OUTPUT_BYTES} bytes"),
         };
     }
     if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let failure = classify_codex_failure(&stderr);
+        let combined = format!(
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stderr),
+            String::from_utf8_lossy(&output.stdout)
+        );
+        let failure = classify(&combined);
         return match failure {
             WorkerFailure::Exhausted | WorkerFailure::RateLimited => {
                 ReviewInvokeOutcome::Unavailable { failure }
             }
             _ => ReviewInvokeOutcome::Failed {
-                reason: format!("Codex review failed: {}", failure_name(failure)),
+                reason: format!("review failed: {}", failure_name(failure)),
             },
         };
     }
@@ -195,14 +290,14 @@ fn classify_output(request: &ReviewInvokeRequest, output: CapturedOutput) -> Rev
         Ok(stdout) => stdout,
         Err(_) => {
             return ReviewInvokeOutcome::Failed {
-                reason: "Codex review returned non-UTF-8 output".into(),
+                reason: "review worker returned non-UTF-8 output".into(),
             };
         }
     };
-    match crate::pr_review::parse_codex_success(stdout, &request.expected_sha) {
+    match parse(stdout, &request.expected_sha) {
         Ok(result) => finished(result),
         Err(ReviewResultError::Malformed) => ReviewInvokeOutcome::Failed {
-            reason: "Codex review returned malformed result JSON".into(),
+            reason: "review worker returned malformed result JSON".into(),
         },
         Err(ReviewResultError::StaleSha) => stale(request, reviewed_sha(stdout)),
     }

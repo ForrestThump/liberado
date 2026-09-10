@@ -203,6 +203,22 @@ fn zero_exit_with_malformed_output_fails() {
 
 #[cfg(unix)]
 #[test]
+fn opencode_port_accepts_a_schema_valid_result() {
+    let fixture = RepoFixture::new();
+    let port = OpenCodeReviewPort::new(
+        fake_codex(fixture._dir.path()),
+        crate::OPENCODE_NAMED_REVIEW_MODEL,
+    )
+    .with_env("FAKE_MODE", "success")
+    .with_env("FAKE_RESULT", &valid_result(&fixture.head));
+    assert!(matches!(
+        port.invoke(&fixture.request()),
+        ReviewInvokeOutcome::Finished { .. }
+    ));
+}
+
+#[cfg(unix)]
+#[test]
 fn exact_codex_exhaustion_is_typed_unavailability_not_http_402() {
     let fixture = RepoFixture::new();
     assert_eq!(

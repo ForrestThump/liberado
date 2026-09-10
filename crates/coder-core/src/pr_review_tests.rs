@@ -25,6 +25,32 @@ fn success_requires_exact_full_sha_and_valid_schema() {
 }
 
 #[test]
+fn output_schema_types_constant_and_enum_properties() {
+    let schema: serde_json::Value =
+        serde_json::from_str(crate::pr_review_port::REVIEW_RESULT_SCHEMA).expect("valid schema");
+    assert_eq!(
+        schema.pointer("/properties/schema/type"),
+        Some(&"string".into())
+    );
+    assert_eq!(
+        schema.pointer("/properties/findings/items/properties/severity/type"),
+        Some(&"string".into())
+    );
+}
+
+#[test]
+fn extracts_opencode_json_event_text() {
+    let sha = "a".repeat(40);
+    let result = valid(&sha);
+    let output = format!(
+        "{}\n",
+        serde_json::json!({"type":"text","part":{"text": result}})
+    );
+    let parsed = parse_opencode_success(&output, &sha).expect("opencode event");
+    assert_eq!(parsed.summary, "clean");
+}
+
+#[test]
 fn extracts_codex_jsonl_result() {
     let output = include_str!("../tests/fixtures/codex_review_jsonl_success.jsonl");
     let result = parse_codex_success(output, &"a".repeat(40)).unwrap();
@@ -35,6 +61,18 @@ fn extracts_codex_jsonl_result() {
 fn codex_failure_fixtures_are_distinct_and_402_is_not_exhaustion() {
     assert_eq!(
         classify_codex_failure("ERROR: You've hit your usage limit. Try again at 1:00 PM"),
+        WorkerFailure::Exhausted
+    );
+    assert_eq!(
+        classify_codex_failure("■ You've hit your usage limit. Try again at 9:45 PM."),
+        WorkerFailure::Exhausted
+    );
+    assert_eq!(
+        classify_codex_failure("You've reached your weekly limit"),
+        WorkerFailure::Exhausted
+    );
+    assert_eq!(
+        classify_codex_failure("request rejected: usage limit reached"),
         WorkerFailure::Exhausted
     );
     assert_eq!(
@@ -82,6 +120,20 @@ fn codex_command_is_read_only_and_sha_pinned() {
             "head"
         ]
     );
+}
+
+#[test]
+fn opencode_command_is_json_run_without_auto_approve() {
+    let args = opencode_review_args(
+        OPENCODE_NAMED_REVIEW_MODEL,
+        "schema.json",
+        &review_prompt("base", "head"),
+    );
+    assert_eq!(args[0], "run");
+    assert!(args.contains(&"--format".into()));
+    assert!(args.contains(&"json".into()));
+    assert!(args.contains(&OPENCODE_NAMED_REVIEW_MODEL.into()));
+    assert!(!args.iter().any(|arg| arg == "--auto"));
 }
 
 #[test]

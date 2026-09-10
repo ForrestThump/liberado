@@ -15,7 +15,7 @@ pub fn review_command_id(repository: &str, pr_number: u64, head_sha: &str) -> St
     format!("review-cmd:{POLICY_VERSION}:{repository}:{pr_number}:{head_sha}")
 }
 
-fn has_command_issue(ledger: &TaskLedger, command_id: &str) -> bool {
+pub fn has_command_issue(ledger: &TaskLedger, command_id: &str) -> bool {
     ledger.events().iter().any(|event| {
         matches!(
             &event.payload,
@@ -70,6 +70,69 @@ pub fn admit_review_command(
     Ok(true)
 }
 
+/// Fence one fallback run after a typed unavailable result. Command stays issued once.
+pub fn admit_review_run(
+    ledger: &mut TaskLedger,
+    task_id: &str,
+    command_id: &str,
+    run_id: &str,
+    worker_id: &str,
+) -> Result<bool, String> {
+    if review_run_in_flight(ledger)
+        || run_already_recorded(ledger, run_id)
+        || !last_command_terminal_allows_fallback(ledger, command_id)
+    {
+        return Ok(false);
+    }
+    append(
+        ledger,
+        task_id,
+        run_id.to_string(),
+        TaskEventKind::ReviewRunStarted {
+            command_id: command_id.to_string(),
+            run_id: run_id.to_string(),
+            worker_id: worker_id.to_string(),
+        },
+    )?;
+    Ok(true)
+}
+
+fn last_command_terminal_allows_fallback(ledger: &TaskLedger, command_id: &str) -> bool {
+    ledger
+        .events()
+        .iter()
+        .rev()
+        .find_map(|event| match &event.payload {
+            TaskEventKind::ReviewWorkerUnavailable { run_id, reason, .. }
+                if run_belongs(command_id, run_id) =>
+            {
+                Some(matches!(reason.as_str(), "exhausted" | "rate_limited"))
+            }
+            TaskEventKind::ReviewRunFinished { run_id, .. }
+            | TaskEventKind::ReviewStale { run_id, .. }
+                if run_belongs(command_id, run_id) =>
+            {
+                Some(false)
+            }
+            _ => None,
+        })
+        .unwrap_or(false)
+}
+
+fn run_belongs(command_id: &str, run_id: &str) -> bool {
+    run_id == command_id || run_id.starts_with(&format!("{command_id}:"))
+}
+
+fn run_already_recorded(ledger: &TaskLedger, run_id: &str) -> bool {
+    ledger.events().iter().any(|event| match &event.payload {
+        TaskEventKind::ReviewRunStarted { run_id: id, .. }
+        | TaskEventKind::ReviewWorkerUnavailable { run_id: id, .. }
+        | TaskEventKind::ReviewRunFinished { run_id: id, .. }
+        | TaskEventKind::ReviewStale { run_id: id, .. } => id == run_id,
+        _ => false,
+    })
+}
+
 fn failure_reason(failure: WorkerFailure) -> &'static str {
     match failure {
         WorkerFailure::Exhausted => "exhausted",
@@ -85,8 +148,8 @@ fn failure_reason(failure: WorkerFailure) -> &'static str {
 pub fn record_review_outcome(
     ledger: &mut TaskLedger,
     task_id: &str,
-    command_id: &str,
     worker_id: &str,
+    run_id: &str,
     head_sha: &str,
     artifact_dir: &Path,
     outcome: ReviewInvokeOutcome,
@@ -108,9 +171,9 @@ pub fn record_review_outcome(
             append(
                 ledger,
                 task_id,
-                format!("{command_id}:finished"),
+                format!("{run_id}:finished"),
                 TaskEventKind::ReviewRunFinished {
-                    run_id: command_id.into(),
+                    run_id: run_id.into(),
                     worker_id: worker_id.into(),
                     head_sha: head_sha.into(),
                     artifact_digest: digest,
@@ -122,9 +185,9 @@ pub fn record_review_outcome(
             append(
                 ledger,
                 task_id,
-                format!("{command_id}:unavailable"),
+                format!("{run_id}:unavailable"),
                 TaskEventKind::ReviewWorkerUnavailable {
-                    run_id: command_id.into(),
+                    run_id: run_id.into(),
                     worker_id: worker_id.into(),
                     reason: failure_reason(failure).into(),
                 },
@@ -135,9 +198,9 @@ pub fn record_review_outcome(
             append(
                 ledger,
                 task_id,
-                format!("{command_id}:unavailable"),
+                format!("{run_id}:unavailable"),
                 TaskEventKind::ReviewWorkerUnavailable {
-                    run_id: command_id.into(),
+                    run_id: run_id.into(),
                     worker_id: worker_id.into(),
                     reason,
                 },
@@ -148,9 +211,9 @@ pub fn record_review_outcome(
             append(
                 ledger,
                 task_id,
-                format!("{command_id}:stale"),
+                format!("{run_id}:stale"),
                 TaskEventKind::ReviewStale {
-                    run_id: command_id.into(),
+                    run_id: run_id.into(),
                     expected_sha: expected,
                     observed_sha: observed,
                 },
@@ -168,20 +231,31 @@ pub fn issue_review(
     request: &ReviewInvokeRequest,
     artifact_dir: &Path,
 ) -> Result<Option<ReviewInvokeOutcome>, String> {
-    if !admit_review_command(
-        ledger,
-        &request.task_id,
-        &request.command_id,
-        &request.expected_sha,
-    )? {
+    let admitted = if has_command_issue(ledger, &request.command_id) {
+        admit_review_run(
+            ledger,
+            &request.task_id,
+            &request.command_id,
+            &request.run_id,
+            worker_id,
+        )?
+    } else {
+        admit_review_command(
+            ledger,
+            &request.task_id,
+            &request.command_id,
+            &request.expected_sha,
+        )?
+    };
+    if !admitted {
         return Ok(None);
     }
     let outcome = port.invoke(request);
     record_review_outcome(
         ledger,
         &request.task_id,
-        &request.command_id,
         worker_id,
+        &request.run_id,
         &request.expected_sha,
         artifact_dir,
         outcome.clone(),

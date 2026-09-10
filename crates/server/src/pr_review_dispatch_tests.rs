@@ -179,8 +179,79 @@ fn dispatch_plan_selects_the_enabled_codex_worker() {
 
     let plan = dispatch_plan(&request).expect("eligible dispatch plan");
     assert_eq!(plan.worker_id, "codex");
-    assert_eq!(plan.executable, "/usr/bin/codex");
     assert_eq!(plan.command_id, review_command_id("owner/repo", 1, sha));
+    assert_eq!(plan.run_id, plan.command_id);
+    assert!(matches!(
+        plan.worker,
+        ReviewWorkerConfig::Codex {
+            executable,
+            ..
+        } if executable == "/usr/bin/codex"
+    ));
+}
+
+#[test]
+fn exhausted_codex_selects_opencode_next() {
+    use liberado_coder_core::OPENCODE_NAMED_REVIEW_MODEL;
+    use liberado_coder_core::pr_review::WorkerFailure;
+    use liberado_coder_core::pr_review_admission::{admit_review_command, record_review_outcome};
+    use liberado_coder_core::pr_review_port::ReviewInvokeOutcome;
+
+    let mut book = ledger("pr-owner-repo-1");
+    let sha = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    let command = review_command_id("owner/repo", 1, sha);
+    admit_review_command(&mut book, "pr-owner-repo-1", &command, sha).unwrap();
+    record_review_outcome(
+        &mut book,
+        "pr-owner-repo-1",
+        "codex",
+        &command,
+        sha,
+        Path::new("/unused"),
+        ReviewInvokeOutcome::Unavailable {
+            failure: WorkerFailure::Exhausted,
+        },
+    )
+    .unwrap();
+
+    let mut workers = BTreeMap::new();
+    workers.insert(
+        "codex".into(),
+        ReviewWorkerConfig::Codex {
+            executable: "/usr/bin/codex".into(),
+            enabled: true,
+        },
+    );
+    workers.insert(
+        "open_code".into(),
+        ReviewWorkerConfig::OpenCode {
+            executable: "/usr/bin/opencode".into(),
+            model: OPENCODE_NAMED_REVIEW_MODEL.into(),
+            permission_mode: "deny_writes".into(),
+            pricing_policy: "named".into(),
+            enabled: true,
+        },
+    );
+    let intents = vec![ObserverIntent::Eligible { sha: sha.into() }];
+    let order = ["codex".into(), "open_code".into()];
+    let request = DispatchRequest {
+        ledger: &mut book,
+        task_id: "pr-owner-repo-1",
+        repository: "owner/repo",
+        pr_number: 1,
+        head_sha: sha,
+        base_sha: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        base_branch: "main",
+        coding_root: Path::new("/tmp"),
+        token: "unused",
+        review_workers: &workers,
+        harness_order: &order,
+        intents: &intents,
+        shadow: false,
+    };
+    let plan = dispatch_plan(&request).expect("fallback plan");
+    assert_eq!(plan.worker_id, "open_code");
+    assert_eq!(plan.run_id, format!("{command}:open_code"));
 }
 
 #[test]
