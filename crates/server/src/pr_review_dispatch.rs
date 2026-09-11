@@ -1,18 +1,19 @@
-//! Slice 2: admit one Codex review for an eligible cycle. No forge writes.
+//! Admit one review attempt for an eligible cycle. Codex can fall back to OpenCode.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
+use liberado_coder_core::has_command_issue;
+use liberado_coder_core::next_review_worker;
 use liberado_coder_core::pr_review::ObserverIntent;
 use liberado_coder_core::pr_review::valid_full_sha;
-use liberado_coder_core::pr_review_admission::{
-    issue_review, review_command_id, should_issue_review,
-};
+use liberado_coder_core::pr_review_admission::{issue_review, review_command_id};
 use liberado_coder_core::pr_review_port::{
-    CodexReviewPort, REVIEW_RESULT_SCHEMA, ReviewInvokeRequest,
+    CodexReviewPort, OpenCodeReviewPort, REVIEW_RESULT_SCHEMA, ReviewInvokeRequest, ReviewPort,
 };
+use liberado_coder_core::review_run_id;
 use liberado_coder_core::{ReviewWorkerConfig, TaskLedger};
 use liberado_common::process::std_command;
 
@@ -34,29 +35,43 @@ pub(crate) struct DispatchRequest<'a> {
 
 struct DispatchPlan<'a> {
     worker_id: &'a str,
-    executable: &'a str,
+    worker: &'a ReviewWorkerConfig,
     command_id: String,
+    run_id: String,
 }
 
 pub(crate) fn maybe_dispatch(req: DispatchRequest<'_>) -> Result<(), String> {
     let Some(plan) = dispatch_plan(&req) else {
         return Ok(());
     };
-    fetch_pr_commits(
+    let url = github_repository_url(req.repository)?;
+    execute_planned_review(req, plan, &url)
+}
+
+fn execute_planned_review(
+    req: DispatchRequest<'_>,
+    plan: DispatchPlan<'_>,
+    url: &str,
+) -> Result<(), String> {
+    let authorization = format!(
+        "Authorization: Basic {}",
+        STANDARD.encode(format!("x-access-token:{}", req.token))
+    );
+    fetch_pr_commits_from(
         req.coding_root,
-        req.repository,
+        url,
         req.pr_number,
         req.base_branch,
         req.base_sha,
         req.head_sha,
-        req.token,
+        Some(&authorization),
     )?;
     let workspace = pin_checkout(req.coding_root, req.head_sha)?;
     let schema_path = write_schema_outside(&workspace)?;
     let request = ReviewInvokeRequest {
         task_id: req.task_id.into(),
-        command_id: plan.command_id.clone(),
-        run_id: plan.command_id,
+        command_id: plan.command_id,
+        run_id: plan.run_id,
         repository: req.repository.into(),
         pr_number: req.pr_number,
         base_sha: req.base_sha.into(),
@@ -64,10 +79,28 @@ pub(crate) fn maybe_dispatch(req: DispatchRequest<'_>) -> Result<(), String> {
         workspace,
         schema_path,
     };
-    let port = CodexReviewPort::new(plan.executable);
+    let port = review_port(plan.worker)?;
     let artifact_dir = req.coding_root.join(".liberado").join("review-artifacts");
-    let _ = issue_review(req.ledger, &port, plan.worker_id, &request, &artifact_dir)?;
+    let _ = issue_review(
+        req.ledger,
+        port.as_ref(),
+        plan.worker_id,
+        &request,
+        &artifact_dir,
+    )?;
     Ok(())
+}
+
+fn review_port(worker: &ReviewWorkerConfig) -> Result<Box<dyn ReviewPort>, String> {
+    match worker {
+        ReviewWorkerConfig::Codex { executable, .. } => {
+            Ok(Box::new(CodexReviewPort::new(executable)))
+        }
+        ReviewWorkerConfig::OpenCode {
+            executable, model, ..
+        } => Ok(Box::new(OpenCodeReviewPort::new(executable, model))),
+        _ => Err("review worker is not an enabled review adapter".into()),
+    }
 }
 
 fn dispatch_plan<'a>(req: &DispatchRequest<'a>) -> Option<DispatchPlan<'a>> {
@@ -81,48 +114,24 @@ fn dispatch_plan<'a>(req: &DispatchRequest<'a>) -> Option<DispatchPlan<'a>> {
     {
         return None;
     }
-    let (worker_id, worker) = req.harness_order.iter().find_map(|id| {
-        req.review_workers
-            .get_key_value(id)
-            .filter(|(_, worker)| matches!(worker, ReviewWorkerConfig::Codex { enabled: true, .. }))
-    })?;
-    let ReviewWorkerConfig::Codex { executable, .. } = worker else {
-        return None;
-    };
     let command_id = review_command_id(req.repository, req.pr_number, req.head_sha);
-    if !should_issue_review(req.ledger, &command_id) {
-        return None;
-    }
+    let (worker_id, worker) = next_review_worker(
+        req.ledger,
+        &command_id,
+        req.harness_order,
+        req.review_workers,
+    )?;
+    let run_id = if has_command_issue(req.ledger, &command_id) {
+        review_run_id(&command_id, worker_id)
+    } else {
+        command_id.clone()
+    };
     Some(DispatchPlan {
         worker_id,
-        executable,
+        worker,
         command_id,
+        run_id,
     })
-}
-
-fn fetch_pr_commits(
-    repo_root: &Path,
-    repository: &str,
-    pr_number: u64,
-    base_branch: &str,
-    base_sha: &str,
-    head_sha: &str,
-    token: &str,
-) -> Result<(), String> {
-    let url = github_repository_url(repository)?;
-    let authorization = format!(
-        "Authorization: Basic {}",
-        STANDARD.encode(format!("x-access-token:{token}"))
-    );
-    fetch_pr_commits_from(
-        repo_root,
-        &url,
-        pr_number,
-        base_branch,
-        base_sha,
-        head_sha,
-        Some(&authorization),
-    )
 }
 
 fn fetch_pr_commits_from(

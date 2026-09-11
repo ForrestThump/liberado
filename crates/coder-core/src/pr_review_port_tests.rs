@@ -7,6 +7,8 @@ use tempfile::TempDir;
 use super::*;
 #[cfg(unix)]
 use crate::pr_review::REVIEW_SCHEMA_VERSION;
+use crate::pr_review::WorkerFailure;
+use std::ffi::OsStr;
 
 #[cfg(unix)]
 struct RepoFixture {
@@ -203,6 +205,22 @@ fn zero_exit_with_malformed_output_fails() {
 
 #[cfg(unix)]
 #[test]
+fn opencode_port_accepts_a_schema_valid_result() {
+    let fixture = RepoFixture::new();
+    let port = OpenCodeReviewPort::new(
+        fake_codex(fixture._dir.path()),
+        crate::OPENCODE_NAMED_REVIEW_MODEL,
+    )
+    .with_env("FAKE_MODE", "success")
+    .with_env("FAKE_RESULT", &valid_result(&fixture.head));
+    assert!(matches!(
+        port.invoke(&fixture.request()),
+        ReviewInvokeOutcome::Finished { .. }
+    ));
+}
+
+#[cfg(unix)]
+#[test]
 fn exact_codex_exhaustion_is_typed_unavailability_not_http_402() {
     let fixture = RepoFixture::new();
     assert_eq!(
@@ -251,6 +269,20 @@ fn result_sha_must_match_request_and_workspace() {
             observed: fixture.other.clone(),
         }
     );
+}
+
+#[test]
+fn failure_name_labels_every_worker_failure() {
+    for (failure, name) in [
+        (WorkerFailure::Exhausted, "exhausted"),
+        (WorkerFailure::RateLimited, "rate_limited"),
+        (WorkerFailure::Auth, "auth"),
+        (WorkerFailure::Permission, "permission"),
+        (WorkerFailure::Timeout, "timeout"),
+        (WorkerFailure::ModelFailure, "model_failure"),
+    ] {
+        assert_eq!(super::invoke::failure_name(failure), name);
+    }
 }
 
 #[test]

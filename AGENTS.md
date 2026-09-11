@@ -19,6 +19,7 @@ not required; leftover directories stay gitignored if present.
 
 ```bash
 just ci                                        # full local CI + CRAP ratchet; run before you push
+# Caps rustc jobs from free RAM (override LIBERADO_CI_JOBS). Workspace Clippy is the memory hog.
 just preflight                                 # fmt / clippy / test / deny, no llvm-cov
 just ready                                     # final gate + exact Linux CRAP + HEAD/tree receipt
 just crap-linux                                # exact Debian CRAP; uses Debian WSL on Windows

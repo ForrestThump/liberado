@@ -11,7 +11,8 @@ open_items: true
 
 **Status**: active. Forrest approved Sol pass 2 and the seven checklist defaults (2026-09-05).
 Slices 0–3 are on main: Slices 0–1 via PR #244, Slice 2 via PR #247, and Slice 3 via PR #249
-(2026-09-08). Codex-only homelab dogfood and cutover proof are active; later worker and webhook
+(2026-09-08). Codex-only homelab dogfood and cutover proof are active. Codex usage exhaustion
+now falls back to one OpenCode DeepSeek V4 Flash attempt. Later worker and webhook
 slices remain open.
 
 ## Decision
@@ -118,14 +119,15 @@ kind = "codex"
 executable = "/home/box/.local/bin/codex"
 enabled = true
 
-# Slice 4: OpenCode is a distinct harness after Codex (Forrest lock 2026-09-08).
-# Not free-router / openai_compatible. Keep disabled until read-only smoke + no-cost/paid policy.
-[tuning.coder.control_plane.review_workers.opencode]
+# OpenCode fallback after typed Codex usage or rate-limit results.
+# Forrest named the paid pin (2026-09-10). Not free-router / openai_compatible.
+[tuning.coder.control_plane.review_workers.open_code]
 kind = "open_code"
 executable = "/home/box/.local/bin/opencode"
-model = "PROVIDER/MODEL"
+model = "openrouter/deepseek/deepseek-v4-flash"
 permission_mode = "deny_writes"
-enabled = false
+pricing_policy = "named"
+enabled = true
 
 [tuning.coder.control_plane.review_workers.antigravity]
 kind = "antigravity"
@@ -330,11 +332,10 @@ for writers; harnesses never receive GitHub credentials.
 ### Slice 4 — Enabled-worker fallback
 
 Add proven adapters in `harness_order`. Forrest lock (2026-09-08): OpenCode is an explicit
-`open_code` worker kind **after Codex** (not a free-router alias). Keep `enabled=false` until an
-unattended read-only smoke succeeds and the selected provider/model is proved no-cost (or Forrest
-approves a named paid policy). Also add Antigravity, Cursor-local, and free-router as enabled
-only with captured evidence. Grok stays declared but disabled until headless proof. Do not wait
-for Grok to ship Codex-first operation.
+`open_code` worker kind **after Codex** (not a free-router alias). Forrest named the paid pin
+`openrouter/deepseek/deepseek-v4-flash` with `pricing_policy = "named"` (2026-09-10). Also add
+Antigravity, Cursor-local, and free-router as enabled only with captured evidence. Grok stays
+declared but disabled until headless proof. Do not wait for Grok to ship Codex-first operation.
 
 Acceptance: typed exhaustion advances once and normal failure stops; disabled adapters do not
 start; cooldowns survive restart; OpenCode denies write permissions and strips forge credentials;

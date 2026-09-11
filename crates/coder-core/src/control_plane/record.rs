@@ -285,6 +285,10 @@ fn apply_review_worker(record: &mut TaskRecord, kind: &TaskEventKind) -> bool {
             record.active_run_id = Some(command_id.clone());
             true
         }
+        TaskEventKind::ReviewRunStarted { run_id, .. } => {
+            record.active_run_id = Some(run_id.clone());
+            true
+        }
         TaskEventKind::ReviewWorkerUnavailable { run_id, .. }
         | TaskEventKind::ReviewRunFinished { run_id, .. }
         | TaskEventKind::ReviewStale { run_id, .. } => {

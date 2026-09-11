@@ -312,10 +312,10 @@
     "cyclomatic": 58
   },
   "crates/cli/src/ci_cmd.rs": {
-    "ploc": 497,
-    "lloc": 123,
-    "functions": 44,
-    "cyclomatic": 132
+    "ploc": 404,
+    "lloc": 98,
+    "functions": 36,
+    "cyclomatic": 107
   },
   "crates/cli/src/ci_cmd/announce_compare_tests.rs": {
     "ploc": 19,
@@ -352,6 +352,24 @@
     "lloc": 24,
     "functions": 19,
     "cyclomatic": 60
+  },
+  "crates/cli/src/ci_cmd/job_budget.rs": {
+    "ploc": 94,
+    "lloc": 22,
+    "functions": 12,
+    "cyclomatic": 22
+  },
+  "crates/cli/src/ci_cmd/job_budget_tests.rs": {
+    "ploc": 47,
+    "lloc": 21,
+    "functions": 8,
+    "cyclomatic": 9
+  },
+  "crates/cli/src/ci_cmd/log.rs": {
+    "ploc": 105,
+    "lloc": 29,
+    "functions": 8,
+    "cyclomatic": 27
   },
   "crates/cli/src/ci_cmd/new_function_ceiling.rs": {
     "ploc": 110,
@@ -1134,10 +1152,10 @@
     "cyclomatic": 21
   },
   "crates/coder-core/src/pr_review.rs": {
-    "ploc": 431,
-    "lloc": 52,
-    "functions": 38,
-    "cyclomatic": 99
+    "ploc": 375,
+    "lloc": 50,
+    "functions": 31,
+    "cyclomatic": 77
   },
   "crates/coder-core/src/pr_review_admission.rs": {
     "ploc": 176,
@@ -1151,11 +1169,23 @@
     "functions": 7,
     "cyclomatic": 10
   },
+  "crates/coder-core/src/pr_review_cmd.rs": {
+    "ploc": 110,
+    "lloc": 5,
+    "functions": 10,
+    "cyclomatic": 27
+  },
   "crates/coder-core/src/pr_review_cycle.rs": {
     "ploc": 10,
     "lloc": 1,
     "functions": 2,
     "cyclomatic": 5
+  },
+  "crates/coder-core/src/pr_review_invoke.rs": {
+    "ploc": 293,
+    "lloc": 70,
+    "functions": 43,
+    "cyclomatic": 108
   },
   "crates/coder-core/src/pr_review_parse.rs": {
     "ploc": 35,
@@ -1164,10 +1194,10 @@
     "cyclomatic": 19
   },
   "crates/coder-core/src/pr_review_port.rs": {
-    "ploc": 328,
-    "lloc": 70,
-    "functions": 42,
-    "cyclomatic": 110
+    "ploc": 135,
+    "lloc": 11,
+    "functions": 10,
+    "cyclomatic": 19
   },
   "crates/coder-core/src/pr_review_port_tests.rs": {
     "ploc": 236,
@@ -1186,6 +1216,18 @@
     "lloc": 148,
     "functions": 24,
     "cyclomatic": 33
+  },
+  "crates/coder-core/src/pr_review_route.rs": {
+    "ploc": 109,
+    "lloc": 8,
+    "functions": 14,
+    "cyclomatic": 41
+  },
+  "crates/coder-core/src/pr_review_route_tests.rs": {
+    "ploc": 126,
+    "lloc": 35,
+    "functions": 7,
+    "cyclomatic": 9
   },
   "crates/coder-core/src/pr_review_tests.rs": {
     "ploc": 406,

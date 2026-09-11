@@ -36,9 +36,14 @@
 //! Child stdout/stderr go to `.liberado/ci.log`. The console prints the log path,
 //! one `ok`/`FAILED` line per gate, and (on red) extracted `error[` / `FAILED` /
 //! `panicked` / CRAP lines. The full log is always named so an agent can read it.
+//!
+//! Workspace Clippy and llvm-cov start several rustc processes. Each often needs
+//! several GiB. `just ci` is `cargo run … -- ci`, so those children inherit a
+//! jobserver sized to the CPU count. `liberado ci` drops that jobserver and sets
+//! `CARGO_BUILD_JOBS` from free RAM (4 GiB reserve, 4 GiB per rustc). Override
+//! with `LIBERADO_CI_JOBS`.
 
-use std::ffi::OsStr;
-use std::io::{self, Write};
+use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
@@ -141,8 +146,13 @@ New functions must land below 30.";
 
 mod coverage_tools;
 mod crap_baseline_ratchet;
+mod log;
+#[cfg(test)]
+pub(crate) use log::extract_ci_failures;
+pub(crate) use log::{CiLog, run_cmd};
 /// Dispatch `liberado ci …`. No subcommand means the local full run (gates + ratchet).
 mod dispatch;
+mod job_budget;
 mod new_function_ceiling;
 mod runtime_support;
 
@@ -156,34 +166,6 @@ fn with_log(
     body: impl FnOnce(&CiLog) -> Result<(), Box<dyn std::error::Error>>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     body(&CiLog::create(&repository_root()?)?)
-}
-
-/// One invocation's full child log. Truncated at the start of `liberado ci`.
-pub(crate) struct CiLog {
-    root: PathBuf,
-    path: PathBuf,
-}
-
-impl CiLog {
-    fn create(root: &Path) -> Result<Self, Box<dyn std::error::Error>> {
-        std::fs::create_dir_all(root.join(".liberado"))?;
-        let path = root.join(CI_LOG_FILE);
-        std::fs::write(
-            &path,
-            format!("# liberado ci — full log\n# {CI_LOG_FILE}\n"),
-        )?;
-        eprintln!("[liberado ci] full log: {CI_LOG_FILE}");
-        Ok(Self {
-            root: root.to_path_buf(),
-            path,
-        })
-    }
-
-    fn writeln(&self, line: &str) -> Result<(), Box<dyn std::error::Error>> {
-        let mut file = std::fs::OpenOptions::new().append(true).open(&self.path)?;
-        writeln!(file, "{line}")?;
-        Ok(())
-    }
 }
 
 /// Move this process's image out of `target/{debug,release}`.
@@ -546,88 +528,6 @@ fn baseline_has_entries(path: &Path) -> bool {
         .get("entries")
         .and_then(Value::as_array)
         .is_some_and(|entries| !entries.is_empty())
-}
-
-pub(crate) fn run_cmd(
-    log: &CiLog,
-    program: impl AsRef<OsStr>,
-    args: &[&str],
-) -> Result<(), Box<dyn std::error::Error>> {
-    let program = program.as_ref();
-    let gate = begin_cmd(log, program, args)?;
-    finish_cmd(log, gate, coverage_tools::spawn_to_log(log, program, args))
-}
-
-struct GateStart {
-    command: String,
-    program: String,
-    start: u64,
-}
-
-fn begin_cmd(
-    log: &CiLog,
-    program: &OsStr,
-    args: &[&str],
-) -> Result<GateStart, Box<dyn std::error::Error>> {
-    let shown = program.to_string_lossy().into_owned();
-    let command = format!("{shown} {}", args.join(" "));
-    log.writeln(&format!("=== {command} ==="))?;
-    eprint!("[liberado ci] {command} ... ");
-    let _ = io::stderr().flush();
-    Ok(GateStart {
-        command,
-        program: shown,
-        start: std::fs::metadata(&log.path)?.len(),
-    })
-}
-
-fn finish_cmd(
-    log: &CiLog,
-    gate: GateStart,
-    spawned: io::Result<std::process::ExitStatus>,
-) -> Result<(), Box<dyn std::error::Error>> {
-    match spawned {
-        Ok(status) if status.success() => {
-            eprintln!("ok");
-            Ok(())
-        }
-        Ok(status) => gate_failed(log, &gate, format!("{} failed with {status}", gate.command)),
-        Err(error) => gate_failed(
-            log,
-            &gate,
-            format!("could not start {}: {error}", gate.program),
-        ),
-    }
-}
-
-fn gate_failed(
-    log: &CiLog,
-    gate: &GateStart,
-    reason: String,
-) -> Result<(), Box<dyn std::error::Error>> {
-    eprintln!("FAILED");
-    log.writeln(&reason)?;
-    let extracted = extract_ci_failures(&read_log_since(&log.path, gate.start)?);
-    if !extracted.is_empty() {
-        eprintln!("\n{extracted}\n");
-    }
-    eprintln!("----------\nFull log: {CI_LOG_FILE}\n----------");
-    if extracted.is_empty() {
-        return Err(format!("{reason}\nFull log: {CI_LOG_FILE}").into());
-    }
-    Err(format!("{reason}\nFull log: {CI_LOG_FILE}\n\n{extracted}").into())
-}
-
-fn read_log_since(path: &Path, start: u64) -> Result<String, Box<dyn std::error::Error>> {
-    let bytes = std::fs::read(path)?;
-    let skip = (start as usize).min(bytes.len());
-    Ok(String::from_utf8_lossy(&bytes[skip..]).into_owned())
-}
-
-/// Pull compiler, test, and CRAP failures out of a child log so the agent
-/// does not have to scan compile progress or passing crates.
-fn extract_ci_failures(output: &str) -> String {
-    liberado_coder_core::extract_failures_capped(output, EXTRACT_MAX_LINES, Some(CI_LOG_FILE))
 }
 
 fn repository_root() -> Result<PathBuf, Box<dyn std::error::Error>> {

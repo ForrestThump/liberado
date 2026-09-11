@@ -4,17 +4,20 @@
 //! already-pinned checkout and returns evidence. Admission, fallback, and forge policy stay with
 //! shepherd.
 
-use std::ffi::OsStr;
-use std::io::Read;
-use std::path::{Path, PathBuf};
-use std::process::{ExitStatus, Stdio};
-
-use sha2::{Digest, Sha256};
+use std::path::PathBuf;
+use std::process::Stdio;
 
 use crate::pr_review::{
-    MAX_RAW_OUTPUT_BYTES, ReviewResult, ReviewResultError, WorkerFailure, classify_codex_failure,
-    codex_review_args, valid_full_sha,
+    ReviewResult, WorkerFailure, classify_codex_failure, classify_opencode_failure,
+    codex_review_args, opencode_review_args, parse_opencode_success, review_prompt,
 };
+
+#[path = "pr_review_invoke.rs"]
+mod invoke;
+#[cfg(test)]
+pub(crate) use invoke::is_forge_environment;
+use invoke::{CapturedOutput, apply_review_env, capture, invoke_process, parse_codex_or_fail};
+pub use invoke::{artifact_digest, serialize_review_result};
 
 /// JSON Schema supplied to `codex exec review`.
 pub const REVIEW_RESULT_SCHEMA: &str = include_str!("pr_review_schema.json");
@@ -78,44 +81,59 @@ impl CodexReviewPort {
 
 impl ReviewPort for CodexReviewPort {
     fn invoke(&self, request: &ReviewInvokeRequest) -> ReviewInvokeOutcome {
-        if let Some(reason) = invalid_request(request) {
-            return ReviewInvokeOutcome::Failed { reason };
-        }
-        let observed = match workspace_head(&request.workspace) {
-            Ok(sha) => sha,
-            Err(reason) => return ReviewInvokeOutcome::Failed { reason },
-        };
-        if observed != request.expected_sha {
-            return stale(request, observed);
-        }
-        if !commit_exists(&request.workspace, &request.base_sha) {
-            return ReviewInvokeOutcome::Failed {
-                reason: "base SHA is not a commit in the pinned checkout".into(),
-            };
-        }
-        if !workspace_is_clean(&request.workspace) {
-            return ReviewInvokeOutcome::Failed {
-                reason: "pinned review checkout is not clean".into(),
-            };
-        }
+        invoke_process(
+            request,
+            || self.run(request),
+            parse_codex_or_fail,
+            classify_codex_failure,
+        )
+    }
+}
 
-        let output = match self.run(request) {
-            Ok(output) => output,
-            Err(reason) => return ReviewInvokeOutcome::Failed { reason },
-        };
-        let observed = match workspace_head(&request.workspace) {
-            Ok(sha) => sha,
-            Err(reason) => return ReviewInvokeOutcome::Failed { reason },
-        };
-        if observed != request.expected_sha {
-            return stale(request, observed);
+#[derive(Debug, Clone)]
+pub struct OpenCodeReviewPort {
+    executable: PathBuf,
+    model: String,
+    extra_env: Vec<(String, String)>,
+}
+
+impl OpenCodeReviewPort {
+    pub fn new(executable: impl Into<PathBuf>, model: impl Into<String>) -> Self {
+        Self {
+            executable: executable.into(),
+            model: model.into(),
+            extra_env: Vec::new(),
         }
-        if !workspace_is_clean(&request.workspace) {
-            return ReviewInvokeOutcome::Failed {
-                reason: "review worker modified the pinned checkout".into(),
-            };
-        }
-        classify_output(request, output)
+    }
+
+    #[cfg(all(test, unix))]
+    fn with_env(mut self, name: &str, value: &str) -> Self {
+        self.extra_env.push((name.into(), value.into()));
+        self
+    }
+
+    fn run(&self, request: &ReviewInvokeRequest) -> Result<CapturedOutput, String> {
+        let schema = request.schema_path.to_string_lossy();
+        let prompt = review_prompt(&request.base_sha, &request.expected_sha);
+        let mut command = liberado_common::process::std_command(&self.executable);
+        command
+            .args(opencode_review_args(&self.model, &schema, &prompt))
+            .current_dir(&request.workspace)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        apply_review_env(&mut command, &self.extra_env);
+        capture(command)
+    }
+}
+
+impl ReviewPort for OpenCodeReviewPort {
+    fn invoke(&self, request: &ReviewInvokeRequest) -> ReviewInvokeOutcome {
+        invoke_process(
+            request,
+            || self.run(request),
+            parse_opencode_success,
+            classify_opencode_failure,
+        )
     }
 }
 
@@ -132,232 +150,9 @@ impl CodexReviewPort {
             .current_dir(&request.workspace)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
-        command.envs(self.extra_env.iter().map(|(name, value)| (name, value)));
-        for (name, _) in std::env::vars_os() {
-            if is_forge_environment(&name) {
-                command.env_remove(name);
-            }
-        }
-        for (name, _) in &self.extra_env {
-            if is_forge_environment(OsStr::new(name)) {
-                command.env_remove(name);
-            }
-        }
+        apply_review_env(&mut command, &self.extra_env);
         capture(command)
     }
-}
-
-fn invalid_request(request: &ReviewInvokeRequest) -> Option<String> {
-    if request.command_id.is_empty() || request.command_id != request.run_id {
-        return Some("review command and run IDs must be equal and nonempty".into());
-    }
-    if request.task_id.trim().is_empty()
-        || request.repository.trim().is_empty()
-        || request.pr_number == 0
-    {
-        return Some("review identity is incomplete".into());
-    }
-    if !valid_full_sha(&request.base_sha) || !valid_full_sha(&request.expected_sha) {
-        return Some("review base and expected SHAs must be full SHAs".into());
-    }
-    if !request.schema_path.is_file() {
-        return Some("review result schema is missing".into());
-    }
-    None
-}
-
-fn stale(request: &ReviewInvokeRequest, observed: String) -> ReviewInvokeOutcome {
-    ReviewInvokeOutcome::Stale {
-        expected: request.expected_sha.clone(),
-        observed,
-    }
-}
-
-fn classify_output(request: &ReviewInvokeRequest, output: CapturedOutput) -> ReviewInvokeOutcome {
-    if output.overflow {
-        return ReviewInvokeOutcome::Failed {
-            reason: format!("review output exceeded {MAX_RAW_OUTPUT_BYTES} bytes"),
-        };
-    }
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let failure = classify_codex_failure(&stderr);
-        return match failure {
-            WorkerFailure::Exhausted | WorkerFailure::RateLimited => {
-                ReviewInvokeOutcome::Unavailable { failure }
-            }
-            _ => ReviewInvokeOutcome::Failed {
-                reason: format!("Codex review failed: {}", failure_name(failure)),
-            },
-        };
-    }
-    let stdout = match std::str::from_utf8(&output.stdout) {
-        Ok(stdout) => stdout,
-        Err(_) => {
-            return ReviewInvokeOutcome::Failed {
-                reason: "Codex review returned non-UTF-8 output".into(),
-            };
-        }
-    };
-    match crate::pr_review::parse_codex_success(stdout, &request.expected_sha) {
-        Ok(result) => finished(result),
-        Err(ReviewResultError::Malformed) => ReviewInvokeOutcome::Failed {
-            reason: "Codex review returned malformed result JSON".into(),
-        },
-        Err(ReviewResultError::StaleSha) => stale(request, reviewed_sha(stdout)),
-    }
-}
-
-fn finished(result: ReviewResult) -> ReviewInvokeOutcome {
-    match serialize_review_result(&result) {
-        Ok(bytes) => ReviewInvokeOutcome::Finished {
-            result,
-            artifact_digest: artifact_digest(&bytes),
-        },
-        Err(reason) => ReviewInvokeOutcome::Failed { reason },
-    }
-}
-
-fn reviewed_sha(output: &str) -> String {
-    serde_json::from_str::<serde_json::Value>(output)
-        .ok()
-        .and_then(|value| value["reviewed_sha"].as_str().map(str::to_owned))
-        .filter(|sha| valid_full_sha(sha))
-        .unwrap_or_else(|| "invalid-review-result-sha".into())
-}
-
-fn failure_name(failure: WorkerFailure) -> &'static str {
-    match failure {
-        WorkerFailure::Exhausted => "exhausted",
-        WorkerFailure::RateLimited => "rate_limited",
-        WorkerFailure::Auth => "auth",
-        WorkerFailure::Permission => "permission",
-        WorkerFailure::Timeout => "timeout",
-        WorkerFailure::ModelFailure => "model_failure",
-    }
-}
-
-pub fn serialize_review_result(result: &ReviewResult) -> Result<Vec<u8>, String> {
-    serde_json::to_vec(result)
-        .map_err(|error| format!("could not serialize review result: {error}"))
-}
-
-pub fn artifact_digest(bytes: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(bytes))
-}
-
-pub(crate) fn workspace_head(workspace: &Path) -> Result<String, String> {
-    let output = liberado_common::process::std_command("git")
-        .args(["rev-parse", "--verify", "HEAD"])
-        .current_dir(workspace)
-        .output()
-        .map_err(|error| format!("could not inspect pinned checkout HEAD: {error}"))?;
-    if !output.status.success() {
-        return Err("could not inspect pinned checkout HEAD".into());
-    }
-    String::from_utf8(output.stdout)
-        .map(|sha| sha.trim().to_string())
-        .map_err(|_| "pinned checkout HEAD was not UTF-8".into())
-}
-
-fn commit_exists(workspace: &Path, sha: &str) -> bool {
-    liberado_common::process::std_command("git")
-        .args(["cat-file", "-e", &format!("{sha}^{{commit}}")])
-        .current_dir(workspace)
-        .status()
-        .is_ok_and(|status| status.success())
-}
-
-fn workspace_is_clean(workspace: &Path) -> bool {
-    liberado_common::process::std_command("git")
-        .args(["status", "--porcelain=v1", "--untracked-files=all"])
-        .current_dir(workspace)
-        .output()
-        .is_ok_and(|output| output.status.success() && output.stdout.is_empty())
-}
-
-pub(crate) fn is_forge_environment(name: &OsStr) -> bool {
-    let name = name.to_string_lossy().to_ascii_uppercase();
-    name.starts_with("GITHUB_")
-        || name.starts_with("GH_")
-        || name.starts_with("LIBERADO_GITHUB_")
-        || matches!(
-            name.as_str(),
-            "GIT_ASKPASS"
-                | "GIT_SSH"
-                | "GIT_SSH_COMMAND"
-                | "SSH_ASKPASS"
-                | "SSH_AUTH_SOCK"
-                | "SSH_AGENT_PID"
-        )
-        || forge_secret_name(&name)
-}
-
-fn forge_secret_name(name: &str) -> bool {
-    ["GITLAB", "GLAB", "BITBUCKET", "GITEA", "FORGEJO"]
-        .iter()
-        .any(|forge| name.contains(forge))
-        && ["TOKEN", "SECRET", "PASSWORD", "PRIVATE_KEY", "AUTH"]
-            .iter()
-            .any(|secret| name.contains(secret))
-}
-
-struct CapturedOutput {
-    status: ExitStatus,
-    stdout: Vec<u8>,
-    stderr: Vec<u8>,
-    overflow: bool,
-}
-
-fn capture(mut command: std::process::Command) -> Result<CapturedOutput, String> {
-    let mut child = command
-        .spawn()
-        .map_err(|error| format!("could not start Codex review: {error}"))?;
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| "Codex stdout was not captured".to_string())?;
-    let stderr = child
-        .stderr
-        .take()
-        .ok_or_else(|| "Codex stderr was not captured".to_string())?;
-    let (stdout, stderr) = std::thread::scope(|scope| {
-        let stdout = scope.spawn(move || read_capped(stdout));
-        let stderr = scope.spawn(move || read_capped(stderr));
-        (stdout.join(), stderr.join())
-    });
-    let status = child
-        .wait()
-        .map_err(|error| format!("could not wait for Codex review: {error}"))?;
-    let (stdout, stdout_overflow) = stdout
-        .map_err(|_| "Codex stdout reader failed".to_string())?
-        .map_err(|error| format!("could not read Codex stdout: {error}"))?;
-    let (stderr, stderr_overflow) = stderr
-        .map_err(|_| "Codex stderr reader failed".to_string())?
-        .map_err(|error| format!("could not read Codex stderr: {error}"))?;
-    let combined_overflow = stdout.len().saturating_add(stderr.len()) > MAX_RAW_OUTPUT_BYTES;
-    Ok(CapturedOutput {
-        status,
-        stdout,
-        stderr,
-        overflow: stdout_overflow || stderr_overflow || combined_overflow,
-    })
-}
-
-fn read_capped(mut reader: impl Read) -> std::io::Result<(Vec<u8>, bool)> {
-    let mut kept = Vec::new();
-    let mut overflow = false;
-    let mut chunk = [0_u8; 8192];
-    loop {
-        let read = reader.read(&mut chunk)?;
-        if read == 0 {
-            break;
-        }
-        let remaining = MAX_RAW_OUTPUT_BYTES.saturating_sub(kept.len());
-        kept.extend_from_slice(&chunk[..read.min(remaining)]);
-        overflow |= read > remaining;
-    }
-    Ok((kept, overflow))
 }
 
 #[cfg(test)]

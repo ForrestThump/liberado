@@ -9,6 +9,8 @@ use super::{ControlPlaneError, OpenCodeWorker, OpenCodeWorkerConfig, WorkerPort}
 
 /// Stable id for Liberado's first-party coding backend in worker-selection config.
 pub const NATIVE_WORKER_ID: &str = crate::LIBERADO_LOOP_BACKEND;
+/// Forrest-named OpenCode review pin (2026-09-10). This is a paid OpenRouter model.
+pub const OPENCODE_NAMED_REVIEW_MODEL: &str = "openrouter/deepseek/deepseek-v4-flash";
 
 /// Worker wiring from `[tuning.coder.control_plane]`.
 ///
@@ -90,6 +92,13 @@ pub enum ReviewWorkerConfig {
         executable: String,
         enabled: bool,
     },
+    OpenCode {
+        executable: String,
+        model: String,
+        permission_mode: String,
+        pricing_policy: String,
+        enabled: bool,
+    },
     OpenaiCompatible {
         base_url: String,
         model: String,
@@ -105,6 +114,7 @@ impl ReviewWorkerConfig {
             | Self::Codex { enabled, .. }
             | Self::Antigravity { enabled, .. }
             | Self::CursorLocal { enabled, .. }
+            | Self::OpenCode { enabled, .. }
             | Self::OpenaiCompatible { enabled, .. } => *enabled,
         }
     }
@@ -115,6 +125,25 @@ impl ReviewWorkerConfig {
             | Self::Codex { executable, .. }
             | Self::Antigravity { executable, .. }
             | Self::CursorLocal { executable, .. } => Some(executable),
+            Self::OpenCode {
+                executable,
+                model,
+                permission_mode,
+                pricing_policy,
+                enabled,
+                ..
+            } => {
+                if executable.trim().is_empty()
+                    || model.trim().is_empty()
+                    || permission_mode != "deny_writes"
+                    || !valid_opencode_pricing(*enabled, pricing_policy, model)
+                {
+                    return Err(ControlPlaneError::InvalidConfig(format!(
+                        "review worker '{name}' must set executable, model, deny_writes, and a named or zero_only price policy"
+                    )));
+                }
+                Some(executable)
+            }
             Self::OpenaiCompatible {
                 base_url,
                 model,
@@ -138,6 +167,14 @@ impl ReviewWorkerConfig {
             )));
         }
         Ok(())
+    }
+}
+
+fn valid_opencode_pricing(enabled: bool, pricing_policy: &str, model: &str) -> bool {
+    match pricing_policy {
+        "zero_only" => true,
+        "named" => !enabled || model == OPENCODE_NAMED_REVIEW_MODEL,
+        _ => false,
     }
 }
 
@@ -230,6 +267,101 @@ mod review_worker_tests {
                 .collect::<Vec<_>>(),
             ["codex"]
         );
+    }
+
+    #[test]
+    fn named_opencode_review_requires_the_locked_flash_model() {
+        let mut config = ControlPlaneConfig::default();
+        config.review_workers.insert(
+            "open_code".into(),
+            ReviewWorkerConfig::OpenCode {
+                executable: "opencode".into(),
+                model: "openrouter/other".into(),
+                permission_mode: "deny_writes".into(),
+                pricing_policy: "named".into(),
+                enabled: true,
+            },
+        );
+        assert!(config.validate().is_err());
+        config.review_workers.insert(
+            "open_code".into(),
+            ReviewWorkerConfig::OpenCode {
+                executable: "opencode".into(),
+                model: OPENCODE_NAMED_REVIEW_MODEL.into(),
+                permission_mode: "deny_writes".into(),
+                pricing_policy: "named".into(),
+                enabled: true,
+            },
+        );
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn opencode_review_rejects_empty_fields_writes_and_unknown_price() {
+        let mut config = ControlPlaneConfig::default();
+        for worker in [
+            ReviewWorkerConfig::OpenCode {
+                executable: String::new(),
+                model: OPENCODE_NAMED_REVIEW_MODEL.into(),
+                permission_mode: "deny_writes".into(),
+                pricing_policy: "named".into(),
+                enabled: true,
+            },
+            ReviewWorkerConfig::OpenCode {
+                executable: "opencode".into(),
+                model: String::new(),
+                permission_mode: "deny_writes".into(),
+                pricing_policy: "named".into(),
+                enabled: true,
+            },
+            ReviewWorkerConfig::OpenCode {
+                executable: "opencode".into(),
+                model: OPENCODE_NAMED_REVIEW_MODEL.into(),
+                permission_mode: "auto".into(),
+                pricing_policy: "named".into(),
+                enabled: true,
+            },
+            ReviewWorkerConfig::OpenCode {
+                executable: "opencode".into(),
+                model: OPENCODE_NAMED_REVIEW_MODEL.into(),
+                permission_mode: "deny_writes".into(),
+                pricing_policy: "paid".into(),
+                enabled: true,
+            },
+        ] {
+            config.review_workers.insert("open_code".into(), worker);
+            assert!(config.validate().is_err());
+        }
+        config.review_workers.insert(
+            "open_code".into(),
+            ReviewWorkerConfig::OpenCode {
+                executable: "opencode".into(),
+                model: "any-free-model".into(),
+                permission_mode: "deny_writes".into(),
+                pricing_policy: "zero_only".into(),
+                enabled: true,
+            },
+        );
+        assert!(config.validate().is_ok());
+        config.review_workers.insert(
+            "open_code".into(),
+            ReviewWorkerConfig::OpenCode {
+                executable: "opencode".into(),
+                model: "openrouter/other".into(),
+                permission_mode: "deny_writes".into(),
+                pricing_policy: "named".into(),
+                enabled: false,
+            },
+        );
+        assert!(config.validate().is_ok());
+        config.review_workers.insert(
+            "codex".into(),
+            ReviewWorkerConfig::Codex {
+                executable: "   ".into(),
+                enabled: true,
+            },
+        );
+        assert!(config.validate().is_err());
     }
 
     #[test]
