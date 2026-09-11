@@ -31,6 +31,7 @@ ongoing findings, and current evidence. Implemented and superseded plans are arc
 | [context-compaction-viewport-rearchitecture.md](context-compaction-viewport-rearchitecture.md) | plan | chat | implementation |
 | [cross-harness-baseline.md](cross-harness-baseline.md) | plan | coding-harness | implementation |
 | [daemon-pr-review-kickoff.md](daemon-pr-review-kickoff.md) | plan | coding-control-plane | advisory |
+| [daemon-pr-review-slice-4.md](daemon-pr-review-slice-4.md) | plan | coding-control-plane | advisory |
 | [harness-study-2026-08.md](harness-study-2026-08.md) | finding | coding-harness | advisory |
 | [heuristics-tuning-engine-plan.md](heuristics-tuning-engine-plan.md) | plan | tuning | implementation |
 | [latency-and-routing-observability-plan.md](latency-and-routing-observability-plan.md) | plan | observability | implementation |
