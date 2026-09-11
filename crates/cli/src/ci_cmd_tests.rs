@@ -209,6 +209,7 @@ fn ci_log_create_truncates_a_previous_run() {
     let text = std::fs::read_to_string(&second.path).unwrap();
     assert!(!text.contains("old run"), "{text}");
     assert!(text.contains(CI_LOG_FILE), "{text}");
+    assert!(text.contains("cargo jobs="), "{text}");
 }
 
 #[test]

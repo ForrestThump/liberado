@@ -7,6 +7,8 @@ use tempfile::TempDir;
 use super::*;
 #[cfg(unix)]
 use crate::pr_review::REVIEW_SCHEMA_VERSION;
+use crate::pr_review::WorkerFailure;
+use std::ffi::OsStr;
 
 #[cfg(unix)]
 struct RepoFixture {

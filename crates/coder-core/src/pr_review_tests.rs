@@ -1,6 +1,7 @@
 //! Split from `pr_review.rs` for module-health boundaries.
 
 use super::*;
+use crate::ReviewWorkerConfig;
 
 fn valid(sha: &str) -> String {
     serde_json::json!({"schema":REVIEW_SCHEMA_VERSION,"reviewed_sha":sha,"summary":"clean","findings":[]}).to_string()
@@ -485,6 +486,83 @@ fn github_payloads_and_disabled_grok_start_no_process() {
         let _ = std::process::Command::new(&argv[0]);
     }
     assert!(!started);
+}
+
+#[test]
+fn review_process_argv_covers_each_enabled_adapter_and_skips_http() {
+    let schema = "schema.json";
+    let grok = review_process_argv(
+        &ReviewWorkerConfig::GrokBuild {
+            executable: "grok".into(),
+            enabled: true,
+        },
+        schema,
+    )
+    .unwrap();
+    assert_eq!(grok[0], "grok");
+    assert!(grok.contains(&"--headless".into()));
+
+    let codex = review_process_argv(
+        &ReviewWorkerConfig::Codex {
+            executable: "codex".into(),
+            enabled: true,
+        },
+        schema,
+    )
+    .unwrap();
+    assert_eq!(codex[0], "codex");
+    assert!(codex.contains(&"--sandbox".into()));
+
+    let antigravity = review_process_argv(
+        &ReviewWorkerConfig::Antigravity {
+            executable: "agy".into(),
+            enabled: true,
+            print_timeout: "30s".into(),
+        },
+        schema,
+    )
+    .unwrap();
+    assert_eq!(antigravity[0], "agy");
+    assert!(antigravity.contains(&"stream-json".into()));
+
+    let cursor = review_process_argv(
+        &ReviewWorkerConfig::CursorLocal {
+            executable: "cursor".into(),
+            enabled: true,
+        },
+        schema,
+    )
+    .unwrap();
+    assert_eq!(cursor[0], "cursor");
+    assert!(cursor.contains(&"--mode".into()));
+
+    let open_code = review_process_argv(
+        &ReviewWorkerConfig::OpenCode {
+            executable: "opencode".into(),
+            model: OPENCODE_NAMED_REVIEW_MODEL.into(),
+            permission_mode: "deny_writes".into(),
+            pricing_policy: "named".into(),
+            enabled: true,
+        },
+        schema,
+    )
+    .unwrap();
+    assert_eq!(open_code[0], "opencode");
+    assert!(open_code.contains(&"run".into()));
+    assert!(!open_code.iter().any(|arg| arg == "--auto"));
+
+    assert_eq!(
+        review_process_argv(
+            &ReviewWorkerConfig::OpenaiCompatible {
+                base_url: "http://127.0.0.1:9/v1".into(),
+                model: "auto".into(),
+                pricing_policy: "zero_only".into(),
+                enabled: true,
+            },
+            schema,
+        ),
+        None
+    );
 }
 
 #[test]

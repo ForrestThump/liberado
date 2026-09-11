@@ -44,14 +44,27 @@ pub(crate) fn maybe_dispatch(req: DispatchRequest<'_>) -> Result<(), String> {
     let Some(plan) = dispatch_plan(&req) else {
         return Ok(());
     };
-    fetch_pr_commits(
+    let url = github_repository_url(req.repository)?;
+    execute_planned_review(req, plan, &url)
+}
+
+fn execute_planned_review(
+    req: DispatchRequest<'_>,
+    plan: DispatchPlan<'_>,
+    url: &str,
+) -> Result<(), String> {
+    let authorization = format!(
+        "Authorization: Basic {}",
+        STANDARD.encode(format!("x-access-token:{}", req.token))
+    );
+    fetch_pr_commits_from(
         req.coding_root,
-        req.repository,
+        url,
         req.pr_number,
         req.base_branch,
         req.base_sha,
         req.head_sha,
-        req.token,
+        Some(&authorization),
     )?;
     let workspace = pin_checkout(req.coding_root, req.head_sha)?;
     let schema_path = write_schema_outside(&workspace)?;
@@ -119,31 +132,6 @@ fn dispatch_plan<'a>(req: &DispatchRequest<'a>) -> Option<DispatchPlan<'a>> {
         command_id,
         run_id,
     })
-}
-
-fn fetch_pr_commits(
-    repo_root: &Path,
-    repository: &str,
-    pr_number: u64,
-    base_branch: &str,
-    base_sha: &str,
-    head_sha: &str,
-    token: &str,
-) -> Result<(), String> {
-    let url = github_repository_url(repository)?;
-    let authorization = format!(
-        "Authorization: Basic {}",
-        STANDARD.encode(format!("x-access-token:{token}"))
-    );
-    fetch_pr_commits_from(
-        repo_root,
-        &url,
-        pr_number,
-        base_branch,
-        base_sha,
-        head_sha,
-        Some(&authorization),
-    )
 }
 
 fn fetch_pr_commits_from(

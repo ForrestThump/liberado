@@ -297,6 +297,74 @@ mod review_worker_tests {
     }
 
     #[test]
+    fn opencode_review_rejects_empty_fields_writes_and_unknown_price() {
+        let mut config = ControlPlaneConfig::default();
+        for worker in [
+            ReviewWorkerConfig::OpenCode {
+                executable: String::new(),
+                model: OPENCODE_NAMED_REVIEW_MODEL.into(),
+                permission_mode: "deny_writes".into(),
+                pricing_policy: "named".into(),
+                enabled: true,
+            },
+            ReviewWorkerConfig::OpenCode {
+                executable: "opencode".into(),
+                model: String::new(),
+                permission_mode: "deny_writes".into(),
+                pricing_policy: "named".into(),
+                enabled: true,
+            },
+            ReviewWorkerConfig::OpenCode {
+                executable: "opencode".into(),
+                model: OPENCODE_NAMED_REVIEW_MODEL.into(),
+                permission_mode: "auto".into(),
+                pricing_policy: "named".into(),
+                enabled: true,
+            },
+            ReviewWorkerConfig::OpenCode {
+                executable: "opencode".into(),
+                model: OPENCODE_NAMED_REVIEW_MODEL.into(),
+                permission_mode: "deny_writes".into(),
+                pricing_policy: "paid".into(),
+                enabled: true,
+            },
+        ] {
+            config.review_workers.insert("open_code".into(), worker);
+            assert!(config.validate().is_err());
+        }
+        config.review_workers.insert(
+            "open_code".into(),
+            ReviewWorkerConfig::OpenCode {
+                executable: "opencode".into(),
+                model: "any-free-model".into(),
+                permission_mode: "deny_writes".into(),
+                pricing_policy: "zero_only".into(),
+                enabled: true,
+            },
+        );
+        assert!(config.validate().is_ok());
+        config.review_workers.insert(
+            "open_code".into(),
+            ReviewWorkerConfig::OpenCode {
+                executable: "opencode".into(),
+                model: "openrouter/other".into(),
+                permission_mode: "deny_writes".into(),
+                pricing_policy: "named".into(),
+                enabled: false,
+            },
+        );
+        assert!(config.validate().is_ok());
+        config.review_workers.insert(
+            "codex".into(),
+            ReviewWorkerConfig::Codex {
+                executable: "   ".into(),
+                enabled: true,
+            },
+        );
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
     fn free_router_must_be_proved_zero_only() {
         let mut config = ControlPlaneConfig::default();
         config.review_workers.insert(

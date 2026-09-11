@@ -349,6 +349,74 @@ fn github_fetch_url_accepts_only_an_owner_and_repository_name() {
 }
 
 #[test]
+fn review_port_accepts_only_codex_and_opencode() {
+    use liberado_coder_core::OPENCODE_NAMED_REVIEW_MODEL;
+    assert!(
+        review_port(&ReviewWorkerConfig::Codex {
+            executable: "/usr/bin/codex".into(),
+            enabled: true,
+        })
+        .is_ok()
+    );
+    assert!(
+        review_port(&ReviewWorkerConfig::OpenCode {
+            executable: "/usr/bin/opencode".into(),
+            model: OPENCODE_NAMED_REVIEW_MODEL.into(),
+            permission_mode: "deny_writes".into(),
+            pricing_policy: "named".into(),
+            enabled: true,
+        })
+        .is_ok()
+    );
+    assert!(matches!(
+        review_port(&ReviewWorkerConfig::GrokBuild {
+            executable: "/usr/bin/grok".into(),
+            enabled: true,
+        }),
+        Err(error) if error.contains("adapter")
+    ));
+}
+
+#[test]
+fn planned_review_from_a_local_remote_issues_the_command() {
+    let (remote, local, base, head) = remote_only_pr();
+    let mut book = ledger("pr-owner-repo-7");
+    let mut workers = BTreeMap::new();
+    workers.insert(
+        "codex".into(),
+        ReviewWorkerConfig::Codex {
+            executable: "/bin/false".into(),
+            enabled: true,
+        },
+    );
+    let intents = vec![ObserverIntent::Eligible { sha: head.clone() }];
+    let order = ["codex".into()];
+    let request = DispatchRequest {
+        ledger: &mut book,
+        task_id: "pr-owner-repo-7",
+        repository: "owner/repo",
+        pr_number: 7,
+        head_sha: &head,
+        base_sha: &base,
+        base_branch: "main",
+        coding_root: local.path(),
+        token: "unused",
+        review_workers: &workers,
+        harness_order: &order,
+        intents: &intents,
+        shadow: false,
+    };
+    let plan = dispatch_plan(&request).expect("eligible plan");
+    execute_planned_review(request, plan, &remote.path().to_string_lossy())
+        .expect("local fetch and pin");
+    assert!(
+        book.events()
+            .iter()
+            .any(|event| matches!(event.payload, TaskEventKind::ReviewCommandIssued { .. }))
+    );
+}
+
+#[test]
 fn fetch_authorization_is_not_a_command_argument() {
     let secret = "Authorization: Basic private-value";
     let mut command = std_command("git");

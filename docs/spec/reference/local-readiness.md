@@ -5,7 +5,7 @@ authority: normative
 domain: ci
 canonical_for: local-readiness
 open_items: false
-last_verified: 2026-09-02
+last_verified: 2026-09-10
 ---
 
 # Local readiness
@@ -110,3 +110,15 @@ floor on a cold cache.
 Coverage, mutation, and comparison jobs stay on isolated targets. Ordinary coding worktrees
 may share a managed cache when `[coder.workspace]` names one. See
 [`cargo-targets.md`](cargo-targets.md).
+
+## Memory on a 16G host
+
+Workspace Clippy (`cargo clippy --workspace --all-targets`) and `cargo llvm-cov` start several
+`rustc` / `clippy-driver` processes. Each often needs several GiB. That is the usual pin on a
+16G N150, not the later test run. `just ci` is `cargo run … -- ci`, so those children inherit a
+jobserver sized to the CPU count unless Liberado drops it.
+
+`liberado ci` removes the inherited jobserver and sets `CARGO_BUILD_JOBS` from free RAM: it
+keeps 4 GiB for the OS, desktop, daemon, and Cargo, and counts one rustc job per 4 GiB after
+that. A host with about 6 GiB free therefore gets one job. Set `LIBERADO_CI_JOBS` to force a
+count. The console prints `cargo jobs=N (…)` at the start of the run.

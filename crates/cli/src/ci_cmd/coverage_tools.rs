@@ -17,6 +17,7 @@ pub(super) fn spawn_to_log(
     let stderr = std::fs::OpenOptions::new().append(true).open(&log.path)?;
     let mut command = std_command(program);
     configure(&mut command, &log.root, args)?;
+    super::job_budget::apply_compile_job_limit(&mut command, program, args);
     command
         .args(args)
         .current_dir(&log.root)

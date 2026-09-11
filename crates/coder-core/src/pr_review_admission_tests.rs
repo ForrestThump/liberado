@@ -1,8 +1,10 @@
 use super::*;
 use crate::pr_review::{REVIEW_SCHEMA_VERSION, ReviewResult, WorkerFailure};
-use crate::pr_review_port::{ReviewInvokeOutcome, artifact_digest, serialize_review_result};
+use crate::pr_review_port::{
+    ReviewInvokeOutcome, ReviewInvokeRequest, ReviewPort, artifact_digest, serialize_review_result,
+};
 use crate::{TaskEvent, TaskEventKind, TaskLedger};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 fn created(task_id: &str) -> TaskEvent {
     TaskEvent::new(
@@ -17,6 +19,36 @@ fn created(task_id: &str) -> TaskEvent {
             repo: Some("owner/repo".into()),
         },
     )
+}
+
+struct StubPort(ReviewInvokeOutcome);
+
+impl ReviewPort for StubPort {
+    fn invoke(&self, _: &ReviewInvokeRequest) -> ReviewInvokeOutcome {
+        self.0.clone()
+    }
+}
+
+struct PanicPort;
+
+impl ReviewPort for PanicPort {
+    fn invoke(&self, _: &ReviewInvokeRequest) -> ReviewInvokeOutcome {
+        panic!("issue_review must not invoke when admission refuses the run");
+    }
+}
+
+fn request(command_id: &str, run_id: &str, sha: &str) -> ReviewInvokeRequest {
+    ReviewInvokeRequest {
+        task_id: "pr-owner-repo-7".into(),
+        command_id: command_id.into(),
+        run_id: run_id.into(),
+        repository: "owner/repo".into(),
+        pr_number: 7,
+        base_sha: "b".repeat(40),
+        expected_sha: sha.into(),
+        workspace: PathBuf::from("/tmp/review-ws"),
+        schema_path: PathBuf::from("/tmp/schema.json"),
+    }
 }
 
 fn clean_result(sha: &str) -> ReviewResult {
@@ -193,5 +225,109 @@ fn failed_review_does_not_admit_a_fallback_run() {
             "open_code",
         )
         .unwrap()
+    );
+}
+
+#[test]
+fn issue_review_records_the_first_command_and_its_result() {
+    let task_id = "pr-owner-repo-7";
+    let command_id = "review-first";
+    let sha = "a".repeat(40);
+    let dir = tempfile::tempdir().unwrap();
+    let mut ledger = TaskLedger::new(created(task_id)).unwrap();
+    let result = clean_result(&sha);
+    let outcome = issue_review(
+        &mut ledger,
+        &StubPort(ReviewInvokeOutcome::Finished {
+            result: result.clone(),
+            artifact_digest: artifact_digest(b"unused"),
+        }),
+        "codex",
+        &request(command_id, command_id, &sha),
+        dir.path(),
+    )
+    .unwrap()
+    .expect("first command is admitted");
+    assert!(matches!(outcome, ReviewInvokeOutcome::Finished { .. }));
+    assert!(ledger.events().iter().any(|event| matches!(
+        &event.payload,
+        TaskEventKind::ReviewCommandIssued { command_id: id, .. } if id == command_id
+    )));
+    assert!(ledger.events().iter().any(|event| matches!(
+        &event.payload,
+        TaskEventKind::ReviewRunFinished { run_id, .. } if run_id == command_id
+    )));
+}
+
+#[test]
+fn issue_review_admits_a_fallback_run_after_exhaustion() {
+    let task_id = "pr-owner-repo-7";
+    let command_id = "review-fallback";
+    let run_id = format!("{command_id}:open_code");
+    let sha = "a".repeat(40);
+    let dir = tempfile::tempdir().unwrap();
+    let mut ledger = TaskLedger::new(created(task_id)).unwrap();
+    assert!(admit_review_command(&mut ledger, task_id, command_id, &sha).unwrap());
+    record_review_outcome(
+        &mut ledger,
+        task_id,
+        "codex",
+        command_id,
+        &sha,
+        Path::new("/unused"),
+        ReviewInvokeOutcome::Unavailable {
+            failure: WorkerFailure::Exhausted,
+        },
+    )
+    .unwrap();
+    let outcome = issue_review(
+        &mut ledger,
+        &StubPort(ReviewInvokeOutcome::Finished {
+            result: clean_result(&sha),
+            artifact_digest: artifact_digest(b"unused"),
+        }),
+        "open_code",
+        &request(command_id, &run_id, &sha),
+        dir.path(),
+    )
+    .unwrap()
+    .expect("fallback run is admitted");
+    assert!(matches!(outcome, ReviewInvokeOutcome::Finished { .. }));
+    assert!(ledger.events().iter().any(|event| matches!(
+        &event.payload,
+        TaskEventKind::ReviewRunStarted { run_id: id, worker_id, .. }
+            if id == &run_id && worker_id == "open_code"
+    )));
+}
+
+#[test]
+fn issue_review_is_a_no_op_when_the_command_already_finished() {
+    let task_id = "pr-owner-repo-7";
+    let command_id = "review-done";
+    let sha = "a".repeat(40);
+    let mut ledger = TaskLedger::new(created(task_id)).unwrap();
+    assert!(admit_review_command(&mut ledger, task_id, command_id, &sha).unwrap());
+    record_review_outcome(
+        &mut ledger,
+        task_id,
+        "codex",
+        command_id,
+        &sha,
+        Path::new("/unused"),
+        ReviewInvokeOutcome::Failed {
+            reason: "review failed: model_failure".into(),
+        },
+    )
+    .unwrap();
+    assert!(
+        issue_review(
+            &mut ledger,
+            &PanicPort,
+            "open_code",
+            &request(command_id, &format!("{command_id}:open_code"), &sha),
+            Path::new("/unused"),
+        )
+        .unwrap()
+        .is_none()
     );
 }
