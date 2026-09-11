@@ -115,6 +115,11 @@ pub enum TaskEventKind {
         command_id: String,
         head_sha: String,
     },
+    ReviewRunStarted {
+        command_id: String,
+        run_id: String,
+        worker_id: String,
+    },
     ReviewWorkerUnavailable {
         run_id: String,
         worker_id: String,

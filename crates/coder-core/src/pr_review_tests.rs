@@ -1,6 +1,7 @@
 //! Split from `pr_review.rs` for module-health boundaries.
 
 use super::*;
+use crate::ReviewWorkerConfig;
 
 fn valid(sha: &str) -> String {
     serde_json::json!({"schema":REVIEW_SCHEMA_VERSION,"reviewed_sha":sha,"summary":"clean","findings":[]}).to_string()
@@ -25,6 +26,32 @@ fn success_requires_exact_full_sha_and_valid_schema() {
 }
 
 #[test]
+fn output_schema_types_constant_and_enum_properties() {
+    let schema: serde_json::Value =
+        serde_json::from_str(crate::pr_review_port::REVIEW_RESULT_SCHEMA).expect("valid schema");
+    assert_eq!(
+        schema.pointer("/properties/schema/type"),
+        Some(&"string".into())
+    );
+    assert_eq!(
+        schema.pointer("/properties/findings/items/properties/severity/type"),
+        Some(&"string".into())
+    );
+}
+
+#[test]
+fn extracts_opencode_json_event_text() {
+    let sha = "a".repeat(40);
+    let result = valid(&sha);
+    let output = format!(
+        "{}\n",
+        serde_json::json!({"type":"text","part":{"text": result}})
+    );
+    let parsed = parse_opencode_success(&output, &sha).expect("opencode event");
+    assert_eq!(parsed.summary, "clean");
+}
+
+#[test]
 fn extracts_codex_jsonl_result() {
     let output = include_str!("../tests/fixtures/codex_review_jsonl_success.jsonl");
     let result = parse_codex_success(output, &"a".repeat(40)).unwrap();
@@ -35,6 +62,18 @@ fn extracts_codex_jsonl_result() {
 fn codex_failure_fixtures_are_distinct_and_402_is_not_exhaustion() {
     assert_eq!(
         classify_codex_failure("ERROR: You've hit your usage limit. Try again at 1:00 PM"),
+        WorkerFailure::Exhausted
+    );
+    assert_eq!(
+        classify_codex_failure("■ You've hit your usage limit. Try again at 9:45 PM."),
+        WorkerFailure::Exhausted
+    );
+    assert_eq!(
+        classify_codex_failure("You've reached your weekly limit"),
+        WorkerFailure::Exhausted
+    );
+    assert_eq!(
+        classify_codex_failure("request rejected: usage limit reached"),
         WorkerFailure::Exhausted
     );
     assert_eq!(
@@ -82,6 +121,20 @@ fn codex_command_is_read_only_and_sha_pinned() {
             "head"
         ]
     );
+}
+
+#[test]
+fn opencode_command_is_json_run_without_auto_approve() {
+    let args = opencode_review_args(
+        OPENCODE_NAMED_REVIEW_MODEL,
+        "schema.json",
+        &review_prompt("base", "head"),
+    );
+    assert_eq!(args[0], "run");
+    assert!(args.contains(&"--format".into()));
+    assert!(args.contains(&"json".into()));
+    assert!(args.contains(&OPENCODE_NAMED_REVIEW_MODEL.into()));
+    assert!(!args.iter().any(|arg| arg == "--auto"));
 }
 
 #[test]
@@ -433,6 +486,83 @@ fn github_payloads_and_disabled_grok_start_no_process() {
         let _ = std::process::Command::new(&argv[0]);
     }
     assert!(!started);
+}
+
+#[test]
+fn review_process_argv_covers_each_enabled_adapter_and_skips_http() {
+    let schema = "schema.json";
+    let grok = review_process_argv(
+        &ReviewWorkerConfig::GrokBuild {
+            executable: "grok".into(),
+            enabled: true,
+        },
+        schema,
+    )
+    .unwrap();
+    assert_eq!(grok[0], "grok");
+    assert!(grok.contains(&"--headless".into()));
+
+    let codex = review_process_argv(
+        &ReviewWorkerConfig::Codex {
+            executable: "codex".into(),
+            enabled: true,
+        },
+        schema,
+    )
+    .unwrap();
+    assert_eq!(codex[0], "codex");
+    assert!(codex.contains(&"--sandbox".into()));
+
+    let antigravity = review_process_argv(
+        &ReviewWorkerConfig::Antigravity {
+            executable: "agy".into(),
+            enabled: true,
+            print_timeout: "30s".into(),
+        },
+        schema,
+    )
+    .unwrap();
+    assert_eq!(antigravity[0], "agy");
+    assert!(antigravity.contains(&"stream-json".into()));
+
+    let cursor = review_process_argv(
+        &ReviewWorkerConfig::CursorLocal {
+            executable: "cursor".into(),
+            enabled: true,
+        },
+        schema,
+    )
+    .unwrap();
+    assert_eq!(cursor[0], "cursor");
+    assert!(cursor.contains(&"--mode".into()));
+
+    let open_code = review_process_argv(
+        &ReviewWorkerConfig::OpenCode {
+            executable: "opencode".into(),
+            model: OPENCODE_NAMED_REVIEW_MODEL.into(),
+            permission_mode: "deny_writes".into(),
+            pricing_policy: "named".into(),
+            enabled: true,
+        },
+        schema,
+    )
+    .unwrap();
+    assert_eq!(open_code[0], "opencode");
+    assert!(open_code.contains(&"run".into()));
+    assert!(!open_code.iter().any(|arg| arg == "--auto"));
+
+    assert_eq!(
+        review_process_argv(
+            &ReviewWorkerConfig::OpenaiCompatible {
+                base_url: "http://127.0.0.1:9/v1".into(),
+                model: "auto".into(),
+                pricing_policy: "zero_only".into(),
+                enabled: true,
+            },
+            schema,
+        ),
+        None
+    );
 }
 
 #[test]

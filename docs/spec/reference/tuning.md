@@ -413,9 +413,12 @@ observation (`controller` other than `liberado-shepherd`) records ledger facts a
 the controller lease. `liberado shepherd review --project <name> --pr <n> --sha <full-sha> --dry-run`
 uses the same SHA-exact eligibility as the daemon observer and writes nothing.
 
-OpenCode is reserved for Slice 4 as the explicit `open_code` harness after Codex in
-`harness_order`. Keep its worker `enabled = false`: this setting documents the locked order but is
-not wired in Slice 3. Do not map it to an OpenAI-compatible or free-router worker.
+OpenCode is the explicit `open_code` harness after Codex in `harness_order`. A typed Codex
+`exhausted` or `rate_limited` result may start one OpenCode attempt for the same review command.
+Forrest named the production pin `openrouter/deepseek/deepseek-v4-flash` with
+`pricing_policy = "named"`. Keep `permission_mode = "deny_writes"`. Do not map OpenCode to an
+OpenAI-compatible or free-router worker. A Codex failure, stale result, or malformed result does
+not start OpenCode.
 
 The shepherd compares GitHub check/job conclusions. Local commands and their normal successful
 exit code (`0`) remain under `[projects.preflight]`; do not duplicate CI commands in the shepherd.

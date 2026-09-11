@@ -18,7 +18,10 @@ pub mod opencode;
 mod record;
 pub mod supervisor;
 
-pub use config::{ControlPlaneConfig, NATIVE_WORKER_ID, ReviewWorkerConfig, WorkerAdapterConfig};
+pub use config::{
+    ControlPlaneConfig, NATIVE_WORKER_ID, OPENCODE_NAMED_REVIEW_MODEL, ReviewWorkerConfig,
+    WorkerAdapterConfig,
+};
 pub use continuation::ContinuationContextBuilder;
 pub use events::{TaskEvent, TaskEventKind};
 pub use ids::{

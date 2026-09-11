@@ -185,6 +185,19 @@ fn preflight_flags_missing_siblings_index_locks_and_disk_space() {
     let err = run(&spec, &policy).unwrap_err();
     assert!(err.to_string().contains("free bytes"), "{err}");
 
+    // A missing binary is cheaper and more specific. It must win even when the
+    // disk estimate would also fail (tmpfs hosts see this on `just ci`).
+    let missing = temp.path().join("missing-pi");
+    fs::create_dir(&missing).unwrap();
+    let mut missing_bin = spec;
+    missing_bin.harnesses[1].binary = Some(missing);
+    let err = run(&missing_bin.finalize().unwrap(), &policy).unwrap_err();
+    assert!(err.to_string().contains("does not exist"), "{err}");
+    assert!(
+        !err.to_string().contains("free bytes"),
+        "disk estimate must not mask a missing binary: {err}"
+    );
+
     unsafe { std::env::remove_var("LIBERADO_PREFLIGHT_E2E_KEY") };
 }
 

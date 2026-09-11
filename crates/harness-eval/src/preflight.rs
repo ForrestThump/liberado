@@ -160,6 +160,9 @@ pub fn run(
     require_program("git")?;
     require_program("cargo")?;
     reject_git_index_locks(&repository)?;
+    // Binaries before disk: a missing runner is cheaper and more specific than a
+    // 20 GiB reserve check against tmpfs `/tmp` (seen on 16G hosts during `just ci`).
+    check_harness_binaries(spec)?;
     let base_commit = git_capture(
         &repository,
         &["rev-parse", &format!("{}^{{commit}}", spec.base_revision)],
@@ -167,7 +170,6 @@ pub fn run(
     .trim()
     .to_string();
     let (free_bytes, estimated_required_bytes) = disk_reserve_check(&repository, spec, policy)?;
-    check_harness_binaries(spec)?;
     let (credential_environment, credential) = resolve_credential(spec, policy)?;
     Ok((
         PreflightReport {

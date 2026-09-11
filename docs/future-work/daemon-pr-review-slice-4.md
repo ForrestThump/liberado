@@ -9,9 +9,10 @@ open_items: true
 
 # Daemon PR review Slice 4 — locked multi-harness plan
 
-**Status**: active. Forrest locked the defaults in this plan on 2026-09-10. Start Slice 4a only
-after the Codex-only daemon review dogfood is healthy. Open implementation work still enters
-through [the backlog](backlog.md).
+**Status**: active. Forrest locked the defaults in this plan on 2026-09-10. OpenCode with the
+named DeepSeek V4 Flash pin later landed on main (PR #253). Remaining Slice 4 work is Grok Build
+proof and later candidates. Open implementation work still enters through
+[the backlog](backlog.md).
 
 This plan refines [the daemon PR review kickoff](daemon-pr-review-kickoff.md). It adds one ordered
 fallback route: Codex, then OpenCode, then Grok Build. Human merge remains the hard gate. Liberado
@@ -19,10 +20,11 @@ does not auto-merge.
 
 ## Locked boundary
 
-- Worker IDs match worker kinds: `codex`, `open_code`, and `grok_build`.
+- Live worker ids are `codex`, `open_code`, and `grok-build`. The Grok kind remains `grok_build`.
 - `harness_order` is an ordered list. Map iteration order never selects a worker.
 - Codex stays first. OpenCode is second. Grok Build is third and disabled.
-- OpenCode uses `pricing_policy = "zero_only"` until Forrest names a paid policy.
+- OpenCode uses the named pin `openrouter/deepseek/deepseek-v4-flash` with
+  `pricing_policy = "named"` (PR #253).
 - Antigravity, Cursor local, and free-router are later candidates. They are not part of the first
   multi-harness ship.
 - Shepherd owns observation, eligibility, admission, route selection, and GitHub side effects.
@@ -36,7 +38,7 @@ does not auto-merge.
 ```toml
 [shepherd.review]
 enabled = true
-harness_order = ["codex", "open_code", "grok_build"]
+harness_order = ["codex", "open_code", "grok-build"]
 
 [tuning.coder.control_plane.review_workers.codex]
 kind = "codex"
@@ -46,22 +48,21 @@ enabled = true
 [tuning.coder.control_plane.review_workers.open_code]
 kind = "open_code"
 executable = "/home/box/.local/bin/opencode"
-model = "PROVIDER/MODEL"
-pricing_policy = "zero_only"
+model = "openrouter/deepseek/deepseek-v4-flash"
+pricing_policy = "named"
 permission_mode = "deny_writes"
-enabled = false
+enabled = true
 
-[tuning.coder.control_plane.review_workers.grok_build]
+[tuning.coder.control_plane.review_workers.grok-build]
 kind = "grok_build"
 executable = "/home/box/.local/bin/grok"
-model = "MODEL"
 enabled = false
 ```
 
-Validation rejects an unknown worker ID, a duplicate route entry, a missing route entry, and a
-map key that differs from its `kind`. It also rejects enabled OpenCode without
-`pricing_policy = "zero_only"` while no named paid policy exists. Disabled workers start no
-process and do not receive an availability probe during a review.
+Validation rejects an unknown worker ID, a duplicate route entry, and a missing route entry.
+Enabled OpenCode must set `permission_mode = "deny_writes"` and either `zero_only` or `named` with
+the DeepSeek V4 Flash pin. Disabled workers start no process and do not receive an availability
+probe during a review.
 
 ## Routing and identity
 

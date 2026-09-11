@@ -24,6 +24,7 @@ mod pr_review_cycle;
 mod pr_review_parse;
 pub mod pr_review_port;
 pub mod pr_review_publish;
+mod pr_review_route;
 mod trace_view;
 mod tuning;
 mod verify;
@@ -31,11 +32,14 @@ mod verify;
 pub use control_plane::{
     CONTROLLER_GROK_BOT, CONTROLLER_LIBERADO_SHEPHERD, CiState, ContinuationContextBuilder,
     ControlPlaneConfig, ControlPlaneError, ControlPlaneSupervisor, DispatchTaskRequest,
-    NATIVE_WORKER_ID, OpenCodeWorker, OpenCodeWorkerConfig, ReadyEvidence, ReviewState,
-    ReviewWorkerConfig, RunHandle, SupervisedRun, TaskDisposition, TaskEvent, TaskEventKind,
-    TaskLedger, TaskRecord, TaskStatus, WorkerAdapterConfig, WorkerPort, WorkerRunRequest,
-    WorkerRunResult, WorkerStatus, durable_tasks_root, shepherd_task_id, tasks_root_from_worktree,
+    NATIVE_WORKER_ID, OPENCODE_NAMED_REVIEW_MODEL, OpenCodeWorker, OpenCodeWorkerConfig,
+    ReadyEvidence, ReviewState, ReviewWorkerConfig, RunHandle, SupervisedRun, TaskDisposition,
+    TaskEvent, TaskEventKind, TaskLedger, TaskRecord, TaskStatus, WorkerAdapterConfig, WorkerPort,
+    WorkerRunRequest, WorkerRunResult, WorkerStatus, durable_tasks_root, shepherd_task_id,
+    tasks_root_from_worktree,
 };
+pub use pr_review_admission::has_command_issue;
+pub use pr_review_route::{allows_fallback, next_review_worker, review_run_id};
 
 pub use trace_view::{
     CallView, Divergence, FailedCall, ForeignTraceFormat, MessagesExport, RunView, SideBySide,

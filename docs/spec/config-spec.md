@@ -98,9 +98,10 @@ Daemon-native review adds strict deployment checks:
 - Both `[shepherd.review]` and `[[shepherd.auth]]` deny unknown fields. Misspelled publication or
   identity controls therefore stop config loading.
 
-The Slice-4 order reserves `open_code` immediately after Codex. Its worker stays
-`enabled = false` until that adapter is wired and validated. Slice 3 does not implement OpenCode and
-does not treat it as an OpenAI-compatible or free-router worker.
+The Slice-4 order places `open_code` immediately after Codex. An enabled OpenCode review worker
+must set `permission_mode = "deny_writes"` and either `pricing_policy = "zero_only"` or
+`pricing_policy = "named"` with model `openrouter/deepseek/deepseek-v4-flash`. It is not an
+OpenAI-compatible or free-router worker.
 
 Surfaced two ways:
 - **On daemon startup** — refuses to start, prints actionable errors.

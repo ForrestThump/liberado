@@ -76,13 +76,14 @@
 # kind = "codex"
 # executable = "/path/to/codex"
 # enabled = true
-# # Slice 4: OpenCode is a distinct open_code harness after Codex; keep disabled until smoke + cost policy.
-# [coder.control_plane.review_workers.opencode]
+# # OpenCode is the fallback after a typed Codex usage or rate-limit result.
+# [coder.control_plane.review_workers.open_code]
 # kind = "open_code"
 # executable = "/path/to/opencode"
-# model = "PROVIDER/MODEL"
+# model = "openrouter/deepseek/deepseek-v4-flash"
 # permission_mode = "deny_writes"
-# enabled = false
+# pricing_policy = "named"
+# enabled = true
 # [coder.control_plane.review_workers.cursor-local]
 # kind = "cursor_local"
 # executable = "/path/to/agent"

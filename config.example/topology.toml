@@ -88,7 +88,7 @@ vault_path = "/path/to/vault"
 # reconcile_on_start = true
 # max_pages = 10
 # page_size = 100
-# harness_order = ["codex", "open_code", "free-router"]
+# harness_order = ["codex", "open_code"]
 # # review_event/blocker_action/on_synchronize are locked constants (COMMENT/draft/draft_if_armed);
 # # unknown keys are rejected.
 # [[shepherd.auth]]
