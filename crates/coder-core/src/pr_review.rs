@@ -6,7 +6,9 @@ use serde::{Deserialize, Serialize};
 
 pub use crate::pr_review_cycle::review_key;
 use crate::pr_review_cycle::tip_already_accepted;
-pub use crate::pr_review_parse::{parse_codex_success, parse_opencode_success};
+pub use crate::pr_review_parse::{
+    parse_codex_success, parse_opencode_success, parse_plain_success,
+};
 
 #[path = "pr_review_cmd.rs"]
 mod pr_review_cmd;
@@ -109,9 +111,7 @@ pub enum WorkerFailure {
 
 pub fn review_prompt(base_sha: &str, head_sha: &str) -> String {
     format!(
-        "Review the changes from base commit {base_sha} to HEAD {head_sha}. Return only the \
-         review result required by the supplied JSON schema. Set reviewed_sha to {head_sha}. \
-         Do not modify files."
+        "Review the changes from base commit {base_sha} to HEAD {head_sha}. Do not modify files."
     )
 }
 

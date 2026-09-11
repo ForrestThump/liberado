@@ -50,7 +50,7 @@ Accept all material Grok corrections:
   `gh pr checks`, or approximate branch-run lookup.
 - If an armed, in-flight, or reviewed tip changes, convert the matching PR state to draft and
   leave one short note. This permits a new GitHub `ready_for_review` transition.
-- Classify Codex's captured usage-limit text; keep Grok disabled until headless proof; give
+- Classify Codex's captured usage-limit text; Grok uses plan mode and `--single`; give
   `agy --print` about 30 minutes, not its five-minute default.
 - Use checklist C: immutable COMMENT evidence plus a separate checkbox issue comment. Never read
   checkbox state.
@@ -112,7 +112,7 @@ gate = "ready_and_green_tip"
 [tuning.coder.control_plane.review_workers.grok-build]
 kind = "grok_build"
 executable = "/home/box/.local/bin/grok"
-enabled = false
+enabled = true
 
 [tuning.coder.control_plane.review_workers.codex]
 kind = "codex"
@@ -139,8 +139,7 @@ enabled = true
 [tuning.coder.control_plane.review_workers.cursor-local]
 kind = "cursor_local"
 executable = "/home/box/.local/bin/agent"
-mode = "ask"
-enabled = false
+enabled = true
 
 [tuning.coder.control_plane.review_workers.free-router]
 kind = "openai_compatible"
@@ -213,8 +212,10 @@ Do not reuse `harness-eval::HarnessAdapter`. Add a review operation beside the r
 workspace, and schema. Its outcome is structured review, typed unavailable, failed, or cancelled.
 
 The result contains reviewed SHA, summary, and findings with stable IDs, severity, blocker flag,
-path, optional diff line, explanation, and optional check. Zero exit without valid schema fails.
-A SHA mismatch is stale. Store capped raw output as an artifact with digest.
+path, optional diff line, explanation, and optional check. Codex `--json` and OpenCode
+`--format json` streams are mapped into that result: schema JSON is kept when present, otherwise
+the last native assistant text is the summary and findings stay empty. A SHA mismatch is stale.
+Store capped raw output as an artifact with digest.
 
 The workspace is read-only and pinned. Strip `GITHUB_TOKEN`, `GH_TOKEN`, `GH_HOST`,
 `LIBERADO_GITHUB_TOKEN`, and forge credentials. Give the model a capped
@@ -238,17 +239,16 @@ Each fact carries its relevant command/run/worker/SHA/evidence IDs. Never map a 
 
 ### Harness rules
 
-- **Grok:** first declared, but disabled and never probed per review. Enable only after a bounded
-  unattended multi-turn, tool-capable, schema-valid run proves no pager/browser and captures a
-  stable exhaustion signal.
+- **Grok:** `grok --permission-mode plan --output-format json --single <prompt>`. Plan mode is
+  read-only. Do not pass `--always-approve`. Native stdout maps into the publish result.
 - **Codex:** use `codex exec review` with read-only sandbox, JSON, schema, base/commit, and
   workspace. The first exhaustion fixture is exact versioned text
   `ERROR: You've hit your usage limit` plus retry time. Do not use HTTP 402. A tiny probe does
   not prove full-review quota.
 - **Antigravity:** use print mode, stream JSON, schema, workspace, and about 30 minutes. Permission
   auto-denial is failure/auth, not quota. Never bypass permissions.
-- **Cursor:** support local ask/plan only. Cursor cloud is separate and out of order. Capture a
-  real plan-limit signal before enabling local fallback.
+- **Cursor:** local `agent --mode ask --print` only. Do not pass `--force` / `--yolo`. Cursor cloud
+  is separate and out of order. Native stdout maps into the publish result.
 - **Free-router:** HTTP is authoritative; 402 belongs here. Only proved-zero catalog entries are
   eligible. Quota-then-pay needs known free remainder. Never hide a paid/cheap pin in this route.
 
@@ -331,11 +331,9 @@ for writers; harnesses never receive GitHub credentials.
 
 ### Slice 4 — Enabled-worker fallback
 
-Add proven adapters in `harness_order`. Forrest lock (2026-09-08): OpenCode is an explicit
-`open_code` worker kind **after Codex** (not a free-router alias). Forrest named the paid pin
-`openrouter/deepseek/deepseek-v4-flash` with `pricing_policy = "named"` (2026-09-10). Also add
-Antigravity, Cursor-local, and free-router as enabled only with captured evidence. Grok stays
-declared but disabled until headless proof. Do not wait for Grok to ship Codex-first operation.
+Add proven adapters in `harness_order`. OpenCode, Cursor local, and Grok Build are print/headless
+review ports after Codex when those rows are enabled. Put the worker you prefer first. Antigravity
+and free-router stay declared until their adapters exist. Cursor cloud is absent.
 
 Acceptance: typed exhaustion advances once and normal failure stops; disabled adapters do not
 start; cooldowns survive restart; OpenCode denies write permissions and strips forge credentials;

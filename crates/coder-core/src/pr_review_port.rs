@@ -9,7 +9,8 @@ use std::process::Stdio;
 
 use crate::pr_review::{
     ReviewResult, WorkerFailure, classify_codex_failure, classify_opencode_failure,
-    codex_review_args, opencode_review_args, parse_opencode_success, review_prompt,
+    codex_review_args, cursor_review_args, grok_review_args, opencode_review_args,
+    parse_opencode_success, parse_plain_success, review_prompt,
 };
 
 #[path = "pr_review_invoke.rs"]
@@ -113,11 +114,10 @@ impl OpenCodeReviewPort {
     }
 
     fn run(&self, request: &ReviewInvokeRequest) -> Result<CapturedOutput, String> {
-        let schema = request.schema_path.to_string_lossy();
         let prompt = review_prompt(&request.base_sha, &request.expected_sha);
         let mut command = liberado_common::process::std_command(&self.executable);
         command
-            .args(opencode_review_args(&self.model, &schema, &prompt))
+            .args(opencode_review_args(&self.model, &prompt))
             .current_dir(&request.workspace)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
@@ -133,6 +133,61 @@ impl ReviewPort for OpenCodeReviewPort {
             || self.run(request),
             parse_opencode_success,
             classify_opencode_failure,
+        )
+    }
+}
+
+/// Headless print CLI (Grok `--single`, Cursor `agent --print`). Native stdout is the review.
+#[derive(Debug, Clone)]
+pub struct PromptReviewPort {
+    executable: PathBuf,
+    extra_env: Vec<(String, String)>,
+    args_for_prompt: fn(&str) -> Vec<String>,
+}
+
+impl PromptReviewPort {
+    pub fn grok(executable: impl Into<PathBuf>) -> Self {
+        Self {
+            executable: executable.into(),
+            extra_env: Vec::new(),
+            args_for_prompt: grok_review_args,
+        }
+    }
+
+    pub fn cursor(executable: impl Into<PathBuf>) -> Self {
+        Self {
+            executable: executable.into(),
+            extra_env: Vec::new(),
+            args_for_prompt: cursor_review_args,
+        }
+    }
+
+    #[cfg(all(test, unix))]
+    fn with_env(mut self, name: &str, value: &str) -> Self {
+        self.extra_env.push((name.into(), value.into()));
+        self
+    }
+
+    fn run(&self, request: &ReviewInvokeRequest) -> Result<CapturedOutput, String> {
+        let prompt = review_prompt(&request.base_sha, &request.expected_sha);
+        let mut command = liberado_common::process::std_command(&self.executable);
+        command
+            .args((self.args_for_prompt)(&prompt))
+            .current_dir(&request.workspace)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        apply_review_env(&mut command, &self.extra_env);
+        capture(command)
+    }
+}
+
+impl ReviewPort for PromptReviewPort {
+    fn invoke(&self, request: &ReviewInvokeRequest) -> ReviewInvokeOutcome {
+        invoke_process(
+            request,
+            || self.run(request),
+            parse_plain_success,
+            classify_codex_failure,
         )
     }
 }

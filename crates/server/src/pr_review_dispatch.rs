@@ -1,4 +1,4 @@
-//! Admit one review attempt for an eligible cycle. Codex can fall back to OpenCode.
+//! Admit one review attempt for an eligible cycle. Enabled adapters follow `harness_order`.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -11,7 +11,8 @@ use liberado_coder_core::pr_review::ObserverIntent;
 use liberado_coder_core::pr_review::valid_full_sha;
 use liberado_coder_core::pr_review_admission::{issue_review, review_command_id};
 use liberado_coder_core::pr_review_port::{
-    CodexReviewPort, OpenCodeReviewPort, REVIEW_RESULT_SCHEMA, ReviewInvokeRequest, ReviewPort,
+    CodexReviewPort, OpenCodeReviewPort, PromptReviewPort, REVIEW_RESULT_SCHEMA,
+    ReviewInvokeRequest, ReviewPort,
 };
 use liberado_coder_core::review_run_id;
 use liberado_coder_core::{ReviewWorkerConfig, TaskLedger};
@@ -99,6 +100,12 @@ fn review_port(worker: &ReviewWorkerConfig) -> Result<Box<dyn ReviewPort>, Strin
         ReviewWorkerConfig::OpenCode {
             executable, model, ..
         } => Ok(Box::new(OpenCodeReviewPort::new(executable, model))),
+        ReviewWorkerConfig::GrokBuild { executable, .. } => {
+            Ok(Box::new(PromptReviewPort::grok(executable)))
+        }
+        ReviewWorkerConfig::CursorLocal { executable, .. } => {
+            Ok(Box::new(PromptReviewPort::cursor(executable)))
+        }
         _ => Err("review worker is not an enabled review adapter".into()),
     }
 }

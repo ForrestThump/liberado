@@ -53,12 +53,14 @@ pub fn codex_review_args(base_sha: &str, head_sha: &str, schema_path: &str) -> V
     ]
 }
 
-pub fn grok_review_args(schema_path: &str) -> Vec<String> {
+pub fn grok_review_args(prompt: &str) -> Vec<String> {
     vec![
-        "review".into(),
-        "--headless".into(),
-        "--schema".into(),
-        schema_path.into(),
+        "--permission-mode".into(),
+        "plan".into(),
+        "--output-format".into(),
+        "json".into(),
+        "--single".into(),
+        prompt.into(),
     ]
 }
 
@@ -72,12 +74,25 @@ pub fn antigravity_review_args(schema_path: &str) -> Vec<String> {
     ]
 }
 
-pub fn cursor_review_args() -> Vec<String> {
-    vec!["--mode".into(), "ask".into(), "--print".into()]
+pub fn cursor_review_args(prompt: &str) -> Vec<String> {
+    vec![
+        "--mode".into(),
+        "ask".into(),
+        "--print".into(),
+        "--output-format".into(),
+        "text".into(),
+        "--trust".into(),
+        "--sandbox".into(),
+        "enabled".into(),
+        prompt.into(),
+    ]
 }
 
 /// Frozen OpenCode command. It does not pass `--auto`, so writes stay denied.
-pub fn opencode_review_args(model: &str, schema_path: &str, prompt: &str) -> Vec<String> {
+///
+/// OpenCode has no `--output-schema`. The prompt is a review request; the adapter maps native
+/// `--format json` text into Liberado's publish result.
+pub fn opencode_review_args(model: &str, prompt: &str) -> Vec<String> {
     vec![
         "run".into(),
         "--format".into(),
@@ -86,9 +101,7 @@ pub fn opencode_review_args(model: &str, schema_path: &str, prompt: &str) -> Vec
         model.into(),
         "--dir".into(),
         ".".into(),
-        format!(
-            "{prompt} The required result schema is in {schema_path}. Return only that JSON object."
-        ),
+        prompt.into(),
     ]
 }
 
@@ -99,7 +112,7 @@ pub fn review_process_argv(worker: &ReviewWorkerConfig, schema_path: &str) -> Op
     }
     Some(match worker {
         ReviewWorkerConfig::GrokBuild { executable, .. } => {
-            prepend_exe(executable, grok_review_args(schema_path))
+            prepend_exe(executable, grok_review_args(&review_prompt("base", "head")))
         }
         ReviewWorkerConfig::Codex { executable, .. } => {
             prepend_exe(executable, codex_review_args("base", "head", schema_path))
@@ -107,14 +120,15 @@ pub fn review_process_argv(worker: &ReviewWorkerConfig, schema_path: &str) -> Op
         ReviewWorkerConfig::Antigravity { executable, .. } => {
             prepend_exe(executable, antigravity_review_args(schema_path))
         }
-        ReviewWorkerConfig::CursorLocal { executable, .. } => {
-            prepend_exe(executable, cursor_review_args())
-        }
+        ReviewWorkerConfig::CursorLocal { executable, .. } => prepend_exe(
+            executable,
+            cursor_review_args(&review_prompt("base", "head")),
+        ),
         ReviewWorkerConfig::OpenCode {
             executable, model, ..
         } => prepend_exe(
             executable,
-            opencode_review_args(model, schema_path, &review_prompt("base", "head")),
+            opencode_review_args(model, &review_prompt("base", "head")),
         ),
         ReviewWorkerConfig::OpenaiCompatible { .. } => return None,
     })

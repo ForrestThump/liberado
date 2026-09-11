@@ -418,7 +418,13 @@ OpenCode is the explicit `open_code` harness after Codex in `harness_order`. A t
 Forrest named the production pin `openrouter/deepseek/deepseek-v4-flash` with
 `pricing_policy = "named"`. Keep `permission_mode = "deny_writes"`. Do not map OpenCode to an
 OpenAI-compatible or free-router worker. A Codex failure, stale result, or malformed result does
-not start OpenCode.
+not start OpenCode. OpenCode is not asked to emit Liberado schema JSON; native assistant text
+becomes the published summary.
+
+`cursor-local` (`kind = "cursor_local"`) and `grok-build` (`kind = "grok_build"`) are the same
+kind of adapter: enable the row and put its id in `harness_order` to use it first or as a later
+fallback. Cursor uses local `agent --mode ask --print` (no `--force`). Grok uses
+`--permission-mode plan --single` (no `--always-approve`). Native stdout becomes the summary.
 
 The shepherd compares GitHub check/job conclusions. Local commands and their normal successful
 exit code (`0`) remain under `[projects.preflight]`; do not duplicate CI commands in the shepherd.

@@ -205,6 +205,30 @@ fn zero_exit_with_malformed_output_fails() {
 
 #[cfg(unix)]
 #[test]
+fn codex_port_accepts_native_assistant_text() {
+    let fixture = RepoFixture::new();
+    let event = serde_json::json!({
+        "type": "item.completed",
+        "item": {
+            "id": "item-1",
+            "type": "agent_message",
+            "text": "Looks safe. No blockers."
+        }
+    })
+    .to_string();
+    let port = port(&fixture, "success").with_env("FAKE_RESULT", &event);
+    match port.invoke(&fixture.request()) {
+        ReviewInvokeOutcome::Finished { result, .. } => {
+            assert_eq!(result.reviewed_sha, fixture.head);
+            assert_eq!(result.summary, "Looks safe. No blockers.");
+            assert!(result.findings.is_empty());
+        }
+        other => panic!("expected finished native Codex review, got {other:?}"),
+    }
+}
+
+#[cfg(unix)]
+#[test]
 fn opencode_port_accepts_a_schema_valid_result() {
     let fixture = RepoFixture::new();
     let port = OpenCodeReviewPort::new(
@@ -217,6 +241,54 @@ fn opencode_port_accepts_a_schema_valid_result() {
         port.invoke(&fixture.request()),
         ReviewInvokeOutcome::Finished { .. }
     ));
+}
+
+#[cfg(unix)]
+#[test]
+fn opencode_port_accepts_native_assistant_text() {
+    let fixture = RepoFixture::new();
+    let event = serde_json::json!({
+        "type": "text",
+        "part": {"type": "text", "text": "Docs-only plan lock. No blockers."}
+    })
+    .to_string();
+    let port = OpenCodeReviewPort::new(
+        fake_codex(fixture._dir.path()),
+        crate::OPENCODE_NAMED_REVIEW_MODEL,
+    )
+    .with_env("FAKE_MODE", "success")
+    .with_env("FAKE_RESULT", &event);
+    match port.invoke(&fixture.request()) {
+        ReviewInvokeOutcome::Finished { result, .. } => {
+            assert_eq!(result.reviewed_sha, fixture.head);
+            assert_eq!(result.summary, "Docs-only plan lock. No blockers.");
+            assert!(result.findings.is_empty());
+        }
+        other => panic!("expected finished native review, got {other:?}"),
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn prompt_ports_accept_native_stdout() {
+    let fixture = RepoFixture::new();
+    for port in [
+        PromptReviewPort::grok(fake_codex(fixture._dir.path())),
+        PromptReviewPort::cursor(fake_codex(fixture._dir.path())),
+    ] {
+        let outcome = port
+            .with_env("FAKE_MODE", "success")
+            .with_env("FAKE_RESULT", "Looks safe. No blockers.")
+            .invoke(&fixture.request());
+        match outcome {
+            ReviewInvokeOutcome::Finished { result, .. } => {
+                assert_eq!(result.reviewed_sha, fixture.head);
+                assert_eq!(result.summary, "Looks safe. No blockers.");
+                assert!(result.findings.is_empty());
+            }
+            other => panic!("expected finished prompt review, got {other:?}"),
+        }
+    }
 }
 
 #[cfg(unix)]

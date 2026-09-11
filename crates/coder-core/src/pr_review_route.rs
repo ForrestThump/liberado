@@ -40,7 +40,10 @@ pub fn next_review_worker<'a>(
 fn review_adapter_supported(worker: &ReviewWorkerConfig) -> bool {
     matches!(
         worker,
-        ReviewWorkerConfig::Codex { .. } | ReviewWorkerConfig::OpenCode { .. }
+        ReviewWorkerConfig::Codex { .. }
+            | ReviewWorkerConfig::OpenCode { .. }
+            | ReviewWorkerConfig::GrokBuild { .. }
+            | ReviewWorkerConfig::CursorLocal { .. }
     )
 }
 
