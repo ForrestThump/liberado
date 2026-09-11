@@ -9,11 +9,11 @@ open_items: true
 
 # Daemon-native pull-request review kickoff
 
-**Status**: active. Forrest approved Sol pass 2 and the seven checklist defaults (2026-09-05).
-Slices 0–3 are on main: Slices 0–1 via PR #244, Slice 2 via PR #247, and Slice 3 via PR #249
-(2026-09-08). Codex-only homelab dogfood and cutover proof are active. Codex usage exhaustion
-now falls back to one OpenCode DeepSeek V4 Flash attempt. Later worker and webhook
-slices remain open.
+**Status**: active. Forrest approved Sol pass 2 and the seven checklist defaults (2026-09-05),
+then locked the Slice 4 route and safety defaults (2026-09-10). Slices 0–3 are on main: Slices
+0–1 via PR #244, Slice 2 via PR #247, and Slice 3 via PR #249 (2026-09-08). Codex usage
+exhaustion now falls back to one OpenCode DeepSeek V4 Flash attempt (PR #253). Cursor local and
+Grok Build are configurable print adapters. Webhook slices remain open.
 
 ## Decision
 
@@ -31,9 +31,12 @@ refs, verifies the observed head SHA, and then creates the detached review workt
 occurs before the durable command fence, so a later poll can retry it. The token stays with
 shepherd and does not enter the Codex process.
 
-The declared worker order is Grok Build, Codex, Antigravity (`agy`), Cursor local, and the
-free-proxy/OpenRouter router. Only enabled workers enter admission. Fallback needs typed
-unavailability. A bad review stops the route. The last route uses only models proved zero-price.
+The first multi-harness worker order is Codex, then OpenCode. Cursor local and Grok Build are
+optional ids in the same `harness_order` list. Only enabled workers enter admission. Fallback
+advances only on typed `Exhausted` or `RateLimited`; `Failed` stops. OpenCode uses the named pin
+`openrouter/deepseek/deepseek-v4-flash` with `pricing_policy = "named"`. Cursor uses local
+`agent --mode ask --print`. Grok uses plan mode and `--single`. Antigravity and the
+free-proxy/OpenRouter route remain later candidates until their adapters exist.
 
 Liberado publishes an immutable PR review with event `COMMENT`. For code blockers, it also posts
 a separate SHA-pinned checkbox issue comment and converts the still-matching PR to draft. It never
@@ -94,7 +97,7 @@ max_concurrent_reviews = 1
 review_event = "COMMENT"
 blocker_action = "draft"
 on_synchronize = "draft_if_armed"
-harness_order = ["codex", "open_code", "grok-build", "antigravity", "cursor-local", "free-router"]
+harness_order = ["codex", "open_code", "cursor-local", "grok-build"]
 
 [[shepherd.projects]]
 name = "example"
@@ -108,11 +111,6 @@ auth = "github-homelab"
 check_names = ["CI", "CRAP regression"]
 cold_reviews = 0
 gate = "ready_and_green_tip"
-
-[tuning.coder.control_plane.review_workers.grok-build]
-kind = "grok_build"
-executable = "/home/box/.local/bin/grok"
-enabled = true
 
 [tuning.coder.control_plane.review_workers.codex]
 kind = "codex"
@@ -129,23 +127,14 @@ permission_mode = "deny_writes"
 pricing_policy = "named"
 enabled = true
 
-[tuning.coder.control_plane.review_workers.antigravity]
-kind = "antigravity"
-executable = "/home/box/.local/bin/agy"
-output = "stream-json"
-print_timeout = "30m"
-enabled = true
-
 [tuning.coder.control_plane.review_workers.cursor-local]
 kind = "cursor_local"
 executable = "/home/box/.local/bin/agent"
 enabled = true
 
-[tuning.coder.control_plane.review_workers.free-router]
-kind = "openai_compatible"
-base_url = "http://127.0.0.1:PORT/v1"
-model = "auto"
-pricing_policy = "zero_only"
+[tuning.coder.control_plane.review_workers.grok-build]
+kind = "grok_build"
+executable = "/home/box/.local/bin/grok"
 enabled = true
 ```
 
@@ -153,7 +142,8 @@ This vocabulary is proposed. Validation rejects duplicate projects/workers, inva
 `OWNER/REPOSITORY`, unknown projects/adapters, literal secrets, two enabled controllers,
 non-COMMENT review events, and non-draft blocker actions. This gate requires `cold_reviews = 0`
 and nonempty `check_names` unless `all_reported_checks = true`. Require distinct
-`cursor-local` and `cursor-cloud` IDs. Require `free-router` to be `zero_only`.
+worker IDs and kinds. For the locked Slice 4 workers, the live ids are `codex`, `open_code`,
+and `grok-build`. OpenCode uses `pricing_policy = "named"` with the DeepSeek V4 Flash pin.
 
 Start with a fine-grained PAT: Metadata read, Contents read, Pull requests read/write, Checks read,
 and Commit statuses read. Resolve `GET /user` at boot and before publication. Fail closed if the
@@ -245,12 +235,13 @@ Each fact carries its relevant command/run/worker/SHA/evidence IDs. Never map a 
   workspace. The first exhaustion fixture is exact versioned text
   `ERROR: You've hit your usage limit` plus retry time. Do not use HTTP 402. A tiny probe does
   not prove full-review quota.
-- **Antigravity:** use print mode, stream JSON, schema, workspace, and about 30 minutes. Permission
-  auto-denial is failure/auth, not quota. Never bypass permissions.
+- **OpenCode:** implement a review-specific `ReviewPort`, not the repair `OpenCodeWorker`. Deny
+  writes, strip forge credentials, and map native assistant text into the publish result.
 - **Cursor:** local `agent --mode ask --print` only. Do not pass `--force` / `--yolo`. Cursor cloud
   is separate and out of order. Native stdout maps into the publish result.
-- **Free-router:** HTTP is authoritative; 402 belongs here. Only proved-zero catalog entries are
-  eligible. Quota-then-pay needs known free remainder. Never hide a paid/cheap pin in this route.
+- **Later candidates:** Antigravity and free-router stay outside this ship. OpenRouter is a
+  provider, not a harness. A later free-router route must use proved-zero catalog entries and must
+  not hide a paid or unknown-price pin.
 
 Classifier order is structured signal, then exact versioned captured bytes, never exit code alone
 or broad quota text. Mid-run exhaustion records cooldown and advances the same review key to the
@@ -329,16 +320,22 @@ checkbox edits have no effect; restart resumes only missing steps; SHA/login gua
 write; synchronize creates at most one draft/note; no merge path exists; `expected_login` required
 for writers; harnesses never receive GitHub credentials.
 
-### Slice 4 — Enabled-worker fallback
+### Slice 4 — Locked multi-harness fallback
 
-Add proven adapters in `harness_order`. OpenCode, Cursor local, and Grok Build are print/headless
-review ports after Codex when those rows are enabled. Put the worker you prefer first. Antigravity
+Follow the focused [Slice 4 plan](daemon-pr-review-slice-4.md). OpenCode after Codex is on main
+with the named DeepSeek V4 Flash pin. Cursor local and Grok Build are print/headless review ports.
+Enable a row and put its id in `harness_order` to use it first or as a later fallback. Antigravity
 and free-router stay declared until their adapters exist. Cursor cloud is absent.
 
-Acceptance: typed exhaustion advances once and normal failure stops; disabled adapters do not
-start; cooldowns survive restart; OpenCode denies write permissions and strips forge credentials;
-agy uses near 30 minutes; Cursor cloud is absent; free-router makes no paid or unknown-price
-request.
+The default order is `codex`, `open_code`, `cursor-local`, `grok-build`. Fallback advances only on
+typed `Exhausted` or `RateLimited`; `Failed` stops. One `command_id` owns the review request and
+each harness attempt gets a distinct `run_id`. `Failed` is not `Unavailable`.
+
+Acceptance: disabled adapters do not start; cooldowns survive restart; OpenCode uses its own
+`ReviewPort`, denies writes, strips forge credentials, and uses the named paid pin; Cursor and
+Grok print adapters do not pass `--force` or `--always-approve`. Shepherd, the ledger,
+`ReviewPort`, and `ReviewPublishPort` keep their current ownership. Human merge remains the hard
+gate. Do not add a workflow engine.
 
 ### Slice 5 — Webhook accelerator
 
@@ -396,8 +393,22 @@ ForrestThump approved Sol pass 2 (`6a189518`) and all checklist defaults:
 2. Explicit nonempty `check_names` for Slices 1–3 (fail-closed).
 3. Fine-grained PAT + `expected_login` for initial write slices.
 4. One normal review per SHA + policy version; audited CLI for rare same-tip repeats.
-5. Grok first in declared order but `enabled=false` until headless proof; Codex first enabled production reviewer.
+5. Grok first in the then-declared order but `enabled=false` until headless proof; Codex first
+   enabled production reviewer. The 2026-09-10 Slice 4 lock below supersedes this route order.
 6. Daemon-owned synchronize-to-draft + one short old→new SHA note.
 7. Human merge remains the hard gate; no paid fallback without a later explicit policy.
 
 Slices 0 and 1 need no further architecture decision. Implementation may proceed.
+
+## Forrest Slice 4 lock (2026-09-10)
+
+1. Start Slice 4a only after Codex-only dogfood is healthy.
+2. Use `harness_order = ["codex", "open_code", "cursor-local", "grok-build"]`. The live Grok
+   worker id is `grok-build`; the kind remains `grok_build`.
+3. Defer Antigravity and free-router past this ship. Cursor local is a print adapter.
+4. OpenCode later used the named pin `openrouter/deepseek/deepseek-v4-flash` with
+   `pricing_policy = "named"` (PR #253).
+5. Advance only on typed `Exhausted` or `RateLimited`; `Failed` stops.
+6. Grok Build uses plan mode and `--single`. Do not pass `--always-approve`.
+7. Keep shepherd, ledger, `ReviewPort`, and `ReviewPublishPort` ownership. Add no workflow engine.
+8. Keep human merge as the hard gate. Never auto-merge.
