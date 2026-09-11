@@ -183,7 +183,7 @@ fn reviewed_sha(output: &str) -> String {
         .unwrap_or_else(|| "invalid-review-result-sha".into())
 }
 
-fn failure_name(failure: WorkerFailure) -> &'static str {
+pub(super) fn failure_name(failure: WorkerFailure) -> &'static str {
     match failure {
         WorkerFailure::Exhausted => "exhausted",
         WorkerFailure::RateLimited => "rate_limited",

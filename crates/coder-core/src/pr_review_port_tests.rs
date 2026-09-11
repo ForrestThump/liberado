@@ -7,7 +7,6 @@ use tempfile::TempDir;
 use super::*;
 #[cfg(unix)]
 use crate::pr_review::REVIEW_SCHEMA_VERSION;
-#[cfg(unix)]
 use crate::pr_review::WorkerFailure;
 use std::ffi::OsStr;
 
@@ -270,6 +269,20 @@ fn result_sha_must_match_request_and_workspace() {
             observed: fixture.other.clone(),
         }
     );
+}
+
+#[test]
+fn failure_name_labels_every_worker_failure() {
+    for (failure, name) in [
+        (WorkerFailure::Exhausted, "exhausted"),
+        (WorkerFailure::RateLimited, "rate_limited"),
+        (WorkerFailure::Auth, "auth"),
+        (WorkerFailure::Permission, "permission"),
+        (WorkerFailure::Timeout, "timeout"),
+        (WorkerFailure::ModelFailure, "model_failure"),
+    ] {
+        assert_eq!(super::invoke::failure_name(failure), name);
+    }
 }
 
 #[test]

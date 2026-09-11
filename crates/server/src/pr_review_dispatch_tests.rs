@@ -385,7 +385,7 @@ fn planned_review_from_a_local_remote_issues_the_command() {
     workers.insert(
         "codex".into(),
         ReviewWorkerConfig::Codex {
-            executable: "liberado-review-adapter-must-not-exist".into(),
+            executable: "/bin/false".into(),
             enabled: true,
         },
     );

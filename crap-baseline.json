@@ -12220,8 +12220,8 @@
       "function": "failure_name",
       "line": 186,
       "cyclomatic": 7.0,
-      "coverage": 55.55555555555556,
-      "crap": 11.301783264746229,
+      "coverage": 100.0,
+      "crap": 7.0,
       "crate": "liberado-coder-core"
     },
     {
