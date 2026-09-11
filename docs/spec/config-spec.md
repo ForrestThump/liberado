@@ -101,7 +101,9 @@ Daemon-native review adds strict deployment checks:
 The Slice-4 order places `open_code` immediately after Codex. An enabled OpenCode review worker
 must set `permission_mode = "deny_writes"` and either `pricing_policy = "zero_only"` or
 `pricing_policy = "named"` with model `openrouter/deepseek/deepseek-v4-flash`. It is not an
-OpenAI-compatible or free-router worker.
+OpenAI-compatible or free-router worker. `cursor-local` and `grok-build` are optional ids in the
+same `harness_order` list; enable the matching `review_workers` row to use them first or as
+fallbacks.
 
 Surfaced two ways:
 - **On daemon startup** — refuses to start, prints actionable errors.

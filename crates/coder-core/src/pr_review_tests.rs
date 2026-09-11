@@ -52,6 +52,50 @@ fn extracts_opencode_json_event_text() {
 }
 
 #[test]
+fn opencode_native_text_becomes_the_summary() {
+    let sha = "a".repeat(40);
+    let output = format!(
+        "{}\n{}\n",
+        serde_json::json!({"type":"step_start","part":{"type":"step-start"}}),
+        serde_json::json!({
+            "type": "text",
+            "part": {"type": "text", "text": "Docs-only plan lock. No blockers."}
+        })
+    );
+    let parsed = parse_opencode_success(&output, &sha).expect("native text");
+    assert_eq!(parsed.schema, REVIEW_SCHEMA_VERSION);
+    assert_eq!(parsed.reviewed_sha, sha);
+    assert_eq!(parsed.summary, "Docs-only plan lock. No blockers.");
+    assert!(parsed.findings.is_empty());
+}
+
+#[test]
+fn opencode_tool_only_stream_is_not_a_review() {
+    let sha = "a".repeat(40);
+    let output = format!(
+        "{}\n",
+        serde_json::json!({"type":"tool_use","part":{"type":"tool","tool":"read"}})
+    );
+    assert_eq!(
+        parse_opencode_success(&output, &sha),
+        Err(ReviewResultError::Malformed)
+    );
+}
+
+#[test]
+fn plain_stdout_becomes_the_summary() {
+    let sha = "a".repeat(40);
+    let parsed = parse_plain_success("Looks safe. No blockers.\n", &sha).expect("plain");
+    assert_eq!(parsed.reviewed_sha, sha);
+    assert_eq!(parsed.summary, "Looks safe. No blockers.");
+    assert!(parsed.findings.is_empty());
+    assert_eq!(
+        parse_plain_success("   \n", &sha),
+        Err(ReviewResultError::Malformed)
+    );
+}
+
+#[test]
 fn extracts_codex_jsonl_result() {
     let output = include_str!("../tests/fixtures/codex_review_jsonl_success.jsonl");
     let result = parse_codex_success(output, &"a".repeat(40)).unwrap();
@@ -125,24 +169,29 @@ fn codex_command_is_read_only_and_sha_pinned() {
 
 #[test]
 fn opencode_command_is_json_run_without_auto_approve() {
-    let args = opencode_review_args(
-        OPENCODE_NAMED_REVIEW_MODEL,
-        "schema.json",
-        &review_prompt("base", "head"),
-    );
+    let args = opencode_review_args(OPENCODE_NAMED_REVIEW_MODEL, &review_prompt("base", "head"));
     assert_eq!(args[0], "run");
     assert!(args.contains(&"--format".into()));
     assert!(args.contains(&"json".into()));
     assert!(args.contains(&OPENCODE_NAMED_REVIEW_MODEL.into()));
     assert!(!args.iter().any(|arg| arg == "--auto"));
+    assert!(!args.iter().any(|arg| arg.contains("schema.json")));
+    assert_eq!(
+        args.last().map(String::as_str),
+        Some("Review the changes from base commit base to HEAD head. Do not modify files.")
+    );
 }
 
 #[test]
 fn adapter_commands_are_frozen_without_execution() {
-    assert_eq!(
-        grok_review_args("schema"),
-        ["review", "--headless", "--schema", "schema"]
-    );
+    let prompt = review_prompt("base", "head");
+    let grok = grok_review_args(&prompt);
+    assert!(grok.contains(&"--permission-mode".into()));
+    assert!(grok.contains(&"plan".into()));
+    assert!(grok.contains(&"--single".into()));
+    assert!(!grok.iter().any(|arg| arg == "--always-approve"));
+    assert_eq!(grok.last().map(String::as_str), Some(prompt.as_str()));
+
     assert_eq!(
         antigravity_review_args("schema"),
         [
@@ -153,7 +202,13 @@ fn adapter_commands_are_frozen_without_execution() {
             "schema"
         ]
     );
-    assert_eq!(cursor_review_args(), ["--mode", "ask", "--print"]);
+
+    let cursor = cursor_review_args(&prompt);
+    assert!(cursor.contains(&"--mode".into()));
+    assert!(cursor.contains(&"ask".into()));
+    assert!(cursor.contains(&"--print".into()));
+    assert!(!cursor.iter().any(|arg| arg == "--force" || arg == "--yolo"));
+    assert_eq!(cursor.last().map(String::as_str), Some(prompt.as_str()));
 }
 
 fn policy() -> ReviewPolicy {
@@ -500,7 +555,9 @@ fn review_process_argv_covers_each_enabled_adapter_and_skips_http() {
     )
     .unwrap();
     assert_eq!(grok[0], "grok");
-    assert!(grok.contains(&"--headless".into()));
+    assert!(grok.contains(&"--permission-mode".into()));
+    assert!(grok.contains(&"plan".into()));
+    assert!(!grok.iter().any(|arg| arg == "--always-approve"));
 
     let codex = review_process_argv(
         &ReviewWorkerConfig::Codex {
@@ -535,6 +592,8 @@ fn review_process_argv_covers_each_enabled_adapter_and_skips_http() {
     .unwrap();
     assert_eq!(cursor[0], "cursor");
     assert!(cursor.contains(&"--mode".into()));
+    assert!(cursor.contains(&"ask".into()));
+    assert!(!cursor.iter().any(|arg| arg == "--force" || arg == "--yolo"));
 
     let open_code = review_process_argv(
         &ReviewWorkerConfig::OpenCode {
@@ -606,7 +665,7 @@ fn jsonl_rejects_conflicting_agent_messages() {
 }
 
 #[test]
-fn jsonl_rejects_duplicate_and_trailing_invalid_agent_messages() {
+fn jsonl_keeps_schema_when_later_agent_message_is_prose() {
     let sha = "a".repeat(40);
     let result = format!(
         "{{\"schema\":\"{}\",\"reviewed_sha\":\"{sha}\",\"summary\":\"one\",\"findings\":[]}}",
@@ -619,16 +678,33 @@ fn jsonl_rejects_duplicate_and_trailing_invalid_agent_messages() {
         })
         .to_string()
     };
-
     let duplicate = format!("{}\n{}\n", line(&result), line(&result));
-    assert!(matches!(
-        parse_codex_success(&duplicate, &sha),
-        Err(ReviewResultError::Malformed)
-    ));
+    let parsed = parse_codex_success(&duplicate, &sha).expect("identical schema");
+    assert_eq!(parsed.summary, "one");
 
-    let trailing_invalid = format!("{}\n{}\n", line(&result), line("not review JSON"));
-    assert!(matches!(
-        parse_codex_success(&trailing_invalid, &sha),
-        Err(ReviewResultError::Malformed)
-    ));
+    let trailing_prose = format!("{}\n{}\n", line(&result), line("not review JSON"));
+    let parsed = parse_codex_success(&trailing_prose, &sha).expect("schema then prose");
+    assert_eq!(parsed.summary, "one");
+}
+
+#[test]
+fn jsonl_wraps_native_codex_prose_and_skips_banners() {
+    let sha = "a".repeat(40);
+    let output = format!(
+        "warning: not json\n{}\n{}\n",
+        serde_json::json!({"type":"thread.started","thread_id":"t"}),
+        serde_json::json!({
+            "type": "item.completed",
+            "item": {
+                "id": "item-1",
+                "type": "agent_message",
+                "text": "Looks safe. No blockers."
+            }
+        })
+    );
+    let parsed = parse_codex_success(&output, &sha).expect("native prose");
+    assert_eq!(parsed.schema, REVIEW_SCHEMA_VERSION);
+    assert_eq!(parsed.reviewed_sha, sha);
+    assert_eq!(parsed.summary, "Looks safe. No blockers.");
+    assert!(parsed.findings.is_empty());
 }

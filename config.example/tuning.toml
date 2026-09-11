@@ -66,12 +66,13 @@
 # model = "openrouter/~deepseek/deepseek-v4-flash-latest"
 # auto_approve = true
 #
-# PR review workers are inert declarations in Slices 0/1. Disabled adapters are never admitted
-# and no review process is started. Keep Grok and Cursor disabled until live evidence exists.
+# PR review workers. Enable a row and put its id in topology.toml [shepherd.review].harness_order.
+# The first enabled supported adapter runs; typed exhausted/rate_limited results try the next id.
+# Cursor and Grok are print adapters. Put either first to prefer it, or after Codex/OpenCode.
 # [coder.control_plane.review_workers.grok-build]
 # kind = "grok_build"
 # executable = "/path/to/grok"
-# enabled = false
+# enabled = true
 # [coder.control_plane.review_workers.codex]
 # kind = "codex"
 # executable = "/path/to/codex"
@@ -87,7 +88,7 @@
 # [coder.control_plane.review_workers.cursor-local]
 # kind = "cursor_local"
 # executable = "/path/to/agent"
-# enabled = false
+# enabled = true
 
 # Where the harness reads its model prompts from.
 #

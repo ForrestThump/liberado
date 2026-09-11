@@ -10,9 +10,9 @@ open_items: true
 # Daemon PR review Slice 4 — locked multi-harness plan
 
 **Status**: active. Forrest locked the defaults in this plan on 2026-09-10. OpenCode with the
-named DeepSeek V4 Flash pin later landed on main (PR #253). Remaining Slice 4 work is Grok Build
-proof and later candidates. Open implementation work still enters through
-[the backlog](backlog.md).
+named DeepSeek V4 Flash pin later landed on main (PR #253). Cursor local and Grok Build are
+configurable print adapters. Remaining work is Antigravity, free-router, and webhooks. Open
+implementation work still enters through [the backlog](backlog.md).
 
 This plan refines [the daemon PR review kickoff](daemon-pr-review-kickoff.md). It adds one ordered
 fallback route: Codex, then OpenCode, then Grok Build. Human merge remains the hard gate. Liberado
@@ -20,9 +20,11 @@ does not auto-merge.
 
 ## Locked boundary
 
-- Live worker ids are `codex`, `open_code`, and `grok-build`. The Grok kind remains `grok_build`.
+- Live worker ids include `codex`, `open_code`, `cursor-local`, and `grok-build`. The Grok kind
+  remains `grok_build`.
 - `harness_order` is an ordered list. Map iteration order never selects a worker.
-- Codex stays first. OpenCode is second. Grok Build is third and disabled.
+- Codex stays first by default. OpenCode is second. Cursor local and Grok Build follow when
+  those rows are enabled.
 - OpenCode uses the named pin `openrouter/deepseek/deepseek-v4-flash` with
   `pricing_policy = "named"` (PR #253).
 - Antigravity, Cursor local, and free-router are later candidates. They are not part of the first
@@ -38,7 +40,7 @@ does not auto-merge.
 ```toml
 [shepherd.review]
 enabled = true
-harness_order = ["codex", "open_code", "grok-build"]
+harness_order = ["codex", "open_code", "cursor-local", "grok-build"]
 
 [tuning.coder.control_plane.review_workers.codex]
 kind = "codex"
@@ -53,10 +55,15 @@ pricing_policy = "named"
 permission_mode = "deny_writes"
 enabled = true
 
+[tuning.coder.control_plane.review_workers.cursor-local]
+kind = "cursor_local"
+executable = "/home/box/.local/bin/agent"
+enabled = true
+
 [tuning.coder.control_plane.review_workers.grok-build]
 kind = "grok_build"
 executable = "/home/box/.local/bin/grok"
-enabled = false
+enabled = true
 ```
 
 Validation rejects an unknown worker ID, a duplicate route entry, and a missing route entry.

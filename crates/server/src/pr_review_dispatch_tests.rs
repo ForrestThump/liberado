@@ -349,7 +349,7 @@ fn github_fetch_url_accepts_only_an_owner_and_repository_name() {
 }
 
 #[test]
-fn review_port_accepts_only_codex_and_opencode() {
+fn review_port_accepts_codex_opencode_cursor_and_grok() {
     use liberado_coder_core::OPENCODE_NAMED_REVIEW_MODEL;
     assert!(
         review_port(&ReviewWorkerConfig::Codex {
@@ -368,10 +368,25 @@ fn review_port_accepts_only_codex_and_opencode() {
         })
         .is_ok()
     );
-    assert!(matches!(
+    assert!(
         review_port(&ReviewWorkerConfig::GrokBuild {
             executable: "/usr/bin/grok".into(),
             enabled: true,
+        })
+        .is_ok()
+    );
+    assert!(
+        review_port(&ReviewWorkerConfig::CursorLocal {
+            executable: "/usr/bin/agent".into(),
+            enabled: true,
+        })
+        .is_ok()
+    );
+    assert!(matches!(
+        review_port(&ReviewWorkerConfig::Antigravity {
+            executable: "/usr/bin/agy".into(),
+            enabled: true,
+            print_timeout: "30s".into(),
         }),
         Err(error) if error.contains("adapter")
     ));

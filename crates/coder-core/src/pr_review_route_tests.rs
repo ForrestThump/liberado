@@ -45,11 +45,30 @@ fn workers() -> BTreeMap<String, ReviewWorkerConfig> {
             enabled: true,
         },
     );
+    workers.insert(
+        "cursor-local".into(),
+        ReviewWorkerConfig::CursorLocal {
+            executable: "agent".into(),
+            enabled: true,
+        },
+    );
+    workers.insert(
+        "grok-build".into(),
+        ReviewWorkerConfig::GrokBuild {
+            executable: "grok".into(),
+            enabled: true,
+        },
+    );
     workers
 }
 
 fn order() -> Vec<String> {
-    vec!["codex".into(), "open_code".into()]
+    vec![
+        "codex".into(),
+        "open_code".into(),
+        "cursor-local".into(),
+        "grok-build".into(),
+    ]
 }
 
 #[test]
@@ -129,6 +148,44 @@ fn disabled_opencode_is_not_selected() {
     if let ReviewWorkerConfig::OpenCode { enabled, .. } = workers.get_mut("open_code").unwrap() {
         *enabled = false;
     }
-    let order = order();
+    let order = vec!["codex".into(), "open_code".into()];
     assert!(next_review_worker(&book, command, &order, &workers).is_none());
+}
+
+#[test]
+fn harness_order_can_select_cursor_or_grok_first() {
+    let ledger = ledger("pr-1");
+    let workers = workers();
+    let cursor_first = ["cursor-local".into(), "codex".into()];
+    let (id, worker) = next_review_worker(&ledger, "cmd", &cursor_first, &workers).expect("cursor");
+    assert_eq!(id, "cursor-local");
+    assert!(matches!(worker, ReviewWorkerConfig::CursorLocal { .. }));
+
+    let grok_first = ["grok-build".into(), "open_code".into()];
+    let (id, worker) = next_review_worker(&ledger, "cmd", &grok_first, &workers).expect("grok");
+    assert_eq!(id, "grok-build");
+    assert!(matches!(worker, ReviewWorkerConfig::GrokBuild { .. }));
+}
+
+#[test]
+fn exhausted_cursor_advances_to_grok() {
+    let mut book = ledger("pr-1");
+    let command = "cmd";
+    admit_review_command(&mut book, "pr-1", command, &"a".repeat(40)).unwrap();
+    record_review_outcome(
+        &mut book,
+        "pr-1",
+        "cursor-local",
+        command,
+        &"a".repeat(40),
+        Path::new("/unused"),
+        ReviewInvokeOutcome::Unavailable {
+            failure: WorkerFailure::Exhausted,
+        },
+    )
+    .unwrap();
+    let workers = workers();
+    let order = ["cursor-local".into(), "grok-build".into()];
+    let (id, _) = next_review_worker(&book, command, &order, &workers).expect("grok");
+    assert_eq!(id, "grok-build");
 }
