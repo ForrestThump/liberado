@@ -36,16 +36,19 @@
 //!
 //! # Dispatch routing
 //!
-//! When `with_dispatch` is attached, every turn is classified by a
-//! [`Dispatcher`] *before* any execution happens — closing the gap where chat used to drive the
-//! executor directly, bypassing the guard pipeline and sub-delegation entirely. The four
-//! `DispatchAction` outcomes are handled asymmetrically, deliberately: `ExecuteDirect` (the common
-//! case) falls straight through into the existing streaming `Conversation::turn`/`turn_stream`
-//! path — zero change to today's token-by-token UX, now just gated on the dispatcher's approval.
-//! `Clarify`, `Propose`, and `DispatchSubagent` all start a hosted background session on the
-//! [`GoalSessionHub`] (one-execution-engine E4) and await its terminal summary — same blocking
-//! shape as the old `Orchestrator::run` path, but through the one engine. `with_dispatch` takes a
-//! classifier; `with_goal_hub` is what makes non-`ExecuteDirect` (and face-agent `delegate`) work.
+//! When `with_dispatch` is attached **and the session still delegates** (`delegation = true`,
+//! the face-agent path), every turn is classified by a [`Dispatcher`] *before* any execution
+//! happens. The four `DispatchAction` outcomes are handled asymmetrically: `ExecuteDirect`
+//! (the common case) falls straight through into the existing streaming
+//! `Conversation::turn`/`turn_stream` path. `Clarify`, `Propose`, and `DispatchSubagent` all
+//! start a hosted background session on the [`GoalSessionHub`] (one-execution-engine E4).
+//!
+//! A session profile with `delegation = false` (budget-bot, web-search, basic-chat) **must not
+//! enter that classifier**. Dispatch is a separate unattended actor: it cannot see this chat's
+//! history, it strips `AskHuman`, and a `Clarify` there prints "blocked — needed a human" even
+//! though the chat already holds the tools. Observed live 2026-09-12 on `budget-bot`. Direct
+//! profiles get the granted tool surface and drive the executor themselves — they should not
+//! even know dispatch exists.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -760,6 +763,17 @@ impl ChatSessions {
                 // proposal/permission notification already landed on this surface), collapse the face
                 // agent's now-redundant reply to a tiny pointer at that notification.
                 collapse_if_deferred(reply, &turn_deferral)
+            } else if !settings.delegation {
+                // Direct tool-user profile: skip the classifier. `dispatch_turn` hosts Clarify as
+                // an unattended goal that cannot talk to this chat.
+                let turn_runtime = self.build_turn_runtime(
+                    user,
+                    session,
+                    &[],
+                    &settings.capabilities,
+                );
+                self.state_tool_surface(&mut convo, session, &settings, turn_runtime.as_ref());
+                convo.turn(&executor, turn_runtime.as_ref(), user).await?
             } else {
                 match self.dispatch_turn(user).await {
                     DispatchOutcome::Answered(reply) => {
@@ -859,6 +873,17 @@ impl ChatSessions {
                     session,
                     settings.capabilities.clone(),
                     turn_deferral,
+                );
+                self.state_tool_surface(&mut convo, session, &settings, turn_runtime.as_ref());
+                convo
+                    .turn_stream(&executor, turn_runtime.as_ref(), user, events)
+                    .await?;
+            } else if !settings.delegation {
+                let turn_runtime = self.build_turn_runtime(
+                    user,
+                    session,
+                    &[],
+                    &settings.capabilities,
                 );
                 self.state_tool_surface(&mut convo, session, &settings, turn_runtime.as_ref());
                 convo

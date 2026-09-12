@@ -475,6 +475,80 @@ async fn a_profiles_tools_reach_a_non_delegating_turn() {
     );
 }
 
+/// Live 2026-09-12: `budget-bot` (`delegation = false`) still ran `dispatch_turn`. The
+/// classifier returned Clarify; the hosted goal is unattended, so AskHuman blocked and the
+/// chat that already held `categorize_transactions` printed "blocked — needed a human".
+/// A scripted Clarify dispatcher must not be invoked at all on this path.
+#[tokio::test]
+async fn a_non_delegating_session_does_not_invoke_the_dispatcher() {
+    use liberado_common::{BlockReason, Capability, CapabilitySet, DispatchAction, DispatchDecision};
+
+    let dir = tempfile::tempdir().unwrap();
+    let store = Arc::new(SessionStore::open(dir.path()).await);
+    let chat_provider = Arc::new(MockProvider::with_script(
+        "chat",
+        [CompletionResponse::text("categorized the nalgene")],
+    ));
+    let clarify = DispatchDecision {
+        action: DispatchAction::Clarify {
+            questions: vec!["which transaction?".into()],
+            what_blocked: BlockReason::MissingParam,
+        },
+        confidence: 0.3,
+        rationale: "must not run".into(),
+    };
+    let dispatch_provider = Arc::new(MockProvider::with_script(
+        "dispatch",
+        [CompletionResponse::text(
+            serde_json::to_string(&clarify).unwrap(),
+        )],
+    ));
+    let dispatcher = Dispatcher::new(dispatch_provider.clone(), DispatchTuning::default(), 4);
+    let executor = Executor::new(chat_provider.clone(), Budget::default());
+    let sessions = ChatSessions::new(store, executor, Arc::new(OneTool("liberado-actual-mcp:categorize_transactions")))
+        .with_guards(
+            vec![("liberado-actual-mcp".into(), Consequence::Reversible)],
+            CapabilitySet::empty(),
+            dir.path().join("proposals"),
+            ProposalSigner::random(),
+        )
+        .with_dispatch(dispatcher, Arc::new(CapabilityCatalog::new()));
+
+    let id = sessions
+        .create_with_grant(
+            None,
+            SessionGrant {
+                capabilities: CapabilitySet::from_iter([Capability::ExecuteMcp(
+                    "liberado-actual-mcp".into(),
+                )]),
+                profile: Some("budget-bot".into()),
+                delegation: Some(false),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    sessions
+        .turn(id, "categorize the amazon water bottle as home goods")
+        .await
+        .unwrap();
+
+    assert!(
+        dispatch_provider.received_requests().is_empty(),
+        "delegation=false must not classify the turn; dispatcher saw {:?}",
+        dispatch_provider.received_requests().len()
+    );
+    let texts: Vec<String> = chat_provider
+        .received_requests()
+        .iter()
+        .map(|r| r.messages.last().map(|m| m.content.clone()).unwrap_or_default())
+        .collect();
+    assert!(
+        !texts.is_empty(),
+        "the chat model must run the turn itself"
+    );
+}
+
 /// The other direction: a session that names no profile must still see the process grant, so this
 /// cannot become a migration that silently strips tools from every pre-existing chat.
 #[tokio::test]
