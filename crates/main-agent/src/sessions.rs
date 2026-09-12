@@ -36,19 +36,19 @@
 //!
 //! # Dispatch routing
 //!
-//! When `with_dispatch` is attached **and the session still delegates** (`delegation = true`,
-//! the face-agent path), every turn is classified by a [`Dispatcher`] *before* any execution
-//! happens. The four `DispatchAction` outcomes are handled asymmetrically: `ExecuteDirect`
-//! (the common case) falls straight through into the existing streaming
-//! `Conversation::turn`/`turn_stream` path. `Clarify`, `Propose`, and `DispatchSubagent` all
-//! start a hosted background session on the [`GoalSessionHub`] (one-execution-engine E4).
+//! When `with_dispatch` is attached, a **delegating** turn is classified by a
+//! [`Dispatcher`] *before* any execution happens — closing the gap where chat used to drive the
+//! executor directly, bypassing the guard pipeline and sub-delegation entirely. The four
+//! `DispatchAction` outcomes are handled asymmetrically, deliberately: `ExecuteDirect` (the common
+//! case) falls straight through into the existing streaming `Conversation::turn`/`turn_stream`
+//! path — zero change to today's token-by-token UX, now just gated on the dispatcher's approval.
+//! `Clarify`, `Propose`, and `DispatchSubagent` all start a hosted background session on the
+//! [`GoalSessionHub`] (one-execution-engine E4) and await its terminal summary — same blocking
+//! shape as the old `Orchestrator::run` path, but through the one engine. `with_dispatch` takes a
+//! classifier; `with_goal_hub` is what makes non-`ExecuteDirect` (and face-agent `delegate`) work.
 //!
-//! A session profile with `delegation = false` (budget-bot, web-search, basic-chat) **must not
-//! enter that classifier**. Dispatch is a separate unattended actor: it cannot see this chat's
-//! history, it strips `AskHuman`, and a `Clarify` there prints "blocked — needed a human" even
-//! though the chat already holds the tools. Observed live 2026-09-12 on `budget-bot`. Direct
-//! profiles get the granted tool surface and drive the executor themselves — they should not
-//! even know dispatch exists.
+//! A `delegation = false` profile must not enter that classifier. Clarify is hosted unattended
+//! and cannot talk to this chat (budget-bot, 2026-09-12). Direct profiles drive granted tools.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -763,19 +763,8 @@ impl ChatSessions {
                 // proposal/permission notification already landed on this surface), collapse the face
                 // agent's now-redundant reply to a tiny pointer at that notification.
                 collapse_if_deferred(reply, &turn_deferral)
-            } else if !settings.delegation {
-                // Direct tool-user profile: skip the classifier. `dispatch_turn` hosts Clarify as
-                // an unattended goal that cannot talk to this chat.
-                let turn_runtime = self.build_turn_runtime(
-                    user,
-                    session,
-                    &[],
-                    &settings.capabilities,
-                );
-                self.state_tool_surface(&mut convo, session, &settings, turn_runtime.as_ref());
-                convo.turn(&executor, turn_runtime.as_ref(), user).await?
             } else {
-                match self.dispatch_turn(user).await {
+                match self.dispatch_turn(user, settings.delegation).await {
                     DispatchOutcome::Answered(reply) => {
                         convo.answer(user, &reply);
                         reply
@@ -878,19 +867,8 @@ impl ChatSessions {
                 convo
                     .turn_stream(&executor, turn_runtime.as_ref(), user, events)
                     .await?;
-            } else if !settings.delegation {
-                let turn_runtime = self.build_turn_runtime(
-                    user,
-                    session,
-                    &[],
-                    &settings.capabilities,
-                );
-                self.state_tool_surface(&mut convo, session, &settings, turn_runtime.as_ref());
-                convo
-                    .turn_stream(&executor, turn_runtime.as_ref(), user, events)
-                    .await?;
             } else {
-                match self.dispatch_turn(user).await {
+                match self.dispatch_turn(user, settings.delegation).await {
                     DispatchOutcome::Answered(reply) => {
                         convo.answer(user, &reply);
                         // Deliver the already-resolved reply as a single token so it renders through the
@@ -1531,14 +1509,11 @@ impl ChatSessions {
         }
     }
 
-    /// Classify `user` via the dispatcher (when attached) and resolve everything except
-    /// `ExecuteDirect` — which returns [`DispatchOutcome::Proceed`] (carrying the decision's
-    /// `relevant_mcps`, if any) so the caller falls through to the normal streaming execution
-    /// path, scoped by whatever narrowing the dispatcher found. See the module docs for why this
-    /// split exists.
-    async fn dispatch_turn(&self, user: &str) -> DispatchOutcome {
-        let Some(dispatcher) = &self.dispatcher else {
-            return DispatchOutcome::Proceed(Vec::new()); // no dispatcher — run exactly as before
+    /// Classify `user` via the dispatcher (when attached and this session still delegates).
+    /// `delegation = false` returns [`DispatchOutcome::Proceed`] with no classifier call.
+    async fn dispatch_turn(&self, user: &str, delegation: bool) -> DispatchOutcome {
+        let Some(dispatcher) = delegation.then_some(self.dispatcher.as_ref()).flatten() else {
+            return DispatchOutcome::Proceed(Vec::new()); // no dispatcher, or a direct profile
         };
 
         let dispatch_caps = if self.dispatcher_capabilities.capabilities.is_empty() {

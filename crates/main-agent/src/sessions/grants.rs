@@ -481,7 +481,9 @@ async fn a_profiles_tools_reach_a_non_delegating_turn() {
 /// A scripted Clarify dispatcher must not be invoked at all on this path.
 #[tokio::test]
 async fn a_non_delegating_session_does_not_invoke_the_dispatcher() {
-    use liberado_common::{BlockReason, Capability, CapabilitySet, DispatchAction, DispatchDecision};
+    use liberado_common::{
+        BlockReason, Capability, CapabilitySet, DispatchAction, DispatchDecision,
+    };
 
     let dir = tempfile::tempdir().unwrap();
     let store = Arc::new(SessionStore::open(dir.path()).await);
@@ -505,14 +507,18 @@ async fn a_non_delegating_session_does_not_invoke_the_dispatcher() {
     ));
     let dispatcher = Dispatcher::new(dispatch_provider.clone(), DispatchTuning::default(), 4);
     let executor = Executor::new(chat_provider.clone(), Budget::default());
-    let sessions = ChatSessions::new(store, executor, Arc::new(OneTool("liberado-actual-mcp:categorize_transactions")))
-        .with_guards(
-            vec![("liberado-actual-mcp".into(), Consequence::Reversible)],
-            CapabilitySet::empty(),
-            dir.path().join("proposals"),
-            ProposalSigner::random(),
-        )
-        .with_dispatch(dispatcher, Arc::new(CapabilityCatalog::new()));
+    let sessions = ChatSessions::new(
+        store,
+        executor,
+        Arc::new(OneTool("liberado-actual-mcp:categorize_transactions")),
+    )
+    .with_guards(
+        vec![("liberado-actual-mcp".into(), Consequence::Reversible)],
+        CapabilitySet::empty(),
+        dir.path().join("proposals"),
+        ProposalSigner::random(),
+    )
+    .with_dispatch(dispatcher, Arc::new(CapabilityCatalog::new()));
 
     let id = sessions
         .create_with_grant(
@@ -541,12 +547,14 @@ async fn a_non_delegating_session_does_not_invoke_the_dispatcher() {
     let texts: Vec<String> = chat_provider
         .received_requests()
         .iter()
-        .map(|r| r.messages.last().map(|m| m.content.clone()).unwrap_or_default())
+        .map(|r| {
+            r.messages
+                .last()
+                .map(|m| m.content.clone())
+                .unwrap_or_default()
+        })
         .collect();
-    assert!(
-        !texts.is_empty(),
-        "the chat model must run the turn itself"
-    );
+    assert!(!texts.is_empty(), "the chat model must run the turn itself");
 }
 
 /// The other direction: a session that names no profile must still see the process grant, so this
