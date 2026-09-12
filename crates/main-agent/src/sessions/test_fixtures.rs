@@ -15,6 +15,24 @@ pub(crate) use liberado_provider::{
 pub(crate) use liberado_session_store::SessionStore;
 pub(crate) use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 
+/// Turn settings for dispatch-routing tests: `delegation = true` so `dispatch_turn` runs, while
+/// process-wide `delegation_mode` stays false so `uses_face_agent` does not take the face path.
+/// A named profile is required: an unprofiled session ignores the grant and inherits daemon defaults.
+pub(crate) fn delegating_turn_grant() -> SessionGrant {
+    SessionGrant {
+        profile: Some("dispatch-routing-test".into()),
+        delegation: Some(true),
+        ..Default::default()
+    }
+}
+
+pub(crate) async fn create_delegating_session(sessions: &ChatSessions) -> Ulid {
+    sessions
+        .create_with_grant(None, delegating_turn_grant())
+        .await
+        .unwrap()
+}
+
 pub(crate) struct NoTools;
 #[async_trait]
 impl ToolRuntime for NoTools {
@@ -251,6 +269,7 @@ pub(crate) async fn sessions_for_narrowing_test(
             dir.join("proposals"),
             ProposalSigner::random(),
         )
+        .with_delegation_mode(true)
         .with_dispatch(dispatcher, Arc::new(CapabilityCatalog::new()));
 
     (sessions, chat_provider)

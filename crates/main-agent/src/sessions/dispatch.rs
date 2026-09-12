@@ -182,7 +182,7 @@ async fn clarify_decision_answers_without_executing() {
     // (dispatch pack) before any conversational execution happens.
     let sessions = sessions_with_dispatch(dir.path(), decision, Vec::new(), vec![]).await;
 
-    let id = sessions.create(None).await.unwrap();
+    let id = create_delegating_session(&sessions).await;
     let reply = sessions.turn(id, "clean up my notes").await.unwrap();
     assert!(
         reply.contains("which vault folder do you mean?"),
@@ -220,7 +220,7 @@ async fn execute_direct_decision_falls_through_to_normal_execution() {
     )
     .await;
 
-    let id = sessions.create(None).await.unwrap();
+    let id = create_delegating_session(&sessions).await;
     let reply = sessions.turn(id, "hello").await.unwrap();
     assert_eq!(reply, "Hello from the normal path!");
 }
@@ -243,7 +243,7 @@ async fn propose_decision_writes_a_proposal_file_and_confirms() {
     // Propose is handled by the dispatch pack (writes the proposal file itself).
     let sessions = sessions_with_dispatch(dir.path(), decision, Vec::new(), vec![]).await;
 
-    let id = sessions.create(None).await.unwrap();
+    let id = create_delegating_session(&sessions).await;
     let reply = sessions
         .turn(id, "email the team the weekly report")
         .await
@@ -568,7 +568,7 @@ async fn pre_turn_dispatch_grant_strips_askhuman_keeps_the_rest() {
         ]))
         .with_dispatch(dispatcher, Arc::new(CapabilityCatalog::new()));
 
-    let id = sessions.create(None).await.unwrap();
+    let id = create_delegating_session(&sessions).await;
     sessions.turn(id, "add something").await.unwrap();
 
     let rows = hub.list().await;

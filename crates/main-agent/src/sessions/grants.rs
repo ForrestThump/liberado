@@ -744,6 +744,7 @@ async fn narrowing_filters_qualified_tool_grants_by_parent_mcp() {
             dir.path().join("proposals"),
             liberado_common::ProposalSigner::random(),
         )
+        .with_delegation_mode(true)
         .with_dispatch(dispatcher, Arc::new(CapabilityCatalog::new()));
 
     let id = sessions.create(None).await.unwrap();
