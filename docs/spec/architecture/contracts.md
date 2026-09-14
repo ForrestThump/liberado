@@ -27,7 +27,7 @@ Layer vocabulary used below (and in every crate's `[package.metadata.liberado] r
 | Contract | Kind | Defined in | The seam it freezes |
 |---|---|---|---|
 | [`Provider`](#provider) | trait | `liberado-provider` | inference: who does the thinking |
-| [`ToolRuntime`](#toolruntime--runtimefactory) | trait | `liberado-executor` | acting: what tools exist and how they run |
+| [`ToolRuntime`](#toolruntime--runtimefactory) | trait | `liberado-tool-runtime` | acting: what tools exist and how they run |
 | [`EventSource`](#eventsource) | trait | `liberado-common` | perceiving: what wakes the daemon |
 | [`DomainPackRunner`](#domainpackrunner) | trait | `liberado-session` | goal sessions: how a domain plugs into the kernel |
 | [`ConversationStore`](#conversationstore) | trait | `liberado-conversation-store` | the chat lens onto a session (see [`sessions.md`](sessions.md)) |
@@ -56,8 +56,12 @@ Pack-level contracts (same discipline, scoped to one domain): `CoderBackend` and
 
 ## ToolRuntime / RuntimeFactory
 
-- **Defined**: `liberado-executor`. `ToolRuntime` = catalog + invoke; `RuntimeFactory` builds one
-  scoped to a capability set.
+- **Defined**: `liberado-tool-runtime` (foundation), re-exported by `liberado-executor` so the
+  engine's own paths keep working. `ToolRuntime` = catalog + invoke; `RuntimeFactory` builds one
+  scoped to a capability set. The contract sits below both the engine and the MCP adapter so the
+  shared test doubles implement the same trait instance every consumer sees — a crate's own
+  `#[cfg(test)]` binary is a second rustc instance of that crate, so doubles compiled against a
+  trait hosted in the crate under test never satisfy the trait the test sees.
 - **Implemented by**: `liberado-mcp` (`TurbomcpRuntime` — real MCP tools, provenance in `_meta`),
   `coder-tools` (coding limb), `scratchpad`, `RiskGatedToolRuntime` (the guard decorator),
   test doubles in `test-support`.

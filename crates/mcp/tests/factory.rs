@@ -3,11 +3,11 @@
 
 use core::future::Future;
 use liberado_common::WriteProvenance;
-use liberado_executor::{RuntimeFactory, RuntimeSetupError};
 use liberado_mcp::{
     McpConnector, McpPoolSettings, McpRegistry, RebindableRuntime, TurbomcpRuntime,
 };
 use liberado_provider::ToolInvocation;
+use liberado_tool_runtime::{RuntimeFactory, RuntimeSetupError};
 use serde_json::Value;
 use turbomcp_client::Client;
 use turbomcp_core::context::RequestContext;
@@ -458,7 +458,7 @@ struct PoisonableRuntime {
 }
 
 #[async_trait::async_trait]
-impl liberado_executor::ToolRuntime for PoisonableRuntime {
+impl liberado_tool_runtime::ToolRuntime for PoisonableRuntime {
     fn catalog(&self) -> Vec<liberado_provider::ToolDef> {
         self.tools.clone()
     }

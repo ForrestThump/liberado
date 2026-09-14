@@ -43,7 +43,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use futures::StreamExt;
-use liberado_common::{Outcome, Report, ToolCall, WriteProvenance};
+use liberado_common::{Outcome, Report, ToolCall};
 use liberado_provider::{
     CompletionRequest, CompletionResponse, Message, Provider, ProviderError, Role, StreamItem,
     ToolDef, ToolInvocation,
@@ -307,79 +307,11 @@ fn tools_removed_nudge(tool_names: &[String]) -> String {
     )
 }
 
-/// The tools available for a run plus how to execute them. Implemented by the (future)
-/// turbomcp-backed runtime in production and by a mock in tests; the engine depends only on this.
-#[async_trait]
-pub trait ToolRuntime: Send + Sync {
-    /// The tool catalog offered to the model this run. Capability narrowing happens *here* (a
-    /// subagent's runtime only lists tools it is permitted to call), which is why the dispatcher's
-    /// pre-flight guard over the classifier's opening move is a check, not the boundary.
-    fn catalog(&self) -> Vec<ToolDef>;
-
-    /// Execute one model-requested call and return the textual result fed back to the model.
-    ///
-    /// A **tool-level** failure is returned as `Err(message)`: the engine surfaces it to the model
-    /// in-band (as the tool result) so it can adapt, exactly as a real agent would. Reserve hard
-    /// errors (which abort the whole loop) for infrastructure faults, by surfacing them through the
-    /// runtime's own state rather than here.
-    async fn invoke(&self, call: &ToolInvocation) -> Result<String, String>;
-
-    /// Whether a tool is safe to run concurrently with other tool calls in the same turn.
-    /// Read-only tools (file reads, searches, git inspection) return true.
-    /// Default: false (conservative — treat every tool as potentially stateful).
-    fn is_read_only(&self, _tool_name: &str) -> bool {
-        false
-    }
-
-    /// After this tool returns, stop the conversational loop and wait for the
-    /// human's next message. The tool result is *not* written until that answer
-    /// arrives (ACP cannot overlap two `session/prompt`s).
-    fn parks_for_human(&self, _tool_name: &str) -> bool {
-        false
-    }
-}
-
-/// Failure building a [`ToolRuntime`] for an execution (connection/handshake/etc.).
-#[derive(Debug, Error)]
-#[error("{0}")]
-pub struct RuntimeSetupError(pub String);
-
-/// How an orchestrator obtains a [`ToolRuntime`] for an execution: given the MCPs the execution is
-/// allowed to see and the provenance every call should carry, return a connected runtime. The real
-/// implementation (turbomcp-backed) lives in the MCP layer; tests inject a mock. Lives here (rather
-/// than in `liberado-orchestrator`, which consumes it) so `liberado-mcp` — which implements it — only
-/// needs to depend on this crate, not sideways into the dispatch-bridging one.
-#[async_trait]
-pub trait RuntimeFactory: Send + Sync {
-    async fn runtime_for(
-        &self,
-        allowed_mcps: &[String],
-        provenance: WriteProvenance,
-    ) -> Result<Box<dyn ToolRuntime>, RuntimeSetupError>;
-
-    /// Like [`runtime_for`](Self::runtime_for), but scoped to a per-worker workspace root.
-    ///
-    /// `workspace_root` is `Some(path)` when the worker must operate inside an isolated
-    /// filesystem workspace (a git worktree, in the coding pack's world) and `None` when the
-    /// worker is unconstrained. The **default** implementation ignores the root and behaves
-    /// exactly like [`runtime_for`](Self::runtime_for) — factories that do not care about
-    /// workspace isolation (the MCP registry, test mocks) never need to override this.
-    ///
-    /// Placement (backlog C7): the *seam* is kernel-side — an orchestrator that fans work out
-    /// passes the root through untouched — but the *isolation* is a pack concern. The concrete
-    /// worktree primitive lives in `coder-sandbox` (pack); the production caller builds the
-    /// workspaces and supplies a factory that roots each worker's runtime in one. The kernel
-    /// never reaches across the layer line for the primitive itself.
-    async fn runtime_for_in(
-        &self,
-        allowed_mcps: &[String],
-        provenance: WriteProvenance,
-        workspace_root: Option<PathBuf>,
-    ) -> Result<Box<dyn ToolRuntime>, RuntimeSetupError> {
-        let _ = workspace_root;
-        self.runtime_for(allowed_mcps, provenance).await
-    }
-}
+// The tool-runtime contract lives in `liberado-tool-runtime` (foundation), sunk below both the
+// engine and the MCP adapter so every consumer — including the shared test doubles — implements
+// the same trait instance. Re-exported here so `liberado_executor::ToolRuntime` (and friends)
+// keep naming the same items.
+pub use liberado_tool_runtime::{RuntimeFactory, RuntimeSetupError, ToolRuntime};
 
 /// A unit of work for the engine: how to behave (`instructions`), what to do (`goal`), and an
 /// optional classifier-provided opening move (`seed_calls`).
@@ -2193,44 +2125,8 @@ mod tests {
     use crate::loop_guard::{ARG_SIMILARITY_THRESHOLD, args_similarity};
     use async_trait::async_trait;
     use liberado_provider::{CompletionResponse, MockProvider};
+    use liberado_test_support::InvocationRecordingRuntime;
     use std::sync::Mutex;
-
-    /// A `ToolRuntime` that offers a fixed catalog, records every invocation, and returns a canned
-    /// result for any call.
-    struct MockToolRuntime {
-        tools: Vec<ToolDef>,
-        invoked: Mutex<Vec<ToolInvocation>>,
-        result: Result<String, String>,
-    }
-
-    impl MockToolRuntime {
-        fn new(tool_names: &[&str], result: Result<String, String>) -> Self {
-            let tools = tool_names
-                .iter()
-                .map(|n| ToolDef::new(*n, "test tool", serde_json::json!({ "type": "object" })))
-                .collect();
-            Self {
-                tools,
-                invoked: Mutex::new(Vec::new()),
-                result,
-            }
-        }
-
-        fn invoked(&self) -> Vec<ToolInvocation> {
-            self.invoked.lock().unwrap().clone()
-        }
-    }
-
-    #[async_trait]
-    impl ToolRuntime for MockToolRuntime {
-        fn catalog(&self) -> Vec<ToolDef> {
-            self.tools.clone()
-        }
-        async fn invoke(&self, call: &ToolInvocation) -> Result<String, String> {
-            self.invoked.lock().unwrap().push(call.clone());
-            self.result.clone()
-        }
-    }
 
     fn call_tool(name: &str) -> CompletionResponse {
         CompletionResponse::tool_calls(vec![ToolInvocation::new("c", name, serde_json::json!({}))])
@@ -2297,7 +2193,7 @@ mod tests {
             vec![call_tool("search"), submit(valid_report_args())],
             Budget::default(),
         );
-        let runtime = MockToolRuntime::new(&["search"], Ok("3 hits".into()));
+        let runtime = InvocationRecordingRuntime::new(&["search"], Ok("3 hits".into()));
 
         let report = exec
             .execute(&runtime, Task::new("you are a worker", "find the thing"))
@@ -2325,7 +2221,7 @@ mod tests {
             ],
             Budget::default(),
         );
-        let runtime = MockToolRuntime::new(&["search"], Ok("data".into()));
+        let runtime = InvocationRecordingRuntime::new(&["search"], Ok("data".into()));
 
         let answer = exec
             .converse(
@@ -2346,7 +2242,7 @@ mod tests {
             vec![call_tool("search"), CompletionResponse::text("found it")],
             Budget::default(),
         );
-        let runtime = MockToolRuntime::new(&["search"], Ok("3 hits".into()));
+        let runtime = InvocationRecordingRuntime::new(&["search"], Ok("3 hits".into()));
         let (tx, mut rx) = tokio::sync::mpsc::channel(64);
 
         let mut messages = vec![
@@ -2395,7 +2291,7 @@ mod tests {
             vec![call_tool("search"), CompletionResponse::text("recovered")],
             Budget::default(),
         );
-        let runtime = MockToolRuntime::new(&["search"], Err("boom".into()));
+        let runtime = InvocationRecordingRuntime::new(&["search"], Err("boom".into()));
         let (tx, mut rx) = tokio::sync::mpsc::channel(64);
 
         let mut messages = vec![Message::system("sys"), Message::user("go")];
@@ -2426,7 +2322,7 @@ mod tests {
             vec![call_tool("search"), call_tool("search")],
             Budget::new(2),
         );
-        let runtime = MockToolRuntime::new(&["search"], Err("upstream 500".into()));
+        let runtime = InvocationRecordingRuntime::new(&["search"], Err("upstream 500".into()));
 
         let report = exec
             .execute(&runtime, Task::new("worker", "loop forever"))
@@ -2455,7 +2351,7 @@ mod tests {
             ],
             Budget::new(2),
         );
-        let runtime = MockToolRuntime::new(&["search"], Ok("3 hits".into()));
+        let runtime = InvocationRecordingRuntime::new(&["search"], Ok("3 hits".into()));
 
         let report = exec
             .execute(
@@ -2487,7 +2383,7 @@ mod tests {
             ],
             Budget::new(1),
         );
-        let runtime = MockToolRuntime::new(&["search"], Ok("3 hits".into()));
+        let runtime = InvocationRecordingRuntime::new(&["search"], Ok("3 hits".into()));
 
         let report = exec
             .execute(
@@ -2517,7 +2413,7 @@ mod tests {
             ],
             Budget::new(2),
         );
-        let runtime = MockToolRuntime::new(&["apply_patch"], Ok("applied".into()));
+        let runtime = InvocationRecordingRuntime::new(&["apply_patch"], Ok("applied".into()));
 
         let report = exec
             .execute(&runtime, Task::new("worker", "refactor the module"))
@@ -2539,7 +2435,7 @@ mod tests {
             .take(12)
             .collect();
         let (_provider, exec) = executor(script, Budget::new(2));
-        let runtime = MockToolRuntime::new(&["search"], Ok("3 hits".into()));
+        let runtime = InvocationRecordingRuntime::new(&["search"], Ok("3 hits".into()));
 
         let report = exec
             .execute(
@@ -2565,7 +2461,7 @@ mod tests {
             vec![call_tool("search"), call_tool("search")],
             Budget::new(2),
         );
-        let runtime = MockToolRuntime::new(&["search"], Ok("3 hits".into()));
+        let runtime = InvocationRecordingRuntime::new(&["search"], Ok("3 hits".into()));
 
         let report = exec
             .execute(&runtime, Task::new("worker", "loop forever"))
@@ -2621,7 +2517,7 @@ mod tests {
             Budget::default(),
         );
         let exec = exec.with_report_gate(Arc::new(RefuseFirstSucceeded::once()));
-        let runtime = MockToolRuntime::new(&["search"], Ok("data".into()));
+        let runtime = InvocationRecordingRuntime::new(&["search"], Ok("data".into()));
 
         let report = exec
             .execute(&runtime, Task::new("worker", "do it"))
@@ -2650,7 +2546,7 @@ mod tests {
     async fn an_infrastructure_gate_refusal_ends_as_failed_without_asking_the_model() {
         let (provider, exec) = executor(vec![submit(valid_report_args())], Budget::default());
         let exec = exec.with_report_gate(Arc::new(RefuseInfrastructure));
-        let runtime = MockToolRuntime::new(&["search"], Ok("data".into()));
+        let runtime = InvocationRecordingRuntime::new(&["search"], Ok("data".into()));
 
         let report = exec
             .execute(&runtime, Task::new("worker", "do it"))
@@ -2686,7 +2582,7 @@ mod tests {
             Budget::default(),
         );
         let exec = exec.with_report_gate(Arc::new(RefuseAll));
-        let runtime = MockToolRuntime::new(&["search"], Ok("data".into()));
+        let runtime = InvocationRecordingRuntime::new(&["search"], Ok("data".into()));
 
         let report = exec
             .execute(&runtime, Task::new("worker", "do it"))
@@ -2707,7 +2603,7 @@ mod tests {
             Budget::new(1),
         );
         let exec = exec.with_report_gate(Arc::new(RefuseAll));
-        let runtime = MockToolRuntime::new(&["search"], Ok("3 hits".into()));
+        let runtime = InvocationRecordingRuntime::new(&["search"], Ok("3 hits".into()));
 
         let report = exec
             .execute(
@@ -2751,7 +2647,7 @@ mod tests {
             ],
             Budget::default(),
         );
-        let runtime = MockToolRuntime::new(&["search"], Ok("data".into()));
+        let runtime = InvocationRecordingRuntime::new(&["search"], Ok("data".into()));
 
         let report = exec
             .execute(&runtime, Task::new("worker", "do it"))
@@ -2770,7 +2666,7 @@ mod tests {
             vec![malformed(), malformed(), malformed()],
             Budget::default(),
         );
-        let runtime = MockToolRuntime::new(&["search"], Ok("data".into()));
+        let runtime = InvocationRecordingRuntime::new(&["search"], Ok("data".into()));
 
         let err = exec
             .execute(&runtime, Task::new("worker", "do it"))
@@ -2783,7 +2679,7 @@ mod tests {
     #[tokio::test]
     async fn seed_calls_run_before_the_first_model_turn() {
         let (provider, exec) = executor(vec![submit(valid_report_args())], Budget::default());
-        let runtime = MockToolRuntime::new(&["tasks-mcp:add"], Ok("added".into()));
+        let runtime = InvocationRecordingRuntime::new(&["tasks-mcp:add"], Ok("added".into()));
 
         let task = Task::new("worker", "add a task").with_seed(vec![ToolCall {
             tool: "tasks-mcp:add".into(),
@@ -2810,7 +2706,7 @@ mod tests {
             ],
             Budget::default(),
         );
-        let runtime = MockToolRuntime::new(&["search"], Ok("data".into()));
+        let runtime = InvocationRecordingRuntime::new(&["search"], Ok("data".into()));
 
         let report = exec
             .execute(&runtime, Task::new("worker", "do it"))
@@ -2832,7 +2728,7 @@ mod tests {
             vec![call_tool("search"), submit(valid_report_args())],
             Budget::default(),
         );
-        let runtime = MockToolRuntime::new(&["search"], Err("upstream 500".into()));
+        let runtime = InvocationRecordingRuntime::new(&["search"], Err("upstream 500".into()));
 
         let report = exec
             .execute(&runtime, Task::new("worker", "do it"))
@@ -2897,7 +2793,8 @@ mod tests {
             ],
             Budget::default(),
         );
-        let runtime = MockToolRuntime::new(&["edit_file", "read_file"], Ok("done".into()));
+        let runtime =
+            InvocationRecordingRuntime::new(&["edit_file", "read_file"], Ok("done".into()));
 
         let _ = exec
             .execute(&runtime, Task::new("worker", "apply the change"))
@@ -2928,7 +2825,8 @@ mod tests {
             ],
             Budget::default(),
         );
-        let runtime = MockToolRuntime::new(&["search", "other_tool"], Ok("same result".into()));
+        let runtime =
+            InvocationRecordingRuntime::new(&["search", "other_tool"], Ok("same result".into()));
 
         let report = exec
             .execute(&runtime, Task::new("worker", "do it"))
@@ -2968,7 +2866,7 @@ mod tests {
             ],
             Budget::default(),
         );
-        let runtime = MockToolRuntime::new(&["search"], Ok("same result".into()));
+        let runtime = InvocationRecordingRuntime::new(&["search"], Ok("same result".into()));
 
         let report = exec
             .execute(&runtime, Task::new("worker", "do it"))
@@ -3022,7 +2920,7 @@ mod tests {
             ],
             Budget::default(),
         );
-        let runtime = MockToolRuntime::new(&["search"], Ok("same result".into()));
+        let runtime = InvocationRecordingRuntime::new(&["search"], Ok("same result".into()));
 
         let report = exec
             .execute(&runtime, Task::new("worker", "do it"))
@@ -3050,7 +2948,7 @@ mod tests {
             ],
             Budget::new(4),
         );
-        let runtime = MockToolRuntime::new(&["search"], Ok("same result".into()));
+        let runtime = InvocationRecordingRuntime::new(&["search"], Ok("same result".into()));
 
         let report = exec
             .execute(&runtime, Task::new("worker", "do it"))
@@ -3080,7 +2978,7 @@ mod tests {
             vec![parallel_search, submit(valid_report_args())],
             Budget::default(),
         );
-        let runtime = MockToolRuntime::new(&["search"], Ok("same result".into()));
+        let runtime = InvocationRecordingRuntime::new(&["search"], Ok("same result".into()));
 
         let report = exec
             .execute(&runtime, Task::new("worker", "do it"))
@@ -3127,7 +3025,7 @@ mod tests {
             ],
             Budget::default(),
         );
-        let runtime = MockToolRuntime::new(
+        let runtime = InvocationRecordingRuntime::new(
             &["deepwiki", "vault"],
             Ok("turbomcp uses stdio and HTTP transports.".into()),
         );
@@ -3175,7 +3073,7 @@ mod tests {
             ],
             Budget::default(),
         );
-        let runtime = MockToolRuntime::new(&["search"], Ok("a result".into()));
+        let runtime = InvocationRecordingRuntime::new(&["search"], Ok("a result".into()));
 
         let report = exec
             .execute(&runtime, Task::new("worker", "look up three things"))
@@ -3208,7 +3106,7 @@ mod tests {
             ],
             Budget::default(),
         );
-        let runtime = MockToolRuntime::new(&["tool-a", "tool-b"], Ok("result".into()));
+        let runtime = InvocationRecordingRuntime::new(&["tool-a", "tool-b"], Ok("result".into()));
 
         let report = exec
             .execute(&runtime, Task::new("worker", "do it"))
@@ -3678,7 +3576,7 @@ mod tests {
             vec![parallel, submit(valid_report_args())],
             Budget::default(),
         );
-        let runtime = MockToolRuntime::new(&["tool-a", "tool-b"], Ok("result".into()));
+        let runtime = InvocationRecordingRuntime::new(&["tool-a", "tool-b"], Ok("result".into()));
 
         let report = exec
             .execute(&runtime, Task::new("worker", "do it"))
@@ -3740,7 +3638,8 @@ mod tests {
             vec![parallel, submit(valid_report_args())],
             Budget::default(),
         );
-        let runtime = MockToolRuntime::new(&["turbovault:read_note"], Ok("note body".into()));
+        let runtime =
+            InvocationRecordingRuntime::new(&["turbovault:read_note"], Ok("note body".into()));
 
         let report = exec
             .execute(&runtime, Task::new("worker", "read several notes"))
@@ -3783,7 +3682,8 @@ mod tests {
             ],
             Budget::default(),
         );
-        let runtime = MockToolRuntime::new(&["turbovault:read_note"], Ok("note body".into()));
+        let runtime =
+            InvocationRecordingRuntime::new(&["turbovault:read_note"], Ok("note body".into()));
 
         let report = exec
             .execute(&runtime, Task::new("worker", "read one note"))
@@ -3818,7 +3718,7 @@ mod tests {
             ],
             Budget::default(),
         );
-        let runtime = MockToolRuntime::new(&["tool-a", "tool-b"], Ok("result".into()));
+        let runtime = InvocationRecordingRuntime::new(&["tool-a", "tool-b"], Ok("result".into()));
 
         let report = exec
             .execute(&runtime, Task::new("worker", "do it"))
@@ -3851,7 +3751,7 @@ mod tests {
             ],
             Budget::default(),
         );
-        let runtime = MockToolRuntime::new(&["tool-a", "tool-b"], Ok("result".into()));
+        let runtime = InvocationRecordingRuntime::new(&["tool-a", "tool-b"], Ok("result".into()));
 
         let report = exec
             .execute(&runtime, Task::new("worker", "do it"))
@@ -3887,7 +3787,7 @@ mod tests {
             // 10 scripted turns exceed `DEFAULT_MAX_TURNS` (8), so this needs its own explicit budget.
             Budget::new(10),
         );
-        let runtime = MockToolRuntime::new(
+        let runtime = InvocationRecordingRuntime::new(
             &["tool-a", "tool-b", "filler", "search", "other_tool"],
             Ok("result".into()),
         );
@@ -3931,7 +3831,7 @@ mod tests {
             vec![submit(valid_report_args())],
             Budget::new(4).with_wall_clock(std::time::Duration::ZERO),
         );
-        let runtime = MockToolRuntime::new(&["search"], Ok("data".into()));
+        let runtime = InvocationRecordingRuntime::new(&["search"], Ok("data".into()));
 
         let report = exec
             .execute(&runtime, Task::new("worker", "do it"))
@@ -3980,7 +3880,7 @@ mod tests {
         // The call fails, so nothing is salvageable and the run ends `Failed` rather than
         // `PartiallySucceeded` — keeping this test on the plain exhaustion report, which is the one
         // that has to name the resource.
-        let runtime = MockToolRuntime::new(&["search"], Err("boom".into()));
+        let runtime = InvocationRecordingRuntime::new(&["search"], Err("boom".into()));
         let report = exec
             .execute(&runtime, Task::new("worker", "do it"))
             .await
@@ -4021,7 +3921,7 @@ mod tests {
             script,
             Budget::new(10).with_token_limit(150), // exhausted after the 2nd response (total 200)
         );
-        let runtime = MockToolRuntime::new(&["search"], Ok("a result".into()));
+        let runtime = InvocationRecordingRuntime::new(&["search"], Ok("a result".into()));
 
         let report = exec
             .execute(&runtime, Task::new("worker", "do it"))
@@ -4051,7 +3951,7 @@ mod tests {
     #[tokio::test]
     async fn scratchpad_injected_in_report_mode_only() {
         let (provider, exec) = executor(vec![submit(valid_report_args())], Budget::default());
-        let runtime = MockToolRuntime::new(&["search"], Ok("data".into()));
+        let runtime = InvocationRecordingRuntime::new(&["search"], Ok("data".into()));
         exec.execute(&runtime, Task::new("worker", "do it"))
             .await
             .unwrap();
@@ -4076,7 +3976,7 @@ mod tests {
             ],
             Budget::default(),
         );
-        let runtime = MockToolRuntime::new(&["search"], Ok("data".into()));
+        let runtime = InvocationRecordingRuntime::new(&["search"], Ok("data".into()));
 
         let report = exec
             .execute(&runtime, Task::new("worker", "do it"))
@@ -4113,7 +4013,7 @@ mod tests {
             ],
             Budget::new(1),
         );
-        let runtime = MockToolRuntime::new(&["search"], Ok("3 hits".into()));
+        let runtime = InvocationRecordingRuntime::new(&["search"], Ok("3 hits".into()));
 
         exec.execute(
             &runtime,
@@ -4147,7 +4047,7 @@ mod tests {
             ],
             Budget::default(),
         );
-        let runtime = MockToolRuntime::new(&["search"], Ok("data".into()));
+        let runtime = InvocationRecordingRuntime::new(&["search"], Ok("data".into()));
         exec.execute(&runtime, Task::new("worker", "do it"))
             .await
             .unwrap();
@@ -4192,7 +4092,7 @@ mod tests {
             ],
             Budget::default(),
         );
-        let runtime = MockToolRuntime::new(&["search"], Ok("data".into()));
+        let runtime = InvocationRecordingRuntime::new(&["search"], Ok("data".into()));
 
         let report = exec
             .execute(&runtime, Task::new("worker", "do it"))
@@ -4224,7 +4124,7 @@ mod tests {
             ],
             Budget::default(),
         );
-        let runtime = MockToolRuntime::new(&["search"], Ok("data".into()));
+        let runtime = InvocationRecordingRuntime::new(&["search"], Ok("data".into()));
 
         let report = exec
             .execute(&runtime, Task::new("worker", "do it"))
@@ -4251,7 +4151,7 @@ mod tests {
             vec![call_tool("search"), submit(valid_report_args())],
             Budget::default(),
         );
-        let runtime = MockToolRuntime::new(&["search"], Ok("3 hits".into()));
+        let runtime = InvocationRecordingRuntime::new(&["search"], Ok("3 hits".into()));
         let report = exec
             .execute(&runtime, Task::new("you are a worker", "find the thing"))
             .await
@@ -4270,7 +4170,7 @@ mod tests {
             ],
             Budget::default(),
         );
-        let runtime = MockToolRuntime::new(&["search"], Ok("3 hits".into()));
+        let runtime = InvocationRecordingRuntime::new(&["search"], Ok("3 hits".into()));
         let report = exec
             .execute(&runtime, Task::new("you are a worker", "find the thing"))
             .await
@@ -4293,7 +4193,7 @@ mod tests {
             ],
             Budget::default(),
         );
-        let runtime = MockToolRuntime::new(&["search"], Ok("3 hits".into()));
+        let runtime = InvocationRecordingRuntime::new(&["search"], Ok("3 hits".into()));
         let report = exec
             .execute(&runtime, Task::new("you are a worker", "find the thing"))
             .await
@@ -4315,7 +4215,7 @@ mod tests {
             ],
             Budget::default(),
         );
-        let runtime = MockToolRuntime::new(&["search"], Ok("3 hits".into()));
+        let runtime = InvocationRecordingRuntime::new(&["search"], Ok("3 hits".into()));
         let report = exec
             .execute(&runtime, Task::new("you are a worker", "find the thing"))
             .await
@@ -4366,7 +4266,7 @@ mod tests {
             MeteredProvider::wrap(inner, AgentRole::Orchestrator, rec.clone()),
             Budget::default(),
         );
-        let runtime = MockToolRuntime::new(&["search"], Ok("hits".into()));
+        let runtime = InvocationRecordingRuntime::new(&["search"], Ok("hits".into()));
 
         let report = exec
             .execute(&runtime, Task::new("sys", "goal"))
@@ -4409,7 +4309,7 @@ mod tests {
         ]);
         // First response makes the `search` call; the second repeats it *after* submit_report.
         let (_provider, exec) = executor(vec![call_tool("search"), batched], Budget::default());
-        let runtime = MockToolRuntime::new(&["search"], Ok("3 hits".into()));
+        let runtime = InvocationRecordingRuntime::new(&["search"], Ok("3 hits".into()));
 
         let report = exec
             .execute(&runtime, Task::new("you are a worker", "find the thing"))
@@ -4425,7 +4325,7 @@ mod tests {
     // ── parallel read-only execution ──────────────────────────────────
 
     struct ReadOnlyAwareRuntime {
-        inner: MockToolRuntime,
+        inner: InvocationRecordingRuntime,
         read_only_tools: Vec<String>,
     }
 
@@ -4464,7 +4364,10 @@ mod tests {
             Budget::default(),
         );
         let runtime = ReadOnlyAwareRuntime {
-            inner: MockToolRuntime::new(&["read_file", "search_text"], Ok("data".into())),
+            inner: InvocationRecordingRuntime::new(
+                &["read_file", "search_text"],
+                Ok("data".into()),
+            ),
             read_only_tools: vec!["read_file".into(), "search_text".into()],
         };
 
@@ -4501,7 +4404,7 @@ mod tests {
             ],
             Budget::default(),
         );
-        let runtime = MockToolRuntime::new(&["search"], Ok("data".into()));
+        let runtime = InvocationRecordingRuntime::new(&["search"], Ok("data".into()));
 
         let mut messages = vec![
             Message::system("you are a helpful assistant"),
@@ -4526,7 +4429,7 @@ mod tests {
             vec![call_tool("search"), call_tool("search")],
             Budget::new(1),
         );
-        let runtime = MockToolRuntime::new(&["search"], Ok("data".into()));
+        let runtime = InvocationRecordingRuntime::new(&["search"], Ok("data".into()));
         let (tx, _rx) = tokio::sync::mpsc::channel(64);
 
         let mut messages = vec![Message::system("helper"), Message::user("find")];
@@ -4542,7 +4445,7 @@ mod tests {
     }
 
     struct ParkOnAsk {
-        inner: MockToolRuntime,
+        inner: InvocationRecordingRuntime,
     }
 
     #[async_trait]
@@ -4562,7 +4465,7 @@ mod tests {
     async fn converse_stream_parks_without_a_tool_result() {
         let (_provider, exec) = executor(vec![call_tool("ask_human")], Budget::default());
         let runtime = ParkOnAsk {
-            inner: MockToolRuntime::new(&["ask_human"], Ok("which crate?".into())),
+            inner: InvocationRecordingRuntime::new(&["ask_human"], Ok("which crate?".into())),
         };
         let (tx, _rx) = tokio::sync::mpsc::channel(64);
         let mut messages = vec![Message::system("sys"), Message::user("split this")];
@@ -4592,7 +4495,7 @@ mod tests {
             Budget::default(),
         );
         let runtime = ParkOnAsk {
-            inner: MockToolRuntime::new(&["ask_human"], Ok("which crate?".into())),
+            inner: InvocationRecordingRuntime::new(&["ask_human"], Ok("which crate?".into())),
         };
         let (tx, _rx) = tokio::sync::mpsc::channel(64);
         let mut messages = vec![Message::system("sys"), Message::user("split this")];
@@ -4649,7 +4552,7 @@ mod tests {
             ],
         ));
         let exec = Executor::new(provider, Budget::default()).with_observer(rec.clone());
-        let runtime = MockToolRuntime::new(&["search", "write_file"], Ok("data".into()));
+        let runtime = InvocationRecordingRuntime::new(&["search", "write_file"], Ok("data".into()));
 
         let _ = exec.execute(&runtime, Task::new("worker", "do it")).await;
 
@@ -4691,7 +4594,7 @@ mod tests {
             ],
         ));
         let exec = Executor::new(provider, Budget::default()).with_observer(rec.clone());
-        let runtime = MockToolRuntime::new(&["search", "write_file"], Ok("data".into()));
+        let runtime = InvocationRecordingRuntime::new(&["search", "write_file"], Ok("data".into()));
 
         let _ = exec.execute(&runtime, Task::new("worker", "do it")).await;
 
@@ -4742,7 +4645,7 @@ mod tests {
             ],
         ));
         let exec = Executor::new(provider, Budget::default()).with_observer(rec.clone());
-        let runtime = MockToolRuntime::new(&["search"], Ok("same result".into()));
+        let runtime = InvocationRecordingRuntime::new(&["search"], Ok("same result".into()));
 
         let _ = exec.execute(&runtime, Task::new("worker", "do it")).await;
 

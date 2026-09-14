@@ -138,8 +138,13 @@ fn write_descendant_worker(path: &std::path::Path, marker: &std::path::Path) -> 
 /// and often `CREATE_BREAKAWAY_FROM_JOB`. The job refuses breakaway, so that
 /// writer never starts — or it starts outside the job and cancel misses it.
 /// A nested `cmd /c` is an ordinary child and stays contained.
+///
+/// `.\descendant.cmd` is required. When `NoDefaultCurrentDirectoryInExePath=1`
+/// (local hardening; GitHub-hosted runners typically leave it unset),
+/// `cmd /c descendant.cmd` does not search the current directory, the writer
+/// never starts, and the test fails as "descendant never started writing".
 fn windows_fake_opencode_script() -> &'static str {
-    "@echo off\r\ncmd /c descendant.cmd\r\n"
+    "@echo off\r\ncmd /c .\\descendant.cmd\r\n"
 }
 
 /// Descendant writer: three lines immediately, then keep writing until killed.
@@ -163,8 +168,9 @@ fn windows_descendant_fixture_stays_inside_the_job() {
         "start breakaway-from-job either fails or escapes the job: {parent}"
     );
     assert!(
-        parent.contains("cmd /c descendant.cmd"),
-        "parent must spawn a nested cmd child: {parent}"
+        parent.contains("cmd /c .\\descendant.cmd"),
+        "parent must spawn a nested cmd child via .\\ so cwd is searched when \
+         NoDefaultCurrentDirectoryInExePath=1: {parent}"
     );
     assert!(
         writer.contains("descendant.marker"),

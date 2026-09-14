@@ -1,0 +1,19 @@
+[package]
+name = "liberado-tool-runtime"
+version = "0.1.0"
+description = "The tool-runtime contract: ToolRuntime (catalog + invoke), RuntimeFactory (how an orchestrator obtains one), RuntimeSetupError, and the RebindableRuntime provenance-rebind extension. Sunk below executor and mcp so the engine, the MCP adapter, and the shared test doubles all implement the same trait instances."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+async-trait = { workspace = true }
+liberado-common = { workspace = true }
+liberado-provider = { workspace = true }
+thiserror = { workspace = true }
+
+[package.metadata.liberado]
+# Layer role for the layer-rules test + crate-map generator (docs/architecture/contracts.md)
+role = "foundation"

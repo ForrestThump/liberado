@@ -1,57 +1,6 @@
 use super::*;
 use liberado_common::Capability;
-use liberado_provider::ToolDef;
-
-/// A mock inner runtime that returns a canned result.
-pub(crate) struct MockInner {
-    tools: Vec<ToolDef>,
-    pub(crate) invoked: std::sync::Mutex<Vec<ToolInvocation>>,
-    result: Result<String, String>,
-}
-
-impl MockInner {
-    pub(crate) fn new(tool_names: &[&str], result: Result<String, String>) -> Self {
-        let tools = tool_names
-            .iter()
-            .map(|n| ToolDef::new(*n, "test tool", serde_json::json!({ "type": "object" })))
-            .collect();
-        Self {
-            tools,
-            invoked: std::sync::Mutex::new(Vec::new()),
-            result,
-        }
-    }
-}
-
-#[async_trait]
-impl ToolRuntime for MockInner {
-    fn catalog(&self) -> Vec<ToolDef> {
-        self.tools.clone()
-    }
-
-    async fn invoke(&self, call: &ToolInvocation) -> Result<String, String> {
-        self.invoked.lock().unwrap().push(call.clone());
-        self.result.clone()
-    }
-}
-
-/// A notifier whose `notify` succeeds or fails on demand — the default `notify_proposal` /
-/// `notify_permission_request` route through it, so it stands in for both. Used to prove the
-/// out-of-band deferral flag (Gap 2) is set on a confirmed send and left clear otherwise.
-struct MockNotifier {
-    ok: bool,
-}
-
-#[async_trait]
-impl Notifier for MockNotifier {
-    async fn notify(&self, _message: &str) -> Result<(), liberado_notify::NotifyError> {
-        if self.ok {
-            Ok(())
-        } else {
-            Err(liberado_notify::NotifyError("notify failed".into()))
-        }
-    }
-}
+use liberado_test_support::{InvocationRecordingRuntime, MockNotifier};
 
 fn test_runtime(
     inner: impl ToolRuntime + 'static,
@@ -82,7 +31,7 @@ fn test_runtime(
 /// a server the grant only meant to open a crack of.
 #[tokio::test]
 async fn a_per_tool_grant_gates_the_rest_of_that_mcp() {
-    let inner = MockInner::new(
+    let inner = InvocationRecordingRuntime::new(
         &["turbovault:read_note", "turbovault:write_note"],
         Ok("ok".into()),
     );
@@ -100,7 +49,7 @@ async fn a_per_tool_grant_gates_the_rest_of_that_mcp() {
 /// And a server-wide grant must keep working — the coarse form is still the common case.
 #[tokio::test]
 async fn a_server_grant_still_authorizes_every_tool_on_it() {
-    let inner = MockInner::new(
+    let inner = InvocationRecordingRuntime::new(
         &["turbovault:read_note", "turbovault:write_note"],
         Ok("ok".into()),
     );
@@ -115,7 +64,7 @@ async fn a_server_grant_still_authorizes_every_tool_on_it() {
 
 #[tokio::test]
 async fn low_consequence_call_passes_through() {
-    let inner = MockInner::new(&["my-mcp:read"], Ok("data".into()));
+    let inner = InvocationRecordingRuntime::new(&["my-mcp:read"], Ok("data".into()));
     let caps = CapabilitySet::from_iter([Capability::ExecuteMcp("my-mcp".into())]);
     let rt = test_runtime(inner, caps, &[("my-mcp", Consequence::ReadOnly)]);
 
@@ -127,7 +76,10 @@ async fn low_consequence_call_passes_through() {
 #[tokio::test]
 async fn high_consequence_call_is_downgraded_to_proposal() {
     let dir = tempfile::TempDir::new().unwrap();
-    let inner = Arc::new(MockInner::new(&["email-mcp:send"], Ok("sent".into())));
+    let inner = Arc::new(InvocationRecordingRuntime::new(
+        &["email-mcp:send"],
+        Ok("sent".into()),
+    ));
     let caps = CapabilitySet::from_iter([Capability::ExecuteMcp("email-mcp".into())]);
     let signer = ProposalSigner::random();
     let rt = RiskGatedToolRuntime::new(
@@ -179,7 +131,10 @@ fn downgrade_runtime(
     dir: &std::path::Path,
     notifier: Option<MockNotifier>,
 ) -> RiskGatedToolRuntime {
-    let inner = Arc::new(MockInner::new(&["email-mcp:send"], Ok("sent".into())));
+    let inner = Arc::new(InvocationRecordingRuntime::new(
+        &["email-mcp:send"],
+        Ok("sent".into()),
+    ));
     let caps = CapabilitySet::from_iter([Capability::ExecuteMcp("email-mcp".into())]);
     let mut rt = RiskGatedToolRuntime::new(
         inner,
@@ -248,7 +203,10 @@ async fn permission_request_with_a_confirmed_notify_records_out_of_band_deferral
     // (four scope buttons) instead of a hard refusal when a notifier is wired — and records the
     // out-of-band surfacing so the face agent drops the duplicate "grant permission" reply.
     let dir = tempfile::TempDir::new().unwrap();
-    let inner = Arc::new(MockInner::new(&["vault:write_review"], Ok("wrote".into())));
+    let inner = Arc::new(InvocationRecordingRuntime::new(
+        &["vault:write_review"],
+        Ok("wrote".into()),
+    ));
     let caps = CapabilitySet::from_iter([Capability::ExecuteMcp("vault".into())]);
     let rt = RiskGatedToolRuntime::new(
         inner,
@@ -278,7 +236,7 @@ async fn permission_request_with_a_confirmed_notify_records_out_of_band_deferral
 
 #[tokio::test]
 async fn out_of_capability_call_is_rejected() {
-    let inner = MockInner::new(&["email-mcp:send"], Ok("sent".into()));
+    let inner = InvocationRecordingRuntime::new(&["email-mcp:send"], Ok("sent".into()));
     let caps = CapabilitySet::from_iter([Capability::ExecuteMcp("tasks-mcp".into())]); // email not granted
     let rt = test_runtime(inner, caps, &[("email-mcp", Consequence::Reversible)]);
 
@@ -290,7 +248,7 @@ async fn out_of_capability_call_is_rejected() {
 
 #[tokio::test]
 async fn catalog_delegates_to_inner() {
-    let inner = MockInner::new(&["my-mcp:read", "my-mcp:write"], Ok("ok".into()));
+    let inner = InvocationRecordingRuntime::new(&["my-mcp:read", "my-mcp:write"], Ok("ok".into()));
     let rt = test_runtime(
         inner,
         CapabilitySet::empty(),
@@ -315,7 +273,10 @@ async fn a_proposal_write_failure_is_a_real_error_not_a_silent_ok() {
         .await
         .unwrap();
 
-    let inner = Arc::new(MockInner::new(&["email-mcp:send"], Ok("sent".into())));
+    let inner = Arc::new(InvocationRecordingRuntime::new(
+        &["email-mcp:send"],
+        Ok("sent".into()),
+    ));
     let caps = CapabilitySet::from_iter([Capability::ExecuteMcp("email-mcp".into())]);
     let rt = RiskGatedToolRuntime::new(
         inner.clone(),
@@ -349,7 +310,10 @@ async fn a_proposal_write_failure_is_a_real_error_not_a_silent_ok() {
 #[tokio::test]
 async fn sweeping_destructive_call_is_downgraded() {
     let dir = tempfile::TempDir::new().unwrap();
-    let inner = Arc::new(MockInner::new(&["vault-mcp:delete"], Ok("done".into())));
+    let inner = Arc::new(InvocationRecordingRuntime::new(
+        &["vault-mcp:delete"],
+        Ok("done".into()),
+    ));
     let caps = CapabilitySet::from_iter([Capability::ExecuteMcp("vault-mcp".into())]);
     let rt = RiskGatedToolRuntime::new(
         inner.clone(),
@@ -392,7 +356,10 @@ fn vault_descriptor() -> McpDescriptor {
 #[tokio::test]
 async fn zone_restricted_call_is_downgraded_to_proposal() {
     let dir = tempfile::TempDir::new().unwrap();
-    let inner = Arc::new(MockInner::new(&["vault:write_review"], Ok("wrote".into())));
+    let inner = Arc::new(InvocationRecordingRuntime::new(
+        &["vault:write_review"],
+        Ok("wrote".into()),
+    ));
     // Holds the authority to write `reviews` — this test is about whether the write is SAFE to
     // do directly (write-class), which is a question that only arises once it is PERMITTED.
     let caps = CapabilitySet::from_iter([
@@ -429,7 +396,10 @@ async fn zone_restricted_call_is_downgraded_to_proposal() {
 #[tokio::test]
 async fn zone_agent_writable_call_passes_through() {
     let dir = tempfile::TempDir::new().unwrap();
-    let inner = Arc::new(MockInner::new(&["vault:write_review"], Ok("wrote".into())));
+    let inner = Arc::new(InvocationRecordingRuntime::new(
+        &["vault:write_review"],
+        Ok("wrote".into()),
+    ));
     let caps = CapabilitySet::from_iter([
         Capability::ExecuteMcp("vault".into()),
         Capability::Write(Zone::vault("reviews")),
@@ -462,7 +432,10 @@ async fn call_to_an_mcp_not_in_the_zone_catalog_is_unaffected() {
     // Backward-compat case: an empty zone_catalog (as every pre-existing test in this file
     // uses) must never trip the zone-write-class check, regardless of zone_write_classes.
     let dir = tempfile::TempDir::new().unwrap();
-    let inner = Arc::new(MockInner::new(&["vault:write_review"], Ok("wrote".into())));
+    let inner = Arc::new(InvocationRecordingRuntime::new(
+        &["vault:write_review"],
+        Ok("wrote".into()),
+    ));
     let caps = CapabilitySet::from_iter([Capability::ExecuteMcp("vault".into())]);
     let rt = RiskGatedToolRuntime::new(
         inner.clone(),
@@ -496,7 +469,10 @@ async fn live_high_consequence_downgrade_sends_a_real_telegram_notification() {
     let notifier = liberado_notify::TelegramNotifier::from_env()
         .expect("set LIBERADO_TELEGRAM_BOT_TOKEN and LIBERADO_TELEGRAM_CHAT_ID to run this test");
     let dir = tempfile::TempDir::new().unwrap();
-    let inner = Arc::new(MockInner::new(&["email-mcp:send"], Ok("sent".into())));
+    let inner = Arc::new(InvocationRecordingRuntime::new(
+        &["email-mcp:send"],
+        Ok("sent".into()),
+    ));
     let caps = CapabilitySet::from_iter([Capability::ExecuteMcp("email-mcp".into())]);
     let rt = RiskGatedToolRuntime::new(
         inner,
@@ -527,7 +503,10 @@ async fn live_high_consequence_downgrade_sends_a_real_telegram_notification() {
 #[tokio::test]
 async fn calling_an_mcp_is_not_permission_to_write_with_it() {
     let dir = tempfile::TempDir::new().unwrap();
-    let inner = Arc::new(MockInner::new(&["vault:write_review"], Ok("wrote".into())));
+    let inner = Arc::new(InvocationRecordingRuntime::new(
+        &["vault:write_review"],
+        Ok("wrote".into()),
+    ));
     // ExecuteMcp but NO Write — exactly the dispatch-readonly profile from the live control.
     let caps = CapabilitySet::from_iter([Capability::ExecuteMcp("vault".into())]);
     let rt = RiskGatedToolRuntime::new(
@@ -584,7 +563,7 @@ async fn a_path_addressed_write_is_checked_against_the_zone_the_path_names() {
         ("tasks".to_string(), WriteClass::AgentWritable),
         ("decisions".to_string(), WriteClass::AgentWritable),
     ];
-    let make = |inner: Arc<MockInner>| {
+    let make = |inner: Arc<InvocationRecordingRuntime>| {
         RiskGatedToolRuntime::new(
             inner,
             caps.clone(),
@@ -600,7 +579,7 @@ async fn a_path_addressed_write_is_checked_against_the_zone_the_path_names() {
     };
 
     // In-zone: permitted.
-    let ok_inner = Arc::new(MockInner::new(
+    let ok_inner = Arc::new(InvocationRecordingRuntime::new(
         &["turbovault:write_note"],
         Ok("wrote".into()),
     ));
@@ -615,7 +594,7 @@ async fn a_path_addressed_write_is_checked_against_the_zone_the_path_names() {
 
     // Out of zone: the SAME tool, the SAME grant — refused, because the path names a zone this
     // grant cannot write. A fixed `default_zone` could never have caught this.
-    let bad_inner = Arc::new(MockInner::new(
+    let bad_inner = Arc::new(InvocationRecordingRuntime::new(
         &["turbovault:write_note"],
         Ok("wrote".into()),
     ));
@@ -656,7 +635,7 @@ async fn a_granted_write_to_an_undeclared_zone_is_direct_not_downgraded() {
         Capability::ExecuteMcp("turbovault".into()),
         Capability::Write(Zone::vault("sandbox")),
     ]);
-    let granted_inner = Arc::new(MockInner::new(
+    let granted_inner = Arc::new(InvocationRecordingRuntime::new(
         &["turbovault:write_note"],
         Ok("wrote".into()),
     ));
@@ -692,7 +671,7 @@ async fn a_granted_write_to_an_undeclared_zone_is_direct_not_downgraded() {
 
     // Control: the SAME undeclared zone WITHOUT a Write grant still fails — at the authority
     // check (:227), before the write-class question is even asked.
-    let ungranted_inner = Arc::new(MockInner::new(
+    let ungranted_inner = Arc::new(InvocationRecordingRuntime::new(
         &["turbovault:write_note"],
         Ok("wrote".into()),
     ));
@@ -741,7 +720,7 @@ mod magnitude_reads_structure_first {
 
     fn gate(
         dir: &std::path::Path,
-        inner: Arc<MockInner>,
+        inner: Arc<InvocationRecordingRuntime>,
         descriptor: McpDescriptor,
         goal: &str,
     ) -> RiskGatedToolRuntime {
@@ -772,7 +751,7 @@ mod magnitude_reads_structure_first {
     #[tokio::test]
     async fn a_report_that_discusses_destruction_is_not_a_destructive_action() {
         let dir = tempfile::TempDir::new().unwrap();
-        let inner = Arc::new(MockInner::new(
+        let inner = Arc::new(InvocationRecordingRuntime::new(
             &["turbovault:write_note"],
             Ok("wrote".into()),
         ));
@@ -811,7 +790,7 @@ mod magnitude_reads_structure_first {
     #[tokio::test]
     async fn a_sweeping_destructive_goal_still_gates_a_single_path_write() {
         let dir = tempfile::TempDir::new().unwrap();
-        let inner = Arc::new(MockInner::new(
+        let inner = Arc::new(InvocationRecordingRuntime::new(
             &["turbovault:write_note"],
             Ok("wrote".into()),
         ));
@@ -852,7 +831,7 @@ mod magnitude_reads_structure_first {
             zone_from_arg: None,
             write_tools: Vec::new(),
         };
-        let inner = Arc::new(MockInner::new(
+        let inner = Arc::new(InvocationRecordingRuntime::new(
             &["turbovault:write_note"],
             Ok("wrote".into()),
         ));
@@ -922,7 +901,7 @@ mod magnitude_respects_risk_waivers {
 
     fn gate_with_waivers(
         dir: &std::path::Path,
-        inner: Arc<MockInner>,
+        inner: Arc<InvocationRecordingRuntime>,
         descriptor: McpDescriptor,
         goal: &str,
         consequence_catalog: Vec<(String, Consequence)>,
@@ -962,7 +941,7 @@ mod magnitude_respects_risk_waivers {
     #[tokio::test]
     async fn a_waiver_matching_every_call_suppresses_magnitude() {
         let dir = tempfile::TempDir::new().unwrap();
-        let inner = Arc::new(MockInner::new(
+        let inner = Arc::new(InvocationRecordingRuntime::new(
             &["turbovault:read_note", "turbovault:write_note"],
             Ok("wrote".into()),
         ));
@@ -1022,7 +1001,7 @@ mod magnitude_respects_risk_waivers {
     #[tokio::test]
     async fn a_partial_waiver_does_not_suppress_magnitude_for_uncovered_calls() {
         let dir = tempfile::TempDir::new().unwrap();
-        let inner = Arc::new(MockInner::new(
+        let inner = Arc::new(InvocationRecordingRuntime::new(
             &["turbovault:write_note"],
             Ok("wrote".into()),
         ));
@@ -1062,7 +1041,7 @@ mod magnitude_respects_risk_waivers {
     #[tokio::test]
     async fn a_waiver_for_a_different_tool_does_not_match() {
         let dir = tempfile::TempDir::new().unwrap();
-        let inner = Arc::new(MockInner::new(
+        let inner = Arc::new(InvocationRecordingRuntime::new(
             &["turbovault:write_note"],
             Ok("wrote".into()),
         ));
@@ -1100,7 +1079,10 @@ mod magnitude_respects_risk_waivers {
     #[tokio::test]
     async fn a_magnitude_waiver_does_not_bypass_consequence() {
         let dir = tempfile::TempDir::new().unwrap();
-        let inner = Arc::new(MockInner::new(&["email:send"], Ok("sent".into())));
+        let inner = Arc::new(InvocationRecordingRuntime::new(
+            &["email:send"],
+            Ok("sent".into()),
+        ));
         let email_descriptor = McpDescriptor {
             name: "email".into(),
             description: "send email".into(),
@@ -1141,7 +1123,7 @@ mod magnitude_respects_risk_waivers {
 mod one_intent_one_prompt {
     use super::*;
 
-    fn gate(dir: &std::path::Path, inner: Arc<MockInner>) -> RiskGatedToolRuntime {
+    fn gate(dir: &std::path::Path, inner: Arc<InvocationRecordingRuntime>) -> RiskGatedToolRuntime {
         RiskGatedToolRuntime::new(
             inner,
             CapabilitySet::from_iter([Capability::ExecuteMcp("vault-mcp".into())]),
@@ -1165,7 +1147,10 @@ mod one_intent_one_prompt {
     #[tokio::test]
     async fn a_retried_call_reuses_its_pending_proposal() {
         let dir = tempfile::TempDir::new().unwrap();
-        let inner = Arc::new(MockInner::new(&["vault-mcp:delete"], Ok("done".into())));
+        let inner = Arc::new(InvocationRecordingRuntime::new(
+            &["vault-mcp:delete"],
+            Ok("done".into()),
+        ));
         let rt = gate(dir.path(), inner.clone());
         let call = ToolInvocation::new(
             "c1",
@@ -1199,7 +1184,10 @@ mod one_intent_one_prompt {
     #[tokio::test]
     async fn a_different_action_still_gets_its_own_proposal() {
         let dir = tempfile::TempDir::new().unwrap();
-        let inner = Arc::new(MockInner::new(&["vault-mcp:delete"], Ok("done".into())));
+        let inner = Arc::new(InvocationRecordingRuntime::new(
+            &["vault-mcp:delete"],
+            Ok("done".into()),
+        ));
         let rt = gate(dir.path(), inner.clone());
 
         rt.invoke(&ToolInvocation::new(

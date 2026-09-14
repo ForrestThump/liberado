@@ -9,7 +9,7 @@ async fn converse_messages_reserves_a_tool_free_final_response() {
         ],
         Budget::new(1),
     );
-    let runtime = MockToolRuntime::new(&["search"], Ok("data".into()));
+    let runtime = InvocationRecordingRuntime::new(&["search"], Ok("data".into()));
     let mut messages = vec![Message::system("helper"), Message::user("find")];
 
     let answer = exec
@@ -40,7 +40,7 @@ async fn converse_stream_reserves_a_tool_free_final_response() {
         ],
         Budget::new(1),
     );
-    let runtime = MockToolRuntime::new(&["search"], Ok("data".into()));
+    let runtime = InvocationRecordingRuntime::new(&["search"], Ok("data".into()));
     let (tx, _rx) = tokio::sync::mpsc::channel(64);
     let mut messages = vec![Message::system("helper"), Message::user("find")];
 

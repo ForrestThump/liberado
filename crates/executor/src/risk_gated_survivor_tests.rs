@@ -5,50 +5,8 @@
 //! zone is unknown to policy; a held `Write` still runs direct).
 
 use super::*;
-use async_trait::async_trait;
 use liberado_common::{Capability, CapabilitySet, Zone};
-
-/// Minimal inner runtime: records invocations, returns a fixed result.
-struct MockInner {
-    tools: Vec<ToolDef>,
-    invoked: std::sync::Mutex<Vec<ToolInvocation>>,
-    result: Result<String, String>,
-}
-
-impl MockInner {
-    fn new(tool_names: &[&str], result: Result<String, String>) -> Self {
-        let tools = tool_names
-            .iter()
-            .map(|n| ToolDef::new(*n, "test tool", serde_json::json!({ "type": "object" })))
-            .collect();
-        Self {
-            tools,
-            invoked: std::sync::Mutex::new(Vec::new()),
-            result,
-        }
-    }
-}
-
-#[async_trait]
-impl ToolRuntime for MockInner {
-    fn catalog(&self) -> Vec<ToolDef> {
-        self.tools.clone()
-    }
-    async fn invoke(&self, call: &ToolInvocation) -> Result<String, String> {
-        self.invoked.lock().unwrap().push(call.clone());
-        self.result.clone()
-    }
-}
-
-/// Notifier that always succeeds, so deferral paths take their happy route.
-struct AlwaysOkNotifier;
-
-#[async_trait]
-impl Notifier for AlwaysOkNotifier {
-    async fn notify(&self, _: &str) -> Result<(), liberado_notify::NotifyError> {
-        Ok(())
-    }
-}
+use liberado_test_support::{InvocationRecordingRuntime, MockNotifier};
 
 // ── pure helpers ────────────────────────────────────────────────────────────
 
@@ -105,7 +63,7 @@ fn path_write_descriptor() -> McpDescriptor {
 #[tokio::test]
 async fn an_undeclared_zone_without_a_grant_is_deferred_not_executed() {
     let dir = tempfile::TempDir::new().unwrap();
-    let inner = Arc::new(MockInner::new(
+    let inner = Arc::new(InvocationRecordingRuntime::new(
         &["turbovault:write_note"],
         Ok("wrote".into()),
     ));
@@ -122,7 +80,7 @@ async fn an_undeclared_zone_without_a_grant_is_deferred_not_executed() {
         ProposalSigner::random(),
         "default",
     )
-    .with_notifier(Arc::new(AlwaysOkNotifier));
+    .with_notifier(Arc::new(MockNotifier::default()));
 
     let result = rt
         .invoke(&ToolInvocation::new(
@@ -148,7 +106,7 @@ async fn an_undeclared_zone_without_a_grant_is_deferred_not_executed() {
 #[tokio::test]
 async fn a_held_undeclared_zone_write_runs_direct() {
     let dir = tempfile::TempDir::new().unwrap();
-    let inner = Arc::new(MockInner::new(
+    let inner = Arc::new(InvocationRecordingRuntime::new(
         &["turbovault:write_note"],
         Ok("wrote".into()),
     ));

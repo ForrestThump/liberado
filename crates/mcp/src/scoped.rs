@@ -24,8 +24,8 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use liberado_common::{CapabilitySet, mcp_of};
-use liberado_executor::ToolRuntime;
 use liberado_provider::{ToolDef, ToolInvocation};
+use liberado_tool_runtime::ToolRuntime;
 
 /// How a [`ScopedRuntime`] decides what is in scope.
 enum Scope {
@@ -104,46 +104,21 @@ impl ToolRuntime for ScopedRuntime {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use async_trait::async_trait;
     use liberado_common::Capability;
-    use std::sync::Mutex;
+    use liberado_test_support::InvocationRecordingRuntime;
 
-    /// A mock inner runtime that records invocations.
-    struct MockInner {
-        tools: Vec<ToolDef>,
-        invoked: Mutex<Vec<ToolInvocation>>,
+    fn mock_inner(
+        tool_names: &[&str],
         result: Result<String, String>,
-    }
-
-    impl MockInner {
-        fn new(tool_names: &[&str], result: Result<String, String>) -> Self {
-            let tools = tool_names
-                .iter()
-                .map(|n| ToolDef::new(*n, "test tool", serde_json::json!({ "type": "object" })))
-                .collect();
-            Self {
-                tools,
-                invoked: Mutex::new(Vec::new()),
-                result,
-            }
-        }
-    }
-
-    #[async_trait]
-    impl ToolRuntime for MockInner {
-        fn catalog(&self) -> Vec<ToolDef> {
-            self.tools.clone()
-        }
-
-        async fn invoke(&self, call: &ToolInvocation) -> Result<String, String> {
-            self.invoked.lock().unwrap().push(call.clone());
-            self.result.clone()
-        }
+    ) -> InvocationRecordingRuntime {
+        InvocationRecordingRuntime::default()
+            .with_catalog(tool_names)
+            .with_default_result(result)
     }
 
     #[tokio::test]
     async fn filters_catalog_to_allowed_mcps() {
-        let inner = Arc::new(MockInner::new(
+        let inner = Arc::new(mock_inner(
             &[
                 "tasks-mcp:add",
                 "tasks-mcp:list",
@@ -166,7 +141,7 @@ mod tests {
 
     #[tokio::test]
     async fn rejects_invoke_for_scoped_out_mcp() {
-        let inner = Arc::new(MockInner::new(
+        let inner = Arc::new(mock_inner(
             &["tasks-mcp:add", "email-mcp:send"],
             Ok("ok".into()),
         ));
@@ -180,7 +155,7 @@ mod tests {
 
     #[tokio::test]
     async fn empty_allow_list_passes_everything() {
-        let inner = Arc::new(MockInner::new(
+        let inner = Arc::new(mock_inner(
             &["tasks-mcp:add", "email-mcp:send"],
             Ok("ok".into()),
         ));
@@ -196,7 +171,7 @@ mod tests {
 
     #[tokio::test]
     async fn allowed_invoke_passes_through() {
-        let inner = Arc::new(MockInner::new(&["tasks-mcp:add"], Ok("added".into())));
+        let inner = Arc::new(mock_inner(&["tasks-mcp:add"], Ok("added".into())));
         let scoped = ScopedRuntime::new(inner, vec!["tasks-mcp".into()]);
 
         let call = ToolInvocation::new("c1", "tasks-mcp:add", serde_json::json!({"title": "milk"}));
@@ -206,8 +181,8 @@ mod tests {
 
     // ── from_capabilities: the fail-closed constructor ───────────────────────────────────────
 
-    fn fleet() -> Arc<MockInner> {
-        Arc::new(MockInner::new(
+    fn fleet() -> Arc<InvocationRecordingRuntime> {
+        Arc::new(mock_inner(
             &[
                 "turbovault:read_note",
                 "turbovault:write_note",

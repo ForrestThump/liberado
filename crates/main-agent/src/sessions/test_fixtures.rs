@@ -13,6 +13,7 @@ pub(crate) use liberado_provider::{
     ToolInvocation,
 };
 pub(crate) use liberado_session_store::SessionStore;
+pub(crate) use liberado_test_support::InvocationRecordingRuntime;
 pub(crate) use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 
 /// Turn settings for dispatch-routing tests: `delegation = true` so `dispatch_turn` runs, while
@@ -33,15 +34,9 @@ pub(crate) async fn create_delegating_session(sessions: &ChatSessions) -> Ulid {
         .unwrap()
 }
 
-pub(crate) struct NoTools;
-#[async_trait]
-impl ToolRuntime for NoTools {
-    fn catalog(&self) -> Vec<ToolDef> {
-        Vec::new()
-    }
-    async fn invoke(&self, _call: &ToolInvocation) -> Result<String, String> {
-        Err("no tools".into())
-    }
+/// Returns a test runtime with no tools that returns a fixed error on invocation.
+pub(crate) fn no_tools_runtime() -> InvocationRecordingRuntime {
+    InvocationRecordingRuntime::default().with_default_result(Err("no tools".into()))
 }
 
 /// A provider whose completion never resolves — lets a turn get started then hang, so a test can
@@ -90,7 +85,7 @@ pub(crate) async fn slow_sessions_at(
         reply: reply.to_string(),
     });
     let executor = Executor::new(provider, Budget::default());
-    ChatSessions::new(store, executor, Arc::new(NoTools))
+    ChatSessions::new(store, executor, Arc::new(no_tools_runtime()))
 }
 
 /// A `ChatSessions` over the **real** session store at `root`, scripted with `replies` and no tools.
@@ -101,7 +96,7 @@ pub(crate) async fn sessions_at(
     let store = Arc::new(SessionStore::open(root).await);
     let provider = Arc::new(MockProvider::with_script("mock", replies));
     let executor = Executor::new(provider, Budget::default());
-    ChatSessions::new(store, executor, Arc::new(NoTools))
+    ChatSessions::new(store, executor, Arc::new(no_tools_runtime()))
 }
 
 /// A runtime that always offers one tool, so we can assert what the model is shown.
@@ -192,7 +187,7 @@ pub(crate) async fn sessions_with_dispatch(
     let chat_provider = Arc::new(MockProvider::with_script("chat", chat_replies));
     let executor = Executor::new(chat_provider, liberado_executor::Budget::default());
 
-    ChatSessions::new(store, executor, Arc::new(NoTools))
+    ChatSessions::new(store, executor, Arc::new(no_tools_runtime()))
         .with_goal_hub(hub)
         .with_guards(
             Vec::new(),
@@ -286,7 +281,7 @@ pub(crate) async fn compacting_sessions_at(
     let store = Arc::new(SessionStore::open(root).await);
     let provider = Arc::new(MockProvider::with_script("mock", replies));
     let executor = Executor::new(provider.clone(), Budget::default());
-    let sessions = ChatSessions::new(store, executor, Arc::new(NoTools))
+    let sessions = ChatSessions::new(store, executor, Arc::new(no_tools_runtime()))
         .with_compaction(config, provider.clone());
     (sessions, provider)
 }
@@ -346,5 +341,5 @@ pub(crate) async fn metered_sessions_at(
     let recorder: Arc<dyn LatencyRecorder> = rec;
     let provider = MeteredProvider::wrap(inner, AgentRole::Face, recorder);
     let executor = Executor::new(provider, Budget::default());
-    ChatSessions::new(store, executor, Arc::new(NoTools))
+    ChatSessions::new(store, executor, Arc::new(no_tools_runtime()))
 }

@@ -7,7 +7,7 @@
 
 use async_trait::async_trait;
 use liberado_common::WriteProvenance;
-use liberado_executor::RuntimeSetupError;
+use liberado_tool_runtime::RuntimeSetupError;
 use turbomcp_client::Client;
 use turbomcp_transport::{ChildProcessConfig, ChildProcessTransport};
 

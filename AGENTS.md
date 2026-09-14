@@ -96,6 +96,11 @@ entries stay distinct. Adding branches inside it does, and GitHub will fail. A g
 is a few lines; the full child log
 is always `.liberado/ci.log`.
 
+**Module-health and unwrap baselines write only on Linux `just ci`.** GitHub only reads
+`module-health-baseline.json` and `unwrap-classification-baseline.json`. Windows `just ci`
+compares them and does not rewrite, so the working tree stays clean for `just ready`. To record a
+new best off Linux, run `just module-health-ratchet` or `just unwrap-ratchet` and inspect the diff.
+
 **A rebase invalidates every earlier check.** A merge, rebase, conflict resolution, amend, or base
 update changes the artifact under review. Use `just push` after the final commit. It runs full local
 CI, then `just ready`; readiness includes exact Linux CRAP, natively on Debian and through Debian
@@ -122,6 +127,14 @@ fetches the ForrestThump forks at tag `liberado-2026-08-27`. Creating a scratch 
 linking leftover clones in with `mklink /J` works — until `git worktree remove --force` follows
 the junction and deletes the **contents of the originals**. Copying leftover dirs, or omitting
 them, both avoid it. Confirm the git+tag pins with `cargo metadata --locked`.
+
+**A trait that shared test doubles implement must live below every crate that tests against it.**
+A crate's `#[cfg(test)]` binary is a *second* rustc instance of that crate, so a double from
+`liberado-test-support` compiled against the normal instance implements a *different* trait than
+the unit test sees — the "multiple different versions of crate X in the dependency graph" error,
+which looks like a version skew and is not one. Dev-dependency cycles resolve in Cargo but still
+hit this wall. This is why `ToolRuntime`/`RuntimeFactory`/`RebindableRuntime` live in
+`liberado-tool-runtime` (foundation), not in executor/mcp.
 
 **A green suite does not prove the lockfile was committed.** CI resolves without `--locked` and
 regenerates `Cargo.lock` in place, so adding a dependency and forgetting the lock passes every check

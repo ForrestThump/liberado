@@ -36,17 +36,18 @@ async fn two_conversations_on_different_models_compact_at_different_thresholds()
     let mut model_triggers = std::collections::HashMap::new();
     model_triggers.insert("model-64k".into(), 1u32); // always fire once selected
     model_triggers.insert("model-200k".into(), 1_000_000u32); // never fire on this fixture
-    let sessions = ChatSessions::new(store, executor, Arc::new(NoTools)).with_compaction(
-        CompactionConfig {
-            enabled: true,
-            trigger_tokens: 1_000_000, // daemon default: high while seeding
-            model_trigger_tokens: model_triggers,
-            unknown_model_trigger_tokens: 1_000_000,
-            keep_recent_turns: 1,
-            ..CompactionConfig::default()
-        },
-        provider.clone(),
-    );
+    let sessions = ChatSessions::new(store, executor, Arc::new(no_tools_runtime()))
+        .with_compaction(
+            CompactionConfig {
+                enabled: true,
+                trigger_tokens: 1_000_000, // daemon default: high while seeding
+                model_trigger_tokens: model_triggers,
+                unknown_model_trigger_tokens: 1_000_000,
+                keep_recent_turns: 1,
+                ..CompactionConfig::default()
+            },
+            provider.clone(),
+        );
 
     let small = sessions.create(None).await.unwrap();
     let big = sessions.create(None).await.unwrap();
@@ -125,16 +126,17 @@ async fn conversation_without_model_uses_daemon_default_trigger() {
     let executor = Executor::new(provider.clone(), Budget::default());
     let mut model_triggers = std::collections::HashMap::new();
     model_triggers.insert("pinned".into(), 42u32);
-    let sessions = ChatSessions::new(store, executor, Arc::new(NoTools)).with_compaction(
-        CompactionConfig {
-            enabled: true,
-            trigger_tokens: 12_345,
-            model_trigger_tokens: model_triggers,
-            unknown_model_trigger_tokens: 99,
-            ..CompactionConfig::default()
-        },
-        provider,
-    );
+    let sessions = ChatSessions::new(store, executor, Arc::new(no_tools_runtime()))
+        .with_compaction(
+            CompactionConfig {
+                enabled: true,
+                trigger_tokens: 12_345,
+                model_trigger_tokens: model_triggers,
+                unknown_model_trigger_tokens: 99,
+                ..CompactionConfig::default()
+            },
+            provider,
+        );
 
     let unpinned = sessions.create(None).await.unwrap();
     assert_eq!(
@@ -168,16 +170,17 @@ async fn daemon_wide_resync_does_not_retune_conversation_with_own_model() {
     let executor = Executor::new(provider.clone(), Budget::default());
     let mut model_triggers = std::collections::HashMap::new();
     model_triggers.insert("conv-model".into(), 7_777u32);
-    let sessions = ChatSessions::new(store, executor, Arc::new(NoTools)).with_compaction(
-        CompactionConfig {
-            enabled: true,
-            trigger_tokens: 48_000,
-            model_trigger_tokens: model_triggers,
-            unknown_model_trigger_tokens: 48_000,
-            ..CompactionConfig::default()
-        },
-        provider,
-    );
+    let sessions = ChatSessions::new(store, executor, Arc::new(no_tools_runtime()))
+        .with_compaction(
+            CompactionConfig {
+                enabled: true,
+                trigger_tokens: 48_000,
+                model_trigger_tokens: model_triggers,
+                unknown_model_trigger_tokens: 48_000,
+                ..CompactionConfig::default()
+            },
+            provider,
+        );
 
     let pinned = sessions.create(None).await.unwrap();
     // Stamp the model on the log so resolution is durable, not only pending.
@@ -234,16 +237,17 @@ async fn per_conversation_trigger_query_reads_the_model_table() {
     let mut model_triggers = std::collections::HashMap::new();
     // Distinct from default so a default-only path cannot accidentally pass.
     model_triggers.insert("wired-model".into(), 55_555u32);
-    let sessions = ChatSessions::new(store, executor, Arc::new(NoTools)).with_compaction(
-        CompactionConfig {
-            enabled: true,
-            trigger_tokens: 11_111,
-            model_trigger_tokens: model_triggers,
-            unknown_model_trigger_tokens: 22_222,
-            ..CompactionConfig::default()
-        },
-        provider,
-    );
+    let sessions = ChatSessions::new(store, executor, Arc::new(no_tools_runtime()))
+        .with_compaction(
+            CompactionConfig {
+                enabled: true,
+                trigger_tokens: 11_111,
+                model_trigger_tokens: model_triggers,
+                unknown_model_trigger_tokens: 22_222,
+                ..CompactionConfig::default()
+            },
+            provider,
+        );
 
     let id = sessions.create(None).await.unwrap();
     sessions.select_model(id, "wired-model".into());
@@ -277,16 +281,17 @@ async fn asking_for_the_trigger_does_not_consume_the_pending_model_pick() {
     let executor = Executor::new(provider.clone(), Budget::default());
     let mut model_triggers = std::collections::HashMap::new();
     model_triggers.insert("picked-model".into(), 31_337u32);
-    let sessions = ChatSessions::new(store, executor, Arc::new(NoTools)).with_compaction(
-        CompactionConfig {
-            enabled: true,
-            trigger_tokens: 1_000_000,
-            model_trigger_tokens: model_triggers,
-            unknown_model_trigger_tokens: 1_000_000,
-            ..CompactionConfig::default()
-        },
-        provider,
-    );
+    let sessions = ChatSessions::new(store, executor, Arc::new(no_tools_runtime()))
+        .with_compaction(
+            CompactionConfig {
+                enabled: true,
+                trigger_tokens: 1_000_000,
+                model_trigger_tokens: model_triggers,
+                unknown_model_trigger_tokens: 1_000_000,
+                ..CompactionConfig::default()
+            },
+            provider,
+        );
 
     let id = sessions.create(None).await.unwrap();
     sessions.select_model(id, "picked-model".into());

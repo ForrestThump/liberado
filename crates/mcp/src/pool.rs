@@ -15,9 +15,15 @@ use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use liberado_common::{CapabilityCatalog, WriteProvenance};
-use liberado_executor::{RuntimeSetupError, ToolRuntime};
 use liberado_provider::{ToolDef, ToolInvocation};
+use liberado_tool_runtime::{RuntimeSetupError, ToolRuntime};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
+
+// The pool-facing extension trait lives in `liberado-tool-runtime` (foundation) alongside
+// `ToolRuntime` itself, so the shared test doubles implement the same trait instance this crate's
+// own unit tests see. Re-exported here to keep `pool::RebindableRuntime` — and the crate-level
+// `liberado_mcp::RebindableRuntime` — naming the same item.
+pub use liberado_tool_runtime::RebindableRuntime;
 
 /// Shut down each pooled runtime on a background task, then let it drop.
 ///
@@ -38,30 +44,6 @@ fn spawn_shutdown(runtimes: Vec<Box<dyn RebindableRuntime>>) {
             rt.shutdown().await;
         });
     }
-}
-
-/// A [`ToolRuntime`] that can accept a new execution's write provenance without reconnecting.
-///
-/// Pooling reuses the underlying MCP session/catalog; provenance (Decision 5 correlation) must
-/// still be per-execution — implementors update whatever they inject into tool `_meta`.
-#[async_trait]
-pub trait RebindableRuntime: ToolRuntime {
-    fn rebind_provenance(&mut self, provenance: WriteProvenance);
-
-    /// `true` when the last failure was a **connection/transport** error (not an in-band tool
-    /// `isError`). Pooled checkouts use this so dead peers are not checked back in.
-    fn connection_is_dead(&self) -> bool {
-        false
-    }
-
-    /// Gracefully shut down the underlying connection and release transport resources.
-    ///
-    /// Called (on a spawned task, since teardown needs `await`) before a pooled runtime is
-    /// discarded — idle reap, dead checkout, or invalidate — so HTTP SSE tasks are aborted and the
-    /// server-side session is terminated. Without this, a bare sync `Drop` leaks pooled HTTP
-    /// connections and they pile up server-side. Default is a no-op for peers with no connection
-    /// to tear down (stdio children drop their process on `Drop`).
-    async fn shutdown(&mut self) {}
 }
 
 /// Pool policy: enable/disable, idle TTL, and per-name concurrency. Constructed from config at
@@ -441,22 +423,7 @@ mod survivor_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use async_trait::async_trait;
-
-    struct NoopRuntime;
-    #[async_trait]
-    impl ToolRuntime for NoopRuntime {
-        fn catalog(&self) -> Vec<ToolDef> {
-            Vec::new()
-        }
-        async fn invoke(&self, _call: &ToolInvocation) -> Result<String, String> {
-            Ok("ok".into())
-        }
-    }
-    #[async_trait]
-    impl RebindableRuntime for NoopRuntime {
-        fn rebind_provenance(&mut self, _provenance: WriteProvenance) {}
-    }
+    use liberado_test_support::NoopRuntime;
 
     #[test]
     fn reap_idle_returns_zero_when_disabled() {

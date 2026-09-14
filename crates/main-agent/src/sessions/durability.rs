@@ -15,7 +15,7 @@ async fn cancelled_stream_keeps_the_user_message_and_no_reply() {
     let dir = tempfile::tempdir().unwrap();
     let store = Arc::new(SessionStore::open(dir.path()).await);
     let executor = Executor::new(Arc::new(PendingProvider), Budget::default());
-    let sessions = ChatSessions::new(store, executor, Arc::new(NoTools));
+    let sessions = ChatSessions::new(store, executor, Arc::new(no_tools_runtime()));
 
     let id = sessions.create(None).await.unwrap();
     let (tx, _rx) = tokio::sync::mpsc::channel(8);
@@ -52,7 +52,7 @@ async fn the_user_message_is_durable_before_the_provider_answers() {
     let dir = tempfile::tempdir().unwrap();
     let store = Arc::new(SessionStore::open(dir.path()).await);
     let executor = Executor::new(Arc::new(PendingProvider), Budget::default());
-    let sessions = ChatSessions::new(store, executor, Arc::new(NoTools));
+    let sessions = ChatSessions::new(store, executor, Arc::new(no_tools_runtime()));
 
     let id = sessions.create(None).await.unwrap();
     let (tx, _rx) = tokio::sync::mpsc::channel(8);
@@ -225,7 +225,11 @@ async fn a_restart_mid_turn_leaves_a_visible_unanswered_turn() {
     let id = {
         let store = Arc::new(SessionStore::open(dir.path()).await);
         let executor = Executor::new(Arc::new(PendingProvider), Budget::default());
-        let sessions = Arc::new(ChatSessions::new(store, executor, Arc::new(NoTools)));
+        let sessions = Arc::new(ChatSessions::new(
+            store,
+            executor,
+            Arc::new(no_tools_runtime()),
+        ));
         let id = sessions.create(None).await.unwrap();
 
         let (_replay, _rx) = sessions.start_or_attach(id, "will the daemon outlive this?");
@@ -250,7 +254,11 @@ async fn a_restart_mid_turn_leaves_a_visible_unanswered_turn() {
     // Reopen at the same root: a fresh daemon reading the durable log.
     let store = Arc::new(SessionStore::open(dir.path()).await);
     let executor = Executor::new(Arc::new(PendingProvider), Budget::default());
-    let reopened = Arc::new(ChatSessions::new(store, executor, Arc::new(NoTools)));
+    let reopened = Arc::new(ChatSessions::new(
+        store,
+        executor,
+        Arc::new(no_tools_runtime()),
+    ));
 
     let history = reopened.history(id).await.unwrap();
     assert!(

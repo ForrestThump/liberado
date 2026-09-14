@@ -115,7 +115,7 @@ async fn compaction_summariser_inherits_turn_correlation() {
     let recorder = rec.clone() as Arc<dyn LatencyRecorder>;
     let provider = MeteredProvider::wrap(inner, AgentRole::Face, recorder);
     let executor = Executor::new(Arc::clone(&provider), Budget::default());
-    let sessions = ChatSessions::new(store, executor, Arc::new(NoTools))
+    let sessions = ChatSessions::new(store, executor, Arc::new(no_tools_runtime()))
         .with_compaction(config, Arc::clone(&provider));
 
     let id = sessions.create(None).await.unwrap();

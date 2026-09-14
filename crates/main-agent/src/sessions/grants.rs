@@ -18,7 +18,7 @@ async fn guarded_turn_with_risk_gated_runtime_works() {
     ));
     let executor = Executor::new(provider, Budget::default());
 
-    let sessions = ChatSessions::new(store, executor, Arc::new(NoTools)).with_guards(
+    let sessions = ChatSessions::new(store, executor, Arc::new(no_tools_runtime())).with_guards(
         vec![("tasks-mcp".into(), Consequence::Reversible)],
         liberado_common::CapabilitySet::empty(),
         dir.path().join("proposals"),
@@ -649,7 +649,7 @@ async fn risk_gate_arms_on_each_source_alone() {
             )),
             Budget::default(),
         );
-        ChatSessions::new(store, executor, Arc::new(NoTools))
+        ChatSessions::new(store, executor, Arc::new(no_tools_runtime()))
     };
     let _ = dir;
     let bare = build().await;

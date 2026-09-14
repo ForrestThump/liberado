@@ -1,6 +1,7 @@
 //! Split from `state.rs` for module-health boundaries.
 
 use super::*;
+use liberado_test_support::InvocationRecordingRuntime;
 
 fn reaction(n: usize) -> Reaction {
     Reaction {
@@ -77,8 +78,10 @@ async fn resync_updates_the_default_chat_trigger() {
     let provider = Arc::new(liberado_provider::MockProvider::new("m"));
     let executor =
         liberado_executor::Executor::new(provider.clone(), liberado_executor::Budget::default());
+    let no_tools = InvocationRecordingRuntime::default()
+        .with_default_result(Err("no tools are configured".into()));
     let chat = Arc::new(
-        ChatSessions::new(store.clone(), executor, Arc::new(NoTools)).with_compaction(
+        ChatSessions::new(store.clone(), executor, Arc::new(no_tools)).with_compaction(
             compaction_config_for_face(&Config::default(), "__face_model__"),
             provider,
         ),

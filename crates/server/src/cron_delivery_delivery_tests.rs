@@ -27,7 +27,7 @@ async fn deliver_cron_appends_to_the_sticky_session_and_sends() {
     let chat = Arc::new(ChatSessions::new(
         store.clone(),
         executor,
-        Arc::new(NoTools),
+        Arc::new(no_tools_runtime()),
     ));
 
     let counter = Arc::new(AtomicUsize::new(0));
@@ -77,7 +77,11 @@ async fn plain_notifications_bypass_the_quiet_wait() {
     let provider = Arc::new(liberado_provider::MockProvider::new("m"));
     let executor =
         liberado_executor::Executor::new(provider.clone(), liberado_executor::Budget::default());
-    let chat = Arc::new(ChatSessions::new(store, executor, Arc::new(NoTools)));
+    let chat = Arc::new(ChatSessions::new(
+        store,
+        executor,
+        Arc::new(no_tools_runtime()),
+    ));
     let notifier = ChatDeliveringNotifier::new(
         Arc::new(Counting),
         chat,
@@ -106,7 +110,11 @@ async fn an_active_chat_holds_the_brief_until_quiet() {
     let provider = Arc::new(liberado_provider::MockProvider::new("m"));
     let executor =
         liberado_executor::Executor::new(provider.clone(), liberado_executor::Budget::default());
-    let chat = Arc::new(ChatSessions::new(store, executor, Arc::new(NoTools)));
+    let chat = Arc::new(ChatSessions::new(
+        store,
+        executor,
+        Arc::new(no_tools_runtime()),
+    ));
     let notifier = ChatDeliveringNotifier::new(
         Arc::new(Passthrough),
         chat,
@@ -138,14 +146,8 @@ impl Notifier for Passthrough {
     }
 }
 
-struct NoTools;
+use liberado_test_support::InvocationRecordingRuntime;
 
-#[async_trait]
-impl liberado_executor::ToolRuntime for NoTools {
-    fn catalog(&self) -> Vec<liberado_provider::ToolDef> {
-        Vec::new()
-    }
-    async fn invoke(&self, _: &liberado_provider::ToolInvocation) -> Result<String, String> {
-        Err("no tools".into())
-    }
+fn no_tools_runtime() -> InvocationRecordingRuntime {
+    InvocationRecordingRuntime::default().with_default_result(Err("no tools".into()))
 }

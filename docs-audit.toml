@@ -51,7 +51,7 @@ documents = ["docs/spec/reference/module-health.md"]
 
 [[impact]]
 name = "local readiness policy"
-sources = ["function-complexity.toml", "crates/cli/src/function_complexity_cmd.rs", "crates/cli/src/readiness_cmd.rs", ".githooks/", "justfile"]
+sources = ["function-complexity.toml", "crates/cli/src/function_complexity_cmd.rs", "crates/cli/src/readiness_cmd.rs", "crates/cli/src/ci_cmd/dispatch.rs", ".githooks/", "justfile"]
 documents = ["docs/spec/reference/local-readiness.md"]
 
 [[impact]]

@@ -394,23 +394,16 @@ mod survivor_tests;
 mod tests {
     use super::*;
     use async_trait::async_trait;
-    use liberado_executor::{Budget, ToolRuntime};
+    use liberado_executor::Budget;
     use liberado_provider::{
         CompletionRequest, CompletionResponse, MockProvider, Provider, ProviderResult, Role,
-        ToolDef, ToolInvocation,
     };
+    use liberado_test_support::InvocationRecordingRuntime;
     use std::sync::Arc;
     use tokio::sync::mpsc;
 
-    struct NoTools;
-    #[async_trait]
-    impl ToolRuntime for NoTools {
-        fn catalog(&self) -> Vec<ToolDef> {
-            Vec::new()
-        }
-        async fn invoke(&self, _call: &ToolInvocation) -> Result<String, String> {
-            Err("no tools".into())
-        }
+    fn no_tools_runtime() -> InvocationRecordingRuntime {
+        InvocationRecordingRuntime::default().with_default_result(Err("no tools".into()))
     }
 
     #[tokio::test]
@@ -424,9 +417,10 @@ mod tests {
         ));
         let executor = Executor::new(provider.clone(), Budget::default());
         let mut convo = Conversation::new("sys");
-        convo.turn(&executor, &NoTools, "hello").await.unwrap();
+        let no_tools = no_tools_runtime();
+        convo.turn(&executor, &no_tools, "hello").await.unwrap();
         convo
-            .turn(&executor, &NoTools, "what did I say?")
+            .turn(&executor, &no_tools, "what did I say?")
             .await
             .unwrap();
         let second = &provider.received_requests()[1];
@@ -451,7 +445,8 @@ mod tests {
         let executor = Executor::new(Arc::new(PendingProvider), Budget::default());
         let mut convo = Conversation::new("sys");
         let (tx, _rx) = mpsc::channel(1);
-        let fut = convo.turn_stream(&executor, &NoTools, "hi", &tx);
+        let no_tools = no_tools_runtime();
+        let fut = convo.turn_stream(&executor, &no_tools, "hi", &tx);
         drop(fut);
         assert_eq!(convo.history().len(), 1);
         assert_eq!(convo.history()[0].role, Role::System);
@@ -466,8 +461,9 @@ mod tests {
         let executor = Executor::new(provider, Budget::default());
         let mut convo = Conversation::new("sys");
         let (tx, _rx) = mpsc::channel(8);
+        let no_tools = no_tools_runtime();
         convo
-            .turn_stream(&executor, &NoTools, "hi", &tx)
+            .turn_stream(&executor, &no_tools, "hi", &tx)
             .await
             .unwrap();
         assert!(convo.history().len() >= 3);
