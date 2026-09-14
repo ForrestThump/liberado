@@ -5,7 +5,7 @@ authority: normative
 domain: ci
 canonical_for: local-readiness
 open_items: false
-last_verified: 2026-09-10
+last_verified: 2026-09-14
 ---
 
 # Local readiness
@@ -52,6 +52,13 @@ keeps its old complete entry. Thus, an ignored score increase below the CRAP flo
 baseline. A regression that the check rejects cannot write. On other hosts, `just ci` defers CRAP
 to final readiness. This avoids treating host-sensitive coverage as a proxy for the authoritative
 Linux result and avoids running the coverage suite twice before the WSL check.
+
+The same Linux-only write applies to `module-health-baseline.json` and
+`unwrap-classification-baseline.json`. Every host still *compares* them during `just ci`. Only
+Linux `just ci` rewrites them. A Windows rewrite dirties the tree, and `just ready` then cannot
+run Debian CRAP, which validates a clean committed `HEAD`. GitHub only reads both files. To record
+a new best off Linux, run `just module-health-ratchet` or `just unwrap-ratchet` on purpose and
+inspect the diff before you commit it.
 
 The host-stable function ratchet is configured in `function-complexity.toml` and committed in
 `function-complexity-baseline.json`. Existing functions may not gain cyclomatic complexity. New

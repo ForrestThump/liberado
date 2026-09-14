@@ -96,6 +96,11 @@ entries stay distinct. Adding branches inside it does, and GitHub will fail. A g
 is a few lines; the full child log
 is always `.liberado/ci.log`.
 
+**Module-health and unwrap baselines write only on Linux `just ci`.** GitHub only reads
+`module-health-baseline.json` and `unwrap-classification-baseline.json`. Windows `just ci`
+compares them and does not rewrite, so the working tree stays clean for `just ready`. To record a
+new best off Linux, run `just module-health-ratchet` or `just unwrap-ratchet` and inspect the diff.
+
 **A rebase invalidates every earlier check.** A merge, rebase, conflict resolution, amend, or base
 update changes the artifact under review. Use `just push` after the final commit. It runs full local
 CI, then `just ready`; readiness includes exact Linux CRAP, natively on Debian and through Debian

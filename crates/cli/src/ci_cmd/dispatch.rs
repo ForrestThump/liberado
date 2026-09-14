@@ -152,14 +152,42 @@ fn run_quality_checks(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
     crate::unwrap_classification_cmd::check(root)
 }
 
+/// Linux `just ci` records a new best for module-health and unwraps. Other hosts compare only:
+/// a Windows rewrite dirties the tree and blocks `just ready` (Debian CRAP requires a clean HEAD),
+/// and GitHub's Ubuntu job is the host of truth — same split as CRAP.
+fn writes_quality_baselines() -> bool {
+    cfg!(target_os = "linux")
+}
+
 fn run_quality_ratchets(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    if !writes_quality_baselines() {
+        eprintln!(
+            "[liberado ci] module-health and unwrap baseline writes are Linux-only \
+             (GitHub's Ubuntu job is the host of truth). Compared only."
+        );
+        return Ok(());
+    }
     crate::module_health_cmd::ratchet(root)?;
     crate::unwrap_classification_cmd::ratchet(root)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{CiCommand, parse_command};
+    use super::{CiCommand, parse_command, writes_quality_baselines};
+
+    #[test]
+    fn quality_baseline_auto_write_is_linux_only() {
+        assert_eq!(
+            writes_quality_baselines(),
+            cfg!(target_os = "linux"),
+            "just ci must not rewrite module-health or unwrap baselines off Linux"
+        );
+        let src = include_str!("dispatch.rs");
+        assert!(
+            src.contains("module-health and unwrap baseline writes are Linux-only"),
+            "the deferral banner is the operator-visible rule; do not drop it"
+        );
+    }
 
     #[test]
     fn every_ci_verb_parses_without_running_an_external_tool() {

@@ -66,7 +66,9 @@ are partitioned into modular sibling files (`crates/daemon/src/tests/*.rs`, `lib
 clean module health without synthetic waivers.
 
 After an accepted improvement, run `just module-health-ratchet` and commit the
-lower baseline. The command does not save worse values. GitHub runs only the read-only comparison.
+lower baseline. The command does not save worse values. Linux `just ci` also
+ratchets this file; other hosts compare only. GitHub runs only the read-only
+comparison.
 
 ## License
 

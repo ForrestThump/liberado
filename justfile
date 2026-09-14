@@ -107,6 +107,7 @@ module-health:
     cargo run --locked --quiet -p liberado-cli -- ci modules
 
 # Check first, then save only non-worsening structural-health values.
+# `just ci` does this automatically on Linux only.
 module-health-ratchet:
     cargo run --locked --quiet -p liberado-cli -- ci modules-ratchet
 
@@ -115,6 +116,7 @@ unwrap-classification:
     cargo run --locked --quiet -p liberado-cli -- ci unwraps
 
 # Check first, then replace the unwrap classification baseline with current values.
+# `just ci` does this automatically on Linux only.
 unwrap-ratchet:
     cargo run --locked --quiet -p liberado-cli -- ci unwraps-ratchet
 
