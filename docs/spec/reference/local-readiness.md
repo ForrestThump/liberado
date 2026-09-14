@@ -58,7 +58,9 @@ The same Linux-only write applies to `module-health-baseline.json` and
 Linux `just ci` rewrites them. A Windows rewrite dirties the tree, and `just ready` then cannot
 run Debian CRAP, which validates a clean committed `HEAD`. GitHub only reads both files. To record
 a new best off Linux, run `just module-health-ratchet` or `just unwrap-ratchet` on purpose and
-inspect the diff before you commit it.
+inspect the diff before you commit it. The Linux write uses the same compile-time
+`cfg!(target_os = "linux")` gate as host CRAP, so `run_quality_ratchets` does not grow a
+runtime branch.
 
 The host-stable function ratchet is configured in `function-complexity.toml` and committed in
 `function-complexity-baseline.json`. Existing functions may not gain cyclomatic complexity. New
