@@ -393,15 +393,16 @@ async fn partial_tail_reappend_failure_keeps_full_view_for_this_turn() {
         ],
     ));
     let executor = Executor::new(provider.clone(), Budget::default());
-    let sessions = ChatSessions::new(store.clone(), executor, Arc::new(NoTools)).with_compaction(
-        CompactionConfig {
-            enabled: true,
-            trigger_tokens: 1,
-            keep_recent_turns: 1,
-            ..CompactionConfig::default()
-        },
-        provider.clone(),
-    );
+    let sessions = ChatSessions::new(store.clone(), executor, Arc::new(no_tools_runtime()))
+        .with_compaction(
+            CompactionConfig {
+                enabled: true,
+                trigger_tokens: 1,
+                keep_recent_turns: 1,
+                ..CompactionConfig::default()
+            },
+            provider.clone(),
+        );
     let id = sessions.create(None).await.unwrap();
     seed_turns(
         &sessions,
@@ -607,15 +608,16 @@ async fn summarizer_failure_runs_the_turn_uncompacted() {
         failed: std::sync::atomic::AtomicBool::new(false),
     });
     let executor = Executor::new(provider.clone(), Budget::default());
-    let sessions = ChatSessions::new(store, executor, Arc::new(NoTools)).with_compaction(
-        CompactionConfig {
-            enabled: true,
-            trigger_tokens: 1, // always fires
-            keep_recent_turns: 1,
-            ..CompactionConfig::default()
-        },
-        provider.clone(),
-    );
+    let sessions = ChatSessions::new(store, executor, Arc::new(no_tools_runtime()))
+        .with_compaction(
+            CompactionConfig {
+                enabled: true,
+                trigger_tokens: 1, // always fires
+                keep_recent_turns: 1,
+                ..CompactionConfig::default()
+            },
+            provider.clone(),
+        );
     let id = sessions.create(None).await.unwrap();
     seed_turns(&sessions, id, &[("u1 secret", "a1"), ("u2", "a2")]).await;
 
@@ -647,16 +649,17 @@ async fn set_compaction_trigger_tokens_updates_live_threshold() {
         ],
     ));
     let executor = Executor::new(provider.clone(), Budget::default());
-    let sessions = ChatSessions::new(store, executor, Arc::new(NoTools)).with_compaction(
-        CompactionConfig {
-            enabled: true,
-            // High enough that seed turns alone won't fire until we lower the live threshold.
-            trigger_tokens: 1_000_000,
-            keep_recent_turns: 1,
-            ..CompactionConfig::default()
-        },
-        provider.clone(),
-    );
+    let sessions = ChatSessions::new(store, executor, Arc::new(no_tools_runtime()))
+        .with_compaction(
+            CompactionConfig {
+                enabled: true,
+                // High enough that seed turns alone won't fire until we lower the live threshold.
+                trigger_tokens: 1_000_000,
+                keep_recent_turns: 1,
+                ..CompactionConfig::default()
+            },
+            provider.clone(),
+        );
     assert_eq!(sessions.compaction_trigger_tokens(), Some(1_000_000));
 
     let id = sessions.create(None).await.unwrap();

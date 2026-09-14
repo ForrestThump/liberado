@@ -94,7 +94,7 @@ async fn context_carries_across_turns_via_rehydration() {
         ],
     ));
     let executor = Executor::new(provider.clone(), Budget::default());
-    let sessions = ChatSessions::new(store, executor, Arc::new(NoTools));
+    let sessions = ChatSessions::new(store, executor, Arc::new(no_tools_runtime()));
 
     let id = sessions.create(None).await.unwrap();
     sessions.turn(id, "hello").await.unwrap();

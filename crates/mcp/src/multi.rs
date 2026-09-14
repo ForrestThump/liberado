@@ -85,47 +85,18 @@ impl ToolRuntime for MultiMcpRuntime {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
+    use liberado_test_support::InvocationRecordingRuntime;
 
-    /// A mock runtime that records invocations and returns a canned result.
-    struct MockRuntime {
-        tools: Vec<ToolDef>,
-        invoked: Mutex<Vec<ToolInvocation>>,
-        result: Result<String, String>,
+    fn make_tasks_runtime() -> InvocationRecordingRuntime {
+        InvocationRecordingRuntime::default()
+            .with_catalog(&["create", "list"])
+            .with_default_result(Ok("ok".into()))
     }
 
-    impl MockRuntime {
-        fn new(tool_names: &[&str], result: Result<String, String>) -> Self {
-            let tools = tool_names
-                .iter()
-                .map(|n| ToolDef::new(*n, "test tool", serde_json::json!({ "type": "object" })))
-                .collect();
-            Self {
-                tools,
-                invoked: Mutex::new(Vec::new()),
-                result,
-            }
-        }
-    }
-
-    #[async_trait]
-    impl ToolRuntime for MockRuntime {
-        fn catalog(&self) -> Vec<ToolDef> {
-            self.tools.clone()
-        }
-
-        async fn invoke(&self, call: &ToolInvocation) -> Result<String, String> {
-            self.invoked.lock().unwrap().push(call.clone());
-            self.result.clone()
-        }
-    }
-
-    fn make_tasks_runtime() -> MockRuntime {
-        MockRuntime::new(&["create", "list"], Ok("ok".into()))
-    }
-
-    fn make_wiki_runtime() -> MockRuntime {
-        MockRuntime::new(&["search", "get_page"], Ok("found".into()))
+    fn make_wiki_runtime() -> InvocationRecordingRuntime {
+        InvocationRecordingRuntime::default()
+            .with_catalog(&["search", "get_page"])
+            .with_default_result(Ok("found".into()))
     }
 
     #[tokio::test]
@@ -163,8 +134,8 @@ mod tests {
 
     #[tokio::test]
     async fn catalog_returns_all_servers_tools_prefixed() {
-        let tasks_rt = MockRuntime::new(&["create", "list"], Ok("ok".into()));
-        let wiki_rt = MockRuntime::new(&["search", "get_page"], Ok("ok".into()));
+        let tasks_rt = make_tasks_runtime();
+        let wiki_rt = make_wiki_runtime();
 
         let multi = MultiMcpRuntime::new(vec![
             ("tasks".into(), Box::new(tasks_rt)),
@@ -183,7 +154,7 @@ mod tests {
 
     #[tokio::test]
     async fn rejects_call_to_unregistered_server() {
-        let tasks_rt = MockRuntime::new(&["create"], Ok("ok".into()));
+        let tasks_rt = make_tasks_runtime();
 
         let multi = MultiMcpRuntime::new(vec![("tasks".into(), Box::new(tasks_rt))]);
 
@@ -205,22 +176,30 @@ mod tests {
 
     #[tokio::test]
     async fn names_returns_registered_keys() {
-        let rt = MockRuntime::new(&["a"], Ok("ok".into()));
+        let rt = InvocationRecordingRuntime::default()
+            .with_catalog(&["a"])
+            .with_default_result(Ok("ok".into()));
         let multi = MultiMcpRuntime::new(vec![("alpha".into(), Box::new(rt))]);
         assert_eq!(multi.names(), vec!["alpha"]);
     }
 
     #[test]
     fn is_empty_false_when_runtimes_registered() {
-        let rt = MockRuntime::new(&["a"], Ok("ok".into()));
+        let rt = InvocationRecordingRuntime::default()
+            .with_catalog(&["a"])
+            .with_default_result(Ok("ok".into()));
         let multi = MultiMcpRuntime::new(vec![("alpha".into(), Box::new(rt))]);
         assert!(!multi.is_empty());
     }
 
     #[test]
     fn len_reflects_registered_count() {
-        let rt1 = MockRuntime::new(&["a"], Ok("ok".into()));
-        let rt2 = MockRuntime::new(&["b"], Ok("ok".into()));
+        let rt1 = InvocationRecordingRuntime::default()
+            .with_catalog(&["a"])
+            .with_default_result(Ok("ok".into()));
+        let rt2 = InvocationRecordingRuntime::default()
+            .with_catalog(&["b"])
+            .with_default_result(Ok("ok".into()));
         let multi = MultiMcpRuntime::new(vec![
             ("alpha".into(), Box::new(rt1)),
             ("beta".into(), Box::new(rt2)),

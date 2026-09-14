@@ -77,7 +77,7 @@ async fn a_delegated_subagent_becomes_a_background_session_under_the_chat_that_a
     let chat = ChatSessions::new(
         Arc::new(SessionStore::open(dir.path()).await),
         Executor::new(chat_provider, liberado_executor::Budget::default()),
-        Arc::new(NoTools),
+        Arc::new(no_tools_runtime()),
     )
     .with_delegation_mode(true)
     .with_goal_hub(hub.clone())
@@ -147,7 +147,7 @@ async fn face_agent_surfaces_only_delegate_by_default() {
     );
     let hub = Arc::new(GoalSessionHub::new(GoalSessionStore::new()));
     let executor = Executor::new(chat_provider.clone(), liberado_executor::Budget::default());
-    let sessions = ChatSessions::new(store, executor, Arc::new(NoTools))
+    let sessions = ChatSessions::new(store, executor, Arc::new(no_tools_runtime()))
         .with_delegation_mode(true)
         .with_goal_hub(hub)
         .with_dispatch(dispatcher, Arc::new(CapabilityCatalog::new()));
@@ -399,8 +399,8 @@ fn disabling_delegation_keeps_the_default_prompt() {
             )),
             Budget::default(),
         );
-        let plain =
-            ChatSessions::new(store, executor, Arc::new(NoTools)).with_delegation_mode(false);
+        let plain = ChatSessions::new(store, executor, Arc::new(no_tools_runtime()))
+            .with_delegation_mode(false);
         assert_eq!(
             plain.system_prompt,
             crate::DEFAULT_SYSTEM_PROMPT,
@@ -415,8 +415,8 @@ fn disabling_delegation_keeps_the_default_prompt() {
             )),
             Budget::default(),
         );
-        let face =
-            ChatSessions::new(store2, executor2, Arc::new(NoTools)).with_delegation_mode(true);
+        let face = ChatSessions::new(store2, executor2, Arc::new(no_tools_runtime()))
+            .with_delegation_mode(true);
         assert_eq!(face.system_prompt, crate::HUMAN_INTERFACE_SYSTEM_PROMPT);
     });
 }
@@ -433,7 +433,7 @@ async fn uses_face_agent_requires_both_delegation_and_a_bridge() {
         )),
         Budget::default(),
     );
-    let bare = ChatSessions::new(store, executor, Arc::new(NoTools));
+    let bare = ChatSessions::new(store, executor, Arc::new(no_tools_runtime()));
     assert!(
         !bare.uses_face_agent(true),
         "delegation with no hub is still the direct path"
@@ -448,7 +448,7 @@ async fn uses_face_agent_requires_both_delegation_and_a_bridge() {
         )),
         Budget::default(),
     );
-    let bridged = ChatSessions::new(store2, executor2, Arc::new(NoTools))
+    let bridged = ChatSessions::new(store2, executor2, Arc::new(no_tools_runtime()))
         .with_goal_hub(Arc::new(liberado_session::GoalSessionHub::new(
             liberado_session::GoalSessionStore::new(),
         )))
@@ -468,7 +468,7 @@ async fn streamed_face_turn_keeps_the_face_prompt() {
         [CompletionResponse::text("hello from your face agent")],
     ));
     let executor = Executor::new(chat_provider.clone(), Budget::default());
-    let sessions = ChatSessions::new(store, executor, Arc::new(NoTools))
+    let sessions = ChatSessions::new(store, executor, Arc::new(no_tools_runtime()))
         .with_goal_hub(Arc::new(liberado_session::GoalSessionHub::new(
             liberado_session::GoalSessionStore::new(),
         )))
@@ -560,7 +560,7 @@ async fn pre_turn_dispatch_grant_strips_askhuman_keeps_the_rest() {
         )),
         Budget::default(),
     );
-    let sessions = ChatSessions::new(store, executor, Arc::new(NoTools))
+    let sessions = ChatSessions::new(store, executor, Arc::new(no_tools_runtime()))
         .with_goal_hub(hub.clone())
         .with_dispatcher_capabilities(CapabilitySet::from_iter([
             Capability::ExecuteMcp("tasks-mcp".into()),

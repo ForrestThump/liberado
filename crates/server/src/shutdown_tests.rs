@@ -6,26 +6,18 @@ use axum::Router;
 use axum::body::Body;
 use axum::http::Request;
 use http_body_util::BodyExt;
-use liberado_executor::{Budget, Executor, ToolRuntime};
+use liberado_executor::{Budget, Executor};
 use liberado_main_agent::ChatSessions;
-use liberado_provider::{
-    CompletionRequest, CompletionResponse, Provider, ProviderResult, ToolDef, ToolInvocation,
-};
+use liberado_provider::{CompletionRequest, CompletionResponse, Provider, ProviderResult};
 use liberado_session_store::SessionStore;
+use liberado_test_support::InvocationRecordingRuntime;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use tower::ServiceExt;
 
-struct NoTools;
-#[async_trait]
-impl ToolRuntime for NoTools {
-    fn catalog(&self) -> Vec<ToolDef> {
-        Vec::new()
-    }
-    async fn invoke(&self, _: &ToolInvocation) -> Result<String, String> {
-        Err("no tools".into())
-    }
+fn no_tools_runtime() -> InvocationRecordingRuntime {
+    InvocationRecordingRuntime::default().with_default_result(Err("no tools".into()))
 }
 
 /// Provider that answers after `delay` (cooperative finish path).
@@ -65,7 +57,7 @@ async fn make_chat(
     let chat = Arc::new(ChatSessions::new(
         store.clone(),
         executor,
-        Arc::new(NoTools),
+        Arc::new(no_tools_runtime()),
     ));
     (chat, store)
 }

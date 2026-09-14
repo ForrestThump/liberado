@@ -55,7 +55,8 @@ pub use generation::GenerationError;
 pub use scoring::{CandidateFitness, ScenarioTrial, ScoredScenario};
 pub use search::{Budget, GenerationRecord, TunerResult, run_tuner};
 pub use tool_loop_scoring::{
-    ToolLoopFitness, ToolLoopScoredScenario, ToolLoopTrial, score_executor_candidate,
+    ScriptedToolRuntime, ToolLoopFitness, ToolLoopScoredScenario, ToolLoopTrial,
+    score_executor_candidate,
 };
 pub use tool_loop_search::{
     ExecutorGenerationRecord, ExecutorTunerResult, run_executor_tuner, run_subagent_tuner,

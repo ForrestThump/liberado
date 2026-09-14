@@ -60,7 +60,8 @@ async fn a_non_delegating_session_is_not_told_it_is_a_face_agent() {
     let executor = Executor::new(provider.clone(), Budget::default());
     // Delegation mode on, so the *persisted root prompt* is the face-agent one — exactly the live
     // configuration. No hub attached, so this turn does not run as the face agent.
-    let sessions = ChatSessions::new(store, executor, Arc::new(NoTools)).with_delegation_mode(true);
+    let sessions =
+        ChatSessions::new(store, executor, Arc::new(no_tools_runtime())).with_delegation_mode(true);
 
     let id = sessions
         .create_with_grant(
@@ -103,7 +104,7 @@ async fn a_delegating_session_keeps_the_face_agent_prompt() {
     ));
     let store = Arc::new(SessionStore::open(dir.path()).await);
     let executor = Executor::new(provider.clone(), Budget::default());
-    let sessions = ChatSessions::new(store, executor, Arc::new(NoTools))
+    let sessions = ChatSessions::new(store, executor, Arc::new(no_tools_runtime()))
         .with_delegation_mode(true)
         .with_goal_hub(Arc::new(GoalSessionHub::new(GoalSessionStore::new())));
 
@@ -306,7 +307,7 @@ async fn the_face_agent_sends_its_static_prompt_before_anything_that_varies() {
     let sessions = ChatSessions::new(
         Arc::new(SessionStore::open(dir.path()).await),
         Executor::new(provider.clone(), Budget::default()),
-        Arc::new(NoTools),
+        Arc::new(no_tools_runtime()),
     )
     .with_delegation_mode(true)
     .with_goal_hub(Arc::new(GoalSessionHub::new(GoalSessionStore::new())));

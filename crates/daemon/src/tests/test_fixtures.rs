@@ -3,7 +3,7 @@
 use super::super::*;
 use liberado_common::WriteProvenance;
 use liberado_executor::{RuntimeFactory, RuntimeSetupError, ToolRuntime};
-use liberado_provider::{ToolDef, ToolInvocation};
+use liberado_test_support::CallRecordingFactory;
 use std::sync::{Arc, Mutex};
 use tempfile::TempDir;
 
@@ -42,28 +42,20 @@ pub(crate) async fn approve_in(dir: &TempDir, proposal_id: &str) {
         .unwrap();
 }
 
-pub(crate) struct NoopRuntime;
-
-#[async_trait::async_trait]
-impl ToolRuntime for NoopRuntime {
-    fn catalog(&self) -> Vec<ToolDef> {
-        Vec::new()
-    }
-    async fn invoke(&self, _call: &ToolInvocation) -> Result<String, String> {
-        Ok("ok".into())
-    }
-}
-
+/// A factory that hands out `NoopRuntime` and records the scope/provenance it was called with.
+#[derive(Default)]
 pub(crate) struct NoopFactory;
 
 #[async_trait::async_trait]
 impl RuntimeFactory for NoopFactory {
     async fn runtime_for(
         &self,
-        _allowed_mcps: &[String],
-        _provenance: WriteProvenance,
+        allowed_mcps: &[String],
+        provenance: WriteProvenance,
     ) -> Result<Box<dyn ToolRuntime>, RuntimeSetupError> {
-        Ok(Box::new(NoopRuntime))
+        CallRecordingFactory::default()
+            .runtime_for(allowed_mcps, provenance)
+            .await
     }
 }
 
@@ -82,28 +74,20 @@ impl RuntimeFactory for NoopFactoryForClarify {
     }
 }
 
-pub(crate) struct UnusedRuntime;
-
-#[async_trait::async_trait]
-impl ToolRuntime for UnusedRuntime {
-    fn catalog(&self) -> Vec<ToolDef> {
-        Vec::new()
-    }
-    async fn invoke(&self, _call: &ToolInvocation) -> Result<String, String> {
-        Ok("ok".into())
-    }
-}
-
+/// Alias for `NoopFactory` kept for back-compat with tests that used the name.
+#[derive(Default)]
 pub(crate) struct UnusedFactory;
 
 #[async_trait::async_trait]
 impl RuntimeFactory for UnusedFactory {
     async fn runtime_for(
         &self,
-        _allowed_mcps: &[String],
-        _provenance: WriteProvenance,
+        allowed_mcps: &[String],
+        provenance: WriteProvenance,
     ) -> Result<Box<dyn ToolRuntime>, RuntimeSetupError> {
-        Ok(Box::new(UnusedRuntime))
+        CallRecordingFactory::default()
+            .runtime_for(allowed_mcps, provenance)
+            .await
     }
 }
 

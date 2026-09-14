@@ -7,7 +7,8 @@ use liberado_common::{
 use liberado_config_loader::DispatchTuning;
 use liberado_dispatcher::guards::evaluate;
 use liberado_executor::{RiskGatedToolRuntime, ToolRuntime};
-use liberado_provider::{ToolDef, ToolInvocation};
+use liberado_provider::ToolInvocation;
+use liberado_test_support::NoopRuntime;
 use std::sync::Arc;
 
 #[tokio::test]
@@ -50,18 +51,8 @@ async fn guard_conformance_capability_gap_agrees_both_sides() {
         "dispatcher: ungranted MCP must be CapabilityGap"
     );
 
-    struct NoopRt;
-    #[async_trait::async_trait]
-    impl ToolRuntime for NoopRt {
-        fn catalog(&self) -> Vec<ToolDef> {
-            Vec::new()
-        }
-        async fn invoke(&self, _call: &ToolInvocation) -> Result<String, String> {
-            Ok("ok".into())
-        }
-    }
     let rt = RiskGatedToolRuntime::new(
-        Arc::new(NoopRt),
+        Arc::new(NoopRuntime),
         caps,
         vec![("email-mcp".into(), Consequence::Reversible)],
         Vec::new(),
@@ -125,18 +116,8 @@ async fn guard_conformance_consequence_agrees_on_external_mcp() {
         "dispatcher: External MCP must be HighConsequence"
     );
 
-    struct NoopRt2;
-    #[async_trait::async_trait]
-    impl ToolRuntime for NoopRt2 {
-        fn catalog(&self) -> Vec<ToolDef> {
-            Vec::new()
-        }
-        async fn invoke(&self, _call: &ToolInvocation) -> Result<String, String> {
-            Ok("ok".into())
-        }
-    }
     let rt = RiskGatedToolRuntime::new(
-        Arc::new(NoopRt2),
+        Arc::new(NoopRuntime),
         caps,
         vec![("email".into(), Consequence::External)],
         Vec::new(),
@@ -201,18 +182,8 @@ async fn guard_conformance_magnitude_agrees_on_sweeping_destructive() {
         "dispatcher: sweeping-destructive goal must be HighConsequence"
     );
 
-    struct NoopRt3;
-    #[async_trait::async_trait]
-    impl ToolRuntime for NoopRt3 {
-        fn catalog(&self) -> Vec<ToolDef> {
-            Vec::new()
-        }
-        async fn invoke(&self, _call: &ToolInvocation) -> Result<String, String> {
-            Ok("ok".into())
-        }
-    }
     let rt = RiskGatedToolRuntime::new(
-        Arc::new(NoopRt3),
+        Arc::new(NoopRuntime),
         caps,
         vec![("vault".into(), Consequence::Reversible)],
         Vec::new(),

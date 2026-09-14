@@ -1,66 +1,19 @@
 //! Ad-hoc live reproduction for `docs/future-work/archive/multi-step-execution-reliability-finding.md`.
-//!
-//! Not part of the tuner proper — a throwaway diagnostic to see *why*, not just *whether*,
-//! `multi-step-research` fails, across a few real models. Prints the full transcript signal the
-//! aggregate tuner scoring throws away: every tool actually invoked, in order, and the model's own
-//! final `Report` (outcome + summary) verbatim, so a hedge toward `PartiallySucceeded` or a genuine
-//! missed call is visible directly instead of inferred from a pass/fail boolean.
-//!
-//! Run: `OPENROUTER_API_KEY=... cargo run -p liberado-heuristics-tuner --example debug_multistep`
+///
+/// Not part of the tuner proper — a throwaway diagnostic to see *why*, not just *whether*,
+/// `multi-step-research` fails, across a few real models. Prints the full transcript signal the
+/// aggregate tuner scoring throws away: every tool actually invoked, in order, and the model's own
+/// final `Report` (outcome + summary) verbatim, so a hedge toward `PartiallySucceeded` or a genuine
+/// missed call is visible directly instead of inferred from a pass/fail boolean.
+///
+/// Run: `OPENROUTER_API_KEY=... cargo run -p liberado-heuristics-tuner --example debug_multistep`
+use std::sync::Arc;
 
-use std::sync::{Arc, Mutex};
-
-use async_trait::async_trait;
-use liberado_executor::{Budget, Executor, Task, ToolRuntime};
-use liberado_heuristics_tuner::tool_scenarios::tool_loop_scenarios;
+use liberado_executor::{Budget, Executor, Task};
+use liberado_heuristics_tuner::{ScriptedToolRuntime, tool_scenarios::tool_loop_scenarios};
 use liberado_orchestrator::{DIRECT_INSTRUCTIONS, DIRECT_MAX_TURNS};
-use liberado_provider::{Provider, ToolDef, ToolInvocation};
+use liberado_provider::Provider;
 use liberado_provider_openai_compat::OpenAiCompatibleProvider;
-
-struct ScriptedToolRuntime {
-    tools: Vec<ToolDef>,
-    canned: std::collections::HashMap<String, String>,
-    invoked: Mutex<Vec<ToolInvocation>>,
-}
-
-impl ScriptedToolRuntime {
-    fn new(tools: &'static [(&'static str, &'static str, &'static str)]) -> Self {
-        let defs = tools
-            .iter()
-            .map(|(name, desc, _)| {
-                ToolDef::new(*name, *desc, serde_json::json!({ "type": "object" }))
-            })
-            .collect();
-        let canned = tools
-            .iter()
-            .map(|(name, _, result)| (name.to_string(), result.to_string()))
-            .collect();
-        Self {
-            tools: defs,
-            canned,
-            invoked: Mutex::new(Vec::new()),
-        }
-    }
-
-    fn invoked(&self) -> Vec<ToolInvocation> {
-        self.invoked.lock().unwrap().clone()
-    }
-}
-
-#[async_trait]
-impl ToolRuntime for ScriptedToolRuntime {
-    fn catalog(&self) -> Vec<ToolDef> {
-        self.tools.clone()
-    }
-
-    async fn invoke(&self, call: &ToolInvocation) -> Result<String, String> {
-        self.invoked.lock().unwrap().push(call.clone());
-        self.canned
-            .get(&call.name)
-            .cloned()
-            .ok_or_else(|| format!("no scripted result for tool '{}'", call.name))
-    }
-}
 
 #[tokio::main]
 async fn main() {

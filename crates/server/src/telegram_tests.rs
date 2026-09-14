@@ -2,7 +2,7 @@
 
 use super::*;
 use async_trait::async_trait;
-use liberado_executor::{Budget, Executor, ToolRuntime};
+use liberado_executor::{Budget, Executor};
 
 /// The deterministic result→reply mapping (no session state) must cover the local arms, and
 /// the awaited browser/spawn/fork results must be routed past it (unreachable here).
@@ -48,24 +48,17 @@ use liberado_executor::AgentEvent;
 use liberado_messaging::ChatSurface;
 use liberado_provider::ProviderError;
 use liberado_provider::{
-    CompletionRequest, CompletionResponse, MockProvider, Provider, ProviderResult, ToolDef,
-    ToolInvocation,
+    CompletionRequest, CompletionResponse, MockProvider, Provider, ProviderResult,
 };
 use liberado_session::{DomainHint, GoalSessionHub, GoalSpec, LifeOpsDemoRunner, SessionGrant};
 use liberado_session_store::SessionStore;
+use liberado_test_support::InvocationRecordingRuntime;
 use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-struct NoTools;
-#[async_trait]
-impl ToolRuntime for NoTools {
-    fn catalog(&self) -> Vec<ToolDef> {
-        Vec::new()
-    }
-    async fn invoke(&self, _: &ToolInvocation) -> Result<String, String> {
-        Err("no tools".into())
-    }
+fn no_tools_runtime() -> InvocationRecordingRuntime {
+    InvocationRecordingRuntime::default().with_default_result(Err("no tools".into()))
 }
 
 /// Provider that never completes — keeps a turn in the running map for cancel/lifecycle tests.
@@ -139,7 +132,7 @@ async fn bridge_with_provider(
     let chat = Arc::new(ChatSessions::new(
         store.clone(),
         executor,
-        Arc::new(NoTools),
+        Arc::new(no_tools_runtime()),
     ));
     let mut state = crate::state::AppState::for_test(store, Some(Arc::clone(&chat)), root.into());
     state.provider = Some(Arc::clone(&provider));
@@ -162,7 +155,7 @@ async fn bridge_with_config(
     let chat = Arc::new(ChatSessions::new(
         store.clone(),
         executor,
-        Arc::new(NoTools),
+        Arc::new(no_tools_runtime()),
     ));
     let mut state = crate::state::AppState::for_test(store, Some(Arc::clone(&chat)), root.into());
     state.provider = Some(Arc::clone(&provider));
@@ -185,7 +178,7 @@ async fn bridge_with_goal_pack(
     let chat = Arc::new(ChatSessions::new(
         store.clone(),
         executor,
-        Arc::new(NoTools),
+        Arc::new(no_tools_runtime()),
     ));
     let mut hub = GoalSessionHub::new(SessionStore::clone(&store));
     hub.register_pack(Arc::new(LifeOpsDemoRunner));
@@ -784,7 +777,7 @@ async fn model_browser_with_no_provider_says_so() {
     let chat = Arc::new(ChatSessions::new(
         store.clone(),
         executor,
-        Arc::new(NoTools),
+        Arc::new(no_tools_runtime()),
     ));
     let mut state = crate::state::AppState::for_test(store, Some(chat), dir.path().into());
     state.provider = None;

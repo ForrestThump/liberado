@@ -15,6 +15,14 @@
 //! - [`FailingFactory`] always returns a [`RuntimeSetupError`] — for testing the orchestrator's
 //!   pool-creation failure path.
 //!
+//! Catalog extension:
+//! - [`InvocationRecordingRuntime::with_catalog`] — adds a non-empty tool catalog for tests that
+//!   need to exercise catalog filtering/routing logic (e.g. `ScopedRuntime`, `MultiMcpRuntime`).
+//!
+//! Pool compatibility:
+//! - [`NoopRuntime`] and [`InvocationRecordingRuntime`] implement `liberado_mcp::RebindableRuntime`
+//!   so they can be used directly in `McpPool`/`McpRegistry` tests.
+//!
 //! Trace contracts (backlog 0.5): [`trace_contracts`] reconstructs MVL turns and checks joins
 //! against the execution-log companion. The path-based suite oracle is [`mvl_oracle`].
 //! Production emission lives in `liberado-executor` (`MvlSession`); this crate only judges files.
@@ -28,6 +36,7 @@ use std::sync::{Arc, Mutex};
 use async_trait::async_trait;
 use liberado_common::WriteProvenance;
 use liberado_executor::{RuntimeFactory, RuntimeSetupError, ToolRuntime};
+use liberado_mcp::RebindableRuntime;
 use liberado_provider::{ToolDef, ToolInvocation};
 
 /// A configurable notifier for testing proposal-downgrade alert paths.
@@ -68,6 +77,11 @@ impl ToolRuntime for NoopRuntime {
     }
 }
 
+#[async_trait]
+impl RebindableRuntime for NoopRuntime {
+    fn rebind_provenance(&mut self, _provenance: WriteProvenance) {}
+}
+
 /// One recorded `runtime_for` call: the `allowed_mcps` scope and the provenance it carried.
 pub type RecordedRuntimeCall = (Vec<String>, WriteProvenance);
 
@@ -98,11 +112,14 @@ impl RuntimeFactory for CallRecordingFactory {
 ///
 /// By default every invocation succeeds with `"ok"`. Call `with_default_result` to change
 /// the default, or `with_error` to make a specific tool name fail.
+/// Use `with_catalog` to provide a non-empty tool catalog (e.g. for `ScopedRuntime` or
+/// `MultiMcpRuntime` tests that filter/route by tool name).
 #[derive(Clone)]
 pub struct InvocationRecordingRuntime {
     pub invoked: Arc<Mutex<Vec<ToolInvocation>>>,
     default_result: Arc<Mutex<Result<String, String>>>,
     per_tool: Arc<Mutex<HashMap<String, Result<String, String>>>>,
+    catalog: Arc<Mutex<Vec<ToolDef>>>,
 }
 
 impl Default for InvocationRecordingRuntime {
@@ -111,6 +128,7 @@ impl Default for InvocationRecordingRuntime {
             invoked: Arc::default(),
             default_result: Arc::new(Mutex::new(Ok("ok".to_string()))),
             per_tool: Arc::default(),
+            catalog: Arc::default(),
         }
     }
 }
@@ -139,12 +157,22 @@ impl InvocationRecordingRuntime {
             .insert(tool.into(), Ok(result.into()));
         self
     }
+
+    /// Provide a tool catalog. Each `&str` is a tool name; description and schema are synthesized.
+    pub fn with_catalog(self, tool_names: &[&str]) -> Self {
+        let defs: Vec<ToolDef> = tool_names
+            .iter()
+            .map(|n| ToolDef::new(*n, "test tool", serde_json::json!({ "type": "object" })))
+            .collect();
+        *self.catalog.lock().unwrap() = defs;
+        self
+    }
 }
 
 #[async_trait]
 impl ToolRuntime for InvocationRecordingRuntime {
     fn catalog(&self) -> Vec<ToolDef> {
-        Vec::new()
+        self.catalog.lock().unwrap().clone()
     }
     async fn invoke(&self, call: &ToolInvocation) -> Result<String, String> {
         self.invoked.lock().unwrap().push(call.clone());
@@ -154,6 +182,11 @@ impl ToolRuntime for InvocationRecordingRuntime {
         }
         self.default_result.lock().unwrap().clone()
     }
+}
+
+#[async_trait]
+impl RebindableRuntime for InvocationRecordingRuntime {
+    fn rebind_provenance(&mut self, _provenance: WriteProvenance) {}
 }
 
 /// Hands out clones of one [`InvocationRecordingRuntime`], ignoring the requested scope — tests that

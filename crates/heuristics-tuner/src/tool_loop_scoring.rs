@@ -21,14 +21,14 @@ use crate::tool_scenarios::{ToolLoopScenario, tool_loop_scenarios};
 /// `liberado-executor`/`liberado-test-support` return one fixed value for *every* tool, which is
 /// too coarse here — a scenario's tools should return distinct, plausible results so a real model's
 /// follow-up reasoning stays coherent), and records every invocation in call order for scoring.
-struct ScriptedToolRuntime {
+pub struct ScriptedToolRuntime {
     tools: Vec<ToolDef>,
     canned: HashMap<String, String>,
     invoked: Mutex<Vec<ToolInvocation>>,
 }
 
 impl ScriptedToolRuntime {
-    fn new(tools: &'static [(&'static str, &'static str, &'static str)]) -> Self {
+    pub fn new(tools: &'static [(&'static str, &'static str, &'static str)]) -> Self {
         let defs = tools
             .iter()
             .map(|(name, desc, _)| {
@@ -46,7 +46,7 @@ impl ScriptedToolRuntime {
         }
     }
 
-    fn invoked(&self) -> Vec<ToolInvocation> {
+    pub fn invoked(&self) -> Vec<ToolInvocation> {
         self.invoked.lock().unwrap().clone()
     }
 }

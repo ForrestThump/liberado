@@ -13,9 +13,13 @@ use liberado_provider::{CompletionResponse, MockProvider, ToolInvocation};
 use liberado_session::{
     DomainHint, GoalSessionHub, GoalSessionStore, SessionGrant, SessionStatus, TerminalKind,
 };
+use liberado_test_support::InvocationRecordingRuntime;
 use std::sync::Arc;
 
+/// A no-op factory that returns a runtime with an empty catalog and a fixed error response.
+#[derive(Default)]
 struct NoopFactory;
+
 #[async_trait]
 impl RuntimeFactory for NoopFactory {
     async fn runtime_for(
@@ -23,18 +27,9 @@ impl RuntimeFactory for NoopFactory {
         _allowed_mcps: &[String],
         _provenance: WriteProvenance,
     ) -> Result<Box<dyn ToolRuntime>, RuntimeSetupError> {
-        Ok(Box::new(NoopRuntime))
-    }
-}
-
-struct NoopRuntime;
-#[async_trait]
-impl ToolRuntime for NoopRuntime {
-    fn catalog(&self) -> Vec<liberado_provider::ToolDef> {
-        Vec::new()
-    }
-    async fn invoke(&self, _call: &ToolInvocation) -> Result<String, String> {
-        Err("noop".into())
+        Ok(Box::new(
+            InvocationRecordingRuntime::default().with_default_result(Err("noop".into())),
+        ))
     }
 }
 

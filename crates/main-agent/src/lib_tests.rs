@@ -4,21 +4,14 @@ use super::*;
 use async_trait::async_trait;
 use liberado_executor::Budget;
 use liberado_provider::{
-    CompletionRequest, CompletionResponse, MockProvider, Provider, ProviderResult, ToolDef,
-    ToolInvocation,
+    CompletionRequest, CompletionResponse, MockProvider, Provider, ProviderResult,
 };
+use liberado_test_support::InvocationRecordingRuntime;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
-struct NoTools;
-#[async_trait]
-impl ToolRuntime for NoTools {
-    fn catalog(&self) -> Vec<ToolDef> {
-        Vec::new()
-    }
-    async fn invoke(&self, _call: &ToolInvocation) -> Result<String, String> {
-        Err("no tools".into())
-    }
+fn no_tools_runtime() -> InvocationRecordingRuntime {
+    InvocationRecordingRuntime::default().with_default_result(Err("no tools".into()))
 }
 
 /// `is_empty` must agree with the underlying buffer in both directions.
@@ -47,7 +40,7 @@ async fn resume_stream_appends_the_tool_result_and_completes() {
     let (tx, _rx) = mpsc::channel(8);
 
     convo
-        .resume_stream(&executor, &NoTools, "call-7", "42 degrees", &tx)
+        .resume_stream(&executor, &no_tools_runtime(), "call-7", "42 degrees", &tx)
         .await
         .unwrap();
 
@@ -88,8 +81,9 @@ async fn aborting_a_polled_stream_turn_rolls_back_to_clean_history() {
     let executor = Executor::new(Arc::new(PendingProvider), Budget::default());
     let mut convo = Conversation::new("sys");
     let (tx, _rx) = mpsc::channel(1);
+    let no_tools = no_tools_runtime();
 
-    let mut fut = Box::pin(convo.turn_stream(&executor, &NoTools, "hi", &tx));
+    let mut fut = Box::pin(convo.turn_stream(&executor, &no_tools, "hi", &tx));
     // One poll runs the body up to its first await: user message pushed, rollback armed,
     // provider parked forever. A no-op waker is fine — nothing here relies on waking.
     let waker = std::task::Waker::noop();

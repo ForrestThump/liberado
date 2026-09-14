@@ -2,21 +2,14 @@
 
 use super::*;
 use axum::http::header::CONTENT_TYPE;
-use liberado_executor::{Budget, Executor, ToolRuntime};
+use liberado_executor::{Budget, Executor};
 use liberado_main_agent::ChatSessions;
 use liberado_session_store::SessionStore;
+use liberado_test_support::InvocationRecordingRuntime;
 use std::sync::Arc;
 
-struct NoTools;
-
-#[async_trait::async_trait]
-impl ToolRuntime for NoTools {
-    fn catalog(&self) -> Vec<liberado_provider::ToolDef> {
-        Vec::new()
-    }
-    async fn invoke(&self, _: &liberado_provider::ToolInvocation) -> Result<String, String> {
-        Err("no tools".into())
-    }
+fn no_tools_runtime() -> InvocationRecordingRuntime {
+    InvocationRecordingRuntime::default().with_default_result(Err("no tools".into()))
 }
 
 async fn chat_state() -> Arc<AppState> {
@@ -27,7 +20,7 @@ async fn chat_state() -> Arc<AppState> {
     let chat = Arc::new(ChatSessions::new(
         store.clone(),
         executor,
-        Arc::new(NoTools),
+        Arc::new(no_tools_runtime()),
     ));
     Arc::new(AppState::for_test(
         store,

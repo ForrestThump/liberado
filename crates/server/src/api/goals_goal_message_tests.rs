@@ -49,14 +49,14 @@ fn truncation_lands_on_a_char_boundary() {
 }
 
 use super::*;
-use std::time::{Duration, Instant};
-
 use axum::Router;
 use axum::body::Body;
 use axum::http::Request;
 use liberado_session::{
     DomainHint, GoalSessionHub, GoalSessionStore, GoalSpec, LifeOpsDemoRunner, SessionSnapshot,
 };
+use liberado_test_support::InvocationRecordingRuntime;
+use std::time::{Duration, Instant};
 use tower::ServiceExt;
 
 /// Build a router exposing just the goal-session routes under test, plus a handle to the hub so
@@ -129,7 +129,10 @@ async fn goals_app_with_chat() -> (
     let chat = Arc::new(liberado_main_agent::ChatSessions::new(
         store,
         executor,
-        Arc::new(crate::state::NoTools),
+        Arc::new(
+            InvocationRecordingRuntime::default()
+                .with_default_result(Err("no tools are configured".into())),
+        ),
     ));
     let conv = chat.create(None).await.unwrap().to_string();
 
