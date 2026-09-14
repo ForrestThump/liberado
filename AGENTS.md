@@ -123,6 +123,14 @@ linking leftover clones in with `mklink /J` works — until `git worktree remove
 the junction and deletes the **contents of the originals**. Copying leftover dirs, or omitting
 them, both avoid it. Confirm the git+tag pins with `cargo metadata --locked`.
 
+**A trait that shared test doubles implement must live below every crate that tests against it.**
+A crate's `#[cfg(test)]` binary is a *second* rustc instance of that crate, so a double from
+`liberado-test-support` compiled against the normal instance implements a *different* trait than
+the unit test sees — the "multiple different versions of crate X in the dependency graph" error,
+which looks like a version skew and is not one. Dev-dependency cycles resolve in Cargo but still
+hit this wall. This is why `ToolRuntime`/`RuntimeFactory`/`RebindableRuntime` live in
+`liberado-tool-runtime` (foundation), not in executor/mcp.
+
 **A green suite does not prove the lockfile was committed.** CI resolves without `--locked` and
 regenerates `Cargo.lock` in place, so adding a dependency and forgetting the lock passes every check
 and lands a `main` that fails `--locked` builds. `cargo metadata --locked` is the check that catches

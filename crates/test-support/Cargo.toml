@@ -15,14 +15,16 @@ path = "src/bin/mvl_conformance.rs"
 [dependencies]
 async-trait = { workspace = true }
 liberado-common = { workspace = true }
-liberado-executor = { workspace = true }
 liberado-provider = { workspace = true }
 liberado-notify = { workspace = true }
-liberado-mcp = { workspace = true }
+liberado-tool-runtime = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 
 [dev-dependencies]
+# The MVL end-to-end test drives a real Executor and judges the trace it writes; the library
+# itself only reads files and stays below the kernel.
+liberado-executor = { workspace = true }
 tokio = { workspace = true, features = ["macros"] }
 toml = { workspace = true }
 tree-sitter = { workspace = true }

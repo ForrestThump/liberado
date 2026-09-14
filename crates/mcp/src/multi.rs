@@ -11,8 +11,8 @@ use std::collections::HashMap;
 
 use async_trait::async_trait;
 use liberado_common::mcp_of;
-use liberado_executor::ToolRuntime;
 use liberado_provider::{ToolDef, ToolInvocation};
+use liberado_tool_runtime::ToolRuntime;
 
 /// A [`ToolRuntime`] backed by several sub-runtimes, each under a string key.
 ///

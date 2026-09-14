@@ -6,8 +6,8 @@ use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use liberado_common::WriteProvenance;
-use liberado_executor::ToolRuntime;
 use liberado_provider::{ToolDef, ToolInvocation};
+use liberado_tool_runtime::ToolRuntime;
 
 use crate::McpRegistry;
 use crate::multi::MultiMcpRuntime;

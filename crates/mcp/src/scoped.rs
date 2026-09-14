@@ -24,8 +24,8 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use liberado_common::{CapabilitySet, mcp_of};
-use liberado_executor::ToolRuntime;
 use liberado_provider::{ToolDef, ToolInvocation};
+use liberado_tool_runtime::ToolRuntime;
 
 /// How a [`ScopedRuntime`] decides what is in scope.
 enum Scope {

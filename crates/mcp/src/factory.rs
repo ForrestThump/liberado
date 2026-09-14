@@ -12,7 +12,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use liberado_common::{CapabilityCatalog, WriteProvenance};
-use liberado_executor::{RuntimeFactory, RuntimeSetupError, ToolRuntime};
+use liberado_tool_runtime::{RuntimeFactory, RuntimeSetupError, ToolRuntime};
 
 use crate::MultiMcpRuntime;
 use crate::connector::McpConnector;

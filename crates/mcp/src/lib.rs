@@ -34,8 +34,8 @@ pub use scoped::ScopedRuntime;
 
 use async_trait::async_trait;
 use liberado_common::WriteProvenance;
-use liberado_executor::ToolRuntime;
 use liberado_provider::{ToolDef, ToolInvocation};
+use liberado_tool_runtime::ToolRuntime;
 use serde_json::Value;
 use thiserror::Error;
 use turbomcp_client::{CallToolResult, Client, Tool, Transport};

@@ -20,8 +20,9 @@
 //!   need to exercise catalog filtering/routing logic (e.g. `ScopedRuntime`, `MultiMcpRuntime`).
 //!
 //! Pool compatibility:
-//! - [`NoopRuntime`] and [`InvocationRecordingRuntime`] implement `liberado_mcp::RebindableRuntime`
-//!   so they can be used directly in `McpPool`/`McpRegistry` tests.
+//! - [`NoopRuntime`] and [`InvocationRecordingRuntime`] implement
+//!   `liberado_tool_runtime::RebindableRuntime` so they can be used directly in
+//!   `McpPool`/`McpRegistry` tests.
 //!
 //! Trace contracts (backlog 0.5): [`trace_contracts`] reconstructs MVL turns and checks joins
 //! against the execution-log companion. The path-based suite oracle is [`mvl_oracle`].
@@ -35,9 +36,8 @@ use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use liberado_common::WriteProvenance;
-use liberado_executor::{RuntimeFactory, RuntimeSetupError, ToolRuntime};
-use liberado_mcp::RebindableRuntime;
 use liberado_provider::{ToolDef, ToolInvocation};
+use liberado_tool_runtime::{RebindableRuntime, RuntimeFactory, RuntimeSetupError, ToolRuntime};
 
 /// A configurable notifier for testing proposal-downgrade alert paths.
 pub struct MockNotifier {
@@ -134,6 +134,20 @@ impl Default for InvocationRecordingRuntime {
 }
 
 impl InvocationRecordingRuntime {
+    /// One-call constructor for the common shape every local `MockInner`/`MockToolRuntime`
+    /// used to hand-write: a fixed catalog plus one canned result for every call.
+    pub fn new(tool_names: &[&str], result: Result<String, String>) -> Self {
+        Self::default()
+            .with_catalog(tool_names)
+            .with_default_result(result)
+    }
+
+    /// Snapshot of every invocation recorded so far — the accessor the replaced
+    /// `MockToolRuntime::invoked()` helpers provided, so call sites read the same.
+    pub fn invoked(&self) -> Vec<ToolInvocation> {
+        self.invoked.lock().unwrap().clone()
+    }
+
     /// Set the result for any tool invocation that does not match a per-tool override.
     pub fn with_default_result(self, result: Result<String, String>) -> Self {
         *self.default_result.lock().unwrap() = result;

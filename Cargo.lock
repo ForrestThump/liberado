@@ -5861,6 +5861,8 @@ dependencies = [
  "liberado-notify",
  "liberado-provider",
  "liberado-scratchpad",
+ "liberado-test-support",
+ "liberado-tool-runtime",
  "proptest",
  "serde_json",
  "sha2 0.10.9",
@@ -5951,9 +5953,9 @@ dependencies = [
  "async-trait",
  "futures",
  "liberado-common",
- "liberado-executor",
  "liberado-provider",
  "liberado-test-support",
+ "liberado-tool-runtime",
  "serde_json",
  "tempfile",
  "thiserror 2.0.18",
@@ -6274,9 +6276,9 @@ dependencies = [
  "async-trait",
  "liberado-common",
  "liberado-executor",
- "liberado-mcp",
  "liberado-notify",
  "liberado-provider",
+ "liberado-tool-runtime",
  "serde",
  "serde_json",
  "tokio",
@@ -6294,6 +6296,16 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.18",
  "toml 0.8.23",
+]
+
+[[package]]
+name = "liberado-tool-runtime"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "liberado-common",
+ "liberado-provider",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
