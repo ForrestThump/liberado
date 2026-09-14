@@ -13,7 +13,10 @@ cargo-vet before any job may compile a build script or procedural macro.
    audit, or an explicit reviewed exemption in `supply-chain/config.toml`.
 3. If the graph gains a build script, add its exact `name@version` package
    specification to `[bans.build].allow-build-scripts` in `deny.toml` after
-   review. Do not add a name-only exception.
+   review. Do not add a name-only exception. A patched crate can require
+   companion version bumps (for example `rustls` pulling `aws-lc-rs`,
+   `aws-lc-sys`, and `rustls-webpki`). Update the lockfile, the allow-list
+   entries, and the cargo-vet exemptions together.
 4. Run `just dependency-security` and request the CODEOWNER review.
 
 GitHub Actions use full commit SHAs. Dependabot proposes Action SHA changes.
