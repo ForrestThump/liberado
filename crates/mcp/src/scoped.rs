@@ -19,6 +19,10 @@
 //! authorization question per tool via [`CapabilitySet::grants_tool`], so a grant of
 //! `ExecuteTool("turbovault:read_note")` shows exactly that one tool — expressible no other way —
 //! and an empty grant shows nothing.
+//!
+//! Implementation: constructed once as a [`DecoratingRuntime`] (catalog filter + pre-invoke gate).
+//! The previous private `permits` helper is inlined into those closures so there is a single
+//! source of filter logic and no uncovered duplicate method.
 
 use std::sync::Arc;
 
@@ -27,20 +31,8 @@ use liberado_common::{CapabilitySet, mcp_of};
 use liberado_provider::{ToolDef, ToolInvocation};
 use liberado_tool_runtime::{DecoratingRuntime, ToolRuntime};
 
-/// How a [`ScopedRuntime`] decides what is in scope.
-enum Scope {
-    /// Allowed MCP names; empty means pass-through. The tool-advisor's shape — see the module docs
-    /// on why this default must not be reused for capability grants.
-    Mcps(Vec<String>),
-    /// A capability grant, consulted per tool. Never passes through: no grant, no tools.
-    Grant(CapabilitySet),
-}
-
 /// A runtime wrapper that limits the visible tool surface.
 pub struct ScopedRuntime {
-    /// Source of truth for [`Self::permits`] — also cloned into the decorator's
-    /// catalog/invoke closures at construction.
-    scope: Scope,
     /// Shared decorator implementing the catalog filter + pre-invoke gate.
     decorator: DecoratingRuntime,
 }
@@ -56,7 +48,7 @@ impl ScopedRuntime {
     /// grant use [`from_capabilities`](Self::from_capabilities) instead, which fails closed.
     pub fn new(inner: Arc<dyn ToolRuntime>, allowed_mcps: Vec<String>) -> Self {
         let decorator = DecoratingRuntime::with_filter_and_gate(
-            inner.clone(),
+            inner,
             {
                 let allowed = allowed_mcps.clone();
                 move |tool| {
@@ -68,7 +60,7 @@ impl ScopedRuntime {
                 }
             },
             {
-                let allowed = allowed_mcps.clone();
+                let allowed = allowed_mcps;
                 move |call| {
                     if allowed.is_empty() {
                         return None;
@@ -82,10 +74,7 @@ impl ScopedRuntime {
                 }
             },
         );
-        Self {
-            scope: Scope::Mcps(allowed_mcps),
-            decorator,
-        }
+        Self { decorator }
     }
 
     /// Build a scoped runtime enforcing `capabilities` tool by tool.
@@ -94,13 +83,13 @@ impl ScopedRuntime {
     /// grant, and the only one that can express a partial grant over a single MCP.
     pub fn from_capabilities(inner: Arc<dyn ToolRuntime>, capabilities: CapabilitySet) -> Self {
         let decorator = DecoratingRuntime::with_filter_and_gate(
-            inner.clone(),
+            inner,
             {
                 let caps = capabilities.clone();
                 move |tool| caps.grants_tool(&tool.name)
             },
             {
-                let caps = capabilities.clone();
+                let caps = capabilities;
                 move |call| {
                     if caps.grants_tool(&call.name) {
                         None
@@ -110,22 +99,7 @@ impl ScopedRuntime {
                 }
             },
         );
-        Self {
-            scope: Scope::Grant(capabilities),
-            decorator,
-        }
-    }
-
-    /// Whether `tool` (a `"<mcp>:<tool>"` name) is in scope.
-    pub fn permits(&self, tool: &str) -> bool {
-        match &self.scope {
-            Scope::Mcps(allowed) if allowed.is_empty() => true,
-            Scope::Mcps(allowed) => {
-                let mcp = mcp_of(tool);
-                allowed.iter().any(|a| a == mcp)
-            }
-            Scope::Grant(caps) => caps.grants_tool(tool),
-        }
+        Self { decorator }
     }
 }
 
