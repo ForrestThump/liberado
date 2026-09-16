@@ -311,7 +311,9 @@ fn tools_removed_nudge(tool_names: &[String]) -> String {
 // engine and the MCP adapter so every consumer — including the shared test doubles — implements
 // the same trait instance. Re-exported here so `liberado_executor::ToolRuntime` (and friends)
 // keep naming the same items.
-pub use liberado_tool_runtime::{RuntimeFactory, RuntimeSetupError, ToolRuntime};
+pub use liberado_tool_runtime::{
+    DecoratingRuntime, RuntimeFactory, RuntimeSetupError, ToolRuntime,
+};
 
 /// A unit of work for the engine: how to behave (`instructions`), what to do (`goal`), and an
 /// optional classifier-provided opening move (`seed_calls`).

@@ -64,7 +64,9 @@ use liberado_conversation_store::{
     StoreError, Ulid,
 };
 use liberado_dispatcher::{DispatchRequest, Dispatcher};
-use liberado_executor::{AgentEvent, ExecError, Executor, RiskGatedToolRuntime, ToolRuntime};
+use liberado_executor::{
+    AgentEvent, DecoratingRuntime, ExecError, Executor, RiskGatedToolRuntime, ToolRuntime,
+};
 use liberado_mcp::ScopedRuntime;
 use liberado_provider::{Message, Provider, Role};
 use liberado_session::{DomainHint, GoalSessionHub, GoalSpec, SessionGrant, SessionOrigin};
@@ -1624,7 +1626,7 @@ impl ChatSessions {
             && self.live_catalog.is_none()
         {
             // Truly unguarded test fixtures — raw runtime only when no live catalog is attached.
-            return Box::new(PassThroughRuntime(self.runtime.clone()));
+            return Box::new(DecoratingRuntime::passthrough(self.runtime.clone()));
         }
 
         // Capability scoping: surface only what *this session* is granted, every turn, regardless of
@@ -2021,21 +2023,6 @@ enum DispatchOutcome {
     /// The turn is already answered (a clarifying question, a proposal confirmation, or a
     /// subagent's report) — this text is the final reply, no execution needed.
     Answered(String),
-}
-
-/// A thin pass-through wrapper that lets us return [`Arc<dyn ToolRuntime>`] as
-/// [`Box<dyn ToolRuntime>`] when no guards are configured.
-struct PassThroughRuntime(Arc<dyn ToolRuntime>);
-
-#[async_trait::async_trait]
-impl ToolRuntime for PassThroughRuntime {
-    fn catalog(&self) -> Vec<liberado_provider::ToolDef> {
-        self.0.catalog()
-    }
-
-    async fn invoke(&self, call: &liberado_provider::ToolInvocation) -> Result<String, String> {
-        self.0.invoke(call).await
-    }
 }
 
 /// A runtime that exposes no tools — used when the chat agent holds no MCP grants, so the model is
