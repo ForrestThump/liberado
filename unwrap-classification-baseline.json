@@ -1,10 +1,10 @@
 {
   "summary": {
-    "total_unwraps": 110,
-    "proven_invariant": 61,
+    "total_unwraps": 113,
+    "proven_invariant": 64,
     "local_failure": 0,
     "process_fatal": 49,
-    "files_scanned": 488,
+    "files_scanned": 489,
     "files_with_unwraps": 49
   },
   "files": {
@@ -395,7 +395,7 @@
       "occurrences": [
         {
           "file": "crates/coder-runner/src/main.rs",
-          "line": 928,
+          "line": 935,
           "column": 27,
           "method": "expect",
           "snippet": "tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())\n            .expect(\"install SIGTERM handler\")",
@@ -866,7 +866,7 @@
       "occurrences": [
         {
           "file": "crates/mcp/src/pool.rs",
-          "line": 338,
+          "line": 320,
           "column": 9,
           "method": "expect",
           "snippet": "self.runtime\n            .as_deref()\n            .expect(\"PooledCheckout used after drop\")",
@@ -1507,14 +1507,14 @@
       ]
     },
     "crates/test-support/src/lib.rs": {
-      "proven_invariant": 7,
+      "proven_invariant": 10,
       "local_failure": 0,
       "process_fatal": 0,
-      "total": 7,
+      "total": 10,
       "occurrences": [
         {
           "file": "crates/test-support/src/lib.rs",
-          "line": 88,
+          "line": 102,
           "column": 9,
           "method": "unwrap",
           "snippet": "self.calls\n            .lock()\n            .unwrap()",
@@ -1525,7 +1525,18 @@
         },
         {
           "file": "crates/test-support/src/lib.rs",
-          "line": 121,
+          "line": 148,
+          "column": 9,
+          "method": "unwrap",
+          "snippet": "self.invoked.lock().unwrap()",
+          "receiver": "self.invoked.lock()",
+          "context": "invokedVec<ToolInvocation>",
+          "classification": "proven_invariant",
+          "reason": "mutex / rwlock acquisition on internal non-poisoned state"
+        },
+        {
+          "file": "crates/test-support/src/lib.rs",
+          "line": 153,
           "column": 10,
           "method": "unwrap",
           "snippet": "self.default_result.lock().unwrap()",
@@ -1536,7 +1547,7 @@
         },
         {
           "file": "crates/test-support/src/lib.rs",
-          "line": 127,
+          "line": 159,
           "column": 9,
           "method": "unwrap",
           "snippet": "self.per_tool\n            .lock()\n            .unwrap()",
@@ -1547,7 +1558,7 @@
         },
         {
           "file": "crates/test-support/src/lib.rs",
-          "line": 136,
+          "line": 168,
           "column": 9,
           "method": "unwrap",
           "snippet": "self.per_tool\n            .lock()\n            .unwrap()",
@@ -1558,7 +1569,29 @@
         },
         {
           "file": "crates/test-support/src/lib.rs",
-          "line": 150,
+          "line": 181,
+          "column": 10,
+          "method": "unwrap",
+          "snippet": "self.catalog.lock().unwrap()",
+          "receiver": "self.catalog.lock()",
+          "context": "with_catalogSelf",
+          "classification": "proven_invariant",
+          "reason": "mutex / rwlock acquisition on internal non-poisoned state"
+        },
+        {
+          "file": "crates/test-support/src/lib.rs",
+          "line": 189,
+          "column": 9,
+          "method": "unwrap",
+          "snippet": "self.catalog.lock().unwrap()",
+          "receiver": "self.catalog.lock()",
+          "context": "catalogVec<ToolDef>",
+          "classification": "proven_invariant",
+          "reason": "mutex / rwlock acquisition on internal non-poisoned state"
+        },
+        {
+          "file": "crates/test-support/src/lib.rs",
+          "line": 192,
           "column": 9,
           "method": "unwrap",
           "snippet": "self.invoked.lock().unwrap()",
@@ -1569,7 +1602,7 @@
         },
         {
           "file": "crates/test-support/src/lib.rs",
-          "line": 151,
+          "line": 193,
           "column": 24,
           "method": "unwrap",
           "snippet": "self.per_tool.lock().unwrap()",
@@ -1580,7 +1613,7 @@
         },
         {
           "file": "crates/test-support/src/lib.rs",
-          "line": 155,
+          "line": 197,
           "column": 9,
           "method": "unwrap",
           "snippet": "self.default_result.lock().unwrap()",

@@ -125,6 +125,33 @@ impl OpenAiCompatibleProvider {
         self
     }
 
+    /// Apply the per-role overrides every composition root chains onto a built
+    /// `OpenAiCompatibleProvider` together: optional model id, optional per-role temperature, and
+    /// optional reasoning effort. Used by the daemon, the coding pack, the coder-runner subprocess,
+    /// and the ACP bridge so the override sequence stays in lockstep.
+    ///
+    /// Semantics (match the pre-refactor `with_*` chain, not "leave untouched" for every field):
+    /// - `model`: `Some` calls [`Provider::set_model`] (no-op on empty/whitespace); `None` leaves
+    ///   the model already configured on `self` alone.
+    /// - `temperature` / `reasoning_effort`: assigned as given — `None` clears any previously set
+    ///   provider-level value (same as `with_temperature(None)` / `with_reasoning_effort(None)`).
+    ///
+    /// Callers that also need `with_extra_client_error_status` chain that one separately because it
+    /// is per-backend, not per-role.
+    pub fn with_overrides(
+        mut self,
+        model: Option<String>,
+        temperature: Option<f32>,
+        reasoning_effort: Option<String>,
+    ) -> Self {
+        if let Some(m) = model {
+            self.set_model(m);
+        }
+        self.temperature = temperature;
+        self.reasoning_effort = reasoning_effort;
+        self
+    }
+
     /// Generic env-based constructor: reads `api_key_env`; if `model_env` is `Some` and set in
     /// the environment, it overrides `default_model`. Plain string/slice parameters (not a shared
     /// config type) so this crate stays with zero dependency on `liberado-config-loader` — the

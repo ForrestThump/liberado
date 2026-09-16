@@ -104,13 +104,16 @@ fn build_provider_from_profile(
     .ok()?;
 
     // Apply the role's model + sampling overrides (all optional; unset = provider default).
+    // The shared `with_overrides` helper is the single source of truth for this chain — see
+    // `OpenAiCompatibleProvider::with_overrides`. Replaces the per-site
+    // `set_model(...).with_temperature(...).with_reasoning_effort(...)` repetition that lived in
+    // five composition roots before item #4 of the minimax-m3 simplifications.
     let provider = if let Some(ov) = role_override {
-        if let Some(model) = &ov.model {
-            provider.set_model(model.clone());
-        }
-        provider
-            .with_temperature(ov.temperature)
-            .with_reasoning_effort(ov.reasoning.map(|r| r.as_str().to_string()))
+        provider.with_overrides(
+            ov.model.clone(),
+            ov.temperature,
+            ov.reasoning.map(|r| r.as_str().to_string()),
+        )
     } else {
         provider
     };
@@ -118,7 +121,9 @@ fn build_provider_from_profile(
     Some(Arc::new(provider))
 }
 
-/// A `CoderProviderFactory` that honours the model each coding role asks for.
+/// A `CoderProviderFactory` that honours the model each coding role asks for, and which lives in
+/// `liberado-bootstrap` (root) so every composition root that needs to serve a coding role can
+/// share the same construction path — instead of each re-deriving `from_env + with_*` locally.
 ///
 /// The pack's own `SingleProviderFactory` returns the one daemon provider for every role,
 /// whatever `CoderRoleConfig::model` says — so `[coder.coder].model` selected nothing, and the
@@ -127,23 +132,21 @@ fn build_provider_from_profile(
 /// A fresh provider per call, deliberately. `Provider::set_model` writes through a `RwLock` on the
 /// shared trait object, so re-modelling the daemon's provider would change the model for every
 /// other holder — the chat face agent included.
-pub struct CoderRoleProviderFactory {
+pub struct ProfileProviderFactory {
     profile: ProviderProfile,
 }
 
-impl CoderRoleProviderFactory {
+impl ProfileProviderFactory {
     /// `None` when the configured provider has no profile or its API key is unset, so the caller
     /// keeps whatever provider it already had rather than silently losing coding.
     pub fn for_config(config: &Config) -> Option<Self> {
-        let profile = resolve_provider_profile(config, &config.topology.provider)?;
+        let profile = resolve_provider_profile(config, &config.topology.provider)?.clone();
         std::env::var(&profile.api_key_env).ok()?;
-        Some(Self {
-            profile: profile.clone(),
-        })
+        Some(Self { profile })
     }
 }
 
-impl liberado_coder_agent::CoderProviderFactory for CoderRoleProviderFactory {
+impl liberado_coder_agent::CoderProviderFactory for ProfileProviderFactory {
     fn provider_for(
         &self,
         _role: &str,
@@ -157,12 +160,11 @@ impl liberado_coder_agent::CoderProviderFactory for CoderRoleProviderFactory {
             self.profile.extra_client_error_status.clone(),
         )
         .map_err(|e| liberado_coder_core::CoderError::Backend(e.to_string()))?;
-        provider.set_model(config.model.clone());
-        let provider = provider.with_reasoning_effort(config.reasoning.clone());
-        if let Some(t) = config.temperature {
-            return Ok(Arc::new(provider.with_temperature(Some(t))));
-        }
-        Ok(Arc::new(provider))
+        Ok(Arc::new(provider.with_overrides(
+            Some(config.model.clone()),
+            config.temperature,
+            config.reasoning.clone(),
+        )))
     }
 }
 

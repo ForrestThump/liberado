@@ -13,6 +13,68 @@ fn constructor_sets_fields() {
 }
 
 #[test]
+fn with_overrides_sets_each_field_independently() {
+    // The whole point of lifting the chain: every composition root should set model / temperature
+    // / reasoning on the same code path, so adding a new override knob is a one-liner here.
+    let provider = OpenAiCompatibleProvider::new("k", "default-model", "https://example.com")
+        .with_overrides(
+            Some("override-model".to_string()),
+            Some(0.3),
+            Some("high".to_string()),
+        );
+    assert_eq!(provider.model(), "override-model");
+    assert_eq!(provider.temperature, Some(0.3));
+    assert_eq!(provider.reasoning_effort.as_deref(), Some("high"));
+}
+
+#[test]
+fn with_overrides_clears_fields_passed_as_none() {
+    // The helper is the single source of truth for the override chain — `None` must overwrite,
+    // matching how `with_temperature(None)` and `with_reasoning_effort(None)` already work.
+    // Composition roots that don't want a particular override pass `None` and expect it to
+    // land as the new value.
+    let provider = OpenAiCompatibleProvider::new("k", "m", "https://example.com")
+        .with_temperature(Some(0.7))
+        .with_reasoning_effort(Some("low".into()))
+        .with_overrides(None, None, None);
+    assert_eq!(provider.model(), "m");
+    assert_eq!(provider.temperature, None);
+    assert_eq!(provider.reasoning_effort, None);
+}
+
+#[test]
+fn with_overrides_leaves_model_alone_when_none() {
+    // Some composition roots (e.g. `coder-runner`'s `DirectProviderFactory`) already pass the
+    // model into `new` and only want reasoning out of this helper — passing `None` for the model
+    // must not blank the model already configured in `new`.
+    let provider = OpenAiCompatibleProvider::new("k", "configured-model", "https://example.com")
+        .with_overrides(None, None, Some("high".into()));
+    assert_eq!(provider.model(), "configured-model");
+    assert_eq!(provider.reasoning_effort.as_deref(), Some("high"));
+}
+
+#[test]
+fn with_overrides_reasoning_only_clears_a_prior_reasoning_field() {
+    // Mirror of the original `with_reasoning_effort(None)` chain: clearing must work the same.
+    let provider = OpenAiCompatibleProvider::new("k", "m", "https://example.com")
+        .with_reasoning_effort(Some("low".into()))
+        .with_overrides(None, None, None);
+    assert_eq!(provider.reasoning_effort, None);
+}
+
+#[test]
+fn with_overrides_ignores_a_whitespace_model() {
+    // `Provider::set_model` already trims and refuses empty/whitespace — assert the helper
+    // inherits that behaviour rather than bypassing it with a direct field write.
+    let provider = OpenAiCompatibleProvider::new("k", "m", "https://example.com").with_overrides(
+        Some("   ".to_string()),
+        None,
+        None,
+    );
+    assert_eq!(provider.model(), "m");
+}
+
+#[test]
 fn with_extra_client_error_status_sets_codes() {
     let provider = OpenAiCompatibleProvider::new("k", "m", "https://example.com")
         .with_extra_client_error_status(vec![402]);
