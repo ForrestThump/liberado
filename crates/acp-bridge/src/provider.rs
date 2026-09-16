@@ -75,17 +75,18 @@ fn provider_from_liberado_config(
     config_dir: &std::path::Path,
     model_override: Option<String>,
 ) -> Option<ResolvedProvider> {
-    let (config, _provenance) = match liberado_config::load_config(Some(config_dir)) {
-        Ok(loaded) => loaded,
-        Err(e) => {
+    // `map_err` restores the pre-refactor warn without a match arm that bumps cyclomatic
+    // (and with it CRAP) on this composition-root function.
+    let (config, _provenance) = liberado_config::load_config(Some(config_dir))
+        .map_err(|e| {
             tracing::warn!(
                 error = %e,
                 config_dir = %config_dir.display(),
                 "resolved Liberado config load failed; falling back to env keys"
             );
-            return None;
-        }
-    };
+            e
+        })
+        .ok()?;
     let provider = liberado_bootstrap::provider_from_config(&config)?;
     let backend = config.topology.provider.clone();
     let model_id = if let Some(m) = model_override {
