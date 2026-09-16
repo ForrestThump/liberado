@@ -113,6 +113,7 @@ pub fn format_rubric(
         })
         .collect();
     let _ = writeln!(out, "\n-- Per-model consistency (mixed results only) --");
+    let _ = writeln!(out, "\n-- Per-model consistency (mixed results only) --");
     if mixed.is_empty() {
         let _ = writeln!(
             out,
@@ -403,8 +404,8 @@ mod tests {
     fn scored(name: &'static str, routed_correctly: bool) -> ScoredScenario {
         ScoredScenario {
             name,
-            goal: "goal",
-            expected: "Clarify",
+            description: "goal",
+            expect: "Clarify",
             note: "note",
             trials: vec![ScenarioTrial {
                 model: "test-model".to_string(),
@@ -546,8 +547,8 @@ mod tests {
     fn rubric_shows_per_model_breakdown_only_for_mixed_scenarios() {
         let mixed = ScoredScenario {
             name: "mixed-scenario",
-            goal: "goal",
-            expected: "Clarify",
+            description: "goal",
+            expect: "Clarify",
             note: "note",
             trials: vec![
                 ScenarioTrial {
@@ -603,7 +604,7 @@ mod tests {
     ) -> crate::tool_loop_scoring::ToolLoopScoredScenario {
         crate::tool_loop_scoring::ToolLoopScoredScenario {
             name,
-            goal: "goal",
+            description: "goal",
             note: "note",
             expect: crate::tool_scenarios::ToolLoopExpect {
                 must_call: &[],
@@ -693,7 +694,7 @@ mod tests {
     fn executor_rubric_shows_per_model_breakdown_only_for_mixed_scenarios() {
         let mixed = crate::tool_loop_scoring::ToolLoopScoredScenario {
             name: "mixed-scenario",
-            goal: "goal",
+            description: "goal",
             note: "note",
             expect: crate::tool_scenarios::ToolLoopExpect {
                 must_call: &[],

@@ -28,6 +28,7 @@ pub mod draft_proposal;
 pub mod generation;
 mod generation_engine;
 pub mod rubric;
+pub mod scored_scenario;
 pub mod scoring;
 pub mod search;
 pub mod tool_loop_generation;

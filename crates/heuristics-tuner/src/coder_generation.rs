@@ -56,7 +56,7 @@ pub async fn mutate_coder(
                     "- \"{}\": task=\"{}\" must_change={:?} must_not_change={:?} \
                      expected_outcome={:?} — {} — {}",
                     s.name,
-                    s.task,
+                    s.description,
                     s.expect.must_change,
                     s.expect.must_not_change,
                     s.expect.expected_outcome,

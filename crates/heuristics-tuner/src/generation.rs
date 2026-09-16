@@ -100,8 +100,8 @@ pub async fn mutate(
                 format!(
                     "- \"{}\": goal=\"{}\" expected={} — {} — {}",
                     s.name,
-                    s.goal,
-                    s.expected,
+                    s.description,
+                    s.expect,
                     s.trial_breakdown(),
                     s.note
                 )
@@ -163,8 +163,8 @@ mod tests {
     fn scenario(name: &'static str) -> ScoredScenario {
         ScoredScenario {
             name,
-            goal: "email my boss",
-            expected: "Clarify",
+            description: "email my boss",
+            expect: "Clarify",
             note: "external action needs confirmation",
             trials: vec![ScenarioTrial {
                 model: "test-model".to_string(),
