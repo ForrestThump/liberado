@@ -126,14 +126,18 @@ impl OpenAiCompatibleProvider {
     }
 
     /// Apply the per-role overrides every composition root chains onto a built
-    /// `OpenAiCompatibleProvider` together: optional model id (via [`Provider::set_model`], which
-    /// no-ops on empty/whitespace), optional per-role temperature (overrides the per-request value
-    /// when `Some`), optional reasoning effort. Used by the daemon, the coding pack, the
-    /// coder-runner subprocess, and the ACP bridge so the override sequence stays in lockstep —
-    /// `None` for any field leaves the existing setting untouched. Replaces the
-    /// `with_temperature(...).with_reasoning_effort(...)` chain that lived in five places before
-    /// this was lifted; callers that also need `with_extra_client_error_status` chain that one
-    /// separately because it is per-backend, not per-role.
+    /// `OpenAiCompatibleProvider` together: optional model id, optional per-role temperature, and
+    /// optional reasoning effort. Used by the daemon, the coding pack, the coder-runner subprocess,
+    /// and the ACP bridge so the override sequence stays in lockstep.
+    ///
+    /// Semantics (match the pre-refactor `with_*` chain, not "leave untouched" for every field):
+    /// - `model`: `Some` calls [`Provider::set_model`] (no-op on empty/whitespace); `None` leaves
+    ///   the model already configured on `self` alone.
+    /// - `temperature` / `reasoning_effort`: assigned as given — `None` clears any previously set
+    ///   provider-level value (same as `with_temperature(None)` / `with_reasoning_effort(None)`).
+    ///
+    /// Callers that also need `with_extra_client_error_status` chain that one separately because it
+    /// is per-backend, not per-role.
     pub fn with_overrides(
         mut self,
         model: Option<String>,
