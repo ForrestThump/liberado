@@ -2250,7 +2250,7 @@
     "cyclomatic": 51
   },
   "crates/executor/src/lib_tests.rs": {
-    "ploc": 2117,
+    "ploc": 2106,
     "lloc": 526,
     "functions": 129,
     "cyclomatic": 160
@@ -2772,10 +2772,10 @@
     "cyclomatic": 12
   },
   "crates/main-agent/src/sessions.rs": {
-    "ploc": 1280,
+    "ploc": 1272,
     "lloc": 286,
-    "functions": 117,
-    "cyclomatic": 242
+    "functions": 115,
+    "cyclomatic": 238
   },
   "crates/main-agent/src/sessions/compaction.rs": {
     "ploc": 660,
@@ -3814,6 +3814,12 @@
     "lloc": 34,
     "functions": 9,
     "cyclomatic": 17
+  },
+  "crates/tool-runtime/src/decorating.rs": {
+    "ploc": 207,
+    "lloc": 36,
+    "functions": 27,
+    "cyclomatic": 44
   },
   "crates/tool-runtime/src/lib.rs": {
     "ploc": 44,

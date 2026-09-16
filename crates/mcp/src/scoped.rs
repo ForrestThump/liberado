@@ -19,27 +19,26 @@
 //! authorization question per tool via [`CapabilitySet::grants_tool`], so a grant of
 //! `ExecuteTool("turbovault:read_note")` shows exactly that one tool — expressible no other way —
 //! and an empty grant shows nothing.
+//!
+//! Implementation: constructed once as a [`DecoratingRuntime`] (catalog filter + pre-invoke gate).
+//! The previous private `permits` helper is inlined into matching filter/gate closures (kept in
+//! lockstep by construction) so there is no uncovered duplicate method left on the type.
 
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use liberado_common::{CapabilitySet, mcp_of};
 use liberado_provider::{ToolDef, ToolInvocation};
-use liberado_tool_runtime::ToolRuntime;
-
-/// How a [`ScopedRuntime`] decides what is in scope.
-enum Scope {
-    /// Allowed MCP names; empty means pass-through. The tool-advisor's shape — see the module docs
-    /// on why this default must not be reused for capability grants.
-    Mcps(Vec<String>),
-    /// A capability grant, consulted per tool. Never passes through: no grant, no tools.
-    Grant(CapabilitySet),
-}
+use liberado_tool_runtime::{DecoratingRuntime, ToolRuntime};
 
 /// A runtime wrapper that limits the visible tool surface.
 pub struct ScopedRuntime {
-    inner: Arc<dyn ToolRuntime>,
-    scope: Scope,
+    /// Shared decorator implementing the catalog filter + pre-invoke gate.
+    decorator: DecoratingRuntime,
+}
+
+fn refused(tool: &str) -> String {
+    format!("tool '{tool}' is not in scope for this turn")
 }
 
 impl ScopedRuntime {
@@ -48,10 +47,34 @@ impl ScopedRuntime {
     /// When `allowed_mcps` is empty, every tool passes through with no filtering. For a capability
     /// grant use [`from_capabilities`](Self::from_capabilities) instead, which fails closed.
     pub fn new(inner: Arc<dyn ToolRuntime>, allowed_mcps: Vec<String>) -> Self {
-        Self {
+        let decorator = DecoratingRuntime::with_filter_and_gate(
             inner,
-            scope: Scope::Mcps(allowed_mcps),
-        }
+            {
+                let allowed = allowed_mcps.clone();
+                move |tool| {
+                    if allowed.is_empty() {
+                        return true;
+                    }
+                    let mcp = mcp_of(&tool.name);
+                    allowed.iter().any(|a| a == mcp)
+                }
+            },
+            {
+                let allowed = allowed_mcps;
+                move |call| {
+                    if allowed.is_empty() {
+                        return None;
+                    }
+                    let mcp = mcp_of(&call.name);
+                    if allowed.iter().any(|a| a == mcp) {
+                        None
+                    } else {
+                        Some(Err(refused(&call.name)))
+                    }
+                }
+            },
+        );
+        Self { decorator }
     }
 
     /// Build a scoped runtime enforcing `capabilities` tool by tool.
@@ -59,45 +82,43 @@ impl ScopedRuntime {
     /// Fails closed: an empty set yields an empty catalog. This is the constructor for a session's
     /// grant, and the only one that can express a partial grant over a single MCP.
     pub fn from_capabilities(inner: Arc<dyn ToolRuntime>, capabilities: CapabilitySet) -> Self {
-        Self {
+        let decorator = DecoratingRuntime::with_filter_and_gate(
             inner,
-            scope: Scope::Grant(capabilities),
-        }
-    }
-
-    /// Whether `tool` (a `"<mcp>:<tool>"` name) is in scope.
-    fn permits(&self, tool: &str) -> bool {
-        match &self.scope {
-            Scope::Mcps(allowed) if allowed.is_empty() => true,
-            Scope::Mcps(allowed) => {
-                let mcp = mcp_of(tool);
-                allowed.iter().any(|a| a == mcp)
-            }
-            Scope::Grant(caps) => caps.grants_tool(tool),
-        }
+            {
+                let caps = capabilities.clone();
+                move |tool| caps.grants_tool(&tool.name)
+            },
+            {
+                let caps = capabilities;
+                move |call| {
+                    if caps.grants_tool(&call.name) {
+                        None
+                    } else {
+                        Some(Err(refused(&call.name)))
+                    }
+                }
+            },
+        );
+        Self { decorator }
     }
 }
 
 #[async_trait]
 impl ToolRuntime for ScopedRuntime {
     fn catalog(&self) -> Vec<ToolDef> {
-        self.inner
-            .catalog()
-            .into_iter()
-            .filter(|tool| self.permits(&tool.name))
-            .collect()
+        self.decorator.catalog()
     }
 
     async fn invoke(&self, call: &ToolInvocation) -> Result<String, String> {
-        // Checked as well as filtered from the catalog: a model can name a tool it was never shown,
-        // whether by hallucination or because the catalog it saw is a turn old.
-        if !self.permits(&call.name) {
-            return Err(format!(
-                "tool '{}' is not in scope for this turn",
-                call.name
-            ));
-        }
-        self.inner.invoke(call).await
+        self.decorator.invoke(call).await
+    }
+
+    fn is_read_only(&self, tool_name: &str) -> bool {
+        self.decorator.is_read_only(tool_name)
+    }
+
+    fn parks_for_human(&self, tool_name: &str) -> bool {
+        self.decorator.parks_for_human(tool_name)
     }
 }
 
@@ -258,5 +279,64 @@ mod tests {
         let hallucinated = ToolInvocation::new("c1", "email-mcp:send", serde_json::json!({}));
         let err = scoped.invoke(&hallucinated).await.unwrap_err();
         assert!(err.contains("not in scope"), "got: {err}");
+    }
+
+    /// DecoratingRuntime forwards these; ScopedRuntime must not re-introduce the trait defaults.
+    #[test]
+    fn is_read_only_and_parks_for_human_forward_through_decorator() {
+        use std::collections::HashMap;
+        use std::sync::Mutex;
+
+        #[derive(Default)]
+        struct Flags {
+            read_only: Mutex<HashMap<String, bool>>,
+            parks: Mutex<HashMap<String, bool>>,
+        }
+
+        #[async_trait]
+        impl ToolRuntime for Flags {
+            fn catalog(&self) -> Vec<ToolDef> {
+                vec![ToolDef::new("tasks-mcp:add", "t", serde_json::json!({}))]
+            }
+
+            async fn invoke(&self, _call: &ToolInvocation) -> Result<String, String> {
+                Ok("ok".into())
+            }
+
+            fn is_read_only(&self, tool_name: &str) -> bool {
+                self.read_only
+                    .lock()
+                    .unwrap()
+                    .get(tool_name)
+                    .copied()
+                    .unwrap_or(false)
+            }
+
+            fn parks_for_human(&self, tool_name: &str) -> bool {
+                self.parks
+                    .lock()
+                    .unwrap()
+                    .get(tool_name)
+                    .copied()
+                    .unwrap_or(false)
+            }
+        }
+
+        let inner = Flags::default();
+        inner
+            .read_only
+            .lock()
+            .unwrap()
+            .insert("tasks-mcp:add".into(), true);
+        inner
+            .parks
+            .lock()
+            .unwrap()
+            .insert("tasks-mcp:add".into(), true);
+        let scoped = ScopedRuntime::new(Arc::new(inner), vec!["tasks-mcp".into()]);
+        assert!(scoped.is_read_only("tasks-mcp:add"));
+        assert!(scoped.parks_for_human("tasks-mcp:add"));
+        assert!(!scoped.is_read_only("email-mcp:send"));
+        assert!(!scoped.parks_for_human("email-mcp:send"));
     }
 }

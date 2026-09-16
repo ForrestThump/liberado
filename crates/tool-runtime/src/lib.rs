@@ -14,6 +14,9 @@
 //!   for an execution, scoped to the MCPs it may see and the provenance every call must carry.
 //! - [`RebindableRuntime`] — the pool-facing extension: accept a new execution's write provenance
 //!   without reconnecting, report transport death, shut down asynchronously.
+//! - [`DecoratingRuntime`] — the shared "passthrough + one tiny rule" wrapper used by every
+//!   `impl ToolRuntime` whose only job is to filter the catalog or short-circuit one
+//!   `invoke` (e.g. `PassThroughRuntime`, `ScopedRuntime`).
 
 use std::path::PathBuf;
 
@@ -21,6 +24,9 @@ use async_trait::async_trait;
 use liberado_common::WriteProvenance;
 use liberado_provider::{ToolDef, ToolInvocation};
 use thiserror::Error;
+
+mod decorating;
+pub use decorating::DecoratingRuntime;
 
 /// The tools available for a run plus how to execute them. Implemented by the turbomcp-backed
 /// runtime in production and by the `liberado-test-support` doubles in tests; the engine depends

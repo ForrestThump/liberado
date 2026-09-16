@@ -762,7 +762,7 @@ async fn narrowing_filters_qualified_tool_grants_by_parent_mcp() {
     );
 }
 
-/// PassThroughRuntime is pure delegation in both directions.
+/// `DecoratingRuntime::passthrough` is pure delegation in both directions.
 #[tokio::test]
 async fn pass_through_runtime_forwards_catalog_and_invoke() {
     struct Echo;
@@ -777,7 +777,7 @@ async fn pass_through_runtime_forwards_catalog_and_invoke() {
     }
 
     let inner = StdArc::new(Echo);
-    let passthrough = PassThroughRuntime(inner.clone());
+    let passthrough = liberado_executor::DecoratingRuntime::passthrough(inner.clone());
     assert_eq!(passthrough.catalog().len(), 1, "catalog forwards");
     let call = ToolInvocation::new("c1", "echo", serde_json::json!({}));
     assert_eq!(
