@@ -49,7 +49,7 @@ pub(super) fn build_coding_pack(
             config.tuning.dispatch.max_concurrent_coding_subagents,
         )
         .with_tuning(coder_tuning.clone());
-    if let Some(factory) = liberado_bootstrap::CoderRoleProviderFactory::for_config(config) {
+    if let Some(factory) = liberado_bootstrap::ProfileProviderFactory::for_config(config) {
         pack = pack.with_provider_factory(Arc::new(factory));
     }
     Some(Arc::new(pack))

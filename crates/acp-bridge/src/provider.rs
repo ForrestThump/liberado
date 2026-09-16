@@ -62,60 +62,39 @@ pub(crate) fn build_provider() -> Result<ResolvedProvider, String> {
     provider_from_env_profiles(model_override)
 }
 
-/// Resolve the provider from a loaded Liberado topology (`topology.toml`): the configured backend
-/// plus an OpenAI-compatible endpoint if the profile is one, else the bootstrap-built provider.
-/// Returns `None` when the config fails to load or declares no provider — the caller then falls
-/// back to the env-key scan.
+/// Resolve the provider from a loaded Liberado topology (`topology.toml`): the bootstrap-built
+/// provider with `LIBERADO_ACP_MODEL` applied as a model override when set. Returns `None` when
+/// the config fails to load or declares no provider — the caller then falls back to the env-key
+/// scan.
+///
+/// Previously rebuilt the provider twice (once via `provider_from_config`, then via
+/// `OpenAiCompatibleProvider::from_env` to bake the model override in as `default_model`).
+/// `Provider::set_model` on the already-built provider covers the same override — the second
+/// build, and its divergent `model_env`-wins-over-`LIBERADO_ACP_MODEL` quirk, are gone.
 fn provider_from_liberado_config(
     config_dir: &std::path::Path,
     model_override: Option<String>,
 ) -> Option<ResolvedProvider> {
-    match liberado_config::load_config(Some(config_dir)) {
-        Ok((config, _)) => {
-            let provider = liberado_bootstrap::provider_from_config(&config)?;
-            let backend = config.topology.provider.clone();
-            let model = model_override.clone().unwrap_or_else(|| provider.model());
-            if let Some(profile) = config
-                .topology
-                .providers
-                .iter()
-                .find(|p| p.name == config.topology.provider)
-                && let Ok(p) = OpenAiCompatibleProvider::from_env(
-                    &profile.api_key_env,
-                    profile.model_env.as_deref(),
-                    &model,
-                    &profile.base_url,
-                    profile.extra_client_error_status.clone(),
-                )
-            {
-                tracing::info!(
-                    provider = %profile.name,
-                    %model,
-                    config_dir = %config_dir.display(),
-                    "acp provider from resolved Liberado config"
-                );
-                return Some(ResolvedProvider {
-                    provider: Arc::new(p),
-                    backend,
-                    model_id: model,
-                });
-            }
-            let m = provider.model();
-            Some(ResolvedProvider {
-                provider,
-                backend,
-                model_id: m,
-            })
-        }
-        Err(e) => {
-            tracing::warn!(
-                error = %e,
-                config_dir = %config_dir.display(),
-                "resolved Liberado config load failed; falling back to env keys"
-            );
-            None
-        }
-    }
+    let (config, _provenance) = liberado_config::load_config(Some(config_dir)).ok()?;
+    let provider = liberado_bootstrap::provider_from_config(&config)?;
+    let backend = config.topology.provider.clone();
+    let model_id = if let Some(m) = model_override {
+        provider.set_model(m.clone());
+        m
+    } else {
+        provider.model()
+    };
+    tracing::info!(
+        provider = %backend,
+        %model_id,
+        config_dir = %config_dir.display(),
+        "acp provider from resolved Liberado config"
+    );
+    Some(ResolvedProvider {
+        provider,
+        backend,
+        model_id,
+    })
 }
 
 /// Fallback scan of declared provider profiles against the environment, preferring OpenRouter so

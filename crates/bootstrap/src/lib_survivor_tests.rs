@@ -105,8 +105,8 @@ fn for_config_builds_a_factory_when_the_selected_key_is_present() {
     let _key = KeyGuard::set();
     let config = keyed_config("alpha", vec![profile("alpha", "model-alpha")]);
 
-    let factory = CoderRoleProviderFactory::for_config(&config)
-        .expect("a configured key must yield a factory");
+    let factory =
+        ProfileProviderFactory::for_config(&config).expect("a configured key must yield a factory");
     use liberado_coder_agent::CoderProviderFactory;
 
     let role = liberado_coder_core::CoderRoleConfig {

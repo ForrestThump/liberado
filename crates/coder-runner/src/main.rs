@@ -683,9 +683,12 @@ impl CoderProviderFactory for DirectProviderFactory {
         _role: &str,
         config: &CoderRoleConfig,
     ) -> Result<Arc<dyn Provider>, CoderError> {
+        // The model goes into `new` (it's required there); `with_overrides` carries the
+        // reasoning-only path so every composition root uses the same helper chain. Item #4 of
+        // the minimax-m3 simplifications — see `OpenAiCompatibleProvider::with_overrides`.
         let provider = OpenAiCompatibleProvider::new(&self.api_key, &config.model, &self.base_url)
             .with_extra_client_error_status(vec![429])
-            .with_reasoning_effort(config.reasoning.clone());
+            .with_overrides(None, None, config.reasoning.clone());
         Ok(Arc::new(provider))
     }
 }
@@ -789,10 +792,14 @@ impl CoderProviderFactory for OpenAiProfileProviderFactory {
         _role: &str,
         config: &CoderRoleConfig,
     ) -> Result<Arc<dyn Provider>, CoderError> {
+        // Same construction path as `DirectProviderFactory` — the only difference is the source
+        // of `extra_client_error_status` (a hardcoded `vec![429]` here vs. the profile's list
+        // there). Item #4 of the minimax-m3 simplifications routes both through
+        // `OpenAiCompatibleProvider::with_overrides`.
         let provider =
             OpenAiCompatibleProvider::new(&self.api_key, &config.model, &self.profile.base_url)
                 .with_extra_client_error_status(self.profile.extra_client_error_status.clone())
-                .with_reasoning_effort(config.reasoning.clone());
+                .with_overrides(None, None, config.reasoning.clone());
         Ok(Arc::new(provider))
     }
 }

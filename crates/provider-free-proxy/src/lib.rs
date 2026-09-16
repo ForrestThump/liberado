@@ -10,7 +10,7 @@
 //! ## Why a proxy, not another `Provider` impl
 //!
 //! Every consumer of inference in Liberado (the daemon's role providers, the coding pack's
-//! `CoderRoleProviderFactory`, `coder-runner`'s direct mode, the ACP bridge) already knows how to
+//! `ProfileProviderFactory`, `coder-runner`'s direct mode, the ACP bridge) already knows how to
 //! talk to an OpenAI-compatible `[[providers]]` profile. A proxy that *speaks that wire format*
 //! therefore becomes available everywhere by adding one TOML entry — no changes to bootstrap,
 //! config-loader, coder-runner or acp-bridge:
