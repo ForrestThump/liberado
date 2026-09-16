@@ -2231,17 +2231,29 @@
     "functions": 7,
     "cyclomatic": 23
   },
+  "crates/executor/src/conversation_reserve_tests.rs": {
+    "ploc": 49,
+    "lloc": 17,
+    "functions": 2,
+    "cyclomatic": 3
+  },
   "crates/executor/src/lib.rs": {
-    "ploc": 3741,
-    "lloc": 865,
-    "functions": 234,
-    "cyclomatic": 390
+    "ploc": 1624,
+    "lloc": 339,
+    "functions": 105,
+    "cyclomatic": 231
   },
   "crates/executor/src/lib_survivor_tests.rs": {
     "ploc": 556,
     "lloc": 183,
     "functions": 45,
     "cyclomatic": 51
+  },
+  "crates/executor/src/lib_tests.rs": {
+    "ploc": 2117,
+    "lloc": 526,
+    "functions": 129,
+    "cyclomatic": 160
   },
   "crates/executor/src/loop_guard.rs": {
     "ploc": 218,
@@ -2290,12 +2302,6 @@
     "lloc": 250,
     "functions": 44,
     "cyclomatic": 47
-  },
-  "crates/executor/src/tests/conversation_reserve_tests.rs": {
-    "ploc": 49,
-    "lloc": 17,
-    "functions": 2,
-    "cyclomatic": 3
   },
   "crates/harness-eval/src/adapter.rs": {
     "ploc": 49,
