@@ -21,8 +21,8 @@
 //! and an empty grant shows nothing.
 //!
 //! Implementation: constructed once as a [`DecoratingRuntime`] (catalog filter + pre-invoke gate).
-//! The previous private `permits` helper is inlined into those closures so there is a single
-//! source of filter logic and no uncovered duplicate method.
+//! The previous private `permits` helper is inlined into matching filter/gate closures (kept in
+//! lockstep by construction) so there is no uncovered duplicate method left on the type.
 
 use std::sync::Arc;
 
@@ -111,6 +111,14 @@ impl ToolRuntime for ScopedRuntime {
 
     async fn invoke(&self, call: &ToolInvocation) -> Result<String, String> {
         self.decorator.invoke(call).await
+    }
+
+    fn is_read_only(&self, tool_name: &str) -> bool {
+        self.decorator.is_read_only(tool_name)
+    }
+
+    fn parks_for_human(&self, tool_name: &str) -> bool {
+        self.decorator.parks_for_human(tool_name)
     }
 }
 
@@ -271,5 +279,64 @@ mod tests {
         let hallucinated = ToolInvocation::new("c1", "email-mcp:send", serde_json::json!({}));
         let err = scoped.invoke(&hallucinated).await.unwrap_err();
         assert!(err.contains("not in scope"), "got: {err}");
+    }
+
+    /// DecoratingRuntime forwards these; ScopedRuntime must not re-introduce the trait defaults.
+    #[test]
+    fn is_read_only_and_parks_for_human_forward_through_decorator() {
+        use std::collections::HashMap;
+        use std::sync::Mutex;
+
+        #[derive(Default)]
+        struct Flags {
+            read_only: Mutex<HashMap<String, bool>>,
+            parks: Mutex<HashMap<String, bool>>,
+        }
+
+        #[async_trait]
+        impl ToolRuntime for Flags {
+            fn catalog(&self) -> Vec<ToolDef> {
+                vec![ToolDef::new("tasks-mcp:add", "t", serde_json::json!({}))]
+            }
+
+            async fn invoke(&self, _call: &ToolInvocation) -> Result<String, String> {
+                Ok("ok".into())
+            }
+
+            fn is_read_only(&self, tool_name: &str) -> bool {
+                self.read_only
+                    .lock()
+                    .unwrap()
+                    .get(tool_name)
+                    .copied()
+                    .unwrap_or(false)
+            }
+
+            fn parks_for_human(&self, tool_name: &str) -> bool {
+                self.parks
+                    .lock()
+                    .unwrap()
+                    .get(tool_name)
+                    .copied()
+                    .unwrap_or(false)
+            }
+        }
+
+        let inner = Flags::default();
+        inner
+            .read_only
+            .lock()
+            .unwrap()
+            .insert("tasks-mcp:add".into(), true);
+        inner
+            .parks
+            .lock()
+            .unwrap()
+            .insert("tasks-mcp:add".into(), true);
+        let scoped = ScopedRuntime::new(Arc::new(inner), vec!["tasks-mcp".into()]);
+        assert!(scoped.is_read_only("tasks-mcp:add"));
+        assert!(scoped.parks_for_human("tasks-mcp:add"));
+        assert!(!scoped.is_read_only("email-mcp:send"));
+        assert!(!scoped.parks_for_human("email-mcp:send"));
     }
 }

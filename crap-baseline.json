@@ -30613,8 +30613,26 @@
     },
     {
       "file": "crates/mcp/src/scoped.rs",
+      "function": "ScopedRuntime::is_read_only",
+      "line": 116,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "liberado-mcp"
+    },
+    {
+      "file": "crates/mcp/src/scoped.rs",
       "function": "ScopedRuntime::new",
       "line": 49,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "liberado-mcp"
+    },
+    {
+      "file": "crates/mcp/src/scoped.rs",
+      "function": "ScopedRuntime::parks_for_human",
+      "line": 120,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
