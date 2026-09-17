@@ -1,6 +1,20 @@
+---
+kind: finding
+status: historical
+authority: advisory
+domain: coding-harness
+canonical_for: coding-test-coverage-audit-2026-08
+open_items: false
+---
+
 # Coding Pack Test Coverage Audit (2026-08-07)
 
+**Status**: historical snapshot. Not a plan. Not scheduled.
 **Branch:** `coding-test-coverage` · **Tool:** `cargo llvm-cov` · **Scope:** 6 coding crates
+**Date**: 2026-08-07. Coverage has moved since; the ratchet lives in `just module-health-ratchet`
+and `just unwrap-ratchet`. Do not read the per-crate percentage column as current.
+**Kept** so the four "0% coverage, high blast radius" items have a dated record next to
+their fixes.
 
 ---
 ## Overall coverage

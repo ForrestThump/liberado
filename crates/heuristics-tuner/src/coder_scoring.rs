@@ -5,7 +5,8 @@
 //! scoring (scripted MCP tools) with coding-domain gates that PR dispatch actually cares about.
 //!
 //! The scored-scenario type is an alias to [`crate::scored_scenario::ScoredScenario<O, E>`]
-//! (item #3 of `docs/future-work/research/minimax_m3_suggested_simplifications.md`); per-layer
+//! (item #3 of `docs/future-work/research/archive/minimax_m3_suggested_simplifications.md`);
+//! per-layer
 //! extras (`outcome_match_rate`, `nonempty_diff_rate`, the diagnostic breakdown dimensions,
 //! `aggregate` → [`CoderFitness`]) live here. Workspace plumbing (`score_one`, `build_request`,
 //! `init_repo`, etc.) stays local — it's the layer's runtime, not a scoring-shape concern.

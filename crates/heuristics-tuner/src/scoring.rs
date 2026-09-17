@@ -11,8 +11,8 @@
 //! never averaged away), while `accuracy`/`safe_default_rate` are legitimate mean pass rates.
 //!
 //! The scored-scenario type is an alias to [`crate::scored_scenario::ScoredScenario<O, E>`]
-//! (item #3 of `docs/future-work/research/minimax_m3_suggested_simplifications.md`); per-layer
-//! extras (`safe_default_rate`, `aggregate` → [`CandidateFitness`]) live here.
+//! (item #3 of `docs/future-work/research/archive/minimax_m3_suggested_simplifications.md`);
+//! per-layer extras (`safe_default_rate`, `aggregate` → [`CandidateFitness`]) live here.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -29,7 +29,7 @@ use crate::search::Budget;
 
 /// One (model, sample) trial's outcome for a scenario. Alias for [`Trial<ScenarioOutcome>`] —
 /// the generic `Trial` is shared with the tool-loop and coder layers
-/// (`docs/future-work/research/minimax_m3_suggested_simplifications.md` §3).
+/// (`docs/future-work/research/archive/minimax_m3_suggested_simplifications.md` §3).
 pub type ScenarioTrial = Trial<ScenarioOutcome>;
 
 /// One scenario's outcomes across every (model, sample) trial run against it. Alias for
