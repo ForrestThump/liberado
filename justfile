@@ -20,6 +20,30 @@ build:
 build-release:
     cargo build --locked --release --bin liberado
 
+# Build the native Life OS workspace. Fences the sidecars a Life OS build does not need
+# (sysmap + free-proxy) while keeping them in the workspace so CI / `just sysmap` /
+# the free-proxy binary still build via `just build`. See docs/spec/reference/life-os-build.md.
+build-life-os:
+    cargo build --locked --workspace \
+        --exclude liberado-webui \
+        --exclude liberado-sysmap \
+        --exclude liberado-sysmap-cli \
+        --exclude liberado-sysmap-gui \
+        --exclude sysmap-core \
+        --exclude liberado-provider-free-proxy
+
+# Release variant of `build-life-os` — useful when you want optimized binaries for
+# every remaining workspace member (e.g. `liberado-conformance`). The single
+# `liberado` release binary is still `just build-release`.
+build-life-os-release:
+    cargo build --locked --release --workspace \
+        --exclude liberado-webui \
+        --exclude liberado-sysmap \
+        --exclude liberado-sysmap-cli \
+        --exclude liberado-sysmap-gui \
+        --exclude sysmap-core \
+        --exclude liberado-provider-free-proxy
+
 # ── Test ─────────────────────────────────────────────────────────────────────
 
 # Run the whole workspace test suite (includes the layer-rules gate).

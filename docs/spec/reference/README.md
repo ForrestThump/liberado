@@ -7,6 +7,7 @@ Machine-oriented contracts and generated inventories.
 | [api.md](api.md) | Public HTTP + SSE API (surfaces ↔ daemon) |
 | [crate-map.md](crate-map.md) | Generated crate layer / deps table (`just gen-crate-map`) |
 | [doc-authority.md](doc-authority.md) | Documentation authority, metadata, executable examples, and source-impact rules |
+| [life-os-build.md](life-os-build.md) | Life OS build profile — fenced sidecars, gated package list, full vs Life OS cargo invocations |
 | [local-readiness.md](local-readiness.md) | Windows/Debian pre-push gates, receipts, and complexity ratchets |
 | [tuning.md](tuning.md) | **Every operator knob** — what lives in which TOML, what needs only a container recreate, what is compiled in and why, and how to read back what the daemon decided |
 
