@@ -55,8 +55,8 @@ pub struct ScoredScenario<O, E> {
     pub description: &'static str,
     pub note: &'static str,
     /// Layer-specific expected-outcome context. Dispatcher stores a label string
-    /// (`"Clarify"`/`"ExecuteDirect"`/...), tool_loop stores [`ToolLoopExpect`], coder stores
-    /// [`CoderExpect`].
+    /// (`"Clarify"`/`"ExecuteDirect"`/...), tool_loop stores [`crate::tool_scenarios::ToolLoopExpect`], coder stores
+    /// [`crate::coder_scenarios::CoderExpect`].
     pub expect: E,
     pub trials: Vec<Trial<O>>,
 }

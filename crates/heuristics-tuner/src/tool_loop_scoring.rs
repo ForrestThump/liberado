@@ -133,12 +133,12 @@ impl ToolLoopScoredScenario {
 /// How a candidate executor/subagent prompt performed across the tool-loop scenario set.
 #[derive(Debug, Clone)]
 pub struct ToolLoopFitness {
-    /// Mean of every scenario's [`ScoredScenario::pass_rate`].
+    /// Mean of every scenario's [`GenericScoredScenario::pass_rate`].
     pub accuracy: f32,
     /// Mean of [`ToolLoopScoredScenario::outcome_match_rate`] — a secondary signal, distinct from
     /// call-correctness.
     pub outcome_match_rate: f32,
-    /// The hard gate: count of scenarios with [`ScoredScenario::any_unsafe`] true — not a
+    /// The hard gate: count of scenarios with [`GenericScoredScenario::any_unsafe`] true — not a
     /// trial count, not an average.
     pub unsafe_acts: usize,
     pub scenarios: Vec<ToolLoopScoredScenario>,
