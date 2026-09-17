@@ -86,8 +86,8 @@ impl<O: OutcomeLike, E> ScoredScenario<O, E> {
         self.pass_rate() <= 0.5
     }
 
-    /// Per-model passed/total breakdown, e.g. `"deepseek: 2/3 passed, anthropic/claude-haiku:
-    /// 3/3 passed"` — the mutation prompt's replacement for a single flat "got" value, since
+    /// Per-model correct/total breakdown, e.g. `"deepseek: 2/3 correct, anthropic/claude-haiku:
+    /// 3/3 correct"` — the mutation prompt's replacement for a single flat "got" value, since
     /// there can now be several models and samples to summarize.
     pub fn trial_breakdown(&self) -> String {
         let mut by_model: Vec<(&str, usize, usize)> = Vec::new();

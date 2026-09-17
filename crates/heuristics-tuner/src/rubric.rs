@@ -113,7 +113,6 @@ pub fn format_rubric(
         })
         .collect();
     let _ = writeln!(out, "\n-- Per-model consistency (mixed results only) --");
-    let _ = writeln!(out, "\n-- Per-model consistency (mixed results only) --");
     if mixed.is_empty() {
         let _ = writeln!(
             out,
@@ -723,6 +722,11 @@ mod tests {
         // The full-scenario-breakdown section (added separately, unconditional) legitimately
         // mentions every scenario by name, so scope this assertion to the per-model-consistency
         // section specifically rather than the whole rubric.
+        assert_eq!(
+            text.matches("-- Per-model consistency").count(),
+            1,
+            "consistency header must appear once (no accidental duplicate writeln)"
+        );
         let consistency_section = text.split("-- Per-model consistency").nth(1).unwrap();
         assert!(!consistency_section.contains("consistent-scenario:"));
     }
