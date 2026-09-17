@@ -1374,7 +1374,8 @@ fn mutants_record_ingests_outcomes_json() {
         String::from_utf8_lossy(&output.stderr)
     );
     let ledger: serde_json::Value = serde_json::from_str(
-        &fs::read_to_string(root.join("code-metrics").join("mutants-ledger.json")).expect("ledger file"),
+        &fs::read_to_string(root.join("code-metrics").join("mutants-ledger.json"))
+            .expect("ledger file"),
     )
     .expect("ledger json");
     let campaigns = ledger["campaigns"].as_array().expect("campaigns");

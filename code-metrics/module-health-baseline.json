@@ -389,11 +389,17 @@
     "functions": 4,
     "cyclomatic": 13
   },
+  "crates/cli/src/ci_cmd_baseline_stage_tests.rs": {
+    "ploc": 131,
+    "lloc": 48,
+    "functions": 9,
+    "cyclomatic": 14
+  },
   "crates/cli/src/ci_cmd_tests.rs": {
-    "ploc": 445,
+    "ploc": 428,
     "lloc": 187,
     "functions": 33,
-    "cyclomatic": 38
+    "cyclomatic": 37
   },
   "crates/cli/src/ci_cmd_usage_tests.rs": {
     "ploc": 7,

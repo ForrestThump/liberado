@@ -36,7 +36,6 @@ impl Drop for LedgerLock {
     }
 }
 
-
 fn ensure_ledger_dir(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
     if let Some(parent) = Path::new(LEDGER_FILE).parent() {
         fs::create_dir_all(root.join(parent))?;

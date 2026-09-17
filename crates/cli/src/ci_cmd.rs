@@ -549,5 +549,9 @@ fn repository_root() -> Result<PathBuf, Box<dyn std::error::Error>> {
 mod ci_cmd_usage_tests;
 
 #[cfg(test)]
+#[path = "ci_cmd_baseline_stage_tests.rs"]
+mod ci_cmd_baseline_stage_tests;
+
+#[cfg(test)]
 #[path = "ci_cmd_tests.rs"]
 mod ci_cmd_tests;
