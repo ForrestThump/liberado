@@ -1,6 +1,6 @@
 //! Shared generic core for the three scoring shapes in this crate (dispatcher / tool-loop /
 //! coder), lifted from `scoring.rs`, `tool_loop_scoring.rs`, and `coder_scoring.rs` per
-//! `docs/future-work/research/minimax_m3_suggested_simplifications.md` §3.
+//! `docs/future-work/research/archive/minimax_m3_suggested_simplifications.md` §3.
 //!
 //! Behavior-preserving. Each layer's per-scenario type is now an alias to
 //! [`ScoredScenario<O, E>`] plus its own impl block for the layer-specific extras

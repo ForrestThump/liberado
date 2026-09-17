@@ -1,4 +1,23 @@
+---
+kind: finding
+status: historical
+authority: advisory
+domain: coding-harness
+canonical_for: minimax-m3-suggested-simplifications-2026-08
+open_items: false
+---
+
 # Liberado — Simplification Opportunities
+
+**Status**: historical source. Not a plan. Not scheduled.
+**Date**: 2026-08-07. Kept as provenance and as the raw model output. Item #3
+(no-op-runtimes consolidation into `liberado-test-support`) shaped the heuristics-tuner
+refactor and references in `crates/heuristics-tuner/src/*` link here as such;
+items #1 and #2 (test-double deduplication, struct-field locks) are tracked elsewhere
+or already partially addressed.
+**Do not start a cleanup campaign from this file.** Check the current state first.
+
+---
 
 After reading through the 53-crate / 257K-line Rust workspace, the codebase is
 genuinely well-architected (mechanically-enforced layer rules, `test-support`

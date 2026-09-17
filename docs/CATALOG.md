@@ -71,6 +71,10 @@ Authority model: [doc-authority.md](spec/reference/doc-authority.md).
 | [docs/future-work/research/README.md](future-work/research/README.md) | index | active | advisory | docs | — |
 | [docs/future-work/research/archive/agent-orchestration-idea-from-Sol.md](future-work/research/archive/agent-orchestration-idea-from-Sol.md) | finding | historical | advisory | coding-harness | coding-worker-control-plane-source |
 | [docs/future-work/research/archive/bob-martin-critique.md](future-work/research/archive/bob-martin-critique.md) | finding | historical | advisory | coding-harness | bob-martin-critique |
+| [docs/future-work/research/archive/coding-test-coverage-audit-2026-08.md](future-work/research/archive/coding-test-coverage-audit-2026-08.md) | finding | historical | advisory | coding-harness | coding-test-coverage-audit-2026-08 |
+| [docs/future-work/research/archive/harness-bench-dogfood-2026-08.md](future-work/research/archive/harness-bench-dogfood-2026-08.md) | finding | historical | advisory | coding-harness | harness-bench-dogfood-2026-08 |
+| [docs/future-work/research/archive/minimax_m3_audit.md](future-work/research/archive/minimax_m3_audit.md) | finding | historical | advisory | coding-harness | minimax-m3-audit-2026-08 |
+| [docs/future-work/research/archive/minimax_m3_suggested_simplifications.md](future-work/research/archive/minimax_m3_suggested_simplifications.md) | finding | historical | advisory | coding-harness | minimax-m3-suggested-simplifications-2026-08 |
 | [docs/future-work/rust-native-agentic-coder-plan.md](future-work/rust-native-agentic-coder-plan.md) | plan | active | implementation | coding-harness | agentic-mesh-coding-pack |
 | [docs/future-work/sysmap-generic-core-plan.md](future-work/sysmap-generic-core-plan.md) | plan | active | implementation | tooling | — |
 | [docs/future-work/token-cost-accounting-plan.md](future-work/token-cost-accounting-plan.md) | plan | active | implementation | token-economics | token-cost-accounting |

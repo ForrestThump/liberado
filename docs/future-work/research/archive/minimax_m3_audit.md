@@ -1,3 +1,21 @@
+---
+kind: finding
+status: historical
+authority: advisory
+domain: coding-harness
+canonical_for: minimax-m3-audit-2026-08
+open_items: false
+---
+
+# MiniMax-M3 audit — five picks on where the dial moves
+
+**Status**: historical source. Not a plan. Not scheduled.
+**Date**: 2026-08-07. The advice has since been worked through piecemeal; the file remains
+as provenance and as the raw model output, not as current instruction.
+**Do not start a new campaign from this file.**
+
+---
+
 Sure. Five picks, ordered by what I think moves the needle most. One honest caveat up front: I've been working from inspection of the tree, not from running it — so these are based on the artifacts I can see, not on your day-to-day. Tell me where my priors are wrong.
 
 ## 1. Classify the unwraps, don't just count them

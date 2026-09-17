@@ -5,7 +5,8 @@
 //! `Report::outcome` was.
 //!
 //! The scored-scenario type is an alias to [`crate::scored_scenario::ScoredScenario<O, E>`]
-//! (item #3 of `docs/future-work/research/minimax_m3_suggested_simplifications.md`); per-layer
+//! (item #3 of `docs/future-work/research/archive/minimax_m3_suggested_simplifications.md`);
+//! per-layer
 //! extras (`outcome_match_rate`, the diagnostic breakdown dimensions, `aggregate` →
 //! [`ToolLoopFitness`]) live here. `ScriptedToolRuntime` stays local — it's the layer's runtime
 //! fixture, not a scoring-shape concern.

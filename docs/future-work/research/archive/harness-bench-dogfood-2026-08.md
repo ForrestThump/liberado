@@ -1,6 +1,19 @@
+---
+kind: finding
+status: historical
+authority: advisory
+domain: coding-harness
+canonical_for: harness-bench-dogfood-2026-08
+open_items: false
+---
+
 # Harness-Bench Dogfood — Liberado + DeepSeek (2026-08-07)
 
-**Status:** research findings. Based on live harness-bench runs of 10 tasks across three DeepSeek models (chat/V3, v4-flash, v4-pro) with two Liberado configurations (baseline, optimized).
+**Status:** historical research findings. Not a plan. Not scheduled.
+Based on live harness-bench runs of 10 tasks across three DeepSeek models (chat/V3,
+v4-flash, v4-pro) with two Liberado configurations (baseline, optimized). The harness
+now lives at `crates/harness-eval/`, configuration has moved since, and this file
+remains as the dated record of what was learned at the time.
 
 **Branch:** `testbench-integration`
 
