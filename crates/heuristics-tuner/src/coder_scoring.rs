@@ -3,6 +3,12 @@
 //! Each trial builds a temp git workspace, runs [`liberado_coder_agent::LiberadoLoopBackend`] with
 //! the candidate prompt, and judges real diffs + path hygiene. Complements executor tool-loop
 //! scoring (scripted MCP tools) with coding-domain gates that PR dispatch actually cares about.
+//!
+//! The scored-scenario type is an alias to [`crate::scored_scenario::ScoredScenario<O, E>`]
+//! (item #3 of `docs/future-work/research/minimax_m3_suggested_simplifications.md`); per-layer
+//! extras (`outcome_match_rate`, `nonempty_diff_rate`, the diagnostic breakdown dimensions,
+//! `aggregate` → [`CoderFitness`]) live here. Workspace plumbing (`score_one`, `build_request`,
+//! `init_repo`, etc.) stays local — it's the layer's runtime, not a scoring-shape concern.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -17,14 +23,14 @@ use liberado_common::Outcome;
 use liberado_provider::Provider;
 
 use crate::coder_scenarios::{CoderExpect, CoderScenario, CoderTier, coder_scenarios_for};
+use crate::scored_scenario::{
+    OutcomeDiagnostic, OutcomeLike, ScoredScenario as GenericScoredScenario, Trial,
+    count_any_unsafe, mean_pass_rate,
+};
 use crate::search::Budget;
 
-/// One (model, sample) trial for a coding scenario.
-#[derive(Debug, Clone)]
-pub struct CoderTrial {
-    pub model: String,
-    pub outcome: CoderTrialOutcome,
-}
+/// One (model, sample) trial for a coding scenario. Alias for [`Trial<CoderTrialOutcome>`].
+pub type CoderTrial = Trial<CoderTrialOutcome>;
 
 /// How one coding trial compared to expectations.
 #[derive(Debug, Clone, Copy)]
@@ -39,29 +45,30 @@ pub struct CoderTrialOutcome {
     pub nonempty_diff: bool,
 }
 
-/// One scenario's trials.
-#[derive(Debug, Clone)]
-pub struct CoderScoredScenario {
-    pub name: &'static str,
-    pub task: &'static str,
-    pub note: &'static str,
-    pub expect: crate::coder_scenarios::CoderExpect,
-    pub trials: Vec<CoderTrial>,
+impl OutcomeLike for CoderTrialOutcome {
+    fn pass(&self) -> bool {
+        self.passed
+    }
+    fn unsafe_flag(&self) -> bool {
+        self.unsafe_touch
+    }
 }
 
+impl OutcomeDiagnostic for CoderTrialOutcome {
+    fn diagnostic_dimensions(&self) -> Vec<(&'static str, bool)> {
+        vec![
+            ("passed", self.passed),
+            ("unsafe touches", self.unsafe_touch),
+            ("outcome matched", self.outcome_matched),
+            ("nonempty diff", self.nonempty_diff),
+        ]
+    }
+}
+
+/// One scenario's trials. Alias for [`GenericScoredScenario<CoderTrialOutcome, CoderExpect>`].
+pub type CoderScoredScenario = GenericScoredScenario<CoderTrialOutcome, CoderExpect>;
+
 impl CoderScoredScenario {
-    pub fn pass_rate(&self) -> f32 {
-        if self.trials.is_empty() {
-            return 0.0;
-        }
-        let correct = self.trials.iter().filter(|t| t.outcome.passed).count();
-        correct as f32 / self.trials.len() as f32
-    }
-
-    pub fn any_unsafe(&self) -> bool {
-        self.trials.iter().any(|t| t.outcome.unsafe_touch)
-    }
-
     pub fn outcome_match_rate(&self) -> f32 {
         if self.trials.is_empty() {
             return 0.0;
@@ -85,54 +92,6 @@ impl CoderScoredScenario {
             .count();
         hits as f32 / self.trials.len() as f32
     }
-
-    pub fn trial_breakdown(&self) -> String {
-        let mut by_model: Vec<(&str, usize, usize)> = Vec::new();
-        for trial in &self.trials {
-            match by_model.iter_mut().find(|(m, ..)| *m == trial.model) {
-                Some((_, correct, total)) => {
-                    *total += 1;
-                    if trial.outcome.passed {
-                        *correct += 1;
-                    }
-                }
-                None => by_model.push((&trial.model, usize::from(trial.outcome.passed), 1)),
-            }
-        }
-        by_model
-            .into_iter()
-            .map(|(model, correct, total)| format!("{model}: {correct}/{total} correct"))
-            .collect::<Vec<_>>()
-            .join(", ")
-    }
-
-    pub fn diagnostic_breakdown(&self) -> String {
-        let total = self.trials.len();
-        if total == 0 {
-            return "no trials completed (budget ran out before this scenario was scored)"
-                .to_string();
-        }
-        let passed = self.trials.iter().filter(|t| t.outcome.passed).count();
-        let unsafe_n = self
-            .trials
-            .iter()
-            .filter(|t| t.outcome.unsafe_touch)
-            .count();
-        let outcome_ok = self
-            .trials
-            .iter()
-            .filter(|t| t.outcome.outcome_matched)
-            .count();
-        let diffs = self
-            .trials
-            .iter()
-            .filter(|t| t.outcome.nonempty_diff)
-            .count();
-        format!(
-            "{total} trial(s) — passed: {passed}/{total}, unsafe touches: {unsafe_n}/{total}, \
-             outcome matched: {outcome_ok}/{total}, nonempty diff: {diffs}/{total}"
-        )
-    }
 }
 
 /// Aggregate fitness for a coder-prompt candidate.
@@ -148,20 +107,13 @@ pub struct CoderFitness {
 
 impl CoderFitness {
     pub fn failing(&self) -> Vec<&CoderScoredScenario> {
-        self.scenarios
-            .iter()
-            .filter(|s| s.pass_rate() <= 0.5)
-            .collect()
+        self.scenarios.iter().filter(|s| s.is_failing()).collect()
     }
 }
 
 pub fn aggregate(scenarios: Vec<CoderScoredScenario>) -> CoderFitness {
+    let accuracy = mean_pass_rate(&scenarios);
     let total = scenarios.len().max(1);
-    let accuracy = scenarios
-        .iter()
-        .map(CoderScoredScenario::pass_rate)
-        .sum::<f32>()
-        / total as f32;
     let outcome_match_rate = scenarios
         .iter()
         .map(CoderScoredScenario::outcome_match_rate)
@@ -172,7 +124,7 @@ pub fn aggregate(scenarios: Vec<CoderScoredScenario>) -> CoderFitness {
         .map(CoderScoredScenario::nonempty_diff_rate)
         .sum::<f32>()
         / total as f32;
-    let unsafe_acts = scenarios.iter().filter(|s| s.any_unsafe()).count();
+    let unsafe_acts = count_any_unsafe(&scenarios);
     CoderFitness {
         accuracy,
         outcome_match_rate,
@@ -224,7 +176,7 @@ pub async fn score_coder_candidate(
                 .entry(scenario.name)
                 .or_insert_with(|| CoderScoredScenario {
                     name: scenario.name,
-                    task: scenario.task,
+                    description: scenario.task,
                     note: scenario.note,
                     expect: scenario.expect,
                     trials: Vec::new(),
@@ -554,7 +506,7 @@ mod tests {
     fn aggregate_asymmetric_unsafe() {
         let scenarios = vec![CoderScoredScenario {
             name: "a",
-            task: "t",
+            description: "t",
             note: "n",
             expect: crate::coder_scenarios::CoderExpect {
                 must_change: &[],

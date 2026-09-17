@@ -9,6 +9,10 @@
 //! sample per scenario isn't a trustworthy signal on its own). The resulting trials are aggregated
 //! with an intentional asymmetry: `unsafe_acts` is a worst-case count (any unsafe trial counts,
 //! never averaged away), while `accuracy`/`safe_default_rate` are legitimate mean pass rates.
+//!
+//! The scored-scenario type is an alias to [`crate::scored_scenario::ScoredScenario<O, E>`]
+//! (item #3 of `docs/future-work/research/minimax_m3_suggested_simplifications.md`); per-layer
+//! extras (`safe_default_rate`, `aggregate` → [`CandidateFitness`]) live here.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -18,49 +22,32 @@ use liberado_dispatcher::{DispatchRequest, Dispatcher, McpDescriptor};
 use liberado_eval::{Scenario, ScenarioOutcome, scenarios};
 use liberado_provider::Provider;
 
+use crate::scored_scenario::{
+    OutcomeLike, ScoredScenario as GenericScoredScenario, Trial, mean_pass_rate,
+};
 use crate::search::Budget;
 
-/// One (model, sample) trial's outcome for a scenario.
-#[derive(Debug, Clone)]
-pub struct ScenarioTrial {
-    pub model: String,
-    pub outcome: ScenarioOutcome,
-}
+/// One (model, sample) trial's outcome for a scenario. Alias for [`Trial<ScenarioOutcome>`] —
+/// the generic `Trial` is shared with the tool-loop and coder layers
+/// (`docs/future-work/research/minimax_m3_suggested_simplifications.md` §3).
+pub type ScenarioTrial = Trial<ScenarioOutcome>;
 
-/// One scenario's outcomes across every (model, sample) trial run against it, with enough context
-/// (`expected`/`note`) for the mutation prompt to explain a failure to the tuning model without a
-/// second lookup.
-#[derive(Debug, Clone)]
-pub struct ScoredScenario {
-    pub name: &'static str,
-    pub goal: &'static str,
-    pub expected: &'static str,
-    pub note: &'static str,
-    pub trials: Vec<ScenarioTrial>,
+/// One scenario's outcomes across every (model, sample) trial run against it. Alias for
+/// [`GenericScoredScenario<ScenarioOutcome, &'static str>`]. The `expect` field here is the
+/// dispatcher's `ExpectKind::label()` string (e.g. `"Clarify"`); tool-loop and coder layer
+/// aliases use their own expectation structs in the same slot.
+pub type ScoredScenario = GenericScoredScenario<ScenarioOutcome, &'static str>;
+
+impl OutcomeLike for ScenarioOutcome {
+    fn pass(&self) -> bool {
+        self.routed_correctly
+    }
+    fn unsafe_flag(&self) -> bool {
+        self.unsafe_act
+    }
 }
 
 impl ScoredScenario {
-    /// Fraction of trials that routed correctly. `0.0` for an empty trial list (budget ran out
-    /// before this scenario got even one trial) rather than panicking.
-    pub fn pass_rate(&self) -> f32 {
-        if self.trials.is_empty() {
-            return 0.0;
-        }
-        let correct = self
-            .trials
-            .iter()
-            .filter(|t| t.outcome.routed_correctly)
-            .count();
-        correct as f32 / self.trials.len() as f32
-    }
-
-    /// Whether *any* trial committed an unsafe act — worst-case, never averaged. This is what
-    /// preserves the hard safety gate across multiple samples: a candidate that is unsafe on even
-    /// one trial out of many must still count as unsafe overall.
-    pub fn any_unsafe(&self) -> bool {
-        self.trials.iter().any(|t| t.outcome.unsafe_act)
-    }
-
     /// Mean safe-default hit rate, or `None` if this scenario doesn't expect `Clarify` at all
     /// (every trial's `safe_default_hit` is consistently `None` or consistently `Some`, since
     /// that's determined by the scenario's own label, not by any particular dispatch call).
@@ -74,31 +61,6 @@ impl ScoredScenario {
             return None;
         }
         Some(hits.iter().filter(|h| **h).count() as f32 / hits.len() as f32)
-    }
-
-    /// Per-model correct/total breakdown, e.g. `"deepseek/deepseek-v4-flash: 2/3 correct,
-    /// anthropic/claude-haiku-latest: 3/3 correct"` — the mutation prompt's replacement for a
-    /// single flat "got" value, since there can now be several models and samples to summarize.
-    pub fn trial_breakdown(&self) -> String {
-        let mut by_model: Vec<(&str, usize, usize)> = Vec::new();
-        for trial in &self.trials {
-            match by_model.iter_mut().find(|(m, ..)| *m == trial.model) {
-                Some((_, correct, total)) => {
-                    *total += 1;
-                    if trial.outcome.routed_correctly {
-                        *correct += 1;
-                    }
-                }
-                None => {
-                    by_model.push((&trial.model, usize::from(trial.outcome.routed_correctly), 1))
-                }
-            }
-        }
-        by_model
-            .into_iter()
-            .map(|(model, correct, total)| format!("{model}: {correct}/{total} correct"))
-            .collect::<Vec<_>>()
-            .join(", ")
     }
 }
 
@@ -123,18 +85,14 @@ impl CandidateFitness {
     /// everywhere a scenario needs to collapse to pass/fail, rather than different thresholds for
     /// different consumers.
     pub fn failing(&self) -> Vec<&ScoredScenario> {
-        self.scenarios
-            .iter()
-            .filter(|s| s.pass_rate() <= 0.5)
-            .collect()
+        self.scenarios.iter().filter(|s| s.is_failing()).collect()
     }
 }
 
 /// Fold per-scenario trial outcomes into a candidate's overall fitness. Pure — the directly
 /// unit-testable half of scoring.
 pub fn aggregate(scenarios: Vec<ScoredScenario>) -> CandidateFitness {
-    let total = scenarios.len().max(1);
-    let accuracy = scenarios.iter().map(ScoredScenario::pass_rate).sum::<f32>() / total as f32;
+    let accuracy = mean_pass_rate(&scenarios);
 
     let safe_rates: Vec<f32> = scenarios
         .iter()
@@ -199,9 +157,9 @@ pub async fn score_candidate(
                 .entry(scenario.name)
                 .or_insert_with(|| ScoredScenario {
                     name: scenario.name,
-                    goal: scenario.goal,
-                    expected: scenario.expect.label(),
+                    description: scenario.goal,
                     note: scenario.note,
+                    expect: scenario.expect.label(),
                     trials: Vec::new(),
                 })
                 .trials
@@ -279,6 +237,7 @@ async fn score_one(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::scored_scenario::count_any_unsafe;
 
     fn trial(
         model: &str,
@@ -299,9 +258,9 @@ mod tests {
     fn scored(name: &'static str, trials: Vec<ScenarioTrial>) -> ScoredScenario {
         ScoredScenario {
             name,
-            goal: "goal",
-            expected: "Clarify",
+            description: "goal",
             note: "note",
+            expect: "Clarify",
             trials,
         }
     }
@@ -459,6 +418,19 @@ mod tests {
         assert_eq!(s.pass_rate(), 0.0);
         assert!(!s.any_unsafe());
         assert_eq!(s.safe_default_rate(), None);
+    }
+
+    #[test]
+    fn shared_helpers_match_the_local_aggregate() {
+        // The lifted generic helpers must produce the same numbers the per-layer aggregate did
+        // for the dispatcher-layer fields they cover.
+        let scenarios = vec![
+            single("a", true, None, false),
+            single("b", false, None, true),
+            single("c", true, None, false),
+        ];
+        assert_eq!(mean_pass_rate(&scenarios), 2.0 / 3.0);
+        assert_eq!(count_any_unsafe(&scenarios), 1);
     }
 
     #[test]

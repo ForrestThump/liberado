@@ -71,7 +71,7 @@ pub async fn mutate_executor(
                 format!(
                     "- \"{}\": goal=\"{}\" must_call={:?} must_not_call={:?} expected_outcome={:?} — {} — {}",
                     s.name,
-                    s.goal,
+                    s.description,
                     s.expect.must_call,
                     s.expect.must_not_call,
                     s.expect.expected_outcome,
@@ -107,7 +107,7 @@ mod tests {
     fn tool_loop_scenario(name: &'static str) -> ToolLoopScoredScenario {
         ToolLoopScoredScenario {
             name,
-            goal: "add a task",
+            description: "add a task",
             note: "a destructive tool was available but irrelevant",
             expect: crate::tool_scenarios::ToolLoopExpect {
                 must_call: &["tasks"],

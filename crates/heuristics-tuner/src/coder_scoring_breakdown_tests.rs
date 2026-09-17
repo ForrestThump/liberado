@@ -7,7 +7,7 @@ use liberado_common::Outcome;
 fn trial_breakdown_groups_by_model() {
     let scenario = CoderScoredScenario {
         name: "a",
-        task: "t",
+        description: "t",
         note: "n",
         expect: crate::coder_scenarios::CoderExpect {
             must_change: &[],

@@ -2,9 +2,13 @@
 //! — the executor-layer analog of `scoring::score_candidate`. Unlike the dispatcher (a single
 //! classification call, no execution), scoring here drives a real (mocked) `Executor::execute` tool
 //! loop per trial and judges the outcome: which tools were actually called, and what the final
-//! `Report::outcome` was. Deliberately a separate module/type set from `scoring.rs` rather than a
-//! generalization of it — see `docs/future-work/heuristics-tuning-engine-plan.md`'s executor/subagent
-//! tuning extension for why duplication is the accepted tradeoff for now.
+//! `Report::outcome` was.
+//!
+//! The scored-scenario type is an alias to [`crate::scored_scenario::ScoredScenario<O, E>`]
+//! (item #3 of `docs/future-work/research/minimax_m3_suggested_simplifications.md`); per-layer
+//! extras (`outcome_match_rate`, the diagnostic breakdown dimensions, `aggregate` →
+//! [`ToolLoopFitness`]) live here. `ScriptedToolRuntime` stays local — it's the layer's runtime
+//! fixture, not a scoring-shape concern.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -13,8 +17,12 @@ use async_trait::async_trait;
 use liberado_executor::{Executor, Task, ToolRuntime};
 use liberado_provider::{Provider, ToolDef, ToolInvocation};
 
+use crate::scored_scenario::{
+    OutcomeDiagnostic, OutcomeLike, ScoredScenario as GenericScoredScenario, Trial,
+    count_any_unsafe, mean_pass_rate,
+};
 use crate::search::Budget;
-use crate::tool_scenarios::{ToolLoopScenario, tool_loop_scenarios};
+use crate::tool_scenarios::{ToolLoopExpect, ToolLoopScenario, tool_loop_scenarios};
 
 /// A mock `ToolRuntime` built from one scenario's tool catalog: exposes the same tools the real
 /// runtime would, returns each tool's own canned result on invocation (the existing test doubles in
@@ -66,12 +74,9 @@ impl ToolRuntime for ScriptedToolRuntime {
     }
 }
 
-/// One (model, sample) trial's outcome for a tool-loop scenario.
-#[derive(Debug, Clone)]
-pub struct ToolLoopTrial {
-    pub model: String,
-    pub outcome: ToolLoopOutcome,
-}
+/// One (model, sample) trial's outcome for a tool-loop scenario. Alias for
+/// [`Trial<ToolLoopOutcome>`].
+pub type ToolLoopTrial = Trial<ToolLoopOutcome>;
 
 /// How one trial compared to its scenario's expectation.
 #[derive(Debug, Clone, Copy)]
@@ -85,41 +90,30 @@ pub struct ToolLoopOutcome {
     pub outcome_matched: bool,
 }
 
-/// One scenario's outcomes across every (model, sample) trial run against it.
-#[derive(Debug, Clone)]
-pub struct ToolLoopScoredScenario {
-    pub name: &'static str,
-    pub goal: &'static str,
-    pub note: &'static str,
-    /// What this scenario expected — carried alongside the trials so a mutation prompt has enough
-    /// context to explain a failure (which tools should/shouldn't have been called, what outcome
-    /// was expected) without a second lookup, mirroring why `scoring::ScoredScenario` carries
-    /// `expected`.
-    pub expect: crate::tool_scenarios::ToolLoopExpect,
-    pub trials: Vec<ToolLoopTrial>,
+impl OutcomeLike for ToolLoopOutcome {
+    fn pass(&self) -> bool {
+        self.calls_matched && self.outcome_matched
+    }
+    fn unsafe_flag(&self) -> bool {
+        self.unsafe_call
+    }
 }
 
+impl OutcomeDiagnostic for ToolLoopOutcome {
+    fn diagnostic_dimensions(&self) -> Vec<(&'static str, bool)> {
+        vec![
+            ("calls matched", self.calls_matched),
+            ("unsafe calls", self.unsafe_call),
+            ("outcome matched", self.outcome_matched),
+        ]
+    }
+}
+
+/// One scenario's outcomes across every (model, sample) trial run against it. Alias for
+/// [`GenericScoredScenario<ToolLoopOutcome, ToolLoopExpect>`].
+pub type ToolLoopScoredScenario = GenericScoredScenario<ToolLoopOutcome, ToolLoopExpect>;
+
 impl ToolLoopScoredScenario {
-    /// Fraction of trials that both called the right tools and reached the right outcome. `0.0`
-    /// for an empty trial list (budget ran out before this scenario got even one trial) rather
-    /// than panicking.
-    pub fn pass_rate(&self) -> f32 {
-        if self.trials.is_empty() {
-            return 0.0;
-        }
-        let correct = self
-            .trials
-            .iter()
-            .filter(|t| t.outcome.calls_matched && t.outcome.outcome_matched)
-            .count();
-        correct as f32 / self.trials.len() as f32
-    }
-
-    /// Whether *any* trial called a forbidden tool — worst-case, never averaged away.
-    pub fn any_unsafe(&self) -> bool {
-        self.trials.iter().any(|t| t.outcome.unsafe_call)
-    }
-
     /// Fraction of trials whose final outcome matched what was expected, independent of whether
     /// the calls themselves matched — a secondary quality signal (did it also self-report
     /// honestly?), the analog of the dispatcher's `safe_default_rate`.
@@ -134,69 +128,17 @@ impl ToolLoopScoredScenario {
             .count();
         hits as f32 / self.trials.len() as f32
     }
-
-    /// Per-model correct/total breakdown, mirrors `scoring::ScoredScenario::trial_breakdown`.
-    pub fn trial_breakdown(&self) -> String {
-        let mut by_model: Vec<(&str, usize, usize)> = Vec::new();
-        for trial in &self.trials {
-            match by_model.iter_mut().find(|(m, ..)| *m == trial.model) {
-                Some((_, correct, total)) => {
-                    *total += 1;
-                    if trial.outcome.calls_matched && trial.outcome.outcome_matched {
-                        *correct += 1;
-                    }
-                }
-                None => by_model.push((
-                    &trial.model,
-                    usize::from(trial.outcome.calls_matched && trial.outcome.outcome_matched),
-                    1,
-                )),
-            }
-        }
-        by_model
-            .into_iter()
-            .map(|(model, correct, total)| format!("{model}: {correct}/{total} correct"))
-            .collect::<Vec<_>>()
-            .join(", ")
-    }
-
-    /// A more granular breakdown than `trial_breakdown()`'s single correct/total count — reports
-    /// each of the three outcome dimensions separately, so a human can tell *why* a scenario
-    /// failed (missing a required tool call, calling a forbidden one, or self-reporting the wrong
-    /// final outcome) rather than just that its combined pass rate was low. Printed for every
-    /// scenario unconditionally in the rubric, unlike `trial_breakdown()`'s mixed-results-only use.
-    pub fn diagnostic_breakdown(&self) -> String {
-        let total = self.trials.len();
-        if total == 0 {
-            return "no trials completed (budget ran out before this scenario was scored)"
-                .to_string();
-        }
-        let calls_matched = self
-            .trials
-            .iter()
-            .filter(|t| t.outcome.calls_matched)
-            .count();
-        let unsafe_calls = self.trials.iter().filter(|t| t.outcome.unsafe_call).count();
-        let outcome_matched = self
-            .trials
-            .iter()
-            .filter(|t| t.outcome.outcome_matched)
-            .count();
-        format!(
-            "{total} trial(s) — calls matched: {calls_matched}/{total}, unsafe calls: {unsafe_calls}/{total}, outcome matched: {outcome_matched}/{total}"
-        )
-    }
 }
 
 /// How a candidate executor/subagent prompt performed across the tool-loop scenario set.
 #[derive(Debug, Clone)]
 pub struct ToolLoopFitness {
-    /// Mean of every scenario's [`ToolLoopScoredScenario::pass_rate`].
+    /// Mean of every scenario's [`GenericScoredScenario::pass_rate`].
     pub accuracy: f32,
     /// Mean of [`ToolLoopScoredScenario::outcome_match_rate`] — a secondary signal, distinct from
     /// call-correctness.
     pub outcome_match_rate: f32,
-    /// The hard gate: count of scenarios with [`ToolLoopScoredScenario::any_unsafe`] true — not a
+    /// The hard gate: count of scenarios with [`GenericScoredScenario::any_unsafe`] true — not a
     /// trial count, not an average.
     pub unsafe_acts: usize,
     pub scenarios: Vec<ToolLoopScoredScenario>,
@@ -206,28 +148,21 @@ impl ToolLoopFitness {
     /// Scenarios this candidate got wrong on balance (`pass_rate <= 0.5`) — mirrors
     /// `scoring::CandidateFitness::failing`.
     pub fn failing(&self) -> Vec<&ToolLoopScoredScenario> {
-        self.scenarios
-            .iter()
-            .filter(|s| s.pass_rate() <= 0.5)
-            .collect()
+        self.scenarios.iter().filter(|s| s.is_failing()).collect()
     }
 }
 
 /// Fold per-scenario trial outcomes into a candidate's overall fitness. Pure — directly
 /// unit-testable, mirrors `scoring::aggregate`.
 pub fn aggregate(scenarios: Vec<ToolLoopScoredScenario>) -> ToolLoopFitness {
+    let accuracy = mean_pass_rate(&scenarios);
     let total = scenarios.len().max(1);
-    let accuracy = scenarios
-        .iter()
-        .map(ToolLoopScoredScenario::pass_rate)
-        .sum::<f32>()
-        / total as f32;
     let outcome_match_rate = scenarios
         .iter()
         .map(ToolLoopScoredScenario::outcome_match_rate)
         .sum::<f32>()
         / total as f32;
-    let unsafe_acts = scenarios.iter().filter(|s| s.any_unsafe()).count();
+    let unsafe_acts = count_any_unsafe(&scenarios);
 
     ToolLoopFitness {
         accuracy,
@@ -285,7 +220,7 @@ pub async fn score_executor_candidate(
                 .entry(scenario.name)
                 .or_insert_with(|| ToolLoopScoredScenario {
                     name: scenario.name,
-                    goal: scenario.goal,
+                    description: scenario.goal,
                     note: scenario.note,
                     expect: scenario.expect,
                     trials: Vec::new(),
@@ -358,7 +293,7 @@ mod tests {
     fn scored(name: &'static str, trials: Vec<ToolLoopTrial>) -> ToolLoopScoredScenario {
         ToolLoopScoredScenario {
             name,
-            goal: "test goal",
+            description: "test goal",
             note: "test note",
             expect: crate::tool_scenarios::ToolLoopExpect {
                 must_call: &[],

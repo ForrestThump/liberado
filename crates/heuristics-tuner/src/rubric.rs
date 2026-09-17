@@ -403,8 +403,8 @@ mod tests {
     fn scored(name: &'static str, routed_correctly: bool) -> ScoredScenario {
         ScoredScenario {
             name,
-            goal: "goal",
-            expected: "Clarify",
+            description: "goal",
+            expect: "Clarify",
             note: "note",
             trials: vec![ScenarioTrial {
                 model: "test-model".to_string(),
@@ -546,8 +546,8 @@ mod tests {
     fn rubric_shows_per_model_breakdown_only_for_mixed_scenarios() {
         let mixed = ScoredScenario {
             name: "mixed-scenario",
-            goal: "goal",
-            expected: "Clarify",
+            description: "goal",
+            expect: "Clarify",
             note: "note",
             trials: vec![
                 ScenarioTrial {
@@ -603,7 +603,7 @@ mod tests {
     ) -> crate::tool_loop_scoring::ToolLoopScoredScenario {
         crate::tool_loop_scoring::ToolLoopScoredScenario {
             name,
-            goal: "goal",
+            description: "goal",
             note: "note",
             expect: crate::tool_scenarios::ToolLoopExpect {
                 must_call: &[],
@@ -693,7 +693,7 @@ mod tests {
     fn executor_rubric_shows_per_model_breakdown_only_for_mixed_scenarios() {
         let mixed = crate::tool_loop_scoring::ToolLoopScoredScenario {
             name: "mixed-scenario",
-            goal: "goal",
+            description: "goal",
             note: "note",
             expect: crate::tool_scenarios::ToolLoopExpect {
                 must_call: &[],
@@ -722,6 +722,11 @@ mod tests {
         // The full-scenario-breakdown section (added separately, unconditional) legitimately
         // mentions every scenario by name, so scope this assertion to the per-model-consistency
         // section specifically rather than the whole rubric.
+        assert_eq!(
+            text.matches("-- Per-model consistency").count(),
+            1,
+            "consistency header must appear once (no accidental duplicate writeln)"
+        );
         let consistency_section = text.split("-- Per-model consistency").nth(1).unwrap();
         assert!(!consistency_section.contains("consistent-scenario:"));
     }

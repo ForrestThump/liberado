@@ -353,7 +353,7 @@ mod tests {
             unsafe_acts,
             scenarios: vec![CoderScoredScenario {
                 name: "create-hello-file",
-                task: "t",
+                description: "t",
                 note: "n",
                 expect: CoderExpect {
                     must_change: &[],
