@@ -69,4 +69,6 @@ Tests are **current** executable evidence. A mutation report is **historical** e
 
 **Related:** [coverage-gaps.md](coverage-gaps.md) for known uncovered code paths;
 [mock-harness-scope.md](../future-work/archive/mock-harness-scope.md) for the historical test
-infrastructure design; [docs/README.md](../README.md) for the full docs map.
+infrastructure design; [property-testing-plan.md](../future-work/archive/property-testing-plan.md)
+for the historical 2026-07-31 property-testing plan (live `proptest` usage is in crate test
+modules and `Cargo.toml`); [docs/README.md](../README.md) for the full docs map.

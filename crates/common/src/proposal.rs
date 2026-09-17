@@ -779,7 +779,7 @@ mod proptest_tests {
 
     /// Generate ASCII-only rationales to avoid `frontmatter.rs:19` byte-index panic
     /// on multi-byte UTF-8 characters. ⚠️ Known defect: generating non-ASCII rationales
-    /// crashes `from_note`. See `docs/validation/property-testing-plan.md` §Tier 2 item #7.
+    /// crashes `from_note`. See `docs/future-work/archive/property-testing-plan.md` §Tier 2 item #7.
     fn arb_proposal() -> impl Strategy<Value = Proposal> {
         (
             "[a-zA-Z0-9]{26}",
