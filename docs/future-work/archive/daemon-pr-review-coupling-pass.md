@@ -11,7 +11,7 @@ open_items: false
 
 **Status**: historical coupling review of main at `4be02711`, after PRs #244 and #247. Slice 3
 landed in PR #249. The current implementation and remaining work are in
-[`daemon-pr-review-kickoff.md`](daemon-pr-review-kickoff.md) and the implementation backlog. This
+[`daemon-pr-review-kickoff.md`](../daemon-pr-review-kickoff.md) and the implementation backlog. This
 file does not authorize application-code changes.
 
 ## Verdict

@@ -10,12 +10,12 @@ open_items: true
 # Grok 4.6 critique — daemon PR review kickoff (Sol pass 1)
 
 **Status**: advisory sibling to
-[`daemon-pr-review-kickoff.md`](daemon-pr-review-kickoff.md). Not a rewrite. Not
+[`daemon-pr-review-kickoff.md`](../daemon-pr-review-kickoff.md). Not a rewrite. Not
 authorization to implement.
 **Target**: Sol pass 1 @ `848ad7da` on `docs/daemon-pr-review-kickoff`.
 **Also read**: current Grok Bot gate (`/home/box/.config/liberado/pr-review-gate.md`),
 live harness order (`/home/box/.config/liberado/coding-agent-order.md`),
-[`coding-worker-control-plane.md`](coding-worker-control-plane.md).
+[`coding-worker-control-plane.md`](../coding-worker-control-plane.md).
 
 ## Verdict
 
