@@ -88,6 +88,7 @@ Authority model: [doc-authority.md](spec/reference/doc-authority.md).
 | [docs/spec/reference/cargo-targets.md](spec/reference/cargo-targets.md) | reference | active | normative | coding-harness | cargo-targets |
 | [docs/spec/reference/doc-authority.md](spec/reference/doc-authority.md) | policy | active | normative | docs | document-authority |
 | [docs/spec/reference/local-readiness.md](spec/reference/local-readiness.md) | reference | active | normative | ci | local-readiness |
+| [docs/spec/reference/slim-build.md](spec/reference/slim-build.md) | reference | active | normative | build | slim-build |
 | [docs/validation/README.md](validation/README.md) | validation | active | evidence | correctness | — |
 | [docs/validation/mutation-testing-plan.md](validation/mutation-testing-plan.md) | validation | historical | evidence | correctness | — |
 | [docs/validation/mutation-testing/mutation-testing-report-acp-bridge.md](validation/mutation-testing/mutation-testing-report-acp-bridge.md) | validation | historical | evidence | — | — |

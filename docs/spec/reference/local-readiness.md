@@ -101,17 +101,17 @@ the repository being cleaned.
 ## Build profiles
 
 Two build profiles share the same lockfile. CI and mutation work use the full
-workspace; Life OS-shaped operator builds fence the sidecars that are not part
-of the product root.
+workspace; day-to-day slim builds fence the sidecars that are not part of the
+Liberado product root.
 
 - `just build` — full native workspace (CI).
-- `just build-life-os` — the Life OS profile: native workspace minus the
-  sysmap tool, the free-proxy provider, and the WASM-only WebUI. Use this for
-  product-root compiles; see [life-os-build.md](life-os-build.md) for the gated
+- `just build-slim` — the slim profile: native workspace minus the sysmap
+  tool, the free-proxy provider, and the WASM-only WebUI. Use this for
+  product-root compiles; see [slim-build.md](slim-build.md) for the gated
   list and rationale.
 - `just build-release` — release binary of `-p liberado-cli` (the `liberado`
-  binary); already Life OS-shaped.
-- `just build-life-os-release` — release variant of the Life OS profile.
+  binary); already slim.
+- `just build-slim-release` — release variant of the slim profile.
 
 ## Mutation-testing recipes
 
