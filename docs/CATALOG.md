@@ -49,6 +49,7 @@ Authority model: [doc-authority.md](spec/reference/doc-authority.md).
 | [docs/future-work/archive/parallel-deliverables-2026-08-round-2.md](future-work/archive/parallel-deliverables-2026-08-round-2.md) | plan | implemented | advisory | process | parallel-deliverables-r2 |
 | [docs/future-work/archive/parallel-deliverables-2026-08-round-3.md](future-work/archive/parallel-deliverables-2026-08-round-3.md) | plan | implemented | advisory | process | parallel-deliverables-r3 |
 | [docs/future-work/archive/parallel-deliverables-2026-08.md](future-work/archive/parallel-deliverables-2026-08.md) | plan | implemented | advisory | process | parallel-deliverables-r1 |
+| [docs/future-work/archive/property-testing-plan.md](future-work/archive/property-testing-plan.md) | plan | historical | advisory | correctness | — |
 | [docs/future-work/backlog.md](future-work/backlog.md) | plan | active | implementation | product | implementation-backlog |
 | [docs/future-work/cadence-triggered-maintenance-agents.md](future-work/cadence-triggered-maintenance-agents.md) | plan | draft | advisory | ops | cadence-maintenance-agents |
 | [docs/future-work/coder-eval-curriculum.md](future-work/coder-eval-curriculum.md) | plan | active | implementation | coding-harness | coder-eval-curriculum |

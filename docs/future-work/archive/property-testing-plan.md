@@ -1,9 +1,26 @@
+---
+kind: plan
+status: historical
+authority: advisory
+domain: correctness
+open_items: false
+last_verified: 2026-09-17
+---
+
 # Property-Based Testing Plan
+
+> **Status:** Historical 2026-07-31 plan. **The opening claim that the workspace has zero
+> `proptest`/`quickcheck` usage is false on current `main`:** `proptest = "1"` is a workspace
+> dependency (declared in the root `Cargo.toml`) and is in use across `common`, `vault`,
+> `config-loader`, `chat-search`, `coder-tools`, `config`, `session`, `executor`, `coder-core`,
+> and others (~18 Rust source files import `proptest::*`). Live property tests live next to
+> the code they cover, in `#[cfg(test)] mod proptest` blocks; this file is retained for
+> provenance only and is **not** an implementation checklist.
 
 Date: **2026-07-31**. Zero `proptest`/`quickcheck` usage exists in the workspace today. This
 document specifies all opportunities discovered during a fourth-pass codebase audit,
 organized by tier and sequenced for implementation. Every item maps to a concrete bug class
-from [`docs/spec/architecture/failure-modes.md`](../spec/architecture/failure-modes.md).
+from [`docs/spec/architecture/failure-modes.md`](../../spec/architecture/failure-modes.md).
 
 ## Prerequisites
 
