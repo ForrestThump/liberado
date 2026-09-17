@@ -11,7 +11,7 @@ open_items: false
 
 **Status**: historical source. Not a plan. Not scheduled.
 **Where it constrains later work**: the control-plane draft,
-[`../coding-worker-control-plane.md`](../coding-worker-control-plane.md) §9.
+[`../../coding-worker-control-plane.md`](../../coding-worker-control-plane.md) §9.
 **Do not start a cleanup campaign from this file.** The CRAP ratchet and new-function ceiling
 already block new sludge. Extraction of `run_loop` / `run_with_turn_budget` is opportunistic: do
 it the next time those functions must change.

@@ -30,14 +30,13 @@ roadmap and **not** a source of implementation work.
 
 | Doc | Role |
 |-----|------|
-| [agent-orchestration-idea-from-Sol.md](agent-orchestration-idea-from-Sol.md) | Provenance for the control-plane spec. Not a plan. |
-| [bob-martin-critique.md](bob-martin-critique.md) | Provenance for the control-plane constraints. Not a cleanup epic. |
+| None. Earlier source conversations are archived below. |
 
 ## Archive
 
 | Doc | Role |
 |-----|------|
-| [archive/](archive/README.md) | Dated architecture analyses and peer MCP studies |
+| [archive/](archive/README.md) | Dated architecture analyses, source conversations kept for provenance, and peer MCP studies |
 
 For what to build next: [backlog.md](../backlog.md).
 For direction: [roadmap.md](../../roadmap.md).
