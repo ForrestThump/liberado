@@ -3,7 +3,7 @@
 **Status**: research note, 2026-07-21 (updated same day: `/goal` harness + `/loop`/cron).  
 **Scope**: highest-leverage gaps if Liberado’s TUI is to be a *daily-driver agentic coding surface*, not a product-market comparison of “who wins coding agents.” Also covers **goal-achievement harness robustness** (Grok `/goal`) and **recurring work** (Grok `/loop` vs Liberado cron + series-loops plan).  
 **Sources**: [xai-org/grok-build](https://github.com/xai-org/grok-build), [docs.x.ai/build](https://docs.x.ai/build/overview), [Background Tasks](https://docs.x.ai/build/features/background-tasks) (`/loop`), public writeups on goal mode (June 2026), Liberado architecture (`agentic-loops.md`, `session-surface-contract.md`, `positioning.md`, `roadmap.md`, `verifiers.md`, [`loops-plan.md`](../loops-plan.md)), coding pack crates (`coder-*`), `liberado-cron`, TUI client (`crates/tui`).  
-**Related**: [`vs-hermes.md`](vs-hermes.md) (life-OS / skills / cron gaps), [`../../spec/architecture/positioning.md`](../../spec/architecture/positioning.md) (coding is P3: *good enough + integrated*, not best-in-class), [`loop_architecture_reference_article.md`](archive/loop_architecture_reference_article.md).
+**Related**: [`vs-hermes.md`](vs-hermes.md) (Liberado / skills / cron gaps), [`../../spec/architecture/positioning.md`](../../spec/architecture/positioning.md) (coding is P3: *good enough + integrated*, not best-in-class), [`loop_architecture_reference_article.md`](archive/loop_architecture_reference_article.md).
 
 ---
 
@@ -11,7 +11,7 @@
 
 | | **Grok Build** | **Liberado** |
 |---|---|---|
-| **Job** | Terminal coding agent: open a repo, plan/search/build, ship diffs | Life OS: daemon + vault + chat + sessions; coding is one domain pack |
+| **Job** | Terminal coding agent: open a repo, plan/search/build, ship diffs | Daemon + vault + chat + sessions; coding is one domain pack |
 | **Default UX** | `cd project && grok` — in-process agent, fullscreen TUI | `liberado serve` + thin TUI client over HTTP/SSE |
 | **Loop owner** | Shell/runtime inside the binary | Kernel (`executor` / session hub) + packs; TUI never owns the loop |
 | **Trust model** | Local tools + permission prompts / always-approve / sandbox profiles | Capability sets, zones, proposals, human taps (Telegram/TUI) |
@@ -35,7 +35,7 @@ If the goal is “open TUI → drive a coding session like a serious coding agen
 | **2** | **Plan-first + human-visible plan + gated writes** | Without plan mode, the agent either over-edits or under-explains; TUI has nowhere to *review* intent before mutation | Optional planner inside coder-agent (config); not a first-class TUI mode | `/plan`, plan file auto-approve, other writes still ask |
 | **3** | **Diff / artifact UX in the TUI** | Session stream shows events/tokens; coding *is* the diff. Without inline/stat/patch review, you cannot supervise well | `git_diff` / critic on evidence; TUI is chat+joined session, not a diff client | Inline diffs, plan review, artifact-forward TUI |
 | **4** | **Mid-build resume / workspace checkpoints** | Long coding jobs die on restart or re-run and redo FS work | Intake resume shipped; **build resume explicitly open** (roadmap E6-c(b)) | Sessions/checkpoints/workspace layer as product core |
-| **5** | **Permission UX that matches coding cadence** | Life-OS permission model (proposal + Telegram buttons) is correct for unattended work; for interactive coding it is slow | Zone grants, proposals, Telegram scopes | Per-tool ask / always-approve / plan-mode split; Shift+Tab modes |
+| **5** | **Permission UX that matches coding cadence** | Liberado permission model (proposal + Telegram buttons) is correct for unattended work; for interactive coding it is slow | Zone grants, proposals, Telegram scopes | Per-tool ask / always-approve / plan-mode split; Shift+Tab modes |
 | **6** | **Parallel subagents + isolation (worktrees)** | Multi-file / multi-hypothesis coding needs parallel search without trampling the main tree | Architecture: subagents + capability ∩; **worktree isolation not done** (coder-agent ARCHITECTURE) | Up to N parallel subagents; isolation as product feature |
 | **7** | **Skills / project instructions discovery** | Coding agents compound via `AGENTS.md` / skills / repo conventions | Topology + prompts + MCP; no Grok/Claude-style skill folders | Skills, plugins, marketplaces, CLAUDE.md + AGENTS.md compatibility |
 | **8** | **Headless coding CLI + machine I/O** | Scripts/CI and “run this fix and exit” are half of coding agent value | PR factory / evals / headless-ish server; not `liberado -p "…"` in a repo | `grok -p`, streaming-json, ACP stdio |
@@ -60,7 +60,7 @@ If the goal is “open TUI → drive a coding session like a serious coding agen
 | Capability | Liberado | Grok Build | Gap severity for TUI coding |
 |---|---|---|---|
 | Fullscreen coding TUI | Yes (ratatui client) | Yes (primary product) | Medium — Liberado TUI is real but chat/session oriented |
-| Daemon + remote surfaces | Yes (HTTP/SSE, Telegram) | Local-first; dashboard/ACP | Liberado *advantage* for life-OS; coding feels remote |
+| Daemon + remote surfaces | Yes (HTTP/SSE, Telegram) | Local-first; dashboard/ACP | Liberado *advantage* for unattended personal automation; coding feels remote |
 | One binary `cd && run` | No — needs vault + daemon + config | Yes | **High** |
 | Headless one-shot | Partial (server APIs, evals, PR dispatch) | First-class `-p` | High for automation |
 | ACP (editor protocol) | Planned / not product | Shipped | Medium (after TUI is good) |
@@ -116,7 +116,7 @@ If the goal is “open TUI → drive a coding session like a serious coding agen
 
 **Grok Build:** The mental model is the repo. Launch is local; tools see that tree; sessions bind to directory.
 
-**Liberado:** Mental model is the **daemon + vault + session hub**. Coding pack *does* take a workspace root and path policy, but the daily path is still “boot the life OS, then spawn a coding domain goal.” That is correct for integration; it is wrong for *feeling* like a coding agent.
+**Liberado:** Mental model is the **daemon + vault + session hub**. Coding pack *does* take a workspace root and path policy, but the daily path is still “boot Liberado, then spawn a coding domain goal.” That is correct for integration; it is wrong for *feeling* like a coding agent.
 
 **Why high leverage:** Every other coding UX (plan, diffs, permissions, resume) is easier when “current coding workspace” is a first-class, sticky context on the TUI — not only a field inside a goal payload.
 
@@ -269,7 +269,7 @@ liberado code -p "fix the flaky test" --workspace . --always-approve
 
 Grok Build invests heavily in pager UX: modes, queue, tasks, themes, context meter, rewind, export, vim scrollback, etc.
 
-Liberado TUI already has real depth for **sessions** (switcher, join, fork, spawn, model select, mouse handlers). The gap is **not** “no TUI”; it is “TUI optimised for life-OS chat + session supervision,” not for continuous coding.
+Liberado TUI already has real depth for **sessions** (switcher, join, fork, spawn, model select, mouse handlers). The gap is **not** “no TUI”; it is “TUI optimised for Liberado chat + session supervision,” not for continuous coding.
 
 **Leverage after 1–5:** Polish compounds only when plan/diff/workspace exist. Otherwise you gold-plate a chat client.
 
@@ -301,7 +301,7 @@ Positioning already says coding is P3 and “not replacing Claude Code / Grok Bu
 
 ## 5. Recommended program of work (TUI agentic coding track)
 
-Assume life-OS dogfood continues as P1. This track is **parallel-safe** only where it hardens shared substrate (session events, permissions, workspace context). Otherwise sequence it when P1 stops wincing.
+Assume Liberado dogfood continues as P1. This track is **parallel-safe** only where it hardens shared substrate (session events, permissions, workspace context). Otherwise sequence it when P1 stops wincing.
 
 ### Phase A — “I can supervise coding in the TUI” (highest ROI)
 
@@ -369,7 +369,7 @@ Assume life-OS dogfood continues as P1. This track is **parallel-safe** only whe
 | Surfaces render diffs; don’t own loop | `docs/spec/architecture/agentic-loops.md` Surfaces table |
 | Session surface obligations | `docs/spec/architecture/session-surface-contract.md` |
 | Coding is P3, good-enough + integrated | `docs/spec/architecture/positioning.md`, `docs/roadmap.md` Priority 3 |
-| Skills / self-extension (life-OS angle) | `docs/ideas/vs-hermes.md` §1 — different mechanism (`ProposeMcp` vs markdown skills) |
+| Skills / self-extension (Liberado angle) | `docs/ideas/vs-hermes.md` §1 — different mechanism (`ProposeMcp` vs markdown skills) |
 | ACP | Named future surface in architecture overview |
 | Goal / turn / loop vocabulary | `docs/spec/architecture/agentic-loops.md` §Vocabulary |
 | Verifiers + criteria intake | `docs/spec/architecture/verifiers.md` |
@@ -566,7 +566,7 @@ Grok’s **`/loop`** and Liberado’s **cron** are easy to confuse with each oth
 | Kind | Question it answers | Stops when | Grok Build | Liberado today |
 |---|---|---|---|---|
 | **Goal** (`/goal`) | “Make this *true*” | Predicate holds (or hard fail/budget) | `/goal`, long autonomous run | Goal sessions + coding pack (under-productized as `/goal`) |
-| **One-shot scheduled goal** | “At 7am, do *this once*” | That firing’s goal terminals | Partial (less life-OS oriented) | **Shipped:** `liberado-cron` + `[[schedules]]` → event → goal session; Telegram brief delivery |
+| **One-shot scheduled goal** | “At 7am, do *this once*” | That firing’s goal terminals | Partial (less Liberado oriented) | **Shipped:** `liberado-cron` + `[[schedules]]` → event → goal session; Telegram brief delivery |
 | **Series loop** (`/loop`-class) | “Every interval, improve *this* a bit; remember last time” | Cap, green streak, or human close — **never “succeeded forever”** | `/loop 5m <prompt>` | **Planned:** [`loops-plan.md`](../loops-plan.md); **not built** — cron firings are amnesiac |
 | **Background task / monitor** | “Run this process / watch this stream” | Kill / expire | `/tasks`, monitors, bg commands | Not a first-class TUI tasks pane; daemon sources instead |
 
@@ -582,9 +582,9 @@ From Grok docs ([Background Tasks](https://docs.x.ai/build/features/background-t
 - Managed from **tasks pane** (`Ctrl+B` / `/tasks`); cancel there or via agent  
 - Separate from: background shell commands, log **monitors** (line → notification), prompt **queue**
 
-That is a **lightweight, chat-local, interval prompt scheduler** — excellent for “nudge me if tests break while I work,” not a full life-OS automation plane.
+That is a **lightweight, chat-local, interval prompt scheduler** — excellent for “nudge me if tests break while I work,” not a full Liberado automation plane.
 
-### 9.2 Liberado one-shot cron (already stronger for life-OS)
+### 9.2 Liberado one-shot cron (already stronger for unattended automation)
 
 Shipped substrate:
 
@@ -660,9 +660,9 @@ Settled: **skip if previous pass still running** (never unbounded queue); agent-
 
 ### 9.5 How Liberado builds comparable (and better) `/loop` performance
 
-Do **not** clone Grok’s 7-day chat loop as the life-OS spine. Build three tiers:
+Do **not** clone Grok’s 7-day chat loop as the Liberado spine. Build three tiers:
 
-#### Tier 1 — Keep winning at unattended cron (life-OS)
+#### Tier 1 — Keep winning at unattended cron (Liberado)
 
 Already the P1 path. Raise robustness by:
 
@@ -688,7 +688,7 @@ For Grok-like “every 5m check tests while I code”:
 
 1. **Session-local scheduler** (or short-lived series loop bound to a coding workspace) created by slash `/loop 5m …` in TUI.  
 2. Each tick spawns a **tiny goal** (or a restricted turn) with report-only tools; results append to the sticky coding chat or a side panel.  
-3. Auto-expire (e.g. 24h or until session ends) — do not pretend this is life-OS automation.  
+3. Auto-expire (e.g. 24h or until session ends) — do not pretend this is Liberado automation.  
 4. Cap concurrency; skip if previous tick still running (same policy as series loops).
 
 This is polish for coding TUI dogfood, not a substitute for Tier 1–2.

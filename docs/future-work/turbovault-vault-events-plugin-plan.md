@@ -530,7 +530,7 @@ Mutation / property ideas (optional): drop counter monotonicity; never attribute
 
 - `docs/spec/vault-concurrency-spec.md` — Decision 5, Approach A, zones, idempotency.
 - `docs/decisions/` — ADRs 5, 6, 18, 19.
-- `docs/spec/life-os-architecture.md` §5 — triggering layer (update when plugin lands).
+- `docs/spec/liberado-architecture.md` §5 — triggering layer (update when plugin lands).
 - `crates/vault/` — attribution + write adapter.
 - `crates/daemon/src/vault_source.rs` — production EventSource fallback.
 

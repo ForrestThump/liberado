@@ -60,7 +60,7 @@ a second model**.
 | | free oracle? |
 |---|---|
 | Agentic coding | **yes** — tests pass or fail; the compiler is objective |
-| Life-OS tasks (calendar, vault, research) | **no** — grading means a human reading transcripts, or an LLM judge with its own failure modes |
+| Liberado tasks (calendar, vault, research) | **no** — grading means a human reading transcripts, or an LLM judge with its own failure modes |
 
 That is why this work belongs with the coding pack rather than before it.
 

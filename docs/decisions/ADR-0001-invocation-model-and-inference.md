@@ -42,7 +42,7 @@ Pure in-loop tool-call invocation of liberado (no separate inference). Passing l
 ## Implementation and tests
 
 - `liberado-dispatch-logic-spec.md`
-- `life-os-architecture.md`
+- `liberado-architecture.md`
 
 ## Supersedes / superseded by
 
@@ -81,4 +81,4 @@ Escalate back to the main agent with structured uncertainty signals when clarifi
 
 The main agent context remains protected from tool definitions, internal dispatch reasoning, and low-level tool execution traces.
 
-**Routing detail resolved in `liberado-dispatch-logic-spec.md`**: the dispatcher chooses among four terminal actions — `ExecuteDirect`, `DispatchSubagent`, `Clarify` (to the main agent), and `Report` (the return type of the first two). Choice is made by a 5-step pipeline (retrieve procedural guidance ? classify via small inference ? downgrade-only deterministic guards ? act ? record outcome). Correctness is engineered, not assumed: routing is **safe-by-default** (uncertainty degrades toward Clarify/proposal, never toward an irreversible action), guards can only *downgrade* risk (capability/zone-write-class/consequence/reaction-depth/confidence), and the decision is a typed, traced, eval-tested artifact (Decisions 12, 16). The component split (new `liberado-dispatcher` consuming the renamed `liberado-memory-mcp` for general + procedural memory) is recorded in `life-os-architecture.md` §2.
+**Routing detail resolved in `liberado-dispatch-logic-spec.md`**: the dispatcher chooses among four terminal actions — `ExecuteDirect`, `DispatchSubagent`, `Clarify` (to the main agent), and `Report` (the return type of the first two). Choice is made by a 5-step pipeline (retrieve procedural guidance ? classify via small inference ? downgrade-only deterministic guards ? act ? record outcome). Correctness is engineered, not assumed: routing is **safe-by-default** (uncertainty degrades toward Clarify/proposal, never toward an irreversible action), guards can only *downgrade* risk (capability/zone-write-class/consequence/reaction-depth/confidence), and the decision is a typed, traced, eval-tested artifact (Decisions 12, 16). The component split (new `liberado-dispatcher` consuming the renamed `liberado-memory-mcp` for general + procedural memory) is recorded in `liberado-architecture.md` §2.

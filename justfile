@@ -20,6 +20,31 @@ build:
 build-release:
     cargo build --locked --release --bin liberado
 
+# Build the day-to-day slim workspace. Fences the sidecars the slim build does
+# not need (sysmap + free-proxy) while keeping them in the workspace so CI /
+# `just sysmap` / the free-proxy binary still build via `just build`. See
+# docs/spec/reference/slim-build.md.
+build-slim:
+    cargo build --locked --workspace \
+        --exclude liberado-webui \
+        --exclude liberado-sysmap \
+        --exclude liberado-sysmap-cli \
+        --exclude liberado-sysmap-gui \
+        --exclude sysmap-core \
+        --exclude liberado-provider-free-proxy
+
+# Release variant of `build-slim` — useful when you want optimized binaries for
+# every remaining workspace member (e.g. `liberado-conformance`). The single
+# `liberado` release binary is still `just build-release`.
+build-slim-release:
+    cargo build --locked --release --workspace \
+        --exclude liberado-webui \
+        --exclude liberado-sysmap \
+        --exclude liberado-sysmap-cli \
+        --exclude liberado-sysmap-gui \
+        --exclude sysmap-core \
+        --exclude liberado-provider-free-proxy
+
 # ── Test ─────────────────────────────────────────────────────────────────────
 
 # Run the whole workspace test suite (includes the layer-rules gate).

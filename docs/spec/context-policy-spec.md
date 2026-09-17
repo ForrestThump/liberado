@@ -4,7 +4,7 @@
 **Owner**: Shiloh Mangus
 **Last Updated**: June 21, 2026
 **Related**:
-- `life-os-architecture.md` (§1 Main Agent & ContextPolicy)
+- `liberado-architecture.md` (§1 Main Agent & ContextPolicy)
 - `liberado-dispatch-logic-spec.md` (on-demand retrieval via the dispatcher; Detach report delivery)
 - `liberado-architecture-decisions.md` (Decision 9 hook→main messaging; Decision 11 proposals)
 - Turbovault read tools (`search`, `read_note`, `search_by_frontmatter`, `query_frontmatter_sql`)

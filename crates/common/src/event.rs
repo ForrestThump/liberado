@@ -1,4 +1,4 @@
-//! The standardized event payload (`life-os-architecture.md` §5, Decision 6).
+//! The standardized event payload (`liberado-architecture.md` §5, Decision 6).
 //!
 //! One shape used by **both** trigger paths: (a) vault changes surfaced by the daemon's
 //! Turbovault subscription (the daemon fills in `provenance` after central hash-join

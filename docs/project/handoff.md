@@ -1,4 +1,4 @@
-# Handoff — Liberado is the daily-driver life OS (Telegram + TurboVault plugins)
+# Handoff — Liberado daily driver (Telegram + TurboVault plugins)
 
 Docs map: [`README.md`](../README.md) · open work: [`../roadmap.md`](../roadmap.md).
 
@@ -80,7 +80,7 @@ with two chatty turns. Subagents now inherit pool zone grants — defensible, un
   Telegram, and fold into the sticky chat session (quiet-delay so they don't barge mid-conversation).
   Sticky id survives container restarts. Briefing reliability fixed (weather geocode, CalDAV
   relative hrefs) — live briefs return `Succeeded`.
-- **Strategy unchanged:** autonomous life-OS daemon first (replace OpenClaw/Hermes), then chat,
+- **Strategy unchanged:** autonomous Liberado daemon first (replace OpenClaw/Hermes), then chat,
   then coding. See [`architecture/positioning.md`](../spec/architecture/positioning.md).
 - **Doctrine:** [`architecture/failure-modes.md`](../spec/architecture/failure-modes.md) — live-verify
   every change against the real daemon.
@@ -125,13 +125,13 @@ curl -fsS "$LIBERADO_API_URL/api/models"
 
 ### TurboVault modules (sibling repo)
 
-Work lives in the `turbovault/` sibling (not the life-os workspace). High level:
+Work lives in the `turbovault/` sibling (not the Liberado workspace). High level:
 
 | Module | Branch / status | Liberado payoff |
 |---|---|---|
 | **Plugin API** (`turbovault-plugin-api`) | Landed (#39) | Boundary Liberado plugins use |
 | **`vector`** | On fork `develop` (prototype Phases 1–4 done); live on homelab with `--features vector` | Semantic vault search from Telegram / briefs |
-| **`tasks`** | `feat/plugin-tasks` (extraction + self-tuning + recurrence); core task tools also on `develop` | Life-OS todo surface; briefs already depend on tasks |
+| **`tasks`** | `feat/plugin-tasks` (extraction + self-tuning + recurrence); core task tools also on `develop` | Liberado todo surface; briefs already depend on tasks |
 | **`vault_events`** | Planned — [`../future-work/turbovault-vault-events-plugin-plan.md`](../future-work/turbovault-vault-events-plugin-plan.md) | Optional L1 perception; not blocking Liberado P1 |
 
 Umbrella: [`../future-work/turbovault-modules-integration-roadmap.md`](../future-work/turbovault-modules-integration-roadmap.md).
@@ -168,7 +168,7 @@ just deploy-homelab
 Strategy is still **daemon → chat → coding**. Modules and MCP breadth *support* the daemon daily-driver
 bar; they do not replace it. Full table: [`../roadmap.md`](../roadmap.md).
 
-### Priority 1 — daily-drive the autonomous life OS
+### Priority 1 — daily-drive the autonomous Liberado
 
 1. **Dogfood Telegram.** Sticky free-form chat + cron delivery is the current phone surface and is
    good enough for the present use case. **Lean into using it** so real friction drives the next

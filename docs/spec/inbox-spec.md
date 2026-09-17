@@ -16,7 +16,7 @@ human notes. A peer to the TUI. Actionable.
 **Owner**: Shiloh Mangus
 **Last Updated**: June 21, 2026
 **Related**:
-- `life-os-architecture.md` (interaction modes; hooks; triggering)
+- `liberado-architecture.md` (interaction modes; hooks; triggering)
 - `liberado-dispatch-logic-spec.md` (everything routes through normal dispatch)
 - `liberado-vault-concurrency-spec.md` (loop-breaking, write classes, journal markers)
 - `liberado-context-policy-spec.md` (counts in header; results via Job B)

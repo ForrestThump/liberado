@@ -22,7 +22,7 @@ behind it needs to activate one."
 **CloudEvents (CNCF)** is the closest real, adopted standard — not agent-specific at all, just a
 vendor-neutral envelope for "something happened" (`id`, `source`, `type`, `time`, `data`). It
 doesn't solve the "wake the model" half either, but it solves the layer underneath: a standard
-shape for the trigger itself. `liberado_common::Event`/`EventPayload` (`life-os-architecture.md`
+shape for the trigger itself. `liberado_common::Event`/`EventPayload` (`liberado-architecture.md`
 §5, Decision 6) is already a bespoke version of exactly this idea — this doc is the plan to make it
 actually CloudEvents-compliant (core attributes + the spec's own extension-attribute mechanism)
 rather than reinvent the envelope, for the same reason `a2a-protocol-idea.md` favors building

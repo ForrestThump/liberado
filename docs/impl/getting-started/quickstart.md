@@ -2,8 +2,8 @@
 
 ## 1. Clone & build
 ```cmd
-git clone https://github.com/your-org/life-os
-cd life-os
+git clone https://github.com/your-org/liberado
+cd liberado
 cargo build --release
 ```
 

@@ -17,7 +17,7 @@
 use chrono::{DateTime, Utc};
 use chrono_tz::Tz;
 
-/// Default IANA zone for this Life OS installation (Texas / US Central).
+/// Default IANA zone for this Liberado installation (Texas / US Central).
 ///
 /// Override per-deploy with `topology.timezone` in `topology.toml`. Keep this in sync with the
 /// default on `liberado_config_loader::Topology` — both are the same SSoT string.

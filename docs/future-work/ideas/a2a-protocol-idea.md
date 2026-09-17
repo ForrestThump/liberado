@@ -13,7 +13,7 @@ invariant (Decision 4) this whole system is built on. Every source researched (i
 Anthropic's own published multi-agent research system) converges on staying with
 orchestrator + narrowed-workers (what Liberado already has, and what the "pool" work — Decision 18
 checkpoint #3's second half — extends) rather than peer coordination, until a *concrete* workload
-demonstrates the simpler model fails. None has appeared. A **life-os-to-other-systems** A2A bridge
+demonstrates the simpler model fails. None has appeared. A **Liberado-to-other-systems** A2A bridge
 — Liberado as *one bounded system* talking to *other* bounded systems over the open protocol — is
 unaffected by this and remains the legitimate version of this idea; everything below in this doc
 was already written with that framing, not the internal one, so it stands as originally captured.
@@ -37,7 +37,7 @@ different stacks.
 ## Naming note — resolve before writing any code
 
 Liberado's background-trigger system is now called **hooks** (thin HTTP webhook receivers; see
-`life-os-architecture.md` §4 — formerly "ACP," renamed to avoid initialism collisions). The
+`liberado-architecture.md` §4 — formerly "ACP," renamed to avoid initialism collisions). The
 industry has a **different** "ACP" — the **Agent Client Protocol** (Zed/editor integration, noted
 as a lower-leverage gap in `vs-hermes.md`) — which is unrelated to both Liberado's hooks and to
 A2A. When this is picked up: name the crate/module something unambiguous, e.g. `liberado-a2a` or

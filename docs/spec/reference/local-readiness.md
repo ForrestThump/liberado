@@ -98,6 +98,21 @@ The justfile is only the convenience surface. Rust owns operator business logic,
 branch cleaner remains independent so repository cleanup never depends on the binary built from
 the repository being cleaned.
 
+## Build profiles
+
+Two build profiles share the same lockfile. CI and mutation work use the full
+workspace; day-to-day slim builds fence the sidecars that are not part of the
+Liberado product root.
+
+- `just build` — full native workspace (CI).
+- `just build-slim` — the slim profile: native workspace minus the sysmap
+  tool, the free-proxy provider, and the WASM-only WebUI. Use this for
+  product-root compiles; see [slim-build.md](slim-build.md) for the gated
+  list and rationale.
+- `just build-release` — release binary of `-p liberado-cli` (the `liberado`
+  binary); already slim.
+- `just build-slim-release` — release variant of the slim profile.
+
 ## Mutation-testing recipes
 
 The `just` file carries the mutation campaign entry points backing

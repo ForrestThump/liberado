@@ -29,7 +29,7 @@ The split:
 
 That is the operational form of
 [`positioning.md`](../spec/architecture/positioning.md) item 3: coding is third, and "good enough +
-integrated", not best-in-class. It is not a new north star. The life-OS daemon remains priority 1.
+integrated", not best-in-class. It is not a new north star. The Liberado daemon remains priority 1.
 
 ## 2. Why this is worth recording
 
@@ -495,7 +495,7 @@ CI-fail-continue. It is not enough to recover a crashed in-flight tool call. Do 
 - Peer-to-peer agent coordination (already rejected;
   [`research/agent_pools_research_results.md`](research/agent_pools_research_results.md)).
 - Replacing shepherd, compare, or the session hub.
-- Scheduling this ahead of C3, C5, or the life-OS inbox work.
+- Scheduling this ahead of C3, C5, or the Liberado inbox work.
 
 ## 13. When to promote
 

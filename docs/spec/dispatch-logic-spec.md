@@ -6,7 +6,7 @@ Actionable; implementation can begin from here.
 **Last Updated**: June 21, 2026
 **Related**:
 - `liberado-architecture-decisions.md` (Decision 1; Decisions 8, 11, 12, 16)
-- `life-os-architecture.md` (§2 dispatcher/memory split)
+- `liberado-architecture.md` (§2 dispatcher/memory split)
 - `liberado-permissions-idea.md` (capability/zone model — Decision 4)
 - `liberado-vault-concurrency-spec.md` (write classes, provenance, correlation IDs)
 - `liberado-memory-mcp` (renamed `liberado-tool-helper-mcp`: general + procedural memory)

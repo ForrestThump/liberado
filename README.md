@@ -1,6 +1,6 @@
 # Liberado
 
-Rust-native **personal AI Life OS** and **agentic orchestration** substrate: one daemon watches a vault, reasons with an LLM, and acts through MCP tools under capability/zone containment — without reacting to its own writes (provenance loop-break). Surfaces (TUI, WebUI, CLI, Telegram) are clients; they do not own the loop.
+Rust-native **personal AI Liberado** and **agentic orchestration** substrate: one daemon watches a vault, reasons with an LLM, and acts through MCP tools under capability/zone containment — without reacting to its own writes (provenance loop-break). Surfaces (TUI, WebUI, CLI, Telegram) are clients; they do not own the loop.
 
 ## Documentation hub
 

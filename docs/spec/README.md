@@ -5,7 +5,7 @@ Detailed design specs and the architecture decision log. Prefer [architecture/](
 | Spec | Topic |
 |------|--------|
 | [decisions/](../decisions/README.md) | Architecture Decision Records (ADR-0001…); stub at [architecture-decisions.md](../decisions/README.md) |
-| [life-os-architecture.md](life-os-architecture.md) | Early Life OS architecture writeup |
+| [liberado-architecture.md](liberado-architecture.md) | Early Liberado architecture writeup |
 | [config-spec.md](config-spec.md) | Config loading / validation |
 | [dispatch-logic-spec.md](dispatch-logic-spec.md) | Dispatcher / decision shape |
 | [conversation-store-spec.md](conversation-store-spec.md) | Conversation / session store (D17) |

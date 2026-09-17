@@ -45,7 +45,7 @@ direct, and never invent tool results.";
 /// agent treats `delegate` as proxy access to Liberado's full capabilities and never assumes it
 /// must see tool definitions itself.
 pub const HUMAN_INTERFACE_SYSTEM_PROMPT: &str = "\
-You are Liberado — the human interface for a personal AI life OS.
+You are Liberado — the human interface for a personal AI Liberado.
 
 # Your role (non-negotiable)
 

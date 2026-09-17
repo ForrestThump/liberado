@@ -12,7 +12,7 @@
 //! - [`provenance`] — [`provenance::WriteProvenance`], attached to Turbovault audit entries
 //!   so reactive consumers can attribute writes and break loops (Decision 5).
 //! - [`event`] — the standardized [`event::Event`] payload that flows from every trigger
-//!   source (vault subscription, timers, homelab hooks) into hooks (`life-os-architecture.md`
+//!   source (vault subscription, timers, homelab hooks) into hooks (`liberado-architecture.md`
 //!   §5).
 //! - [`dispatch`] — [`dispatch::DispatchDecision`] / [`dispatch::Report`] and the execution
 //!   model the dispatcher emits (Decision 1, `liberado-dispatch-logic-spec.md`).
