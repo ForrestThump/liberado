@@ -39,6 +39,8 @@ Authority model: [doc-authority.md](spec/reference/doc-authority.md).
 | [docs/future-work/README.md](future-work/README.md) | index | active | advisory | — | — |
 | [docs/future-work/archive/acp-bridge-completion-roadmap.md](future-work/archive/acp-bridge-completion-roadmap.md) | plan | superseded | advisory | acp | acp-bridge-completion |
 | [docs/future-work/archive/chat-search-plan.md](future-work/archive/chat-search-plan.md) | plan | implemented | advisory | chat | chat-search |
+| [docs/future-work/archive/daemon-pr-review-coupling-pass.md](future-work/archive/daemon-pr-review-coupling-pass.md) | finding | historical | advisory | coding-control-plane | daemon-pr-review-coupling-pass |
+| [docs/future-work/archive/daemon-pr-review-kickoff-grok46-critique.md](future-work/archive/daemon-pr-review-kickoff-grok46-critique.md) | finding | historical | advisory | coding-control-plane | daemon-pr-review-kickoff-grok46-critique |
 | [docs/future-work/archive/delegated-work-is-discarded-at-the-seam.md](future-work/archive/delegated-work-is-discarded-at-the-seam.md) | finding | implemented | evidence | delegation | delegated-work-seam |
 | [docs/future-work/archive/docs_fixup.md](future-work/archive/docs_fixup.md) | plan | implemented | advisory | docs | docs-lifecycle |
 | [docs/future-work/archive/harness-comparison-redesign-2026-08.md](future-work/archive/harness-comparison-redesign-2026-08.md) | plan | implemented | advisory | coding-harness | harness-comparison-redesign |
@@ -55,8 +57,6 @@ Authority model: [doc-authority.md](spec/reference/doc-authority.md).
 | [docs/future-work/coding-worker-control-plane.md](future-work/coding-worker-control-plane.md) | plan | draft | advisory | coding-harness | coding-worker-control-plane |
 | [docs/future-work/context-compaction-viewport-rearchitecture.md](future-work/context-compaction-viewport-rearchitecture.md) | plan | active | implementation | chat | context-compaction-viewport |
 | [docs/future-work/cross-harness-baseline.md](future-work/cross-harness-baseline.md) | plan | active | implementation | coding-harness | cross-harness-baseline |
-| [docs/future-work/daemon-pr-review-coupling-pass.md](future-work/daemon-pr-review-coupling-pass.md) | finding | historical | advisory | coding-control-plane | daemon-pr-review-coupling-pass |
-| [docs/future-work/daemon-pr-review-kickoff-grok46-critique.md](future-work/daemon-pr-review-kickoff-grok46-critique.md) | finding | historical | advisory | coding-control-plane | daemon-pr-review-kickoff-grok46-critique |
 | [docs/future-work/daemon-pr-review-kickoff.md](future-work/daemon-pr-review-kickoff.md) | plan | active | advisory | coding-control-plane | daemon-pr-review-kickoff |
 | [docs/future-work/daemon-pr-review-slice-4.md](future-work/daemon-pr-review-slice-4.md) | plan | active | advisory | coding-control-plane | daemon-pr-review-slice-4 |
 | [docs/future-work/harness-study-2026-08.md](future-work/harness-study-2026-08.md) | finding | active | advisory | coding-harness | harness-study-2026-08 |
