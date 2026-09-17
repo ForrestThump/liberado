@@ -34,7 +34,7 @@ Provenance only in note frontmatter (stales on Obsidian edits). Custom vault-cha
 ## Implementation and tests
 
 - `liberado-vault-concurrency-spec.md`
-- `life-os-architecture.md`
+- `liberado-architecture.md`
 
 ## Supersedes / superseded by
 
@@ -70,7 +70,7 @@ The text below is preserved from `docs/spec/architecture-decisions.md` so reason
 Decision 5: Resolved in `liberado-vault-concurrency-spec.md`. Summary:
 - **Provenance lives on the Turbovault audit log, not frontmatter** (frontmatter is last-writer-only state and goes stale on direct Obsidian edits). Rides on `AuditEntry.metadata._liberado_provenance` today; migrates to a typed field if the upstream proposal lands. `source` + `correlation_id` are mandatory on every agent write.
 - **Loop-breaking via Approach A (consumer-side hash join)**: attribute an observed change by matching `sha256(nfc(content))` against the `after_hash` of the latest audit entry for that path. Match + non-human + recent ? suppress; no match ? external/human edit ? react. Robust to races, coalescing, and human-edits-after-agent. A bounded seen-correlation set + child correlation IDs break cross-hook A?B?A chains; `MAX_REACTION_DEPTH` halts cascades.
-- **Consume Turbovault's native subscription (PR #24), not a custom emitter.** The daemon holds one subscription and does the hash-join + de-loop **centrally**, then routes already-attributed events to thin hooks. This supersedes the hand-built `vault-change-emitter` in `life-os-architecture.md` §5 (non-vault triggers still POST webhooks directly).
+- **Consume Turbovault's native subscription (PR #24), not a custom emitter.** The daemon holds one subscription and does the hash-join + de-loop **centrally**, then routes already-attributed events to thin hooks. This supersedes the hand-built `vault-change-emitter` in `liberado-architecture.md` §5 (non-vault triggers still POST webhooks directly).
 - **Concurrency stays optimistic** with the structured `ConcurrentModification { path, expected, actual }` error; agents re-read and retry (bounded) rather than overwrite.
 - **Per-zone write classes** (`human_only` / `agent_writable` / `proposal_only` / `shared`) enforced at the MCP/hook boundary; unlisted zones default to `proposal_only` (fail safe).
 - **Idempotency**: correlation ID is the idempotency key; vault-as-journal (pending?working?done markers) makes redelivery safe.

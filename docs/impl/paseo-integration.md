@@ -66,7 +66,7 @@
 2. **Sibling checkouts** for path deps (same as the rest of Liberado):
 
    ```powershell
-   # from life-os/
+   # from liberado/
    git clone <fork>/turbovault turbovault; git -C turbovault checkout develop
    git clone <fork>/turbomcp turbomcp;   git -C turbomcp  checkout develop
    ```

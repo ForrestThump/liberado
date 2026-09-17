@@ -304,4 +304,4 @@ pipeline picks up the write and archives it — closed the gap where an expired-
    held to, and how to delegate to subagents effectively.
 
 The deeper "why" behind each Decision N lives in the root planning docs (`*-spec.md`,
-`life-os-architecture.md`).
+`liberado-architecture.md`).

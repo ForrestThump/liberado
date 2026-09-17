@@ -109,7 +109,7 @@ extensibility with minimum friction — the exact shape we wanted.
                           │  L0 local watcher  ← authoritative today     │
                           │  L1 optional: consume vault_events_* over MCP│
                           │  vector_* → context policy / chat-search T3  │
-                          │  tasks_*  → life-OS todo surface             │
+                          │  tasks_*  → Liberado todo surface             │
                           └─────────────────────────────────────────────┘
 ```
 
@@ -174,7 +174,7 @@ home for that surface.
 - Merge onto fork `develop` and enable in the homelab TurboVault image when ready.
 - Upstream curation PR (default-off feature; no core catalog change when off).
 
-**Payback into Liberado**: **already realized** as the life-OS todo surface in Telegram/briefs.
+**Payback into Liberado**: **already realized** as the Liberado todo surface in Telegram/briefs.
 Plugin merge is polish + ownership cleanliness, not a greenfield capability.
 
 ---
@@ -217,8 +217,8 @@ architecture decisions: [`archive/turbovault-vector-module-plan.md`](archive/tur
 **What we actually built** (decision flipped from the original "depend on `lqm-core`" lean):
 
 - In-tree **`turbovault-vector`** engine (fastembed + usearch + SQLite; content-fed
-  `update_note` / chunk-level incremental) — same family life-os `memory-store` already used.
-- **No `lqm-core` dependency** (would force life-os public); optional idea ports only.
+  `update_note` / chunk-level incremental) — same family Liberado `memory-store` already used.
+- **No `lqm-core` dependency** (would force Liberado public); optional idea ports only.
 - Host capabilities prototyped: **`plugin_state_dir` (#42)**, **`list_notes_meta` + watcher→HookBus
   bridge (#43)**, plus `read_config`.
 - Module tools: `vector_search`, `vector_reindex`, `vector_status`, `vector_config`.
@@ -274,7 +274,7 @@ interfacing**, not vault storage. Concretely:
 | **CH2 — chat history search** ([`chat-search-plan.md`](archive/chat-search-plan.md)) | Tier 3 (vector) is **subsumed by the `vector` module**. Keep Tier 1 (ripgrep) as planned. |
 | **Context policy** ([`../spec/context-policy-spec.md`](../spec/context-policy-spec.md)) | Real retrieval backend via live `vector_*`. |
 | **Agent memory / `memory-mcp`, `memory-store`** | Still evaluate overlap with standalone qdrant / memories before consolidating. |
-| **Life-OS todos** | **Live** — briefs and chat drive tasks through TurboVault. |
+| **Liberado todos** | **Live** — briefs and chat drive tasks through TurboVault. |
 | **Nice-to-have: A2A / mesh** | Unchanged. |
 
 **Wired into [`roadmap.md`](../roadmap.md)** (2026-07-19): cross-cutting TurboVault modules line +
@@ -309,7 +309,7 @@ Extends the vault-events plan's F1–F12 with module-umbrella-level calls.
 | **M-2** | Ownership framing | "Modules we maintain, Nick curates" | Positioning as core TV features |
 | **M-3** | Shared helper crate | Defer until 2–3 modules overlap | Speculative `plugin-common` up front |
 | **M-4** | tasks: vault access | Route all reads/writes through `VaultApi` (CAS) — **done on branch** | Keeping any internal-manager or blind-write path |
-| **M-5** | vector: engine | **In-tree `turbovault-vector`** (locked; no `lqm-core` dep) | Forking life-os / forcing public lqm |
+| **M-5** | vector: engine | **In-tree `turbovault-vector`** (locked; no `lqm-core` dep) | Forking Liberado / forcing public lqm |
 | **M-6** | vector: freshness | **mtime reconcile-on-demand first** (shipped); graduate to `vault_events` envelopes | Growing a second private watcher inside vector |
 | **M-7** | vector: isolation | Single active vault in prototype; multi-vault later | A parallel isolation model |
 | **M-8** | Liberado consumption | `L0` authoritative; modules optional — **vector/tasks already consumed live** | Rewriting the daemon around a module before parity is proven |

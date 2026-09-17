@@ -7,7 +7,7 @@ access) as-is.
 
 ## Context
 
-I'm the architect of a personal, self-hosted "life OS" agent system — a single long-running Rust
+I'm the architect of a personal, self-hosted "Liberado" agent system — a single long-running Rust
 daemon that watches for triggers (file changes, cron schedules, incoming webhooks) and reasons
 about them with an LLM, then acts through a set of tools (via the Model Context Protocol, MCP).
 Safety is engineered, not prompted: every action goes through a hard capability/permission

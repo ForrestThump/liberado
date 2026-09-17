@@ -72,7 +72,7 @@ What the port cost, and the gotchas the next repo will hit — **read before por
   identical — every MCP request already arrives from the one Liberado container.
 - **Error mapping:** `McpError::tool_execution_failed(name, reason)` for core failures,
   `McpError::serialization(e)` for JSON, `McpError::rate_limited(msg)` for the guard.
-- **Standalone-workspace footgun:** a crate extracted *inside* the life-os workspace needs its own
+- **Standalone-workspace footgun:** a crate extracted *inside* the liberado workspace needs its own
   `[workspace]` stanza in `Cargo.toml` or cargo refuses to build it.
 - **Windows dev box:** cfg-gate `tokio::signal::unix` (`#[cfg(not(unix))] std::future::pending()`)
   or the binary won't compile on Windows, where it's developed.

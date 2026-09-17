@@ -5,7 +5,7 @@
 **Last Updated**: June 21, 2026
 **Related**:
 - `liberado-architecture-decisions.md` (Decision 5)
-- `life-os-architecture.md` (§5 Triggering Layer, §6 Vault Layer)
+- `liberado-architecture.md` (§5 Triggering Layer, §6 Vault Layer)
 - Turbovault `turbovault-write-provenance-proposal.md`
 - Turbovault `write-provenance-in-event-stream-issue.md` (Approach A / B analysis)
 - Turbovault `turbovault-concurrency-improvements-proposal.md`
@@ -42,7 +42,7 @@ before these rules are in place.
   No match → it's an external (human) change → react.
 - **We consume Turbovault's *native* change subscription** (PR #24
   `subscribe_vault_events` / `fetch_vault_events`), not a hand-built `vault-change-emitter`.
-  The custom emitter described in `life-os-architecture.md` §5 is superseded; see §8.
+  The custom emitter described in `liberado-architecture.md` §5 is superseded; see §8.
 - **Concurrency stays optimistic**: read returns a hash, writes pass `expected_hash`. We adopt
   the structured `ConcurrentModification { path, expected, actual }` error from the
   concurrency proposal so agents recover programmatically instead of string-parsing.
@@ -223,9 +223,9 @@ Hook reaction handlers are therefore **idempotent by construction**:
 
 ---
 
-## 8. Reconciliation with `life-os-architecture.md` §5 (the emitter)
+## 8. Reconciliation with `liberado-architecture.md` §5 (the emitter)
 
-`life-os-architecture.md` describes a hand-built `vault-change-emitter` that watches paths and
+`liberado-architecture.md` describes a hand-built `vault-change-emitter` that watches paths and
 routes to hook webhooks. **This is superseded** by Turbovault's native subscription:
 
 - Turbovault already owns the `notify`-based `VaultWatcher` and (via PR #24) fans it out to
@@ -238,9 +238,9 @@ routes to hook webhooks. **This is superseded** by Turbovault's native subscript
   standardized event payload to hook webhooks directly — that part of §5 stands. Only the
   vault-watching emitter is replaced.
 
-`life-os-architecture.md` §5 has since been rewritten to reflect this (the "hand-built
+`liberado-architecture.md` §5 has since been rewritten to reflect this (the "hand-built
 `vault-change-emitter`" is marked superseded there, matching the single-subscription,
-central-attribution design above). Note that `life-os-architecture.md` as a whole now carries a
+central-attribution design above). Note that `liberado-architecture.md` as a whole now carries a
 superseded-by header pointing at `docs/spec/architecture/overview.md` — treat this concurrency spec, not
 that older vision doc, as the source of truth for the emitter design.
 

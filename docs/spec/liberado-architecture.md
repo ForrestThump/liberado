@@ -1,4 +1,4 @@
-# Liberado: Rust-Native Personal AI Life Operating System
+# Liberado: Rust-Native Personal AI System
 
 **Version**: v0.3 (June 2026)  
 **Status**: Historical vision document — **superseded as the cold-start reference** by
