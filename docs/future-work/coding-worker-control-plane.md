@@ -16,7 +16,7 @@ configuration-driven coding-session routing while the C3 evidence gate remains o
 **Evidence gate**: the published C3 baseline in
 [`cross-harness-baseline.md`](cross-harness-baseline.md).
 **Source**: conversation captured in
-[`research/agent-orchestration-idea-from-Sol.md`](research/agent-orchestration-idea-from-Sol.md).
+[`research/archive/agent-orchestration-idea-from-Sol.md`](research/archive/agent-orchestration-idea-from-Sol.md).
 
 ## 1. One sentence
 
@@ -473,7 +473,7 @@ Acceptance for that slice:
 
 ## 11. Constraints (why this stays a draft)
 
-From [`research/bob-martin-critique.md`](research/bob-martin-critique.md) and the layer rules:
+From [`research/archive/bob-martin-critique.md`](research/archive/bob-martin-critique.md) and the layer rules:
 
 - Do not add a 54th crate to encode confusion as structure.
 - Do not grow `run_loop` / `run_with_turn_budget` to host this.

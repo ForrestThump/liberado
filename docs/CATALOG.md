@@ -69,8 +69,8 @@ Authority model: [doc-authority.md](spec/reference/doc-authority.md).
 | [docs/future-work/paseo-liberado-integration-roadmap.md](future-work/paseo-liberado-integration-roadmap.md) | plan | active | implementation | acp | paseo-liberado-integration |
 | [docs/future-work/pr-dispatch-vtcode-no-write-finding.md](future-work/pr-dispatch-vtcode-no-write-finding.md) | finding | active | evidence | coding-harness | vtcode-no-write |
 | [docs/future-work/research/README.md](future-work/research/README.md) | index | active | advisory | docs | — |
-| [docs/future-work/research/agent-orchestration-idea-from-Sol.md](future-work/research/agent-orchestration-idea-from-Sol.md) | finding | historical | advisory | coding-harness | coding-worker-control-plane-source |
-| [docs/future-work/research/bob-martin-critique.md](future-work/research/bob-martin-critique.md) | finding | historical | advisory | coding-harness | bob-martin-critique |
+| [docs/future-work/research/archive/agent-orchestration-idea-from-Sol.md](future-work/research/archive/agent-orchestration-idea-from-Sol.md) | finding | historical | advisory | coding-harness | coding-worker-control-plane-source |
+| [docs/future-work/research/archive/bob-martin-critique.md](future-work/research/archive/bob-martin-critique.md) | finding | historical | advisory | coding-harness | bob-martin-critique |
 | [docs/future-work/rust-native-agentic-coder-plan.md](future-work/rust-native-agentic-coder-plan.md) | plan | active | implementation | coding-harness | agentic-mesh-coding-pack |
 | [docs/future-work/sysmap-generic-core-plan.md](future-work/sysmap-generic-core-plan.md) | plan | active | implementation | tooling | — |
 | [docs/future-work/token-cost-accounting-plan.md](future-work/token-cost-accounting-plan.md) | plan | active | implementation | token-economics | token-cost-accounting |
