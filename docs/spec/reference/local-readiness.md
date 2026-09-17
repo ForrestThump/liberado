@@ -53,8 +53,8 @@ baseline. A regression that the check rejects cannot write. On other hosts, `jus
 to final readiness. This avoids treating host-sensitive coverage as a proxy for the authoritative
 Linux result and avoids running the coverage suite twice before the WSL check.
 
-The same Linux-only write applies to `module-health-baseline.json` and
-`unwrap-classification-baseline.json`. Every host still *compares* them during `just ci`. Only
+The same Linux-only write applies to `code-metrics/module-health-baseline.json` and
+`code-metrics/unwrap-classification-baseline.json`. Every host still *compares* them during `just ci`. Only
 Linux `just ci` rewrites them. A Windows rewrite dirties the tree, and `just ready` then cannot
 run Debian CRAP, which validates a clean committed `HEAD`. GitHub only reads both files. To record
 a new best off Linux, run `just module-health-ratchet` or `just unwrap-ratchet` on purpose and
@@ -62,8 +62,8 @@ inspect the diff before you commit it. The Linux write uses the same compile-tim
 `cfg!(target_os = "linux")` gate as host CRAP, so `run_quality_ratchets` does not grow a
 runtime branch.
 
-The host-stable function ratchet is configured in `function-complexity.toml` and committed in
-`function-complexity-baseline.json`. Existing functions may not gain cyclomatic complexity. New
+The host-stable function ratchet is configured in `code-metrics/function-complexity.toml` and committed in
+`code-metrics/function-complexity-baseline.json`. Existing functions may not gain cyclomatic complexity. New
 functions must stay under the configured ceiling. A persistent exception must name one exact file
 and function and include an explicit ceiling, reason, and review date. The check fails if its
 generated report or committed baseline cannot be read and decoded.
@@ -74,8 +74,8 @@ cargo-crap `--fail-above` is not applied to the whole report, because that would
 known tail. `liberado ci crap` applies the ceiling only to entries that cargo-crap's
 move-aware baseline matcher classifies as new. This preserves distinct same-name functions.
 
-The unwraps classifier and ratchet are configured in `unwrap-classification.toml` and committed
-in `unwrap-classification-baseline.json`. The AST classifier walks production `.unwrap()` and
+The unwraps classifier and ratchet are configured in `code-metrics/unwrap-classification.toml` and committed
+in `code-metrics/unwrap-classification-baseline.json`. The AST classifier walks production `.unwrap()` and
 `.expect()` calls, categorizing them into proven invariants, local failures, and process-fatal unwraps.
 New process-fatal unwraps are blocked by CI without a narrow, reviewed waiver. Operator recipes include
 `just unwrap-classification` (or `cargo liberado ci unwraps`) and `just unwrap-ratchet`.
@@ -116,10 +116,10 @@ Liberado product root.
 ## Mutation-testing recipes
 
 The `just` file carries the mutation campaign entry points backing
-[`Skills/mutants-campaign.md`](../../../Skills/mutants-campaign.md):
+[`skills/mutants-campaign.md`](../../../skills/mutants-campaign.md):
 
 - `just mutants <crate-dir>` — run cargo-mutants for one crate and append a ledger row to
-  `mutants-ledger.json` (append-only; a row is recorded only when outcomes are complete and
+  `code-metrics/mutants-ledger.json` (append-only; a row is recorded only when outcomes are complete and
   viable).
 - `just mutants-agent` — coder-agent only (`--lib-only`; its e2e test hangs under mutants).
 - `just mutants-record <crate-dir>` — ingest an existing `mutants.out/` without re-running.

@@ -1,10 +1,6 @@
-# cargo-crap persistent configuration (searched upward from the CWD).
-# CLI flags always take precedence over values here.
-#
-# Canonical home for quality-metric artifacts is `code-metrics/`.
-# This filename must stay at the repo root: cargo-crap discovers only
-# `.cargo-crap.toml` via upward search. Keep in sync with
-# `code-metrics/cargo-crap.toml` (same body; documented twin).
+# Liberado cargo-crap settings (documented twin of repo-root `.cargo-crap.toml`).
+# cargo-crap only auto-discovers `.cargo-crap.toml` at/above CWD; the root file is
+# what the tool loads. Keep both files identical. Baselines live in this directory.
 #
 # The committed ratchet lives in `crap-baseline.json`. GitHub only compares
 # against that file (`--fail-regression`). Coverage is host-sensitive: the

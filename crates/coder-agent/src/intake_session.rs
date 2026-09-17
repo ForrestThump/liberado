@@ -7,13 +7,13 @@ use liberado_coder_core::{
 };
 use liberado_provider::{CompletionRequest, Message, Provider, complete_json};
 
-/// The intake planner's instructions, from `prompts/coder/intake.md`.
+/// The intake planner's instructions, from `skills/coder/intake.md`.
 ///
 /// Was a `const` here. Intake is the phase that decides whether an unattended goal asks a
 /// human a question or gets on with the work — F11 in the backlog — so it is exactly the prompt
 /// an operator most wants to retune, and it was the one locked inside the binary.
 /// No workspace argument on purpose: intake runs *before* a workspace exists, so there is no
-/// checkout to read from. It uses the process-level `prompts/coder` and the baked copy otherwise.
+/// checkout to read from. It uses the process-level `skills/coder` and the baked copy otherwise.
 fn intake_system() -> String {
     liberado_coder_core::prompts::load(
         None,

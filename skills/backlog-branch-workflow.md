@@ -100,5 +100,5 @@ When the branch merges, remove its row from `current_unmerged_work.md` locally.
 
 ## Skill commits vs feature work
 
-- Playbooks under `Skills/` that change the *process* may land on `main` as a small docs commit.
+- Playbooks under `skills/` that change the *process* may land on `main` as a small docs commit.
 - Feature code stays on its own branch and is listed in `current_unmerged_work.md` until merged.

@@ -25,10 +25,13 @@ Rust-native **personal AI Liberado** and **agentic orchestration** substrate: on
 
 ## Development
 
+- Day-to-day build: `just build-slim` (full workspace: `just build`)
 - Workspace: Cargo crates under [`crates/`](crates/)
 - Contributor and agent orientation: [AGENTS.md](AGENTS.md)
 - Layer rules (mechanical): `crates/test-support/tests/layer_rules.rs`
 - Example config: [`config.example/`](config.example/)
+- Agent playbooks + coder prompts: [`skills/`](skills/) (coder prompts under `skills/coder/`)
+- Quality-metric baselines: [`code-metrics/`](code-metrics/)
 
 Nested MCP checkouts (`liberado-*-mcp/`, `turbovault/`, …) may appear for co-dev; they are **not** the Liberado workspace product docs.
 
@@ -36,4 +39,4 @@ Nested MCP checkouts (`liberado-*-mcp/`, `turbovault/`, …) may appear for co-d
 
 See [LICENSE](LICENSE).
 
-**Last updated:** 2026-07-31 — docs hub reorg; architecture hardening (module splits, T1 partial, MCP pooling) on branch.
+**Last updated:** 2026-09-17 — repo tidy: `skills/`, `code-metrics/`; day-to-day `just build-slim`.

@@ -13,7 +13,7 @@ open_items: true
 workspace tasks, so we do not declare victory after two easy one-file wins.
 
 **Runner**: `liberado-heuristics-tuner` with `TUNER_LAYER=coder`.  
-**Proposal only**: winners go to `prompts/coder/coder.md` / `LIBERADO_CODER_PROMPT` by human hand.
+**Proposal only**: winners go to `skills/coder/coder.md` / `LIBERADO_CODER_PROMPT` by human hand.
 
 ---
 
@@ -103,7 +103,7 @@ Artifacts: `<LIBERADO_DATA_DIR or .liberado>/tuner/<timestamp>/`:
 | `final.txt` / `generation-*.txt` | Rubric + proposed prompt text |
 | `PROPOSAL.md` | Human decision summary (recommended?) |
 | `proposal.json` | Machine metadata + metrics |
-| `proposed/prompts/coder/coder.md` | Proposed file body only (not live-applied) |
+| `proposed/skills/coder/coder.md` | Proposed file body only (not live-applied) |
 | `pr_factory_task.json` | Optional hand-off to PR-dispatch after human review |
 
 **Decision 14:** the tuner never writes into the repo `prompts/` tree and never opens PRs itself.

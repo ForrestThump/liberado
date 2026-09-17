@@ -4,7 +4,7 @@
 
 - Assessing how fresh mutation coverage is for a crate
 - Finding survivor counts and commit drift before changing tests
-- Running `cargo mutants` so results land in `mutants-ledger.json`
+- Running `cargo mutants` so results land in `code-metrics/mutants-ledger.json`
 - Fixing survivors and documenting what you triaged
 
 **Start here.** The ledger is the machine scoreboard; markdown reports under
@@ -17,7 +17,7 @@ Implementation history:
 
 | Layer | Path | What it answers |
 |---|---|---|
-| Ledger | `mutants-ledger.json` | When was the last campaign? At which commit? How many survived? |
+| Ledger | `code-metrics/mutants-ledger.json` | When was the last campaign? At which commit? How many survived? |
 | Raw output | `mutants.out/` (gitignored) | Which mutants survived (file, line, diff)? |
 | Evidence | `docs/validation/mutation-testing/*.md` | Why each survivor was kept or fixed (historical) |
 
@@ -173,7 +173,7 @@ import json
 from pathlib import Path
 
 DIR = "executor"          # crates/<dir>
-ledger = json.loads(Path("mutants-ledger.json").read_text())
+ledger = json.loads(Path("code-metrics/mutants-ledger.json").read_text())
 PKG = "liberado-executor" # adjust if needed
 
 rows = [
@@ -221,7 +221,7 @@ This runs `liberado mutants run`, which:
 1. Invokes `cargo mutants` with repo timeout flags
 2. Builds into `target/mutants/` (isolated from `target/debug/`)
 3. Always passes `--in-place` (no `%TEMP%` workspace copy; sibling path deps break it on every host)
-4. Appends one row to `mutants-ledger.json` when `mutants.out/outcomes.json` is complete
+4. Appends one row to `code-metrics/mutants-ledger.json` when `mutants.out/outcomes.json` is complete
 
 ### Verify the ledger append
 
@@ -326,7 +326,7 @@ Parallel agents appending to one ledger guarantee conflicts:
 - **Keep new tests out of `src/*.rs`** — use `#[path]` sibling files like the ones already on
   the branch. Module-health waivers exist for load-bearing size only; a waiver reason that
   reads as laziness gets the whole contribution pushed back for rework. See the acceptance
-  bar in `module-health.toml`.
+  bar in `code-metrics/module-health.toml`.
 - Push after every verified batch. On push rejection: fetch, merge immediately, re-run the
   crate's tests, then push again.
 
@@ -362,7 +362,7 @@ triage notes, ledger as the scoreboard.
 | Gap | Workaround |
 |---|---|
 | No `just mutants-status <dir>` | `just mutants-report` line + ledger Python snippet above |
-| `recorded_at` not in report | Read last matching row in `mutants-ledger.json` |
+| `recorded_at` not in report | Read last matching row in `code-metrics/mutants-ledger.json` |
 | Ledger has counts, not locations | `mutants.out/outcomes.json` or terminal output |
 | Historical-only crates | Need a fresh `just mutants <dir>` to set drift clock |
 | Multiple rows per package | **Last** `scope: "package"` row with a commit is current |

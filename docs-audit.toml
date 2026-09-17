@@ -3,10 +3,10 @@
 
 [[contract]]
 name = "module health"
-source = "module-health.toml"
+source = "code-metrics/module-health.toml"
 document = "docs/spec/reference/module-health.md"
 source_terms = ["ploc_review", "cyclomatic_new"]
-document_terms = ["rust-code-analysis-cli", "module-health-baseline.json"]
+document_terms = ["rust-code-analysis-cli", "code-metrics/module-health-baseline.json"]
 
 [[contract]]
 name = "dependency admission"
@@ -24,10 +24,10 @@ document_terms = ["canonical_for", "generated index"]
 
 [[contract]]
 name = "local readiness"
-source = "function-complexity.toml"
+source = "code-metrics/function-complexity.toml"
 document = "docs/spec/reference/local-readiness.md"
 source_terms = ["new_function_ceiling"]
-document_terms = ["just ready", "function-complexity-baseline.json"]
+document_terms = ["just ready", "code-metrics/function-complexity-baseline.json"]
 
 [[impact]]
 name = "documentation policy"
@@ -46,12 +46,12 @@ documents = ["docs/spec/reference/dependency-security.md"]
 
 [[impact]]
 name = "module health policy"
-sources = ["module-health.toml", "crates/cli/src/module_health_cmd.rs", "crates/cli/src/module_health_cmd/"]
+sources = ["code-metrics/module-health.toml", "crates/cli/src/module_health_cmd.rs", "crates/cli/src/module_health_cmd/"]
 documents = ["docs/spec/reference/module-health.md"]
 
 [[impact]]
 name = "local readiness policy"
-sources = ["function-complexity.toml", "crates/cli/src/function_complexity_cmd.rs", "crates/cli/src/readiness_cmd.rs", "crates/cli/src/ci_cmd/dispatch.rs", ".githooks/", "justfile"]
+sources = ["code-metrics/function-complexity.toml", "crates/cli/src/function_complexity_cmd.rs", "crates/cli/src/readiness_cmd.rs", "crates/cli/src/ci_cmd/dispatch.rs", ".githooks/", "justfile"]
 documents = ["docs/spec/reference/local-readiness.md"]
 
 [[impact]]

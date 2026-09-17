@@ -17,7 +17,7 @@ session tunes:
 | `Dispatcher` | `liberado_dispatcher::DEFAULT_SYSTEM_PROMPT` | `Dispatcher::dispatch` — a single classification call, no execution | n/a |
 | `Executor` | `liberado_orchestrator::DIRECT_INSTRUCTIONS` | a real (mocked) `Executor::execute` tool loop | `DIRECT_MAX_TURNS` (4) |
 | `Subagent` | `liberado_orchestrator::SUBAGENT_PREAMBLE` | same tool-loop machinery as `Executor` | `liberado_executor::DEFAULT_MAX_TURNS` (8) |
-| `Coder` | `DEFAULT_CODER_SYSTEM_PROMPT` / `prompts/coder/coder.md` | real temp git repo + `liberado-coder-agent` + coding tools | 12 turns |
+| `Coder` | `DEFAULT_CODER_SYSTEM_PROMPT` / `skills/coder/coder.md` | real temp git repo + `liberado-coder-agent` + coding tools | 12 turns |
 
 The dispatcher path is cheap (no execution needed — deterministic classification vs. a fixed label);
 the executor/subagent paths are materially more expensive and slower (a real, if mocked, multi-turn

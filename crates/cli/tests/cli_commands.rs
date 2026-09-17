@@ -1192,8 +1192,9 @@ fn run_git(root: &Path, args: &[&str]) {
 }
 
 fn write_ledger(root: &Path, campaigns: Value) {
+    fs::create_dir_all(root.join("code-metrics")).expect("code-metrics");
     fs::write(
-        root.join("mutants-ledger.json"),
+        root.join("code-metrics").join("mutants-ledger.json"),
         serde_json::json!({ "schema": 1, "campaigns": campaigns }).to_string(),
     )
     .expect("ledger");
@@ -1317,8 +1318,9 @@ fn mutants_record_ingests_outcomes_json() {
         "[package]\nname = \"liberado-markdown\"\n\n[package.metadata.liberado]\nrole = \"client\"\n",
     )
     .expect("manifest");
+    fs::create_dir_all(root.join("code-metrics")).expect("code-metrics");
     fs::write(
-        root.join("mutants-ledger.json"),
+        root.join("code-metrics").join("mutants-ledger.json"),
         "{\"schema\":1,\"campaigns\":[]}\n",
     )
     .expect("ledger");
@@ -1372,7 +1374,7 @@ fn mutants_record_ingests_outcomes_json() {
         String::from_utf8_lossy(&output.stderr)
     );
     let ledger: serde_json::Value = serde_json::from_str(
-        &fs::read_to_string(root.join("mutants-ledger.json")).expect("ledger file"),
+        &fs::read_to_string(root.join("code-metrics").join("mutants-ledger.json")).expect("ledger file"),
     )
     .expect("ledger json");
     let campaigns = ledger["campaigns"].as_array().expect("campaigns");

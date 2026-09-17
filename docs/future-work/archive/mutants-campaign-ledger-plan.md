@@ -24,7 +24,7 @@ flowchart LR
   cliRun["liberado mutants run"]
   cargoMut["cargo mutants"]
   outDir["mutants.out/outcomes.json"]
-  ledger["mutants-ledger.json"]
+  ledger["code-metrics/mutants-ledger.json"]
   justReport["just mutants-report"]
   gitLog["git log on crates/dir"]
   justRun --> cliRun
@@ -39,7 +39,7 @@ flowchart LR
 
 | Layer | Path | Role |
 |---|---|---|
-| Ledger | `mutants-ledger.json` | Machine scoreboard: append-only campaigns |
+| Ledger | `code-metrics/mutants-ledger.json` | Machine scoreboard: append-only campaigns |
 | Evidence | `docs/validation/mutation-testing/*.md` | Human survivor triage (historical) |
 | Raw output | `mutants.out/` (gitignored) | Ingest counts, discard |
 
@@ -76,7 +76,7 @@ Thin wrappers only — no logic in `justfile`:
 - `just mutants-record <name>` → `liberado mutants record <name>`
 - `just mutants-report` / `just mutants-next`
 
-Agent playbook: [`Skills/mutants-campaign.md`](../../../Skills/mutants-campaign.md).
+Agent playbook: [`skills/mutants-campaign.md`](../../../skills/mutants-campaign.md).
 
 **Not** wired into `just ci`, `just preflight`, or `just ready`.
 
@@ -92,7 +92,7 @@ Skip `testing` and `tooling` roles by default; `--all` includes them.
 
 ## Initial seed
 
-`mutants-ledger.json` seeds the 13 crates documented in
+`code-metrics/mutants-ledger.json` seeds the 13 crates documented in
 [`mutation-testing-plan.md`](../../validation/mutation-testing-plan.md) with `commit: null`,
 `source: "markdown-seed"`, and counts from the per-crate reports.
 
@@ -102,7 +102,7 @@ Skip `testing` and `tooling` roles by default; `--all` includes them.
 - Ingest from fixture `outcomes.json`
 - Report grouping (never / historical / drift)
 - Drift when commit missing or not an ancestor (temp git repo)
-- Repo-root `mutants-ledger.json` parses in `liberado-cli` integration test
+- Repo-root `code-metrics/mutants-ledger.json` parses in `liberado-cli` integration test
 
 ## Out of scope (v1)
 

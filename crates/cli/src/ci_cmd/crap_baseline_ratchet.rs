@@ -30,6 +30,9 @@ pub(super) fn write_and_stage_ratcheted_baseline(
 
 pub(crate) fn ratchet_crap_baseline(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
     let baseline_path = root.join(BASELINE_FILE);
+    if let Some(parent) = baseline_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
     let current_path = root.join(CURRENT_REPORT);
     let current: Value = serde_json::from_slice(&std::fs::read(&current_path)?)?;
     let ratcheted = ratcheted_crap_report(&baseline_path, current)?;

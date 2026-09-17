@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use tree_sitter::{Node, Parser};
 
-const CONFIG_FILE: &str = "unwrap-classification.toml";
+const CONFIG_FILE: &str = "code-metrics/unwrap-classification.toml";
 
 #[derive(Debug, Deserialize)]
 struct Config {

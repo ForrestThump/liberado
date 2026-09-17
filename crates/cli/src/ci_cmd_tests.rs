@@ -428,7 +428,10 @@ fn crap_ratchet_writes_the_best_complete_report() {
         new_entry.clone()
     ]));
     fs::write(
-        root.join(BASELINE_FILE),
+        {
+        fs::create_dir_all(root.join("code-metrics")).unwrap();
+        root.join(BASELINE_FILE)
+    },
         serde_json::to_vec_pretty(&old).unwrap(),
     )
     .unwrap();
@@ -540,8 +543,8 @@ fn empty_or_missing_baseline_is_not_a_ratchet_yet() {
 #[test]
 fn porcelain_path_skips_the_two_status_columns() {
     assert_eq!(
-        porcelain_path("M  crap-baseline.json"),
-        Some("crap-baseline.json")
+        porcelain_path("M  code-metrics/crap-baseline.json"),
+        Some("code-metrics/crap-baseline.json")
     );
     assert_eq!(porcelain_path("?? other.rs"), Some("other.rs"));
     assert_eq!(porcelain_path("M"), None);
@@ -551,6 +554,7 @@ fn porcelain_path_skips_the_two_status_columns() {
 fn a_clean_tree_amends_the_baseline_onto_head() {
     let temp = init_repo();
     let root = temp.path();
+    fs::create_dir_all(root.join("code-metrics")).unwrap();
     fs::write(root.join(BASELINE_FILE), "{\"entries\":[]}\n").unwrap();
     assert_eq!(
         stage_ratcheted_baseline(root).unwrap(),
@@ -565,6 +569,7 @@ fn a_dirty_tree_only_stages_the_baseline() {
     let temp = init_repo();
     let root = temp.path();
     fs::write(root.join("dirty.rs"), "fn f() {}\n").unwrap();
+    fs::create_dir_all(root.join("code-metrics")).unwrap();
     fs::write(root.join(BASELINE_FILE), "{\"entries\":[]}\n").unwrap();
     assert_eq!(
         stage_ratcheted_baseline(root).unwrap(),
@@ -587,6 +592,7 @@ fn a_dirty_tree_only_stages_the_baseline() {
 fn an_unchanged_baseline_is_a_no_op() {
     let temp = init_repo();
     let root = temp.path();
+    fs::create_dir_all(root.join("code-metrics")).unwrap();
     fs::write(root.join(BASELINE_FILE), "{\"entries\":[]}\n").unwrap();
     git(root, &["add", BASELINE_FILE]).unwrap();
     git(root, &["commit", "-q", "-m", "baseline"]).unwrap();
@@ -597,5 +603,23 @@ fn an_unchanged_baseline_is_a_no_op() {
     assert_eq!(
         git(root, &["log", "-1", "--pretty=%s"]).unwrap().trim(),
         "baseline"
+    );
+}
+
+#[test]
+fn cargo_crap_toml_twins_stay_identical() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(Path::parent)
+        .expect("crate is crates/cli");
+    let discovered = std::fs::read_to_string(root.join(".cargo-crap.toml")).expect("root toml");
+    let documented = std::fs::read_to_string(root.join("code-metrics/cargo-crap.toml"))
+        .expect("code-metrics toml");
+    // Strip comment-only header differences: compare from the first `threshold` line.
+    let body = |s: &str| s.lines().skip_while(|l| !l.starts_with("threshold")).collect::<Vec<_>>().join("\n");
+    assert_eq!(
+        body(&discovered),
+        body(&documented),
+        "root .cargo-crap.toml and code-metrics/cargo-crap.toml bodies must stay identical"
     );
 }

@@ -213,7 +213,7 @@ fn early_complexity_uses_the_same_native_policy_as_local_readiness() {
     let root = repository_root();
     let workflow =
         std::fs::read_to_string(root.join(".github/workflows/ci.yml")).expect("read CI workflow");
-    let policy = std::fs::read_to_string(root.join("function-complexity.toml"))
+    let policy = std::fs::read_to_string(root.join("code-metrics/function-complexity.toml"))
         .expect("read complexity policy");
     assert!(policy.contains("new_function_ceiling = 20"));
     assert!(workflow.contains("cargo run --locked -p liberado-cli -- ci complexity"));

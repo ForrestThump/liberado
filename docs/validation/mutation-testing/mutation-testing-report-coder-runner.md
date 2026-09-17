@@ -4,7 +4,7 @@
 
 Two campaigns were run on the same base (`ce1db7a5`, the `origin/main` the work branched
 from). The first is the **baseline**, the second is the **final** after adding the two tests
-in `crates/coder-runner/src/survivor_tests.rs`. Both rows are appended to `mutants-ledger.json`.
+in `crates/coder-runner/src/survivor_tests.rs`. Both rows are appended to `code-metrics/mutants-ledger.json`.
 
 | Metric | Baseline | Final |
 |--------|:--------:|:-----:|

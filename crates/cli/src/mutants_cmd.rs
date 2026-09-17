@@ -1,6 +1,6 @@
 //! Mutation-testing campaign ledger: run, record, report, and next-crate selection.
 //!
-//! The ledger at `mutants-ledger.json` is append-only. Each completed `cargo mutants` run adds one
+//! The ledger at `code-metrics/mutants-ledger.json` is append-only. Each completed `cargo mutants` run adds one
 //! row. Squashing survivors means re-running and appending — never editing prior rows.
 
 use crate::crate_map_cmd::{self, CrateInfo};
@@ -15,7 +15,7 @@ use std::path::Path;
 mod ledger;
 use ledger::{append_campaign, load_ledger};
 
-pub const LEDGER_FILE: &str = "mutants-ledger.json";
+pub const LEDGER_FILE: &str = "code-metrics/mutants-ledger.json";
 const OUTCOMES_FILE: &str = "mutants.out/outcomes.json";
 const MUTANTS_TARGET_DIR: &str = "target/mutants";
 
@@ -233,7 +233,7 @@ fn build_mutants_command(package: &str, profile: RunProfile) -> String {
     // cargo-mutants copies the workspace into %TEMP%; paseo/node_modules symlinks fail on
     // Windows without elevation (os error 1314), and leftover gitignored clones
     // (turbovault/, turbomcp/) do not survive the copy. The git+tag pins do not need those
-    // directories. In-place avoids both. Recovery ritual lives in Skills/mutants-campaign.md
+    // directories. In-place avoids both. Recovery ritual lives in skills/mutants-campaign.md
     // — prefer this to a run that never starts.
     parts.extend(["--in-place".into()]);
     if profile == RunProfile::LibOnly && package != "liberado-cli" {

@@ -71,7 +71,7 @@ check:
 # Other hosts defer coverage to `just ready`, which runs the exact Linux gate
 # natively or through Debian WSL. Host coverage is not a reliable proxy.
 # The baseline is not rewritten while that check is red. On Linux success,
-# ratchet `crap-baseline.json` without saving worse existing scores. If the tree
+# ratchet `code-metrics/crap-baseline.json` without saving worse existing scores. If the tree
 # is otherwise clean, a Linux update is amended onto HEAD. GitHub never writes it.
 # Console: log path, one ok/FAILED per gate, extracted errors on red.
 # Full child output: `.liberado/ci.log`.
@@ -225,10 +225,10 @@ compare-reset path commit="":
 
 # ── Mutation testing ─────────────────────────────────────────────────────────
 #
-# Playbook: Skills/mutants-campaign.md — cold-start assessment, run, record, fix survivors.
-# Ledger: mutants-ledger.json (append-only). Health: just mutants-report / just mutants-next.
+# Playbook: skills/mutants-campaign.md — cold-start assessment, run, record, fix survivors.
+# Ledger: code-metrics/mutants-ledger.json (append-only). Health: just mutants-report / just mutants-next.
 #
-# Run cargo-mutants on one crate and append results to mutants-ledger.json.
+# Run cargo-mutants on one crate and append results to code-metrics/mutants-ledger.json.
 # Example: `just mutants executor`
 #
 # CARGO_TARGET_DIR keeps the invoke binary out of target/debug/liberado.exe so
@@ -255,7 +255,7 @@ mutants-record name:
 mutants-report:
     cargo run --locked --quiet -p liberado-cli -- mutants report
 
-# Print one crate directory name to mutation-test next (see Skills/mutants-campaign.md).
+# Print one crate directory name to mutation-test next (see skills/mutants-campaign.md).
 [env('CARGO_TARGET_DIR', 'target/liberado-invoke')]
 mutants-next:
     cargo run --locked --quiet -p liberado-cli -- mutants next

@@ -36,7 +36,16 @@ impl Drop for LedgerLock {
     }
 }
 
+
+fn ensure_ledger_dir(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    if let Some(parent) = Path::new(LEDGER_FILE).parent() {
+        fs::create_dir_all(root.join(parent))?;
+    }
+    Ok(())
+}
+
 fn ledger_lock(root: &Path) -> Result<LedgerLock, Box<dyn std::error::Error>> {
+    ensure_ledger_dir(root)?;
     let path = root.join(format!("{LEDGER_FILE}.lock"));
     let file = OpenOptions::new()
         .create(true)
@@ -93,6 +102,7 @@ pub(super) fn save_ledger(root: &Path, ledger: &Ledger) -> Result<(), Box<dyn st
 // propagates to the caller (a campaign that cannot be recorded must fail the
 // command, not panic mid-run) and removes the inert `.tmp` it may leave.
 fn write_atomic(root: &Path, bytes: &str) -> Result<(), Box<dyn std::error::Error>> {
+    ensure_ledger_dir(root)?;
     let tmp = root.join(format!("{LEDGER_FILE}.{}.tmp", std::process::id()));
     // Plain `and_then` + a function path, not a closure chain: this file sits
     // against a function-count ratchet.

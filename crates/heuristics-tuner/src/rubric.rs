@@ -164,7 +164,7 @@ pub fn format_coder_rubric(
     let _ = writeln!(
         out,
         "Layer: Liberado coding worker system prompt (PR-dispatch / liberado-coder-agent).\n\
-         Never auto-applied — hand-copy a winner into prompts/coder/coder.md or LIBERADO_CODER_PROMPT.\n"
+         Never auto-applied — hand-copy a winner into skills/coder/coder.md or LIBERADO_CODER_PROMPT.\n"
     );
 
     match &winner.origin {

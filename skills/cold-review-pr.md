@@ -17,7 +17,7 @@ build → verify → cold review (diff only) → filter (cite-to-keep)
 | Hard rule | Entry |
 |---|---|
 | Cold reviewer sees **diff (+ optional file excerpts)** only — not goal narrative or tool trace | `build_cold_review_request` |
-| Taste / standards | `prompts/coder/cold-pr-reviewer.md` (disk override + baked) |
+| Taste / standards | `skills/coder/cold-pr-reviewer.md` (disk override + baked) |
 | Cite path+location to retain a finding | `filter_findings` |
 | At most **one** automatic fix round | `MAX_FIX_ROUNDS`, `decide_after_filter` / `decide_after_fix_round` |
 | Ready for human only after **post-review re-verify** | `ready_for_human` |
@@ -45,7 +45,7 @@ Launch a subagent with the **diff only**. Tell it:
 - Return issues with severity (high/medium/low), **path**, and **location**
 - Do NOT fix anything — just report
 
-Prefer the same standards as `prompts/coder/cold-pr-reviewer.md`.
+Prefer the same standards as `skills/coder/cold-pr-reviewer.md`.
 
 ### 3. Filter (cite-to-keep)
 

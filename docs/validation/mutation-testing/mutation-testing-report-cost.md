@@ -1,6 +1,6 @@
 # cost — Mutation Testing Report
 
-**Status:** historical, post-fix campaign recorded · **Authority:** `mutants-ledger.json` rows at commits `425c58ad` (2026-09-05) and `b59f208d` (2026-09-06)
+**Status:** historical, post-fix campaign recorded · **Authority:** `code-metrics/mutants-ledger.json` rows at commits `425c58ad` (2026-09-05) and `b59f208d` (2026-09-06)
 
 | Metric | Before (`425c58ad`) | After (`b59f208d`) | Change |
 |---|:---:|:---:|:---:|
@@ -39,8 +39,8 @@ The recorded post-fix campaign has 42 survivors. The tip adds `child_to_parent_m
 
 ## Evidence
 
-- Before row: `mutants-ledger.json`, `package=liberado-cost`, `recorded_at=2026-09-05`, `commit=425c58ad`, `counts={viable:269, caught:189, survived:69, timeout:11, unviable:20}`.
-- After row: `mutants-ledger.json`, `package=liberado-cost`, `recorded_at=2026-09-06`, `commit=b59f208d`, `counts={viable:269, caught:215, survived:42, timeout:12, unviable:20}`.
+- Before row: `code-metrics/mutants-ledger.json`, `package=liberado-cost`, `recorded_at=2026-09-05`, `commit=425c58ad`, `counts={viable:269, caught:189, survived:69, timeout:11, unviable:20}`.
+- After row: `code-metrics/mutants-ledger.json`, `package=liberado-cost`, `recorded_at=2026-09-06`, `commit=b59f208d`, `counts={viable:269, caught:215, survived:42, timeout:12, unviable:20}`.
 - Tip coverage is present in `crates/cost/src/survivor_tests.rs` for batches 1–3, `price_event`, report formatting helpers, rollup arithmetic through `report_from_parts`, the Batch 7 journal loader fixture, and `child_to_parent_map` constant-return replacements.
 
 ## Next steps

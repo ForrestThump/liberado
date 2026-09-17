@@ -6,8 +6,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::process::Stdio;
 
-const CONFIG_FILE: &str = "function-complexity.toml";
-const BASELINE_FILE: &str = "function-complexity-baseline.json";
+const CONFIG_FILE: &str = "code-metrics/function-complexity.toml";
+const BASELINE_FILE: &str = "code-metrics/function-complexity-baseline.json";
 const CURRENT_FILE: &str = ".liberado/function-complexity-current.json";
 const TOOL_VERSION: &str = "0.4.3";
 
@@ -71,6 +71,9 @@ pub fn ratchet(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
     } else {
         load_config(root)?;
         generate(root)?;
+    }
+    if let Some(parent) = Path::new(BASELINE_FILE).parent() {
+        std::fs::create_dir_all(root.join(parent))?;
     }
     std::fs::copy(root.join(CURRENT_FILE), root.join(BASELINE_FILE))?;
     eprintln!("[function complexity] ratcheted {BASELINE_FILE}");
@@ -290,6 +293,7 @@ mod tests {
 
     fn config_dir_with(body: &str, extra_file: Option<&str>) -> tempfile::TempDir {
         let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("code-metrics")).unwrap();
         std::fs::write(dir.path().join(CONFIG_FILE), body).unwrap();
         if let Some(rel) = extra_file {
             std::fs::create_dir_all(dir.path().join(rel).parent().unwrap()).unwrap();

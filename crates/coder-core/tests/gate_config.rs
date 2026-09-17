@@ -7,7 +7,7 @@ fresh_reviewers = 2
 strategist_after = 3
 [gate.gatekeeper]
 model = "deepseek/deepseek-v4-pro"
-prompt_path = "prompts/coder/critic.md"
+prompt_path = "skills/coder/critic.md"
 "#;
     let value: toml::Value = toml_src.parse().unwrap();
     let tuning = liberado_coder_core::CoderTuning::from_value(Some(&value)).unwrap();
