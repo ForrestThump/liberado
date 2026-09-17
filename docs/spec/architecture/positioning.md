@@ -40,7 +40,7 @@ the whole thing modular and partially deployable.
 
 ## Replacement priority — what we build first, and why in this order
 
-**1. The autonomous life-OS daemon first (replace OpenClaw / Hermes).** This is where the free tools
+**1. The autonomous Liberado daemon first (replace OpenClaw / Hermes).** This is where the free tools
 are weakest exactly where it matters most — OpenClaw is structurally insecure, Hermes self-improves by
 running uncontained Python — and where Liberado already holds its strongest cards: TurboVault as the
 life-system store, the capability boundary, one daemon on one event architecture. The capabilities

@@ -9,13 +9,13 @@ below are the *proposed* names, not what shipped (the real crates are `dispatche
 (cross-referenced in [`architecture-decisions.md`](../decisions/README.md)); do
 not treat the crate/module names or file layout below as current.  
 **Owner**: Shiloh Mangus  
-**Goal**: A minimal, security-first, token-efficient, fully auditable personal AI Life OS in Rust. It replaces heavier plugin-marketplace systems (e.g. OpenClaw) with curated, hand-audited components while enabling real background autonomy and loose coupling. Built directly on existing Turbovault + liberado-tool-helper-mcp work.
+**Goal**: A minimal, security-first, token-efficient, fully auditable personal AI Liberado in Rust. It replaces heavier plugin-marketplace systems (e.g. OpenClaw) with curated, hand-audited components while enabling real background autonomy and loose coupling. Built directly on existing Turbovault + liberado-tool-helper-mcp work.
 
 ---
 
 ## Vision
 
-Liberado is a personal Life OS that:
+Liberado is a personal AI Liberado that:
 
 - Uses a structured **Obsidian Markdown vault** (via Turbovault) as the single source of truth for memory, tasks, calendar, decisions, goals, reviews, and knowledge.
 - Keeps the **main agent thin** — focused on high-level reasoning, your current life context, and orchestration. It never receives massive tool schemas or full plugin lists.

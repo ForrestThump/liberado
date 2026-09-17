@@ -20,13 +20,13 @@ changing safety, tests, configuration, or agent control flow.
 
 The product order remains:
 
-1. Autonomous life-OS daemon.
+1. Autonomous Liberado daemon.
 2. Lean chat surfaces.
 3. Coding pack with the best accepted result per dollar.
 
 The reason for this order is in [`positioning.md`](spec/architecture/positioning.md).
 
-## Priority 1 — autonomous life-OS daemon
+## Priority 1 — autonomous Liberado daemon
 
 The near-term goal is a daemon that is useful enough to operate every day. Dogfood the existing
 Telegram surface and fix observed friction before adding another broad surface.

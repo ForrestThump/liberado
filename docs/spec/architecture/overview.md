@@ -1,6 +1,6 @@
 # Liberado — Architecture
 
-Liberado is a **Rust-native personal AI Life OS**: a daemon that watches your Obsidian vault, reasons
+Liberado is a **Rust-native personal AI Liberado**: a daemon that watches your Obsidian vault, reasons
 about changes with an LLM, and acts on your behalf through tools — safely, and without reacting to its
 own work. This document is the cold-start map. Each crate has its own zoomed-in
 `crates/<name>/ARCHITECTURE.md`.
@@ -38,7 +38,7 @@ The **general agentic orchestration kernel** (goal sessions, verifiers, subagent
 OpenClaw briefings cut over, TurboVault peer with **vector search + tasks**). As of 2026-07-23
 engineering hardened **module boundaries**, **MCP connection pooling** (default on), and a **partial
 Tier-1 live conformance suite** (see [`../../roadmap.md`](../../roadmap.md)). Effort still
-follows a deliberate **replacement priority**: **autonomous life-OS daemon → chat → coding** — the
+follows a deliberate **replacement priority**: **autonomous Liberado daemon → chat → coding** — the
 remaining P1 gap is the **phone-grade interfacing loop** (session WebUI later; not Telegram multiplexing),
 not storage
 or basic MCP reach. The order and its rationale are in [`positioning.md`](positioning.md); the
@@ -206,7 +206,7 @@ Docker-daemon smoke test. Rust-native agentic orchestration is now **built**, no
 Liberado goal-session crates replaced `vtcode`, and the unified Session model (D7) plus the one
 converged execution engine expose the same session/event backend to every surface (see
 [`sessions.md`](sessions.md)). The current strategic direction is a **replacement priority** —
-**autonomous life-OS daemon → chat → coding** — sequencing effort to get one thing over the
+**autonomous Liberado daemon → chat → coding** — sequencing effort to get one thing over the
 daily-driver line rather than three half-built. The order and rationale are in
 [`positioning.md`](positioning.md); the work items, in that order, in
 [`../../roadmap.md`](../../roadmap.md).
