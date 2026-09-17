@@ -325,7 +325,7 @@ The chip, the picker, and profile-before-first-message all worked end to end.
 
 **And the session did nothing.** Asked "What tasks do I have open?", the model replied *"I'll fetch
 your open tasks first."* and issued **zero tool calls** — announced an action, took none. The exact
-symptom [`pr-dispatch-vtcode-no-write-finding.md`](../pr-dispatch-vtcode-no-write-finding.md) spent
+symptom [`pr-dispatch-vtcode-no-write-finding.md`](pr-dispatch-vtcode-no-write-finding.md) spent
 three rounds on, reproduced in our own system on the first live run.
 
 The cause is the drift step 7 predicts, now concrete:

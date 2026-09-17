@@ -346,7 +346,7 @@ S2 makes it visible; S3 makes it safe against real repos; S4 makes it reversible
 - **vtcode doc cleanup** rides along with S1's PR (delete the `VTCODE_BACKEND` const
   (`coder-core/src/lib.rs:47` + its mention in `coder-core/ARCHITECTURE.md:41`), the stale
   `config.example/tuning.toml` comment, and refresh the references in
-  `rust-native-agentic-coder-plan.md` and `pr-dispatch-vtcode-no-write-finding.md` status), not a
+  `rust-native-agentic-coder-plan.md` and `archive/pr-dispatch-vtcode-no-write-finding.md` status), not a
   separate slice.
 
 ## Docs this plan updates when slices land

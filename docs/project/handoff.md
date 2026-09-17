@@ -197,8 +197,8 @@ bar; they do not replace it. Full table: [`../roadmap.md`](../roadmap.md).
 ### Priority 2 / 3 (after the daily-driver bar)
 
 - **CH1** WebUI chat maturity; **CH2** chat history search Tier 1 (lexical).
-- Coding: resume mid-build (E6-c(b)), open vtcode no-write finding, eval curriculum — only when
-  P1 is not the bottleneck.
+- Coding: resume mid-build (E6-c(b)), vtcode no-write finding (archived; not in-repo), eval curriculum
+  — only when P1 is not the bottleneck.
 
 **Move-on bar:** leave P1 when you **daily-drive without wincing**, not when it is polished.
 

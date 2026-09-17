@@ -39,7 +39,6 @@ ongoing findings, and current evidence. Implemented and superseded plans are arc
 | [mcp-forge-backlog.md](mcp-forge-backlog.md) | plan | mcp | implementation |
 | [mcp-suite-standardization.md](mcp-suite-standardization.md) | plan | mcp | implementation |
 | [paseo-liberado-integration-roadmap.md](paseo-liberado-integration-roadmap.md) | plan | acp | implementation |
-| [pr-dispatch-vtcode-no-write-finding.md](pr-dispatch-vtcode-no-write-finding.md) | finding | coding-harness | evidence |
 | [rust-native-agentic-coder-plan.md](rust-native-agentic-coder-plan.md) | plan | coding-harness | implementation |
 | [sysmap-generic-core-plan.md](sysmap-generic-core-plan.md) | plan | tooling | implementation |
 | [token-cost-accounting-plan.md](token-cost-accounting-plan.md) | plan | token-economics | implementation |

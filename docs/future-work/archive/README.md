@@ -38,6 +38,7 @@ Everything removed from this directory remains in git history.
 | [daemon-pr-review-coupling-pass.md](daemon-pr-review-coupling-pass.md) | Historical coupling pass — daemon PR review after Slice 2 (Sol @ `4be02711`) |
 | [daemon-pr-review-kickoff-grok46-critique.md](daemon-pr-review-kickoff-grok46-critique.md) | Historical Grok 4.6 critique of the daemon PR review kickoff (Sol pass 1 @ `848ad7da`) |
 | [property-testing-plan.md](property-testing-plan.md) | Historical 2026-07-31 property-testing plan — `proptest = "1"` is now a workspace dep and in use across multiple crates; not an implementation checklist |
+| [pr-dispatch-vtcode-no-write-finding.md](pr-dispatch-vtcode-no-write-finding.md) | Historical 2026-07-08 finding — `vtcode` is no longer Liberado's coding harness; retained as provenance for the rust-native pivot, not an open bug |
 | *Other retained records* | Same directory — treat as historical |
 
 Living roadmap: [`../../roadmap.md`](../../roadmap.md) · Future work index: [`../README.md`](../README.md).
