@@ -15,7 +15,6 @@ fn detect_lang_covers_ts_variants() {
     assert!(detect_lang("src/app.jsx").is_some(), ".jsx detected");
 }
 
-
 /// The TypeScript and Go query sources stay loadable and productive.
 #[cfg(all(feature = "lang-typescript", feature = "lang-go"))]
 #[test]
@@ -52,7 +51,6 @@ fn extract_tags_supports_typescript_and_go() {
     );
 }
 
-
 #[cfg(not(feature = "lang-typescript"))]
 #[test]
 fn detect_lang_ts_variants_unavailable_without_feature() {
@@ -70,7 +68,6 @@ fn detect_lang_ts_variants_unavailable_without_feature() {
     );
 }
 
-
 #[cfg(not(feature = "lang-go"))]
 #[test]
 fn detect_lang_go_unavailable_without_feature() {
@@ -80,14 +77,12 @@ fn detect_lang_go_unavailable_without_feature() {
     );
 }
 
-
 #[cfg(feature = "lang-python")]
 #[test]
 fn test_detect_lang_python() {
     let (name, _lang) = detect_lang("app/views.py").unwrap();
     assert_eq!(name, "python");
 }
-
 
 #[cfg(feature = "lang-typescript")]
 #[test]
@@ -96,7 +91,6 @@ fn test_detect_lang_typescript() {
     assert_eq!(name, "tsx");
 }
 
-
 #[cfg(feature = "lang-go")]
 #[test]
 fn test_detect_lang_go() {
@@ -104,13 +98,11 @@ fn test_detect_lang_go() {
     assert_eq!(name, "go");
 }
 
-
 #[cfg(not(feature = "lang-python"))]
 #[test]
 fn test_detect_lang_python_unavailable_without_feature() {
     assert!(detect_lang("app/views.py").is_none());
 }
-
 
 #[cfg(not(feature = "lang-typescript"))]
 #[test]
@@ -119,13 +111,11 @@ fn test_detect_lang_typescript_unavailable_without_feature() {
     assert!(detect_lang("src/app.ts").is_none());
 }
 
-
 #[cfg(not(feature = "lang-go"))]
 #[test]
 fn test_detect_lang_go_unavailable_without_feature() {
     assert!(detect_lang("pkg/handler.go").is_none());
 }
-
 
 #[cfg(feature = "lang-python")]
 #[test]
@@ -155,5 +145,3 @@ app.run()
     assert!(def_names.contains("init"));
     assert!(def_names.contains("main"));
 }
-
-

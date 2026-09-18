@@ -8,7 +8,6 @@ use super::*;
 use liberado_coder_core::{CommandPolicy, PathPolicy};
 use serde_json::json;
 
-
 pub(crate) fn init_temp_git_repo(dir: &std::path::Path) {
     let run = |args: &[&str]| {
         let out = std::process::Command::new("git")
@@ -36,7 +35,6 @@ pub(crate) fn init_temp_git_repo(dir: &std::path::Path) {
     run(&["add", "seed.txt"]);
     run(&["commit", "-m", "initial commit"]);
 }
-
 
 /// A git repo with one committed file, for the untracked-diff tests.
 ///
@@ -67,7 +65,6 @@ fn git_repo_with_one_committed_file() -> tempfile::TempDir {
     run(&["commit", "--quiet", "-m", "base"]);
     dir
 }
-
 
 #[cfg(feature = "git")]
 fn git_add_commit(dir: &std::path::Path, message: &str) {
@@ -114,7 +111,6 @@ async fn dedicated_git_tool_still_works_with_default_policy() {
     assert_eq!(branch, "c1-test-branch");
 }
 
-
 /// The bug this closes, in the form it actually took.
 ///
 /// A run wrote a new module, then called `git_diff` four times and was shown nothing each
@@ -142,7 +138,6 @@ async fn a_new_file_appears_in_the_diff() {
     }
 }
 
-
 /// Names were what the critic already had, and they were not enough to review a change.
 #[cfg(feature = "git")]
 #[tokio::test]
@@ -164,7 +159,6 @@ async fn patch_mode_carries_the_new_file_content() {
     );
 }
 
-
 /// Tracked edits must survive the addition. Appending the untracked section is worthless if
 /// it displaces the answer the tool already gave.
 #[cfg(feature = "git")]
@@ -185,7 +179,6 @@ async fn tracked_changes_still_appear_alongside_untracked_ones() {
     assert!(stdout.contains("tracked.txt"), "{stdout:?}");
     assert!(stdout.contains("brand_new.rs"), "{stdout:?}");
 }
-
 
 #[cfg(feature = "git")]
 #[tokio::test]
@@ -211,7 +204,6 @@ async fn git_branch_creates_and_switches() {
     let branch = String::from_utf8_lossy(&current.stdout).trim().to_string();
     assert_eq!(branch, "feature-x");
 }
-
 
 #[cfg(feature = "git")]
 #[tokio::test]
@@ -243,7 +235,6 @@ async fn git_commit_stages_and_commits() {
     assert!(log_text.contains("add new file"));
 }
 
-
 #[cfg(feature = "git")]
 #[tokio::test]
 async fn git_commit_stages_all_when_no_files_given() {
@@ -271,7 +262,6 @@ async fn git_commit_stages_all_when_no_files_given() {
     assert!(String::from_utf8_lossy(&status.stdout).trim().is_empty());
 }
 
-
 #[cfg(feature = "git")]
 #[tokio::test]
 async fn git_log_returns_recent_commits() {
@@ -289,7 +279,6 @@ async fn git_log_returns_recent_commits() {
     assert!(stdout.contains("second commit"));
     assert!(stdout.contains("initial commit"));
 }
-
 
 #[cfg(feature = "git")]
 #[tokio::test]
@@ -312,7 +301,6 @@ async fn git_log_respects_limit_and_branch() {
     let count = stdout.lines().filter(|l| !l.is_empty()).count();
     assert_eq!(count, 2);
 }
-
 
 #[cfg(feature = "git")]
 #[tokio::test]
@@ -338,7 +326,6 @@ async fn git_diff_stat_and_patch_modes() {
         .unwrap();
     assert!(patch["stdout"].as_str().unwrap().contains("@@"));
 }
-
 
 /// Without the `git` feature, dedicated git tools return a clear unavailable error
 /// that points operators at `coder-full` / `liberado-coder-run` rather than only
@@ -381,5 +368,3 @@ async fn git_tools_stub_mention_coder_full_when_feature_off() {
         "git_commit stub must mention runner path: {stderr}"
     );
 }
-
-
