@@ -4,7 +4,7 @@
     "proven_invariant": 64,
     "local_failure": 0,
     "process_fatal": 49,
-    "files_scanned": 490,
+    "files_scanned": 491,
     "files_with_unwraps": 49
   },
   "files": {
@@ -136,7 +136,7 @@
       "occurrences": [
         {
           "file": "crates/cli/src/mutants_cmd_ledger.rs",
-          "line": 76,
+          "line": 84,
           "column": 29,
           "method": "expect",
           "snippet": "serde_json::to_string(c).expect(\"a ledger row serialises\")",
@@ -738,7 +738,7 @@
       "occurrences": [
         {
           "file": "crates/heuristics-tuner/src/tool_loop_scoring.rs",
-          "line": 50,
+          "line": 59,
           "column": 9,
           "method": "unwrap",
           "snippet": "self.invoked.lock().unwrap()",
@@ -749,7 +749,7 @@
         },
         {
           "file": "crates/heuristics-tuner/src/tool_loop_scoring.rs",
-          "line": 61,
+          "line": 70,
           "column": 9,
           "method": "unwrap",
           "snippet": "self.invoked.lock().unwrap()",

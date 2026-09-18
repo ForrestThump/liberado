@@ -2466,10 +2466,10 @@
     "cyclomatic": 34
   },
   "crates/heuristics-tuner/src/coder_scoring.rs": {
-    "ploc": 549,
-    "lloc": 110,
-    "functions": 48,
-    "cyclomatic": 105
+    "ploc": 497,
+    "lloc": 92,
+    "functions": 38,
+    "cyclomatic": 93
   },
   "crates/heuristics-tuner/src/coder_scoring_breakdown_tests.rs": {
     "ploc": 49,
@@ -2531,11 +2531,17 @@
     "functions": 30,
     "cyclomatic": 62
   },
+  "crates/heuristics-tuner/src/scored_scenario.rs": {
+    "ploc": 93,
+    "lloc": 20,
+    "functions": 17,
+    "cyclomatic": 28
+  },
   "crates/heuristics-tuner/src/scoring.rs": {
-    "ploc": 392,
-    "lloc": 78,
-    "functions": 38,
-    "cyclomatic": 57
+    "ploc": 364,
+    "lloc": 69,
+    "functions": 34,
+    "cyclomatic": 50
   },
   "crates/heuristics-tuner/src/search.rs": {
     "ploc": 364,
@@ -2550,10 +2556,10 @@
     "cyclomatic": 14
   },
   "crates/heuristics-tuner/src/tool_loop_scoring.rs": {
-    "ploc": 497,
-    "lloc": 116,
-    "functions": 53,
-    "cyclomatic": 79
+    "ploc": 442,
+    "lloc": 99,
+    "functions": 44,
+    "cyclomatic": 66
   },
   "crates/heuristics-tuner/src/tool_loop_search.rs": {
     "ploc": 334,
