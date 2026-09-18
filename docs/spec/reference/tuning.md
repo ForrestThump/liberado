@@ -12,7 +12,8 @@ with the reason each one is not a config field.
 
 ## 1. Where config lives
 
-Three files in one directory. The daemon resolves that directory in tiers (`liberado_config::config_dir`):
+Three files in one directory. The daemon resolves that directory in tiers,
+first match wins (`liberado_config::config_dir`):
 
 1. `$LIBERADO_CONFIG_DIR`
 2. the platform config dir (`~/.config/liberado`, `%APPDATA%\liberado`)
