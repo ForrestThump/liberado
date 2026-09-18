@@ -82,10 +82,36 @@ fn execute_health(command: CiCommand) -> Result<(), Box<dyn std::error::Error>> 
 
 fn execute_unwraps(command: CiCommand) -> Result<(), Box<dyn std::error::Error>> {
     match command {
-        CiCommand::Unwraps => crate::unwrap_classification_cmd::check(&repository_root()?),
-        CiCommand::UnwrapsRatchet => crate::unwrap_classification_cmd::ratchet(&repository_root()?),
+        CiCommand::Unwraps => unwraps_check(&repository_root()?),
+        CiCommand::UnwrapsRatchet => unwraps_ratchet(&repository_root()?),
         command => execute_readiness(command),
     }
+}
+
+#[cfg(feature = "ci-unwraps")]
+fn unwraps_check(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    crate::unwrap_classification_cmd::check(root)
+}
+
+#[cfg(feature = "ci-unwraps")]
+fn unwraps_ratchet(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    crate::unwrap_classification_cmd::ratchet(root)
+}
+
+#[cfg(not(feature = "ci-unwraps"))]
+fn unwraps_check(_root: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    Err(
+        "liberado ci unwraps requires `--features ci-unwraps` (just unwrap-classification / just ci enable it)"
+            .into(),
+    )
+}
+
+#[cfg(not(feature = "ci-unwraps"))]
+fn unwraps_ratchet(_root: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    Err(
+        "liberado ci unwraps-ratchet requires `--features ci-unwraps` (just unwrap-ratchet / just ci enable it)"
+            .into(),
+    )
 }
 
 fn execute_readiness(command: CiCommand) -> Result<(), Box<dyn std::error::Error>> {
@@ -149,7 +175,7 @@ fn run_host_crap(log: &CiLog) -> Result<(), Box<dyn std::error::Error>> {
 
 fn run_quality_checks(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
     crate::module_health_cmd::check(root)?;
-    crate::unwrap_classification_cmd::check(root)
+    unwraps_check(root)
 }
 
 /// Linux `just ci` records a new best for module-health and unwraps. Other hosts compare only:
@@ -169,7 +195,7 @@ fn run_quality_ratchets(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
 
 fn write_quality_baselines(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
     crate::module_health_cmd::ratchet(root)?;
-    crate::unwrap_classification_cmd::ratchet(root)
+    unwraps_ratchet(root)
 }
 
 #[cfg(test)]

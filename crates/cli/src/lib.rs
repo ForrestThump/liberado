@@ -73,6 +73,7 @@ mod ops_cmd;
 mod readiness_cmd;
 mod shepherd_cmd;
 mod summarize_cmd;
+#[cfg(feature = "ci-unwraps")]
 pub mod unwrap_classification_cmd;
 
 /// Install the stderr tracing subscriber, then route `args` (argv without the program name). The

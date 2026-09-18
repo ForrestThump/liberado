@@ -76,7 +76,7 @@ check:
 # Console: log path, one ok/FAILED per gate, extracted errors on red.
 # Full child output: `.liberado/ci.log`.
 ci:
-    cargo run --locked --quiet -p liberado-cli -- ci
+    cargo run --locked --quiet -p liberado-cli --features ci-unwraps -- ci
 
 # Auto-format the whole workspace.
 fmt:
@@ -138,12 +138,12 @@ module-health-ratchet:
 
 # Classify production Rust unwraps against the committed baseline and waivers.
 unwrap-classification:
-    cargo run --locked --quiet -p liberado-cli -- ci unwraps
+    cargo run --locked --quiet -p liberado-cli --features ci-unwraps -- ci unwraps
 
 # Check first, then replace the unwrap classification baseline with current values.
 # `just ci` does this automatically on Linux only.
 unwrap-ratchet:
-    cargo run --locked --quiet -p liberado-cli -- ci unwraps-ratchet
+    cargo run --locked --quiet -p liberado-cli --features ci-unwraps -- ci unwraps-ratchet
 
 # Validate the Rust-native PR shepherd's failure-identity and state-machine guards.
 shepherd-self-test:

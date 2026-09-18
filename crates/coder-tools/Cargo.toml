@@ -8,6 +8,19 @@ authors.workspace = true
 repository.workspace = true
 description = "Executor ToolRuntime implementation for Liberado's Rust-native coder"
 
+[features]
+# Standalone / `cargo test -p liberado-coder-tools` keeps full tools.
+# Downstream product crates (coder-agent → server → cli) pass
+# `default-features = false` so gix + non-Rust grammars stay off the default
+# liberado graph; liberado-coder-runner re-enables `full`.
+default = ["git", "multi-lang"]
+git = ["dep:gix"]
+lang-python = ["dep:tree-sitter-python"]
+lang-typescript = ["dep:tree-sitter-typescript"]
+lang-go = ["dep:tree-sitter-go"]
+multi-lang = ["lang-python", "lang-typescript", "lang-go"]
+full = ["git", "multi-lang"]
+
 [dependencies]
 regex.workspace = true
 tracing.workspace = true
@@ -24,10 +37,10 @@ thiserror.workspace = true
 tokio.workspace = true
 tree-sitter.workspace = true
 tree-sitter-rust.workspace = true
-tree-sitter-python.workspace = true
-tree-sitter-typescript.workspace = true
-tree-sitter-go.workspace = true
-gix.workspace = true
+tree-sitter-python = { workspace = true, optional = true }
+tree-sitter-typescript = { workspace = true, optional = true }
+tree-sitter-go = { workspace = true, optional = true }
+gix = { workspace = true, optional = true }
 
 [dev-dependencies]
 tempfile.workspace = true

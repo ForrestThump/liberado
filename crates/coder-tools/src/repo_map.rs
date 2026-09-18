@@ -108,13 +108,18 @@ fn detect_lang(path: &str) -> Option<(&'static str, Language)> {
     let ext = path.rsplit('.').next()?;
     match ext {
         "rs" => Some(("rust", tree_sitter_rust::LANGUAGE.into())),
+        #[cfg(feature = "lang-python")]
         "py" | "pyi" => Some(("python", tree_sitter_python::LANGUAGE.into())),
+        #[cfg(feature = "lang-typescript")]
         "ts" => Some((
             "typescript",
             tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
         )),
+        #[cfg(feature = "lang-typescript")]
         "tsx" => Some(("tsx", tree_sitter_typescript::LANGUAGE_TSX.into())),
+        #[cfg(feature = "lang-typescript")]
         "js" | "jsx" => Some(("tsx", tree_sitter_typescript::LANGUAGE_TSX.into())),
+        #[cfg(feature = "lang-go")]
         "go" => Some(("go", tree_sitter_go::LANGUAGE.into())),
         _ => None,
     }
@@ -961,24 +966,6 @@ mod tests {
     }
 
     #[test]
-    fn test_detect_lang_python() {
-        let (name, _lang) = detect_lang("app/views.py").unwrap();
-        assert_eq!(name, "python");
-    }
-
-    #[test]
-    fn test_detect_lang_typescript() {
-        let (name, _lang) = detect_lang("src/App.tsx").unwrap();
-        assert_eq!(name, "tsx");
-    }
-
-    #[test]
-    fn test_detect_lang_go() {
-        let (name, _lang) = detect_lang("pkg/handler.go").unwrap();
-        assert_eq!(name, "go");
-    }
-
-    #[test]
     fn test_detect_lang_unknown() {
         // Use a non-docs/ path: docs_meta check-stale-rs scans crates for
         // docs/**/*.md strings and requires the target to exist with exact case.
@@ -1020,34 +1007,6 @@ fn main() {
         let ref_names: HashSet<_> = refs.iter().map(|t| t.name.as_str()).collect();
         assert!(ref_names.contains("init"));
         assert!(ref_names.contains("run"));
-    }
-
-    #[test]
-    fn test_extract_python_tags() {
-        let source = r#"
-class App:
-    def run(self):
-        self.init()
-
-    def init(self):
-        pass
-
-def main():
-    app = App()
-    app.run()
-"#;
-        let lang: Language = tree_sitter_python::LANGUAGE.into();
-        let tags = extract_tags("test.py", source, "python", &lang);
-
-        let def_names: HashSet<_> = tags
-            .iter()
-            .filter(|t| t.is_def)
-            .map(|t| t.name.as_str())
-            .collect();
-        assert!(def_names.contains("App"));
-        assert!(def_names.contains("run"));
-        assert!(def_names.contains("init"));
-        assert!(def_names.contains("main"));
     }
 
     #[test]
@@ -1277,6 +1236,9 @@ def main():
         }
     }
 }
+#[cfg(test)]
+#[path = "repo_map_lang_feature_tests.rs"]
+mod lang_feature_tests;
 #[cfg(test)]
 #[path = "repo_map_survivor_tests.rs"]
 mod survivor_tests;

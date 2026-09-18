@@ -24,7 +24,7 @@ liberado-conversation-store = { workspace = true }
 liberado-provider = { workspace = true }
 liberado-telegram-approvals = { workspace = true }
 liberado-commands = { workspace = true }
-liberado-memory-store = { workspace = true }
+liberado-memory-store = { workspace = true, optional = true }
 liberado-vault = { workspace = true }
 liberado-session = { workspace = true }
 liberado-session-store = { workspace = true }
@@ -32,7 +32,7 @@ liberado-coder-agent = { workspace = true }
 liberado-coder-core = { workspace = true }
 liberado-notify = { workspace = true }
 liberado-messaging = { workspace = true }
-turbovault-vector = { workspace = true }
+turbovault-vector = { workspace = true, optional = true }
 tokio = { workspace = true }
 tokio-stream = { workspace = true }
 futures = { workspace = true }
@@ -42,12 +42,20 @@ tracing = { workspace = true }
 base64 = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-reqwest = { workspace = true }
+reqwest = { workspace = true, features = ["blocking"] }
 chrono = { workspace = true }
 axum = { version = "0.8", features = ["json"] }
 tower-http = { version = "0.6", features = ["cors", "fs", "compression-gzip"] }
 tower = { version = "0.5", features = ["util"] }
 thiserror = { workspace = true }
+
+[features]
+default = []
+# In-process coding pack with gix + multi-lang repo-map (also available via liberado-coder-run).
+coder-full = ["liberado-coder-agent/full-tools"]
+# Opt into procedural-memory guidance + local ONNX embeddings (fastembed).
+# Off by default so liberado serve/chat do not link turbovault-vector/fastembed.
+vector-local = ["dep:liberado-memory-store", "dep:turbovault-vector"]
 
 [dev-dependencies]
 # The exact deserializer axum's `Query` extractor uses, so the query-string contract test in

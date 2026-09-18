@@ -13,9 +13,9 @@ name = "liberado-coder-run"
 path = "src/main.rs"
 
 [dependencies]
-liberado-coder-agent.workspace = true
+liberado-coder-agent = { workspace = true, features = ["full-tools"] }
 liberado-coder-core.workspace = true
-liberado-coder-tools.workspace = true
+liberado-coder-tools = { workspace = true, features = ["full"] }
 liberado-common.workspace = true
 liberado-config-loader.workspace = true
 liberado-provider.workspace = true

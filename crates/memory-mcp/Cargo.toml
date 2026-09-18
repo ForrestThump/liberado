@@ -16,7 +16,7 @@ path = "src/main.rs"
 liberado-common = { workspace = true }
 liberado-config = { workspace = true }
 liberado-vault = { workspace = true }
-liberado-memory-store = { workspace = true }
+liberado-memory-store = { workspace = true }  # package default includes vector-local name
 turbovault-vector = { workspace = true }
 turbomcp = { workspace = true }
 serde = { workspace = true }
