@@ -34,7 +34,8 @@ Tests are **current** executable evidence. A mutation report is **historical** e
 
 - **Per-crate reports:** [`mutation-testing/`](mutation-testing/) — one report per hardened crate (Phase 1 + Phase 4) plus the original 2026-07-23 first-pass report.
 - **Summary:** [`mutation-testing-plan.md`](mutation-testing-plan.md) — the aggregate plan + results that ties the per-crate reports together.
-- **Correctness artifacts:** [`coverage-gaps.md`](coverage-gaps.md) — known uncovered code paths (IO/network/clock-gated, tracing-only, defaults).
+- **Correctness artifacts:** [`coverage-gaps.md`](coverage-gaps.md) — **historical snapshot** (2026-07-29, 8 hardened crates); the "Real Logic Gaps" section is closed, and remaining categories are infrastructure-bound. See `mutation-testing-plan.md` for the executable guarantee.
+- [`coverage-gaps-coding-features-2026-08-06.md`](coverage-gaps-coding-features-2026-08-06.md) — **historical snapshot** (2026-08-06, develop vs main, ~6,470 new lines across 55 files); was never indexed under `future-work/`. High-priority gaps were tracked forward through the coding-harness reliability work.
 - The completed mock-harness design is retained in the
   [future-work archive](../future-work/archive/mock-harness-scope.md). Current behavior lives in
   the test-helper code, Rustdoc, and tests.
@@ -43,7 +44,8 @@ Tests are **current** executable evidence. A mutation report is **historical** e
 |-----|------|
 | [mutation-testing-plan.md](mutation-testing-plan.md) | **Summary** — master plan + Phase 1–5 results across 13 crates |
 | [mutation-testing/](mutation-testing/) | Per-crate mutation-testing reports (Phase 1 + Phase 4) |
-| [coverage-gaps.md](coverage-gaps.md) | Known uncovered code paths — IO/network/clock-gated, tracing-only, defaults |
+| [coverage-gaps.md](coverage-gaps.md) | **Historical snapshot (2026-07-29)** — llvm-cov output for 8 hardened crates; "Real Logic Gaps" closed, remaining categories are infrastructure-bound |
+| [coverage-gaps-coding-features-2026-08-06.md](coverage-gaps-coding-features-2026-08-06.md) | **Historical snapshot (2026-08-06)** — develop vs main, ~6,470 new lines; high-priority gaps tracked forward through coding-harness reliability work |
 | [future-work/archive/mock-harness-scope.md](../future-work/archive/mock-harness-scope.md) | Historical test-infrastructure design — scriptable error mocks, FrozenClock, filesystem stubs |
 
 ## Per-crate reports ([`mutation-testing/`](mutation-testing/))
@@ -67,7 +69,9 @@ Tests are **current** executable evidence. A mutation report is **historical** e
 
 **Naming notes:** `mutation-testing-report-v2.md` was renamed to `mutation-testing-report-dispatcher.md`. It covers only the dispatcher crate, not a second version of the overall mutation-testing program. `mutation-testing-report.md` — the original first-pass report — was renamed `mutation-testing-report-phase0-2026-07-23.md` to distinguish it from the aggregate plan.
 
-**Related:** [coverage-gaps.md](coverage-gaps.md) for known uncovered code paths;
+**Related:** [coverage-gaps.md](coverage-gaps.md) (historical 2026-07-29 snapshot) and
+[coverage-gaps-coding-features-2026-08-06.md](coverage-gaps-coding-features-2026-08-06.md)
+(historical 2026-08-06 feature-branch snapshot) for dated llvm-cov evidence;
 [mock-harness-scope.md](../future-work/archive/mock-harness-scope.md) for the historical test
 infrastructure design; [property-testing-plan.md](../future-work/archive/property-testing-plan.md)
 for the historical 2026-07-31 property-testing plan (live `proptest` usage is in crate test

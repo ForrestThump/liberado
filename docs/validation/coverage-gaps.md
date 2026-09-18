@@ -1,6 +1,21 @@
+---
+kind: validation
+status: historical
+authority: evidence
+domain: correctness
+open_items: false
+last_verified: 2026-07-29
+---
+
 # Coverage Gaps — Analysis
 
 Generated 2026-07-29 from `cargo llvm-cov` on the 8 hardened crates.
+
+**Historical snapshot** — dated llvm-cov output from 2026-07-29. The "Real Logic Gaps" section
+is closed (targeted tests added); the remaining categories (IO/network/clock-gated, tracing-only,
+defaults, dead code in tests) are *infrastructure-bound* and explained in
+`mutation-testing-plan.md`. Not a current authority on uncovered paths — see that plan and the
+live test suite for the executable guarantee.
 
 ## Real Logic Gaps (closed)
 

@@ -1,6 +1,21 @@
+---
+kind: validation
+status: historical
+authority: evidence
+domain: correctness
+open_items: false
+last_verified: 2026-08-06
+---
+
 # Coverage Gap Analysis — New Coding Features (develop vs main)
 
 Generated 2026-08-06 from `cargo llvm-cov --workspace` on branch `feat/coverage-gap-analysis-coding-features`.
+
+**Historical snapshot** — dated feature-branch llvm-cov output from 2026-08-06. Was never indexed
+under `docs/future-work/`; brought under managed metadata to retire it as historical evidence. The
+high-priority gaps listed here were tracked forward through the coding-harness reliability work
+(see `docs/future-work/coder-harness-reliability-2026-08.md`). Not a current authority on
+uncovered paths.
 
 **Baseline:** `develop` at `892f173`, compared against `main`. Covers ~6,470 new lines across 55 files.
 

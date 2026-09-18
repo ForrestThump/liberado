@@ -71,7 +71,7 @@ Per-crate detail: generated [crate map](spec/reference/crate-map.md) + each crat
 | **API reference** | [spec/reference/api.md](spec/reference/api.md) | HTTP/SSE surface |
 | **Tuning** | [spec/reference/tuning.md](spec/reference/tuning.md) | All behavioral knobs |
 | **Mutation testing** | [validation/mutation-testing-plan.md](validation/mutation-testing-plan.md) | Plan + results across 13 crates |
-| **Coverage gaps** | [validation/coverage-gaps.md](validation/coverage-gaps.md) | Known uncovered paths |
+| **Coverage gaps** | [validation/coverage-gaps.md](validation/coverage-gaps.md) | Historical llvm-cov snapshot (2026-07-29); see `mutation-testing-plan.md` for the executable guarantee |
 | **Invariants** | [spec/architecture/failure-modes.md](spec/architecture/failure-modes.md) §6 | "Two things that should agree" |
 
 ---
