@@ -1,7 +1,7 @@
 # Liberado's system-map profile. Everything the map shows that cargo and topology.toml cannot
 # derive: the layer/kind vocabulary (colors, blurbs, heights) and the runtime control/data wiring.
-# The generic `sysmap-core` reads this; see docs/future-work/sysmap-generic-core-plan.md for the
-# schema and how a new project fills its own in.
+# The generic `sysmap-core` reads this; see docs/future-work/archive/sysmap-generic-core-plan.md
+# for the schema and how a new project fills its own in.
 
 manifest_namespace = "liberado"
 

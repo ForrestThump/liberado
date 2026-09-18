@@ -4,7 +4,7 @@
 //! legacy isometric projection helpers, and color styling. No knowledge of any particular project —
 //! the layer and node-kind vocabulary, the color palette, and the runtime wiring all come from
 //! outside this crate (see the `sysmap.toml` profile in
-//! `docs/future-work/sysmap-generic-core-plan.md`).
+//! `docs/future-work/archive/sysmap-generic-core-plan.md`).
 //!
 //! This crate is the extraction seam: `liberado-sysmap` re-exports these modules so consumers keep
 //! working while the scanner and wiring (which *are* project-specific) stay behind.

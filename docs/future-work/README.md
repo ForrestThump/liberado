@@ -40,7 +40,6 @@ ongoing findings, and current evidence. Implemented and superseded plans are arc
 | [mcp-suite-standardization.md](mcp-suite-standardization.md) | plan | mcp | implementation |
 | [paseo-liberado-integration-roadmap.md](paseo-liberado-integration-roadmap.md) | plan | acp | implementation |
 | [rust-native-agentic-coder-plan.md](rust-native-agentic-coder-plan.md) | plan | coding-harness | implementation |
-| [sysmap-generic-core-plan.md](sysmap-generic-core-plan.md) | plan | tooling | implementation |
 | [token-cost-accounting-plan.md](token-cost-accounting-plan.md) | plan | token-economics | implementation |
 | [token-economics-findings-2026-08.md](token-economics-findings-2026-08.md) | finding | token-economics | evidence |
 | [tui-maturity-roadmap.md](tui-maturity-roadmap.md) | plan | tui | implementation |
