@@ -68,6 +68,12 @@ mod tests {
     }
 
     #[test]
+    fn as_str_matches_wire_spelling() {
+        assert_eq!(SurfaceMode::Chat.as_str(), "chat");
+        assert_eq!(SurfaceMode::Agent.as_str(), "agent");
+    }
+
+    #[test]
     fn surface_mode_serializes_lowercase() {
         // Pin the wire spelling. The chat-shelf / agent-shelf partitioning
         // code reads it as a string; a rename to PascalCase here would
