@@ -6,6 +6,7 @@ Superseded brainstorms, one-off research dumps, and duplicate handoff notes. **N
 |------|----------------|
 | [handoff.md](handoff.md) | Historical 2026-07-08 duplicate. The prior living copy at `docs/project/handoff.md` was also archived on 2026-09-18 to [`../../archive/project-handoff-2026-07.md`](../../archive/project-handoff-2026-07.md). |
 | [meshify.md](meshify.md) | Superseded by [architecture/modularity.md](../../../spec/architecture/modularity.md) |
+| [per_model_system_prompts_in_code_harness.md](per_model_system_prompts_in_code_harness.md) | Undeveloped stub; never listed in [../README.md](../README.md). Related direction in [../../model-knob-profiles.md](../../model-knob-profiles.md) (draft); [../../harness-study-2026-08.md](../../harness-study-2026-08.md) treats each harness's native system prompt as part of what is measured. |
 | [doomloop_research.md](doomloop_research.md) | Research dump; behavior lives in executor |
 | [loop_architecture_reference_article.md](loop_architecture_reference_article.md) | External-style article draft |
 | [mcp_acp_protocol_difference_conversation.md](mcp_acp_protocol_difference_conversation.md) | Conversation log |
