@@ -335,6 +335,6 @@ tests: it says the remaining gap is very unlikely to be in request-level paramet
 
 ## Related docs
 
-- [`docs/project/handoff.md`](../../project/handoff.md) — live ops handoff (not the archived ideas/handoff snapshot).
+- [`project-handoff-2026-07.md`](project-handoff-2026-07.md) — historical July-2026 ops diary (formerly `docs/project/handoff.md`). For current direction use [`../../roadmap.md`](../../roadmap.md).
 - [`human-todo.md`](human-todo.md) — archived operator checklist (uncommitted work,
   PR review, etc.).

@@ -15,4 +15,4 @@ Detailed design specs and the architecture decision log. Prefer [architecture/](
 | [vault-concurrency-spec.md](vault-concurrency-spec.md) | Vault concurrency |
 | [vault-maintenance-spec.md](vault-maintenance-spec.md) | Vault maintenance / git |
 
-If a spec conflicts with code or with [architecture/](architecture/README.md), follow **code + architecture living docs**, and log the conflict in [design_questions.md](../project/design_questions.md).
+If a spec conflicts with code or with [architecture/](architecture/README.md), follow **code + architecture living docs**. The authority model in [reference/doc-authority.md](reference/doc-authority.md) is the conflict-resolution policy; historical open conflicts from the 2026-07 docs reorg are kept as record only in [../future-work/archive/project-design-questions-2026-07.md](../future-work/archive/project-design-questions-2026-07.md).

@@ -47,7 +47,7 @@ Coding is a **domain pack** on a domain-neutral kernel, not the product identity
 *good-enough-and-integrated* rather than a Claude Code / Kilo rival. The coding pack is home-spun
 Liberado (`Provider` + `Executor` + `ToolRuntime` + `coder-*`) — not a VTCode wrap. Surfaces (TUI,
 WebUI, CLI, PR factory) are session clients; they do not own the loop. Architecture:
-[`agentic-loops.md`](agentic-loops.md). Live ops status: [`../../project/handoff.md`](../../project/handoff.md).
+[`agentic-loops.md`](agentic-loops.md).
 
 **Operational data** (the runtime trace — Decision 12; conversation history — Decision 17)
 deliberately lives *outside* the vault as append-only JSONL, so high-volume writes don't pollute the
