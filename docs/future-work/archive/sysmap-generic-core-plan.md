@@ -18,7 +18,7 @@ core rule engine applies them (Phase 3); the scanner and assembly moved into `sy
 The active renderer is now an interactive 2D map. **Phase 6 (publish / port `sysmap-core` to
 crates.io or as a git dep for other projects) is deferred** — not on the Liberado product
 backlog and not pursued here. The current live map docs live with the code, in
-[`crates/sysmap/README.md`](../../crates/sysmap/README.md), with sibling crates `sysmap-core`,
+[`crates/sysmap/README.md`](../../../crates/sysmap/README.md), with sibling crates `sysmap-core`,
 `sysmap`, `sysmap-gui`, and `sysmap-cli`. This plan is retained as a record of the split.
 
 ## The principle: three sources, three homes
