@@ -108,13 +108,18 @@ fn detect_lang(path: &str) -> Option<(&'static str, Language)> {
     let ext = path.rsplit('.').next()?;
     match ext {
         "rs" => Some(("rust", tree_sitter_rust::LANGUAGE.into())),
+        #[cfg(feature = "lang-python")]
         "py" | "pyi" => Some(("python", tree_sitter_python::LANGUAGE.into())),
+        #[cfg(feature = "lang-typescript")]
         "ts" => Some((
             "typescript",
             tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
         )),
+        #[cfg(feature = "lang-typescript")]
         "tsx" => Some(("tsx", tree_sitter_typescript::LANGUAGE_TSX.into())),
+        #[cfg(feature = "lang-typescript")]
         "js" | "jsx" => Some(("tsx", tree_sitter_typescript::LANGUAGE_TSX.into())),
+        #[cfg(feature = "lang-go")]
         "go" => Some(("go", tree_sitter_go::LANGUAGE.into())),
         _ => None,
     }
@@ -1022,6 +1027,7 @@ fn main() {
         assert!(ref_names.contains("run"));
     }
 
+    #[cfg(feature = "lang-python")]
     #[test]
     fn test_extract_python_tags() {
         let source = r#"

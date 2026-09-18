@@ -5,7 +5,7 @@ authority: normative
 domain: build
 canonical_for: slim-build
 open_items: false
-last_verified: 2026-09-17
+last_verified: 2026-09-18
 ---
 
 # Slim build profile
@@ -76,3 +76,21 @@ cargo build --locked --workspace \
 The release binary stays `just build-release` regardless of profile — the
 `liberado` binary is built from `-p liberado-cli`, which never pulled in the
 gated crates to begin with.
+
+## Feature fences on the product graph
+
+Beyond excluding sidecars from `build-slim`, several heavy optional surfaces are
+Cargo-feature-fenced off the **default** `liberado-cli` / `liberado-server` graph:
+
+| Feature | Crate | What it pulls |
+|---|---|---|
+| `ci-unwraps` | `liberado-cli` | tree-sitter + tree-sitter-rust for `liberado ci unwraps` |
+| `coder-full` | `liberado-server` / `liberado-cli` | gix + go/python/typescript grammars via coder-tools |
+| `vector-local` | `liberado-server` / `liberado-cli` | optional `liberado-memory-store` + `turbovault-vector` (fastembed) for in-process guidance |
+
+`liberado-coder-runner` (`liberado-coder-run`) enables full coder tools by default.
+`liberado-memory-mcp` keeps `vector-local` enabled. `just ci` / `just unwrap-classification`
+pass `--features ci-unwraps`.
+
+This is a dependency boundary only — not a dispatcher / task-flow redesign.
+

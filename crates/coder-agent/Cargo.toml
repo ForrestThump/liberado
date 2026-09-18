@@ -14,7 +14,7 @@ chrono.workspace = true
 tracing.workspace = true
 liberado-coder-core.workspace = true
 liberado-coder-sandbox.workspace = true
-liberado-coder-tools.workspace = true
+liberado-coder-tools = { workspace = true }  # workspace pin: default-features = false
 liberado-common.workspace = true
 liberado-executor.workspace = true
 liberado-provider.workspace = true
@@ -23,6 +23,11 @@ serde = { workspace = true }
 serde_json.workspace = true
 sha2.workspace = true
 tokio.workspace = true
+
+[features]
+# Re-enable gix + multi-lang grammars for in-process / runner builds that need them.
+default = []
+full-tools = ["liberado-coder-tools/full"]
 
 [dev-dependencies]
 tempfile.workspace = true

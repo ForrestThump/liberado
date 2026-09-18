@@ -14,7 +14,7 @@ liberado-common = { workspace = true }
 liberado-config = { workspace = true }
 liberado-config-loader = { workspace = true }
 liberado-cost = { workspace = true }
-reqwest = { workspace = true }
+reqwest = { workspace = true, features = ["blocking"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tempfile = { workspace = true }

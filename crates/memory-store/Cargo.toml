@@ -8,6 +8,12 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 
+[features]
+# Kept for an explicit opt-in name; turbovault-vector's own default already enables `local`.
+# (Building turbovault-vector with default-features=false currently fails upstream without `local`.)
+default = ["vector-local"]
+vector-local = []
+
 [dependencies]
 liberado-common = { workspace = true }
 liberado-vault = { workspace = true }
@@ -25,5 +31,4 @@ tracing = { workspace = true }
 tempfile = { workspace = true }
 
 [package.metadata.liberado]
-# Layer role for the layer-rules test + crate-map generator (docs/architecture/contracts.md)
 role = "store"

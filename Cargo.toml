@@ -1,4 +1,4 @@
-# Liberado — Rust-native personal AI Life OS.
+# Liberado — Rust-native personal AI system.
 #
 # One Cargo workspace for the Liberado system (Decision 7). External dependencies
 # (turbovault, turbomcp) are NOT members — they are consumed as git+tag pins on the
@@ -37,7 +37,10 @@ tokio = { version = "1", features = ["full"] }
 async-trait = "0.1"
 tempfile = "3"
 flate2 = "1"
-reqwest = { version = "0.12", features = ["blocking", "json", "stream"] }
+# Workspace pin is 0.12 without `blocking`. Crates that need blocking (cli shepherd,
+# server pr-review publish, ops) enable `features = ["blocking"]` locally. turbomcp
+# still brings reqwest 0.13 into the graph — majors are not unified until that pin moves.
+reqwest = { version = "0.12", features = ["json", "stream"] }
 futures = "0.3"
 async-stream = "0.3"
 tokio-stream = "0.1"
@@ -95,7 +98,7 @@ liberado-memory-store = { path = "crates/memory-store" }
 liberado-coder-agent = { path = "crates/coder-agent" }
 liberado-coder-core = { path = "crates/coder-core" }
 liberado-coder-sandbox = { path = "crates/coder-sandbox" }
-liberado-coder-tools = { path = "crates/coder-tools" }
+liberado-coder-tools = { path = "crates/coder-tools", default-features = false }
 liberado-session = { path = "crates/session" }
 liberado-session-store = { path = "crates/session-store" }
 liberado-dispatch-pack = { path = "crates/dispatch-pack" }

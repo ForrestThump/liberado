@@ -12,6 +12,14 @@ repository.workspace = true
 name = "liberado"
 path = "src/main.rs"
 
+[features]
+default = []
+# Tree-sitter unwrap classifier for `liberado ci unwraps` / just unwrap-classification.
+ci-unwraps = ["dep:tree-sitter", "dep:tree-sitter-rust"]
+# Optional heavy surfaces (off the default product graph).
+coder-full = ["liberado-server/coder-full"]
+vector-local = ["liberado-server/vector-local"]
+
 [dependencies]
 fs4 = { workspace = true }
 liberado-common = { workspace = true }
@@ -24,7 +32,7 @@ liberado-ops = { workspace = true }
 chat-client-contract = { workspace = true }
 tokio = { workspace = true }
 tracing-subscriber = { workspace = true }
-reqwest = { workspace = true }
+reqwest = { workspace = true, features = ["blocking"] }
 futures = { workspace = true }
 serde_json = { workspace = true }
 serde = { workspace = true }
@@ -35,8 +43,8 @@ toml = { workspace = true }
 tempfile = { workspace = true }
 sha2 = { workspace = true }
 ulid = { workspace = true }
-tree-sitter = { workspace = true }
-tree-sitter-rust = { workspace = true }
+tree-sitter = { workspace = true, optional = true }
+tree-sitter-rust = { workspace = true, optional = true }
 
 [package.metadata.liberado]
 # Layer role for the layer-rules test + crate-map generator (docs/architecture/contracts.md)

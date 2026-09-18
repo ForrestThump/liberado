@@ -971,12 +971,10 @@ fn chat_dispatcher(
 }
 
 /// Build the dispatcher's optional procedural-memory guidance source (`liberado-dispatch-logic-spec.md`
-/// §2 steps 1/5), opting in only when `LIBERADO_DISPATCHER_GUIDANCE=1` is set. Off by default:
-/// building one means opening a vault-backed store and loading an embedding model in the daemon
-/// process itself — the same store `liberado-memory-mcp` (a separate subprocess) already exposes
-/// to agents, so an unopted-in deployment isn't paying for a second copy of that model just to run
-/// `liberado serve`. Any failure (bad vault path, model load error) degrades to `None` — this is
-/// an optimization, never something worth failing boot over.
+/// §2 steps 1/5), opting in only when `LIBERADO_DISPATCHER_GUIDANCE=1` is set **and** this crate
+/// was built with `--features vector-local`. Off by default so `liberado serve` does not link
+/// turbovault-vector/fastembed; `liberado-memory-mcp` remains the subprocess that carries that
+/// weight. Any failure degrades to `None`.
 async fn dispatcher_guidance_source(
     vault_path: &str,
 ) -> Option<Arc<dyn liberado_common::ToolGuidanceSource>> {
@@ -984,6 +982,26 @@ async fn dispatcher_guidance_source(
         return None;
     }
 
+    guidance_source_when_enabled(vault_path).await
+}
+
+#[cfg(not(feature = "vector-local"))]
+async fn guidance_source_when_enabled(
+    vault_path: &str,
+) -> Option<Arc<dyn liberado_common::ToolGuidanceSource>> {
+    let _ = vault_path;
+    warn!(
+        "dispatcher guidance: LIBERADO_DISPATCHER_GUIDANCE=1 but this liberado-server build \
+         lacks `--features vector-local` — continuing without in-process guidance \
+         (use liberado-memory-mcp, or rebuild with vector-local)"
+    );
+    None
+}
+
+#[cfg(feature = "vector-local")]
+async fn guidance_source_when_enabled(
+    vault_path: &str,
+) -> Option<Arc<dyn liberado_common::ToolGuidanceSource>> {
     let vault = open_guidance_vault(vault_path).await?;
     let embedder = load_guidance_embedder()?;
 
@@ -999,9 +1017,7 @@ async fn dispatcher_guidance_source(
     }
 }
 
-/// Open the vault backing the dispatcher's procedural memory. Any failure (bad vault path, model
-/// load error) degrades to `None` — this is an optimization, never something worth failing boot
-/// over.
+#[cfg(feature = "vector-local")]
 async fn open_guidance_vault(vault_path: &str) -> Option<liberado_vault::Vault> {
     match liberado_vault::Vault::open("dispatcher-guidance", vault_path).await {
         Ok(v) => Some(v),
@@ -1012,10 +1028,7 @@ async fn open_guidance_vault(vault_path: &str) -> Option<liberado_vault::Vault> 
     }
 }
 
-/// Load the embedding model for procedural-memory retrieval (`LIBERADO_MEMORY_MODEL`, defaulting
-/// to bge-small-en-v1.5). A failed load degrades to `None` — the same store
-/// `liberado-memory-mcp` (a separate subprocess) already exposes to agents, so an unopted-in
-/// deployment isn't paying for a second copy of that model just to run `liberado serve`.
+#[cfg(feature = "vector-local")]
 fn load_guidance_embedder() -> Option<Arc<dyn turbovault_vector::EmbeddingEngine>> {
     let model =
         std::env::var("LIBERADO_MEMORY_MODEL").unwrap_or_else(|_| "bge-small-en-v1.5".to_string());
@@ -1028,7 +1041,7 @@ fn load_guidance_embedder() -> Option<Arc<dyn turbovault_vector::EmbeddingEngine
     }
 }
 
-/// Open the procedural-memory store over an already-open vault and embedder.
+#[cfg(feature = "vector-local")]
 async fn open_procedural_memory(
     vault: liberado_vault::Vault,
     embedder: Arc<dyn turbovault_vector::EmbeddingEngine>,
