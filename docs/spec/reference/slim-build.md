@@ -94,3 +94,24 @@ pass `--features ci-unwraps`.
 
 This is a dependency boundary only — not a dispatcher / task-flow redesign.
 
+
+## Feature-unification caveat
+
+The fences above hold for **package-scoped** product builds:
+
+- `cargo build -p liberado-cli` / `-p liberado-server`
+- Docker release / `just build-release` (builds `-p liberado-cli`)
+
+They do **not** hold for a single Cargo resolve that also builds
+`liberado-coder-runner` or `liberado-acp-bridge`. Those crates enable
+`liberado-coder-tools` `full` / `full-tools`, and Cargo **unions** features
+across the workspace resolve — so one shared `coder-tools` artifact can be
+built with `git` + `multi-lang` and linked by every dependent in that resolve
+(including paths that look like `cli → server → coder-agent`).
+
+Verify the slim product graph with `-p liberado-cli` (or `-p liberado-server`),
+not with bare `cargo tree -i gix` / `cargo build --workspace`. Splitting
+coder-tools into separate crates to defeat feature unification is out of scope
+here.
+
+

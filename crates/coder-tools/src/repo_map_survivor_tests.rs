@@ -258,6 +258,7 @@ fn extract_tags_enforces_name_length_bounds_and_one_based_lines() {
 
 // ── language detection and per-language queries ─────────────────────────────
 
+#[cfg(feature = "lang-typescript")]
 #[test]
 fn detect_lang_covers_ts_variants() {
     assert!(detect_lang("src/app.ts").is_some(), ".ts detected");
@@ -266,6 +267,7 @@ fn detect_lang_covers_ts_variants() {
 }
 
 /// The TypeScript and Go query sources stay loadable and productive.
+#[cfg(all(feature = "lang-typescript", feature = "lang-go"))]
 #[test]
 fn extract_tags_supports_typescript_and_go() {
     let ts_source = "function hello(): void {\n  world();\n}\nfunction world(): void {}\n";
@@ -297,6 +299,32 @@ fn extract_tags_supports_typescript_and_go() {
         go_tags.iter().any(|t| !t.is_def && t.name == "helper"),
         "helper call captured as reference: {:?}",
         go_tags
+    );
+}
+
+#[cfg(not(feature = "lang-typescript"))]
+#[test]
+fn detect_lang_ts_variants_unavailable_without_feature() {
+    assert!(
+        detect_lang("src/app.ts").is_none(),
+        ".ts must be None without lang-typescript"
+    );
+    assert!(
+        detect_lang("src/app.js").is_none(),
+        ".js must be None without lang-typescript"
+    );
+    assert!(
+        detect_lang("src/app.jsx").is_none(),
+        ".jsx must be None without lang-typescript"
+    );
+}
+
+#[cfg(not(feature = "lang-go"))]
+#[test]
+fn detect_lang_go_unavailable_without_feature() {
+    assert!(
+        detect_lang("m.go").is_none(),
+        ".go must be None without lang-go"
     );
 }
 

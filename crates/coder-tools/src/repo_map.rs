@@ -965,18 +965,21 @@ mod tests {
         assert_eq!(name, "rust");
     }
 
+    #[cfg(feature = "lang-python")]
     #[test]
     fn test_detect_lang_python() {
         let (name, _lang) = detect_lang("app/views.py").unwrap();
         assert_eq!(name, "python");
     }
 
+    #[cfg(feature = "lang-typescript")]
     #[test]
     fn test_detect_lang_typescript() {
         let (name, _lang) = detect_lang("src/App.tsx").unwrap();
         assert_eq!(name, "tsx");
     }
 
+    #[cfg(feature = "lang-go")]
     #[test]
     fn test_detect_lang_go() {
         let (name, _lang) = detect_lang("pkg/handler.go").unwrap();
@@ -988,6 +991,25 @@ mod tests {
         // Use a non-docs/ path: docs_meta check-stale-rs scans crates for
         // docs/**/*.md strings and requires the target to exist with exact case.
         assert!(detect_lang("notes/readme.md").is_none());
+    }
+
+    #[cfg(not(feature = "lang-python"))]
+    #[test]
+    fn test_detect_lang_python_unavailable_without_feature() {
+        assert!(detect_lang("app/views.py").is_none());
+    }
+
+    #[cfg(not(feature = "lang-typescript"))]
+    #[test]
+    fn test_detect_lang_typescript_unavailable_without_feature() {
+        assert!(detect_lang("src/App.tsx").is_none());
+        assert!(detect_lang("src/app.ts").is_none());
+    }
+
+    #[cfg(not(feature = "lang-go"))]
+    #[test]
+    fn test_detect_lang_go_unavailable_without_feature() {
+        assert!(detect_lang("pkg/handler.go").is_none());
     }
 
     #[test]

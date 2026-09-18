@@ -31,7 +31,8 @@ mod imp {
             exit_code: 1,
             message: format!(
                 "git_{op} unavailable: liberado-coder-tools built without the `git` feature \
-                 (build with --features git, or use liberado-coder-run which enables full tools)"
+                 (enable product feature `coder-full` on liberado-cli / liberado-server, \
+                 use liberado-coder-run / liberado-coder-runner, or build with --features git)"
             ),
         }
     }
@@ -92,6 +93,48 @@ mod imp {
 
     pub fn merge(_root: &Path, _branch: &str, _ff_only: bool) -> Result<String, GitError> {
         Err(unavailable("merge"))
+    }
+
+    #[cfg(test)]
+    mod stub_tests {
+        use super::*;
+        use std::path::Path;
+
+        #[test]
+        fn status_mentions_coder_full_and_runner() {
+            let err = status(Path::new(".")).unwrap_err();
+            assert!(
+                err.message.contains("coder-full"),
+                "stub should mention product feature coder-full: {}",
+                err.message
+            );
+            assert!(
+                err.message.contains("liberado-coder-run"),
+                "stub should mention liberado-coder-run: {}",
+                err.message
+            );
+            assert!(
+                err.message.contains("unavailable"),
+                "stub should say unavailable: {}",
+                err.message
+            );
+        }
+
+        #[test]
+        fn diff_and_commit_stubs_share_guidance() {
+            for (op, res) in [
+                ("diff", diff_name_only(Path::new(".")).unwrap_err()),
+                ("commit", commit(Path::new("."), "msg", None).unwrap_err()),
+                ("branch", branch_create(Path::new("."), "x").unwrap_err()),
+            ] {
+                assert!(
+                    res.message.contains("coder-full")
+                        && res.message.contains("liberado-coder-run"),
+                    "{op} stub missing product guidance: {}",
+                    res.message
+                );
+            }
+        }
     }
 }
 
