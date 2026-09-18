@@ -70,7 +70,7 @@ All run in CI — no network, no API key, no real vault.
 
 `budget_failed_report` ignores `exhausted_name` (executor/src/lib.rs:1079). Always reports
 "turns" even when wall-clock or token budget actually exhausted. Documented at
-`docs/coverage-gaps.md:95-146`.
+[coverage-gaps.md](coverage-gaps.md) §"Real Bugs Found During Coverage Analysis".
 
 ## Phase 1: Primary Mutation Hardening (8 crates)
 
@@ -198,7 +198,7 @@ cannot be distinguished with valid filename inputs. The sixth was not in the clo
 near-identical code differing only by variant name (`ExecuteTool` / `ExecuteMcp`).
 Consolidated via a private `matching_names` helper.
 
-### Test-Code Dedup Analysis (see `docs/coverage-gaps.md`)
+### Test-Code Dedup Analysis (see [coverage-gaps.md](coverage-gaps.md))
 
 `cargo dupes` found 244 exact-duplicate groups across the workspace. The most impactful
 test-code duplicates are private helpers inside test modules (`NoopRuntime`, `vault_descriptor`,
@@ -232,7 +232,7 @@ misdiagnose the failure.
 ```rust
 // test written during this session, currently #[ignore]
 #[tokio::test]
-#[ignore = "FrozenClock limitation + budget_failed_report bug (see docs/coverage-gaps.md)"]
+#[ignore = "FrozenClock limitation + budget_failed_report bug (see validation/coverage-gaps.md)"]
 async fn wall_clock_limit_exhausts_at_exact_non_zero_boundary() { ... }
 ```
 
