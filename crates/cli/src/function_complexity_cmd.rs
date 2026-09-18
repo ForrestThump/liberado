@@ -413,4 +413,28 @@ reviewed_on = "2026-08-01"
         let err = super::load_config(dir.path()).unwrap_err().to_string();
         assert!(err.contains("duplicate"), "{err}");
     }
+
+    // ── write_baseline: copy current report into the baseline path ───
+
+    #[test]
+    fn write_baseline_copies_current_to_baseline_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let current = dir.path().join(super::CURRENT_FILE);
+        std::fs::create_dir_all(current.parent().unwrap()).unwrap();
+        let body = br#"{"version":"","entries":[]}"#;
+        std::fs::write(&current, body).unwrap();
+        assert!(
+            !dir.path().join("code-metrics").exists(),
+            "write_baseline should create the parent directory"
+        );
+
+        super::write_baseline(dir.path()).unwrap();
+
+        let baseline = dir.path().join(super::BASELINE_FILE);
+        assert!(
+            baseline.is_file(),
+            "baseline should be written: {baseline:?}"
+        );
+        assert_eq!(std::fs::read(&baseline).unwrap(), body);
+    }
 }

@@ -9,11 +9,16 @@ use std::path::Path;
 pub(super) fn write(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
     let current = current_report(root)?;
     let ratcheted = report_to_write(root, current)?;
+    persist_baseline(root, &ratcheted)?;
+    eprintln!("[module health] ratcheted {BASELINE_FILE}");
+    Ok(())
+}
+
+fn persist_baseline(root: &Path, report: &Report) -> Result<(), Box<dyn std::error::Error>> {
     if let Some(parent) = std::path::Path::new(super::BASELINE_FILE).parent() {
         std::fs::create_dir_all(root.join(parent))?;
     }
-    write_report(&root.join(BASELINE_FILE), &ratcheted)?;
-    eprintln!("[module health] ratcheted {BASELINE_FILE}");
+    write_report(&root.join(BASELINE_FILE), report)?;
     Ok(())
 }
 
