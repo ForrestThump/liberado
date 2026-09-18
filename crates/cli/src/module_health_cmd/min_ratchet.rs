@@ -74,8 +74,35 @@ pub(super) fn ratcheted_report(baseline: &Report, current: &Report) -> Report {
 
 #[cfg(test)]
 mod tests {
-    use super::{FileMetrics, Report, ratcheted_report};
+    use super::{FileMetrics, Report, persist_baseline, ratcheted_report};
     use std::collections::BTreeMap;
+
+    #[test]
+    fn persist_baseline_creates_parent_and_writes_report() {
+        let dir = tempfile::tempdir().unwrap();
+        let report = BTreeMap::from([(
+            "crates/a/src/lib.rs".into(),
+            FileMetrics {
+                ploc: 10,
+                lloc: 8,
+                functions: 2,
+                cyclomatic: 3,
+            },
+        )]);
+        assert!(
+            !dir.path().join("code-metrics").exists(),
+            "persist_baseline should create the parent directory"
+        );
+        persist_baseline(dir.path(), &report).unwrap();
+        let baseline = dir.path().join(super::BASELINE_FILE);
+        assert!(
+            baseline.is_file(),
+            "baseline should be written: {baseline:?}"
+        );
+        let saved: Report = serde_json::from_slice(&std::fs::read(&baseline).unwrap()).unwrap();
+        assert_eq!(saved["crates/a/src/lib.rs"].ploc, 10);
+        assert_eq!(saved["crates/a/src/lib.rs"].cyclomatic, 3);
+    }
 
     #[test]
     fn ratchet_does_not_raise_existing_file_metrics() {

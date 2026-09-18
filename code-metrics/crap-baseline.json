@@ -3128,7 +3128,7 @@
     {
       "file": "crates/cli/src/ci_cmd/crap_baseline_ratchet.rs",
       "function": "closest_matching_crap_entry",
-      "line": 89,
+      "line": 92,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -3137,7 +3137,7 @@
     {
       "file": "crates/cli/src/ci_cmd/crap_baseline_ratchet.rs",
       "function": "crap_metric",
-      "line": 113,
+      "line": 116,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -3146,7 +3146,7 @@
     {
       "file": "crates/cli/src/ci_cmd/crap_baseline_ratchet.rs",
       "function": "keep_worse_existing_crap_entries",
-      "line": 61,
+      "line": 64,
       "cyclomatic": 10.0,
       "coverage": 100.0,
       "crap": 10.0,
@@ -3164,7 +3164,7 @@
     {
       "file": "crates/cli/src/ci_cmd/crap_baseline_ratchet.rs",
       "function": "ratcheted_crap_report",
-      "line": 39,
+      "line": 42,
       "cyclomatic": 5.0,
       "coverage": 90.0,
       "crap": 5.025,
@@ -3173,7 +3173,7 @@
     {
       "file": "crates/cli/src/ci_cmd/crap_baseline_ratchet.rs",
       "function": "same_crap_function",
-      "line": 107,
+      "line": 110,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -3182,7 +3182,7 @@
     {
       "file": "crates/cli/src/ci_cmd/crap_baseline_ratchet.rs",
       "function": "write_after_success",
-      "line": 120,
+      "line": 123,
       "cyclomatic": 2.0,
       "coverage": 85.71428571428571,
       "crap": 2.011661807580175,
@@ -3200,7 +3200,7 @@
     {
       "file": "crates/cli/src/ci_cmd/crap_baseline_ratchet.rs",
       "function": "write_crap_report",
-      "line": 50,
+      "line": 53,
       "cyclomatic": 3.0,
       "coverage": 100.0,
       "crap": 3.0,
@@ -4811,7 +4811,7 @@
     {
       "file": "crates/cli/src/function_complexity_cmd.rs",
       "function": "compare",
-      "line": 159,
+      "line": 167,
       "cyclomatic": 5.0,
       "coverage": 100.0,
       "crap": 5.0,
@@ -4820,7 +4820,7 @@
     {
       "file": "crates/cli/src/function_complexity_cmd.rs",
       "function": "generate",
-      "line": 115,
+      "line": 123,
       "cyclomatic": 5.0,
       "coverage": 0.0,
       "crap": 30.0,
@@ -4829,7 +4829,7 @@
     {
       "file": "crates/cli/src/function_complexity_cmd.rs",
       "function": "indexed_complexities",
-      "line": 210,
+      "line": 218,
       "cyclomatic": 2.0,
       "coverage": 100.0,
       "crap": 2.0,
@@ -4838,7 +4838,7 @@
     {
       "file": "crates/cli/src/function_complexity_cmd.rs",
       "function": "load_config",
-      "line": 80,
+      "line": 88,
       "cyclomatic": 10.0,
       "coverage": 100.0,
       "crap": 10.0,
@@ -4865,10 +4865,19 @@
     {
       "file": "crates/cli/src/function_complexity_cmd.rs",
       "function": "require_tool",
-      "line": 142,
+      "line": 150,
       "cyclomatic": 3.0,
       "coverage": 0.0,
       "crap": 12.0,
+      "crate": "liberado-cli"
+    },
+    {
+      "file": "crates/cli/src/function_complexity_cmd.rs",
+      "function": "write_baseline",
+      "line": 80,
+      "cyclomatic": 4.0,
+      "coverage": 85.71428571428571,
+      "crap": 4.0466472303206995,
       "crate": "liberado-cli"
     },
     {
@@ -5119,8 +5128,8 @@
       "function": "write_report",
       "line": 261,
       "cyclomatic": 5.0,
-      "coverage": 0.0,
-      "crap": 30.0,
+      "coverage": 88.88888888888889,
+      "crap": 5.034293552812072,
       "crate": "liberado-cli"
     },
     {
@@ -5171,15 +5180,6 @@
     {
       "file": "crates/cli/src/module_health_cmd/min_ratchet.rs",
       "function": "current_report",
-      "line": 28,
-      "cyclomatic": 2.0,
-      "coverage": 0.0,
-      "crap": 6.0,
-      "crate": "liberado-cli"
-    },
-    {
-      "file": "crates/cli/src/module_health_cmd/min_ratchet.rs",
-      "function": "existing_report",
       "line": 36,
       "cyclomatic": 2.0,
       "coverage": 0.0,
@@ -5188,8 +5188,17 @@
     },
     {
       "file": "crates/cli/src/module_health_cmd/min_ratchet.rs",
+      "function": "existing_report",
+      "line": 44,
+      "cyclomatic": 2.0,
+      "coverage": 0.0,
+      "crap": 6.0,
+      "crate": "liberado-cli"
+    },
+    {
+      "file": "crates/cli/src/module_health_cmd/min_ratchet.rs",
       "function": "initial_report",
-      "line": 41,
+      "line": 49,
       "cyclomatic": 4.0,
       "coverage": 0.0,
       "crap": 20.0,
@@ -5197,8 +5206,17 @@
     },
     {
       "file": "crates/cli/src/module_health_cmd/min_ratchet.rs",
+      "function": "persist_baseline",
+      "line": 17,
+      "cyclomatic": 4.0,
+      "coverage": 85.71428571428571,
+      "crap": 4.0466472303206995,
+      "crate": "liberado-cli"
+    },
+    {
+      "file": "crates/cli/src/module_health_cmd/min_ratchet.rs",
       "function": "ratcheted_report",
-      "line": 49,
+      "line": 57,
       "cyclomatic": 1.0,
       "coverage": 93.33333333333331,
       "crap": 1.0002962962962962,
@@ -5207,7 +5225,7 @@
     {
       "file": "crates/cli/src/module_health_cmd/min_ratchet.rs",
       "function": "report_to_write",
-      "line": 17,
+      "line": 25,
       "cyclomatic": 3.0,
       "coverage": 0.0,
       "crap": 12.0,
@@ -5477,10 +5495,19 @@
     {
       "file": "crates/cli/src/mutants_cmd_ledger.rs",
       "function": "dedupe_campaigns",
-      "line": 71,
+      "line": 79,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
+      "crate": "liberado-cli"
+    },
+    {
+      "file": "crates/cli/src/mutants_cmd_ledger.rs",
+      "function": "ensure_ledger_dir",
+      "line": 39,
+      "cyclomatic": 3.0,
+      "coverage": 83.33333333333334,
+      "crap": 3.0416666666666665,
       "crate": "liberado-cli"
     },
     {
@@ -5495,7 +5522,7 @@
     {
       "file": "crates/cli/src/mutants_cmd_ledger.rs",
       "function": "load_ledger",
-      "line": 50,
+      "line": 58,
       "cyclomatic": 5.0,
       "coverage": 92.85714285714286,
       "crap": 5.009110787172012,
@@ -5504,7 +5531,7 @@
     {
       "file": "crates/cli/src/mutants_cmd_ledger.rs",
       "function": "save_ledger",
-      "line": 82,
+      "line": 90,
       "cyclomatic": 3.0,
       "coverage": 100.0,
       "crap": 3.0,
@@ -25970,7 +25997,7 @@
     {
       "file": "crates/heuristics-tuner/src/coder_scoring.rs",
       "function": "CoderFitness::failing",
-      "line": 150,
+      "line": 110,
       "cyclomatic": 1.0,
       "coverage": 0.0,
       "crap": 2.0,
@@ -25978,26 +26005,8 @@
     },
     {
       "file": "crates/heuristics-tuner/src/coder_scoring.rs",
-      "function": "CoderScoredScenario::any_unsafe",
-      "line": 61,
-      "cyclomatic": 1.0,
-      "coverage": 100.0,
-      "crap": 1.0,
-      "crate": "liberado-heuristics-tuner"
-    },
-    {
-      "file": "crates/heuristics-tuner/src/coder_scoring.rs",
-      "function": "CoderScoredScenario::diagnostic_breakdown",
-      "line": 109,
-      "cyclomatic": 2.0,
-      "coverage": 0.0,
-      "crap": 6.0,
-      "crate": "liberado-heuristics-tuner"
-    },
-    {
-      "file": "crates/heuristics-tuner/src/coder_scoring.rs",
       "function": "CoderScoredScenario::nonempty_diff_rate",
-      "line": 77,
+      "line": 85,
       "cyclomatic": 2.0,
       "coverage": 90.9090909090909,
       "crap": 2.0030052592036065,
@@ -26006,7 +26015,7 @@
     {
       "file": "crates/heuristics-tuner/src/coder_scoring.rs",
       "function": "CoderScoredScenario::outcome_match_rate",
-      "line": 65,
+      "line": 73,
       "cyclomatic": 2.0,
       "coverage": 90.9090909090909,
       "crap": 2.0030052592036065,
@@ -26014,26 +26023,35 @@
     },
     {
       "file": "crates/heuristics-tuner/src/coder_scoring.rs",
-      "function": "CoderScoredScenario::pass_rate",
-      "line": 53,
-      "cyclomatic": 2.0,
-      "coverage": 85.71428571428571,
-      "crap": 2.011661807580175,
+      "function": "CoderTrialOutcome::diagnostic_dimensions",
+      "line": 59,
+      "cyclomatic": 1.0,
+      "coverage": 0.0,
+      "crap": 2.0,
       "crate": "liberado-heuristics-tuner"
     },
     {
       "file": "crates/heuristics-tuner/src/coder_scoring.rs",
-      "function": "CoderScoredScenario::trial_breakdown",
-      "line": 89,
-      "cyclomatic": 5.0,
-      "coverage": 93.75,
-      "crap": 5.006103515625,
+      "function": "CoderTrialOutcome::pass",
+      "line": 50,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "liberado-heuristics-tuner"
+    },
+    {
+      "file": "crates/heuristics-tuner/src/coder_scoring.rs",
+      "function": "CoderTrialOutcome::unsafe_flag",
+      "line": 53,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
       "crate": "liberado-heuristics-tuner"
     },
     {
       "file": "crates/heuristics-tuner/src/coder_scoring.rs",
       "function": "aggregate",
-      "line": 158,
+      "line": 115,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -26042,7 +26060,7 @@
     {
       "file": "crates/heuristics-tuner/src/coder_scoring.rs",
       "function": "all_content_contains_present",
-      "line": 290,
+      "line": 243,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -26051,7 +26069,7 @@
     {
       "file": "crates/heuristics-tuner/src/coder_scoring.rs",
       "function": "all_must_change_present",
-      "line": 278,
+      "line": 231,
       "cyclomatic": 1.0,
       "coverage": 90.0,
       "crap": 1.001,
@@ -26060,7 +26078,7 @@
     {
       "file": "crates/heuristics-tuner/src/coder_scoring.rs",
       "function": "attempts_for",
-      "line": 259,
+      "line": 212,
       "cyclomatic": 2.0,
       "coverage": 80.0,
       "crap": 2.032,
@@ -26069,7 +26087,7 @@
     {
       "file": "crates/heuristics-tuner/src/coder_scoring.rs",
       "function": "build_request",
-      "line": 401,
+      "line": 354,
       "cyclomatic": 2.0,
       "coverage": 98.33333333333331,
       "crap": 2.000018518518518,
@@ -26078,7 +26096,7 @@
     {
       "file": "crates/heuristics-tuner/src/coder_scoring.rs",
       "function": "init_failure_trial",
-      "line": 246,
+      "line": 199,
       "cyclomatic": 1.0,
       "coverage": 0.0,
       "crap": 2.0,
@@ -26087,7 +26105,7 @@
     {
       "file": "crates/heuristics-tuner/src/coder_scoring.rs",
       "function": "init_repo",
-      "line": 475,
+      "line": 428,
       "cyclomatic": 12.0,
       "coverage": 93.75,
       "crap": 12.03515625,
@@ -26096,7 +26114,7 @@
     {
       "file": "crates/heuristics-tuner/src/coder_scoring.rs",
       "function": "passed_for",
-      "line": 324,
+      "line": 277,
       "cyclomatic": 10.0,
       "coverage": 100.0,
       "crap": 10.0,
@@ -26105,7 +26123,7 @@
     {
       "file": "crates/heuristics-tuner/src/coder_scoring.rs",
       "function": "rename_stress_violated",
-      "line": 303,
+      "line": 256,
       "cyclomatic": 3.0,
       "coverage": 100.0,
       "crap": 3.0,
@@ -26114,7 +26132,7 @@
     {
       "file": "crates/heuristics-tuner/src/coder_scoring.rs",
       "function": "repair_stress_violated",
-      "line": 313,
+      "line": 266,
       "cyclomatic": 2.0,
       "coverage": 100.0,
       "crap": 2.0,
@@ -26123,7 +26141,7 @@
     {
       "file": "crates/heuristics-tuner/src/coder_scoring.rs",
       "function": "run",
-      "line": 495,
+      "line": 448,
       "cyclomatic": 3.0,
       "coverage": 90.0,
       "crap": 3.009,
@@ -26132,7 +26150,7 @@
     {
       "file": "crates/heuristics-tuner/src/coder_scoring.rs",
       "function": "score_coder_candidate",
-      "line": 190,
+      "line": 143,
       "cyclomatic": 7.0,
       "coverage": 95.55555555555556,
       "crap": 7.004301783264746,
@@ -26141,7 +26159,7 @@
     {
       "file": "crates/heuristics-tuner/src/coder_scoring.rs",
       "function": "score_one",
-      "line": 341,
+      "line": 294,
       "cyclomatic": 11.0,
       "coverage": 90.3846153846154,
       "crap": 11.10756855939918,
@@ -26150,7 +26168,7 @@
     {
       "file": "crates/heuristics-tuner/src/coder_scoring.rs",
       "function": "touches_must_not_change",
-      "line": 268,
+      "line": 221,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -26616,54 +26634,108 @@
       "crate": "liberado-heuristics-tuner"
     },
     {
-      "file": "crates/heuristics-tuner/src/scoring.rs",
-      "function": "CandidateFitness::failing",
-      "line": 125,
-      "cyclomatic": 1.0,
-      "coverage": 100.0,
-      "crap": 1.0,
-      "crate": "liberado-heuristics-tuner"
-    },
-    {
-      "file": "crates/heuristics-tuner/src/scoring.rs",
+      "file": "crates/heuristics-tuner/src/scored_scenario.rs",
       "function": "ScoredScenario::any_unsafe",
-      "line": 60,
+      "line": 79,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
       "crate": "liberado-heuristics-tuner"
     },
     {
-      "file": "crates/heuristics-tuner/src/scoring.rs",
+      "file": "crates/heuristics-tuner/src/scored_scenario.rs",
+      "function": "ScoredScenario::diagnostic_breakdown",
+      "line": 120,
+      "cyclomatic": 2.0,
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "liberado-heuristics-tuner"
+    },
+    {
+      "file": "crates/heuristics-tuner/src/scored_scenario.rs",
+      "function": "ScoredScenario::is_failing",
+      "line": 85,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "liberado-heuristics-tuner"
+    },
+    {
+      "file": "crates/heuristics-tuner/src/scored_scenario.rs",
       "function": "ScoredScenario::pass_rate",
-      "line": 45,
+      "line": 68,
       "cyclomatic": 2.0,
       "coverage": 100.0,
       "crap": 2.0,
       "crate": "liberado-heuristics-tuner"
     },
     {
-      "file": "crates/heuristics-tuner/src/scoring.rs",
-      "function": "ScoredScenario::safe_default_rate",
-      "line": 67,
-      "cyclomatic": 2.0,
-      "coverage": 100.0,
-      "crap": 2.0,
-      "crate": "liberado-heuristics-tuner"
-    },
-    {
-      "file": "crates/heuristics-tuner/src/scoring.rs",
+      "file": "crates/heuristics-tuner/src/scored_scenario.rs",
       "function": "ScoredScenario::trial_breakdown",
-      "line": 82,
+      "line": 92,
       "cyclomatic": 5.0,
       "coverage": 100.0,
       "crap": 5.0,
       "crate": "liberado-heuristics-tuner"
     },
     {
+      "file": "crates/heuristics-tuner/src/scored_scenario.rs",
+      "function": "count_any_unsafe",
+      "line": 162,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "liberado-heuristics-tuner"
+    },
+    {
+      "file": "crates/heuristics-tuner/src/scored_scenario.rs",
+      "function": "mean_pass_rate",
+      "line": 155,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "liberado-heuristics-tuner"
+    },
+    {
+      "file": "crates/heuristics-tuner/src/scoring.rs",
+      "function": "CandidateFitness::failing",
+      "line": 87,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "liberado-heuristics-tuner"
+    },
+    {
+      "file": "crates/heuristics-tuner/src/scoring.rs",
+      "function": "ScenarioOutcome::pass",
+      "line": 42,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "liberado-heuristics-tuner"
+    },
+    {
+      "file": "crates/heuristics-tuner/src/scoring.rs",
+      "function": "ScenarioOutcome::unsafe_flag",
+      "line": 45,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "liberado-heuristics-tuner"
+    },
+    {
+      "file": "crates/heuristics-tuner/src/scoring.rs",
+      "function": "ScoredScenario::safe_default_rate",
+      "line": 54,
+      "cyclomatic": 2.0,
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "liberado-heuristics-tuner"
+    },
+    {
       "file": "crates/heuristics-tuner/src/scoring.rs",
       "function": "aggregate",
-      "line": 135,
+      "line": 94,
       "cyclomatic": 2.0,
       "coverage": 100.0,
       "crap": 2.0,
@@ -26672,7 +26744,7 @@
     {
       "file": "crates/heuristics-tuner/src/scoring.rs",
       "function": "scenario_subset",
-      "line": 163,
+      "line": 121,
       "cyclomatic": 3.0,
       "coverage": 100.0,
       "crap": 3.0,
@@ -26681,7 +26753,7 @@
     {
       "file": "crates/heuristics-tuner/src/scoring.rs",
       "function": "schedule_scenario_trials",
-      "line": 214,
+      "line": 172,
       "cyclomatic": 4.0,
       "coverage": 0.0,
       "crap": 20.0,
@@ -26690,7 +26762,7 @@
     {
       "file": "crates/heuristics-tuner/src/scoring.rs",
       "function": "score_candidate",
-      "line": 176,
+      "line": 134,
       "cyclomatic": 4.0,
       "coverage": 0.0,
       "crap": 20.0,
@@ -26699,7 +26771,7 @@
     {
       "file": "crates/heuristics-tuner/src/scoring.rs",
       "function": "score_one",
-      "line": 242,
+      "line": 200,
       "cyclomatic": 2.0,
       "coverage": 0.0,
       "crap": 6.0,
@@ -26816,7 +26888,7 @@
     {
       "file": "crates/heuristics-tuner/src/tool_loop_scoring.rs",
       "function": "ScriptedToolRuntime::catalog",
-      "line": 56,
+      "line": 65,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -26825,7 +26897,7 @@
     {
       "file": "crates/heuristics-tuner/src/tool_loop_scoring.rs",
       "function": "ScriptedToolRuntime::invoke",
-      "line": 60,
+      "line": 69,
       "cyclomatic": 1.0,
       "coverage": 66.66666666666666,
       "crap": 1.0370370370370372,
@@ -26834,7 +26906,7 @@
     {
       "file": "crates/heuristics-tuner/src/tool_loop_scoring.rs",
       "function": "ScriptedToolRuntime::invoked",
-      "line": 49,
+      "line": 58,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -26843,7 +26915,7 @@
     {
       "file": "crates/heuristics-tuner/src/tool_loop_scoring.rs",
       "function": "ScriptedToolRuntime::new",
-      "line": 31,
+      "line": 40,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -26852,7 +26924,7 @@
     {
       "file": "crates/heuristics-tuner/src/tool_loop_scoring.rs",
       "function": "ToolLoopFitness::failing",
-      "line": 208,
+      "line": 151,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -26860,8 +26932,8 @@
     },
     {
       "file": "crates/heuristics-tuner/src/tool_loop_scoring.rs",
-      "function": "ToolLoopScoredScenario::any_unsafe",
-      "line": 119,
+      "function": "ToolLoopOutcome::diagnostic_dimensions",
+      "line": 104,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -26869,44 +26941,35 @@
     },
     {
       "file": "crates/heuristics-tuner/src/tool_loop_scoring.rs",
-      "function": "ToolLoopScoredScenario::diagnostic_breakdown",
-      "line": 168,
+      "function": "ToolLoopOutcome::pass",
+      "line": 95,
       "cyclomatic": 2.0,
       "coverage": 100.0,
       "crap": 2.0,
+      "crate": "liberado-heuristics-tuner"
+    },
+    {
+      "file": "crates/heuristics-tuner/src/tool_loop_scoring.rs",
+      "function": "ToolLoopOutcome::unsafe_flag",
+      "line": 98,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
       "crate": "liberado-heuristics-tuner"
     },
     {
       "file": "crates/heuristics-tuner/src/tool_loop_scoring.rs",
       "function": "ToolLoopScoredScenario::outcome_match_rate",
-      "line": 126,
+      "line": 121,
       "cyclomatic": 2.0,
       "coverage": 100.0,
       "crap": 2.0,
-      "crate": "liberado-heuristics-tuner"
-    },
-    {
-      "file": "crates/heuristics-tuner/src/tool_loop_scoring.rs",
-      "function": "ToolLoopScoredScenario::pass_rate",
-      "line": 106,
-      "cyclomatic": 2.0,
-      "coverage": 100.0,
-      "crap": 2.0,
-      "crate": "liberado-heuristics-tuner"
-    },
-    {
-      "file": "crates/heuristics-tuner/src/tool_loop_scoring.rs",
-      "function": "ToolLoopScoredScenario::trial_breakdown",
-      "line": 139,
-      "cyclomatic": 7.0,
-      "coverage": 94.44444444444444,
-      "crap": 7.008401920438957,
       "crate": "liberado-heuristics-tuner"
     },
     {
       "file": "crates/heuristics-tuner/src/tool_loop_scoring.rs",
       "function": "aggregate",
-      "line": 218,
+      "line": 158,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -26915,7 +26978,7 @@
     {
       "file": "crates/heuristics-tuner/src/tool_loop_scoring.rs",
       "function": "scenario_subset",
-      "line": 240,
+      "line": 176,
       "cyclomatic": 3.0,
       "coverage": 83.33333333333334,
       "crap": 3.0416666666666665,
@@ -26924,7 +26987,7 @@
     {
       "file": "crates/heuristics-tuner/src/tool_loop_scoring.rs",
       "function": "score_executor_candidate",
-      "line": 254,
+      "line": 190,
       "cyclomatic": 7.0,
       "coverage": 94.87179487179486,
       "crap": 7.0066083379692845,
@@ -26933,7 +26996,7 @@
     {
       "file": "crates/heuristics-tuner/src/tool_loop_scoring.rs",
       "function": "score_one",
-      "line": 300,
+      "line": 236,
       "cyclomatic": 3.0,
       "coverage": 100.0,
       "crap": 3.0,
@@ -43312,11 +43375,11 @@
     }
   ],
   "diagnostics": {
-    "analyzed_files": 609,
-    "lcov_files": 433,
-    "matched_files": 431,
+    "analyzed_files": 611,
+    "lcov_files": 434,
+    "matched_files": 432,
     "source_only": {
-      "count": 178,
+      "count": 179,
       "examples": [
         "crates/acp-bridge/src/coding_run_tests.rs",
         "crates/acp-bridge/src/grant_tests.rs",
