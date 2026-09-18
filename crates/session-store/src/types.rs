@@ -129,14 +129,20 @@ impl SessionHeader {
     /// stamps `Agent` so the chat lens shelves it correctly. The on-disk
     /// record is unchanged — the upgrade is a read-side concern, so it does
     /// not require a migration and cannot drift.
-    pub fn to_conversation_header(&self) -> ConversationHeader {
-        let projected_surface_mode = if self.surface_mode == SurfaceMode::Chat
+    /// Legacy chat-lens upgrade: pre-stamp rows deserialize as `Chat`; if the
+    /// session's profile is in [`is_agent_profile`], project `Agent` for the
+    /// shelf without rewriting the on-disk header.
+    fn projected_surface_mode(&self) -> SurfaceMode {
+        if self.surface_mode == SurfaceMode::Chat
             && self.grant.profile.as_deref().is_some_and(is_agent_profile)
         {
             SurfaceMode::Agent
         } else {
             self.surface_mode
-        };
+        }
+    }
+
+    pub fn to_conversation_header(&self) -> ConversationHeader {
         ConversationHeader {
             id: self.id,
             title: self.title.clone().or_else(|| {
@@ -150,7 +156,7 @@ impl SessionHeader {
             // The same grant, seen through the chat lens — not a copy that can drift, since both
             // views are built from this one header.
             grant: self.grant.clone(),
-            surface_mode: projected_surface_mode,
+            surface_mode: self.projected_surface_mode(),
         }
     }
 

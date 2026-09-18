@@ -60,8 +60,7 @@ use liberado_common::{
     McpDescriptor, ProposalSigner, RiskWaiverSet, WriteClass, mcp_of,
 };
 use liberado_conversation_store::{
-    Author, ConversationHeader, ConversationStore, MessageNode, NewConversation, NewNode,
-    StoreError, SurfaceMode, Ulid, is_agent_profile,
+    Author, ConversationHeader, ConversationStore, MessageNode, NewNode, StoreError, Ulid,
 };
 use liberado_dispatcher::{DispatchRequest, Dispatcher};
 use liberado_executor::{
@@ -71,6 +70,8 @@ use liberado_mcp::ScopedRuntime;
 use liberado_provider::{Message, Provider, Role};
 use liberado_session::{DomainHint, GoalSessionHub, GoalSpec, SessionGrant, SessionOrigin};
 
+#[path = "sessions/surface_mode.rs"]
+mod surface_mode;
 #[path = "sessions_waivers.rs"]
 mod waivers;
 use thiserror::Error;
@@ -584,47 +585,6 @@ impl ChatSessions {
             SessionGrant::default(),
         )
         .await
-    }
-
-    async fn create_conversation(
-        &self,
-        title: Option<String>,
-        ephemeral: bool,
-        visibility: liberado_session::Visibility,
-        grant: SessionGrant,
-    ) -> SessionResult<Ulid> {
-        // Reading B: stamp from profile class at create — not goal.is_some().
-        // Explicit surface_mode override can land in a later slice; profile ∈
-        // agent_profiles is the create-time signal for Slice 1.
-        let surface_mode = if grant.profile.as_deref().is_some_and(is_agent_profile) {
-            SurfaceMode::Agent
-        } else {
-            SurfaceMode::Chat
-        };
-        let header = self
-            .store
-            .create(NewConversation {
-                title,
-                parent_conversation: None,
-                spawned_by: None,
-                ephemeral,
-                visibility,
-                grant,
-                surface_mode,
-            })
-            .await?;
-        self.store
-            .append(
-                header.id,
-                NewNode {
-                    parent_id: None,
-                    author: Author::System,
-                    message: Message::system(&self.system_prompt),
-                    model: None,
-                },
-            )
-            .await?;
-        Ok(header.id)
     }
 
     /// Switch a conversation onto a different session profile, and record that it happened.
