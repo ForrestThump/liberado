@@ -57,11 +57,11 @@ reason = "Progress bar duration conversion"
 reviewed_on = "2026-08-30"
 
 [[waiver]]
-path = "crates/coder-tools/src/git.rs"
+path = "crates/coder-tools/src/git_gix.rs"
 metric = "process_fatal"
 ceiling = 1
-reason = "Git diff header extraction"
-reviewed_on = "2026-08-30"
+reason = "HEAD FullName parse is a static invariant (moved with git_gix split)"
+reviewed_on = "2026-09-18"
 
 [[waiver]]
 path = "crates/coder-tools/src/hashline.rs"

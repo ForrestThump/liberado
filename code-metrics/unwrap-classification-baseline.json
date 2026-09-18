@@ -406,14 +406,14 @@
         }
       ]
     },
-    "crates/coder-tools/src/git.rs": {
+    "crates/coder-tools/src/git_gix.rs": {
       "proven_invariant": 0,
       "local_failure": 0,
       "process_fatal": 1,
       "total": 1,
       "occurrences": [
         {
-          "file": "crates/coder-tools/src/git.rs",
+          "file": "crates/coder-tools/src/git_gix.rs",
           "line": 231,
           "column": 41,
           "method": "expect",
