@@ -72,11 +72,16 @@ pub fn ratchet(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
         load_config(root)?;
         generate(root)?;
     }
+    write_baseline(root)?;
+    eprintln!("[function complexity] ratcheted {BASELINE_FILE}");
+    Ok(())
+}
+
+fn write_baseline(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
     if let Some(parent) = Path::new(BASELINE_FILE).parent() {
         std::fs::create_dir_all(root.join(parent))?;
     }
     std::fs::copy(root.join(CURRENT_FILE), root.join(BASELINE_FILE))?;
-    eprintln!("[function complexity] ratcheted {BASELINE_FILE}");
     Ok(())
 }
 
