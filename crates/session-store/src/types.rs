@@ -4,7 +4,7 @@
 //! differences are **attributes, not subtypes**, and this struct is where that stops being a claim
 //! and becomes a record on disk.
 
-use liberado_conversation_store::{ConversationHeader, Timestamp};
+use liberado_conversation_store::{ConversationHeader, SurfaceMode, Timestamp, is_agent_profile};
 use liberado_session::{
     GoalResult, GoalSessionRecord, GoalSpec, SessionGrant, SessionStatus, Visibility,
 };
@@ -70,6 +70,18 @@ pub struct SessionHeader {
     /// false so existing logs are byte-identical.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub ephemeral: bool,
+
+    /// Which chat-surface shelf this session lives on. Parallel to
+    /// `chat_client_contract::SurfaceMode`; same wire spelling, same
+    /// `Chat` default. `#[serde(default)]` so pre-stamp logs read as
+    /// `Chat`. Spec: `docs/spec/architecture/chat-agent-surface-mode.md`.
+    ///
+    /// Reading B (locked in the plan): the stamp is create-time +
+    /// profile-class, **not** `goal.is_some()`. A goal session with no
+    /// profile and no explicit stamp stays `Chat` on the chat lens —
+    /// the agent sense is the profile one, not the goal one.
+    #[serde(default)]
+    pub surface_mode: SurfaceMode,
 }
 
 fn pending() -> SessionStatus {
@@ -96,6 +108,9 @@ impl SessionHeader {
             result: None,
             awaiting_input: false,
             ephemeral: false,
+            // The default surface_mode for a goal-less chat constructor. Profile
+            // class upgrades it on the chat lens — see `to_conversation_header`.
+            surface_mode: SurfaceMode::default(),
         }
     }
 
@@ -106,7 +121,22 @@ impl SessionHeader {
 
     /// The chat lens onto this session. Every session has one — a goal session has a transcript
     /// too, which is exactly the point of converging.
+    ///
+    /// **Legacy upgrade.** A pre-stamp log has no `surface_mode` field, so it
+    /// deserializes as `Chat`. For the **projection only**, if the on-disk
+    /// stamp is `Chat` and the session's `grant.profile` is in
+    /// [`is_agent_profile`](crate::is_agent_profile), the projected header
+    /// stamps `Agent` so the chat lens shelves it correctly. The on-disk
+    /// record is unchanged — the upgrade is a read-side concern, so it does
+    /// not require a migration and cannot drift.
     pub fn to_conversation_header(&self) -> ConversationHeader {
+        let projected_surface_mode = if self.surface_mode == SurfaceMode::Chat
+            && self.grant.profile.as_deref().is_some_and(is_agent_profile)
+        {
+            SurfaceMode::Agent
+        } else {
+            self.surface_mode
+        };
         ConversationHeader {
             id: self.id,
             title: self.title.clone().or_else(|| {
@@ -120,6 +150,7 @@ impl SessionHeader {
             // The same grant, seen through the chat lens — not a copy that can drift, since both
             // views are built from this one header.
             grant: self.grant.clone(),
+            surface_mode: projected_surface_mode,
         }
     }
 
@@ -156,4 +187,66 @@ pub struct NewSession {
     /// Open this session in RAM only — nothing about it ever touches the disk. See
     /// [`SessionHeader::ephemeral`].
     pub ephemeral: bool,
+    /// Which chat-surface shelf this session lives on. `Default = Chat` so
+    /// every existing call site (which constructs via `..Default::default()`)
+    /// stays chat unless it opts in. The chat-client-contract stamp flows
+    /// through here. Spec:
+    /// `docs/spec/architecture/chat-agent-surface-mode.md`.
+    pub surface_mode: SurfaceMode,
+}
+
+#[cfg(test)]
+mod surface_mode_tests {
+    use super::*;
+    use chrono::Utc;
+    use liberado_conversation_store::is_agent_profile;
+
+    #[test]
+    fn agent_profile_classifier() {
+        assert!(is_agent_profile("coding"));
+        assert!(is_agent_profile("life"));
+        assert!(!is_agent_profile("chat-default"));
+        assert!(!is_agent_profile(""));
+    }
+
+    #[test]
+    fn legacy_chat_with_agent_profile_projects_agent() {
+        let mut header = SessionHeader::chat(Ulid::new(), Some("x".into()), Utc::now());
+        header.grant.profile = Some("coding".into());
+        // Pre-stamp default
+        assert_eq!(header.surface_mode, SurfaceMode::Chat);
+        let conv = header.to_conversation_header();
+        assert_eq!(conv.surface_mode, SurfaceMode::Agent);
+    }
+
+    #[test]
+    fn stamped_agent_survives_projection() {
+        let mut header = SessionHeader::chat(Ulid::new(), None, Utc::now());
+        header.surface_mode = SurfaceMode::Agent;
+        header.grant.profile = Some("coding".into());
+        assert_eq!(
+            header.to_conversation_header().surface_mode,
+            SurfaceMode::Agent
+        );
+    }
+
+    #[test]
+    fn unprofiled_chat_stays_chat() {
+        let header = SessionHeader::chat(Ulid::new(), None, Utc::now());
+        assert_eq!(
+            header.to_conversation_header().surface_mode,
+            SurfaceMode::Chat
+        );
+    }
+
+    #[test]
+    fn missing_surface_mode_deserializes_as_chat() {
+        let json = serde_json::json!({
+            "id": Ulid::new().to_string(),
+            "created_at": "2026-09-18T00:00:00Z",
+            "status": "running",
+        });
+        let header: SessionHeader = serde_json::from_value(json).unwrap();
+        assert_eq!(header.surface_mode, SurfaceMode::Chat);
+    }
 }

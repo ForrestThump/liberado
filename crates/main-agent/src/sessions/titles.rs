@@ -69,6 +69,7 @@ async fn list_backfills_title_from_existing_user_message() {
             ephemeral: false,
             visibility: Default::default(),
             grant: Default::default(),
+            surface_mode: Default::default(),
         })
         .await
         .unwrap();

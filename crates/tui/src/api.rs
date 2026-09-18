@@ -15,7 +15,7 @@ use reqwest::{Client, StatusCode};
 // from `crate::api::*` without changing call sites.
 pub use chat_client_contract::{
     ChatMessage, ConvHeader, ConversationHistoryResponse, DaemonStatus, ForkRequest, ForkResponse,
-    ModelsResponse, ReactionEvent, SessionKind, SessionSummary,
+    ModelsResponse, ReactionEvent, SessionKind, SessionSummary, SurfaceMode,
 };
 
 /// A tool-call chip rendered inline in the chat: `[tool] name(args preview)`.
@@ -557,6 +557,7 @@ mod tests {
             created_at: "2025-06-25T12:00:00Z".into(),
             parent_conversation: Some("c0".into()),
             spawned_by: Some("msg-5".into()),
+            surface_mode: SurfaceMode::default(),
         };
         let json = serde_json::to_value(&header).unwrap();
         let back: ConvHeader = serde_json::from_value(json).unwrap();

@@ -15,6 +15,7 @@ fn conv(id: &str, title: &str) -> ConvHeader {
         created_at: String::new(),
         parent_conversation: None,
         spawned_by: None,
+        surface_mode: Default::default(),
     }
 }
 fn child_conv(id: &str, title: &str, parent: &str) -> ConvHeader {
@@ -24,6 +25,7 @@ fn child_conv(id: &str, title: &str, parent: &str) -> ConvHeader {
         created_at: String::new(),
         parent_conversation: Some(parent.into()),
         spawned_by: None,
+        surface_mode: Default::default(),
     }
 }
 fn left_click(col: u16, row: u16) -> MouseEvent {

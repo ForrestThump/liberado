@@ -42,6 +42,7 @@ fn chat_header(id: Ulid) -> SessionHeader {
         result: None,
         awaiting_input: false,
         ephemeral: false,
+        surface_mode: Default::default(),
     }
 }
 

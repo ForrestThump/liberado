@@ -61,7 +61,7 @@ use liberado_common::{
 };
 use liberado_conversation_store::{
     Author, ConversationHeader, ConversationStore, MessageNode, NewConversation, NewNode,
-    StoreError, Ulid,
+    StoreError, SurfaceMode, Ulid, is_agent_profile,
 };
 use liberado_dispatcher::{DispatchRequest, Dispatcher};
 use liberado_executor::{
@@ -593,6 +593,14 @@ impl ChatSessions {
         visibility: liberado_session::Visibility,
         grant: SessionGrant,
     ) -> SessionResult<Ulid> {
+        // Reading B: stamp from profile class at create — not goal.is_some().
+        // Explicit surface_mode override can land in a later slice; profile ∈
+        // agent_profiles is the create-time signal for Slice 1.
+        let surface_mode = if grant.profile.as_deref().is_some_and(is_agent_profile) {
+            SurfaceMode::Agent
+        } else {
+            SurfaceMode::Chat
+        };
         let header = self
             .store
             .create(NewConversation {
@@ -602,6 +610,7 @@ impl ChatSessions {
                 ephemeral,
                 visibility,
                 grant,
+                surface_mode,
             })
             .await?;
         self.store

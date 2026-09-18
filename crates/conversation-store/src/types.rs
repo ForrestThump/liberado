@@ -73,6 +73,30 @@ impl Author {
     }
 }
 
+/// Which **chat-surface shelf** a conversation belongs to. Parallel to
+/// `chat_client_contract::SurfaceMode`; the two share a wire and disk
+/// representation but live in separate crates because the layer rules forbid
+/// stores from depending on the client crate. Spec:
+/// `docs/spec/architecture/chat-agent-surface-mode.md`.
+///
+/// `#[serde(rename_all = "lowercase")]` so the wire is the human-readable
+/// string (`"chat"`, `"agent"`); `Default = Chat` is the honest missing-field
+/// behavior — pre-stamp logs and unprofiled chats both read as chat.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SurfaceMode {
+    #[default]
+    Chat,
+    Agent,
+}
+
+/// The chat-surface shelf a named profile falls into. Small conservative set
+/// matching specialist hats in example `policy.toml` / topology. Spec:
+/// `docs/spec/architecture/chat-agent-surface-mode.md`.
+pub fn is_agent_profile(name: &str) -> bool {
+    matches!(name, "coding" | "life" | "researcher" | "operator")
+}
+
 /// One persisted message — a node in the conversation DAG. Appended once, never mutated.
 ///
 /// The [`id`](MessageNode::id) is time-sortable and minted by the store *at append time*, which is
@@ -158,6 +182,16 @@ pub struct ConversationHeader {
     /// call nothing" is expressible and distinguishable from "unset".
     #[serde(default)]
     pub grant: SessionGrant,
+    /// Which chat-surface shelf this conversation lives on. `#[serde(default)]`
+    /// so a row missing the field (any pre-stamp log) reads as `Chat`. Stamped
+    /// at create; see `docs/spec/architecture/chat-agent-surface-mode.md` for
+    /// the rule. The on-disk value is honored as written; the chat-lens
+    /// projection (`SessionHeader::to_conversation_header`) **upgrades** a
+    /// defaulted `Chat` row to `Agent` when the row's `grant.profile` is in
+    /// `agent_profiles`, so a 2026-09 chat under the `coding` profile reads
+    /// in the right shelf without any migration.
+    #[serde(default)]
+    pub surface_mode: SurfaceMode,
 }
 
 /// The input to [`create`](crate::ConversationStore::create): the caller supplies only intent, not
@@ -185,6 +219,11 @@ pub struct NewConversation {
     /// question (`Config::resolve_session_profile`), and a store that reached for config would put
     /// the whole config stack underneath the storage layer.
     pub grant: SessionGrant,
+    /// Which chat-surface shelf this conversation lives on. `Default = Chat`
+    /// so every existing call site stays chat unless it opts in. The
+    /// `chat-client-contract::SurfaceMode` stamp flows through here; see
+    /// `docs/spec/architecture/chat-agent-surface-mode.md` for the rule.
+    pub surface_mode: SurfaceMode,
 }
 
 /// The input to [`append`](crate::ConversationStore::append): a complete message plus its place in

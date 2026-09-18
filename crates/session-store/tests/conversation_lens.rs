@@ -38,6 +38,7 @@ fn new_convo(title: &str) -> NewConversation {
         ephemeral: false,
         visibility: Default::default(),
         grant: Default::default(),
+        surface_mode: Default::default(),
     }
 }
 
@@ -460,6 +461,7 @@ async fn create_stores_parent_conversation_lineage() {
             ephemeral: false,
             visibility: Default::default(),
             grant: Default::default(),
+            surface_mode: Default::default(),
         })
         .await
         .unwrap();
@@ -490,6 +492,7 @@ async fn create_stores_spawned_by_lineage() {
             ephemeral: false,
             visibility: Default::default(),
             grant: Default::default(),
+            surface_mode: Default::default(),
         })
         .await
         .unwrap();
@@ -513,6 +516,7 @@ fn new_incognito(title: &str) -> NewConversation {
         ephemeral: true,
         visibility: Default::default(),
         grant: Default::default(),
+        surface_mode: Default::default(),
     }
 }
 
