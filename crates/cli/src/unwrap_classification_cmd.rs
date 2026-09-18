@@ -9,8 +9,8 @@ use serde::Deserialize;
 use std::collections::BTreeSet;
 use std::path::Path;
 
-const CONFIG_FILE: &str = "unwrap-classification.toml";
-const BASELINE_FILE: &str = "unwrap-classification-baseline.json";
+const CONFIG_FILE: &str = "code-metrics/unwrap-classification.toml";
+const BASELINE_FILE: &str = "code-metrics/unwrap-classification-baseline.json";
 const CURRENT_FILE: &str = ".liberado/unwrap-classification-current.json";
 
 #[derive(Debug, Deserialize)]
@@ -198,6 +198,7 @@ local_failure_new = 0
 "#;
 
     fn write_clean_workspace(root: &Path) {
+        std::fs::create_dir_all(root.join("code-metrics")).unwrap();
         std::fs::write(root.join(CONFIG_FILE), CLEAN_CONFIG).unwrap();
         let source = root.join("crates/sample/src");
         std::fs::create_dir_all(&source).unwrap();
@@ -228,6 +229,7 @@ local_failure_new = 0
                 .contains("missing")
         );
 
+        std::fs::create_dir_all(root.path().join("code-metrics")).unwrap();
         std::fs::write(
             root.path().join(CONFIG_FILE),
             format!(
@@ -242,6 +244,7 @@ local_failure_new = 0
                 .contains("needs reason")
         );
 
+        std::fs::create_dir_all(root.path().join("code-metrics")).unwrap();
         std::fs::write(
             root.path().join(CONFIG_FILE),
             format!(
@@ -258,6 +261,7 @@ local_failure_new = 0
 
         std::fs::write(root.path().join("tracked.rs"), "fn tracked() {}\n").unwrap();
         let waiver = "\n[[waiver]]\npath = \"tracked.rs\"\nmetric = \"total\"\nceiling = 1\nreason = \"legacy\"\nreviewed_on = \"2026-08-31\"\n";
+        std::fs::create_dir_all(root.path().join("code-metrics")).unwrap();
         std::fs::write(
             root.path().join(CONFIG_FILE),
             format!("{CLEAN_CONFIG}{waiver}{waiver}"),

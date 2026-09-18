@@ -69,7 +69,7 @@ pub struct CoderTuning {
     pub hashline: HashlineConfig,
     /// `[coder] prompt_dir` — directory holding the harness prompt files.
     ///
-    /// Unset means `prompts/coder` under the working directory, and a missing file means the
+    /// Unset means `skills/coder` under the working directory, and a missing file means the
     /// copy compiled into the binary. See [`crate::prompts`] for why both exist.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prompt_dir: Option<String>,
@@ -353,15 +353,15 @@ fn default_coder_trace_dir() -> Option<String> {
 }
 
 fn default_coder_planner() -> CoderRoleConfig {
-    coder_role("deepseek-v4-pro", "prompts/coder/planner.md", Some(8))
+    coder_role("deepseek-v4-pro", "skills/coder/planner.md", Some(8))
 }
 
 fn default_coder_role() -> CoderRoleConfig {
-    coder_role("deepseek-v4-pro", "prompts/coder/coder.md", Some(50))
+    coder_role("deepseek-v4-pro", "skills/coder/coder.md", Some(50))
 }
 
 fn default_coder_critic() -> CoderRoleConfig {
-    coder_role("deepseek-v4-flash", "prompts/coder/critic.md", Some(8))
+    coder_role("deepseek-v4-flash", "skills/coder/critic.md", Some(8))
 }
 
 fn coder_role(model: &str, prompt_path: &str, max_turns: Option<u32>) -> CoderRoleConfig {

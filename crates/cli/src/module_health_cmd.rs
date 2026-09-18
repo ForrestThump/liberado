@@ -11,8 +11,8 @@ use std::path::{Path, PathBuf};
 
 const TOOL: &str = "rust-code-analysis-cli";
 const TOOL_VERSION: &str = "0.0.25";
-const CONFIG_FILE: &str = "module-health.toml";
-const BASELINE_FILE: &str = "module-health-baseline.json";
+const CONFIG_FILE: &str = "code-metrics/module-health.toml";
+const BASELINE_FILE: &str = "code-metrics/module-health-baseline.json";
 const CURRENT_FILE: &str = ".liberado/module-health-current.json";
 const ANALYSIS_DIR: &str = ".liberado/rust-code-analysis";
 

@@ -35,6 +35,10 @@ config/*.toml
 crates/*/config/*.toml
 
 .kilo
+
+# IDE MCP tool JSON dumps (not Liberado MCP crates)
+/mcps/
+scratchpad.md
 .codex/
 .claude/
 .worktrees/
@@ -70,4 +74,4 @@ scripts/__pycache__/
 .proposal-key
 
 # OS-held lock file for ledger read-modify-write exclusion
-mutants-ledger.json.lock
+code-metrics/mutants-ledger.json.lock

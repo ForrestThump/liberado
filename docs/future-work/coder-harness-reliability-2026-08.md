@@ -221,7 +221,7 @@ string that only the new build contains.
 
 | Branch | What is on it | Why it is not merged |
 |---|---|---|
-| `exp/tuning-scratch` | `todowrite`, grep ambiguity contexts, `prompts/coder/coder.md` edits | Measured **neutral to slightly worse**. Kept because the measurement is what is valuable, not the code. |
+| `exp/tuning-scratch` | `todowrite`, grep ambiguity contexts, `skills/coder/coder.md` edits | Measured **neutral to slightly worse**. Kept because the measurement is what is valuable, not the code. |
 | `lib-18ca8a53fbbd54f4-20612` | A partial P3.1a implementation (`session_store.rs`, 334 lines) | Produced by the run that failed on disk + #118. Re-do against the fixed harness rather than salvage. |
 
 Per the working rule agreed for this track: **tuning experiments live on one branch and become one

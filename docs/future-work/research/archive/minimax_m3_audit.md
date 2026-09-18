@@ -78,7 +78,7 @@ Honest take: the instinct is good, but the specific implementation is the wrong 
 
 **1. The "hashtag on the line above" pattern is weaker than your existing waiver pattern.**
 
-Look at `module-health.toml` — your waivers are *typed artifacts*:
+Look at `code-metrics/module-health.toml` — your waivers are *typed artifacts*:
 
 ```toml
 [[waiver]]
@@ -112,12 +112,12 @@ The repo's discipline is "measure first, then ratchet." The `mutants-campaign` s
 
 **Step 1: Write a one-shot classifier, not a gate.** A script (or a `cargo` subcommand in `liberado-cli`) that walks every `unwrap()` and `expect()` in `crates/**/src/**` (excluding tests), and emits a JSON report with: file, line, expression type (`Result` vs `Option`), the inferred context (inside a function returning `Result`? in a `main`? in a `tokio::spawn` block?), and a suggested bucket (proven invariant / local failure / process-fatal). Run it. Look at the output. I bet the distribution tells you something you didn't expect — probably that the *proven invariant* class is way larger than the *process-fatal* class, in which case a ratchet against the latter is much more aggressive than against the total.
 
-**Step 2: Once you have the data, extend `module-health.toml` (or add a sibling `unwrap-classification.toml`) with the same `path / metric / ceiling / reason / reviewed_on` shape.** Per-file ceilings for the `process_fatal` class. The ratchet says "this file has N fatal-class unwraps; it must not grow; new code must convert to `?`." That's a number with a *meaning*, not a hashtag.
+**Step 2: Once you have the data, extend `code-metrics/module-health.toml` (or add a sibling `code-metrics/unwrap-classification.toml`) with the same `path / metric / ceiling / reason / reviewed_on` shape.** Per-file ceilings for the `process_fatal` class. The ratchet says "this file has N fatal-class unwraps; it must not grow; new code must convert to `?`." That's a number with a *meaning*, not a hashtag.
 
-**Step 3: Optionally, turn on `clippy::unwrap_used` as deny-by-default *for new code only*.** Clippy has `#[allow(clippy::unwrap_used)]` per-function, and you can drive a baseline of allowed sites the same way you drive `crap-baseline.json` — a committed JSON of permitted call sites, and any new one fails CI. The waiver for an existing site is the typed `unwrap-classification.toml` entry, not a comment.
+**Step 3: Optionally, turn on `clippy::unwrap_used` as deny-by-default *for new code only*.** Clippy has `#[allow(clippy::unwrap_used)]` per-function, and you can drive a baseline of allowed sites the same way you drive `code-metrics/crap-baseline.json` — a committed JSON of permitted call sites, and any new one fails CI. The waiver for an existing site is the typed `code-metrics/unwrap-classification.toml` entry, not a comment.
 
 **Step 4: Don't build a comment parser.** The hashtag idea is the kind of tool that looks like progress on a dashboard and produces no actual safety improvement. The classification is the *thinking* — that's the part that takes 6 weeks, not the parsing.
 
 The reason I'm pushing back is that I've watched a lot of repos add comment-driven lint tools and they all do the same thing: developers add the marker because the build is red, the marker says nothing, and a year later the lint is in the way of a refactor and gets deleted. The repo you have is one of the few where I'd expect the discipline to *actually work* — but only if the tool matches the existing culture. The culture here is structured waivers with review dates. Lean into that.
 
-If you want, I can sketch the `unwrap-classification.toml` schema and the report-script stub to make it concrete. But I'd start by running the classifier once on the current tree and seeing what the actual distribution looks like before committing to any ratchet shape.
+If you want, I can sketch the `code-metrics/unwrap-classification.toml` schema and the report-script stub to make it concrete. But I'd start by running the classifier once on the current tree and seeing what the actual distribution looks like before committing to any ratchet shape.

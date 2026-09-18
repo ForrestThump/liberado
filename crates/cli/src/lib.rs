@@ -13,9 +13,9 @@
 //!   LIBERADO_VAULT=\\<\1\\> liberado  same, taking the vault from the environment
 //!   liberado chat [session-id]       the streaming terminal client of a running daemon
 //!   liberado config check            load + validate config, print a summary (or an error)
-//!   liberado ci                      full local CI; ratchet and stage/amend crap-baseline.json
+//!   liberado ci                      full local CI; ratchet and stage/amend code-metrics/crap-baseline.json
 //!   liberado ci check                ship preflight (fmt, clippy, tests, deny)
-//!   liberado ci crap                 compare CRAP scores to crap-baseline.json (no write)
+//!   liberado ci crap                 compare CRAP scores to code-metrics/crap-baseline.json (no write)
 //!   liberado ci ready                final checks + exact Linux CRAP + readiness receipt
 //!   liberado ci verify-ready         reject a stale readiness receipt
 //!   liberado ci crap-linux           native Debian CRAP; Debian WSL on Windows
@@ -43,7 +43,7 @@
 //!   liberado coder summarize \\<\1\\>  summarize a cross-harness compare run
 //!   liberado coder smoke              validate the coder runner process boundary
 //!   liberado coder import \\<\1\\>     foreign (Kilo / OpenHands) → `.messages.json`
-//!   liberado mutants run \\<\1\\>   run cargo-mutants and append to mutants-ledger.json
+//!   liberado mutants run \\<\1\\>   run cargo-mutants and append to code-metrics/mutants-ledger.json
 //!   liberado mutants record [crate-dir] ingest mutants.out/outcomes.json into the ledger
 //!   liberado mutants report [--all]    print never/historical/drift campaign health
 //!   liberado mutants next [--all]        suggest the next crate to mutation-test

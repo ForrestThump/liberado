@@ -9,8 +9,16 @@ use std::path::Path;
 pub(super) fn write(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
     let current = current_report(root)?;
     let ratcheted = report_to_write(root, current)?;
-    write_report(&root.join(BASELINE_FILE), &ratcheted)?;
+    persist_baseline(root, &ratcheted)?;
     eprintln!("[module health] ratcheted {BASELINE_FILE}");
+    Ok(())
+}
+
+fn persist_baseline(root: &Path, report: &Report) -> Result<(), Box<dyn std::error::Error>> {
+    if let Some(parent) = std::path::Path::new(super::BASELINE_FILE).parent() {
+        std::fs::create_dir_all(root.join(parent))?;
+    }
+    write_report(&root.join(BASELINE_FILE), report)?;
     Ok(())
 }
 
@@ -66,8 +74,35 @@ pub(super) fn ratcheted_report(baseline: &Report, current: &Report) -> Report {
 
 #[cfg(test)]
 mod tests {
-    use super::{FileMetrics, Report, ratcheted_report};
+    use super::{FileMetrics, Report, persist_baseline, ratcheted_report};
     use std::collections::BTreeMap;
+
+    #[test]
+    fn persist_baseline_creates_parent_and_writes_report() {
+        let dir = tempfile::tempdir().unwrap();
+        let report = BTreeMap::from([(
+            "crates/a/src/lib.rs".into(),
+            FileMetrics {
+                ploc: 10,
+                lloc: 8,
+                functions: 2,
+                cyclomatic: 3,
+            },
+        )]);
+        assert!(
+            !dir.path().join("code-metrics").exists(),
+            "persist_baseline should create the parent directory"
+        );
+        persist_baseline(dir.path(), &report).unwrap();
+        let baseline = dir.path().join(super::BASELINE_FILE);
+        assert!(
+            baseline.is_file(),
+            "baseline should be written: {baseline:?}"
+        );
+        let saved: Report = serde_json::from_slice(&std::fs::read(&baseline).unwrap()).unwrap();
+        assert_eq!(saved["crates/a/src/lib.rs"].ploc, 10);
+        assert_eq!(saved["crates/a/src/lib.rs"].cyclomatic, 3);
+    }
 
     #[test]
     fn ratchet_does_not_raise_existing_file_metrics() {

@@ -194,7 +194,7 @@ fn an_unconfigured_prompt_dir_resolves_inside_the_workspace() {
     let from_disk = prompts::load(Some(&dir), prompts::CODER_FILE, "BAKED-FALLBACK");
     assert_ne!(
         from_disk, "BAKED-FALLBACK",
-        "a run inside a checkout must read prompts/coder/coder.md from it, not the binary"
+        "a run inside a checkout must read skills/coder/coder.md from it, not the binary"
     );
 }
 

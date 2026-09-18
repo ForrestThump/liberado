@@ -143,7 +143,7 @@ pub fn build_review_input(task: &str, transcript: &str, filed_report: Option<&st
     out
 }
 
-/// The question, loaded from `prompts/coder/session-critic.md` so it can be retuned without a
+/// The question, loaded from `skills/coder/session-critic.md` so it can be retuned without a
 /// rebuild — this prompt went from 2 of 4 labelled traces to 4 of 4 on one wording change, and a
 /// compile between iterations is the wrong cost for that loop.
 ///

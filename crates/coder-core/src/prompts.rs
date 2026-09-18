@@ -9,12 +9,12 @@
 //! two of four labelled traces to four of four on one wording change — so the loop that most
 //! wants to be fast was the slowest one available.
 //!
-//! Worse, two of those literals had drifted from `prompts/coder/coder.md`, which already existed
+//! Worse, two of those literals had drifted from `skills/coder/coder.md`, which already existed
 //! and already claimed to be the coder's prompt. Nobody could tell which text a given run used.
 //!
 //! ## How it works
 //!
-//! Each prompt has exactly one source of truth: a file under `prompts/coder/`. That file is
+//! Each prompt has exactly one source of truth: a file under `skills/coder/`. That file is
 //! **baked in at compile time** with `include_str!` *and* **read from disk at run time** when it
 //! is there.
 //!
@@ -32,22 +32,22 @@
 use std::path::{Path, PathBuf};
 
 /// The coding worker's instructions.
-pub const CODER: &str = include_str!("../../../prompts/coder/coder.md");
+pub const CODER: &str = include_str!("../../../skills/coder/coder.md");
 /// The cold reviewer that sees the diff and nothing else (completion-gate / attempt critic).
-pub const DIFF_REVIEWER: &str = include_str!("../../../prompts/coder/diff-reviewer.md");
+pub const DIFF_REVIEWER: &str = include_str!("../../../skills/coder/diff-reviewer.md");
 /// Product cold-PR stage (backlog 0.8): severity findings with code citations; no author context.
-pub const COLD_PR_REVIEWER: &str = include_str!("../../../prompts/coder/cold-pr-reviewer.md");
+pub const COLD_PR_REVIEWER: &str = include_str!("../../../skills/coder/cold-pr-reviewer.md");
 /// The reviewer that reads a finished run's own narration.
-pub const SESSION_CRITIC: &str = include_str!("../../../prompts/coder/session-critic.md");
+pub const SESSION_CRITIC: &str = include_str!("../../../skills/coder/session-critic.md");
 /// The coding worker as the daemon session pack configures it, with self-host git rules.
-pub const SESSION_PACK_CODER: &str = include_str!("../../../prompts/coder/session-pack-coder.md");
+pub const SESSION_PACK_CODER: &str = include_str!("../../../skills/coder/session-pack-coder.md");
 /// The criteria-intake planner that turns a rough writeup into an acceptance contract.
-pub const INTAKE: &str = include_str!("../../../prompts/coder/intake.md");
+pub const INTAKE: &str = include_str!("../../../skills/coder/intake.md");
 /// Interactive ACP coding: conversation + tools, no `submit_report`.
-pub const INTERACTIVE: &str = include_str!("../../../prompts/coder/interactive.md");
+pub const INTERACTIVE: &str = include_str!("../../../skills/coder/interactive.md");
 
 /// Where prompt files live relative to a checkout root.
-pub const PROMPT_DIR: &str = "prompts/coder";
+pub const PROMPT_DIR: &str = "skills/coder";
 
 /// File name for each prompt, so the on-disk copy and the baked copy stay paired.
 pub const CODER_FILE: &str = "coder.md";
@@ -60,7 +60,7 @@ pub const INTERACTIVE_FILE: &str = "interactive.md";
 
 /// Where to look for prompt files for a run on `workspace_root`.
 ///
-/// An explicit `[coder] prompt_dir` wins. Otherwise it is `prompts/coder` **inside the workspace
+/// An explicit `[coder] prompt_dir` wins. Otherwise it is `skills/coder` **inside the workspace
 /// the run is operating on** — not relative to the process's current directory.
 ///
 /// That distinction is not pedantry. A coding run happens in a git worktree of this repo, so the
@@ -80,7 +80,7 @@ pub fn dir_for(configured: Option<&str>, workspace_root: &str) -> PathBuf {
 ///
 /// Search order:
 /// 1. `dir/file`, when a `[coder] prompt_dir` is configured.
-/// 2. `prompts/coder/file` under the current directory — the ordinary checkout case.
+/// 2. `skills/coder/file` under the current directory — the ordinary checkout case.
 /// 3. `baked`, the copy compiled in from that same file.
 ///
 /// A file that exists but cannot be read is a **warning, not an error**. The alternative is

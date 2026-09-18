@@ -2,7 +2,7 @@
 //!
 //! ## CRAP ratchet
 //!
-//! `crap-baseline.json` is the last best per-function score. GitHub only *reads* it
+//! `code-metrics/crap-baseline.json` is the last best per-function score. GitHub only *reads* it
 //! (`liberado ci crap` / `--fail-regression`, keyed by file + function name, not
 //! line). A local `liberado ci` run that stays
 //! green *ratchets* it (`liberado ci ratchet`). Existing functions only take
@@ -12,7 +12,7 @@
 //! GitHub must not rewrite the file. Coverage is host-sensitive, and a bot commit
 //! on `main` races every open PR.
 //!
-//! After a green *Linux* write, `just ci` stages `crap-baseline.json`. If that
+//! After a green *Linux* write, `just ci` stages `code-metrics/crap-baseline.json`. If that
 //! is the only change, it amends HEAD (`--no-verify`, because this process just
 //! ran the suite) so a subsequent `git push` includes the ratchet. If the tree
 //! already has other dirty files, it only stages — the agent is about to commit
@@ -52,7 +52,7 @@ use serde_json::Value;
 
 /// Pinned so a cargo-crap release cannot silently reshape the baseline schema.
 const CARGO_CRAP_VERSION: &str = "0.4.3";
-const BASELINE_FILE: &str = "crap-baseline.json";
+const BASELINE_FILE: &str = "code-metrics/crap-baseline.json";
 const LCOV_FILE: &str = ".liberado/crap.lcov";
 const CURRENT_REPORT: &str = ".liberado/crap-current.json";
 const DELTA_REPORT: &str = ".liberado/crap-delta.json";
@@ -108,7 +108,7 @@ const LLVM_COV_ARGS: &[&str] = &[
 
 /// Printed after `cargo crap` exits non-zero when a per-function score rose.
 const CRAP_REGRESSION_HINT: &str = "\
-CRAP check failed. A function's score went up vs crap-baseline.json \
+CRAP check failed. A function's score went up vs code-metrics/crap-baseline.json \
 (per-function ratchet: 40 cannot become 45, even under the 29.9 new-function ceiling). \
 A current score below 10 is ignored. cargo-crap named the functions above. \
 Split the function or add tests until each score is at or below its baseline. \
@@ -123,7 +123,7 @@ Existing functions may sit above 30; the per-function ratchet holds them.";
 
 /// One-line GitHub Actions annotation (newlines are not legal in `::error`).
 const CRAP_REGRESSION_GH: &str = "\
-A function CRAP score went up vs crap-baseline.json (per-function ratchet). \
+A function CRAP score went up vs code-metrics/crap-baseline.json (per-function ratchet). \
 Scores below 10 are ignored. Split the function or add tests. \
 Do not raise the baseline. Linux `just ci` or this Ubuntu job is the check that matches the file.";
 
@@ -133,11 +133,11 @@ const CRAP_HOST_CEILING_ONLY: &str = "\
 Existing functions are not compared here; GitHub's Ubuntu job runs the per-function ratchet.";
 
 const CRAP_EMPTY_BASELINE: &str = "\
-[liberado ci] crap-baseline.json has no entries yet — ceiling only (`--fail-above`). \
+[liberado ci] code-metrics/crap-baseline.json has no entries yet — ceiling only (`--fail-above`). \
 A green Linux `liberado ci ratchet` fills the per-function ratchet.";
 
 const CRAP_COMPARE_SUMMARY: &str = "\
-[liberado ci] CRAP compare against crap-baseline.json \
+[liberado ci] CRAP compare against code-metrics/crap-baseline.json \
 (per-function ratchet on Linux; scores below 10 are ignored; 29.9 is the new-function ceiling)";
 
 const CRAP_CEILING_GH: &str = "\
@@ -223,7 +223,7 @@ fn check(log: &CiLog) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 /// Full local CI: the ship preflight, then the CRAP check, then ratchet and stage the baseline.
-/// Compare the current tree against `crap-baseline.json`. Never writes the baseline.
+/// Compare the current tree against `code-metrics/crap-baseline.json`. Never writes the baseline.
 ///
 /// Always writes `.liberado/crap-current.json` (gitignored) so a red GitHub job
 /// still has an Ubuntu-shaped report to commit as the next baseline. Coverage is
@@ -238,7 +238,7 @@ pub(crate) fn crap_for_root(root: &Path) -> Result<(), Box<dyn std::error::Error
     crap_check(&CiLog::create(root)?)
 }
 
-/// Check, then update `crap-baseline.json` with new functions and non-worsening scores.
+/// Check, then update `code-metrics/crap-baseline.json` with new functions and non-worsening scores.
 fn crap_ratchet(log: &CiLog) -> Result<(), Box<dyn std::error::Error>> {
     generate_lcov(log)?;
     write_after_success(compare_to_baseline(log), || {
@@ -388,7 +388,7 @@ enum StageOutcome {
     Amended,
 }
 
-/// Stage `crap-baseline.json`. Amend HEAD only when that file is the sole dirty path.
+/// Stage `code-metrics/crap-baseline.json`. Amend HEAD only when that file is the sole dirty path.
 ///
 /// `--no-verify` on the amend: this process just ran the suite, and a pre-commit hook
 /// that called `just ci` would recurse.
@@ -547,6 +547,10 @@ fn repository_root() -> Result<PathBuf, Box<dyn std::error::Error>> {
 #[cfg(test)]
 #[path = "ci_cmd_usage_tests.rs"]
 mod ci_cmd_usage_tests;
+
+#[cfg(test)]
+#[path = "ci_cmd_baseline_stage_tests.rs"]
+mod ci_cmd_baseline_stage_tests;
 
 #[cfg(test)]
 #[path = "ci_cmd_tests.rs"]

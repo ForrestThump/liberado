@@ -1,7 +1,7 @@
 //! `list_models` status handling against a live HTTP seam.
 //!
 //! Lives outside `lib.rs` because that file sits over the module-health review
-//! boundary — any addition there regresses the ratchet (see `module-health.toml`).
+//! boundary — any addition there regresses the ratchet (see `code-metrics/module-health.toml`).
 
 use super::*;
 use wiremock::matchers::{method, path};

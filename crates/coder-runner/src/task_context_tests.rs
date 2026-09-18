@@ -2,7 +2,7 @@
 //! and prior-round session history.
 //!
 //! These live outside `main.rs` because that file sits over every module-health review
-//! boundary — any line added there regresses the ratchet (see `module-health.toml`).
+//! boundary — any line added there regresses the ratchet (see `code-metrics/module-health.toml`).
 
 use super::{
     SessionRound, build_task_context, derive_task_id, now_unix_seconds, push_work,

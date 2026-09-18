@@ -164,7 +164,7 @@ impl CodingSessionPack {
             WorkspacePolicies::resolve(ctx.overrides(), payload_json, self.hashline.clone());
         let prompt = policies.coder_prompt(
             payload_json,
-            // Loaded from prompts/coder/session-pack-coder.md, not a literal: the daemon path's
+            // Loaded from skills/coder/session-pack-coder.md, not a literal: the daemon path's
             // prompt was a second copy of coder instructions that nobody could diff against the
             // other two, and retuning it cost a rebuild.
             &liberado_coder_core::prompts::load(

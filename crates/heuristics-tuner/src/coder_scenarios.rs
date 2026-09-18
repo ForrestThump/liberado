@@ -71,7 +71,7 @@ pub struct CoderExpect {
     pub expected_outcome: Outcome,
 }
 
-/// Built-in seed system prompt for the coder role (matches `prompts/coder/coder.md` intent).
+/// Built-in seed system prompt for the coder role (matches `skills/coder/coder.md` intent).
 pub const DEFAULT_CODER_SYSTEM_PROMPT: &str = "\
 You are Liberado's coding worker. You have discrete tools: list_files, search_text, read_file, \
 write_file, edit_file, apply_patch, git_status, git_diff, run_command, validate, and submit_report.\n\

@@ -6,7 +6,7 @@
 //! Artifacts written under the tuner run directory:
 //! - `PROPOSAL.md` — human summary
 //! - `proposal.json` — machine-readable metadata
-//! - `proposed/<target_path>` — proposed file body (e.g. `prompts/coder/coder.md`)
+//! - `proposed/<target_path>` — proposed file body (e.g. `skills/coder/coder.md`)
 //! - `pr_factory_task.json` — payload shape for `submit_pr_factory_task` (optional hand-off)
 
 use std::path::{Path, PathBuf};
@@ -17,7 +17,7 @@ use crate::candidate::Candidate;
 use crate::coder_scoring::CoderFitness;
 
 /// Default path the coder-layer proposal targets (repo-relative).
-pub const DEFAULT_CODER_PROMPT_PATH: &str = "prompts/coder/coder.md";
+pub const DEFAULT_CODER_PROMPT_PATH: &str = "skills/coder/coder.md";
 
 /// Structured draft from a completed coder tuning session.
 #[derive(Debug, Clone, Serialize)]
@@ -445,7 +445,7 @@ mod tests {
             DEFAULT_CODER_PROMPT_PATH,
         );
         let task = build_pr_factory_task(&p);
-        assert!(task.description.contains("prompts/coder/coder.md"));
+        assert!(task.description.contains("skills/coder/coder.md"));
         assert_eq!(task.risk_level, "medium");
         assert!(!task.verifiers.is_empty());
         assert!(task._meta.decision.contains("Decision 14"));
@@ -471,10 +471,10 @@ mod tests {
         assert!(written.len() >= 4);
         assert!(dir.path().join("PROPOSAL.md").is_file());
         assert!(dir.path().join("proposal.json").is_file());
-        assert!(dir.path().join("proposed/prompts/coder/coder.md").is_file());
+        assert!(dir.path().join("proposed/skills/coder/coder.md").is_file());
         assert!(dir.path().join("pr_factory_task.json").is_file());
         let body =
-            std::fs::read_to_string(dir.path().join("proposed/prompts/coder/coder.md")).unwrap();
+            std::fs::read_to_string(dir.path().join("proposed/skills/coder/coder.md")).unwrap();
         assert_eq!(body, "proposed body\n");
     }
 }

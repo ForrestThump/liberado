@@ -47,7 +47,7 @@ binding.
 | Idempotency / loop-breaking | `Event.correlation_id`, required on every event (Decision 6) | **Exists.** Load-bearing here — see [the hazard](#the-one-real-hazard-self-triggering). |
 | Unattended session spawn | `GoalSessionHub::start_background` — [`crates/session/src/hub.rs`](../../crates/session/src/hub.rs) | **Exists.** |
 | Routing a goal to the coding pack | `DomainHint::Coding` — [`crates/session/src/goal.rs`](../../crates/session/src/goal.rs) | **Exists, and is the default.** |
-| Playbooks as files | [`Skills/`](../../Skills/) — `cold-review-pr.md` | **Exists**, but nothing binds a trigger to one. |
+| Playbooks as files | [`skills/`](../../skills/) — `cold-review-pr.md` | **Exists**, but nothing binds a trigger to one. |
 | Driving an agent PR to ready-or-blocked | `liberado shepherd` | **Exists.** |
 | Bounded concurrency for agent sessions | fan-out cap of 3 (S6, PR #72) | **Exists**, reusable. |
 | Per-schedule turn budget and delivery silencing | `Schedule.max_turns`, `Schedule.deliver` | **Exists** on cron — a maintenance schedule that usually finds nothing already has a way not to spam. |
@@ -65,7 +65,7 @@ a sibling of `CronEventSource`, and it should probably *be* driven by a cron tic
 and it does not need a webhook or a daemon on the GitHub side.
 
 **2. A trigger → skill binding.** `Schedule.goal` is a free-text `String`. This wants
-`skill: String` resolved against `Skills/`, so the prompt lives in a reviewable file rather than in
+`skill: String` resolved against `skills/`, so the prompt lives in a reviewable file rather than in
 config. That also makes the skill tunable without a restart — the same reasoning that moved coder
 prompts out of the binary in PR #107.
 
@@ -122,7 +122,7 @@ knowing what a run actually did. Fix the trace gap first.
 ```toml
 [[maintenance]]
 name    = "doc-drift"
-skill   = "update-docs"        # resolved against Skills/
+skill   = "update-docs"        # resolved against skills/
 every   = { commits = 25 }     # or { prs = 10 }, or both (fire on either)
 min_gap = "24h"                # wall-clock floor, regardless of count
 pool    = "maintenance"        # existing executor-pool routing

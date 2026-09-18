@@ -22,7 +22,7 @@ pub fn worker_role_config(request: &CoderRunRequest) -> &CoderRoleConfig {
     }
     &request.config.coder
 }
-/// The cold diff reviewer's instructions now live in `prompts/coder/diff-reviewer.md`.
+/// The cold diff reviewer's instructions now live in `skills/coder/diff-reviewer.md`.
 ///
 /// It was a `const` here, which meant retuning a reviewer prompt cost a full workspace rebuild
 /// — minutes, on the loop that most wants to be fast. `liberado_coder_core::prompts` bakes the
@@ -55,7 +55,7 @@ pub fn planner_enabled(request: &CoderRunRequest) -> bool {
 /// Resolve a role's system prompt.
 ///
 /// Order: an inline `prompt`, then `prompt_path`, then the copy compiled in from
-/// `prompts/coder/` (see [`liberado_coder_core::prompts`]).
+/// `skills/coder/` (see [`liberado_coder_core::prompts`]).
 ///
 /// **A missing `prompt_path` is no longer fatal.** It used to return `Err`, which failed the whole
 /// run — so a container that shipped the binary without `prompts/` could not code at all, and
@@ -239,7 +239,7 @@ mod tests {
     #[tokio::test]
     async fn an_inline_prompt_outranks_everything() {
         let resolved = role_instructions(
-            &role(Some("INLINE"), Some("prompts/coder/coder.md")),
+            &role(Some("INLINE"), Some("skills/coder/coder.md")),
             "coder",
         )
         .await

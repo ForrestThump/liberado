@@ -11,7 +11,10 @@ fn ledger_append_preserves_prior_rows() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
     fs::write(
-        root.join(LEDGER_FILE),
+        {
+            let _ = std::fs::create_dir_all(root.join("code-metrics"));
+            root.join(LEDGER_FILE)
+        },
         r#"{"schema":1,"campaigns":[{"package":"liberado-alpha","commit":null,"recorded_at":"2026-07-29","scope":"package","source":"markdown-seed","counts":{"viable":1,"caught":1,"survived":0,"timeout":0,"unviable":0}}]}"#,
     )
     .unwrap();
@@ -92,6 +95,7 @@ fn save_ledger_drops_exact_duplicate_rows() {
 #[test]
 fn save_ledger_fails_cleanly_when_the_target_cannot_be_renamed() {
     let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("code-metrics")).unwrap();
     std::fs::create_dir(dir.path().join(LEDGER_FILE)).unwrap();
     let ledger = Ledger {
         schema: 1,
@@ -124,7 +128,10 @@ fn concurrent_appends_both_survive_the_read_modify_write() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
     fs::write(
-        root.join(LEDGER_FILE),
+        {
+            let _ = std::fs::create_dir_all(root.join("code-metrics"));
+            root.join(LEDGER_FILE)
+        },
         r#"{"schema":1,"campaigns":[{"package":"liberado-seed","commit":null,"recorded_at":"2026-08-25","scope":"package","source":"markdown-seed","counts":{"viable":1,"caught":1,"survived":0,"timeout":0,"unviable":0}}]}"#,
     )
     .unwrap();

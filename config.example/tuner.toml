@@ -22,7 +22,7 @@
 #   "coder" — tunes the Liberado coding-worker system prompt (PR dispatch / liberado-coder-agent)
 #     by running real temp git workspaces + discrete coding tools per scenario. More expensive than
 #     executor scoring (filesystem + multi-turn coding). Winners are proposals only — hand-copy into
-#     prompts/coder/coder.md or LIBERADO_CODER_PROMPT.
+#     skills/coder/coder.md or LIBERADO_CODER_PROMPT.
 # An unrecognized value falls back to "dispatcher" with a warning rather than failing the session.
 
 # coder_tier = "core"

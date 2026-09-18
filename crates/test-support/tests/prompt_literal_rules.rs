@@ -9,7 +9,7 @@
 //! - Retuning any of them meant a full workspace rebuild. Prompt work is iterative — the session
 //!   critic went from 2 of 4 labelled traces to 4 of 4 on one wording change — so the loop that
 //!   most wants a fast turnaround had the slowest one available.
-//! - Two of them had drifted from `prompts/coder/coder.md`, a file that already existed and
+//! - Two of them had drifted from `skills/coder/coder.md`, a file that already existed and
 //!   already claimed to be the coder's prompt. Nobody could tell which text a run had used.
 //! - A prompt in a binary cannot be changed by the person operating a deployment.
 //!
@@ -162,7 +162,7 @@ fn harness_prompts_are_not_compiled_into_the_binary() {
     let found = violations();
     assert!(
         found.is_empty(),
-        "a model prompt is a string literal again. Put it in prompts/coder/ and load it with \
+        "a model prompt is a string literal again. Put it in skills/coder/ and load it with \
          liberado_coder_core::prompts, so it can be retuned without a rebuild and a deployment \
          can override it.\n{}",
         found.join("\n")

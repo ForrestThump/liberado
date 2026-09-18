@@ -18,6 +18,7 @@ not required; leftover directories stay gitignored if present.
 `.github/workflows/ci.yml` is the authority on what CI runs, and preflight mirrors it.
 
 ```bash
+just build-slim                               # day-to-day build (excludes heavy sidecars)
 just ci                                        # full local CI + CRAP ratchet; run before you push
 # Caps rustc jobs from free RAM (override LIBERADO_CI_JOBS). Workspace Clippy is the memory hog.
 just preflight                                 # fmt / clippy / test / deny, no llvm-cov
@@ -82,7 +83,7 @@ uncommitted work.
 **`cargo test` stops at the first failing test binary.** Use `--no-fail-fast` whenever you need the
 complete failure set — comparing a branch against its base is meaningless with a truncated list.
 
-**Run `just ci` before you push — CRAP is a per-function ratchet.** `crap-baseline.json` is the last
+**Run `just ci` before you push — CRAP is a per-function ratchet.** `code-metrics/crap-baseline.json` is the last
 best score for each function, scored on Ubuntu (the GitHub job's host). GitHub only *reads* it
 (`liberado ci crap` / job `CRAP regression`); it never writes the file. A function at 40 that goes
 to 45 fails, even under the 29.9 new-function ceiling. A current score below 10 is ignored, so a 4→5 move does
@@ -97,7 +98,7 @@ is a few lines; the full child log
 is always `.liberado/ci.log`.
 
 **Module-health and unwrap baselines write only on Linux `just ci`.** GitHub only reads
-`module-health-baseline.json` and `unwrap-classification-baseline.json`. Windows `just ci`
+`code-metrics/module-health-baseline.json` and `code-metrics/unwrap-classification-baseline.json`. Windows `just ci`
 compares them and does not rewrite, so the working tree stays clean for `just ready`. To record a
 new best off Linux, run `just module-health-ratchet` or `just unwrap-ratchet` and inspect the diff.
 
@@ -160,7 +161,10 @@ production entry point still reads it.
 - `crates/coder-tools/` — the tools the model actually calls.
 - `crates/coder-sandbox/` — workspaces, worktrees, checkpoints, preflight.
 - `crates/executor/` — the bounded decide/act loop shared by all agents.
-- `Skills/` — task playbooks (e.g. `cold-review-pr.md`, `mutants-campaign.md`).
+- `skills/` — task playbooks (e.g. `cold-review-pr.md`, `mutants-campaign.md`).
+- `skills/coder/` — compile-time + runtime coder prompts (`include_str!` in `liberado-coder-core`).
+- `code-metrics/` — CRAP / complexity / module-health / unwrap baselines and configs; mutants ledger.
+  (Root `.cargo-crap.toml` remains for cargo-crap discovery; keep it identical to `code-metrics/cargo-crap.toml`.)
 - `liberado shepherd` — drives agent PRs to ready-or-blocked on the same differential rule.
 - `crates/harness-eval/` and `liberado coder compare prepare|run|save|submit|await` — own durable Liberado/Pi comparisons: pinned
   worktrees, separate Cargo caches, 30-minute compile ceilings, spawn-on-submit dispatch behind a
@@ -234,8 +238,8 @@ free. `target/` reached 71.6 GB in one checkout, and `cargo-mutants` copies the 
 `%TEMP%` per run and leaves it there when killed (~23 GB in leaked clones). Check free space before
 a long dispatch and sweep `%TEMP%\cargo-mutants-*`. The harness now reports this honestly instead of
 telling the model to fix it (PR #119), but it cannot prevent it. For mutation campaigns, read
-`Skills/mutants-campaign.md`: builds use `target/mutants/`, and `just mutants-report` reads
-`mutants-ledger.json` for survivor counts and commit drift.
+`skills/mutants-campaign.md`: builds use `target/mutants/`, and `just mutants-report` reads
+`code-metrics/mutants-ledger.json` for survivor counts and commit drift.
 
 **Reinstall `liberado-acp` after merging anything the bridge links.** A dispatched run tests the
 installed binary, not your working tree. A run once silently tested a stale build; it was caught

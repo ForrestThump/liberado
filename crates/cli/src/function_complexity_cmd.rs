@@ -6,8 +6,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::process::Stdio;
 
-const CONFIG_FILE: &str = "function-complexity.toml";
-const BASELINE_FILE: &str = "function-complexity-baseline.json";
+const CONFIG_FILE: &str = "code-metrics/function-complexity.toml";
+const BASELINE_FILE: &str = "code-metrics/function-complexity-baseline.json";
 const CURRENT_FILE: &str = ".liberado/function-complexity-current.json";
 const TOOL_VERSION: &str = "0.4.3";
 
@@ -72,8 +72,16 @@ pub fn ratchet(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
         load_config(root)?;
         generate(root)?;
     }
-    std::fs::copy(root.join(CURRENT_FILE), root.join(BASELINE_FILE))?;
+    write_baseline(root)?;
     eprintln!("[function complexity] ratcheted {BASELINE_FILE}");
+    Ok(())
+}
+
+fn write_baseline(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    if let Some(parent) = Path::new(BASELINE_FILE).parent() {
+        std::fs::create_dir_all(root.join(parent))?;
+    }
+    std::fs::copy(root.join(CURRENT_FILE), root.join(BASELINE_FILE))?;
     Ok(())
 }
 
@@ -290,6 +298,7 @@ mod tests {
 
     fn config_dir_with(body: &str, extra_file: Option<&str>) -> tempfile::TempDir {
         let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("code-metrics")).unwrap();
         std::fs::write(dir.path().join(CONFIG_FILE), body).unwrap();
         if let Some(rel) = extra_file {
             std::fs::create_dir_all(dir.path().join(rel).parent().unwrap()).unwrap();
@@ -403,5 +412,29 @@ reviewed_on = "2026-08-01"
         let dir = config_dir_with(body, Some("src/lib.rs"));
         let err = super::load_config(dir.path()).unwrap_err().to_string();
         assert!(err.contains("duplicate"), "{err}");
+    }
+
+    // ── write_baseline: copy current report into the baseline path ───
+
+    #[test]
+    fn write_baseline_copies_current_to_baseline_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let current = dir.path().join(super::CURRENT_FILE);
+        std::fs::create_dir_all(current.parent().unwrap()).unwrap();
+        let body = br#"{"version":"","entries":[]}"#;
+        std::fs::write(&current, body).unwrap();
+        assert!(
+            !dir.path().join("code-metrics").exists(),
+            "write_baseline should create the parent directory"
+        );
+
+        super::write_baseline(dir.path()).unwrap();
+
+        let baseline = dir.path().join(super::BASELINE_FILE);
+        assert!(
+            baseline.is_file(),
+            "baseline should be written: {baseline:?}"
+        );
+        assert_eq!(std::fs::read(&baseline).unwrap(), body);
     }
 }

@@ -388,18 +388,18 @@ trace_dir = "coder-traces"
 
 [coder.planner]
 model = "deepseek/deepseek-v4-pro"
-prompt_path = "prompts/coder/planner.md"
+prompt_path = "skills/coder/planner.md"
 temperature = 0.1
 max_tokens = 8192
 
 [coder.coder]
 model = "deepseek/deepseek-v4-pro"
-prompt_path = "prompts/coder/coder.md"
+prompt_path = "skills/coder/coder.md"
 max_turns = 30
 
 [coder.critic]
 model = "deepseek/deepseek-v4-flash"
-prompt_path = "prompts/coder/critic.md"
+prompt_path = "skills/coder/critic.md"
 temperature = 0.1
 
 [coder.progress]
