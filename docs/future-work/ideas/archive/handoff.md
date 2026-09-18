@@ -1,4 +1,7 @@
-﻿> ⚠️ Archive — see living copy at `docs/project/handoff.md`. This file is preserved for historical reference only.
+﻿> ⚠️ Archive — both this file and the prior living copy at `docs/project/handoff.md` are now
+> historical. The living copy was archived on 2026-09-18 to
+> [`project-handoff-2026-07.md`](../../../future-work/archive/project-handoff-2026-07.md).
+> Current direction is in [`../../../roadmap.md`](../../../roadmap.md).
 
 # Liberado â€” Handoff (2026-07-08)
 

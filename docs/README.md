@@ -39,7 +39,6 @@ If you are an agent: start at the [roadmap](roadmap.md) → [architecture overvi
 | **`impl/`** | Developer guides, setup, contribution workflow — how to build and work here |
 | **`future-work/`** | Forward-looking: plans, ideas, research, historical archives — what might happen next |
 | **`validation/`** | Correctness: mutation testing reports, coverage analysis |
-| **`project/`** | Meta: handoffs, design questions |
 | **`CATALOG.md`** | Generated repository-wide document catalog |
 
 ---
@@ -53,7 +52,6 @@ If you are an agent: start at the [roadmap](roadmap.md) → [architecture overvi
 5. [Failure modes](spec/architecture/failure-modes.md) — six recurring bug classes
 6. [Contributor orientation](../AGENTS.md) — build, test, architecture, and repository rules
 7. [Developer workflow](impl/development-workflow.md) — how work gets done here
-8. [Handoff](project/handoff.md) — what is live on the homelab today
 
 Per-crate detail: generated [crate map](spec/reference/crate-map.md) + each crate's `crates/*/ARCHITECTURE.md`.
 
@@ -94,4 +92,4 @@ Liberado is sequenced **daemon (life-ops) → chat surface → coding pack**, no
 
 **Checking links:** run `just check-links` (or `cargo run --locked -p liberado-cli -- docs check-links`) to verify every relative markdown link in `docs/`, the repo-root `README.md`, and every `crates/*/ARCHITECTURE.md` resolves to a real file, resolved from each linking file's directory. External `http(s)`/protocol URLs and `.secret` files are skipped, so the check never needs network access. CI enforces the same check in the `doc-links` job.
 
-**Last updated:** 2026-07-31 — docs reorganized per `project/` → `spec/impl/future-work/validation/project` schema; `just check-links` doc-link checker added.
+**Last updated:** 2026-09-18 — archived stale `docs/project/handoff.md` and `docs/project/design_questions.md` (2026-07 diary / closed questions) to `docs/future-work/archive/`. The empty `docs/project/` directory was removed; the `project/` row in the folder-structure table is gone with it.

@@ -13,11 +13,9 @@ Rust-native **personal AI Liberado** and **agentic orchestration** substrate: on
 | Sessions model | [docs/spec/architecture/sessions.md](docs/spec/architecture/sessions.md) |
 | Frozen seams | [docs/spec/architecture/contracts.md](docs/spec/architecture/contracts.md) |
 | What to build next | [docs/roadmap.md](docs/roadmap.md) |
-| Live homelab status | [docs/project/handoff.md](docs/project/handoff.md) |
 | HTTP/SSE API | [docs/spec/reference/api.md](docs/spec/reference/api.md) |
 | Crate inventory | [docs/spec/reference/crate-map.md](docs/spec/reference/crate-map.md) |
 | Failure-modes checklist | [docs/spec/architecture/failure-modes.md](docs/spec/architecture/failure-modes.md) |
-| Open design questions | [docs/project/design_questions.md](docs/project/design_questions.md) |
 
 ## Strategy (short)
 

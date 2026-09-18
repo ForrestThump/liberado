@@ -4,7 +4,7 @@ Superseded brainstorms, one-off research dumps, and duplicate handoff notes. **N
 
 | File | Why archived |
 |------|----------------|
-| [handoff.md](handoff.md) | Duplicate of living [docs/project/handoff.md](../../../project/handoff.md) |
+| [handoff.md](handoff.md) | Historical 2026-07-08 duplicate. The prior living copy at `docs/project/handoff.md` was also archived on 2026-09-18 to [`../../archive/project-handoff-2026-07.md`](../../archive/project-handoff-2026-07.md). |
 | [meshify.md](meshify.md) | Superseded by [architecture/modularity.md](../../../spec/architecture/modularity.md) |
 | [doomloop_research.md](doomloop_research.md) | Research dump; behavior lives in executor |
 | [loop_architecture_reference_article.md](loop_architecture_reference_article.md) | External-style article draft |

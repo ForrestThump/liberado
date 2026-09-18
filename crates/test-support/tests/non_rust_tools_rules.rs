@@ -78,7 +78,7 @@ fn public_deployment_files_contain_no_private_host_data() {
         "deploy/homelab/docker-compose.ghcr-webui.yml",
         "deploy/homelab/setup.sh",
         "deploy/homelab/liberado-mcp-diagnosis.md",
-        "docs/project/handoff.md",
+        "docs/future-work/archive/project-handoff-2026-07.md",
     ] {
         let text = std::fs::read_to_string(root.join(relative))
             .unwrap()
