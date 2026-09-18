@@ -98,7 +98,9 @@ Slice order, all under Priority 2:
    from observed usage. **Backlog.**
 
 Jev lands **after** Slice 4 lands and is dogfooded — explicitly out of scope for the
-chat/agent PR set. TUI parity (kind filter) is deferred until shelves are stable. The
+chat/agent PR set. The post-shelf phase plan (TypeSafe Jev first wedge, non-goals, and
+kernel constraints) is [`jev-integration.md`](spec/architecture/jev-integration.md).
+TUI parity (kind filter) is deferred until shelves are stable. The
 [`tui-maturity-roadmap.md`](future-work/tui-maturity-roadmap.md) is updated to reflect the
 deferral.
 

@@ -10,8 +10,9 @@ open_items: true
 # Chat vs agent surface mode
 
 **Status**: Slice 1 (wire + stamp) is in this PR. Slices 2–4 follow as separate
-PRs. Jev is out of scope for this document and lands only after the shelves are
-dogfooded.
+PRs. Jev is out of scope for **this** document (CAS1–CAS4 only); the full phase
+plan lives in [`jev-integration.md`](jev-integration.md) and starts only after
+the shelves are dogfooded.
 
 **Reading**: this plan locks **Reading B** for the meaning of "agent". An
 **agent** is a long-lived specialist **chat** (a Grok-Bot-style context with
@@ -123,7 +124,7 @@ without any migration.
 | **S2 — WebUI shelves** | Two top-level shelves inside the sidebar (Chats / Agents), partition client-side by `ConvHeader.surface_mode`. Default to Chats. | one |
 | **S3 — chat-default tools** | Named `chat-default` `[[session_profiles]]` entry; `chat-search` (read-only MCP) granted to `main-agent`. Operator opt-in via `policy.toml` comment block. | one |
 | **S4 — dogfood + measure** | One-week dogfood of shelves + chat-default. Tune `agent_profiles` set from observed usage. | one |
-| **later — Jev** | Out of scope for this plan. Jev is dispatcher-side; lands after S4 has measured the shelves for a week. |
+| **later — Jev** | Out of scope for this plan. See [`jev-integration.md`](jev-integration.md) for the phase plan (first wedge, non-goals, kernel constraints). Lands after S4 has measured the shelves for a week. |
 
 TUI is **deliberately not in this slice set**. The TUI already renders
 its own `SessionKind` chip from `goal.domain`; a kind filter is parity
@@ -135,7 +136,7 @@ not pull TUI filter work into this PR.
 
 Per the brief and confirmed by walking the repo:
 
-- **Jev** (brief line 12). Out of scope.
+- **Jev** (brief line 12). Out of scope here; see [`jev-integration.md`](jev-integration.md).
 - **TUI polish / TUI shelf split.** TUI already has the kind chip; no
   shelf work for Slice 1.
 - **Dispatcher / executor refactor.** Capability `∩` and dispatcher
@@ -214,6 +215,7 @@ Per the brief and confirmed by walking the repo:
 - **S4 (dogfood)**: one week of measured shelves + chat-default, then
   tune `agent_profiles` from observed usage.
 - **Jev (later)**: dispatcher-side "which agent does this belong to"
-  wedge; lands after S4 has been dogfooded.
+  wedge; lands after S4 has been dogfooded. Full phase plan:
+  [`jev-integration.md`](jev-integration.md).
 - **TUI parity (later)**: `K` key filter on `SessionKind` — small, but
   explicitly deferred until shelves are stable.

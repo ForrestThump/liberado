@@ -37,10 +37,11 @@ unblocked item. Do not skip a code dependency.
 | **11** | **CAS2 — WebUI shelf split (Slice 2)** | Blocked on CAS1. Two shelves inside the sidebar, partition client-side by `ConvHeader.surface_mode`, default to Chats. |
 | **12** | **CAS3 — chat-default tools (Slice 3)** | Blocked on CAS2. Named `chat-default` profile; `chat-search` granted to `main-agent` via `policy.toml` comment block. |
 | **13** | **CAS4 — dogfood + measure shelves (Slice 4)** | Blocked on CAS3. One-week dogfood; tune `agent_profiles` from observed usage. |
+| **14** | **JEV1 / CAS5 — TypeSafe Jev first wedge** | Blocked on CAS4 dogfood (≥1 week). Spec: [`../spec/architecture/jev-integration.md`](../spec/architecture/jev-integration.md). Confidence-gated advisor only (belong? / which agent? / optional soft tool hints). Dispatcher remains sole grantor. One PR at a time — do not start while an earlier CAS item is still open. |
 
-Jev (the dispatcher-side "which agent does this belong to" wedge) is **not** in this table.
-It lands after CAS4 is dogfooded for at least one week; its first wedge reads against
-an addressable `agent_profiles` set, not against `goal.is_some()`.
+Jev is in the table as **JEV1 / CAS5** only so the next agent can find it; it stays
+blocked until CAS4 dogfood finishes. Its first wedge reads against an addressable
+`agent_profiles` set and Agent shelves, not against `goal.is_some()`.
 
 ## Acceptance context
 
