@@ -1,13 +1,16 @@
 ---
 kind: finding
-status: active
-authority: evidence
+status: historical
+authority: advisory
 domain: coding-harness
 canonical_for: vtcode-no-write
-open_items: true
+open_items: false
+last_verified: 2026-09-17
 ---
 
-> 🐛 Open bug finding — tracked pending write-guard completion. See [`docs/roadmap.md`](../roadmap.md) for status.
+> **Historical finding (2026-07).** `vtcode` is no longer Liberado's coding harness — zero
+> workspace crates depend on it; strategy is rust-native `liberado-loop` / coding pack.
+> Retained as provenance for the pivot; not an open bug to fix in this repo.
 
 # PR-dispatch pipeline reliability — vtcode never writes files (in progress)
 
@@ -332,6 +335,6 @@ tests: it says the remaining gap is very unlikely to be in request-level paramet
 
 ## Related docs
 
-- [`docs/project/handoff.md`](../project/handoff.md) — live ops handoff (not the archived ideas/handoff snapshot).
-- [`archive/human-todo.md`](archive/human-todo.md) — archived operator checklist (uncommitted work,
+- [`docs/project/handoff.md`](../../project/handoff.md) — live ops handoff (not the archived ideas/handoff snapshot).
+- [`human-todo.md`](human-todo.md) — archived operator checklist (uncommitted work,
   PR review, etc.).

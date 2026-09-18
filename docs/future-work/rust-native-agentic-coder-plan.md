@@ -69,7 +69,7 @@ checkpoint log, **proving the mesh through the coding pack** that unblocks PR di
 
 The PR-dispatch system proved the draft-PR gate and forge workflow, but the coding harness was the
 weak link. The diagnosis in
-[`pr-dispatch-vtcode-no-write-finding.md`](pr-dispatch-vtcode-no-write-finding.md) shows that
+[`pr-dispatch-vtcode-no-write-finding.md`](archive/pr-dispatch-vtcode-no-write-finding.md) shows that
 `vtcode` can report success while doing read-only exploration and producing no real diff, while an
 OpenCode A/B with the same model and task writes the expected code. Ten confirmed interventions did
 not move the core symptom. More patching around `vtcode` has low expected return.

@@ -49,6 +49,7 @@ Authority model: [doc-authority.md](spec/reference/doc-authority.md).
 | [docs/future-work/archive/parallel-deliverables-2026-08-round-2.md](future-work/archive/parallel-deliverables-2026-08-round-2.md) | plan | implemented | advisory | process | parallel-deliverables-r2 |
 | [docs/future-work/archive/parallel-deliverables-2026-08-round-3.md](future-work/archive/parallel-deliverables-2026-08-round-3.md) | plan | implemented | advisory | process | parallel-deliverables-r3 |
 | [docs/future-work/archive/parallel-deliverables-2026-08.md](future-work/archive/parallel-deliverables-2026-08.md) | plan | implemented | advisory | process | parallel-deliverables-r1 |
+| [docs/future-work/archive/pr-dispatch-vtcode-no-write-finding.md](future-work/archive/pr-dispatch-vtcode-no-write-finding.md) | finding | historical | advisory | coding-harness | vtcode-no-write |
 | [docs/future-work/archive/property-testing-plan.md](future-work/archive/property-testing-plan.md) | plan | historical | advisory | correctness | — |
 | [docs/future-work/backlog.md](future-work/backlog.md) | plan | active | implementation | product | implementation-backlog |
 | [docs/future-work/cadence-triggered-maintenance-agents.md](future-work/cadence-triggered-maintenance-agents.md) | plan | draft | advisory | ops | cadence-maintenance-agents |
@@ -68,7 +69,6 @@ Authority model: [doc-authority.md](spec/reference/doc-authority.md).
 | [docs/future-work/mcp-suite-standardization.md](future-work/mcp-suite-standardization.md) | plan | active | implementation | mcp | mcp-suite-standardization |
 | [docs/future-work/model-knob-profiles.md](future-work/model-knob-profiles.md) | plan | draft | advisory | tuning | model-knob-profiles |
 | [docs/future-work/paseo-liberado-integration-roadmap.md](future-work/paseo-liberado-integration-roadmap.md) | plan | active | implementation | acp | paseo-liberado-integration |
-| [docs/future-work/pr-dispatch-vtcode-no-write-finding.md](future-work/pr-dispatch-vtcode-no-write-finding.md) | finding | active | evidence | coding-harness | vtcode-no-write |
 | [docs/future-work/research/README.md](future-work/research/README.md) | index | active | advisory | docs | — |
 | [docs/future-work/research/archive/agent-orchestration-idea-from-Sol.md](future-work/research/archive/agent-orchestration-idea-from-Sol.md) | finding | historical | advisory | coding-harness | coding-worker-control-plane-source |
 | [docs/future-work/research/archive/bob-martin-critique.md](future-work/research/archive/bob-martin-critique.md) | finding | historical | advisory | coding-harness | bob-martin-critique |

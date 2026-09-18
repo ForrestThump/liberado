@@ -42,7 +42,7 @@ MCPs; hand-edited `topology.toml` remains the operator surface.
 
 ## 5. Coding pack priority vs “not replacing Claude Code”
 
-**Question:** [positioning.md](../spec/architecture/positioning.md) and [../roadmap.md](../roadmap.md) deprioritize coding polish, but [rust-native-agentic-coder-plan.md](../future-work/rust-native-agentic-coder-plan.md) and [pr-dispatch-vtcode-no-write-finding.md](../future-work/pr-dispatch-vtcode-no-write-finding.md) still look like large active programs. Confirm coding remains **integration-only** until P1 daily-drive bar is met.
+**Question:** [positioning.md](../spec/architecture/positioning.md) and [../roadmap.md](../roadmap.md) deprioritize coding polish, but [rust-native-agentic-coder-plan.md](../future-work/rust-native-agentic-coder-plan.md) and [pr-dispatch-vtcode-no-write-finding.md](../future-work/archive/pr-dispatch-vtcode-no-write-finding.md) still look like large active programs. Confirm coding remains **integration-only** until P1 daily-drive bar is met.
 
 **Related:** those files + [architecture/agentic-loops.md](../spec/architecture/agentic-loops.md).
 
