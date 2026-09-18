@@ -35,6 +35,7 @@ Everything removed from this directory remains in git history.
 | [human-todo.md](human-todo.md) | Operator checklist snapshot |
 | [webui-flesh-out-plan.md](webui-flesh-out-plan.md) | WebUI flesh-out — all 5 phases implemented; design reference only |
 | [mutants-campaign-ledger-plan.md](mutants-campaign-ledger-plan.md) | Mutation campaign ledger CLI and recipes — implemented; live operation is in the skill |
+| [sysmap-generic-core-plan.md](sysmap-generic-core-plan.md) | Generic `sysmap-core` split — Phases 1–5 implemented; Phase 6 (publish/port) deferred outside Liberado product backlog |
 | [daemon-pr-review-coupling-pass.md](daemon-pr-review-coupling-pass.md) | Historical coupling pass — daemon PR review after Slice 2 (Sol @ `4be02711`) |
 | [daemon-pr-review-kickoff-grok46-critique.md](daemon-pr-review-kickoff-grok46-critique.md) | Historical Grok 4.6 critique of the daemon PR review kickoff (Sol pass 1 @ `848ad7da`) |
 | [property-testing-plan.md](property-testing-plan.md) | Historical 2026-07-31 property-testing plan — `proptest = "1"` is now a workspace dep and in use across multiple crates; not an implementation checklist |

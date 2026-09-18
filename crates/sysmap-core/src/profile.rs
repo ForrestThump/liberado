@@ -1,7 +1,7 @@
 //! The declared profile a map is built from: the layer/kind vocabulary plus the runtime wiring
 //! that cargo and the project's own config cannot derive. This is the `sysmap.toml` schema —
 //! project-agnostic; a project supplies one (see `crates/sysmap/sysmap.toml` for the Liberado
-//! profile and `docs/future-work/sysmap-generic-core-plan.md` for the template).
+//! profile and `docs/future-work/archive/sysmap-generic-core-plan.md` for the template).
 
 use std::collections::BTreeMap;
 

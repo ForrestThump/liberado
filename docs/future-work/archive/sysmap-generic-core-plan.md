@@ -1,25 +1,25 @@
 ---
 kind: plan
-status: active
-authority: implementation
+status: implemented
+authority: advisory
 domain: tooling
-open_items: true
-last_verified: 2026-08-21
-verified_against: e1ab936
+open_items: false
+last_verified: 2026-09-18
+verified_against: 1ac8feac
 ---
 
 # sysmap — split into a generic core + a Liberado profile
 
-**Status**: active, verified 2026-08-21. **Phases 1–5 done** — `sysmap-core` extracted with an open layer/kind
-vocabulary (Phase 1); the scanner reads `cargo metadata` + `[package.metadata]` (Phase 2); the
-profile vocabulary, seed edge, and topology wiring live in `sysmap.toml` and a core rule engine
-applies them (Phase 3); the scanner and assembly moved into `sysmap-core` (Phase 4); the renderer
-became a `sysmap-core`-only library with a thin launcher bin (Phase 5). The active renderer is now
-an interactive 2D map. **Phase 6 remains open** (publish or port the generic core).
-This plan records the split of the system map (`liberado-sysmap` +
-`liberado-sysmap-gui`, see [`crates/sysmap/README.md`](../../crates/sysmap/README.md)) into a
-**project-agnostic** core crate plus a thin **Liberado-specific** profile, so the map becomes
-portable to other Rust projects.
+**Status:** Implemented and archived. **Phases 1–5 shipped** — `sysmap-core` extracted with an
+open layer/kind vocabulary (Phase 1); the scanner reads `cargo metadata` + `[package.metadata]`
+(Phase 2); the profile vocabulary, seed edge, and topology wiring live in `sysmap.toml` and a
+core rule engine applies them (Phase 3); the scanner and assembly moved into `sysmap-core`
+(Phase 4); the renderer became a `sysmap-core`-only library with a thin launcher bin (Phase 5).
+The active renderer is now an interactive 2D map. **Phase 6 (publish / port `sysmap-core` to
+crates.io or as a git dep for other projects) is deferred** — not on the Liberado product
+backlog and not pursued here. The current live map docs live with the code, in
+[`crates/sysmap/README.md`](../../../crates/sysmap/README.md), with sibling crates `sysmap-core`,
+`sysmap`, `sysmap-gui`, and `sysmap-cli`. This plan is retained as a record of the split.
 
 ## The principle: three sources, three homes
 
@@ -130,7 +130,7 @@ label = "domain pack"
 `manifest_namespace` is the decoupling trick: the core reads `[package.metadata.<ns>] role` and
 `flows` with `<ns>` defaulting to `sysmap`. Liberado passes `liberado`, so **zero manifest churn** —
 and `layer_rules` and the crate-map generator keep reading `[package.metadata.liberado] role`
-untouched (see [`../spec/architecture/contracts.md`](../spec/architecture/contracts.md)).
+untouched (see [`../../spec/architecture/contracts.md`](../../spec/architecture/contracts.md)).
 
 ## What `cargo metadata` bought over the old TOML parser
 
