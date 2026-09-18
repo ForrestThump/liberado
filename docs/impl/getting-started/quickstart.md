@@ -27,13 +27,21 @@ All three files are optional — an absent file keeps the daemon's built-in
 defaults. Starters live under `config.example/` (`topology.toml`,
 `policy.toml`, `tuning.toml`).
 
-The daemon looks for them in this order, first match wins (see
-[`docs/spec/reference/tuning.md`](../../spec/reference/tuning.md) §"Where config
-lives"):
+The daemon picks a single directory in this order — first match wins — and
+reads all three files from there. This chooses *where the files come from*;
+it is separate from how an individual setting's value is resolved once they
+are loaded. See
+[`docs/spec/reference/tuning.md`](../../spec/reference/tuning.md) §"Where
+config lives":
 
 1. `$LIBERADO_CONFIG_DIR`
 2. the platform config dir — `~/.config/liberado` (or `%APPDATA%\liberado` on Windows)
 3. the directory of the running binary
+
+For value overrides once the directory is chosen — code defaults, then files,
+then env (`LIBERADO_*`), then CLI flags; the highest source wins — see
+[`docs/spec/config-spec.md`](../../spec/config-spec.md) §"File Layout &
+Precedence".
 
 ```bash
 mkdir -p ~/.config/liberado
