@@ -5,7 +5,7 @@ authority: normative
 domain: ci
 canonical_for: local-readiness
 open_items: false
-last_verified: 2026-09-14
+last_verified: 2026-09-18
 ---
 
 # Local readiness
@@ -77,8 +77,17 @@ move-aware baseline matcher classifies as new. This preserves distinct same-name
 The unwraps classifier and ratchet are configured in `code-metrics/unwrap-classification.toml` and committed
 in `code-metrics/unwrap-classification-baseline.json`. The AST classifier walks production `.unwrap()` and
 `.expect()` calls, categorizing them into proven invariants, local failures, and process-fatal unwraps.
-New process-fatal unwraps are blocked by CI without a narrow, reviewed waiver. Operator recipes include
-`just unwrap-classification` (or `cargo liberado ci unwraps`) and `just unwrap-ratchet`.
+New process-fatal unwraps are blocked by CI without a narrow, reviewed waiver.
+
+Unwrap classification is behind the `liberado-cli` feature `ci-unwraps` (tree-sitter + tree-sitter-rust)
+so the default product graph stays slim. Operator recipes pass the feature explicitly:
+
+- `just ci` runs `cargo run -p liberado-cli --features ci-unwraps -- ci`
+- `just unwrap-classification` runs `… --features ci-unwraps -- ci unwraps`
+- `just unwrap-ratchet` runs `… --features ci-unwraps -- ci unwraps-ratchet`
+
+Invoking `liberado ci unwraps` / `unwraps-ratchet` without `--features ci-unwraps` returns an error that
+points at those just recipes. See also [slim-build.md](slim-build.md) for the feature fence.
 
 ## Operator recipes
 
