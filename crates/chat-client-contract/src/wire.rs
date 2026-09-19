@@ -5,6 +5,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::surface_mode::SurfaceMode;
+
 // ──────────────────────────────────────────────────────────────
 // Chat streaming types
 // ──────────────────────────────────────────────────────────────
@@ -304,6 +306,12 @@ pub struct ConvHeader {
     /// The message node that spawned this conversation, when applicable.
     #[serde(default)]
     pub spawned_by: Option<String>,
+    /// Which chat-surface shelf this conversation lives on. `#[serde(default)]`
+    /// so a row missing the field (any pre-stamp log, any older client) reads
+    /// as `Chat`. Stamped at create; see
+    /// `docs/spec/architecture/chat-agent-surface-mode.md` for the rule.
+    #[serde(default)]
+    pub surface_mode: SurfaceMode,
 }
 
 /// Body of `POST /api/sessions/{id}/fork`.
@@ -839,6 +847,7 @@ mod tests {
             created_at: "2025-06-25T12:00:00Z".into(),
             parent_conversation: Some("c0".into()),
             spawned_by: Some("msg-5".into()),
+            surface_mode: SurfaceMode::default(),
         };
         let json = serde_json::to_value(&h).unwrap();
         let back: ConvHeader = serde_json::from_value(json).unwrap();

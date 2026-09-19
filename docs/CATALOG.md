@@ -86,6 +86,8 @@ Authority model: [doc-authority.md](spec/reference/doc-authority.md).
 | [docs/impl/live-conformance.md](impl/live-conformance.md) | runbook | active | implementation | conformance | live-conformance-operation |
 | [docs/roadmap.md](roadmap.md) | plan | active | advisory | product | product-roadmap |
 | [docs/spec/architecture-decisions.md](spec/architecture-decisions.md) | index | superseded | advisory | architecture | — |
+| [docs/spec/architecture/chat-agent-surface-mode.md](spec/architecture/chat-agent-surface-mode.md) | plan | active | implementation | product | chat-agent-surface-mode |
+| [docs/spec/architecture/jev-integration.md](spec/architecture/jev-integration.md) | plan | active | implementation | product | jev-integration |
 | [docs/spec/reference/cargo-targets.md](spec/reference/cargo-targets.md) | reference | active | normative | coding-harness | cargo-targets |
 | [docs/spec/reference/doc-authority.md](spec/reference/doc-authority.md) | policy | active | normative | docs | document-authority |
 | [docs/spec/reference/local-readiness.md](spec/reference/local-readiness.md) | reference | active | normative | ci | local-readiness |

@@ -552,3 +552,12 @@ Do **not** implement goals only inside `crates/tui/src/api.rs`.
 
 **Document owner:** TUI / surfaces.  
 **Review after:** T2 complete (first goal dogfood) and after T4 (coding density).
+
+### Shelf split and parity filter are deferred (2026-09)
+
+The chat | agent surface mode (Reading B) is in flight on the WebUI side; spec at
+[`../spec/architecture/chat-agent-surface-mode.md`](../spec/architecture/chat-agent-surface-mode.md).
+The TUI is **not** in that PR set: the brief de-prioritizes TUI work and the TUI already
+renders its own `SessionKind` chip from `goal.domain`. A TUI kind filter (parity with the
+WebUI shelves) is explicitly deferred until the WebUI shelves are dogfooded and stable. The
+[`backlog`](backlog.md) tracks the chat/agent item order.

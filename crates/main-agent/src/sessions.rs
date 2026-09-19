@@ -60,8 +60,7 @@ use liberado_common::{
     McpDescriptor, ProposalSigner, RiskWaiverSet, WriteClass, mcp_of,
 };
 use liberado_conversation_store::{
-    Author, ConversationHeader, ConversationStore, MessageNode, NewConversation, NewNode,
-    StoreError, Ulid,
+    Author, ConversationHeader, ConversationStore, MessageNode, NewNode, StoreError, Ulid,
 };
 use liberado_dispatcher::{DispatchRequest, Dispatcher};
 use liberado_executor::{
@@ -71,6 +70,8 @@ use liberado_mcp::ScopedRuntime;
 use liberado_provider::{Message, Provider, Role};
 use liberado_session::{DomainHint, GoalSessionHub, GoalSpec, SessionGrant, SessionOrigin};
 
+#[path = "sessions/surface_mode.rs"]
+mod surface_mode;
 #[path = "sessions_waivers.rs"]
 mod waivers;
 use thiserror::Error;
@@ -584,38 +585,6 @@ impl ChatSessions {
             SessionGrant::default(),
         )
         .await
-    }
-
-    async fn create_conversation(
-        &self,
-        title: Option<String>,
-        ephemeral: bool,
-        visibility: liberado_session::Visibility,
-        grant: SessionGrant,
-    ) -> SessionResult<Ulid> {
-        let header = self
-            .store
-            .create(NewConversation {
-                title,
-                parent_conversation: None,
-                spawned_by: None,
-                ephemeral,
-                visibility,
-                grant,
-            })
-            .await?;
-        self.store
-            .append(
-                header.id,
-                NewNode {
-                    parent_id: None,
-                    author: Author::System,
-                    message: Message::system(&self.system_prompt),
-                    model: None,
-                },
-            )
-            .await?;
-        Ok(header.id)
     }
 
     /// Switch a conversation onto a different session profile, and record that it happened.

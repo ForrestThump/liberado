@@ -280,6 +280,11 @@ impl SessionStore {
             result: None,
             awaiting_input: false,
             ephemeral: new.ephemeral,
+            // The stamp arrives from the caller (`NewSession.surface_mode`,
+            // defaulted to `Chat`). Goal sessions and unprofiled chats both
+            // stay `Chat` on the wire — Reading B locks the agent sense to
+            // profile class, not goal-ness.
+            surface_mode: new.surface_mode,
         };
         self.append_line(id, &Record::Header(Box::new(header.clone())));
         let (bus, _) = broadcast::channel(EVENT_CHANNEL_CAPACITY);
@@ -445,6 +450,9 @@ impl SessionStore {
                 // A fork of an incognito chat is incognito too, or forking would be a way to launder
                 // a RAM-only transcript onto the disk.
                 ephemeral: parent.ephemeral,
+                // Keep the shelf stamp: forking is a branch of the same chat-surface
+                // conversation, not a reclassification.
+                surface_mode: parent.surface_mode,
             })
             .await;
 
@@ -585,6 +593,8 @@ impl ConversationStore for SessionStore {
                 // profile becomes the session's authority, and where it was previously dropped.
                 grant: new.grant,
                 ephemeral: new.ephemeral,
+                // Reading B: shelf stamp is create-time / profile-class, not goal.
+                surface_mode: new.surface_mode,
             })
             .await;
         Ok(header.to_conversation_header())

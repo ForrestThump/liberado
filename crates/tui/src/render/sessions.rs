@@ -145,6 +145,7 @@ mod tests {
             created_at: "2025-06-25T12:00:00Z".into(),
             parent_conversation: None,
             spawned_by: None,
+            surface_mode: Default::default(),
         }
     }
 
@@ -195,17 +196,17 @@ mod tests {
 
     #[test]
     fn parent_child_rows_carry_tree_glyphs() {
-        use chat_client_contract::ConvHeader as C;
         let mut app = test_support::app();
         app.focus = Focus::SessionBrowser;
         app.conversations = vec![
             conv("root", "root thread"),
-            C {
+            ConvHeader {
                 id: "kid".into(),
                 title: Some("child".into()),
                 created_at: "2025-06-25T12:00:00Z".into(),
                 parent_conversation: Some("root".into()),
                 spawned_by: Some("msg-9".into()),
+                surface_mode: Default::default(),
             },
         ];
         let out = render(&app, 90, 24);

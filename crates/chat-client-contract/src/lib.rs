@@ -5,6 +5,8 @@
 //!
 //! # Module layout
 //!
+//! - **`surface_mode`** — `SurfaceMode` (`chat` | `agent`) shelf stamp; kept as its own
+//!   module so `wire.rs` stays at its function baseline.
 //! - **`wire`** — All wire DTOs (`DaemonStatus`, `ReactionEvent`, `SessionEvent`, etc.).
 //!   Pure `serde` — no native deps, compiles to `wasm32-unknown-unknown`. The clients'
 //!   actual shared boundary lives here: [`wire::SessionEvent::from_sse_data`] turns one decoded
@@ -22,6 +24,7 @@
 //! matching the old flat layout for existing import paths.
 
 pub mod session_kind;
+pub mod surface_mode;
 pub mod wire;
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -31,4 +34,5 @@ pub mod native;
 pub use session_kind::{
     DomainWire, GoalHeaderResult, GoalHeaderSpec, SessionKind, SessionSummary, VisibilityWire,
 };
+pub use surface_mode::SurfaceMode;
 pub use wire::*;

@@ -40,6 +40,12 @@ impl SessionStore {
             // A goal session is durable by construction: it is run by a pack, reported on, and
             // resumed. Incognito is a property of a human sitting at a chat surface asking for it.
             ephemeral: false,
+            // Goal sessions default to `Chat` on the chat lens — Reading B
+            // locks the agent sense to profile class, not goal-ness. The
+            // projection upgrades this to `Agent` only when the profile is
+            // in `agent_profiles`, which a `/spawn`ed goal session may or
+            // may not carry. See `SessionHeader::to_conversation_header`.
+            surface_mode: Default::default(),
         };
         let mut map = self.inner.lock().await;
         if map.contains_key(&id) {

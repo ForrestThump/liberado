@@ -76,6 +76,34 @@ Open outcomes:
 Per-conversation model selection and its compaction trigger are implemented. Their current contract
 belongs in the architecture and configuration references, not in this roadmap.
 
+### Near-term callout — chat | agent surface mode (Reading B)
+
+The immediate product-surface bet is a soft **chat | agent** split: a long-lived specialist
+chat (a Grok-Bot-style context with curated tools, never terminal) lives on the **agent** shelf;
+an open-ended chat lives on the **chat** shelf. The stamp is **not** `goal.is_some()` — it is
+the create-time signal (explicit `surface_mode`, or the named profile in a small `agent_profiles`
+set). Goal sessions default to `chat` on the chat lens; the agent sense is the profile one.
+
+Slice order, all under Priority 2:
+
+1. **Wire stamp** (Slice 1) — `surface_mode: "chat" | "agent"` on `ConvHeader` /
+   `ConversationHeader` / `SessionHeader`. Stamped at create, defaulted to `chat` on read for
+   legacy rows, upgraded for legacy rows whose profile is in `agent_profiles`. **In flight.**
+   Spec: [`chat-agent-surface-mode.md`](spec/architecture/chat-agent-surface-mode.md).
+2. **WebUI shelves** (Slice 2) — two top-level shelves inside the sidebar, partition client-side,
+   default to Chats. **Backlog.**
+3. **Chat-default tools** (Slice 3) — named `chat-default` profile, `chat-search` granted to
+   `main-agent` as a commented `policy.toml` block. **Backlog.**
+4. **Dogfood + measure** (Slice 4) — one week of shelves + chat-default, tune `agent_profiles`
+   from observed usage. **Backlog.**
+
+Jev lands **after** Slice 4 lands and is dogfooded — explicitly out of scope for the
+chat/agent PR set. The post-shelf phase plan (TypeSafe Jev first wedge, non-goals, and
+kernel constraints) is [`jev-integration.md`](spec/architecture/jev-integration.md).
+TUI parity (kind filter) is deferred until shelves are stable. The
+[`tui-maturity-roadmap.md`](future-work/tui-maturity-roadmap.md) is updated to reflect the
+deferral.
+
 ## Priority 3 — coding pack
 
 The target is a merge-ready result under a fixed task, repository commit, model, provider, and

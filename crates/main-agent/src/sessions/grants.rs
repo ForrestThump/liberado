@@ -609,6 +609,7 @@ fn profile_model_needs_a_named_profile() {
             model: Some("gpt-x".into()),
             ..Default::default()
         },
+        surface_mode: Default::default(),
     };
     assert_eq!(
         ChatSessions::profile_model(&named),
@@ -627,6 +628,7 @@ fn profile_model_needs_a_named_profile() {
             model: Some("gpt-x".into()),
             ..Default::default()
         },
+        surface_mode: Default::default(),
     };
     assert_eq!(
         ChatSessions::profile_model(&anonymous),
