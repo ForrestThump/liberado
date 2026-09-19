@@ -4,6 +4,7 @@ use chat_client_contract::{ConvHeader, ConversationSearchResponse, ConversationS
 
 use crate::components::conversation_row::ConversationRow;
 use crate::components::mcp_panel::McpPanel;
+use crate::components::sidebar_shelf::{Shelf, conversations_on_shelf, search_results_on_shelf};
 use crate::icons::IconChevronLeft;
 
 async fn fetch_conversations(api_base: String) -> Result<Vec<ConvHeader>, String> {
@@ -274,6 +275,10 @@ pub fn Sidebar(
     });
 
     let mut search_query = use_signal(String::new);
+    // Soft shelf toggle (Chats | Agents). Default Chats. Switching shelves only
+    // refilters the list — the active conversation stays selected even if it
+    // lives on the other shelf (see PR body / CAS2 brief).
+    let mut shelf = use_signal(Shelf::default);
     // Which row's action sheet is open, by conversation id. Held here rather than per row so
     // opening one closes another — two open sheets at once is just clutter.
     let mut menu_for = use_signal(|| None::<String>);
@@ -406,6 +411,27 @@ pub fn Sidebar(
                     oninput: move |evt| search_query.set(evt.value()),
                 }
             }
+            div {
+                class: "sidebar-shelves",
+                role: "tablist",
+                "aria-label": "Conversation shelves",
+                button {
+                    class: if shelf() == Shelf::Chats { "sidebar-shelf-btn active" } else { "sidebar-shelf-btn" },
+                    role: "tab",
+                    r#type: "button",
+                    "aria-selected": "{shelf() == Shelf::Chats}",
+                    onclick: move |_| shelf.set(Shelf::Chats),
+                    "Chats"
+                }
+                button {
+                    class: if shelf() == Shelf::Agents { "sidebar-shelf-btn active" } else { "sidebar-shelf-btn" },
+                    role: "tab",
+                    r#type: "button",
+                    "aria-selected": "{shelf() == Shelf::Agents}",
+                    onclick: move |_| shelf.set(Shelf::Agents),
+                    "Agents"
+                }
+            }
             p {
                 class: "sidebar-gesture-hint",
                 "Press and hold a chat for rename or delete."
@@ -415,13 +441,19 @@ pub fn Sidebar(
                 if !search_query.read().trim().is_empty() {
                     match &*search_results.read() {
                         Some(Some(Ok(list))) => {
-                            if list.is_empty() {
+                            let conv_guard = conversations.read();
+                            let headers: &[ConvHeader] = match &*conv_guard {
+                                Some(Ok(h)) => h.as_slice(),
+                                _ => &[],
+                            };
+                            let scoped = search_results_on_shelf(list, headers, shelf());
+                            if scoped.is_empty() {
                                 rsx! {
                                     p { class: "sidebar-empty", "No results." }
                                 }
                             } else {
                                 rsx! {
-                                    for result in list {
+                                    for result in scoped {
                                         ConversationRow {
                                             key: "{result.conversation_id}",
                                             id: result.conversation_id.clone(),
@@ -461,16 +493,17 @@ pub fn Sidebar(
                 } else {
                     match &*conversations.read() {
                         Some(Ok(list)) => {
-                            if list.is_empty() {
+                            let on_shelf = conversations_on_shelf(list, shelf());
+                            if on_shelf.is_empty() {
                                 rsx! {
                                     p {
                                         class: "sidebar-empty",
-                                        "No conversations yet."
+                                        "{shelf().empty_message()}"
                                     }
                                 }
                             } else {
                                 rsx! {
-                                    for conv in list {
+                                    for conv in on_shelf {
                                         ConversationRow {
                                             key: "{conv.id}",
                                             id: conv.id.clone(),

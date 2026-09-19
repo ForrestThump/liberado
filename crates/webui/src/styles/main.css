@@ -493,6 +493,40 @@ body {
     background: var(--lib-surface);
 }
 
+/* ── Sidebar shelves (Chats | Agents) ─────────────────────────────────────── */
+
+.sidebar-shelves {
+    display: flex;
+    gap: 0.25rem;
+    padding: 0.5rem 0.75rem 0;
+    flex-shrink: 0;
+}
+
+.sidebar-shelf-btn {
+    flex: 1;
+    padding: 0.35rem 0.5rem;
+    border: 1px solid var(--lib-border);
+    border-radius: 0.375rem;
+    background: transparent;
+    color: var(--lib-sidebar-text);
+    font-family: inherit;
+    font-size: 0.75rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: border-color 0.12s, background 0.12s, color 0.12s;
+}
+
+.sidebar-shelf-btn:hover {
+    border-color: var(--lib-accent);
+    color: var(--lib-accent);
+}
+
+.sidebar-shelf-btn.active {
+    background: color-mix(in srgb, var(--lib-accent) 18%, transparent);
+    border-color: var(--lib-accent);
+    color: var(--lib-accent);
+}
+
 /* ── Sidebar search ───────────────────────────────────────────────────────── */
 
 .sidebar-search {

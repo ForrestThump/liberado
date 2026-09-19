@@ -43294,11 +43294,11 @@
     }
   ],
   "diagnostics": {
-    "analyzed_files": 616,
+    "analyzed_files": 617,
     "lcov_files": 435,
     "matched_files": 433,
     "source_only": {
-      "count": 183,
+      "count": 184,
       "examples": [
         "crates/acp-bridge/src/coding_run_tests.rs",
         "crates/acp-bridge/src/grant_tests.rs",

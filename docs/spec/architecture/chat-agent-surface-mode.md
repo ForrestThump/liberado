@@ -9,7 +9,7 @@ open_items: true
 
 # Chat vs agent surface mode
 
-**Status**: Slice 1 (wire + stamp) is in this PR. Slices 2–4 follow as separate
+**Status**: Slice 1 (wire + stamp) landed in [#274](https://github.com/ForrestThump/liberado/pull/274). Slice 2 (WebUI shelves) is in flight. Slices 3–4 follow as separate
 PRs. Jev is out of scope for **this** document (CAS1–CAS4 only); the full phase
 plan lives in [`jev-integration.md`](jev-integration.md) and starts only after
 the shelves are dogfooded.

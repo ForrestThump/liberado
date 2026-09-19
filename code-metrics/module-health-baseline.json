@@ -4223,6 +4223,12 @@
     "functions": 39,
     "cyclomatic": 74
   },
+  "crates/webui/src/components/sidebar_shelf.rs": {
+    "ploc": 122,
+    "lloc": 19,
+    "functions": 16,
+    "cyclomatic": 26
+  },
   "crates/webui/src/components/slash_commands.rs": {
     "ploc": 446,
     "lloc": 126,
