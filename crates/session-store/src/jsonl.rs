@@ -136,14 +136,6 @@ impl SessionStore {
         }
     }
 
-    /// Override the chat-surface `agent_profiles` set used by the chat-lens
-    /// projection on every read is implemented in the `agent_profiles.rs`
-    /// sibling module so this file stays at its cyclomatic / ploc baseline.
-    /// Threaded through from `config.tuning.chat.agent_profiles` by the
-    /// daemon wiring. Without it, the projection uses the conservative
-    /// built-in default. Spec:
-    /// `docs/spec/architecture/chat-agent-surface-mode.md`.
-
     /// Open a durable store rooted at `dir`, replaying every `*.jsonl` found there.
     ///
     /// A session that was mid-run when the daemon stopped is coerced to `Failed`: no pack is running
