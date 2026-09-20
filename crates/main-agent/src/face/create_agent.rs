@@ -7,7 +7,6 @@
 //! dispatch-domain jobs).
 
 use async_trait::async_trait;
-use liberado_conversation_store::is_agent_profile;
 use liberado_provider::ToolDef;
 use serde_json::json;
 
@@ -50,16 +49,18 @@ pub fn create_agent_tool_def() -> ToolDef {
     ToolDef::new(
         CREATE_AGENT_TOOL_NAME,
         "Create a long-lived specialist Agent chat on the Agents shelf (Grok-Bot-style peer \
-         context). Pass an agent-eligible chat profile name (`coding`, `life`, `researcher`, \
-         `operator`). Returns the new conversation id — it is NOT a subagent job and does not \
-         await a goal. Prefer this over delegate when the human wants an ongoing specialist \
-         conversation rather than a one-shot dispatch.",
+         context). Pass an agent-eligible chat profile name. The eligible set is the deployment's \
+         `[chat] agent_profiles` (default: `coding`, `life`, `researcher`, `operator`); the create \
+         is refused with a clear error if the name is not in the deployment's set. Returns the \
+         new conversation id — it is NOT a subagent job and does not await a goal. Prefer this \
+         over delegate when the human wants an ongoing specialist conversation rather than a \
+         one-shot dispatch.",
         json!({
             "type": "object",
             "properties": {
                 "profile": {
                     "type": "string",
-                    "description": "Agent-eligible chat profile name (e.g. coding, life, researcher, operator)."
+                    "description": "Agent-eligible chat profile name (e.g. coding, life, researcher, operator — the actual eligible set is deployment-tuned via [chat] agent_profiles)."
                 },
                 "title": {
                     "type": "string",
@@ -77,6 +78,12 @@ pub(super) struct CreateAgentArgs {
     pub title: Option<String>,
 }
 
+/// Parse the model-supplied arguments. Validates shape only — `profile` is non-empty
+/// after trimming. The policy check (is this profile in the deployment's `[chat]
+/// agent_profiles` set?) lives in [`ChatSessions::create_agent_chat`](crate::ChatSessions::create_agent_chat)
+/// so the parser has no opinion on what counts as "agent-eligible": the answer is
+/// deployment-tunable, and the parser would otherwise be reading a default set the
+/// deployment did not pick.
 pub(super) fn parse_create_agent_args(
     arguments: &serde_json::Value,
 ) -> Result<CreateAgentArgs, String> {
@@ -87,12 +94,6 @@ pub(super) fn parse_create_agent_args(
         .trim();
     if profile.is_empty() {
         return Err("create_agent requires a non-empty `profile` string".into());
-    }
-    if !is_agent_profile(profile) {
-        return Err(format!(
-            "create_agent: profile `{profile}` is not agent-eligible \
-             (expected coding|life|researcher|operator)"
-        ));
     }
     let title = arguments
         .get("title")
@@ -112,12 +113,27 @@ mod tests {
     use liberado_conversation_store::is_agent_creator_profile;
 
     #[test]
-    fn parse_requires_agent_eligible_profile() {
-        let err = parse_create_agent_args(&json!({"profile": "chat-default"})).unwrap_err();
-        assert!(err.contains("not agent-eligible"), "{err}");
+    fn parse_validates_shape_only_not_policy() {
+        // Non-empty after trim: ok, even for profiles the parser has no opinion on.
+        let ok = parse_create_agent_args(&json!({"profile": "designer"})).unwrap();
+        assert_eq!(ok.profile, "designer");
+        assert_eq!(ok.title, None);
+        // Title is trimmed; empty / whitespace-only title drops to None.
         let ok = parse_create_agent_args(&json!({"profile": "coding", "title": "  X  "})).unwrap();
         assert_eq!(ok.profile, "coding");
         assert_eq!(ok.title.as_deref(), Some("X"));
+        let ok = parse_create_agent_args(&json!({"profile": "coding", "title": "   "})).unwrap();
+        assert_eq!(ok.title, None);
+    }
+
+    #[test]
+    fn parse_rejects_empty_profile() {
+        let err = parse_create_agent_args(&json!({"profile": ""})).unwrap_err();
+        assert!(err.contains("non-empty"), "{err}");
+        let err = parse_create_agent_args(&json!({"profile": "   "})).unwrap_err();
+        assert!(err.contains("non-empty"), "{err}");
+        let err = parse_create_agent_args(&json!({})).unwrap_err();
+        assert!(err.contains("non-empty"), "{err}");
     }
 
     #[test]
