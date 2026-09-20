@@ -35,19 +35,32 @@ pub async fn append(correlation_id: &str, record: Value) {
         .open(&path)
         .await
     {
-        Ok(mut f) => {
-            use tokio::io::AsyncWriteExt;
-            if let Err(e) = f.write_all(line.as_bytes()).await {
-                tracing::warn!(
-                    error = %e,
-                    path = %path.display(),
-                    "dispatch journal write failed"
-                );
-            }
-        }
+        Ok(mut f) => write_and_flush(&mut f, &path, &line).await,
         Err(e) => {
             tracing::warn!(error = %e, path = %path.display(), "dispatch journal open failed");
         }
+    }
+}
+
+/// Write `line` and flush the kernel buffer before drop closes the fd: a reader that opens the
+/// file right after `append` returns must see the line, on slow CI disks an unflushed append can
+/// be observed as an empty file. `write_all` returning only guarantees the bytes left userspace.
+async fn write_and_flush(f: &mut tokio::fs::File, path: &Path, line: &str) {
+    use tokio::io::AsyncWriteExt;
+    if let Err(e) = f.write_all(line.as_bytes()).await {
+        tracing::warn!(
+            error = %e,
+            path = %path.display(),
+            "dispatch journal write failed"
+        );
+        return;
+    }
+    if let Err(e) = f.flush().await {
+        tracing::warn!(
+            error = %e,
+            path = %path.display(),
+            "dispatch journal flush failed"
+        );
     }
 }
 

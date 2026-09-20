@@ -24,7 +24,7 @@ unblocked item. Do not skip a code dependency.
 
 | Order | Item | Dependency |
 |---:|---|---|
-| **1** | **CAS1 — chat vs agent wire stamp (Slice 1)** | None. Spec: [`../spec/architecture/chat-agent-surface-mode.md`](../spec/architecture/chat-agent-surface-mode.md). `SurfaceMode` on `ConvHeader` / `ConversationHeader` / `SessionHeader`; stamped at create; legacy rows default `chat`, upgrade to `agent` when `grant.profile ∈ agent_profiles`. **In flight.** |
+| **1** | **CAS1 — chat vs agent wire stamp (Slice 1)** | **Done** (merged [#274](https://github.com/ForrestThump/liberado/pull/274)). Spec: [`../spec/architecture/chat-agent-surface-mode.md`](../spec/architecture/chat-agent-surface-mode.md). `SurfaceMode` on `ConvHeader` / `ConversationHeader` / `SessionHeader`; stamped at create; legacy rows default `chat`, upgrade to `agent` when `grant.profile ∈ agent_profiles`. |
 | **2** | **R1 — prove Codex-only daemon PR review and one-repository cutover** | Slices 0–3 and remote PR acquisition are present. Run the restart, clean, blocker, synchronize, and remote-only-head cases from [`daemon-pr-review-kickoff.md`](daemon-pr-review-kickoff.md). Publish the evidence before Slice 4. |
 | **3** | **0.7 / C3 — publish the controlled cross-harness baseline** | The comparison infrastructure and ship-bar excerpt fix are present. This is a report, not another harness change. Spec: [`cross-harness-baseline.md`](cross-harness-baseline.md). |
 | **4** | **C5 — measure the completion gate** | Run after the baseline produces a non-zero finish rate. Do not change the default first. |
@@ -34,7 +34,7 @@ unblocked item. Do not skip a code dependency.
 | **8** | **E5 — stop the TurboMCP SSE reconnect storm** | External reliability work; restore useful homelab diagnostics. |
 | **9** | **E2 — implement the inbox layer** | E4 must land first. The design is settled in the inbox specification. |
 | **10** | **C4 — finish dedicated goal-view panes** | Useful surface work, but it does not block measurement or unattended shipping. |
-| **11** | **CAS2 — WebUI shelf split (Slice 2)** | Blocked on CAS1. Two shelves inside the sidebar, partition client-side by `ConvHeader.surface_mode`, default to Chats. |
+| **11** | **CAS2 — WebUI shelf split + create-path (Slice 2)** | **In flight** ([#276](https://github.com/ForrestThump/liberado/pull/276)). Shelves + **New Agent** (`POST /api/conversations` + profile) + privileged face `create_agent` (gate A: default face / `operator`). CAS3 still next; Jev still after CAS4. |
 | **12** | **CAS3 — chat-default tools (Slice 3)** | Blocked on CAS2. Named `chat-default` profile; `chat-search` granted to `main-agent` via `policy.toml` comment block. |
 | **13** | **CAS4 — dogfood + measure shelves (Slice 4)** | Blocked on CAS3. One-week dogfood; tune `agent_profiles` from observed usage. |
 | **14** | **JEV1 / CAS5 — TypeSafe Jev first wedge** | Blocked on CAS4 dogfood (≥1 week). Spec: [`../spec/architecture/jev-integration.md`](../spec/architecture/jev-integration.md). Confidence-gated advisor only (belong? / which agent? / optional soft tool hints). Dispatcher remains sole grantor. One PR at a time — do not start while an earlier CAS item is still open. |

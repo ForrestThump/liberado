@@ -88,14 +88,16 @@ Slice order, all under Priority 2:
 
 1. **Wire stamp** (Slice 1) — `surface_mode: "chat" | "agent"` on `ConvHeader` /
    `ConversationHeader` / `SessionHeader`. Stamped at create, defaulted to `chat` on read for
-   legacy rows, upgraded for legacy rows whose profile is in `agent_profiles`. **In flight.**
+   legacy rows, upgraded for legacy rows whose profile is in `agent_profiles`. **Done**
+   ([#274](https://github.com/ForrestThump/liberado/pull/274)).
    Spec: [`chat-agent-surface-mode.md`](spec/architecture/chat-agent-surface-mode.md).
-2. **WebUI shelves** (Slice 2) — two top-level shelves inside the sidebar, partition client-side,
-   default to Chats. **Backlog.**
-3. **Chat-default tools** (Slice 3) — named `chat-default` profile, `chat-search` granted to
-   `main-agent` as a commented `policy.toml` block. **Backlog.**
-4. **Dogfood + measure** (Slice 4) — one week of shelves + chat-default, tune `agent_profiles`
-   from observed usage. **Backlog.**
+2. **WebUI shelves + create-path** (Slice 2) — shelves, **New Agent** create-with-grant,
+   privileged face `create_agent` (gate A). **In flight**
+   ([#276](https://github.com/ForrestThump/liberado/pull/276)).
+3. **Chat-default tools** (Slice 3 / CAS3) — named `chat-default` profile, `chat-search` granted to
+   `main-agent` as a commented `policy.toml` block. **Backlog** (still next after this).
+4. **Dogfood + measure** (Slice 4 / CAS4) — one week of shelves + chat-default, tune `agent_profiles`
+   from observed usage. **Backlog.** Jev still after CAS4.
 
 Jev lands **after** Slice 4 lands and is dogfooded — explicitly out of scope for the
 chat/agent PR set. The post-shelf phase plan (TypeSafe Jev first wedge, non-goals, and

@@ -123,8 +123,10 @@ fn caps_granting(mcps: &[&str]) -> CapabilitySet {
     caps
 }
 
-/// Normal mode exposes the whole live registry; delegation mode collapses to `delegate`
-/// plus only MCP-granted tools — and never an ungranted one.
+/// Normal mode exposes the whole live registry; delegation mode collapses to built-in face
+/// tools (`delegate` + `create_agent`) plus only MCP-granted tools — and never an ungranted one.
+/// (`create_agent` is still privilege-gated per session at runtime; the boot log lists it so ops
+/// know the face can offer it.)
 #[tokio::test]
 async fn face_tool_surface_follows_delegation_and_grants() {
     let runtime = runtime_with(&["delegate", "memory:search", "vault:write", "plain_tool"]);
@@ -135,15 +137,20 @@ async fn face_tool_surface_follows_delegation_and_grants() {
     assert!(names.contains(&"memory:search".to_string()));
     assert!(names.contains(&"plain_tool".to_string()));
 
-    // Delegation without grants: delegate only.
+    // Delegation without grants: built-in face tools only.
     let (names, count) = face_tool_surface(&runtime, true, &CapabilitySet::empty());
-    assert_eq!(names, vec!["delegate".to_string()], "{names:?}");
-    assert_eq!(count, 1);
+    assert_eq!(
+        names,
+        vec!["delegate".to_string(), "create_agent".to_string()],
+        "{names:?}"
+    );
+    assert_eq!(count, 2);
 
-    // Delegation with a memory grant: delegate + memory tools; vault stays out.
+    // Delegation with a memory grant: face builtins + memory tools; vault stays out.
     let (names, count) = face_tool_surface(&runtime, true, &caps_granting(&["memory"]));
-    assert_eq!(count, 2, "{names:?}");
+    assert_eq!(count, 3, "{names:?}");
     assert!(names.contains(&"delegate".to_string()));
+    assert!(names.contains(&"create_agent".to_string()));
     assert!(names.contains(&"memory:search".to_string()));
     assert!(!names.contains(&"vault:write".to_string()));
 }

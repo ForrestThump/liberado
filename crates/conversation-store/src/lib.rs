@@ -42,7 +42,8 @@ pub use error::{StoreError, StoreResult};
 pub use store::ConversationStore;
 pub use types::{
     AgentProfiles, Author, COMPACTION_AUTHOR, COMPACTION_TAIL_AUTHOR, ConversationHeader,
-    MessageNode, NewConversation, NewNode, SurfaceMode, Timestamp, is_agent_profile,
+    MessageNode, NewConversation, NewNode, SurfaceMode, Timestamp, is_agent_creator_profile,
+    is_agent_profile,
 };
 // Re-exported so downstream crates can name session/node ids without depending on `ulid` directly.
 pub use ulid::Ulid;

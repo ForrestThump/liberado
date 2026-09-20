@@ -146,28 +146,37 @@ pub(super) const KEEP_ALIVE_INTERVAL: std::time::Duration = std::time::Duration:
 
 /// Resolve a named chat session profile into the grant a session would run under, or `None` when no
 /// profile was asked for. Fails closed on an unknown/disabled name — an empty grant must not silently
-/// become the default (wider) one. Pure: the caller owns the error response.
-fn resolve_chat_grant(
+/// become the default (wider) one. Also fails closed on a serialization bug: the resolved overrides
+/// must round-trip to JSON, otherwise the child would silently run with default overrides (wider
+/// than the named profile specified). Pure: the caller owns the error response.
+///
+/// Uses an inline closure for the profile→grant step so this function stays at its cyclomatic
+/// baseline (the JSON serialization's `?` would otherwise push the count past the limit). The
+/// closure is the only place that touches `ResolvedProfile`; the type is not re-exported from
+/// `liberado_config` at the top level, so naming it here would force a deep import.
+pub(super) fn resolve_chat_grant(
     config: &Config,
     profile: Option<&str>,
 ) -> Result<Option<liberado_session::SessionGrant>, String> {
     match profile {
         None => Ok(None),
-        Some(name) => match config.resolve_session_profile(Some(name), "") {
-            Ok(resolved) => {
+        Some(name) => config
+            .resolve_session_profile(Some(name), "")
+            .map_err(|e| e.to_string())
+            .and_then(|resolved| {
                 let parts = resolved.grant_parts();
-                Ok(Some(liberado_session::SessionGrant {
-                    capabilities: parts.capabilities,
-                    profile: parts.profile,
-                    overrides: serde_json::to_value(&resolved.overrides)
-                        .unwrap_or(serde_json::Value::Null),
-                    delegation: parts.delegation,
-                    model: parts.model.map(str::to_string),
-                    prompt_append: parts.prompt_append.map(str::to_string),
-                }))
-            }
-            Err(e) => Err(e.to_string()),
-        },
+                serde_json::to_value(&resolved.overrides)
+                    .map_err(|e| format!("failed to serialize profile overrides: {e}"))
+                    .map(|overrides| liberado_session::SessionGrant {
+                        capabilities: parts.capabilities,
+                        profile: parts.profile,
+                        overrides,
+                        delegation: parts.delegation,
+                        model: parts.model.map(str::to_string),
+                        prompt_append: parts.prompt_append.map(str::to_string),
+                    })
+            })
+            .map(Some),
     }
 }
 
@@ -200,7 +209,7 @@ fn pick_chat_creation(
 
 /// `\u{2014}` keeps this glyph ASCII in source. UTF-8 em-dash bytes (`E2 80 94`) read as
 /// Windows-1252 become U+00E2 U+20AC U+201D in the WebUI error bubble.
-const CHAT_DISABLED_HINT: &str = "chat is disabled \u{2014} set DEEPSEEK_API_KEY";
+pub(super) const CHAT_DISABLED_HINT: &str = "chat is disabled \u{2014} set DEEPSEEK_API_KEY";
 
 /// Build a single-`failed`-event stream response: the shape every "the stream cannot start" path
 /// returns (chat disabled, profile resolution failure, creation failure). Sends the error on the
@@ -517,7 +526,7 @@ pub async fn chat(
 }
 
 /// Map a session/store error to a 500 JSON body â€” the shared failure shape for the chat endpoints.
-fn chat_error(e: liberado_main_agent::SessionError) -> axum::response::Response {
+pub(super) fn chat_error(e: liberado_main_agent::SessionError) -> axum::response::Response {
     (
         StatusCode::INTERNAL_SERVER_ERROR,
         Json(ApiError {
@@ -671,6 +680,8 @@ pub async fn list_profiles(State(state): State<Arc<AppState>>) -> impl IntoRespo
                 "domain": p.domain,
                 "delegation": p.delegation,
                 "model": p.model,
+                // Reading B: New Agent picker + create_agent only offer these.
+                "agent_eligible": liberado_conversation_store::is_agent_profile(&p.name),
             })
         })
         .collect();

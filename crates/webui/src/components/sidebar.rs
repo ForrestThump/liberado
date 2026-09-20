@@ -4,6 +4,8 @@ use chat_client_contract::{ConvHeader, ConversationSearchResponse, ConversationS
 
 use crate::components::conversation_row::ConversationRow;
 use crate::components::mcp_panel::McpPanel;
+use crate::components::sidebar_new_agent::NewAgentPicker;
+use crate::components::sidebar_shelf::{Shelf, conversations_on_shelf, search_results_on_shelf};
 use crate::icons::IconChevronLeft;
 
 async fn fetch_conversations(api_base: String) -> Result<Vec<ConvHeader>, String> {
@@ -274,6 +276,11 @@ pub fn Sidebar(
     });
 
     let mut search_query = use_signal(String::new);
+    // Soft shelf toggle (Chats | Agents). Default Chats. Switching shelves only
+    // refilters the list — the active conversation stays selected even if it
+    // lives on the other shelf (see PR body / CAS2 brief).
+    let mut shelf = use_signal(Shelf::default);
+    let mut new_agent_open = use_signal(|| false);
     // Which row's action sheet is open, by conversation id. Held here rather than per row so
     // opening one closes another — two open sheets at once is just clutter.
     let mut menu_for = use_signal(|| None::<String>);
@@ -369,25 +376,34 @@ pub fn Sidebar(
             class: "sidebar",
             div {
                 class: "sidebar-header",
-                button {
-                    class: "sidebar-new-chat-btn",
-                    onclick: move |_| {
-                        // Announce the *request* rather than infer it from state. This used to be
-                        // only `if active_conv_id.is_some() { set(None) }`, on the premise that
-                        // `None` already means "fresh and empty" — true until incognito, whose
-                        // session deliberately never becomes an `active_conv_id`. New Chat then
-                        // no-opped in exactly the case where clearing mattered most, leaving the
-                        // private transcript on screen.
-                        //
-                        // A counter, not a bool: pressing New Chat twice has to register twice, and
-                        // a flag that is already `true` cannot say "again".
-                        new_chat_nonce += 1;
-                        if active_conv_id.read().is_some() {
-                            active_conv_id.set(None);
-                        }
-                        collapse_after_pick(collapsed);
-                    },
-                    "New Chat"
+                div {
+                    class: "sidebar-new-btns",
+                    button {
+                        class: "sidebar-new-chat-btn",
+                        onclick: move |_| {
+                            // Announce the *request* rather than infer it from state. This used to be
+                            // only `if active_conv_id.is_some() { set(None) }`, on the premise that
+                            // `None` already means "fresh and empty" — true until incognito, whose
+                            // session deliberately never becomes an `active_conv_id`. New Chat then
+                            // no-opped in exactly the case where clearing mattered most, leaving the
+                            // private transcript on screen.
+                            //
+                            // A counter, not a bool: pressing New Chat twice has to register twice, and
+                            // a flag that is already `true` cannot say "again".
+                            new_chat_nonce += 1;
+                            if active_conv_id.read().is_some() {
+                                active_conv_id.set(None);
+                            }
+                            collapse_after_pick(collapsed);
+                        },
+                        "New Chat"
+                    }
+                    button {
+                        class: "sidebar-new-agent-btn",
+                        title: "Create an Agents-shelf specialist chat",
+                        onclick: move |_| new_agent_open.set(true),
+                        "New Agent"
+                    }
                 }
                 button {
                     class: "sidebar-collapse-btn",
@@ -406,6 +422,27 @@ pub fn Sidebar(
                     oninput: move |evt| search_query.set(evt.value()),
                 }
             }
+            div {
+                class: "sidebar-shelves",
+                role: "tablist",
+                "aria-label": "Conversation shelves",
+                button {
+                    class: if shelf() == Shelf::Chats { "sidebar-shelf-btn active" } else { "sidebar-shelf-btn" },
+                    role: "tab",
+                    r#type: "button",
+                    "aria-selected": "{shelf() == Shelf::Chats}",
+                    onclick: move |_| shelf.set(Shelf::Chats),
+                    "Chats"
+                }
+                button {
+                    class: if shelf() == Shelf::Agents { "sidebar-shelf-btn active" } else { "sidebar-shelf-btn" },
+                    role: "tab",
+                    r#type: "button",
+                    "aria-selected": "{shelf() == Shelf::Agents}",
+                    onclick: move |_| shelf.set(Shelf::Agents),
+                    "Agents"
+                }
+            }
             p {
                 class: "sidebar-gesture-hint",
                 "Press and hold a chat for rename or delete."
@@ -415,13 +452,19 @@ pub fn Sidebar(
                 if !search_query.read().trim().is_empty() {
                     match &*search_results.read() {
                         Some(Some(Ok(list))) => {
-                            if list.is_empty() {
+                            let conv_guard = conversations.read();
+                            let headers: &[ConvHeader] = match &*conv_guard {
+                                Some(Ok(h)) => h.as_slice(),
+                                _ => &[],
+                            };
+                            let scoped = search_results_on_shelf(list, headers, shelf());
+                            if scoped.is_empty() {
                                 rsx! {
                                     p { class: "sidebar-empty", "No results." }
                                 }
                             } else {
                                 rsx! {
-                                    for result in list {
+                                    for result in scoped {
                                         ConversationRow {
                                             key: "{result.conversation_id}",
                                             id: result.conversation_id.clone(),
@@ -461,16 +504,17 @@ pub fn Sidebar(
                 } else {
                     match &*conversations.read() {
                         Some(Ok(list)) => {
-                            if list.is_empty() {
+                            let on_shelf = conversations_on_shelf(list, shelf());
+                            if on_shelf.is_empty() {
                                 rsx! {
                                     p {
                                         class: "sidebar-empty",
-                                        "No conversations yet."
+                                        "{shelf().empty_message()}"
                                     }
                                 }
                             } else {
                                 rsx! {
-                                    for conv in list {
+                                    for conv in on_shelf {
                                         ConversationRow {
                                             key: "{conv.id}",
                                             id: conv.id.clone(),
@@ -525,6 +569,18 @@ pub fn Sidebar(
             div {
                 class: "sidebar-footer",
                 McpPanel { api_base: api_base.clone() }
+            }
+            if new_agent_open() {
+                NewAgentPicker {
+                    api_base: api_base.clone(),
+                    open: new_agent_open,
+                    on_created: move |header: chat_client_contract::ConvHeader| {
+                        active_conv_id.set(Some(header.id));
+                        shelf.set(Shelf::Agents);
+                        conversations.restart();
+                        collapse_after_pick(collapsed);
+                    },
+                }
             }
         }
     }

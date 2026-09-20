@@ -188,6 +188,19 @@ impl std::fmt::Display for AgentProfiles {
     }
 }
 
+/// Privilege gate A for the face `create_agent` tool: which *current* session
+/// profiles may request a new Agent-shelf chat.
+///
+/// Default face (`None`) is included so dogfood main chat can spawn specialists
+/// without first switching onto `operator`. Named creators start at `operator`.
+/// Non-creators (`coding`, `life`, `researcher`, …) must not see the tool.
+pub fn is_agent_creator_profile(profile: Option<&str>) -> bool {
+    match profile {
+        None => true,
+        Some(name) => matches!(name, "operator"),
+    }
+}
+
 /// One persisted message — a node in the conversation DAG. Appended once, never mutated.
 ///
 /// The [`id`](MessageNode::id) is time-sortable and minted by the store *at append time*, which is

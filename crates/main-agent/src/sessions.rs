@@ -73,6 +73,8 @@ use liberado_session::{DomainHint, GoalSessionHub, GoalSpec, SessionGrant, Sessi
 
 #[path = "sessions/agent_profiles.rs"]
 mod agent_profiles;
+#[path = "sessions/agent_spawn.rs"]
+mod agent_spawn;
 #[path = "sessions/surface_mode.rs"]
 mod surface_mode;
 #[path = "sessions_waivers.rs"]
@@ -84,7 +86,7 @@ use tokio::sync::mpsc::Sender;
 use crate::compaction::{
     self, COMPACTION_AUTHOR, COMPACTION_TAIL_AUTHOR, CompactionConfig, CompactionTriggerTable,
 };
-use crate::face::{DispatchBridge, FaceRuntime};
+use crate::face::DispatchBridge;
 use crate::{Conversation, DEFAULT_SYSTEM_PROMPT};
 
 /// Max display length for the cheap first-line default title (UTF-8 chars).
@@ -292,6 +294,10 @@ pub struct ChatSessions {
     delegation_mode: bool,
     /// Shared bridge for the face agent's `delegate` tool (when hub + delegation_mode).
     face_bridge: Option<Arc<DispatchBridge>>,
+    /// Profile→grant resolver for privileged `create_agent` (wired from Config at boot).
+    profile_resolver: Option<agent_spawn::ProfileGrantResolver>,
+    /// Weak self after `Arc::new` so face tools can call `create_with_grant`.
+    self_handle: std::sync::OnceLock<std::sync::Weak<ChatSessions>>,
     /// Automatic context compaction (CH3) — config + the provider that writes summaries.
     /// `None` = never compact (tests, and hosts that never wired it).
     compaction: Option<CompactionEngine>,
@@ -353,6 +359,8 @@ impl ChatSessions {
             dispatcher_capabilities: CapabilitySet::empty(),
             delegation_mode: false,
             face_bridge: None,
+            profile_resolver: None,
+            self_handle: std::sync::OnceLock::new(),
             compaction: None,
             agent_profiles: AgentProfiles::default(),
         }
@@ -731,6 +739,7 @@ impl ChatSessions {
                     session,
                     settings.capabilities.clone(),
                     turn_deferral.clone(),
+                    settings.profile.as_deref(),
                 );
                 // Derived from the runtime the executor is about to be handed, never from a list built
                 // beside it — see `Conversation::apply_available_tools`.
@@ -839,6 +848,7 @@ impl ChatSessions {
                     session,
                     settings.capabilities.clone(),
                     turn_deferral,
+                    settings.profile.as_deref(),
                 );
                 self.state_tool_surface(&mut convo, session, &settings, turn_runtime.as_ref());
                 convo
@@ -1272,29 +1282,6 @@ impl ChatSessions {
             profile: None,
             model: None,
         }
-    }
-
-    /// Face-agent runtime: built-in `delegate` is never risk-gated by MCP name (it is core).
-    /// Optional `"main-agent"` MCP grants are scoped + risk-gated separately so operators can
-    /// thicken the surface without exposing the fleet by default.
-    ///
-    /// `turn_deferral` is the per-turn flag a `delegate` raises when its subagent deferred the
-    /// action to the human out-of-band — read back by [`turn`](Self::turn) to drop the redundant
-    /// reply (Gap 2).
-    fn build_face_runtime(
-        &self,
-        user: &str,
-        session: Ulid,
-        capabilities: CapabilitySet,
-        turn_deferral: Arc<AtomicBool>,
-    ) -> Box<dyn ToolRuntime> {
-        let extras = self.scoped_extras_runtime(user, session, capabilities);
-        Box::new(FaceRuntime::new(
-            self.face_bridge.clone(),
-            extras,
-            Some(session.to_string()),
-            turn_deferral,
-        ))
     }
 
     /// Whether runtime risk/zone/consequence gates must wrap tool calls.
