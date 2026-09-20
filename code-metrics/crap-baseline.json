@@ -27724,11 +27724,20 @@
     },
     {
       "file": "crates/main-agent/src/face.rs",
-      "function": "FaceRuntime::catalog",
-      "line": 227,
-      "cyclomatic": 2.0,
+      "function": "FaceRuntime::builtin_catalog",
+      "line": 244,
+      "cyclomatic": 3.0,
       "coverage": 100.0,
-      "crap": 2.0,
+      "crap": 3.0,
+      "crate": "liberado-main-agent"
+    },
+    {
+      "file": "crates/main-agent/src/face.rs",
+      "function": "FaceRuntime::catalog",
+      "line": 292,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
       "crate": "liberado-main-agent"
     },
     {
@@ -27743,10 +27752,28 @@
     {
       "file": "crates/main-agent/src/face.rs",
       "function": "FaceRuntime::invoke",
-      "line": 236,
-      "cyclomatic": 3.0,
+      "line": 298,
+      "cyclomatic": 2.0,
       "coverage": 100.0,
-      "crap": 3.0,
+      "crap": 2.0,
+      "crate": "liberado-main-agent"
+    },
+    {
+      "file": "crates/main-agent/src/face.rs",
+      "function": "FaceRuntime::invoke_create_agent",
+      "line": 269,
+      "cyclomatic": 3.0,
+      "coverage": 0.0,
+      "crap": 12.0,
+      "crate": "liberado-main-agent"
+    },
+    {
+      "file": "crates/main-agent/src/face.rs",
+      "function": "FaceRuntime::invoke_delegate",
+      "line": 255,
+      "cyclomatic": 2.0,
+      "coverage": 91.66666666666666,
+      "crap": 2.002314814814815,
       "crate": "liberado-main-agent"
     },
     {
@@ -27756,6 +27783,15 @@
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
+      "crate": "liberado-main-agent"
+    },
+    {
+      "file": "crates/main-agent/src/face.rs",
+      "function": "FaceRuntime::try_invoke_builtin",
+      "line": 279,
+      "cyclomatic": 3.0,
+      "coverage": 88.88888888888889,
+      "crap": 3.0123456790123457,
       "crate": "liberado-main-agent"
     },
     {
@@ -27770,7 +27806,7 @@
     {
       "file": "crates/main-agent/src/face.rs",
       "function": "parse_delegate_goal",
-      "line": 287,
+      "line": 306,
       "cyclomatic": 3.0,
       "coverage": 94.44444444444444,
       "crap": 3.001543209876543,

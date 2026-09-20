@@ -240,11 +240,8 @@ impl FaceRuntime {
             }),
         )
     }
-}
 
-#[async_trait]
-impl ToolRuntime for FaceRuntime {
-    fn catalog(&self) -> Vec<ToolDef> {
+    fn builtin_catalog(&self) -> Vec<ToolDef> {
         let mut tools = Vec::new();
         if self.bridge.is_some() {
             tools.push(Self::delegate_tool_def());
@@ -252,33 +249,55 @@ impl ToolRuntime for FaceRuntime {
         if self.agent_spawner.is_some() {
             tools.push(create_agent_tool_def());
         }
+        tools
+    }
+
+    async fn invoke_delegate(&self, call: &ToolInvocation) -> Result<String, String> {
+        let Some(bridge) = &self.bridge else {
+            return Err("delegate is not available (no dispatcher attached)".into());
+        };
+        let goal = parse_delegate_goal(&call.arguments)?;
+        bridge
+            .delegate(
+                goal.as_str(),
+                self.parent_conversation.as_deref(),
+                &self.turn_deferral,
+            )
+            .await
+    }
+
+    async fn invoke_create_agent(&self, call: &ToolInvocation) -> Result<String, String> {
+        let Some(spawner) = &self.agent_spawner else {
+            return Err(
+                "create_agent is not available (this session is not an agent creator)".into(),
+            );
+        };
+        let CreateAgentArgs { profile, title } = parse_create_agent_args(&call.arguments)?;
+        Ok(spawner.spawn_agent(&profile, title).await?.to_json())
+    }
+
+    async fn try_invoke_builtin(&self, call: &ToolInvocation) -> Option<Result<String, String>> {
+        if call.name == DELEGATE_TOOL_NAME {
+            return Some(self.invoke_delegate(call).await);
+        }
+        if call.name == CREATE_AGENT_TOOL_NAME {
+            return Some(self.invoke_create_agent(call).await);
+        }
+        None
+    }
+}
+
+#[async_trait]
+impl ToolRuntime for FaceRuntime {
+    fn catalog(&self) -> Vec<ToolDef> {
+        let mut tools = self.builtin_catalog();
         tools.extend(self.extras.catalog());
         tools
     }
 
     async fn invoke(&self, call: &ToolInvocation) -> Result<String, String> {
-        if call.name == DELEGATE_TOOL_NAME {
-            let Some(bridge) = &self.bridge else {
-                return Err("delegate is not available (no dispatcher attached)".into());
-            };
-            let goal = parse_delegate_goal(&call.arguments)?;
-            return bridge
-                .delegate(
-                    goal.as_str(),
-                    self.parent_conversation.as_deref(),
-                    &self.turn_deferral,
-                )
-                .await;
-        }
-        if call.name == CREATE_AGENT_TOOL_NAME {
-            let Some(spawner) = &self.agent_spawner else {
-                return Err(
-                    "create_agent is not available (this session is not an agent creator)".into(),
-                );
-            };
-            let CreateAgentArgs { profile, title } = parse_create_agent_args(&call.arguments)?;
-            let result = spawner.spawn_agent(&profile, title).await?;
-            return Ok(result.to_json());
+        if let Some(result) = self.try_invoke_builtin(call).await {
+            return result;
         }
         self.extras.invoke(call).await
     }
