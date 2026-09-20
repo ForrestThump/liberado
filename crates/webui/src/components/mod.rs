@@ -11,6 +11,8 @@ pub mod profile_browser;
 pub mod profiles_panel;
 pub mod reactions;
 pub mod sidebar;
+mod sidebar_new_agent;
+mod sidebar_shelf;
 pub mod slash_commands;
 pub mod slash_palette;
 pub mod stuck_sessions;

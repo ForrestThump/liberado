@@ -7,6 +7,7 @@
 //! us doesn't fight over it).
 
 mod api;
+mod chat_agent_spawn;
 mod coding_pack;
 mod cron_delivery;
 mod dispatcher_guidance;
@@ -436,7 +437,7 @@ fn build_app_router(state: &Arc<AppState>) -> Router {
         .route("/api/vault", axum::routing::get(api::vault))
         .route(
             "/api/conversations",
-            axum::routing::get(api::list_conversations),
+            axum::routing::get(api::list_conversations).post(api::create_conversation),
         )
         .route(
             "/api/conversations/search",
@@ -909,7 +910,8 @@ async fn build_chat(
     );
     sessions = sessions.with_dispatch(dispatcher, catalog);
 
-    (Some(Arc::new(sessions)), tool_count, tool_names)
+    let sessions = chat_agent_spawn::install(sessions, config);
+    (Some(sessions), tool_count, tool_names)
 }
 
 /// The face agent's tool surface: `delegate` only (plus granted main-agent MCP tools) in
@@ -921,7 +923,11 @@ fn face_tool_surface(
 ) -> (Vec<String>, usize) {
     let mut tool_names: Vec<String> = runtime.catalog().iter().map(|t| t.name.clone()).collect();
     if delegation_mode {
-        tool_names = vec![liberado_main_agent::DELEGATE_TOOL_NAME.to_string()];
+        // create_agent is per-session (privilege gate A); listed here so ops know the face can offer it.
+        tool_names = vec![
+            liberado_main_agent::DELEGATE_TOOL_NAME.to_string(),
+            liberado_main_agent::CREATE_AGENT_TOOL_NAME.to_string(),
+        ];
         let granted = caps.granted_mcps();
         if !granted.is_empty() {
             tool_names.extend(runtime.catalog().iter().filter_map(|t| {

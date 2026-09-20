@@ -9,7 +9,7 @@ open_items: true
 
 # Chat vs agent surface mode
 
-**Status**: Slice 1 (wire + stamp) is in this PR. Slices 2–4 follow as separate
+**Status**: Slice 1 (wire + stamp) landed in [#274](https://github.com/ForrestThump/liberado/pull/274). Slice 2 (WebUI shelves + create-path + privileged `create_agent`) is in flight on [#276](https://github.com/ForrestThump/liberado/pull/276). Slices 3–4 (CAS3/CAS4) follow as separate
 PRs. Jev is out of scope for **this** document (CAS1–CAS4 only); the full phase
 plan lives in [`jev-integration.md`](jev-integration.md) and starts only after
 the shelves are dogfooded.
@@ -204,11 +204,48 @@ Per the brief and confirmed by walking the repo:
     sentence: shelf split deferred, TUI parity (kind filter) is not
     in the active slice order.
 
+
+## 6b. Create-path + privileged agent spawn (stacked on CAS2)
+
+Human and privileged-face paths that **create** Agent-shelf chats (Reading B stamp via
+`create_with_grant`). Distinct from `delegate` / GoalSessionHub (dispatch-domain goal
+sessions, often Chat on the shelf).
+
+### Human — WebUI **New Agent**
+
+1. Sidebar **New Agent** opens a picker of profiles where `GET /api/profiles` reports
+   `agent_eligible: true` **and** `domain` is absent (chat hats only).
+2. Create is `POST /api/conversations` with body `{ "profile": "<name>", "title"?: "..." }`.
+   The daemon resolves the profile (`Config::resolve_session_profile`, fail closed) and
+   calls `ChatSessions::create_with_grant`, so `stamp_surface_mode` returns `Agent` when
+   the name is in `agent_profiles`.
+3. After create: select the new conversation, switch shelf to Agents, refresh the list.
+4. **New Chat** is unchanged — default-grant Chat (nonce / first message).
+
+### Privileged face — `create_agent` tool
+
+1. Built-in face tool alongside `delegate` (`CREATE_AGENT_TOOL_NAME`).
+2. Args: `profile` (required, must be agent-eligible), optional `title`. Opening-message
+   enqueue is skipped (not cheap inside an in-flight turn); return the id.
+3. Behavior: resolve profile → reject if not `is_agent_profile` → `create_with_grant` →
+   JSON `{ "conversation_id", "surface_mode": "agent", "profile", "title"? }`.
+4. **Privilege gate A:** tool is only registered when the *current* session's profile is
+   an agent-creator (`is_agent_creator_profile`): default face (`None`) or `operator`.
+   Non-creators (`coding`, `life`, `researcher`, …) do not see the tool.
+5. Creators cannot pass custom capability lists. No peer mesh. Child grant = only what the
+   named profile resolves to in policy. `set_profile` / `POST .../profile` remains
+   human-only HTTP — never a model tool.
+
+### Not this path
+
+- `delegate` — GoalSessionHub dispatch jobs; strips AskHuman; awaits terminal result.
+- Mid-conversation `set_profile` — human authority switch, not create-time stamp.
+
 ## 7. Follow-ups (NOT in this PR)
 
-- **S2 (WebUI shelves)**: split `crates/webui/src/components/sidebar.rs`
-  into Chats / Agents tabs, default to Chats, partition client-side by
-  `ConvHeader.surface_mode`.
+- **S2 (WebUI shelves + create-path)**: Chats / Agents shelves; **New Agent** +
+  `POST /api/conversations` with profile; privileged face `create_agent` (gate A).
+  In flight on [#276](https://github.com/ForrestThump/liberado/pull/276).
 - **S3 (chat-default tools)**: name `chat-default` profile in
   `config.example/topology.toml`, add `chat-search` to the `main-agent`
   grant as a commented block in `config.example/policy.toml`.
