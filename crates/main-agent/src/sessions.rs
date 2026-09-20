@@ -71,6 +71,8 @@ use liberado_mcp::ScopedRuntime;
 use liberado_provider::{Message, Provider, Role};
 use liberado_session::{DomainHint, GoalSessionHub, GoalSpec, SessionGrant, SessionOrigin};
 
+#[path = "sessions/agent_profiles.rs"]
+mod agent_profiles;
 #[path = "sessions/surface_mode.rs"]
 mod surface_mode;
 #[path = "sessions_waivers.rs"]
@@ -293,12 +295,7 @@ pub struct ChatSessions {
     /// Automatic context compaction (CH3) — config + the provider that writes summaries.
     /// `None` = never compact (tests, and hosts that never wired it).
     compaction: Option<CompactionEngine>,
-
-    /// The chat-surface `agent_profiles` set, read from `tuning.toml [chat]
-    /// agent_profiles`. Defaults to the conservative built-in set; deployments
-    /// that add a specialist hat thread their own via
-    /// [`with_agent_profiles`](Self::with_agent_profiles). Spec:
-    /// `docs/spec/architecture/chat-agent-surface-mode.md`.
+    /// CAS1: chat-surface agent_profiles (default set; tunable via `with_agent_profiles`).
     agent_profiles: AgentProfiles,
 }
 
@@ -357,22 +354,8 @@ impl ChatSessions {
             delegation_mode: false,
             face_bridge: None,
             compaction: None,
-            // Conservative built-in set. Wiring a deployment's
-            // `[chat] agent_profiles` arrives through
-            // `with_agent_profiles` — composition never reads tuning config
-            // itself so the test surface stays free of a config dependency.
             agent_profiles: AgentProfiles::default(),
         }
-    }
-
-    /// Override the chat-surface `agent_profiles` set. Without this, the
-    /// built-in conservative set is used (`coding`, `life`, `researcher`,
-    /// `operator`). Tunable per deployment via
-    /// `config.example/tuning.toml [chat] agent_profiles`. Spec:
-    /// `docs/spec/architecture/chat-agent-surface-mode.md`.
-    pub fn with_agent_profiles(mut self, profiles: AgentProfiles) -> Self {
-        self.agent_profiles = profiles;
-        self
     }
 
     /// Enable automatic context compaction (CH3) with `config`; `provider` runs the one

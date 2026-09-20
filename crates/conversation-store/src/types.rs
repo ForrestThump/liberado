@@ -315,9 +315,8 @@ pub struct NewConversation {
     /// Despite `NewConversation: Default` existing (for test helpers that
     /// build around `..Default::default()`), the store does not default
     /// this to `Chat` via that derive — callers should compute the stamp up
-    /// front, typically via
-    /// [`liberado_main_agent::sessions::surface_mode::stamp_surface_mode`],
-    /// so the create path has one authority for the rule and a deployment's
+    /// front (the chat creator in `liberado_main_agent` owns that rule),
+    /// so the create path has one authority and a deployment's
     /// `[chat] agent_profiles` config flows through the call, not around it.
     /// Passing `surface_mode: SurfaceMode::default()` explicitly is fine in
     /// tests; production call sites compute it. See

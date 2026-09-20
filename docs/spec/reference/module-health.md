@@ -52,6 +52,15 @@ splitting tests by state made those ceilings unnecessary; they are gone from
 `code-metrics/module-health.toml`. The committed `code-metrics/module-health-baseline.json` is still the
 last accepted measurement — this change does not raise it.
 
+CAS1 (chat vs. agent surface mode) wires two narrow waivers for the irreducible
+introductions on `crates/main-agent/src/sessions.rs` (the new `AgentProfiles`
+field + the `#[path = "sessions/agent_profiles.rs"] mod agent_profiles;`
+declaration) and on `crates/session-store/src/jsonl.rs` (the +1 cyclomatic
+and +1 closure for the new chat-lens projection closure). The builder itself
+lives in the sibling modules so this file's structured-functionality floor
+does not regress; the waivers carry hard ceilings and review dates so any
+further growth is not covered and must be split, not waived.
+
 The same narrow rule applies when a production crate root crosses its boundary
 only because it declares and exports a new sibling module. The waiver must name
 the exact wiring lines and exclude implementation growth. `crates/cost/src/lib.rs`
