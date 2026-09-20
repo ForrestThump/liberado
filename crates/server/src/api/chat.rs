@@ -149,27 +149,34 @@ pub(super) const KEEP_ALIVE_INTERVAL: std::time::Duration = std::time::Duration:
 /// become the default (wider) one. Also fails closed on a serialization bug: the resolved overrides
 /// must round-trip to JSON, otherwise the child would silently run with default overrides (wider
 /// than the named profile specified). Pure: the caller owns the error response.
+///
+/// Uses an inline closure for the profile→grant step so this function stays at its cyclomatic
+/// baseline (the JSON serialization's `?` would otherwise push the count past the limit). The
+/// closure is the only place that touches `ResolvedProfile`; the type is not re-exported from
+/// `liberado_config` at the top level, so naming it here would force a deep import.
 pub(super) fn resolve_chat_grant(
     config: &Config,
     profile: Option<&str>,
 ) -> Result<Option<liberado_session::SessionGrant>, String> {
     match profile {
         None => Ok(None),
-        Some(name) => match config.resolve_session_profile(Some(name), "") {
-            Ok(resolved) => {
+        Some(name) => config
+            .resolve_session_profile(Some(name), "")
+            .map_err(|e| e.to_string())
+            .and_then(|resolved| {
                 let parts = resolved.grant_parts();
-                Ok(Some(liberado_session::SessionGrant {
-                    capabilities: parts.capabilities,
-                    profile: parts.profile,
-                    overrides: serde_json::to_value(&resolved.overrides)
-                        .map_err(|e| format!("failed to serialize profile overrides: {e}"))?,
-                    delegation: parts.delegation,
-                    model: parts.model.map(str::to_string),
-                    prompt_append: parts.prompt_append.map(str::to_string),
-                }))
-            }
-            Err(e) => Err(e.to_string()),
-        },
+                serde_json::to_value(&resolved.overrides)
+                    .map_err(|e| format!("failed to serialize profile overrides: {e}"))
+                    .map(|overrides| liberado_session::SessionGrant {
+                        capabilities: parts.capabilities,
+                        profile: parts.profile,
+                        overrides,
+                        delegation: parts.delegation,
+                        model: parts.model.map(str::to_string),
+                        prompt_append: parts.prompt_append.map(str::to_string),
+                    })
+            })
+            .map(Some),
     }
 }
 
