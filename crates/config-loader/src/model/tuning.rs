@@ -369,9 +369,12 @@ pub struct ChatTuning {
     /// restart, so removal is a deploy-visible change worth a comment in
     /// the changelog.
     ///
-    /// Read by [`liberado_main_agent::ChatSessions`] and
-    /// [`liberado_session_store::SessionStore`] at construction; threading is
-    /// via the `with_agent_profiles` builder on each. Example:
+    /// Read by `liberado_main_agent::ChatSessions::with_agent_profiles` and
+    /// `liberado_session_store::SessionStore::with_agent_profiles` at construction;
+    /// threading is via the `with_agent_profiles` builder on each. (Plain text
+    /// references because the config loader has no dependency edge into the
+    /// main-agent or session-store crates — a rustdoc link would not resolve.)
+    /// Example:
     ///
     /// ```toml
     /// [chat]
