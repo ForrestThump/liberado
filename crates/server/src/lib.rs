@@ -118,7 +118,9 @@ pub async fn run(vault_path: String) -> Result<(), Box<dyn std::error::Error>> {
     //
     // One `sessions_dir()`, not a `.join("sessions")` here and another in the `chat-search` MCP —
     // that is precisely how the MCP got left behind pointing at the dead `conversations/` directory.
-    let (sessions_root, sessions) = open_session_store().await;
+    // `open_session_store` threads the deployment's `[chat] agent_profiles` into the store so the
+    // chat-lens projection honors it on every read (legacy-row upgrade, deployment-tuned default).
+    let (sessions_root, sessions) = open_session_store(&config).await;
 
     let goals = build_goal_hub(
         &config,
@@ -264,9 +266,27 @@ pub async fn run(vault_path: String) -> Result<(), Box<dyn std::error::Error>> {
 /// Also spawns the incognito backstop: the WebUI deletes its own ephemeral chats on the way out,
 /// and this sweep is what makes "almost" not the end of the story for the ones it never got to
 /// discard. Nothing here touches the disk: an ephemeral session has no file to remove.
-async fn open_session_store() -> (std::path::PathBuf, Arc<SessionStore>) {
+/// Open the session store and wire the deployment's `[chat] agent_profiles` set into it so the
+/// chat-lens projection honors it on every read (PR #277 + follow-up). Without this wire the store
+/// would always use `AgentProfiles::default()` in production, which contradicts the spec where a
+/// deployment adding `designer` to `[chat] agent_profiles` reads back legacy `designer` rows as
+/// `Agent` from the moment the daemon restarts.
+async fn open_session_store(
+    config: &liberado_bootstrap::Config,
+) -> (std::path::PathBuf, Arc<SessionStore>) {
     let sessions_root = liberado_bootstrap::sessions_dir();
-    let sessions = Arc::new(liberado_session_store::SessionStore::open(&sessions_root).await);
+    let agent_profiles =
+        liberado_conversation_store::AgentProfiles::from_slice(&config.tuning.chat.agent_profiles);
+    tracing::info!(
+        count = config.tuning.chat.agent_profiles.len(),
+        default = agent_profiles.is_default(),
+        "chat: session-store agent_profiles wired from tuning.toml"
+    );
+    let sessions = Arc::new(
+        liberado_session_store::SessionStore::open(&sessions_root)
+            .await
+            .with_agent_profiles(agent_profiles),
+    );
 
     // Backstop for incognito chats whose surface never got to discard them — a closed laptop, a
     // killed tab, a dropped connection. The WebUI deletes its own on the way out and that is what

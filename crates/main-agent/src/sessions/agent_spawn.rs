@@ -198,13 +198,12 @@ mod tests {
     async fn create_agent_chat_honours_deployment_agent_profiles() {
         let dir = tempfile::tempdir().unwrap();
         let store = Arc::new(SessionStore::open(dir.path()).await);
-        let resolver: Arc<dyn Fn(&str) -> Result<SessionGrant, String> + Send + Sync> =
-            Arc::new(|name: &str| {
-                Ok(SessionGrant {
-                    profile: Some(name.to_owned()),
-                    ..SessionGrant::default()
-                })
-            });
+        let resolver: ProfileGrantResolver = Arc::new(|name: &str| {
+            Ok(SessionGrant {
+                profile: Some(name.to_owned()),
+                ..SessionGrant::default()
+            })
+        });
         // Deployment set: `coding` + `designer`. `life` is in the conservative
         // default but absent here — it must be refused for this deployment.
         let deployment_set = AgentProfiles::new(["coding", "designer"]);
