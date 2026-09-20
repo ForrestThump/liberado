@@ -27654,9 +27654,9 @@
       "file": "crates/main-agent/src/dispatch_journal.rs",
       "function": "append",
       "line": 25,
-      "cyclomatic": 5.0,
-      "coverage": 80.0,
-      "crap": 5.2,
+      "cyclomatic": 4.0,
+      "coverage": 87.5,
+      "crap": 4.03125,
       "crate": "liberado-main-agent"
     },
     {
@@ -27671,7 +27671,7 @@
     {
       "file": "crates/main-agent/src/dispatch_journal.rs",
       "function": "disposition_record",
-      "line": 96,
+      "line": 109,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -27680,7 +27680,7 @@
     {
       "file": "crates/main-agent/src/dispatch_journal.rs",
       "function": "ensure_parent",
-      "line": 56,
+      "line": 69,
       "cyclomatic": 3.0,
       "coverage": 80.0,
       "crap": 3.072,
@@ -27689,7 +27689,7 @@
     {
       "file": "crates/main-agent/src/dispatch_journal.rs",
       "function": "journal_display_path",
-      "line": 106,
+      "line": 119,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -27707,10 +27707,19 @@
     {
       "file": "crates/main-agent/src/dispatch_journal.rs",
       "function": "start_record",
-      "line": 74,
+      "line": 87,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
+      "crate": "liberado-main-agent"
+    },
+    {
+      "file": "crates/main-agent/src/dispatch_journal.rs",
+      "function": "write_and_flush",
+      "line": 48,
+      "cyclomatic": 3.0,
+      "coverage": 54.54545454545454,
+      "crap": 3.845229151014275,
       "crate": "liberado-main-agent"
     },
     {
