@@ -146,7 +146,9 @@ pub(super) const KEEP_ALIVE_INTERVAL: std::time::Duration = std::time::Duration:
 
 /// Resolve a named chat session profile into the grant a session would run under, or `None` when no
 /// profile was asked for. Fails closed on an unknown/disabled name — an empty grant must not silently
-/// become the default (wider) one. Pure: the caller owns the error response.
+/// become the default (wider) one. Also fails closed on a serialization bug: the resolved overrides
+/// must round-trip to JSON, otherwise the child would silently run with default overrides (wider
+/// than the named profile specified). Pure: the caller owns the error response.
 pub(super) fn resolve_chat_grant(
     config: &Config,
     profile: Option<&str>,
@@ -160,7 +162,7 @@ pub(super) fn resolve_chat_grant(
                     capabilities: parts.capabilities,
                     profile: parts.profile,
                     overrides: serde_json::to_value(&resolved.overrides)
-                        .unwrap_or(serde_json::Value::Null),
+                        .map_err(|e| format!("failed to serialize profile overrides: {e}"))?,
                     delegation: parts.delegation,
                     model: parts.model.map(str::to_string),
                     prompt_append: parts.prompt_append.map(str::to_string),

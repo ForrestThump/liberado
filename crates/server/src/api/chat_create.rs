@@ -60,9 +60,19 @@ pub async fn create_conversation(
             Err(e) => return chat_error(e),
         },
         Some(name) => {
+            // `resolve_chat_grant` is `fn(Option<&str>) -> Result<Option<Grant>, String>` because
+            // the absent-profile arm returns `Ok(None)` to the caller (no resolve needed).
+            // When WE pass `Some(name)` here, the inner `Some(name)` arm can only produce
+            // `Ok(Some(grant))` (profile found, overrides serialized) or `Err(msg)` (unknown /
+            // disabled / serialization failure — all fail closed). `Ok(None)` is structurally
+            // unreachable for this input. If you ever generalize `resolve_chat_grant` to return
+            // `Ok(None)` for any `Some(name)` case, this site is the one that must change.
             let grant = match resolve_chat_grant(state.config.as_ref(), Some(name)) {
                 Ok(Some(grant)) => grant,
-                Ok(None) => unreachable!("Some(name) always yields Some(grant) or Err"),
+                Ok(None) => unreachable!(
+                    "resolve_chat_grant(Some(name)) cannot return Ok(None) — only Ok(Some(grant)) \
+                     or Err; the Ok(None) arm is reserved for the absent-profile caller"
+                ),
                 Err(msg) => {
                     return (StatusCode::BAD_REQUEST, Json(ApiError { error: msg }))
                         .into_response();
