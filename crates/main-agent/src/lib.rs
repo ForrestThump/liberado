@@ -32,6 +32,10 @@ pub use face::{DELEGATE_TOOL_NAME, DispatchBridge, FaceRuntime};
 pub use sessions::{
     ChatSessions, PROFILE_AUTHOR, SessionError, SessionResult, default_conversation_title,
 };
+// Re-exported so a daemon wiring `tuning.toml [chat] agent_profiles` can
+// build an `AgentProfiles` without depending on `liberado-conversation-store`
+// directly. Spec: `docs/spec/architecture/chat-agent-surface-mode.md`.
+pub use liberado_conversation_store::AgentProfiles;
 
 /// Short legacy prompt (used when `delegation_mode = false` and no custom prompt is set).
 pub const DEFAULT_SYSTEM_PROMPT: &str = "\

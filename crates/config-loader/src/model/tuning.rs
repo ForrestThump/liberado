@@ -25,6 +25,12 @@ pub struct Tuning {
     pub maintenance: MaintenanceTuning,
     pub telegram_approvals: TelegramApprovalsTuning,
     pub cron_delivery: CronDeliveryTuning,
+    /// Chat-tuning knobs (`[chat]` in `tuning.toml`). Currently only
+    /// [`ChatTuning::agent_profiles`] — the set of named session profiles that
+    /// classify a conversation as `SurfaceMode::Agent` rather than `Chat` on
+    /// the chat-surface shelf. Spec:
+    /// `docs/spec/architecture/chat-agent-surface-mode.md`.
+    pub chat: ChatTuning,
     /// MCP connection pooling (M1) — reuse healthy peer connections across executions.
     pub mcp_pooling: McpPoolingTuning,
     /// Proposal lifecycle: expiry reaper interval, etc.
@@ -337,6 +343,52 @@ impl Default for ProposalTuning {
     fn default() -> Self {
         Self {
             reap_interval_secs: 600,
+        }
+    }
+}
+
+/// Chat-surface knobs. Only one knob today, deliberately small: the
+/// chat/agent split (CAS1, `docs/spec/architecture/chat-agent-surface-mode.md`)
+/// is a soft client-side taxonomy, and the only thing a deployment should be
+/// able to widen is which profiles count as agent profiles.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ChatTuning {
+    /// Named session profiles that classify a conversation as
+    /// `SurfaceMode::Agent` rather than `Chat` on the chat-surface shelf.
+    /// Profiles absent from this list are always `Chat`, even if the caller
+    /// passed an explicit `surface_mode`. Profiles added here stamp `Agent`
+    /// at create and the store's chat-lens projection upgrades a defaulted
+    /// `Chat` row to `Agent` when the profile matches.
+    ///
+    /// Defaults to the small conservative set the design locked in
+    /// (`coding`, `life`, `researcher`, `operator`). Empty list means "no
+    /// profiles are agent profiles" — every chat is `Chat`. The default set
+    /// is additive in spirit: deployments that *remove* a name from the list
+    /// will start projecting legacy rows as `Chat` after the next daemon
+    /// restart, so removal is a deploy-visible change worth a comment in
+    /// the changelog.
+    ///
+    /// Read by [`liberado_main_agent::ChatSessions`] and
+    /// [`liberado_session_store::SessionStore`] at construction; threading is
+    /// via the `with_agent_profiles` builder on each. Example:
+    ///
+    /// ```toml
+    /// [chat]
+    /// agent_profiles = ["coding", "life", "researcher", "operator", "designer"]
+    /// ```
+    pub agent_profiles: Vec<String>,
+}
+
+impl Default for ChatTuning {
+    fn default() -> Self {
+        Self {
+            agent_profiles: vec![
+                "coding".to_string(),
+                "life".to_string(),
+                "researcher".to_string(),
+                "operator".to_string(),
+            ],
         }
     }
 }

@@ -880,6 +880,23 @@ async fn build_chat(
     let trigger_pct = main_agent_cfg.compaction.trigger_pct;
     let keep_recent_turns = compact_cfg.keep_recent_turns;
     sessions = sessions.with_compaction(compact_cfg, provider.clone());
+
+    // Chat-surface shelf (CAS1): the `[chat] agent_profiles` config is the
+    // deploy-tunable source of which named profiles stamp `Agent` on the
+    // chat lens — see `docs/spec/architecture/chat-agent-surface-mode.md`.
+    // Without this thread, a deployment adding `designer` would compile but
+    // not see `designer` chats shelved under `agent` until a code change.
+    let chat_agent_profiles =
+        liberado_main_agent::AgentProfiles::from_slice(&config.tuning.chat.agent_profiles);
+    let chat_agent_profile_count = config.tuning.chat.agent_profiles.len();
+    let chat_agent_profile_default = chat_agent_profiles.is_default();
+    sessions = sessions.with_agent_profiles(chat_agent_profiles);
+    info!(
+        count = chat_agent_profile_count,
+        default = chat_agent_profile_default,
+        "chat: surface-mode agent_profiles wired from tuning.toml"
+    );
+
     if compact_enabled {
         info!(
             face_model = %face_model,

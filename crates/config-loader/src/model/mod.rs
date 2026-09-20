@@ -30,7 +30,7 @@ pub use topology::{
     WebUiConfig, managed_binary_path, resolve_declared_zone,
 };
 pub use tuning::{
-    CURRENT_SCHEMA_VERSION, CaptureTuning, ConcurrencyTuning, ContextTuning, CronDeliveryTuning,
-    DispatchTuning, MaintenanceTuning, McpPoolingTuning, SubagentIsolation,
-    TelegramApprovalsTuning, Tuning,
+    CURRENT_SCHEMA_VERSION, CaptureTuning, ChatTuning, ConcurrencyTuning, ContextTuning,
+    CronDeliveryTuning, DispatchTuning, MaintenanceTuning, McpPoolingTuning, ProposalTuning,
+    SubagentIsolation, TelegramApprovalsTuning, Tuning,
 };

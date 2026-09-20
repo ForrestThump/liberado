@@ -22,8 +22,8 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use chrono::Utc;
 use liberado_conversation_store::{
-    Author, ConversationHeader, ConversationStore, MessageNode, NewConversation, NewNode,
-    StoreError, StoreResult,
+    AgentProfiles, Author, ConversationHeader, ConversationStore, MessageNode, NewConversation,
+    NewNode, StoreError, StoreResult,
 };
 use liberado_provider::Message;
 use liberado_session::{
@@ -94,6 +94,12 @@ pub struct SessionStore {
     /// on purpose). Threading the flag through all seven `append_line` call sites instead would work
     /// exactly until someone adds an eighth and forgets. One chokepoint, one check.
     ephemeral: Arc<std::sync::Mutex<std::collections::HashSet<Ulid>>>,
+    /// The chat-surface `agent_profiles` set used by the chat-lens projection
+    /// on every read. Defaults to the conservative built-in set; deployments
+    /// that have a `[chat] agent_profiles` override wire it via
+    /// [`with_agent_profiles`](Self::with_agent_profiles). Spec:
+    /// `docs/spec/architecture/chat-agent-surface-mode.md`.
+    agent_profiles: AgentProfiles,
 }
 
 impl SessionStore {
@@ -124,7 +130,23 @@ impl SessionStore {
             ids: Arc::new(std::sync::Mutex::new(ulid::Generator::new())),
             write_locks: Arc::new(std::sync::Mutex::new(HashMap::new())),
             ephemeral: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
+            agent_profiles: AgentProfiles::default(),
         }
+    }
+
+    /// Override the chat-surface `agent_profiles` set used by the chat-lens
+    /// projection on every read. Threaded through from
+    /// `config.tuning.chat.agent_profiles` by the daemon wiring. Without
+    /// this, the projection uses the conservative built-in default. Spec:
+    /// `docs/spec/architecture/chat-agent-surface-mode.md`.
+    pub fn with_agent_profiles(mut self, profiles: AgentProfiles) -> Self {
+        self.agent_profiles = profiles;
+        self
+    }
+
+    /// The `agent_profiles` set currently in force on this store.
+    pub fn agent_profiles(&self) -> &AgentProfiles {
+        &self.agent_profiles
     }
 
     /// Open a durable store rooted at `dir`, replaying every `*.jsonl` found there.
@@ -153,6 +175,7 @@ impl SessionStore {
             ids: Arc::new(std::sync::Mutex::new(ulid::Generator::new())),
             write_locks: Arc::new(std::sync::Mutex::new(HashMap::new())),
             ephemeral: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
+            agent_profiles: AgentProfiles::default(),
         }
     }
 
@@ -597,7 +620,12 @@ impl ConversationStore for SessionStore {
                 surface_mode: new.surface_mode,
             })
             .await;
-        Ok(header.to_conversation_header())
+        // Chat-lens projection uses this store's `agent_profiles` so a
+        // deployment that removed `coding` from its `[chat] agent_profiles`
+        // reads legacy `coding` rows back as `Chat`, matching its on-disk
+        // stamp on a fresh create. (`header.surface_mode` is still `Chat`
+        // here for pre-stamp rows; the projection honours the store's set.)
+        Ok(header.to_conversation_header_with(&self.agent_profiles))
     }
 
     async fn append(&self, conversation: Ulid, node: NewNode) -> StoreResult<MessageNode> {
@@ -718,14 +746,14 @@ impl ConversationStore for SessionStore {
             .await
             .iter()
             .filter(|h| !h.visibility.is_background())
-            .map(SessionHeader::to_conversation_header)
+            .map(|h| h.to_conversation_header_with(&self.agent_profiles))
             .collect())
     }
 
     async fn header(&self, conversation: Ulid) -> StoreResult<ConversationHeader> {
         self.session(conversation)
             .await
-            .map(|h| h.to_conversation_header())
+            .map(|h| h.to_conversation_header_with(&self.agent_profiles))
             .ok_or_else(|| StoreError::NotFound(format!("session {conversation}")))
     }
 

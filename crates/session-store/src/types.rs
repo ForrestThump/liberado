@@ -4,7 +4,7 @@
 //! differences are **attributes, not subtypes**, and this struct is where that stops being a claim
 //! and becomes a record on disk.
 
-use liberado_conversation_store::{ConversationHeader, SurfaceMode, Timestamp, is_agent_profile};
+use liberado_conversation_store::{AgentProfiles, ConversationHeader, SurfaceMode, Timestamp};
 use liberado_session::{
     GoalResult, GoalSessionRecord, GoalSpec, SessionGrant, SessionStatus, Visibility,
 };
@@ -119,22 +119,18 @@ impl SessionHeader {
         self.goal.is_some()
     }
 
-    /// The chat lens onto this session. Every session has one — a goal session has a transcript
-    /// too, which is exactly the point of converging.
-    ///
-    /// **Legacy upgrade.** A pre-stamp log has no `surface_mode` field, so it
-    /// deserializes as `Chat`. For the **projection only**, if the on-disk
-    /// stamp is `Chat` and the session's `grant.profile` is in
-    /// [`is_agent_profile`](crate::is_agent_profile), the projected header
-    /// stamps `Agent` so the chat lens shelves it correctly. The on-disk
-    /// record is unchanged — the upgrade is a read-side concern, so it does
-    /// not require a migration and cannot drift.
-    /// Legacy chat-lens upgrade: pre-stamp rows deserialize as `Chat`; if the
-    /// session's profile is in [`is_agent_profile`], project `Agent` for the
-    /// shelf without rewriting the on-disk header.
-    fn projected_surface_mode(&self) -> SurfaceMode {
+    /// Legacy chat-lens upgrade. Pre-stamp rows deserialize as `Chat`; if the
+    /// session's profile is in `profiles`, project `Agent` for the shelf
+    /// without rewriting the on-disk header. The on-disk record is unchanged
+    /// — the upgrade is a read-side concern, so it does not require a
+    /// migration and cannot drift.
+    fn projected_surface_mode(&self, profiles: &AgentProfiles) -> SurfaceMode {
         if self.surface_mode == SurfaceMode::Chat
-            && self.grant.profile.as_deref().is_some_and(is_agent_profile)
+            && self
+                .grant
+                .profile
+                .as_deref()
+                .is_some_and(|name| profiles.is_agent(name))
         {
             SurfaceMode::Agent
         } else {
@@ -142,7 +138,38 @@ impl SessionHeader {
         }
     }
 
+    /// The chat lens onto this session, using the conservative default
+    /// `AgentProfiles` set.
+    ///
+    /// **Legacy callers:** when `SessionStore::with_agent_profiles` is wired
+    /// (production), prefer [`to_conversation_header_with`](Self::to_conversation_header_with)
+    /// so a deployment that *removed* `coding` from `[chat] agent_profiles`
+    /// reads legacy `coding` rows back as `Chat`, matching the post-restart
+    /// view. This method's projection always uses the default set, which is
+    /// correct for tests and external callers without a deployment context,
+    /// and which is why it stays around.
+    ///
+    /// **Legacy upgrade.** A pre-stamp log has no `surface_mode` field, so it
+    /// deserializes as `Chat`. For the **projection only**, if the on-disk
+    /// stamp is `Chat` and the session's `grant.profile` is in the default
+    /// `agent_profiles` set, the projected header stamps `Agent` so the chat
+    /// lens shelves it correctly. The on-disk record is unchanged — the
+    /// upgrade is a read-side concern, so it does not require a migration
+    /// and cannot drift.
     pub fn to_conversation_header(&self) -> ConversationHeader {
+        self.to_conversation_header_with(&AgentProfiles::default())
+    }
+
+    /// The chat lens onto this session, projecting with `profiles` instead of
+    /// the conservative default. Pass `&SessionStore::agent_profiles()` (or
+    /// the result of `tuning.toml [chat] agent_profiles`) to honour a
+    /// deployment's tuning; pass `&AgentProfiles::default()` to match this
+    /// method's sibling, [`to_conversation_header`](Self::to_conversation_header).
+    ///
+    /// Reads use `profiles`; writes keep the on-disk record unchanged. The
+    /// legacy upgrade is *only* a chat-lens projection, so it cannot drift
+    /// even if `profiles` changes between reads.
+    pub fn to_conversation_header_with(&self, profiles: &AgentProfiles) -> ConversationHeader {
         ConversationHeader {
             id: self.id,
             title: self.title.clone().or_else(|| {
@@ -156,7 +183,7 @@ impl SessionHeader {
             // The same grant, seen through the chat lens — not a copy that can drift, since both
             // views are built from this one header.
             grant: self.grant.clone(),
-            surface_mode: self.projected_surface_mode(),
+            surface_mode: self.projected_surface_mode(profiles),
         }
     }
 
@@ -205,14 +232,31 @@ pub struct NewSession {
 mod surface_mode_tests {
     use super::*;
     use chrono::Utc;
-    use liberado_conversation_store::is_agent_profile;
 
     #[test]
-    fn agent_profile_classifier() {
-        assert!(is_agent_profile("coding"));
-        assert!(is_agent_profile("life"));
-        assert!(!is_agent_profile("chat-default"));
-        assert!(!is_agent_profile(""));
+    fn agent_profiles_default_includes_specialist_hats() {
+        let profiles = AgentProfiles::default();
+        assert!(profiles.is_agent("coding"));
+        assert!(profiles.is_agent("life"));
+        assert!(profiles.is_agent("researcher"));
+        assert!(profiles.is_agent("operator"));
+        assert!(!profiles.is_agent("chat-default"));
+        assert!(!profiles.is_agent(""));
+        assert!(profiles.is_default());
+    }
+
+    #[test]
+    fn agent_profiles_new_dedupes_and_sorts() {
+        let profiles = AgentProfiles::new(["coding", "coding", "designer", "agent"]);
+        assert_eq!(
+            profiles.names(),
+            &[
+                "agent".to_string(),
+                "coding".to_string(),
+                "designer".to_string()
+            ]
+        );
+        assert!(!profiles.is_default());
     }
 
     #[test]
@@ -243,6 +287,23 @@ mod surface_mode_tests {
             header.to_conversation_header().surface_mode,
             SurfaceMode::Chat
         );
+    }
+
+    /// A deployment that lists `coding` in its `[chat] agent_profiles`
+    /// (default behaviour) projects a legacy `coding` row as `Agent` —
+    /// the converse of the previous test: drop `coding` from the set
+    /// and a legacy row with `profile = "coding"` reads as `Chat`.
+    #[test]
+    fn legacy_chat_with_agent_profile_demotes_when_profile_dropped() {
+        let mut header = SessionHeader::chat(Ulid::new(), Some("x".into()), Utc::now());
+        header.grant.profile = Some("coding".into());
+        let only_life = AgentProfiles::new(["life"]);
+        let conv = header.to_conversation_header_with(&only_life);
+        assert_eq!(conv.surface_mode, SurfaceMode::Chat);
+        // Same row read with the default set still projects Agent — the
+        // projection is per-read, the on-disk stamp (Chat) is unchanged.
+        let conv = header.to_conversation_header();
+        assert_eq!(conv.surface_mode, SurfaceMode::Agent);
     }
 
     #[test]

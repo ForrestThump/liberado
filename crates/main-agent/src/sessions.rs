@@ -60,7 +60,8 @@ use liberado_common::{
     McpDescriptor, ProposalSigner, RiskWaiverSet, WriteClass, mcp_of,
 };
 use liberado_conversation_store::{
-    Author, ConversationHeader, ConversationStore, MessageNode, NewNode, StoreError, Ulid,
+    AgentProfiles, Author, ConversationHeader, ConversationStore, MessageNode, NewNode, StoreError,
+    Ulid,
 };
 use liberado_dispatcher::{DispatchRequest, Dispatcher};
 use liberado_executor::{
@@ -292,6 +293,13 @@ pub struct ChatSessions {
     /// Automatic context compaction (CH3) — config + the provider that writes summaries.
     /// `None` = never compact (tests, and hosts that never wired it).
     compaction: Option<CompactionEngine>,
+
+    /// The chat-surface `agent_profiles` set, read from `tuning.toml [chat]
+    /// agent_profiles`. Defaults to the conservative built-in set; deployments
+    /// that add a specialist hat thread their own via
+    /// [`with_agent_profiles`](Self::with_agent_profiles). Spec:
+    /// `docs/spec/architecture/chat-agent-surface-mode.md`.
+    agent_profiles: AgentProfiles,
 }
 
 /// The moving parts of automatic compaction: the tunables, plus the provider used for the one
@@ -349,7 +357,22 @@ impl ChatSessions {
             delegation_mode: false,
             face_bridge: None,
             compaction: None,
+            // Conservative built-in set. Wiring a deployment's
+            // `[chat] agent_profiles` arrives through
+            // `with_agent_profiles` — composition never reads tuning config
+            // itself so the test surface stays free of a config dependency.
+            agent_profiles: AgentProfiles::default(),
         }
+    }
+
+    /// Override the chat-surface `agent_profiles` set. Without this, the
+    /// built-in conservative set is used (`coding`, `life`, `researcher`,
+    /// `operator`). Tunable per deployment via
+    /// `config.example/tuning.toml [chat] agent_profiles`. Spec:
+    /// `docs/spec/architecture/chat-agent-surface-mode.md`.
+    pub fn with_agent_profiles(mut self, profiles: AgentProfiles) -> Self {
+        self.agent_profiles = profiles;
+        self
     }
 
     /// Enable automatic context compaction (CH3) with `config`; `provider` runs the one
