@@ -82,7 +82,8 @@ pub fn NewAgentPicker(
     open: Signal<bool>,
     on_created: EventHandler<ConvHeader>,
 ) -> Element {
-    let open = open;
+    #[cfg_attr(not(target_arch = "wasm32"), allow(unused_mut))]
+    let mut open = open;
     let mut busy = use_signal(|| false);
     let mut error = use_signal(|| None::<String>);
 
