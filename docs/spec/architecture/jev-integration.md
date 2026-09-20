@@ -17,6 +17,11 @@ TypeSafe Jev inside Liberado. It does **not** change CAS1–CAS4; those stay in
 CAS1–CAS4) · [`../../future-work/backlog.md`](../../future-work/backlog.md) (JEV1 / CAS5) ·
 [`../../roadmap.md`](../../roadmap.md) (near-term callout).
 
+**Create-path note**: addressable Agent-shelf sessions are created via WebUI **New Agent** /
+`POST /api/conversations` with an agent-eligible chat profile, or the privileged face
+`create_agent` tool — not via goals / `delegate`. See
+[`chat-agent-surface-mode.md`](chat-agent-surface-mode.md) §6b.
+
 ## 1. Product north star
 
 Liberado should feel like two **soft** surfaces, not one undifferentiated inbox:

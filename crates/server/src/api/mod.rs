@@ -8,7 +8,7 @@ mod status;
 
 pub use chat::{
     attach_conversation, cancel_conversation_turn, chat, chat_stream_get, chat_stream_post,
-    delete_conversation, get_conversation, list_conversations, list_profiles,
+    create_conversation, delete_conversation, get_conversation, list_conversations, list_profiles,
     patch_conversation_title, set_conversation_profile,
 };
 pub use goals::{

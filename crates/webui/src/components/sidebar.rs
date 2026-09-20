@@ -4,6 +4,7 @@ use chat_client_contract::{ConvHeader, ConversationSearchResponse, ConversationS
 
 use crate::components::conversation_row::ConversationRow;
 use crate::components::mcp_panel::McpPanel;
+use crate::components::sidebar_new_agent::NewAgentPicker;
 use crate::components::sidebar_shelf::{Shelf, conversations_on_shelf, search_results_on_shelf};
 use crate::icons::IconChevronLeft;
 
@@ -279,6 +280,7 @@ pub fn Sidebar(
     // refilters the list — the active conversation stays selected even if it
     // lives on the other shelf (see PR body / CAS2 brief).
     let mut shelf = use_signal(Shelf::default);
+    let mut new_agent_open = use_signal(|| false);
     // Which row's action sheet is open, by conversation id. Held here rather than per row so
     // opening one closes another — two open sheets at once is just clutter.
     let mut menu_for = use_signal(|| None::<String>);
@@ -374,25 +376,34 @@ pub fn Sidebar(
             class: "sidebar",
             div {
                 class: "sidebar-header",
-                button {
-                    class: "sidebar-new-chat-btn",
-                    onclick: move |_| {
-                        // Announce the *request* rather than infer it from state. This used to be
-                        // only `if active_conv_id.is_some() { set(None) }`, on the premise that
-                        // `None` already means "fresh and empty" — true until incognito, whose
-                        // session deliberately never becomes an `active_conv_id`. New Chat then
-                        // no-opped in exactly the case where clearing mattered most, leaving the
-                        // private transcript on screen.
-                        //
-                        // A counter, not a bool: pressing New Chat twice has to register twice, and
-                        // a flag that is already `true` cannot say "again".
-                        new_chat_nonce += 1;
-                        if active_conv_id.read().is_some() {
-                            active_conv_id.set(None);
-                        }
-                        collapse_after_pick(collapsed);
-                    },
-                    "New Chat"
+                div {
+                    class: "sidebar-new-btns",
+                    button {
+                        class: "sidebar-new-chat-btn",
+                        onclick: move |_| {
+                            // Announce the *request* rather than infer it from state. This used to be
+                            // only `if active_conv_id.is_some() { set(None) }`, on the premise that
+                            // `None` already means "fresh and empty" — true until incognito, whose
+                            // session deliberately never becomes an `active_conv_id`. New Chat then
+                            // no-opped in exactly the case where clearing mattered most, leaving the
+                            // private transcript on screen.
+                            //
+                            // A counter, not a bool: pressing New Chat twice has to register twice, and
+                            // a flag that is already `true` cannot say "again".
+                            new_chat_nonce += 1;
+                            if active_conv_id.read().is_some() {
+                                active_conv_id.set(None);
+                            }
+                            collapse_after_pick(collapsed);
+                        },
+                        "New Chat"
+                    }
+                    button {
+                        class: "sidebar-new-agent-btn",
+                        title: "Create an Agents-shelf specialist chat",
+                        onclick: move |_| new_agent_open.set(true),
+                        "New Agent"
+                    }
                 }
                 button {
                     class: "sidebar-collapse-btn",
@@ -558,6 +569,18 @@ pub fn Sidebar(
             div {
                 class: "sidebar-footer",
                 McpPanel { api_base: api_base.clone() }
+            }
+            if new_agent_open() {
+                NewAgentPicker {
+                    api_base: api_base.clone(),
+                    open: new_agent_open,
+                    on_created: move |header: chat_client_contract::ConvHeader| {
+                        active_conv_id.set(Some(header.id));
+                        shelf.set(Shelf::Agents);
+                        conversations.restart();
+                        collapse_after_pick(collapsed);
+                    },
+                }
             }
         }
     }

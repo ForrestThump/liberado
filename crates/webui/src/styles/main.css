@@ -455,21 +455,40 @@ body {
     flex-shrink: 0;
 }
 
-.sidebar-new-chat-btn {
+.sidebar-new-btns {
     flex: 1;
-    padding: 0.45rem 0.75rem;
+    display: flex;
+    gap: 0.35rem;
+    min-width: 0;
+}
+
+.sidebar-new-chat-btn,
+.sidebar-new-agent-btn {
+    flex: 1;
+    padding: 0.45rem 0.5rem;
     border: none;
     border-radius: 0.5rem;
-    background: var(--lib-accent);
-    color: var(--lib-app-bg);
     font-size: 0.8125rem;
     font-weight: 600;
     cursor: pointer;
     text-align: center;
     transition: opacity 0.12s;
+    white-space: nowrap;
 }
 
-.sidebar-new-chat-btn:hover {
+.sidebar-new-chat-btn {
+    background: var(--lib-accent);
+    color: var(--lib-app-bg);
+}
+
+.sidebar-new-agent-btn {
+    background: transparent;
+    color: var(--lib-sidebar-text);
+    border: 1px solid var(--lib-border);
+}
+
+.sidebar-new-chat-btn:hover,
+.sidebar-new-agent-btn:hover {
     opacity: 0.88;
 }
 

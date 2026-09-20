@@ -455,6 +455,37 @@ writes_vault = false             # writes code workspaces, not the Obsidian vaul
 #
 # Declaring none changes nothing: an unprofiled session runs its pack with the grant keyed by the
 # domain name (`life`, `coding`), exactly as before profiles existed.
+#
+# --- Chat hats for Agents shelf (Reading B / create-path) --------------------------------------
+# No `domain` = chat profile (WebUI /profile + New Agent picker). Names in
+# `is_agent_profile` (coding|life|researcher|operator) stamp surface_mode=agent at create.
+# Enable these for dogfood; New Chat stays default-grant Chat.
+
+[[session_profiles]]
+name = "coding"
+component = "coding"
+description = "Long-lived coding specialist chat (Agents shelf)"
+enabled = true
+
+[[session_profiles]]
+name = "life"
+component = "life"
+description = "Long-lived life/tasks specialist chat (Agents shelf)"
+enabled = true
+
+[[session_profiles]]
+name = "researcher"
+component = "research"
+description = "Read-only research hat chat (Agents shelf)"
+enabled = true
+
+[[session_profiles]]
+name = "operator"
+component = "main-agent"
+description = "Privileged face that may create_agent other Agents-shelf chats"
+enabled = true
+
+# Pack profile example (has domain — NOT in New Agent picker):
 # [[session_profiles]]
 # name = "research"
 # domain = "life"          # same pack as a normal life session...

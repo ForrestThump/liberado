@@ -2,9 +2,9 @@
 //!
 //! The conversational **human interface** the user talks to. By default (config
 //! `topology.main_agent.delegation_mode = true`) it is a face agent: it holds the human's intent,
-//! asks clarifying questions, and calls a single built-in [`face::DELEGATE_TOOL_NAME`] tool that
-//! hands goals to the dispatcher/orchestrator — so tool schemas and raw tool results never
-//! pollute chat context. Operators can still grant extra MCPs to the `"main-agent"` policy
+//! asks clarifying questions, and calls built-in [`face::DELEGATE_TOOL_NAME`] (dispatch jobs) and,
+//! when privileged, [`face::CREATE_AGENT_TOOL_NAME`] (Agents-shelf specialist chats) — so tool
+//! schemas and raw tool results never pollute chat context. Operators can still grant extra MCPs to the `"main-agent"` policy
 //! component if they want a thicker surface.
 //!
 //! Delegate handoffs write **dispatch journals** under `<LIBERADO_DATA_DIR>/dispatches/` (linked from
@@ -28,7 +28,10 @@ pub use compaction::{
     COMPACTION_AUTHOR, CompactionConfig, CompactionTriggerTable, SUMMARY_HEADER, estimate_tokens,
 };
 pub use dispatch_journal::{dispatches_dir, journal_path};
-pub use face::{DELEGATE_TOOL_NAME, DispatchBridge, FaceRuntime};
+pub use face::{
+    AgentSpawner, CREATE_AGENT_TOOL_NAME, CreateAgentResult, DELEGATE_TOOL_NAME, DispatchBridge,
+    FaceRuntime,
+};
 pub use sessions::{
     ChatSessions, PROFILE_AUTHOR, SessionError, SessionResult, default_conversation_title,
 };

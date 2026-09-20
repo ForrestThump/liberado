@@ -550,3 +550,57 @@ capabilities = []
     let err = resolve_chat_grant(&config, Some("nosuch")).unwrap_err();
     assert!(err.contains("nosuch"), "error must name the profile: {err}");
 }
+
+// ── POST /api/conversations (create-path) ────────────────────────────────────
+
+fn create_router(state: Arc<crate::state::AppState>) -> Router {
+    Router::new()
+        .route(
+            "/api/conversations",
+            axum::routing::get(super::list_conversations).post(super::create_conversation),
+        )
+        .with_state(state)
+}
+
+async fn post_create(app: &Router, body: &str) -> (StatusCode, String) {
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/conversations")
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = resp.status();
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    (status, String::from_utf8_lossy(&bytes).into_owned())
+}
+
+#[tokio::test]
+async fn create_without_profile_stamps_chat() {
+    let h = harness().await;
+    let app = create_router(h.state.clone());
+    let (status, body) = post_create(&app, r#"{}"#).await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(v["surface_mode"], "chat");
+    assert!(v["id"].as_str().unwrap().len() > 10);
+}
+
+#[tokio::test]
+async fn create_with_unknown_profile_is_refused() {
+    let h = harness().await;
+    let app = create_router(h.state.clone());
+    let (status, body) = post_create(&app, r#"{"profile":"nonesuch"}"#).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert!(
+        body.contains("nonesuch") || body.contains("profile"),
+        "{body}"
+    );
+}

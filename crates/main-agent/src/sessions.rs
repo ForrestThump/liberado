@@ -70,6 +70,8 @@ use liberado_mcp::ScopedRuntime;
 use liberado_provider::{Message, Provider, Role};
 use liberado_session::{DomainHint, GoalSessionHub, GoalSpec, SessionGrant, SessionOrigin};
 
+#[path = "sessions/agent_spawn.rs"]
+mod agent_spawn;
 #[path = "sessions/surface_mode.rs"]
 mod surface_mode;
 #[path = "sessions_waivers.rs"]
@@ -289,6 +291,10 @@ pub struct ChatSessions {
     delegation_mode: bool,
     /// Shared bridge for the face agent's `delegate` tool (when hub + delegation_mode).
     face_bridge: Option<Arc<DispatchBridge>>,
+    /// Profile→grant resolver for privileged `create_agent` (wired from Config at boot).
+    profile_resolver: Option<agent_spawn::ProfileGrantResolver>,
+    /// Weak self after `Arc::new` so face tools can call `create_with_grant`.
+    self_handle: std::sync::OnceLock<std::sync::Weak<ChatSessions>>,
     /// Automatic context compaction (CH3) — config + the provider that writes summaries.
     /// `None` = never compact (tests, and hosts that never wired it).
     compaction: Option<CompactionEngine>,
@@ -348,6 +354,8 @@ impl ChatSessions {
             dispatcher_capabilities: CapabilitySet::empty(),
             delegation_mode: false,
             face_bridge: None,
+            profile_resolver: None,
+            self_handle: std::sync::OnceLock::new(),
             compaction: None,
         }
     }
@@ -725,6 +733,7 @@ impl ChatSessions {
                     session,
                     settings.capabilities.clone(),
                     turn_deferral.clone(),
+                    settings.profile.as_deref(),
                 );
                 // Derived from the runtime the executor is about to be handed, never from a list built
                 // beside it — see `Conversation::apply_available_tools`.
@@ -833,6 +842,7 @@ impl ChatSessions {
                     session,
                     settings.capabilities.clone(),
                     turn_deferral,
+                    settings.profile.as_deref(),
                 );
                 self.state_tool_surface(&mut convo, session, &settings, turn_runtime.as_ref());
                 convo
@@ -1281,13 +1291,16 @@ impl ChatSessions {
         session: Ulid,
         capabilities: CapabilitySet,
         turn_deferral: Arc<AtomicBool>,
+        profile: Option<&str>,
     ) -> Box<dyn ToolRuntime> {
         let extras = self.scoped_extras_runtime(user, session, capabilities);
+        let agent_spawner = self.agent_spawner_for_profile(profile);
         Box::new(FaceRuntime::new(
             self.face_bridge.clone(),
             extras,
             Some(session.to_string()),
             turn_deferral,
+            agent_spawner,
         ))
     }
 

@@ -1,4 +1,5 @@
-//! Face-agent tool surface: human interfacer + built-in `delegate` (dispatcher bridge).
+//! Face-agent tool surface: human interfacer + built-in `delegate` (dispatcher bridge)
+//! and privileged `create_agent` (Agents-shelf spawn).
 //!
 //! Optional extra MCP tools (from `"main-agent"` policy grants) can be layered on for power users;
 //! the architecture intent is that those stay empty and work goes through `delegate`.
@@ -8,6 +9,13 @@
 //! `delegate` starts a hosted background session on the [`GoalSessionHub`] (domain `"dispatch"`)
 //! and awaits its terminal result. It no longer owns a dispatcher/orchestrator pair — those live
 //! only inside `liberado-dispatch-pack`. Delegated sessions run **without** `AskHuman` (D-e).
+//!
+//! # Privileged agent spawn
+//!
+//! `create_agent` opens a long-lived specialist **chat** on the Agents shelf via
+//! `create_with_grant` (Reading B stamp). It is **not** GoalSessionHub / `delegate`. Privilege
+//! gate A: only offered when the current session's profile is an agent-creator
+//! ([`liberado_conversation_store::is_agent_creator_profile`]).
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -20,6 +28,13 @@ use liberado_session::{
     DomainHint, GoalSessionHub, GoalSpec, SessionGrant, SessionOrigin, TerminalKind,
 };
 use serde_json::json;
+
+#[path = "face/create_agent.rs"]
+mod create_agent;
+pub use create_agent::{
+    AgentSpawner, CREATE_AGENT_TOOL_NAME, CreateAgentResult, create_agent_tool_def,
+};
+use create_agent::{CreateAgentArgs, parse_create_agent_args};
 
 /// Tool name the face agent calls to hand a goal to the dispatcher.
 pub const DELEGATE_TOOL_NAME: &str = "delegate";
@@ -167,7 +182,8 @@ impl DispatchBridge {
     }
 }
 
-/// Tool runtime shown to the main (face) agent: optional extras + always `delegate` when bridged.
+/// Tool runtime shown to the main (face) agent: optional extras + `delegate` when bridged +
+/// privileged `create_agent` when a spawner is attached.
 pub struct FaceRuntime {
     bridge: Option<Arc<DispatchBridge>>,
     /// Capability-scoped optional MCP tools the operator granted to `"main-agent"`.
@@ -178,6 +194,8 @@ pub struct FaceRuntime {
     /// the session after the turn to drop the redundant chat reply (Gap 2). Shared with the caller;
     /// a fresh `false` per turn.
     turn_deferral: Arc<AtomicBool>,
+    /// When `Some`, the face may call `create_agent`. Absent for non-creator profiles (gate A).
+    agent_spawner: Option<Arc<dyn AgentSpawner>>,
 }
 
 impl FaceRuntime {
@@ -186,12 +204,14 @@ impl FaceRuntime {
         extras: Arc<dyn ToolRuntime>,
         parent_conversation: Option<String>,
         turn_deferral: Arc<AtomicBool>,
+        agent_spawner: Option<Arc<dyn AgentSpawner>>,
     ) -> Self {
         Self {
             bridge,
             extras,
             parent_conversation,
             turn_deferral,
+            agent_spawner,
         }
     }
 
@@ -229,6 +249,9 @@ impl ToolRuntime for FaceRuntime {
         if self.bridge.is_some() {
             tools.push(Self::delegate_tool_def());
         }
+        if self.agent_spawner.is_some() {
+            tools.push(create_agent_tool_def());
+        }
         tools.extend(self.extras.catalog());
         tools
     }
@@ -246,6 +269,16 @@ impl ToolRuntime for FaceRuntime {
                     &self.turn_deferral,
                 )
                 .await;
+        }
+        if call.name == CREATE_AGENT_TOOL_NAME {
+            let Some(spawner) = &self.agent_spawner else {
+                return Err(
+                    "create_agent is not available (this session is not an agent creator)".into(),
+                );
+            };
+            let CreateAgentArgs { profile, title } = parse_create_agent_args(&call.arguments)?;
+            let result = spawner.spawn_agent(&profile, title).await?;
+            return Ok(result.to_json());
         }
         self.extras.invoke(call).await
     }
@@ -279,6 +312,8 @@ mod survivor_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use liberado_executor::ToolRuntime;
+    use std::sync::atomic::AtomicBool;
 
     #[test]
     fn parse_goal_merges_context() {
@@ -286,5 +321,64 @@ mod tests {
         let g = parse_delegate_goal(&args).unwrap();
         assert!(g.contains("list tasks"));
         assert!(g.contains("inbox only"));
+    }
+
+    struct NoExtras;
+    #[async_trait]
+    impl ToolRuntime for NoExtras {
+        fn catalog(&self) -> Vec<ToolDef> {
+            Vec::new()
+        }
+        async fn invoke(&self, _: &ToolInvocation) -> Result<String, String> {
+            Err("no extras".into())
+        }
+    }
+
+    struct StubSpawner;
+    #[async_trait]
+    impl AgentSpawner for StubSpawner {
+        async fn spawn_agent(
+            &self,
+            profile: &str,
+            title: Option<String>,
+        ) -> Result<CreateAgentResult, String> {
+            Ok(CreateAgentResult {
+                conversation_id: "01TEST".into(),
+                profile: profile.into(),
+                title,
+            })
+        }
+    }
+
+    #[test]
+    fn create_agent_absent_from_catalog_without_spawner() {
+        let rt = FaceRuntime::new(
+            None,
+            Arc::new(NoExtras),
+            None,
+            Arc::new(AtomicBool::new(false)),
+            None,
+        );
+        assert!(
+            !rt.catalog()
+                .iter()
+                .any(|t| t.name == CREATE_AGENT_TOOL_NAME)
+        );
+    }
+
+    #[test]
+    fn create_agent_present_when_spawner_attached() {
+        let rt = FaceRuntime::new(
+            None,
+            Arc::new(NoExtras),
+            None,
+            Arc::new(AtomicBool::new(false)),
+            Some(Arc::new(StubSpawner)),
+        );
+        assert!(
+            rt.catalog()
+                .iter()
+                .any(|t| t.name == CREATE_AGENT_TOOL_NAME)
+        );
     }
 }
