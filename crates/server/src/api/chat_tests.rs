@@ -557,7 +557,7 @@ fn create_router(state: Arc<crate::state::AppState>) -> Router {
     Router::new()
         .route(
             "/api/conversations",
-            axum::routing::get(super::list_conversations).post(super::create_conversation),
+            axum::routing::get(super::list_conversations).post(crate::api::create_conversation),
         )
         .with_state(state)
 }

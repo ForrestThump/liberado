@@ -7,6 +7,7 @@
 //! us doesn't fight over it).
 
 mod api;
+mod chat_agent_spawn;
 mod coding_pack;
 mod cron_delivery;
 mod dispatcher_guidance;
@@ -909,28 +910,7 @@ async fn build_chat(
     );
     sessions = sessions.with_dispatch(dispatcher, catalog);
 
-    // Privileged create_agent: resolve child grants from config (fail closed); weak self for tool.
-    let config_for_resolve = config.clone();
-    sessions = sessions.with_profile_resolver(std::sync::Arc::new(move |name: &str| {
-        match config_for_resolve.resolve_session_profile(Some(name), "") {
-            Ok(resolved) => {
-                let parts = resolved.grant_parts();
-                Ok(liberado_session::SessionGrant {
-                    capabilities: parts.capabilities,
-                    profile: parts.profile,
-                    overrides: serde_json::to_value(&resolved.overrides)
-                        .unwrap_or(serde_json::Value::Null),
-                    delegation: parts.delegation,
-                    model: parts.model.map(str::to_string),
-                    prompt_append: parts.prompt_append.map(str::to_string),
-                })
-            }
-            Err(e) => Err(e.to_string()),
-        }
-    }));
-
-    let sessions = std::sync::Arc::new(sessions);
-    sessions.install_self_handle();
+    let sessions = chat_agent_spawn::install(sessions, config);
     (Some(sessions), tool_count, tool_names)
 }
 

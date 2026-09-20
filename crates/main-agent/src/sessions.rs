@@ -83,7 +83,7 @@ use tokio::sync::mpsc::Sender;
 use crate::compaction::{
     self, COMPACTION_AUTHOR, COMPACTION_TAIL_AUTHOR, CompactionConfig, CompactionTriggerTable,
 };
-use crate::face::{DispatchBridge, FaceRuntime};
+use crate::face::DispatchBridge;
 use crate::{Conversation, DEFAULT_SYSTEM_PROMPT};
 
 /// Max display length for the cheap first-line default title (UTF-8 chars).
@@ -1276,32 +1276,6 @@ impl ChatSessions {
             profile: None,
             model: None,
         }
-    }
-
-    /// Face-agent runtime: built-in `delegate` is never risk-gated by MCP name (it is core).
-    /// Optional `"main-agent"` MCP grants are scoped + risk-gated separately so operators can
-    /// thicken the surface without exposing the fleet by default.
-    ///
-    /// `turn_deferral` is the per-turn flag a `delegate` raises when its subagent deferred the
-    /// action to the human out-of-band — read back by [`turn`](Self::turn) to drop the redundant
-    /// reply (Gap 2).
-    fn build_face_runtime(
-        &self,
-        user: &str,
-        session: Ulid,
-        capabilities: CapabilitySet,
-        turn_deferral: Arc<AtomicBool>,
-        profile: Option<&str>,
-    ) -> Box<dyn ToolRuntime> {
-        let extras = self.scoped_extras_runtime(user, session, capabilities);
-        let agent_spawner = self.agent_spawner_for_profile(profile);
-        Box::new(FaceRuntime::new(
-            self.face_bridge.clone(),
-            extras,
-            Some(session.to_string()),
-            turn_deferral,
-            agent_spawner,
-        ))
     }
 
     /// Whether runtime risk/zone/consequence gates must wrap tool calls.

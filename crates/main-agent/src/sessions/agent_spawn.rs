@@ -4,14 +4,17 @@
 //! module resolves the named profile (fail closed) and calls `create_with_grant`
 //! so Reading B stamps `Agent`. Not GoalSessionHub / `delegate`.
 
+use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Weak};
 
 use async_trait::async_trait;
-use liberado_conversation_store::is_agent_profile;
+use liberado_common::CapabilitySet;
+use liberado_conversation_store::{Ulid, is_agent_profile};
+use liberado_executor::ToolRuntime;
 use liberado_session::SessionGrant;
 
 use super::ChatSessions;
-use crate::face::{AgentSpawner, CreateAgentResult};
+use crate::face::{AgentSpawner, CreateAgentResult, FaceRuntime};
 
 /// Resolves a chat profile name → [`SessionGrant`]. Wired from the daemon's
 /// `Config::resolve_session_profile` at boot (fail closed on unknown/disabled).
@@ -78,6 +81,33 @@ impl ChatSessions {
             profile: profile.to_owned(),
             title: title_for_result,
         })
+    }
+
+    /// Face-agent runtime: built-in `delegate` is never risk-gated by MCP name (it is core).
+    /// Optional `"main-agent"` MCP grants are scoped + risk-gated separately so operators can
+    /// thicken the surface without exposing the fleet by default.
+    ///
+    /// `turn_deferral` is the per-turn flag a `delegate` raises when its subagent deferred the
+    /// action to the human out-of-band — read back by [`turn`](Self::turn) to drop the redundant
+    /// reply (Gap 2). Privilege gate A: `create_agent` only when `profile` is an agent-creator
+    /// and the weak self-handle is installed.
+    pub(super) fn build_face_runtime(
+        &self,
+        user: &str,
+        session: Ulid,
+        capabilities: CapabilitySet,
+        turn_deferral: Arc<AtomicBool>,
+        profile: Option<&str>,
+    ) -> Box<dyn ToolRuntime> {
+        let extras = self.scoped_extras_runtime(user, session, capabilities);
+        let agent_spawner = self.agent_spawner_for_profile(profile);
+        Box::new(FaceRuntime::new(
+            self.face_bridge.clone(),
+            extras,
+            Some(session.to_string()),
+            turn_deferral,
+            agent_spawner,
+        ))
     }
 }
 
