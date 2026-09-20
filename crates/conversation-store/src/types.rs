@@ -246,7 +246,7 @@ pub struct MessageNode {
 
 /// A conversation's header record — the first line of its log. Carries lineage so subagent trees
 /// and fan-out are expressible without a schema change.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct ConversationHeader {
     pub id: Ulid,
     /// A display title for the sidebar. Derived/regenerable; never the source of truth.
@@ -288,7 +288,7 @@ pub struct ConversationHeader {
 /// The input to [`create`](crate::ConversationStore::create): the caller supplies only intent, not
 /// identity. The store mints the conversation id and stamps the time, so the *only* writer of ids
 /// is the store (the property that keeps the log sorted).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct NewConversation {
     pub title: Option<String>,
     pub parent_conversation: Option<Ulid>,
@@ -310,10 +310,18 @@ pub struct NewConversation {
     /// question (`Config::resolve_session_profile`), and a store that reached for config would put
     /// the whole config stack underneath the storage layer.
     pub grant: SessionGrant,
-    /// Which chat-surface shelf this conversation lives on. `Default = Chat`
-    /// so every existing call site stays chat unless it opts in. The
-    /// `chat-client-contract::SurfaceMode` stamp flows through here; see
-    /// `docs/spec/architecture/chat-agent-surface-mode.md` for the rule.
+    /// Which chat-surface shelf this conversation lives on. **Required.**
+    ///
+    /// Despite `NewConversation: Default` existing (for test helpers that
+    /// build around `..Default::default()`), the store does not default
+    /// this to `Chat` via that derive — callers should compute the stamp up
+    /// front, typically via
+    /// [`liberado_main_agent::sessions::surface_mode::stamp_surface_mode`],
+    /// so the create path has one authority for the rule and a deployment's
+    /// `[chat] agent_profiles` config flows through the call, not around it.
+    /// Passing `surface_mode: SurfaceMode::default()` explicitly is fine in
+    /// tests; production call sites compute it. See
+    /// `docs/spec/architecture/chat-agent-surface-mode.md`.
     pub surface_mode: SurfaceMode,
 }
 

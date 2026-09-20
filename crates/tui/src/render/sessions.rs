@@ -145,7 +145,7 @@ mod tests {
             created_at: "2025-06-25T12:00:00Z".into(),
             parent_conversation: None,
             spawned_by: None,
-            surface_mode: Default::default(),
+            ..Default::default()
         }
     }
 
@@ -206,7 +206,7 @@ mod tests {
                 created_at: "2025-06-25T12:00:00Z".into(),
                 parent_conversation: Some("root".into()),
                 spawned_by: Some("msg-9".into()),
-                surface_mode: Default::default(),
+                ..Default::default()
             },
         ];
         let out = render(&app, 90, 24);
