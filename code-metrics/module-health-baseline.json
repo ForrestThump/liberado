@@ -2789,6 +2789,12 @@
     "functions": 17,
     "cyclomatic": 36
   },
+  "crates/main-agent/src/face/create_agent.rs": {
+    "ploc": 124,
+    "lloc": 26,
+    "functions": 9,
+    "cyclomatic": 15
+  },
   "crates/main-agent/src/face/tests.rs": {
     "ploc": 132,
     "lloc": 30,
@@ -2808,10 +2814,16 @@
     "cyclomatic": 12
   },
   "crates/main-agent/src/sessions.rs": {
-    "ploc": 1242,
-    "lloc": 284,
-    "functions": 114,
-    "cyclomatic": 235
+    "ploc": 1235,
+    "lloc": 283,
+    "functions": 113,
+    "cyclomatic": 234
+  },
+  "crates/main-agent/src/sessions/agent_spawn.rs": {
+    "ploc": 171,
+    "lloc": 38,
+    "functions": 14,
+    "cyclomatic": 24
   },
   "crates/main-agent/src/sessions/compaction.rs": {
     "ploc": 660,
@@ -3299,6 +3311,12 @@
     "functions": 29,
     "cyclomatic": 97
   },
+  "crates/server/src/api/chat_create.rs": {
+    "ploc": 74,
+    "lloc": 9,
+    "functions": 4,
+    "cyclomatic": 17
+  },
   "crates/server/src/api/chat_endpoint_tests.rs": {
     "ploc": 259,
     "lloc": 67,
@@ -3388,6 +3406,12 @@
     "lloc": 34,
     "functions": 2,
     "cyclomatic": 3
+  },
+  "crates/server/src/chat_agent_spawn.rs": {
+    "ploc": 27,
+    "lloc": 6,
+    "functions": 2,
+    "cyclomatic": 5
   },
   "crates/server/src/coding_pack.rs": {
     "ploc": 43,
@@ -4222,6 +4246,12 @@
     "lloc": 104,
     "functions": 39,
     "cyclomatic": 74
+  },
+  "crates/webui/src/components/sidebar_new_agent.rs": {
+    "ploc": 167,
+    "lloc": 39,
+    "functions": 19,
+    "cyclomatic": 37
   },
   "crates/webui/src/components/sidebar_shelf.rs": {
     "ploc": 122,
