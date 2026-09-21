@@ -99,3 +99,24 @@ ceiling = 1397
 reason = "Same as executor lib.rs: three lines of sibling-test module wiring (risk_gated_survivor_tests.rs)."
 reviewed_on = "2026-08-25"
 
+[[waiver]]
+path = "crates/main-agent/src/sessions.rs"
+metric = "ploc"
+ceiling = 1280
+reason = "CAS1 wires the new `AgentProfiles` field on `ChatSessions` (+ its doc comment) plus the `#[path = \"sessions/agent_profiles.rs\"] mod agent_profiles;` declaration; both lines are irreducible inside the struct, and the builder itself is correctly placed in a sibling module to keep this file's cyclomatic baseline. The +1 cyclomatic comes from the new `is_some_and(|name| profiles.is_agent(name))` closure in the stamp path; the projection-side closure is in `sessions-store` and accounted for by the readings above."
+reviewed_on = "2026-09-20"
+
+[[waiver]]
+path = "crates/session-store/src/jsonl.rs"
+metric = "cyclomatic"
+ceiling = 190
+reason = "CAS1 wire threads `&self.agent_profiles` through three chat-lens projection paths (`create`, `list`, `header`); the inline `with_agent_profiles`/`agent_profiles()` are in a sibling module. The +1 cyclomatic vs the auto-ratchet baseline is the new projection call to `to_conversation_header_with(&AgentProfiles)`."
+reviewed_on = "2026-09-20"
+
+[[waiver]]
+path = "crates/session-store/src/jsonl.rs"
+metric = "functions"
+ceiling = 86
+reason = "Same cyclomatic waiver: the functions ratchet is `nom.total` (functions + closures), and the new projection closure `|h| h.to_conversation_header_with(&self.agent_profiles)` adds one to it."
+reviewed_on = "2026-09-20"
+

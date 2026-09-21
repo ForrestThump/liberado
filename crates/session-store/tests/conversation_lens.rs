@@ -18,7 +18,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use liberado_conversation_store::{
-    Author, ConversationStore, NewConversation, NewNode, StoreError, Ulid,
+    AgentProfiles, Author, ConversationStore, NewConversation, NewNode, StoreError, Ulid,
 };
 use liberado_provider::{Message, ToolInvocation};
 use liberado_session_store::SessionStore;
@@ -36,9 +36,7 @@ fn new_convo(title: &str) -> NewConversation {
         parent_conversation: None,
         spawned_by: None,
         ephemeral: false,
-        visibility: Default::default(),
-        grant: Default::default(),
-        surface_mode: Default::default(),
+        ..Default::default()
     }
 }
 
@@ -459,9 +457,7 @@ async fn create_stores_parent_conversation_lineage() {
             parent_conversation: Some(parent.id),
             spawned_by: None,
             ephemeral: false,
-            visibility: Default::default(),
-            grant: Default::default(),
-            surface_mode: Default::default(),
+            ..Default::default()
         })
         .await
         .unwrap();
@@ -490,9 +486,7 @@ async fn create_stores_spawned_by_lineage() {
             parent_conversation: None,
             spawned_by: Some(node.id),
             ephemeral: false,
-            visibility: Default::default(),
-            grant: Default::default(),
-            surface_mode: Default::default(),
+            ..Default::default()
         })
         .await
         .unwrap();
@@ -514,9 +508,7 @@ fn new_incognito(title: &str) -> NewConversation {
         parent_conversation: None,
         spawned_by: None,
         ephemeral: true,
-        visibility: Default::default(),
-        grant: Default::default(),
-        surface_mode: Default::default(),
+        ..Default::default()
     }
 }
 
@@ -779,5 +771,78 @@ async fn turns_excludes_tail_copies() {
     assert!(
         turns.iter().any(|(_, t)| t == "next question"),
         "the turn after the tail copy must be in turns"
+    );
+}
+
+// ── agent_profiles threading on SessionStore (PR #277 follow-up) ─────────────
+
+/// The store's chat-lens projection must honour a deployment-tuned
+/// `agent_profiles` set, not just the conservative default. Without this wire,
+/// a deployment that added `designer` to `[chat] agent_profiles` would still
+/// see legacy `designer` rows stamped `Chat` on every read, contradicting the
+/// spec.
+#[tokio::test]
+async fn projection_uses_with_agent_profiles_when_wired() {
+    let dir = tempdir().unwrap();
+    let store = SessionStore::open(dir.path())
+        .await
+        // Deployment set: `coding | designer`. `life` is in the conservative default but
+        // absent here, so a legacy row with `grant.profile = Some("life")` must project
+        // back as `Chat` (not the `Agent` the default would give).
+        .with_agent_profiles(AgentProfiles::new(["coding", "designer"]));
+
+    let mut legacy_life = new_convo("legacy life");
+    legacy_life.grant.profile = Some("life".into());
+    let mut legacy_designer = new_convo("legacy designer");
+    legacy_designer.grant.profile = Some("designer".into());
+
+    // `create` returns the projected header (the same view `header` and `list`
+    // produce), not the raw on-disk stamp. The on-disk stamp is `Chat` for both
+    // rows because that's what NewConversation defaults to; the projection is what
+    // changes the value the caller sees.
+    let life_header = store.create(legacy_life).await.unwrap();
+    let designer_header = store.create(legacy_designer).await.unwrap();
+
+    // `life` is absent from the deployment's set → projects as Chat.
+    assert_eq!(
+        life_header.surface_mode,
+        liberado_conversation_store::SurfaceMode::Chat,
+        "deployment set {{coding, designer}} must NOT project legacy `life` rows as Agent"
+    );
+    // `designer` is in the deployment's set → projects as Agent.
+    assert_eq!(
+        designer_header.surface_mode,
+        liberado_conversation_store::SurfaceMode::Agent,
+        "deployment set {{coding, designer}} must project legacy `designer` rows as Agent"
+    );
+
+    // Same rule on the read paths.
+    let projected_life = store.header(life_header.id).await.unwrap();
+    let projected_designer = store.header(designer_header.id).await.unwrap();
+    assert_eq!(
+        projected_life.surface_mode,
+        liberado_conversation_store::SurfaceMode::Chat
+    );
+    assert_eq!(
+        projected_designer.surface_mode,
+        liberado_conversation_store::SurfaceMode::Agent
+    );
+
+    let listed = store.list().await.unwrap();
+    let list_life = listed
+        .iter()
+        .find(|h| h.id == life_header.id)
+        .expect("life header in list");
+    let list_designer = listed
+        .iter()
+        .find(|h| h.id == designer_header.id)
+        .expect("designer header in list");
+    assert_eq!(
+        list_life.surface_mode,
+        liberado_conversation_store::SurfaceMode::Chat
+    );
+    assert_eq!(
+        list_designer.surface_mode,
+        liberado_conversation_store::SurfaceMode::Agent
     );
 }

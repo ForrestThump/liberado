@@ -46,6 +46,15 @@
 # maintenance_schedule = "weekly"
 # prune_requires_proposal = true   # pruning human-authored content always proposes first
 
+[chat]
+# agent_profiles = ["coding", "life", "researcher", "operator"]   # named session profiles that
+# classify a conversation as `SurfaceMode::Agent` on the chat-surface shelf (the chat vs. agent
+# split in `docs/spec/architecture/chat-agent-surface-mode.md`). Profiles absent from this list are
+# always `Chat`, even if a caller passed an explicit `surface_mode`. Add a deployment-specific
+# specialist here to extend the default set without a code change. Empty list = no profile is an
+# agent profile; every chat reads as `Chat`. Removing a default name is a deploy-visible change
+# (legacy rows project back to `Chat` after the next daemon restart) — worth a changelog note.
+
 [telegram_approvals]
 # getupdate_timeout_secs = 25   # Telegram getUpdates long-poll length (1-50, Telegram's own cap)
 # poll_retry_backoff_secs = 10  # backoff before retrying getUpdates after a network/API error

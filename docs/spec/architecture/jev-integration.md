@@ -57,14 +57,15 @@ Jev is **not** a second grantor. It advises; the dispatcher still grants.
 
 Already reflected in backlog CAS1–CAS4 + TUI deferral:
 
-1. **Tagging / wire stamp** (`surface_mode` on headers) — CAS1 / Slice 1 — in flight
-2. **WebUI shelf split** (Chats / Agents, client-side partition) — CAS2
-3. **Chat-default tools** (named profile + light tools; agent curation unchanged) — CAS3
-4. **Dogfood + measure** shelves for ≥1 week; tune `agent_profiles` — CAS4
-5. **TUI shelf/filter parity** — deferred until shelves are stable (Forrest does not
+1. **Tagging / wire stamp** (`surface_mode` on headers) — CAS1 / Slice 1 — **Done** ([#274](https://github.com/ForrestThump/liberado/pull/274))
+2. **WebUI shelf split** (Chats / Agents, client-side partition) — CAS2 — **Done** ([#276](https://github.com/ForrestThump/liberado/pull/276))
+3. **CAS1 follow-ups** (`AgentProfiles` deployment-tunable; cross-PR consistency) — **Done** ([#277](https://github.com/ForrestThump/liberado/pull/277))
+4. **Chat-default tools** (named profile + light tools; agent curation unchanged) — CAS3 — **Next.**
+5. **Dogfood + measure** shelves for ≥1 week; tune `agent_profiles` — CAS4 — Blocked on CAS3
+6. **TUI shelf/filter parity** — deferred until shelves are stable (Forrest does not
    use the TUI day-to-day). See
    [`../../future-work/tui-maturity-roadmap.md`](../../future-work/tui-maturity-roadmap.md).
-6. **Jev** — only after structure is solid and CAS4 dogfood has run — **JEV1 / CAS5**
+7. **Jev** — only after structure is solid and CAS4 dogfood has run — **JEV1 / CAS5**
 
 One PR under active review at a time. No CRAP/MH baseline raises — split functions
 or extract tests instead.

@@ -34,6 +34,7 @@ mod jsonl;
 mod types;
 
 pub use jsonl::{Record, SessionStore};
+pub use liberado_conversation_store::AgentProfiles;
 pub use liberado_conversation_store::{is_agent_creator_profile, is_agent_profile};
 pub use types::{NewSession, SessionHeader};
 

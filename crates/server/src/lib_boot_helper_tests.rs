@@ -165,7 +165,8 @@ async fn open_session_store_opens_under_the_resolved_root() {
         std::env::set_var("LIBERADO_DATA_DIR", dir.path());
     }
     let expected_root = liberado_bootstrap::sessions_dir();
-    let (root, store) = open_session_store().await;
+    let config = liberado_bootstrap::Config::default();
+    let (root, store) = open_session_store(&config).await;
     unsafe {
         std::env::remove_var("LIBERADO_DATA_DIR");
     }
@@ -178,5 +179,12 @@ async fn open_session_store_opens_under_the_resolved_root() {
     assert!(
         headers.is_empty(),
         "a fresh store lists nothing, but must answer: {headers:?}"
+    );
+    // The default config wires the conservative default agent_profiles set; the store's
+    // getter should reflect that exact set after open.
+    assert!(
+        store.agent_profiles().is_default(),
+        "default-config open_session_store wires AgentProfiles::default(): {:?}",
+        store.agent_profiles().names()
     );
 }

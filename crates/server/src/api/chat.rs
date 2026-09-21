@@ -667,6 +667,19 @@ async fn refuse_ephemeral_delete(
 ///
 /// Enabled entries only, in configured order, so the operator controls the list a picker shows.
 pub async fn list_profiles(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    // The deployment's `[chat] agent_profiles` set is the source of truth for which
+    // profiles the WebUI New Agent picker and the face `create_agent` tool will
+    // accept. Reading it from `config.tuning` here keeps the picker consistent with
+    // those create paths — a deployment adding `designer` shows it in the picker,
+    // a deployment removing `coding` no longer offers it.
+    let agent_eligible: std::collections::HashSet<&str> = state
+        .config
+        .tuning
+        .chat
+        .agent_profiles
+        .iter()
+        .map(String::as_str)
+        .collect();
     let profiles: Vec<serde_json::Value> = state
         .config
         .enabled_session_profiles()
@@ -681,7 +694,7 @@ pub async fn list_profiles(State(state): State<Arc<AppState>>) -> impl IntoRespo
                 "delegation": p.delegation,
                 "model": p.model,
                 // Reading B: New Agent picker + create_agent only offer these.
-                "agent_eligible": liberado_conversation_store::is_agent_profile(&p.name),
+                "agent_eligible": agent_eligible.contains(p.name.as_str()),
             })
         })
         .collect();

@@ -91,13 +91,21 @@ Slice order, all under Priority 2:
    legacy rows, upgraded for legacy rows whose profile is in `agent_profiles`. **Done**
    ([#274](https://github.com/ForrestThump/liberado/pull/274)).
    Spec: [`chat-agent-surface-mode.md`](spec/architecture/chat-agent-surface-mode.md).
-2. **WebUI shelves + create-path** (Slice 2) — shelves, **New Agent** create-with-grant,
-   privileged face `create_agent` (gate A). **In flight**
-   ([#276](https://github.com/ForrestThump/liberado/pull/276)).
-3. **Chat-default tools** (Slice 3 / CAS3) — named `chat-default` profile, `chat-search` granted to
-   `main-agent` as a commented `policy.toml` block. **Backlog** (still next after this).
-4. **Dogfood + measure** (Slice 4 / CAS4) — one week of shelves + chat-default, tune `agent_profiles`
-   from observed usage. **Backlog.** Jev still after CAS4.
+2. **WebUI shelves + create-path** (Slice 2) — Chats / Agents shelves; **New Agent**
+   create-with-grant; privileged face `create_agent` (gate A: default face / `operator`).
+   **Done** ([#276](https://github.com/ForrestThump/liberado/pull/276)).
+   Spec: [`chat-agent-surface-mode.md`](spec/architecture/chat-agent-surface-mode.md) §6b.
+3. **CAS1 follow-ups** — `AgentProfiles` deployment-tunable via `[chat]` in `tuning.toml`;
+   cross-PR consistency so every create / read / pick path consults the deployment's set,
+   not the conservative default. **Done**
+   ([#277](https://github.com/ForrestThump/liberado/pull/277)).
+   Spec: [`chat-agent-surface-mode.md`](spec/architecture/chat-agent-surface-mode.md) §6c.
+4. **Chat-default tools** (Slice 3 / CAS3) — named `chat-default` profile, `chat-search` granted
+   to `main-agent` as a commented `policy.toml` block. **Next.** Backlog: CAS3. Spec:
+   [`chat-agent-surface-mode.md`](spec/architecture/chat-agent-surface-mode.md) §5 / §7.
+5. **Dogfood + measure** (Slice 4 / CAS4) — one week of shelves + chat-default, tune
+   `agent_profiles` from observed usage. **Backlog.** Blocked on CAS3. Jev lands after
+   CAS4 dogfood (≥1 week), see [`jev-integration.md`](spec/architecture/jev-integration.md) §10.
 
 Jev lands **after** Slice 4 lands and is dogfooded — explicitly out of scope for the
 chat/agent PR set. The post-shelf phase plan (TypeSafe Jev first wedge, non-goals, and

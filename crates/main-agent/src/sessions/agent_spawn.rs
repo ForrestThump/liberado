@@ -9,7 +9,7 @@ use std::sync::{Arc, Weak};
 
 use async_trait::async_trait;
 use liberado_common::CapabilitySet;
-use liberado_conversation_store::{Ulid, is_agent_profile};
+use liberado_conversation_store::Ulid;
 use liberado_executor::ToolRuntime;
 use liberado_session::SessionGrant;
 
@@ -50,9 +50,12 @@ impl ChatSessions {
 
     /// Create a long-lived Agent-shelf chat under a named agent-eligible profile.
     ///
-    /// Grant = only what the resolver returns for `profile`. Rejects non-agent
-    /// names and missing resolver. Does not start a turn (opening messages are
-    /// out of scope — return the id for the human/face to continue).
+    /// Agent-eligibility is checked against `self.agent_profiles` — the deployment's
+    /// `[chat] agent_profiles` set, threaded through [`with_agent_profiles`](Self::with_agent_profiles)
+    /// at boot. Tests that don't wire a deployment set get the conservative default.
+    /// Grant = only what the resolver returns for `profile`. Rejects profiles not in
+    /// the deployment's set and a missing resolver. Does not start a turn (opening
+    /// messages are out of scope — return the id for the human/face to continue).
     pub async fn create_agent_chat(
         &self,
         profile: &str,
@@ -62,9 +65,9 @@ impl ChatSessions {
         if profile.is_empty() {
             return Err("create_agent requires a non-empty profile".into());
         }
-        if !is_agent_profile(profile) {
+        if !self.agent_profiles.is_agent(profile) {
             return Err(format!(
-                "profile `{profile}` is not agent-eligible (coding|life|researcher|operator)"
+                "profile `{profile}` is not in the deployment's [chat] agent_profiles set"
             ));
         }
         let resolver = self.profile_resolver.as_ref().ok_or_else(|| {
@@ -125,7 +128,7 @@ impl AgentSpawner for ChatSessions {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use liberado_conversation_store::ConversationStore;
+    use liberado_conversation_store::{AgentProfiles, ConversationStore};
     use liberado_executor::{Budget, Executor};
     use liberado_provider::MockProvider;
     use liberado_session_store::SessionStore;
@@ -183,7 +186,57 @@ mod tests {
             .create_agent_chat("chat-default", None)
             .await
             .unwrap_err();
-        assert!(err.contains("not agent-eligible"), "{err}");
+        assert!(err.contains("not in the deployment"), "{err}");
+    }
+
+    /// A deployment that lists `designer` in its `[chat] agent_profiles` gets
+    /// `create_agent("designer")` to succeed; the converse — a profile in the
+    /// default set but absent from the deployment's set — is refused. This is
+    /// the cross-PR consistency test that pins the bug fixed by
+    /// `agent_profiles.is_agent(profile)` replacing the hardcoded free function.
+    #[tokio::test]
+    async fn create_agent_chat_honours_deployment_agent_profiles() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(SessionStore::open(dir.path()).await);
+        let resolver: ProfileGrantResolver = Arc::new(|name: &str| {
+            Ok(SessionGrant {
+                profile: Some(name.to_owned()),
+                ..SessionGrant::default()
+            })
+        });
+        // Deployment set: `coding` + `designer`. `life` is in the conservative
+        // default but absent here — it must be refused for this deployment.
+        let deployment_set = AgentProfiles::new(["coding", "designer"]);
+        let sessions = Arc::new(
+            ChatSessions::new(
+                store.clone(),
+                Executor::new(
+                    Arc::new(MockProvider::with_script("m", vec![])),
+                    Budget::default(),
+                ),
+                Arc::new(NoopRuntime),
+            )
+            .with_profile_resolver(resolver)
+            .with_agent_profiles(deployment_set),
+        );
+        sessions.install_self_handle();
+
+        // Custom profile accepted.
+        let result = sessions
+            .create_agent_chat("designer", Some("D".into()))
+            .await
+            .unwrap();
+        assert_eq!(result.profile, "designer");
+        let id: liberado_conversation_store::Ulid = result.conversation_id.parse().unwrap();
+        let header = store.header(id).await.unwrap();
+        assert_eq!(
+            header.surface_mode,
+            liberado_conversation_store::SurfaceMode::Agent
+        );
+
+        // Default-set profile absent from deployment set is refused.
+        let err = sessions.create_agent_chat("life", None).await.unwrap_err();
+        assert!(err.contains("not in the deployment"), "{err}");
     }
 
     #[tokio::test]

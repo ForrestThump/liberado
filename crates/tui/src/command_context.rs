@@ -163,7 +163,7 @@ mod tests {
             created_at: "2025-06-25T12:00:00Z".into(),
             parent_conversation: parent.map(str::to_string),
             spawned_by: None,
-            surface_mode: Default::default(),
+            ..Default::default()
         }
     }
 

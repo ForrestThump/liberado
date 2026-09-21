@@ -19,7 +19,7 @@ fn header(
         spawned_by: None,
         created_at: chrono::Utc::now(),
         grant: Default::default(),
-        surface_mode: Default::default(),
+        ..Default::default()
     }
 }
 

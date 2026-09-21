@@ -93,8 +93,99 @@ pub enum SurfaceMode {
 /// The chat-surface shelf a named profile falls into. Small conservative set
 /// matching specialist hats in example `policy.toml` / topology. Spec:
 /// `docs/spec/architecture/chat-agent-surface-mode.md`.
+///
+/// New code should hold an [`AgentProfiles`] and call [`AgentProfiles::is_agent`]
+/// — this free function is kept as a zero-config shortcut and is exactly
+/// `AgentProfiles::default().is_agent(name)`.
 pub fn is_agent_profile(name: &str) -> bool {
-    matches!(name, "coding" | "life" | "researcher" | "operator")
+    AgentProfiles::default().is_agent(name)
+}
+
+/// The set of named session profiles that classify a conversation as
+/// `SurfaceMode::Agent` rather than `Chat` on the chat-surface shelf.
+///
+/// `Default` is the small conservative set the design locked in
+/// (`coding | life | researcher | operator`). A deployment that adds a new
+/// specialist hat threads its own [`AgentProfiles`] through the store and
+/// the chat creator — see `config.example/tuning.toml [chat] agent_profiles`
+/// and the `with_agent_profiles` builders on [`SessionStore`] and
+/// [`liberado_main_agent::ChatSessions`].
+///
+/// [`SessionStore`]: ../../../liberado_session_store/struct.SessionStore.html
+/// [`liberado_main_agent::ChatSessions`]: ../../../liberado_main_agent/struct.ChatSessions.html
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct AgentProfiles {
+    /// Stored sorted so the wire/disk representation is stable and equality is
+    /// content-based. Lookup at runtime is O(log n) via the helper, but in
+    /// practice `n ≤ 8` and a linear scan is fine — that's why `is_agent` is
+    /// a `Vec` `contains` check, not a `BTreeSet` membership test.
+    names: Vec<String>,
+}
+
+impl AgentProfiles {
+    /// The conservative default set, **alphabetically sorted**. The sort
+    /// matters: `AgentProfiles::new` sorts its input, and `is_default`
+    /// compares against the sorted canonical — leaving `DEFAULT_NAMES`
+    /// unsorted would let two equal-looking "defaults" not compare equal.
+    pub const DEFAULT_NAMES: &'static [&'static str] =
+        &["coding", "life", "operator", "researcher"];
+
+    /// Build from any iterable of `Into<String>` (so `&[&str]`, `Vec<String>`,
+    /// and config-read slices all work without a forced clone per name).
+    /// Duplicates collapse; missing entries from the default set stay
+    /// missing — this is opt-in additional specialists, not a replacement
+    /// of the built-ins.
+    pub fn new<I, S>(names: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        let mut set: Vec<String> = names.into_iter().map(Into::into).collect();
+        set.sort();
+        set.dedup();
+        Self { names: set }
+    }
+
+    /// Parse from a slice of strings (the shape `tuning.toml [chat] agent_profiles`
+    /// arrives in once it's through `toml::Value::try_into`).
+    pub fn from_slice<S: AsRef<str>>(names: &[S]) -> Self {
+        Self::new(names.iter().map(|s| s.as_ref().to_owned()))
+    }
+
+    /// `true` when `name` classifies as an agent profile for this set.
+    pub fn is_agent(&self, name: &str) -> bool {
+        self.names.iter().any(|n| n == name)
+    }
+
+    /// Names in stable order, for diagnostics and config round-tripping.
+    pub fn names(&self) -> &[String] {
+        &self.names
+    }
+
+    /// `true` when this set is the conservative default and contains no
+    /// deployment-specific additions — useful for log lines that promise
+    /// "default" behaviour.
+    pub fn is_default(&self) -> bool {
+        let defaults: Vec<String> = Self::DEFAULT_NAMES.iter().map(|s| s.to_string()).collect();
+        self.names == defaults
+    }
+}
+
+impl Default for AgentProfiles {
+    fn default() -> Self {
+        Self::new(Self::DEFAULT_NAMES.iter().copied())
+    }
+}
+
+impl std::fmt::Display for AgentProfiles {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.is_default() {
+            f.write_str("agent_profiles(default: coding, life, researcher, operator)")
+        } else {
+            write!(f, "agent_profiles({})", self.names.join(", "))
+        }
+    }
 }
 
 /// Privilege gate A for the face `create_agent` tool: which *current* session
@@ -168,7 +259,7 @@ pub struct MessageNode {
 
 /// A conversation's header record — the first line of its log. Carries lineage so subagent trees
 /// and fan-out are expressible without a schema change.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct ConversationHeader {
     pub id: Ulid,
     /// A display title for the sidebar. Derived/regenerable; never the source of truth.
@@ -210,7 +301,7 @@ pub struct ConversationHeader {
 /// The input to [`create`](crate::ConversationStore::create): the caller supplies only intent, not
 /// identity. The store mints the conversation id and stamps the time, so the *only* writer of ids
 /// is the store (the property that keeps the log sorted).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct NewConversation {
     pub title: Option<String>,
     pub parent_conversation: Option<Ulid>,
@@ -232,10 +323,17 @@ pub struct NewConversation {
     /// question (`Config::resolve_session_profile`), and a store that reached for config would put
     /// the whole config stack underneath the storage layer.
     pub grant: SessionGrant,
-    /// Which chat-surface shelf this conversation lives on. `Default = Chat`
-    /// so every existing call site stays chat unless it opts in. The
-    /// `chat-client-contract::SurfaceMode` stamp flows through here; see
-    /// `docs/spec/architecture/chat-agent-surface-mode.md` for the rule.
+    /// Which chat-surface shelf this conversation lives on. **Required.**
+    ///
+    /// Despite `NewConversation: Default` existing (for test helpers that
+    /// build around `..Default::default()`), the store does not default
+    /// this to `Chat` via that derive — callers should compute the stamp up
+    /// front (the chat creator in `liberado_main_agent` owns that rule),
+    /// so the create path has one authority and a deployment's
+    /// `[chat] agent_profiles` config flows through the call, not around it.
+    /// Passing `surface_mode: SurfaceMode::default()` explicitly is fine in
+    /// tests; production call sites compute it. See
+    /// `docs/spec/architecture/chat-agent-surface-mode.md`.
     pub surface_mode: SurfaceMode,
 }
 

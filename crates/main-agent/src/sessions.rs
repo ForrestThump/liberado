@@ -60,7 +60,8 @@ use liberado_common::{
     McpDescriptor, ProposalSigner, RiskWaiverSet, WriteClass, mcp_of,
 };
 use liberado_conversation_store::{
-    Author, ConversationHeader, ConversationStore, MessageNode, NewNode, StoreError, Ulid,
+    AgentProfiles, Author, ConversationHeader, ConversationStore, MessageNode, NewNode, StoreError,
+    Ulid,
 };
 use liberado_dispatcher::{DispatchRequest, Dispatcher};
 use liberado_executor::{
@@ -70,6 +71,8 @@ use liberado_mcp::ScopedRuntime;
 use liberado_provider::{Message, Provider, Role};
 use liberado_session::{DomainHint, GoalSessionHub, GoalSpec, SessionGrant, SessionOrigin};
 
+#[path = "sessions/agent_profiles.rs"]
+mod agent_profiles;
 #[path = "sessions/agent_spawn.rs"]
 mod agent_spawn;
 #[path = "sessions/surface_mode.rs"]
@@ -298,6 +301,8 @@ pub struct ChatSessions {
     /// Automatic context compaction (CH3) — config + the provider that writes summaries.
     /// `None` = never compact (tests, and hosts that never wired it).
     compaction: Option<CompactionEngine>,
+    /// CAS1: chat-surface agent_profiles (default set; tunable via `with_agent_profiles`).
+    agent_profiles: AgentProfiles,
 }
 
 /// The moving parts of automatic compaction: the tunables, plus the provider used for the one
@@ -357,6 +362,7 @@ impl ChatSessions {
             profile_resolver: None,
             self_handle: std::sync::OnceLock::new(),
             compaction: None,
+            agent_profiles: AgentProfiles::default(),
         }
     }
 
