@@ -34,8 +34,9 @@ unblocked item. Do not skip a code dependency.
 | **8** | **E5 — stop the TurboMCP SSE reconnect storm** | External reliability work; restore useful homelab diagnostics. |
 | **9** | **E2 — implement the inbox layer** | E4 must land first. The design is settled in the inbox specification. |
 | **10** | **C4 — finish dedicated goal-view panes** | Useful surface work, but it does not block measurement or unattended shipping. |
-| **11** | **CAS2 — WebUI shelf split + create-path (Slice 2)** | **In flight** ([#276](https://github.com/ForrestThump/liberado/pull/276)). Shelves + **New Agent** (`POST /api/conversations` + profile) + privileged face `create_agent` (gate A: default face / `operator`). CAS3 still next; Jev still after CAS4. |
-| **12** | **CAS3 — chat-default tools (Slice 3)** | Blocked on CAS2. Named `chat-default` profile; `chat-search` granted to `main-agent` via `policy.toml` comment block. |
+| **11** | **CAS2 — WebUI shelf split + create-path (Slice 2)** | **Done** ([#276](https://github.com/ForrestThump/liberado/pull/276)). Shelves + **New Agent** (`POST /api/conversations` + profile) + privileged face `create_agent` (gate A: default face / `operator`). |
+| **11a** | **CAS1 follow-ups (data layer + cross-PR consistency)** | **Done** ([#277](https://github.com/ForrestThump/liberado/pull/277)). `AgentProfiles` deployment-tunable via `[chat]` in `tuning.toml`; every create / read / pick path consults the deployment's set, not the conservative default. See `chat-agent-surface-mode.md` §6c. |
+| **12** | **CAS3 — chat-default tools (Slice 3)** | **Next.** Blocked on CAS1 follow-ups (now done). Named `chat-default` profile; `chat-search` granted to `main-agent` via `policy.toml` comment block. |
 | **13** | **CAS4 — dogfood + measure shelves (Slice 4)** | Blocked on CAS3. One-week dogfood; tune `agent_profiles` from observed usage. |
 | **14** | **JEV1 / CAS5 — TypeSafe Jev first wedge** | Blocked on CAS4 dogfood (≥1 week). Spec: [`../spec/architecture/jev-integration.md`](../spec/architecture/jev-integration.md). Confidence-gated advisor only (belong? / which agent? / optional soft tool hints). Dispatcher remains sole grantor. One PR at a time — do not start while an earlier CAS item is still open. |
 

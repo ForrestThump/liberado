@@ -9,10 +9,7 @@ open_items: true
 
 # Chat vs agent surface mode
 
-**Status**: Slice 1 (wire + stamp) landed in [#274](https://github.com/ForrestThump/liberado/pull/274). Slice 2 (WebUI shelves + create-path + privileged `create_agent`) is in flight on [#276](https://github.com/ForrestThump/liberado/pull/276). Slices 3–4 (CAS3/CAS4) follow as separate
-PRs. Jev is out of scope for **this** document (CAS1–CAS4 only); the full phase
-plan lives in [`jev-integration.md`](jev-integration.md) and starts only after
-the shelves are dogfooded.
+**Status**: Slice 1 (wire + stamp) landed in [#274](https://github.com/ForrestThump/liberado/pull/274). Slice 2 (WebUI shelves + create-path + privileged `create_agent`) landed in [#276](https://github.com/ForrestThump/liberado/pull/276). The CAS1 follow-ups — making `agent_profiles` deployment-tunable via `[chat]` in `tuning.toml` and ensuring every create / read path honours the deployment's set instead of the conservative default — landed in [#277](https://github.com/ForrestThump/liberado/pull/277). **Next is CAS3 (chat-default tools, Slice 3)** — see [`docs/roadmap.md`](../../roadmap.md) and [`docs/future-work/backlog.md`](../../future-work/backlog.md). Jev is out of scope for this document (CAS1–CAS4 only); the full phase plan lives in [`jev-integration.md`](jev-integration.md) and starts only after the shelves are dogfooded.
 
 **Reading**: this plan locks **Reading B** for the meaning of "agent". An
 **agent** is a long-lived specialist **chat** (a Grok-Bot-style context with
@@ -90,16 +87,24 @@ stamp_surface_mode(grant: &SessionGrant, explicit: Option<SurfaceMode>) -> Surfa
     return Chat
 ```
 
-`agent_profiles` is a small const set documented in the plan and pinned
-in code as a single `fn is_agent_profile(name: &str) -> bool` so adding
-a name is one edit:
+`agent_profiles` is a small **deployment-tunable** set. The default —
+the conservative CAS1 set — is `coding`, `life`, `researcher`, `operator`,
+pinned as `AgentProfiles::DEFAULT_NAMES` in
+`crates/conversation-store/src/types.rs`. A deployment that adds a new
+specialist hat sets `[chat] agent_profiles = [...]` in `tuning.toml`;
+the daemon reads it at boot and threads the same `AgentProfiles` into
+both `ChatSessions` (create-time stamp) and `SessionStore` (chat-lens
+projection on every read). Removing a default name is a deploy-visible
+change — legacy rows whose profile is no longer in the set project back
+as `Chat` after the next daemon restart. See §6c for the wiring
+and [`tuning.md`](../reference/tuning.md) for the knob.
 
-```rust
-// crates/main-agent/src/sessions/surface_mode.rs
-fn is_agent_profile(name: &str) -> bool {
-    matches!(name, "coding" | "life" | "researcher" | "operator")
-}
-```
+The free function `is_agent_profile(name)` is kept as a backward-compat
+shortcut for `AgentProfiles::default().is_agent(name)`; it is **not**
+the source of truth. Production read paths (`stamp_surface_mode`,
+`to_conversation_header_with`, `/api/profiles`, the face
+`create_agent` tool) all read from the deployment-tuned set on
+`ChatSessions` / `SessionStore`, never from the free function.
 
 The list is **conservative**: every name here is a profile that exists
 in the homelab's `policy.toml` and that the operator treats as a
@@ -118,13 +123,14 @@ without any migration.
 
 ## 4. Slice order
 
-| Slice | Scope | PR size |
-|---|---|---|
-| **S1 — wire stamp** | Add `SurfaceMode`, stamp at create paths, persist on headers, expose on `ConvHeader`. Tests for serde roundtrip and stamp logic. **This PR.** | one |
-| **S2 — WebUI shelves** | Two top-level shelves inside the sidebar (Chats / Agents), partition client-side by `ConvHeader.surface_mode`. Default to Chats. | one |
-| **S3 — chat-default tools** | Named `chat-default` `[[session_profiles]]` entry; `chat-search` (read-only MCP) granted to `main-agent`. Operator opt-in via `policy.toml` comment block. | one |
-| **S4 — dogfood + measure** | One-week dogfood of shelves + chat-default. Tune `agent_profiles` set from observed usage. | one |
-| **later — Jev** | Out of scope for this plan. See [`jev-integration.md`](jev-integration.md) for the phase plan (first wedge, non-goals, kernel constraints). Lands after S4 has measured the shelves for a week. |
+| Slice | Scope | PR size | Status |
+|---|---|---|---|
+| **S1 — wire stamp** | Add `SurfaceMode`, stamp at create paths, persist on headers, expose on `ConvHeader`. Tests for serde roundtrip and stamp logic. | one | **Done** ([#274](https://github.com/ForrestThump/liberado/pull/274)) |
+| **S2 — WebUI shelves + create-path** | Two top-level shelves inside the sidebar (Chats / Agents), partition client-side by `ConvHeader.surface_mode`. Default to Chats. **New Agent** create-with-grant. Privileged face `create_agent` tool (gate A). | one | **Done** ([#276](https://github.com/ForrestThump/liberado/pull/276)) |
+| **CAS1 follow-ups** | `AgentProfiles` deployment-tunable via `[chat]` in `tuning.toml`; cross-PR consistency so every create / read / pick path consults the deployment's set, not the conservative default. | one | **Done** ([#277](https://github.com/ForrestThump/liberado/pull/277)) |
+| **S3 — chat-default tools** | Named `chat-default` `[[session_profiles]]` entry; `chat-search` (read-only MCP) granted to `main-agent`. Operator opt-in via `policy.toml` comment block. | one | **Next.** Backlog: CAS3. |
+| **S4 — dogfood + measure** | One-week dogfood of shelves + chat-default. Tune `agent_profiles` set from observed usage. | one | Blocked on S3. Backlog: CAS4. |
+| **later — Jev** | Out of scope for this plan. See [`jev-integration.md`](jev-integration.md) for the phase plan (first wedge, non-goals, kernel constraints). Lands after S4 has measured the shelves for a week. | n/a | Blocked on S4 dogfood.
 
 TUI is **deliberately not in this slice set**. The TUI already renders
 its own `SessionKind` chip from `goal.domain`; a kind filter is parity
@@ -150,6 +156,8 @@ Per the brief and confirmed by walking the repo:
 - **Full WebUI shelf redesign.** Slice 2.
 
 ## 6. Slice 1 acceptance criteria
+
+**Status**: all criteria below met in [#274](https://github.com/ForrestThump/liberado/pull/274).
 
 ### Functional
 
@@ -205,6 +213,27 @@ Per the brief and confirmed by walking the repo:
     in the active slice order.
 
 
+## 6a. Slice 2 + CAS1-followups acceptance criteria
+
+**Status**: Slice 2 met in [#276](https://github.com/ForrestThump/liberado/pull/276); CAS1 follow-ups met in [#277](https://github.com/ForrestThump/liberado/pull/277) (data layer + three cross-PR consistency fixes). All criteria below pinned by tests; no manual checklist.
+
+### Slice 2 (WebUI shelves + create-path + privileged `create_agent`)
+
+1. WebUI sidebar renders two tabs: **Chats** (default), **Agents**. Switching shelves refilters the list without dropping the active conversation, even if it lives on the other shelf. Search hits are scoped to the active shelf; unknown ids (race / stale) stay visible rather than silently dropping.
+2. `POST /api/conversations` with `{"profile": "<name>", "title"?: "..."}` opens an Agent-shelf chat under the named profile. Fail-closed on an unknown / disabled profile (HTTP 400 with the profile name in the message). `{}` opens a default-grant Chat (unchanged from S1).
+3. `GET /api/profiles` reports `agent_eligible: true` for every profile in the deployment's `[chat] agent_profiles` set and `false` otherwise. WebUI New Agent picker uses this list, filtering for `domain`-absent chat profiles.
+4. Privileged face tool `create_agent` is registered only when the *current* session's profile is an agent-creator (`is_agent_creator_profile(None | Some("operator"))` → `true`; everyone else → `false`). Rejects with a clear error naming the knob when `profile` is not in the deployment's set.
+5. `ChatSessions::create_with_grant` flow → `stamp_surface_mode(grant, None, &self.agent_profiles)` → stamps `Agent` iff the named profile is in the deployment's set. No second stamp rule to drift.
+
+### CAS1 follow-ups (data layer + cross-PR consistency)
+
+6. `AgentProfiles` is deployment-tunable via `[chat] agent_profiles` in `tuning.toml`. Default set is `coding | life | researcher | operator` (`AgentProfiles::DEFAULT_NAMES`).
+7. Boot wires the same `AgentProfiles` into both `ChatSessions` (`with_agent_profiles`) and `SessionStore` (`with_agent_profiles`). The boot log emits one info line per side reporting count + whether the conservative default is in force.
+8. Every read path — `ChatSessions::stamp_surface_mode`, `ChatSessions::create_agent_chat`, `face::create_agent::parse_create_agent_args`, `SessionStore::to_conversation_header_with`, `GET /api/profiles` — consults the deployment's set, never the free function `is_agent_profile`. The five sites are enumerated in §6c.
+9. `cargo fmt --check`, `cargo clippy --workspace --exclude liberado-webui --all-targets -- -D warnings`, full `cargo test --workspace --no-fail-fast`, the function-complexity ratchet, and the module-health ratchet all pass; the WebUI WASM release build passes.
+10. No `SessionGrant` field added; no `SessionKind` variant added; no on-disk migration (legacy rows default to `Chat` and the chat-lens projection upgrades them per the deployment's set).
+
+
 ## 6b. Create-path + privileged agent spawn (stacked on CAS2)
 
 Human and privileged-face paths that **create** Agent-shelf chats (Reading B stamp via
@@ -225,10 +254,12 @@ sessions, often Chat on the shelf).
 ### Privileged face — `create_agent` tool
 
 1. Built-in face tool alongside `delegate` (`CREATE_AGENT_TOOL_NAME`).
-2. Args: `profile` (required, must be agent-eligible), optional `title`. Opening-message
-   enqueue is skipped (not cheap inside an in-flight turn); return the id.
-3. Behavior: resolve profile → reject if not `is_agent_profile` → `create_with_grant` →
-   JSON `{ "conversation_id", "surface_mode": "agent", "profile", "title"? }`.
+2. Args: `profile` (required, must be in the deployment's `[chat] agent_profiles` set),
+   optional `title`. Opening-message enqueue is skipped (not cheap inside an in-flight
+   turn); return the id.
+3. Behavior: resolve profile → reject if **not in the deployment's `agent_profiles` set**
+   (this is the same set the HTTP New Agent path and `stamp_surface_mode` consult) →
+   `create_with_grant` → JSON `{ "conversation_id", "surface_mode": "agent", "profile", "title"? }`.
 4. **Privilege gate A:** tool is only registered when the *current* session's profile is
    an agent-creator (`is_agent_creator_profile`): default face (`None`) or `operator`.
    Non-creators (`coding`, `life`, `researcher`, …) do not see the tool.
@@ -241,18 +272,43 @@ sessions, often Chat on the shelf).
 - `delegate` — GoalSessionHub dispatch jobs; strips AskHuman; awaits terminal result.
 - Mid-conversation `set_profile` — human authority switch, not create-time stamp.
 
-## 7. Follow-ups (NOT in this PR)
+## 6c. Every site reads the deployment's tuned set
 
-- **S2 (WebUI shelves + create-path)**: Chats / Agents shelves; **New Agent** +
-  `POST /api/conversations` with profile; privileged face `create_agent` (gate A).
-  In flight on [#276](https://github.com/ForrestThump/liberado/pull/276).
-- **S3 (chat-default tools)**: name `chat-default` profile in
-  `config.example/topology.toml`, add `chat-search` to the `main-agent`
-  grant as a commented block in `config.example/policy.toml`.
-- **S4 (dogfood)**: one week of measured shelves + chat-default, then
-  tune `agent_profiles` from observed usage.
-- **Jev (later)**: dispatcher-side "which agent does this belong to"
-  wedge; lands after S4 has been dogfooded. Full phase plan:
-  [`jev-integration.md`](jev-integration.md).
-- **TUI parity (later)**: `K` key filter on `SessionKind` — small, but
+`agent_profiles` is the deployment's single source of truth. **Every** create / read / pick path consults the same `AgentProfiles` instance threaded through from `config.tuning.chat.agent_profiles` at boot:
+
+| Site | File | How it consults the set |
+|---|---|---|
+| `ChatSessions::stamp_surface_mode` (create-time) | `crates/main-agent/src/sessions/surface_mode.rs` | `self.agent_profiles.is_agent(profile)` — stamps `Agent` iff the named profile is in the deployment's set. |
+| `ChatSessions::create_agent_chat` (face `create_agent` tool) | `crates/main-agent/src/sessions/agent_spawn.rs` | Same; rejects with `"profile X is not in the deployment's [chat] agent_profiles set"` (clear error, names the configuration knob). |
+| `face::create_agent::parse_create_agent_args` | `crates/main-agent/src/face/create_agent.rs` | Validates **shape only** (non-empty after trim). The policy check lives in `create_agent_chat` next to the data it consults. |
+| `SessionStore::to_conversation_header_with` (chat-lens projection) | `crates/session-store/src/types.rs` | Passed `&self.agent_profiles` on every `create`/`list`/`header` call. Legacy-row upgrade: a row whose on-disk `surface_mode` is `Chat` is projected as `Agent` iff `grant.profile ∈ agent_profiles`. |
+| `GET /api/profiles` (`agent_eligible` field) | `crates/server/src/api/chat.rs` | Reports `agent_eligible: true` iff `name ∈ config.tuning.chat.agent_profiles`. The WebUI New Agent picker uses this to filter. |
+
+The free function `is_agent_profile(name)` is kept as a backward-compat shortcut for `AgentProfiles::default().is_agent(name)`; it is **not** the source of truth for any of the five sites above. Adding a deployment hat means adding it to `[chat] agent_profiles` — no code change.
+
+The cross-PR consistency was established by three follow-up commits on top of PR #277:
+1. `fix(face): honor deployment's [chat] agent_profiles in create_agent tool` — the parser drops the policy check; `create_agent_chat` reads `self.agent_profiles`.
+2. `fix(api): /api/profiles reports agent_eligible from the deployment's set` — the picker now offers what the deployment actually accepts.
+3. `fix(session-store): wire deployment's [chat] agent_profiles at boot` — the `SessionStore` builder chain was unused in production; the boot now calls `with_agent_profiles` so the chat-lens projection reflects the deployment's set.
+
+Conformance tests pin all three: `create_agent_chat_honours_deployment_agent_profiles` (face), `projection_uses_with_agent_profiles_when_wired` (storage). The end-to-end story is: a deployment that lists `{coding, designer}` in `[chat]` gets the same `Agent`/`Chat` answer from all five sites, with the same error message when a name is missing.
+
+## 7. Follow-ups
+
+- **S3 (chat-default tools, Slice 3)** — **NEXT.** Name a `chat-default` profile in
+  `config.example/topology.toml` and add `chat-search` (read-only MCP) to the
+  `main-agent` grant as a commented block in `config.example/policy.toml`.
+  One PR; the design is settled in §5.
+- **S4 (dogfood, Slice 4)** — Blocked on S3. One week of measured shelves +
+  chat-default, then tune `agent_profiles` from observed usage. The
+  follow-up is the gate to JEV1 / CAS5 — see [`jev-integration.md`](jev-integration.md) §10.
+- **Jev (later)** — dispatcher-side "which agent does this belong to"
+  wedge. Full phase plan: [`jev-integration.md`](jev-integration.md).
+  Lands after S4 dogfood.
+- **TUI parity (later)** — `K` key filter on `SessionKind`. Small, but
   explicitly deferred until shelves are stable.
+
+**Already done (in the slice chain this plan locks):**
+- **S1 (wire + stamp)** — landed in [#274](https://github.com/ForrestThump/liberado/pull/274).
+- **S2 (WebUI shelves + create-path + privileged `create_agent`)** — landed in [#276](https://github.com/ForrestThump/liberado/pull/276). WebUI Chats | Agents shelves, **New Agent** (`POST /api/conversations` with profile), privileged face `create_agent` (gate A: default face / `operator`).
+- **CAS1 follow-ups (data layer + cross-PR consistency)** — landed in [#277](https://github.com/ForrestThump/liberado/pull/277). `AgentProfiles` is now a deployment-tunable set wired through `ChatSessions` and `SessionStore`; the five sites in §6c all read from it.
