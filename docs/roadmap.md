@@ -101,8 +101,8 @@ Slice order, all under Priority 2:
    ([#277](https://github.com/ForrestThump/liberado/pull/277)).
    Spec: [`chat-agent-surface-mode.md`](spec/architecture/chat-agent-surface-mode.md) §6c.
 4. **Chat-default tools** (Slice 3 / CAS3) — named `chat-default` profile, `chat-search` granted
-   to `main-agent` as a commented `policy.toml` block. **Next.** Backlog: CAS3. Spec:
-   [`chat-agent-surface-mode.md`](spec/architecture/chat-agent-surface-mode.md) §5 / §7.
+   to `main-agent` as a commented `policy.toml` block. **This PR.** Spec:
+   [`chat-agent-surface-mode.md`](spec/architecture/chat-agent-surface-mode.md) §6d.
 5. **Dogfood + measure** (Slice 4 / CAS4) — one week of shelves + chat-default, tune
    `agent_profiles` from observed usage. **Backlog.** Blocked on CAS3. Jev lands after
    CAS4 dogfood (≥1 week), see [`jev-integration.md`](spec/architecture/jev-integration.md) §10.
