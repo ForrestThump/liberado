@@ -2,7 +2,7 @@
 
 **Status**: Resolves Tier-3 Decision 14 (single source of truth for config / topology). Actionable.
 **Owner**: Shiloh Mangus
-**Last Updated**: August 29, 2026
+**Last Updated**: September 21, 2026
 **Related**:
 - `liberado-architecture-decisions.md` (Decision 14; Decision 10 secrets; Decision 4 policy)
 - Every companion spec contributes tunables (their "Tunables — single source of truth" tables)
@@ -201,3 +201,18 @@ Local deployment overrides are never committed; only the starter examples are:
 | `config/*.toml` | `.gitignore`d | Local deployment overrides |
 | `crates/*/config.example/` | committed | Per-crate examples |
 | `crates/*/config/*.toml` | `.gitignore`d | Per-crate deployment overrides |
+
+The shipped example is a contract, not a sketch. `crates/config-loader/tests/shipped_config_grants.rs`
+parses `config.example/` itself. A fixture that builds its own grants would stay green while the
+files we hand to a new deploy go wrong.
+
+CAS3 (chat vs agent, Slice 3) pins three facts on those files:
+
+1. `topology.toml` names an enabled `chat-default` `[[session_profiles]]` entry with no `domain`
+   (a chat hat) and `component = "main-agent"` (it borrows the face grant).
+2. `chat-default` is not in the default `[chat] agent_profiles` set, so create stamps `Chat`.
+3. `policy.toml` does not grant `ExecuteMcp = "chat-search"` to `main-agent`. The line is a
+   comment on that grant. Uncomment it, and the `[[mcps]]` `chat-search` block in topology, to
+   give Chat-shelf look-back. Off by default so a new deploy does not grow the face catalogue.
+
+Product meaning: [`chat-agent-surface-mode.md`](architecture/chat-agent-surface-mode.md) §6d.
