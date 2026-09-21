@@ -9,7 +9,7 @@ open_items: true
 
 # Chat vs agent surface mode
 
-**Status**: Slice 1 (wire + stamp) landed in [#274](https://github.com/ForrestThump/liberado/pull/274). Slice 2 (WebUI shelves + create-path + privileged `create_agent`) landed in [#276](https://github.com/ForrestThump/liberado/pull/276). The CAS1 follow-ups — making `agent_profiles` deployment-tunable via `[chat]` in `tuning.toml` and ensuring every create / read path honours the deployment's set instead of the conservative default — landed in [#277](https://github.com/ForrestThump/liberado/pull/277). **Next is CAS3 (chat-default tools, Slice 3)** — see [`docs/roadmap.md`](../../roadmap.md) and [`docs/future-work/backlog.md`](../../future-work/backlog.md). Jev is out of scope for this document (CAS1–CAS4 only); the full phase plan lives in [`jev-integration.md`](jev-integration.md) and starts only after the shelves are dogfooded.
+**Status**: Slice 1 (wire + stamp) landed in [#274](https://github.com/ForrestThump/liberado/pull/274). Slice 2 (WebUI shelves + create-path + privileged `create_agent`) landed in [#276](https://github.com/ForrestThump/liberado/pull/276). The CAS1 follow-ups — making `agent_profiles` deployment-tunable via `[chat]` in `tuning.toml` and ensuring every create / read path honours the deployment's set instead of the conservative default — landed in [#277](https://github.com/ForrestThump/liberado/pull/277). **CAS3 (chat-default tools, Slice 3) is this PR.** Jev is out of scope for this document (CAS1–CAS4 only); the full phase plan lives in [`jev-integration.md`](jev-integration.md) and starts only after the shelves are dogfooded.
 
 **Reading**: this plan locks **Reading B** for the meaning of "agent". An
 **agent** is a long-lived specialist **chat** (a Grok-Bot-style context with
@@ -128,7 +128,7 @@ without any migration.
 | **S1 — wire stamp** | Add `SurfaceMode`, stamp at create paths, persist on headers, expose on `ConvHeader`. Tests for serde roundtrip and stamp logic. | one | **Done** ([#274](https://github.com/ForrestThump/liberado/pull/274)) |
 | **S2 — WebUI shelves + create-path** | Two top-level shelves inside the sidebar (Chats / Agents), partition client-side by `ConvHeader.surface_mode`. Default to Chats. **New Agent** create-with-grant. Privileged face `create_agent` tool (gate A). | one | **Done** ([#276](https://github.com/ForrestThump/liberado/pull/276)) |
 | **CAS1 follow-ups** | `AgentProfiles` deployment-tunable via `[chat]` in `tuning.toml`; cross-PR consistency so every create / read / pick path consults the deployment's set, not the conservative default. | one | **Done** ([#277](https://github.com/ForrestThump/liberado/pull/277)) |
-| **S3 — chat-default tools** | Named `chat-default` `[[session_profiles]]` entry; `chat-search` (read-only MCP) granted to `main-agent`. Operator opt-in via `policy.toml` comment block. | one | **Next.** Backlog: CAS3. |
+| **S3 — chat-default tools** | Named `chat-default` `[[session_profiles]]` entry; `chat-search` (read-only MCP) granted to `main-agent`. Operator opt-in via `policy.toml` comment block. | one | **This PR.** Backlog: CAS3. |
 | **S4 — dogfood + measure** | One-week dogfood of shelves + chat-default. Tune `agent_profiles` set from observed usage. | one | Blocked on S3. Backlog: CAS4. |
 | **later — Jev** | Out of scope for this plan. See [`jev-integration.md`](jev-integration.md) for the phase plan (first wedge, non-goals, kernel constraints). Lands after S4 has measured the shelves for a week. | n/a | Blocked on S4 dogfood.
 
@@ -293,12 +293,24 @@ The cross-PR consistency was established by three follow-up commits on top of PR
 
 Conformance tests pin all three: `create_agent_chat_honours_deployment_agent_profiles` (face), `projection_uses_with_agent_profiles_when_wired` (storage). The end-to-end story is: a deployment that lists `{coding, designer}` in `[chat]` gets the same `Agent`/`Chat` answer from all five sites, with the same error message when a name is missing.
 
+## 6d. Slice 3 acceptance criteria (CAS3)
+
+**Status**: this PR. All criteria below pinned by tests against `config.example/`.
+
+1. `config.example/topology.toml` names an enabled `chat-default` `[[session_profiles]]` entry
+   with no `domain` (chat hat) and `component = "main-agent"` (borrows the face grant).
+2. `chat-default` is **not** in the default `[chat] agent_profiles` set, so create stamps
+   `Chat` and the New Agent picker excludes it.
+3. `config.example/policy.toml` does **not** grant `ExecuteMcp = "chat-search"` to
+   `main-agent`. The grant is a comment on that block so the operator opts in.
+4. Uncommenting the grant and the `[[mcps]]` `chat-search` block in topology is the
+   documented opt-in. The MCP stays commented: its binary path is workspace-local.
+5. New Chat is unchanged — default-grant Chat (no profile). `chat-default` is the named
+   hat picked with `/profile`.
+6. Agent hats (`coding`, `life`, `researcher`, `operator`) and their grants are unchanged.
+
 ## 7. Follow-ups
 
-- **S3 (chat-default tools, Slice 3)** — **NEXT.** Name a `chat-default` profile in
-  `config.example/topology.toml` and add `chat-search` (read-only MCP) to the
-  `main-agent` grant as a commented block in `config.example/policy.toml`.
-  One PR; the design is settled in §5.
 - **S4 (dogfood, Slice 4)** — Blocked on S3. One week of measured shelves +
   chat-default, then tune `agent_profiles` from observed usage. The
   follow-up is the gate to JEV1 / CAS5 — see [`jev-integration.md`](jev-integration.md) §10.
@@ -312,3 +324,5 @@ Conformance tests pin all three: `create_agent_chat_honours_deployment_agent_pro
 - **S1 (wire + stamp)** — landed in [#274](https://github.com/ForrestThump/liberado/pull/274).
 - **S2 (WebUI shelves + create-path + privileged `create_agent`)** — landed in [#276](https://github.com/ForrestThump/liberado/pull/276). WebUI Chats | Agents shelves, **New Agent** (`POST /api/conversations` with profile), privileged face `create_agent` (gate A: default face / `operator`).
 - **CAS1 follow-ups (data layer + cross-PR consistency)** — landed in [#277](https://github.com/ForrestThump/liberado/pull/277). `AgentProfiles` is now a deployment-tunable set wired through `ChatSessions` and `SessionStore`; the five sites in §6c all read from it.
+- **S3 (chat-default tools)** — this PR. Named `chat-default` profile; `chat-search` on
+  `main-agent` as a commented opt-in. See §6d.

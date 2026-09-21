@@ -60,7 +60,7 @@ Already reflected in backlog CAS1–CAS4 + TUI deferral:
 1. **Tagging / wire stamp** (`surface_mode` on headers) — CAS1 / Slice 1 — **Done** ([#274](https://github.com/ForrestThump/liberado/pull/274))
 2. **WebUI shelf split** (Chats / Agents, client-side partition) — CAS2 — **Done** ([#276](https://github.com/ForrestThump/liberado/pull/276))
 3. **CAS1 follow-ups** (`AgentProfiles` deployment-tunable; cross-PR consistency) — **Done** ([#277](https://github.com/ForrestThump/liberado/pull/277))
-4. **Chat-default tools** (named profile + light tools; agent curation unchanged) — CAS3 — **Next.**
+4. **Chat-default tools** (named profile + light tools; agent curation unchanged) — CAS3 — **this PR.**
 5. **Dogfood + measure** shelves for ≥1 week; tune `agent_profiles` — CAS4 — Blocked on CAS3
 6. **TUI shelf/filter parity** — deferred until shelves are stable (Forrest does not
    use the TUI day-to-day). See

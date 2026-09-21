@@ -61,6 +61,11 @@ capabilities = [
     { ReadSummary = { Named = "finance" } },   # finance is human_only: read a summary, never the detail
     # { ExecuteMcp = "tasks-mcp" },
     # { ExecuteMcp = "liberado-memory-mcp" },
+    # { ExecuteMcp = "chat-search" },          # CAS3: conversation look-back (read_only).
+                                                # Opt-in: uncomment this AND the [[mcps]] chat-search
+                                                # block in topology.toml. The `chat-default` profile
+                                                # borrows this grant. Off by default so a new deploy
+                                                # does not grow the face catalogue.
 ]
 
 [[grants]]
@@ -76,11 +81,10 @@ capabilities = [
     { ExecuteMcp = "code-dispatch" },          # dispatcher-only: self-extension goes through the
                                                 # guard pipeline, never a direct chat tool call.
     # { ExecuteMcp = "chat-search" },          # search conversation history mid-reasoning
-                                                # (read_only — safe for unattended dispatch). Not
-                                                # granted to main-agent: this is a dispatched-work
-                                                # tool, same tier as code-dispatch above; add it
-                                                # there too if direct chat should also search
-                                                # history.
+                                                # (read_only — safe for unattended dispatch). Direct
+                                                # chat look-back is the CAS3 opt-in on main-agent
+                                                # above; uncomment here only if dispatched work
+                                                # should search history too.
 ]
 
 # A named pool (Decision 18 checkpoint #3, declared via topology.toml's `[[pools]]`) is granted

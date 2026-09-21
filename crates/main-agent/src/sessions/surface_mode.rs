@@ -132,6 +132,20 @@ mod tests {
         );
     }
 
+    /// CAS3: the named Chat-shelf hat is a profile, but it is not in the
+    /// conservative `agent_profiles` set, so create stamps `Chat`.
+    #[test]
+    fn chat_default_profile_stamps_chat() {
+        assert_eq!(
+            stamp_surface_mode(
+                &grant_with_profile(Some("chat-default")),
+                None,
+                &default_profiles(),
+            ),
+            SurfaceMode::Chat
+        );
+    }
+
     #[test]
     fn explicit_chat_wins_over_agent_profile() {
         assert_eq!(

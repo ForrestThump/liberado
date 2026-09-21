@@ -317,6 +317,10 @@ writes_vault = false             # writes code workspaces, not the Obsidian vaul
 # (dev) or `--release` (prod), then point `command` at the resulting path. Exposes one tool,
 # `search_conversations`, backed by the same search `GET /api/conversations/search` uses — see
 # docs/future-work/archive/chat-search-plan.md.
+#
+# CAS3 opt-in: uncomment this MCP, then uncomment `{ ExecuteMcp = "chat-search" }` on
+# `[[grants]] component = "main-agent"` in policy.toml. The `chat-default` profile borrows
+# that grant. Off by default so a new deploy does not grow the face catalogue.
 # [[mcps]]
 # name = "chat-search"
 # description = "Search conversation history by keyword or regex"
@@ -456,11 +460,19 @@ writes_vault = false             # writes code workspaces, not the Obsidian vaul
 # Declaring none changes nothing: an unprofiled session runs its pack with the grant keyed by the
 # domain name (`life`, `coding`), exactly as before profiles existed.
 #
-# --- Chat hats for Agents shelf (Reading B / create-path) --------------------------------------
-# No `domain` = chat profile (WebUI /profile + New Agent picker). Names in
-# `is_agent_profile` (coding|life|researcher|operator) stamp surface_mode=agent at create.
-# Enable these for dogfood; New Chat stays default-grant Chat.
+# --- Chat hats (CAS3 + Reading B) --------------------------------------------------------------
+# No `domain` = chat profile (WebUI /profile + New Agent picker). New Chat stays the
+# default grant (no profile). Pick a named hat with /profile.
 
+# Chats shelf: not in [chat] agent_profiles, so stamp is Chat. Borrows the face grant;
+# history search is the commented `chat-search` opt-in on main-agent in policy.toml.
+[[session_profiles]]
+name = "chat-default"
+component = "main-agent"
+description = "Open-ended chat (Chats shelf). History search is opt-in — see policy.toml main-agent."
+enabled = true
+
+# Agents shelf: names in [chat] agent_profiles stamp surface_mode=agent at create.
 [[session_profiles]]
 name = "coding"
 component = "coding"

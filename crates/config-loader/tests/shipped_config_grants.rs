@@ -8,21 +8,38 @@
 use std::path::PathBuf;
 
 use liberado_common::Capability;
-use liberado_config_loader::{Config, Policy};
+use liberado_config_loader::{Config, Policy, Topology};
 
-fn shipped_policy() -> Policy {
-    let path: PathBuf = [
+fn shipped_example_path(name: &str) -> PathBuf {
+    [
         env!("CARGO_MANIFEST_DIR"),
         "..",
         "..",
         "config.example",
-        "policy.toml",
+        name,
     ]
     .iter()
-    .collect();
-    let text =
-        std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
-    toml::from_str(&text).unwrap_or_else(|e| panic!("parse {}: {e}", path.display()))
+    .collect()
+}
+
+fn shipped_example_text(name: &str) -> String {
+    let path = shipped_example_path(name);
+    std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()))
+}
+
+fn shipped_policy() -> Policy {
+    let text = shipped_example_text("policy.toml");
+    toml::from_str(&text).unwrap_or_else(|e| panic!("parse config.example/policy.toml: {e}"))
+}
+
+fn shipped_example_config() -> Config {
+    let topology: Topology = toml::from_str(&shipped_example_text("topology.toml"))
+        .unwrap_or_else(|e| panic!("parse config.example/topology.toml: {e}"));
+    Config {
+        topology,
+        policy: shipped_policy(),
+        tuning: Default::default(),
+    }
 }
 
 /// `AskHuman` is the capability to block on a person. A goal that holds it and has nobody attached
@@ -85,24 +102,72 @@ fn the_local_coding_hat_keeps_ask_human() {
 /// we hand to new users.
 #[test]
 fn the_shipped_example_topology_deserializes() {
-    let path: PathBuf = [
-        env!("CARGO_MANIFEST_DIR"),
-        "..",
-        "..",
-        "config.example",
-        "topology.toml",
-    ]
-    .iter()
-    .collect();
-    let text =
-        std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
-    let topology: liberado_config_loader::Topology =
-        toml::from_str(&text).unwrap_or_else(|e| panic!("example topology does not parse: {e}"));
-    Config {
-        topology,
-        policy: shipped_policy(),
-        tuning: Default::default(),
-    }
-    .validate()
-    .unwrap_or_else(|e| panic!("config.example does not validate: {e}"));
+    shipped_example_config()
+        .validate()
+        .unwrap_or_else(|e| panic!("config.example does not validate: {e}"));
+}
+
+/// CAS3: the named Chat-shelf hat exists, is enabled, has no pack domain, and borrows the
+/// face grant. New Chat stays the default (no profile); this is the hat you pick with
+/// `/profile`. It must not sit in `[chat] agent_profiles` or it lands on the Agents shelf.
+#[test]
+fn chat_default_is_an_enabled_chat_hat_on_the_main_agent_grant() {
+    let cfg = shipped_example_config();
+    let profile = cfg
+        .topology
+        .session_profiles
+        .iter()
+        .find(|p| p.name == "chat-default")
+        .expect("config.example/topology.toml must name a chat-default profile");
+    assert!(profile.enabled, "chat-default must be selectable");
+    assert!(
+        profile.domain.is_none(),
+        "chat-default is a chat hat, not a pack profile"
+    );
+    assert_eq!(
+        profile.component.as_deref(),
+        Some("main-agent"),
+        "chat-default borrows the face grant so the chat-search opt-in applies"
+    );
+    assert!(
+        !cfg.tuning
+            .chat
+            .agent_profiles
+            .iter()
+            .any(|n| n == "chat-default"),
+        "chat-default must stay off the Agents shelf (not in default agent_profiles)"
+    );
+
+    let resolved = cfg
+        .resolve_session_profile(Some("chat-default"), "life")
+        .expect("chat-default must resolve");
+    assert_eq!(resolved.name.as_deref(), Some("chat-default"));
+    assert!(resolved.domain.is_none());
+    assert_eq!(
+        resolved.capabilities,
+        cfg.policy.capabilities_for("main-agent")
+    );
+}
+
+/// CAS3: `chat-search` is operator opt-in on the face grant. Granting it by default
+/// grows the face catalogue; omitting the comment leaves no opt-in path.
+#[test]
+fn main_agent_chat_search_is_commented_opt_in_not_granted() {
+    let caps = shipped_policy().capabilities_for("main-agent");
+    assert!(
+        !caps.contains(&Capability::ExecuteMcp("chat-search".into())),
+        "CAS3 ships chat-search as operator opt-in; granting it by default grows the face catalogue"
+    );
+
+    let text = shipped_example_text("policy.toml");
+    let start = text
+        .find("component = \"main-agent\"")
+        .expect("main-agent grant missing from config.example/policy.toml");
+    let rest = &text[start..];
+    let end = rest.find("\n[[grants]]").unwrap_or(rest.len());
+    let block = &rest[..end];
+    assert!(
+        block.contains("# { ExecuteMcp = \"chat-search\" }"),
+        "CAS3 opt-in comment must live on the main-agent grant, not only dispatcher; block was:\n{block}"
+    );
 }
