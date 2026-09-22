@@ -161,12 +161,12 @@ writes_vault = false
 
 # rentcast-mcp removed 2026-07-17 — operator directive: skip completely.
 
-# Finance (Liberado Budget SQLite, Actual-compatible). MCP v1 is local-mode against
-# the shared DB; do not point this URL at budget :5006. Liberado appends /mcp.
+# Finance (Actual Budget). The Node/TS actual-mcp (which 404'd on /http) is retired; this is the
+# Rust/turbomcp replacement, served on :8000.
 [[mcps]]
 name = "liberado-actual-mcp"
-description = "Personal finance via Liberado Budget: accounts, balances, transactions, spending"
-consequence = "reversible"
+description = "Personal finance via Actual Budget: accounts, balances, transactions, spending"
+consequence = "external"
 transport = { kind = "http", url = "http://liberado-actual-mcp:8000" }
 writes_vault = false
 

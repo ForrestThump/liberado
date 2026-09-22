@@ -329,10 +329,7 @@ max_turns = 44
         assert!(cfg.validate().is_err());
     }
 
-    // Validation tests for the `[[providers.fallback]]` schema live in the sibling file
-    // `builder_fallback_tests.rs` (declared at the bottom of this file under `#[path]`). The
-    // fallback-specific test growth was kept out of this file on purpose — see the ratchet
-    // discussions on `module-health.toml` for why "tests are long" is never waiver material.
+    // Load and validation tests for `[providers.fallback]` live in `builder_fallback_tests.rs`.
 
     #[test]
     fn a_brand_new_provider_declared_purely_via_config_validates_and_is_selectable() {

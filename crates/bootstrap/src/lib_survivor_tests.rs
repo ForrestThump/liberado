@@ -296,7 +296,7 @@ fn provider_from_config_some_path() {
     assert!(provider.is_some(), "a keyed profile builds a provider");
 }
 
-/// Integration test: a `Config` with `[[providers.fallback]]` wired should produce a provider
+/// Integration test: a `Config` with `[providers.fallback]` wired should produce a provider
 /// whose runtime fallback fires end-to-end against wiremock stubs for primary + fallback. This
 /// closes the gap between `provider-openai-compat`'s unit tests (which prove the runtime
 /// behaviour) and the existing `primary_provider_with_a_wired_fallback_still_resolves` test

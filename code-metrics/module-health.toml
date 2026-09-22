@@ -125,7 +125,7 @@ reviewed_on = "2026-09-20"
 path = "crates/config-loader/src/model/builder.rs"
 metric = "cyclomatic"
 ceiling = 115
-reason = "Cross-provider fallback feature wires the `[[providers.fallback]]` schema. The +1 cyclomatic is the module-level `provider_profile` fixture shared with the sibling `builder_fallback_tests.rs` (split out specifically to keep the inline `mod tests` growth off the table; the sibling module needs the helper to be at module scope). The fallback-specific tests themselves live in `builder_fallback_tests.rs` and add zero regression here."
+reason = "Cross-provider fallback feature wires the `[providers.fallback]` schema. The +1 cyclomatic is the module-level `provider_profile` fixture shared with the sibling `builder_fallback_tests.rs` (split out specifically to keep the inline `mod tests` growth off the table; the sibling module needs the helper to be at module scope). The fallback-specific tests themselves live in `builder_fallback_tests.rs` and add zero regression here."
 reviewed_on = "2026-09-21"
 
 [[waiver]]
@@ -152,9 +152,9 @@ reviewed_on = "2026-09-21"
 [[waiver]]
 path = "crates/config-loader/src/model/config.rs"
 metric = "functions"
-ceiling = 90
-reason = "Same as the cyclomatic waiver on this file: the new function is the fallback comment block; no new function was added, the cyclomatic / functions regression is the doc comment that the reviewer asked for in the template."
-reviewed_on = "2026-09-21"
+ceiling = 88
+reason = "validate_providers gained one closure, providers.iter().any(|p| p.name == fb.provider), to reject an undeclared fallback name. The ceiling is the measured function count."
+reviewed_on = "2026-09-22"
 
 [[waiver]]
 path = "crates/config-loader/src/model/config.rs"

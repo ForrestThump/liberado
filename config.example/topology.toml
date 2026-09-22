@@ -193,7 +193,7 @@ delegation_mode = true
 # initial response status — a streaming reply that starts OK and fails mid-stream cannot be
 # retried. Codes NOT in `on_status` (notably 400/401/403/404/422) are returned to the caller
 # unchanged so config / auth errors are never silently downgraded to a different provider.
-# [[providers.fallback]]
+# [providers.fallback]
 # provider = "openrouter"                                                # must match another [[providers]] name; no self-reference
 # model = "deepseek/deepseek-v4-flash-0731"                              # override the fallback provider's default model
 # on_status = [402, 408, 425, 429, 500, 502, 503, 504]                   # optional; this is the default

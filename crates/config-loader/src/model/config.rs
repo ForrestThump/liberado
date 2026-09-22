@@ -1328,6 +1328,3 @@ mod project_auth_tests {
         );
     }
 }
-
-// helper removed — inlined back into validate_providers after the split regressed the metrics
-// more than the inline. The comment above the inlined block preserves the reasoning.

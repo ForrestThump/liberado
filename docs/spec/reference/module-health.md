@@ -78,9 +78,10 @@ The cross-provider fallback feature wires three narrow waivers for irreducible g
 config-schema side. `crates/config-loader/src/model/topology.rs` grows by one struct (`ProviderFallback`),
 one default helper, and one cross-cutting doc comment — a schema addition that has no other home.
 `crates/config-loader/src/model/config.rs` adds two error checks inside `validate_providers`'s
-per-provider loop (self-reference guard + undeclared-name guard); splitting them into a helper
-regressed the metrics more than the inline because a new function adds to the `functions` count and
-its own cyclomatic, so the inline shape is the ratchet-friendly one for these two specific checks.
+per-provider loop (self-reference guard + undeclared-name guard). The functions metric grew by
+one closure, `providers.iter().any(|p| p.name == fb.provider)`; that waiver's ceiling is the
+measured count, 88. Splitting the checks into a helper adds another function and its own
+cyclomatic, so the checks stay inline.
 `crates/config-loader/src/model/builder.rs` adds a shared `provider_profile` fixture at module scope so
 the sibling `builder_fallback_tests.rs` can use it via `super::provider_profile` — the
 fallback-specific tests themselves live in the sibling and add zero regression to `builder.rs`.

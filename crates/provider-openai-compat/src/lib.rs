@@ -176,6 +176,43 @@ impl OpenAiCompatibleProvider {
         Some(fb)
     }
 
+    /// The chat path stamps the primary slug on `request.model`. That field wins over the
+    /// provider model on the wire, so a fallback call must replace it with this provider's
+    /// model — the configured override — or the fallback host receives the primary slug.
+    fn request_for_fallback(&self, mut request: CompletionRequest) -> CompletionRequest {
+        request.model = Some(self.model());
+        request
+    }
+
+    /// One chat completion with no fallback decision. The retry calls this on the fallback
+    /// provider so a fallback that itself has a fallback cannot chain.
+    async fn complete_once(
+        &self,
+        request: &CompletionRequest,
+    ) -> Result<CompletionResponse, (u16, ProviderError)> {
+        let name_map = build_tool_name_map(&request.tools);
+        let (_model, body) = self.build_request_body(request, false);
+        let response = self.post_chat(&body).await?;
+        let value: Value = response.json().await.map_err(|e| {
+            (
+                0,
+                ProviderError::Transport(format!("malformed response body: {e}")),
+            )
+        })?;
+        from_openai_response(&value, &name_map).map_err(|e| (0, e))
+    }
+
+    /// One streaming open with no fallback decision. Same retry-once rule as [`Self::complete_once`].
+    async fn complete_stream_once(
+        &self,
+        request: &CompletionRequest,
+    ) -> Result<CompletionStream, (u16, ProviderError)> {
+        let name_map = build_tool_name_map(&request.tools);
+        let (_model, body) = self.build_request_body(request, true);
+        let response = self.post_chat(&body).await?;
+        Ok(stream_sse_response(response, name_map))
+    }
+
     /// Override the API base URL (e.g. to point at a mock server in tests).
     pub fn with_base_url(mut self, base_url: impl Into<String>) -> Self {
         self.base_url = base_url.into();
@@ -356,47 +393,38 @@ impl Provider for OpenAiCompatibleProvider {
     }
 
     async fn complete(&self, request: CompletionRequest) -> ProviderResult<CompletionResponse> {
-        let name_map = build_tool_name_map(&request.tools);
-        let (_primary_model, body) = self.build_request_body(&request, false);
-
-        let response = match self.post_chat(&body).await {
-            Ok(r) => r,
+        match self.complete_once(&request).await {
+            Ok(resp) => Ok(resp),
             Err((status, err)) => {
                 if let Some(fb) = self.fallback_for_status(status) {
-                    return fb.complete(request).await;
+                    return fb
+                        .complete_once(&fb.request_for_fallback(request))
+                        .await
+                        .map_err(|(_, fb_err)| fb_err);
                 }
-                return Err(err);
+                Err(err)
             }
-        };
-
-        let value: Value = response
-            .json()
-            .await
-            .map_err(|e| ProviderError::Transport(format!("malformed response body: {e}")))?;
-        from_openai_response(&value, &name_map)
+        }
     }
 
     async fn complete_stream(
         &self,
         request: CompletionRequest,
     ) -> ProviderResult<CompletionStream> {
-        let name_map = build_tool_name_map(&request.tools);
-        let (_primary_model, body) = self.build_request_body(&request, true);
-
-        let response = match self.post_chat(&body).await {
-            Ok(r) => r,
+        // A stream that starts OK and fails mid-stream is not retried: the caller already
+        // has the response. Fallback applies only to the initial status, same as `complete`.
+        match self.complete_stream_once(&request).await {
+            Ok(stream) => Ok(stream),
             Err((status, err)) => {
-                // Same fallback rule as `complete`. A streaming response that *starts* OK and
-                // fails mid-stream cannot be retried — the consumer already saw headers — so
-                // fallback is scoped to the initial status, identical to blocking.
                 if let Some(fb) = self.fallback_for_status(status) {
-                    return fb.complete_stream(request).await;
+                    return fb
+                        .complete_stream_once(&fb.request_for_fallback(request))
+                        .await
+                        .map_err(|(_, fb_err)| fb_err);
                 }
-                return Err(err);
+                Err(err)
             }
-        };
-
-        Ok(stream_sse_response(response, name_map))
+        }
     }
 }
 

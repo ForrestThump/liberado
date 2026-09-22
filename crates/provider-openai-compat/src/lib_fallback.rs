@@ -5,8 +5,8 @@
 //!
 //! - A 2xx on the primary returns the primary's reply. Fallback is never touched.
 //! - A non-2xx on the primary with a status in `fallback_on_status` retries ONCE on the fallback
-//!   provider with the same request body (the fallback's own model is what gets sent — see the
-//!   test that pins the override).
+//!   provider. The fallback body uses the fallback provider's model, even when the request
+//!   already names the primary slug. A fallback that itself has a fallback is not consulted.
 //! - A non-2xx on the primary with a status NOT in `fallback_on_status` returns the primary's
 //!   error verbatim. The fallback is never touched (404 on the primary is a caller error, not
 //!   a transient — we don't silently downgrade it).
@@ -346,4 +346,150 @@ async fn streaming_primary_402_triggers_fallback_on_initial_status() {
 
     assert_eq!(primary_bodies.lock().unwrap().len(), 1);
     assert_eq!(fallback_bodies.lock().unwrap().len(), 1);
+}
+
+fn request_stamped(model: &str) -> CompletionRequest {
+    one_turn().with_model(Some(model.to_string()))
+}
+
+/// Chat stamps the primary slug on the request. The fallback host must still receive the
+/// configured fallback model, not that stamp.
+#[tokio::test]
+async fn stamped_primary_model_is_replaced_on_fallback() {
+    let (primary, primary_bodies) = recording_server(minimax_402(), "/chat/completions").await;
+    let (fallback, fallback_bodies) = recording_server(
+        chat_200_with("from fallback", "deepseek/deepseek-v4-flash-0731"),
+        "/chat/completions",
+    )
+    .await;
+
+    let provider = OpenAiCompatibleProvider::new("sk-test", "MiniMax-M3", primary.uri())
+        .with_fallback(
+            OpenAiCompatibleProvider::new(
+                "sk-test-fb",
+                "deepseek/deepseek-v4-flash-0731",
+                fallback.uri(),
+            ),
+            vec![402],
+        );
+
+    let resp = provider
+        .complete(request_stamped("MiniMax-M3"))
+        .await
+        .expect("fallback should succeed");
+    assert_eq!(resp.content.as_deref(), Some("from fallback"));
+
+    let primary_body = primary_bodies.lock().unwrap()[0].clone();
+    assert_eq!(primary_body["model"].as_str(), Some("MiniMax-M3"));
+    let fb_body = fallback_bodies.lock().unwrap()[0].clone();
+    assert_eq!(
+        fb_body["model"].as_str(),
+        Some("deepseek/deepseek-v4-flash-0731"),
+        "fallback must send its configured model, not the stamped primary slug"
+    );
+}
+
+#[tokio::test]
+async fn stamped_primary_model_is_replaced_on_streaming_fallback() {
+    let (primary, primary_bodies) =
+        recording_server(chat_error(402, "primary exhausted"), "/chat/completions").await;
+    let (fallback, fallback_bodies) = recording_server(
+        ResponseTemplate::new(200)
+            .insert_header("content-type", "text/event-stream")
+            .set_body_string("data: [DONE]\n\n"),
+        "/chat/completions",
+    )
+    .await;
+
+    let provider = OpenAiCompatibleProvider::new("sk-test", "MiniMax-M3", primary.uri())
+        .with_fallback(
+            OpenAiCompatibleProvider::new(
+                "sk-test-fb",
+                "deepseek/deepseek-v4-flash-0731",
+                fallback.uri(),
+            ),
+            vec![402],
+        );
+
+    let stream = provider
+        .complete_stream(request_stamped("MiniMax-M3"))
+        .await
+        .expect("fallback stream should open");
+    drop(stream);
+
+    assert_eq!(
+        primary_bodies.lock().unwrap()[0]["model"].as_str(),
+        Some("MiniMax-M3")
+    );
+    assert_eq!(
+        fallback_bodies.lock().unwrap()[0]["model"].as_str(),
+        Some("deepseek/deepseek-v4-flash-0731")
+    );
+}
+
+/// The fallback provider may itself have a fallback configured. The retry is once: that
+/// child must not be called when the first fallback fails.
+#[tokio::test]
+async fn fallback_does_not_chain_into_its_own_fallback() {
+    let (primary, _) =
+        recording_server(chat_error(402, "primary exhausted"), "/chat/completions").await;
+    let (fallback, fallback_bodies) =
+        recording_server(chat_error(503, "fallback exhausted"), "/chat/completions").await;
+    let (grandchild, grandchild_bodies) = recording_server(
+        chat_200_with("from grandchild", "grand"),
+        "/chat/completions",
+    )
+    .await;
+
+    let fb = OpenAiCompatibleProvider::new("sk-test-fb", "fb-model", fallback.uri()).with_fallback(
+        OpenAiCompatibleProvider::new("sk-test-grand", "grand-model", grandchild.uri()),
+        vec![503],
+    );
+    let provider = OpenAiCompatibleProvider::new("sk-test", "primary-model", primary.uri())
+        .with_fallback(fb, vec![402]);
+
+    let err = provider
+        .complete(one_turn())
+        .await
+        .expect_err("a failed fallback must not chain");
+    assert!(
+        err.to_string().contains("503"),
+        "caller must see the fallback error, got: {err}"
+    );
+    assert_eq!(fallback_bodies.lock().unwrap().len(), 1);
+    assert_eq!(
+        grandchild_bodies.lock().unwrap().len(),
+        0,
+        "a nested fallback must not run"
+    );
+}
+
+#[tokio::test]
+async fn streaming_fallback_does_not_chain_into_its_own_fallback() {
+    let (primary, _) =
+        recording_server(chat_error(402, "primary exhausted"), "/chat/completions").await;
+    let (fallback, fallback_bodies) =
+        recording_server(chat_error(503, "fallback exhausted"), "/chat/completions").await;
+    let (grandchild, grandchild_bodies) = recording_server(
+        ResponseTemplate::new(200)
+            .insert_header("content-type", "text/event-stream")
+            .set_body_string("data: [DONE]\n\n"),
+        "/chat/completions",
+    )
+    .await;
+
+    let fb = OpenAiCompatibleProvider::new("sk-test-fb", "fb-model", fallback.uri()).with_fallback(
+        OpenAiCompatibleProvider::new("sk-test-grand", "grand-model", grandchild.uri()),
+        vec![503],
+    );
+    let provider = OpenAiCompatibleProvider::new("sk-test", "primary-model", primary.uri())
+        .with_fallback(fb, vec![402]);
+
+    let err = match provider.complete_stream(one_turn()).await {
+        Ok(_) => panic!("a failed streaming fallback must not chain"),
+        Err(err) => err,
+    };
+    assert!(err.to_string().contains("503"), "got: {err}");
+    assert_eq!(fallback_bodies.lock().unwrap().len(), 1);
+    assert_eq!(grandchild_bodies.lock().unwrap().len(), 0);
 }
