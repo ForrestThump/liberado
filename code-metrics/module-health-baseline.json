@@ -209,11 +209,23 @@
     "functions": 5,
     "cyclomatic": 11
   },
+  "crates/bootstrap/src/coder_provider_factory.rs": {
+    "ploc": 49,
+    "lloc": 6,
+    "functions": 3,
+    "cyclomatic": 11
+  },
+  "crates/bootstrap/src/fallback_builder.rs": {
+    "ploc": 79,
+    "lloc": 15,
+    "functions": 6,
+    "cyclomatic": 12
+  },
   "crates/bootstrap/src/lib.rs": {
-    "ploc": 961,
-    "lloc": 220,
-    "functions": 67,
-    "cyclomatic": 119
+    "ploc": 946,
+    "lloc": 219,
+    "functions": 66,
+    "cyclomatic": 117
   },
   "crates/bootstrap/src/lib_survivor_tests.rs": {
     "ploc": 200,
@@ -1769,6 +1781,12 @@
     "functions": 95,
     "cyclomatic": 108
   },
+  "crates/config-loader/src/model/builder_fallback_tests.rs": {
+    "ploc": 51,
+    "lloc": 27,
+    "functions": 3,
+    "cyclomatic": 4
+  },
   "crates/config-loader/src/model/builder_turn_budget_tests.rs": {
     "ploc": 20,
     "lloc": 9,
@@ -2819,6 +2837,12 @@
     "functions": 113,
     "cyclomatic": 234
   },
+  "crates/main-agent/src/sessions/agent_profiles.rs": {
+    "ploc": 8,
+    "lloc": 2,
+    "functions": 1,
+    "cyclomatic": 3
+  },
   "crates/main-agent/src/sessions/agent_spawn.rs": {
     "ploc": 171,
     "lloc": 38,
@@ -2904,7 +2928,7 @@
     "cyclomatic": 1
   },
   "crates/main-agent/src/sessions/titles.rs": {
-    "ploc": 92,
+    "ploc": 91,
     "lloc": 32,
     "functions": 8,
     "cyclomatic": 9
@@ -3232,6 +3256,12 @@
     "lloc": 51,
     "functions": 29,
     "cyclomatic": 47
+  },
+  "crates/provider-openai-compat/src/lib_fallback.rs": {
+    "ploc": 236,
+    "lloc": 59,
+    "functions": 12,
+    "cyclomatic": 16
   },
   "crates/provider-openai-compat/src/lib_per_request_model.rs": {
     "ploc": 45,
@@ -3610,6 +3640,12 @@
     "lloc": 324,
     "functions": 52,
     "cyclomatic": 75
+  },
+  "crates/session-store/src/agent_profiles.rs": {
+    "ploc": 11,
+    "lloc": 2,
+    "functions": 2,
+    "cyclomatic": 4
   },
   "crates/session-store/src/jsonl.rs": {
     "ploc": 716,

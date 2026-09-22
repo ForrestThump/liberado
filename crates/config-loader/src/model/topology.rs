@@ -436,6 +436,7 @@ pub(crate) fn default_providers() -> Vec<ProviderProfile> {
             api_key_env: "DEEPSEEK_API_KEY".to_string(),
             model_env: Some("DEEPSEEK_MODEL".to_string()),
             extra_client_error_status: Vec::new(),
+            fallback: None,
         },
         ProviderProfile {
             name: "openrouter".to_string(),
@@ -444,6 +445,7 @@ pub(crate) fn default_providers() -> Vec<ProviderProfile> {
             api_key_env: "OPENROUTER_API_KEY".to_string(),
             model_env: Some("OPENROUTER_MODEL".to_string()),
             extra_client_error_status: vec![402],
+            fallback: None,
         },
     ]
 }
@@ -493,6 +495,49 @@ pub struct ProviderProfile {
     /// account credits).
     #[serde(default)]
     pub extra_client_error_status: Vec<u16>,
+    /// Optional cross-provider fallback: when this provider returns a status in
+    /// [`ProviderFallback::on_status`], the same request is retried once on the named provider
+    /// with `model` substituted. Failure-of-fallback is propagated to the caller — never silently
+    /// masked. See [`ProviderFallback`] for the rule set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fallback: Option<ProviderFallback>,
+}
+
+/// Cross-provider fallback wiring for a [`ProviderProfile`].
+///
+/// A fallback is named (must match another `[[topology.providers]]` entry), may pin a different
+/// model, and only triggers on a status code in [`Self::on_status`]. Status codes NOT in the list
+/// (notably `400`/`401`/`403`/`404`/`422`) are returned to the caller unchanged — config and auth
+/// errors are never silently downgraded to a different provider, since masking them trades a
+/// legible failure for a paid-but-wrong reply.
+///
+/// The default `on_status` is the conservative transient/usage set: `402`, `408`, `425`, `429`,
+/// `500`, `502`, `503`, `504`. Override per-provider to add or remove codes for backends whose
+/// "out of usage" surface is something else (e.g. a `451` legal block).
+///
+/// Only the **initial response** status triggers fallback. Streaming responses that start `200`
+/// then fail mid-stream cannot be retried mid-stream — that limitation is intrinsic to streaming,
+/// not a missing feature, and the fallback rule above is therefore scoped to the response that
+/// decides whether the call is going to succeed at all.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProviderFallback {
+    /// Name of another [`ProviderProfile`] in the same `[[topology.providers]]` table.
+    /// Validated to exist at config-load time (see `Config::validate_providers`); self-reference
+    /// is rejected because a fallback that points back at its own provider is an unconditional
+    /// loop on every failure.
+    pub provider: String,
+    /// Model slug to use on the fallback provider, overriding that provider's `default_model`
+    /// (or its `model_env`, if set). `None` keeps the fallback provider's own default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// HTTP status codes that trigger fallback. Defaults to the transient/usage set documented
+    /// on the struct.
+    #[serde(default = "default_fallback_status_codes")]
+    pub on_status: Vec<u16>,
+}
+
+fn default_fallback_status_codes() -> Vec<u16> {
+    vec![402, 408, 425, 429, 500, 502, 503, 504]
 }
 
 /// A named dispatcher/executor pool (Decision 18 checkpoint #3): authority segregation only, not

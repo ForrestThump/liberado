@@ -144,7 +144,7 @@ mod tests {
 
     use crate::model::policy::Policy;
     use crate::model::topology::{
-        McpGrant, McpTransport, PoolConfig, ProviderProfile, SessionProfile, Topology, empty_table,
+        McpGrant, McpTransport, PoolConfig, SessionProfile, Topology, empty_table,
     };
 
     #[test]
@@ -313,17 +313,6 @@ max_turns = 44
         assert!(cfg.validate().is_ok());
     }
 
-    fn provider_profile(name: &str) -> ProviderProfile {
-        ProviderProfile {
-            name: name.into(),
-            base_url: format!("https://{name}.example.com"),
-            default_model: "some-model".into(),
-            api_key_env: format!("{}_API_KEY", name.to_uppercase()),
-            model_env: None,
-            extra_client_error_status: Vec::new(),
-        }
-    }
-
     #[test]
     fn duplicate_provider_names_fail_validation() {
         let mut cfg = Config::default();
@@ -339,6 +328,11 @@ max_turns = 44
         cfg.topology.provider = "not-declared-anywhere".into();
         assert!(cfg.validate().is_err());
     }
+
+    // Validation tests for the `[[providers.fallback]]` schema live in the sibling file
+    // `builder_fallback_tests.rs` (declared at the bottom of this file under `#[path]`). The
+    // fallback-specific test growth was kept out of this file on purpose — see the ratchet
+    // discussions on `module-health.toml` for why "tests are long" is never waiver material.
 
     #[test]
     fn a_brand_new_provider_declared_purely_via_config_validates_and_is_selectable() {
@@ -1403,5 +1397,28 @@ clarify_threshold_read = 0.8
             .validate()
             .expect_err("profile referencing an undeclared zone must fail");
         assert!(err.to_string().contains("undeclared zone"), "got: {}", err);
+    }
+}
+
+// Sibling test module (split out so fallback-specific test growth doesn't push `builder.rs` over
+// the module-health ratchet — see the waiver-rejection note in `code-metrics/module-health.toml`).
+#[cfg(test)]
+#[path = "builder_fallback_tests.rs"]
+mod fallback_tests;
+
+/// Test fixture: a `ProviderProfile` with sensible defaults. Hoisted out of `mod tests` so the
+/// sibling `fallback_tests` module (in `builder_fallback_tests.rs`) can share it via
+/// `super::provider_profile`. `mod tests` picks it up via its `use super::*;` import.
+#[cfg(test)]
+fn provider_profile(name: &str) -> crate::ProviderProfile {
+    use crate::ProviderProfile;
+    ProviderProfile {
+        name: name.into(),
+        base_url: format!("https://{name}.example.com"),
+        default_model: "some-model".into(),
+        api_key_env: format!("{}_API_KEY", name.to_uppercase()),
+        model_env: None,
+        extra_client_error_status: Vec::new(),
+        fallback: None,
     }
 }

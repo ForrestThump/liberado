@@ -33,6 +33,14 @@ use liberado_common::{
     CapabilityCatalog, CapabilitySet, DEFAULT_POOL, ModelRole, ToolGuidanceSource,
 };
 use liberado_config::{ProviderProfile, RoleOverride};
+
+mod coder_provider_factory;
+mod fallback_builder;
+
+// Re-export the coder-pack's provider factory. Lives in its own module (see
+// `coder_provider_factory.rs`'s doc comment) so this file's cyclomatic complexity stays under
+// the ratchet boundary.
+pub use coder_provider_factory::ProfileProviderFactory;
 use liberado_daemon::Daemon;
 use liberado_dispatch_pack::DispatchPack;
 use liberado_dispatcher::Dispatcher;
@@ -53,7 +61,7 @@ use liberado_provider_openai_compat::OpenAiCompatibleProvider;
 /// disabled.
 pub fn provider_from_config(config: &Config) -> Option<Arc<dyn Provider>> {
     let profile = resolve_provider_profile(config, &config.topology.provider)?;
-    match build_provider_from_profile(profile, None) {
+    match build_provider_from_profile(config, profile, None) {
         Some(provider) => {
             tracing::info!(
                 model = provider.model(),
@@ -88,9 +96,28 @@ fn resolve_provider_profile<'a>(config: &'a Config, name: &str) -> Option<&'a Pr
         })
 }
 
+/// Parse a `ReasoningLevel` from a free-form string (`"off"`/`"low"`/`"medium"`/`"high"`).
+/// `None` for empty or unrecognized values — the provider default applies, which is the safe
+/// fallback for a config that mistypes the level.
+fn parse_reasoning_level(s: Option<&str>) -> Option<liberado_common::ReasoningLevel> {
+    use liberado_common::ReasoningLevel;
+    match s.map(str::trim).filter(|s| !s.is_empty()) {
+        Some("off") => Some(ReasoningLevel::Off),
+        Some("low") => Some(ReasoningLevel::Low),
+        Some("medium") => Some(ReasoningLevel::Medium),
+        Some("high") => Some(ReasoningLevel::High),
+        _ => None,
+    }
+}
+
 /// Build a provider for `profile`, applying a per-role override (model slug + sampling) when given.
 /// `None` when the profile's API key isn't set in the environment.
+///
+/// If `profile.fallback` is set, the named fallback is wired in by
+/// [`fallback_builder::attach_fallback`] — that file owns the three failure modes (undeclared
+/// name, unset API key, happy path) so this function stays focused on per-role overrides.
 fn build_provider_from_profile(
+    config: &liberado_config::Config,
     profile: &ProviderProfile,
     role_override: Option<&RoleOverride>,
 ) -> Option<Arc<dyn Provider>> {
@@ -118,54 +145,8 @@ fn build_provider_from_profile(
         provider
     };
 
+    let provider = fallback_builder::attach_fallback(config, profile, provider);
     Some(Arc::new(provider))
-}
-
-/// A `CoderProviderFactory` that honours the model each coding role asks for, and which lives in
-/// `liberado-bootstrap` (root) so every composition root that needs to serve a coding role can
-/// share the same construction path — instead of each re-deriving `from_env + with_*` locally.
-///
-/// The pack's own `SingleProviderFactory` returns the one daemon provider for every role,
-/// whatever `CoderRoleConfig::model` says — so `[coder.coder].model` selected nothing, and the
-/// session event log reported the placeholder `"session-coder"` as the model in use.
-///
-/// A fresh provider per call, deliberately. `Provider::set_model` writes through a `RwLock` on the
-/// shared trait object, so re-modelling the daemon's provider would change the model for every
-/// other holder — the chat face agent included.
-pub struct ProfileProviderFactory {
-    profile: ProviderProfile,
-}
-
-impl ProfileProviderFactory {
-    /// `None` when the configured provider has no profile or its API key is unset, so the caller
-    /// keeps whatever provider it already had rather than silently losing coding.
-    pub fn for_config(config: &Config) -> Option<Self> {
-        let profile = resolve_provider_profile(config, &config.topology.provider)?.clone();
-        std::env::var(&profile.api_key_env).ok()?;
-        Some(Self { profile })
-    }
-}
-
-impl liberado_coder_agent::CoderProviderFactory for ProfileProviderFactory {
-    fn provider_for(
-        &self,
-        _role: &str,
-        config: &liberado_coder_core::CoderRoleConfig,
-    ) -> Result<Arc<dyn Provider>, liberado_coder_core::CoderError> {
-        let provider = OpenAiCompatibleProvider::from_env(
-            &self.profile.api_key_env,
-            self.profile.model_env.as_deref(),
-            &self.profile.default_model,
-            &self.profile.base_url,
-            self.profile.extra_client_error_status.clone(),
-        )
-        .map_err(|e| liberado_coder_core::CoderError::Backend(e.to_string()))?;
-        Ok(Arc::new(provider.with_overrides(
-            Some(config.model.clone()),
-            config.temperature,
-            config.reasoning.clone(),
-        )))
-    }
 }
 
 /// The two subagent-tagged providers, built together — an `Option` pair where both are `Some` or
@@ -224,7 +205,7 @@ pub fn role_providers_from_config(
     let Some(base_profile) = resolve_provider_profile(config, &config.topology.provider) else {
         return RoleProviders::none();
     };
-    let Some(base) = build_provider_from_profile(base_profile, None) else {
+    let Some(base) = build_provider_from_profile(config, base_profile, None) else {
         return RoleProviders::none();
     };
     tracing::info!(model = base.model(), provider = %base_profile.name, "provider configured (base)");
@@ -243,8 +224,8 @@ pub fn role_providers_from_config(
                     .as_deref()
                     .and_then(|n| resolve_provider_profile(config, n))
                     .unwrap_or(base_profile);
-                let built =
-                    build_provider_from_profile(profile, Some(ov)).unwrap_or_else(|| base.clone());
+                let built = build_provider_from_profile(config, profile, Some(ov))
+                    .unwrap_or_else(|| base.clone());
                 tracing::info!(
                     role = arole.as_str(),
                     model = built.model(),
@@ -870,6 +851,7 @@ mod tests {
             api_key_env: "LIBERADO_TEST_MADE_UP_BACKEND_KEY_DOES_NOT_EXIST".to_string(),
             model_env: None,
             extra_client_error_status: Vec::new(),
+            fallback: None,
         });
         config.topology.provider = "made-up-backend".to_string();
 

@@ -74,6 +74,19 @@ are partitioned into modular sibling files (`crates/daemon/src/tests/*.rs`, `lib
 `lib_loop_tests.rs`, `lib_disposition_tests.rs`) to eliminate monolithic test blocks and preserve
 clean module health without synthetic waivers.
 
+The cross-provider fallback feature wires three narrow waivers for irreducible growth on the
+config-schema side. `crates/config-loader/src/model/topology.rs` grows by one struct (`ProviderFallback`),
+one default helper, and one cross-cutting doc comment — a schema addition that has no other home.
+`crates/config-loader/src/model/config.rs` adds two error checks inside `validate_providers`'s
+per-provider loop (self-reference guard + undeclared-name guard); splitting them into a helper
+regressed the metrics more than the inline because a new function adds to the `functions` count and
+its own cyclomatic, so the inline shape is the ratchet-friendly one for these two specific checks.
+`crates/config-loader/src/model/builder.rs` adds a shared `provider_profile` fixture at module scope so
+the sibling `builder_fallback_tests.rs` can use it via `super::provider_profile` — the
+fallback-specific tests themselves live in the sibling and add zero regression to `builder.rs`.
+The three waivers carry hard ceilings and review dates; any further growth in these files must be
+split, not waived.
+
 After an accepted improvement, run `just module-health-ratchet` and commit the
 lower baseline. The command does not save worse values. Linux `just ci` also
 ratchets this file; other hosts compare only. GitHub runs only the read-only

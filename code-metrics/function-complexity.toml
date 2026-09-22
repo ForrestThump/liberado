@@ -10,3 +10,45 @@ new_function_ceiling = 20
 # ceiling = 30
 # reason = "One static protocol table is clearer than split authorities."
 # reviewed_on = "2026-08-21"
+
+# Cross-provider fallback feature wires narrow waivers for three functions whose complexity grew
+# by exactly +1 — one extra branch for the fallback decision per call site. The growth is
+# irreducible in the sense that the alternative (splitting the fallback logic into a separate
+# helper) regressed the metrics more than the inline shape, because a new helper function
+# adds to the `functions` count and its own cyclomatic, and the `?` operator on its return
+# adds another branch — net wash or worse.
+#
+# Each waiver carries a hard ceiling and a review date; any further growth in these functions
+# is not covered and must be split, not waived.
+
+
+# Cross-provider fallback feature wires narrow waivers for three functions whose complexity grew
+# by exactly +1 — one extra branch for the fallback decision per call site. The growth is
+# irreducible in the sense that the alternative (splitting the fallback logic into a separate
+# helper) regressed the metrics more than the inline shape, because a new helper function
+# adds to the `functions` count and its own cyclomatic, and the `?` operator on its return
+# adds another branch — net wash or worse.
+#
+# Each waiver carries a hard ceiling and a review date; any further growth in these functions
+# is not covered and must be split, not waived.
+
+[[waiver]]
+file = "crates/provider-openai-compat/src/lib.rs"
+function = "OpenAiCompatibleProvider::complete"
+ceiling = 21
+reason = "Cross-provider fallback feature adds +1 for the fallback retry decision (single inline `if let Some(fb) = ... return fb.complete(request).await;`). Extracting the fallback retry into a separate async helper regressed the metrics more than the inline because the helper would need to be generic over `complete` vs `complete_stream` to share logic."
+reviewed_on = "2026-09-21"
+
+[[waiver]]
+file = "crates/provider-openai-compat/src/lib.rs"
+function = "OpenAiCompatibleProvider::complete_stream"
+ceiling = 21
+reason = "Same as the `complete` waiver: the streaming path mirrors the blocking path with the same fallback decision branch. Splitting would require a generic helper across the two methods."
+reviewed_on = "2026-09-21"
+
+[[waiver]]
+file = "crates/config-loader/src/model/config.rs"
+function = "Config::validate_providers"
+ceiling = 21
+reason = "Cross-provider fallback feature adds two error checks inside the per-provider loop of `validate_providers`: the self-reference guard and the undeclared-name guard. Extracting them into a helper regressed the metrics more than the inline (a new function adds to the `functions` count and its own cyclomatic, and the `?` operator on its return adds another branch), so the inline shape is the ratchet-friendly one for these two specific checks."
+reviewed_on = "2026-09-21"

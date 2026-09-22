@@ -58,6 +58,7 @@ fn profile(name: &str, model: &str) -> ProviderProfile {
         api_key_env: TEST_KEY_ENV.to_string(),
         model_env: None,
         extra_client_error_status: Vec::new(),
+        fallback: None,
     }
 }
 
@@ -76,6 +77,45 @@ fn role_providers(config: &Config) -> RoleProviders {
 /// env write and its restore exclusive to this one test.
 fn lock_env() -> std::sync::MutexGuard<'static, ()> {
     ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+#[test]
+fn primary_provider_with_a_wired_fallback_still_resolves() {
+    // The runtime fallback logic is covered in `liberado-provider-openai-compat`'s unit tests;
+    // the contract this test pins is the bootstrap-side wiring: when a provider profile names a
+    // fallback, the daemon's primary provider is still constructed (the fallback being usable
+    // is the runtime's problem, not bootstrap's). A missing fallback API key degrades to
+    // primary-only with a logged warning, not a startup failure.
+    use liberado_config::ProviderFallback;
+    let _env = lock_env();
+    let _key = KeyGuard::set();
+    let mut config = keyed_config(
+        "alpha",
+        vec![
+            profile("alpha", "model-alpha"),
+            profile("beta", "model-beta"),
+        ],
+    );
+    // The fallback points at a provider whose key is NOT set in this test — we want to verify
+    // bootstrap tolerates that and the primary still resolves.
+    let primary = config
+        .topology
+        .providers
+        .iter_mut()
+        .find(|p| p.name == "alpha")
+        .expect("alpha profile exists");
+    primary.fallback = Some(ProviderFallback {
+        provider: "beta".into(),
+        model: Some("model-beta".into()),
+        on_status: vec![402],
+    });
+
+    let primary = provider_from_config(&config).expect("primary should still resolve");
+    assert_eq!(
+        primary.model(),
+        "model-alpha",
+        "the primary's model is unchanged by fallback wiring"
+    );
 }
 
 #[test]
@@ -254,4 +294,95 @@ fn provider_from_config_some_path() {
     let config = keyed_config("declared", vec![profile("declared", "m")]);
     let provider = provider_from_config(&config);
     assert!(provider.is_some(), "a keyed profile builds a provider");
+}
+
+/// Integration test: a `Config` with `[[providers.fallback]]` wired should produce a provider
+/// whose runtime fallback fires end-to-end against wiremock stubs for primary + fallback. This
+/// closes the gap between `provider-openai-compat`'s unit tests (which prove the runtime
+/// behaviour) and the existing `primary_provider_with_a_wired_fallback_still_resolves` test
+/// (which proves the provider CAN be constructed) — the bootstrap wiring itself isn't covered
+/// by either.
+///
+/// Pinned against the documented MiniMax `insufficient_balance_error` body shape (see
+/// `crates/provider-openai-compat/src/lib_fallback.rs`'s `MINIMAX_INSUFFICIENT_BALANCE_BODY`).
+/// If MiniMax ever changes the envelope, this test's body string needs to be updated to match
+/// (the policy still triggers on status, but the fixture stops representing reality).
+#[tokio::test]
+// The env lock serializes tests that share `TEST_KEY_ENV`; it isn't a data lock and the
+// held-across-await pattern can't deadlock the test (a panic here drops the guard). Suppress
+// `await_holding_lock` for this test only — converting the file's `std::sync::Mutex` to
+// `tokio::sync::Mutex` would touch every test in this module for one new async case.
+#[allow(clippy::await_holding_lock)]
+async fn a_config_with_fallback_wires_a_working_fallback_end_to_end() {
+    use liberado_config::ProviderFallback;
+    use liberado_provider::{CompletionRequest, Message};
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    // The env var has to remain set while we read it inside `provider_from_config` /
+    // `OpenAiCompatibleProvider::from_env`, so the lock + KeyGuard scope has to wrap the
+    // entire async test body — not just setup. `MockServer` is `Drop`pable but we just hold it
+    // for the whole test so the underlying listener stays alive.
+    let _env = lock_env();
+    let _key = KeyGuard::set();
+
+    let primary = MockServer::start().await;
+    let fallback = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(ResponseTemplate::new(402).set_body_string(
+            r#"{"type":"error","error":{"type":"insufficient_balance_error","message":"insufficient balance (1008)","http_code":"402"}}"#,
+        ))
+        .mount(&primary)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(
+            r#"{"model":"deepseek/deepseek-v4-flash-0731","choices":[{"message":{"role":"assistant","content":"from fallback"}}]}"#,
+        ))
+        .expect(1)
+        .mount(&fallback)
+        .await;
+
+    let config = keyed_config(
+        "minimax",
+        vec![
+            ProviderProfile {
+                name: "minimax".into(),
+                base_url: primary.uri(),
+                default_model: "MiniMax-M3".into(),
+                api_key_env: TEST_KEY_ENV.into(),
+                model_env: Some("MINIMAX_MODEL".into()),
+                extra_client_error_status: vec![],
+                fallback: Some(ProviderFallback {
+                    provider: "openrouter".into(),
+                    model: Some("deepseek/deepseek-v4-flash-0731".into()),
+                    on_status: vec![402],
+                }),
+            },
+            ProviderProfile {
+                name: "openrouter".into(),
+                base_url: fallback.uri(),
+                default_model: "openai/gpt-4o-mini".into(),
+                api_key_env: TEST_KEY_ENV.into(),
+                model_env: None,
+                extra_client_error_status: vec![402],
+                fallback: None,
+            },
+        ],
+    );
+
+    // `provider_from_config` reads the env vars at call time. The lock + guard above keep
+    // them set throughout the test body.
+    let provider = provider_from_config(&config).expect("primary provider should build");
+    let resp = provider
+        .complete(CompletionRequest::new(vec![Message::user("hi")]))
+        .await
+        .expect("fallback should succeed");
+    assert_eq!(
+        resp.content.as_deref(),
+        Some("from fallback"),
+        "the response content must come from the fallback, not the primary's 402 body"
+    );
+    let _ = (primary, fallback);
 }

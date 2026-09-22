@@ -473,6 +473,29 @@ impl Config {
                     provider.name
                 )));
             }
+            // Fallback wiring: the named provider must exist (so the build step can resolve it),
+            // and it must not be self-referential (that would loop on every fallback-eligible
+            // failure, doubling spend on the same backend).
+            if let Some(fb) = &provider.fallback {
+                if fb.provider == provider.name {
+                    return Err(Error::Config(format!(
+                        "providers[{}].fallback.provider cannot be the same as the primary \
+                         (would loop on every fallback-eligible failure)",
+                        provider.name
+                    )));
+                }
+                if !self
+                    .topology
+                    .providers
+                    .iter()
+                    .any(|p| p.name == fb.provider)
+                {
+                    return Err(Error::Config(format!(
+                        "providers[{}].fallback.provider '{}' is not a declared providers entry",
+                        provider.name, fb.provider
+                    )));
+                }
+            }
         }
         if !self
             .topology
@@ -1305,3 +1328,6 @@ mod project_auth_tests {
         );
     }
 }
+
+// helper removed — inlined back into validate_providers after the split regressed the metrics
+// more than the inline. The comment above the inlined block preserves the reasoning.

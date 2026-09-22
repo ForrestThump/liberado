@@ -75,3 +75,6 @@ scripts/__pycache__/
 
 # OS-held lock file for ledger read-modify-write exclusion
 code-metrics/mutants-ledger.json.lock
+
+# Dioxus CLI build artifact (host-side build, not part of source)
+.dx-cli/
