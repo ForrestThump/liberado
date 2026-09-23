@@ -1,7 +1,7 @@
 ---
 kind: plan
-status: active
-authority: implementation
+status: draft
+authority: advisory
 domain: product
 canonical_for: jev-integration
 open_items: true
@@ -60,8 +60,8 @@ Already reflected in backlog CAS1–CAS4 + TUI deferral:
 1. **Tagging / wire stamp** (`surface_mode` on headers) — CAS1 / Slice 1 — **Done** ([#274](https://github.com/ForrestThump/liberado/pull/274))
 2. **WebUI shelf split** (Chats / Agents, client-side partition) — CAS2 — **Done** ([#276](https://github.com/ForrestThump/liberado/pull/276))
 3. **CAS1 follow-ups** (`AgentProfiles` deployment-tunable; cross-PR consistency) — **Done** ([#277](https://github.com/ForrestThump/liberado/pull/277))
-4. **Chat-default tools** (named profile + light tools; agent curation unchanged) — CAS3 — **this PR.**
-5. **Dogfood + measure** shelves for ≥1 week; tune `agent_profiles` — CAS4 — Blocked on CAS3
+4. **Chat-default tools** (named profile + light tools; agent curation unchanged) — CAS3 — **Done** ([#278](https://github.com/ForrestThump/liberado/pull/278))
+5. **Dogfood + measure** shelves for ≥1 week; tune `agent_profiles` — CAS4 — **Current.** Operator use. See the backlog.
 6. **TUI shelf/filter parity** — deferred until shelves are stable (Forrest does not
    use the TUI day-to-day). See
    [`../../future-work/tui-maturity-roadmap.md`](../../future-work/tui-maturity-roadmap.md).
@@ -148,5 +148,5 @@ Blocked until:
 3. `agent_profiles` has been tuned from that dogfood (or explicitly left as-is with
    a short note in the CAS4 write-up).
 
-Until then, keep this document as the north-star phase plan and keep implementing
-CAS slices one PR at a time.
+Until then, keep this document as the phase plan. The operator is dogfooding the
+shelves. Do not start Jev during that week.

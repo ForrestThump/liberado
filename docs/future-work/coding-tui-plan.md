@@ -1,11 +1,15 @@
 ---
 kind: plan
-status: active
-authority: implementation
+status: draft
+authority: advisory
 domain: coding-harness
 canonical_for: coding-tui
 open_items: true
 ---
+
+> **Not the work queue** (2026-09-22). Retained design, not selectable work.
+> The only implementation queue is [`backlog.md`](backlog.md).
+> The current item is operator dogfood: use the system and write down what hurts.
 
 # Agentic Coding TUI — Plan (goal-driven session surface + kernel completion gate)
 

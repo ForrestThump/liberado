@@ -1,15 +1,19 @@
 ---
 kind: plan
-status: active
-authority: implementation
+status: draft
+authority: advisory
 domain: token-economics
 canonical_for: token-cost-accounting
 open_items: true
 ---
 
+> **Not the work queue** (2026-09-22). Retained design, not selectable work.
+> The only implementation queue is [`backlog.md`](backlog.md).
+> The current item is operator dogfood: use the system and write down what hurts.
+
 # Token cost accounting
 
-**Status**: scoped, not built. Written 2026-08-02.
+**Status**: D1 (price table) and D2 (`liberado-cost` read-time rollup) are on main. `token_usage_total` is filled from the journal. D3 (a pre-flight `estimated_cost` on the latency event) is still open. Written 2026-08-02; checked 2026-09-22.
 **Purpose**: answer design questions with measurements instead of guesses. The immediate one is
 open in [`delegated-work-is-discarded-at-the-seam.md`](archive/delegated-work-is-discarded-at-the-seam.md) —
 *what does carrying a research report inline actually cost?* — and it is currently unanswerable.

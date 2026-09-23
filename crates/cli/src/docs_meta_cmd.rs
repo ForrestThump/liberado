@@ -149,8 +149,8 @@ fn generate_future_work_readme(docs: &[Document]) -> String {
         "| [backlog.md](backlog.md) | **Pick-from-here backlog** — only place agents should take next implementation items |",
         "| [archive/](archive/README.md) | Finished plans, closed audits — **not current truth** |",
         "| [CATALOG.md](../CATALOG.md) | Repository-wide document catalog |", "", "## Active documents", "",
-        "Only root documents with `status: active` appear here. This includes active plans,",
-        "ongoing findings, and current evidence. Implemented and superseded plans are archived.", "",
+        "Only root documents with `status: active` appear here. Active means current:",
+        "the backlog, plus evidence later work has to read. Draft plans are not selectable.", "",
         "| Document | Kind | Domain | Authority |", "|------|------|--------|-----------|",
     ].into_iter().map(str::to_owned).collect::<Vec<_>>();
     if active.is_empty() {
@@ -165,7 +165,7 @@ fn generate_future_work_readme(docs: &[Document]) -> String {
             ));
         }
     }
-    lines.extend(["", "## Non-active root documents", "", "Root files that are not active (historical findings kept briefly, or pending archive).", "Prefer archive/ for completed plans.", "", "| Doc | Status | Kind |", "|-----|--------|------|"].into_iter().map(str::to_owned));
+    lines.extend(["", "## Non-active root documents", "", "Draft plans are retained design, not the implementation queue. Move a plan to", "archive/ only after its useful facts live in spec, Rustdoc, or an ADR.", "", "| Doc | Status | Kind |", "|-----|--------|------|"].into_iter().map(str::to_owned));
     if other.is_empty() {
         lines.push("| *(none)* | | |".to_owned());
     } else {

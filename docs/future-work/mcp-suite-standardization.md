@@ -1,11 +1,15 @@
 ---
 kind: plan
-status: active
-authority: implementation
+status: draft
+authority: advisory
 domain: mcp
 canonical_for: mcp-suite-standardization
 open_items: true
 ---
+
+> **Not the work queue** (2026-09-22). Retained design, not selectable work.
+> The only implementation queue is [`backlog.md`](backlog.md).
+> The current item is operator dogfood: use the system and write down what hurts.
 
 # MCP suite standardization — one brand, one library, one source of truth
 

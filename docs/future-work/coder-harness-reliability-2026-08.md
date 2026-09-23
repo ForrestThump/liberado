@@ -9,6 +9,8 @@ open_items: true
 
 # Coding harness reliability — measurement and fixes, 2026-08
 
+> Evidence, not a work queue. Read this before changing the coding pack. Select the change from [`backlog.md`](backlog.md).
+
 **Status**: Active. Fixes through PR #119 are on `main`. The measurement is real but incomplete —
 read [Where the numbers came from](#where-the-numbers-came-from) before quoting it.
 

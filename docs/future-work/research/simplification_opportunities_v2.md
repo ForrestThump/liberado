@@ -1,5 +1,10 @@
 # Liberado — Simplification Opportunities (Round 2, amalgamated)
 
+> **Not a queue** (checked 2026-09-22). Do not pick items from this list.
+> Keep `crates/session/src/store.rs`. It is the kernel's store double, which the layer rules require.
+> The life-demo test packs are already behind `#[cfg(test)]`.
+> Re-check any other item against the code before editing it.
+
 This artifact merges the second-round review from earlier in this session with
 the parallel second-round review from a teammate's morning read. Each item
 is tagged with its **status** (`DONE`, `PARTIAL`, or `NEW`) and a brief note
