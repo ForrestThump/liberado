@@ -206,7 +206,7 @@ The shipped example is a contract, not a sketch. `crates/config-loader/tests/shi
 parses `config.example/` itself. A fixture that builds its own grants would stay green while the
 files we hand to a new deploy go wrong.
 
-CAS3 (chat vs agent, Slice 3) pins three facts on those files:
+The shipped chat-default example (CAS3, [#278](https://github.com/ForrestThump/liberado/pull/278)) pins three facts on those files:
 
 1. `topology.toml` names an enabled `chat-default` `[[session_profiles]]` entry with no `domain`
    (a chat hat) and `component = "main-agent"` (it borrows the face grant).

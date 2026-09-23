@@ -9,14 +9,14 @@ open_items: true
 
 # Liberado — roadmap
 
-This page explains the direction of open work. It does not record completed implementation.
-Current behavior belongs in code, tests, Rustdoc, and [`spec/`](spec/). Git history preserves work
-that has landed.
+This page is the direction and the status snapshot. Current behavior in detail belongs in code,
+tests, Rustdoc, and [`spec/`](spec/). Git history preserves work that has landed.
 
-Agents must select implementation work from the ordered
-[`future-work/backlog.md`](future-work/backlog.md), not from this page. Verify an item against current
-code before implementation. Read [`failure-modes.md`](spec/architecture/failure-modes.md) before
-changing safety, tests, configuration, or agent control flow.
+Agents select implementation work from the ordered
+[`future-work/backlog.md`](future-work/backlog.md), not from this page and not from any other plan.
+Verify an item against current code before implementation. Read
+[`failure-modes.md`](spec/architecture/failure-modes.md) before changing safety, tests,
+configuration, or agent control flow.
 
 The product order remains:
 
@@ -26,10 +26,58 @@ The product order remains:
 
 The reason for this order is in [`positioning.md`](spec/architecture/positioning.md).
 
+## You are here (2026-09-22)
+
+### Have
+
+- A daemon with a capability boundary, vault watch, cron, webhooks, Telegram approvals, and one
+  session model. Cross-provider fallback for an out-of-usage response is config:
+  `[providers.fallback]` inside a `[[providers]]` entry. Shape and limits:
+  [`tuning.md`](spec/reference/tuning.md).
+- Chat and agent shelves. `surface_mode` is stamped at create from an explicit value or from
+  `[chat] agent_profiles`. WebUI Chats and Agents, New Agent, and privileged `create_agent` are
+  on main ([#274](https://github.com/ForrestThump/liberado/pull/274),
+  [#276](https://github.com/ForrestThump/liberado/pull/276),
+  [#277](https://github.com/ForrestThump/liberado/pull/277)). The example `chat-default` hat is on
+  main ([#278](https://github.com/ForrestThump/liberado/pull/278)). `chat-search` is a commented
+  opt-in, not a default grant. Contract:
+  [`chat-agent-surface-mode.md`](spec/architecture/chat-agent-surface-mode.md).
+- A coding pack on the same daemon: native loop, worktrees, a completion gate that stays default
+  off, shepherd review slices 0–3, and a comparison runner. No published four-harness score.
+- Token accounting at read time (`liberado-cost`, `[[models]]` prices) and one measured day
+  (2026-08-02). Most tokens that day were the same base context sent again on every hop. The
+  orchestrator now logs offered MCP count and an estimated schema size at info. Evidence:
+  [`token-economics-findings-2026-08.md`](future-work/token-economics-findings-2026-08.md).
+
+### Still missing
+
+- A week of real shelf use on the daemon you actually talk to.
+- Jev. It waits on that week. Plan:
+  [`jev-integration.md`](spec/architecture/jev-integration.md).
+- Inbox capture. It waits on directory listing in TurboVault.
+- A product `/loop`: a scheduler that remembers the previous pass. Cron already fires one-shot
+  goals. That is a different mechanism. Design:
+  [`loops-plan.md`](future-work/loops-plan.md) (not selectable).
+- Skills the agent writes and prunes by itself. The containment answer is `ProposeMcp` plus the
+  capability gate. It is not the current job. Comparison:
+  [`positioning.md`](spec/architecture/positioning.md).
+- A proven unattended Codex review of one repository, and a published four-harness report.
+- TUI shelf parity. The daily surface for this bet is the WebUI.
+
+### Next
+
+Use the system. Write down headaches, bugs, and behavior you want changed, one note per issue.
+The next code change is the first note that names one change. The
+[backlog](future-work/backlog.md) says how the week closes, and the fallback order if the notes
+name no code change.
+
+Jev, the review proof, and the harness comparison wait until this week is closed.
+
 ## Priority 1 — autonomous Liberado daemon
 
-The near-term goal is a daemon that is useful enough to operate every day. Dogfood the existing
-Telegram surface and fix observed friction before adding another broad surface.
+The goal is a daemon that is useful enough to operate every day. The current expression of that
+goal is the dogfood week in the backlog, not a new surface. These outcomes stay open. They do not
+outrank that week.
 
 Open outcomes:
 
@@ -76,48 +124,19 @@ Open outcomes:
 Per-conversation model selection and its compaction trigger are implemented. Their current contract
 belongs in the architecture and configuration references, not in this roadmap.
 
-### Near-term callout — chat | agent surface mode (Reading B)
+### Chat | agent surface (Reading B)
 
-The immediate product-surface bet is a soft **chat | agent** split: a long-lived specialist
-chat (a Grok-Bot-style context with curated tools, never terminal) lives on the **agent** shelf;
-an open-ended chat lives on the **chat** shelf. The stamp is **not** `goal.is_some()` — it is
-the create-time signal (explicit `surface_mode`, or the named profile in a small `agent_profiles`
-set). Goal sessions default to `chat` on the chat lens; the agent sense is the profile one.
-
-Slice order, all under Priority 2:
-
-1. **Wire stamp** (Slice 1) — `surface_mode: "chat" | "agent"` on `ConvHeader` /
-   `ConversationHeader` / `SessionHeader`. Stamped at create, defaulted to `chat` on read for
-   legacy rows, upgraded for legacy rows whose profile is in `agent_profiles`. **Done**
-   ([#274](https://github.com/ForrestThump/liberado/pull/274)).
-   Spec: [`chat-agent-surface-mode.md`](spec/architecture/chat-agent-surface-mode.md).
-2. **WebUI shelves + create-path** (Slice 2) — Chats / Agents shelves; **New Agent**
-   create-with-grant; privileged face `create_agent` (gate A: default face / `operator`).
-   **Done** ([#276](https://github.com/ForrestThump/liberado/pull/276)).
-   Spec: [`chat-agent-surface-mode.md`](spec/architecture/chat-agent-surface-mode.md) §6b.
-3. **CAS1 follow-ups** — `AgentProfiles` deployment-tunable via `[chat]` in `tuning.toml`;
-   cross-PR consistency so every create / read / pick path consults the deployment's set,
-   not the conservative default. **Done**
-   ([#277](https://github.com/ForrestThump/liberado/pull/277)).
-   Spec: [`chat-agent-surface-mode.md`](spec/architecture/chat-agent-surface-mode.md) §6c.
-4. **Chat-default tools** (Slice 3 / CAS3) — named `chat-default` profile, `chat-search` granted
-   to `main-agent` as a commented `policy.toml` block. **This PR.** Spec:
-   [`chat-agent-surface-mode.md`](spec/architecture/chat-agent-surface-mode.md) §6d.
-5. **Dogfood + measure** (Slice 4 / CAS4) — one week of shelves + chat-default, tune
-   `agent_profiles` from observed usage. **Backlog.** Blocked on CAS3. Jev lands after
-   CAS4 dogfood (≥1 week), see [`jev-integration.md`](spec/architecture/jev-integration.md) §10.
-
-Jev lands **after** Slice 4 lands and is dogfooded — explicitly out of scope for the
-chat/agent PR set. The post-shelf phase plan (TypeSafe Jev first wedge, non-goals, and
-kernel constraints) is [`jev-integration.md`](spec/architecture/jev-integration.md).
-TUI parity (kind filter) is deferred until shelves are stable. The
-[`tui-maturity-roadmap.md`](future-work/tui-maturity-roadmap.md) is updated to reflect the
-deferral.
+Slices 1–3 are on main (#274, #276, #277, #278). Slice 4 is the current item: use the shelves
+and write down what hurts. The slice contract, including what "agent" means, is
+[`chat-agent-surface-mode.md`](spec/architecture/chat-agent-surface-mode.md). Jev starts only
+after that week, per [`jev-integration.md`](spec/architecture/jev-integration.md). TUI shelf
+parity stays deferred.
 
 ## Priority 3 — coding pack
 
 The target is a merge-ready result under a fixed task, repository commit, model, provider, and
 resource budget. Tool style and turn count are diagnostic measures, not the product result.
+This priority waits while the dogfood week in the backlog is open.
 
 Before another review worker is enabled, prove the Codex-only daemon review path on one repository.
 The proof must include a remote-only PR head, restart-safe publication, a clean review, and a

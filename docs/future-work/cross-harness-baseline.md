@@ -1,16 +1,20 @@
 ---
 kind: plan
-status: active
-authority: implementation
+status: draft
+authority: advisory
 domain: coding-harness
 canonical_for: cross-harness-baseline
 open_items: true
 ---
 
+> **Not the work queue** (2026-09-22). Retained design, not selectable work.
+> The only implementation queue is [`backlog.md`](backlog.md).
+> The current item is operator dogfood: use the system and write down what hurts.
+
 # Cross-harness baseline — backlog 0.7 / C3
 
 **Status**: experiment spec. The comparison runner exists. The published four-way score does not.
-**Selectable work**: yes. This is backlog item 1.
+**Selectable work**: no, while operator dogfood is the current backlog item. This report is a later fallback row (C3).
 **This is a report**, not a Liberado coding-loop change.
 
 The runner contract lives in

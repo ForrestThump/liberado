@@ -14,7 +14,7 @@ roadmap and **not** a source of implementation work.
 
 | Spec | Role | Status |
 |------|------|--------|
-| [cross-harness-baseline.md](../cross-harness-baseline.md) | C3 experiment: four-way published score | active, backlog item 1 |
+| [cross-harness-baseline.md](../cross-harness-baseline.md) | C3 experiment: four-way published score | draft. Fallback backlog row after dogfood. The score is not published. |
 | [coding-worker-control-plane.md](../coding-worker-control-plane.md) | Liberado operates coding agents; native loop is one worker | draft, not scheduled |
 
 ## Active research

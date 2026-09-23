@@ -1,7 +1,7 @@
 # Agentic Loops — Architecture
 
 **Status**: living architecture, 2026-07-10  
-**Implementation roadmap**: [`../../future-work/rust-native-agentic-coder-plan.md`](../../future-work/rust-native-agentic-coder-plan.md)  
+**Where the work stands**: [`../../roadmap.md`](../../roadmap.md). The July build plan is a retained draft, not the queue: [`../../future-work/rust-native-agentic-coder-plan.md`](../../future-work/rust-native-agentic-coder-plan.md). Unbuilt `/loop` series memory is [`../../future-work/loops-plan.md`](../../future-work/loops-plan.md).
 **Hygiene audit**: [`../../future-work/archive/agentic-mesh-hygiene-audit-2026-07-10.md`](../../future-work/archive/agentic-mesh-hygiene-audit-2026-07-10.md)  
 **Modularity**: [`modularity.md`](modularity.md) · **Contracts**: [`contracts.md`](contracts.md) ·
 **Event-bus idea (annotated, partly superseded)**: [`meshify.md`](../../future-work/ideas/archive/meshify.md)  

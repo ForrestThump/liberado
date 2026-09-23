@@ -16,33 +16,61 @@ that has landed.
 Take the first open, unblocked item. Do not choose a later item because it is easier. Use one item
 per PR. Before implementation, verify the item against current code and recent git history.
 
-If an item is blocked only by elapsed time, another repository, or an external service, record the
-exact blocker in the local `current_unmerged_work.md` (repo root, never committed) and take the next
-unblocked item. Do not skip a code dependency.
+If an item is blocked only by another repository or an external service, record the exact blocker
+in the local `current_unmerged_work.md` (repo root, never committed) and take the next unblocked
+item. Do not skip a code dependency.
+
+**CAS4 is the exception.** It is operator time on purpose. It is the current item. Do not skip it
+because the clock has not finished, and do not start a later row while it is open.
 
 ## Implementation order
 
+Landed chat-surface work (not rows): wire stamp [#274](https://github.com/ForrestThump/liberado/pull/274),
+WebUI shelves [#276](https://github.com/ForrestThump/liberado/pull/276), tunable `agent_profiles`
+[#277](https://github.com/ForrestThump/liberado/pull/277), example `chat-default` hat
+[#278](https://github.com/ForrestThump/liberado/pull/278). Contract:
+[`../spec/architecture/chat-agent-surface-mode.md`](../spec/architecture/chat-agent-surface-mode.md).
+
 | Order | Item | Dependency |
 |---:|---|---|
-| **1** | **CAS1 — chat vs agent wire stamp (Slice 1)** | **Done** (merged [#274](https://github.com/ForrestThump/liberado/pull/274)). Spec: [`../spec/architecture/chat-agent-surface-mode.md`](../spec/architecture/chat-agent-surface-mode.md). `SurfaceMode` on `ConvHeader` / `ConversationHeader` / `SessionHeader`; stamped at create; legacy rows default `chat`, upgrade to `agent` when `grant.profile ∈ agent_profiles`. |
-| **2** | **R1 — prove Codex-only daemon PR review and one-repository cutover** | Slices 0–3 and remote PR acquisition are present. Run the restart, clean, blocker, synchronize, and remote-only-head cases from [`daemon-pr-review-kickoff.md`](daemon-pr-review-kickoff.md). Publish the evidence before Slice 4. |
-| **3** | **0.7 / C3 — publish the controlled cross-harness baseline** | The comparison infrastructure and ship-bar excerpt fix are present. This is a report, not another harness change. Spec: [`cross-harness-baseline.md`](cross-harness-baseline.md). |
-| **4** | **C5 — measure the completion gate** | Run after the baseline produces a non-zero finish rate. Do not change the default first. |
-| **5** | **A1 — read one day of deployed token-economics data** | Measure the existing production system before changing its tool catalogue. |
-| **6** | **A2 — narrow the tool catalogue** | Blocked on A1. Change only what the measurement supports. |
-| **7** | **E4 — add directory enumeration in TurboVault** | External prerequisite for E2. Record the upstream commit. |
-| **8** | **E5 — stop the TurboMCP SSE reconnect storm** | External reliability work; restore useful homelab diagnostics. |
-| **9** | **E2 — implement the inbox layer** | E4 must land first. The design is settled in the inbox specification. |
-| **10** | **C4 — finish dedicated goal-view panes** | Useful surface work, but it does not block measurement or unattended shipping. |
-| **11** | **CAS2 — WebUI shelf split + create-path (Slice 2)** | **Done** ([#276](https://github.com/ForrestThump/liberado/pull/276)). Shelves + **New Agent** (`POST /api/conversations` + profile) + privileged face `create_agent` (gate A: default face / `operator`). |
-| **11a** | **CAS1 follow-ups (data layer + cross-PR consistency)** | **Done** ([#277](https://github.com/ForrestThump/liberado/pull/277)). `AgentProfiles` deployment-tunable via `[chat]` in `tuning.toml`; every create / read / pick path consults the deployment's set, not the conservative default. See `chat-agent-surface-mode.md` §6c. |
-| **12** | **CAS3 — chat-default tools (Slice 3)** | **This PR.** Named `chat-default` profile; `chat-search` granted to `main-agent` via `policy.toml` comment block. Spec: [`../spec/architecture/chat-agent-surface-mode.md`](../spec/architecture/chat-agent-surface-mode.md) §6d. |
-| **13** | **CAS4 — dogfood + measure shelves (Slice 4)** | Blocked on CAS3. One-week dogfood; tune `agent_profiles` from observed usage. |
-| **14** | **JEV1 / CAS5 — TypeSafe Jev first wedge** | Blocked on CAS4 dogfood (≥1 week). Spec: [`../spec/architecture/jev-integration.md`](../spec/architecture/jev-integration.md). Confidence-gated advisor only (belong? / which agent? / optional soft tool hints). Dispatcher remains sole grantor. One PR at a time — do not start while an earlier CAS item is still open. |
+| **1** | **CAS4 — use the shelves and write notes** | **Current.** Operator work, not an agent implementation. Slices 1–3 are on main. Do not skip. See the acceptance section below. |
+| **2** | **The first dogfood note that names one code change** | Opens when the operator points at a note. One note, one PR. Replaces the fallback rows below for that change. |
+| **3** | **R1 — prove Codex-only daemon PR review and one-repository cutover** | Fallback after CAS4 closes with no code note. Slices 0–3 and remote PR acquisition are present. Run the restart, clean, blocker, synchronize, and remote-only-head cases from [`daemon-pr-review-kickoff.md`](daemon-pr-review-kickoff.md). Publish the evidence before the worker-fallback slice. |
+| **4** | **0.7 / C3 — publish the controlled cross-harness baseline** | Fallback. The comparison runner is present. This is a report, not another harness change. Spec: [`cross-harness-baseline.md`](cross-harness-baseline.md). |
+| **5** | **C5 — measure the completion gate** | Run after the baseline produces a non-zero finish rate. Do not change the default first. |
+| **6** | **A1 — read one day of deployed token-economics data** | The logger is already at info. Read the deployed daemon. Do not change the catalogue in this item. |
+| **7** | **A2 — narrow the tool catalogue** | Blocked on A1. Change only what the measurement supports. |
+| **8** | **E4 — add directory enumeration in TurboVault** | External prerequisite for E2. Record the upstream commit. |
+| **9** | **E5 — stop the TurboMCP SSE reconnect storm** | External reliability work; restore useful homelab diagnostics. |
+| **10** | **E2 — implement the inbox layer** | E4 must land first. The design is settled in the inbox specification. |
+| **11** | **C4 — finish dedicated goal-view panes** | Useful surface work. It does not block measurement or unattended shipping. The daily surface for the current bet is the WebUI. |
+| **12** | **JEV1 / CAS5 — TypeSafe Jev first wedge** | Blocked on a finished CAS4 week. Spec: [`../spec/architecture/jev-integration.md`](../spec/architecture/jev-integration.md). Confidence-gated advisor only (belong? / which agent? / optional soft tool hints). Dispatcher remains sole grantor. |
 
-Jev is in the table as **JEV1 / CAS5** only so the next agent can find it; it stays
-blocked until CAS4 dogfood finishes. Its first wedge reads against an addressable
-`agent_profiles` set and Agent shelves, not against `goal.is_some()`.
+Jev stays blocked until CAS4 has actually been used for at least a week and `agent_profiles` has
+been tuned, or explicitly left as-is with a short note. Its first wedge reads against an
+addressable `agent_profiles` set and Agent shelves, not against `goal.is_some()`.
+
+## CAS4 — use the system
+
+This row closes in one of two ways:
+
+1. The operator names a headache, bug, or behavior change, and the next PR does that one thing.
+2. About a week of real use produces no code change. Record that in one short note and take row 3.
+
+Use the daemon you actually talk to, on current `main`. In the live config:
+
+- `chat-default` is a Chat hat (`component = "main-agent"`, no domain). It is not listed in
+  `[chat] agent_profiles`.
+- The specialist hats you actually open are listed in `[chat] agent_profiles`. `operator` is the
+  creator hat.
+- `chat-search` stays a commented opt-in until you miss history search. The example is
+  `config.example/policy.toml`.
+- Optional: `[providers.fallback]` on the paid provider. Copy the shape from
+  [`tuning.md`](../spec/reference/tuning.md). The header is `[providers.fallback]`, a table inside
+  the `[[providers]]` entry.
+
+Write one note per issue. Keep the notes locally. Do not commit a scratch log. A note is ready for
+a PR when it names the behavior you saw and the behavior you want.
 
 ## Acceptance context
 

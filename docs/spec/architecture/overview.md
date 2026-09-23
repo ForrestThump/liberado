@@ -235,7 +235,7 @@ archive subtree) so the active `proposals/` dir shows only what still needs a hu
 pipeline picks up the write and archives it — closed the gap where an expired-but-untouched
 `Pending` proposal would sit forever with no status change.
 11. ✅ **Phase 1 — the general MCP agent** — chat now routes every turn through `Dispatcher::dispatch` before executing (the "main-agent depth" item below is done); the three independently-static capability catalogs (daemon/chat/API) are one live, shared `Arc<CapabilityCatalog>`; `Grant.component` narrows both dispatch routing and runtime tool surfacing. Full writeups: [`chat-dispatcher-and-component-scoping.md`](../../future-work/archive/chat-dispatcher-and-component-scoping.md), [`live-catalog-and-dispatcher-narrowed-tools.md`](../../future-work/archive/live-catalog-and-dispatcher-narrowed-tools.md).
-12. ✅ **Phase 2 — the self-improvement moat** — `riggers/` (`liberado-pr-dispatch-mcp`) registered as `code-dispatch` (reversible, human-approved draft PRs only), with a greenfield mode to scaffold brand-new MCPs from scratch. Full report: [`phase-2-implementation-report.md`](../../future-work/archive/phase-2-implementation-report.md). **Updated direction, 2026-07-09:** the PR factory workflow stays, but `vtcode` is no longer the strategic coding engine; see [`rust-native-agentic-coder-plan.md`](../../future-work/rust-native-agentic-coder-plan.md).
+12. ✅ **Phase 2 — the self-improvement moat** — `riggers/` (`liberado-pr-dispatch-mcp`) registered as `code-dispatch` (reversible, human-approved draft PRs only), with a greenfield mode to scaffold brand-new MCPs from scratch. Full report: [`phase-2-implementation-report.md`](../../future-work/archive/phase-2-implementation-report.md). **Updated direction, 2026-07-09:** the PR factory workflow stays, but `vtcode` is no longer the strategic coding engine. Current direction is [`roadmap.md`](../../roadmap.md). The July build plan is a retained draft: [`rust-native-agentic-coder-plan.md`](../../future-work/rust-native-agentic-coder-plan.md).
 13. ✅ **`crates/tui`** — a ratatui TUI client hitting the same chat/SSE contract as the browser web UI and `liberado chat`; shares its SSE decoder and slash-command dispatcher with the other clients (`chat-client-contract`, `liberado-commands`) rather than hand-rolling its own.
 14. ✅ **Web UI flesh-out** — sidebar, MCP capability panel, Markdown rendering, and slash commands landed in `liberado-webui`. Design reference: [`webui-flesh-out-plan.md`](../../future-work/archive/webui-flesh-out-plan.md).
 15. ✅ **Pre-Phase-3 hardening pass** — the heuristics tuning engine (`liberado-heuristics-tuner`, now tuning the dispatcher, executor, and subagent layers), the zone-write-class guard (§6 #2), resource-budget bounds (`ResourceLimit`, wall-clock + token-count), and two-way Telegram proposal approval (`liberado-notify` + `liberado-telegram-approvals`: Approve/Reject are pure code, Revise is the one LLM-touching path and can only redraft content, never grant approval). Also found and fixed, via the tuner: a multi-step tool-chaining doom-loop bug (was the "Known limitations" entry below). Full detail: [`roadmap.md`](../../roadmap.md)'s "Before Phase 3" section.
@@ -263,9 +263,11 @@ pipeline picks up the write and archives it — closed the gap where an expired-
     theme preference in platform `settings.toml`. Delegation journals under
     `<LIBERADO_DATA_DIR>/dispatches/`. Writeup: [`delegate_dogfood_issues.md`](../../future-work/archive/delegate_dogfood_issues.md).
 
-**Not yet built (next slice):**
-- Rust-native agentic coder crates and PR-factory integration; see
-  [`rust-native-agentic-coder-plan.md`](../../future-work/rust-native-agentic-coder-plan.md).
+**Not the next slice.** The coding pack is on main. What is still unbuilt, and in what order, is the
+[roadmap](../../roadmap.md) and the [backlog](../../future-work/backlog.md). This log's leftovers:
+
+- A product `/loop` (series memory across scheduled passes). Cron already fires one-shot goals.
+  Design: [`loops-plan.md`](../../future-work/loops-plan.md). Not selectable during dogfood.
 - Tier 2 live conformance (model-in-the-loop) — optional; see the
   [conformance runbook](../../impl/live-conformance.md).
 - Splitting `liberado-common`'s grab-bag along its natural boundaries — partially underway (`config`

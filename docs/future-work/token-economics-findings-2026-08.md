@@ -9,7 +9,9 @@ open_items: true
 
 # Token economics — where the tokens actually go (measured 2026-08-02)
 
-**Status:** findings + three work items. Nothing here is built yet.
+**Status:** findings from the 2026-08-02 journal, plus logging that landed afterwards.
+`liberado-cost` and `[[models]]` prices exist. The August shares are not a substitute for a new
+day on the daemon you are about to use. Do not change the catalogue from this page alone.
 
 The first thing `liberado-cost` was built for was to stop guessing about spend. This is the first
 real read of it, over the deployed journal at build `e85a0eb`: **1,338 inference calls, 15,496,141
@@ -113,8 +115,8 @@ is mostly tool schemas rather than inherited conversation.
 
 ## TE1 — find out why the tool catalog isn't being narrowed
 
-**The symptom is established; the cause is not.** Do not start by building narrowing — it already
-exists on both dispatch paths:
+**The symptom is established; the cause is not.** Narrowing already exists on both dispatch paths.
+Do not add a second mechanism:
 
 - `ExecuteDirect.relevant_mcps` — intersected against the grant in
   [`crates/orchestrator/src/lib.rs:856`](../../crates/orchestrator/src/lib.rs#L856), and
@@ -132,11 +134,10 @@ emits a list" and "the executor sends schemas" is not narrowing. Candidates, non
 4. The 11k is dominated by the fixed preamble rather than schemas, in which case narrowing is the
    wrong lever entirely and the preamble is the target.
 
-**First step is instrumentation, not a fix.** `allowed_mcps.len()` is logged at `debug`
-([`orchestrator/src/lib.rs:865`](../../crates/orchestrator/src/lib.rs#L865)) and the box runs at
-`info`, so this could not be answered from the outside. Promote a count — offered vs chosen vs
-surviving MCPs, and the resulting schema token size — to `info` or onto the dispatch journal, run a
-day, and *then* pick the fix.
+**Next step is a new day of logs, not more instrumentation.** Execute-direct logs
+`allowed_mcps` at info, and catalog preparation logs `mcp_offered`, `mcp_from_catalog`, and
+`schema_est_tokens` at info (`crates/orchestrator/src/lib.rs`, `instrument_catalog`). Read those
+lines from the deployed daemon for one day (backlog A1), and only then pick a fix.
 
 **Why it matters:** this is 56% of all token spend. Nothing else on this page is close.
 

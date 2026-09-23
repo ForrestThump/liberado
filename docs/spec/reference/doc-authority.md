@@ -5,7 +5,7 @@ authority: normative
 domain: docs
 canonical_for: document-authority
 open_items: false
-last_verified: 2026-09-17
+last_verified: 2026-09-22
 ---
 
 # Document authority and metadata
@@ -112,6 +112,8 @@ When a plan is finished:
 6. Delete from the working tree only if every useful fact already lives elsewhere (git still retains it).
 
 A completed plan must not stay in the active index only because one paragraph is useful. Extract that paragraph first.
+
+The generated future-work index lists root documents with `status: active` only. Active means the backlog and evidence a later change has to read. A draft plan is retained design: it stays in the non-active table, and it is not selectable. Move it to `archive/` only after the useful facts live in spec, Rustdoc, or an ADR.
 
 ## ADRs
 
