@@ -10,3 +10,24 @@ new_function_ceiling = 20
 # ceiling = 30
 # reason = "One static protocol table is clearer than split authorities."
 # reviewed_on = "2026-08-21"
+
+[[waiver]]
+file = "crates/provider-openai-compat/src/lib.rs"
+function = "OpenAiCompatibleProvider::complete"
+ceiling = 21
+reason = "The fallback decision is one branch over this function's complexity baseline. A waiver ceiling must be above the new-function ceiling (20), so the ceiling is 21."
+reviewed_on = "2026-09-21"
+
+[[waiver]]
+file = "crates/provider-openai-compat/src/lib.rs"
+function = "OpenAiCompatibleProvider::complete_stream"
+ceiling = 21
+reason = "Same as the `complete` waiver: the streaming path keeps the same fallback decision branch over its baseline."
+reviewed_on = "2026-09-21"
+
+[[waiver]]
+file = "crates/config-loader/src/model/config.rs"
+function = "Config::validate_providers"
+ceiling = 21
+reason = "Cross-provider fallback feature adds two error checks inside the per-provider loop of `validate_providers`: the self-reference guard and the undeclared-name guard. Extracting them into a helper regressed the metrics more than the inline (a new function adds to the `functions` count and its own cyclomatic, and the `?` operator on its return adds another branch), so the inline shape is the ratchet-friendly one for these two specific checks."
+reviewed_on = "2026-09-21"

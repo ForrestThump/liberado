@@ -1,11 +1,11 @@
 {
   "summary": {
-    "total_unwraps": 113,
-    "proven_invariant": 64,
+    "total_unwraps": 114,
+    "proven_invariant": 65,
     "local_failure": 0,
     "process_fatal": 49,
-    "files_scanned": 501,
-    "files_with_unwraps": 49
+    "files_scanned": 506,
+    "files_with_unwraps": 50
   },
   "files": {
     "crates/acp-bridge/src/session_store.rs": {
@@ -1035,6 +1035,25 @@
         }
       ]
     },
+    "crates/provider-openai-compat/src/lib_fallback.rs": {
+      "proven_invariant": 1,
+      "local_failure": 0,
+      "process_fatal": 0,
+      "total": 1,
+      "occurrences": [
+        {
+          "file": "crates/provider-openai-compat/src/lib_fallback.rs",
+          "line": 35,
+          "column": 13,
+          "method": "unwrap",
+          "snippet": "self.bodies.lock().unwrap()",
+          "receiver": "self.bodies.lock()",
+          "context": "respondResponseTemplate",
+          "classification": "proven_invariant",
+          "reason": "mutex / rwlock acquisition on internal non-poisoned state"
+        }
+      ]
+    },
     "crates/provider-openai-compat/src/lib_wire_seam.rs": {
       "proven_invariant": 3,
       "local_failure": 0,
@@ -1435,7 +1454,7 @@
       "occurrences": [
         {
           "file": "crates/session-store/src/jsonl.rs",
-          "line": 104,
+          "line": 112,
           "column": 9,
           "method": "expect",
           "snippet": "self.ids\n            .lock()\n            .expect(\"id generator mutex poisoned\")",
@@ -1446,7 +1465,7 @@
         },
         {
           "file": "crates/session-store/src/jsonl.rs",
-          "line": 247,
+          "line": 257,
           "column": 9,
           "method": "expect",
           "snippet": "self.write_locks\n            .lock()\n            .expect(\"write-lock registry poisoned\")",
@@ -1457,7 +1476,7 @@
         },
         {
           "file": "crates/session-store/src/jsonl.rs",
-          "line": 429,
+          "line": 439,
           "column": 26,
           "method": "expect",
           "snippet": "prefix.last().expect(\"non-empty\")",

@@ -68,6 +68,16 @@ functions must stay under the configured ceiling. A persistent exception must na
 and function and include an explicit ceiling, reason, and review date. The check fails if its
 generated report or committed baseline cannot be read and decoded.
 
+The cross-provider fallback feature carries three narrow function-complexity waivers — one per call
+site that gained an irreducible +1 cyclomatic branch for the fallback decision:
+`Config::validate_providers` (two inline error checks: self-reference guard + undeclared-name guard),
+`OpenAiCompatibleProvider::complete` (the single `if let Some(fb) = self.fallback_for_status(status)` branch),
+and `OpenAiCompatibleProvider::complete_stream` (the same shape on the streaming path). Each waiver
+carries a hard ceiling and review date; any further growth in these functions is not covered and must be
+split, not waived. The `Config::validate_providers` waiver is for the inline shape specifically — a
+prior split attempt regressed the metrics more than the inline because a new helper function adds to
+the `functions` count and its own cyclomatic.
+
 The coverage-sensitive CRAP ceiling is 29.9. New functions must remain below 30. Existing
 functions may sit above 30; the per-function Linux baseline prevents those scores from rising.
 cargo-crap `--fail-above` is not applied to the whole report, because that would fail the

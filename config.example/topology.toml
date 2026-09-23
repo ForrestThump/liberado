@@ -184,6 +184,19 @@ delegation_mode = true
 # api_key_env = "GROQ_API_KEY"
 # model_env = "GROQ_MODEL"          # optional — omit if this backend has no override-env convention
 # extra_client_error_status = []    # e.g. [402] for a backend with its own "insufficient credits" code
+#
+# Cross-provider fallback: when this provider's initial response status is in
+# `[providers.fallback].on_status`, the same request is retried once on the named provider with
+# the configured model. Use it for an "out of usage" path — e.g. a paid MiniMax as primary and
+# OpenRouter v4 Flash as the cheap backup that runs when MiniMax returns `402 insufficient
+# balance` (the canonical out-of-usage code on MiniMax). The fallback only triggers on the
+# initial response status — a streaming reply that starts OK and fails mid-stream cannot be
+# retried. Codes NOT in `on_status` (notably 400/401/403/404/422) are returned to the caller
+# unchanged so config / auth errors are never silently downgraded to a different provider.
+# [providers.fallback]
+# provider = "openrouter"                                                # must match another [[providers]] name; no self-reference
+# model = "deepseek/deepseek-v4-flash-0731"                              # override the fallback provider's default model
+# on_status = [402, 408, 425, 429, 500, 502, 503, 504]                   # optional; this is the default
 
 # The free-coding proxy (`crates/provider-free-proxy`, binary `liberado-free-proxy`): a local
 # OpenAI-compatible proxy that serves ONLY OpenRouter's zero-priced models and picks whichever

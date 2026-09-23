@@ -49,7 +49,42 @@ ssh <box> 'docker exec -e LIBERADO_CONFIG_DIR=/config liberado liberado config c
 
 ```toml
 provider = "openrouter"          # which [[providers]] entry supplies inference
+```
 
+#### Declaring inference backends — `[[providers]]`
+
+Every backend is one `[[providers]]` entry. The daemon builds a single `OpenAiCompatibleProvider`
+per role and routes through the entry whose `name` matches `topology.provider` (or a per-role
+override). Adding a backend the system has never shipped with — OpenAI direct, Groq, Together,
+MiniMax, anything OpenAI-compat — is one new entry here, no Rust change.
+
+```toml
+[[providers]]
+name = "minimax"
+base_url = "https://api.minimax.io/v1"
+default_model = "MiniMax-M3"
+api_key_env = "MINIMAX_API_KEY"
+model_env = "MINIMAX_MODEL"                    # optional — env override of default_model
+extra_client_error_status = []               # extra 4xx codes this backend returns as client errors (e.g. OpenRouter's 402)
+
+# Cross-provider fallback. When the primary's *initial response* status is in `on_status`, the
+# same request is retried once on `fallback.provider` with `fallback.model` substituted. Codes
+# NOT in `on_status` — notably 400/401/403/404/422 — are returned to the caller unchanged, so
+# config and auth errors are never silently downgraded to a different provider. Streaming
+# replies that start OK and fail mid-stream cannot be retried (intrinsic to streaming).
+[providers.fallback]
+provider = "openrouter"                       # must match another [[providers]] name; no self-reference
+model = "deepseek/deepseek-v4-flash-0731"     # optional — overrides the fallback provider's default_model
+on_status = [402, 408, 425, 429, 500, 502, 503, 504]   # optional; this is the default
+```
+
+`extra_client_error_status` folds a backend's own 4xx codes into the same `InvalidRequest` bucket
+as the common 400/401/403/404/422 set — it changes error *classification*, not whether the call
+retries. The fallback trigger set is separate and lives on `[providers.fallback]`.
+
+#### Per-role tiering — `[roles.*]`
+
+```toml
 [roles.dispatcher]               # roles: main_agent | dispatcher | subagent
 model = "deepseek/deepseek-v4-flash"
 temperature = 0.0

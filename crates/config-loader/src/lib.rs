@@ -42,8 +42,8 @@ pub use model::{
     CompactionSettings, CompactionTriggerSource, ConcurrencyTuning, Config, ConfigBuilder,
     ContextTuning, CronDeliveryTuning, CronSchedule, DispatchTuning, EnterKey, Grant, HookConfig,
     MainAgentConfig, MaintenanceTuning, McpConfig, McpPoolingTuning, McpTransport,
-    ModelCompactionSettings, Policy, PoolConfig, ProjectConfig, ProviderProfile, RoleOverride,
-    ShepherdAuthConfig, ShepherdConfig, ShepherdProjectConfig, ShepherdReviewConfig,
+    ModelCompactionSettings, Policy, PoolConfig, ProjectConfig, ProviderFallback, ProviderProfile,
+    RoleOverride, ShepherdAuthConfig, ShepherdConfig, ShepherdProjectConfig, ShepherdReviewConfig,
     SubagentIsolation, TelegramApprovalsTuning, ToolImpact, Topology, Tuning, WebUiConfig,
     ZonePolicy, managed_binary_path, resolve_declared_zone,
 };

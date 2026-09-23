@@ -26,8 +26,8 @@ pub use topology::{
     CompactionSettings, CompactionTriggerSource, CronSchedule, EnterKey, HookConfig,
     MainAgentConfig, McpConfig, McpGrant, McpTransport, ModelCompactionSettings, PoolConfig,
     PreflightProfileConfig, PreflightStepConfig, ProjectConfig, ProjectPreflightConfig,
-    ProviderProfile, ReportSinkConfig, RoleOverride, SessionProfile, ToolImpact, Topology,
-    WebUiConfig, managed_binary_path, resolve_declared_zone,
+    ProviderFallback, ProviderProfile, ReportSinkConfig, RoleOverride, SessionProfile, ToolImpact,
+    Topology, WebUiConfig, managed_binary_path, resolve_declared_zone,
 };
 pub use tuning::{
     CURRENT_SCHEMA_VERSION, CaptureTuning, ChatTuning, ConcurrencyTuning, ContextTuning,

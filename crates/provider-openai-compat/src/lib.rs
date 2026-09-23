@@ -45,6 +45,19 @@ pub struct OpenAiCompatibleProvider {
     /// Per-role reasoning ("thinking") effort — `"off"`, `"low"`, `"medium"`, or `"high"`. Mapped to
     /// the OpenAI-compatible `reasoning` body field when `Some`.
     reasoning_effort: Option<String>,
+    /// Optional cross-provider fallback. On an initial response with a status in `fallback_on_status`,
+    /// the same request is retried once on this provider with the fallback model substituted. The
+    /// retry does not propagate `temperature` / `reasoning_effort` from the primary by default — the
+    /// fallback provider is built standalone in `bootstrap::build_provider_from_profile` and has its
+    /// own per-role overrides; a caller that wants shared tuning passes a pre-built
+    /// `OpenAiCompatibleProvider` via [`Self::with_fallback`].
+    ///
+    /// Boxed to keep the struct's size predictable (the fallback can otherwise be arbitrarily
+    /// large when its own fallback chain is configured).
+    fallback: Option<Box<OpenAiCompatibleProvider>>,
+    /// HTTP status codes that trigger fallback, copied from the `ProviderFallback::on_status`
+    /// field. Empty when no fallback is configured.
+    fallback_on_status: Vec<u16>,
 }
 
 impl OpenAiCompatibleProvider {
@@ -75,6 +88,8 @@ impl OpenAiCompatibleProvider {
             extra_client_error_status: Vec::new(),
             temperature: None,
             reasoning_effort: None,
+            fallback: None,
+            fallback_on_status: Vec::new(),
         }
     }
 
@@ -117,6 +132,85 @@ impl OpenAiCompatibleProvider {
     pub fn with_extra_client_error_status(mut self, codes: Vec<u16>) -> Self {
         self.extra_client_error_status = codes;
         self
+    }
+
+    /// Attach a fallback provider and the status codes that should trigger fallback. The fallback
+    /// is retried at most once per call, only when the primary's **initial response status** is in
+    /// `on_status`. Built stand-alone by the caller (`bootstrap::build_provider_from_profile` does
+    /// this for the config-driven path) so the fallback's own per-role overrides are independent
+    /// of the primary's. An empty `on_status` is a misconfiguration but does not panic — it just
+    /// means the fallback is wired but unreachable.
+    pub fn with_fallback(
+        mut self,
+        fallback: OpenAiCompatibleProvider,
+        on_status: Vec<u16>,
+    ) -> Self {
+        self.fallback = Some(Box::new(fallback));
+        self.fallback_on_status = on_status;
+        self
+    }
+
+    /// True iff `status` is in the configured `fallback_on_status` list AND a fallback provider
+    /// is attached. Caller is responsible for the retry; this just decides.
+    fn should_fallback(&self, status: u16) -> bool {
+        self.fallback.is_some() && self.fallback_on_status.contains(&status)
+    }
+
+    /// Return the fallback provider if `status` triggers fallback, logging the decision. `None`
+    /// either when no fallback is configured or when the status is not eligible (caller
+    /// propagates the primary error in that case). `should_fallback` returned `true` whenever
+    /// this returns `Some`, so the `else` arm is unreachable in practice — the `tracing::error!`
+    /// is a defensive log in case a future refactor breaks the invariant.
+    fn fallback_for_status(&self, status: u16) -> Option<&OpenAiCompatibleProvider> {
+        if status == 0 || !self.should_fallback(status) {
+            return None;
+        }
+        let fb = self.fallback.as_ref()?;
+        tracing::warn!(
+            primary_provider = %self.base_url,
+            primary_status = status,
+            fallback_provider = %fb.base_url,
+            fallback_model = %fb.model(),
+            "primary returned fallback-eligible status — retrying once on configured fallback"
+        );
+        Some(fb)
+    }
+
+    /// The chat path stamps the primary slug on `request.model`. That field wins over the
+    /// provider model on the wire, so a fallback call must replace it with this provider's
+    /// model — the configured override — or the fallback host receives the primary slug.
+    fn request_for_fallback(&self, mut request: CompletionRequest) -> CompletionRequest {
+        request.model = Some(self.model());
+        request
+    }
+
+    /// One chat completion with no fallback decision. The retry calls this on the fallback
+    /// provider so a fallback that itself has a fallback cannot chain.
+    async fn complete_once(
+        &self,
+        request: &CompletionRequest,
+    ) -> Result<CompletionResponse, (u16, ProviderError)> {
+        let name_map = build_tool_name_map(&request.tools);
+        let (_model, body) = self.build_request_body(request, false);
+        let response = self.post_chat(&body).await?;
+        let value: Value = response.json().await.map_err(|e| {
+            (
+                0,
+                ProviderError::Transport(format!("malformed response body: {e}")),
+            )
+        })?;
+        from_openai_response(&value, &name_map).map_err(|e| (0, e))
+    }
+
+    /// One streaming open with no fallback decision. Same retry-once rule as [`Self::complete_once`].
+    async fn complete_stream_once(
+        &self,
+        request: &CompletionRequest,
+    ) -> Result<CompletionStream, (u16, ProviderError)> {
+        let name_map = build_tool_name_map(&request.tools);
+        let (_model, body) = self.build_request_body(request, true);
+        let response = self.post_chat(&body).await?;
+        Ok(stream_sse_response(response, name_map))
     }
 
     /// Override the API base URL (e.g. to point at a mock server in tests).
@@ -235,6 +329,49 @@ impl OpenAiCompatibleProvider {
             .map_err(|e| ProviderError::Transport(format!("malformed response body: {e}")))?;
         Ok(parse_models_response(&value))
     }
+
+    /// Build the OpenAI-compat request body the same way for both the blocking and streaming
+    /// paths so the two never drift on a future edit. Returns the body and the model slug used.
+    fn build_request_body(&self, request: &CompletionRequest, stream: bool) -> (String, Value) {
+        let name_map = build_tool_name_map(&request.tools);
+        let model = self.model();
+        let mut body = to_openai_request(&model, request, &name_map);
+        self.apply_role_tuning(&mut body, request);
+        if stream {
+            body["stream"] = json!(true);
+            // Ask for the trailing usage chunk so streamed calls report token counts (latency journal).
+            body["stream_options"] = json!({ "include_usage": true });
+        }
+        (model, body)
+    }
+
+    /// POST `body` to the chat-completions endpoint and fold the HTTP outcome into the typed
+    /// contract callers see. Returns the **initial status** alongside the error so the
+    /// fallback-aware `complete` / `complete_stream` can decide whether to retry without having
+    /// to re-parse the error string. `Ok` covers all `2xx` responses (the caller still validates
+    /// the response body).
+    async fn post_chat(&self, body: &Value) -> Result<reqwest::Response, (u16, ProviderError)> {
+        let response = self
+            .client
+            .post(self.endpoint())
+            .bearer_auth(&self.api_key)
+            .json(body)
+            .send()
+            .await
+            .map_err(|e| (0, ProviderError::Transport(e.to_string())))?;
+
+        let status = response.status();
+        if !status.is_success() {
+            let detail = response
+                .text()
+                .await
+                .unwrap_or_else(|e| format!("<error body unavailable: {e}>"));
+            let status_u16 = status.as_u16();
+            let err = map_status(status_u16, detail, &self.extra_client_error_status);
+            return Err((status_u16, err));
+        }
+        Ok(response)
+    }
 }
 
 #[async_trait]
@@ -256,75 +393,38 @@ impl Provider for OpenAiCompatibleProvider {
     }
 
     async fn complete(&self, request: CompletionRequest) -> ProviderResult<CompletionResponse> {
-        let name_map = build_tool_name_map(&request.tools);
-        let model = self.model();
-        let mut body = to_openai_request(&model, &request, &name_map);
-        self.apply_role_tuning(&mut body, &request);
-
-        let response = self
-            .client
-            .post(self.endpoint())
-            .bearer_auth(&self.api_key)
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| ProviderError::Transport(e.to_string()))?;
-
-        let status = response.status();
-        if !status.is_success() {
-            let detail = response
-                .text()
-                .await
-                .unwrap_or_else(|e| format!("<error body unavailable: {e}>"));
-            return Err(map_status(
-                status.as_u16(),
-                detail,
-                &self.extra_client_error_status,
-            ));
+        match self.complete_once(&request).await {
+            Ok(resp) => Ok(resp),
+            Err((status, err)) => {
+                if let Some(fb) = self.fallback_for_status(status) {
+                    return fb
+                        .complete_once(&fb.request_for_fallback(request))
+                        .await
+                        .map_err(|(_, fb_err)| fb_err);
+                }
+                Err(err)
+            }
         }
-
-        let value: Value = response
-            .json()
-            .await
-            .map_err(|e| ProviderError::Transport(format!("malformed response body: {e}")))?;
-        from_openai_response(&value, &name_map)
     }
 
     async fn complete_stream(
         &self,
         request: CompletionRequest,
     ) -> ProviderResult<CompletionStream> {
-        let name_map = build_tool_name_map(&request.tools);
-        let model = self.model();
-        let mut body = to_openai_request(&model, &request, &name_map);
-        self.apply_role_tuning(&mut body, &request);
-        body["stream"] = json!(true);
-        // Ask for the trailing usage chunk so streamed calls report token counts (latency journal).
-        body["stream_options"] = json!({ "include_usage": true });
-
-        let response = self
-            .client
-            .post(self.endpoint())
-            .bearer_auth(&self.api_key)
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| ProviderError::Transport(e.to_string()))?;
-
-        let status = response.status();
-        if !status.is_success() {
-            let detail = response
-                .text()
-                .await
-                .unwrap_or_else(|e| format!("<error body unavailable: {e}>"));
-            return Err(map_status(
-                status.as_u16(),
-                detail,
-                &self.extra_client_error_status,
-            ));
+        // A stream that starts OK and fails mid-stream is not retried: the caller already
+        // has the response. Fallback applies only to the initial status, same as `complete`.
+        match self.complete_stream_once(&request).await {
+            Ok(stream) => Ok(stream),
+            Err((status, err)) => {
+                if let Some(fb) = self.fallback_for_status(status) {
+                    return fb
+                        .complete_stream_once(&fb.request_for_fallback(request))
+                        .await
+                        .map_err(|(_, fb_err)| fb_err);
+                }
+                Err(err)
+            }
         }
-
-        Ok(stream_sse_response(response, name_map))
     }
 }
 
@@ -355,3 +455,8 @@ mod per_request_model;
 
 #[cfg(test)]
 mod list_models_tests;
+
+/// Provider-level cross-provider fallback: see the module doc comment for the full contract.
+#[cfg(test)]
+#[path = "lib_fallback.rs"]
+mod fallback;
