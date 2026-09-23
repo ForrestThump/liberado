@@ -165,7 +165,20 @@ fn generate_future_work_readme(docs: &[Document]) -> String {
             ));
         }
     }
-    lines.extend(["", "## Non-active root documents", "", "Draft plans are retained design, not the implementation queue. Move a plan to", "archive/ only after its useful facts live in spec, Rustdoc, or an ADR.", "", "| Doc | Status | Kind |", "|-----|--------|------|"].into_iter().map(str::to_owned));
+    lines.extend(
+        [
+            "",
+            "## Non-active root documents",
+            "",
+            "Draft plans are retained design, not the implementation queue. Move a plan to",
+            "archive/ only after its useful facts live in spec, Rustdoc, or an ADR.",
+            "",
+            "| Doc | Status | Kind |",
+            "|-----|--------|------|",
+        ]
+        .into_iter()
+        .map(str::to_owned),
+    );
     if other.is_empty() {
         lines.push("| *(none)* | | |".to_owned());
     } else {
