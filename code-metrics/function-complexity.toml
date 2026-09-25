@@ -31,10 +31,3 @@ function = "Config::validate_providers"
 ceiling = 21
 reason = "Cross-provider fallback feature adds two error checks inside the per-provider loop of `validate_providers`: the self-reference guard and the undeclared-name guard. Extracting them into a helper regressed the metrics more than the inline (a new function adds to the `functions` count and its own cyclomatic, and the `?` operator on its return adds another branch), so the inline shape is the ratchet-friendly one for these two specific checks."
 reviewed_on = "2026-09-21"
-
-[[waiver]]
-file = "crates/daemon/src/react.rs"
-function = "Daemon::react"
-ceiling = 5
-reason = "Mechanical-jobs feature adds one `if let Some(outcome) = self.handle_mechanical(event) { return outcome; }` early-return before the pool resolution, mirroring the existing `handle_proposal_event` early-return directly above it. The handler itself is a sibling method, so this is the same shape the function already accepts."
-reviewed_on = "2026-09-25"

@@ -78,15 +78,16 @@ split, not waived. The `Config::validate_providers` waiver is for the inline sha
 prior split attempt regressed the metrics more than the inline because a new helper function adds to the
 `functions` count and its own cyclomatic.
 
-The mechanical-jobs feature (ADR-0020) carries one narrow function-complexity waiver: `Daemon::react`
-on `crates/daemon/src/react.rs` (ceiling 5). The new `if let Some(outcome) = self.handle_mechanical(event) { return outcome; }` early-return mirrors the existing `handle_proposal_event` early-return
-directly above it — the handler itself is a sibling method, so the inline shape matches the
-function's existing pattern. The four per-job-kind `if`/`&&` checks that validate a mechanical
-job (job-kind allowlist, `habit-ping` requires `habit_text`, `inbox-if-present` requires `goal`)
-were split out of `Config::validate_schedules` into a module-scope `validate_schedule_job` free
-function, which keeps the per-schedule loop at its cyclomatic baseline (4) and is itself well under
-the new-function ceiling (20). The waiver carries a hard ceiling and review date; any further
-growth in `Daemon::react` is not covered and must be split, not waived.
+The mechanical-jobs feature (ADR-0020) did not require any function-complexity waivers. The
+new `if let Some(outcome) = self.handle_mechanical(event) { return outcome; }` early-return on
+`Daemon::react` and the `if let Some(job) = &schedule.job { insert_job(&mut map, job); }` branch on
+`build_event` (cron) stay within each function's existing cyclomatic baseline — the cargo-crap
+ratchet accepts the new shape because the early-return / inline-block additions sit inside the
+function's existing branch budget. The four per-job-kind `if`/`&&` checks that validate a
+mechanical job (job-kind allowlist, `habit-ping` requires `habit_text`, `inbox-if-present`
+requires `goal`) were split out of `Config::validate_schedules` into a module-scope
+`validate_schedule_job` free function, which keeps the per-schedule loop at its cyclomatic
+baseline (4) and is itself well under the new-function ceiling (20).
 
 The coverage-sensitive CRAP ceiling is 29.9. New functions must remain below 30. Existing
 functions may sit above 30; the per-function Linux baseline prevents those scores from rising.
