@@ -286,37 +286,31 @@ You are a live-conformance probe. Do exactly this and nothing else:
 4. When the write succeeds, finish with a one-line summary that repeats the path.
 """
 
-[[schedules]]
-name = "daily-planning"
-enabled = true
-cron_expr = "0 55 11 * * * *"   # 11:55 UTC = 06:55 America/Chicago CDT
-goal = """
-Produce a concise morning brief. Your final summary IS the brief delivered to the user, so make it the report.
-1. Current weather and today's forecast via liberado-weather-mcp (use my usual home area unless I said otherwise).
-2. Incomplete tasks from turbovault (filter: incomplete only) — the primary task source.
-3. Three noteworthy headlines from the past 24 hours via liberado-search-orchestrator-mcp — one line each.
-Deliver: weather snapshot, open tasks, and the 3 headlines, ending with a single focus suggestion if one stands out. Keep it tight — no filler.
-"""
+# Mechanical jobs. No model. Reminders use LIBERADO_REMINDER_BOT_TOKEN and
+# LIBERADO_REMINDER_CHAT_ID, not the sticky chat. See ADR-0020.
+# Times are UTC. 11:55 UTC = 06:55 America/Chicago CDT. 02:00 UTC = 21:00 CDT.
+# 08:15 UTC = 03:15 CDT.
 
 [[schedules]]
-name = "evening-debrief"
+name = "morning-tasks"
 enabled = true
-cron_expr = "0 55 1 * * * *"    # 01:55 UTC = 20:55 America/Chicago CDT (previous evening)
-goal = """
-Produce a grounded end-of-day evening debrief. Your final summary IS the message delivered to the user.
-1. Task status in turbovault — what's still open vs completed today (pull today's entries from Journal/ as well, for context).
-2. Quick scan of freed-today items: list tasks completed today in turbovault and the day's journal entries.
-Deliver a brief evening summary: how the day looked on paper, open items carrying into tomorrow. Close with one short reflection or suggested next action if something stands out. Concise, not a status report.
-"""
+cron_expr = "0 55 11 * * * *"
+job = "task-ping"
+task_limit = 10
+deliver = false
 
 [[schedules]]
-name = "weekly-review"
+name = "evening-journal"
 enabled = true
-cron_expr = "0 55 23 * * SUN *"  # 23:55 UTC Sun = 18:55 America/Chicago CDT
-goal = """
-Produce a weekly review. Your final summary IS the review delivered to the user.
-1. turbovault tasks: completed this week, still open, anything overdue.
-2. Journal/ entries from the past 7 days — a short digest of what was logged.
-3. A brief weekly news digest via liberado-search-orchestrator-mcp — 3–5 headlines worth knowing.
-Deliver sections: **This Week** (what happened, tasks completed, journal digest), **Next Week** (upcoming priorities from open tasks), **Open Items** (unresolved tasks), **News Digest**, and a short **Weekly Focus** — one clear intention for the coming week. Honest and grounded, not motivational filler.
-"""
+cron_expr = "0 0 2 * * * *"
+job = "habit-ping"
+habit_text = "Write tonight's journal."
+deliver = false
+
+[[schedules]]
+name = "vault-snapshot"
+enabled = true
+cron_expr = "0 15 8 * * * *"
+job = "git-snapshot"
+git_remote = "origin"
+deliver = false

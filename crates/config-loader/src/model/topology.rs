@@ -1082,7 +1082,8 @@ pub struct CronSchedule {
     #[serde(default = "default_true")]
     pub enabled: bool,
     pub cron_expr: String,
-    /// The goal text dispatched.
+    /// The goal text dispatched. Empty when `job` handles the firing without a model.
+    #[serde(default)]
     pub goal: String,
     /// Which named pool (Decision 18 checkpoint #3) handles this schedule's firing — `None` routes
     /// to the always-present `"default"` pool (today's behavior, unchanged for anyone not opting
@@ -1106,6 +1107,35 @@ pub struct CronSchedule {
     /// direct, 8 for a subagent) — which the schedule does not choose and cannot see.
     #[serde(default)]
     pub max_turns: Option<u32>,
+    /// Mechanical job kind. When set, the daemon runs the job and does not start a model
+    /// session, except `inbox-if-present`, which dispatches `goal` only when the capture
+    /// file has text. Known kinds: `git-snapshot`, `task-ping`, `habit-ping`, `inbox-if-present`.
+    #[serde(default)]
+    pub job: Option<String>,
+    /// Text a `habit-ping` sends. Required for that kind.
+    #[serde(default)]
+    pub habit_text: Option<String>,
+    /// How many open tasks a `task-ping` lists. Default 10.
+    #[serde(default)]
+    pub task_limit: Option<u32>,
+    /// Vault-relative capture file for `inbox-if-present`. Default `Inbox/Capture.md`.
+    #[serde(default)]
+    pub capture_path: Option<String>,
+    /// Git remote for `git-snapshot`. Default `origin`.
+    #[serde(default)]
+    pub git_remote: Option<String>,
+    /// Branch `git-snapshot` pushes `HEAD` to. Omitted pushes `HEAD`.
+    #[serde(default)]
+    pub git_branch: Option<String>,
+    /// Commit identity for `git-snapshot`. Default `Liberado` / `liberado@localhost`.
+    #[serde(default)]
+    pub git_user_name: Option<String>,
+    #[serde(default)]
+    pub git_user_email: Option<String>,
+    /// Run a `git-snapshot` once at daemon start when the tree is dirty. Default yes.
+    /// Other jobs ignore this.
+    #[serde(default)]
+    pub run_on_start: Option<bool>,
 }
 
 /// A configured external webhook hook: wiring only (Decision 14) — `liberado-server` resolves

@@ -191,6 +191,14 @@ impl TelegramNotifier {
         Some(Self::new(token, chat_id))
     }
 
+    /// Second bot for mechanical reminders. Unset means those jobs log and do not write
+    /// into the chat session.
+    pub fn from_reminder_env() -> Option<Self> {
+        let token = std::env::var("LIBERADO_REMINDER_BOT_TOKEN").ok()?;
+        let chat_id = std::env::var("LIBERADO_REMINDER_CHAT_ID").ok()?;
+        Some(Self::new(token, chat_id))
+    }
+
     fn api_url(&self, method: &str) -> String {
         format!("{}{}/{}", self.api_base, self.token, method)
     }
@@ -800,6 +808,18 @@ mod tests {
             "https://api.telegram.org/bottok-1/sendMessage"
         );
         assert!(TelegramNotifier::from_env().is_none());
+
+        unsafe { std::env::set_var("LIBERADO_REMINDER_BOT_TOKEN", "tok-2") };
+        unsafe { std::env::set_var("LIBERADO_REMINDER_CHAT_ID", "99") };
+        let reminder = TelegramNotifier::from_reminder_env();
+        unsafe { std::env::remove_var("LIBERADO_REMINDER_BOT_TOKEN") };
+        unsafe { std::env::remove_var("LIBERADO_REMINDER_CHAT_ID") };
+        let reminder = reminder.expect("reminder vars set -> Some");
+        assert_eq!(
+            reminder.api_url("sendMessage"),
+            "https://api.telegram.org/bottok-2/sendMessage"
+        );
+        assert!(TelegramNotifier::from_reminder_env().is_none());
     }
 
     #[test]

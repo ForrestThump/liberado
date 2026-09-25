@@ -36,6 +36,7 @@ code, tests, and Rustdoc. Cross-crate contracts live in
 | ADR-0017 | Conversation History Store | accepted | [ADR-0017-conversation-history-store.md](ADR-0017-conversation-history-store.md) |
 | ADR-0018 | Incremental Event-Bus Mesh (with checkpoints) | accepted | [ADR-0018-incremental-event-bus-mesh.md](ADR-0018-incremental-event-bus-mesh.md) |
 | ADR-0019 | TurboVault as Privileged Plugin, not Hard Dependency | accepted | [ADR-0019-turbovault-as-privileged-plugin.md](ADR-0019-turbovault-as-privileged-plugin.md) |
+| ADR-0020 | Mechanical Schedules | accepted | [ADR-0020-mechanical-schedules.md](ADR-0020-mechanical-schedules.md) |
 
 ## Writing a new ADR
 

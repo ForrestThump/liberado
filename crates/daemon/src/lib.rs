@@ -17,10 +17,13 @@
 
 mod debounce;
 mod helpers;
+mod jobs;
 mod proposals;
 mod react;
 mod types;
 mod vault_source;
+
+pub use jobs::{JobOptions, JobRequest};
 
 pub use types::{Daemon, DaemonError, Reaction, ReactionOutcome, VAULT_NOTE_CHANGED};
 
@@ -63,6 +66,8 @@ impl Daemon {
             signer: ProposalSigner::random(),
             approvals: None,
             notifier: None,
+            reminder: None,
+            startup_jobs: Vec::new(),
             cron_source: None,
             event_tx: Some(event_tx),
             event_rx: Some(event_rx),
@@ -187,6 +192,19 @@ impl Daemon {
     /// attached just never sends anything, the same as today.
     pub fn with_notifier(mut self, notifier: Arc<dyn Notifier>) -> Self {
         self.notifier = Some(notifier);
+        self
+    }
+
+    /// Channel for mechanical reminders. Separate from [`with_notifier`](Self::with_notifier),
+    /// which folds cron briefs into the sticky chat.
+    pub fn with_reminder_notifier(mut self, notifier: Arc<dyn Notifier>) -> Self {
+        self.reminder = Some(notifier);
+        self
+    }
+
+    /// `git-snapshot` jobs to run once before the event loop, so a restart commits a dirty vault.
+    pub fn with_startup_jobs(mut self, jobs: Vec<JobRequest>) -> Self {
+        self.startup_jobs = jobs;
         self
     }
 
@@ -333,6 +351,7 @@ impl Daemon {
             .take()
             .expect("Daemon::run must only be called once");
 
+        self.run_startup_jobs();
         self.spawn_vault_source(event_tx.clone());
         self.spawn_extra_sources(event_tx.clone());
         self.spawn_reaper();

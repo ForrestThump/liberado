@@ -386,6 +386,17 @@ pub fn cron_source_from_config(
             profile: s.profile.clone(),
             deliver: s.deliver,
             max_turns: s.max_turns,
+            job: s.job.clone().map(|kind| liberado_cron::MechanicalJob {
+                kind,
+                habit_text: s.habit_text.clone(),
+                task_limit: s.task_limit,
+                capture_path: s.capture_path.clone(),
+                git_remote: s.git_remote.clone(),
+                git_branch: s.git_branch.clone(),
+                git_user_name: s.git_user_name.clone(),
+                git_user_email: s.git_user_email.clone(),
+                run_on_start: s.run_on_start,
+            }),
         })
         .collect();
     if schedules.is_empty() {
@@ -573,7 +584,9 @@ fn wire_dispatch_stack(
             liberado_config::data_dir(),
         ));
     let daemon = attach_notifier(daemon, &notifier);
+    let daemon = attach_reminder(daemon);
     let daemon = attach_cron(daemon, config);
+    let daemon = daemon.with_startup_jobs(startup_snapshots(config));
     // Always wire the shared live registry (even when empty) so empty→add hot-reload can acquire
     // peers without a process restart. Emptiness only affects acquisition, not composition.
     tracing::info!(
@@ -639,6 +652,44 @@ fn attach_notifier(daemon: Daemon, notifier: &Option<Arc<dyn Notifier>>) -> Daem
 
 /// Attach the cron event source when schedules are configured; a construction failure is logged
 /// and the daemon runs without cron.
+fn attach_reminder(daemon: Daemon) -> Daemon {
+    match liberado_notify::TelegramNotifier::from_reminder_env() {
+        Some(notifier) => {
+            tracing::info!("reminder bot configured");
+            daemon.with_reminder_notifier(Arc::new(notifier))
+        }
+        None => daemon,
+    }
+}
+
+fn startup_snapshots(config: &Config) -> Vec<liberado_daemon::JobRequest> {
+    config
+        .topology
+        .schedules
+        .iter()
+        .filter(|schedule| {
+            schedule.enabled
+                && schedule.job.as_deref() == Some("git-snapshot")
+                && schedule.run_on_start != Some(false)
+        })
+        .map(|schedule| {
+            liberado_daemon::JobRequest::from_options(
+                &schedule.name,
+                "git-snapshot",
+                liberado_daemon::JobOptions {
+                    habit_text: schedule.habit_text.clone(),
+                    task_limit: schedule.task_limit,
+                    capture_path: schedule.capture_path.clone(),
+                    git_remote: schedule.git_remote.clone(),
+                    git_branch: schedule.git_branch.clone(),
+                    git_user_name: schedule.git_user_name.clone(),
+                    git_user_email: schedule.git_user_email.clone(),
+                },
+            )
+        })
+        .collect()
+}
+
 fn attach_cron(daemon: Daemon, config: &Config) -> Daemon {
     match cron_source_from_config(config) {
         Ok(Some(cron_source)) => {
@@ -1047,6 +1098,15 @@ mod tests {
             profile: None,
             deliver: None,
             max_turns: None,
+            job: None,
+            habit_text: None,
+            task_limit: None,
+            capture_path: None,
+            git_remote: None,
+            git_branch: None,
+            git_user_name: None,
+            git_user_email: None,
+            run_on_start: None,
         }
     }
 

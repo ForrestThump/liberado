@@ -50,6 +50,23 @@ pub struct Schedule {
     /// schedule doing N-item work therefore had to be written around a budget it could not see.
     /// `None` keeps the path's default.
     pub max_turns: Option<u32>,
+    /// When set, the daemon runs this firing as a mechanical job and does not start a model
+    /// session. The cron crate only carries the fields; it does not execute them.
+    pub job: Option<MechanicalJob>,
+}
+
+/// Data for a schedule that must not call a model. The daemon interprets `kind`.
+#[derive(Debug, Clone, Default)]
+pub struct MechanicalJob {
+    pub kind: String,
+    pub habit_text: Option<String>,
+    pub task_limit: Option<u32>,
+    pub capture_path: Option<String>,
+    pub git_remote: Option<String>,
+    pub git_branch: Option<String>,
+    pub git_user_name: Option<String>,
+    pub git_user_email: Option<String>,
+    pub run_on_start: Option<bool>,
 }
 
 /// Errors constructing a [`CronEventSource`] — both fail-fast at construction time (Decision 14's
@@ -76,6 +93,7 @@ struct ParsedSchedule {
     profile: Option<String>,
     deliver: Option<bool>,
     max_turns: Option<u32>,
+    job: Option<MechanicalJob>,
     parsed: cron::Schedule,
 }
 
@@ -112,6 +130,7 @@ impl CronEventSource {
                 profile: s.profile,
                 deliver: s.deliver,
                 max_turns: s.max_turns,
+                job: s.job,
                 parsed: expr,
             });
         }
@@ -166,6 +185,49 @@ impl EventSource for CronEventSource {
     }
 }
 
+fn insert_job(map: &mut serde_json::Map<String, serde_json::Value>, job: &MechanicalJob) {
+    map.insert("job".into(), serde_json::Value::String(job.kind.clone()));
+    if let Some(text) = &job.habit_text {
+        map.insert("habit_text".into(), serde_json::Value::String(text.clone()));
+    }
+    if let Some(limit) = job.task_limit {
+        map.insert("task_limit".into(), serde_json::Value::from(limit));
+    }
+    if let Some(path) = &job.capture_path {
+        map.insert(
+            "capture_path".into(),
+            serde_json::Value::String(path.clone()),
+        );
+    }
+    if let Some(remote) = &job.git_remote {
+        map.insert(
+            "git_remote".into(),
+            serde_json::Value::String(remote.clone()),
+        );
+    }
+    if let Some(branch) = &job.git_branch {
+        map.insert(
+            "git_branch".into(),
+            serde_json::Value::String(branch.clone()),
+        );
+    }
+    if let Some(name) = &job.git_user_name {
+        map.insert(
+            "git_user_name".into(),
+            serde_json::Value::String(name.clone()),
+        );
+    }
+    if let Some(email) = &job.git_user_email {
+        map.insert(
+            "git_user_email".into(),
+            serde_json::Value::String(email.clone()),
+        );
+    }
+    if let Some(run) = job.run_on_start {
+        map.insert("run_on_start".into(), serde_json::Value::Bool(run));
+    }
+}
+
 /// Build the standardized event for a cron firing. `correlation_id` is unique per firing (name +
 /// fire time), the idempotency key Decision 6 requires; `source` is `"cron:{name}"` so a consumer
 /// can tell which schedule fired without inspecting the payload.
@@ -190,6 +252,9 @@ fn build_event(schedule: &ParsedSchedule, fire_at: DateTime<Utc>) -> Event {
                 }
                 if let Some(t) = schedule.max_turns {
                     map.insert("max_turns".into(), serde_json::Value::from(t));
+                }
+                if let Some(job) = &schedule.job {
+                    insert_job(&mut map, job);
                 }
                 if map.is_empty() {
                     serde_json::Value::Null
@@ -219,7 +284,51 @@ mod tests {
             profile: None,
             deliver: None,
             max_turns: None,
+            job: None,
         }
+    }
+
+    #[test]
+    fn a_mechanical_job_is_carried_on_the_event() {
+        let mut s = schedule("snap", "0 0 * * * * *", "");
+        s.job = Some(MechanicalJob {
+            kind: "git-snapshot".into(),
+            git_remote: Some("origin".into()),
+            run_on_start: Some(true),
+            ..MechanicalJob::default()
+        });
+        let parsed = CronEventSource::new(vec![s]).unwrap().schedules;
+        let event = build_event(&parsed[0], Utc::now());
+        assert_eq!(
+            event.payload.data.get("job").and_then(|v| v.as_str()),
+            Some("git-snapshot")
+        );
+        assert_eq!(
+            event
+                .payload
+                .data
+                .get("git_remote")
+                .and_then(|v| v.as_str()),
+            Some("origin")
+        );
+        assert_eq!(
+            event
+                .payload
+                .data
+                .get("run_on_start")
+                .and_then(|v| v.as_bool()),
+            Some(true)
+        );
+        assert!(event.payload.data.get("habit_text").is_none());
+    }
+
+    #[test]
+    fn a_schedule_without_a_job_puts_no_job_key_on_the_event() {
+        let parsed = CronEventSource::new(vec![schedule("plain", "0 0 * * * * *", "tidy")])
+            .unwrap()
+            .schedules;
+        let event = build_event(&parsed[0], Utc::now());
+        assert!(event.payload.data.get("job").is_none());
     }
 
     /// A schedule's turn ceiling rides on the event payload, because the daemon builds the

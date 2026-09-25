@@ -556,6 +556,40 @@ impl Config {
                     schedule.name, schedule.cron_expr
                 )));
             }
+            if let Some(job) = &schedule.job {
+                const KINDS: &[&str] = &[
+                    "git-snapshot",
+                    "task-ping",
+                    "habit-ping",
+                    "inbox-if-present",
+                ];
+                if !KINDS.contains(&job.as_str()) {
+                    return Err(Error::Config(format!(
+                        "topology.schedules['{}'].job '{job}' is not one of {}",
+                        schedule.name,
+                        KINDS.join(", ")
+                    )));
+                }
+                if job == "habit-ping"
+                    && schedule
+                        .habit_text
+                        .as_deref()
+                        .unwrap_or("")
+                        .trim()
+                        .is_empty()
+                {
+                    return Err(Error::Config(format!(
+                        "topology.schedules['{}'] habit-ping requires habit_text",
+                        schedule.name
+                    )));
+                }
+                if job == "inbox-if-present" && schedule.goal.trim().is_empty() {
+                    return Err(Error::Config(format!(
+                        "topology.schedules['{}'] inbox-if-present requires goal",
+                        schedule.name
+                    )));
+                }
+            }
         }
         Ok(())
     }

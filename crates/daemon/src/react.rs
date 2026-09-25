@@ -42,6 +42,11 @@ impl Daemon {
         if let Some(outcome) = self.handle_proposal_event(event).await {
             return outcome;
         }
+        // Mechanical jobs do not need a dispatcher or a model. An inbox with captures
+        // returns None here and falls through to the goal.
+        if let Some(outcome) = self.handle_mechanical(event) {
+            return outcome;
+        }
 
         // Which named pool (Decision 18 checkpoint #3) handles this event — the producer sets
         // `payload.pool` explicitly (cron/webhook); an unset pool (vault-watch, or anything that

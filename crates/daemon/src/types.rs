@@ -178,6 +178,10 @@ pub struct Daemon {
     /// Told about every proposal this daemon writes (dispatcher pre-flight `Propose` path) —
     /// optional, `None` by default. Best-effort: a notification failure never blocks the write.
     pub(crate) notifier: Option<Arc<dyn Notifier>>,
+    /// Mechanical reminders (task list, habit, snapshot failure). Not the sticky chat.
+    pub(crate) reminder: Option<Arc<dyn Notifier>>,
+    /// Git snapshots to attempt once when the daemon starts.
+    pub(crate) startup_jobs: Vec<crate::jobs::JobRequest>,
     /// An additional event source run alongside the always-on vault watch (Decision 18/19) — e.g.
     /// `liberado-cron`'s `CronEventSource`. `None` by default: vault-watch is the only source, same
     /// as before this seam existed. At most one extra source for now (v1 scope); nothing prevents
