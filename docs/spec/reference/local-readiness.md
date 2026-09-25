@@ -78,21 +78,18 @@ split, not waived. The `Config::validate_providers` waiver is for the inline sha
 prior split attempt regressed the metrics more than the inline because a new helper function adds to the
 `functions` count and its own cyclomatic.
 
-The mechanical-jobs feature (ADR-0020) carries three narrow function-complexity waivers — one
-per call site that gained an irreducible +1 cyclomatic branch for the new dispatch shape.
-`Config::validate_schedules` on `crates/config-loader/src/model/config.rs` (ceiling 5): the four
-per-job-kind `if`/`&&` checks were extracted into a module-scope `validate_schedule_job` helper;
-the call site uses `?` to propagate the helper's `Result`, which cargo-crap counts as one extra
-branch over the existing `if let Err(e) = std::str::FromStr::from_str(...)` shape the
-cron-expression validation already uses. `build_event` on `crates/cron/src/lib.rs` (ceiling 6):
-the new `if let Some(job) = &schedule.job { insert_job(&mut map, job); }` branch — the body is
-the dedicated `insert_job` helper, so the inline is the ratchet-friendly shape. `Daemon::react`
-on `crates/daemon/src/react.rs` (ceiling 5): the new
-`if let Some(outcome) = self.handle_mechanical(event) { return outcome; }` early-return mirrors
-the existing `handle_proposal_event` early-return directly above it — the handler itself is a
-sibling method, so the inline shape matches the function's existing pattern. Each waiver carries
-a hard ceiling and review date; any further growth in these functions is not covered and must
-be split, not waived.
+The mechanical-jobs feature (ADR-0020) carries one narrow function-complexity waiver:
+`Config::validate_schedules` on `crates/config-loader/src/model/config.rs` (ceiling 10). The
+four per-job-kind `if`/`&&` checks (job-kind allowlist, `habit-ping` requires `habit_text`,
+`inbox-if-present` requires `goal`) are kept inline inside the per-schedule loop for the same
+reason as the `validate_providers` waiver — a helper extraction regressed the metrics more than
+the inline (the helper adds a new function and its own cyclomatic, the call site uses `?` which
+cargo-crap counts as a branch, and the inline checks would otherwise push the per-schedule loop
+past 10 branches). The new mechanical-job inline branch on `build_event` (cron) and the
+`handle_mechanical` early-return on `Daemon::react` (daemon) stay within each function's existing
+cyclomatic baseline — both fit inside the existing branch budget, no waiver needed. Each waiver
+carries a hard ceiling and review date; any further growth in `validate_schedules` is not covered
+and must be split, not waived.
 
 The coverage-sensitive CRAP ceiling is 29.9. New functions must remain below 30. Existing
 functions may sit above 30; the per-function Linux baseline prevents those scores from rising.

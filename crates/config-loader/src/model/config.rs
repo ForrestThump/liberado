@@ -556,53 +556,43 @@ impl Config {
                     schedule.name, schedule.cron_expr
                 )));
             }
-            validate_schedule_job(schedule)?;
+            if let Some(job) = &schedule.job {
+                const KINDS: &[&str] = &[
+                    "git-snapshot",
+                    "task-ping",
+                    "habit-ping",
+                    "inbox-if-present",
+                ];
+                if !KINDS.contains(&job.as_str()) {
+                    return Err(Error::Config(format!(
+                        "topology.schedules['{}'].job '{job}' is not one of {}",
+                        schedule.name,
+                        KINDS.join(", ")
+                    )));
+                }
+                if job == "habit-ping"
+                    && schedule
+                        .habit_text
+                        .as_deref()
+                        .unwrap_or("")
+                        .trim()
+                        .is_empty()
+                {
+                    return Err(Error::Config(format!(
+                        "topology.schedules['{}'] habit-ping requires habit_text",
+                        schedule.name
+                    )));
+                }
+                if job == "inbox-if-present" && schedule.goal.trim().is_empty() {
+                    return Err(Error::Config(format!(
+                        "topology.schedules['{}'] inbox-if-present requires goal",
+                        schedule.name
+                    )));
+                }
+            }
         }
         Ok(())
     }
-}
-
-/// Mechanical-job-specific validation, split from `validate_schedules` to keep the per-schedule
-/// loop under its cyclomatic baseline (the four job kinds each add their own `if`/`&&` checks).
-/// A schedule without a `job` field passes through unchanged — those keep the existing goal-text
-/// validation path.
-fn validate_schedule_job(schedule: &CronSchedule) -> Result<()> {
-    let Some(job) = &schedule.job else {
-        return Ok(());
-    };
-    const KINDS: &[&str] = &[
-        "git-snapshot",
-        "task-ping",
-        "habit-ping",
-        "inbox-if-present",
-    ];
-    if !KINDS.contains(&job.as_str()) {
-        return Err(Error::Config(format!(
-            "topology.schedules['{}'].job '{job}' is not one of {}",
-            schedule.name,
-            KINDS.join(", ")
-        )));
-    }
-    if job == "habit-ping"
-        && schedule
-            .habit_text
-            .as_deref()
-            .unwrap_or("")
-            .trim()
-            .is_empty()
-    {
-        return Err(Error::Config(format!(
-            "topology.schedules['{}'] habit-ping requires habit_text",
-            schedule.name
-        )));
-    }
-    if job == "inbox-if-present" && schedule.goal.trim().is_empty() {
-        return Err(Error::Config(format!(
-            "topology.schedules['{}'] inbox-if-present requires goal",
-            schedule.name
-        )));
-    }
-    Ok(())
 }
 
 impl Config {
