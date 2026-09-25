@@ -560,6 +560,7 @@ impl Config {
         }
         Ok(())
     }
+}
 
 /// Mechanical-job-specific validation, split from `validate_schedules` to keep the per-schedule
 /// loop under its cyclomatic baseline (the four job kinds each add their own `if`/`&&` checks).
