@@ -33,13 +33,6 @@ reason = "Cross-provider fallback feature adds two error checks inside the per-p
 reviewed_on = "2026-09-21"
 
 [[waiver]]
-file = "crates/cron/src/lib.rs"
-function = "build_event"
-ceiling = 6
-reason = "Mechanical-jobs feature adds one `if let Some(job) = &schedule.job { insert_job(&mut map, job); }` branch on the existing payload-shape loop. The body of the new branch is the dedicated `insert_job` helper, so the inline is the ratchet-friendly shape (extracting a wrapper around `insert_job` would add a function and its own cyclomatic)."
-reviewed_on = "2026-09-25"
-
-[[waiver]]
 file = "crates/daemon/src/react.rs"
 function = "Daemon::react"
 ceiling = 5

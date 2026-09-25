@@ -152,9 +152,9 @@ reviewed_on = "2026-09-21"
 [[waiver]]
 path = "crates/config-loader/src/model/config.rs"
 metric = "functions"
-ceiling = 88
-reason = "validate_providers gained one closure, providers.iter().any(|p| p.name == fb.provider), to reject an undeclared fallback name. The ceiling is the measured function count."
-reviewed_on = "2026-09-22"
+ceiling = 90
+reason = "validate_providers gained one closure, providers.iter().any(|p| p.name == fb.provider), to reject an undeclared fallback name. The mechanical-jobs feature added the module-scope `validate_schedule_job` free function (split out of `validate_schedules` to keep its per-schedule loop at its cyclomatic baseline) — a sibling function on the schedule schema that does not belong in a separate module."
+reviewed_on = "2026-09-25"
 
 [[waiver]]
 path = "crates/config-loader/src/model/config.rs"
