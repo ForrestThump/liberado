@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use super::builder::ConfigBuilder;
 use super::policy::Policy;
 use super::topology::{
-    CronSchedule, McpGrant, McpTransport, ProjectConfig, SessionProfile, Topology, empty_table,
+    McpGrant, McpTransport, ProjectConfig, SessionProfile, Topology, empty_table,
 };
 
 /// What a session profile resolves to — everything a caller needs to start a session under it.
