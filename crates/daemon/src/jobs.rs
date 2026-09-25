@@ -5,9 +5,9 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use liberado_common::Event;
+use liberado_common::process::std_command;
 
 use crate::types::{Daemon, ReactionOutcome};
 
@@ -235,7 +235,7 @@ fn git(root: &Path, job: &JobRequest, args: &[&str]) -> Result<std::process::Out
     let safe = format!("safe.directory={}", root.display());
     let name = format!("user.name={}", job.git_user_name);
     let email = format!("user.email={}", job.git_user_email);
-    Command::new("git")
+    std_command("git")
         .current_dir(root)
         .arg("-c")
         .arg(&safe)

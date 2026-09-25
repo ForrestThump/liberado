@@ -131,15 +131,15 @@ reviewed_on = "2026-09-21"
 [[waiver]]
 path = "crates/config-loader/src/model/builder.rs"
 metric = "functions"
-ceiling = 100
-reason = "Same as the cyclomatic waiver on this file: the new function is the shared `provider_profile` fixture hoisted out of `mod tests` for cross-module reuse."
-reviewed_on = "2026-09-21"
+ceiling = 110
+reason = "Same as the cyclomatic waiver on this file: the new function is the shared `provider_profile` fixture hoisted out of `mod tests` for cross-module reuse. The mechanical-jobs feature added five new test functions for `Config::validate_schedules` branches (habit-ping with text, task-ping, inbox-if-present with and without goal, no-job) — each `#[test] fn` is a separate function in this file's count."
+reviewed_on = "2026-09-25"
 
 [[waiver]]
 path = "crates/config-loader/src/model/builder.rs"
 metric = "ploc"
-ceiling = 1200
-reason = "Same as the cyclomatic waiver on this file: the new ploc is the shared `provider_profile` fixture, its doc comment, and the `#[path] mod fallback_tests;` declaration. The fallback test bodies themselves are zero ploc here — they live in `builder_fallback_tests.rs`. The mechanical-jobs feature added the `job` field plumbing on every `CronSchedule` test fixture in this file (10 fields each, on multiple `CronSchedule { ... }` literals) — the field is load-bearing across the config-loading tests, not a refactor target."
+ceiling = 1300
+reason = "Same as the cyclomatic waiver on this file: the new ploc is the shared `provider_profile` fixture, its doc comment, and the `#[path] mod fallback_tests;` declaration. The fallback test bodies themselves are zero ploc here — they live in `builder_fallback_tests.rs`. The mechanical-jobs feature added the `job` field plumbing on every `CronSchedule` test fixture in this file (10 fields each, on multiple `CronSchedule { ... }` literals) and five new test functions covering the previously-untested branches in `Config::validate_schedules` (habit-ping with text, task-ping, inbox-if-present with and without goal, no-job) — both are load-bearing across the config-loading tests, not refactor targets."
 reviewed_on = "2026-09-25"
 
 [[waiver]]
