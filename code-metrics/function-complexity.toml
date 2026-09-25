@@ -38,3 +38,17 @@ function = "Config::validate_schedules"
 ceiling = 21
 reason = "Mechanical-jobs feature adds four per-job-kind `if`/`&&` checks inside the per-schedule loop: the job-kind allowlist (KINDS.contains), `habit-ping` requires `habit_text`, `inbox-if-present` requires `goal`. Extracting them into a helper regressed the metrics more than the inline (the helper adds a new function and its own cyclomatic, the call site uses `?` which cargo-crap counts as a branch, and the inline checks would otherwise push the per-schedule loop past 10 branches). The inline form is the ratchet-friendly shape for this validation surface, exactly as the cross-provider fallback waiver is for `validate_providers`. A waiver ceiling must be above the new-function ceiling (20), so the ceiling is 21."
 reviewed_on = "2026-09-25"
+
+[[waiver]]
+file = "crates/cron/src/lib.rs"
+function = "build_event"
+ceiling = 21
+reason = "Mechanical-jobs feature adds one `if let Some(job) = &schedule.job { insert_job(&mut map, job); }` branch on the existing payload-shape loop. The body of the new branch is the dedicated `insert_job` helper, so the inline is the ratchet-friendly shape (extracting a wrapper around `insert_job` would add a function and its own cyclomatic). A waiver ceiling must be above the new-function ceiling (20), so the ceiling is 21."
+reviewed_on = "2026-09-25"
+
+[[waiver]]
+file = "crates/daemon/src/react.rs"
+function = "Daemon::react"
+ceiling = 21
+reason = "Mechanical-jobs feature adds one `if let Some(outcome) = self.handle_mechanical(event) { return outcome; }` early-return before the pool resolution, mirroring the existing `handle_proposal_event` early-return directly above it. The handler itself is a sibling method, so this is the same shape the function already accepts. A waiver ceiling must be above the new-function ceiling (20), so the ceiling is 21."
+reviewed_on = "2026-09-25"
