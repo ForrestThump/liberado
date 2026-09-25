@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use super::builder::ConfigBuilder;
 use super::policy::Policy;
 use super::topology::{
-    McpGrant, McpTransport, ProjectConfig, SessionProfile, Topology, empty_table,
+    CronSchedule, McpGrant, McpTransport, ProjectConfig, SessionProfile, Topology, empty_table,
 };
 
 /// What a session profile resolves to — everything a caller needs to start a session under it.
@@ -542,57 +542,73 @@ impl Config {
     fn validate_schedules(&self) -> Result<()> {
         let mut seen_schedule_names = std::collections::HashSet::new();
         for schedule in &self.topology.schedules {
-            if !seen_schedule_names.insert(&schedule.name) {
-                return Err(Error::Config(format!(
-                    "topology.schedules has a duplicate name '{}'",
-                    schedule.name
-                )));
-            }
-            if let Err(e) =
-                std::str::FromStr::from_str(&schedule.cron_expr).map(|_: cron::Schedule| ())
-            {
-                return Err(Error::Config(format!(
-                    "topology.schedules['{}'].cron_expr '{}' is invalid: {e}",
-                    schedule.name, schedule.cron_expr
-                )));
-            }
-            if let Some(job) = &schedule.job {
-                const KINDS: &[&str] = &[
-                    "git-snapshot",
-                    "task-ping",
-                    "habit-ping",
-                    "inbox-if-present",
-                ];
-                if !KINDS.contains(&job.as_str()) {
-                    return Err(Error::Config(format!(
-                        "topology.schedules['{}'].job '{job}' is not one of {}",
-                        schedule.name,
-                        KINDS.join(", ")
-                    )));
-                }
-                if job == "habit-ping"
-                    && schedule
-                        .habit_text
-                        .as_deref()
-                        .unwrap_or("")
-                        .trim()
-                        .is_empty()
-                {
-                    return Err(Error::Config(format!(
-                        "topology.schedules['{}'] habit-ping requires habit_text",
-                        schedule.name
-                    )));
-                }
-                if job == "inbox-if-present" && schedule.goal.trim().is_empty() {
-                    return Err(Error::Config(format!(
-                        "topology.schedules['{}'] inbox-if-present requires goal",
-                        schedule.name
-                    )));
-                }
-            }
+            validate_one_schedule(schedule, &mut seen_schedule_names)?;
         }
         Ok(())
     }
+}
+
+/// Per-schedule validation: name uniqueness, cron parse, and the four job-kind
+/// `if`/`&&` checks. Lives at module scope so the per-schedule loop in
+/// `Config::validate_schedules` stays at its cyclomatic baseline.
+///
+/// Cyclomatic: 1 (base) + 1 (insert) + 1 (cron) + 1 (job Some) + 1 (KINDS)
+///             + 2 (habit &&) + 2 (inbox &&) = 8; CRAP at full coverage is 8
+///             (below the per-function ratchet's 10-point floor).
+fn validate_one_schedule(
+    schedule: &CronSchedule,
+    seen: &mut std::collections::HashSet<&str>,
+) -> Result<()> {
+    if !seen.insert(&schedule.name) {
+        return Err(Error::Config(format!(
+            "topology.schedules has a duplicate name '{}'",
+            schedule.name
+        )));
+    }
+    if let Err(e) =
+        std::str::FromStr::from_str(&schedule.cron_expr).map(|_: cron::Schedule| ())
+    {
+        return Err(Error::Config(format!(
+            "topology.schedules['{}'].cron_expr '{}' is invalid: {e}",
+            schedule.name, schedule.cron_expr
+        )));
+    }
+    let Some(job) = &schedule.job else {
+        return Ok(());
+    };
+    const KINDS: &[&str] = &[
+        "git-snapshot",
+        "task-ping",
+        "habit-ping",
+        "inbox-if-present",
+    ];
+    if !KINDS.contains(&job.as_str()) {
+        return Err(Error::Config(format!(
+            "topology.schedules['{}'].job '{job}' is not one of {}",
+            schedule.name,
+            KINDS.join(", ")
+        )));
+    }
+    if job == "habit-ping"
+        && schedule
+            .habit_text
+            .as_deref()
+            .unwrap_or("")
+            .trim()
+        .is_empty()
+    {
+        return Err(Error::Config(format!(
+            "topology.schedules['{}'] habit-ping requires habit_text",
+            schedule.name
+        )));
+    }
+    if job == "inbox-if-present" && schedule.goal.trim().is_empty() {
+        return Err(Error::Config(format!(
+            "topology.schedules['{}'] inbox-if-present requires goal",
+            schedule.name
+        )));
+    }
+    Ok(())
 }
 
 impl Config {
