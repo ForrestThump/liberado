@@ -33,13 +33,6 @@ reason = "Cross-provider fallback feature adds two error checks inside the per-p
 reviewed_on = "2026-09-21"
 
 [[waiver]]
-file = "crates/config-loader/src/model/config.rs"
-function = "Config::validate_schedules"
-ceiling = 5
-reason = "Mechanical-jobs feature extracts the four per-job-kind `if`/`&&` checks into a module-scope `validate_schedule_job` helper to keep the validation split clean, and the call site uses `?` (one extra branch in the ratcher's count, matching the inline shape the existing `if let Err(e) = std::str::FromStr::from_str(...)` already adds). Without the helper, the inline form would push cyclomatic past 10; the helper holds the per-kind checks below the new-function ceiling."
-reviewed_on = "2026-09-25"
-
-[[waiver]]
 file = "crates/cron/src/lib.rs"
 function = "build_event"
 ceiling = 6
