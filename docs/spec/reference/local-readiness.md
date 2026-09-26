@@ -75,8 +75,26 @@ site that gained an irreducible +1 cyclomatic branch for the fallback decision:
 and `OpenAiCompatibleProvider::complete_stream` (the same shape on the streaming path). Each waiver
 carries a hard ceiling and review date; any further growth in these functions is not covered and must be
 split, not waived. The `Config::validate_providers` waiver is for the inline shape specifically — a
-prior split attempt regressed the metrics more than the inline because a new helper function adds to
-the `functions` count and its own cyclomatic.
+prior split attempt regressed the metrics more than the inline because a new helper function adds to the
+`functions` count and its own cyclomatic.
+
+The mechanical-jobs feature (ADR-0020) carries two narrow function-complexity waivers — one
+per call site that gained an irreducible +1 cyclomatic branch for the new dispatch shape.
+`build_event` on `crates/cron/src/lib.rs`: the new
+`if let Some(job) = &schedule.job { insert_job(&mut map, job); }` branch — the body is the
+dedicated `insert_job` helper, so the inline is the ratchet-friendly shape. `Daemon::react` on
+`crates/daemon/src/react.rs`: the new
+`if let Some(outcome) = self.handle_mechanical(event) { return outcome; }` early-return mirrors
+the existing `handle_proposal_event` early-return directly above it — the handler itself is a
+sibling method, so the inline shape matches the function's existing pattern. Both ceilings sit
+at 21 (above the new-function ceiling of 20, per the same rule as the cross-provider fallback
+waivers). The four per-job-kind `if`/`&&` checks (job-kind allowlist, `habit-ping` requires
+`habit_text`, `inbox-if-present` requires `goal`) were extracted into a module-scope
+`validate_one_schedule` free function, which keeps `Config::validate_schedules` at its
+cyclomatic baseline (4) and sits at cyclomatic 8 itself — under the new-function ceiling (20)
+and the per-function CRAP ratchet's 10-point floor at full coverage. Each waiver carries a hard
+ceiling and review date; any further growth in these functions is not covered and must be split,
+not waived.
 
 The coverage-sensitive CRAP ceiling is 29.9. New functions must remain below 30. Existing
 functions may sit above 30; the per-function Linux baseline prevents those scores from rising.

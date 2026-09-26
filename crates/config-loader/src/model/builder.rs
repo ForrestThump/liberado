@@ -394,6 +394,15 @@ max_turns = 44
             profile: None,
             deliver: None,
             max_turns: None,
+            job: None,
+            habit_text: None,
+            task_limit: None,
+            capture_path: None,
+            git_remote: None,
+            git_branch: None,
+            git_user_name: None,
+            git_user_email: None,
+            run_on_start: None,
         }
     }
 
@@ -422,6 +431,89 @@ max_turns = 44
             cron_schedule("nightly", "0 0 12 * * * *"),
         ];
         assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn an_unknown_job_kind_fails_validation() {
+        let mut cfg = Config::default();
+        cfg.topology.vault_path = PathBuf::from("/home/shiloh/vault");
+        let mut schedule = cron_schedule("snap", "0 0 9 * * * *");
+        schedule.job = Some("shell".into());
+        cfg.topology.schedules = vec![schedule];
+        let err = cfg.validate().unwrap_err().to_string();
+        assert!(err.contains("job"), "{err}");
+    }
+
+    #[test]
+    fn habit_ping_requires_text_and_a_snapshot_may_omit_a_goal() {
+        let mut cfg = Config::default();
+        cfg.topology.vault_path = PathBuf::from("/home/shiloh/vault");
+        let mut habit = cron_schedule("plan", "0 0 12 * * * *");
+        habit.job = Some("habit-ping".into());
+        habit.goal.clear();
+        cfg.topology.schedules = vec![habit];
+        assert!(cfg.validate().is_err());
+
+        let mut snap = cron_schedule("snap", "0 15 8 * * * *");
+        snap.job = Some("git-snapshot".into());
+        snap.goal.clear();
+        cfg.topology.schedules = vec![snap];
+        assert!(cfg.validate().is_ok());
+    }
+
+    #[test]
+    fn habit_ping_with_text_passes() {
+        let mut cfg = Config::default();
+        cfg.topology.vault_path = PathBuf::from("/home/shiloh/vault");
+        let mut habit = cron_schedule("plan", "0 0 12 * * * *");
+        habit.job = Some("habit-ping".into());
+        habit.habit_text = Some("Write tonight's journal.".into());
+        cfg.topology.schedules = vec![habit];
+        assert!(cfg.validate().is_ok());
+    }
+
+    #[test]
+    fn task_ping_passes_with_no_extra_fields() {
+        let mut cfg = Config::default();
+        cfg.topology.vault_path = PathBuf::from("/home/shiloh/vault");
+        let mut schedule = cron_schedule("tasks", "0 55 11 * * * *");
+        schedule.job = Some("task-ping".into());
+        cfg.topology.schedules = vec![schedule];
+        assert!(cfg.validate().is_ok());
+    }
+
+    #[test]
+    fn inbox_if_present_requires_a_goal() {
+        let mut cfg = Config::default();
+        cfg.topology.vault_path = PathBuf::from("/home/shiloh/vault");
+        let mut schedule = cron_schedule("inbox", "0 0 * * * * *");
+        schedule.job = Some("inbox-if-present".into());
+        schedule.goal.clear();
+        cfg.topology.schedules = vec![schedule];
+        let err = cfg.validate().unwrap_err().to_string();
+        assert!(err.contains("inbox-if-present requires goal"), "{err}");
+    }
+
+    #[test]
+    fn inbox_if_present_with_goal_passes() {
+        let mut cfg = Config::default();
+        cfg.topology.vault_path = PathBuf::from("/home/shiloh/vault");
+        let mut schedule = cron_schedule("inbox", "0 0 * * * * *");
+        schedule.job = Some("inbox-if-present".into());
+        // goal is the default non-empty from cron_schedule()
+        cfg.topology.schedules = vec![schedule];
+        assert!(cfg.validate().is_ok());
+    }
+
+    #[test]
+    fn a_schedule_without_a_job_uses_goal_validation() {
+        // No job field — the schedule is a prose goal and goes through the
+        // existing path. Validate that the absence of `job` doesn't trip the
+        // job-kind gate.
+        let mut cfg = Config::default();
+        cfg.topology.vault_path = PathBuf::from("/home/shiloh/vault");
+        cfg.topology.schedules = vec![cron_schedule("nightly", "0 0 9 * * * *")];
+        assert!(cfg.validate().is_ok());
     }
 
     // ── Session profiles (session-focus S6) ──────────────────────────────────

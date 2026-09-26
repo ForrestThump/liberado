@@ -131,16 +131,16 @@ reviewed_on = "2026-09-21"
 [[waiver]]
 path = "crates/config-loader/src/model/builder.rs"
 metric = "functions"
-ceiling = 100
-reason = "Same as the cyclomatic waiver on this file: the new function is the shared `provider_profile` fixture hoisted out of `mod tests` for cross-module reuse."
-reviewed_on = "2026-09-21"
+ceiling = 110
+reason = "Same as the cyclomatic waiver on this file: the new function is the shared `provider_profile` fixture hoisted out of `mod tests` for cross-module reuse. The mechanical-jobs feature added five new test functions for `Config::validate_schedules` branches (habit-ping with text, task-ping, inbox-if-present with and without goal, no-job) — each `#[test] fn` is a separate function in this file's count."
+reviewed_on = "2026-09-25"
 
 [[waiver]]
 path = "crates/config-loader/src/model/builder.rs"
 metric = "ploc"
-ceiling = 1130
-reason = "Same as the cyclomatic waiver on this file: the new ploc is the shared `provider_profile` fixture, its doc comment, and the `#[path] mod fallback_tests;` declaration. The fallback test bodies themselves are zero ploc here — they live in `builder_fallback_tests.rs`."
-reviewed_on = "2026-09-21"
+ceiling = 1300
+reason = "Same as the cyclomatic waiver on this file: the new ploc is the shared `provider_profile` fixture, its doc comment, and the `#[path] mod fallback_tests;` declaration. The fallback test bodies themselves are zero ploc here — they live in `builder_fallback_tests.rs`. The mechanical-jobs feature added the `job` field plumbing on every `CronSchedule` test fixture in this file (10 fields each, on multiple `CronSchedule { ... }` literals) and five new test functions covering the previously-untested branches in `Config::validate_schedules` (habit-ping with text, task-ping, inbox-if-present with and without goal, no-job) — both are load-bearing across the config-loading tests, not refactor targets."
+reviewed_on = "2026-09-25"
 
 [[waiver]]
 path = "crates/config-loader/src/model/config.rs"
@@ -152,16 +152,16 @@ reviewed_on = "2026-09-21"
 [[waiver]]
 path = "crates/config-loader/src/model/config.rs"
 metric = "functions"
-ceiling = 88
-reason = "validate_providers gained one closure, providers.iter().any(|p| p.name == fb.provider), to reject an undeclared fallback name. The ceiling is the measured function count."
-reviewed_on = "2026-09-22"
+ceiling = 90
+reason = "validate_providers gained one closure, providers.iter().any(|p| p.name == fb.provider), to reject an undeclared fallback name. The mechanical-jobs feature added the module-scope `validate_schedule_job` free function (split out of `validate_schedules` to keep its per-schedule loop at its cyclomatic baseline) — a sibling function on the schedule schema that does not belong in a separate module."
+reviewed_on = "2026-09-25"
 
 [[waiver]]
 path = "crates/config-loader/src/model/config.rs"
 metric = "ploc"
-ceiling = 1080
-reason = "Same as the cyclomatic waiver on this file: the new ploc is the two inline error checks plus the rationale comment above them."
-reviewed_on = "2026-09-21"
+ceiling = 1120
+reason = "Same as the cyclomatic waiver on this file: the new ploc is the two inline error checks plus the rationale comment above them. The mechanical-jobs feature added the `validate_schedule_job` helper alongside `validate_schedules` (with its own doc comment) — the helper holds the per-kind `if`/`&&` checks that would otherwise have raised `validate_schedules` past its cyclomatic baseline, and the validation belongs next to the schedule schema in this file."
+reviewed_on = "2026-09-25"
 
 [[waiver]]
 path = "crates/config-loader/src/model/topology.rs"
@@ -180,6 +180,41 @@ reviewed_on = "2026-09-21"
 [[waiver]]
 path = "crates/config-loader/src/model/topology.rs"
 metric = "ploc"
-ceiling = 1120
-reason = "Same as the cyclomatic waiver on this file: the new ploc is the `ProviderFallback` struct definition (with three fields, serde attributes, and a doc comment that explains the on_status default and the streaming limitation)."
-reviewed_on = "2026-09-21"
+ceiling = 1150
+reason = "Same as the cyclomatic waiver on this file: the new ploc is the `ProviderFallback` struct definition (with three fields, serde attributes, and a doc comment that explains the on_status default and the streaming limitation). The mechanical-jobs feature added nine `CronSchedule` fields (`job`, `habit_text`, `task_limit`, `capture_path`, `git_remote`, `git_branch`, `git_user_name`, `git_user_email`, `run_on_start`) with their doc comments — every one of them belongs on the schedule schema, and pulling them into a sibling module would split the schema from the struct that owns it."
+reviewed_on = "2026-09-25"
+
+[[waiver]]
+path = "crates/bootstrap/src/lib.rs"
+metric = "cyclomatic"
+ceiling = 135
+reason = "Mechanical-jobs feature adds `attach_reminder` (one `match Some/None` arm on the optional Telegram reminder notifier) and `startup_snapshots` (one filter closure chaining `enabled && job == \"git-snapshot\" && run_on_start != Some(false)`, plus one `map` closure to convert the kept schedules into `JobRequest`s). Both helpers are wired into `wire_dispatch_stack`, where the dispatch stack itself is composed — moving either helper to a sibling module would split the wiring from the dispatch composition that owns it."
+reviewed_on = "2026-09-25"
+
+[[waiver]]
+path = "crates/bootstrap/src/lib.rs"
+metric = "functions"
+ceiling = 80
+reason = "Same as the cyclomatic waiver on this file: the new functions are `attach_reminder`, `startup_snapshots`, and the two iterator closures inside `startup_snapshots` (the filter and the map); the `cron_source_from_config` builder closure is also a function-count entry that the mechanical-jobs field plumbing added. None of these belong in a sibling module under the dispatch-composition argument."
+reviewed_on = "2026-09-25"
+
+[[waiver]]
+path = "crates/bootstrap/src/lib.rs"
+metric = "ploc"
+ceiling = 1100
+reason = "Same as the cyclomatic waiver on this file: the new ploc is `attach_reminder` (the optional-notifier match), `startup_snapshots` (the filter + map pipeline), and the `with_startup_jobs` line in `wire_dispatch_stack` that wires them. The wiring has to live next to the rest of the dispatch composition."
+reviewed_on = "2026-09-25"
+
+[[waiver]]
+path = "crates/notify/src/lib.rs"
+metric = "cyclomatic"
+ceiling = 150
+reason = "Mechanical-jobs feature adds `TelegramNotifier::from_reminder_env`, a thin loader parallel to the existing `from_env` (one `let-else` per env var, two total). It mirrors `from_env` rather than extending it because the reminder bot uses different env vars and a separate chat — the two loaders are kept side-by-side so the wiring in `bootstrap` can pick the right one by env name."
+reviewed_on = "2026-09-25"
+
+[[waiver]]
+path = "crates/notify/src/lib.rs"
+metric = "functions"
+ceiling = 90
+reason = "Same as the cyclomatic waiver on this file: the new function is `TelegramNotifier::from_reminder_env`. Its single test assertion is added inline to the existing `from_env` test rather than a new `#[test] fn`, so the function-count delta is exactly +1."
+reviewed_on = "2026-09-25"

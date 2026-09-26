@@ -216,3 +216,15 @@ The shipped chat-default example (CAS3, [#278](https://github.com/ForrestThump/l
    give Chat-shelf look-back. Off by default so a new deploy does not grow the face catalogue.
 
 Product meaning: [`chat-agent-surface-mode.md`](architecture/chat-agent-surface-mode.md) §6d.
+
+## 9. Mechanical schedules
+
+A `[[schedules]]` entry with `job` set does not start a model session. The daemon runs the
+built-in kind. Kinds are `git-snapshot`, `task-ping`, `habit-ping`, and `inbox-if-present`.
+An unknown kind is a load error. `habit-ping` requires `habit_text`. `inbox-if-present`
+requires `goal`, and that goal runs only when the capture file has text.
+
+`git-snapshot` commits the vault when it is dirty and pushes. It also runs at startup unless
+`run_on_start = false`. Reminders use `LIBERADO_REMINDER_BOT_TOKEN` and
+`LIBERADO_REMINDER_CHAT_ID`. They are not appended to the sticky chat. See ADR-0020.
+

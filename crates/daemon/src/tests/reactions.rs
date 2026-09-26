@@ -112,6 +112,7 @@ async fn cron_and_vault_watch_are_interchangeable_event_sources() {
         profile: None,
         deliver: None,
         max_turns: None,
+        job: None,
     }])
     .unwrap();
 
@@ -210,6 +211,7 @@ async fn a_cron_firing_is_recorded_as_a_background_session_instead_of_vanishing(
         profile: None,
         deliver: None,
         max_turns: None,
+        job: None,
     }])
     .unwrap();
 

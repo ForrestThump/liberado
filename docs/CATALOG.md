@@ -35,6 +35,7 @@ Authority model: [doc-authority.md](spec/reference/doc-authority.md).
 | [docs/decisions/ADR-0017-conversation-history-store.md](decisions/ADR-0017-conversation-history-store.md) | decision | accepted | normative | architecture | adr-0017 |
 | [docs/decisions/ADR-0018-incremental-event-bus-mesh.md](decisions/ADR-0018-incremental-event-bus-mesh.md) | decision | accepted | normative | architecture | adr-0018 |
 | [docs/decisions/ADR-0019-turbovault-as-privileged-plugin.md](decisions/ADR-0019-turbovault-as-privileged-plugin.md) | decision | accepted | normative | architecture | adr-0019 |
+| [docs/decisions/ADR-0020-mechanical-schedules.md](decisions/ADR-0020-mechanical-schedules.md) | decision | accepted | normative | architecture | adr-0020 |
 | [docs/decisions/README.md](decisions/README.md) | index | active | advisory | architecture | — |
 | [docs/future-work/README.md](future-work/README.md) | index | active | advisory | — | — |
 | [docs/future-work/archive/acp-bridge-completion-roadmap.md](future-work/archive/acp-bridge-completion-roadmap.md) | plan | superseded | advisory | acp | acp-bridge-completion |
