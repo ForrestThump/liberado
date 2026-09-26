@@ -555,9 +555,9 @@ impl Config {
 /// Cyclomatic: 1 (base) + 1 (insert) + 1 (cron) + 1 (job Some) + 1 (KINDS)
 ///             + 2 (habit &&) + 2 (inbox &&) = 8; CRAP at full coverage is 8
 ///             (below the per-function ratchet's 10-point floor).
-fn validate_one_schedule(
-    schedule: &CronSchedule,
-    seen: &mut std::collections::HashSet<&str>,
+fn validate_one_schedule<'a>(
+    schedule: &'a CronSchedule,
+    seen: &mut std::collections::HashSet<&'a str>,
 ) -> Result<()> {
     if !seen.insert(&schedule.name) {
         return Err(Error::Config(format!(
@@ -565,9 +565,7 @@ fn validate_one_schedule(
             schedule.name
         )));
     }
-    if let Err(e) =
-        std::str::FromStr::from_str(&schedule.cron_expr).map(|_: cron::Schedule| ())
-    {
+    if let Err(e) = std::str::FromStr::from_str(&schedule.cron_expr).map(|_: cron::Schedule| ()) {
         return Err(Error::Config(format!(
             "topology.schedules['{}'].cron_expr '{}' is invalid: {e}",
             schedule.name, schedule.cron_expr
@@ -595,7 +593,7 @@ fn validate_one_schedule(
             .as_deref()
             .unwrap_or("")
             .trim()
-        .is_empty()
+            .is_empty()
     {
         return Err(Error::Config(format!(
             "topology.schedules['{}'] habit-ping requires habit_text",
