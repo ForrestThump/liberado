@@ -88,9 +88,10 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
 FROM debian:trixie-slim AS runtime
 
 # Runtime deps: TLS roots (outbound provider/MCP HTTPS), openssl runtime, git (coder pack; harmless
-# for the automation daemon), and a shell for healthchecks.
+# for the automation daemon), openssh-client (mechanical-job vault snapshots push to a Gitea SSH
+# remote; the host keys are bind-mounted at /root/.ssh:ro), and a shell for healthchecks.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        ca-certificates libssl3 git curl \
+        ca-certificates libssl3 git curl openssh-client \
     && rm -rf /var/lib/apt/lists/*
 
 # From /out, not /build/target - the target dir is a cache mount and does not survive its RUN.
