@@ -227,6 +227,7 @@ async fn score_one(
         reaction_depth: 0,
         zone_write_classes: Vec::new(),
         risk_waivers: RiskWaiverSet::empty(),
+        direct: false,
     };
 
     let decision = dispatcher.dispatch(&request).await.ok()?;

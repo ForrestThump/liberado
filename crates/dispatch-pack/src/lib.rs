@@ -402,6 +402,7 @@ impl DomainPackRunner for DispatchPack {
             reaction_depth: self.reaction_depth,
             zone_write_classes: self.zone_write_classes.clone(),
             risk_waivers: self.risk_waivers.clone(),
+            direct: false,
         };
 
         // Tag every inference this pack triggers (dispatcher classification + orchestrator loop)

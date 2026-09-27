@@ -106,6 +106,15 @@ the `config.rs` `functions` ceiling (88 → 90) absorbs the module-scope `valida
 helper that was split out to keep `validate_schedules` at its cyclomatic baseline. All five
 carry hard ceilings and review dates; any further growth in these files must be split, not waived.
 
+The cron `direct`-bypass feature (the `[[schedules]] direct = true` opt-in) adds a
+`crates/dispatcher/src/lib_tests.rs` `ploc` (1000 → 1070) waiver: the new `direct: bool` field
+on `DispatchRequest` requires one `direct: false,` line in every inline
+`DispatchRequest { ... }` initializer in this test file. They each carry different catalog /
+zone-write-classes / risk-waivers values, so they cannot use the shared `request()` helper.
+The three new tests live in a sibling module (`direct_tests.rs`) to keep cyclomatic / functions
+baseline clean; the ploc delta is purely mechanical field plumbing. The hard ceiling and review
+date are recorded; any further growth in this file must be split, not waived.
+
 After an accepted improvement, run `just module-health-ratchet` and commit the
 lower baseline. The command does not save worse values. Linux `just ci` also
 ratchets this file; other hosts compare only. GitHub runs only the read-only

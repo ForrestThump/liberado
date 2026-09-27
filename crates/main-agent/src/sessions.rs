@@ -1493,6 +1493,7 @@ impl ChatSessions {
             reaction_depth: 0, // user-initiated, not a background reaction
             zone_write_classes: self.zone_write_classes.clone(),
             risk_waivers: self.risk_waivers.clone(),
+            direct: false,
         };
         let decision = match dispatcher.dispatch(&req).await {
             Ok(decision) => decision,

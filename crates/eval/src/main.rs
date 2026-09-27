@@ -74,6 +74,7 @@ fn build_request(s: &liberado_eval::Scenario) -> DispatchRequest {
         reaction_depth: 0,
         zone_write_classes: Vec::new(),
         risk_waivers: RiskWaiverSet::empty(),
+        direct: false,
     }
 }
 

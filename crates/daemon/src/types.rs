@@ -115,6 +115,17 @@ impl DispatcherContext {
                 .clone()
                 .unwrap_or_else(|| "An event fired with no goal text configured.".to_string()),
         };
+        // The cron crate rides `direct` on `payload.data` so a schedule can opt out of the
+        // router (classifier) and execute its goal verbatim. Read with the same absent-means-
+        // absent pattern used for the other cron-carried fields; only the literal `true` value
+        // turns the bypass on.
+        let direct = event
+            .payload
+            .data
+            .as_object()
+            .and_then(|m| m.get("direct"))
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
         DispatchRequest {
             goal,
             // M1b: routing catalog excludes peers marked degraded after connect/transport failure.
@@ -123,6 +134,7 @@ impl DispatcherContext {
             reaction_depth: self.reaction_depth,
             zone_write_classes: self.zone_write_classes.clone(),
             risk_waivers: self.risk_waivers.clone(),
+            direct,
         }
     }
 }
@@ -237,6 +249,77 @@ pub struct Daemon {
 }
 
 #[cfg(test)]
+mod dispatch_request_tests {
+    //! `DispatcherContext::dispatch_request` reads cron-carried flags off `event.payload.data`.
+    //! These pins cover the `direct` flag plumbing — the cron crate sets it on the event,
+    //! this function copies it onto `DispatchRequest`, and the dispatcher uses it to bypass
+    //! the router model. A break in any of the three steps surfaces here.
+    use super::*;
+    use liberado_common::{CapabilityCatalog, Event, EventPayload, RiskWaiverSet};
+    use liberado_provider::MockProvider;
+    use std::sync::Arc;
+
+    fn ctx() -> DispatcherContext {
+        let dispatcher = Dispatcher::new(
+            Arc::new(MockProvider::with_script("mock", Vec::new())),
+            liberado_config_loader::DispatchTuning::default(),
+            4,
+        );
+        DispatcherContext {
+            dispatcher,
+            catalog: Arc::new(CapabilityCatalog::new()),
+            capabilities: liberado_common::CapabilitySet::empty(),
+            reaction_depth: 1,
+            zone_write_classes: Vec::new(),
+            risk_waivers: RiskWaiverSet::empty(),
+        }
+    }
+
+    fn event(data: serde_json::Value) -> Event {
+        Event::trigger(
+            "CronFired",
+            "cron:test",
+            "cron:test:1",
+            EventPayload {
+                summary: Some("file captures".into()),
+                data,
+                ..Default::default()
+            },
+        )
+    }
+
+    #[test]
+    fn direct_true_on_the_event_lands_on_the_dispatch_request() {
+        let req = ctx().dispatch_request(&event(serde_json::json!({"direct": true})));
+        assert!(
+            req.direct,
+            "cron `direct = true` must reach DispatchRequest"
+        );
+    }
+
+    #[test]
+    fn direct_false_on_the_event_lands_on_the_dispatch_request() {
+        let req = ctx().dispatch_request(&event(serde_json::json!({"direct": false})));
+        assert!(!req.direct, "explicit `false` must propagate");
+    }
+
+    #[test]
+    fn absent_direct_defaults_to_false_and_does_not_panic_on_other_shapes() {
+        let req = ctx().dispatch_request(&event(serde_json::json!({})));
+        assert!(!req.direct, "absent key defaults to false");
+        // Non-object data (a cron event with no extra fields) — parser must not panic.
+        let req = ctx().dispatch_request(&event(serde_json::Value::Null));
+        assert!(!req.direct, "null data defaults to false");
+        // Wrong-typed value — as_bool returns None, unwrap_or falls back to false.
+        let req = ctx().dispatch_request(&event(serde_json::json!({"direct": "true"})));
+        assert!(
+            !req.direct,
+            "string `true` (the classic config typo) is rejected and defaults to false"
+        );
+    }
+}
+
+#[cfg(test)]
 mod label_tests {
     //! Pin the per-variant labels in [`ReactionOutcome::label`].
     //!
@@ -248,7 +331,6 @@ mod label_tests {
         BlockReason, DispatchAction, DispatchDecision, Outcome, ProposalSigner, Report,
     };
     use liberado_orchestrator::Disposition;
-
     fn sample_report() -> Report {
         Report {
             outcome: Outcome::Succeeded,

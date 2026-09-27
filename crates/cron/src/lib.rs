@@ -53,6 +53,14 @@ pub struct Schedule {
     /// When set, the daemon runs this firing as a mechanical job and does not start a model
     /// session. The cron crate only carries the fields; it does not execute them.
     pub job: Option<MechanicalJob>,
+    /// When `true`, dispatch this schedule's `goal` directly without consulting the router
+    /// (classifier) model. The router exists to disambiguate human chat into
+    /// Execute / Clarify / Skip and adds nothing for a fully-specified cron goal. A
+    /// router parse failure degrades to `Clarify`, which fails closed for an unattended
+    /// cron (no `AskHuman`) and silently does nothing. Pair with `profile` to scope
+    /// the grant (the hat runs the goal; the router never picks the hat). Default
+    /// `false` — today's behaviour.
+    pub direct: Option<bool>,
 }
 
 /// Data for a schedule that must not call a model. The daemon interprets `kind`.
@@ -94,6 +102,7 @@ struct ParsedSchedule {
     deliver: Option<bool>,
     max_turns: Option<u32>,
     job: Option<MechanicalJob>,
+    direct: Option<bool>,
     parsed: cron::Schedule,
 }
 
@@ -131,6 +140,7 @@ impl CronEventSource {
                 deliver: s.deliver,
                 max_turns: s.max_turns,
                 job: s.job,
+                direct: s.direct,
                 parsed: expr,
             });
         }
@@ -256,6 +266,9 @@ fn build_event(schedule: &ParsedSchedule, fire_at: DateTime<Utc>) -> Event {
                 if let Some(job) = &schedule.job {
                     insert_job(&mut map, job);
                 }
+                if let Some(d) = schedule.direct {
+                    map.insert("direct".into(), serde_json::Value::Bool(d));
+                }
                 if map.is_empty() {
                     serde_json::Value::Null
                 } else {
@@ -285,6 +298,7 @@ mod tests {
             deliver: None,
             max_turns: None,
             job: None,
+            direct: None,
         }
     }
 
@@ -367,6 +381,33 @@ mod tests {
             event.payload.data.get("deliver").and_then(|v| v.as_bool()),
             Some(false)
         );
+    }
+
+    /// `direct = true` rides on the event payload so the daemon can read it back and pass it
+    /// through to `DispatchRequest::direct`. The router-bypass flag is opt-in: omitted keeps
+    /// today's behaviour (route through the classifier model).
+    #[test]
+    fn direct_true_is_carried_on_the_event() {
+        let mut s = schedule("inbox-filing", "0 0 * * * * *", "file captures");
+        s.direct = Some(true);
+        let parsed = CronEventSource::new(vec![s]).unwrap().schedules;
+        let event = build_event(&parsed[0], Utc::now());
+        assert_eq!(
+            event.payload.data.get("direct").and_then(|v| v.as_bool()),
+            Some(true)
+        );
+    }
+
+    /// Absent `direct` puts nothing on the event — the orchestrator's `as_bool().unwrap_or(false)`
+    /// reads `false` either way, but a missing key is the documented shape (matches `deliver` /
+    /// `max_turns` / `profile` above).
+    #[test]
+    fn absent_direct_puts_nothing_on_the_event() {
+        let parsed = CronEventSource::new(vec![schedule("plain", "0 0 * * * * *", "tidy")])
+            .unwrap()
+            .schedules;
+        let event = build_event(&parsed[0], Utc::now());
+        assert!(event.payload.data.get("direct").is_none());
     }
 
     /// Omitting it must stay indistinguishable from before the flag existed.

@@ -22,6 +22,7 @@ fn req(capabilities: CapabilitySet, reaction_depth: u32) -> DispatchRequest {
         reaction_depth,
         zone_write_classes: Vec::new(),
         risk_waivers: RiskWaiverSet::empty(),
+        direct: false,
     }
 }
 
@@ -192,6 +193,7 @@ fn external_action_is_gated_by_consequence() {
         reaction_depth: 0,
         zone_write_classes: Vec::new(),
         risk_waivers: RiskWaiverSet::empty(),
+        direct: false,
     };
     let d = execute_direct("email:send", 0.95);
     assert_eq!(
@@ -220,6 +222,7 @@ fn reversible_git_tracked_write_is_not_gated() {
         reaction_depth: 0,
         zone_write_classes: Vec::new(),
         risk_waivers: RiskWaiverSet::empty(),
+        direct: false,
     };
     let d = execute_direct("vault:write", 0.95);
     assert_eq!(evaluate(&d, &request, &DispatchTuning::default(), 4), None);
@@ -245,6 +248,7 @@ fn sweeping_destructive_goal_is_gated_by_magnitude() {
         reaction_depth: 0,
         zone_write_classes: Vec::new(),
         risk_waivers: RiskWaiverSet::empty(),
+        direct: false,
     };
     let d = execute_direct("vault:delete", 0.95);
     assert_eq!(
@@ -420,6 +424,7 @@ fn vault_request(zone_write_classes: Vec<(&str, liberado_common::WriteClass)>) -
             .map(|(z, wc)| (z.to_string(), wc))
             .collect(),
         risk_waivers: RiskWaiverSet::empty(),
+        direct: false,
     }
 }
 

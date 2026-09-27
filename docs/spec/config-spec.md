@@ -228,3 +228,33 @@ requires `goal`, and that goal runs only when the capture file has text.
 `run_on_start = false`. Reminders use `LIBERADO_REMINDER_BOT_TOKEN` and
 `LIBERADO_REMINDER_CHAT_ID`. They are not appended to the sticky chat. See ADR-0020.
 
+## 9a. Direct cron dispatch (`direct = true`)
+
+A `[[schedules]]` entry may set `direct = true` to skip the router (classifier) model and
+execute the schedule's `goal` verbatim under the configured grant. Default `false` (today's
+behaviour — every schedule routes through the dispatcher).
+
+Why a cron would opt in: the router's job is to disambiguate human chat into Execute /
+Clarify / Skip. For an unattended cron with a fully-specified `goal` the router adds nothing,
+and a router parse failure (the `UnusableOutput` branch — `liberado-dispatcher`'s `classify`
+fallback) degrades to `Clarify`, which fails closed for an unattended trigger that lacks
+`AskHuman`. The session finishes as `Failed` with no work done and no recoverable signal.
+`direct = true` removes that whole failure mode for the schedules that can describe themselves.
+
+Behaviour:
+
+- The dispatcher synthesizes `ExecuteDirect { seed_calls: [], relevant_mcps: [], confidence:
+  1.0 }`. No router / procedural-memory short-circuit / classifier call happens for this
+  schedule's firings — the assertion `direct_dispatch_bypasses_the_router_and_synthesizes_execute_direct`
+  in `crates/dispatcher/src/lib_tests.rs` proves no provider call landed on the mock.
+- The post-classification pipeline still runs: `enforce_narrow_direct_tools`,
+  `sanitize_decision_mcps`, the guard pipeline (capability / consequence / zone / depth / confidence).
+  Pair `direct = true` with `[[risk_waivers]]` (in `policy.toml`) when the goal text would trip
+  the magnitude heuristic.
+- The grant is whatever `profile` (the schedule's hat) resolves to. Pair `direct = true` with
+  a narrow `profile` so the executor only sees the tools it needs.
+
+The flag is plumbed through the cron crate onto `Event.payload.data["direct"]` and read
+back in `crates/daemon/src/types.rs::DispatcherContext::dispatch_request` before the
+dispatcher sees the request.
+

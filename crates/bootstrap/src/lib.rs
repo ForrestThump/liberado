@@ -397,6 +397,7 @@ pub fn cron_source_from_config(
                 git_user_email: s.git_user_email.clone(),
                 run_on_start: s.run_on_start,
             }),
+            direct: s.direct,
         })
         .collect();
     if schedules.is_empty() {
@@ -1107,6 +1108,7 @@ mod tests {
             git_user_name: None,
             git_user_email: None,
             run_on_start: None,
+            direct: None,
         }
     }
 

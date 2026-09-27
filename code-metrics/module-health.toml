@@ -218,3 +218,10 @@ metric = "functions"
 ceiling = 90
 reason = "Same as the cyclomatic waiver on this file: the new function is `TelegramNotifier::from_reminder_env`. Its single test assertion is added inline to the existing `from_env` test rather than a new `#[test] fn`, so the function-count delta is exactly +1."
 reviewed_on = "2026-09-25"
+
+[[waiver]]
+path = "crates/dispatcher/src/lib_tests.rs"
+metric = "ploc"
+ceiling = 1070
+reason = "feat(cron): the new `direct: bool` field on `DispatchRequest` requires one `direct: false,` line in every inline `DispatchRequest { ... }` initializer in this test file — they each carry different catalog / zone-write-classes / risk-waivers values, so they cannot use the shared `request()` helper. The three new tests live in a sibling module (direct_tests.rs) to keep cyclomatic / functions baseline clean; the ploc delta is purely mechanical field plumbing."
+reviewed_on = "2026-09-26"
