@@ -122,7 +122,12 @@ fn a_schedules_direct_flag_reaches_the_goal_spec() {
     };
 
     assert!(
-        reaction_goal(&with(serde_json::json!({"direct": true})), "do it", "default").direct,
+        reaction_goal(
+            &with(serde_json::json!({"direct": true})),
+            "do it",
+            "default"
+        )
+        .direct,
         "`direct: true` must carry onto `GoalSpec.direct` so the dispatch pack can bypass the router"
     );
 

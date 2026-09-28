@@ -843,7 +843,10 @@ async fn run_rejects_unknown_pool_with_a_named_error() {
 async fn hub_path_with_direct_true_skips_the_router() {
     // Dispatcher provider: empty script. Any call → MockExhausted. Bypass means no call lands.
     let dispatcher = Dispatcher::new(
-        Arc::new(MockProvider::with_script("dispatch", Vec::<CompletionResponse>::new())),
+        Arc::new(MockProvider::with_script(
+            "dispatch",
+            Vec::<CompletionResponse>::new(),
+        )),
         DispatchTuning::default(),
         4,
     );
@@ -922,9 +925,7 @@ async fn hub_path_with_direct_true_skips_the_router() {
         .events
         .iter()
         .find_map(|e| match &e.kind {
-            SessionEventKind::Progress { message }
-                if message.contains("dispatched:") =>
-            {
+            SessionEventKind::Progress { message } if message.contains("dispatched:") => {
                 Some(message.clone())
             }
             _ => None,

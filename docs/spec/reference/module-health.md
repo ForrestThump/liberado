@@ -112,8 +112,13 @@ on `DispatchRequest` requires one `direct: false,` line in every inline
 `DispatchRequest { ... }` initializer in this test file. They each carry different catalog /
 zone-write-classes / risk-waivers values, so they cannot use the shared `request()` helper.
 The three new tests live in a sibling module (`direct_tests.rs`) to keep cyclomatic / functions
-baseline clean; the ploc delta is purely mechanical field plumbing. The hard ceiling and review
-date are recorded; any further growth in this file must be split, not waived.
+baseline clean; the ploc delta is purely mechanical field plumbing. The same field on
+`GoalSpec` drives three more narrow `ploc` waivers for mechanical `direct: false,` plumbing:
+`crates/coder-agent/src/session_pack/tests.rs` (1325 → 1326, shared `goal()` helper),
+`crates/server/src/t1_conformance.rs` (1346 → 1347, one inline initializer), and
+`crates/session/src/life_demo.rs` (1124 → 1142, eighteen inline `GoalSpec` sites that each
+carry different grant / status / payload values). Hard ceilings and review dates are recorded;
+any further growth in these files must be split, not waived.
 
 After an accepted improvement, run `just module-health-ratchet` and commit the
 lower baseline. The command does not save worse values. Linux `just ci` also
