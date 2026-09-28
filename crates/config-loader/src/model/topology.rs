@@ -1109,13 +1109,15 @@ pub struct CronSchedule {
     pub max_turns: Option<u32>,
     /// Mechanical job kind. When set, the daemon runs the job and does not start a model
     /// session, except `inbox-if-present`, which dispatches `goal` only when the capture
-    /// file has text. Known kinds: `git-snapshot`, `task-ping`, `habit-ping`, `inbox-if-present`.
+    /// file has text. Known kinds: `git-snapshot`, `task-ping`, `event-ping`, `habit-ping`,
+    /// `inbox-if-present`.
     #[serde(default)]
     pub job: Option<String>,
     /// Text a `habit-ping` sends. Required for that kind.
     #[serde(default)]
     pub habit_text: Option<String>,
-    /// How many open tasks a `task-ping` lists. Default 10.
+    /// How many open tasks a `task-ping` lists. Default 10. `event-ping` lists at most 10
+    /// events and does not read this field.
     #[serde(default)]
     pub task_limit: Option<u32>,
     /// Vault-relative capture file for `inbox-if-present`. Default `Inbox/Capture.md`.

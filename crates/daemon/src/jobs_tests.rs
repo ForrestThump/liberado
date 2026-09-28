@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use liberado_common::{Event, EventPayload};
 use liberado_notify::{Notifier, NotifyError};
 
-use super::{JobEffect, JobOptions, JobRequest, capture_is_empty, execute};
+use super::{JobEffect, JobOptions, JobRequest, capture_is_empty, execute_on};
 use crate::types::{Daemon, ReactionOutcome};
 
 struct RecordingNotifier {
@@ -31,6 +31,11 @@ fn init_repo(dir: &std::path::Path) {
 
 fn job(kind: &str) -> JobRequest {
     JobRequest::from_options("job", kind, JobOptions::default())
+}
+
+fn execute(dir: &std::path::Path, request: &JobRequest) -> JobEffect {
+    let zone = liberado_common::UserTimezone::default_zone();
+    execute_on(dir, request, zone.now().date_naive(), zone.iana_name())
 }
 
 #[test]
@@ -178,6 +183,79 @@ fn an_empty_capture_is_quiet_and_text_continues() {
         execute(dir.path(), &job("inbox-if-present")),
         JobEffect::Continue
     );
+}
+
+#[tokio::test]
+async fn an_event_ping_uses_the_reminder_channel_and_not_the_sticky_notifier() {
+    let dir = tempfile::tempdir().unwrap();
+    let calendar = dir.path().join("calendar");
+    std::fs::create_dir_all(&calendar).unwrap();
+    let today = liberado_common::UserTimezone::parse("America/Chicago")
+        .expect("zone")
+        .now()
+        .date_naive();
+    std::fs::write(
+        calendar.join("dentist.md"),
+        format!(
+            "---\ntitle: Dentist\ndate: {today}\nallDay: false\nstartTime: 09:00\nendTime: 10:00\n---\n"
+        ),
+    )
+    .unwrap();
+    let sticky = Arc::new(Mutex::new(Vec::new()));
+    let reminder = Arc::new(Mutex::new(Vec::new()));
+    let daemon = Daemon::open("vault", dir.path())
+        .await
+        .unwrap()
+        .with_user_timezone(liberado_common::UserTimezone::parse("America/Chicago").expect("zone"))
+        .with_notifier(Arc::new(RecordingNotifier {
+            sent: sticky.clone(),
+        }))
+        .with_reminder_notifier(Arc::new(RecordingNotifier {
+            sent: reminder.clone(),
+        }));
+    let event = Event::trigger(
+        "CronFired",
+        "cron:morning-events",
+        "cron:morning-events:t",
+        EventPayload {
+            data: serde_json::json!({"job": "event-ping", "deliver": false}),
+            ..EventPayload::default()
+        },
+    );
+    assert!(matches!(
+        daemon.handle_mechanical(&event),
+        Some(ReactionOutcome::Observed)
+    ));
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    let reminder = reminder.lock().unwrap().clone();
+    assert!(
+        reminder.iter().any(|text| text.contains("Dentist")),
+        "{reminder:?}"
+    );
+    assert!(
+        reminder.iter().any(|text| text.contains("America/Chicago")),
+        "{reminder:?}"
+    );
+    assert!(sticky.lock().unwrap().is_empty());
+}
+
+#[test]
+fn event_ping_message_names_the_zone_for_a_fixed_day() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("calendar")).unwrap();
+    std::fs::write(
+        dir.path().join("calendar/dentist.md"),
+        "---\ntitle: Dentist\ndate: 2026-09-28\nstartTime: 09:00\nendTime: 10:00\n---\n",
+    )
+    .unwrap();
+    let today = chrono::NaiveDate::from_ymd_opt(2026, 9, 28).expect("date");
+    let message = match execute_on(dir.path(), &job("event-ping"), today, "America/Chicago") {
+        JobEffect::Remind(text) => text,
+        other => panic!("expected a reminder, got {other:?}"),
+    };
+    assert!(message.contains("Dentist"), "{message}");
+    assert!(message.contains("America/Chicago"), "{message}");
+    assert!(!message.contains("No events"), "{message}");
 }
 
 #[test]

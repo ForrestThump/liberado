@@ -21,6 +21,7 @@ mod jobs;
 mod proposals;
 mod react;
 mod types;
+mod vault_pings;
 mod vault_source;
 
 pub use jobs::{JobOptions, JobRequest};

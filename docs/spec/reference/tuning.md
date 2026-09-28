@@ -197,6 +197,59 @@ string stamped onto the goal. Re-check the offset when DST flips.
 To test a schedule without waiting: set `cron_expr` a few minutes out, `up -d --force-recreate`,
 watch, then restore. Verify the restore.
 
+### Mechanical reminders — vault notes, not the sticky chat
+
+`task-ping`, `event-ping`, and `habit-ping` do not call a model. They send through
+`LIBERADO_REMINDER_BOT_TOKEN` and `LIBERADO_REMINDER_CHAT_ID`. That is a second bot. The sticky
+chat uses `LIBERADO_TELEGRAM_*`. Set `deliver = false` so the schedule does not also push a
+session summary into the sticky chat.
+
+The vault is the list. Add a task by writing an Obsidian Tasks line in a note:
+
+```markdown
+- [ ] Call the clinic 📅 2026-09-28
+- [ ] Pay the bill ⏳ 2026-09-28 🔁 every month
+- [x] Already done 📅 2026-09-01
+- [-] Cancelled 📅 2026-09-01
+```
+
+Add an event as a Full Calendar note, or as a titled note under `calendar/`:
+
+```markdown
+---
+title: Dentist
+date: 2026-09-28
+allDay: false
+startTime: 09:00
+endTime: 10:00
+---
+```
+
+```markdown
+---
+title: Standup
+type: recurring
+daysOfWeek: [M, T, W, R, F]
+startTime: 09:00
+endTime: 09:15
+startRecur: 2026-09-01
+---
+```
+
+`cron_expr` is UTC. The dates above are compared to `topology.timezone` (default
+`America/Chicago`). Example: 06:50 CDT is 11:50 UTC, which is `0 50 11 * * * *`. When the
+clock is CST (UTC-6), that same wall time is 12:50 UTC. Re-check the offset when DST flips.
+
+Folders the walker skips: `.git`, `.obsidian`, `.trash`, `00 - Meta`, `Legal`, `proposals`.
+A journal note that only has `date:` is not an event.
+
+To dogfood on a daemon that already has the reminder bot: put the notes in the vault, add
+the schedules to the host `topology.toml` (the copy in `deploy/homelab/config/` is the
+review mirror), then `docker compose up -d --force-recreate`. Open the reminder bot once
+with `/start` if Telegram says the chat was not found. Edit the markdown to change what
+the next ping says. An agent does the same edit through TurboVault. There is no separate
+notification database.
+
 ### Turn budgets — `topology.toml`
 
 ```toml

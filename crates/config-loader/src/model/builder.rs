@@ -474,6 +474,17 @@ max_turns = 44
     }
 
     #[test]
+    fn event_ping_passes_with_no_extra_fields() {
+        let mut cfg = Config::default();
+        cfg.topology.vault_path = PathBuf::from("/home/shiloh/vault");
+        let mut schedule = cron_schedule("events", "0 50 11 * * * *");
+        schedule.job = Some("event-ping".into());
+        schedule.goal.clear();
+        cfg.topology.schedules = vec![schedule];
+        assert!(cfg.validate().is_ok());
+    }
+
+    #[test]
     fn task_ping_passes_with_no_extra_fields() {
         let mut cfg = Config::default();
         cfg.topology.vault_path = PathBuf::from("/home/shiloh/vault");
