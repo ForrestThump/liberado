@@ -1,25 +1,11 @@
-//! Vault notes that mechanical reminders read. No model, no second task store.
-//!
-//! Tasks are Obsidian Tasks lines in any note the walker is allowed to open.
-//! Events are [Full Calendar](https://github.com/obsidian-community/obsidian-full-calendar)
-//! frontmatter, plus a titled note under a `calendar/` folder (the vault layout in
-//! `docs/spec/liberado-architecture.md`). Dates are calendar dates in the operator zone.
-//! `cron_expr` stays UTC.
-
+use std::cmp::Ordering;
 use std::collections::BTreeMap;
-use std::fs;
 use std::path::{Path, PathBuf};
 
 use chrono::{Datelike, NaiveDate};
 
-const SKIP_DIRS: &[&str] = &[
-    ".git",
-    ".obsidian",
-    ".trash",
-    "00 - Meta",
-    "Legal",
-    "proposals",
-];
+use super::date::parse_ymd;
+use super::walk::markdown_notes;
 
 /// How far past today an event still appears. The window is inclusive.
 pub(crate) const EVENT_HORIZON_DAYS: i64 = 7;
@@ -28,228 +14,40 @@ const EVENT_LIMIT: usize = 10;
 const WEEKDAY_LETTERS: [char; 7] = ['M', 'T', 'W', 'R', 'F', 'S', 'U'];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct OpenTask {
-    priority: u8,
-    due: Option<NaiveDate>,
-    scheduled: Option<NaiveDate>,
-    start: Option<NaiveDate>,
-    recurrence: Option<String>,
-    in_progress: bool,
-    text: String,
-    path: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct VaultEvent {
-    title: String,
-    start: NaiveDate,
-    end: NaiveDate,
-    start_time: Option<String>,
-    end_time: Option<String>,
-    all_day: bool,
-    path: String,
-}
-
-pub(crate) fn task_ping_message(root: &Path, limit: u32, today: NaiveDate) -> String {
-    let mut tasks = Vec::new();
-    walk_notes(root, &mut |path, text| {
-        let rel = rel_path(root, path);
-        collect_tasks(&rel, text, today, &mut tasks);
-    });
-    sort_tasks(&mut tasks);
-    render_tasks(&tasks, limit, today)
+    pub(crate) title: String,
+    pub(crate) start: NaiveDate,
+    pub(crate) end: NaiveDate,
+    pub(crate) start_time: Option<String>,
+    pub(crate) end_time: Option<String>,
+    pub(crate) all_day: bool,
+    pub(crate) path: String,
 }
 
 pub(crate) fn event_ping_message(root: &Path, today: NaiveDate, zone: &str) -> String {
     let mut events = Vec::new();
-    walk_notes(root, &mut |path, text| {
-        let rel = rel_path(root, path);
-        events.extend(events_in_note(&rel, text, today));
-    });
-    events.sort_by(|a, b| {
-        a.start
-            .cmp(&b.start)
-            .then_with(|| a.start_time.cmp(&b.start_time))
-            .then_with(|| a.title.cmp(&b.title))
-            .then_with(|| a.path.cmp(&b.path))
-    });
+    for (rel, text) in markdown_notes(root) {
+        events.extend(events_in_note(&rel, &text, today));
+    }
+    events.sort_by(event_rank);
     events.truncate(EVENT_LIMIT);
     render_events(&events, today, zone)
 }
 
-fn walk_notes(root: &Path, visit: &mut impl FnMut(&Path, &str)) {
-    walk_dir(root, visit);
-}
-
-fn walk_dir(dir: &Path, visit: &mut impl FnMut(&Path, &str)) {
-    let Ok(entries) = fs::read_dir(dir) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        let name = entry.file_name();
-        let name = name.to_string_lossy();
-        if path.is_dir() {
-            if skip_dir(&name) {
-                continue;
-            }
-            walk_dir(&path, visit);
-            continue;
-        }
-        if !name.ends_with(".md") {
-            continue;
-        }
-        if let Ok(text) = fs::read_to_string(&path) {
-            visit(&path, &text);
-        }
+fn event_rank(left: &VaultEvent, right: &VaultEvent) -> Ordering {
+    let start = left.start.cmp(&right.start);
+    if start != Ordering::Equal {
+        return start;
     }
-}
-
-fn skip_dir(name: &str) -> bool {
-    name.starts_with('.') || SKIP_DIRS.contains(&name)
-}
-
-fn rel_path(root: &Path, path: &Path) -> String {
-    path.strip_prefix(root)
-        .unwrap_or(path)
-        .to_string_lossy()
-        .replace('\\', "/")
-}
-
-fn collect_tasks(rel: &str, text: &str, today: NaiveDate, out: &mut Vec<OpenTask>) {
-    for line in text.lines() {
-        let Some(mut task) = parse_task_line(line) else {
-            continue;
-        };
-        if !task_is_listed(&task, today) {
-            continue;
-        }
-        task.path = rel.to_string();
-        out.push(task);
+    let time = left.start_time.cmp(&right.start_time);
+    if time != Ordering::Equal {
+        return time;
     }
-}
-
-pub(crate) fn parse_task_line(line: &str) -> Option<OpenTask> {
-    let rest = line.trim().strip_prefix("- [")?;
-    let (mark, body) = rest.split_once(']')?;
-    let state = match mark {
-        " " => false,
-        "/" => true,
-        _ => return None,
-    };
-    let body = body.trim();
-    if body.is_empty() {
-        return None;
+    let title = left.title.cmp(&right.title);
+    if title != Ordering::Equal {
+        return title;
     }
-    Some(OpenTask {
-        priority: task_priority(body),
-        due: date_after(body, '📅'),
-        scheduled: date_after(body, '⏳'),
-        start: date_after(body, '🛫'),
-        recurrence: recurrence_text(body),
-        in_progress: state,
-        text: body.to_string(),
-        path: String::new(),
-    })
-}
-
-fn task_is_listed(task: &OpenTask, today: NaiveDate) -> bool {
-    !matches!(task.start, Some(start) if start > today)
-}
-
-fn task_priority(line: &str) -> u8 {
-    if line.contains('🔺') {
-        4
-    } else if line.contains('⏫') {
-        3
-    } else if line.contains('🔼') {
-        2
-    } else if line.contains('🔽') {
-        0
-    } else {
-        1
-    }
-}
-
-fn date_after(line: &str, emoji: char) -> Option<NaiveDate> {
-    let rest = line.split(emoji).nth(1)?;
-    let token = rest.split_whitespace().next()?;
-    parse_ymd(token)
-}
-
-fn recurrence_text(line: &str) -> Option<String> {
-    let rest = line.split('🔁').nth(1)?.trim();
-    if rest.is_empty() {
-        return None;
-    }
-    let end = rest.find(['📅', '⏳', '🛫', '✅', '❌', '➕', '⏫', '🔼', '🔽', '🔺']);
-    let text = match end {
-        Some(index) => rest[..index].trim(),
-        None => rest,
-    };
-    if text.is_empty() {
-        None
-    } else {
-        Some(text.to_string())
-    }
-}
-
-fn sort_tasks(tasks: &mut [OpenTask]) {
-    tasks.sort_by(|a, b| {
-        b.priority.cmp(&a.priority).then_with(|| {
-            sort_key(a)
-                .cmp(&sort_key(b))
-                .then_with(|| a.text.cmp(&b.text))
-        })
-    });
-}
-
-fn sort_key(task: &OpenTask) -> (bool, NaiveDate) {
-    match task.due.or(task.scheduled) {
-        Some(date) => (false, date),
-        None => (true, NaiveDate::MIN),
-    }
-}
-
-fn render_tasks(tasks: &[OpenTask], limit: u32, today: NaiveDate) -> String {
-    if tasks.is_empty() {
-        return "No open tasks.".to_string();
-    }
-    let mut lines = vec!["Open tasks".to_string(), String::new()];
-    for (index, task) in tasks.iter().take(limit as usize).enumerate() {
-        lines.push(format_task_line(index + 1, task, today));
-    }
-    lines.push(String::new());
-    lines.push("Reply in Liberado when you want one done.".to_string());
-    lines.join("\n")
-}
-
-fn format_task_line(index: usize, task: &OpenTask, today: NaiveDate) -> String {
-    let mut parts = vec![format!("{index}. {}", task.text)];
-    if let Some(due) = task.due {
-        parts.push(due_label(due, today));
-    }
-    if let Some(scheduled) = task.scheduled {
-        parts.push(format!("scheduled {scheduled}"));
-    }
-    if let Some(rule) = &task.recurrence {
-        parts.push(format!("repeats {rule}"));
-    }
-    if task.in_progress {
-        parts.push("in progress".to_string());
-    }
-    parts.push(task.path.clone());
-    parts.join(" — ")
-}
-
-fn due_label(due: NaiveDate, today: NaiveDate) -> String {
-    if due < today {
-        format!("due {due} (overdue)")
-    } else if due == today {
-        format!("due {due} (today)")
-    } else {
-        format!("due {due}")
-    }
+    left.path.cmp(&right.path)
 }
 
 fn events_in_note(rel: &str, text: &str, today: NaiveDate) -> Vec<VaultEvent> {
@@ -280,9 +78,12 @@ fn horizon_end(today: NaiveDate) -> NaiveDate {
 }
 
 fn is_recurring(map: &BTreeMap<String, String>) -> bool {
-    map.get("type")
-        .is_some_and(|value| value.eq_ignore_ascii_case("recurring"))
-        || map.contains_key("daysOfWeek")
+    if let Some(value) = map.get("type")
+        && value.eq_ignore_ascii_case("recurring")
+    {
+        return true;
+    }
+    map.contains_key("daysOfWeek")
 }
 
 fn expand_recurring(
@@ -304,9 +105,9 @@ fn expand_recurring(
     let start_time = map.get("startTime").and_then(|value| clock_token(value));
     let end_time = map.get("endTime").and_then(|value| clock_token(value));
     let all_day = all_day_flag(map, start_time.is_some(), end_time.is_some());
-    dates_in_window(today, start_recur, end_recur, &letters)
-        .into_iter()
-        .map(|date| VaultEvent {
+    let mut events = Vec::new();
+    for date in dates_in_window(today, start_recur, end_recur, &letters) {
+        events.push(VaultEvent {
             title: title.clone(),
             start: date,
             end: date,
@@ -314,8 +115,9 @@ fn expand_recurring(
             end_time: end_time.clone(),
             all_day,
             path: rel.to_string(),
-        })
-        .collect()
+        });
+    }
+    events
 }
 
 fn dates_in_window(
@@ -324,10 +126,19 @@ fn dates_in_window(
     end_recur: Option<NaiveDate>,
     letters: &[char],
 ) -> Vec<NaiveDate> {
-    let mut cursor = start_recur.filter(|start| *start > today).unwrap_or(today);
-    let last = end_recur
-        .filter(|end| *end < horizon_end(today))
-        .unwrap_or_else(|| horizon_end(today));
+    let mut cursor = today;
+    if let Some(start) = start_recur
+        && start > today
+    {
+        cursor = start;
+    }
+    let horizon = horizon_end(today);
+    let mut last = horizon;
+    if let Some(end) = end_recur
+        && end < horizon
+    {
+        last = end;
+    }
     let mut out = Vec::new();
     while cursor <= last {
         if letters.contains(&weekday_letter(cursor)) {
@@ -346,12 +157,17 @@ fn weekday_letter(date: NaiveDate) -> char {
 }
 
 fn weekday_letters(value: &str) -> Vec<char> {
-    value
-        .chars()
-        .filter(|letter| letter.is_ascii_alphabetic())
-        .map(|letter| letter.to_ascii_uppercase())
-        .filter(|letter| WEEKDAY_LETTERS.contains(letter))
-        .collect()
+    let mut letters = Vec::new();
+    for letter in value.chars() {
+        if !letter.is_ascii_alphabetic() {
+            continue;
+        }
+        let letter = letter.to_ascii_uppercase();
+        if WEEKDAY_LETTERS.contains(&letter) {
+            letters.push(letter);
+        }
+    }
+    letters
 }
 
 fn single_event(rel: &str, text: &str, map: &BTreeMap<String, String>) -> Option<VaultEvent> {
@@ -386,26 +202,29 @@ fn is_event_shape(map: &BTreeMap<String, String>, rel: &str) -> bool {
     if parse_ymd(date).is_none() {
         return false;
     }
-    if ["allDay", "startTime", "endTime", "endDate"]
-        .iter()
-        .any(|key| map.contains_key(*key))
-    {
-        return true;
+    for key in ["allDay", "startTime", "endTime", "endDate"] {
+        if map.contains_key(key) {
+            return true;
+        }
     }
     in_calendar_folder(rel) && titled(map.get("title").map(String::as_str))
 }
 
 fn in_calendar_folder(rel: &str) -> bool {
-    PathBuf::from(rel)
-        .components()
-        .any(|component| component.as_os_str().eq_ignore_ascii_case("calendar"))
+    for component in PathBuf::from(rel).components() {
+        if component.as_os_str().eq_ignore_ascii_case("calendar") {
+            return true;
+        }
+    }
+    false
 }
 
 fn titled(title: Option<&str>) -> bool {
-    title.is_some_and(|value| {
-        let value = value.trim();
-        !value.is_empty() && !value.eq_ignore_ascii_case("null")
-    })
+    let Some(value) = title else {
+        return false;
+    };
+    let value = value.trim();
+    !value.is_empty() && !value.eq_ignore_ascii_case("null")
 }
 
 fn is_completed(value: Option<&str>) -> bool {
@@ -446,11 +265,13 @@ fn event_title(text: &str, map: &BTreeMap<String, String>, rel: &str) -> String 
     if let Some(title) = heading_title(text) {
         return title;
     }
-    Path::new(rel)
-        .file_stem()
-        .map(|stem| stem.to_string_lossy().into_owned())
-        .filter(|stem| !stem.is_empty())
-        .unwrap_or_else(|| rel.to_string())
+    if let Some(stem) = Path::new(rel).file_stem() {
+        let stem = stem.to_string_lossy();
+        if !stem.is_empty() {
+            return stem.into_owned();
+        }
+    }
+    rel.to_string()
 }
 
 fn heading_title(text: &str) -> Option<String> {
@@ -494,18 +315,6 @@ fn unquote(value: &str) -> String {
         return value[1..value.len() - 1].to_string();
     }
     value.to_string()
-}
-
-fn parse_ymd(value: &str) -> Option<NaiveDate> {
-    let value = value.trim();
-    let date = value.get(..10)?;
-    if value.len() > 10 {
-        let boundary = value.as_bytes().get(10).copied()?;
-        if boundary != b'T' && boundary != b' ' {
-            return None;
-        }
-    }
-    NaiveDate::parse_from_str(date, "%Y-%m-%d").ok()
 }
 
 fn clock_token(value: &str) -> Option<String> {
@@ -569,7 +378,3 @@ fn clock_label(event: &VaultEvent) -> String {
         (None, None) => String::new(),
     }
 }
-
-#[cfg(test)]
-#[path = "vault_pings_tests.rs"]
-mod vault_pings_tests;
