@@ -123,6 +123,14 @@ pub struct GoalSpec {
     /// against config into a [`SessionGrant`], keeping the kernel free of the config stack.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub profile: Option<String>,
+    /// Router bypass: `true` skips the classifier and synthesizes `ExecuteDirect`. The cron
+    /// daemon sets this from `data["direct"]`; the dispatcher pack reads it back off `GoalSpec`
+    /// so the hub-attached production path can carry the flag end-to-end (the daemon's own
+    /// `dispatch_request` only sees the unattached call shape). Default `false` — every session
+    /// routes through the dispatcher, like today. Wire-side optional so older JSON clients
+    /// that omit the field keep working.
+    #[serde(default)]
+    pub direct: bool,
     /// Opaque pack payload (workspace root, vault path, contract JSON, …).
     #[serde(default)]
     pub payload: serde_json::Value,
@@ -426,6 +434,7 @@ mod tests {
                 correlation_id: Some("corr-1".into()),
             }),
             profile: None,
+            direct: false,
             payload: serde_json::json!({}),
         };
         let json = serde_json::to_value(&with).unwrap();
@@ -516,6 +525,7 @@ mod tests {
                 max_idle_secs: None,
                 origin: None,
                 profile: None,
+                direct: false,
                 payload: serde_json::json!({}),
             },
             SessionGrant::default(),

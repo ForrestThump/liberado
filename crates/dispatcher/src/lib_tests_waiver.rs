@@ -19,6 +19,7 @@ async fn high_consequence_without_seed_calls_proposes_the_exact_adaptive_goal() 
         reaction_depth: 0,
         zone_write_classes: Vec::new(),
         risk_waivers: RiskWaiverSet::empty(),
+        direct: false,
     };
     let decision = DispatchDecision {
         action: DispatchAction::ExecuteDirect {

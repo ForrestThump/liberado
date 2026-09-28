@@ -68,6 +68,7 @@ fn request(capabilities: CapabilitySet, reaction_depth: u32) -> DispatchRequest 
         reaction_depth,
         zone_write_classes: Vec::new(),
         risk_waivers: RiskWaiverSet::empty(),
+        direct: false,
     }
 }
 fn execute_direct(tool: &str, confidence: f32) -> DispatchDecision {
@@ -276,6 +277,7 @@ async fn high_consequence_concrete_action_is_downgraded_to_propose() {
         reaction_depth: 0,
         zone_write_classes: Vec::new(),
         risk_waivers: RiskWaiverSet::empty(),
+        direct: false,
     };
     let mock = scripted(&execute_direct("email:send", 0.95));
     let dispatcher = Dispatcher::new(mock, DispatchTuning::default(), 4);
@@ -314,6 +316,7 @@ async fn zone_restricted_concrete_action_is_downgraded_to_propose() {
         reaction_depth: 0,
         zone_write_classes: vec![("reviews".into(), liberado_common::WriteClass::ProposalOnly)],
         risk_waivers: RiskWaiverSet::empty(),
+        direct: false,
     };
     let mock = scripted(&execute_direct("vault:write_review", 0.95));
     let dispatcher = Dispatcher::new(mock, DispatchTuning::default(), 4);
@@ -351,6 +354,7 @@ async fn high_consequence_subagent_is_downgraded_to_propose() {
         reaction_depth: 0,
         zone_write_classes: Vec::new(),
         risk_waivers: RiskWaiverSet::empty(),
+        direct: false,
     };
     let decision = DispatchDecision {
         action: DispatchAction::DispatchSubagent {
@@ -860,6 +864,7 @@ fn sanitize_empty_relevant_mcps_means_full_grant_not_capability_gap() {
         reaction_depth: 0,
         zone_write_classes: Vec::new(),
         risk_waivers: RiskWaiverSet::empty(),
+        direct: false,
     };
     assert!(guards::evaluate(&d, &req, &DispatchTuning::default(), 4).is_none());
 }

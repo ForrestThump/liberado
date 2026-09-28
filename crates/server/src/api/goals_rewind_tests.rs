@@ -236,6 +236,7 @@ async fn start_coding_session(goals: &Arc<GoalSessionHub>, payload: serde_json::
             max_idle_secs: None,
             origin: None,
             profile: None,
+            direct: false,
             payload,
         })
         .await
@@ -266,6 +267,7 @@ async fn rewind_of_a_non_coding_session_is_400() {
             max_idle_secs: None,
             origin: None,
             profile: None,
+            direct: false,
             payload: serde_json::json!({}),
         })
         .await

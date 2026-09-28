@@ -94,6 +94,73 @@ fn a_schedules_max_turns_reaches_the_goal_spec() {
     );
 }
 
+/// `direct = true` rides on the event payload and must reach `GoalSpec.direct` so the
+/// hub-attached dispatch pack can pass it through. Absent / wrong-typed values fall back to
+/// `false` — the same conservative reading the other payload riders use, so a legacy event
+/// that pre-dates the flag behaves like every other event.
+///
+/// If this regresses, `direct` silently reverts to `false` in the dispatcher: the daemon's
+/// only seam is here, and the pack reads the field straight from the `GoalSpec` (it never sees
+/// the event payload). This is the test that lets the hub-path integration test in
+/// `liberado-dispatch-pack` mean what it claims: the goal the hub produces is the goal the
+/// dispatcher sees.
+#[test]
+fn a_schedules_direct_flag_reaches_the_goal_spec() {
+    use crate::helpers::reaction_goal;
+    use liberado_common::{Event, EventPayload};
+
+    let with = |data: serde_json::Value| {
+        Event::trigger(
+            "CronFired",
+            "cron:bypass",
+            "c1",
+            EventPayload {
+                data,
+                ..Default::default()
+            },
+        )
+    };
+
+    assert!(
+        reaction_goal(
+            &with(serde_json::json!({"direct": true})),
+            "do it",
+            "default"
+        )
+        .direct,
+        "`direct: true` must carry onto `GoalSpec.direct` so the dispatch pack can bypass the router"
+    );
+
+    // Anything else — absent, `null`, a non-bool — defaults to `false` so legacy events keep
+    // routing through the dispatcher unchanged.
+    for payload in [
+        serde_json::json!({}),
+        serde_json::Value::Null,
+        serde_json::json!({"direct": false}),
+        serde_json::json!({"direct": "true"}),
+        serde_json::json!({"direct": 1}),
+    ] {
+        assert!(
+            !reaction_goal(&with(payload.clone()), "do it", "default").direct,
+            "non-true direct values must default to false: {payload}"
+        );
+    }
+
+    // Coexists with profile and max_turns — the other payload riders that share the map.
+    assert!(
+        reaction_goal(
+            &with(serde_json::json!({
+                "profile": "hat",
+                "max_turns": 8,
+                "direct": true,
+            })),
+            "do it",
+            "default"
+        )
+        .direct
+    );
+}
+
 #[test]
 fn cron_delivery_is_suppressed_only_by_an_explicit_false() {
     use crate::helpers::cron_delivery_suppressed;

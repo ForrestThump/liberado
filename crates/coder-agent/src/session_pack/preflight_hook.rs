@@ -323,6 +323,7 @@ mod tests {
             max_idle_secs: None,
             origin: None,
             profile: None,
+            direct: false,
             payload,
         }
     }

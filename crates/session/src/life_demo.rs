@@ -399,6 +399,7 @@ mod tests {
                     max_idle_secs: None,
                     origin: None,
                     profile: None,
+                    direct: false,
                     payload: serde_json::json!({ "interactive": true }),
                 },
                 attended_grant(),
@@ -462,6 +463,7 @@ mod tests {
                     max_idle_secs: Some(0), // expires immediately with no answer
                     origin: None,
                     profile: None,
+                    direct: false,
                     payload: serde_json::json!({ "interactive": true }),
                 },
                 attended_grant(),
@@ -498,6 +500,7 @@ mod tests {
                     max_idle_secs: None,
                     origin: None,
                     profile: None,
+                    direct: false,
                     payload: serde_json::json!({}),
                 },
                 attended_grant(),
@@ -530,6 +533,7 @@ mod tests {
                 max_idle_secs: None,
                 origin: None,
                 profile: None,
+                direct: false,
                 payload: serde_json::json!({ "interactive": true }),
             })
             .await
@@ -564,6 +568,7 @@ mod tests {
                     max_idle_secs: None,
                     origin: None,
                     profile: Some("research".into()),
+                    direct: false,
                     payload: serde_json::json!({ "interactive": true }),
                 },
                 SessionGrant {
@@ -619,6 +624,7 @@ mod tests {
                     max_idle_secs: None,
                     origin: None,
                     profile: None,
+                    direct: false,
                     payload: serde_json::json!({ "interactive": true }),
                 },
                 attended_grant(),
@@ -673,6 +679,7 @@ mod tests {
                 max_idle_secs: None,
                 origin: None,
                 profile: None,
+                direct: false,
                 payload: serde_json::json!({}),
             })
             .await
@@ -711,6 +718,7 @@ mod tests {
                 max_idle_secs: None,
                 origin: None,
                 profile: None,
+                direct: false,
                 payload: serde_json::json!({}),
             })
             .await
@@ -737,6 +745,7 @@ mod tests {
             max_idle_secs: None,
             origin: None,
             profile: None,
+            direct: false,
             payload: serde_json::Value::Null,
         });
         // It may ask (AskHuman), it is awaiting an answer, and the daemon restarted under it.
@@ -784,6 +793,7 @@ mod tests {
             max_idle_secs: None,
             origin: None,
             profile: None,
+            direct: false,
             payload: serde_json::Value::Null,
         });
         rec.status = crate::goal::SessionStatus::Parked;
@@ -902,6 +912,7 @@ mod tests {
             max_idle_secs: None,
             origin: None,
             profile: None,
+            direct: false,
             payload: serde_json::Value::Null,
         });
         no_ask.status = SessionStatus::Parked;
@@ -918,6 +929,7 @@ mod tests {
             max_idle_secs: None,
             origin: None,
             profile: None,
+            direct: false,
             payload: serde_json::Value::Null,
         });
         no_resume.grant = SessionGrant {
@@ -938,6 +950,7 @@ mod tests {
             max_idle_secs: None,
             origin: None,
             profile: None,
+            direct: false,
             payload: serde_json::Value::Null,
         });
         keep.grant = SessionGrant {
@@ -1014,6 +1027,7 @@ mod tests {
             max_idle_secs: None,
             origin: None,
             profile: None,
+            direct: false,
             payload: serde_json::Value::Null,
         });
         rec.status = crate::goal::SessionStatus::Parked;
@@ -1110,6 +1124,7 @@ mod tests {
             max_idle_secs: None,
             origin: None,
             profile: None,
+            direct: false,
             payload: serde_json::Value::Null,
         });
         rec.grant = SessionGrant {
@@ -1213,6 +1228,7 @@ mod tests {
                 max_idle_secs: None,
                 origin: None,
                 profile: None,
+                direct: false,
                 payload: serde_json::Value::Null,
             })
             .await
@@ -1256,6 +1272,7 @@ mod tests {
                 max_idle_secs: None,
                 origin: None,
                 profile: None,
+                direct: false,
                 payload: serde_json::Value::Null,
             })
             .await
@@ -1316,6 +1333,7 @@ mod tests {
                 max_idle_secs: None,
                 origin: None,
                 profile: None,
+                direct: false,
                 payload: serde_json::Value::Null,
             });
             rec.grant = SessionGrant {

@@ -402,6 +402,11 @@ impl DomainPackRunner for DispatchPack {
             reaction_depth: self.reaction_depth,
             zone_write_classes: self.zone_write_classes.clone(),
             risk_waivers: self.risk_waivers.clone(),
+            // Router bypass plumbed through from the cron daemon: a `direct: true` event ends up
+            // on `GoalSpec.direct` and must reach the dispatcher, otherwise the hub-attached
+            // production path silently reverts to the routed behaviour. Default `false`
+            // preserves today's routing for every goal that did not opt in.
+            direct: goal.direct,
         };
 
         // Tag every inference this pack triggers (dispatcher classification + orchestrator loop)

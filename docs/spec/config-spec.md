@@ -228,3 +228,57 @@ requires `goal`, and that goal runs only when the capture file has text.
 `run_on_start = false`. Reminders use `LIBERADO_REMINDER_BOT_TOKEN` and
 `LIBERADO_REMINDER_CHAT_ID`. They are not appended to the sticky chat. See ADR-0020.
 
+## 9a. Direct cron dispatch (`direct = true`)
+
+A `[[schedules]]` entry may set `direct = true` to skip the router (classifier) model and
+execute the schedule's `goal` verbatim under the configured grant. Default `false` (today's
+behaviour — every schedule routes through the dispatcher).
+
+Why a cron would opt in: the router's job is to disambiguate human chat into Execute /
+Clarify / Skip. For an unattended cron with a fully-specified `goal` the router adds nothing,
+and a router parse failure (the `UnusableOutput` branch — `liberado-dispatcher`'s `classify`
+fallback) degrades to `Clarify`, which fails closed for an unattended trigger that lacks
+`AskHuman`. The session finishes as `Failed` with no work done and no recoverable signal.
+`direct = true` removes that whole failure mode for the schedules that can describe themselves.
+
+**Scope of the opt-in is the schedule only.** `HookConfig` does not carry a `direct` field;
+hook firings keep routing through the dispatcher until a future config schema adds one.
+
+Behaviour:
+
+- The dispatcher synthesizes `ExecuteDirect { seed_calls: [], relevant_mcps: [], confidence:
+  1.0 }`. No router / procedural-memory short-circuit / classifier call happens for this
+  schedule's firings — the assertion
+  `direct_dispatch_bypasses_the_router_and_synthesizes_execute_direct` in
+  `crates/dispatcher/src/direct_tests.rs` proves no provider call landed on the mock. The
+  hub-attached production path is the same shape: `a_schedules_direct_flag_reaches_the_goal_spec`
+  in `crates/daemon/src/tests/helpers.rs` pins that the event's flag reaches `GoalSpec.direct`,
+  and `hub_path_with_direct_true_skips_the_router` in `crates/dispatch-pack/src/lib_tests.rs`
+  pins that the pack then forwards it as `DispatchRequest.direct` (any router call would fail
+  on the empty mock).
+- The post-classification pipeline still runs: `enforce_narrow_direct_tools`,
+  `sanitize_decision_mcps`, the guard pipeline (capability / consequence / zone / depth / confidence).
+  `direct = true` does **not** weaken any structural guard. The synthesized `ExecuteDirect`
+  has empty `seed_calls` and empty `relevant_mcps`, so the magnitude / risk-waiver targets the
+  heuristic checks are empty, and a sweeping goal text is the case that triggers the
+  magnitude downgrade (see `direct_dispatch_still_runs_the_magnitude_guard`).
+- `[[risk_waivers]]` cannot rescue an empty-seed direct `ExecuteDirect`: the waiver list keys
+  off concrete tool/mcp calls, not goal text, and there are no calls yet. **Reach for risk
+  waivers when the goal will fan out to tool calls** (e.g. wide vocabulary matches the
+  configured MCPs). For an empty-seed direct run the levers that actually matter are:
+  - **do not write sweeping goal text** — the magnitude heuristic still trips on phrases like
+    "delete everything", "wipe", "reset", "all of my notes";
+  - **set `max_turns`** on the schedule so the executor has a tight envelope even with no
+    seeds;
+  - **use a narrow `profile`** so the grant carries only the MCPs the goal actually needs.
+- The grant is whatever `profile` (the schedule's hat) resolves to. Pair `direct = true` with
+  a narrow `profile` so the executor only sees the tools it needs.
+
+The flag is plumbed through the cron crate onto `Event.payload.data["direct"]` and read
+back in `crates/daemon/src/helpers.rs::reaction_goal` onto the `GoalSpec`. The dispatch pack
+reads `GoalSpec.direct` (`crates/dispatch-pack/src/lib.rs`) and forwards it as
+`DispatchRequest.direct` to the dispatcher. That is the path the cron firing actually
+takes in production: `Daemon::react` → `react_via_hub` → `reaction_goal` → `GoalSpec` →
+dispatch pack → `Dispatcher::route_or_bypass`. The earlier `daemon::dispatch_request` only
+saw the unattached call shape and is **not** the production route.
+

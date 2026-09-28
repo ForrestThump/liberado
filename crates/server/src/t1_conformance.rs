@@ -1091,6 +1091,7 @@ async fn l2_reopen_store_while_awaiting_input_is_parked_with_question() {
                     max_idle_secs: None,
                     origin: None,
                     profile: None,
+                    direct: false,
                     payload: serde_json::json!({ "interactive": true }),
                 },
                 grant,

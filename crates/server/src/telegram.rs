@@ -488,6 +488,7 @@ impl TelegramChatBridge {
             max_idle_secs: resolved.max_idle_secs,
             origin,
             profile,
+            direct: false,
             payload: serde_json::Value::Null,
         };
         if spec.domain.as_str() != resolved_domain.as_str() {

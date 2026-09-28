@@ -1493,6 +1493,7 @@ impl ChatSessions {
             reaction_depth: 0, // user-initiated, not a background reaction
             zone_write_classes: self.zone_write_classes.clone(),
             risk_waivers: self.risk_waivers.clone(),
+            direct: false,
         };
         let decision = match dispatcher.dispatch(&req).await {
             Ok(decision) => decision,
@@ -1528,6 +1529,7 @@ impl ChatSessions {
             max_idle_secs: None,
             origin: Some(SessionOrigin::from_correlation(&correlation_id)),
             profile: None,
+            direct: false,
             payload: serde_json::json!({ "source": "chat-preturn" }),
         };
         let session_id = match hub

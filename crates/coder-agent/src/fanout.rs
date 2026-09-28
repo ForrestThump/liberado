@@ -444,6 +444,7 @@ async fn run_child_goal(
         max_idle_secs: None,
         origin: None,
         profile: None,
+        direct: false,
         payload: json!({
             "workspace_root": wt_path.to_string_lossy(),
             "force_host_local": true,

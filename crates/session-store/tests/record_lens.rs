@@ -55,6 +55,7 @@ fn spec(id: &str, description: &str) -> GoalSpec {
         max_idle_secs: None,
         origin: None,
         profile: None,
+        direct: false,
         payload: serde_json::Value::Null,
     }
 }

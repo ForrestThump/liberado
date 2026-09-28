@@ -397,14 +397,23 @@ writes_vault = false             # writes code workspaces, not the Obsidian vaul
 # `deliver = false` silences the notifier for this schedule. Omitted, results are delivered as
 # before — worth setting for a maintenance schedule that runs often and usually finds nothing.
 #
+# `direct = true` skips the router (classifier) model and executes the schedule's `goal`
+# verbatim with the configured grant. Recommended for any unattended cron whose `goal` is
+# fully self-contained — the router's only job is to disambiguate human chat into Execute /
+# Clarify / Skip, and any router parse failure degrades to `Clarify`, which fails closed for an
+# unattended cron (no `AskHuman`) and silently does nothing. Pair with `profile` so the
+# execution runs under a narrow grant; omit to keep the default pool's grant. Default `false`.
+#
 # [[schedules]]
 # name = "nightly-summary"
 # cron_expr = "0 0 2 * * * *"   # 02:00 UTC ≈ 21:00 America/Chicago (CDT)
 # goal = "Summarize today's decisions and post the summary."
 # enabled = true
 # pool = "unattended"
+# profile = "unattended-summary"
 # max_turns = 20
 # deliver = true
+# direct = true                # skip the router — goal is fully specified
 
 # Periodic memory consolidation — a cheap, general-purpose model reviews recent notes in
 # memory/general and memory/procedural via liberado-memory-mcp's own tools (search_memory /

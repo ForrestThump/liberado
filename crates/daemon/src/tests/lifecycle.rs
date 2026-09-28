@@ -63,6 +63,7 @@ async fn concurrent_park_and_cancel_do_not_deadlock() {
                 max_idle_secs: None,
                 origin: None,
                 profile: None,
+                direct: false,
                 payload: serde_json::json!({}),
             },
             SessionGrant {

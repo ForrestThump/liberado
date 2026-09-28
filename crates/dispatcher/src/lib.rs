@@ -61,6 +61,15 @@ pub struct DispatchRequest {
     /// behaviour). Set this from `Policy::risk_waiver_set` at the bootstrap site so the guard
     /// pipeline and the runtime guard (`RiskGatedToolRuntime`) see the same set.
     pub risk_waivers: liberado_common::RiskWaiverSet,
+    /// When `true`, skip the router (classifier) model entirely and synthesize an
+    /// `ExecuteDirect` decision with `confidence = 1.0` and no MCP narrowing — the
+    /// caller is asserting the goal is fully specified and the router has nothing
+    /// to add. Guard / sanitize still run, so the structural checks (capability /
+    /// consequence / zone / depth) stay authoritative. Default `false` — today's
+    /// behaviour. Cron schedules set this via the `direct` field in topology.toml;
+    /// the daemon plumbs it onto the event payload and the orchestrator reads it
+    /// back here.
+    pub direct: bool,
 }
 
 /// Errors that abort a dispatch. Malformed model output does **not** appear here — it is handled
@@ -70,6 +79,18 @@ pub struct DispatchRequest {
 pub enum DispatchError {
     #[error("provider failure during classification: {0}")]
     Provider(ProviderError),
+}
+
+/// Outcome of [`Dispatcher::route_or_bypass`] — a tagged union so the caller knows whether
+/// the decision came from the router or from the `direct = true` opt-in (which is otherwise
+/// indistinguishable from a router-synthesized `ExecuteDirect`). The router-bypass branch
+/// never touches the provider, so the two paths have different telemetry signatures — the
+/// dispatch log line should record which one ran.
+enum RouteOutcome {
+    /// Synthesized without consulting the router (cron `direct = true`).
+    Direct(DispatchDecision),
+    /// Routed through the procedural-memory short-circuit and / or classifier model.
+    Routed(DispatchDecision),
 }
 
 /// The out-of-band dispatcher.
@@ -131,11 +152,14 @@ impl Dispatcher {
         );
 
         async {
-            let hits = self.retrieve_guidance(&req.goal).await;
-
-            let mut classified = match self.guidance_short_circuit(&hits) {
-                Some(decision) => decision,
-                None => self.classify(req, &hits).await?,
+            // `direct = true` (cron schedules opt in via topology.toml's `direct` field) —
+            // the caller is asserting the goal is fully specified and the router has
+            // nothing to add. The router-bypass logic lives in its own helper so this
+            // function's cyclomatic stays at the per-function ratchet's baseline; the
+            // bypass path itself is one straight-line `if` away.
+            let mut classified = match self.route_or_bypass(req).await? {
+                RouteOutcome::Direct(decision) => decision,
+                RouteOutcome::Routed(decision) => decision,
             };
             ensure_correlation(&mut classified, goal_hash);
             enforce_narrow_direct_tools(&mut classified, self.tuning.narrow_direct_tools);
@@ -338,6 +362,36 @@ Goal:
             confidence: top.score,
             rationale: format!("procedural memory guidance: {}", top.content),
         })
+    }
+
+    /// Resolve a goal into a [`DispatchDecision`] either by bypassing the router (the
+    /// `direct = true` opt-in on `[[schedules]]`) or by the normal guidance / classify
+    /// pipeline. Kept separate from [`Dispatcher::dispatch`] so that function's cyclomatic
+    /// stays at its per-function ratchet's baseline — the bypass adds one branch here,
+    /// not in the caller.
+    ///
+    /// The bypass synthesizes an `ExecuteDirect` with confidence 1.0 and no MCP narrowing.
+    /// Guard / sanitize still run on the returned decision, so structural checks
+    /// (capability / consequence / zone / depth) stay authoritative.
+    async fn route_or_bypass(&self, req: &DispatchRequest) -> Result<RouteOutcome, DispatchError> {
+        if req.direct {
+            tracing::info!("dispatch direct: skipping router, executing goal as configured");
+            return Ok(RouteOutcome::Direct(DispatchDecision {
+                action: DispatchAction::ExecuteDirect {
+                    seed_calls: Vec::new(),
+                    relevant_mcps: Vec::new(),
+                    delivery: Delivery::Summarize,
+                },
+                confidence: 1.0,
+                rationale: "direct dispatch (cron / explicit bypass)".into(),
+            }));
+        }
+        let hits = self.retrieve_guidance(&req.goal).await;
+        let classified = match self.guidance_short_circuit(&hits) {
+            Some(decision) => decision,
+            None => self.classify(req, &hits).await?,
+        };
+        Ok(RouteOutcome::Routed(classified))
     }
 
     /// RECORD (`liberado-dispatch-logic-spec.md` §2 step 5): save a new guidance directive once a
@@ -949,3 +1003,7 @@ mod tests;
 #[cfg(test)]
 #[path = "lib_tests_more.rs"]
 mod tests_more;
+
+#[cfg(test)]
+#[path = "direct_tests.rs"]
+mod direct_tests;

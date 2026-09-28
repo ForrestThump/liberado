@@ -104,6 +104,7 @@ async fn pack_runs_execute_direct_to_a_terminal_session() {
                 max_idle_secs: None,
                 origin: None,
                 profile: None,
+                direct: false,
                 payload: serde_json::json!({}),
             },
             SessionGrant::default(),
@@ -174,6 +175,7 @@ async fn pack_honours_a_narrow_session_grant_over_a_wide_pool() {
                 max_idle_secs: None,
                 origin: None,
                 profile: None,
+                direct: false,
                 payload: serde_json::json!({}),
             },
             SessionGrant {
@@ -225,6 +227,7 @@ async fn clarify_fails_honestly() {
                 max_idle_secs: None,
                 origin: None,
                 profile: None,
+                direct: false,
                 payload: serde_json::json!({}),
             },
             SessionGrant::default(),
@@ -282,6 +285,7 @@ fn pool_name_defaults_and_reads_payload() {
         max_idle_secs: None,
         origin: None,
         profile: None,
+        direct: false,
         payload: serde_json::json!({}),
     };
     assert_eq!(DispatchPack::pool_name(&goal), DEFAULT_POOL);
@@ -517,6 +521,7 @@ async fn pack_refuses_nested_parallel_goals() {
                 max_idle_secs: None,
                 origin: None,
                 profile: None,
+                direct: false,
                 payload: serde_json::json!({
                     "parallel_child": true,
                     "parallel_goals": [{"goal": "a", "label": "A"}],
@@ -547,6 +552,7 @@ fn parallel_route_rejects_nesting_and_routes_only_real_fan_outs() {
         max_idle_secs: None,
         origin: None,
         profile: None,
+        direct: false,
         payload,
     };
 
@@ -742,6 +748,7 @@ async fn run_routes_top_level_parallel_goals_through_the_fan_out() {
                 max_idle_secs: None,
                 origin: None,
                 profile: None,
+                direct: false,
                 payload: serde_json::json!({
                     "parallel_goals": [
                         { "goal": "a", "label": "A" },
@@ -808,6 +815,7 @@ async fn run_rejects_unknown_pool_with_a_named_error() {
                 max_idle_secs: None,
                 origin: None,
                 profile: None,
+                direct: false,
                 payload: serde_json::json!({ "pool": "nonexistent-pool" }),
             },
             SessionGrant::default(),
@@ -818,5 +826,114 @@ async fn run_rejects_unknown_pool_with_a_named_error() {
     assert!(
         matches!(snap.session.status, SessionStatus::Failed),
         "unknown pool must fail the session"
+    );
+}
+
+/// `direct = true` must skip the router through the **hub-attached production path**, the same
+/// shape every cron firing and every dispatched subagent takes on `liberado-server`. The
+/// dispatcher's mock provider has an **empty** scripted completion list — every router call
+/// would fail with `MockExhausted`, which is what makes this test the seam-guard: a stray
+/// `direct: false` (the previous hardcode) goes back to the router, the empty script fires,
+/// the dispatch fails, and the assertion `Succeeded` fails below.
+///
+/// The orchestrator's mock has one working tool call so the bypassed-then-executed path can
+/// still reach a terminal `Succeeded`. The dispatcher's empty script is the only signal that
+/// the bypass actually bypassed.
+#[tokio::test]
+async fn hub_path_with_direct_true_skips_the_router() {
+    // Dispatcher provider: empty script. Any call → MockExhausted. Bypass means no call lands.
+    let dispatcher = Dispatcher::new(
+        Arc::new(MockProvider::with_script(
+            "dispatch",
+            Vec::<CompletionResponse>::new(),
+        )),
+        DispatchTuning::default(),
+        4,
+    );
+    // Orchestrator provider: one tool call that submits a success report. Without the bypass,
+    // this mock is never reached because the dispatcher fails first.
+    let orchestrator = Orchestrator::new(
+        Arc::new(MockProvider::with_script(
+            "exec",
+            vec![CompletionResponse::tool_calls(vec![ToolInvocation::new(
+                "c",
+                SUBMIT_REPORT_TOOL,
+                serde_json::json!({ "outcome": "succeeded", "summary": "direct via hub" }),
+            )])],
+        )),
+        NoopFactory,
+        CapabilitySet::empty(),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        std::env::temp_dir(),
+        ProposalSigner::random(),
+        DEFAULT_POOL,
+    );
+    let pack = DispatchPack::new(
+        Arc::new(CapabilityCatalog::new()),
+        Vec::new(),
+        1,
+        std::env::temp_dir(),
+    )
+    .with_pool(DEFAULT_POOL, dispatcher, orchestrator);
+
+    let mut hub = GoalSessionHub::new(GoalSessionStore::new());
+    hub.register_pack(Arc::new(pack));
+    let hub = Arc::new(hub);
+
+    let id = hub
+        .start_with_grant(
+            GoalSpec {
+                id: None,
+                description: "summarize today".into(),
+                success_criteria: vec![],
+                domain: DomainHint::from(DISPATCH_DOMAIN),
+                max_turns: 0,
+                max_idle_secs: None,
+                origin: None,
+                profile: None,
+                // `direct: true` is the cron-side opt-in. The daemon's `reaction_goal` produces
+                // this exact `GoalSpec` when an event arrives with `data.direct = true`; the
+                // pack reads it back off `GoalSpec.direct` here, *not* off any payload field.
+                direct: true,
+                payload: serde_json::json!({}),
+            },
+            SessionGrant::default(),
+        )
+        .await
+        .expect("start");
+
+    let snap = wait_terminal(&hub, &id).await;
+    assert_eq!(
+        snap.session.status,
+        SessionStatus::Succeeded,
+        "direct=true on the hub path must skip the router (whose provider is intentionally \
+         empty) and reach a success report: {:?}",
+        snap.session
+    );
+    assert_eq!(
+        snap.session.result.as_ref().unwrap().summary,
+        "direct via hub",
+        "orchestrator's submit_report is the only thing that can have produced this summary — \
+         which is itself proof no router call landed"
+    );
+
+    // The decision narrated into events must be the bypassed one (confidence 1.0, the
+    // dispatcher's hard-coded router-bypass value), not a routed call's typical < 1.0.
+    let narrated_confidence = snap
+        .events
+        .iter()
+        .find_map(|e| match &e.kind {
+            SessionEventKind::Progress { message } if message.contains("dispatched:") => {
+                Some(message.clone())
+            }
+            _ => None,
+        })
+        .expect("a dispatched progress event must be recorded");
+    assert!(
+        narrated_confidence.contains("confidence 1.00"),
+        "bypassed decisions are hard-coded to confidence 1.0 — any other value means the \
+         router was consulted: {narrated_confidence}"
     );
 }

@@ -464,6 +464,7 @@ async fn state_with_goal_pack(
                 max_idle_secs: None,
                 origin: None,
                 profile: None,
+                direct: false,
                 payload: serde_json::Value::Null,
             },
             SessionGrant::default(),

@@ -44,6 +44,7 @@ async fn guard_conformance_capability_gap_agrees_both_sides() {
         reaction_depth: 0,
         zone_write_classes: Vec::new(),
         risk_waivers: RiskWaiverSet::empty(),
+        direct: false,
     };
     assert_eq!(
         evaluate(&decision, &req, &DispatchTuning::default(), 4),
@@ -109,6 +110,7 @@ async fn guard_conformance_consequence_agrees_on_external_mcp() {
         reaction_depth: 0,
         zone_write_classes: Vec::new(),
         risk_waivers: RiskWaiverSet::empty(),
+        direct: false,
     };
     assert_eq!(
         evaluate(&decision, &req, &DispatchTuning::default(), 4),
@@ -175,6 +177,7 @@ async fn guard_conformance_magnitude_agrees_on_sweeping_destructive() {
         reaction_depth: 0,
         zone_write_classes: Vec::new(),
         risk_waivers: RiskWaiverSet::empty(),
+        direct: false,
     };
     assert_eq!(
         evaluate(&decision, &req, &DispatchTuning::default(), 4),

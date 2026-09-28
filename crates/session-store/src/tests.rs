@@ -19,6 +19,7 @@ fn goal_spec(description: &str) -> GoalSpec {
         max_idle_secs: None,
         origin: None,
         profile: None,
+        direct: false,
         payload: serde_json::json!({}),
     }
 }

@@ -110,6 +110,7 @@ fn life_goal(description: &str, interactive: bool) -> GoalSpec {
         max_idle_secs: None,
         origin: None,
         profile: None,
+        direct: false,
         payload: if interactive {
             serde_json::json!({ "interactive": true })
         } else {

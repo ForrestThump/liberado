@@ -1136,6 +1136,16 @@ pub struct CronSchedule {
     /// Other jobs ignore this.
     #[serde(default)]
     pub run_on_start: Option<bool>,
+    /// When `true`, dispatch this schedule's `goal` directly without consulting the
+    /// router (classifier) model. The router exists to disambiguate human chat into
+    /// Execute / Clarify / Skip and add nothing for a fully-specified cron goal: by
+    /// construction, a schedule already names the work, and any router parse failure
+    /// degrades to `Clarify`, which fails closed for an unattended cron (no `AskHuman`
+    /// capability) — silently doing nothing. Recommended for any schedule whose `goal`
+    /// is self-contained and pairs naturally with `profile` (which scopes the grant).
+    /// Default `false` (today's behaviour).
+    #[serde(default)]
+    pub direct: Option<bool>,
 }
 
 /// A configured external webhook hook: wiring only (Decision 14) — `liberado-server` resolves

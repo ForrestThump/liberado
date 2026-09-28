@@ -58,6 +58,7 @@ fn delegated_goal(goal: &str, correlation_id: &str, parent_conversation: Option<
             correlation_id: Some(correlation_id.to_string()),
         }),
         profile: None,
+        direct: false,
         payload: json!({ "source": "delegate" }),
     }
 }

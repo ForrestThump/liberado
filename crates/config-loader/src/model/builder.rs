@@ -403,6 +403,7 @@ max_turns = 44
             git_user_name: None,
             git_user_email: None,
             run_on_start: None,
+            direct: None,
         }
     }
 
