@@ -697,6 +697,7 @@ async fn turns_excludes_tail_copies() {
         max_idle_secs: None,
         origin: None,
         profile: None,
+        direct: false,
         payload: serde_json::Value::Null,
     };
     store.insert(GoalSessionRecord::new(spec)).await;

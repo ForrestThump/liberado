@@ -22,6 +22,7 @@ async fn repeated_client_goal_id_does_not_start_a_second_run() {
         max_idle_secs: None,
         origin: None,
         profile: None,
+        direct: false,
         payload: serde_json::json!({}),
     };
 
@@ -53,6 +54,7 @@ async fn concurrent_client_goal_id_starts_one_run() {
         max_idle_secs: None,
         origin: None,
         profile: None,
+        direct: false,
         payload: serde_json::json!({}),
     };
 

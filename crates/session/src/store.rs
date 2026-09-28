@@ -458,6 +458,7 @@ mod tests {
             max_idle_secs: None,
             origin: None,
             profile: None,
+            direct: false,
             payload: serde_json::json!({}),
         })
     }
@@ -801,6 +802,7 @@ mod tests {
                 max_idle_secs: None,
                 origin: None,
                 profile: None,
+                direct: false,
                 payload: serde_json::json!({}),
             },
             grant: Default::default(),
@@ -873,6 +875,7 @@ mod proptest_tests {
                     max_idle_secs: None,
                     origin: None,
                     profile: None,
+                    direct: false,
                     payload: serde_json::json!({}),
                 };
                 if background {

@@ -93,6 +93,17 @@ pub(crate) fn reaction_goal(event: &Event, goal: &str, pool: &str) -> GoalSpec {
         .and_then(|v| v.as_u64())
         .and_then(|v| u32::try_from(v).ok())
         .unwrap_or(0);
+    // Router bypass: a cron schedule with `direct = true` skips the classifier and synthesizes
+    // `ExecuteDirect`. Anything other than an explicit JSON `true` is `false`, so legacy events
+    // (no field, `null`, a string, anything else) keep routing — the same reading rule the other
+    // payload riders use. This is the seam that lets the hub-attached pack path carry the flag,
+    // since `Daemon::react` → `react_via_hub` lands here rather than on `dispatch_request`.
+    let direct = event
+        .payload
+        .data
+        .get("direct")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
     GoalSpec {
         id: None,
         description: goal.to_string(),
@@ -102,6 +113,7 @@ pub(crate) fn reaction_goal(event: &Event, goal: &str, pool: &str) -> GoalSpec {
         max_idle_secs: None,
         origin: Some(SessionOrigin::from_correlation(&event.correlation_id)),
         profile,
+        direct,
         payload: serde_json::json!({
             "source": event.source,
             "event_type": event.event_type,

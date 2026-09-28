@@ -223,6 +223,7 @@ fn goal_with_interactive(interactive: Option<bool>) -> liberado_session::GoalSpe
         max_idle_secs: None,
         origin: None,
         profile: None,
+        direct: false,
         payload,
     }
 }
@@ -314,6 +315,7 @@ async fn start_interactive(goals: &Arc<GoalSessionHub>) -> String {
                 max_idle_secs: None,
                 origin: None,
                 profile: None,
+                direct: false,
                 payload: serde_json::json!({ "interactive": true }),
             },
             attended_life_grant(),
@@ -408,6 +410,7 @@ fn handoff_note_includes_status_summary_artifacts_and_rejoin_hint() {
         max_idle_secs: None,
         origin: None,
         profile: None,
+        direct: false,
         payload: serde_json::json!({}),
     });
     record.status = SessionStatus::Succeeded;
@@ -461,6 +464,7 @@ async fn message_to_a_session_without_ask_human_is_403_not_409() {
             max_idle_secs: None,
             origin: None,
             profile: None,
+            direct: false,
             payload: serde_json::json!({ "interactive": true }),
         })
         .await
@@ -492,6 +496,7 @@ async fn a_session_without_ask_human_never_awaits_even_when_asked_to_be_interact
             max_idle_secs: None,
             origin: None,
             profile: None,
+            direct: false,
             payload: serde_json::json!({ "interactive": true }),
         })
         .await

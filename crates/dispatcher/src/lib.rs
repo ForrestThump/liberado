@@ -87,7 +87,7 @@ pub enum DispatchError {
 /// never touches the provider, so the two paths have different telemetry signatures — the
 /// dispatch log line should record which one ran.
 enum RouteOutcome {
-    /// Synthesized without consulting the router (cron / webhook `direct = true`).
+    /// Synthesized without consulting the router (cron `direct = true`).
     Direct(DispatchDecision),
     /// Routed through the procedural-memory short-circuit and / or classifier model.
     Routed(DispatchDecision),
@@ -383,7 +383,7 @@ Goal:
                     delivery: Delivery::Summarize,
                 },
                 confidence: 1.0,
-                rationale: "direct dispatch (cron / webhook / explicit bypass)".into(),
+                rationale: "direct dispatch (cron / explicit bypass)".into(),
             }));
         }
         let hits = self.retrieve_guidance(&req.goal).await;

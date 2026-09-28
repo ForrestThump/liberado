@@ -1529,6 +1529,7 @@ impl ChatSessions {
             max_idle_secs: None,
             origin: Some(SessionOrigin::from_correlation(&correlation_id)),
             profile: None,
+            direct: false,
             payload: serde_json::json!({ "source": "chat-preturn" }),
         };
         let session_id = match hub
