@@ -229,8 +229,9 @@ built-in kind. Kinds are `git-snapshot`, `task-ping`, `event-ping`, `habit-ping`
 
 `task-ping` reads Obsidian Tasks lines from vault markdown. It lists open `- [ ]` lines and
 in-progress `- [/]` lines. It skips done (`- [x]`) and cancelled (`- [-]`). It reads Tasks
-dates on the line: 📅 due, ⏳ scheduled, 🛫 start, and 🔁 recurrence. A start date after
-today hides the line. The list is ranked by Tasks priority (🔺, then ⏫, then 🔼, then
+dates on the line: 📅 due, ⏳ scheduled, 🛫 start, and 🔁 recurrence. A due or
+scheduled value with a clock (`YYYY-MM-DD HH:MM` or `YYYY-MM-DDTHH:MM`) is shown
+as `at HH:MM`. Seconds are ignored. A start date after today hides the line. The list is ranked by Tasks priority (🔺, then ⏫, then 🔼, then
 unmarked, then 🔽) and then by due date. `task_limit` caps the list (default 10).
 
 `event-ping` reads calendar notes from the same vault. A note counts when its YAML

@@ -24,7 +24,7 @@ Scheduled work was a prose goal. Every firing paid for a model call, and the res
 A schedule may set `job` to a built-in kind. The daemon runs that kind directly. It does not classify the goal and it does not start a session.
 
 - `git-snapshot` commits the vault when it is dirty and pushes. It also runs once at startup unless `run_on_start = false`.
-- `task-ping` reads open Obsidian Tasks lines from the vault and sends a ranked list. Done and cancelled lines are skipped. Due, scheduled, start, and recurrence markers on the line are shown.
+- `task-ping` reads open Obsidian Tasks lines from the vault and sends a ranked list. Done and cancelled lines are skipped. Due, scheduled, start, and recurrence markers on the line are shown. A clock on a due or scheduled date is included.
 - `event-ping` reads Full Calendar frontmatter, and titled notes under `calendar/`, and sends events that overlap today through the next 7 days. It does not read CalDAV.
 - `habit-ping` sends `habit_text` unchanged.
 - `inbox-if-present` dispatches `goal` only when the capture file has text. An empty file does not call a model.

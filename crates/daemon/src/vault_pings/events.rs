@@ -287,6 +287,11 @@ fn heading_title(text: &str) -> Option<String> {
     None
 }
 
+/// Flat `key: value` lines from a Full Calendar note.
+///
+/// Block scalars (`|`, `>`), nested maps, and lines that start with `-` are
+/// skipped. Proposal notes use `serde_yaml` in `liberado-common`. The calendar
+/// fields this job reads are single-line scalars, so this scan is enough.
 fn yaml_map(yaml: &str) -> BTreeMap<String, String> {
     let mut map = BTreeMap::new();
     for line in yaml.lines() {

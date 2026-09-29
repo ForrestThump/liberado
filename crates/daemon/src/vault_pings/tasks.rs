@@ -1,7 +1,7 @@
 use std::cmp::Ordering;
 use std::path::Path;
 
-use chrono::NaiveDate;
+use chrono::{NaiveDate, NaiveTime};
 
 use super::date::parse_ymd;
 use super::walk::markdown_notes;
@@ -10,7 +10,9 @@ use super::walk::markdown_notes;
 pub(crate) struct OpenTask {
     pub(crate) priority: u8,
     pub(crate) due: Option<NaiveDate>,
+    pub(crate) due_at: Option<NaiveTime>,
     pub(crate) scheduled: Option<NaiveDate>,
+    pub(crate) scheduled_at: Option<NaiveTime>,
     pub(crate) start: Option<NaiveDate>,
     pub(crate) recurrence: Option<String>,
     pub(crate) in_progress: bool,
@@ -52,11 +54,15 @@ pub(crate) fn parse_task_line(line: &str) -> Option<OpenTask> {
     if body.is_empty() {
         return None;
     }
+    let due = mark_after(body, '📅');
+    let scheduled = mark_after(body, '⏳');
     Some(OpenTask {
         priority: task_priority(body),
-        due: date_after(body, '📅'),
-        scheduled: date_after(body, '⏳'),
-        start: date_after(body, '🛫'),
+        due: due.map(|mark| mark.date),
+        due_at: due.and_then(|mark| mark.clock),
+        scheduled: scheduled.map(|mark| mark.date),
+        scheduled_at: scheduled.and_then(|mark| mark.clock),
+        start: mark_after(body, '🛫').map(|mark| mark.date),
         recurrence: recurrence_text(body),
         in_progress: state,
         text: body.to_string(),
@@ -82,10 +88,46 @@ fn task_priority(line: &str) -> u8 {
     }
 }
 
-fn date_after(line: &str, emoji: char) -> Option<NaiveDate> {
+#[derive(Clone, Copy)]
+struct Mark {
+    date: NaiveDate,
+    clock: Option<NaiveTime>,
+}
+
+/// Date after `emoji`, plus a clock when the value is `YYYY-MM-DD HH:MM` or
+/// `YYYY-MM-DDTHH:MM`. Seconds are ignored. A later word that is not a clock
+/// stays off the label.
+fn mark_after(line: &str, emoji: char) -> Option<Mark> {
     let rest = line.split(emoji).nth(1)?;
-    let token = rest.split_whitespace().next()?;
-    parse_ymd(token)
+    let mut parts = rest.split_whitespace();
+    let token = parts.next()?;
+    if let Some(mark) = iso_mark(token) {
+        return Some(mark);
+    }
+    Some(Mark {
+        date: parse_ymd(token)?,
+        clock: parts.next().and_then(parse_clock),
+    })
+}
+
+fn iso_mark(token: &str) -> Option<Mark> {
+    let (date, clock) = token.split_once('T')?;
+    Some(Mark {
+        date: parse_ymd(date)?,
+        clock: Some(parse_clock(clock)?),
+    })
+}
+
+fn parse_clock(value: &str) -> Option<NaiveTime> {
+    let (hour, rest) = value.split_once(':')?;
+    if hour.is_empty() || hour.len() > 2 || rest.len() < 2 {
+        return None;
+    }
+    let minute = &rest[..2];
+    if !hour.chars().all(|c| c.is_ascii_digit()) || !minute.chars().all(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    NaiveTime::from_hms_opt(hour.parse().ok()?, minute.parse().ok()?, 0)
 }
 
 fn recurrence_text(line: &str) -> Option<String> {
@@ -140,10 +182,10 @@ fn render_tasks(tasks: &[OpenTask], limit: u32, today: NaiveDate) -> String {
 fn format_task_line(index: usize, task: &OpenTask, today: NaiveDate) -> String {
     let mut parts = vec![format!("{index}. {}", task.text)];
     if let Some(due) = task.due {
-        parts.push(due_label(due, today));
+        parts.push(due_label(due, task.due_at, today));
     }
     if let Some(scheduled) = task.scheduled {
-        parts.push(format!("scheduled {scheduled}"));
+        parts.push(when_label("scheduled", scheduled, task.scheduled_at));
     }
     if let Some(rule) = &task.recurrence {
         parts.push(format!("repeats {rule}"));
@@ -155,12 +197,20 @@ fn format_task_line(index: usize, task: &OpenTask, today: NaiveDate) -> String {
     parts.join(" — ")
 }
 
-fn due_label(due: NaiveDate, today: NaiveDate) -> String {
+fn due_label(due: NaiveDate, clock: Option<NaiveTime>, today: NaiveDate) -> String {
+    let label = when_label("due", due, clock);
     if due < today {
-        format!("due {due} (overdue)")
+        format!("{label} (overdue)")
     } else if due == today {
-        format!("due {due} (today)")
+        format!("{label} (today)")
     } else {
-        format!("due {due}")
+        label
+    }
+}
+
+fn when_label(kind: &str, date: NaiveDate, clock: Option<NaiveTime>) -> String {
+    match clock {
+        Some(time) => format!("{kind} {date} at {}", time.format("%H:%M")),
+        None => format!("{kind} {date}"),
     }
 }

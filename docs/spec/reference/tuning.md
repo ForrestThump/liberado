@@ -207,7 +207,7 @@ session summary into the sticky chat.
 The vault is the list. Add a task by writing an Obsidian Tasks line in a note:
 
 ```markdown
-- [ ] Call the clinic 📅 2026-09-28
+- [ ] Call the clinic 📅 2026-09-28 14:00
 - [ ] Pay the bill ⏳ 2026-09-28 🔁 every month
 - [x] Already done 📅 2026-09-01
 - [-] Cancelled 📅 2026-09-01

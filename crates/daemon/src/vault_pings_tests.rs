@@ -75,9 +75,40 @@ fn task_message_marks_overdue_and_today_and_keeps_priority_order() {
     );
     assert!(message.contains("due 2026-09-01 (overdue)"), "{message}");
     assert!(message.contains("due 2026-09-28 (today)"), "{message}");
+    assert!(!message.contains(" at "), "{message}");
     assert!(message.contains("scheduled 2026-09-01"), "{message}");
     assert!(message.contains("repeats every month"), "{message}");
     assert!(message.contains("Tasks/Main.md"), "{message}");
+}
+
+#[test]
+fn a_due_clock_is_shown_and_a_date_only_task_stays_date_only() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::write(
+        root.path().join("Tasks.md"),
+        "\
+- [ ] clinic 📅 2026-09-28 14:00
+- [ ] standup 📅 2026-09-28T09:30:00
+- [ ] tomorrow 📅 2026-09-29
+- [ ] bill ⏳ 2026-09-28 16:05
+",
+    )
+    .unwrap();
+    let message = task_ping_message(root.path(), 10, today());
+    assert!(
+        message.contains("due 2026-09-28 at 14:00 (today)"),
+        "{message}"
+    );
+    assert!(
+        message.contains("due 2026-09-28 at 09:30 (today)"),
+        "{message}"
+    );
+    assert!(message.contains("due 2026-09-29"), "{message}");
+    assert!(!message.contains("due 2026-09-29 at"), "{message}");
+    assert!(
+        message.contains("scheduled 2026-09-28 at 16:05"),
+        "{message}"
+    );
 }
 
 #[test]
