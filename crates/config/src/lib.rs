@@ -37,8 +37,8 @@ pub use liberado_config_loader::{
     MaintenanceTuning, McpConfig, McpPoolingTuning, McpTransport, ModelCompactionSettings, Policy,
     PoolConfig, ProjectConfig, ProviderFallback, ProviderProfile, RoleOverride, ShepherdAuthConfig,
     ShepherdConfig, ShepherdProjectConfig, ShepherdReviewConfig, SubagentIsolation,
-    TelegramApprovalsTuning, ToolImpact, Topology, Tuning, ZonePolicy, managed_binary_path,
-    resolve_declared_zone,
+    TelegramApprovalsTuning, ToolImpact, Topology, Tuning, VaultRemindersConfig, ZonePolicy,
+    managed_binary_path, resolve_declared_zone,
 };
 
 /// Records which source file contributed each section of a loaded [`Config`],

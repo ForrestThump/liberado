@@ -8,11 +8,14 @@
 
 mod date;
 mod events;
+mod remind;
 mod tasks;
+mod tick;
 mod walk;
 
 pub(crate) use events::event_ping_message;
 pub(crate) use tasks::task_ping_message;
+pub(crate) use tick::{ReminderTick, reminder_message};
 
 #[cfg(test)]
 pub(crate) use events::{EVENT_HORIZON_DAYS, VaultEvent, event_in_window};

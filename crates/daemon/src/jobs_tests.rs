@@ -33,9 +33,26 @@ fn job(kind: &str) -> JobRequest {
     JobRequest::from_options("job", kind, JobOptions::default())
 }
 
+fn idle_tick() -> crate::vault_pings::ReminderTick {
+    crate::vault_pings::ReminderTick {
+        now: chrono::NaiveDate::from_ymd_opt(2026, 9, 29)
+            .expect("date")
+            .and_hms_opt(12, 0, 0)
+            .expect("time"),
+        settings: liberado_config::VaultRemindersConfig::default(),
+        state_path: std::path::PathBuf::from("vault-reminder-fires.json"),
+    }
+}
+
 fn execute(dir: &std::path::Path, request: &JobRequest) -> JobEffect {
     let zone = liberado_common::UserTimezone::default_zone();
-    execute_on(dir, request, zone.now().date_naive(), zone.iana_name())
+    execute_on(
+        dir,
+        request,
+        zone.now().date_naive(),
+        zone.iana_name(),
+        &idle_tick(),
+    )
 }
 
 #[test]
@@ -249,7 +266,13 @@ fn event_ping_message_names_the_zone_for_a_fixed_day() {
     )
     .unwrap();
     let today = chrono::NaiveDate::from_ymd_opt(2026, 9, 28).expect("date");
-    let message = match execute_on(dir.path(), &job("event-ping"), today, "America/Chicago") {
+    let message = match execute_on(
+        dir.path(),
+        &job("event-ping"),
+        today,
+        "America/Chicago",
+        &idle_tick(),
+    ) {
         JobEffect::Remind(text) => text,
         other => panic!("expected a reminder, got {other:?}"),
     };

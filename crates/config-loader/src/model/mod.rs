@@ -14,6 +14,7 @@ mod shepherd;
 mod topology;
 mod topology_default;
 mod tuning;
+mod vault_reminders;
 
 pub use builder::ConfigBuilder;
 pub use config::{CodingAuthError, CodingWorkspaceAuth, Config, GrantParts, ResolvedProfile};
@@ -34,3 +35,4 @@ pub use tuning::{
     CronDeliveryTuning, DispatchTuning, MaintenanceTuning, McpPoolingTuning, ProposalTuning,
     SubagentIsolation, TelegramApprovalsTuning, Tuning,
 };
+pub use vault_reminders::VaultRemindersConfig;

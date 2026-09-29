@@ -108,7 +108,13 @@ pub enum JobEffect {
     Continue,
 }
 
-pub(crate) fn execute_on(root: &Path, job: &JobRequest, today: NaiveDate, zone: &str) -> JobEffect {
+pub(crate) fn execute_on(
+    root: &Path,
+    job: &JobRequest,
+    today: NaiveDate,
+    zone: &str,
+    tick: &crate::vault_pings::ReminderTick,
+) -> JobEffect {
     match job.kind.as_str() {
         "git-snapshot" => git_snapshot(root, job),
         "task-ping" => JobEffect::Remind(crate::vault_pings::task_ping_message(
@@ -119,6 +125,9 @@ pub(crate) fn execute_on(root: &Path, job: &JobRequest, today: NaiveDate, zone: 
         "event-ping" => {
             JobEffect::Remind(crate::vault_pings::event_ping_message(root, today, zone))
         }
+        "vault-reminder-tick" => crate::vault_pings::reminder_message(root, tick)
+            .map(JobEffect::Remind)
+            .unwrap_or(JobEffect::Quiet),
         "habit-ping" => match job
             .habit_text
             .as_deref()
@@ -147,7 +156,8 @@ impl Daemon {
         let name = crate::helpers::cron_schedule_name(&event.source).unwrap_or("job");
         let request = JobRequest::from_event(name, &event.payload.data)?;
         let (today, zone) = self.mechanical_clock();
-        match execute_on(self.vault.root(), &request, today, &zone) {
+        let tick = self.reminder_tick();
+        match execute_on(self.vault.root(), &request, today, &zone, &tick) {
             JobEffect::Continue => None,
             JobEffect::Quiet => {
                 tracing::info!(job = %request.name, kind = %request.kind, "mechanical job quiet");
@@ -163,8 +173,9 @@ impl Daemon {
 
     pub(crate) fn run_startup_jobs(&self) {
         let (today, zone) = self.mechanical_clock();
+        let tick = self.reminder_tick();
         for job in &self.startup_jobs {
-            match execute_on(self.vault.root(), job, today, &zone) {
+            match execute_on(self.vault.root(), job, today, &zone, &tick) {
                 JobEffect::Quiet => {
                     tracing::info!(job = %job.name, "startup snapshot clean");
                 }
@@ -182,6 +193,17 @@ impl Daemon {
             .user_timezone
             .unwrap_or_else(UserTimezone::default_zone);
         (zone.now().date_naive(), zone.iana_name().to_string())
+    }
+
+    fn reminder_tick(&self) -> crate::vault_pings::ReminderTick {
+        let zone = self
+            .user_timezone
+            .unwrap_or_else(UserTimezone::default_zone);
+        crate::vault_pings::ReminderTick {
+            now: zone.now().naive_local(),
+            settings: self.vault_reminders.clone(),
+            state_path: self.reminder_state_path.clone(),
+        }
     }
 
     fn send_reminder(&self, text: &str) {

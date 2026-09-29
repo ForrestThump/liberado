@@ -1,6 +1,7 @@
 //! Shared daemon types, constants, and pool wiring.
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -190,8 +191,12 @@ pub struct Daemon {
     /// Told about every proposal this daemon writes (dispatcher pre-flight `Propose` path) —
     /// optional, `None` by default. Best-effort: a notification failure never blocks the write.
     pub(crate) notifier: Option<Arc<dyn Notifier>>,
-    /// Mechanical reminders (task list, habit, snapshot failure). Not the sticky chat.
+    /// Mechanical reminders (task list, habit, snapshot failure, minute tick). Not the sticky chat.
     pub(crate) reminder: Option<Arc<dyn Notifier>>,
+    /// Timed vault reminders. Default off, so a tick schedule sends nothing until config opts in.
+    pub(crate) vault_reminders: liberado_config::VaultRemindersConfig,
+    /// JSON file of minutes already sent. Outside the vault, so a snapshot does not commit it.
+    pub(crate) reminder_state_path: PathBuf,
     /// Git snapshots to attempt once when the daemon starts.
     pub(crate) startup_jobs: Vec<crate::jobs::JobRequest>,
     /// An additional event source run alongside the always-on vault watch (Decision 18/19) — e.g.

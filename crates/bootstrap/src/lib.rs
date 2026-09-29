@@ -586,6 +586,10 @@ fn wire_dispatch_stack(
         ));
     let daemon = attach_notifier(daemon, &notifier);
     let daemon = attach_reminder(daemon);
+    let daemon = daemon.with_vault_reminders(
+        config.topology.vault_reminders.clone(),
+        liberado_config::data_dir().join("vault-reminder-fires.json"),
+    );
     let daemon = attach_cron(daemon, config);
     let daemon = daemon.with_startup_jobs(startup_snapshots(config));
     // Always wire the shared live registry (even when empty) so empty→add hot-reload can acquire

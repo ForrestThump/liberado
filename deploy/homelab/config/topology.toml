@@ -289,6 +289,13 @@ You are a live-conformance probe. Do exactly this and nothing else:
 # Mechanical jobs. No model. Reminders use LIBERADO_REMINDER_BOT_TOKEN and
 # LIBERADO_REMINDER_CHAT_ID, not the sticky chat. deliver = false keeps the sticky
 # notifier out of the path. See ADR-0020 and docs/spec/reference/tuning.md.
+# Timed vault reminders stay off. Turn on [vault_reminders] and the tick below once
+# the vault task carries #remind. A habit such as tuesday-trash can retire then.
+
+[vault_reminders]
+enabled = false
+tasks = true
+events = true
 # Times are UTC. "Today" inside task-ping and event-ping uses topology.timezone
 # (America/Chicago). 11:50 UTC = 06:50 CDT. 11:55 UTC = 06:55 CDT.
 # 02:00 UTC = 21:00 CDT. 08:15 UTC = 03:15 CDT.
@@ -310,6 +317,14 @@ cron_expr = "0 55 11 * * * *"
 job = "task-ping"
 task_limit = 10
 deliver = false
+
+# Minute tick. Leave enabled = false until [vault_reminders] enabled = true.
+# [[schedules]]
+# name = "vault-reminder-tick"
+# enabled = false
+# cron_expr = "0 * * * * *"
+# job = "vault-reminder-tick"
+# deliver = false
 
 [[schedules]]
 name = "evening-journal"
