@@ -7,7 +7,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use chrono::NaiveDate;
+use chrono::{NaiveDate, NaiveDateTime};
 use liberado_common::process::std_command;
 use liberado_common::{Event, UserTimezone};
 
@@ -200,9 +200,16 @@ impl Daemon {
             .user_timezone
             .unwrap_or_else(UserTimezone::default_zone);
         crate::vault_pings::ReminderTick {
-            now: zone.now().naive_local(),
+            now: self.reminder_now(&zone),
             settings: self.vault_reminders.clone(),
             state_path: self.reminder_state_path.clone(),
+        }
+    }
+
+    fn reminder_now(&self, zone: &UserTimezone) -> NaiveDateTime {
+        match self.fixed_now {
+            Some(now) => now,
+            None => zone.now().naive_local(),
         }
     }
 

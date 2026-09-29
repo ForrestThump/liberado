@@ -21,6 +21,9 @@ use super::tasks::parse_task_line;
 use super::walk::markdown_notes;
 use liberado_config::VaultRemindersConfig;
 
+/// Separates kind, vault path, local minute, and id in one fire key.
+/// U+001F is the ASCII unit separator. A path or title that contains that
+/// character would share a key with a different note.
 const KEY_SEP: char = '\u{1f}';
 
 /// Clock and switches for one tick. The daemon fills this from topology.
@@ -87,7 +90,7 @@ fn tasks_due(rel: &str, text: &str, now: NaiveDateTime) -> Vec<DueItem> {
 }
 
 fn task_due(rel: &str, line: &str, index: usize, now: NaiveDateTime) -> Option<DueItem> {
-    parse_task_line(line)?;
+    let task = parse_task_line(line)?;
     if !remind_opt_in(line) {
         return None;
     }
@@ -99,17 +102,8 @@ fn task_due(rel: &str, line: &str, index: usize, now: NaiveDateTime) -> Option<D
     let when = format_when(stamp.date, time);
     Some(DueItem {
         key: fire_key("task", rel, &when, &index.to_string()),
-        line: format!("{} — {} {when} — {rel}", task_label(line), stamp.label),
+        line: format!("{} — {} {when} — {rel}", task.text, stamp.label),
     })
-}
-
-fn task_label(line: &str) -> String {
-    line.trim()
-        .trim_start_matches("- [")
-        .trim_start_matches([' ', '/'])
-        .trim_start_matches(']')
-        .trim()
-        .to_string()
 }
 
 fn anchor_stamp(line: &str) -> Option<Stamp> {
@@ -212,6 +206,8 @@ fn load_fires(path: &Path) -> BTreeSet<String> {
         .collect()
 }
 
+/// Best-effort overwrite. A crash during the write can leave partial JSON.
+/// The next load then sees no fires and may send that minute again.
 fn save_fires(path: &Path, fires: &BTreeSet<String>) {
     if let Some(parent) = path.parent()
         && !parent.as_os_str().is_empty()

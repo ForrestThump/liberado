@@ -197,6 +197,8 @@ pub struct Daemon {
     pub(crate) vault_reminders: liberado_config::VaultRemindersConfig,
     /// JSON file of minutes already sent. Outside the vault, so a snapshot does not commit it.
     pub(crate) reminder_state_path: PathBuf,
+    /// Test clock for the minute tick. `open` leaves this `None`, so production reads the zone clock.
+    pub(crate) fixed_now: Option<chrono::NaiveDateTime>,
     /// Git snapshots to attempt once when the daemon starts.
     pub(crate) startup_jobs: Vec<crate::jobs::JobRequest>,
     /// An additional event source run alongside the always-on vault watch (Decision 18/19) — e.g.

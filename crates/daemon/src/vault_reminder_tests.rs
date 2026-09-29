@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use async_trait::async_trait;
-use chrono::{NaiveDate, NaiveDateTime, Timelike};
+use chrono::{NaiveDate, NaiveDateTime};
 use liberado_common::{Event, EventPayload, UserTimezone};
 use liberado_config::VaultRemindersConfig;
 use liberado_notify::{Notifier, NotifyError};
@@ -263,20 +263,13 @@ impl Notifier for RecordingNotifier {
     }
 }
 
-fn chicago_minute() -> (UserTimezone, NaiveDateTime) {
-    let zone = UserTimezone::parse("America/Chicago").expect("zone");
-    loop {
-        let now = zone.now().naive_local();
-        if now.time().second() < 40 {
-            return (zone, now);
-        }
-        std::thread::sleep(Duration::from_millis(200));
-    }
+fn chicago() -> UserTimezone {
+    UserTimezone::parse("America/Chicago").expect("zone")
 }
 
 #[tokio::test]
 async fn the_tick_uses_the_reminder_channel_and_not_the_sticky_chat() {
-    let (zone, now) = chicago_minute();
+    let now = at(21, 0);
     let root = tempfile::tempdir().unwrap();
     let state = root.path().join("fires.json");
     std::fs::write(
@@ -293,7 +286,8 @@ async fn the_tick_uses_the_reminder_channel_and_not_the_sticky_chat() {
     let daemon = Daemon::open("vault", root.path())
         .await
         .unwrap()
-        .with_user_timezone(zone)
+        .with_user_timezone(chicago())
+        .with_fixed_now(now)
         .with_vault_reminders(enabled(), &state)
         .with_notifier(Arc::new(RecordingNotifier {
             sent: sticky.clone(),
@@ -329,7 +323,7 @@ async fn the_tick_uses_the_reminder_channel_and_not_the_sticky_chat() {
 
 #[tokio::test]
 async fn a_disabled_tick_does_not_ping_the_reminder_channel() {
-    let (zone, now) = chicago_minute();
+    let now = at(21, 0);
     let root = tempfile::tempdir().unwrap();
     std::fs::write(
         root.path().join("Home.md"),
@@ -344,7 +338,12 @@ async fn a_disabled_tick_does_not_ping_the_reminder_channel() {
     let daemon = Daemon::open("vault", root.path())
         .await
         .unwrap()
-        .with_user_timezone(zone)
+        .with_user_timezone(chicago())
+        .with_fixed_now(now)
+        .with_vault_reminders(
+            VaultRemindersConfig::default(),
+            root.path().join("fires.json"),
+        )
         .with_reminder_notifier(Arc::new(RecordingNotifier {
             sent: reminder.clone(),
         }));
