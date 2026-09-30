@@ -76,26 +76,51 @@ fn iso_date_len(token: &str) -> Option<usize> {
     None
 }
 
+/// `M/D`, `MM/DD`, `MM/DD/YY`, or `MM/DD/YYYY`. A third slash is not a date.
 fn slash_date_len(token: &str) -> Option<usize> {
-    let mut parts = token.split('/');
-    let month = parts.next()?;
-    let day = parts.next()?;
-    let year = parts.next();
-    if parts.next().is_some() {
-        return None;
+    let (month, rest) = token.split_once('/')?;
+    let (day, year) = day_and_year(rest)?;
+    if slash_parts_ok(month, day, year) {
+        Some(token.len())
+    } else {
+        None
     }
-    if !(1..=2).contains(&month.len()) || !(1..=2).contains(&day.len()) {
-        return None;
+}
+
+fn day_and_year(rest: &str) -> Option<(&str, Option<&str>)> {
+    match rest.split_once('/') {
+        None => Some((rest, None)),
+        Some((day, year)) => year_part(day, year),
     }
-    if !all_digits(month) || !all_digits(day) {
-        return None;
+}
+
+fn year_part<'a>(day: &'a str, year: &'a str) -> Option<(&'a str, Option<&'a str>)> {
+    if year.contains('/') {
+        None
+    } else {
+        Some((day, Some(year)))
     }
-    if let Some(year) = year
-        && ((year.len() != 4 && year.len() != 2) || !all_digits(year))
-    {
-        return None;
+}
+
+fn slash_parts_ok(month: &str, day: &str, year: Option<&str>) -> bool {
+    mm_or_dd(month) && mm_or_dd(day) && !year_rejected(year)
+}
+
+fn mm_or_dd(value: &str) -> bool {
+    let len = value.len();
+    (len == 1 || len == 2) && all_digits(value)
+}
+
+fn year_rejected(year: Option<&str>) -> bool {
+    match year {
+        None => false,
+        Some(text) => !yy_or_yyyy(text),
     }
-    Some(token.len())
+}
+
+fn yy_or_yyyy(text: &str) -> bool {
+    let len = text.len();
+    (len == 2 || len == 4) && all_digits(text)
 }
 
 fn clock_token_len(token: &str) -> Option<usize> {

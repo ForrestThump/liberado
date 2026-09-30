@@ -248,6 +248,61 @@ fn two_near_tasks_in_one_note_stay_two_lines() {
 }
 
 #[test]
+fn a_slash_due_collapses_onto_the_emoji_date() {
+    let root = tempfile::tempdir().unwrap();
+    write_note(
+        root.path(),
+        "Life/House.md",
+        "\
+- [ ] Pay the water bill 📅 2026-10-22
+- [ ] File the form 📅 2026-01-02
+",
+    );
+    write_note(
+        root.path(),
+        "Journal/Weekly Review 2026-09-20.md",
+        "\
+- [ ] Pay the water bill — due 10/22
+- [ ] Pay the water bill — due 10/22/26
+- [ ] Pay the water bill — due 10/22/2026
+- [ ] File the form — due 1/2
+",
+    );
+    write_note(
+        root.path(),
+        "Tasks/Slash.md",
+        "\
+- [ ] Leave the long month — due 100/22
+- [ ] Leave the long day — due 10/222
+- [ ] Leave the letters — due ab/22
+- [ ] Leave the day letters — due 10/cd
+- [ ] Leave the short year — due 10/22/202
+- [ ] Leave the word year — due 10/22/yy
+- [ ] Leave the extra part — due 10/22/2026/1
+- [ ] Clinic follow up 📅 10/22
+",
+    );
+    let message = task_ping_message(root.path(), 20, today());
+    assert_eq!(
+        message.matches("Pay the water bill").count(),
+        1,
+        "{message}"
+    );
+    assert_eq!(message.matches("File the form").count(), 1, "{message}");
+    assert!(message.contains("Life/House.md"), "{message}");
+    assert!(!message.contains("Weekly Review"), "{message}");
+    assert!(message.contains("100/22"), "{message}");
+    assert!(message.contains("10/222"), "{message}");
+    assert!(message.contains("ab/22"), "{message}");
+    assert!(message.contains("10/cd"), "{message}");
+    assert!(message.contains("10/22/202"), "{message}");
+    assert!(message.contains("10/22/yy"), "{message}");
+    assert!(message.contains("10/22/2026/1"), "{message}");
+    assert!(message.contains("Clinic follow up"), "{message}");
+    assert!(message.contains("Tasks/Slash.md"), "{message}");
+}
+
+#[test]
 fn task_limit_truncates_and_skipped_folders_stay_out() {
     let root = tempfile::tempdir().unwrap();
     std::fs::write(
