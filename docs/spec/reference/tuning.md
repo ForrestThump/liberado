@@ -213,6 +213,11 @@ The vault is the list. Add a task by writing an Obsidian Tasks line in a note:
 - [-] Cancelled 📅 2026-09-01
 ```
 
+A weekly review or evening debrief often pastes that same open line, with a
+`*(path)*` or `[[path]]` back to the original note. `task-ping` lists the task
+once and keeps the original note (`Life/` or `Tasks/` ahead of `Briefs/` and
+`Journal/`).
+
 Add an event as a Full Calendar note, or as a titled note under `calendar/`:
 
 ```markdown

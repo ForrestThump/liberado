@@ -111,6 +111,142 @@ fn a_due_clock_is_shown_and_a_date_only_task_stays_date_only() {
     );
 }
 
+fn write_note(root: &std::path::Path, rel: &str, body: &str) {
+    let path = root.join(rel);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).unwrap();
+    }
+    std::fs::write(path, body).unwrap();
+}
+
+#[test]
+fn copied_open_tasks_collapse_to_the_finance_note() {
+    let root = tempfile::tempdir().unwrap();
+    write_note(
+        root.path(),
+        "Life/Systems/Finance/CNH 401k Rollover to IRA.md",
+        "- [ ] Move CNH retirement account into an IRA ⏫ 📅 2026-10-22 #task #finance #retirement\n",
+    );
+    write_note(
+        root.path(),
+        "Journal/Weekly Review 2026-09-20.md",
+        "- [ ] Move CNH retirement account into an IRA ⏫ 📅 2026-10-22 *(Life/Systems/Finance/CNH 401k Rollover to IRA.md)* #finance #retirement\n",
+    );
+    write_note(
+        root.path(),
+        "Journal/Weekly Review 2026-09-13.md",
+        "- [ ] Move CNH retirement account into an IRA ⏫ 📅 2026-10-22 [[Life/Systems/Finance/CNH 401k Rollover to IRA]]\n",
+    );
+    write_note(
+        root.path(),
+        "Briefs/2026-09-17-Evening-Debrief.md",
+        "- [ ] Move CNH 401k into an IRA — due Oct 22 ⏫ *(Life/Systems/Finance/CNH 401k Rollover to IRA.md)*\n",
+    );
+    write_note(
+        root.path(),
+        "Briefs/2026-09-19-Evening-Debrief.md",
+        "- [ ] Move CNH retirement account into an IRA — **due Oct 22** ⏫ *(Life/Systems/Finance/CNH 401k Rollover to IRA.md)*\n",
+    );
+    write_note(
+        root.path(),
+        "Tasks/Admin.md",
+        "- [ ] Email the plan administrator 📅 2026-10-01\n",
+    );
+    let message = task_ping_message(root.path(), 10, today());
+    assert_eq!(message.matches("Move CNH").count(), 1, "{message}");
+    assert!(
+        message.contains("Life/Systems/Finance/CNH 401k Rollover to IRA.md"),
+        "{message}"
+    );
+    assert!(
+        message.contains("retirement account into an IRA"),
+        "{message}"
+    );
+    assert!(!message.contains("401k into an IRA"), "{message}");
+    assert!(!message.contains("Weekly Review"), "{message}");
+    assert!(!message.contains("Evening-Debrief"), "{message}");
+    assert!(
+        message.contains("Email the plan administrator"),
+        "{message}"
+    );
+    assert!(message.contains("Tasks/Admin.md"), "{message}");
+}
+
+#[test]
+fn task_limit_counts_unique_tasks_after_dedupe() {
+    let root = tempfile::tempdir().unwrap();
+    write_note(
+        root.path(),
+        "Life/Chore.md",
+        "- [ ] Take out the trash ⏫ 📅 2026-10-22\n",
+    );
+    write_note(
+        root.path(),
+        "Journal/Weekly Review 2026-09-20.md",
+        "- [ ] Take out the trash ⏫ 📅 2026-10-22 *(Life/Chore.md)*\n",
+    );
+    write_note(
+        root.path(),
+        "Briefs/2026-09-19-Evening-Debrief.md",
+        "- [ ] Take out the trash ⏫ *(Life/Chore.md)*\n",
+    );
+    write_note(
+        root.path(),
+        "Tasks/Next.md",
+        "- [ ] Email the plan administrator 🔼 📅 2026-10-01\n",
+    );
+    write_note(
+        root.path(),
+        "Tasks/Later.md",
+        "- [ ] Order filters 📅 2026-12-01\n",
+    );
+    let message = task_ping_message(root.path(), 2, today());
+    assert_eq!(
+        message.matches("Take out the trash").count(),
+        1,
+        "{message}"
+    );
+    assert!(message.contains("Life/Chore.md"), "{message}");
+    assert!(
+        message.contains("Email the plan administrator"),
+        "{message}"
+    );
+    assert!(!message.contains("Order filters"), "{message}");
+    assert!(!message.contains("Weekly Review"), "{message}");
+    assert!(!message.contains("Evening-Debrief"), "{message}");
+}
+
+#[test]
+fn two_near_tasks_in_one_note_stay_two_lines() {
+    let root = tempfile::tempdir().unwrap();
+    write_note(
+        root.path(),
+        "Life/Systems/Finance/CNH.md",
+        "\
+- [ ] Move CNH retirement account into an IRA ⏫ 📅 2026-10-22
+- [ ] Move CNH retirement account into a Roth ⏫ 📅 2026-11-01
+",
+    );
+    write_note(
+        root.path(),
+        "Briefs/2026-09-17-Evening-Debrief.md",
+        "\
+- [ ] Move CNH 401k into an IRA — due Oct 22 *(Life/Systems/Finance/CNH.md)*
+- [ ] Move CNH 401k into a Roth — due Nov 1 *(Life/Systems/Finance/CNH.md)*
+",
+    );
+    let message = task_ping_message(root.path(), 10, today());
+    assert_eq!(message.matches("into an IRA").count(), 1, "{message}");
+    assert_eq!(message.matches("into a Roth").count(), 1, "{message}");
+    assert!(!message.contains("401k into"), "{message}");
+    assert!(!message.contains("Evening-Debrief"), "{message}");
+    assert_eq!(
+        message.matches("Life/Systems/Finance/CNH.md").count(),
+        2,
+        "{message}"
+    );
+}
+
 #[test]
 fn task_limit_truncates_and_skipped_folders_stay_out() {
     let root = tempfile::tempdir().unwrap();

@@ -232,7 +232,10 @@ in-progress `- [/]` lines. It skips done (`- [x]`) and cancelled (`- [-]`). It r
 dates on the line: 📅 due, ⏳ scheduled, 🛫 start, and 🔁 recurrence. A due or
 scheduled value with a clock (`YYYY-MM-DD HH:MM` or `YYYY-MM-DDTHH:MM`) is shown
 as `at HH:MM`. Seconds are ignored. A start date after today hides the line. The list is ranked by Tasks priority (🔺, then ⏫, then 🔼, then
-unmarked, then 🔽) and then by due date. `task_limit` caps the list (default 10).
+unmarked, then 🔽) and then by due date. The same open task copied into another note is listed
+once, before that rank and limit. The digest keeps the note the copies point at with `*(path)*`
+or `[[path]]`, otherwise a note under `Life/` or `Tasks/`, and it drops `Briefs/` and `Journal/`
+copies. `task_limit` caps the list (default 10).
 
 `event-ping` reads calendar notes from the same vault. A note counts when its YAML
 frontmatter has `date: YYYY-MM-DD` and one of these is true:

@@ -6,6 +6,9 @@ use chrono::{NaiveDate, NaiveTime};
 use super::date::parse_ymd;
 use super::walk::markdown_notes;
 
+#[path = "task_dedupe.rs"]
+mod dedupe;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct OpenTask {
     pub(crate) priority: u8,
@@ -18,6 +21,8 @@ pub(crate) struct OpenTask {
     pub(crate) in_progress: bool,
     pub(crate) text: String,
     pub(crate) path: String,
+    /// `*(path)*` and `[[path]]` notes named on this line. Used only to collapse copies.
+    backrefs: Vec<String>,
 }
 
 pub(crate) fn task_ping_message(root: &Path, limit: u32, today: NaiveDate) -> String {
@@ -25,6 +30,8 @@ pub(crate) fn task_ping_message(root: &Path, limit: u32, today: NaiveDate) -> St
     for (rel, text) in markdown_notes(root) {
         collect_tasks(&rel, &text, today, &mut tasks);
     }
+    // Review notes paste the same open line. Collapse those copies first, then rank and limit.
+    let mut tasks = dedupe::collapse_copies(tasks);
     tasks.sort_by(task_rank);
     render_tasks(&tasks, limit, today)
 }
@@ -38,6 +45,7 @@ fn collect_tasks(rel: &str, text: &str, today: NaiveDate, out: &mut Vec<OpenTask
             continue;
         }
         task.path = rel.to_string();
+        task.backrefs = dedupe::note_backrefs(line);
         out.push(task);
     }
 }
@@ -67,6 +75,7 @@ pub(crate) fn parse_task_line(line: &str) -> Option<OpenTask> {
         in_progress: state,
         text: body.to_string(),
         path: String::new(),
+        backrefs: Vec::new(),
     })
 }
 
