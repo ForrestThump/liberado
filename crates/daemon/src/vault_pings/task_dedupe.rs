@@ -9,9 +9,9 @@
 //!
 //! A line names a note with a trailing-style path backref `*(path)*` or a wiki
 //! link `[[path]]` (alias and `#heading` are ignored). Matching ignores `.md`
-//! and accepts the note's file name when the link has no folder. Two copies that
-//! only share a backref do not match each other through that link. Different
-//! tasks in one note stay separate.
+//! and ASCII case, and accepts the note's file name when the link has no folder.
+//! Two copies that only share a backref do not match each other through that
+//! link. Different tasks in one note stay separate.
 //!
 //! A near copy shares at least 4 words and at least half of the combined word
 //! set (Jaccard ≥ 1/2). Words come from the normalized description.
@@ -117,7 +117,8 @@ fn norm_note(value: &str) -> String {
     let trimmed = value.trim().trim_matches('*').trim();
     let slash = trimmed.replace('\\', "/");
     let no_dot = slash.strip_prefix("./").unwrap_or(&slash);
-    no_dot.strip_suffix(".md").unwrap_or(no_dot).to_string()
+    let folded = no_dot.to_ascii_lowercase();
+    folded.strip_suffix(".md").unwrap_or(&folded).to_string()
 }
 
 fn near_copy(left: &str, right: &str) -> bool {

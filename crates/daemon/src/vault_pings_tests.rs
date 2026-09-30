@@ -303,6 +303,30 @@ fn a_slash_due_collapses_onto_the_emoji_date() {
 }
 
 #[test]
+fn a_lowercase_wiki_link_collapses_onto_the_note() {
+    let root = tempfile::tempdir().unwrap();
+    write_note(
+        root.path(),
+        "Life/CNH.md",
+        "- [ ] Move CNH retirement account into an IRA ⏫ 📅 2026-10-22\n",
+    );
+    write_note(
+        root.path(),
+        "Journal/Weekly Review 2026-09-20.md",
+        "- [ ] Move CNH 401k into an IRA — due Oct 22 [[cnh]]\n",
+    );
+    let message = task_ping_message(root.path(), 10, today());
+    assert_eq!(message.matches("into an IRA").count(), 1, "{message}");
+    assert!(
+        message.contains("retirement account into an IRA"),
+        "{message}"
+    );
+    assert!(message.contains("Life/CNH.md"), "{message}");
+    assert!(!message.contains("401k into an IRA"), "{message}");
+    assert!(!message.contains("Weekly Review"), "{message}");
+}
+
+#[test]
 fn task_limit_truncates_and_skipped_folders_stay_out() {
     let root = tempfile::tempdir().unwrap();
     std::fs::write(
@@ -467,6 +491,100 @@ endRecur: 2026-12-31
         "{message}"
     );
     assert!(!message.contains("2026-10-07"), "{message}");
+}
+
+#[test]
+fn a_heading_is_the_event_title_when_frontmatter_has_no_title() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(root.path().join("calendar")).unwrap();
+    std::fs::write(
+        root.path().join("calendar/dentist.md"),
+        "\
+---
+allDay: false
+startTime: 9:00
+endTime: 10:30
+date: 2026-09-28
+---
+# Clinic visit
+Bring the card.
+",
+    )
+    .unwrap();
+    let message = event_ping_message(root.path(), today(), "America/Chicago");
+    assert!(message.contains("— Clinic visit —"), "{message}");
+    assert!(message.contains("calendar/dentist.md"), "{message}");
+    assert!(!message.contains("— dentist —"), "{message}");
+}
+
+#[test]
+fn an_end_recur_inside_the_window_keeps_that_day_and_drops_the_next() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(root.path().join("calendar")).unwrap();
+    std::fs::write(
+        root.path().join("calendar/standup.md"),
+        "\
+---
+title: Standup
+allDay: false
+startTime: 09:00
+endTime: 09:15
+type: recurring
+daysOfWeek: [M, W]
+startRecur: 2026-09-01
+endRecur: 2026-09-30
+---
+",
+    )
+    .unwrap();
+    let message = event_ping_message(root.path(), today(), "America/Chicago");
+    assert!(
+        message.contains("2026-09-28 09:00–09:15 — Standup"),
+        "{message}"
+    );
+    assert!(
+        message.contains("2026-09-30 09:00–09:15 — Standup"),
+        "{message}"
+    );
+    assert!(
+        !message.contains("2026-10-05 09:00–09:15 — Standup"),
+        "{message}"
+    );
+}
+
+#[test]
+fn a_start_recur_inside_the_window_drops_earlier_days() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(root.path().join("calendar")).unwrap();
+    std::fs::write(
+        root.path().join("calendar/standup.md"),
+        "\
+---
+title: Standup
+allDay: false
+startTime: 09:00
+endTime: 09:15
+type: recurring
+daysOfWeek: [M, W]
+startRecur: 2026-09-30
+endRecur: 2026-12-31
+---
+",
+    )
+    .unwrap();
+    let message = event_ping_message(root.path(), today(), "America/Chicago");
+    assert!(
+        !message.contains("2026-09-28 09:00–09:15 — Standup"),
+        "{message}"
+    );
+    assert!(
+        message.contains("2026-09-30 09:00–09:15 — Standup"),
+        "{message}"
+    );
+    assert!(
+        message.contains("2026-10-05 09:00–09:15 — Standup"),
+        "{message}"
+    );
 }
 
 #[test]
