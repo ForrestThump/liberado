@@ -5,8 +5,10 @@ use chat_client_contract::{ConvHeader, ConversationSearchResponse, ConversationS
 use crate::components::conversation_row::ConversationRow;
 use crate::components::mcp_panel::McpPanel;
 use crate::components::sidebar_new_agent::NewAgentPicker;
-use crate::components::sidebar_shelf::{Shelf, conversations_on_shelf, search_results_on_shelf};
-use crate::icons::IconChevronLeft;
+use crate::components::sidebar_shelf::{
+    Shelf, ShelfCreate, conversations_on_shelf, search_is_active, search_results_on_shelf,
+};
+use crate::icons::{IconChevronLeft, IconPlus, IconSearch};
 
 async fn fetch_conversations(api_base: String) -> Result<Vec<ConvHeader>, String> {
     let url = format!("{api_base}/api/conversations");
@@ -260,7 +262,8 @@ pub fn Sidebar(
     api_base: String,
     active_conv_id: Signal<Option<String>>,
     collapsed: Signal<bool>,
-    /// Bumped whenever "New Chat" is pressed. See the button below for why a counter and not a bool.
+    /// Bumped when the Chats shelf's + control starts a fresh chat. A counter,
+    /// not a bool — see that control. The Agents shelf does not bump this.
     new_chat_nonce: Signal<u64>,
 ) -> Element {
     let mut new_chat_nonce = new_chat_nonce;
@@ -276,6 +279,11 @@ pub fn Sidebar(
     });
 
     let mut search_query = use_signal(String::new);
+    // Search starts closed. The magnifying glass toggles the field; closing it
+    // clears `search_query` so the shelf list returns. While open, results stay
+    // shelf-scoped through `search_results_on_shelf`.
+    // `bool::default` (not a closure) keeps this file on its function-count boundary.
+    let mut search_open = use_signal(bool::default);
     // Soft shelf toggle (Chats | Agents). Default Chats. Switching shelves only
     // refilters the list — the active conversation stays selected even if it
     // lives on the other shelf (see PR body / CAS2 brief).
@@ -290,7 +298,13 @@ pub fn Sidebar(
     let mut search_results = use_resource({
         let base = api_base.clone();
         move || {
-            let q = search_query.read().trim().to_string();
+            // A closed field must not keep searching on a leftover query.
+            let raw = search_query.read();
+            let q = if search_is_active(search_open(), raw.as_str()) {
+                raw.trim().to_string()
+            } else {
+                String::new()
+            };
             let base = base.clone(); // fresh per-call clone; the async block below consumes it
             async move {
                 if q.is_empty() {
@@ -377,49 +391,58 @@ pub fn Sidebar(
             div {
                 class: "sidebar-header",
                 div {
-                    class: "sidebar-new-btns",
+                    class: "sidebar-chrome-actions",
                     button {
-                        class: "sidebar-new-chat-btn",
-                        onclick: move |_| {
-                            // Announce the *request* rather than infer it from state. This used to be
-                            // only `if active_conv_id.is_some() { set(None) }`, on the premise that
-                            // `None` already means "fresh and empty" — true until incognito, whose
-                            // session deliberately never becomes an `active_conv_id`. New Chat then
-                            // no-opped in exactly the case where clearing mattered most, leaving the
-                            // private transcript on screen.
-                            //
-                            // A counter, not a bool: pressing New Chat twice has to register twice, and
-                            // a flag that is already `true` cannot say "again".
-                            new_chat_nonce += 1;
-                            if active_conv_id.read().is_some() {
-                                active_conv_id.set(None);
+                        class: "sidebar-icon-btn",
+                        r#type: "button",
+                        title: "{shelf().create_label()}",
+                        "aria-label": "{shelf().create_label()}",
+                        onclick: move |_| match shelf().create_action() {
+                            // Agents: the existing picker. Do not start a Chats-shelf fresh chat.
+                            ShelfCreate::NewAgent => new_agent_open.set(true),
+                            ShelfCreate::FreshChat => {
+                                // Announce the *request* rather than infer it from state. This used to be
+                                // only `if active_conv_id.is_some() { set(None) }`, on the premise that
+                                // `None` already means "fresh and empty" — true until incognito, whose
+                                // session deliberately never becomes an `active_conv_id`. New Chat then
+                                // no-opped in exactly the case where clearing mattered most, leaving the
+                                // private transcript on screen.
+                                //
+                                // A counter, not a bool: pressing New Chat twice has to register twice, and
+                                // a flag that is already `true` cannot say "again".
+                                new_chat_nonce += 1;
+                                if active_conv_id.read().is_some() {
+                                    active_conv_id.set(None);
+                                }
+                                collapse_after_pick(collapsed);
                             }
-                            collapse_after_pick(collapsed);
                         },
-                        "New Chat"
+                        IconPlus {}
                     }
                     button {
-                        class: "sidebar-new-agent-btn",
-                        title: "Create an Agents-shelf specialist chat",
-                        onclick: move |_| new_agent_open.set(true),
-                        "New Agent"
+                        class: if search_open() { "sidebar-icon-btn active" } else { "sidebar-icon-btn" },
+                        r#type: "button",
+                        title: if search_open() { "Close search" } else { shelf().search_button_label() },
+                        "aria-label": if search_open() { "Close search" } else { shelf().search_button_label() },
+                        "aria-expanded": "{search_open()}",
+                        "aria-controls": "sidebar-search",
+                        onclick: move |_| {
+                            let open = !search_open();
+                            search_open.set(open);
+                            if !open {
+                                search_query.set(String::new());
+                            }
+                        },
+                        IconSearch {}
                     }
                 }
                 button {
-                    class: "sidebar-collapse-btn",
+                    class: "sidebar-icon-btn",
+                    r#type: "button",
                     onclick: toggle,
                     title: "Collapse sidebar",
+                    "aria-label": "Collapse sidebar",
                     IconChevronLeft {}
-                }
-            }
-            div {
-                class: "sidebar-search",
-                input {
-                    class: "sidebar-search-input",
-                    r#type: "search",
-                    placeholder: "Search conversations...",
-                    value: "{search_query}",
-                    oninput: move |evt| search_query.set(evt.value()),
                 }
             }
             div {
@@ -443,13 +466,25 @@ pub fn Sidebar(
                     "Agents"
                 }
             }
-            p {
-                class: "sidebar-gesture-hint",
-                "Press and hold a chat for rename or delete."
+            if search_open() {
+                div {
+                    class: "sidebar-search",
+                    id: "sidebar-search",
+                    input {
+                        id: "sidebar-search-input",
+                        class: "sidebar-search-input",
+                        r#type: "search",
+                        placeholder: "{shelf().search_placeholder()}",
+                        "aria-label": "{shelf().search_field_label()}",
+                        value: "{search_query}",
+                        autofocus: true,
+                        oninput: move |evt| search_query.set(evt.value()),
+                    }
+                }
             }
             div {
                 class: "sidebar-list",
-                if !search_query.read().trim().is_empty() {
+                if search_is_active(search_open(), search_query.read().as_str()) {
                     match &*search_results.read() {
                         Some(Some(Ok(list))) => {
                             let conv_guard = conversations.read();

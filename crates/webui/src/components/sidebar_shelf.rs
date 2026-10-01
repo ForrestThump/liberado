@@ -35,6 +35,64 @@ impl Shelf {
             Shelf::Agents => "No agents yet.",
         }
     }
+
+    /// What the compact + control does. Chats starts a fresh chat; Agents opens
+    /// the existing New Agent picker and does not bump the chat nonce.
+    pub(super) fn create_action(self) -> ShelfCreate {
+        match self {
+            Shelf::Chats => ShelfCreate::FreshChat,
+            Shelf::Agents => ShelfCreate::NewAgent,
+        }
+    }
+
+    /// `title` / accessible name for the + control.
+    pub(super) fn create_label(self) -> &'static str {
+        match self {
+            Shelf::Chats => "New chat",
+            Shelf::Agents => "New agent",
+        }
+    }
+
+    /// `title` / accessible name for the magnifying-glass control while search is closed.
+    pub(super) fn search_button_label(self) -> &'static str {
+        match self {
+            Shelf::Chats => "Search chats",
+            Shelf::Agents => "Search agents",
+        }
+    }
+
+    /// Accessible name for the search field. The request is still
+    /// `GET /api/conversations/search` (message grep); the shelf only decides
+    /// which conversations those hits are allowed to show.
+    pub(super) fn search_field_label(self) -> &'static str {
+        match self {
+            Shelf::Chats => "Search messages in chats",
+            Shelf::Agents => "Search messages in agent sessions",
+        }
+    }
+
+    pub(super) fn search_placeholder(self) -> &'static str {
+        match self {
+            Shelf::Chats => "Search chats...",
+            Shelf::Agents => "Search agents...",
+        }
+    }
+}
+
+/// What the sidebar + control does for the active shelf.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ShelfCreate {
+    /// Bump `new_chat_nonce` and clear the active conversation.
+    /// Does not open the New Agent picker.
+    FreshChat,
+    /// Open the New Agent picker. Does not start a fresh Chats-shelf chat.
+    NewAgent,
+}
+
+/// Search hits the list only while the field is open and the query has text.
+/// Closing the field (or leaving it blank) shows the shelf again.
+pub(super) fn search_is_active(open: bool, query: &str) -> bool {
+    open && !query.trim().is_empty()
 }
 
 /// Partition the conversation list onto the active shelf. Soft filter only —
@@ -114,6 +172,42 @@ mod tests {
         assert_eq!(Shelf::default(), Shelf::Chats);
         assert_eq!(Shelf::Chats.label(), "Chats");
         assert_eq!(Shelf::Agents.empty_message(), "No agents yet.");
+    }
+
+    /// + follows the shelf: Chats starts a fresh chat, Agents opens the picker.
+    #[test]
+    fn create_action_follows_the_shelf() {
+        assert_eq!(Shelf::Chats.create_action(), ShelfCreate::FreshChat);
+        assert_eq!(Shelf::Agents.create_action(), ShelfCreate::NewAgent);
+        assert_eq!(Shelf::Chats.create_label(), "New chat");
+        assert_eq!(Shelf::Agents.create_label(), "New agent");
+    }
+
+    /// Search copy names the shelf. The field is still the message-search API.
+    #[test]
+    fn search_copy_follows_the_shelf() {
+        assert_eq!(Shelf::Chats.search_button_label(), "Search chats");
+        assert_eq!(Shelf::Agents.search_button_label(), "Search agents");
+        assert_eq!(Shelf::Chats.search_placeholder(), "Search chats...");
+        assert_eq!(Shelf::Agents.search_placeholder(), "Search agents...");
+        assert_eq!(
+            Shelf::Chats.search_field_label(),
+            "Search messages in chats"
+        );
+        assert_eq!(
+            Shelf::Agents.search_field_label(),
+            "Search messages in agent sessions"
+        );
+    }
+
+    /// A closed field ignores leftover text; a blank open field is not a search.
+    #[test]
+    fn closed_or_blank_search_is_inactive() {
+        assert!(!search_is_active(false, "hello"));
+        assert!(!search_is_active(false, "  hello  "));
+        assert!(!search_is_active(true, ""));
+        assert!(!search_is_active(true, "   "));
+        assert!(search_is_active(true, " hello "));
     }
 
     /// Search scoping uses the conversation list's surface_mode; unknown ids stay visible.
