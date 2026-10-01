@@ -50,7 +50,7 @@ fn event_rank(left: &VaultEvent, right: &VaultEvent) -> Ordering {
     left.path.cmp(&right.path)
 }
 
-fn events_in_note(rel: &str, text: &str, today: NaiveDate) -> Vec<VaultEvent> {
+pub(super) fn events_in_note(rel: &str, text: &str, today: NaiveDate) -> Vec<VaultEvent> {
     let Some(yaml) = liberado_common::extract_frontmatter(text) else {
         return Vec::new();
     };

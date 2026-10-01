@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use super::shepherd::ShepherdConfig;
+use super::vault_reminders::VaultRemindersConfig;
 use liberado_common::{
     Capability, CapabilitySet, Consequence, ModelProfile, ModelRole, ReasoningLevel, UserTimezone,
     Zone,
@@ -55,6 +56,9 @@ pub struct Topology {
     /// Cron schedules (Decision 18/19) — each fires on its own timer and dispatches `goal` through
     /// the same reactive pipeline a vault change does (`liberado-cron`'s `CronEventSource`).
     pub schedules: Vec<CronSchedule>,
+    /// Minute-tick reminders from vault notes. Default off.
+    #[serde(default)]
+    pub vault_reminders: VaultRemindersConfig,
     /// Named dispatcher/executor pools (Decision 18 checkpoint #3) — each gets its own
     /// `Policy::capabilities_for(name)` authority boundary, sharing the same provider/tuning/MCP
     /// registry as everything else. The always-present `"default"` pool (today's single-dispatcher
@@ -1110,7 +1114,7 @@ pub struct CronSchedule {
     /// Mechanical job kind. When set, the daemon runs the job and does not start a model
     /// session, except `inbox-if-present`, which dispatches `goal` only when the capture
     /// file has text. Known kinds: `git-snapshot`, `task-ping`, `event-ping`, `habit-ping`,
-    /// `inbox-if-present`.
+    /// `inbox-if-present`, `vault-reminder-tick`.
     #[serde(default)]
     pub job: Option<String>,
     /// Text a `habit-ping` sends. Required for that kind.

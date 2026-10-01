@@ -402,6 +402,15 @@ writes_vault = false             # writes code workspaces, not the Obsidian vaul
 # Reminders use LIBERADO_REMINDER_BOT_TOKEN and LIBERADO_REMINDER_CHAT_ID. They do not
 # enter the sticky chat. cron_expr is UTC. "Today" uses topology.timezone (America/Chicago).
 # Set deliver = false so a session summary is not also pushed to the sticky notifier.
+#
+# Timed reminders are off until [vault_reminders] enabled = true. The tick then sends
+# only lines and notes that opt in with #remind, or with remind / reminder set to
+# true, yes, y, 1, or on. The rightmost marker wins. Date-only tasks stay on task-ping.
+# A habit such as tuesday-trash can retire once that vault task carries #remind.
+[vault_reminders]
+enabled = false
+tasks = true
+events = true
 # [[schedules]]
 # name = "morning-events"
 # cron_expr = "0 50 11 * * * *"  # 11:50 UTC = 06:50 America/Chicago CDT
@@ -414,6 +423,12 @@ writes_vault = false             # writes code workspaces, not the Obsidian vaul
 # job = "task-ping"
 # task_limit = 10
 # enabled = true
+# deliver = false
+# [[schedules]]
+# name = "vault-reminder-tick"
+# cron_expr = "0 * * * * *"
+# job = "vault-reminder-tick"
+# enabled = false
 # deliver = false
 #
 # `direct = true` skips the router (classifier) model and executes the schedule's `goal`

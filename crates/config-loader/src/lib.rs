@@ -44,8 +44,8 @@ pub use model::{
     MainAgentConfig, MaintenanceTuning, McpConfig, McpPoolingTuning, McpTransport,
     ModelCompactionSettings, Policy, PoolConfig, ProjectConfig, ProviderFallback, ProviderProfile,
     RoleOverride, ShepherdAuthConfig, ShepherdConfig, ShepherdProjectConfig, ShepherdReviewConfig,
-    SubagentIsolation, TelegramApprovalsTuning, ToolImpact, Topology, Tuning, WebUiConfig,
-    ZonePolicy, managed_binary_path, resolve_declared_zone,
+    SubagentIsolation, TelegramApprovalsTuning, ToolImpact, Topology, Tuning, VaultRemindersConfig,
+    WebUiConfig, ZonePolicy, managed_binary_path, resolve_declared_zone,
 };
 pub use source::{ConfigLoadError, ConfigSource};
 pub use validation::validate_merged_config;

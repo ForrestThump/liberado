@@ -199,10 +199,17 @@ watch, then restore. Verify the restore.
 
 ### Mechanical reminders — vault notes, not the sticky chat
 
-`task-ping`, `event-ping`, and `habit-ping` do not call a model. They send through
+`task-ping`, `event-ping`, `habit-ping`, and `vault-reminder-tick` do not call a model. They send through
 `LIBERADO_REMINDER_BOT_TOKEN` and `LIBERADO_REMINDER_CHAT_ID`. That is a second bot. The sticky
 chat uses `LIBERADO_TELEGRAM_*`. Set `deliver = false` so the schedule does not also push a
 session summary into the sticky chat.
+
+`[vault_reminders] enabled` defaults to false. The minute tick does nothing until that
+switch is on. `tasks` and `events` default to true and apply only while the switch is on.
+A task or event also needs its own `#remind` tag, or `remind` / `reminder` set to
+`true`, `yes`, `y`, `1`, or `on`. The rightmost marker wins. The tick matches a clock
+time in `topology.timezone`. A date with no time stays on `task-ping`. A habit such as
+tuesday-trash can retire once the vault task carries `#remind`.
 
 The vault is the list. Add a task by writing an Obsidian Tasks line in a note:
 

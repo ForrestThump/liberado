@@ -220,9 +220,11 @@ Product meaning: [`chat-agent-surface-mode.md`](architecture/chat-agent-surface-
 ## 9. Mechanical schedules
 
 A `[[schedules]]` entry with `job` set does not start a model session. The daemon runs the
-built-in kind. Kinds are `git-snapshot`, `task-ping`, `event-ping`, `habit-ping`, and
-`inbox-if-present`. An unknown kind is a load error. `habit-ping` requires `habit_text`.
-`inbox-if-present` requires `goal`, and that goal runs only when the capture file has text.
+built-in kind. Kinds are `git-snapshot`, `task-ping`, `event-ping`, `habit-ping`,
+`inbox-if-present`, and `vault-reminder-tick`. An unknown kind is a load error.
+`habit-ping` requires `habit_text`. `inbox-if-present` requires `goal`, and that goal
+runs only when the capture file has text. `vault-reminder-tick` is allowed only while
+`[vault_reminders] enabled = true`.
 
 `git-snapshot` commits the vault when it is dirty and pushes. It also runs at startup unless
 `run_on_start = false`.
@@ -254,6 +256,36 @@ the next 7 days, at most 10. There is no CalDAV read and no second event store.
 `LIBERADO_REMINDER_BOT_TOKEN` and `LIBERADO_REMINDER_CHAT_ID`. It does not append to the
 sticky chat, and it does not start a session. If the reminder variables are unset, the
 job still runs and the text is logged.
+
+### Timed tick — `[vault_reminders]`
+
+```toml
+[vault_reminders]
+enabled = false   # master switch; default false
+tasks = true      # used only while enabled
+events = true
+```
+
+`vault-reminder-tick` walks the same vault folders as `task-ping` and `event-ping`. It
+sends only notes that opt in. The rightmost marker wins:
+
+- `#remind` as its own tag (any case). `#reminder` does not count. `#remind/trash` does.
+- Dataview `remind::` or `reminder::`, or YAML `remind:` / `reminder:`.
+  Truthy values are `true`, `yes`, `y`, `1`, and `on` (any case, optional quotes).
+  Any other value opts out.
+
+On a task the marker is on that line. On a calendar note it may be in frontmatter or
+the body. A task fires when local time matches the first anchor that is present:
+📅 due, then ⏳ scheduled, then 🛫 start. That anchor must include a time
+(`YYYY-MM-DD HH:MM` or `YYYY-MM-DDTHH:MM`; seconds are ignored). A date with no time
+does not fire in the tick. The morning digest lists those. An event fires when it has
+`startTime` (a recurring note uses the same weekday expansion as `event-ping`) and
+local time matches that clock on the occurrence date. All-day notes do not fire here.
+
+The schedule is one UTC minute, for example `0 * * * * *`, with `deliver = false`.
+The daemon records fired minutes in `vault-reminder-fires.json` under the data dir,
+outside the vault. There is no second task store and no model call. A habit ping such
+as tuesday-trash can retire once that task carries `#remind`.
 
 Creating or editing a task or event is a vault markdown edit. TurboVault already writes
 those notes. This path has no separate notification record.

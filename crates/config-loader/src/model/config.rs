@@ -542,7 +542,11 @@ impl Config {
     fn validate_schedules(&self) -> Result<()> {
         let mut seen_schedule_names = std::collections::HashSet::new();
         for schedule in &self.topology.schedules {
-            validate_one_schedule(schedule, &mut seen_schedule_names)?;
+            validate_one_schedule(
+                schedule,
+                &mut seen_schedule_names,
+                self.topology.vault_reminders.enabled,
+            )?;
         }
         Ok(())
     }
@@ -553,11 +557,12 @@ impl Config {
 /// `Config::validate_schedules` stays at its cyclomatic baseline.
 ///
 /// Cyclomatic: 1 (base) + 1 (insert) + 1 (cron) + 1 (job Some) + 1 (KINDS)
-///             + 2 (habit &&) + 2 (inbox &&) = 8; CRAP at full coverage is 8
-///             (below the per-function ratchet's 10-point floor).
+///             + 2 (habit &&) + 2 (inbox &&) + 1 (tick `?`) = 9.
+///             CRAP at full coverage is 9, under the per-function floor of 10.
 fn validate_one_schedule<'a>(
     schedule: &'a CronSchedule,
     seen: &mut std::collections::HashSet<&'a str>,
+    reminders_enabled: bool,
 ) -> Result<()> {
     if !seen.insert(&schedule.name) {
         return Err(Error::Config(format!(
@@ -580,6 +585,7 @@ fn validate_one_schedule<'a>(
         "event-ping",
         "habit-ping",
         "inbox-if-present",
+        "vault-reminder-tick",
     ];
     if !KINDS.contains(&job.as_str()) {
         return Err(Error::Config(format!(
@@ -607,6 +613,7 @@ fn validate_one_schedule<'a>(
             schedule.name
         )));
     }
+    super::vault_reminders::refuse_tick_while_disabled(schedule, reminders_enabled)?;
     Ok(())
 }
 

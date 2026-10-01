@@ -68,6 +68,9 @@ impl Daemon {
             approvals: None,
             notifier: None,
             reminder: None,
+            vault_reminders: liberado_config::VaultRemindersConfig::default(),
+            reminder_state_path: liberado_config::data_dir().join("vault-reminder-fires.json"),
+            fixed_now: None,
             startup_jobs: Vec::new(),
             cron_source: None,
             event_tx: Some(event_tx),
@@ -200,6 +203,28 @@ impl Daemon {
     /// which folds cron briefs into the sticky chat.
     pub fn with_reminder_notifier(mut self, notifier: Arc<dyn Notifier>) -> Self {
         self.reminder = Some(notifier);
+        self
+    }
+
+    /// Turn the minute tick on and choose where fired minutes are recorded.
+    ///
+    /// `state_path` is outside the vault. Production passes `data_dir()/vault-reminder-fires.json`.
+    pub fn with_vault_reminders(
+        mut self,
+        settings: liberado_config::VaultRemindersConfig,
+        state_path: impl Into<PathBuf>,
+    ) -> Self {
+        self.vault_reminders = settings;
+        self.reminder_state_path = state_path.into();
+        self
+    }
+
+    /// Pin the minute-tick clock. A test writes a note for this minute and the
+    /// daemon reads the same minute.
+    #[cfg(test)]
+    #[must_use]
+    pub fn with_fixed_now(mut self, now: chrono::NaiveDateTime) -> Self {
+        self.fixed_now = Some(now);
         self
     }
 
