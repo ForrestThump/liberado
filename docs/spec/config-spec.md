@@ -220,13 +220,45 @@ Product meaning: [`chat-agent-surface-mode.md`](architecture/chat-agent-surface-
 ## 9. Mechanical schedules
 
 A `[[schedules]]` entry with `job` set does not start a model session. The daemon runs the
-built-in kind. Kinds are `git-snapshot`, `task-ping`, `habit-ping`, and `inbox-if-present`.
-An unknown kind is a load error. `habit-ping` requires `habit_text`. `inbox-if-present`
-requires `goal`, and that goal runs only when the capture file has text.
+built-in kind. Kinds are `git-snapshot`, `task-ping`, `event-ping`, `habit-ping`, and
+`inbox-if-present`. An unknown kind is a load error. `habit-ping` requires `habit_text`.
+`inbox-if-present` requires `goal`, and that goal runs only when the capture file has text.
 
 `git-snapshot` commits the vault when it is dirty and pushes. It also runs at startup unless
-`run_on_start = false`. Reminders use `LIBERADO_REMINDER_BOT_TOKEN` and
-`LIBERADO_REMINDER_CHAT_ID`. They are not appended to the sticky chat. See ADR-0020.
+`run_on_start = false`.
+
+`task-ping` reads Obsidian Tasks lines from vault markdown. It lists open `- [ ]` lines and
+in-progress `- [/]` lines. It skips done (`- [x]`) and cancelled (`- [-]`). It reads Tasks
+dates on the line: 📅 due, ⏳ scheduled, 🛫 start, and 🔁 recurrence. A due or
+scheduled value with a clock (`YYYY-MM-DD HH:MM` or `YYYY-MM-DDTHH:MM`) is shown
+as `at HH:MM`. Seconds are ignored. A start date after today hides the line. The list is ranked by Tasks priority (🔺, then ⏫, then 🔼, then
+unmarked, then 🔽) and then by due date. The same open task copied into another note is listed
+once, before that rank and limit. The digest keeps the note the copies point at with `*(path)*`
+or `[[path]]`, otherwise a note under `Life/` or `Tasks/`, and it drops `Briefs/` and `Journal/`
+copies. `task_limit` caps the list (default 10).
+
+`event-ping` reads calendar notes from the same vault. A note counts when its YAML
+frontmatter has `date: YYYY-MM-DD` and one of these is true:
+
+- It sets a Full Calendar field: `allDay`, `startTime`, `endTime`, or `endDate`.
+- It lives under a `calendar/` folder (any case) and sets `title`.
+
+A recurring Full Calendar note (`type: recurring` or `daysOfWeek`) uses `daysOfWeek`
+letters `U M T W R F S` (Sunday through Saturday, Thursday is `R`), plus optional
+`startRecur` and `endRecur`. `completed: true`, `yes`, or a date skips the note.
+`completed: false` or `null` keeps it. The message lists events that overlap today through
+the next 7 days, at most 10. There is no CalDAV read and no second event store.
+
+"Today" for both jobs is `topology.timezone`. The default is `America/Chicago`.
+`cron_expr` stays UTC. Set `deliver = false` on these schedules. The job sends on
+`LIBERADO_REMINDER_BOT_TOKEN` and `LIBERADO_REMINDER_CHAT_ID`. It does not append to the
+sticky chat, and it does not start a session. If the reminder variables are unset, the
+job still runs and the text is logged.
+
+Creating or editing a task or event is a vault markdown edit. TurboVault already writes
+those notes. This path has no separate notification record.
+
+See ADR-0020.
 
 ## 9a. Direct cron dispatch (`direct = true`)
 

@@ -397,6 +397,25 @@ writes_vault = false             # writes code workspaces, not the Obsidian vaul
 # `deliver = false` silences the notifier for this schedule. Omitted, results are delivered as
 # before — worth setting for a maintenance schedule that runs often and usually finds nothing.
 #
+# Mechanical jobs do not start a model. task-ping reads Obsidian Tasks lines. event-ping
+# reads Full Calendar notes and titled notes under calendar/. habit-ping sends habit_text.
+# Reminders use LIBERADO_REMINDER_BOT_TOKEN and LIBERADO_REMINDER_CHAT_ID. They do not
+# enter the sticky chat. cron_expr is UTC. "Today" uses topology.timezone (America/Chicago).
+# Set deliver = false so a session summary is not also pushed to the sticky notifier.
+# [[schedules]]
+# name = "morning-events"
+# cron_expr = "0 50 11 * * * *"  # 11:50 UTC = 06:50 America/Chicago CDT
+# job = "event-ping"
+# enabled = true
+# deliver = false
+# [[schedules]]
+# name = "morning-tasks"
+# cron_expr = "0 55 11 * * * *"  # 11:55 UTC = 06:55 America/Chicago CDT
+# job = "task-ping"
+# task_limit = 10
+# enabled = true
+# deliver = false
+#
 # `direct = true` skips the router (classifier) model and executes the schedule's `goal`
 # verbatim with the configured grant. Recommended for any unattended cron whose `goal` is
 # fully self-contained — the router's only job is to disambiguate human chat into Execute /

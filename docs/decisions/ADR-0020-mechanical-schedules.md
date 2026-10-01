@@ -24,9 +24,12 @@ Scheduled work was a prose goal. Every firing paid for a model call, and the res
 A schedule may set `job` to a built-in kind. The daemon runs that kind directly. It does not classify the goal and it does not start a session.
 
 - `git-snapshot` commits the vault when it is dirty and pushes. It also runs once at startup unless `run_on_start = false`.
-- `task-ping` reads open `- [ ]` lines from the vault and sends a ranked list.
+- `task-ping` reads open Obsidian Tasks lines from the vault and sends a ranked list. Done and cancelled lines are skipped. Due, scheduled, start, and recurrence markers on the line are shown. A clock on a due or scheduled date is included. The same task copied into a review note is listed once, on the note the copies point at.
+- `event-ping` reads Full Calendar frontmatter, and titled notes under `calendar/`, and sends events that overlap today through the next 7 days. It does not read CalDAV.
 - `habit-ping` sends `habit_text` unchanged.
 - `inbox-if-present` dispatches `goal` only when the capture file has text. An empty file does not call a model.
+
+"Today" follows `topology.timezone` (default `America/Chicago`). `cron_expr` stays UTC. Set `deliver = false` so the reminder is not also written into the sticky chat. Creating or editing a task or event is a vault markdown edit.
 
 Reminders go out through `LIBERADO_REMINDER_BOT_TOKEN` and `LIBERADO_REMINDER_CHAT_ID`. They do not use the sticky chat. If those variables are unset, the job still runs and the text is logged.
 

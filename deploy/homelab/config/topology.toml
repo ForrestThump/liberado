@@ -287,9 +287,21 @@ You are a live-conformance probe. Do exactly this and nothing else:
 """
 
 # Mechanical jobs. No model. Reminders use LIBERADO_REMINDER_BOT_TOKEN and
-# LIBERADO_REMINDER_CHAT_ID, not the sticky chat. See ADR-0020.
-# Times are UTC. 11:55 UTC = 06:55 America/Chicago CDT. 02:00 UTC = 21:00 CDT.
-# 08:15 UTC = 03:15 CDT.
+# LIBERADO_REMINDER_CHAT_ID, not the sticky chat. deliver = false keeps the sticky
+# notifier out of the path. See ADR-0020 and docs/spec/reference/tuning.md.
+# Times are UTC. "Today" inside task-ping and event-ping uses topology.timezone
+# (America/Chicago). 11:50 UTC = 06:50 CDT. 11:55 UTC = 06:55 CDT.
+# 02:00 UTC = 21:00 CDT. 08:15 UTC = 03:15 CDT.
+# When the clock is CST (UTC-6), add one hour to these UTC times.
+# Tasks are Obsidian Tasks lines in vault notes. Events are Full Calendar notes,
+# or a titled note under calendar/. Edit the markdown to change the next ping.
+
+[[schedules]]
+name = "morning-events"
+enabled = true
+cron_expr = "0 50 11 * * * *"
+job = "event-ping"
+deliver = false
 
 [[schedules]]
 name = "morning-tasks"

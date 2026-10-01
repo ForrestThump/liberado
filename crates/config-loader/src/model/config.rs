@@ -577,6 +577,7 @@ fn validate_one_schedule<'a>(
     const KINDS: &[&str] = &[
         "git-snapshot",
         "task-ping",
+        "event-ping",
         "habit-ping",
         "inbox-if-present",
     ];

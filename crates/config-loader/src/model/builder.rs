@@ -1496,6 +1496,10 @@ clarify_threshold_read = 0.8
 #[path = "builder_fallback_tests.rs"]
 mod fallback_tests;
 
+#[cfg(test)]
+#[path = "builder_job_tests.rs"]
+mod job_tests;
+
 /// Test fixture: a `ProviderProfile` with sensible defaults. Hoisted out of `mod tests` so the
 /// sibling `fallback_tests` module (in `builder_fallback_tests.rs`) can share it via
 /// `super::provider_profile`. `mod tests` picks it up via its `use super::*;` import.

@@ -1,26 +1,20 @@
-//! Mechanical schedules: git snapshot, task list, habit ping, inbox gate.
+//! Mechanical schedules: git snapshot, task list, event list, habit ping, inbox gate.
 //!
 //! These run in the daemon. They do not call a model. A reminder, when there is one, goes
-//! to the reminder notifier — never the sticky chat.
+//! to the reminder notifier — never the sticky chat. Task and event text comes from vault
+//! markdown. See [`crate::vault_pings`].
 
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use liberado_common::Event;
+use chrono::NaiveDate;
 use liberado_common::process::std_command;
+use liberado_common::{Event, UserTimezone};
 
 use crate::types::{Daemon, ReactionOutcome};
 
 const DEFAULT_TASK_LIMIT: u32 = 10;
 const DEFAULT_CAPTURE: &str = "Inbox/Capture.md";
-const SKIP_DIRS: &[&str] = &[
-    ".git",
-    ".obsidian",
-    ".trash",
-    "00 - Meta",
-    "Legal",
-    "proposals",
-];
 
 /// Optional fields a schedule or event may set. Empty values fall back to defaults.
 #[derive(Debug, Clone, Default)]
@@ -114,10 +108,17 @@ pub enum JobEffect {
     Continue,
 }
 
-pub fn execute(root: &Path, job: &JobRequest) -> JobEffect {
+pub(crate) fn execute_on(root: &Path, job: &JobRequest, today: NaiveDate, zone: &str) -> JobEffect {
     match job.kind.as_str() {
         "git-snapshot" => git_snapshot(root, job),
-        "task-ping" => JobEffect::Remind(task_message(root, job.task_limit)),
+        "task-ping" => JobEffect::Remind(crate::vault_pings::task_ping_message(
+            root,
+            job.task_limit,
+            today,
+        )),
+        "event-ping" => {
+            JobEffect::Remind(crate::vault_pings::event_ping_message(root, today, zone))
+        }
         "habit-ping" => match job
             .habit_text
             .as_deref()
@@ -145,7 +146,8 @@ impl Daemon {
     pub(crate) fn handle_mechanical(&self, event: &Event) -> Option<ReactionOutcome> {
         let name = crate::helpers::cron_schedule_name(&event.source).unwrap_or("job");
         let request = JobRequest::from_event(name, &event.payload.data)?;
-        match execute(self.vault.root(), &request) {
+        let (today, zone) = self.mechanical_clock();
+        match execute_on(self.vault.root(), &request, today, &zone) {
             JobEffect::Continue => None,
             JobEffect::Quiet => {
                 tracing::info!(job = %request.name, kind = %request.kind, "mechanical job quiet");
@@ -160,8 +162,9 @@ impl Daemon {
     }
 
     pub(crate) fn run_startup_jobs(&self) {
+        let (today, zone) = self.mechanical_clock();
         for job in &self.startup_jobs {
-            match execute(self.vault.root(), job) {
+            match execute_on(self.vault.root(), job, today, &zone) {
                 JobEffect::Quiet => {
                     tracing::info!(job = %job.name, "startup snapshot clean");
                 }
@@ -172,6 +175,13 @@ impl Daemon {
                 JobEffect::Continue => {}
             }
         }
+    }
+
+    fn mechanical_clock(&self) -> (NaiveDate, String) {
+        let zone = self
+            .user_timezone
+            .unwrap_or_else(UserTimezone::default_zone);
+        (zone.now().date_naive(), zone.iana_name().to_string())
     }
 
     fn send_reminder(&self, text: &str) {
@@ -268,118 +278,6 @@ fn output_text(output: &std::process::Output) -> String {
         format!("{short}…")
     } else {
         short
-    }
-}
-
-#[derive(Debug)]
-struct OpenTask {
-    priority: u8,
-    due: Option<String>,
-    text: String,
-    path: String,
-}
-
-fn task_message(root: &Path, limit: u32) -> String {
-    let mut tasks = Vec::new();
-    collect_tasks(root, root, &mut tasks);
-    tasks.sort_by(|a, b| {
-        b.priority
-            .cmp(&a.priority)
-            .then_with(|| match (&a.due, &b.due) {
-                (Some(left), Some(right)) => left.cmp(right),
-                (Some(_), None) => std::cmp::Ordering::Less,
-                (None, Some(_)) => std::cmp::Ordering::Greater,
-                (None, None) => a.text.cmp(&b.text),
-            })
-    });
-    if tasks.is_empty() {
-        return "No open tasks.".to_string();
-    }
-    let mut lines = vec!["Open tasks".to_string(), String::new()];
-    for (index, task) in tasks.into_iter().take(limit as usize).enumerate() {
-        let due = task
-            .due
-            .map(|date| format!(" — due {date}"))
-            .unwrap_or_default();
-        lines.push(format!("{}. {}{due} — {}", index + 1, task.text, task.path));
-    }
-    lines.push(String::new());
-    lines.push("Reply in Liberado when you want one done.".to_string());
-    lines.join("\n")
-}
-
-fn collect_tasks(root: &Path, dir: &Path, out: &mut Vec<OpenTask>) {
-    let entries = match fs::read_dir(dir) {
-        Ok(entries) => entries,
-        Err(_) => return,
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        let name = entry.file_name();
-        let name = name.to_string_lossy();
-        if path.is_dir() {
-            if SKIP_DIRS.contains(&name.as_ref()) || name.starts_with('.') {
-                continue;
-            }
-            collect_tasks(root, &path, out);
-            continue;
-        }
-        if name.ends_with(".md") {
-            read_tasks(root, &path, out);
-        }
-    }
-}
-
-fn read_tasks(root: &Path, path: &Path, out: &mut Vec<OpenTask>) {
-    let Ok(text) = fs::read_to_string(path) else {
-        return;
-    };
-    let rel = path
-        .strip_prefix(root)
-        .unwrap_or(path)
-        .to_string_lossy()
-        .replace('\\', "/");
-    for line in text.lines() {
-        let trimmed = line.trim();
-        let Some(body) = trimmed.strip_prefix("- [ ]") else {
-            continue;
-        };
-        let body = body.trim();
-        if body.is_empty() {
-            continue;
-        }
-        out.push(OpenTask {
-            priority: task_priority(body),
-            due: task_due(body),
-            text: body.to_string(),
-            path: rel.clone(),
-        });
-    }
-}
-
-fn task_priority(line: &str) -> u8 {
-    if line.contains('⏫') {
-        3
-    } else if line.contains('🔼') {
-        2
-    } else if line.contains('🔽') {
-        0
-    } else {
-        1
-    }
-}
-
-fn task_due(line: &str) -> Option<String> {
-    let rest = line.split('📅').nth(1)?.trim_start();
-    let date: String = rest.chars().take(10).collect();
-    if date.len() == 10
-        && date.as_bytes().get(4) == Some(&b'-')
-        && date.as_bytes().get(7) == Some(&b'-')
-        && date.bytes().all(|b| b.is_ascii_digit() || b == b'-')
-    {
-        Some(date)
-    } else {
-        None
     }
 }
 
