@@ -864,14 +864,21 @@ pub async fn get_conversation(
             // made Tier 3 P2's model cross-check vacuous — every history reply had no model field.
             let messages: Vec<ChatMessage> =
                 nodes.into_iter().map(chat_message_from_node).collect();
-            // Read from the session's own header rather than tracked client-side: a conversation
-            // opened in a second tab, or after a restart, must show the authority it actually runs
-            // under.
-            let profile = state
+            // One session read: profile for the chip, projected shelf for whether the chip shows.
+            // The projection is the same chat lens the sidebar list uses.
+            let (profile, surface_mode) = state
                 .sessions
                 .session(id)
                 .await
-                .and_then(|h| h.grant.profile);
+                .map(|header| {
+                    let mode = wire_surface(
+                        header
+                            .to_conversation_header_with(state.sessions.agent_profiles())
+                            .surface_mode,
+                    );
+                    (header.grant.profile, mode)
+                })
+                .unwrap_or((None, chat_client_contract::SurfaceMode::default()));
             Json(ConversationHistoryResponse {
                 messages,
                 profile,
@@ -881,6 +888,7 @@ pub async fn get_conversation(
                 // Asked after `turn_running` and never alongside it: a live turn also ends on the
                 // human's message, and calling that dead would mark every in-flight turn as failed.
                 turn_unanswered: sessions.last_turn_unanswered(id).await,
+                surface_mode,
             })
             .into_response()
         }
@@ -903,6 +911,15 @@ pub async fn get_conversation(
 ///
 /// Carries `MessageNode::model` so clients (and the Tier 3 suite) can cross-check which model
 /// actually ran a turn without a second API.
+/// Store shelf → wire shelf. The two enums match on serde spelling and cannot share a type.
+fn wire_surface(
+    mode: liberado_conversation_store::SurfaceMode,
+) -> chat_client_contract::SurfaceMode {
+    // Branch-free: an `if` here pushes this file over its cyclomatic review boundary.
+    serde_json::from_value(serde_json::to_value(mode).unwrap_or(serde_json::json!("chat")))
+        .unwrap_or_default()
+}
+
 fn chat_message_from_node(n: liberado_conversation_store::MessageNode) -> ChatMessage {
     let m = n.message;
     let role = match m.role {

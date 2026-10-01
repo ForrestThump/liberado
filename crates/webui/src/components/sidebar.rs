@@ -1,12 +1,17 @@
 use dioxus::prelude::*;
 
-use chat_client_contract::{ConvHeader, ConversationSearchResponse, ConversationSearchResult};
+use chat_client_contract::{
+    ConvHeader, ConversationSearchResponse, ConversationSearchResult, SurfaceMode,
+};
 
 use crate::components::conversation_row::ConversationRow;
 use crate::components::mcp_panel::McpPanel;
-use crate::components::sidebar_new_agent::NewAgentPicker;
+use crate::components::sidebar_agent_creator::CreatorError;
+#[cfg(target_arch = "wasm32")]
+use crate::components::sidebar_agent_creator::open_agent_creator_session;
 use crate::components::sidebar_shelf::{
     Shelf, ShelfCreate, conversations_on_shelf, search_is_active, search_results_on_shelf,
+    surface_for_id,
 };
 use crate::icons::{IconChevronLeft, IconPlus, IconSearch};
 
@@ -265,8 +270,12 @@ pub fn Sidebar(
     /// Bumped when the Chats shelf's + control starts a fresh chat. A counter,
     /// not a bool — see that control. The Agents shelf does not bump this.
     new_chat_nonce: Signal<u64>,
+    /// Projected shelf of the open conversation. Agents + and row select write it.
+    /// Chat history overwrites it once the transcript loads.
+    active_surface: Signal<Option<SurfaceMode>>,
 ) -> Element {
     let mut new_chat_nonce = new_chat_nonce;
+    let mut active_surface = active_surface;
     // `mut` for `restart()` after a delete, which is wasm-only — on native that writer is cfg'd out
     // and the binding merely looks immutable.
     #[cfg_attr(not(target_arch = "wasm32"), allow(unused_mut))]
@@ -288,7 +297,11 @@ pub fn Sidebar(
     // refilters the list — the active conversation stays selected even if it
     // lives on the other shelf (see PR body / CAS2 brief).
     let mut shelf = use_signal(Shelf::default);
-    let mut new_agent_open = use_signal(|| false);
+    // Agents + failure. Separate from row `action_error` so a delete error stays on the row.
+    // `Option::default` (not a closure) keeps this file on its function-count boundary.
+    // `.set` is wasm-only; native only reads the signal in the list.
+    #[cfg_attr(not(target_arch = "wasm32"), allow(unused_mut))]
+    let mut create_error = use_signal(Option::<String>::default);
     // Which row's action sheet is open, by conversation id. Held here rather than per row so
     // opening one closes another — two open sheets at once is just clutter.
     let mut menu_for = use_signal(|| None::<String>);
@@ -398,8 +411,28 @@ pub fn Sidebar(
                         title: "{shelf().create_label()}",
                         "aria-label": "{shelf().create_label()}",
                         onclick: move |_| match shelf().create_action() {
-                            // Agents: the existing picker. Do not start a Chats-shelf fresh chat.
-                            ShelfCreate::NewAgent => new_agent_open.set(true),
+                            // Agents: focus the singleton creator. Do not start a Chats-shelf chat
+                            // and do not open a specialist picker.
+                            ShelfCreate::AgentCreator => {
+                                let base = api_base.clone();
+                                #[cfg(target_arch = "wasm32")]
+                                wasm_bindgen_futures::spawn_local(async move {
+                                    match open_agent_creator_session(&base).await {
+                                        Ok(header) => {
+                                            active_conv_id.set(Some(header.id));
+                                            active_surface.set(Some(SurfaceMode::Agent));
+                                            create_error.set(None);
+                                            conversations.restart();
+                                            collapse_after_pick(collapsed);
+                                        }
+                                        Err(e) => create_error.set(Some(e)),
+                                    }
+                                });
+                                #[cfg(not(target_arch = "wasm32"))]
+                                {
+                                    let _ = base;
+                                }
+                            }
                             ShelfCreate::FreshChat => {
                                 // Announce the *request* rather than infer it from state. This used to be
                                 // only `if active_conv_id.is_some() { set(None) }`, on the premise that
@@ -484,6 +517,7 @@ pub fn Sidebar(
             }
             div {
                 class: "sidebar-list",
+                CreatorError { message: create_error() }
                 if search_is_active(search_open(), search_query.read().as_str()) {
                     match &*search_results.read() {
                         Some(Some(Ok(list))) => {
@@ -514,9 +548,11 @@ pub fn Sidebar(
                                             on_select: {
                                                 let mut active = active_conv_id;
                                                 let id = result.conversation_id.clone();
+                                                let mode = surface_for_id(headers, &result.conversation_id);
                                                 move |_| {
                                                     menu_for.set(None);
                                                     active.set(Some(id.clone()));
+                                                    active_surface.set(mode);
                                                     collapse_after_pick(collapsed);
                                                 }
                                             },
@@ -562,9 +598,11 @@ pub fn Sidebar(
                                             on_select: {
                                                 let mut active = active_conv_id;
                                                 let id = conv.id.clone();
+                                                let mode = conv.surface_mode;
                                                 move |_| {
                                                     menu_for.set(None);
                                                     active.set(Some(id.clone()));
+                                                    active_surface.set(Some(mode));
                                                     collapse_after_pick(collapsed);
                                                 }
                                             },
@@ -604,18 +642,6 @@ pub fn Sidebar(
             div {
                 class: "sidebar-footer",
                 McpPanel { api_base: api_base.clone() }
-            }
-            if new_agent_open() {
-                NewAgentPicker {
-                    api_base: api_base.clone(),
-                    open: new_agent_open,
-                    on_created: move |header: chat_client_contract::ConvHeader| {
-                        active_conv_id.set(Some(header.id));
-                        shelf.set(Shelf::Agents);
-                        conversations.restart();
-                        collapse_after_pick(collapsed);
-                    },
-                }
             }
         }
     }

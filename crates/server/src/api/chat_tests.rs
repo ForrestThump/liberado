@@ -559,6 +559,10 @@ fn create_router(state: Arc<crate::state::AppState>) -> Router {
             "/api/conversations",
             axum::routing::get(super::list_conversations).post(crate::api::create_conversation),
         )
+        .route(
+            "/api/conversations/{id}",
+            axum::routing::get(super::get_conversation),
+        )
         .with_state(state)
 }
 
@@ -603,4 +607,90 @@ async fn create_with_unknown_profile_is_refused() {
         body.contains("nonesuch") || body.contains("profile"),
         "{body}"
     );
+}
+
+/// Agents shelf + : one creator session, canned opener, client profile/title ignored.
+#[tokio::test]
+async fn agent_creator_post_is_a_singleton_with_a_canned_opener() {
+    let dir = tempfile::tempdir().unwrap();
+    let sessions = Arc::new(SessionStore::open(dir.path()).await);
+    let chat = Arc::new(
+        ChatSessions::new(
+            sessions.clone(),
+            Executor::new(
+                Arc::new(MockProvider::with_script("mock", vec![])),
+                Budget::default(),
+            ),
+            Arc::new(NoopRuntime),
+        )
+        .with_profile_resolver(Arc::new(|name: &str| {
+            Ok(liberado_session::SessionGrant {
+                profile: Some(name.to_owned()),
+                ..Default::default()
+            })
+        })),
+    );
+    let state = Arc::new(crate::state::AppState::for_test(
+        sessions,
+        Some(chat.clone()),
+        dir.path().to_path_buf(),
+    ));
+    let app = create_router(state);
+    let body = r#"{"agent_creator":true,"profile":"coding","title":"ignored"}"#;
+    let (status, raw) = post_create(&app, body).await;
+    assert_eq!(status, StatusCode::CREATED, "{raw}");
+    let created: serde_json::Value = serde_json::from_str(&raw).unwrap();
+    let id = created["id"].as_str().unwrap().to_string();
+    assert_eq!(created["surface_mode"], "agent");
+    assert_eq!(created["title"], "Agent Creator");
+    assert_eq!(created["agent_creator"], true);
+    assert_eq!(created["grant"]["profile"], "operator");
+
+    let (again_status, again_raw) = post_create(&app, body).await;
+    assert_eq!(again_status, StatusCode::OK, "{again_raw}");
+    let again: serde_json::Value = serde_json::from_str(&again_raw).unwrap();
+    assert_eq!(again["id"], id);
+
+    let ulid = liberado_conversation_store::Ulid::from_str(&id).unwrap();
+    let nodes = chat.history_nodes(ulid).await.unwrap();
+    let visible: Vec<_> = nodes
+        .iter()
+        .filter(|n| !matches!(n.author, liberado_conversation_store::Author::System))
+        .collect();
+    assert_eq!(visible.len(), 1);
+    assert!(matches!(
+        visible[0].author,
+        liberado_conversation_store::Author::Assistant
+    ));
+    assert_eq!(
+        visible[0].message.content,
+        "What type of agent do you want to make?"
+    );
+    assert!(visible[0].model.is_none());
+    let system = nodes
+        .iter()
+        .find(|n| matches!(n.author, liberado_conversation_store::Author::System))
+        .unwrap();
+    assert!(system.message.content.contains("create_agent"));
+
+    let hist = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/conversations/{id}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(hist.status(), StatusCode::OK);
+    let hist_body = axum::body::to_bytes(hist.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let hist_json: serde_json::Value = serde_json::from_slice(&hist_body).unwrap();
+    assert_eq!(hist_json["surface_mode"], "agent");
+    assert_eq!(
+        hist_json["messages"][1]["content"],
+        "What type of agent do you want to make?"
+    );
+    assert!(hist_json["messages"][1]["model"].is_null());
 }
