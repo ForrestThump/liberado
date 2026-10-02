@@ -24,11 +24,8 @@ pub(crate) fn show_profile_browser(open: bool, surface: Option<SurfaceMode>) -> 
 }
 
 /// `/profile` on an Agent surface is a no-op open. Chat and empty chat still open the picker.
-pub(crate) fn maybe_open_profile_browser(
-    surface: Signal<Option<SurfaceMode>>,
-    mut open: Signal<bool>,
-) {
-    if profile_chip_visible(surface()) {
+pub(crate) fn maybe_open_profile_browser(surface: Option<SurfaceMode>, mut open: Signal<bool>) {
+    if profile_chip_visible(surface) {
         open.set(true);
     }
 }

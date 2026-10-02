@@ -172,8 +172,6 @@ pub fn Chat(
     active_surface: Signal<Option<chat_client_contract::SurfaceMode>>,
 ) -> Element {
     #[cfg_attr(not(target_arch = "wasm32"), allow(unused_mut))]
-    let mut profile_browser_open = profile_browser_open;
-    #[cfg_attr(not(target_arch = "wasm32"), allow(unused_mut))]
     let mut active_profile = active_profile;
     #[cfg_attr(not(target_arch = "wasm32"), allow(unused_mut))]
     let mut palette_dismissed = palette_dismissed;
