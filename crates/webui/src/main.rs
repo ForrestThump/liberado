@@ -168,6 +168,9 @@ fn App() -> Element {
     // "New Chat" as an event rather than a state change — see the button in `sidebar.rs`. Owned here
     // because the sidebar raises it and the chat acts on it.
     let new_chat_nonce = use_signal(|| 0u64);
+    // `create_agent` finishes on the Agent Creator session, so the open id does
+    // not change. This counter is what makes the Agents shelf fetch again.
+    let list_epoch = use_signal(u64::default);
     // The `/model` and `/theme` pickers. They are opened from inside `Chat`, but they live here with
     // every other dismissible layer, because the Back gesture needs one place that knows what is
     // open and in what order (see the block below and `back_nav.rs`).
@@ -329,6 +332,7 @@ fn App() -> Element {
                     collapsed: sidebar_collapsed,
                     new_chat_nonce,
                     active_surface,
+                    list_epoch,
                 }
                 main {
                     class: "main-content",
@@ -346,6 +350,7 @@ fn App() -> Element {
                             profile_browser_open,
                             active_profile,
                             active_surface,
+                            list_epoch,
                         }
                     } else {
                         Dashboard { api_base: base.clone() }

@@ -298,6 +298,47 @@ fn chat_message_from_node_carries_the_store_model_stamp() {
     assert_eq!(wire.model.as_deref(), Some("vendor/slug"));
 }
 
+/// An old session can still have `<think>` in the stored assistant text. The
+/// history read hides it. A user who quoted the tag keeps it.
+#[test]
+fn chat_message_from_node_hides_assistant_think_blocks() {
+    use liberado_conversation_store::{Author, MessageNode, Ulid};
+    use liberado_provider::{Message, Role};
+
+    let stored = "<think>\nsecret\n</think>\n\nHello";
+    let assistant = MessageNode {
+        id: Ulid::new(),
+        parent_id: None,
+        conversation_id: Ulid::new(),
+        author: Author::Assistant,
+        created_at: chrono::Utc::now(),
+        message: Message {
+            role: Role::Assistant,
+            content: stored.into(),
+            tool_calls: Vec::new(),
+            tool_call_id: None,
+        },
+        model: None,
+    };
+    assert_eq!(chat_message_from_node(assistant).content, "Hello");
+
+    let user = MessageNode {
+        id: Ulid::new(),
+        parent_id: None,
+        conversation_id: Ulid::new(),
+        author: Author::User,
+        created_at: chrono::Utc::now(),
+        message: Message {
+            role: Role::User,
+            content: stored.into(),
+            tool_calls: Vec::new(),
+            tool_call_id: None,
+        },
+        model: None,
+    };
+    assert_eq!(chat_message_from_node(user).content, stored);
+}
+
 /// Both transports, because `EventSource` can only `GET` and so the WebUI's picks arrive as a
 /// query parameter while every other client sends JSON. A field that works on one of the two is
 /// worse than one that works on neither, because it looks fine wherever you happen to test it.

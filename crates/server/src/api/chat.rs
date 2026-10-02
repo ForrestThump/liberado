@@ -930,7 +930,7 @@ fn chat_message_from_node(n: liberado_conversation_store::MessageNode) -> ChatMe
     };
     ChatMessage {
         role: role.to_string(),
-        content: m.content,
+        content: liberado_provider::visible_transcript(role, m.content),
         tool_calls: (!m.tool_calls.is_empty())
             .then(|| serde_json::to_value(&m.tool_calls).ok())
             .flatten(),

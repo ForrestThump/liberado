@@ -273,6 +273,9 @@ pub fn Sidebar(
     /// Projected shelf of the open conversation. Agents + and row select write it.
     /// Chat history overwrites it once the transcript loads.
     active_surface: Signal<Option<SurfaceMode>>,
+    /// Bumped when `create_agent` succeeds. The open row does not change, so
+    /// `active_conv_id` alone would leave this list stale.
+    list_epoch: Signal<u64>,
 ) -> Element {
     let mut new_chat_nonce = new_chat_nonce;
     let mut active_surface = active_surface;
@@ -283,6 +286,8 @@ pub fn Sidebar(
         let base = api_base.clone();
         move || {
             let _ = active_conv_id.read();
+            // Successful `create_agent` does not switch the open conversation.
+            let _ = list_epoch.read();
             fetch_conversations(base.clone())
         }
     });

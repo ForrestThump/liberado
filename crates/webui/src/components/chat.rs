@@ -24,6 +24,10 @@ use crate::icons::{
 #[cfg(target_arch = "wasm32")]
 use liberado_commands::CommandResult;
 
+#[cfg(target_arch = "wasm32")]
+#[path = "chat_tool_events.rs"]
+mod chat_tool_events;
+
 // ── Data types ──────────────────────────────────────────────────────────────
 
 /// A tool call + its result, grouped as a thinking step under an assistant message.
@@ -170,7 +174,12 @@ pub fn Chat(
     active_profile: Signal<Option<String>>,
     /// Projected shelf. Agent hides the profile chip and blocks `/profile`.
     active_surface: Signal<Option<chat_client_contract::SurfaceMode>>,
+    /// Bumped when `create_agent` succeeds so the Agents shelf refetches.
+    list_epoch: Signal<u64>,
 ) -> Element {
+    // The SSE listener that writes this is wasm-only. Native still has the prop.
+    #[cfg(not(target_arch = "wasm32"))]
+    let _list_epoch_keep = list_epoch;
     #[cfg_attr(not(target_arch = "wasm32"), allow(unused_mut))]
     let mut active_profile = active_profile;
     #[cfg_attr(not(target_arch = "wasm32"), allow(unused_mut))]
@@ -277,6 +286,7 @@ pub fn Chat(
                                     active_conv_id,
                                     should_set_title,
                                     ghost_session,
+                                    list_epoch,
                                 },
                                 &base,
                             );
@@ -519,6 +529,7 @@ pub fn Chat(
                 active_conv_id,
                 should_set_title,
                 ghost_session,
+                list_epoch,
             },
             &base_for_title,
             incognito(),
@@ -1090,6 +1101,8 @@ struct StreamTargets {
     should_set_title: Signal<bool>,
     /// Where an incognito turn records the session it opened, for the teardown paths.
     ghost_session: Signal<Option<String>>,
+    /// Bumped when `create_agent` succeeds. The shelf reads it and refetches.
+    list_epoch: Signal<u64>,
 }
 
 /// The `/api/chat/stream` URL for one turn.
@@ -1228,6 +1241,7 @@ fn connect_stream(
         mut active_conv_id,
         mut should_set_title,
         mut ghost_session,
+        list_epoch,
     } = targets;
     use std::rc::Rc;
     use wasm_bindgen::JsCast;
@@ -1324,40 +1338,11 @@ fn connect_stream(
         on_tool.forget();
     }
 
-    // tool_finished -> resolve the most recent pending ThinkingStep with matching name.
+    // tool_finished -> close the pending step, and refetch the shelf when an agent was created.
     {
         let on_result = Closure::<dyn FnMut(MessageEvent)>::new(move |e: MessageEvent| {
             if let Some(data) = e.data().as_string() {
-                if let Ok(chat_client_contract::SessionEvent {
-                    kind:
-                        chat_client_contract::SessionEventKind::ToolFinished {
-                            name,
-                            ok,
-                            result_preview: preview,
-                        },
-                    ..
-                }) = chat_client_contract::SessionEvent::from_sse_data("tool_finished", &data)
-                {
-                    messages.with_mut(|m| {
-                        // Find the last assistant message that has a pending step matching `name`.
-                        // `find_map` hands back a `&mut ThinkingStep` borrowed from `m` itself —
-                        // no raw pointer needed; NLL is fine with using it right after.
-                        let found = m
-                            .iter_mut()
-                            .rev()
-                            .filter(|msg| msg.role == "assistant")
-                            .find_map(|msg| {
-                                msg.thinking_steps
-                                    .iter_mut()
-                                    .rev()
-                                    .find(|s| s.ok.is_none() && s.tool_name == name)
-                            });
-                        if let Some(step) = found {
-                            step.ok = Some(ok);
-                            step.preview = preview;
-                        }
-                    });
-                }
+                chat_tool_events::note_tool_finished(&data, messages, list_epoch);
             }
         });
         let _ = source

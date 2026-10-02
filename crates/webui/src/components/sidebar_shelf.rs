@@ -106,6 +106,13 @@ pub(super) fn search_is_active(open: bool, query: &str) -> bool {
     open && !query.trim().is_empty()
 }
 
+/// A successful `create_agent` adds a shelf row while the user stays on the
+/// Agent Creator. The conversation list has to be fetched again; switching
+/// Chats/Agents only refilters whatever was already loaded.
+pub(crate) fn refreshes_agent_shelf(tool_name: &str, ok: bool) -> bool {
+    ok && tool_name == "create_agent"
+}
+
 /// Partition the conversation list onto the active shelf. Soft filter only —
 /// the full list stays in memory so switching shelves never drops selection.
 pub(super) fn conversations_on_shelf<'a>(
@@ -183,6 +190,16 @@ mod tests {
         assert_eq!(Shelf::default(), Shelf::Chats);
         assert_eq!(Shelf::Chats.label(), "Chats");
         assert_eq!(Shelf::Agents.empty_message(), "No agents yet.");
+    }
+
+    /// Only a successful `create_agent` reloads the shelf. A failure, or any
+    /// other tool, leaves the list alone.
+    #[test]
+    fn create_agent_success_refreshes_the_shelf() {
+        assert!(refreshes_agent_shelf("create_agent", true));
+        assert!(!refreshes_agent_shelf("create_agent", false));
+        assert!(!refreshes_agent_shelf("delegate", true));
+        assert!(!refreshes_agent_shelf("search", true));
     }
 
     /// + follows the shelf: Chats starts a fresh chat, Agents opens the creator.

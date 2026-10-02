@@ -17,12 +17,14 @@ pub mod latency;
 mod mock;
 pub mod openai_compat;
 mod provider;
+mod think_text;
 mod types;
 
 pub use error::{ProviderError, ProviderResult};
 pub use latency::{AgentRole, LatencyEvent, LatencyRecorder, MeteredProvider, NoopRecorder};
 pub use mock::MockProvider;
 pub use provider::{CompletionStream, Provider, complete_json};
+pub use think_text::visible_transcript;
 pub use types::{
     CompletionRequest, CompletionResponse, FinishReason, Message, ResponseFormat, Role, StreamItem,
     ToolDef, ToolInvocation, Usage,
