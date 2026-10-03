@@ -401,6 +401,13 @@ pub struct ConversationHistoryResponse {
     /// Mutually exclusive with [`turn_running`](Self::turn_running) by construction.
     #[serde(default)]
     pub turn_unanswered: bool,
+    /// Projected shelf of this conversation (`chat` / `agent`).
+    ///
+    /// On the history response so a client opening a row can hide chat-only chrome (the profile
+    /// chip) without a second list fetch. `#[serde(default)]` reads a pre-field daemon as `Chat`,
+    /// which keeps the chip visible — the safe direction.
+    #[serde(default)]
+    pub surface_mode: SurfaceMode,
 }
 
 // ──────────────────────────────────────────────────────────────
@@ -949,13 +956,16 @@ mod tests {
             profile: Some("basic-chat".into()),
             turn_running: true,
             turn_unanswered: false,
+            surface_mode: SurfaceMode::Agent,
         };
         let json = serde_json::to_value(&resp).unwrap();
+        assert_eq!(json["surface_mode"], "agent");
         let back: ConversationHistoryResponse = serde_json::from_value(json).unwrap();
         assert_eq!(back.messages.len(), 2);
         assert_eq!(back.messages[0].role, "user");
         assert_eq!(back.messages[1].content, "hi there");
         assert!(back.turn_running);
+        assert_eq!(back.surface_mode, SurfaceMode::Agent);
     }
 
     /// A daemon that predates `turn_running` omits the field, and a client must read that as "no
@@ -966,6 +976,7 @@ mod tests {
         let back: ConversationHistoryResponse = serde_json::from_value(json).unwrap();
         assert!(!back.turn_running);
         assert!(!back.turn_unanswered);
+        assert_eq!(back.surface_mode, SurfaceMode::Chat);
     }
 
     // ── VaultInfo / ApiError ──────────────────────────────────

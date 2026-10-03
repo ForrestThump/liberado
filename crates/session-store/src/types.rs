@@ -82,6 +82,11 @@ pub struct SessionHeader {
     /// the agent sense is the profile one, not the goal one.
     #[serde(default)]
     pub surface_mode: SurfaceMode,
+
+    /// Singleton Agent Creator conversation. See
+    /// [`ConversationHeader::agent_creator`](liberado_conversation_store::ConversationHeader::agent_creator).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub agent_creator: bool,
 }
 
 fn pending() -> SessionStatus {
@@ -111,6 +116,7 @@ impl SessionHeader {
             // The default surface_mode for a goal-less chat constructor. Profile
             // class upgrades it on the chat lens — see `to_conversation_header`.
             surface_mode: SurfaceMode::default(),
+            agent_creator: false,
         }
     }
 
@@ -184,6 +190,7 @@ impl SessionHeader {
             // views are built from this one header.
             grant: self.grant.clone(),
             surface_mode: self.projected_surface_mode(profiles),
+            agent_creator: self.agent_creator,
         }
     }
 
@@ -226,6 +233,9 @@ pub struct NewSession {
     /// through here. Spec:
     /// `docs/spec/architecture/chat-agent-surface-mode.md`.
     pub surface_mode: SurfaceMode,
+    /// Singleton Agent Creator marker. Default false. Forks pass false even
+    /// when the source is the creator — a branch is not a second creator.
+    pub agent_creator: bool,
 }
 
 #[cfg(test)]
@@ -304,6 +314,21 @@ mod surface_mode_tests {
         // projection is per-read, the on-disk stamp (Chat) is unchanged.
         let conv = header.to_conversation_header();
         assert_eq!(conv.surface_mode, SurfaceMode::Agent);
+    }
+
+    #[test]
+    fn missing_agent_creator_deserializes_as_false_and_true_roundtrips() {
+        let json = r#"{"id":"01ARZ3NDEKTSV4RRFFQ69G5FAV","created_at":"2026-01-01T00:00:00Z"}"#;
+        let header: SessionHeader = serde_json::from_str(json).unwrap();
+        assert!(!header.agent_creator);
+        let mut stamped = header.clone();
+        stamped.agent_creator = true;
+        let wire = serde_json::to_string(&stamped).unwrap();
+        assert!(wire.contains("\"agent_creator\":true"), "{wire}");
+        let back: SessionHeader = serde_json::from_str(&wire).unwrap();
+        assert!(back.agent_creator);
+        let projected = back.to_conversation_header();
+        assert!(projected.agent_creator);
     }
 
     #[test]

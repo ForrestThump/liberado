@@ -43,6 +43,7 @@ fn chat_header(id: Ulid) -> SessionHeader {
         awaiting_input: false,
         ephemeral: false,
         surface_mode: Default::default(),
+        agent_creator: false,
     }
 }
 

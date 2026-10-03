@@ -2,11 +2,18 @@ use dioxus::prelude::*;
 
 use chat_client_contract::ChatMessage;
 
-use crate::components::chat_submission::submission_text;
+#[cfg(target_arch = "wasm32")]
+use crate::components::chat_submission::unanswered_turn_note;
+use crate::components::chat_submission::{profile_switched_note, submission_text};
 use crate::components::markdown::MarkdownText;
 use crate::components::model_browser::ModelBrowser;
 use crate::components::picker::Picker;
 use crate::components::profile_browser::ProfileBrowser;
+use crate::components::profile_surface::show_profile_browser;
+#[cfg(target_arch = "wasm32")]
+use crate::components::profile_surface::{
+    handle_slash_for_surface, maybe_open_profile_browser, set_surface,
+};
 use crate::components::slash_palette::SlashPalette;
 use crate::icons::{
     IconCheck, IconChevronDown, IconChevronRight, IconGlasses, IconSpinner, IconStop, IconX,
@@ -15,9 +22,11 @@ use crate::icons::{
 // Slash commands only run in the browser — `submit` gates the whole block on wasm32, so gate the
 // imports identically or a native build trips the workspace's zero-warnings bar on unused imports.
 #[cfg(target_arch = "wasm32")]
-use crate::components::slash_commands::handle_slash_command;
-#[cfg(target_arch = "wasm32")]
 use liberado_commands::CommandResult;
+
+#[cfg(target_arch = "wasm32")]
+#[path = "chat_tool_events.rs"]
+mod chat_tool_events;
 
 // ── Data types ──────────────────────────────────────────────────────────────
 
@@ -92,6 +101,7 @@ struct LoadedConversation {
     /// The last turn ended with no reply — usually the daemon restarting mid-inference. Rendered as
     /// a note rather than left as silence, which reads as "the model said nothing".
     turn_unanswered: bool,
+    surface_mode: chat_client_contract::SurfaceMode,
 }
 
 async fn fetch_conversation(api_base: &str, conv_id: &str) -> Result<LoadedConversation, String> {
@@ -120,6 +130,7 @@ async fn fetch_conversation(api_base: &str, conv_id: &str) -> Result<LoadedConve
         profile: history.profile,
         turn_running: history.turn_running,
         turn_unanswered: history.turn_unanswered,
+        surface_mode: history.surface_mode,
     })
 }
 
@@ -161,9 +172,14 @@ pub fn Chat(
     /// Which session profile the open conversation runs under, for the picker's active badge and the
     /// header chip. Loaded from the conversation, not guessed.
     active_profile: Signal<Option<String>>,
+    /// Projected shelf. Agent hides the profile chip and blocks `/profile`.
+    active_surface: Signal<Option<chat_client_contract::SurfaceMode>>,
+    /// Bumped when `create_agent` succeeds so the Agents shelf refetches.
+    list_epoch: Signal<u64>,
 ) -> Element {
-    #[cfg_attr(not(target_arch = "wasm32"), allow(unused_mut))]
-    let mut profile_browser_open = profile_browser_open;
+    // The SSE listener that writes this is wasm-only. Native still has the prop.
+    #[cfg(not(target_arch = "wasm32"))]
+    let _list_epoch_keep = list_epoch;
     #[cfg_attr(not(target_arch = "wasm32"), allow(unused_mut))]
     let mut active_profile = active_profile;
     #[cfg_attr(not(target_arch = "wasm32"), allow(unused_mut))]
@@ -246,14 +262,10 @@ pub fn Chat(
                         // transcript, and writing it into the log would make a display decision
                         // permanent and re-answer it wrongly if the turn were later retried.
                         if unanswered {
-                            loaded_messages.push(ChatMsg {
-                                role: "system",
-                                content: "That turn ended without a reply — the daemon most likely                                           restarted mid-answer. Nothing was saved; send again to retry."
-                                    .to_string(),
-                                thinking_steps: Vec::new(),
-                            });
+                            loaded_messages.push(unanswered_turn_note());
                         }
                         messages.set(loaded_messages);
+                        set_surface(active_surface, Some(loaded.surface_mode));
                         // From the conversation, not remembered client-side: opening a chat in a
                         // second tab or after a restart must show the authority it actually runs
                         // under, not whatever this tab last set.
@@ -274,6 +286,7 @@ pub fn Chat(
                                     active_conv_id,
                                     should_set_title,
                                     ghost_session,
+                                    list_epoch,
                                 },
                                 &base,
                             );
@@ -289,6 +302,7 @@ pub fn Chat(
                 // A new chat starts on the default grant; leaving a stale chip up would claim
                 // otherwise.
                 active_profile.set(None);
+                set_surface(active_surface, None);
             }
             // No conversation id. An incognito chat never has one (it is not in the sidebar, so
             // there is nothing there to highlight), and a first durable turn does not have one
@@ -423,13 +437,14 @@ pub fn Chat(
 
             #[cfg(target_arch = "wasm32")]
             wasm_bindgen_futures::spawn_local(async move {
-                let (cmd_msgs, new_session, results) = handle_slash_command(
+                let (cmd_msgs, new_session, results) = handle_slash_for_surface(
                     &text_owned,
                     &base,
                     session_snapshot,
                     sending_snapshot,
                     message_count,
                     &theme_snapshot,
+                    active_surface(),
                 )
                 .await;
                 for msg in cmd_msgs {
@@ -465,7 +480,7 @@ pub fn Chat(
                             theme_browser_open.set(true);
                         }
                         CommandResult::OpenProfileBrowser => {
-                            profile_browser_open.set(true);
+                            maybe_open_profile_browser(active_surface(), profile_browser_open);
                         }
                         // The command layer validated the name against the shared registry; all that
                         // is left is to render it and remember it.
@@ -514,6 +529,7 @@ pub fn Chat(
                 active_conv_id,
                 should_set_title,
                 ghost_session,
+                list_epoch,
             },
             &base_for_title,
             incognito(),
@@ -625,7 +641,7 @@ pub fn Chat(
                 }
             }
 
-            if profile_browser_open() {
+            if show_profile_browser(profile_browser_open(), active_surface()) {
                 ProfileBrowser {
                     api_base: base_for_profiles.clone(),
                     session: session(),
@@ -633,19 +649,7 @@ pub fn Chat(
                     open: profile_browser_open,
                     on_switched: move |name: Option<String>| {
                         active_profile.set(name.clone());
-                        messages
-                            .write()
-                            .push(ChatMsg {
-                                role: "system",
-                                content: match name {
-                                    Some(n) => format!(
-                                        "Session profile: {n} — applies from your next message."
-                                    ),
-                                    None => "Session profile cleared — back to the default grant,                                              from your next message."
-                                        .to_string(),
-                                },
-                                thinking_steps: Vec::new(),
-                            });
+                        messages.write().push(profile_switched_note(name));
                     },
                 }
             }
@@ -1097,6 +1101,8 @@ struct StreamTargets {
     should_set_title: Signal<bool>,
     /// Where an incognito turn records the session it opened, for the teardown paths.
     ghost_session: Signal<Option<String>>,
+    /// Bumped when `create_agent` succeeds. The shelf reads it and refetches.
+    list_epoch: Signal<u64>,
 }
 
 /// The `/api/chat/stream` URL for one turn.
@@ -1235,6 +1241,7 @@ fn connect_stream(
         mut active_conv_id,
         mut should_set_title,
         mut ghost_session,
+        list_epoch,
     } = targets;
     use std::rc::Rc;
     use wasm_bindgen::JsCast;
@@ -1331,40 +1338,11 @@ fn connect_stream(
         on_tool.forget();
     }
 
-    // tool_finished -> resolve the most recent pending ThinkingStep with matching name.
+    // tool_finished -> close the pending step, and refetch the shelf when an agent was created.
     {
         let on_result = Closure::<dyn FnMut(MessageEvent)>::new(move |e: MessageEvent| {
             if let Some(data) = e.data().as_string() {
-                if let Ok(chat_client_contract::SessionEvent {
-                    kind:
-                        chat_client_contract::SessionEventKind::ToolFinished {
-                            name,
-                            ok,
-                            result_preview: preview,
-                        },
-                    ..
-                }) = chat_client_contract::SessionEvent::from_sse_data("tool_finished", &data)
-                {
-                    messages.with_mut(|m| {
-                        // Find the last assistant message that has a pending step matching `name`.
-                        // `find_map` hands back a `&mut ThinkingStep` borrowed from `m` itself —
-                        // no raw pointer needed; NLL is fine with using it right after.
-                        let found = m
-                            .iter_mut()
-                            .rev()
-                            .filter(|msg| msg.role == "assistant")
-                            .find_map(|msg| {
-                                msg.thinking_steps
-                                    .iter_mut()
-                                    .rev()
-                                    .find(|s| s.ok.is_none() && s.tool_name == name)
-                            });
-                        if let Some(step) = found {
-                            step.ok = Some(ok);
-                            step.preview = preview;
-                        }
-                    });
-                }
+                chat_tool_events::note_tool_finished(&data, messages, list_epoch);
             }
         });
         let _ = source

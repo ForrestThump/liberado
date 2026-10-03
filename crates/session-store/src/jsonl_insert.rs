@@ -46,6 +46,7 @@ impl SessionStore {
             // in `agent_profiles`, which a `/spawn`ed goal session may or
             // may not carry. See `SessionHeader::to_conversation_header`.
             surface_mode: Default::default(),
+            agent_creator: false,
         };
         let mut map = self.inner.lock().await;
         if map.contains_key(&id) {

@@ -41,6 +41,20 @@ pub(super) fn stamp_surface_mode(
     SurfaceMode::Chat
 }
 
+/// Extra create-time signals that the four public `create*` wrappers leave off.
+pub(super) struct ConversationCreate {
+    pub title: Option<String>,
+    pub ephemeral: bool,
+    pub visibility: liberado_session::Visibility,
+    pub grant: SessionGrant,
+    /// `Some` wins over profile-class stamping. `None` is the Reading B rule.
+    pub explicit_surface: Option<SurfaceMode>,
+    /// Singleton Agent Creator marker. Ordinary creates pass false.
+    pub agent_creator: bool,
+    /// Root system text. `None` uses [`ChatSessions`]'s configured prompt.
+    pub system_prompt: Option<String>,
+}
+
 impl ChatSessions {
     /// Shared create path: stamp `surface_mode`, persist header + system root.
     pub(super) async fn create_conversation(
@@ -50,21 +64,42 @@ impl ChatSessions {
         visibility: liberado_session::Visibility,
         grant: SessionGrant,
     ) -> SessionResult<Ulid> {
+        self.create_stamped(ConversationCreate {
+            title,
+            ephemeral,
+            visibility,
+            grant,
+            explicit_surface: None,
+            agent_creator: false,
+            system_prompt: None,
+        })
+        .await
+    }
+
+    /// Create path with an explicit shelf stamp and the Agent Creator marker.
+    ///
+    /// `pub(super)` matches [`ConversationCreate`]: the sibling `agent_spawn`
+    /// module can call it, and a wider visibility would expose a private type.
+    /// The public wrappers stay on [`create_conversation`](Self::create_conversation).
+    pub(super) async fn create_stamped(&self, spec: ConversationCreate) -> SessionResult<Ulid> {
         // Reading B: stamp from profile class at create — not goal.is_some().
         // `agent_profiles` is the deploy-tunable set; tests stick to the
         // conservative default by constructing `ChatSessions` without
         // `with_agent_profiles`.
-        let surface_mode = stamp_surface_mode(&grant, None, &self.agent_profiles);
+        let surface_mode =
+            stamp_surface_mode(&spec.grant, spec.explicit_surface, &self.agent_profiles);
+        let prompt = spec.system_prompt.as_deref().unwrap_or(&self.system_prompt);
         let header = self
             .store
             .create(NewConversation {
-                title,
+                title: spec.title,
                 parent_conversation: None,
                 spawned_by: None,
-                ephemeral,
-                visibility,
-                grant,
+                ephemeral: spec.ephemeral,
+                visibility: spec.visibility,
+                grant: spec.grant,
                 surface_mode,
+                agent_creator: spec.agent_creator,
             })
             .await?;
         self.store
@@ -73,7 +108,7 @@ impl ChatSessions {
                 NewNode {
                     parent_id: None,
                     author: Author::System,
-                    message: Message::system(&self.system_prompt),
+                    message: Message::system(prompt),
                     model: None,
                 },
             )

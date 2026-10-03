@@ -295,6 +295,7 @@ impl SessionStore {
             // stay `Chat` on the wire — Reading B locks the agent sense to
             // profile class, not goal-ness.
             surface_mode: new.surface_mode,
+            agent_creator: new.agent_creator,
         };
         self.append_line(id, &Record::Header(Box::new(header.clone())));
         let (bus, _) = broadcast::channel(EVENT_CHANNEL_CAPACITY);
@@ -463,6 +464,8 @@ impl SessionStore {
                 // Keep the shelf stamp: forking is a branch of the same chat-surface
                 // conversation, not a reclassification.
                 surface_mode: parent.surface_mode,
+                // A fork of the Agent Creator is an ordinary branch, not a second creator.
+                agent_creator: false,
             })
             .await;
 
@@ -605,6 +608,7 @@ impl ConversationStore for SessionStore {
                 ephemeral: new.ephemeral,
                 // Reading B: shelf stamp is create-time / profile-class, not goal.
                 surface_mode: new.surface_mode,
+                agent_creator: new.agent_creator,
             })
             .await;
         // Chat-lens projection uses this store's `agent_profiles` so a
