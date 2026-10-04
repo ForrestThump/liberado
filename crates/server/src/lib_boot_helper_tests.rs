@@ -132,7 +132,8 @@ async fn face_tool_surface_follows_delegation_and_grants() {
     let runtime = runtime_with(&["delegate", "memory:search", "vault:write", "plain_tool"]);
     let workspace: Vec<String> = liberado_main_agent::WORKSPACE_TOOL_NAMES
         .iter()
-        .map(|name| (*name).to_string())
+        .copied()
+        .map(str::to_string)
         .collect();
 
     // Full surface outside delegation, plus the private workspace tools.
@@ -140,9 +141,10 @@ async fn face_tool_surface_follows_delegation_and_grants() {
     assert_eq!(count, 4 + workspace.len());
     assert!(names.contains(&"memory:search".to_string()));
     assert!(names.contains(&"plain_tool".to_string()));
-    for name in &workspace {
-        assert!(names.contains(name), "{names:?}");
-    }
+    assert_eq!(
+        &names[names.len() - workspace.len()..],
+        workspace.as_slice()
+    );
 
     // Delegation without grants: built-in face tools, then the workspace tools.
     let (names, count) = face_tool_surface(&runtime, true, &CapabilitySet::empty());
@@ -158,9 +160,10 @@ async fn face_tool_surface_follows_delegation_and_grants() {
     assert!(names.contains(&"create_agent".to_string()));
     assert!(names.contains(&"memory:search".to_string()));
     assert!(!names.contains(&"vault:write".to_string()));
-    for name in &workspace {
-        assert!(names.contains(name), "{names:?}");
-    }
+    assert_eq!(
+        &names[names.len() - workspace.len()..],
+        workspace.as_slice()
+    );
 }
 
 /// The store opens under the resolved sessions root: a stub returning an empty path would

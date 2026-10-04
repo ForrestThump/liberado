@@ -923,11 +923,6 @@ async fn build_chat(
         &config.tuning.agent_workspace.root,
         &liberado_config::data_dir(),
     );
-    info!(
-        root = %workspace.root.display(),
-        max_bytes = workspace.max_bytes,
-        "chat: per-agent file workspace"
-    );
     sessions = sessions.with_agent_workspace(workspace);
 
     if compact_enabled {
@@ -992,7 +987,8 @@ fn face_tool_surface(
     tool_names.extend(
         liberado_main_agent::WORKSPACE_TOOL_NAMES
             .iter()
-            .map(|name| (*name).to_string()),
+            .copied()
+            .map(str::to_string),
     );
     let tool_count = tool_names.len();
     if tool_count > 0 {
