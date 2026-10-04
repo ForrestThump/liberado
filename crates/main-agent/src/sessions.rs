@@ -55,6 +55,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
+use liberado_agent_workspace::WorkspaceSettings;
 use liberado_common::{
     Capability, CapabilityCatalog, CapabilitySet, Consequence, DEFAULT_POOL, DispatchAction,
     McpDescriptor, ProposalSigner, RiskWaiverSet, WriteClass, mcp_of,
@@ -79,6 +80,8 @@ mod agent_spawn;
 mod surface_mode;
 #[path = "sessions_waivers.rs"]
 mod waivers;
+#[path = "sessions/workspace.rs"]
+mod workspace;
 use thiserror::Error;
 use tokio::sync::broadcast;
 use tokio::sync::mpsc::Sender;
@@ -303,6 +306,8 @@ pub struct ChatSessions {
     compaction: Option<CompactionEngine>,
     /// CAS1: chat-surface agent_profiles (default set; tunable via `with_agent_profiles`).
     agent_profiles: AgentProfiles,
+    /// Private file workspace. Absent in tests, so they do not grow a shared directory.
+    agent_workspace: Option<WorkspaceSettings>,
 }
 
 /// The moving parts of automatic compaction: the tunables, plus the provider used for the one
@@ -363,6 +368,7 @@ impl ChatSessions {
             self_handle: std::sync::OnceLock::new(),
             compaction: None,
             agent_profiles: AgentProfiles::default(),
+            agent_workspace: None,
         }
     }
 
@@ -1590,7 +1596,10 @@ impl ChatSessions {
             && self.live_catalog.is_none()
         {
             // Truly unguarded test fixtures — raw runtime only when no live catalog is attached.
-            return Box::new(DecoratingRuntime::passthrough(self.runtime.clone()));
+            return self.attach_workspace(
+                session,
+                Box::new(DecoratingRuntime::passthrough(self.runtime.clone())),
+            );
         }
 
         // Capability scoping: surface only what *this session* is granted, every turn, regardless of
@@ -1662,7 +1671,7 @@ impl ChatSessions {
         if let Some(cat) = &self.live_catalog {
             gated = gated.with_live_catalog(cat.clone());
         }
-        Box::new(gated)
+        self.attach_workspace(session, Box::new(gated))
     }
 
     /// Get-or-insert the per-session turn lock, so two turns on the same conversation serialize

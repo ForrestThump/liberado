@@ -104,13 +104,16 @@ impl ChatSessions {
     ) -> Box<dyn ToolRuntime> {
         let extras = self.scoped_extras_runtime(user, session, capabilities);
         let agent_spawner = self.agent_spawner_for_profile(profile);
-        Box::new(FaceRuntime::new(
-            self.face_bridge.clone(),
-            extras,
-            Some(session.to_string()),
-            turn_deferral,
-            agent_spawner,
-        ))
+        self.attach_workspace(
+            session,
+            Box::new(FaceRuntime::new(
+                self.face_bridge.clone(),
+                extras,
+                Some(session.to_string()),
+                turn_deferral,
+                agent_spawner,
+            )),
+        )
     }
 }
 
@@ -259,5 +262,91 @@ mod tests {
                 .is_some()
         );
         assert!(sessions.agent_spawner_for_profile(None).is_some());
+    }
+
+    /// The configured cap is the cap the face tools enforce, and two sessions do not share a
+    /// directory. A hardcoded 1 GiB cap, or a missing `attach_workspace`, fails this test.
+    #[tokio::test]
+    async fn face_workspace_enforces_the_configured_cap_per_session() {
+        let dir = tempfile::tempdir().unwrap();
+        let files = tempfile::tempdir().unwrap();
+        let store = Arc::new(SessionStore::open(dir.path()).await);
+        let sessions = ChatSessions::new(
+            store,
+            Executor::new(
+                Arc::new(MockProvider::with_script("m", vec![])),
+                Budget::default(),
+            ),
+            Arc::new(NoopRuntime),
+        )
+        .with_agent_workspace(liberado_agent_workspace::WorkspaceSettings {
+            root: files.path().to_path_buf(),
+            max_bytes: 4,
+        });
+        let left = face_runtime(&sessions, Ulid::from(1u128));
+        let names: Vec<_> = left.catalog().into_iter().map(|tool| tool.name).collect();
+        assert!(
+            names.iter().any(|name| name == "workspace_write"),
+            "face catalog: {names:?}"
+        );
+
+        let over = left
+            .invoke(&liberado_provider::ToolInvocation::new(
+                "1",
+                "workspace_write",
+                serde_json::json!({"path": "note.txt", "content": "12345"}),
+            ))
+            .await
+            .unwrap_err();
+        assert!(over.contains("cap is 4"), "{over}");
+
+        left.invoke(&liberado_provider::ToolInvocation::new(
+            "2",
+            "workspace_write",
+            serde_json::json!({"path": "note.txt", "content": "1234"}),
+        ))
+        .await
+        .unwrap();
+
+        let right = face_runtime(&sessions, Ulid::from(2u128));
+        let listed = right
+            .invoke(&liberado_provider::ToolInvocation::new(
+                "3",
+                "workspace_list",
+                serde_json::json!({"path": "."}),
+            ))
+            .await
+            .unwrap();
+        assert!(
+            !listed.contains("note.txt"),
+            "the second session listed the first session's file: {listed}"
+        );
+        let own = left
+            .invoke(&liberado_provider::ToolInvocation::new(
+                "4",
+                "workspace_read",
+                serde_json::json!({"path": "note.txt"}),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(own, "1234");
+    }
+
+    #[test]
+    fn default_workspace_cap_matches_tuning() {
+        assert_eq!(
+            liberado_config_loader::AgentWorkspaceTuning::default().max_bytes,
+            liberado_agent_workspace::DEFAULT_CAP_BYTES
+        );
+    }
+
+    fn face_runtime(sessions: &ChatSessions, session: Ulid) -> Box<dyn ToolRuntime> {
+        sessions.build_face_runtime(
+            "user",
+            session,
+            CapabilitySet::empty(),
+            Arc::new(AtomicBool::new(false)),
+            None,
+        )
     }
 }

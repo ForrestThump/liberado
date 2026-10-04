@@ -918,6 +918,18 @@ async fn build_chat(
         "chat: surface-mode agent_profiles wired from tuning.toml"
     );
 
+    let workspace = liberado_main_agent::WorkspaceSettings::resolve(
+        config.tuning.agent_workspace.max_bytes,
+        &config.tuning.agent_workspace.root,
+        &liberado_config::data_dir(),
+    );
+    info!(
+        root = %workspace.root.display(),
+        max_bytes = workspace.max_bytes,
+        "chat: per-agent file workspace"
+    );
+    sessions = sessions.with_agent_workspace(workspace);
+
     if compact_enabled {
         info!(
             face_model = %face_model,
@@ -951,8 +963,8 @@ async fn build_chat(
     (Some(sessions), tool_count, tool_names)
 }
 
-/// The face agent's tool surface: `delegate` only (plus granted main-agent MCP tools) in
-/// delegation mode, the full live registry otherwise.
+/// The face agent's tool surface: `delegate` (plus granted main-agent MCP tools) in delegation
+/// mode, the full live registry otherwise. Private workspace tools are listed in both modes.
 fn face_tool_surface(
     runtime: &Arc<dyn ToolRuntime>,
     delegation_mode: bool,
@@ -977,6 +989,11 @@ fn face_tool_surface(
             }));
         }
     }
+    tool_names.extend(
+        liberado_main_agent::WORKSPACE_TOOL_NAMES
+            .iter()
+            .map(|name| (*name).to_string()),
+    );
     let tool_count = tool_names.len();
     if tool_count > 0 {
         info!(

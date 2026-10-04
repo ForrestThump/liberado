@@ -63,7 +63,8 @@ Pack-level contracts (same discipline, scoped to one domain): `CoderBackend` and
   `#[cfg(test)]` binary is a second rustc instance of that crate, so doubles compiled against a
   trait hosted in the crate under test never satisfy the trait the test sees.
 - **Implemented by**: `liberado-mcp` (`TurbomcpRuntime` — real MCP tools, provenance in `_meta`),
-  `coder-tools` (coding limb), `scratchpad`, `RiskGatedToolRuntime` (the guard decorator),
+  `coder-tools` (coding limb), `scratchpad`, `agent-workspace` (private per-agent files),
+  `RiskGatedToolRuntime` (the guard decorator),
   test doubles in `test-support`.
 - **Promise**: this is *the* domain limb. Coding tools and MCP tools are interchangeable from the
   executor's point of view; a new domain is "different runtime + different verifiers", never a

@@ -126,33 +126,41 @@ fn caps_granting(mcps: &[&str]) -> CapabilitySet {
 /// Normal mode exposes the whole live registry; delegation mode collapses to built-in face
 /// tools (`delegate` + `create_agent`) plus only MCP-granted tools — and never an ungranted one.
 /// (`create_agent` is still privilege-gated per session at runtime; the boot log lists it so ops
-/// know the face can offer it.)
+/// know the face can offer it.) Private workspace tools are appended in both modes.
 #[tokio::test]
 async fn face_tool_surface_follows_delegation_and_grants() {
     let runtime = runtime_with(&["delegate", "memory:search", "vault:write", "plain_tool"]);
+    let workspace: Vec<String> = liberado_main_agent::WORKSPACE_TOOL_NAMES
+        .iter()
+        .map(|name| (*name).to_string())
+        .collect();
 
-    // Full surface outside delegation.
+    // Full surface outside delegation, plus the private workspace tools.
     let (names, count) = face_tool_surface(&runtime, false, &CapabilitySet::empty());
-    assert_eq!(count, 4);
+    assert_eq!(count, 4 + workspace.len());
     assert!(names.contains(&"memory:search".to_string()));
     assert!(names.contains(&"plain_tool".to_string()));
+    for name in &workspace {
+        assert!(names.contains(name), "{names:?}");
+    }
 
-    // Delegation without grants: built-in face tools only.
+    // Delegation without grants: built-in face tools, then the workspace tools.
     let (names, count) = face_tool_surface(&runtime, true, &CapabilitySet::empty());
-    assert_eq!(
-        names,
-        vec!["delegate".to_string(), "create_agent".to_string()],
-        "{names:?}"
-    );
-    assert_eq!(count, 2);
+    let mut expected = vec!["delegate".to_string(), "create_agent".to_string()];
+    expected.extend(workspace.iter().cloned());
+    assert_eq!(names, expected, "{names:?}");
+    assert_eq!(count, expected.len());
 
     // Delegation with a memory grant: face builtins + memory tools; vault stays out.
     let (names, count) = face_tool_surface(&runtime, true, &caps_granting(&["memory"]));
-    assert_eq!(count, 3, "{names:?}");
+    assert_eq!(count, 3 + workspace.len(), "{names:?}");
     assert!(names.contains(&"delegate".to_string()));
     assert!(names.contains(&"create_agent".to_string()));
     assert!(names.contains(&"memory:search".to_string()));
     assert!(!names.contains(&"vault:write".to_string()));
+    for name in &workspace {
+        assert!(names.contains(name), "{names:?}");
+    }
 }
 
 /// The store opens under the resolved sessions root: a stub returning an empty path would

@@ -1,0 +1,27 @@
+[package]
+name = "liberado-agent-workspace"
+version = "0.1.0"
+description = "Private per-agent file workspace: one directory per agent, a byte cap, and sandboxed list, read, write, delete, and download tools."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+async-trait = { workspace = true }
+fs4 = { workspace = true }
+liberado-provider = { workspace = true }
+liberado-tool-runtime = { workspace = true }
+reqwest = { workspace = true, features = ["blocking"] }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+tokio = { workspace = true }
+
+[package.metadata.liberado]
+role = "kernel"
