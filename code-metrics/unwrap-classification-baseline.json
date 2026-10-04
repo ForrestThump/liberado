@@ -4,7 +4,7 @@
     "proven_invariant": 65,
     "local_failure": 0,
     "process_fatal": 46,
-    "files_scanned": 523,
+    "files_scanned": 529,
     "files_with_unwraps": 49
   },
   "files": {
@@ -1372,7 +1372,7 @@
         },
         {
           "file": "crates/server/src/t1_conformance.rs",
-          "line": 1171,
+          "line": 1157,
           "column": 9,
           "method": "unwrap",
           "snippet": "self.ran.lock().unwrap()",
@@ -1383,7 +1383,7 @@
         },
         {
           "file": "crates/server/src/t1_conformance.rs",
-          "line": 1312,
+          "line": 1298,
           "column": 5,
           "method": "unwrap",
           "snippet": "serde_json::from_str::<serde_json::Value>(&body).unwrap()[\"session_id\"]\n        .as_str()\n        .unwrap()",
@@ -1394,7 +1394,7 @@
         },
         {
           "file": "crates/server/src/t1_conformance.rs",
-          "line": 1312,
+          "line": 1298,
           "column": 5,
           "method": "unwrap",
           "snippet": "serde_json::from_str::<serde_json::Value>(&body).unwrap()",

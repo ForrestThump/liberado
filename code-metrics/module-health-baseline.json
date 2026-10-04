@@ -2406,7 +2406,7 @@
     "cyclomatic": 51
   },
   "crates/executor/src/lib_tests.rs": {
-    "ploc": 2106,
+    "ploc": 2105,
     "lloc": 526,
     "functions": 129,
     "cyclomatic": 160
@@ -2434,6 +2434,12 @@
     "lloc": 104,
     "functions": 25,
     "cyclomatic": 26
+  },
+  "crates/executor/src/reasoning_log.rs": {
+    "ploc": 29,
+    "lloc": 7,
+    "functions": 6,
+    "cyclomatic": 9
   },
   "crates/executor/src/risk_gated.rs": {
     "ploc": 503,
@@ -3023,6 +3029,12 @@
     "functions": 19,
     "cyclomatic": 22
   },
+  "crates/main-agent/src/sessions/reasoning_stamp.rs": {
+    "ploc": 10,
+    "lloc": 2,
+    "functions": 1,
+    "cyclomatic": 3
+  },
   "crates/main-agent/src/sessions/surface_mode.rs": {
     "ploc": 91,
     "lloc": 11,
@@ -3438,10 +3450,16 @@
     "cyclomatic": 28
   },
   "crates/provider/src/openai_compat.rs": {
-    "ploc": 748,
+    "ploc": 747,
     "lloc": 250,
-    "functions": 73,
-    "cyclomatic": 115
+    "functions": 72,
+    "cyclomatic": 114
+  },
+  "crates/provider/src/openai_compat/sse_decode.rs": {
+    "ploc": 123,
+    "lloc": 55,
+    "functions": 7,
+    "cyclomatic": 30
   },
   "crates/provider/src/openai_compat/stream_sse.rs": {
     "ploc": 65,
@@ -3454,6 +3472,12 @@
     "lloc": 114,
     "functions": 23,
     "cyclomatic": 50
+  },
+  "crates/provider/src/reasoning_text.rs": {
+    "ploc": 116,
+    "lloc": 52,
+    "functions": 12,
+    "cyclomatic": 36
   },
   "crates/provider/src/think_text.rs": {
     "ploc": 271,
@@ -3756,7 +3780,7 @@
     "cyclomatic": 39
   },
   "crates/server/src/t1_conformance.rs": {
-    "ploc": 1346,
+    "ploc": 1319,
     "lloc": 327,
     "functions": 80,
     "cyclomatic": 120
@@ -4086,7 +4110,7 @@
     "cyclomatic": 316
   },
   "crates/tui/src/app/tests.rs": {
-    "ploc": 3336,
+    "ploc": 3296,
     "lloc": 1853,
     "functions": 290,
     "cyclomatic": 393
@@ -4332,10 +4356,22 @@
     "cyclomatic": 15
   },
   "crates/webui/src/components/chat.rs": {
-    "ploc": 1107,
-    "lloc": 300,
-    "functions": 78,
-    "cyclomatic": 196
+    "ploc": 1000,
+    "lloc": 288,
+    "functions": 66,
+    "cyclomatic": 169
+  },
+  "crates/webui/src/components/chat_fold.rs": {
+    "ploc": 156,
+    "lloc": 17,
+    "functions": 15,
+    "cyclomatic": 36
+  },
+  "crates/webui/src/components/chat_reasoning.rs": {
+    "ploc": 54,
+    "lloc": 24,
+    "functions": 8,
+    "cyclomatic": 18
   },
   "crates/webui/src/components/chat_submission.rs": {
     "ploc": 14,
