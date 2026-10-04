@@ -9,7 +9,8 @@ use crate::components::picker::Picker;
 use crate::components::profile_browser::ProfileBrowser;
 use crate::components::slash_palette::SlashPalette;
 use crate::icons::{
-    IconCheck, IconChevronDown, IconChevronRight, IconGlasses, IconSpinner, IconStop, IconX,
+    IconCheck, IconChevronDown, IconChevronRight, IconCopy, IconGlasses, IconSpinner, IconStop,
+    IconX,
 };
 
 // Slash commands only run in the browser — `submit` gates the whole block on wasm32, so gate the
@@ -817,15 +818,80 @@ pub fn Chat(
 
 // ── Message row — renders a message + optional thinking steps ───────────────
 
+/// Whether the copy button should be visible after the next tap lands on this response.
+///
+/// First tap on a hidden button shows it, the second tap hides it again, the third shows it
+/// again — alternating per response. Extracted from the row so the alternation is testable
+/// without rendering the Dioxus component.
+fn next_copy_button_visible(currently_visible: bool) -> bool {
+    !currently_visible
+}
+
+/// The state a click landed on, for skipping the toggle when the user actually followed a link
+/// inside the message rather than tapping the chrome around it. `navigator.clipboard` and the
+/// browser's link navigation are both meant to fire when the user targets the link, so the
+/// response-chrome toggle should stay out of their way.
+#[cfg(target_arch = "wasm32")]
+fn click_target_was_link(evt: &dioxus::prelude::MouseEvent) -> bool {
+    use dioxus::web::WebEventExt;
+    use wasm_bindgen::JsCast;
+
+    let data = evt.data();
+    let Some(web_evt): Option<web_sys::MouseEvent> = data.try_as_web_event() else {
+        return false;
+    };
+    let target: Option<web_sys::EventTarget> = web_evt.target();
+    let Some(target) = target else {
+        return false;
+    };
+    let target: web_sys::Element = match target.dyn_into::<web_sys::Element>() {
+        Ok(el) => el,
+        Err(_) => return false,
+    };
+    // `closest("a")` walks up to the nearest anchor; a tap on a link or any inline run inside one
+    // resolves to that anchor. `<button>` for the copy button itself sits *outside* the bubble and
+    // so is never the click target here.
+    target.closest("a").ok().flatten().is_some()
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn click_target_was_link(_evt: &dioxus::prelude::MouseEvent) -> bool {
+    false
+}
+
 #[component]
 fn MessageRow(msg: ChatMsg) -> Element {
     let has_steps = !msg.thinking_steps.is_empty();
+    // The copy button is hidden until the first tap on this response, shown on the second tap
+    // hidden again on the third, and so on. Per-row state — a tap on one message does not move the
+    // button on another. Mirrors the conversation-row's `menu_open` ownership.
+    let mut copy_button_visible = use_signal(|| false);
+    // The button only renders for assistant responses; user/tool/system/error messages get no copy
+    // affordance. The source we hand the clipboard is the raw markdown — pasted into a markdown
+    // surface it renders, pasted into plain text it is the source, same as the conversation log.
+    let is_assistant = msg.role == "assistant";
+    let copy_text = msg.content.clone();
+
+    let on_bubble_click = move |evt: dioxus::prelude::MouseEvent| {
+        if !is_assistant {
+            return;
+        }
+        if click_target_was_link(&evt) {
+            return;
+        }
+        copy_button_visible.set(next_copy_button_visible(copy_button_visible()));
+    };
 
     rsx! {
         div {
             class: "bubble-row {msg.role}",
             div {
                 class: "bubble-wrap",
+                // Always attached, with the role check inside: a missing handler would mean the
+                // browser's text-selection long-press has nothing to suppress the default
+                // click-during-drag for, and a non-assistant row still gets *some* taps. A no-op
+                // closure is the smaller change.
+                onclick: on_bubble_click,
                 if has_steps {
                     ThinkingGroup { steps: msg.thinking_steps.clone() }
                 }
@@ -844,10 +910,46 @@ fn MessageRow(msg: ChatMsg) -> Element {
                         },
                     }
                 }
+                if is_assistant && copy_button_visible() {
+                    div {
+                        class: "response-copy-row",
+                        button {
+                            class: "response-copy-btn",
+                            r#type: "button",
+                            // The button click lands on the bubble-wrap too; the row's toggle would
+                            // flip the visibility on the same tap that the user used to copy.
+                            // Stopping propagation here keeps the two gestures independent.
+                            onclick: move |evt| {
+                                evt.stop_propagation();
+                                copy_to_clipboard(&copy_text);
+                            },
+                            IconCopy {}
+                            span { class: "response-copy-label", "Copy" }
+                        }
+                    }
+                }
             }
         }
     }
 }
+
+/// Push `text` to the system clipboard. Browser-only — the host build never has a clipboard to
+/// write to. The `navigator.clipboard` API is gated on a secure context, which the PWA shell
+/// already provides, so a missing call there is a real failure rather than a missing feature.
+#[cfg(target_arch = "wasm32")]
+fn copy_to_clipboard(text: &str) {
+    let Some(window) = web_sys::window() else {
+        return;
+    };
+    let clipboard = window.navigator().clipboard();
+    // Best-effort: rejections are silently dropped. Surfacing them as a toast would be more
+    // helpful, but no error path here is recoverable — and the user's next tap dismisses the
+    // button, so a stuck "failed to copy" message would just have to be dismissed first.
+    let _ = clipboard.write_text(text);
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn copy_to_clipboard(_text: &str) {}
 
 // ── Collapsible tool result ─────────────────────────────────────────────────
 

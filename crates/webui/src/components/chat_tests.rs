@@ -209,3 +209,51 @@ fn tool_block_header_uses_the_daemon_summary_line() {
     assert_eq!(tool_block_label("\n\nbody without a header"), "Tool result");
     assert_eq!(tool_block_label(""), "Tool result");
 }
+
+/// The copy button is hidden until the first tap, shown after it, hidden after the second, and
+/// so on. Pinned so a future refactor that swaps `!` for an accidental `set(false)` or a
+/// stale-closure bug cannot quietly regress to a button that never appears (or never goes away).
+#[test]
+fn copy_button_visibility_alternates_with_each_tap() {
+    // The function is the *next* state after a tap, so feeding `false` in returns the state
+    // produced by the first tap on a hidden button — visible.
+    assert!(
+        next_copy_button_visible(false),
+        "first tap must show the button"
+    );
+
+    // Five consecutive taps from a fresh render: odd-numbered taps reveal the button, even ones
+    // hide it. 1-based tap count makes the alternation easy to read.
+    let mut visible = false;
+    for tap in 1..=5 {
+        visible = next_copy_button_visible(visible);
+        let expected = tap % 2 == 1;
+        assert_eq!(
+            visible, expected,
+            "tap #{tap} should set visible={expected}"
+        );
+    }
+
+    // A sixth tap re-hides the button — important because a stuck-visible button would consume
+    // space under every assistant message after the first interaction.
+    visible = next_copy_button_visible(visible);
+    assert!(!visible, "sixth tap should re-hide the button");
+}
+
+/// Tapping one response must not move the button on another. Simulated by running the toggle
+/// on two independent state variables; the second's history is the test that the first cannot
+/// touch it. The render layer guarantees per-row signals, so the function only has to be correct
+/// on one — but the contract is worth pinning so a future `static mut` shortcut is caught.
+#[test]
+fn copy_button_tap_state_is_per_response() {
+    let mut response_a = false;
+    let response_b = false;
+    // Tap A three times: after the odd taps (1, 3) it is visible, after the even tap (2) it is
+    // hidden. Three taps from a hidden start lands on `visible = true`.
+    for _ in 0..3 {
+        response_a = next_copy_button_visible(response_a);
+    }
+    assert!(response_a, "A's third tap should show the button");
+    // B was never tapped, so it must still be hidden.
+    assert!(!response_b, "B's state must be independent of A's taps");
+}

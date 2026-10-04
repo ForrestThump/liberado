@@ -833,6 +833,53 @@ body {
 
 }
 
+/* ── Response copy button (mobile only) ──────────────────────────────────── */
+
+/* The button is desktop-hidden by default. A desktop user has the broader toolbar; on a phone the
+   only way to grab a response is the markdown selection, which breaks links and strips code-block
+   structure, so a single tap target is worth the screen real estate it costs. */
+.response-copy-row {
+    display: none;
+}
+
+@media (max-width: 768px) {
+    .response-copy-row {
+        /* Sits below the bubble, inside the same .bubble-wrap so it stays left-aligned with the
+           bubble's leading edge — a row outside the wrap would float to the screen edge on narrow
+           viewports and look like it belonged to the next message. */
+        display: flex;
+        justify-content: flex-start;
+        margin-top: 0.25rem;
+    }
+
+    .response-copy-btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.3rem;
+        padding: 0.25rem 0.6rem;
+        border: 1px solid var(--lib-border);
+        border-radius: 999px;
+        background: color-mix(in srgb, var(--lib-surface) 60%, transparent);
+        color: var(--lib-sidebar-text);
+        font-family: inherit;
+        font-size: 0.6875rem;
+        cursor: pointer;
+        transition: background 0.12s, color 0.12s, border-color 0.12s;
+    }
+
+    .response-copy-btn:hover,
+    .response-copy-btn:active {
+        background: color-mix(in srgb, var(--lib-surface) 90%, transparent);
+        color: var(--lib-chat-assistant-text);
+        border-color: var(--lib-sidebar-border-unfocused);
+    }
+
+    .response-copy-btn .icon {
+        width: 0.75rem;
+        height: 0.75rem;
+    }
+}
+
 /* ── Thinking steps group (collapsible) ──────────────────────────────────── */
 
 .thinking-group {
