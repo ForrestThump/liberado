@@ -146,6 +146,7 @@ async fn open_agent_creator_is_a_singleton_with_a_canned_opener() {
                 author: Author::User,
                 message: Message::user("a coding agent"),
                 model: None,
+                reasoning: None,
             },
         )
         .await

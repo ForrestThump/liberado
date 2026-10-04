@@ -103,6 +103,7 @@ impl CommandContext for WebCommandContext {
             role: "system",
             content: msg,
             thinking_steps: Vec::new(),
+            reasoning: None,
         });
     }
     fn clear_input(&mut self) {}
@@ -148,6 +149,7 @@ fn parse_error(text: &str) -> (Vec<ChatMsg>, Option<String>, Vec<CommandResult>)
         role: "system",
         content: format!("Unknown command: {text}. Type /help for available commands."),
         thinking_steps: Vec::new(),
+        reasoning: None,
     };
     (vec![msg], None, Vec::new())
 }
@@ -468,6 +470,7 @@ mod tests {
             role: "user",
             content: "hi".into(),
             thinking_steps: Vec::new(),
+            reasoning: None,
         });
         ctx.reset_for_new_conversation();
         assert_eq!(ctx.session_id, None);
@@ -531,6 +534,7 @@ mod tests {
             role: "user",
             content: "hi".into(),
             thinking_steps: Vec::new(),
+            reasoning: None,
         });
         ctx.session_id = Some("01A".into());
 

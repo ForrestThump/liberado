@@ -256,6 +256,7 @@ async fn an_empty_critic_response_does_not_discard_the_run() {
         tool_calls: Vec::new(),
         finish_reason: liberado_provider::FinishReason::Stop,
         usage: None,
+        reasoning: None,
     });
     let provider = Arc::new(MockProvider::with_script("mock", script));
     let backend = LiberadoLoopBackend::new(provider);

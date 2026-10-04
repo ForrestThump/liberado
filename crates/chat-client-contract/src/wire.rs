@@ -362,6 +362,10 @@ pub struct ChatMessage {
     /// `GET /api/status` (failure-modes §6 — do not let a missing stamp silently pass).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    /// Model thinking for this assistant turn. Absent on older history and on
+    /// turns that did not think. Not a tool step.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning: Option<String>,
 }
 
 /// Response from `GET /api/conversations/{id}`. Not just `Vec<ChatMessage>` directly at the top
@@ -891,6 +895,7 @@ mod tests {
             ])),
             tool_call_id: None,
             model: Some("test/model".into()),
+            reasoning: None,
         };
         let json = serde_json::to_value(&msg).unwrap();
         let back: ChatMessage = serde_json::from_value(json).unwrap();
@@ -907,6 +912,7 @@ mod tests {
         assert_eq!(msg.tool_calls, None);
         assert_eq!(msg.tool_call_id, None);
         assert_eq!(msg.model, None);
+        assert_eq!(msg.reasoning, None);
     }
 
     #[test]
@@ -917,11 +923,14 @@ mod tests {
             tool_calls: None,
             tool_call_id: None,
             model: Some("vendor/slug".into()),
+            reasoning: Some("hidden thought".into()),
         };
         let v = serde_json::to_value(&with).unwrap();
         assert_eq!(v["model"], "vendor/slug");
+        assert_eq!(v["reasoning"], "hidden thought");
         let back: ChatMessage = serde_json::from_value(v).unwrap();
         assert_eq!(back.model.as_deref(), Some("vendor/slug"));
+        assert_eq!(back.reasoning.as_deref(), Some("hidden thought"));
 
         let bare = ChatMessage {
             role: "user".into(),
@@ -929,9 +938,11 @@ mod tests {
             tool_calls: None,
             tool_call_id: None,
             model: None,
+            reasoning: None,
         };
         let v = serde_json::to_value(&bare).unwrap();
         assert!(v.get("model").is_none(), "None must skip_serializing");
+        assert!(v.get("reasoning").is_none(), "None must skip_serializing");
     }
 
     #[test]
@@ -944,6 +955,7 @@ mod tests {
                     tool_calls: None,
                     tool_call_id: None,
                     model: None,
+                    reasoning: None,
                 },
                 ChatMessage {
                     role: "assistant".into(),
@@ -951,6 +963,7 @@ mod tests {
                     tool_calls: None,
                     tool_call_id: None,
                     model: Some("deepseek/v4".into()),
+                    reasoning: None,
                 },
             ],
             profile: Some("basic-chat".into()),

@@ -292,6 +292,14 @@ pub struct CompletionResponse {
     pub finish_reason: FinishReason,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub usage: Option<Usage>,
+    /// Model thinking for this completion: `<think>` interiors and the
+    /// `reasoning_content` / `reasoning_details` channel. `None` when the model
+    /// did not think. This is not the effort knob on [`CompletionRequest::reasoning`].
+    ///
+    /// It is not part of [`Message`]. The next provider request is built from
+    /// `Message` alone, so thinking stored on a conversation node never goes back.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning: Option<String>,
 }
 
 impl CompletionResponse {
@@ -302,6 +310,7 @@ impl CompletionResponse {
             tool_calls: Vec::new(),
             finish_reason: FinishReason::Stop,
             usage: None,
+            reasoning: None,
         }
     }
 
@@ -312,6 +321,7 @@ impl CompletionResponse {
             tool_calls: calls,
             finish_reason: FinishReason::ToolCalls,
             usage: None,
+            reasoning: None,
         }
     }
 }

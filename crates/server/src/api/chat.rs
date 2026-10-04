@@ -928,14 +928,16 @@ fn chat_message_from_node(n: liberado_conversation_store::MessageNode) -> ChatMe
         liberado_provider::Role::Assistant => "assistant",
         liberado_provider::Role::Tool => "tool",
     };
+    let (content, reasoning) = liberado_provider::transcript_parts(role, m.content, n.reasoning);
     ChatMessage {
         role: role.to_string(),
-        content: liberado_provider::visible_transcript(role, m.content),
+        content,
         tool_calls: (!m.tool_calls.is_empty())
             .then(|| serde_json::to_value(&m.tool_calls).ok())
             .flatten(),
         tool_call_id: m.tool_call_id,
         model: n.model,
+        reasoning,
     }
 }
 

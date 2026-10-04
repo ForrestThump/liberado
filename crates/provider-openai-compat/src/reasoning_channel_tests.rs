@@ -97,6 +97,8 @@ async fn a_blocking_answer_drops_think_tags_and_ignores_reasoning_content() {
         .with_reasoning_effort(Some("high".into()));
     let resp = provider.complete(one_turn()).await.unwrap();
     assert_eq!(resp.content.as_deref(), Some("Visible"));
+    assert_eq!(resp.reasoning.as_deref(), Some("hidden"));
+    assert!(!resp.content.as_deref().unwrap_or("").contains("<think"));
 }
 
 #[tokio::test]
@@ -130,8 +132,8 @@ async fn a_stream_hides_a_split_think_tag_and_the_reasoning_channel() {
         }
     }
     assert_eq!(tokens, "Hello");
-    assert_eq!(
-        done.expect("stream finished").content.as_deref(),
-        Some("Hello")
-    );
+    let done = done.expect("stream finished");
+    assert_eq!(done.content.as_deref(), Some("Hello"));
+    assert_eq!(done.reasoning.as_deref(), Some("secret"));
+    assert!(!done.content.as_deref().unwrap_or("").contains("secret"));
 }

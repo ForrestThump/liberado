@@ -255,6 +255,11 @@ pub struct MessageNode {
     /// provider when two backends serve overlapping ids, which is when it starts to matter.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    /// Model thinking for this assistant turn. Not part of [`Message`], so the
+    /// provider request built from `message` alone never sees it. `None` on
+    /// nodes written before this field and on turns that did not think.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning: Option<String>,
 }
 
 /// A conversation's header record — the first line of its log. Carries lineage so subagent trees
@@ -358,6 +363,8 @@ pub struct NewNode {
     /// Which model this node was dispatched to (on a `User` node) or produced by (on an
     /// `Assistant` one). See [`MessageNode::model`].
     pub model: Option<String>,
+    /// Thinking to store beside the message. See [`MessageNode::reasoning`].
+    pub reasoning: Option<String>,
 }
 
 #[cfg(test)]

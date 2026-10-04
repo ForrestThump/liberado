@@ -9,7 +9,8 @@ pub(super) fn unanswered_turn_note() -> ChatMsg {
         content: "That turn ended without a reply — the daemon most likely                                           restarted mid-answer. Nothing was saved; send again to retry."
             .to_string(),
         thinking_steps: Vec::new(),
-    }
+        reasoning: None,
+}
 }
 
 /// System line after the human switches the session profile from a chat.
@@ -22,7 +23,8 @@ pub(super) fn profile_switched_note(name: Option<String>) -> ChatMsg {
                 .to_string(),
         },
         thinking_steps: Vec::new(),
-    }
+        reasoning: None,
+}
 }
 
 /// Resolve what one submit gesture runs. Palette rows carry an exact command so they never depend

@@ -58,6 +58,7 @@ pub(crate) async fn handle_slash_for_surface(
             role: "system",
             content: AGENT_PROFILE_LOCKED.to_string(),
             thinking_steps: Vec::new(),
+            reasoning: None,
         };
         return (vec![msg], None, Vec::new());
     }

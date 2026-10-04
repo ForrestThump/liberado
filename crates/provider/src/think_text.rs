@@ -1,11 +1,12 @@
-//! Hide model thinking that arrived inside the user-visible answer.
+//! Separate model thinking from the user-visible answer.
 //!
 //! MiniMax's OpenAI-compatible API writes reasoning into `content` as
 //! `<think>...</think>` unless the request sets `reasoning_split`. The separate
-//! `reasoning_content` / `reasoning_details` fields are that hidden channel and
-//! are never copied into this text. Closed blocks are removed. A think block
-//! that opens the message and never closes is dropped — it is the whole reply.
-//! A later unclosed `<think>` stays, so a reply that mentions the tag is not eaten.
+//! `reasoning_content` / `reasoning_details` fields are that hidden channel.
+//! Closed blocks leave the visible answer and are returned as thinking. A think
+//! block that opens the message and never closes is the whole reply: visible
+//! text is empty and the interior is thinking. A later unclosed `<think>` stays
+//! in the answer, so a reply that mentions the tag is not eaten.
 
 const OPEN: &[u8] = b"<think>";
 const CLOSE: &[u8] = b"</think>";
@@ -21,12 +22,18 @@ pub fn visible_transcript(role: &str, content: String) -> String {
 
 /// `content` with `<think>` blocks removed. Unchanged when the text has none.
 pub fn visible_answer(raw: &str) -> String {
-    let (text, removed_closed) = strip_closed(raw);
-    match strip_leading_unclosed(&text) {
-        Some(text) => text.trim_start().to_string(),
-        None if removed_closed => text.trim_start().to_string(),
-        None => text,
-    }
+    split_answer(raw).0
+}
+
+/// Visible answer and the thinking that was inside `<think>` blocks.
+///
+/// `None` thinking means there was no real think block (an answer-only reply,
+/// or a later unclosed tag that is part of the answer).
+pub fn split_answer(raw: &str) -> (String, Option<String>) {
+    let mut filter = ThinkFilter::default();
+    let mut visible = filter.push(raw);
+    visible.push_str(&filter.finish());
+    (visible, filter.take_reasoning())
 }
 
 /// Streaming counterpart of [`visible_answer`]. Chunk boundaries may split a tag.
@@ -39,6 +46,7 @@ pub(crate) struct ThinkFilter {
     inside: bool,
     started: bool,
     removed: bool,
+    reasoning: String,
 }
 
 impl ThinkFilter {
@@ -50,6 +58,7 @@ impl ThinkFilter {
                 if let Some(idx) = find_tag(&self.pending, CLOSE) {
                     self.block.push_str(&self.pending[..idx]);
                     self.pending.drain(..idx + CLOSE.len());
+                    self.keep_closed();
                     self.block.clear();
                     self.inside = false;
                     self.removed = true;
@@ -83,9 +92,7 @@ impl ThinkFilter {
     pub(crate) fn finish(&mut self) -> String {
         if self.inside {
             if !self.started {
-                self.block.clear();
-                self.pending.clear();
-                self.leading_ws.clear();
+                self.keep_leading_unclosed();
                 return String::new();
             }
             let mut rest = std::mem::take(&mut self.block);
@@ -132,35 +139,48 @@ impl ThinkFilter {
         self.leading_ws.clear();
         self.started = true;
     }
-}
 
-fn strip_closed(raw: &str) -> (String, bool) {
-    let mut out = String::new();
-    let mut rest = raw;
-    let mut removed = false;
-    while let Some(start) = find_tag(rest, OPEN) {
-        out.push_str(&rest[..start]);
-        let after_open = &rest[start + OPEN.len()..];
-        if let Some(end) = find_tag(after_open, CLOSE) {
-            rest = &after_open[end + CLOSE.len()..];
-            removed = true;
+    fn keep_closed(&mut self) {
+        let owned = strip_open_tag(&self.block).to_string();
+        self.note(&owned);
+    }
+
+    fn keep_leading_unclosed(&mut self) {
+        let mut all = std::mem::take(&mut self.block);
+        all.push_str(&self.pending);
+        self.pending.clear();
+        self.leading_ws.clear();
+        self.note(strip_open_tag(&all));
+    }
+
+    fn note(&mut self, text: &str) {
+        let text = text.trim();
+        if text.is_empty() {
+            return;
+        }
+        if !self.reasoning.is_empty() {
+            self.reasoning.push('\n');
+        }
+        self.reasoning.push_str(text);
+    }
+
+    fn take_reasoning(&mut self) -> Option<String> {
+        let text = std::mem::take(&mut self.reasoning);
+        let trimmed = text.trim();
+        if trimmed.is_empty() {
+            None
         } else {
-            out.push_str(&rest[start..]);
-            rest = "";
-            break;
+            Some(trimmed.to_string())
         }
     }
-    out.push_str(rest);
-    (out, removed)
 }
 
-/// `Some("")` when the first non-whitespace is an unclosed `<think>`.
-fn strip_leading_unclosed(text: &str) -> Option<String> {
-    let trimmed = text.trim_start();
-    if find_tag(trimmed, OPEN) == Some(0) && find_tag(&trimmed[OPEN.len()..], CLOSE).is_none() {
-        Some(String::new())
+fn strip_open_tag(text: &str) -> &str {
+    let bytes = text.as_bytes();
+    if bytes.len() >= OPEN.len() && bytes[..OPEN.len()].eq_ignore_ascii_case(OPEN) {
+        &text[OPEN.len()..]
     } else {
-        None
+        text
     }
 }
 
@@ -304,5 +324,23 @@ mod tests {
         });
         let resp = from_openai_response(&v, &ToolNameMap::default()).unwrap();
         assert_eq!(resp.content.as_deref(), Some("Visible"));
+        assert_eq!(resp.reasoning.as_deref(), Some("hidden"));
+        assert!(!resp.content.as_deref().unwrap_or("").contains("hidden"));
+    }
+
+    #[test]
+    fn split_answer_keeps_think_interiors_out_of_the_visible_text() {
+        let (visible, reasoning) = split_answer("<think>\nsecret step\n</think>\n\nReady");
+        assert_eq!(visible, "Ready");
+        assert_eq!(reasoning.as_deref(), Some("secret step"));
+        let (only, thought) = split_answer("<think>only this");
+        assert_eq!(only, "");
+        assert_eq!(thought.as_deref(), Some("only this"));
+        let (answer, none) = split_answer("Just the answer");
+        assert_eq!(answer, "Just the answer");
+        assert_eq!(none, None);
+        let (mentioned, not_thinking) = split_answer("Use <think> like this");
+        assert_eq!(mentioned, "Use <think> like this");
+        assert_eq!(not_thinking, None);
     }
 }

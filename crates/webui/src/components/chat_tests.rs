@@ -91,13 +91,14 @@ fn wire_roles_map_to_bubble_roles() {
             tool_calls: None,
             tool_call_id: None,
             model: None,
+            reasoning: None,
         });
         assert_eq!(msg.role, expected, "wire role {wire:?}");
     }
 }
 
-/// History never carries thinking steps (those exist only on the live SSE stream), so the wire
-/// decoder must not invent any.
+/// History carries no tool steps. Model thinking is a separate field and does
+/// survive a reload. The answer text stays in the bubble.
 #[test]
 fn wire_messages_carry_no_thinking_steps() {
     let msg = ChatMsg::from_wire(&ChatMessage {
@@ -106,9 +107,42 @@ fn wire_messages_carry_no_thinking_steps() {
         tool_calls: None,
         tool_call_id: None,
         model: None,
+        reasoning: Some("  secret step  ".into()),
     });
     assert!(msg.thinking_steps.is_empty());
     assert_eq!(msg.content, "hi");
+    assert_eq!(msg.reasoning.as_deref(), Some("secret step"));
+
+    let plain = ChatMsg::from_wire(&ChatMessage {
+        role: "assistant".to_string(),
+        content: "just the answer".to_string(),
+        tool_calls: None,
+        tool_call_id: None,
+        model: None,
+        reasoning: None,
+    });
+    assert!(plain.thinking_steps.is_empty());
+    assert_eq!(plain.reasoning, None);
+    assert_eq!(plain.content, "just the answer");
+}
+
+#[test]
+fn a_reloaded_think_only_turn_keeps_a_collapsed_thinking_step() {
+    let mut live = Vec::new();
+    let history = vec![ChatMsg::from_wire(&ChatMessage {
+        role: "assistant".to_string(),
+        content: String::new(),
+        tool_calls: None,
+        tool_call_id: None,
+        model: None,
+        reasoning: Some("only thinking".into()),
+    })];
+    super::chat_reasoning::merge_history(&mut live, &history);
+    assert_eq!(live.len(), 1);
+    assert_eq!(live[0].content, "");
+    assert_eq!(live[0].reasoning.as_deref(), Some("only thinking"));
+    assert!(!super::chat_fold::show_answer(true, false, true));
+    assert!(super::chat_fold::show_answer(false, false, true));
 }
 
 /// The history effect must not wipe a first turn just because it has no conversation id yet.
@@ -182,19 +216,25 @@ fn long_titles_cut_on_char_boundaries() {
 /// The JSON spellings of "no arguments" and the empty string all render as nothing.
 #[test]
 fn empty_args_render_as_nothing() {
-    assert_eq!(clean_args(""), "");
-    assert_eq!(clean_args("{}"), "");
-    assert_eq!(clean_args("null"), "");
-    assert_eq!(args_display(""), "");
-    assert_eq!(args_display("{}"), "");
-    assert_eq!(args_display("null"), "");
+    assert_eq!(super::chat_fold::clean_args(""), "");
+    assert_eq!(super::chat_fold::clean_args("{}"), "");
+    assert_eq!(super::chat_fold::clean_args("null"), "");
+    assert_eq!(super::chat_fold::args_display(""), "");
+    assert_eq!(super::chat_fold::args_display("{}"), "");
+    assert_eq!(super::chat_fold::args_display("null"), "");
 }
 
 #[test]
 fn real_args_are_kept_and_parenthesized() {
-    assert_eq!(clean_args("path=/tmp/x"), "path=/tmp/x");
-    assert_eq!(args_display("path=/tmp/x"), "(path=/tmp/x)");
-    assert_eq!(args_display("{ \"a\": 1 }"), "({ \"a\": 1 })");
+    assert_eq!(super::chat_fold::clean_args("path=/tmp/x"), "path=/tmp/x");
+    assert_eq!(
+        super::chat_fold::args_display("path=/tmp/x"),
+        "(path=/tmp/x)"
+    );
+    assert_eq!(
+        super::chat_fold::args_display("{ \"a\": 1 }"),
+        "({ \"a\": 1 })"
+    );
 }
 
 /// The tool block's header is the daemon's own summary line, colon trimmed; empty content
@@ -202,10 +242,16 @@ fn real_args_are_kept_and_parenthesized() {
 #[test]
 fn tool_block_header_uses_the_daemon_summary_line() {
     assert_eq!(
-        tool_block_label("RESULT (Succeeded):\nwrote 12 notes\n"),
+        super::chat_fold::tool_block_label("RESULT (Succeeded):\nwrote 12 notes\n"),
         "RESULT (Succeeded)"
     );
-    assert_eq!(tool_block_label("  RESULT (Failed):  "), "RESULT (Failed)");
-    assert_eq!(tool_block_label("\n\nbody without a header"), "Tool result");
-    assert_eq!(tool_block_label(""), "Tool result");
+    assert_eq!(
+        super::chat_fold::tool_block_label("  RESULT (Failed):  "),
+        "RESULT (Failed)"
+    );
+    assert_eq!(
+        super::chat_fold::tool_block_label("\n\nbody without a header"),
+        "Tool result"
+    );
+    assert_eq!(super::chat_fold::tool_block_label(""), "Tool result");
 }

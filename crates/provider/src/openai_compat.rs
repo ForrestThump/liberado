@@ -123,6 +123,7 @@ pub fn accumulate_tool_deltas(acc: &mut Vec<ToolAcc>, deltas: &[Value]) {
     }
 }
 
+mod sse_decode;
 mod stream_sse;
 pub use stream_sse::stream_sse_response;
 
@@ -254,12 +255,9 @@ pub fn from_openai_response(
     let choice = v["choices"].get(0).ok_or(ProviderError::EmptyResponse)?;
     let message = &choice["message"];
 
-    // `reasoning_content` is the hidden channel and is not copied. `<think>` leaked
-    // into `content` is removed; a think-only reply becomes no visible content.
-    let content = message["content"]
-        .as_str()
-        .map(crate::think_text::visible_answer)
-        .filter(|s| !s.is_empty());
+    // `<think>` leaves `content`. Its interior and the reasoning channel are
+    // stored separately. A think-only reply has no visible content.
+    let (content, reasoning) = crate::reasoning_text::from_choice_message(message);
 
     // A present-but-unparseable tool call is a silent data-loss path; warn rather than drop quietly.
     let tool_calls = message["tool_calls"]
@@ -287,6 +285,7 @@ pub fn from_openai_response(
         tool_calls,
         finish_reason,
         usage: parse_usage(&v["usage"]),
+        reasoning,
     })
 }
 

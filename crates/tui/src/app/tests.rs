@@ -303,27 +303,21 @@ fn pgdown_does_not_go_below_zero() {
     app.handle_key(key(KeyCode::PageDown));
     assert_eq!(app.scroll_offset, 0);
 }
+#[rustfmt::skip]
 #[test]
 fn history_loaded_renders_tool_calls() {
     let mut app = test_app();
     app.pending_load = Some("c1".into());
     app.update(Action::HistoryLoaded {
         id: "c1".into(),
-        messages: vec![ChatMessage {
-            role: "assistant".into(),
-            content: String::new(),
-            tool_calls: Some(
-                serde_json::json!([{"function":{"name":"search","arguments":"{\"q\":\"test\"}"}}]),
-            ),
-            tool_call_id: None,
-            model: None,
-        }],
+        messages: vec![ChatMessage { role: "assistant".into(), content: String::new(), tool_calls: Some(serde_json::json!([{"function":{"name":"search","arguments":"{\"q\":\"test\"}"}}])), tool_call_id: None, model: None, reasoning: None }],
         turn_running: false,
         turn_unanswered: false,
     });
     assert_eq!(app.messages.len(), 1);
     assert!(matches!(app.messages[0], Message::ToolCall(_)));
 }
+#[rustfmt::skip]
 #[test]
 fn history_loaded_mixed_content_and_tools() {
     let mut app = test_app();
@@ -331,22 +325,8 @@ fn history_loaded_mixed_content_and_tools() {
     app.update(Action::HistoryLoaded {
         id: "c2".into(),
         messages: vec![
-            ChatMessage {
-                role: "user".into(),
-                content: "search please".into(),
-                tool_calls: None,
-                tool_call_id: None,
-                model: None,
-            },
-            ChatMessage {
-                role: "assistant".into(),
-                content: "Let me search...".into(),
-                tool_calls: Some(
-                    serde_json::json!([{"function":{"name":"search","arguments":"{}"}}]),
-                ),
-                tool_call_id: None,
-                model: None,
-            },
+            ChatMessage { role: "user".into(), content: "search please".into(), tool_calls: None, tool_call_id: None, model: None, reasoning: None },
+            ChatMessage { role: "assistant".into(), content: "Let me search...".into(), tool_calls: Some(serde_json::json!([{"function":{"name":"search","arguments":"{}"}}])), tool_call_id: None, model: None, reasoning: None },
         ],
         turn_running: false,
         turn_unanswered: false,
@@ -356,18 +336,13 @@ fn history_loaded_mixed_content_and_tools() {
     assert!(matches!(app.messages[1], Message::ToolCall(_)));
     assert!(matches!(app.messages[2], Message::Assistant(_)));
 }
+#[rustfmt::skip]
 #[test]
 fn history_loaded_enforces_message_cap() {
     let mut app = test_app();
     app.pending_load = Some("big-conv".into());
     let many_messages: Vec<ChatMessage> = (0..600)
-        .map(|i| ChatMessage {
-            role: "user".into(),
-            content: format!("message {i}"),
-            tool_calls: None,
-            tool_call_id: None,
-            model: None,
-        })
+        .map(|i| ChatMessage { role: "user".into(), content: format!("message {i}"), tool_calls: None, tool_call_id: None, model: None, reasoning: None })
         .collect();
     app.update(Action::HistoryLoaded {
         id: "big-conv".into(),
@@ -500,19 +475,14 @@ fn pending_load_cleared_on_history_loaded() {
 }
 
 /// Opening a conversation with a live turn reattaches rather than showing idle silence.
+#[rustfmt::skip]
 #[test]
 fn history_loaded_turn_running_emits_attach() {
     let mut app = test_app();
     app.pending_load = Some("live-1".into());
     let effects = app.update(Action::HistoryLoaded {
         id: "live-1".into(),
-        messages: vec![ChatMessage {
-            role: "user".into(),
-            content: "still working?".into(),
-            tool_calls: None,
-            tool_call_id: None,
-            model: None,
-        }],
+        messages: vec![ChatMessage { role: "user".into(), content: "still working?".into(), tool_calls: None, tool_call_id: None, model: None, reasoning: None }],
         turn_running: true,
         turn_unanswered: false,
     });
@@ -533,19 +503,14 @@ fn history_loaded_turn_running_emits_attach() {
 }
 
 /// A dead turn must be named, not left as a question followed by silence.
+#[rustfmt::skip]
 #[test]
 fn history_loaded_turn_unanswered_surfaces_death_message() {
     let mut app = test_app();
     app.pending_load = Some("dead-1".into());
     let effects = app.update(Action::HistoryLoaded {
         id: "dead-1".into(),
-        messages: vec![ChatMessage {
-            role: "user".into(),
-            content: "where did my answer go?".into(),
-            tool_calls: None,
-            tool_call_id: None,
-            model: None,
-        }],
+        messages: vec![ChatMessage { role: "user".into(), content: "where did my answer go?".into(), tool_calls: None, tool_call_id: None, model: None, reasoning: None }],
         turn_running: false,
         turn_unanswered: true,
     });
@@ -1205,6 +1170,7 @@ fn sidebar_enter_empty_conversations_does_not_panic() {
     assert!(effects.iter().all(|e| matches!(e, Effect::None)));
 }
 
+#[rustfmt::skip]
 #[test]
 fn history_loaded_stale_response_rejected() {
     let mut app = test_app();
@@ -1212,13 +1178,7 @@ fn history_loaded_stale_response_rejected() {
     app.messages.push(Message::User("current".into()));
     let effects = app.update(Action::HistoryLoaded {
         id: "stale".into(),
-        messages: vec![ChatMessage {
-            role: "user".into(),
-            content: "stale".into(),
-            tool_calls: None,
-            tool_call_id: None,
-            model: None,
-        }],
+        messages: vec![ChatMessage { role: "user".into(), content: "stale".into(), tool_calls: None, tool_call_id: None, model: None, reasoning: None }],
         turn_running: false,
         turn_unanswered: false,
     });

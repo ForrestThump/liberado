@@ -110,6 +110,7 @@ impl ChatSessions {
                     author: Author::System,
                     message: Message::system(prompt),
                     model: None,
+                    reasoning: None,
                 },
             )
             .await?;

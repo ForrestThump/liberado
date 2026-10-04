@@ -256,6 +256,7 @@ impl ChatSessions {
                     author: Author::Assistant,
                     message: Message::assistant(AGENT_CREATOR_OPENER),
                     model: None,
+                    reasoning: None,
                 },
             )
             .await

@@ -292,14 +292,17 @@ fn chat_message_from_node_carries_the_store_model_stamp() {
             tool_call_id: None,
         },
         model: Some("vendor/slug".into()),
+        reasoning: None,
     };
     let wire = chat_message_from_node(node);
     assert_eq!(wire.role, "assistant");
     assert_eq!(wire.model.as_deref(), Some("vendor/slug"));
+    assert_eq!(wire.reasoning, None);
 }
 
 /// An old session can still have `<think>` in the stored assistant text. The
-/// history read hides it. A user who quoted the tag keeps it.
+/// history read keeps the interior as thinking and the answer as content. A
+/// user who quoted the tag keeps it, with no thinking step.
 #[test]
 fn chat_message_from_node_hides_assistant_think_blocks() {
     use liberado_conversation_store::{Author, MessageNode, Ulid};
@@ -319,8 +322,12 @@ fn chat_message_from_node_hides_assistant_think_blocks() {
             tool_call_id: None,
         },
         model: None,
+        reasoning: None,
     };
-    assert_eq!(chat_message_from_node(assistant).content, "Hello");
+    let wire = chat_message_from_node(assistant);
+    assert_eq!(wire.content, "Hello");
+    assert_eq!(wire.reasoning.as_deref(), Some("secret"));
+    assert!(!wire.content.contains("<think"));
 
     let user = MessageNode {
         id: Ulid::new(),
@@ -335,8 +342,11 @@ fn chat_message_from_node_hides_assistant_think_blocks() {
             tool_call_id: None,
         },
         model: None,
+        reasoning: None,
     };
-    assert_eq!(chat_message_from_node(user).content, stored);
+    let user_wire = chat_message_from_node(user);
+    assert_eq!(user_wire.content, stored);
+    assert_eq!(user_wire.reasoning, None);
 }
 
 /// Both transports, because `EventSource` can only `GET` and so the WebUI's picks arrive as a

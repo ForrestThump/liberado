@@ -80,6 +80,7 @@ async fn tool_results_carry_no_model() {
                 author: Author::Tool,
                 message: Message::tool_result("call-1", "result"),
                 model: None,
+                reasoning: None,
             },
         )
         .await
