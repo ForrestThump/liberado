@@ -903,6 +903,13 @@ body {
     overflow-y: auto;
 }
 
+/* Model-thinking disclosure only. Tool results share `.thinking-header` and
+   `.tool-result-body`, so the snow-storm color is scoped under this class. */
+.reasoning-disclosure .thinking-header,
+.reasoning-disclosure .tool-result-body {
+    color: var(--lib-chat-user-text);
+}
+
 .thinking-step {
     display: flex;
     align-items: center;

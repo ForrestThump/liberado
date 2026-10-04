@@ -20,7 +20,7 @@ pub(super) fn ReasoningBlock(text: String) -> Element {
     let mut expanded = use_signal(|| false);
     rsx! {
         div {
-            class: "thinking-group",
+            class: "thinking-group reasoning-disclosure",
             button {
                 class: "thinking-header",
                 r#type: "button",
