@@ -53,6 +53,7 @@ pub(super) fn adopt_when_finished(
     session: dioxus::prelude::Signal<Option<String>>,
     mut messages: dioxus::prelude::Signal<Vec<ChatMsg>>,
 ) {
+    use dioxus::prelude::{ReadableExt, WritableExt};
     let Some(id) = session.read().clone() else {
         return;
     };
