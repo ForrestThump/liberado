@@ -3,8 +3,9 @@
 //!
 //! Split out of `chat.rs` so the message-rendering side of the surface lives in one place
 //! independent of the chat's input, stream, and history logic. The mobile copy button is a
-//! chrome gesture over the assistant row, so it belongs with the row rather than in its own
-//! module that the row would have to import.
+//! chrome gesture over a user or assistant row, so the control belongs with the row. Which
+//! single row is showing it is owned by the message list — the same shape as the sidebar's
+//! `menu_open` — because two buttons are never up at once.
 
 use dioxus::prelude::*;
 
@@ -13,33 +14,40 @@ use super::chat::{ChatMsg, ThinkingStep};
 use crate::components::markdown::MarkdownText;
 use crate::icons::{IconCheck, IconChevronDown, IconChevronRight, IconCopy, IconSpinner, IconX};
 
-/// The one rendered bubble. Assistant rows also get a small Copy button below the bubble;
-/// the button is hidden until the first tap on this response, shown on the second, hidden
-/// again on the third, and so on. Per-row state — a tap on one message does not move the
-/// button on another. Mirrors the conversation-row's `menu_open` ownership.
+/// The one rendered bubble. User and assistant rows get a Copy button below the bubble.
+/// The list decides which single index is open: the first tap on a closed row shows it and
+/// hides any other, and a second tap on that same row hides it. Tool, system, and error rows
+/// have no copy control. The clipboard receives the row's raw markdown (`msg.content`).
+///
+/// The button stays inside `.bubble-wrap`. A user row is `justify-content: flex-end`, so the
+/// wrap — bubble and button together — sits on the right.
 #[component]
-pub(super) fn MessageRow(msg: ChatMsg) -> Element {
+pub(super) fn MessageRow(
+    msg: ChatMsg,
+    index: usize,
+    copy_visible: bool,
+    on_toggle_copy: EventHandler<usize>,
+) -> Element {
     let has_steps = !msg.thinking_steps.is_empty();
     let has_reasoning = msg.reasoning.is_some();
     // A think-only turn keeps the disclosure and skips the blank answer bubble.
     let show = show_answer(msg.content.is_empty(), has_steps, has_reasoning);
     let reasoning = msg.reasoning.clone().unwrap_or_default();
-    let mut copy_button_visible = use_signal(|| false);
-    // The button only renders for assistant responses; user/tool/system/error messages get no
-    // copy affordance. The source we hand the clipboard is the raw markdown — pasted into a
-    // markdown surface it renders, pasted into plain text it is the source, same as the
-    // conversation log.
-    let is_assistant = msg.role == "assistant";
+    // User and assistant rows only. The source handed to the clipboard is the raw markdown —
+    // pasted into a markdown surface it renders, pasted into plain text it is the source, same
+    // as the conversation log.
+    let offers_copy = message_offers_copy(msg.role);
+    let show_copy = offers_copy && copy_visible;
     let copy_text = msg.content.clone();
 
     let on_bubble_click = move |evt: dioxus::prelude::MouseEvent| {
-        if !is_assistant {
+        if !offers_copy {
             return;
         }
         if click_target_was_link(&evt) {
             return;
         }
-        copy_button_visible.set(next_copy_button_visible(copy_button_visible()));
+        on_toggle_copy.call(index);
     };
 
     rsx! {
@@ -49,8 +57,8 @@ pub(super) fn MessageRow(msg: ChatMsg) -> Element {
                 class: "bubble-wrap",
                 // Always attached, with the role check inside: a missing handler would mean the
                 // browser's text-selection long-press has nothing to suppress the default
-                // click-during-drag for, and a non-assistant row still gets *some* taps. A no-op
-                // closure is the smaller change.
+                // click-during-drag for, and a tool/system/error row still gets *some* taps. A
+                // no-op closure is the smaller change.
                 onclick: on_bubble_click,
                 if has_reasoning {
                     ReasoningBlock { text: reasoning }
@@ -73,8 +81,11 @@ pub(super) fn MessageRow(msg: ChatMsg) -> Element {
                         },
                     }
                 }
-                if is_assistant && copy_button_visible() {
+                if show_copy {
                     div {
+                        // The list scrolls this exact node into `.messages` when the tap that
+                        // revealed it was on the last message. One button is visible, so one id.
+                        id: "response-copy-{index}",
                         class: "response-copy-row",
                         button {
                             class: "response-copy-btn",
@@ -96,13 +107,46 @@ pub(super) fn MessageRow(msg: ChatMsg) -> Element {
     }
 }
 
-/// Whether the copy button should be visible after the next tap lands on this response.
+/// Whether the copy button on the tapped message should be visible after this tap.
 ///
-/// First tap on a hidden button shows it, the second tap hides it again, the third shows it
-/// again — alternating per response. Extracted from the row so the alternation is testable
-/// without rendering the Dioxus component.
+/// First tap on a hidden button shows it, the second hides it, the third shows it again.
+/// This is the same-message half of the rule. The thread keeps one shared open index
+/// ([`next_open_copy`]), so showing this message hides every other button.
 pub(super) fn next_copy_button_visible(currently_visible: bool) -> bool {
     !currently_visible
+}
+
+/// User-sent messages and assistant responses carry the copy control. Tool results, system
+/// notes, and errors do not — there is nothing there the reader would paste as markdown.
+pub(super) fn message_offers_copy(role: &str) -> bool {
+    matches!(role, "user" | "assistant")
+}
+
+/// Which message's copy button is visible after `tapped` is tapped.
+///
+/// `open` is the index that was visible before the tap, or `None` when every button was
+/// hidden. Revealing `tapped` replaces that index. Tapping the message that is already open
+/// hides it, so repeated taps on one message alternate show, hide, show, hide.
+pub(super) fn next_open_copy(open: Option<usize>, tapped: usize) -> Option<usize> {
+    if next_copy_button_visible(open == Some(tapped)) {
+        Some(tapped)
+    } else {
+        None
+    }
+}
+
+/// Whether this tap should scroll the thread so the revealed Copy button is on screen.
+///
+/// Scroll only when the tap reveals the button on the last message in the thread list.
+/// Hiding that button does not scroll. A tap on any earlier message does not scroll, including
+/// one that hides the last message's button by opening an earlier one. `last_index` is the
+/// last `ChatMsg`. The streaming ellipsis is not a list entry, so it is never `last_index`.
+pub(super) fn should_scroll_copy_button(
+    open_before: Option<usize>,
+    tapped: usize,
+    last_index: usize,
+) -> bool {
+    tapped == last_index && next_open_copy(open_before, tapped) == Some(tapped)
 }
 
 /// True when the click target was a link inside the message — used to skip the toggle so the

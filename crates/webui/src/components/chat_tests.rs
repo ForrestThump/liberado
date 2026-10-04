@@ -1,6 +1,8 @@
 //! Split from `chat.rs` for module-health boundaries.
 
-use super::super::message_row::next_copy_button_visible;
+use super::super::message_row::{
+    message_offers_copy, next_copy_button_visible, next_open_copy, should_scroll_copy_button,
+};
 use super::stream_url;
 use super::*;
 
@@ -287,20 +289,78 @@ fn copy_button_visibility_alternates_with_each_tap() {
     assert!(!visible, "sixth tap should re-hide the button");
 }
 
-/// Tapping one response must not move the button on another. Simulated by running the toggle
-/// on two independent state variables; the second's history is the test that the first cannot
-/// touch it. The render layer guarantees per-row signals, so the function only has to be correct
-/// on one — but the contract is worth pinning so a future `static mut` shortcut is caught.
+/// One copy button is visible. Tapping a message reveals it and hides whichever other message
+/// was open. A second tap on that same message hides it, and a third shows it again — the
+/// same-message alternation, applied to the single shared index rather than a private flag.
 #[test]
-fn copy_button_tap_state_is_per_response() {
-    let mut response_a = false;
-    let response_b = false;
-    // Tap A three times: after the odd taps (1, 3) it is visible, after the even tap (2) it is
-    // hidden. Three taps from a hidden start lands on `visible = true`.
-    for _ in 0..3 {
-        response_a = next_copy_button_visible(response_a);
-    }
-    assert!(response_a, "A's third tap should show the button");
-    // B was never tapped, so it must still be hidden.
-    assert!(!response_b, "B's state must be independent of A's taps");
+fn copy_button_tap_state_is_exclusive() {
+    let mut open = None;
+
+    open = next_open_copy(open, 0);
+    assert_eq!(open, Some(0), "first tap shows that message");
+    assert_eq!(
+        open.is_some(),
+        next_copy_button_visible(false),
+        "showing a closed message uses the same-message alternation"
+    );
+
+    open = next_open_copy(open, 1);
+    assert_eq!(
+        open,
+        Some(1),
+        "tapping a second message shows it and hides the first"
+    );
+
+    open = next_open_copy(open, 1);
+    assert_eq!(open, None, "second tap on the same message hides it");
+    assert!(
+        !next_copy_button_visible(true),
+        "hiding an open message uses the same-message alternation"
+    );
+
+    open = next_open_copy(open, 1);
+    assert_eq!(open, Some(1), "third tap on the same message shows it again");
+
+    open = next_open_copy(Some(0), 2);
+    assert_eq!(open, Some(2), "revealing a third message leaves only that one open");
+}
+
+/// Scroll only when a tap reveals the button on the last message in the thread list.
+/// Hiding does not scroll. An earlier message does not scroll, including a tap that hides
+/// the last message's button by opening an earlier one. The streaming ellipsis is not a list
+/// entry: counting it would make the last `ChatMsg` look earlier than `last`, and that tap
+/// would no longer scroll.
+#[test]
+fn copy_button_scrolls_only_when_the_last_message_is_revealed() {
+    let last = 2usize;
+    assert!(should_scroll_copy_button(None, last, last));
+    assert!(
+        should_scroll_copy_button(Some(0), last, last),
+        "switching the open button onto the last message reveals it"
+    );
+    assert!(
+        !should_scroll_copy_button(Some(last), last, last),
+        "hiding the last message does not scroll"
+    );
+    assert!(
+        !should_scroll_copy_button(None, 0, last),
+        "an earlier message does not scroll"
+    );
+    assert!(
+        !should_scroll_copy_button(Some(last), 0, last),
+        "moving off the last message does not scroll"
+    );
+    assert!(
+        !should_scroll_copy_button(None, last, last + 1),
+        "the ellipsis is not a list entry, so it must not push the last message off the end"
+    );
+}
+
+#[test]
+fn copy_button_is_offered_for_user_and_assistant_only() {
+    assert!(message_offers_copy("user"));
+    assert!(message_offers_copy("assistant"));
+    assert!(!message_offers_copy("tool"));
+    assert!(!message_offers_copy("system"));
+    assert!(!message_offers_copy("error"));
 }
