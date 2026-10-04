@@ -10,13 +10,19 @@ use crate::icons::{IconCheck, IconChevronDown, IconChevronRight, IconSpinner, Ic
 /// Show the answer bubble. A think-only turn (empty content, a thinking
 /// disclosure, no tool steps) does not also render a blank bubble. Tool steps
 /// with no prose stay folded without an empty bubble, as they did before.
-pub(super) fn show_answer(content_empty: bool, has_steps: bool, has_reasoning: bool) -> bool {
+///
+/// Visible to `message_row`, a sibling of `chat`, which renders the row.
+pub(in super::super) fn show_answer(
+    content_empty: bool,
+    has_steps: bool,
+    has_reasoning: bool,
+) -> bool {
     !content_empty || (!has_steps && !has_reasoning)
 }
 
 /// Model thinking. Collapsed until the reader opens it. Not a tool step.
 #[component]
-pub(super) fn ReasoningBlock(text: String) -> Element {
+pub(in super::super) fn ReasoningBlock(text: String) -> Element {
     let mut expanded = use_signal(|| false);
     rsx! {
         div {

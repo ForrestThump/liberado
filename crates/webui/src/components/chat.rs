@@ -2,10 +2,10 @@ use dioxus::prelude::*;
 
 use chat_client_contract::ChatMessage;
 
+use super::message_row::MessageRow;
 #[cfg(target_arch = "wasm32")]
 use crate::components::chat_submission::unanswered_turn_note;
 use crate::components::chat_submission::{profile_switched_note, submission_text};
-use crate::components::markdown::MarkdownText;
 use crate::components::model_browser::ModelBrowser;
 use crate::components::picker::Picker;
 use crate::components::profile_browser::ProfileBrowser;
@@ -27,7 +27,7 @@ use liberado_commands::CommandResult;
 mod chat_tool_events;
 
 #[path = "chat_fold.rs"]
-mod chat_fold;
+pub(super) mod chat_fold;
 
 #[path = "chat_reasoning.rs"]
 mod chat_reasoning;
@@ -830,46 +830,6 @@ pub fn Chat(
                 }
             }
         }
-}
-
-// ── Message row — renders a message + optional thinking steps ───────────────
-
-#[component]
-fn MessageRow(msg: ChatMsg) -> Element {
-    let has_steps = !msg.thinking_steps.is_empty();
-    let has_reasoning = msg.reasoning.is_some();
-    let show = chat_fold::show_answer(msg.content.is_empty(), has_steps, has_reasoning);
-    let reasoning = msg.reasoning.clone().unwrap_or_default();
-
-    rsx! {
-        div {
-            class: "bubble-row {msg.role}",
-            div {
-                class: "bubble-wrap",
-                if has_reasoning {
-                    chat_fold::ReasoningBlock { text: reasoning }
-                }
-                if has_steps {
-                    chat_fold::ThinkingGroup { steps: msg.thinking_steps.clone() }
-                }
-                if show {
-                    match msg.role {
-                        "assistant" | "user" => rsx! {
-                            div { class: "bubble {msg.role}",
-                                MarkdownText { content: msg.content.clone() }
-                            }
-                        },
-                        "tool" => rsx! { chat_fold::ToolBlock { content: msg.content.clone() } },
-                        _ => rsx! {
-                            div { class: "bubble {msg.role}",
-                                "{msg.content}"
-                            }
-                        },
-                    }
-                }
-            }
-        }
-    }
 }
 
 // ── Input auto-grow (browser-only) ──────────────────────────────────────────
