@@ -1,5 +1,8 @@
 //! Split from `chat.rs` for module-health boundaries.
 
+use super::super::message_row::{
+    args_display, clean_args, next_copy_button_visible, tool_block_label,
+};
 use super::stream_url;
 use super::*;
 

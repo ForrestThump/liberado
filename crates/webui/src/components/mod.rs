@@ -5,6 +5,7 @@ pub mod dashboard;
 pub mod incognito;
 pub mod markdown;
 pub mod mcp_panel;
+mod message_row;
 pub mod model_browser;
 pub mod picker;
 pub mod profile_browser;
