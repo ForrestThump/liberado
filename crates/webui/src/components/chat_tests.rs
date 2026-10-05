@@ -319,10 +319,18 @@ fn copy_button_tap_state_is_exclusive() {
     );
 
     open = next_open_copy(open, 1);
-    assert_eq!(open, Some(1), "third tap on the same message shows it again");
+    assert_eq!(
+        open,
+        Some(1),
+        "third tap on the same message shows it again"
+    );
 
     open = next_open_copy(Some(0), 2);
-    assert_eq!(open, Some(2), "revealing a third message leaves only that one open");
+    assert_eq!(
+        open,
+        Some(2),
+        "revealing a third message leaves only that one open"
+    );
 }
 
 /// Scroll only when a tap reveals the button on the last message in the thread list.

@@ -3,7 +3,7 @@ use dioxus::prelude::*;
 use chat_client_contract::ChatMessage;
 
 use super::message_row::{
-    message_offers_copy, next_open_copy, should_scroll_copy_button, MessageRow,
+    MessageRow, message_offers_copy, next_open_copy, should_scroll_copy_button,
 };
 #[cfg(target_arch = "wasm32")]
 use crate::components::chat_submission::unanswered_turn_note;
