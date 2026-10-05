@@ -31,8 +31,8 @@ pub use topology::{
     Topology, WebUiConfig, managed_binary_path, resolve_declared_zone,
 };
 pub use tuning::{
-    CURRENT_SCHEMA_VERSION, CaptureTuning, ChatTuning, ConcurrencyTuning, ContextTuning,
-    CronDeliveryTuning, DispatchTuning, MaintenanceTuning, McpPoolingTuning, ProposalTuning,
-    SubagentIsolation, TelegramApprovalsTuning, Tuning,
+    AgentWorkspaceTuning, CURRENT_SCHEMA_VERSION, CaptureTuning, ChatTuning, ConcurrencyTuning,
+    ContextTuning, CronDeliveryTuning, DispatchTuning, MaintenanceTuning, McpPoolingTuning,
+    ProposalTuning, SubagentIsolation, TelegramApprovalsTuning, Tuning,
 };
 pub use vault_reminders::VaultRemindersConfig;

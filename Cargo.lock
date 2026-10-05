@@ -5461,6 +5461,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "liberado-agent-workspace"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "fs4",
+ "liberado-provider",
+ "liberado-tool-runtime",
+ "reqwest 0.12.28",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
 name = "liberado-bootstrap"
 version = "0.1.0"
 dependencies = [
@@ -5923,6 +5939,7 @@ dependencies = [
  "async-trait",
  "chrono",
  "futures",
+ "liberado-agent-workspace",
  "liberado-common",
  "liberado-config-loader",
  "liberado-conversation-store",

@@ -4,8 +4,10 @@
 //! `topology.main_agent.delegation_mode = true`) it is a face agent: it holds the human's intent,
 //! asks clarifying questions, and calls built-in [`face::DELEGATE_TOOL_NAME`] (dispatch jobs) and,
 //! when privileged, [`face::CREATE_AGENT_TOOL_NAME`] (Agents-shelf specialist chats) — so tool
-//! schemas and raw tool results never pollute chat context. Operators can still grant extra MCPs to the `"main-agent"` policy
-//! component if they want a thicker surface.
+//! schemas and raw tool results never pollute chat context. Each session also has a private file
+//! workspace (`workspace_list`, `workspace_read`, `workspace_write`, `workspace_delete`,
+//! `workspace_download`). That directory is not a shared scratch area. Operators can still grant
+//! extra MCPs to the `"main-agent"` policy component if they want a thicker surface.
 //!
 //! Delegate handoffs write **dispatch journals** under `<LIBERADO_DATA_DIR>/dispatches/` (linked from
 //! the `delegate` tool result footer by correlation id + parent chat session). Not model context.
@@ -38,6 +40,7 @@ pub use sessions::{
 // Re-exported so a daemon wiring `tuning.toml [chat] agent_profiles` can
 // build an `AgentProfiles` without depending on `liberado-conversation-store`
 // directly. Spec: `docs/spec/architecture/chat-agent-surface-mode.md`.
+pub use liberado_agent_workspace::{WORKSPACE_TOOL_NAMES, WorkspaceSettings};
 pub use liberado_conversation_store::AgentProfiles;
 
 /// Short legacy prompt (used when `delegation_mode = false` and no custom prompt is set).
@@ -67,18 +70,31 @@ conversation, call the `delegate` tool with a clear, self-contained goal.
 
 # What you must assume about capabilities
 
-You have **proxy access** to Liberado's full set of capabilities through `delegate` only. Those \
-capabilities can include vault/memory (TurboVault-backed), tasks, research, files, external \
-services, code work, and more. \
-**Do not** try to enumerate tools from your own context. You will usually see only `delegate` (and \
-possibly a tiny set of extras the human explicitly enabled). That is intentional.
+You have **proxy access** to Liberado's full set of capabilities through `delegate`. Those \
+capabilities can include vault/memory (TurboVault-backed), tasks, research, external services, \
+code work, and more. \
+**Do not** try to enumerate those tools from your own context. You will usually see `delegate` \
+(and possibly a tiny set of extras the human explicitly enabled), plus the private file tools \
+below. That is intentional.
 
-- If you need something done: **delegate** a well-specified goal.
+- If you need something done outside your private files: **delegate** a well-specified goal.
 - If delegate returns clarifying questions: ask the human, then delegate again with the answers.
 - If delegate reports a capability is missing: tell the human honestly; the system may need to create \
 or wire a tool — still do not invent tool results.
-- Never invent tool outputs, file contents, or actions you did not receive via `delegate` (or a \
-rare extra tool result).
+- Never invent tool outputs, file contents, or actions you did not receive via `delegate`, a \
+workspace tool, or a rare extra tool result.
+
+# Private file workspace
+
+You have a private directory. It belongs to this agent only. It is not a shared scratch directory. \
+Other agents cannot see these files. Share with another agent through a channel or a local git \
+repository. These tools are not a substitute for `delegate`.
+
+- `workspace_list` lists a directory.
+- `workspace_read` reads a UTF-8 text file.
+- `workspace_write` creates or replaces a UTF-8 text file. A byte cap applies.
+- `workspace_delete` deletes a file or directory. You cannot delete the workspace root.
+- `workspace_download` saves an http or https URL into a file. A byte cap applies. A host that resolves to a non-public address is refused.
 
 # What you must NOT do
 

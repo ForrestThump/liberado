@@ -5,7 +5,7 @@
 > Layer semantics and dependency rules: [contracts.md](../architecture/contracts.md) and
 > `crates/test-support/tests/layer_rules.rs` (the same role tags, mechanically enforced).
 
-54 workspace crates.
+55 workspace crates.
 
 ## foundation
 
@@ -37,11 +37,12 @@ The orchestration engine: decide/act loops, sessions, capability plumbing.
 
 | Crate | Internal deps | Description |
 |---|---|---|
+| [`liberado-agent-workspace`](../../../crates/agent-workspace/) | `liberado-provider`, `liberado-tool-runtime` | Private per-agent file workspace: one directory per agent, a byte cap, and sandboxed list, read, write, delete, and download tools. |
 | [`liberado-config`](../../../crates/config/) | `liberado-common`, `liberado-config-loader` | Config loading (Decision 14): resolve a config directory, read the per-section TOML files, assemble and validate a Config, plus the path-resolution helpers (mcp install dir, operational data dir, runtime-gating context) built on it. Deliberately dependency-light — no daemon/mcp/dispatcher/orchestrator — so tools that only need config/path resolution (e.g. liberado-mcp-forge) don't have to pull in the whole assembly stack. |
 | [`liberado-cron`](../../../crates/cron/) | `liberado-common` | Cron as an EventSource (Decision 18/19): a schedule fires on its own timer and produces the same standardized Event vault-watch does, so the daemon reacts to it identically. Vault-agnostic by construction — no liberado-vault dependency — the concrete proof the core doesn't need the vault. |
 | [`liberado-dispatcher`](../../../crates/dispatcher/) | `liberado-common`, `liberado-config-loader`, `liberado-provider` | The Liberado dispatcher (Decision 1): the out-of-band router that classifies a goal into a DispatchDecision, then applies the deterministic downgrade-only guard pipeline (Decision 6) that engineers safety regardless of classifier error. |
 | [`liberado-executor`](../../../crates/executor/) | `liberado-common`, `liberado-notify`, `liberado-provider`, `liberado-scratchpad`, `liberado-tool-runtime` | The Liberado agent execution engine: a bounded, adaptive tool loop that drives a Provider through real tool calls until it files a typed Report (delegated work) or answers in prose (conversational). |
-| [`liberado-main-agent`](../../../crates/main-agent/) | `liberado-common`, `liberado-conversation-store`, `liberado-dispatcher`, `liberado-executor`, `liberado-mcp`, `liberado-provider`, `liberado-session` | The conversational main agent: a multi-turn Conversation that carries context across turns and drives the executor's tool-calling loop. The thing a chat UI talks to. |
+| [`liberado-main-agent`](../../../crates/main-agent/) | `liberado-agent-workspace`, `liberado-common`, `liberado-conversation-store`, `liberado-dispatcher`, `liberado-executor`, `liberado-mcp`, `liberado-provider`, `liberado-session` | The conversational main agent: a multi-turn Conversation that carries context across turns and drives the executor's tool-calling loop. The thing a chat UI talks to. |
 | [`liberado-mcp`](../../../crates/mcp/) | `liberado-common`, `liberado-provider`, `liberado-tool-runtime` | The production `ToolRuntime` for Liberado: a turbomcp-client-backed adapter that exposes an MCP server's tools to the executor and injects write provenance into each call's `_meta` so tool-mediated vault writes are self-attributed (loop-broken). |
 | [`liberado-orchestrator`](../../../crates/orchestrator/) | `liberado-common`, `liberado-executor`, `liberado-notify`, `liberado-provider`, `liberado-session` | Bridges a dispatcher DispatchDecision to an execution: builds the task + write provenance, runs the executor's agent loop over a ToolRuntime, and returns a Report (or surfaces a Clarify). Decoupled from MCP connection management via the RuntimeFactory trait. |
 | [`liberado-provider-free-proxy`](../../../crates/provider-free-proxy/) | *none* | An OpenAI-compatible inference proxy that serves only genuinely-free models across configured providers, picking whichever available free model ranks highest on coding benchmarks (API first, deterministic spider-mcp scrape fallback). |

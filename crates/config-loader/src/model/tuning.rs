@@ -31,6 +31,9 @@ pub struct Tuning {
     /// the chat-surface shelf. Spec:
     /// `docs/spec/architecture/chat-agent-surface-mode.md`.
     pub chat: ChatTuning,
+    /// Private per-agent file workspace (`[agent_workspace]` in `tuning.toml`).
+    /// Read by the chat boot path when it opens each agent's directory.
+    pub agent_workspace: AgentWorkspaceTuning,
     /// MCP connection pooling (M1) — reuse healthy peer connections across executions.
     pub mcp_pooling: McpPoolingTuning,
     /// Proposal lifecycle: expiry reaper interval, etc.
@@ -393,5 +396,59 @@ impl Default for ChatTuning {
                 "operator".to_string(),
             ],
         }
+    }
+}
+
+/// Per-agent private file workspace (`[agent_workspace]` in `tuning.toml`).
+///
+/// `max_bytes` defaults to 1 GiB (1024^3). That number is the same value as
+/// `liberado_agent_workspace::DEFAULT_CAP_BYTES`. This crate cannot depend on that one
+/// (foundation must not depend on kernel), so the equality is checked from `liberado-main-agent`.
+/// An empty `root` means `<data_dir>/agent-workspaces`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AgentWorkspaceTuning {
+    /// Byte cap for one agent's files. Writes and downloads that would pass it are refused.
+    pub max_bytes: u64,
+    /// Absolute directory that holds the per-agent folders. Empty uses the data dir.
+    pub root: String,
+}
+
+impl Default for AgentWorkspaceTuning {
+    fn default() -> Self {
+        Self {
+            max_bytes: 1024 * 1024 * 1024,
+            root: String::new(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::str::FromStr;
+
+    use super::super::Config;
+    use super::AgentWorkspaceTuning;
+
+    #[test]
+    fn agent_workspace_defaults_to_one_gibibyte_and_an_empty_root() {
+        let tuning = AgentWorkspaceTuning::default();
+        assert_eq!(tuning.max_bytes, 1024 * 1024 * 1024);
+        assert!(tuning.root.is_empty());
+    }
+
+    #[test]
+    fn agent_workspace_toml_overrides_the_cap_and_root() {
+        let toml = r#"
+[topology]
+vault_path = "/vault"
+
+[tuning.agent_workspace]
+max_bytes = 42
+root = "/var/lib/liberado/agents"
+"#;
+        let cfg = Config::from_str(toml).expect("valid TOML");
+        assert_eq!(cfg.tuning.agent_workspace.max_bytes, 42);
+        assert_eq!(cfg.tuning.agent_workspace.root, "/var/lib/liberado/agents");
     }
 }

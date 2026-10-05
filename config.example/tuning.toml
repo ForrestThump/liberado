@@ -55,6 +55,14 @@
 # agent profile; every chat reads as `Chat`. Removing a default name is a deploy-visible change
 # (legacy rows project back to `Chat` after the next daemon restart) — worth a changelog note.
 
+[agent_workspace]
+# max_bytes = 1073741824   # 1 GiB cap for one agent's files. Each file, directory, and symlink
+#                          # costs 4096 bytes plus the file's length. Writes and downloads that
+#                          # would pass the cap are refused. 0 refuses every write and download,
+#                          # including an empty file.
+# root = ""                # empty uses <data_dir>/agent-workspaces. Each agent gets its own
+#                          # directory. There is no shared scratch directory.
+
 [telegram_approvals]
 # getupdate_timeout_secs = 25   # Telegram getUpdates long-poll length (1-50, Telegram's own cap)
 # poll_retry_backoff_secs = 10  # backoff before retrying getUpdates after a network/API error

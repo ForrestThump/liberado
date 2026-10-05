@@ -30,15 +30,15 @@ use liberado_common::{Capability, CapabilityCatalog, WriteClass, Zone};
 use thiserror::Error;
 
 pub use liberado_config_loader::{
-    AcpConfig, COMPACTION_TRIGGER_PCT_DEFAULT, COMPACTION_TRIGGER_TOKENS_FALLBACK,
-    CURRENT_SCHEMA_VERSION, CaptureTuning, CodingAuthError, CodingWorkspaceAuth,
-    CompactionSettings, CompactionTriggerSource, ConcurrencyTuning, Config, ConfigBuilder,
-    ContextTuning, CronSchedule, DEFAULT_POOL, DispatchTuning, Grant, HookConfig, MainAgentConfig,
-    MaintenanceTuning, McpConfig, McpPoolingTuning, McpTransport, ModelCompactionSettings, Policy,
-    PoolConfig, ProjectConfig, ProviderFallback, ProviderProfile, RoleOverride, ShepherdAuthConfig,
-    ShepherdConfig, ShepherdProjectConfig, ShepherdReviewConfig, SubagentIsolation,
-    TelegramApprovalsTuning, ToolImpact, Topology, Tuning, VaultRemindersConfig, ZonePolicy,
-    managed_binary_path, resolve_declared_zone,
+    AcpConfig, AgentWorkspaceTuning, COMPACTION_TRIGGER_PCT_DEFAULT,
+    COMPACTION_TRIGGER_TOKENS_FALLBACK, CURRENT_SCHEMA_VERSION, CaptureTuning, CodingAuthError,
+    CodingWorkspaceAuth, CompactionSettings, CompactionTriggerSource, ConcurrencyTuning, Config,
+    ConfigBuilder, ContextTuning, CronSchedule, DEFAULT_POOL, DispatchTuning, Grant, HookConfig,
+    MainAgentConfig, MaintenanceTuning, McpConfig, McpPoolingTuning, McpTransport,
+    ModelCompactionSettings, Policy, PoolConfig, ProjectConfig, ProviderFallback, ProviderProfile,
+    RoleOverride, ShepherdAuthConfig, ShepherdConfig, ShepherdProjectConfig, ShepherdReviewConfig,
+    SubagentIsolation, TelegramApprovalsTuning, ToolImpact, Topology, Tuning, VaultRemindersConfig,
+    ZonePolicy, managed_binary_path, resolve_declared_zone,
 };
 
 /// Records which source file contributed each section of a loaded [`Config`],

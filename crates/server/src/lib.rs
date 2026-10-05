@@ -26,6 +26,7 @@ mod shutdown;
 mod state;
 mod sticky;
 mod telegram;
+mod workspace_surface;
 
 #[cfg(test)]
 mod t1_conformance;
@@ -858,8 +859,18 @@ async fn build_chat(
     // through `delegate` → hub → dispatch pack, not the face agent's own tool list.
     let runtime = connect_chat_runtime(mcp);
 
-    let (tool_names, tool_count) =
-        face_tool_surface(&runtime, main_agent_cfg.delegation_mode, &main_agent_caps);
+    let workspace = liberado_main_agent::WorkspaceSettings::resolve(
+        config.tuning.agent_workspace.max_bytes,
+        &config.tuning.agent_workspace.root,
+        &liberado_config::data_dir(),
+    );
+    let workspace_offered = workspace.root_is_usable();
+    let (tool_names, tool_count) = face_tool_surface(
+        &runtime,
+        main_agent_cfg.delegation_mode,
+        &main_agent_caps,
+        workspace_offered,
+    );
 
     // ── Build the guarded ChatSessions ───────────────────────────────────────
     let consequence_count = guard.consequences.len();
@@ -918,6 +929,8 @@ async fn build_chat(
         "chat: surface-mode agent_profiles wired from tuning.toml"
     );
 
+    sessions = sessions.with_agent_workspace(workspace);
+
     if compact_enabled {
         info!(
             face_model = %face_model,
@@ -951,12 +964,14 @@ async fn build_chat(
     (Some(sessions), tool_count, tool_names)
 }
 
-/// The face agent's tool surface: `delegate` only (plus granted main-agent MCP tools) in
-/// delegation mode, the full live registry otherwise.
+/// The face agent's tool surface: `delegate` (plus granted main-agent MCP tools) in delegation
+/// mode, the full live registry otherwise. Private workspace tools are listed in both modes
+/// only when `workspace_offered` is true.
 fn face_tool_surface(
     runtime: &Arc<dyn ToolRuntime>,
     delegation_mode: bool,
     caps: &CapabilitySet,
+    workspace_offered: bool,
 ) -> (Vec<String>, usize) {
     let mut tool_names: Vec<String> = runtime.catalog().iter().map(|t| t.name.clone()).collect();
     if delegation_mode {
@@ -977,6 +992,7 @@ fn face_tool_surface(
             }));
         }
     }
+    tool_names.extend(workspace_surface::listed_names(workspace_offered));
     let tool_count = tool_names.len();
     if tool_count > 0 {
         info!(

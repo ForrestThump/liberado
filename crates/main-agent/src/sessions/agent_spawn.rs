@@ -282,13 +282,16 @@ impl ChatSessions {
     ) -> Box<dyn ToolRuntime> {
         let extras = self.scoped_extras_runtime(user, session, capabilities);
         let agent_spawner = self.agent_spawner_for_profile(profile);
-        Box::new(FaceRuntime::new(
-            self.face_bridge.clone(),
-            extras,
-            Some(session.to_string()),
-            turn_deferral,
-            agent_spawner,
-        ))
+        self.attach_workspace(
+            session,
+            Box::new(FaceRuntime::new(
+                self.face_bridge.clone(),
+                extras,
+                Some(session.to_string()),
+                turn_deferral,
+                agent_spawner,
+            )),
+        )
     }
 }
 
