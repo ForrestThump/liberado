@@ -2219,7 +2219,7 @@
     {
       "file": "crates/agent-workspace/src/sandbox.rs",
       "function": "accept_directory",
-      "line": 89,
+      "line": 137,
       "cyclomatic": 3.0,
       "coverage": 100.0,
       "crap": 3.0,
@@ -2227,8 +2227,17 @@
     },
     {
       "file": "crates/agent-workspace/src/sandbox.rs",
+      "function": "accept_plain_file",
+      "line": 67,
+      "cyclomatic": 4.0,
+      "coverage": 100.0,
+      "crap": 4.0,
+      "crate": "liberado-agent-workspace"
+    },
+    {
+      "file": "crates/agent-workspace/src/sandbox.rs",
       "function": "contained",
-      "line": 157,
+      "line": 205,
       "cyclomatic": 2.0,
       "coverage": 80.0,
       "crap": 2.032,
@@ -2237,10 +2246,19 @@
     {
       "file": "crates/agent-workspace/src/sandbox.rs",
       "function": "create_dirs",
-      "line": 61,
+      "line": 107,
       "cyclomatic": 4.0,
       "coverage": 100.0,
       "crap": 4.0,
+      "crate": "liberado-agent-workspace"
+    },
+    {
+      "file": "crates/agent-workspace/src/sandbox.rs",
+      "function": "dot_name",
+      "line": 89,
+      "cyclomatic": 2.0,
+      "coverage": 100.0,
+      "crap": 2.0,
       "crate": "liberado-agent-workspace"
     },
     {
@@ -2255,7 +2273,7 @@
     {
       "file": "crates/agent-workspace/src/sandbox.rs",
       "function": "follow_symlink",
-      "line": 141,
+      "line": 189,
       "cyclomatic": 7.0,
       "coverage": 78.57142857142857,
       "crap": 7.482142857142858,
@@ -2264,7 +2282,7 @@
     {
       "file": "crates/agent-workspace/src/sandbox.rs",
       "function": "normal_name",
-      "line": 70,
+      "line": 116,
       "cyclomatic": 3.0,
       "coverage": 100.0,
       "crap": 3.0,
@@ -2273,7 +2291,7 @@
     {
       "file": "crates/agent-workspace/src/sandbox.rs",
       "function": "parent_components",
-      "line": 48,
+      "line": 94,
       "cyclomatic": 4.0,
       "coverage": 100.0,
       "crap": 4.0,
@@ -2281,8 +2299,17 @@
     },
     {
       "file": "crates/agent-workspace/src/sandbox.rs",
+      "function": "plain_name",
+      "line": 82,
+      "cyclomatic": 3.0,
+      "coverage": 100.0,
+      "crap": 3.0,
+      "crate": "liberado-agent-workspace"
+    },
+    {
+      "file": "crates/agent-workspace/src/sandbox.rs",
       "function": "prepare_dir",
-      "line": 79,
+      "line": 127,
       "cyclomatic": 4.0,
       "coverage": 85.71428571428571,
       "crap": 4.0466472303206995,
@@ -2291,7 +2318,7 @@
     {
       "file": "crates/agent-workspace/src/sandbox.rs",
       "function": "reject_alias",
-      "line": 130,
+      "line": 178,
       "cyclomatic": 3.0,
       "coverage": 66.66666666666666,
       "crap": 3.333333333333334,
@@ -2300,7 +2327,7 @@
     {
       "file": "crates/agent-workspace/src/sandbox.rs",
       "function": "relative_path",
-      "line": 99,
+      "line": 147,
       "cyclomatic": 11.0,
       "coverage": 91.30434782608695,
       "crap": 11.079559464124271,
@@ -2308,8 +2335,17 @@
     },
     {
       "file": "crates/agent-workspace/src/sandbox.rs",
+      "function": "require_plain_dest",
+      "line": 57,
+      "cyclomatic": 3.0,
+      "coverage": 100.0,
+      "crap": 3.0,
+      "crate": "liberado-agent-workspace"
+    },
+    {
+      "file": "crates/agent-workspace/src/sandbox.rs",
       "function": "resolve",
-      "line": 15,
+      "line": 16,
       "cyclomatic": 9.0,
       "coverage": 82.35294117647058,
       "crap": 9.445145532261348,
@@ -46489,11 +46525,11 @@
     }
   ],
   "diagnostics": {
-    "analyzed_files": 668,
+    "analyzed_files": 669,
     "lcov_files": 471,
     "matched_files": 469,
     "source_only": {
-      "count": 199,
+      "count": 200,
       "examples": [
         "crates/acp-bridge/src/coding_run_tests.rs",
         "crates/acp-bridge/src/grant_tests.rs",

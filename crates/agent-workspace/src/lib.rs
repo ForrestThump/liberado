@@ -31,4 +31,8 @@ pub use workspace::{
 };
 
 #[cfg(test)]
+#[path = "sandbox_tests.rs"]
+mod sandbox_tests;
+
+#[cfg(test)]
 mod tests;
