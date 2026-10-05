@@ -309,6 +309,7 @@ mod tests {
             content: Some(truncated),
             tool_calls: Vec::new(),
             finish_reason: FinishReason::Length,
+            reasoning: None,
             usage: Some(Usage {
                 prompt_tokens: 1200,
                 completion_tokens: 1024,

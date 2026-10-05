@@ -541,6 +541,7 @@ mod tests {
                     cached_prompt_tokens: None,
                     reasoning_tokens: Some(33),
                 }),
+                reasoning: None,
             },
         );
         let text = std::fs::read_to_string(&path).unwrap();

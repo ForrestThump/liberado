@@ -125,6 +125,8 @@ impl OpenAiCompatibleProvider {
                 other => json!({ "effort": other }),
             };
         }
+        // MiniMax hides thinking on `reasoning_content` only when asked. Effort is unchanged.
+        crate::reasoning_channel::apply_reasoning_channel(body, &self.base_url);
     }
 
     /// Declare extra status codes this backend's API treats as client errors (see
@@ -460,3 +462,10 @@ mod list_models_tests;
 #[cfg(test)]
 #[path = "lib_fallback.rs"]
 mod fallback;
+
+mod reasoning_channel;
+
+/// MiniMax `reasoning_split` plus the visible-answer strip on both transports.
+#[cfg(test)]
+#[path = "reasoning_channel_tests.rs"]
+mod reasoning_channel_tests;

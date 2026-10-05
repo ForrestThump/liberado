@@ -255,6 +255,11 @@ pub struct MessageNode {
     /// provider when two backends serve overlapping ids, which is when it starts to matter.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    /// Model thinking for this assistant turn. Not part of [`Message`], so the
+    /// provider request built from `message` alone never sees it. `None` on
+    /// nodes written before this field and on turns that did not think.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning: Option<String>,
 }
 
 /// A conversation's header record — the first line of its log. Carries lineage so subagent trees
@@ -296,6 +301,12 @@ pub struct ConversationHeader {
     /// in the right shelf without any migration.
     #[serde(default)]
     pub surface_mode: SurfaceMode,
+    /// Singleton Agent Creator row (Agents shelf +). False on every other
+    /// conversation. `#[serde(default)]` so logs written before the flag exist
+    /// read as ordinary rows. False is omitted so those files stay
+    /// byte-identical until a creator row is written. Not copied on fork.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub agent_creator: bool,
 }
 
 /// The input to [`create`](crate::ConversationStore::create): the caller supplies only intent, not
@@ -335,6 +346,9 @@ pub struct NewConversation {
     /// tests; production call sites compute it. See
     /// `docs/spec/architecture/chat-agent-surface-mode.md`.
     pub surface_mode: SurfaceMode,
+    /// Stamp the singleton Agent Creator marker. Default false. See
+    /// [`ConversationHeader::agent_creator`](ConversationHeader::agent_creator).
+    pub agent_creator: bool,
 }
 
 /// The input to [`append`](crate::ConversationStore::append): a complete message plus its place in
@@ -349,6 +363,8 @@ pub struct NewNode {
     /// Which model this node was dispatched to (on a `User` node) or produced by (on an
     /// `Assistant` one). See [`MessageNode::model`].
     pub model: Option<String>,
+    /// Thinking to store beside the message. See [`MessageNode::reasoning`].
+    pub reasoning: Option<String>,
 }
 
 #[cfg(test)]

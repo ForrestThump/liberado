@@ -47,6 +47,7 @@ fn user_node(parent: Option<ulid::Ulid>, content: &str) -> NewNode {
         author: Author::User,
         message: Message::user(content),
         model: None,
+        reasoning: None,
     }
 }
 
@@ -210,6 +211,7 @@ async fn tool_call_messages_round_trip() {
                 author: Author::Assistant,
                 message: assistant,
                 model: None,
+                reasoning: None,
             },
         )
         .await
@@ -224,6 +226,7 @@ async fn tool_call_messages_round_trip() {
                 author: Author::Tool,
                 message: Message::tool_result("call_1", "{\"hits\":3}"),
                 model: None,
+                reasoning: None,
             },
         )
         .await
@@ -711,6 +714,7 @@ async fn turns_excludes_tail_copies() {
                 author: Author::User,
                 message: Message::user("original question"),
                 model: None,
+                reasoning: None,
             },
         )
         .await
@@ -723,6 +727,7 @@ async fn turns_excludes_tail_copies() {
                 author: Author::Assistant,
                 message: Message::assistant("original answer"),
                 model: None,
+                reasoning: None,
             },
         )
         .await
@@ -736,6 +741,7 @@ async fn turns_excludes_tail_copies() {
                 author: Author::Named("compaction-tail".into()),
                 message: Message::assistant("original answer"),
                 model: None,
+                reasoning: None,
             },
         )
         .await
@@ -749,6 +755,7 @@ async fn turns_excludes_tail_copies() {
                 author: Author::User,
                 message: Message::user("next question"),
                 model: None,
+                reasoning: None,
             },
         )
         .await

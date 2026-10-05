@@ -2,22 +2,35 @@ use dioxus::prelude::*;
 
 use chat_client_contract::ChatMessage;
 
-use crate::components::chat_submission::submission_text;
-use crate::components::markdown::MarkdownText;
+use super::message_row::MessageList;
+#[cfg(target_arch = "wasm32")]
+use crate::components::chat_submission::unanswered_turn_note;
+use crate::components::chat_submission::{profile_switched_note, submission_text};
 use crate::components::model_browser::ModelBrowser;
 use crate::components::picker::Picker;
 use crate::components::profile_browser::ProfileBrowser;
-use crate::components::slash_palette::SlashPalette;
-use crate::icons::{
-    IconCheck, IconChevronDown, IconChevronRight, IconGlasses, IconSpinner, IconStop, IconX,
+use crate::components::profile_surface::show_profile_browser;
+#[cfg(target_arch = "wasm32")]
+use crate::components::profile_surface::{
+    handle_slash_for_surface, maybe_open_profile_browser, set_surface,
 };
+use crate::components::slash_palette::SlashPalette;
+use crate::icons::{IconGlasses, IconStop};
 
 // Slash commands only run in the browser — `submit` gates the whole block on wasm32, so gate the
 // imports identically or a native build trips the workspace's zero-warnings bar on unused imports.
 #[cfg(target_arch = "wasm32")]
-use crate::components::slash_commands::handle_slash_command;
-#[cfg(target_arch = "wasm32")]
 use liberado_commands::CommandResult;
+
+#[cfg(target_arch = "wasm32")]
+#[path = "chat_tool_events.rs"]
+mod chat_tool_events;
+
+#[path = "chat_fold.rs"]
+pub(super) mod chat_fold;
+
+#[path = "chat_reasoning.rs"]
+mod chat_reasoning;
 
 // ── Data types ──────────────────────────────────────────────────────────────
 
@@ -38,6 +51,9 @@ pub struct ChatMsg {
     /// Tool calls that happened during this assistant turn. Only populated during
     /// live SSE streaming; historical messages loaded from the API have empty vecs.
     pub thinking_steps: Vec<ThinkingStep>,
+    /// Model thinking for this assistant turn. Collapsed in the row. Empty for
+    /// history that did not think, and for every non-assistant row.
+    pub reasoning: Option<String>,
 }
 
 impl ChatMsg {
@@ -46,6 +62,7 @@ impl ChatMsg {
             role: "user",
             content,
             thinking_steps: Vec::new(),
+            reasoning: None,
         }
     }
 
@@ -54,6 +71,7 @@ impl ChatMsg {
             role: "assistant",
             content,
             thinking_steps: Vec::new(),
+            reasoning: None,
         }
     }
 
@@ -62,6 +80,7 @@ impl ChatMsg {
             role: "error",
             content,
             thinking_steps: Vec::new(),
+            reasoning: None,
         }
     }
 
@@ -76,6 +95,7 @@ impl ChatMsg {
             role,
             content: msg.content.clone(),
             thinking_steps: Vec::new(),
+            reasoning: chat_reasoning::kept(msg.reasoning.as_deref()),
         }
     }
 }
@@ -92,6 +112,7 @@ struct LoadedConversation {
     /// The last turn ended with no reply — usually the daemon restarting mid-inference. Rendered as
     /// a note rather than left as silence, which reads as "the model said nothing".
     turn_unanswered: bool,
+    surface_mode: chat_client_contract::SurfaceMode,
 }
 
 async fn fetch_conversation(api_base: &str, conv_id: &str) -> Result<LoadedConversation, String> {
@@ -120,6 +141,7 @@ async fn fetch_conversation(api_base: &str, conv_id: &str) -> Result<LoadedConve
         profile: history.profile,
         turn_running: history.turn_running,
         turn_unanswered: history.turn_unanswered,
+        surface_mode: history.surface_mode,
     })
 }
 
@@ -161,9 +183,14 @@ pub fn Chat(
     /// Which session profile the open conversation runs under, for the picker's active badge and the
     /// header chip. Loaded from the conversation, not guessed.
     active_profile: Signal<Option<String>>,
+    /// Projected shelf. Agent hides the profile chip and blocks `/profile`.
+    active_surface: Signal<Option<chat_client_contract::SurfaceMode>>,
+    /// Bumped when `create_agent` succeeds so the Agents shelf refetches.
+    list_epoch: Signal<u64>,
 ) -> Element {
-    #[cfg_attr(not(target_arch = "wasm32"), allow(unused_mut))]
-    let mut profile_browser_open = profile_browser_open;
+    // The SSE listener that writes this is wasm-only. Native still has the prop.
+    #[cfg(not(target_arch = "wasm32"))]
+    let _list_epoch_keep = list_epoch;
     #[cfg_attr(not(target_arch = "wasm32"), allow(unused_mut))]
     let mut active_profile = active_profile;
     #[cfg_attr(not(target_arch = "wasm32"), allow(unused_mut))]
@@ -246,14 +273,10 @@ pub fn Chat(
                         // transcript, and writing it into the log would make a display decision
                         // permanent and re-answer it wrongly if the turn were later retried.
                         if unanswered {
-                            loaded_messages.push(ChatMsg {
-                                role: "system",
-                                content: "That turn ended without a reply — the daemon most likely                                           restarted mid-answer. Nothing was saved; send again to retry."
-                                    .to_string(),
-                                thinking_steps: Vec::new(),
-                            });
+                            loaded_messages.push(unanswered_turn_note());
                         }
                         messages.set(loaded_messages);
+                        set_surface(active_surface, Some(loaded.surface_mode));
                         // From the conversation, not remembered client-side: opening a chat in a
                         // second tab or after a restart must show the authority it actually runs
                         // under, not whatever this tab last set.
@@ -274,6 +297,7 @@ pub fn Chat(
                                     active_conv_id,
                                     should_set_title,
                                     ghost_session,
+                                    list_epoch,
                                 },
                                 &base,
                             );
@@ -289,6 +313,7 @@ pub fn Chat(
                 // A new chat starts on the default grant; leaving a stale chip up would claim
                 // otherwise.
                 active_profile.set(None);
+                set_surface(active_surface, None);
             }
             // No conversation id. An incognito chat never has one (it is not in the sidebar, so
             // there is nothing there to highlight), and a first durable turn does not have one
@@ -423,13 +448,14 @@ pub fn Chat(
 
             #[cfg(target_arch = "wasm32")]
             wasm_bindgen_futures::spawn_local(async move {
-                let (cmd_msgs, new_session, results) = handle_slash_command(
+                let (cmd_msgs, new_session, results) = handle_slash_for_surface(
                     &text_owned,
                     &base,
                     session_snapshot,
                     sending_snapshot,
                     message_count,
                     &theme_snapshot,
+                    active_surface(),
                 )
                 .await;
                 for msg in cmd_msgs {
@@ -465,7 +491,7 @@ pub fn Chat(
                             theme_browser_open.set(true);
                         }
                         CommandResult::OpenProfileBrowser => {
-                            profile_browser_open.set(true);
+                            maybe_open_profile_browser(active_surface(), profile_browser_open);
                         }
                         // The command layer validated the name against the shared registry; all that
                         // is left is to render it and remember it.
@@ -514,6 +540,7 @@ pub fn Chat(
                 active_conv_id,
                 should_set_title,
                 ghost_session,
+                list_epoch,
             },
             &base_for_title,
             incognito(),
@@ -564,456 +591,245 @@ pub fn Chat(
     };
 
     rsx! {
-        div {
-            class: "{chat_cls}",
-
-            if incognito() {
-                // Stated where the conversation is, not only on the button in the header — the
-                // wrong thing to be unsure about mid-chat is whether it is being recorded. The
-                // second sentence is the honest limit of the promise.
-                div {
-                    class: "incognito-banner",
-                    span { class: "incognito-glyph", IconGlasses {} }
-                    span {
-                        b { "Incognito." }
-                        " This chat is never written to disk and is discarded when you leave it. Actions the agent takes — notes, memories, files — still happen."
-                    }
-                }
-            }
-
             div {
-                class: "messages",
-                if messages.read().is_empty() && conv_id.is_none() && !sending() && ghost_session.read().is_none() {
+                class: "{chat_cls}",
+
+                if incognito() {
+                    // Stated where the conversation is, not only on the button in the header — the
+                    // wrong thing to be unsure about mid-chat is whether it is being recorded. The
+                    // second sentence is the honest limit of the promise.
                     div {
-                        class: "empty-state",
-                        p { "Start a conversation with Liberado." }
-                        p { "It has access to your tools." }
-                    }
-                }
-                for (i, msg) in messages.read().iter().enumerate() {
-                    MessageRow { key: "{i}", msg: msg.clone() }
-                }
-                if sending() {
-                    div { class: "bubble-row assistant",
-                        div { class: "bubble-thinking", "\u{2026}" }
-                    }
-                }
-            }
-
-            if theme_browser_open() {
-                Picker {
-                    title: "Switch theme",
-                    current: Some(theme_name()),
-                    items: crate::theme::theme_names(),
-                    status: None,
-                    error: None,
-                    open: theme_browser_open,
-                    // A theme applies instantly and locally, so unlike the model picker there is no
-                    // round trip to wait on: close as soon as it is chosen.
-                    on_pick: move |name: String| {
-                        theme_name.set(name.clone());
-                        crate::theme::save_theme_name(&name);
-                        theme_browser_open.set(false);
-                        messages
-                            .write()
-                            .push(ChatMsg {
-                                role: "system",
-                                content: format!("Theme: {name}"),
-                                thinking_steps: Vec::new(),
-                            });
-                    },
-                }
-            }
-
-            if profile_browser_open() {
-                ProfileBrowser {
-                    api_base: base_for_profiles.clone(),
-                    session: session(),
-                    current: active_profile(),
-                    open: profile_browser_open,
-                    on_switched: move |name: Option<String>| {
-                        active_profile.set(name.clone());
-                        messages
-                            .write()
-                            .push(ChatMsg {
-                                role: "system",
-                                content: match name {
-                                    Some(n) => format!(
-                                        "Session profile: {n} — applies from your next message."
-                                    ),
-                                    None => "Session profile cleared — back to the default grant,                                              from your next message."
-                                        .to_string(),
-                                },
-                                thinking_steps: Vec::new(),
-                            });
-                    },
-                }
-            }
-
-            if model_browser_open() {
-                ModelBrowser {
-                    api_base: base_for_models.clone(),
-                    open: model_browser_open,
-                    // Scope the pick to this chat once it has an id. Before that the browser hands
-                    // the choice back and `pending_model` below carries it onto the request that
-                    // creates the conversation.
-                    conversation: session(),
-                    on_switched: move |model: String| {
-                        // Held for the next message when there is no conversation yet. Dropping it
-                        // here is what sent the pick to the daemon-wide default instead, which
-                        // retuned every other chat.
-                        if session().is_none() {
-                            pending_model.set(Some(model.clone()));
+                        class: "incognito-banner",
+                        span { class: "incognito-glyph", IconGlasses {} }
+                        span {
+                            b { "Incognito." }
+                            " This chat is never written to disk and is discarded when you leave it. Actions the agent takes — notes, memories, files — still happen."
                         }
-                        messages.write().push(ChatMsg {
-                            role: "system",
-                            content: format!(
-                                "Model set to {model} for this conversation, from your next message. Other chats are unaffected."
-                            ),
-                            thinking_steps: Vec::new(),
-                        });
-                    },
+                    }
                 }
-            }
 
-            div {
-                class: "composer-dock",
-                if palette_open() {
-                SlashPalette {
-                    input: input(),
-                    selected: slash_index(),
-                    // A tap is the phone's select-and-run gesture. The row hands us its exact
-                    // command so state/render timing cannot accidentally submit the old prefix.
-                    on_run: move |command: String| {
-                        submit.call(Some(command));
-                    },
-                }
-            }
-
-                form {
-                class: "input-bar",
-                onsubmit: move |evt| {
-                    evt.prevent_default();
-                    submit.call(None);
-                },
-                // Wraps the textarea so the ghost mirror can sit exactly under it. `.input` keeps
-                // its own metrics; this only supplies the positioning context.
                 div {
-                    class: "input-wrap",
-                    // The dim remainder of the selected match, drawn *behind* a transparent-background
-                    // textarea. The typed part is reproduced invisibly so the visible suffix starts
-                    // precisely where the caret is — there is no way to measure that from Rust, so the
-                    // browser measures it for us by laying out the same text in the same font.
-                    if let Some(ghost) = ghost_suffix() {
+                    class: "messages",
+                    // `MessageList` scrolls `#response-copy-{index}` into this node.
+                    id: "chat-messages",
+                    if messages.read().is_empty() && conv_id.is_none() && !sending() && ghost_session.read().is_none() {
                         div {
-                            class: "input-ghost",
-                            "aria-hidden": "true",
-                            span { class: "input-ghost-typed", "{input}" }
-                            span { class: "input-ghost-suffix", "{ghost}" }
+                            class: "empty-state",
+                            p { "Start a conversation with Liberado." }
+                            p { "It has access to your tools." }
                         }
                     }
-                    textarea {
-                        id: "chat-input",
-                        class: "input",
-                        placeholder: "Message Liberado\u{2026}",
-                        value: "{input}",
-                        rows: 1,
-                        autofocus: true,
-                        // The palette is a completion aid, not a listbox the caret moves into, so the
-                        // textarea keeps focus and announces the relationship instead.
-                        autocomplete: "off",
-                        // Labels the virtual keyboard's action key to match what it will actually
-                        // do. Cosmetic on a desktop; on a phone it is the difference between a key
-                        // marked "send" that sends and one marked "return" that does not.
-                        enterkeyhint: if enter_sends() { "send" } else { "enter" },
-                        oninput: move |e| {
-                            input.set(e.value());
-                            // A changed query invalidates the old selection: `/s` selecting the third
-                            // match and then typing `e` would otherwise leave the highlight on
-                            // whatever now happens to be third.
-                            slash_index.set(0);
-                            palette_dismissed.set(false);
-                            resize_input_to_content();
+                    MessageList { messages }
+                    if sending() {
+                        div { class: "bubble-row assistant",
+                            div { class: "bubble-thinking", "\u{2026}" }
+                        }
+                    }
+                }
+
+                if theme_browser_open() {
+                    Picker {
+                        title: "Switch theme",
+                        current: Some(theme_name()),
+                        items: crate::theme::theme_names(),
+                        status: None,
+                        error: None,
+                        open: theme_browser_open,
+                        // A theme applies instantly and locally, so unlike the model picker there is no
+                        // round trip to wait on: close as soon as it is chosen.
+                        on_pick: move |name: String| {
+                            theme_name.set(name.clone());
+                            crate::theme::save_theme_name(&name);
+                            theme_browser_open.set(false);
+                            messages
+                                .write()
+                                .push(ChatMsg {
+                                    role: "system",
+                                    content: format!("Theme: {name}"),
+                                    thinking_steps: Vec::new(),
+                                                            reasoning: None,
+    });
                         },
-                        onkeydown: move |e: Event<KeyboardData>| {
-                            let open = palette_open();
-                            match e.key() {
-                                // Tab fills progressively — the shared `complete_commands` decides
-                                // how far, which is what keeps `/th` behaving as it does in the TUI.
-                                Key::Tab if open => {
-                                    e.prevent_default();
-                                    if let Some(filled) =
-                                        liberado_commands::complete_commands(&input(), slash_index())
+                    }
+                }
+
+                if show_profile_browser(profile_browser_open(), active_surface()) {
+                    ProfileBrowser {
+                        api_base: base_for_profiles.clone(),
+                        session: session(),
+                        current: active_profile(),
+                        open: profile_browser_open,
+                        on_switched: move |name: Option<String>| {
+                            active_profile.set(name.clone());
+                            messages.write().push(profile_switched_note(name));
+                        },
+                    }
+                }
+
+                if model_browser_open() {
+                    ModelBrowser {
+                        api_base: base_for_models.clone(),
+                        open: model_browser_open,
+                        // Scope the pick to this chat once it has an id. Before that the browser hands
+                        // the choice back and `pending_model` below carries it onto the request that
+                        // creates the conversation.
+                        conversation: session(),
+                        on_switched: move |model: String| {
+                            // Held for the next message when there is no conversation yet. Dropping it
+                            // here is what sent the pick to the daemon-wide default instead, which
+                            // retuned every other chat.
+                            if session().is_none() {
+                                pending_model.set(Some(model.clone()));
+                            }
+                            messages.write().push(ChatMsg {
+                                role: "system",
+                                content: format!(
+                                    "Model set to {model} for this conversation, from your next message. Other chats are unaffected."
+                                ),
+                                thinking_steps: Vec::new(),
+                                                    reasoning: None,
+    });
+                        },
+                    }
+                }
+
+                div {
+                    class: "composer-dock",
+                    if palette_open() {
+                    SlashPalette {
+                        input: input(),
+                        selected: slash_index(),
+                        // A tap is the phone's select-and-run gesture. The row hands us its exact
+                        // command so state/render timing cannot accidentally submit the old prefix.
+                        on_run: move |command: String| {
+                            submit.call(Some(command));
+                        },
+                    }
+                }
+
+                    form {
+                    class: "input-bar",
+                    onsubmit: move |evt| {
+                        evt.prevent_default();
+                        submit.call(None);
+                    },
+                    // Wraps the textarea so the ghost mirror can sit exactly under it. `.input` keeps
+                    // its own metrics; this only supplies the positioning context.
+                    div {
+                        class: "input-wrap",
+                        // The dim remainder of the selected match, drawn *behind* a transparent-background
+                        // textarea. The typed part is reproduced invisibly so the visible suffix starts
+                        // precisely where the caret is — there is no way to measure that from Rust, so the
+                        // browser measures it for us by laying out the same text in the same font.
+                        if let Some(ghost) = ghost_suffix() {
+                            div {
+                                class: "input-ghost",
+                                "aria-hidden": "true",
+                                span { class: "input-ghost-typed", "{input}" }
+                                span { class: "input-ghost-suffix", "{ghost}" }
+                            }
+                        }
+                        textarea {
+                            id: "chat-input",
+                            class: "input",
+                            placeholder: "Message Liberado\u{2026}",
+                            value: "{input}",
+                            rows: 1,
+                            autofocus: true,
+                            // The palette is a completion aid, not a listbox the caret moves into, so the
+                            // textarea keeps focus and announces the relationship instead.
+                            autocomplete: "off",
+                            // Labels the virtual keyboard's action key to match what it will actually
+                            // do. Cosmetic on a desktop; on a phone it is the difference between a key
+                            // marked "send" that sends and one marked "return" that does not.
+                            enterkeyhint: if enter_sends() { "send" } else { "enter" },
+                            oninput: move |e| {
+                                input.set(e.value());
+                                // A changed query invalidates the old selection: `/s` selecting the third
+                                // match and then typing `e` would otherwise leave the highlight on
+                                // whatever now happens to be third.
+                                slash_index.set(0);
+                                palette_dismissed.set(false);
+                                resize_input_to_content();
+                            },
+                            onkeydown: move |e: Event<KeyboardData>| {
+                                let open = palette_open();
+                                match e.key() {
+                                    // Tab fills progressively — the shared `complete_commands` decides
+                                    // how far, which is what keeps `/th` behaving as it does in the TUI.
+                                    Key::Tab if open => {
+                                        e.prevent_default();
+                                        if let Some(filled) =
+                                            liberado_commands::complete_commands(&input(), slash_index())
+                                        {
+                                            input.set(filled);
+                                            resize_input_to_content();
+                                        }
+                                    }
+                                    Key::ArrowDown if open => {
+                                        e.prevent_default();
+                                        let n = crate::components::slash_palette::matches_for(&input()).len();
+                                        if n > 0 {
+                                            slash_index.set((slash_index() + 1).min(n - 1));
+                                        }
+                                    }
+                                    Key::ArrowUp if open => {
+                                        e.prevent_default();
+                                        slash_index.set(slash_index().saturating_sub(1));
+                                    }
+                                    // Dismiss without clearing what was typed. Reopened by the next
+                                    // keystroke, since that is a new query.
+                                    Key::Escape if open => {
+                                        e.prevent_default();
+                                        palette_dismissed.set(true);
+                                    }
+                                    // `[webui] enter_key = "send"` — Enter submits, Shift+Enter is the
+                                    // newline. The historical behaviour and the default.
+                                    Key::Enter
+                                        if enter_sends()
+                                            && !e.modifiers().contains(Modifiers::SHIFT) =>
                                     {
-                                        input.set(filled);
-                                        resize_input_to_content();
+                                        e.prevent_default();
+                                        submit.call(None);
                                     }
-                                }
-                                Key::ArrowDown if open => {
-                                    e.prevent_default();
-                                    let n = crate::components::slash_palette::matches_for(&input()).len();
-                                    if n > 0 {
-                                        slash_index.set((slash_index() + 1).min(n - 1));
+                                    // `enter_key = "newline"` — Ctrl/Cmd+Enter is the deliberate send.
+                                    // Plain Enter deliberately matches *no* arm below, so it falls to
+                                    // the browser's own newline and this handler never submits. That is
+                                    // the point of the setting: on a phone Enter is the easiest key to
+                                    // hit and a mis-send cannot be taken back, so in this mode nothing
+                                    // reachable by one keypress can send.
+                                    Key::Enter
+                                        if !enter_sends()
+                                            && (e.modifiers().contains(Modifiers::CONTROL)
+                                                || e.modifiers().contains(Modifiers::META)) =>
+                                    {
+                                        e.prevent_default();
+                                        submit.call(None);
                                     }
+                                    _ => {}
                                 }
-                                Key::ArrowUp if open => {
-                                    e.prevent_default();
-                                    slash_index.set(slash_index().saturating_sub(1));
-                                }
-                                // Dismiss without clearing what was typed. Reopened by the next
-                                // keystroke, since that is a new query.
-                                Key::Escape if open => {
-                                    e.prevent_default();
-                                    palette_dismissed.set(true);
-                                }
-                                // `[webui] enter_key = "send"` — Enter submits, Shift+Enter is the
-                                // newline. The historical behaviour and the default.
-                                Key::Enter
-                                    if enter_sends()
-                                        && !e.modifiers().contains(Modifiers::SHIFT) =>
-                                {
-                                    e.prevent_default();
-                                    submit.call(None);
-                                }
-                                // `enter_key = "newline"` — Ctrl/Cmd+Enter is the deliberate send.
-                                // Plain Enter deliberately matches *no* arm below, so it falls to
-                                // the browser's own newline and this handler never submits. That is
-                                // the point of the setting: on a phone Enter is the easiest key to
-                                // hit and a mis-send cannot be taken back, so in this mode nothing
-                                // reachable by one keypress can send.
-                                Key::Enter
-                                    if !enter_sends()
-                                        && (e.modifiers().contains(Modifiers::CONTROL)
-                                            || e.modifiers().contains(Modifiers::META)) =>
-                                {
-                                    e.prevent_default();
-                                    submit.call(None);
-                                }
-                                _ => {}
-                            }
-                        },
+                            },
+                        }
                     }
-                }
-                if sending() {
+                    if sending() {
+                        button {
+                            class: "stop-btn",
+                            r#type: "button",
+                            onclick: move |_| stop_stream(),
+                            title: "Stop generating",
+                            IconStop {}
+                        }
+                    }
                     button {
-                        class: "stop-btn",
-                        r#type: "button",
-                        onclick: move |_| stop_stream(),
-                        title: "Stop generating",
-                        IconStop {}
+                        class: "send-btn",
+                        r#type: "submit",
+                        disabled: sending(),
+                        "Send"
                     }
-                }
-                button {
-                    class: "send-btn",
-                    r#type: "submit",
-                    disabled: sending(),
-                    "Send"
-                }
-                }
-            }
-        }
-    }
-}
-
-// ── Message row — renders a message + optional thinking steps ───────────────
-
-#[component]
-fn MessageRow(msg: ChatMsg) -> Element {
-    let has_steps = !msg.thinking_steps.is_empty();
-
-    rsx! {
-        div {
-            class: "bubble-row {msg.role}",
-            div {
-                class: "bubble-wrap",
-                if has_steps {
-                    ThinkingGroup { steps: msg.thinking_steps.clone() }
-                }
-                if !msg.content.is_empty() || !has_steps {
-                    match msg.role {
-                        "assistant" | "user" => rsx! {
-                            div { class: "bubble {msg.role}",
-                                MarkdownText { content: msg.content.clone() }
-                            }
-                        },
-                        "tool" => rsx! { ToolBlock { content: msg.content.clone() } },
-                        _ => rsx! {
-                            div { class: "bubble {msg.role}",
-                                "{msg.content}"
-                            }
-                        },
                     }
                 }
             }
         }
-    }
-}
-
-// ── Collapsible tool result ─────────────────────────────────────────────────
-
-/// A `tool` message — the full text a dispatched tool returned, as replayed from conversation
-/// history. This is the block that used to be permanently open: the live turn shows a
-/// [`ThinkingGroup`], but history has no thinking steps (they exist only on the SSE stream), so a
-/// reloaded conversation rendered the whole result as a plain bubble with no way to fold it away.
-/// Several hundred characters of session ids and journal paths then sat between the question and
-/// the answer.
-///
-/// Collapsed by default, with the outcome line kept in the header, and it stays wherever the user
-/// puts it.
-/// The one-line header for a tool-result block: the daemon's own summary line when present,
-/// falling back to a neutral label, with a trailing colon trimmed ("RESULT (Succeeded):" reads
-/// as "RESULT (Succeeded)").
-fn tool_block_label(content: &str) -> String {
-    content
-        .lines()
-        .next()
-        .map(str::trim)
-        .filter(|l| !l.is_empty())
-        .unwrap_or("Tool result")
-        .trim_end_matches(':')
-        .to_string()
-}
-
-#[component]
-fn ToolBlock(content: String) -> Element {
-    let mut expanded = use_signal(|| false);
-
-    // The daemon's first line is already a summary ("RESULT (Succeeded):"). Reuse it as the header
-    // rather than inventing one, falling back only if it is empty so the header is never blank.
-    let label = tool_block_label(&content);
-
-    rsx! {
-        div {
-            class: "thinking-group",
-            button {
-                class: "thinking-header",
-                // Explicit: a bare <button> defaults to type=submit, which would post the chat
-                // form the moment this block is ever rendered inside one.
-                r#type: "button",
-                onclick: move |_| {
-                    let now = expanded();
-                    expanded.set(!now);
-                },
-                span { class: "thinking-arrow",
-                    if expanded() { IconChevronDown {} } else { IconChevronRight {} }
-                }
-                span { class: "thinking-label", "{label}" }
-            }
-            if expanded() {
-                div {
-                    class: "thinking-body",
-                    div { class: "tool-result-body", "{content}" }
-                }
-            }
-        }
-    }
-}
-
-// ── Collapsible thinking-steps group ────────────────────────────────────────
-
-#[component]
-fn ThinkingGroup(steps: Vec<ThinkingStep>) -> Element {
-    // Starts collapsed and then belongs entirely to the user — nothing derived from `steps` ever
-    // moves it again. It used to open itself whenever a step was pending, which meant the run
-    // decided the disclosure state instead of the reader: it sprang open mid-turn, and wherever it
-    // happened to be when the last step resolved was where it stuck. Progress is already in the
-    // header label, which is the part that stays visible while collapsed.
-    let mut expanded = use_signal(|| false);
-
-    let has_pending = steps.iter().any(|s| s.ok.is_none());
-    let toggle = move |_| {
-        let now = expanded();
-        expanded.set(!now);
-    };
-
-    let count = steps.len();
-    let summary: Vec<String> = steps.iter().map(|s| s.tool_name.clone()).collect();
-    let summary_text = summary.join(", ");
-
-    let header_label = if has_pending {
-        format!(
-            "Thinking ({count} step{plural}): {summary_text} \u{2026}",
-            plural = if count == 1 { "" } else { "s" }
-        )
-    } else {
-        format!(
-            "Thinking ({count} step{plural}): {summary_text}",
-            plural = if count == 1 { "" } else { "s" }
-        )
-    };
-
-    rsx! {
-        div {
-            class: "thinking-group",
-            button {
-                class: "thinking-header",
-                r#type: "button",
-                onclick: toggle,
-                span { class: "thinking-arrow",
-                    if expanded() { IconChevronDown {} } else { IconChevronRight {} }
-                }
-                span { class: "thinking-label", "{header_label}" }
-            }
-            if expanded() {
-                div {
-                    class: "thinking-body",
-                    for step in steps.iter() {
-                        ThinkingStepRow { step: step.clone() }
-                    }
-                }
-            }
-        }
-    }
-}
-
-/// `{}` and `null` are the JSON spellings of "no arguments", and the empty string is the
-/// trimmed version of the same idea — all three render as nothing.
-fn clean_args(args: &str) -> String {
-    if args.is_empty() || args == "{}" || args == "null" {
-        String::new()
-    } else {
-        args.to_string()
-    }
-}
-
-/// The parenthesized argument text shown next to a tool name. Empty and JSON-"empty" args show
-/// nothing at all — `tool(clean()_up)` is noise, `tool` is the same information.
-fn args_display(args: &str) -> String {
-    if clean_args(args).is_empty() {
-        String::new()
-    } else {
-        format!("({args})")
-    }
-}
-
-#[component]
-fn ThinkingStepRow(step: ThinkingStep) -> Element {
-    let status_cls = match step.ok {
-        None => "thinking-step pending",
-        Some(true) => "thinking-step ok",
-        Some(false) => "thinking-step err",
-    };
-
-    let args_text = args_display(&step.tool_args);
-
-    let name_text = format!("{}{}", step.tool_name, args_text);
-
-    rsx! {
-        div {
-            class: "{status_cls}",
-            span { class: "thinking-step-name", "{name_text}" }
-            span { class: "thinking-step-mark",
-                match step.ok {
-                    None => rsx! { IconSpinner {} },
-                    Some(true) => rsx! { IconCheck {} },
-                    Some(false) => rsx! { IconX {} },
-                }
-            }
-            if !step.preview.is_empty() {
-                span { class: "thinking-step-preview", "{step.preview}" }
-            }
-        }
-    }
 }
 
 // ── Input auto-grow (browser-only) ──────────────────────────────────────────
@@ -1097,6 +913,8 @@ struct StreamTargets {
     should_set_title: Signal<bool>,
     /// Where an incognito turn records the session it opened, for the teardown paths.
     ghost_session: Signal<Option<String>>,
+    /// Bumped when `create_agent` succeeds. The shelf reads it and refetches.
+    list_epoch: Signal<u64>,
 }
 
 /// The `/api/chat/stream` URL for one turn.
@@ -1235,6 +1053,7 @@ fn connect_stream(
         mut active_conv_id,
         mut should_set_title,
         mut ghost_session,
+        list_epoch,
     } = targets;
     use std::rc::Rc;
     use wasm_bindgen::JsCast;
@@ -1302,7 +1121,7 @@ fn connect_stream(
                     ..
                 }) = chat_client_contract::SessionEvent::from_sse_data("tool_started", &data)
                 {
-                    let clean = clean_args(&args_preview);
+                    let clean = chat_fold::clean_args(&args_preview);
                     messages.with_mut(|m| match m.last_mut() {
                         Some(last) if last.role == "assistant" => {
                             last.thinking_steps.push(ThinkingStep {
@@ -1331,40 +1150,11 @@ fn connect_stream(
         on_tool.forget();
     }
 
-    // tool_finished -> resolve the most recent pending ThinkingStep with matching name.
+    // tool_finished -> close the pending step, and refetch the shelf when an agent was created.
     {
         let on_result = Closure::<dyn FnMut(MessageEvent)>::new(move |e: MessageEvent| {
             if let Some(data) = e.data().as_string() {
-                if let Ok(chat_client_contract::SessionEvent {
-                    kind:
-                        chat_client_contract::SessionEventKind::ToolFinished {
-                            name,
-                            ok,
-                            result_preview: preview,
-                        },
-                    ..
-                }) = chat_client_contract::SessionEvent::from_sse_data("tool_finished", &data)
-                {
-                    messages.with_mut(|m| {
-                        // Find the last assistant message that has a pending step matching `name`.
-                        // `find_map` hands back a `&mut ThinkingStep` borrowed from `m` itself —
-                        // no raw pointer needed; NLL is fine with using it right after.
-                        let found = m
-                            .iter_mut()
-                            .rev()
-                            .filter(|msg| msg.role == "assistant")
-                            .find_map(|msg| {
-                                msg.thinking_steps
-                                    .iter_mut()
-                                    .rev()
-                                    .find(|s| s.ok.is_none() && s.tool_name == name)
-                            });
-                        if let Some(step) = found {
-                            step.ok = Some(ok);
-                            step.preview = preview;
-                        }
-                    });
-                }
+                chat_tool_events::note_tool_finished(&data, messages, list_epoch);
             }
         });
         let _ = source
@@ -1377,6 +1167,7 @@ fn connect_stream(
         let source_done = source.clone();
         let title_base = api_base_for_title.to_string();
         let on_done = Closure::<dyn FnMut(MessageEvent)>::new(move |_e: MessageEvent| {
+            chat_reasoning::adopt_when_finished(title_base.clone(), session, messages);
             source_done.close();
             sending.set(false);
             CURRENT_SOURCE.with(|cell| *cell.borrow_mut() = None);

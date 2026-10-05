@@ -955,6 +955,7 @@ async fn l8_cancel_reaches_cancelled_on_hub_ground_truth() {
 // ── L10 — fork at turn N is a snapshot prefix ───────────────────────────────
 
 /// L10: fork after turn *n* keeps the prefix; continuing the original does not move the fork.
+#[rustfmt::skip]
 #[tokio::test]
 async fn l10_fork_holds_prefix_while_original_continues() {
     let harness = T1Harness::with_life_pack().await;
@@ -974,24 +975,14 @@ async fn l10_fork_holds_prefix_while_original_continues() {
         let u = sessions
             .append(
                 conv,
-                NewNode {
-                    parent_id: parent,
-                    author: Author::User,
-                    message: Message::user(q),
-                    model: None,
-                },
+                NewNode { parent_id: parent, author: Author::User, message: Message::user(q), model: None, reasoning: None },
             )
             .await
             .unwrap();
         let a = sessions
             .append(
                 conv,
-                NewNode {
-                    parent_id: Some(u.id),
-                    author: Author::Assistant,
-                    message: Message::assistant(a),
-                    model: None,
-                },
+                NewNode { parent_id: Some(u.id), author: Author::Assistant, message: Message::assistant(a), model: None, reasoning: None },
             )
             .await
             .unwrap();
@@ -1023,12 +1014,7 @@ async fn l10_fork_holds_prefix_while_original_continues() {
     sessions
         .append(
             conv,
-            NewNode {
-                parent_id: Some(leaf),
-                author: Author::User,
-                message: Message::user("q4-after-fork"),
-                model: None,
-            },
+            NewNode { parent_id: Some(leaf), author: Author::User, message: Message::user("q4-after-fork"), model: None, reasoning: None },
         )
         .await
         .unwrap();
@@ -1451,6 +1437,7 @@ async fn a_goal_on_a_domain_with_no_grant_is_refused_with_the_remedy() {
 /// L10 extended: fork through the HTTP surface also works for goal-derived sessions — not just
 /// chat-derived sessions. The `POST /api/sessions/{conv_id}/fork` endpoint is session-agnostic
 /// and should serve both origins equally.
+#[rustfmt::skip]
 #[tokio::test]
 async fn l10_fork_via_http_works_for_goal_sessions_too() {
     use liberado_provider::Message;
@@ -1472,24 +1459,14 @@ async fn l10_fork_via_http_works_for_goal_sessions_too() {
         let u = sessions
             .append(
                 conv,
-                NewNode {
-                    parent_id: parent,
-                    author: Author::User,
-                    message: Message::user(format!("goal-turn-{i}")),
-                    model: None,
-                },
+                NewNode { parent_id: parent, author: Author::User, message: Message::user(format!("goal-turn-{i}")), model: None, reasoning: None },
             )
             .await
             .unwrap();
         let a = sessions
             .append(
                 conv,
-                NewNode {
-                    parent_id: Some(u.id),
-                    author: Author::Assistant,
-                    message: Message::assistant(format!("goal-reply-{i}")),
-                    model: None,
-                },
+                NewNode { parent_id: Some(u.id), author: Author::Assistant, message: Message::assistant(format!("goal-reply-{i}")), model: None, reasoning: None },
             )
             .await
             .unwrap();
@@ -1521,12 +1498,7 @@ async fn l10_fork_via_http_works_for_goal_sessions_too() {
     sessions
         .append(
             conv,
-            NewNode {
-                parent_id: Some(leaf),
-                author: Author::User,
-                message: Message::user("goal-turn-4-after-fork"),
-                model: None,
-            },
+            NewNode { parent_id: Some(leaf), author: Author::User, message: Message::user("goal-turn-4-after-fork"), model: None, reasoning: None },
         )
         .await
         .unwrap();

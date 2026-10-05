@@ -79,6 +79,7 @@ async fn list_backfills_title_from_existing_user_message() {
                 author: Author::User,
                 message: Message::user("Buy milk and eggs"),
                 model: None,
+                reasoning: None,
             },
         )
         .await

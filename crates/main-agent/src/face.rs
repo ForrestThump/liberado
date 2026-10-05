@@ -12,8 +12,9 @@
 //!
 //! # Privileged agent spawn
 //!
-//! `create_agent` opens a long-lived specialist **chat** on the Agents shelf via
-//! `create_with_grant` (Reading B stamp). It is **not** GoalSessionHub / `delegate`. Privilege
+//! `create_agent` find-or-creates a long-lived specialist **chat** on the Agents shelf.
+//! A new row goes through `create_with_grant` (Reading B stamp). The same profile and title
+//! reuse the existing conversation. It is **not** GoalSessionHub / `delegate`. Privilege
 //! gate A: only offered when the current session's profile is an agent-creator
 //! ([`liberado_conversation_store::is_agent_creator_profile`]).
 
@@ -366,6 +367,7 @@ mod tests {
                 conversation_id: "01TEST".into(),
                 profile: profile.into(),
                 title,
+                reused: false,
             })
         }
     }

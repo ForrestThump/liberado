@@ -362,6 +362,10 @@ pub struct ChatMessage {
     /// `GET /api/status` (failure-modes §6 — do not let a missing stamp silently pass).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    /// Model thinking for this assistant turn. Absent on older history and on
+    /// turns that did not think. Not a tool step.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning: Option<String>,
 }
 
 /// Response from `GET /api/conversations/{id}`. Not just `Vec<ChatMessage>` directly at the top
@@ -401,6 +405,13 @@ pub struct ConversationHistoryResponse {
     /// Mutually exclusive with [`turn_running`](Self::turn_running) by construction.
     #[serde(default)]
     pub turn_unanswered: bool,
+    /// Projected shelf of this conversation (`chat` / `agent`).
+    ///
+    /// On the history response so a client opening a row can hide chat-only chrome (the profile
+    /// chip) without a second list fetch. `#[serde(default)]` reads a pre-field daemon as `Chat`,
+    /// which keeps the chip visible — the safe direction.
+    #[serde(default)]
+    pub surface_mode: SurfaceMode,
 }
 
 // ──────────────────────────────────────────────────────────────
@@ -884,6 +895,7 @@ mod tests {
             ])),
             tool_call_id: None,
             model: Some("test/model".into()),
+            reasoning: None,
         };
         let json = serde_json::to_value(&msg).unwrap();
         let back: ChatMessage = serde_json::from_value(json).unwrap();
@@ -900,6 +912,7 @@ mod tests {
         assert_eq!(msg.tool_calls, None);
         assert_eq!(msg.tool_call_id, None);
         assert_eq!(msg.model, None);
+        assert_eq!(msg.reasoning, None);
     }
 
     #[test]
@@ -910,11 +923,14 @@ mod tests {
             tool_calls: None,
             tool_call_id: None,
             model: Some("vendor/slug".into()),
+            reasoning: Some("hidden thought".into()),
         };
         let v = serde_json::to_value(&with).unwrap();
         assert_eq!(v["model"], "vendor/slug");
+        assert_eq!(v["reasoning"], "hidden thought");
         let back: ChatMessage = serde_json::from_value(v).unwrap();
         assert_eq!(back.model.as_deref(), Some("vendor/slug"));
+        assert_eq!(back.reasoning.as_deref(), Some("hidden thought"));
 
         let bare = ChatMessage {
             role: "user".into(),
@@ -922,9 +938,11 @@ mod tests {
             tool_calls: None,
             tool_call_id: None,
             model: None,
+            reasoning: None,
         };
         let v = serde_json::to_value(&bare).unwrap();
         assert!(v.get("model").is_none(), "None must skip_serializing");
+        assert!(v.get("reasoning").is_none(), "None must skip_serializing");
     }
 
     #[test]
@@ -937,6 +955,7 @@ mod tests {
                     tool_calls: None,
                     tool_call_id: None,
                     model: None,
+                    reasoning: None,
                 },
                 ChatMessage {
                     role: "assistant".into(),
@@ -944,18 +963,22 @@ mod tests {
                     tool_calls: None,
                     tool_call_id: None,
                     model: Some("deepseek/v4".into()),
+                    reasoning: None,
                 },
             ],
             profile: Some("basic-chat".into()),
             turn_running: true,
             turn_unanswered: false,
+            surface_mode: SurfaceMode::Agent,
         };
         let json = serde_json::to_value(&resp).unwrap();
+        assert_eq!(json["surface_mode"], "agent");
         let back: ConversationHistoryResponse = serde_json::from_value(json).unwrap();
         assert_eq!(back.messages.len(), 2);
         assert_eq!(back.messages[0].role, "user");
         assert_eq!(back.messages[1].content, "hi there");
         assert!(back.turn_running);
+        assert_eq!(back.surface_mode, SurfaceMode::Agent);
     }
 
     /// A daemon that predates `turn_running` omits the field, and a client must read that as "no
@@ -966,6 +989,7 @@ mod tests {
         let back: ConversationHistoryResponse = serde_json::from_value(json).unwrap();
         assert!(!back.turn_running);
         assert!(!back.turn_unanswered);
+        assert_eq!(back.surface_mode, SurfaceMode::Chat);
     }
 
     // ── VaultInfo / ApiError ──────────────────────────────────

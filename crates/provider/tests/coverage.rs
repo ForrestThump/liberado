@@ -147,6 +147,7 @@ fn request_and_response_serde_round_trip() {
         content: Some("c".into()),
         tool_calls: vec![ToolInvocation::new("1", "t", serde_json::json!({ "a": 1 }))],
         finish_reason: FinishReason::ToolCalls,
+        reasoning: None,
         usage: Some(Usage {
             prompt_tokens: 1,
             completion_tokens: 2,

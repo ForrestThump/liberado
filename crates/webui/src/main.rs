@@ -1,6 +1,7 @@
 // WIP Dioxus scaffold — many component helpers are wired into planned features but
 // not yet called from the render tree. Allow dead code crate-wide until wiring is complete.
 #![allow(dead_code)]
+use chat_client_contract::SurfaceMode;
 use dioxus::prelude::*;
 
 mod back_nav;
@@ -14,6 +15,7 @@ use components::chat::Chat;
 use components::dashboard::Dashboard;
 use components::incognito::IncognitoToggle;
 use components::profile_browser::ProfileChip;
+use components::profile_surface::profile_chip_visible;
 use components::sidebar::Sidebar;
 use icons::IconMenu;
 
@@ -135,6 +137,22 @@ mod tests {
     }
 }
 
+/// Header profile control. `ProfileChip` stays in this file so the PWA test can find it.
+/// An Agent surface renders nothing — the chip is a Chats concept.
+#[component]
+fn HeaderProfileChip(
+    active_profile: Signal<Option<String>>,
+    active_surface: Signal<Option<SurfaceMode>>,
+    on_open: EventHandler<()>,
+) -> Element {
+    if !profile_chip_visible(active_surface()) {
+        return rsx! {};
+    }
+    rsx! {
+        ProfileChip { active_profile, on_open }
+    }
+}
+
 #[component]
 fn App() -> Element {
     let base = api_base();
@@ -150,6 +168,9 @@ fn App() -> Element {
     // "New Chat" as an event rather than a state change — see the button in `sidebar.rs`. Owned here
     // because the sidebar raises it and the chat acts on it.
     let new_chat_nonce = use_signal(|| 0u64);
+    // `create_agent` finishes on the Agent Creator session, so the open id does
+    // not change. This counter is what makes the Agents shelf fetch again.
+    let list_epoch = use_signal(u64::default);
     // The `/model` and `/theme` pickers. They are opened from inside `Chat`, but they live here with
     // every other dismissible layer, because the Back gesture needs one place that knows what is
     // open and in what order (see the block below and `back_nav.rs`).
@@ -163,6 +184,16 @@ fn App() -> Element {
     // the same reason the other pickers do: `App` owns the Back-gesture layer stack.
     let mut profile_browser_open = use_signal(|| false);
     let active_profile = use_signal(|| None::<String>);
+    // None until a conversation is open. Agent hides the profile chip; Chat and empty keep it.
+    let mut active_surface = use_signal(|| None::<SurfaceMode>);
+    use_effect(move || {
+        if active_conv_id.read().is_none() && active_surface.read().is_some() {
+            active_surface.set(None);
+        }
+        if !profile_chip_visible(active_surface()) && profile_browser_open() {
+            profile_browser_open.set(false);
+        }
+    });
     let palette_dismissed = use_signal(|| false);
     // `mut` because the header's menu button toggles it (see below).
     // Default collapsed on narrow (phone-width) viewports so the sidebar doesn't cover the chat
@@ -272,8 +303,10 @@ fn App() -> Element {
                         }
                         span { class: "brand", "Liberado" }
                         // Profile chip sits here so it does not take a row out of the transcript.
-                        ProfileChip {
+                        // Hidden on an Agent surface — the profile is fixed for that session.
+                        HeaderProfileChip {
                             active_profile,
+                            active_surface,
                             on_open: move |_| {
                                 // The picker is rendered inside `Chat`. Switching first means a
                                 // click from Status still opens it, rather than setting a flag on a
@@ -298,6 +331,8 @@ fn App() -> Element {
                     active_conv_id,
                     collapsed: sidebar_collapsed,
                     new_chat_nonce,
+                    active_surface,
+                    list_epoch,
                 }
                 main {
                     class: "main-content",
@@ -314,6 +349,8 @@ fn App() -> Element {
                             palette_visible,
                             profile_browser_open,
                             active_profile,
+                            active_surface,
+                            list_epoch,
                         }
                     } else {
                         Dashboard { api_base: base.clone() }

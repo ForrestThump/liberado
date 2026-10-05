@@ -1,5 +1,8 @@
 //! Split from `chat.rs` for module-health boundaries.
 
+use super::super::message_row::{
+    message_offers_copy, next_copy_button_visible, next_open_copy, should_scroll_copy_button,
+};
 use super::stream_url;
 use super::*;
 
@@ -91,13 +94,14 @@ fn wire_roles_map_to_bubble_roles() {
             tool_calls: None,
             tool_call_id: None,
             model: None,
+            reasoning: None,
         });
         assert_eq!(msg.role, expected, "wire role {wire:?}");
     }
 }
 
-/// History never carries thinking steps (those exist only on the live SSE stream), so the wire
-/// decoder must not invent any.
+/// History carries no tool steps. Model thinking is a separate field and does
+/// survive a reload. The answer text stays in the bubble.
 #[test]
 fn wire_messages_carry_no_thinking_steps() {
     let msg = ChatMsg::from_wire(&ChatMessage {
@@ -106,9 +110,42 @@ fn wire_messages_carry_no_thinking_steps() {
         tool_calls: None,
         tool_call_id: None,
         model: None,
+        reasoning: Some("  secret step  ".into()),
     });
     assert!(msg.thinking_steps.is_empty());
     assert_eq!(msg.content, "hi");
+    assert_eq!(msg.reasoning.as_deref(), Some("secret step"));
+
+    let plain = ChatMsg::from_wire(&ChatMessage {
+        role: "assistant".to_string(),
+        content: "just the answer".to_string(),
+        tool_calls: None,
+        tool_call_id: None,
+        model: None,
+        reasoning: None,
+    });
+    assert!(plain.thinking_steps.is_empty());
+    assert_eq!(plain.reasoning, None);
+    assert_eq!(plain.content, "just the answer");
+}
+
+#[test]
+fn a_reloaded_think_only_turn_keeps_a_collapsed_thinking_step() {
+    let mut live = Vec::new();
+    let history = vec![ChatMsg::from_wire(&ChatMessage {
+        role: "assistant".to_string(),
+        content: String::new(),
+        tool_calls: None,
+        tool_call_id: None,
+        model: None,
+        reasoning: Some("only thinking".into()),
+    })];
+    super::chat_reasoning::merge_history(&mut live, &history);
+    assert_eq!(live.len(), 1);
+    assert_eq!(live[0].content, "");
+    assert_eq!(live[0].reasoning.as_deref(), Some("only thinking"));
+    assert!(!super::chat_fold::show_answer(true, false, true));
+    assert!(super::chat_fold::show_answer(false, false, true));
 }
 
 /// The history effect must not wipe a first turn just because it has no conversation id yet.
@@ -182,19 +219,25 @@ fn long_titles_cut_on_char_boundaries() {
 /// The JSON spellings of "no arguments" and the empty string all render as nothing.
 #[test]
 fn empty_args_render_as_nothing() {
-    assert_eq!(clean_args(""), "");
-    assert_eq!(clean_args("{}"), "");
-    assert_eq!(clean_args("null"), "");
-    assert_eq!(args_display(""), "");
-    assert_eq!(args_display("{}"), "");
-    assert_eq!(args_display("null"), "");
+    assert_eq!(super::chat_fold::clean_args(""), "");
+    assert_eq!(super::chat_fold::clean_args("{}"), "");
+    assert_eq!(super::chat_fold::clean_args("null"), "");
+    assert_eq!(super::chat_fold::args_display(""), "");
+    assert_eq!(super::chat_fold::args_display("{}"), "");
+    assert_eq!(super::chat_fold::args_display("null"), "");
 }
 
 #[test]
 fn real_args_are_kept_and_parenthesized() {
-    assert_eq!(clean_args("path=/tmp/x"), "path=/tmp/x");
-    assert_eq!(args_display("path=/tmp/x"), "(path=/tmp/x)");
-    assert_eq!(args_display("{ \"a\": 1 }"), "({ \"a\": 1 })");
+    assert_eq!(super::chat_fold::clean_args("path=/tmp/x"), "path=/tmp/x");
+    assert_eq!(
+        super::chat_fold::args_display("path=/tmp/x"),
+        "(path=/tmp/x)"
+    );
+    assert_eq!(
+        super::chat_fold::args_display("{ \"a\": 1 }"),
+        "({ \"a\": 1 })"
+    );
 }
 
 /// The tool block's header is the daemon's own summary line, colon trimmed; empty content
@@ -202,10 +245,130 @@ fn real_args_are_kept_and_parenthesized() {
 #[test]
 fn tool_block_header_uses_the_daemon_summary_line() {
     assert_eq!(
-        tool_block_label("RESULT (Succeeded):\nwrote 12 notes\n"),
+        super::chat_fold::tool_block_label("RESULT (Succeeded):\nwrote 12 notes\n"),
         "RESULT (Succeeded)"
     );
-    assert_eq!(tool_block_label("  RESULT (Failed):  "), "RESULT (Failed)");
-    assert_eq!(tool_block_label("\n\nbody without a header"), "Tool result");
-    assert_eq!(tool_block_label(""), "Tool result");
+    assert_eq!(
+        super::chat_fold::tool_block_label("  RESULT (Failed):  "),
+        "RESULT (Failed)"
+    );
+    assert_eq!(
+        super::chat_fold::tool_block_label("\n\nbody without a header"),
+        "Tool result"
+    );
+    assert_eq!(super::chat_fold::tool_block_label(""), "Tool result");
+}
+
+/// The copy button is hidden until the first tap, shown after it, hidden after the second, and
+/// so on. Pinned so a future refactor that swaps `!` for an accidental `set(false)` or a
+/// stale-closure bug cannot quietly regress to a button that never appears (or never goes away).
+#[test]
+fn copy_button_visibility_alternates_with_each_tap() {
+    // The function is the *next* state after a tap, so feeding `false` in returns the state
+    // produced by the first tap on a hidden button — visible.
+    assert!(
+        next_copy_button_visible(false),
+        "first tap must show the button"
+    );
+
+    // Five consecutive taps from a fresh render: odd-numbered taps reveal the button, even ones
+    // hide it. 1-based tap count makes the alternation easy to read.
+    let mut visible = false;
+    for tap in 1..=5 {
+        visible = next_copy_button_visible(visible);
+        let expected = tap % 2 == 1;
+        assert_eq!(
+            visible, expected,
+            "tap #{tap} should set visible={expected}"
+        );
+    }
+
+    // A sixth tap re-hides the button — important because a stuck-visible button would consume
+    // space under every assistant message after the first interaction.
+    visible = next_copy_button_visible(visible);
+    assert!(!visible, "sixth tap should re-hide the button");
+}
+
+/// One copy button is visible. Tapping a message reveals it and hides whichever other message
+/// was open. A second tap on that same message hides it, and a third shows it again — the
+/// same-message alternation, applied to the single shared index rather than a private flag.
+#[test]
+fn copy_button_tap_state_is_exclusive() {
+    let mut open = None;
+
+    open = next_open_copy(open, 0);
+    assert_eq!(open, Some(0), "first tap shows that message");
+    assert_eq!(
+        open.is_some(),
+        next_copy_button_visible(false),
+        "showing a closed message uses the same-message alternation"
+    );
+
+    open = next_open_copy(open, 1);
+    assert_eq!(
+        open,
+        Some(1),
+        "tapping a second message shows it and hides the first"
+    );
+
+    open = next_open_copy(open, 1);
+    assert_eq!(open, None, "second tap on the same message hides it");
+    assert!(
+        !next_copy_button_visible(true),
+        "hiding an open message uses the same-message alternation"
+    );
+
+    open = next_open_copy(open, 1);
+    assert_eq!(
+        open,
+        Some(1),
+        "third tap on the same message shows it again"
+    );
+
+    open = next_open_copy(Some(0), 2);
+    assert_eq!(
+        open,
+        Some(2),
+        "revealing a third message leaves only that one open"
+    );
+}
+
+/// Scroll only when a tap reveals the button on the last message in the thread list.
+/// Hiding does not scroll. An earlier message does not scroll, including a tap that hides
+/// the last message's button by opening an earlier one. The streaming ellipsis is not a list
+/// entry: counting it would make the last `ChatMsg` look earlier than `last`, and that tap
+/// would no longer scroll.
+#[test]
+fn copy_button_scrolls_only_when_the_last_message_is_revealed() {
+    let last = 2usize;
+    assert!(should_scroll_copy_button(None, last, last));
+    assert!(
+        should_scroll_copy_button(Some(0), last, last),
+        "switching the open button onto the last message reveals it"
+    );
+    assert!(
+        !should_scroll_copy_button(Some(last), last, last),
+        "hiding the last message does not scroll"
+    );
+    assert!(
+        !should_scroll_copy_button(None, 0, last),
+        "an earlier message does not scroll"
+    );
+    assert!(
+        !should_scroll_copy_button(Some(last), 0, last),
+        "moving off the last message does not scroll"
+    );
+    assert!(
+        !should_scroll_copy_button(None, last, last + 1),
+        "the ellipsis is not a list entry, so it must not push the last message off the end"
+    );
+}
+
+#[test]
+fn copy_button_is_offered_for_user_and_assistant_only() {
+    assert!(message_offers_copy("user"));
+    assert!(message_offers_copy("assistant"));
+    assert!(!message_offers_copy("tool"));
+    assert!(!message_offers_copy("system"));
+    assert!(!message_offers_copy("error"));
 }
