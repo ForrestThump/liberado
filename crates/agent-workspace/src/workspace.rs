@@ -172,27 +172,27 @@ impl AgentWorkspace {
     /// The host is resolved before connecting. Non-public addresses are refused, and each
     /// redirect is checked the same way. The connection uses only the addresses from that check.
     pub fn download_url(&self, rel: &str, url: &str) -> Result<u64, WorkspaceError> {
-        self.fetch(rel, url, false)
+        self.fetch(rel, url, ssrf::Reach::Public)
     }
 
-    /// Test-only download that still pins the resolved addresses but allows loopback.
-    /// Production [`download_url`](Self::download_url) always refuses non-public targets.
+    /// Test-only download. Loopback is allowed; every other non-public address is still
+    /// refused, including on a redirect. The connection stays pinned to the vetted addresses.
     #[cfg(test)]
     pub(crate) fn download_url_allowing_local(
         &self,
         rel: &str,
         url: &str,
     ) -> Result<u64, WorkspaceError> {
-        self.fetch(rel, url, true)
+        self.fetch(rel, url, ssrf::Reach::Loopback)
     }
 
-    fn fetch(&self, rel: &str, url: &str, allow_local: bool) -> Result<u64, WorkspaceError> {
+    fn fetch(&self, rel: &str, url: &str, reach: ssrf::Reach) -> Result<u64, WorkspaceError> {
         let url = validate_url(url)?;
         let pins = ssrf::Pins::new();
-        ssrf::vet_and_pin(&pins, url, allow_local)?;
+        ssrf::vet_and_pin(&pins, url, reach)?;
         let _guard = self.lock()?;
         let dest = self.destination(rel)?;
-        let client = ssrf::client(pins, allow_local)?;
+        let client = ssrf::client(pins, reach)?;
         let response = client.get(url).send().map_err(download_error)?;
         // A 3xx that survived the client is a redirect reqwest could not turn
         // into an http(s) request. `http::Uri` drops `file:` before the policy

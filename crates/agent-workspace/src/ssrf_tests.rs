@@ -1,14 +1,13 @@
-//! Strict downloads refuse non-public addresses. Happy-path HTTP tests use the test-only client.
+//! Strict downloads refuse non-public addresses. Happy-path HTTP tests use the test-only client,
+//! which allows loopback and still refuses every other non-public class.
 
 use std::io::{Read, Write};
 use std::net::{IpAddr, SocketAddr, TcpListener};
 use std::path::Path;
-use std::process::{Command, Stdio};
-use std::sync::{Mutex, MutexGuard};
 
 use crate::WorkspaceError;
 use crate::quota::ENTRY_COST;
-use crate::ssrf::{self, is_blocked_ip};
+use crate::ssrf::{self, Reach, is_blocked_ip};
 use crate::tools::downloaded_message;
 use crate::workspace::AgentWorkspace;
 
@@ -28,6 +27,8 @@ fn ip(text: &str) -> IpAddr {
 fn blocked_address_classes_are_refused() {
     for text in [
         "0.0.0.0",
+        "0.1.2.3",
+        "0.255.255.255",
         "127.0.0.1",
         "127.255.255.255",
         "10.1.2.3",
@@ -43,14 +44,22 @@ fn blocked_address_classes_are_refused() {
         "::1",
         "fc00::1",
         "fd12::1",
+        "fec0::1",
+        "feff::1",
         "fe80::1",
         "ff02::1",
+        "::ffff:0.1.2.3",
         "::ffff:127.0.0.1",
         "::ffff:10.1.2.3",
         "::ffff:169.254.169.254",
         "::ffff:100.64.0.1",
         "::ffff:255.255.255.255",
         "::7f00:1",
+        "64:ff9b::",
+        "64:ff9b::7f00:1",
+        "64:ff9b::a00:1",
+        "2002::",
+        "2002:7f00:1::",
     ] {
         assert!(is_blocked_ip(ip(text)), "{text}");
     }
@@ -68,10 +77,11 @@ fn public_and_documentation_addresses_are_allowed() {
         "172.32.0.1",
         "192.0.2.10",
         "192.0.2.1",
-        "fec0::1",
         "2001:db8::1",
         "::ffff:8.8.8.8",
         "::ffff:192.0.2.10",
+        "64:ff9b::808:808",
+        "2002:808:808::",
     ] {
         assert!(!is_blocked_ip(ip(text)), "{text}");
     }
@@ -80,10 +90,55 @@ fn public_and_documentation_addresses_are_allowed() {
 #[test]
 fn one_private_address_blocks_the_whole_answer() {
     let mixed = [ip("8.8.8.8"), ip("10.0.0.1")];
-    let err = ssrf::refuse_if_blocked(&mixed, false).unwrap_err();
+    let err = ssrf::refuse_if_blocked(&mixed, Reach::Public).unwrap_err();
     assert!(matches!(err, WorkspaceError::BlockedAddress));
-    assert!(ssrf::refuse_if_blocked(&mixed, true).is_ok());
-    assert!(ssrf::refuse_if_blocked(&[ip("192.0.2.10")], false).is_ok());
+    let err = ssrf::refuse_if_blocked(&mixed, Reach::Loopback).unwrap_err();
+    assert!(matches!(err, WorkspaceError::BlockedAddress));
+    assert!(ssrf::refuse_if_blocked(&[ip("192.0.2.10")], Reach::Public).is_ok());
+    assert!(ssrf::refuse_if_blocked(&[ip("8.8.8.8")], Reach::Loopback).is_ok());
+}
+
+#[test]
+fn loopback_reach_allows_only_loopback() {
+    for text in [
+        "127.0.0.1",
+        "127.255.255.255",
+        "::1",
+        "::ffff:127.0.0.1",
+        "::ffff:127.255.255.255",
+    ] {
+        assert!(
+            ssrf::refuse_if_blocked(&[ip(text)], Reach::Loopback).is_ok(),
+            "{text}"
+        );
+    }
+    for text in [
+        "10.1.2.3",
+        "172.16.0.1",
+        "192.168.1.1",
+        "169.254.169.254",
+        "100.64.0.1",
+        "0.0.0.0",
+        "0.1.2.3",
+        "224.0.0.1",
+        "255.255.255.255",
+        "::",
+        "fc00::1",
+        "fe80::1",
+        "fec0::1",
+        "ff02::1",
+        "::7f00:1",
+        "::ffff:10.1.2.3",
+        "::ffff:0.1.2.3",
+        "64:ff9b::7f00:1",
+        "2002:7f00:1::",
+    ] {
+        let err = ssrf::refuse_if_blocked(&[ip(text)], Reach::Loopback).unwrap_err();
+        assert!(
+            matches!(err, WorkspaceError::BlockedAddress),
+            "{text} -> {err:?}"
+        );
+    }
 }
 
 #[test]
@@ -98,15 +153,20 @@ fn strict_download_refuses_non_public_targets() {
         "http://169.254.169.254/latest/meta-data",
         "http://100.64.0.1/x",
         "http://0.0.0.0/x",
+        "http://0.1.2.3/x",
         "http://224.0.0.1/x",
         "http://255.255.255.255/x",
         "http://[::1]:9/x",
         "http://[::]/x",
         "http://[fc00::1]/x",
+        "http://[fec0::1]/x",
         "http://[fe80::1]/x",
         "http://[::ffff:10.1.2.3]/x",
         "http://[::ffff:127.0.0.1]/x",
+        "http://[::ffff:0.1.2.3]/x",
         "http://[::7f00:1]/x",
+        "http://[64:ff9b::7f00:1]/x",
+        "http://[2002:7f00:1::]/x",
         "http://localhost/x",
     ] {
         let err = workspace.download_url("a.txt", url).unwrap_err();
@@ -124,15 +184,15 @@ async fn the_resolver_never_falls_through_to_dns() {
     let err = resolve(&pins, "localhost").await.unwrap_err();
     assert!(err.to_string().contains("not pinned"), "{err}");
 
-    ssrf::vet_and_pin(&pins, "http://192.0.2.10/a", false).unwrap();
+    ssrf::vet_and_pin(&pins, "http://192.0.2.10/a", Reach::Public).unwrap();
     let addrs = resolve(&pins, "192.0.2.10").await.unwrap();
     assert_eq!(addrs, vec![SocketAddr::from(([192, 0, 2, 10], 0))]);
 
-    let err = ssrf::vet_and_pin(&pins, "http://10.1.2.3/a", false).unwrap_err();
+    let err = ssrf::vet_and_pin(&pins, "http://10.1.2.3/a", Reach::Public).unwrap_err();
     assert!(matches!(err, WorkspaceError::BlockedAddress));
     assert!(resolve(&pins, "10.1.2.3").await.is_err());
 
-    ssrf::vet_and_pin(&pins, "http://127.0.0.1/a", true).unwrap();
+    ssrf::vet_and_pin(&pins, "http://127.0.0.1/a", Reach::Loopback).unwrap();
     let pinned = resolve(&pins, "127.0.0.1").await.unwrap();
     assert_eq!(pinned[0].ip(), ip("127.0.0.1"));
 }
@@ -140,11 +200,11 @@ async fn the_resolver_never_falls_through_to_dns() {
 #[tokio::test]
 async fn localhost_is_blocked_after_name_resolution() {
     let pins = ssrf::Pins::new();
-    let err = ssrf::vet_and_pin(&pins, "http://localhost/secret", false).unwrap_err();
+    let err = ssrf::vet_and_pin(&pins, "http://localhost/secret", Reach::Public).unwrap_err();
     assert!(matches!(err, WorkspaceError::BlockedAddress), "{err:?}");
     assert!(resolve(&pins, "localhost").await.is_err());
 
-    ssrf::vet_and_pin(&pins, "http://LocalHost/secret", true).unwrap();
+    ssrf::vet_and_pin(&pins, "http://LocalHost/secret", Reach::Loopback).unwrap();
     let addrs = resolve(&pins, "localhost").await.unwrap();
     assert!(addrs.iter().any(|addr| addr.ip().is_loopback()));
 }
@@ -167,32 +227,21 @@ fn allowing_local_download_reports_the_stored_bytes() {
     assert_eq!(workspace.read_text("a.txt").unwrap(), "hello");
 }
 
-#[cfg(unix)]
-#[test]
-fn strict_download_allows_a_documentation_address() {
-    let _lease = DocLease::acquire();
-    let root = scratch();
-    let workspace = open(root.path());
-    let url = serve_doc(&ok_page(b"ok"));
-    let bytes = workspace.download_url("a.txt", &url).unwrap();
-    assert_eq!(bytes, 2);
-    assert_eq!(workspace.read_text("a.txt").unwrap(), "ok");
-}
-
-#[cfg(unix)]
 #[test]
 fn strict_download_refuses_a_redirect_to_a_private_address() {
-    let _lease = DocLease::acquire();
     let root = scratch();
     let workspace = open(root.path());
     for location in [
         "http://10.1.2.3/secret",
-        "http://127.0.0.1:1/secret",
-        "http://localhost:1/secret",
+        "http://192.168.1.1/secret",
         "http://169.254.169.254/latest/meta-data",
+        "http://[fc00::1]/secret",
+        "http://100.64.0.1/secret",
     ] {
-        let url = serve_doc(&redirect_page(location));
-        let err = workspace.download_url("a.txt", &url).unwrap_err();
+        let url = local_redirect(location);
+        let err = workspace
+            .download_url_allowing_local("a.txt", &url)
+            .unwrap_err();
         assert!(
             matches!(err, WorkspaceError::BlockedAddress),
             "{location} -> {err:?}"
@@ -213,16 +262,15 @@ async fn resolve(
 }
 
 fn local_body(body: &[u8]) -> String {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let addr = listener.local_addr().unwrap();
-    let page = ok_page(body);
-    std::thread::spawn(move || write_once(listener, &page));
-    format!("http://{addr}/blob")
+    serve_local(&ok_page(body))
 }
 
-#[cfg(unix)]
-fn serve_doc(page: &[u8]) -> String {
-    let listener = TcpListener::bind("192.0.2.10:0").expect("bind 192.0.2.10");
+fn local_redirect(location: &str) -> String {
+    serve_local(&redirect_page(location))
+}
+
+fn serve_local(page: &[u8]) -> String {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = listener.local_addr().unwrap();
     let page = page.to_vec();
     std::thread::spawn(move || write_once(listener, &page));
@@ -248,74 +296,9 @@ fn ok_page(body: &[u8]) -> Vec<u8> {
     page
 }
 
-#[cfg(unix)]
 fn redirect_page(location: &str) -> Vec<u8> {
     format!(
         "HTTP/1.1 302 Found\r\nLocation: {location}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
     )
     .into_bytes()
-}
-
-#[cfg(unix)]
-static DOC: Mutex<()> = Mutex::new(());
-
-#[cfg(unix)]
-struct DocLease {
-    _lock: MutexGuard<'static, ()>,
-    added: bool,
-}
-
-#[cfg(unix)]
-impl DocLease {
-    fn acquire() -> Self {
-        let lock = DOC.lock().unwrap_or_else(|err| err.into_inner());
-        if doc_ip_present() {
-            return Self {
-                _lock: lock,
-                added: false,
-            };
-        }
-        let lease = Self {
-            _lock: lock,
-            added: true,
-        };
-        let ok = run_ip(false, "add") || run_ip(true, "add");
-        assert!(ok && doc_ip_present(), "could not add 192.0.2.10/32 to lo");
-        lease
-    }
-}
-
-#[cfg(unix)]
-impl Drop for DocLease {
-    fn drop(&mut self) {
-        if self.added {
-            let _ = run_ip(false, "del") || run_ip(true, "del");
-        }
-    }
-}
-
-#[cfg(unix)]
-fn doc_ip_present() -> bool {
-    let Ok(output) = Command::new("ip")
-        .args(["-4", "addr", "show", "dev", "lo"])
-        .output()
-    else {
-        return false;
-    };
-    String::from_utf8_lossy(&output.stdout).contains("192.0.2.10")
-}
-
-#[cfg(unix)]
-fn run_ip(sudo: bool, verb: &str) -> bool {
-    let mut cmd = if sudo {
-        let mut cmd = Command::new("sudo");
-        cmd.arg("-n").arg("ip");
-        cmd
-    } else {
-        Command::new("ip")
-    };
-    cmd.args(["addr", verb, "192.0.2.10/32", "dev", "lo"])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
-    matches!(cmd.status(), Ok(status) if status.success())
 }

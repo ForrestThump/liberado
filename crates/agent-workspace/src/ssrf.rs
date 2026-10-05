@@ -16,6 +16,20 @@ use crate::error::WorkspaceError;
 
 const MAX_REDIRECTS: usize = 5;
 
+/// Which non-public addresses a download may still use.
+///
+/// Production code can name only [`Reach::Public`]. [`Reach::Loopback`] exists
+/// only in tests, so a loopback server can prove that a later hop is checked again.
+#[derive(Clone, Copy)]
+pub(crate) enum Reach {
+    /// Refuse every non-public address.
+    Public,
+    /// Allow 127.0.0.0/8, `::1`, and IPv4-mapped forms of those.
+    /// Every other non-public class stays blocked.
+    #[cfg(test)]
+    Loopback,
+}
+
 pub(crate) fn is_blocked_ip(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V4(v4) => blocked_v4(v4),
@@ -24,13 +38,18 @@ pub(crate) fn is_blocked_ip(ip: IpAddr) -> bool {
 }
 
 fn blocked_v4(ip: Ipv4Addr) -> bool {
-    ip.is_unspecified()
+    this_network(ip)
         || ip.is_loopback()
         || ip.is_private()
         || ip.is_link_local()
         || ip.is_multicast()
         || ip.is_broadcast()
         || cgnat(ip)
+}
+
+/// `0.0.0.0/8`, "this network" — the whole block, not only `0.0.0.0`.
+fn this_network(ip: Ipv4Addr) -> bool {
+    ip.octets()[0] == 0
 }
 
 fn cgnat(ip: Ipv4Addr) -> bool {
@@ -45,14 +64,55 @@ fn blocked_v6(ip: Ipv6Addr) -> bool {
     if let Some(v4) = embedded_v4(ip) {
         return blocked_v4(v4);
     }
-    ula(ip) || ip.is_unicast_link_local()
+    ula(ip) || ip.is_unicast_link_local() || site_local(ip)
 }
 
 fn embedded_v4(ip: Ipv6Addr) -> Option<Ipv4Addr> {
+    if let Some(v4) = mapped_or_compatible(ip) {
+        return Some(v4);
+    }
+    nat64_or_6to4(ip)
+}
+
+fn mapped_or_compatible(ip: Ipv6Addr) -> Option<Ipv4Addr> {
     if let Some(mapped) = ip.to_ipv4_mapped() {
         return Some(mapped);
     }
     compatible_v4(ip)
+}
+
+fn nat64_or_6to4(ip: Ipv6Addr) -> Option<Ipv4Addr> {
+    if let Some(v4) = nat64_v4(ip) {
+        return Some(v4);
+    }
+    sixto4_v4(ip)
+}
+
+/// Well-known NAT64 prefix `64:ff9b::/96` (RFC 6052). The last 32 bits are an IPv4 address.
+fn nat64_v4(ip: Ipv6Addr) -> Option<Ipv4Addr> {
+    let octets = ip.octets();
+    if !octets.starts_with(&NAT64_WELL_KNOWN) {
+        return None;
+    }
+    Some(Ipv4Addr::new(
+        octets[12], octets[13], octets[14], octets[15],
+    ))
+}
+
+const NAT64_WELL_KNOWN: [u8; 12] = [0x00, 0x64, 0xff, 0x9b, 0, 0, 0, 0, 0, 0, 0, 0];
+
+/// 6to4 `2002::/16` (RFC 3056). The next 32 bits are an IPv4 address.
+fn sixto4_v4(ip: Ipv6Addr) -> Option<Ipv4Addr> {
+    if ip.segments()[0] != 0x2002 {
+        return None;
+    }
+    let octets = ip.octets();
+    Some(Ipv4Addr::new(octets[2], octets[3], octets[4], octets[5]))
+}
+
+/// Deprecated site-local `fec0::/10` (RFC 3879).
+fn site_local(ip: Ipv6Addr) -> bool {
+    ip.segments()[0] & 0xffc0 == 0xfec0
 }
 
 /// IPv4-compatible `::a.b.c.d`. `::` and `::1` also answer `to_ipv4`, so they are excluded here.
@@ -113,24 +173,24 @@ impl Resolve for Pins {
     }
 }
 
-pub(crate) fn vet_and_pin(pins: &Pins, url: &str, allow_local: bool) -> Result<(), WorkspaceError> {
-    let (host, ips) = vetted_host(url, allow_local)?;
+pub(crate) fn vet_and_pin(pins: &Pins, url: &str, reach: Reach) -> Result<(), WorkspaceError> {
+    let (host, ips) = vetted_host(url, reach)?;
     pins.pin(&host, &ips);
     Ok(())
 }
 
-fn vetted_host(url: &str, allow_local: bool) -> Result<(String, Vec<IpAddr>), WorkspaceError> {
+fn vetted_host(url: &str, reach: Reach) -> Result<(String, Vec<IpAddr>), WorkspaceError> {
     let parsed = http_url(url)?;
-    checked_host(&parsed, allow_local)
+    checked_host(&parsed, reach)
 }
 
 fn checked_host(
     parsed: &reqwest::Url,
-    allow_local: bool,
+    reach: Reach,
 ) -> Result<(String, Vec<IpAddr>), WorkspaceError> {
     let host = host_name(parsed)?;
     let ips = addresses(&host)?;
-    refuse_if_blocked(&ips, allow_local)?;
+    refuse_if_blocked(&ips, reach)?;
     Ok((host, ips))
 }
 
@@ -177,32 +237,51 @@ fn lookup(host: &str) -> Result<Vec<IpAddr>, WorkspaceError> {
     Ok(ips)
 }
 
-pub(crate) fn refuse_if_blocked(ips: &[IpAddr], allow_local: bool) -> Result<(), WorkspaceError> {
-    if allow_local {
-        return Ok(());
-    }
-    if has_blocked(ips) {
+pub(crate) fn refuse_if_blocked(ips: &[IpAddr], reach: Reach) -> Result<(), WorkspaceError> {
+    if has_blocked(ips, reach) {
         return Err(WorkspaceError::BlockedAddress);
     }
     Ok(())
 }
 
-fn has_blocked(ips: &[IpAddr]) -> bool {
+fn has_blocked(ips: &[IpAddr], reach: Reach) -> bool {
     for ip in ips {
-        if is_blocked_ip(*ip) {
+        if blocked_for(*ip, reach) {
             return true;
         }
     }
     false
 }
 
+fn blocked_for(ip: IpAddr, reach: Reach) -> bool {
+    match reach {
+        Reach::Public => is_blocked_ip(ip),
+        #[cfg(test)]
+        Reach::Loopback => is_blocked_ip(ip) && !loopback_ip(ip),
+    }
+}
+
+/// `127.0.0.0/8`, `::1`, and IPv4-mapped forms of those. Compatible `::a.b.c.d` is not included.
+#[cfg(test)]
+fn loopback_ip(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(v4) => v4.is_loopback(),
+        IpAddr::V6(v6) => v6.is_loopback() || mapped_loopback(v6),
+    }
+}
+
+#[cfg(test)]
+fn mapped_loopback(ip: Ipv6Addr) -> bool {
+    ip.to_ipv4_mapped().is_some_and(|v4| v4.is_loopback())
+}
+
 pub(crate) fn client(
     pins: Arc<Pins>,
-    allow_local: bool,
+    reach: Reach,
 ) -> Result<reqwest::blocking::Client, WorkspaceError> {
     let resolver = Arc::clone(&pins);
     reqwest::blocking::Client::builder()
-        .redirect(policy(pins, allow_local))
+        .redirect(policy(pins, reach))
         .dns_resolver(resolver)
         .no_proxy()
         .timeout(Duration::from_secs(600))
@@ -210,19 +289,19 @@ pub(crate) fn client(
         .map_err(WorkspaceError::io)
 }
 
-fn policy(pins: Arc<Pins>, allow_local: bool) -> reqwest::redirect::Policy {
-    reqwest::redirect::Policy::custom(move |attempt| on_redirect(&pins, allow_local, attempt))
+fn policy(pins: Arc<Pins>, reach: Reach) -> reqwest::redirect::Policy {
+    reqwest::redirect::Policy::custom(move |attempt| on_redirect(&pins, reach, attempt))
 }
 
 fn on_redirect(
     pins: &Pins,
-    allow_local: bool,
+    reach: Reach,
     attempt: reqwest::redirect::Attempt<'_>,
 ) -> reqwest::redirect::Action {
     if attempt.previous().len() >= MAX_REDIRECTS {
         return attempt.error(WorkspaceError::io("too many redirects"));
     }
-    if let Err(err) = vet_and_pin(pins, attempt.url().as_str(), allow_local) {
+    if let Err(err) = vet_and_pin(pins, attempt.url().as_str(), reach) {
         return attempt.error(err);
     }
     attempt.follow()
