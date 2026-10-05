@@ -45,6 +45,20 @@ impl WorkspaceSettings {
         };
         Self { root, max_bytes }
     }
+
+    /// True when [`AgentWorkspace::open`] can create an agent directory here.
+    ///
+    /// A false result means every session open fails and the file tools are withheld.
+    /// The boot log uses this so it does not name tools the runtime will not offer.
+    pub fn root_is_usable(&self) -> bool {
+        if fs::create_dir_all(&self.root).is_err() {
+            return false;
+        }
+        match fs::canonicalize(&self.root) {
+            Ok(path) => path.is_dir(),
+            Err(_) => false,
+        }
+    }
 }
 
 /// One agent's private files. Two different agent ids never share this directory.
@@ -183,6 +197,8 @@ impl AgentWorkspace {
     }
 
     /// Download `url` into `rel`. The byte cap applies to the bytes actually stored.
+    ///
+    /// Redirects stay on http or https. A `Location` with another scheme is refused.
     pub fn download_url(&self, rel: &str, url: &str) -> Result<u64, WorkspaceError> {
         let url = validate_url(url)?;
         let _guard = self.lock()?;
@@ -190,11 +206,17 @@ impl AgentWorkspace {
         let old = quota::file_len(&dest)?;
         let used = quota::usage(&self.files)?;
         let client = reqwest::blocking::Client::builder()
-            .redirect(reqwest::redirect::Policy::limited(5))
+            .redirect(reqwest::redirect::Policy::custom(redirect_policy))
             .timeout(Duration::from_secs(600))
             .build()
             .map_err(WorkspaceError::io)?;
-        let response = client.get(url).send().map_err(WorkspaceError::io)?;
+        let response = client.get(url).send().map_err(download_error)?;
+        // A 3xx that survived the client is a redirect reqwest could not turn
+        // into an http(s) request. `http::Uri` drops `file:` before the policy
+        // runs, so the response would otherwise look like a finished download.
+        if response.status().is_redirection() {
+            return Err(WorkspaceError::UnsupportedUrl);
+        }
         if !response.status().is_success() {
             return Err(WorkspaceError::io(format!("HTTP {}", response.status())));
         }
@@ -329,6 +351,29 @@ fn bind_identity(home: &Path, agent_id: &str) -> Result<(), WorkspaceError> {
         }
         Err(err) => Err(WorkspaceError::io(err)),
     }
+}
+
+const MAX_REDIRECTS: usize = 5;
+
+fn redirect_policy(attempt: reqwest::redirect::Attempt) -> reqwest::redirect::Action {
+    if attempt.previous().len() >= MAX_REDIRECTS {
+        return attempt.error(WorkspaceError::io("too many redirects"));
+    }
+    match validate_url(attempt.url().as_str()) {
+        Ok(_) => attempt.follow(),
+        Err(err) => attempt.error(err),
+    }
+}
+
+fn download_error(err: reqwest::Error) -> WorkspaceError {
+    let mut source = std::error::Error::source(&err);
+    while let Some(inner) = source {
+        if let Some(WorkspaceError::UnsupportedUrl) = inner.downcast_ref::<WorkspaceError>() {
+            return WorkspaceError::UnsupportedUrl;
+        }
+        source = std::error::Error::source(inner);
+    }
+    WorkspaceError::io(err)
 }
 
 fn validate_url(url: &str) -> Result<&str, WorkspaceError> {

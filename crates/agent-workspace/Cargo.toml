@@ -25,3 +25,10 @@ tokio = { workspace = true }
 
 [package.metadata.liberado]
 role = "kernel"
+
+# Runtime wiring for the 2D system map. Declaring a flow is this crate's
+# outbound control edge.
+[[package.metadata.liberado.flows]]
+to = "liberado-tool-runtime"
+kind = "control"
+label = "sandboxed list/read/write/delete/download"

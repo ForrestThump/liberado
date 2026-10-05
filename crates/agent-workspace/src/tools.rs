@@ -221,6 +221,8 @@ impl ToolRuntime for WorkspaceRuntime {
         let workspace = self.workspace.clone();
         let name = call.name.clone();
         let args = call.arguments.clone();
+        // File and network IO stays off the async runtime. List uses this same
+        // path so there is one implementation for every workspace tool.
         tokio::task::spawn_blocking(move || apply(&workspace, &name, &args))
             .await
             .map_err(|err| format!("workspace tool failed: {err}"))?

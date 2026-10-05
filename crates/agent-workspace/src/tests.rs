@@ -37,6 +37,24 @@ fn settings_keep_the_configured_cap_and_root() {
 }
 
 #[test]
+fn an_unusable_root_is_not_offered() {
+    let root = scratch();
+    let file = root.path().join("not-a-dir");
+    fs::write(&file, "x").unwrap();
+    let blocked = WorkspaceSettings {
+        root: file,
+        max_bytes: 1,
+    };
+    assert!(!blocked.root_is_usable());
+
+    let ready = WorkspaceSettings {
+        root: root.path().join("agents"),
+        max_bytes: 1,
+    };
+    assert!(ready.root_is_usable());
+}
+
+#[test]
 fn directory_names_are_distinct_for_distinct_ids() {
     let upper = directory_name("Agent").unwrap();
     let lower = directory_name("agent").unwrap();
@@ -176,6 +194,20 @@ fn path_escape_does_not_write_outside_the_workspace() {
     assert!(workspace.write_text("bad\0name", "x").is_err());
 }
 
+#[cfg(windows)]
+#[test]
+fn windows_unc_and_verbatim_paths_do_not_escape() {
+    let root = scratch();
+    let workspace = open(root.path(), "boxed", 100);
+    for rel in [r"\\server\share\secret.txt", r"\\?\C:\Windows\notepad.exe"] {
+        let err = workspace.write_text(rel, "nope").unwrap_err();
+        assert!(
+            matches!(err, WorkspaceError::PathEscape),
+            "{rel} returned {err:?}"
+        );
+    }
+}
+
 #[test]
 fn a_symlink_that_leaves_the_workspace_is_not_readable() {
     let root = scratch();
@@ -183,9 +215,8 @@ fn a_symlink_that_leaves_the_workspace_is_not_readable() {
     let outside = root.path().join("secret.txt");
     fs::write(&outside, "hidden").unwrap();
     let link = workspace.files_dir().join("link.txt");
-    if !try_symlink(&outside, &link) {
-        return;
-    }
+    create_symlink(&outside, &link)
+        .expect("symlink creation failed; this test requires that privilege");
     let err = workspace.read_text("link.txt").unwrap_err();
     assert!(
         matches!(err, WorkspaceError::PathEscape),
@@ -231,6 +262,28 @@ fn download_that_fits_replaces_without_double_counting() {
     assert_eq!(bytes, 6);
     assert_eq!(workspace.read_text("blob.bin").unwrap(), "abcdef");
     assert_eq!(workspace.usage_bytes().unwrap(), 6);
+}
+
+#[test]
+fn download_refuses_a_redirect_off_http() {
+    let root = scratch();
+    let workspace = open(root.path(), "cap", 100);
+    let url = http_redirect("file:///etc/passwd");
+    let err = workspace.download_url("a.txt", &url).unwrap_err();
+    assert!(matches!(err, WorkspaceError::UnsupportedUrl), "{err:?}");
+    assert!(!workspace.files_dir().join("a.txt").exists());
+    assert!(!workspace.home_dir().join("incoming.bin").exists());
+}
+
+#[test]
+fn download_follows_an_http_redirect() {
+    let root = scratch();
+    let workspace = open(root.path(), "cap", 100);
+    let dest = http_body(b"ok", true);
+    let url = http_redirect(&dest);
+    let bytes = workspace.download_url("a.txt", &url).unwrap();
+    assert_eq!(bytes, 2);
+    assert_eq!(workspace.read_text("a.txt").unwrap(), "ok");
 }
 
 #[test]
@@ -316,14 +369,14 @@ impl ToolRuntime for EmptyInner {
     }
 }
 
-fn try_symlink(target: &Path, link: &Path) -> bool {
+fn create_symlink(target: &Path, link: &Path) -> std::io::Result<()> {
     #[cfg(unix)]
     {
-        std::os::unix::fs::symlink(target, link).is_ok()
+        std::os::unix::fs::symlink(target, link)
     }
     #[cfg(windows)]
     {
-        std::os::windows::fs::symlink_file(target, link).is_ok()
+        std::os::windows::fs::symlink_file(target, link)
     }
 }
 
@@ -349,4 +402,22 @@ fn http_body(body: &[u8], with_length: bool) -> String {
         let _ = Write::write_all(&mut sock, &body);
     });
     format!("http://{addr}/blob")
+}
+
+fn http_redirect(location: &str) -> String {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let location = location.to_string();
+    std::thread::spawn(move || {
+        let Ok((mut sock, _)) = listener.accept() else {
+            return;
+        };
+        let mut buf = [0u8; 2048];
+        let _ = Read::read(&mut sock, &mut buf);
+        let header = format!(
+            "HTTP/1.1 302 Found\r\nLocation: {location}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+        );
+        let _ = Write::write_all(&mut sock, header.as_bytes());
+    });
+    format!("http://{addr}/start")
 }

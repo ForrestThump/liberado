@@ -126,7 +126,8 @@ fn caps_granting(mcps: &[&str]) -> CapabilitySet {
 /// Normal mode exposes the whole live registry; delegation mode collapses to built-in face
 /// tools (`delegate` + `create_agent`) plus only MCP-granted tools — and never an ungranted one.
 /// (`create_agent` is still privilege-gated per session at runtime; the boot log lists it so ops
-/// know the face can offer it.) Private workspace tools are appended in both modes.
+/// know the face can offer it.) Private workspace tools are appended in both modes
+/// when the workspace is offered, and omitted when it is not.
 #[tokio::test]
 async fn face_tool_surface_follows_delegation_and_grants() {
     let runtime = runtime_with(&["delegate", "memory:search", "vault:write", "plain_tool"]);
@@ -137,7 +138,7 @@ async fn face_tool_surface_follows_delegation_and_grants() {
         .collect();
 
     // Full surface outside delegation, plus the private workspace tools.
-    let (names, count) = face_tool_surface(&runtime, false, &CapabilitySet::empty());
+    let (names, count) = face_tool_surface(&runtime, false, &CapabilitySet::empty(), true);
     assert_eq!(count, 4 + workspace.len());
     assert!(names.contains(&"memory:search".to_string()));
     assert!(names.contains(&"plain_tool".to_string()));
@@ -147,14 +148,14 @@ async fn face_tool_surface_follows_delegation_and_grants() {
     );
 
     // Delegation without grants: built-in face tools, then the workspace tools.
-    let (names, count) = face_tool_surface(&runtime, true, &CapabilitySet::empty());
+    let (names, count) = face_tool_surface(&runtime, true, &CapabilitySet::empty(), true);
     let mut expected = vec!["delegate".to_string(), "create_agent".to_string()];
     expected.extend(workspace.iter().cloned());
     assert_eq!(names, expected, "{names:?}");
     assert_eq!(count, expected.len());
 
     // Delegation with a memory grant: face builtins + memory tools; vault stays out.
-    let (names, count) = face_tool_surface(&runtime, true, &caps_granting(&["memory"]));
+    let (names, count) = face_tool_surface(&runtime, true, &caps_granting(&["memory"]), true);
     assert_eq!(count, 3 + workspace.len(), "{names:?}");
     assert!(names.contains(&"delegate".to_string()));
     assert!(names.contains(&"create_agent".to_string()));
@@ -164,6 +165,19 @@ async fn face_tool_surface_follows_delegation_and_grants() {
         &names[names.len() - workspace.len()..],
         workspace.as_slice()
     );
+
+    // A closed or unwired workspace does not appear in the boot log.
+    let (names, count) = face_tool_surface(&runtime, false, &CapabilitySet::empty(), false);
+    assert_eq!(
+        names,
+        vec![
+            "delegate".to_string(),
+            "memory:search".to_string(),
+            "vault:write".to_string(),
+            "plain_tool".to_string(),
+        ]
+    );
+    assert_eq!(count, 4);
 }
 
 /// The store opens under the resolved sessions root: a stub returning an empty path would

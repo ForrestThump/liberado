@@ -6,8 +6,8 @@
 //! different id.
 //!
 //! The default cap is 1 GiB ([`DEFAULT_CAP_BYTES`]). Writes and downloads that would pass the cap
-//! are refused, and a refused download leaves no file behind. Every tool path is resolved inside
-//! that agent's `files/` directory.
+//! are refused, and a refused download leaves no file behind. A download redirect must stay on
+//! http or https. Every tool path is resolved inside that agent's `files/` directory.
 //!
 //! This is not a shared scratch directory. There is no path that every agent can write. Agents
 //! share through a channel or a local git repository.
