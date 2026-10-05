@@ -20,6 +20,15 @@ fn scratch() -> tempfile::TempDir {
     tempfile::tempdir().unwrap()
 }
 
+/// Append `component` as raw text. `PathBuf::push("..")` on a canonical `\\?\` path deletes
+/// the previous component, so the `..` would never reach `ensure_parents`.
+fn append_component(path: &Path, component: &str) -> std::path::PathBuf {
+    let mut raw = path.as_os_str().to_os_string();
+    raw.push(std::path::MAIN_SEPARATOR_STR);
+    raw.push(component);
+    std::path::PathBuf::from(raw)
+}
+
 #[test]
 fn default_cap_is_one_gibibyte() {
     assert_eq!(DEFAULT_CAP_BYTES, 1024 * 1024 * 1024);
@@ -230,10 +239,15 @@ fn ensure_parents_covers_escape_symlink_and_file_components() {
     let err = crate::sandbox::ensure_parents(&files, &outside).unwrap_err();
     assert!(matches!(err, WorkspaceError::PathEscape), "{err:?}");
 
-    let mut escaped = files.join("sub");
-    escaped.push("..");
-    escaped.push("note.txt");
+    let escaped = append_component(
+        &append_component(&append_component(&files, "sub"), ".."),
+        "note.txt",
+    );
     let err = crate::sandbox::ensure_parents(&files, &escaped).unwrap_err();
+    assert!(matches!(err, WorkspaceError::PathEscape), "{err:?}");
+    assert!(!files.join("sub").exists());
+
+    let err = crate::sandbox::ensure_parents(&files, &files).unwrap_err();
     assert!(matches!(err, WorkspaceError::PathEscape), "{err:?}");
 
     let link = files.join("link");
@@ -250,6 +264,37 @@ fn ensure_parents_covers_escape_symlink_and_file_components() {
     crate::sandbox::ensure_parents(&files, &dest).unwrap();
     assert!(files.join("a").join("b").is_dir());
     crate::sandbox::ensure_parents(&files, &files.join("a").join("b").join("d.txt")).unwrap();
+}
+
+/// A canonical Windows path uses the `\\?\` prefix. `.` and `..` in that prefix are still refused,
+/// including when the parser reports them as ordinary names.
+#[cfg(windows)]
+#[test]
+fn ensure_parents_rejects_dot_components_in_a_verbatim_path() {
+    let root = scratch();
+    let workspace = open(root.path(), "boxed", 100);
+    let files = workspace.files_dir().to_path_buf();
+    let verbatim = files.to_string_lossy();
+    assert!(
+        verbatim.starts_with(r"\\?\"),
+        "canonicalize should yield a verbatim path, got {verbatim}"
+    );
+
+    let escaped = append_component(
+        &append_component(&append_component(&files, "sub"), ".."),
+        "note.txt",
+    );
+    let err = crate::sandbox::ensure_parents(&files, &escaped).unwrap_err();
+    assert!(matches!(err, WorkspaceError::PathEscape), "{err:?}");
+    assert!(!files.join("sub").exists());
+
+    let dotted = append_component(&append_component(&files, "."), "note.txt");
+    let err = crate::sandbox::ensure_parents(&files, &dotted).unwrap_err();
+    assert!(matches!(err, WorkspaceError::PathEscape), "{err:?}");
+
+    let kept = append_component(&append_component(&files, "kept"), "note.txt");
+    crate::sandbox::ensure_parents(&files, &kept).unwrap();
+    assert!(files.join("kept").is_dir());
 }
 
 #[test]

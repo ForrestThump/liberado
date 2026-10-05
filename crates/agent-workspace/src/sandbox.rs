@@ -1,12 +1,13 @@
 //! Resolve a tool path so it stays inside one agent's `files/` directory.
 //!
-//! Absolute paths, `..`, drive prefixes, backslash separators, and symlinks that leave the
-//! directory are refused. A backslash is a separator on every OS, so a model path is accepted or
-//! refused the same way on Linux and Windows.
+//! Absolute paths, `..`, drive prefixes, and symlinks that leave the directory are refused.
+//! A backslash is normalized to `/` before the path is checked, so it is a separator on every
+//! OS and a model path is accepted or refused the same way on Linux and Windows.
 //! Missing parents are created one component at a time, and only after the byte cap has been
 //! checked by the caller. `create_dir_all` is not used: it would follow a symlink out of the
 //! workspace.
 
+use std::ffi::OsStr;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 
@@ -35,13 +36,58 @@ pub(crate) fn resolve(files: &Path, rel: &str) -> Result<PathBuf, WorkspaceError
     contained(files, acc)
 }
 
-/// Create missing directories under `files` for `dest`'s parent. A symlink component is refused
-/// rather than followed.
+/// Create missing directories under `files` for `dest`'s parent.
+///
+/// `dest` is refused before any directory is created unless every component after `files` is a
+/// normal file name. `.` and `..` are refused even when a verbatim path parses them as normal
+/// names. A symlink component is refused rather than followed.
 pub(crate) fn ensure_parents(files: &Path, dest: &Path) -> Result<(), WorkspaceError> {
+    require_plain_dest(files, dest)?;
     let Some(rel) = parent_components(files, dest)? else {
         return Ok(());
     };
     create_dirs(files, &rel)
+}
+
+/// Refuse `dest` unless it names a file strictly inside `files`.
+///
+/// Components come from `dest` itself. A `\\?\` path can report `.` and `..` as
+/// [`Component::Normal`]; [`parent`](Path::parent) would drop that final name before
+/// [`normal_name`] sees it.
+fn require_plain_dest(files: &Path, dest: &Path) -> Result<(), WorkspaceError> {
+    let mut rest = dest.components();
+    for expected in files.components() {
+        if rest.next() != Some(expected) {
+            return Err(WorkspaceError::PathEscape);
+        }
+    }
+    accept_plain_file(rest)
+}
+
+fn accept_plain_file(rest: std::path::Components<'_>) -> Result<(), WorkspaceError> {
+    let mut saw_name = false;
+    for component in rest {
+        if !plain_name(component) {
+            return Err(WorkspaceError::PathEscape);
+        }
+        saw_name = true;
+    }
+    if saw_name {
+        Ok(())
+    } else {
+        Err(WorkspaceError::PathEscape)
+    }
+}
+
+fn plain_name(component: Component<'_>) -> bool {
+    match component {
+        Component::Normal(name) => !dot_name(name),
+        _ => false,
+    }
+}
+
+fn dot_name(name: &OsStr) -> bool {
+    name == "." || name == ".."
 }
 
 /// Relative parent of `dest`, or `Ok(None)` when `dest` sits directly in `files`.
@@ -67,12 +113,14 @@ fn create_dirs(files: &Path, rel: &Path) -> Result<(), WorkspaceError> {
     Ok(())
 }
 
-fn normal_name(component: Component<'_>) -> Result<&std::ffi::OsStr, WorkspaceError> {
+fn normal_name(component: Component<'_>) -> Result<&OsStr, WorkspaceError> {
     match component {
-        Component::Normal(name) => Ok(name),
-        Component::CurDir | Component::ParentDir | Component::RootDir | Component::Prefix(_) => {
-            Err(WorkspaceError::PathEscape)
-        }
+        Component::Normal(name) if !dot_name(name) => Ok(name),
+        Component::Normal(_)
+        | Component::CurDir
+        | Component::ParentDir
+        | Component::RootDir
+        | Component::Prefix(_) => Err(WorkspaceError::PathEscape),
     }
 }
 
@@ -159,5 +207,51 @@ fn contained(files: &Path, path: PathBuf) -> Result<PathBuf, WorkspaceError> {
         Ok(path)
     } else {
         Err(WorkspaceError::PathEscape)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::ffi::OsStr;
+    use std::path::{Component, Path};
+
+    use super::{create_dirs, dot_name, normal_name, parent_components, plain_name};
+
+    #[test]
+    fn dot_names_are_not_plain_file_names() {
+        assert!(dot_name(OsStr::new(".")));
+        assert!(dot_name(OsStr::new("..")));
+        assert!(!dot_name(OsStr::new("note.txt")));
+        assert!(!plain_name(Component::Normal(OsStr::new("."))));
+        assert!(!plain_name(Component::Normal(OsStr::new(".."))));
+        assert!(plain_name(Component::Normal(OsStr::new("note.txt"))));
+        assert!(!plain_name(Component::ParentDir));
+        assert!(normal_name(Component::Normal(OsStr::new(".."))).is_err());
+        assert!(normal_name(Component::Normal(OsStr::new("."))).is_err());
+        assert!(normal_name(Component::ParentDir).is_err());
+        assert_eq!(
+            normal_name(Component::Normal(OsStr::new("note.txt"))).unwrap(),
+            "note.txt"
+        );
+    }
+
+    #[test]
+    fn parent_components_rejects_a_root_and_a_sibling() {
+        let files = Path::new("/workspace/files");
+        assert!(parent_components(files, Path::new("/")).is_err());
+        assert!(parent_components(files, Path::new("/workspace/note.txt")).is_err());
+        assert!(
+            parent_components(files, &files.join("note.txt"))
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(
+            parent_components(files, &files.join("a").join("b.txt"))
+                .unwrap()
+                .unwrap(),
+            Path::new("a")
+        );
+        // `..` is refused before `create_dirs` touches the filesystem.
+        assert!(create_dirs(files, Path::new("..")).is_err());
     }
 }
