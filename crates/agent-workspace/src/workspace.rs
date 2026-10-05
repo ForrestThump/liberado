@@ -3,7 +3,6 @@
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::time::Duration;
 
 use fs4::fs_std::FileExt;
 
@@ -12,6 +11,7 @@ use crate::error::WorkspaceError;
 use crate::id::directory_name;
 use crate::quota::{self, admit};
 use crate::sandbox;
+use crate::ssrf;
 
 pub use crate::entries::{DirEntry, EntryKind};
 
@@ -169,16 +169,30 @@ impl AgentWorkspace {
 
     /// Download `url` into `rel`. The cap covers stored bytes and each new file or directory.
     ///
-    /// Redirects stay on http or https. A `Location` with another scheme is refused.
+    /// The host is resolved before connecting. Non-public addresses are refused, and each
+    /// redirect is checked the same way. The connection uses only the addresses from that check.
     pub fn download_url(&self, rel: &str, url: &str) -> Result<u64, WorkspaceError> {
+        self.fetch(rel, url, false)
+    }
+
+    /// Test-only download that still pins the resolved addresses but allows loopback.
+    /// Production [`download_url`](Self::download_url) always refuses non-public targets.
+    #[cfg(test)]
+    pub(crate) fn download_url_allowing_local(
+        &self,
+        rel: &str,
+        url: &str,
+    ) -> Result<u64, WorkspaceError> {
+        self.fetch(rel, url, true)
+    }
+
+    fn fetch(&self, rel: &str, url: &str, allow_local: bool) -> Result<u64, WorkspaceError> {
         let url = validate_url(url)?;
+        let pins = ssrf::Pins::new();
+        ssrf::vet_and_pin(&pins, url, allow_local)?;
         let _guard = self.lock()?;
         let dest = self.destination(rel)?;
-        let client = reqwest::blocking::Client::builder()
-            .redirect(reqwest::redirect::Policy::custom(redirect_policy))
-            .timeout(Duration::from_secs(600))
-            .build()
-            .map_err(WorkspaceError::io)?;
+        let client = ssrf::client(pins, allow_local)?;
         let response = client.get(url).send().map_err(download_error)?;
         // A 3xx that survived the client is a redirect reqwest could not turn
         // into an http(s) request. `http::Uri` drops `file:` before the policy
@@ -309,27 +323,23 @@ fn bind_identity(home: &Path, agent_id: &str) -> Result<(), WorkspaceError> {
     }
 }
 
-const MAX_REDIRECTS: usize = 5;
-
-fn redirect_policy(attempt: reqwest::redirect::Attempt) -> reqwest::redirect::Action {
-    if attempt.previous().len() >= MAX_REDIRECTS {
-        return attempt.error(WorkspaceError::io("too many redirects"));
-    }
-    match validate_url(attempt.url().as_str()) {
-        Ok(_) => attempt.follow(),
-        Err(err) => attempt.error(err),
-    }
-}
-
 fn download_error(err: reqwest::Error) -> WorkspaceError {
     let mut source = std::error::Error::source(&err);
     while let Some(inner) = source {
-        if let Some(WorkspaceError::UnsupportedUrl) = inner.downcast_ref::<WorkspaceError>() {
-            return WorkspaceError::UnsupportedUrl;
+        if let Some(mapped) = mapped_download_error(inner) {
+            return mapped;
         }
         source = std::error::Error::source(inner);
     }
     WorkspaceError::io(err)
+}
+
+fn mapped_download_error(err: &(dyn std::error::Error + 'static)) -> Option<WorkspaceError> {
+    match err.downcast_ref::<WorkspaceError>() {
+        Some(WorkspaceError::UnsupportedUrl) => Some(WorkspaceError::UnsupportedUrl),
+        Some(WorkspaceError::BlockedAddress) => Some(WorkspaceError::BlockedAddress),
+        _ => None,
+    }
 }
 
 fn validate_url(url: &str) -> Result<&str, WorkspaceError> {

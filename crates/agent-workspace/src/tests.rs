@@ -362,24 +362,17 @@ fn a_symlink_that_leaves_the_workspace_is_not_readable() {
 }
 
 #[test]
-fn download_tool_reports_the_bytes_it_stored() {
+fn download_tool_refuses_a_non_public_target() {
     let root = scratch();
-    let cap = ENTRY_COST + 100;
-    let workspace = open(root.path(), "dl", cap);
-    let url = http_body(b"hello", true);
-    let text = crate::apply(
+    let workspace = open(root.path(), "dl", ENTRY_COST + 100);
+    let err = crate::apply(
         &workspace,
         "workspace_download",
-        &json!({"url": url, "path": "a.txt"}),
+        &json!({"url": "http://127.0.0.1:9/hello", "path": "a.txt"}),
     )
-    .unwrap();
-    assert!(text.contains("Downloaded 5 bytes to a.txt"), "{text}");
-    let used = ENTRY_COST + 5;
-    assert!(
-        text.contains(&format!("Using {used} of {cap} bytes")),
-        "{text}"
-    );
-    assert_eq!(workspace.read_text("a.txt").unwrap(), "hello");
+    .unwrap_err();
+    assert!(err.contains("non-public"), "{err}");
+    assert!(!workspace.files_dir().join("a.txt").exists());
 }
 
 #[test]
@@ -387,7 +380,9 @@ fn download_over_the_announced_cap_writes_nothing() {
     let root = scratch();
     let workspace = open(root.path(), "cap", ENTRY_COST + 10);
     let url = http_body(b"0123456789ABCDEF", true);
-    let err = workspace.download_url("blob.bin", &url).unwrap_err();
+    let err = workspace
+        .download_url_allowing_local("blob.bin", &url)
+        .unwrap_err();
     assert!(
         matches!(err, WorkspaceError::OverCap { .. }),
         "download returned {err:?}"
@@ -401,7 +396,9 @@ fn download_without_a_length_stops_at_the_cap() {
     let root = scratch();
     let workspace = open(root.path(), "cap", ENTRY_COST + 10);
     let url = http_body(b"0123456789ABCDEF", false);
-    let err = workspace.download_url("blob.bin", &url).unwrap_err();
+    let err = workspace
+        .download_url_allowing_local("blob.bin", &url)
+        .unwrap_err();
     assert!(matches!(err, WorkspaceError::OverCap { .. }), "{err:?}");
     assert!(!workspace.files_dir().join("blob.bin").exists());
     assert!(!workspace.home_dir().join("incoming.bin").exists());
@@ -413,7 +410,9 @@ fn download_that_fits_replaces_without_double_counting() {
     let workspace = open(root.path(), "cap", ENTRY_COST + 10);
     workspace.write_text("blob.bin", "12345678").unwrap();
     let url = http_body(b"abcdef", true);
-    let bytes = workspace.download_url("blob.bin", &url).unwrap();
+    let bytes = workspace
+        .download_url_allowing_local("blob.bin", &url)
+        .unwrap();
     assert_eq!(bytes, 6);
     assert_eq!(workspace.read_text("blob.bin").unwrap(), "abcdef");
     assert_eq!(workspace.usage_bytes().unwrap(), ENTRY_COST + 6);
@@ -424,7 +423,9 @@ fn download_refuses_a_redirect_off_http() {
     let root = scratch();
     let workspace = open(root.path(), "cap", ROOM);
     let url = http_redirect("file:///etc/passwd");
-    let err = workspace.download_url("a.txt", &url).unwrap_err();
+    let err = workspace
+        .download_url_allowing_local("a.txt", &url)
+        .unwrap_err();
     assert!(matches!(err, WorkspaceError::UnsupportedUrl), "{err:?}");
     assert!(!workspace.files_dir().join("a.txt").exists());
     assert!(!workspace.home_dir().join("incoming.bin").exists());
@@ -436,7 +437,9 @@ fn download_follows_an_http_redirect() {
     let workspace = open(root.path(), "cap", ROOM);
     let dest = http_body(b"ok", true);
     let url = http_redirect(&dest);
-    let bytes = workspace.download_url("a.txt", &url).unwrap();
+    let bytes = workspace
+        .download_url_allowing_local("a.txt", &url)
+        .unwrap();
     assert_eq!(bytes, 2);
     assert_eq!(workspace.read_text("a.txt").unwrap(), "ok");
 }

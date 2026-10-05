@@ -39,6 +39,8 @@ pub enum WorkspaceError {
     NotFound,
     #[error("only http and https URLs can be downloaded")]
     UnsupportedUrl,
+    #[error("refusing to download: that host resolves to a non-public address")]
+    BlockedAddress,
     #[error("{0}")]
     Io(String),
 }

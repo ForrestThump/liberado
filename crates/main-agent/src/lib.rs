@@ -94,7 +94,7 @@ repository. These tools are not a substitute for `delegate`.
 - `workspace_read` reads a UTF-8 text file.
 - `workspace_write` creates or replaces a UTF-8 text file. A byte cap applies.
 - `workspace_delete` deletes a file or directory. You cannot delete the workspace root.
-- `workspace_download` saves an http or https URL into a file. A byte cap applies.
+- `workspace_download` saves an http or https URL into a file. A byte cap applies. A host that resolves to a non-public address is refused.
 
 # What you must NOT do
 

@@ -8,8 +8,8 @@
 //! The default cap is 1 GiB ([`DEFAULT_CAP_BYTES`]). Each file, directory, and symlink costs 4096
 //! bytes plus the file's length. Writes and downloads that would pass the cap are refused, including
 //! an empty file when the cap is 0, and a refused download leaves no file behind. A download
-//! redirect must stay on http or https. Every tool path is resolved inside that agent's `files/`
-//! directory.
+//! must stay on http or https, and every hop must resolve to a public address. Every tool path
+//! is resolved inside that agent's `files/` directory.
 //!
 //! This is not a shared scratch directory. There is no path that every agent can write. Agents
 //! share through a channel or a local git repository.
@@ -19,6 +19,7 @@ mod error;
 mod id;
 mod quota;
 mod sandbox;
+mod ssrf;
 mod tools;
 mod workspace;
 
@@ -43,6 +44,10 @@ mod symlink_tests;
 #[cfg(test)]
 #[path = "quota_tests.rs"]
 mod quota_tests;
+
+#[cfg(test)]
+#[path = "ssrf_tests.rs"]
+mod ssrf_tests;
 
 #[cfg(test)]
 mod tests;

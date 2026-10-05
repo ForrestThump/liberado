@@ -171,7 +171,9 @@ fn download_replaces_a_symlink_and_leaves_the_target() {
     link_to(&workspace.files_dir().join("target.txt"), &link);
     let url = http_body(b"fresh");
 
-    let bytes = workspace.download_url("blob.bin", &url).unwrap();
+    let bytes = workspace
+        .download_url_allowing_local("blob.bin", &url)
+        .unwrap();
     assert_eq!(bytes, 5);
     assert_eq!(
         fs::read_to_string(workspace.files_dir().join("target.txt")).unwrap(),

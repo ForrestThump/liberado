@@ -75,7 +75,7 @@ pub fn tool_defs() -> Vec<ToolDef> {
         ToolDef::new(
             TOOL_DOWNLOAD,
             format!(
-                "Download an http or https URL into a file in this agent's private workspace. The byte cap applies. {PRIVATE}"
+                "Download an http or https URL into a file in this agent's private workspace. The byte cap applies. Hosts that resolve to a non-public address are refused. {PRIVATE}"
             ),
             json!({
                 "type": "object",
@@ -150,10 +150,11 @@ fn report_download(
 ) -> Result<String, WorkspaceError> {
     let bytes = workspace.download_url(path, url)?;
     let used = workspace.usage_bytes()?;
-    Ok(format!(
-        "Downloaded {bytes} bytes to {path}. Using {used} of {} bytes.",
-        workspace.max_bytes()
-    ))
+    Ok(downloaded_message(bytes, path, used, workspace.max_bytes()))
+}
+
+pub(crate) fn downloaded_message(bytes: u64, path: &str, used: u64, cap: u64) -> String {
+    format!("Downloaded {bytes} bytes to {path}. Using {used} of {cap} bytes.")
 }
 
 fn format_list(entries: &[DirEntry], used: u64, cap: u64) -> String {

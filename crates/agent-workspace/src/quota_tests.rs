@@ -18,7 +18,7 @@ fn scratch() -> tempfile::TempDir {
 }
 
 fn download(workspace: &AgentWorkspace, rel: &str, body: &[u8]) -> Result<u64, WorkspaceError> {
-    workspace.download_url(rel, &http_body(body))
+    workspace.download_url_allowing_local(rel, &http_body(body))
 }
 
 #[test]
