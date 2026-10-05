@@ -18,7 +18,7 @@ const MAX_REDIRECTS: usize = 5;
 
 /// Which non-public addresses a download may still use.
 ///
-/// Production code can name only [`Reach::Public`]. [`Reach::Loopback`] exists
+/// Production code can name only [`Reach::Public`]. `Reach::Loopback` exists
 /// only in tests, so a loopback server can prove that a later hop is checked again.
 #[derive(Clone, Copy)]
 pub(crate) enum Reach {
