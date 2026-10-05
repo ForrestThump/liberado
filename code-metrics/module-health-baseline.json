@@ -239,6 +239,12 @@
     "functions": 4,
     "cyclomatic": 21
   },
+  "crates/agent-workspace/src/quota_tests.rs": {
+    "ploc": 178,
+    "lloc": 98,
+    "functions": 20,
+    "cyclomatic": 22
+  },
   "crates/agent-workspace/src/sandbox.rs": {
     "ploc": 135,
     "lloc": 52,
@@ -250,6 +256,24 @@
     "lloc": 18,
     "functions": 4,
     "cyclomatic": 5
+  },
+  "crates/agent-workspace/src/ssrf.rs": {
+    "ploc": 247,
+    "lloc": 57,
+    "functions": 39,
+    "cyclomatic": 98
+  },
+  "crates/agent-workspace/src/ssrf_tests.rs": {
+    "ploc": 277,
+    "lloc": 70,
+    "functions": 20,
+    "cyclomatic": 28
+  },
+  "crates/agent-workspace/src/symlink_tests.rs": {
+    "ploc": 185,
+    "lloc": 111,
+    "functions": 16,
+    "cyclomatic": 17
   },
   "crates/agent-workspace/src/tests.rs": {
     "ploc": 493,
@@ -264,10 +288,10 @@
     "cyclomatic": 61
   },
   "crates/agent-workspace/src/workspace.rs": {
-    "ploc": 300,
-    "lloc": 110,
+    "ploc": 294,
+    "lloc": 101,
     "functions": 27,
-    "cyclomatic": 120
+    "cyclomatic": 112
   },
   "crates/bootstrap/src/coder_provider_factory.rs": {
     "ploc": 38,
