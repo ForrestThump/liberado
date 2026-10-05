@@ -4,8 +4,9 @@
 //! Split out of `chat.rs` so the message-rendering side of the surface lives in one place
 //! independent of the chat's input, stream, and history logic. The mobile copy button is a
 //! chrome gesture over a user or assistant row, so the control belongs with the row. Which
-//! single row is showing it is owned by the message list — the same shape as the sidebar's
-//! `menu_open` — because two buttons are never up at once.
+//! single row is showing it is owned by [`MessageList`] — the same shape as the sidebar's
+//! `menu_open` — because two buttons are never up at once. That list also scrolls the
+//! revealed button into `#chat-messages` when the tap was on the last row.
 
 use dioxus::prelude::*;
 
@@ -13,6 +14,60 @@ use super::chat::chat_fold::{ReasoningBlock, show_answer};
 use super::chat::{ChatMsg, ThinkingStep};
 use crate::components::markdown::MarkdownText;
 use crate::icons::{IconCheck, IconChevronDown, IconChevronRight, IconCopy, IconSpinner, IconX};
+
+/// The transcript rows and the one Copy button they share.
+///
+/// The open index and the scroll request live here, not on `Chat`: hooks have to run inside a
+/// component, and the button is a property of the list (one visible at a time). `Chat` renders
+/// the streaming ellipsis after this list, so the ellipsis is not a message index and a tap on
+/// the last real row still counts as last while a turn is in flight.
+#[component]
+pub(super) fn MessageList(messages: Signal<Vec<ChatMsg>>) -> Element {
+    // `None` hides every button. A second tap on the open row returns to `None`.
+    let mut copy_open = use_signal(|| None::<usize>);
+    // `(generation, index)` of a scroll request. Generation 0 is the initial "do not scroll".
+    // Only a tap that reveals the button on the last message bumps it. The effect reads this
+    // pair and not `copy_open`, so hiding, or revealing an earlier row, does not scroll.
+    let mut copy_scroll = use_signal(|| (0u32, 0usize));
+    use_effect(move || {
+        let (nonce, index) = copy_scroll();
+        if nonce == 0 {
+            return;
+        }
+        schedule_scroll_messages_to_copy_button(index);
+    });
+
+    let toggle_copy = use_callback(move |index: usize| {
+        let before = copy_open();
+        let msgs = messages.read();
+        let Some(last) = msgs.len().checked_sub(1) else {
+            return;
+        };
+        if index > last || !message_offers_copy(msgs[index].role) {
+            return;
+        }
+        drop(msgs);
+        copy_open.set(next_open_copy(before, index));
+        if should_scroll_copy_button(before, index, last) {
+            let (nonce, _) = copy_scroll();
+            // `max(1)` keeps a wrapping generation from landing back on 0, which the effect
+            // treats as "no request".
+            copy_scroll.set((nonce.wrapping_add(1).max(1), index));
+        }
+    });
+
+    rsx! {
+        for (i, msg) in messages.read().iter().enumerate() {
+            MessageRow {
+                key: "{i}",
+                msg: msg.clone(),
+                index: i,
+                copy_visible: message_offers_copy(msg.role) && copy_open() == Some(i),
+                on_toggle_copy: move |index| toggle_copy.call(index),
+            }
+        }
+    }
+}
 
 /// The one rendered bubble. User and assistant rows get a Copy button below the bubble.
 /// The list decides which single index is open: the first tap on a closed row shows it and
@@ -196,6 +251,94 @@ pub(super) fn copy_to_clipboard(text: &str) {
 
 #[cfg(not(target_arch = "wasm32"))]
 pub(super) fn copy_to_clipboard(_text: &str) {}
+
+/// Bring `#response-copy-{index}` inside `#chat-messages`.
+///
+/// Called from the effect that follows a reveal of the last message's Copy button, so the
+/// row is already in the committed tree. Measurement uses viewport coordinates: the delta
+/// between the button and the container is exactly the `scrollTop` adjustment, and no
+/// ancestor moves. Desktop widths hide the control with the same `max-width: 768px` query
+/// as `.response-copy-row`, and a `display: none` box must not be scrolled to.
+#[cfg(target_arch = "wasm32")]
+fn schedule_scroll_messages_to_copy_button(index: usize) {
+    if !scroll_messages_to_copy_button(index) {
+        // The row can commit a turn after the effect. One more frame, then stop — a second
+        // miss means the button was hidden again, and hiding must not scroll.
+        scroll_copy_button_on_next_frame(index);
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn schedule_scroll_messages_to_copy_button(_index: usize) {}
+
+#[cfg(target_arch = "wasm32")]
+fn scroll_copy_button_on_next_frame(index: usize) {
+    use wasm_bindgen::JsCast;
+    use wasm_bindgen::closure::Closure;
+
+    let Some(window) = web_sys::window() else {
+        return;
+    };
+    let callback = Closure::once(move |_timestamp: f64| {
+        let _ = scroll_messages_to_copy_button(index);
+    });
+    if window
+        .request_animation_frame(callback.as_ref().unchecked_ref())
+        .is_ok()
+    {
+        callback.forget();
+    }
+}
+
+/// Scroll `#chat-messages` until the copy button for `index` is fully inside it.
+///
+/// Returns `false` when that button is not in the document yet, so the caller can retry
+/// once. Returns `true` when there is nothing to do — desktop breakpoint, or the button is
+/// already visible — so a retry does not fire.
+#[cfg(target_arch = "wasm32")]
+fn scroll_messages_to_copy_button(index: usize) -> bool {
+    let Some(window) = web_sys::window() else {
+        return true;
+    };
+    let on_phone = window
+        .match_media("(max-width: 768px)")
+        .ok()
+        .flatten()
+        .is_some_and(|list| list.matches());
+    if !on_phone {
+        return true;
+    }
+    let Some(document) = window.document() else {
+        return true;
+    };
+    let Some(container) = document.get_element_by_id("chat-messages") else {
+        return false;
+    };
+    let Some(button) = document.get_element_by_id(&format!("response-copy-{index}")) else {
+        return false;
+    };
+    let container_box = container.get_bounding_client_rect();
+    let button_box = button.get_bounding_client_rect();
+    // `display: none` (the desktop rule, if the query and the layout disagree) has no box.
+    if button_box.width() == 0.0 && button_box.height() == 0.0 {
+        return false;
+    }
+    let delta = if button_box.bottom() > container_box.bottom() {
+        button_box.bottom() - container_box.bottom()
+    } else if button_box.top() < container_box.top() {
+        button_box.top() - container_box.top()
+    } else {
+        0.0
+    };
+    if delta.abs() < 0.5 {
+        return true;
+    }
+    let next = (container.scroll_top() as f64 + delta).round();
+    if next.is_finite() {
+        container.set_scroll_top(next as i32);
+    }
+    true
+}
 
 // ── Collapsible tool result ─────────────────────────────────────────────────
 

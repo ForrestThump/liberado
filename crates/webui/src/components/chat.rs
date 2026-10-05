@@ -2,9 +2,7 @@ use dioxus::prelude::*;
 
 use chat_client_contract::ChatMessage;
 
-use super::message_row::{
-    MessageRow, message_offers_copy, next_open_copy, should_scroll_copy_button,
-};
+use super::message_row::MessageList;
 #[cfg(target_arch = "wasm32")]
 use crate::components::chat_submission::unanswered_turn_note;
 use crate::components::chat_submission::{profile_switched_note, submission_text};
@@ -217,22 +215,6 @@ pub fn Chat(
     #[cfg_attr(not(target_arch = "wasm32"), allow(unused_mut))]
     let mut ghost_session = use_signal(|| None::<String>);
     let mut messages = use_signal(Vec::new);
-    // The one Copy button in the thread, as an index into `messages`. `None` hides them all.
-    // The streaming ellipsis is rendered after the list and is not an entry in this vec, so it
-    // can never be the open index and a tap on the last real message still counts as last
-    // while a turn is in flight.
-    let mut copy_open = use_signal(|| None::<usize>);
-    // `(generation, index)` of a scroll request. Generation 0 is the initial "do not scroll".
-    // Only a tap that reveals the button on the last message bumps it. The effect reads this
-    // pair and not `copy_open`, so hiding, or revealing an earlier row, does not scroll.
-    let mut copy_scroll = use_signal(|| (0u32, 0usize));
-    use_effect(move || {
-        let (nonce, index) = copy_scroll();
-        if nonce == 0 {
-            return;
-        }
-        schedule_scroll_messages_to_copy_button(index);
-    });
     let mut input = use_signal(String::new);
     let mut sending = use_signal(|| false);
     // `mut` is required by the wasm-only slash-command block below, which reassigns this. On a
@@ -602,25 +584,6 @@ pub fn Chat(
     let mut palette_visible = palette_visible;
     use_effect(move || palette_visible.set(palette_open()));
 
-    let toggle_copy = use_callback(move |index: usize| {
-        let before = copy_open();
-        let msgs = messages.read();
-        let Some(last) = msgs.len().checked_sub(1) else {
-            return;
-        };
-        if index > last || !message_offers_copy(msgs[index].role) {
-            return;
-        }
-        drop(msgs);
-        copy_open.set(next_open_copy(before, index));
-        if should_scroll_copy_button(before, index, last) {
-            let (nonce, _) = copy_scroll();
-            // `max(1)` keeps a wrapping generation from landing back on 0, which the effect
-            // treats as "no request".
-            copy_scroll.set((nonce.wrapping_add(1).max(1), index));
-        }
-    });
-
     let chat_cls = if incognito() {
         "chat incognito"
     } else {
@@ -647,6 +610,7 @@ pub fn Chat(
 
                 div {
                     class: "messages",
+                    // `MessageList` scrolls `#response-copy-{index}` into this node.
                     id: "chat-messages",
                     if messages.read().is_empty() && conv_id.is_none() && !sending() && ghost_session.read().is_none() {
                         div {
@@ -655,15 +619,7 @@ pub fn Chat(
                             p { "It has access to your tools." }
                         }
                     }
-                    for (i, msg) in messages.read().iter().enumerate() {
-                        MessageRow {
-                            key: "{i}",
-                            msg: msg.clone(),
-                            index: i,
-                            copy_visible: message_offers_copy(msg.role) && copy_open() == Some(i),
-                            on_toggle_copy: move |index| toggle_copy.call(index),
-                        }
-                    }
+                    MessageList { messages }
                     if sending() {
                         div { class: "bubble-row assistant",
                             div { class: "bubble-thinking", "\u{2026}" }
@@ -922,94 +878,6 @@ fn focus_chat_input() {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn focus_chat_input() {}
-
-/// Bring `#response-copy-{index}` inside `#chat-messages`.
-///
-/// Called from the effect that follows a reveal of the last message's Copy button, so the
-/// row is already in the committed tree. Measurement uses viewport coordinates: the delta
-/// between the button and the container is exactly the `scrollTop` adjustment, and no
-/// ancestor moves. Desktop widths hide the control with the same `max-width: 768px` query
-/// as `.response-copy-row`, and a `display: none` box must not be scrolled to.
-#[cfg(target_arch = "wasm32")]
-fn schedule_scroll_messages_to_copy_button(index: usize) {
-    if !scroll_messages_to_copy_button(index) {
-        // The row can commit a turn after the effect. One more frame, then stop — a second
-        // miss means the button was hidden again, and hiding must not scroll.
-        scroll_copy_button_on_next_frame(index);
-    }
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn schedule_scroll_messages_to_copy_button(_index: usize) {}
-
-#[cfg(target_arch = "wasm32")]
-fn scroll_copy_button_on_next_frame(index: usize) {
-    use wasm_bindgen::JsCast;
-    use wasm_bindgen::closure::Closure;
-
-    let Some(window) = web_sys::window() else {
-        return;
-    };
-    let callback = Closure::once(move |_timestamp: f64| {
-        let _ = scroll_messages_to_copy_button(index);
-    });
-    if window
-        .request_animation_frame(callback.as_ref().unchecked_ref())
-        .is_ok()
-    {
-        callback.forget();
-    }
-}
-
-/// Scroll `#chat-messages` until the copy button for `index` is fully inside it.
-///
-/// Returns `false` when that button is not in the document yet, so the caller can retry
-/// once. Returns `true` when there is nothing to do — desktop breakpoint, or the button is
-/// already visible — so a retry does not fire.
-#[cfg(target_arch = "wasm32")]
-fn scroll_messages_to_copy_button(index: usize) -> bool {
-    let Some(window) = web_sys::window() else {
-        return true;
-    };
-    let on_phone = window
-        .match_media("(max-width: 768px)")
-        .ok()
-        .flatten()
-        .is_some_and(|list| list.matches());
-    if !on_phone {
-        return true;
-    }
-    let Some(document) = window.document() else {
-        return true;
-    };
-    let Some(container) = document.get_element_by_id("chat-messages") else {
-        return false;
-    };
-    let Some(button) = document.get_element_by_id(&format!("response-copy-{index}")) else {
-        return false;
-    };
-    let container_box = container.get_bounding_client_rect();
-    let button_box = button.get_bounding_client_rect();
-    // `display: none` (the desktop rule, if the query and the layout disagree) has no box.
-    if button_box.width() == 0.0 && button_box.height() == 0.0 {
-        return false;
-    }
-    let delta = if button_box.bottom() > container_box.bottom() {
-        button_box.bottom() - container_box.bottom()
-    } else if button_box.top() < container_box.top() {
-        button_box.top() - container_box.top()
-    } else {
-        0.0
-    };
-    if delta.abs() < 0.5 {
-        return true;
-    }
-    let next = (container.scroll_top() as f64 + delta).round();
-    if next.is_finite() {
-        container.set_scroll_top(next as i32);
-    }
-    true
-}
 
 // ── SSE streaming (browser-only) ────────────────────────────────────────────
 
