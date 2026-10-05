@@ -597,6 +597,7 @@ mod tests {
             ])),
             tool_call_id: None,
             model: None,
+            reasoning: None,
         };
         let json = serde_json::to_value(&msg).unwrap();
         let back: ChatMessage = serde_json::from_value(json).unwrap();

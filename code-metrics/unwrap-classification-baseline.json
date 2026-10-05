@@ -1,11 +1,11 @@
 {
   "summary": {
-    "total_unwraps": 114,
+    "total_unwraps": 111,
     "proven_invariant": 65,
     "local_failure": 0,
-    "process_fatal": 49,
-    "files_scanned": 506,
-    "files_with_unwraps": 50
+    "process_fatal": 46,
+    "files_scanned": 530,
+    "files_with_unwraps": 49
   },
   "files": {
     "crates/acp-bridge/src/session_store.rs": {
@@ -87,7 +87,7 @@
         },
         {
           "file": "crates/cli/src/docs_meta_cmd.rs",
-          "line": 217,
+          "line": 230,
           "column": 20,
           "method": "unwrap",
           "snippet": "doc.meta.as_ref().unwrap()",
@@ -98,7 +98,7 @@
         },
         {
           "file": "crates/cli/src/docs_meta_cmd.rs",
-          "line": 707,
+          "line": 720,
           "column": 28,
           "method": "expect",
           "snippet": "path.parent().expect(\"document has parent\")",
@@ -597,47 +597,6 @@
           "snippet": "s.cached_prompt_tokens.unwrap()",
           "receiver": "s.cached_prompt_tokens",
           "context": "summarize",
-          "classification": "process_fatal",
-          "reason": "production path unwrap requiring conversion to Result or waiver"
-        }
-      ]
-    },
-    "crates/daemon/src/lib.rs": {
-      "proven_invariant": 0,
-      "local_failure": 0,
-      "process_fatal": 3,
-      "total": 3,
-      "occurrences": [
-        {
-          "file": "crates/daemon/src/lib.rs",
-          "line": 160,
-          "column": 9,
-          "method": "expect",
-          "snippet": "self.event_tx\n            .as_ref()\n            .expect(\"event_sender() called after run() already started\")",
-          "receiver": "self.event_tx\n            .as_ref()",
-          "context": "event_senderUnboundedSender<Event>",
-          "classification": "process_fatal",
-          "reason": "production path unwrap requiring conversion to Result or waiver"
-        },
-        {
-          "file": "crates/daemon/src/lib.rs",
-          "line": 325,
-          "column": 28,
-          "method": "expect",
-          "snippet": "self\n            .event_rx\n            .take()\n            .expect(\"Daemon::run must only be called once\")",
-          "receiver": "self\n            .event_rx\n            .take()",
-          "context": "runResult<(), DaemonError>",
-          "classification": "process_fatal",
-          "reason": "production path unwrap requiring conversion to Result or waiver"
-        },
-        {
-          "file": "crates/daemon/src/lib.rs",
-          "line": 331,
-          "column": 24,
-          "method": "expect",
-          "snippet": "self\n            .event_tx\n            .take()\n            .expect(\"Daemon::run must only be called once\")",
-          "receiver": "self\n            .event_tx\n            .take()",
-          "context": "runResult<(), DaemonError>",
           "classification": "process_fatal",
           "reason": "production path unwrap requiring conversion to Result or waiver"
         }
@@ -1413,7 +1372,7 @@
         },
         {
           "file": "crates/server/src/t1_conformance.rs",
-          "line": 1170,
+          "line": 1157,
           "column": 9,
           "method": "unwrap",
           "snippet": "self.ran.lock().unwrap()",
@@ -1424,7 +1383,7 @@
         },
         {
           "file": "crates/server/src/t1_conformance.rs",
-          "line": 1311,
+          "line": 1298,
           "column": 5,
           "method": "unwrap",
           "snippet": "serde_json::from_str::<serde_json::Value>(&body).unwrap()[\"session_id\"]\n        .as_str()\n        .unwrap()",
@@ -1435,7 +1394,7 @@
         },
         {
           "file": "crates/server/src/t1_conformance.rs",
-          "line": 1311,
+          "line": 1298,
           "column": 5,
           "method": "unwrap",
           "snippet": "serde_json::from_str::<serde_json::Value>(&body).unwrap()",
@@ -1476,7 +1435,7 @@
         },
         {
           "file": "crates/session-store/src/jsonl.rs",
-          "line": 439,
+          "line": 440,
           "column": 26,
           "method": "expect",
           "snippet": "prefix.last().expect(\"non-empty\")",

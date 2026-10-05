@@ -36,12 +36,12 @@ impl Shelf {
         }
     }
 
-    /// What the compact + control does. Chats starts a fresh chat; Agents opens
-    /// the existing New Agent picker and does not bump the chat nonce.
+    /// What the compact + control does. Chats starts a fresh chat. Agents focuses
+    /// the singleton Agent Creator and does not bump the chat nonce.
     pub(super) fn create_action(self) -> ShelfCreate {
         match self {
             Shelf::Chats => ShelfCreate::FreshChat,
-            Shelf::Agents => ShelfCreate::NewAgent,
+            Shelf::Agents => ShelfCreate::AgentCreator,
         }
     }
 
@@ -83,16 +83,34 @@ impl Shelf {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum ShelfCreate {
     /// Bump `new_chat_nonce` and clear the active conversation.
-    /// Does not open the New Agent picker.
+    /// Does not open the Agent Creator.
     FreshChat,
-    /// Open the New Agent picker. Does not start a fresh Chats-shelf chat.
-    NewAgent,
+    /// Focus the singleton Agent Creator session. Does not start a fresh Chats-shelf chat.
+    AgentCreator,
+}
+
+/// Shelf of a conversation id, from headers the sidebar already loaded.
+/// Unknown ids (a search hit that raced the list) leave the surface unset.
+pub(super) fn surface_for_id(list: &[ConvHeader], id: &str) -> Option<SurfaceMode> {
+    for conv in list {
+        if conv.id == id {
+            return Some(conv.surface_mode);
+        }
+    }
+    None
 }
 
 /// Search hits the list only while the field is open and the query has text.
 /// Closing the field (or leaving it blank) shows the shelf again.
 pub(super) fn search_is_active(open: bool, query: &str) -> bool {
     open && !query.trim().is_empty()
+}
+
+/// A successful `create_agent` adds a shelf row while the user stays on the
+/// Agent Creator. The conversation list has to be fetched again; switching
+/// Chats/Agents only refilters whatever was already loaded.
+pub(crate) fn refreshes_agent_shelf(tool_name: &str, ok: bool) -> bool {
+    ok && tool_name == "create_agent"
 }
 
 /// Partition the conversation list onto the active shelf. Soft filter only —
@@ -174,13 +192,31 @@ mod tests {
         assert_eq!(Shelf::Agents.empty_message(), "No agents yet.");
     }
 
-    /// + follows the shelf: Chats starts a fresh chat, Agents opens the picker.
+    /// Only a successful `create_agent` reloads the shelf. A failure, or any
+    /// other tool, leaves the list alone.
+    #[test]
+    fn create_agent_success_refreshes_the_shelf() {
+        assert!(refreshes_agent_shelf("create_agent", true));
+        assert!(!refreshes_agent_shelf("create_agent", false));
+        assert!(!refreshes_agent_shelf("delegate", true));
+        assert!(!refreshes_agent_shelf("search", true));
+    }
+
+    /// + follows the shelf: Chats starts a fresh chat, Agents opens the creator.
     #[test]
     fn create_action_follows_the_shelf() {
         assert_eq!(Shelf::Chats.create_action(), ShelfCreate::FreshChat);
-        assert_eq!(Shelf::Agents.create_action(), ShelfCreate::NewAgent);
+        assert_eq!(Shelf::Agents.create_action(), ShelfCreate::AgentCreator);
         assert_eq!(Shelf::Chats.create_label(), "New chat");
         assert_eq!(Shelf::Agents.create_label(), "New agent");
+    }
+
+    #[test]
+    fn surface_for_id_reads_the_header_and_misses_unknown() {
+        let list = vec![hdr("c1", SurfaceMode::Chat), hdr("a1", SurfaceMode::Agent)];
+        assert_eq!(surface_for_id(&list, "a1"), Some(SurfaceMode::Agent));
+        assert_eq!(surface_for_id(&list, "c1"), Some(SurfaceMode::Chat));
+        assert_eq!(surface_for_id(&list, "missing"), None);
     }
 
     /// Search copy names the shelf. The field is still the message-search API.

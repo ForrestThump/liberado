@@ -1774,9 +1774,7 @@ async fn wall_clock_limit_exhausts_at_exact_non_zero_boundary() {
 async fn token_limit_exhausts_once_accumulated_usage_crosses_it() {
     fn tool_call_with_usage(id: &str, tokens: u32) -> CompletionResponse {
         CompletionResponse {
-            content: None,
             tool_calls: vec![ToolInvocation::new(id, "search", serde_json::json!({}))],
-            finish_reason: liberado_provider::FinishReason::ToolCalls,
             usage: Some(liberado_provider::Usage {
                 prompt_tokens: tokens / 2,
                 completion_tokens: tokens / 2,
@@ -1784,6 +1782,7 @@ async fn token_limit_exhausts_once_accumulated_usage_crosses_it() {
                 cached_prompt_tokens: None,
                 reasoning_tokens: None,
             }),
+            ..CompletionResponse::tool_calls(vec![])
         }
     }
     let script = vec![

@@ -259,6 +259,7 @@ fn chat_message_carries_tool_calls_only_when_present() {
                 tool_call_id: None,
             },
             model: None,
+            reasoning: None,
         }
     };
     let plain = chat_message_from_node(make_node(Vec::new()));

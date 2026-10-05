@@ -75,6 +75,8 @@ use liberado_session::{DomainHint, GoalSessionHub, GoalSpec, SessionGrant, Sessi
 mod agent_profiles;
 #[path = "sessions/agent_spawn.rs"]
 mod agent_spawn;
+#[path = "sessions/reasoning_stamp.rs"]
+mod reasoning_stamp;
 #[path = "sessions/surface_mode.rs"]
 mod surface_mode;
 #[path = "sessions_waivers.rs"]
@@ -642,6 +644,7 @@ impl ChatSessions {
                     author: Author::Named(PROFILE_AUTHOR.into()),
                     message: Message::system(note),
                     model: None,
+                    reasoning: None,
                 },
             )
             .await?;
@@ -673,6 +676,7 @@ impl ChatSessions {
                     author: Author::Named("goal-session".into()),
                     message: Message::assistant(content),
                     model: None,
+                    reasoning: None,
                 },
             )
             .await?;
@@ -777,6 +781,7 @@ impl ChatSessions {
                 tail_after_user(convo.turn_tail(before)),
                 parent_leaf,
                 Some(turn_model),
+                liberado_executor::take_turn_reasoning(&executor),
             )
             .await?;
             Ok(reply)
@@ -886,6 +891,7 @@ impl ChatSessions {
                 tail_after_user(convo.turn_tail(before)),
                 parent_leaf,
                 Some(turn_model),
+                liberado_executor::take_turn_reasoning(&executor),
             )
             .await?;
             Ok(())
@@ -1737,6 +1743,7 @@ impl ChatSessions {
                     author: Author::Named(COMPACTION_AUTHOR.into()),
                     message: marker.clone(),
                     model: None,
+                    reasoning: None,
                 },
             )
             .await
@@ -1760,6 +1767,7 @@ impl ChatSessions {
                         author: Author::Named(COMPACTION_TAIL_AUTHOR.into()),
                         message: tail_node.message.clone(),
                         model: None,
+                        reasoning: None,
                     },
                 )
                 .await
@@ -1901,6 +1909,7 @@ impl ChatSessions {
                     author: Author::from_role(message.role),
                     message,
                     model,
+                    reasoning: None,
                 },
             )
             .await?;
@@ -1916,12 +1925,15 @@ impl ChatSessions {
         new: &[Message],
         mut parent: Option<Ulid>,
         model: Option<String>,
+        reasoning: Vec<Option<String>>,
     ) -> SessionResult<()> {
+        let mut pending = reasoning.into_iter();
         for msg in new {
             let author = Author::from_role(msg.role);
             let stamp = matches!(author, Author::Assistant)
                 .then(|| model.clone())
                 .flatten();
+            let reasoning = reasoning_stamp::next_for(msg.role, &mut pending);
             let node = self
                 .store
                 .append(
@@ -1931,6 +1943,7 @@ impl ChatSessions {
                         author,
                         message: msg.clone(),
                         model: stamp,
+                        reasoning,
                     },
                 )
                 .await?;

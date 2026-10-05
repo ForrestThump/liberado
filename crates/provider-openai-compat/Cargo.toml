@@ -17,6 +17,7 @@ tracing = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true }
+futures = { workspace = true }
 # Lets the seam tests assert on the bytes that actually leave the process, rather than on the
 # helper that builds them — the distinction that let a discarded `response_format` ship green.
 wiremock = "0.6"

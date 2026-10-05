@@ -310,6 +310,7 @@ pub(crate) async fn seed_turns(sessions: &ChatSessions, id: Ulid, pairs: &[(&str
                         author,
                         message: msg,
                         model: None,
+                        reasoning: None,
                     },
                 )
                 .await

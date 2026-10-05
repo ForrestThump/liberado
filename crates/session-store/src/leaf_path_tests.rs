@@ -14,6 +14,7 @@ fn user_node(parent: Option<Ulid>, text: &str) -> NewNode {
         author: Author::User,
         message: Message::user(text),
         model: None,
+        reasoning: None,
     }
 }
 
@@ -43,6 +44,7 @@ fn chat_header(id: Ulid) -> SessionHeader {
         awaiting_input: false,
         ephemeral: false,
         surface_mode: Default::default(),
+        agent_creator: false,
     }
 }
 
@@ -55,6 +57,7 @@ fn user_message_node(id: Ulid, conversation: Ulid, parent: Option<Ulid>) -> Mess
         created_at: Utc::now(),
         message: Message::user("x"),
         model: None,
+        reasoning: None,
     }
 }
 

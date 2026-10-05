@@ -11,6 +11,8 @@ open_items: true
 
 **Status**: Slices 1–3 are on main. Slice 1 (wire + stamp) landed in [#274](https://github.com/ForrestThump/liberado/pull/274). Slice 2 (WebUI shelves + create-path + privileged `create_agent`) landed in [#276](https://github.com/ForrestThump/liberado/pull/276). The CAS1 follow-ups — making `agent_profiles` deployment-tunable via `[chat]` in `tuning.toml` and ensuring every create / read path honours the deployment's set instead of the conservative default — landed in [#277](https://github.com/ForrestThump/liberado/pull/277). Slice 3 (chat-default hat, `chat-search` commented opt-in) landed in [#278](https://github.com/ForrestThump/liberado/pull/278). Slice 4 is operator dogfood, tracked in [`../../future-work/backlog.md`](../../future-work/backlog.md). Jev is out of scope for this document; the phase plan lives in [`jev-integration.md`](jev-integration.md) and starts only after that dogfood.
 
+Agents shelf **+** opens the singleton Agent Creator session (§6e). It does not open the specialist-profile picker from S2.
+
 **Reading**: this plan locks **Reading B** for the meaning of "agent". An
 **agent** is a long-lived specialist **chat** (a Grok-Bot-style context with
 curated tools, never terminal). It is **not** `goal.is_some()`. The stamp is
@@ -240,6 +242,10 @@ Human and privileged-face paths that **create** Agent-shelf chats (Reading B sta
 `create_with_grant`). Distinct from `delegate` / GoalSessionHub (dispatch-domain goal
 sessions, often Chat on the shelf).
 
+The WebUI picker in the "Human" list below is the S2 shape. Current Agents shelf **+**
+behavior is §6e. `POST /api/conversations` with `{profile}` stays for other clients.
+`create_agent` find-or-create (also §6e) supersedes "always `create_with_grant`".
+
 ### Human — WebUI **New Agent**
 
 1. Sidebar **New Agent** opens a picker of profiles where `GET /api/profiles` reports
@@ -282,7 +288,7 @@ sessions, often Chat on the shelf).
 | `ChatSessions::create_agent_chat` (face `create_agent` tool) | `crates/main-agent/src/sessions/agent_spawn.rs` | Same; rejects with `"profile X is not in the deployment's [chat] agent_profiles set"` (clear error, names the configuration knob). |
 | `face::create_agent::parse_create_agent_args` | `crates/main-agent/src/face/create_agent.rs` | Validates **shape only** (non-empty after trim). The policy check lives in `create_agent_chat` next to the data it consults. |
 | `SessionStore::to_conversation_header_with` (chat-lens projection) | `crates/session-store/src/types.rs` | Passed `&self.agent_profiles` on every `create`/`list`/`header` call. Legacy-row upgrade: a row whose on-disk `surface_mode` is `Chat` is projected as `Agent` iff `grant.profile ∈ agent_profiles`. |
-| `GET /api/profiles` (`agent_eligible` field) | `crates/server/src/api/chat.rs` | Reports `agent_eligible: true` iff `name ∈ config.tuning.chat.agent_profiles`. The WebUI New Agent picker uses this to filter. |
+| `GET /api/profiles` (`agent_eligible` field) | `crates/server/src/api/chat.rs` | Reports `agent_eligible: true` iff `name ∈ config.tuning.chat.agent_profiles`. Clients may still filter on it. WebUI Agents **+** does not; it opens the Agent Creator (§6e). |
 
 The free function `is_agent_profile(name)` is kept as a backward-compat shortcut for `AgentProfiles::default().is_agent(name)`; it is **not** the source of truth for any of the five sites above. Adding a deployment hat means adding it to `[chat] agent_profiles` — no code change.
 
@@ -308,6 +314,46 @@ Conformance tests pin all three: `create_agent_chat_honours_deployment_agent_pro
 5. New Chat is unchanged — default-grant Chat (no profile). `chat-default` is the named
    hat picked with `/profile`.
 6. Agent hats (`coding`, `life`, `researcher`, `operator`) and their grants are unchanged.
+
+## 6e. Agent Creator session and one session per specialist
+
+Agents shelf **+** find-or-creates one long-running **Agent Creator** conversation. It does not
+open a specialist picker and it does not bump the Chats `new_chat_nonce`. A second **+** focuses
+the same conversation. Chats shelf **+** is unchanged.
+
+The creator row is marked `agent_creator: true` on the session and conversation headers (serde
+default false, omitted when false). The title `"Agent Creator"` is display-only. Renaming the
+row does not mint a second creator. A fork clears the flag.
+
+The creator runs as profile `operator` with explicit `surface_mode: agent`, even if a deployment
+removed `operator` from `agent_profiles`. Its root system prompt is the creator prompt (not the
+shared face prompt, which says to use `delegate` only). The first visible message is the canned
+assistant line `What type of agent do you want to make?`, appended by the store with `model: None`.
+That append is not a provider turn. It is written only while every node is still `Author::System`,
+so a later open does not duplicate it and compaction does not re-seed it. Specialist rows do not
+get an opener.
+
+`POST /api/conversations` accepts `agent_creator: true`. When set, `profile` and `title` on the
+body are ignored. The response is 201 the first time and 200 when the flagged row already exists.
+
+`create_agent` is find-or-create. Identity is the case-sensitive pair `(trimmed profile, trimmed
+title)`. A missing or blank title uses the profile name, so `create_agent("coding")` and
+`create_agent("coding", "coding")` are one agent. Two titles under one profile are two agents.
+The creator row is excluded even when profile and title would match. On a hit the tool returns
+the existing id with `reused: true` and does not call `create_with_grant`. Several pre-existing
+matches resolve to the oldest `(created_at, id)`. Matching uses the projected shelf from
+`store.list()` (legacy Chat + an agent profile counts when the stored title equals the requested
+name). Renaming changes identity: the old title creates a new row; the new title reuses.
+
+The tool still cannot pass a custom capability list. "Pick tools" means pick an existing
+agent-eligible profile. The grant is whatever that profile resolves to.
+
+The header profile chip is a Chats control. On a conversation whose projected `surface_mode` is
+`agent` the chip is hidden and `/profile` does not open the picker (the agent keeps its create-time
+profile). A chat, and an empty chat with no conversation yet, still show the chip.
+
+Out of scope here: a wizard UI, notebook editor, skills substrate, custom tool grants, compaction
+of the creator transcript, and TUI shelf parity.
 
 ## 7. Follow-ups
 

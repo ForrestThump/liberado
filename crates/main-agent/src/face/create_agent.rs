@@ -1,7 +1,8 @@
 //! Privileged face tool: create a long-lived Agent-shelf chat (not `delegate`).
 //!
 //! The face agent *requests* create; the dispatcher/create path remains the sole
-//! grantor via [`ChatSessions::create_with_grant`](crate::ChatSessions::create_with_grant).
+//! grantor. A new row uses [`ChatSessions::create_with_grant`](crate::ChatSessions::create_with_grant).
+//! The same `(profile, title)` identity returns the existing conversation instead.
 //! Child capability is only whatever `Config::resolve_session_profile` returns —
 //! callers cannot pass custom tool lists. Distinct from `delegate` (GoalSessionHub
 //! dispatch-domain jobs).
@@ -13,12 +14,14 @@ use serde_json::json;
 /// Tool name the privileged face agent calls to open a specialist Agents-shelf chat.
 pub const CREATE_AGENT_TOOL_NAME: &str = "create_agent";
 
-/// Result returned to the model as JSON after a successful create.
+/// Result returned to the model as JSON after a successful create or reuse.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CreateAgentResult {
     pub conversation_id: String,
     pub profile: String,
     pub title: Option<String>,
+    /// True when an existing Agents-shelf session already had this identity.
+    pub reused: bool,
 }
 
 impl CreateAgentResult {
@@ -31,6 +34,7 @@ impl CreateAgentResult {
         if let Some(title) = &self.title {
             body["title"] = json!(title);
         }
+        body["reused"] = json!(self.reused);
         body.to_string()
     }
 }
@@ -48,23 +52,28 @@ pub trait AgentSpawner: Send + Sync {
 pub fn create_agent_tool_def() -> ToolDef {
     ToolDef::new(
         CREATE_AGENT_TOOL_NAME,
-        "Create a long-lived specialist Agent chat on the Agents shelf (Grok-Bot-style peer \
-         context). Pass an agent-eligible chat profile name. The eligible set is the deployment's \
-         `[chat] agent_profiles` (default: `coding`, `life`, `researcher`, `operator`); the create \
-         is refused with a clear error if the name is not in the deployment's set. Returns the \
-         new conversation id — it is NOT a subagent job and does not await a goal. Prefer this \
-         over delegate when the human wants an ongoing specialist conversation rather than a \
-         one-shot dispatch.",
+        "Find or create a long-lived specialist Agent chat on the Agents shelf \
+         (Grok-Bot-style peer context). Pass an agent-eligible chat profile name. \
+         That profile is the tool set: you cannot pass a custom capability list. \
+         The eligible set is the deployment's `[chat] agent_profiles` (default: \
+         `coding`, `life`, `researcher`, `operator`); the call is refused with a \
+         clear error if the name is not in the deployment's set. `title` is the \
+         agent name shown on the shelf. The same profile and title reuse the \
+         existing conversation (`reused: true`) instead of minting a second one. \
+         A blank title uses the profile name as the title. Returns the conversation \
+         id — it is NOT a subagent job and does not await a goal. Prefer this over \
+         delegate when the human wants an ongoing specialist conversation rather \
+         than a one-shot dispatch.",
         json!({
             "type": "object",
             "properties": {
                 "profile": {
                     "type": "string",
-                    "description": "Agent-eligible chat profile name (e.g. coding, life, researcher, operator — the actual eligible set is deployment-tuned via [chat] agent_profiles)."
+                    "description": "Agent-eligible chat profile name. This profile is the tool set; custom capability lists are not accepted. The eligible set is deployment-tuned via [chat] agent_profiles (default: coding, life, researcher, operator)."
                 },
                 "title": {
                     "type": "string",
-                    "description": "Optional sidebar title for the new agent conversation."
+                    "description": "Agent name shown on the Agents shelf. Same profile + title reuses the existing session. Blank means the profile name."
                 }
             },
             "required": ["profile"]
@@ -151,6 +160,7 @@ mod tests {
             conversation_id: "01ABC".into(),
             profile: "coding".into(),
             title: Some("Bot".into()),
+            reused: true,
         }
         .to_json();
         let v: serde_json::Value = serde_json::from_str(&s).unwrap();
@@ -158,5 +168,17 @@ mod tests {
         assert_eq!(v["surface_mode"], "agent");
         assert_eq!(v["profile"], "coding");
         assert_eq!(v["title"], "Bot");
+        assert_eq!(v["reused"], true);
+    }
+
+    #[test]
+    fn tool_def_says_profile_is_the_tool_set_and_reuse_is_by_title() {
+        let def = create_agent_tool_def();
+        assert!(
+            def.description
+                .contains("cannot pass a custom capability list")
+        );
+        assert!(def.description.contains("reuse"));
+        assert!(def.description.contains("title"));
     }
 }

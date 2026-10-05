@@ -592,6 +592,7 @@ async fn fork_app(
                     author: Author::User,
                     message: Message::user(*q),
                     model: None,
+                    reasoning: None,
                 },
             )
             .await
@@ -604,6 +605,7 @@ async fn fork_app(
                     author: Author::Assistant,
                     message: Message::assistant(*a),
                     model: None,
+                    reasoning: None,
                 },
             )
             .await

@@ -295,6 +295,7 @@ impl SessionStore {
             // stay `Chat` on the wire — Reading B locks the agent sense to
             // profile class, not goal-ness.
             surface_mode: new.surface_mode,
+            agent_creator: new.agent_creator,
         };
         self.append_line(id, &Record::Header(Box::new(header.clone())));
         let (bus, _) = broadcast::channel(EVENT_CHANNEL_CAPACITY);
@@ -463,6 +464,8 @@ impl SessionStore {
                 // Keep the shelf stamp: forking is a branch of the same chat-surface
                 // conversation, not a reclassification.
                 surface_mode: parent.surface_mode,
+                // A fork of the Agent Creator is an ordinary branch, not a second creator.
+                agent_creator: false,
             })
             .await;
 
@@ -478,6 +481,7 @@ impl SessionStore {
                         author: node.author.clone(),
                         message: node.message.clone(),
                         model: None,
+                        reasoning: node.reasoning.clone(),
                     },
                 )
                 .await?;
@@ -605,6 +609,7 @@ impl ConversationStore for SessionStore {
                 ephemeral: new.ephemeral,
                 // Reading B: shelf stamp is create-time / profile-class, not goal.
                 surface_mode: new.surface_mode,
+                agent_creator: new.agent_creator,
             })
             .await;
         // Chat-lens projection uses this store's `agent_profiles` so a
@@ -635,6 +640,7 @@ impl ConversationStore for SessionStore {
             created_at: Utc::now(),
             message: node.message,
             model: node.model,
+            reasoning: node.reasoning,
         };
         live.nodes.push(persisted.clone());
         drop(map);
@@ -927,6 +933,7 @@ impl SessionRecordStore for SessionStore {
                     author,
                     message,
                     model: None,
+                    reasoning: None,
                 },
             )
             .await

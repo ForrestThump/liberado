@@ -26,7 +26,10 @@ mod budget;
 mod conversation_reserve;
 mod loop_guard;
 mod mvl;
+mod reasoning_log;
 mod risk_gated;
+
+pub use reasoning_log::take as take_turn_reasoning;
 
 pub use budget::{Budget, ResourceLimit, ResourceUsage, TokenLimit, WallClockLimit};
 pub use loop_guard::{ArgMatch, LoopProfile};
@@ -39,7 +42,7 @@ use crate::loop_guard::{
 };
 
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use futures::StreamExt;
@@ -512,6 +515,10 @@ pub struct Executor {
     spill_dir: Option<PathBuf>,
     /// Byte threshold for spilling a tool result. Default 64 KiB.
     spill_max_bytes: usize,
+    /// Thinking for each assistant message this turn appended, in order.
+    /// Not sent to the model. `with_model` starts a fresh log so concurrent
+    /// sessions that clone the shared executor do not share one vec.
+    reasoning: Arc<Mutex<Vec<Option<String>>>>,
     /// Model for the calls this executor makes. `None` = the provider's own.
     ///
     /// Held here rather than on the provider because a provider is shared by every session, and a
@@ -757,6 +764,7 @@ impl Executor {
             mvl: None,
             spill_dir: None,
             spill_max_bytes: 64 * 1024,
+            reasoning: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
@@ -912,6 +920,7 @@ impl Executor {
     pub fn with_model(&self, model: Option<String>) -> Self {
         Self {
             model,
+            reasoning: Arc::new(Mutex::new(Vec::new())),
             ..self.clone()
         }
     }
@@ -1022,6 +1031,7 @@ impl Executor {
         mode: Mode,
     ) -> Result<Terminal, ExecError> {
         self.mvl_start(Some(&task.goal));
+        reasoning_log::clear(&self.reasoning);
         let mut messages = vec![Message::system(task.instructions), Message::user(task.goal)];
 
         let mut tools = runtime.catalog();
@@ -1086,6 +1096,7 @@ impl Executor {
             // Conversational mode gets no scratchpad this pass (see liberado-scratchpad's module
             // docs) — the call site is ready for it, just not enabled yet.
             let mut scratchpad: Option<Scratchpad> = None;
+            reasoning_log::clear(&self.reasoning);
             self.mvl_start(None);
             let result = self
                 .run_loop(
@@ -1135,6 +1146,7 @@ impl Executor {
             budget = self.budget.max_turns,
         );
         let _enter = span.enter();
+        reasoning_log::clear(&self.reasoning);
         tracing::debug!(model = %self.active_model(), "starting conversational stream turn");
         let mut tools = runtime.catalog();
         self.mvl_start(None);
@@ -1160,7 +1172,10 @@ impl Executor {
                             // A dropped receiver (client disconnected) just means no one is listening.
                             let _ = events.send(AgentEvent::Token(text)).await;
                         }
-                        StreamItem::Done(resp) => response = Some(resp),
+                        StreamItem::Done(resp) => {
+                            reasoning_log::note(&self.reasoning, resp.reasoning.clone());
+                            response = Some(resp);
+                        }
                     }
                 }
                 let response =
@@ -1363,6 +1378,7 @@ impl Executor {
 
             // Record the model's turn (content and/or tool calls) so it sees its own history.
             messages.push(assistant_turn(&response));
+            reasoning_log::note(&self.reasoning, response.reasoning.clone());
 
             if response.tool_calls.is_empty() {
                 if let Some(terminal) = self.handle_prose(
@@ -1917,6 +1933,7 @@ impl Executor {
             tool_calls: invocations.clone(),
             tool_call_id: None,
         });
+        reasoning_log::note(&self.reasoning, None);
         for inv in &invocations {
             let span = tracing::debug_span!("seed_call", tool = %inv.name, id = %inv.id);
             let result = async {
