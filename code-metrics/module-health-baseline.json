@@ -4356,10 +4356,10 @@
     "cyclomatic": 15
   },
   "crates/webui/src/components/chat.rs": {
-    "ploc": 964,
+    "ploc": 963,
     "lloc": 284,
     "functions": 65,
-    "cyclomatic": 165
+    "cyclomatic": 164
   },
   "crates/webui/src/components/chat_fold.rs": {
     "ploc": 156,
