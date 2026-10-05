@@ -245,6 +245,12 @@
     "functions": 11,
     "cyclomatic": 55
   },
+  "crates/agent-workspace/src/sandbox_tests.rs": {
+    "ploc": 41,
+    "lloc": 18,
+    "functions": 4,
+    "cyclomatic": 5
+  },
   "crates/agent-workspace/src/tests.rs": {
     "ploc": 493,
     "lloc": 270,
