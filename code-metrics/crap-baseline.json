@@ -2057,7 +2057,7 @@
     {
       "file": "crates/agent-workspace/src/entries.rs",
       "function": "bytes_of",
-      "line": 75,
+      "line": 77,
       "cyclomatic": 2.0,
       "coverage": 100.0,
       "crap": 2.0,
@@ -2066,7 +2066,7 @@
     {
       "file": "crates/agent-workspace/src/entries.rs",
       "function": "collect_entries",
-      "line": 40,
+      "line": 42,
       "cyclomatic": 4.0,
       "coverage": 100.0,
       "crap": 4.0,
@@ -2075,7 +2075,7 @@
     {
       "file": "crates/agent-workspace/src/entries.rs",
       "function": "dir_entry",
-      "line": 55,
+      "line": 57,
       "cyclomatic": 2.0,
       "coverage": 100.0,
       "crap": 2.0,
@@ -2083,8 +2083,26 @@
     },
     {
       "file": "crates/agent-workspace/src/entries.rs",
+      "function": "dir_link",
+      "line": 111,
+      "cyclomatic": 2.0,
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "liberado-agent-workspace"
+    },
+    {
+      "file": "crates/agent-workspace/src/entries.rs",
+      "function": "dir_link",
+      "line": 120,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "liberado-agent-workspace"
+    },
+    {
+      "file": "crates/agent-workspace/src/entries.rs",
       "function": "entry_kind",
-      "line": 65,
+      "line": 67,
       "cyclomatic": 3.0,
       "coverage": 100.0,
       "crap": 3.0,
@@ -2092,17 +2110,35 @@
     },
     {
       "file": "crates/agent-workspace/src/entries.rs",
-      "function": "is_file_or_link",
-      "line": 94,
-      "cyclomatic": 2.0,
+      "function": "final_exists",
+      "line": 185,
+      "cyclomatic": 1.0,
       "coverage": 100.0,
-      "crap": 2.0,
+      "crap": 1.0,
+      "crate": "liberado-agent-workspace"
+    },
+    {
+      "file": "crates/agent-workspace/src/entries.rs",
+      "function": "is_dir_link",
+      "line": 106,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "liberado-agent-workspace"
+    },
+    {
+      "file": "crates/agent-workspace/src/entries.rs",
+      "function": "is_file_or_link",
+      "line": 96,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
       "crate": "liberado-agent-workspace"
     },
     {
       "file": "crates/agent-workspace/src/entries.rs",
       "function": "list_directory",
-      "line": 24,
+      "line": 26,
       "cyclomatic": 3.0,
       "coverage": 100.0,
       "crap": 3.0,
@@ -2111,7 +2147,7 @@
     {
       "file": "crates/agent-workspace/src/entries.rs",
       "function": "read_dir_entries",
-      "line": 48,
+      "line": 50,
       "cyclomatic": 2.0,
       "coverage": 100.0,
       "crap": 2.0,
@@ -2119,8 +2155,44 @@
     },
     {
       "file": "crates/agent-workspace/src/entries.rs",
+      "function": "real_dir",
+      "line": 141,
+      "cyclomatic": 3.0,
+      "coverage": 100.0,
+      "crap": 3.0,
+      "crate": "liberado-agent-workspace"
+    },
+    {
+      "file": "crates/agent-workspace/src/entries.rs",
+      "function": "reject_real_dir",
+      "line": 134,
+      "cyclomatic": 3.0,
+      "coverage": 100.0,
+      "crap": 3.0,
+      "crate": "liberado-agent-workspace"
+    },
+    {
+      "file": "crates/agent-workspace/src/entries.rs",
+      "function": "removable_link",
+      "line": 161,
+      "cyclomatic": 2.0,
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "liberado-agent-workspace"
+    },
+    {
+      "file": "crates/agent-workspace/src/entries.rs",
+      "function": "removable_without_recursion",
+      "line": 100,
+      "cyclomatic": 3.0,
+      "coverage": 100.0,
+      "crap": 3.0,
+      "crate": "liberado-agent-workspace"
+    },
+    {
+      "file": "crates/agent-workspace/src/entries.rs",
       "function": "remove_contained",
-      "line": 83,
+      "line": 85,
       "cyclomatic": 4.0,
       "coverage": 80.0,
       "crap": 4.128,
@@ -2129,7 +2201,7 @@
     {
       "file": "crates/agent-workspace/src/entries.rs",
       "function": "remove_directory",
-      "line": 98,
+      "line": 197,
       "cyclomatic": 4.0,
       "coverage": 100.0,
       "crap": 4.0,
@@ -2137,17 +2209,71 @@
     },
     {
       "file": "crates/agent-workspace/src/entries.rs",
-      "function": "require_directory",
-      "line": 31,
+      "function": "remove_file_or_link",
+      "line": 124,
+      "cyclomatic": 2.0,
+      "coverage": 80.0,
+      "crap": 2.032,
+      "crate": "liberado-agent-workspace"
+    },
+    {
+      "file": "crates/agent-workspace/src/entries.rs",
+      "function": "remove_final",
+      "line": 189,
+      "cyclomatic": 3.0,
+      "coverage": 85.71428571428571,
+      "crap": 3.0262390670553936,
+      "crate": "liberado-agent-workspace"
+    },
+    {
+      "file": "crates/agent-workspace/src/entries.rs",
+      "function": "replace_existing",
+      "line": 177,
+      "cyclomatic": 3.0,
+      "coverage": 71.42857142857143,
+      "crap": 3.2099125364431487,
+      "crate": "liberado-agent-workspace"
+    },
+    {
+      "file": "crates/agent-workspace/src/entries.rs",
+      "function": "replace_file",
+      "line": 170,
       "cyclomatic": 3.0,
       "coverage": 100.0,
       "crap": 3.0,
       "crate": "liberado-agent-workspace"
     },
     {
+      "file": "crates/agent-workspace/src/entries.rs",
+      "function": "require_directory",
+      "line": 33,
+      "cyclomatic": 3.0,
+      "coverage": 100.0,
+      "crap": 3.0,
+      "crate": "liberado-agent-workspace"
+    },
+    {
+      "file": "crates/agent-workspace/src/entries.rs",
+      "function": "unlink_if_link",
+      "line": 152,
+      "cyclomatic": 5.0,
+      "coverage": 85.71428571428571,
+      "crap": 5.072886297376093,
+      "crate": "liberado-agent-workspace"
+    },
+    {
+      "file": "crates/agent-workspace/src/entries.rs",
+      "function": "write_replacing_link",
+      "line": 147,
+      "cyclomatic": 2.0,
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "liberado-agent-workspace"
+    },
+    {
       "file": "crates/agent-workspace/src/error.rs",
       "function": "WorkspaceError::io",
-      "line": 47,
+      "line": 49,
       "cyclomatic": 1.0,
       "coverage": 0.0,
       "crap": 2.0,
@@ -2156,7 +2282,7 @@
     {
       "file": "crates/agent-workspace/src/error.rs",
       "function": "WorkspaceError::missing",
-      "line": 52,
+      "line": 54,
       "cyclomatic": 2.0,
       "coverage": 80.0,
       "crap": 2.032,
@@ -2183,10 +2309,46 @@
     {
       "file": "crates/agent-workspace/src/quota.rs",
       "function": "admit",
-      "line": 35,
+      "line": 46,
       "cyclomatic": 2.0,
       "coverage": 100.0,
       "crap": 2.0,
+      "crate": "liberado-agent-workspace"
+    },
+    {
+      "file": "crates/agent-workspace/src/quota.rs",
+      "function": "admit_write",
+      "line": 59,
+      "cyclomatic": 2.0,
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "liberado-agent-workspace"
+    },
+    {
+      "file": "crates/agent-workspace/src/quota.rs",
+      "function": "bytes_if_replaced",
+      "line": 136,
+      "cyclomatic": 3.0,
+      "coverage": 100.0,
+      "crap": 3.0,
+      "crate": "liberado-agent-workspace"
+    },
+    {
+      "file": "crates/agent-workspace/src/quota.rs",
+      "function": "charge",
+      "line": 85,
+      "cyclomatic": 4.0,
+      "coverage": 100.0,
+      "crap": 4.0,
+      "crate": "liberado-agent-workspace"
+    },
+    {
+      "file": "crates/agent-workspace/src/quota.rs",
+      "function": "entry_absent",
+      "line": 109,
+      "cyclomatic": 4.0,
+      "coverage": 83.33333333333334,
+      "crap": 4.0740740740740735,
       "crate": "liberado-agent-workspace"
     },
     {
@@ -2200,8 +2362,62 @@
     },
     {
       "file": "crates/agent-workspace/src/quota.rs",
+      "function": "gate_download",
+      "line": 73,
+      "cyclomatic": 3.0,
+      "coverage": 100.0,
+      "crap": 3.0,
+      "crate": "liberado-agent-workspace"
+    },
+    {
+      "file": "crates/agent-workspace/src/quota.rs",
+      "function": "link_entry",
+      "line": 41,
+      "cyclomatic": 2.0,
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "liberado-agent-workspace"
+    },
+    {
+      "file": "crates/agent-workspace/src/quota.rs",
+      "function": "missing_components",
+      "line": 96,
+      "cyclomatic": 4.0,
+      "coverage": 100.0,
+      "crap": 4.0,
+      "crate": "liberado-agent-workspace"
+    },
+    {
+      "file": "crates/agent-workspace/src/quota.rs",
+      "function": "new_entry_cost",
+      "line": 92,
+      "cyclomatic": 2.0,
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "liberado-agent-workspace"
+    },
+    {
+      "file": "crates/agent-workspace/src/quota.rs",
+      "function": "replaced_bytes",
+      "line": 128,
+      "cyclomatic": 4.0,
+      "coverage": 83.33333333333334,
+      "crap": 4.0740740740740735,
+      "crate": "liberado-agent-workspace"
+    },
+    {
+      "file": "crates/agent-workspace/src/quota.rs",
+      "function": "replaced_link",
+      "line": 146,
+      "cyclomatic": 2.0,
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "liberado-agent-workspace"
+    },
+    {
+      "file": "crates/agent-workspace/src/quota.rs",
       "function": "usage",
-      "line": 11,
+      "line": 17,
       "cyclomatic": 2.0,
       "coverage": 100.0,
       "crap": 2.0,
@@ -2210,7 +2426,7 @@
     {
       "file": "crates/agent-workspace/src/quota.rs",
       "function": "walk",
-      "line": 17,
+      "line": 23,
       "cyclomatic": 9.0,
       "coverage": 100.0,
       "crap": 9.0,
@@ -2219,7 +2435,7 @@
     {
       "file": "crates/agent-workspace/src/sandbox.rs",
       "function": "accept_directory",
-      "line": 137,
+      "line": 170,
       "cyclomatic": 3.0,
       "coverage": 100.0,
       "crap": 3.0,
@@ -2228,7 +2444,7 @@
     {
       "file": "crates/agent-workspace/src/sandbox.rs",
       "function": "accept_plain_file",
-      "line": 67,
+      "line": 100,
       "cyclomatic": 4.0,
       "coverage": 100.0,
       "crap": 4.0,
@@ -2237,7 +2453,7 @@
     {
       "file": "crates/agent-workspace/src/sandbox.rs",
       "function": "contained",
-      "line": 205,
+      "line": 238,
       "cyclomatic": 2.0,
       "coverage": 80.0,
       "crap": 2.032,
@@ -2246,7 +2462,7 @@
     {
       "file": "crates/agent-workspace/src/sandbox.rs",
       "function": "create_dirs",
-      "line": 107,
+      "line": 140,
       "cyclomatic": 4.0,
       "coverage": 100.0,
       "crap": 4.0,
@@ -2255,7 +2471,7 @@
     {
       "file": "crates/agent-workspace/src/sandbox.rs",
       "function": "dot_name",
-      "line": 89,
+      "line": 122,
       "cyclomatic": 2.0,
       "coverage": 100.0,
       "crap": 2.0,
@@ -2273,16 +2489,25 @@
     {
       "file": "crates/agent-workspace/src/sandbox.rs",
       "function": "follow_symlink",
-      "line": 189,
+      "line": 222,
       "cyclomatic": 7.0,
-      "coverage": 78.57142857142857,
-      "crap": 7.482142857142858,
+      "coverage": 92.85714285714286,
+      "crap": 7.017857142857143,
       "crate": "liberado-agent-workspace"
     },
     {
       "file": "crates/agent-workspace/src/sandbox.rs",
       "function": "normal_name",
-      "line": 116,
+      "line": 149,
+      "cyclomatic": 3.0,
+      "coverage": 100.0,
+      "crap": 3.0,
+      "crate": "liberado-agent-workspace"
+    },
+    {
+      "file": "crates/agent-workspace/src/sandbox.rs",
+      "function": "normal_names",
+      "line": 49,
       "cyclomatic": 3.0,
       "coverage": 100.0,
       "crap": 3.0,
@@ -2291,7 +2516,7 @@
     {
       "file": "crates/agent-workspace/src/sandbox.rs",
       "function": "parent_components",
-      "line": 94,
+      "line": 127,
       "cyclomatic": 4.0,
       "coverage": 100.0,
       "crap": 4.0,
@@ -2300,7 +2525,7 @@
     {
       "file": "crates/agent-workspace/src/sandbox.rs",
       "function": "plain_name",
-      "line": 82,
+      "line": 115,
       "cyclomatic": 3.0,
       "coverage": 100.0,
       "crap": 3.0,
@@ -2309,7 +2534,7 @@
     {
       "file": "crates/agent-workspace/src/sandbox.rs",
       "function": "prepare_dir",
-      "line": 127,
+      "line": 160,
       "cyclomatic": 4.0,
       "coverage": 85.71428571428571,
       "crap": 4.0466472303206995,
@@ -2317,8 +2542,26 @@
     },
     {
       "file": "crates/agent-workspace/src/sandbox.rs",
+      "function": "push_final",
+      "line": 67,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "liberado-agent-workspace"
+    },
+    {
+      "file": "crates/agent-workspace/src/sandbox.rs",
+      "function": "push_followed",
+      "line": 59,
+      "cyclomatic": 4.0,
+      "coverage": 100.0,
+      "crap": 4.0,
+      "crate": "liberado-agent-workspace"
+    },
+    {
+      "file": "crates/agent-workspace/src/sandbox.rs",
       "function": "reject_alias",
-      "line": 178,
+      "line": 211,
       "cyclomatic": 3.0,
       "coverage": 66.66666666666666,
       "crap": 3.333333333333334,
@@ -2327,16 +2570,16 @@
     {
       "file": "crates/agent-workspace/src/sandbox.rs",
       "function": "relative_path",
-      "line": 147,
+      "line": 180,
       "cyclomatic": 11.0,
-      "coverage": 91.30434782608695,
-      "crap": 11.079559464124271,
+      "coverage": 95.65217391304348,
+      "crap": 11.009944933015534,
       "crate": "liberado-agent-workspace"
     },
     {
       "file": "crates/agent-workspace/src/sandbox.rs",
       "function": "require_plain_dest",
-      "line": 57,
+      "line": 90,
       "cyclomatic": 3.0,
       "coverage": 100.0,
       "crap": 3.0,
@@ -2345,16 +2588,349 @@
     {
       "file": "crates/agent-workspace/src/sandbox.rs",
       "function": "resolve",
-      "line": 16,
-      "cyclomatic": 9.0,
-      "coverage": 82.35294117647058,
-      "crap": 9.445145532261348,
+      "line": 19,
+      "cyclomatic": 4.0,
+      "coverage": 100.0,
+      "crap": 4.0,
+      "crate": "liberado-agent-workspace"
+    },
+    {
+      "file": "crates/agent-workspace/src/sandbox.rs",
+      "function": "resolve_following",
+      "line": 28,
+      "cyclomatic": 5.0,
+      "coverage": 100.0,
+      "crap": 5.0,
+      "crate": "liberado-agent-workspace"
+    },
+    {
+      "file": "crates/agent-workspace/src/sandbox.rs",
+      "function": "walk_components",
+      "line": 37,
+      "cyclomatic": 3.0,
+      "coverage": 88.88888888888889,
+      "crap": 3.0123456790123457,
+      "crate": "liberado-agent-workspace"
+    },
+    {
+      "file": "crates/agent-workspace/src/ssrf.rs",
+      "function": "Pins::map",
+      "line": 145,
+      "cyclomatic": 3.0,
+      "coverage": 80.0,
+      "crap": 3.072,
+      "crate": "liberado-agent-workspace"
+    },
+    {
+      "file": "crates/agent-workspace/src/ssrf.rs",
+      "function": "Pins::new",
+      "line": 135,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "liberado-agent-workspace"
+    },
+    {
+      "file": "crates/agent-workspace/src/ssrf.rs",
+      "function": "Pins::pin",
+      "line": 141,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "liberado-agent-workspace"
+    },
+    {
+      "file": "crates/agent-workspace/src/ssrf.rs",
+      "function": "Pins::pinned",
+      "line": 152,
+      "cyclomatic": 3.0,
+      "coverage": 100.0,
+      "crap": 3.0,
+      "crate": "liberado-agent-workspace"
+    },
+    {
+      "file": "crates/agent-workspace/src/ssrf.rs",
+      "function": "Pins::resolve",
+      "line": 171,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "liberado-agent-workspace"
+    },
+    {
+      "file": "crates/agent-workspace/src/ssrf.rs",
+      "function": "addresses",
+      "line": 212,
+      "cyclomatic": 3.0,
+      "coverage": 88.88888888888889,
+      "crap": 3.0123456790123457,
+      "crate": "liberado-agent-workspace"
+    },
+    {
+      "file": "crates/agent-workspace/src/ssrf.rs",
+      "function": "blocked_for",
+      "line": 256,
+      "cyclomatic": 4.0,
+      "coverage": 100.0,
+      "crap": 4.0,
+      "crate": "liberado-agent-workspace"
+    },
+    {
+      "file": "crates/agent-workspace/src/ssrf.rs",
+      "function": "blocked_v4",
+      "line": 40,
+      "cyclomatic": 7.0,
+      "coverage": 100.0,
+      "crap": 7.0,
+      "crate": "liberado-agent-workspace"
+    },
+    {
+      "file": "crates/agent-workspace/src/ssrf.rs",
+      "function": "blocked_v6",
+      "line": 60,
+      "cyclomatic": 7.0,
+      "coverage": 100.0,
+      "crap": 7.0,
+      "crate": "liberado-agent-workspace"
+    },
+    {
+      "file": "crates/agent-workspace/src/ssrf.rs",
+      "function": "cgnat",
+      "line": 55,
+      "cyclomatic": 2.0,
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "liberado-agent-workspace"
+    },
+    {
+      "file": "crates/agent-workspace/src/ssrf.rs",
+      "function": "checked_host",
+      "line": 187,
+      "cyclomatic": 4.0,
+      "coverage": 100.0,
+      "crap": 4.0,
+      "crate": "liberado-agent-workspace"
+    },
+    {
+      "file": "crates/agent-workspace/src/ssrf.rs",
+      "function": "client",
+      "line": 278,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "liberado-agent-workspace"
+    },
+    {
+      "file": "crates/agent-workspace/src/ssrf.rs",
+      "function": "compatible_v4",
+      "line": 119,
+      "cyclomatic": 3.0,
+      "coverage": 83.33333333333334,
+      "crap": 3.0416666666666665,
+      "crate": "liberado-agent-workspace"
+    },
+    {
+      "file": "crates/agent-workspace/src/ssrf.rs",
+      "function": "embedded_v4",
+      "line": 70,
+      "cyclomatic": 2.0,
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "liberado-agent-workspace"
+    },
+    {
+      "file": "crates/agent-workspace/src/ssrf.rs",
+      "function": "has_blocked",
+      "line": 247,
+      "cyclomatic": 3.0,
+      "coverage": 100.0,
+      "crap": 3.0,
+      "crate": "liberado-agent-workspace"
+    },
+    {
+      "file": "crates/agent-workspace/src/ssrf.rs",
+      "function": "host_name",
+      "line": 205,
+      "cyclomatic": 3.0,
+      "coverage": 80.0,
+      "crap": 3.072,
+      "crate": "liberado-agent-workspace"
+    },
+    {
+      "file": "crates/agent-workspace/src/ssrf.rs",
+      "function": "http_url",
+      "line": 197,
+      "cyclomatic": 4.0,
+      "coverage": 71.42857142857143,
+      "crap": 4.373177842565598,
+      "crate": "liberado-agent-workspace"
+    },
+    {
+      "file": "crates/agent-workspace/src/ssrf.rs",
+      "function": "is_blocked_ip",
+      "line": 33,
+      "cyclomatic": 3.0,
+      "coverage": 100.0,
+      "crap": 3.0,
+      "crate": "liberado-agent-workspace"
+    },
+    {
+      "file": "crates/agent-workspace/src/ssrf.rs",
+      "function": "literal_ip",
+      "line": 223,
+      "cyclomatic": 4.0,
+      "coverage": 100.0,
+      "crap": 4.0,
+      "crate": "liberado-agent-workspace"
+    },
+    {
+      "file": "crates/agent-workspace/src/ssrf.rs",
+      "function": "lookup",
+      "line": 231,
+      "cyclomatic": 3.0,
+      "coverage": 87.5,
+      "crap": 3.017578125,
+      "crate": "liberado-agent-workspace"
+    },
+    {
+      "file": "crates/agent-workspace/src/ssrf.rs",
+      "function": "loopback_ip",
+      "line": 266,
+      "cyclomatic": 4.0,
+      "coverage": 100.0,
+      "crap": 4.0,
+      "crate": "liberado-agent-workspace"
+    },
+    {
+      "file": "crates/agent-workspace/src/ssrf.rs",
+      "function": "mapped_loopback",
+      "line": 274,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "liberado-agent-workspace"
+    },
+    {
+      "file": "crates/agent-workspace/src/ssrf.rs",
+      "function": "mapped_or_compatible",
+      "line": 77,
+      "cyclomatic": 2.0,
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "liberado-agent-workspace"
+    },
+    {
+      "file": "crates/agent-workspace/src/ssrf.rs",
+      "function": "nat64_or_6to4",
+      "line": 84,
+      "cyclomatic": 2.0,
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "liberado-agent-workspace"
+    },
+    {
+      "file": "crates/agent-workspace/src/ssrf.rs",
+      "function": "nat64_v4",
+      "line": 92,
+      "cyclomatic": 2.0,
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "liberado-agent-workspace"
+    },
+    {
+      "file": "crates/agent-workspace/src/ssrf.rs",
+      "function": "on_redirect",
+      "line": 296,
+      "cyclomatic": 3.0,
+      "coverage": 92.3076923076923,
+      "crap": 3.0040964952207556,
+      "crate": "liberado-agent-workspace"
+    },
+    {
+      "file": "crates/agent-workspace/src/ssrf.rs",
+      "function": "policy",
+      "line": 292,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "liberado-agent-workspace"
+    },
+    {
+      "file": "crates/agent-workspace/src/ssrf.rs",
+      "function": "refuse_if_blocked",
+      "line": 240,
+      "cyclomatic": 2.0,
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "liberado-agent-workspace"
+    },
+    {
+      "file": "crates/agent-workspace/src/ssrf.rs",
+      "function": "site_local",
+      "line": 114,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "liberado-agent-workspace"
+    },
+    {
+      "file": "crates/agent-workspace/src/ssrf.rs",
+      "function": "sixto4_v4",
+      "line": 105,
+      "cyclomatic": 2.0,
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "liberado-agent-workspace"
+    },
+    {
+      "file": "crates/agent-workspace/src/ssrf.rs",
+      "function": "sockets",
+      "line": 162,
+      "cyclomatic": 2.0,
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "liberado-agent-workspace"
+    },
+    {
+      "file": "crates/agent-workspace/src/ssrf.rs",
+      "function": "this_network",
+      "line": 51,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "liberado-agent-workspace"
+    },
+    {
+      "file": "crates/agent-workspace/src/ssrf.rs",
+      "function": "ula",
+      "line": 126,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "liberado-agent-workspace"
+    },
+    {
+      "file": "crates/agent-workspace/src/ssrf.rs",
+      "function": "vet_and_pin",
+      "line": 176,
+      "cyclomatic": 2.0,
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "liberado-agent-workspace"
+    },
+    {
+      "file": "crates/agent-workspace/src/ssrf.rs",
+      "function": "vetted_host",
+      "line": 182,
+      "cyclomatic": 2.0,
+      "coverage": 100.0,
+      "crap": 2.0,
       "crate": "liberado-agent-workspace"
     },
     {
       "file": "crates/agent-workspace/src/tools.rs",
       "function": "WorkspaceRuntime::catalog",
-      "line": 219,
+      "line": 220,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -2363,7 +2939,7 @@
     {
       "file": "crates/agent-workspace/src/tools.rs",
       "function": "WorkspaceRuntime::invoke",
-      "line": 225,
+      "line": 226,
       "cyclomatic": 3.0,
       "coverage": 75.0,
       "crap": 3.140625,
@@ -2372,7 +2948,7 @@
     {
       "file": "crates/agent-workspace/src/tools.rs",
       "function": "WorkspaceRuntime::is_read_only",
-      "line": 239,
+      "line": 240,
       "cyclomatic": 4.0,
       "coverage": 83.33333333333334,
       "crap": 4.0740740740740735,
@@ -2381,7 +2957,7 @@
     {
       "file": "crates/agent-workspace/src/tools.rs",
       "function": "WorkspaceRuntime::new",
-      "line": 212,
+      "line": 213,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -2390,7 +2966,7 @@
     {
       "file": "crates/agent-workspace/src/tools.rs",
       "function": "WorkspaceRuntime::parks_for_human",
-      "line": 247,
+      "line": 248,
       "cyclomatic": 2.0,
       "coverage": 0.0,
       "crap": 6.0,
@@ -2425,8 +3001,17 @@
     },
     {
       "file": "crates/agent-workspace/src/tools.rs",
+      "function": "downloaded_message",
+      "line": 156,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "liberado-agent-workspace"
+    },
+    {
+      "file": "crates/agent-workspace/src/tools.rs",
       "function": "format_list",
-      "line": 159,
+      "line": 160,
       "cyclomatic": 6.0,
       "coverage": 50.0,
       "crap": 10.5,
@@ -2453,7 +3038,7 @@
     {
       "file": "crates/agent-workspace/src/tools.rs",
       "function": "optional_path",
-      "line": 176,
+      "line": 177,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -2480,7 +3065,7 @@
     {
       "file": "crates/agent-workspace/src/tools.rs",
       "function": "required_content",
-      "line": 189,
+      "line": 190,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -2489,7 +3074,7 @@
     {
       "file": "crates/agent-workspace/src/tools.rs",
       "function": "required_path",
-      "line": 185,
+      "line": 186,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -2498,7 +3083,7 @@
     {
       "file": "crates/agent-workspace/src/tools.rs",
       "function": "required_str",
-      "line": 196,
+      "line": 197,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -2534,37 +3119,55 @@
     {
       "file": "crates/agent-workspace/src/workspace.rs",
       "function": "AgentWorkspace::delete",
-      "line": 163,
-      "cyclomatic": 5.0,
+      "line": 161,
+      "cyclomatic": 4.0,
       "coverage": 100.0,
-      "crap": 5.0,
+      "crap": 4.0,
       "crate": "liberado-agent-workspace"
     },
     {
       "file": "crates/agent-workspace/src/workspace.rs",
       "function": "AgentWorkspace::destination",
-      "line": 251,
-      "cyclomatic": 5.0,
-      "coverage": 88.88888888888889,
-      "crap": 5.034293552812072,
+      "line": 261,
+      "cyclomatic": 4.0,
+      "coverage": 87.5,
+      "crap": 4.03125,
       "crate": "liberado-agent-workspace"
     },
     {
       "file": "crates/agent-workspace/src/workspace.rs",
       "function": "AgentWorkspace::download_url",
-      "line": 178,
-      "cyclomatic": 12.0,
-      "coverage": 95.65217391304348,
-      "crap": 12.011835292183775,
+      "line": 174,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "liberado-agent-workspace"
+    },
+    {
+      "file": "crates/agent-workspace/src/workspace.rs",
+      "function": "AgentWorkspace::download_url_allowing_local",
+      "line": 181,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
       "crate": "liberado-agent-workspace"
     },
     {
       "file": "crates/agent-workspace/src/workspace.rs",
       "function": "AgentWorkspace::existing_file",
-      "line": 239,
+      "line": 249,
       "cyclomatic": 6.0,
       "coverage": 80.0,
       "crap": 6.288,
+      "crate": "liberado-agent-workspace"
+    },
+    {
+      "file": "crates/agent-workspace/src/workspace.rs",
+      "function": "AgentWorkspace::fetch",
+      "line": 189,
+      "cyclomatic": 10.0,
+      "coverage": 95.45454545454544,
+      "crap": 10.00939143501127,
       "crate": "liberado-agent-workspace"
     },
     {
@@ -2597,7 +3200,7 @@
     {
       "file": "crates/agent-workspace/src/workspace.rs",
       "function": "AgentWorkspace::lock",
-      "line": 262,
+      "line": 270,
       "cyclomatic": 3.0,
       "coverage": 100.0,
       "crap": 3.0,
@@ -2633,7 +3236,7 @@
     {
       "file": "crates/agent-workspace/src/workspace.rs",
       "function": "AgentWorkspace::store_reader",
-      "line": 205,
+      "line": 215,
       "cyclomatic": 10.0,
       "coverage": 100.0,
       "crap": 10.0,
@@ -2652,15 +3255,15 @@
       "file": "crates/agent-workspace/src/workspace.rs",
       "function": "AgentWorkspace::write_text",
       "line": 151,
-      "cyclomatic": 8.0,
+      "cyclomatic": 6.0,
       "coverage": 100.0,
-      "crap": 8.0,
+      "crap": 6.0,
       "crate": "liberado-agent-workspace"
     },
     {
       "file": "crates/agent-workspace/src/workspace.rs",
       "function": "Incoming::drop",
-      "line": 289,
+      "line": 297,
       "cyclomatic": 2.0,
       "coverage": 100.0,
       "crap": 2.0,
@@ -2669,7 +3272,7 @@
     {
       "file": "crates/agent-workspace/src/workspace.rs",
       "function": "LockGuard::drop",
-      "line": 278,
+      "line": 286,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -2696,7 +3299,7 @@
     {
       "file": "crates/agent-workspace/src/workspace.rs",
       "function": "bind_identity",
-      "line": 296,
+      "line": 304,
       "cyclomatic": 7.0,
       "coverage": 93.75,
       "crap": 7.011962890625,
@@ -2705,34 +3308,25 @@
     {
       "file": "crates/agent-workspace/src/workspace.rs",
       "function": "download_error",
-      "line": 330,
+      "line": 326,
       "cyclomatic": 3.0,
-      "coverage": 0.0,
-      "crap": 12.0,
+      "coverage": 66.66666666666666,
+      "crap": 3.333333333333334,
       "crate": "liberado-agent-workspace"
     },
     {
       "file": "crates/agent-workspace/src/workspace.rs",
-      "function": "redirect_policy",
-      "line": 320,
+      "function": "mapped_download_error",
+      "line": 337,
       "cyclomatic": 4.0,
-      "coverage": 75.0,
-      "crap": 4.25,
-      "crate": "liberado-agent-workspace"
-    },
-    {
-      "file": "crates/agent-workspace/src/workspace.rs",
-      "function": "replace_file",
-      "line": 357,
-      "cyclomatic": 3.0,
-      "coverage": 100.0,
-      "crap": 3.0,
+      "coverage": 66.66666666666666,
+      "crap": 4.5925925925925934,
       "crate": "liberado-agent-workspace"
     },
     {
       "file": "crates/agent-workspace/src/workspace.rs",
       "function": "validate_url",
-      "line": 341,
+      "line": 345,
       "cyclomatic": 4.0,
       "coverage": 92.3076923076923,
       "crap": 4.007282658170232,
@@ -46525,11 +47119,11 @@
     }
   ],
   "diagnostics": {
-    "analyzed_files": 669,
-    "lcov_files": 471,
-    "matched_files": 469,
+    "analyzed_files": 673,
+    "lcov_files": 472,
+    "matched_files": 470,
     "source_only": {
-      "count": 200,
+      "count": 203,
       "examples": [
         "crates/acp-bridge/src/coding_run_tests.rs",
         "crates/acp-bridge/src/grant_tests.rs",

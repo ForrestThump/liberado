@@ -12,7 +12,7 @@ use std::path::Path;
 use crate::error::WorkspaceError;
 
 /// Bytes charged for one file, directory, or symlink, before its content length.
-pub(crate) const ENTRY_COST: u64 = 4096;
+pub const ENTRY_COST: u64 = 4096;
 
 pub(crate) fn usage(files: &Path) -> Result<u64, WorkspaceError> {
     let mut total = 0u64;

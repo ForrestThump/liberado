@@ -24,6 +24,7 @@ mod tools;
 mod workspace;
 
 pub use error::WorkspaceError;
+pub use quota::ENTRY_COST;
 pub use tools::{
     TOOL_DELETE, TOOL_DOWNLOAD, TOOL_LIST, TOOL_READ, TOOL_WRITE, WORKSPACE_TOOL_NAMES,
     WorkspaceRuntime, apply, is_workspace_tool, tool_defs,

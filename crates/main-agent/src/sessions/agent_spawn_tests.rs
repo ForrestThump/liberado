@@ -400,12 +400,15 @@ async fn non_creator_profile_gets_no_spawner_even_with_handle() {
 }
 
 /// The configured cap is the cap the face tools enforce, and two sessions do not share a
-/// directory. A hardcoded 1 GiB cap, or a missing `attach_workspace`, fails this test.
+/// directory. A hardcoded 1 GiB cap, or a missing `attach_workspace`, fails this test. The
+/// cap must include [`liberado_agent_workspace::ENTRY_COST`], which every new file or
+/// directory pays before its content length is added.
 #[tokio::test]
 async fn face_workspace_enforces_the_configured_cap_per_session() {
     let dir = tempfile::tempdir().unwrap();
     let files = tempfile::tempdir().unwrap();
     let store = Arc::new(SessionStore::open(dir.path()).await);
+    let cap = liberado_agent_workspace::ENTRY_COST + 4;
     let sessions = ChatSessions::new(
         store,
         Executor::new(
@@ -416,7 +419,7 @@ async fn face_workspace_enforces_the_configured_cap_per_session() {
     )
     .with_agent_workspace(liberado_agent_workspace::WorkspaceSettings {
         root: files.path().to_path_buf(),
-        max_bytes: 4,
+        max_bytes: cap,
     });
     let left = face_runtime(&sessions, Ulid::from(1u128));
     let names: Vec<_> = left.catalog().into_iter().map(|tool| tool.name).collect();
@@ -433,7 +436,7 @@ async fn face_workspace_enforces_the_configured_cap_per_session() {
         ))
         .await
         .unwrap_err();
-    assert!(over.contains("cap is 4"), "{over}");
+    assert!(over.contains(&format!("cap is {cap}")), "{over}");
 
     left.invoke(&liberado_provider::ToolInvocation::new(
         "2",
