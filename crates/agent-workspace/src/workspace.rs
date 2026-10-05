@@ -129,7 +129,7 @@ impl AgentWorkspace {
 
     pub fn list(&self, rel: &str) -> Result<Vec<DirEntry>, WorkspaceError> {
         let _guard = self.lock()?;
-        let path = sandbox::resolve(&self.files, rel)?;
+        let path = sandbox::resolve_following(&self.files, rel)?;
         entries::list_directory(&path)
     }
 
@@ -152,11 +152,11 @@ impl AgentWorkspace {
         let _guard = self.lock()?;
         let bytes = content.as_bytes();
         let dest = self.destination(rel)?;
-        let old = quota::file_len(&dest)?;
+        let old = quota::replaced_bytes(&dest)?;
         let used = quota::usage(&self.files)?;
         admit(used, old, bytes.len() as u64, self.max_bytes)?;
         sandbox::ensure_parents(&self.files, &dest)?;
-        fs::write(&dest, bytes).map_err(WorkspaceError::io)?;
+        entries::write_replacing_link(&dest, bytes)?;
         Ok(bytes.len() as u64)
     }
 
@@ -165,9 +165,6 @@ impl AgentWorkspace {
         let path = sandbox::resolve(&self.files, rel)?;
         if path == self.files {
             return Err(WorkspaceError::DeleteRoot);
-        }
-        if !path.exists() {
-            return Err(WorkspaceError::NotFound);
         }
         entries::remove_contained(&path)
     }
@@ -179,7 +176,7 @@ impl AgentWorkspace {
         let url = validate_url(url)?;
         let _guard = self.lock()?;
         let dest = self.destination(rel)?;
-        let old = quota::file_len(&dest)?;
+        let old = quota::replaced_bytes(&dest)?;
         let used = quota::usage(&self.files)?;
         let client = reqwest::blocking::Client::builder()
             .redirect(reqwest::redirect::Policy::custom(redirect_policy))
@@ -231,13 +228,13 @@ impl AgentWorkspace {
         file.sync_all().map_err(WorkspaceError::io)?;
         drop(file);
         sandbox::ensure_parents(&self.files, dest)?;
-        replace_file(&incoming.path, dest)?;
+        entries::replace_file(&incoming.path, dest)?;
         incoming.keep = true;
         Ok(written)
     }
 
     fn existing_file(&self, rel: &str) -> Result<PathBuf, WorkspaceError> {
-        let path = sandbox::resolve(&self.files, rel)?;
+        let path = sandbox::resolve_following(&self.files, rel)?;
         if path == self.files {
             return Err(WorkspaceError::NotAFile);
         }
@@ -253,10 +250,8 @@ impl AgentWorkspace {
         if path == self.files {
             return Err(WorkspaceError::BadPath("a file path is required".into()));
         }
-        match fs::symlink_metadata(&path) {
-            Ok(meta) if meta.is_dir() => Err(WorkspaceError::NotAFile),
-            _ => Ok(path),
-        }
+        entries::reject_real_dir(&path)?;
+        Ok(path)
     }
 
     fn lock(&self) -> Result<LockGuard, WorkspaceError> {
@@ -352,11 +347,4 @@ fn validate_url(url: &str) -> Result<&str, WorkspaceError> {
     } else {
         Err(WorkspaceError::UnsupportedUrl)
     }
-}
-
-fn replace_file(from: &Path, to: &Path) -> Result<(), WorkspaceError> {
-    if to.exists() {
-        fs::remove_file(to).map_err(WorkspaceError::io)?;
-    }
-    fs::rename(from, to).map_err(WorkspaceError::io)
 }

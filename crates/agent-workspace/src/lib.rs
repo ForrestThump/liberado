@@ -35,4 +35,8 @@ pub use workspace::{
 mod sandbox_tests;
 
 #[cfg(test)]
+#[path = "symlink_tests.rs"]
+mod symlink_tests;
+
+#[cfg(test)]
 mod tests;

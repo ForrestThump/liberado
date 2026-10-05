@@ -345,8 +345,16 @@ fn a_symlink_that_leaves_the_workspace_is_not_readable() {
         "symlink read returned {err:?}"
     );
     assert_eq!(fs::read_to_string(&outside).unwrap(), "hidden");
-    assert!(workspace.write_text("link.txt", "changed").is_err());
+    // Write replaces the link. It does not open the outside target.
+    workspace.write_text("link.txt", "changed").unwrap();
     assert_eq!(fs::read_to_string(&outside).unwrap(), "hidden");
+    assert_eq!(workspace.read_text("link.txt").unwrap(), "changed");
+    assert!(
+        !fs::symlink_metadata(&link)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
 }
 
 #[test]

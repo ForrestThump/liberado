@@ -52,3 +52,27 @@ pub(crate) fn file_len(path: &Path) -> Result<u64, WorkspaceError> {
         Err(err) => Err(WorkspaceError::io(err)),
     }
 }
+
+/// Bytes a replace subtracts. A symlink or junction contributes no file bytes.
+/// A missing path contributes nothing. A real directory is not a file.
+pub(crate) fn replaced_bytes(path: &Path) -> Result<u64, WorkspaceError> {
+    match fs::symlink_metadata(path) {
+        Ok(meta) => bytes_if_replaced(&meta),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(0),
+        Err(err) => Err(WorkspaceError::io(err)),
+    }
+}
+
+fn bytes_if_replaced(meta: &fs::Metadata) -> Result<u64, WorkspaceError> {
+    if replaced_link(meta) {
+        return Ok(0);
+    }
+    if meta.is_file() {
+        return Ok(meta.len());
+    }
+    Err(WorkspaceError::NotAFile)
+}
+
+fn replaced_link(meta: &fs::Metadata) -> bool {
+    meta.file_type().is_symlink() || crate::entries::is_dir_link(meta)
+}

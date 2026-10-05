@@ -3,6 +3,9 @@
 //! Absolute paths, `..`, drive prefixes, and symlinks that leave the directory are refused.
 //! A backslash is normalized to `/` before the path is checked, so it is a separator on every
 //! OS and a model path is accepted or refused the same way on Linux and Windows.
+//! Parent directory symlinks are followed so containment is checked. The final component is
+//! not followed: delete and write operate on that name itself. Read and list use
+//! [`resolve_following`] and still refuse a final symlink whose target leaves the directory.
 //! Missing parents are created one component at a time, and only after the byte cap has been
 //! checked by the caller. `create_dir_all` is not used: it would follow a symlink out of the
 //! workspace.
@@ -18,22 +21,52 @@ pub(crate) fn resolve(files: &Path, rel: &str) -> Result<PathBuf, WorkspaceError
     if relative.as_os_str().is_empty() {
         return Ok(files.to_path_buf());
     }
+    contained(files, walk_components(files, &relative)?)
+}
+
+/// [`resolve`], then follow a final symlink that stays inside `files`.
+pub(crate) fn resolve_following(files: &Path, rel: &str) -> Result<PathBuf, WorkspaceError> {
+    let path = resolve(files, rel)?;
+    match follow_symlink(files, &path)? {
+        Some(resolved) => contained(files, resolved),
+        None => Ok(path),
+    }
+}
+
+/// Follow every parent. Leave the last name as it is, even when it is a symlink.
+fn walk_components(files: &Path, relative: &Path) -> Result<PathBuf, WorkspaceError> {
+    let mut names = normal_names(relative);
+    let Some(last) = names.pop() else {
+        return Ok(files.to_path_buf());
+    };
     let mut acc = files.to_path_buf();
+    for name in names {
+        acc = push_followed(files, acc, name)?;
+    }
+    Ok(push_final(acc, last))
+}
+
+fn normal_names(relative: &Path) -> Vec<&OsStr> {
+    let mut names = Vec::new();
     for component in relative.components() {
-        match component {
-            Component::CurDir => {}
-            Component::Normal(name) => {
-                acc.push(name);
-                if let Some(resolved) = follow_symlink(files, &acc)? {
-                    acc = resolved;
-                }
-            }
-            Component::ParentDir | Component::RootDir | Component::Prefix(_) => {
-                return Err(WorkspaceError::PathEscape);
-            }
+        if let Component::Normal(name) = component {
+            names.push(name);
         }
     }
-    contained(files, acc)
+    names
+}
+
+fn push_followed(files: &Path, mut acc: PathBuf, name: &OsStr) -> Result<PathBuf, WorkspaceError> {
+    acc.push(name);
+    match follow_symlink(files, &acc)? {
+        Some(resolved) => Ok(resolved),
+        None => Ok(acc),
+    }
+}
+
+fn push_final(mut acc: PathBuf, name: &OsStr) -> PathBuf {
+    acc.push(name);
+    acc
 }
 
 /// Create missing directories under `files` for `dest`'s parent.
