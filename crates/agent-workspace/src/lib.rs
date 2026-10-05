@@ -5,9 +5,11 @@
 //! Windows path rules. A marker file records the id and refuses a directory that was bound to a
 //! different id.
 //!
-//! The default cap is 1 GiB ([`DEFAULT_CAP_BYTES`]). Writes and downloads that would pass the cap
-//! are refused, and a refused download leaves no file behind. A download redirect must stay on
-//! http or https. Every tool path is resolved inside that agent's `files/` directory.
+//! The default cap is 1 GiB ([`DEFAULT_CAP_BYTES`]). Each file, directory, and symlink costs 4096
+//! bytes plus the file's length. Writes and downloads that would pass the cap are refused, including
+//! an empty file when the cap is 0, and a refused download leaves no file behind. A download
+//! redirect must stay on http or https. Every tool path is resolved inside that agent's `files/`
+//! directory.
 //!
 //! This is not a shared scratch directory. There is no path that every agent can write. Agents
 //! share through a channel or a local git repository.
@@ -37,6 +39,10 @@ mod sandbox_tests;
 #[cfg(test)]
 #[path = "symlink_tests.rs"]
 mod symlink_tests;
+
+#[cfg(test)]
+#[path = "quota_tests.rs"]
+mod quota_tests;
 
 #[cfg(test)]
 mod tests;

@@ -9,9 +9,12 @@ use liberado_tool_runtime::ToolRuntime;
 use serde_json::json;
 
 use crate::id::directory_name;
+use crate::quota::ENTRY_COST;
 use crate::sandbox_tests::append_component;
 use crate::workspace::{AgentWorkspace, EntryKind, WorkspaceSettings};
 use crate::{DEFAULT_CAP_BYTES, WorkspaceError, WorkspaceRuntime};
+
+const ROOM: u64 = ENTRY_COST * 8;
 
 fn open(root: &Path, agent_id: &str, cap: u64) -> AgentWorkspace {
     AgentWorkspace::open(root, agent_id, cap).unwrap()
@@ -73,9 +76,9 @@ fn directory_names_are_distinct_for_distinct_ids() {
 #[test]
 fn distinct_agents_get_distinct_directories_and_no_shared_scratch() {
     let root = scratch();
-    let left = open(root.path(), "Agent", 100);
-    let right = open(root.path(), "agent", 100);
-    let nested = open(root.path(), "../outside", 100);
+    let left = open(root.path(), "Agent", ROOM);
+    let right = open(root.path(), "agent", ROOM);
+    let nested = open(root.path(), "../outside", ROOM);
 
     assert_ne!(left.home_dir(), right.home_dir());
     assert_ne!(left.files_dir(), right.files_dir());
@@ -114,9 +117,9 @@ fn distinct_agents_get_distinct_directories_and_no_shared_scratch() {
 #[test]
 fn the_same_agent_id_reopens_the_same_directory() {
     let root = scratch();
-    let first = open(root.path(), "same", 100);
+    let first = open(root.path(), "same", ROOM);
     first.write_text("note.txt", "hello").unwrap();
-    let second = open(root.path(), "same", 100);
+    let second = open(root.path(), "same", ROOM);
     assert_eq!(first.files_dir(), second.files_dir());
     assert_eq!(second.read_text("note.txt").unwrap(), "hello");
 }
@@ -135,11 +138,12 @@ fn a_directory_bound_to_another_id_is_refused() {
 #[test]
 fn write_over_the_cap_leaves_the_workspace_unchanged() {
     let root = scratch();
-    let workspace = open(root.path(), "cap", 10);
+    let cap = ENTRY_COST + 10;
+    let workspace = open(root.path(), "cap", cap);
     workspace.write_text("ok.txt", "1234567890").unwrap();
 
     let err = workspace.write_text("over.txt", "12345678901").unwrap_err();
-    assert!(matches!(err, WorkspaceError::OverCap { cap: 10, .. }));
+    assert!(matches!(err, WorkspaceError::OverCap { cap: c, .. } if c == cap));
     assert!(!workspace.files_dir().join("over.txt").exists());
 
     let err = workspace.write_text("ok.txt", "12345678901").unwrap_err();
@@ -150,17 +154,17 @@ fn write_over_the_cap_leaves_the_workspace_unchanged() {
 #[test]
 fn replace_counts_the_new_size_not_the_sum() {
     let root = scratch();
-    let workspace = open(root.path(), "cap", 10);
+    let workspace = open(root.path(), "cap", ENTRY_COST + 8);
     workspace.write_text("ok.txt", "123456").unwrap();
     workspace.write_text("ok.txt", "12345678").unwrap();
     assert_eq!(workspace.read_text("ok.txt").unwrap(), "12345678");
-    assert_eq!(workspace.usage_bytes().unwrap(), 8);
+    assert_eq!(workspace.usage_bytes().unwrap(), ENTRY_COST + 8);
 }
 
 #[test]
 fn list_reports_files_directories_and_symlinks() {
     let root = scratch();
-    let workspace = open(root.path(), "boxed", 100);
+    let workspace = open(root.path(), "boxed", ROOM);
     workspace.write_text("b.txt", "hi").unwrap();
     workspace.write_text("a/c.txt", "x").unwrap();
     let link = workspace.files_dir().join("m-link");
@@ -197,7 +201,7 @@ fn list_reports_files_directories_and_symlinks() {
 #[test]
 fn delete_removes_a_tree_and_a_symlink_without_its_target() {
     let root = scratch();
-    let workspace = open(root.path(), "boxed", 100);
+    let workspace = open(root.path(), "boxed", ROOM);
     workspace.write_text("dir/sub/a.txt", "aaa").unwrap();
     workspace.write_text("keep.txt", "safe").unwrap();
     // The link sits inside the tree. Deleting the tree must unlink it, not the target.
@@ -221,7 +225,7 @@ fn delete_removes_a_tree_and_a_symlink_without_its_target() {
 #[test]
 fn ensure_parents_covers_escape_symlink_and_file_components() {
     let root = scratch();
-    let workspace = open(root.path(), "boxed", 100);
+    let workspace = open(root.path(), "boxed", ROOM);
     let files = workspace.files_dir().to_path_buf();
 
     let err = crate::sandbox::ensure_parents(&files, Path::new("/")).unwrap_err();
@@ -261,7 +265,7 @@ fn ensure_parents_covers_escape_symlink_and_file_components() {
 #[test]
 fn delete_frees_room_under_the_cap() {
     let root = scratch();
-    let workspace = open(root.path(), "cap", 10);
+    let workspace = open(root.path(), "cap", ENTRY_COST + 10);
     workspace.write_text("ok.txt", "1234567890").unwrap();
     assert!(workspace.write_text("more.txt", "x").is_err());
     workspace.delete("ok.txt").unwrap();
@@ -272,7 +276,7 @@ fn delete_frees_room_under_the_cap() {
 #[test]
 fn path_escape_does_not_write_outside_the_workspace() {
     let root = scratch();
-    let workspace = open(root.path(), "boxed", 100);
+    let workspace = open(root.path(), "boxed", ROOM);
     let outside = root.path().join("outside.txt");
     let beside = workspace.home_dir().join("outside.txt");
 
@@ -301,7 +305,7 @@ fn path_escape_does_not_write_outside_the_workspace() {
 #[test]
 fn backslash_is_a_separator_on_every_platform() {
     let root = scratch();
-    let workspace = open(root.path(), "boxed", 100);
+    let workspace = open(root.path(), "boxed", ROOM);
     workspace.write_text(r"sub\note.txt", "hi").unwrap();
     let nested = workspace.files_dir().join("sub").join("note.txt");
     assert_eq!(fs::read_to_string(&nested).unwrap(), "hi");
@@ -320,7 +324,7 @@ fn backslash_is_a_separator_on_every_platform() {
 #[test]
 fn windows_unc_and_verbatim_paths_do_not_escape() {
     let root = scratch();
-    let workspace = open(root.path(), "boxed", 100);
+    let workspace = open(root.path(), "boxed", ROOM);
     for rel in [r"\\server\share\secret.txt", r"\\?\C:\Windows\notepad.exe"] {
         let err = workspace.write_text(rel, "nope").unwrap_err();
         assert!(
@@ -333,7 +337,7 @@ fn windows_unc_and_verbatim_paths_do_not_escape() {
 #[test]
 fn a_symlink_that_leaves_the_workspace_is_not_readable() {
     let root = scratch();
-    let workspace = open(root.path(), "boxed", 100);
+    let workspace = open(root.path(), "boxed", ROOM);
     let outside = root.path().join("secret.txt");
     fs::write(&outside, "hidden").unwrap();
     let link = workspace.files_dir().join("link.txt");
@@ -360,7 +364,8 @@ fn a_symlink_that_leaves_the_workspace_is_not_readable() {
 #[test]
 fn download_tool_reports_the_bytes_it_stored() {
     let root = scratch();
-    let workspace = open(root.path(), "dl", 100);
+    let cap = ENTRY_COST + 100;
+    let workspace = open(root.path(), "dl", cap);
     let url = http_body(b"hello", true);
     let text = crate::apply(
         &workspace,
@@ -369,14 +374,18 @@ fn download_tool_reports_the_bytes_it_stored() {
     )
     .unwrap();
     assert!(text.contains("Downloaded 5 bytes to a.txt"), "{text}");
-    assert!(text.contains("Using 5 of 100 bytes"), "{text}");
+    let used = ENTRY_COST + 5;
+    assert!(
+        text.contains(&format!("Using {used} of {cap} bytes")),
+        "{text}"
+    );
     assert_eq!(workspace.read_text("a.txt").unwrap(), "hello");
 }
 
 #[test]
 fn download_over_the_announced_cap_writes_nothing() {
     let root = scratch();
-    let workspace = open(root.path(), "cap", 10);
+    let workspace = open(root.path(), "cap", ENTRY_COST + 10);
     let url = http_body(b"0123456789ABCDEF", true);
     let err = workspace.download_url("blob.bin", &url).unwrap_err();
     assert!(
@@ -390,7 +399,7 @@ fn download_over_the_announced_cap_writes_nothing() {
 #[test]
 fn download_without_a_length_stops_at_the_cap() {
     let root = scratch();
-    let workspace = open(root.path(), "cap", 10);
+    let workspace = open(root.path(), "cap", ENTRY_COST + 10);
     let url = http_body(b"0123456789ABCDEF", false);
     let err = workspace.download_url("blob.bin", &url).unwrap_err();
     assert!(matches!(err, WorkspaceError::OverCap { .. }), "{err:?}");
@@ -401,19 +410,19 @@ fn download_without_a_length_stops_at_the_cap() {
 #[test]
 fn download_that_fits_replaces_without_double_counting() {
     let root = scratch();
-    let workspace = open(root.path(), "cap", 10);
+    let workspace = open(root.path(), "cap", ENTRY_COST + 10);
     workspace.write_text("blob.bin", "12345678").unwrap();
     let url = http_body(b"abcdef", true);
     let bytes = workspace.download_url("blob.bin", &url).unwrap();
     assert_eq!(bytes, 6);
     assert_eq!(workspace.read_text("blob.bin").unwrap(), "abcdef");
-    assert_eq!(workspace.usage_bytes().unwrap(), 6);
+    assert_eq!(workspace.usage_bytes().unwrap(), ENTRY_COST + 6);
 }
 
 #[test]
 fn download_refuses_a_redirect_off_http() {
     let root = scratch();
-    let workspace = open(root.path(), "cap", 100);
+    let workspace = open(root.path(), "cap", ROOM);
     let url = http_redirect("file:///etc/passwd");
     let err = workspace.download_url("a.txt", &url).unwrap_err();
     assert!(matches!(err, WorkspaceError::UnsupportedUrl), "{err:?}");
@@ -424,7 +433,7 @@ fn download_refuses_a_redirect_off_http() {
 #[test]
 fn download_follows_an_http_redirect() {
     let root = scratch();
-    let workspace = open(root.path(), "cap", 100);
+    let workspace = open(root.path(), "cap", ROOM);
     let dest = http_body(b"ok", true);
     let url = http_redirect(&dest);
     let bytes = workspace.download_url("a.txt", &url).unwrap();
@@ -435,7 +444,7 @@ fn download_follows_an_http_redirect() {
 #[test]
 fn download_rejects_non_http_urls() {
     let root = scratch();
-    let workspace = open(root.path(), "cap", 100);
+    let workspace = open(root.path(), "cap", ROOM);
     for url in ["file:///etc/passwd", "/etc/passwd", "javascript:alert(1)"] {
         let err = workspace.download_url("a.txt", url).unwrap_err();
         assert!(
@@ -449,8 +458,8 @@ fn download_rejects_non_http_urls() {
 #[test]
 fn tool_arguments_cannot_select_another_agent() {
     let root = scratch();
-    let left = open(root.path(), "left", 100);
-    let right = open(root.path(), "right", 100);
+    let left = open(root.path(), "left", ROOM);
+    let right = open(root.path(), "right", ROOM);
     right.write_text("secret.txt", "nope").unwrap();
     let err = crate::apply(
         &left,
@@ -465,7 +474,7 @@ fn tool_arguments_cannot_select_another_agent() {
 #[tokio::test]
 async fn runtime_handles_workspace_tools_and_leaves_other_calls_alone() {
     let root = scratch();
-    let workspace = open(root.path(), "runtime", 20);
+    let workspace = open(root.path(), "runtime", ROOM);
     let runtime = WorkspaceRuntime::new(workspace, Box::new(EmptyInner));
     let names: Vec<_> = runtime
         .catalog()

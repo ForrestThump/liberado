@@ -24,7 +24,7 @@ fn link_to(target: &Path, link: &Path) {
 #[test]
 fn delete_unlinks_a_file_symlink_and_keeps_the_target() {
     let root = scratch();
-    let workspace = open(root.path(), 100);
+    let workspace = open(root.path(), crate::quota::ENTRY_COST * 8);
     workspace.write_text("target.txt", "safe").unwrap();
     let link = workspace.files_dir().join("link.txt");
     link_to(&workspace.files_dir().join("target.txt"), &link);
@@ -39,7 +39,7 @@ fn delete_unlinks_a_file_symlink_and_keeps_the_target() {
 #[test]
 fn delete_unlinks_a_directory_symlink_and_keeps_the_tree() {
     let root = scratch();
-    let workspace = open(root.path(), 100);
+    let workspace = open(root.path(), crate::quota::ENTRY_COST * 8);
     workspace.write_text("dir/a.txt", "tree").unwrap();
     let link = workspace.files_dir().join("link");
     std::os::unix::fs::symlink(workspace.files_dir().join("dir"), &link).unwrap();
@@ -53,7 +53,7 @@ fn delete_unlinks_a_directory_symlink_and_keeps_the_tree() {
 #[test]
 fn write_replaces_a_file_symlink_and_leaves_the_target() {
     let root = scratch();
-    let workspace = open(root.path(), 100);
+    let workspace = open(root.path(), crate::quota::ENTRY_COST * 8);
     workspace.write_text("target.txt", "original").unwrap();
     let link = workspace.files_dir().join("link.txt");
     link_to(&workspace.files_dir().join("target.txt"), &link);
@@ -72,7 +72,7 @@ fn write_replaces_a_file_symlink_and_leaves_the_target() {
 #[test]
 fn delete_unlinks_a_dangling_symlink() {
     let root = scratch();
-    let workspace = open(root.path(), 100);
+    let workspace = open(root.path(), crate::quota::ENTRY_COST * 8);
     let link = workspace.files_dir().join("missing-link");
     link_to(&workspace.files_dir().join("no-such-target"), &link);
     workspace.delete("missing-link").unwrap();
@@ -83,7 +83,7 @@ fn delete_unlinks_a_dangling_symlink() {
 #[test]
 fn a_parent_symlink_that_leaves_the_workspace_is_refused() {
     let root = scratch();
-    let workspace = open(root.path(), 100);
+    let workspace = open(root.path(), crate::quota::ENTRY_COST * 8);
     let outside = root.path().join("outside");
     fs::create_dir(&outside).unwrap();
     let link = workspace.files_dir().join("out");
@@ -100,7 +100,7 @@ fn a_parent_symlink_that_leaves_the_workspace_is_refused() {
 #[test]
 fn a_parent_symlink_inside_the_workspace_is_followed() {
     let root = scratch();
-    let workspace = open(root.path(), 100);
+    let workspace = open(root.path(), crate::quota::ENTRY_COST * 8);
     workspace.write_text("sub/keep.txt", "k").unwrap();
     let link = workspace.files_dir().join("alias");
     std::os::unix::fs::symlink(workspace.files_dir().join("sub"), &link).unwrap();
@@ -114,7 +114,7 @@ fn a_parent_symlink_inside_the_workspace_is_followed() {
 #[test]
 fn list_follows_a_directory_symlink() {
     let root = scratch();
-    let workspace = open(root.path(), 100);
+    let workspace = open(root.path(), crate::quota::ENTRY_COST * 8);
     workspace.write_text("dir/a.txt", "x").unwrap();
     let link = workspace.files_dir().join("alias");
     std::os::unix::fs::symlink(workspace.files_dir().join("dir"), &link).unwrap();
@@ -126,7 +126,7 @@ fn list_follows_a_directory_symlink() {
 #[test]
 fn dot_segments_do_not_follow_a_final_symlink() {
     let root = scratch();
-    let workspace = open(root.path(), 100);
+    let workspace = open(root.path(), crate::quota::ENTRY_COST * 8);
     workspace.write_text("target.txt", "body").unwrap();
     let link = workspace.files_dir().join("link.txt");
     link_to(&workspace.files_dir().join("target.txt"), &link);
@@ -139,7 +139,7 @@ fn dot_segments_do_not_follow_a_final_symlink() {
 #[test]
 fn writing_a_directory_path_is_refused() {
     let root = scratch();
-    let workspace = open(root.path(), 100);
+    let workspace = open(root.path(), crate::quota::ENTRY_COST * 8);
     workspace.write_text("dir/a.txt", "x").unwrap();
     let err = workspace.write_text("dir", "nope").unwrap_err();
     assert!(matches!(err, WorkspaceError::NotAFile), "{err:?}");
@@ -149,7 +149,7 @@ fn writing_a_directory_path_is_refused() {
 #[test]
 fn replace_file_leaves_a_real_directory_in_place() {
     let root = scratch();
-    let workspace = open(root.path(), 100);
+    let workspace = open(root.path(), crate::quota::ENTRY_COST * 8);
     let from = workspace.home_dir().join("incoming.bin");
     fs::write(&from, b"data").unwrap();
     let dir = workspace.files_dir().join("dir");
@@ -165,7 +165,7 @@ fn replace_file_leaves_a_real_directory_in_place() {
 #[test]
 fn download_replaces_a_symlink_and_leaves_the_target() {
     let root = scratch();
-    let workspace = open(root.path(), 100);
+    let workspace = open(root.path(), crate::quota::ENTRY_COST * 8);
     workspace.write_text("target.txt", "original").unwrap();
     let link = workspace.files_dir().join("blob.bin");
     link_to(&workspace.files_dir().join("target.txt"), &link);

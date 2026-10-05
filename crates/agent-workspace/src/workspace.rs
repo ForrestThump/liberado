@@ -152,9 +152,7 @@ impl AgentWorkspace {
         let _guard = self.lock()?;
         let bytes = content.as_bytes();
         let dest = self.destination(rel)?;
-        let old = quota::replaced_bytes(&dest)?;
-        let used = quota::usage(&self.files)?;
-        admit(used, old, bytes.len() as u64, self.max_bytes)?;
+        quota::admit_write(&self.files, &dest, bytes.len() as u64, self.max_bytes)?;
         sandbox::ensure_parents(&self.files, &dest)?;
         entries::write_replacing_link(&dest, bytes)?;
         Ok(bytes.len() as u64)
@@ -169,15 +167,13 @@ impl AgentWorkspace {
         entries::remove_contained(&path)
     }
 
-    /// Download `url` into `rel`. The byte cap applies to the bytes actually stored.
+    /// Download `url` into `rel`. The cap covers stored bytes and each new file or directory.
     ///
     /// Redirects stay on http or https. A `Location` with another scheme is refused.
     pub fn download_url(&self, rel: &str, url: &str) -> Result<u64, WorkspaceError> {
         let url = validate_url(url)?;
         let _guard = self.lock()?;
         let dest = self.destination(rel)?;
-        let old = quota::replaced_bytes(&dest)?;
-        let used = quota::usage(&self.files)?;
         let client = reqwest::blocking::Client::builder()
             .redirect(reqwest::redirect::Policy::custom(redirect_policy))
             .timeout(Duration::from_secs(600))
@@ -193,10 +189,13 @@ impl AgentWorkspace {
         if !response.status().is_success() {
             return Err(WorkspaceError::io(format!("HTTP {}", response.status())));
         }
-        if let Some(announced) = response.content_length() {
-            admit(used, old, announced, self.max_bytes)?;
-        }
-        self.store_reader(&dest, used, old, response)
+        let (adjusted, old) = quota::gate_download(
+            &self.files,
+            &dest,
+            response.content_length(),
+            self.max_bytes,
+        )?;
+        self.store_reader(&dest, adjusted, old, response)
     }
 
     fn store_reader(

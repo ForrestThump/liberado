@@ -56,8 +56,10 @@
 # (legacy rows project back to `Chat` after the next daemon restart) — worth a changelog note.
 
 [agent_workspace]
-# max_bytes = 1073741824   # 1 GiB cap for one agent's files. Writes and downloads that would pass
-#                          # it are refused. 0 refuses every write.
+# max_bytes = 1073741824   # 1 GiB cap for one agent's files. Each file, directory, and symlink
+#                          # costs 4096 bytes plus the file's length. Writes and downloads that
+#                          # would pass the cap are refused. 0 refuses every write and download,
+#                          # including an empty file.
 # root = ""                # empty uses <data_dir>/agent-workspaces. Each agent gets its own
 #                          # directory. There is no shared scratch directory.
 
