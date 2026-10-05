@@ -9,7 +9,7 @@ use liberado_tool_runtime::ToolRuntime;
 use serde_json::json;
 
 use crate::id::directory_name;
-use crate::workspace::{AgentWorkspace, WorkspaceSettings};
+use crate::workspace::{AgentWorkspace, EntryKind, WorkspaceSettings};
 use crate::{DEFAULT_CAP_BYTES, WorkspaceError, WorkspaceRuntime};
 
 fn open(root: &Path, agent_id: &str, cap: u64) -> AgentWorkspace {
@@ -157,6 +157,102 @@ fn replace_counts_the_new_size_not_the_sum() {
 }
 
 #[test]
+fn list_reports_files_directories_and_symlinks() {
+    let root = scratch();
+    let workspace = open(root.path(), "boxed", 100);
+    workspace.write_text("b.txt", "hi").unwrap();
+    workspace.write_text("a/c.txt", "x").unwrap();
+    let link = workspace.files_dir().join("m-link");
+    create_symlink(&workspace.files_dir().join("b.txt"), &link).expect("symlink");
+
+    let entries = workspace.list(".").unwrap();
+    let described: Vec<_> = entries
+        .iter()
+        .map(|entry| (entry.name.as_str(), entry.kind, entry.bytes))
+        .collect();
+    assert_eq!(
+        described,
+        vec![
+            ("a", EntryKind::Dir, 0),
+            ("b.txt", EntryKind::File, 2),
+            ("m-link", EntryKind::Symlink, 0),
+        ]
+    );
+    let nested = workspace.list("a").unwrap();
+    assert_eq!(nested.len(), 1);
+    assert_eq!(nested[0].name, "c.txt");
+    assert_eq!(nested[0].bytes, 1);
+
+    let err = workspace.list("b.txt").unwrap_err();
+    assert!(matches!(err, WorkspaceError::NotADirectory), "{err:?}");
+    let err = workspace.list("missing").unwrap_err();
+    assert!(matches!(err, WorkspaceError::NotFound), "{err:?}");
+
+    let empty_root = scratch();
+    let empty = open(empty_root.path(), "empty", 10);
+    assert!(empty.list(".").unwrap().is_empty());
+}
+
+#[test]
+fn delete_removes_a_tree_and_a_symlink_without_its_target() {
+    let root = scratch();
+    let workspace = open(root.path(), "boxed", 100);
+    workspace.write_text("dir/sub/a.txt", "aaa").unwrap();
+    workspace.write_text("keep.txt", "safe").unwrap();
+    // The link sits inside the tree. Deleting the tree must unlink it, not the target.
+    let link = workspace.files_dir().join("dir").join("link.txt");
+    create_symlink(&workspace.files_dir().join("keep.txt"), &link).expect("symlink");
+
+    workspace.delete("dir").unwrap();
+    assert_eq!(workspace.read_text("keep.txt").unwrap(), "safe");
+    assert!(workspace.read_text("dir/sub/a.txt").is_err());
+    assert!(matches!(
+        workspace.list("dir").unwrap_err(),
+        WorkspaceError::NotFound
+    ));
+
+    let err = workspace.delete(".").unwrap_err();
+    assert!(matches!(err, WorkspaceError::DeleteRoot), "{err:?}");
+    let err = workspace.delete("missing.txt").unwrap_err();
+    assert!(matches!(err, WorkspaceError::NotFound), "{err:?}");
+}
+
+#[test]
+fn ensure_parents_covers_escape_symlink_and_file_components() {
+    let root = scratch();
+    let workspace = open(root.path(), "boxed", 100);
+    let files = workspace.files_dir().to_path_buf();
+
+    let err = crate::sandbox::ensure_parents(&files, Path::new("/")).unwrap_err();
+    assert!(matches!(err, WorkspaceError::PathEscape), "{err:?}");
+
+    let outside = files.parent().unwrap().join("note.txt");
+    let err = crate::sandbox::ensure_parents(&files, &outside).unwrap_err();
+    assert!(matches!(err, WorkspaceError::PathEscape), "{err:?}");
+
+    let mut escaped = files.join("sub");
+    escaped.push("..");
+    escaped.push("note.txt");
+    let err = crate::sandbox::ensure_parents(&files, &escaped).unwrap_err();
+    assert!(matches!(err, WorkspaceError::PathEscape), "{err:?}");
+
+    let link = files.join("link");
+    create_symlink(&files, &link).expect("symlink");
+    let err = crate::sandbox::ensure_parents(&files, &link.join("note.txt")).unwrap_err();
+    assert!(matches!(err, WorkspaceError::PathEscape), "{err:?}");
+
+    workspace.write_text("file.txt", "x").unwrap();
+    let err = crate::sandbox::ensure_parents(&files, &files.join("file.txt").join("note.txt"))
+        .unwrap_err();
+    assert!(matches!(err, WorkspaceError::NotADirectory), "{err:?}");
+
+    let dest = files.join("a").join("b").join("c.txt");
+    crate::sandbox::ensure_parents(&files, &dest).unwrap();
+    assert!(files.join("a").join("b").is_dir());
+    crate::sandbox::ensure_parents(&files, &files.join("a").join("b").join("d.txt")).unwrap();
+}
+
+#[test]
 fn delete_frees_room_under_the_cap() {
     let root = scratch();
     let workspace = open(root.path(), "cap", 10);
@@ -194,6 +290,26 @@ fn path_escape_does_not_write_outside_the_workspace() {
     assert!(workspace.write_text("bad\0name", "x").is_err());
 }
 
+/// `\` is a separator on every OS. On Unix it would otherwise be a filename character, so
+/// `..\outside.txt` would be created inside the workspace instead of refused.
+#[test]
+fn backslash_is_a_separator_on_every_platform() {
+    let root = scratch();
+    let workspace = open(root.path(), "boxed", 100);
+    workspace.write_text(r"sub\note.txt", "hi").unwrap();
+    let nested = workspace.files_dir().join("sub").join("note.txt");
+    assert_eq!(fs::read_to_string(&nested).unwrap(), "hi");
+    assert_eq!(workspace.read_text(r"sub\note.txt").unwrap(), "hi");
+    assert_eq!(workspace.read_text("sub/note.txt").unwrap(), "hi");
+
+    let err = workspace
+        .write_text(r"foo\..\outside.txt", "nope")
+        .unwrap_err();
+    assert!(matches!(err, WorkspaceError::PathEscape), "{err:?}");
+    assert!(!root.path().join("outside.txt").exists());
+    assert!(!workspace.files_dir().join("outside.txt").exists());
+}
+
 #[cfg(windows)]
 #[test]
 fn windows_unc_and_verbatim_paths_do_not_escape() {
@@ -225,6 +341,22 @@ fn a_symlink_that_leaves_the_workspace_is_not_readable() {
     assert_eq!(fs::read_to_string(&outside).unwrap(), "hidden");
     assert!(workspace.write_text("link.txt", "changed").is_err());
     assert_eq!(fs::read_to_string(&outside).unwrap(), "hidden");
+}
+
+#[test]
+fn download_tool_reports_the_bytes_it_stored() {
+    let root = scratch();
+    let workspace = open(root.path(), "dl", 100);
+    let url = http_body(b"hello", true);
+    let text = crate::apply(
+        &workspace,
+        "workspace_download",
+        &json!({"url": url, "path": "a.txt"}),
+    )
+    .unwrap();
+    assert!(text.contains("Downloaded 5 bytes to a.txt"), "{text}");
+    assert!(text.contains("Using 5 of 100 bytes"), "{text}");
+    assert_eq!(workspace.read_text("a.txt").unwrap(), "hello");
 }
 
 #[test]

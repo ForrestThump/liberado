@@ -140,7 +140,15 @@ fn delete_tool(workspace: &AgentWorkspace, args: &Value) -> Result<String, Works
 fn download_tool(workspace: &AgentWorkspace, args: &Value) -> Result<String, WorkspaceError> {
     let path = required_path(args)?;
     let url = required_str(args, "url")?;
-    let bytes = workspace.download_url(&path, &url)?;
+    report_download(workspace, &path, &url)
+}
+
+fn report_download(
+    workspace: &AgentWorkspace,
+    path: &str,
+    url: &str,
+) -> Result<String, WorkspaceError> {
+    let bytes = workspace.download_url(path, url)?;
     let used = workspace.usage_bytes()?;
     Ok(format!(
         "Downloaded {bytes} bytes to {path}. Using {used} of {} bytes.",

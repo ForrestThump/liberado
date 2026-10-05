@@ -1,6 +1,8 @@
 //! Resolve a tool path so it stays inside one agent's `files/` directory.
 //!
-//! Absolute paths, `..`, drive prefixes, and symlinks that leave the directory are refused.
+//! Absolute paths, `..`, drive prefixes, backslash separators, and symlinks that leave the
+//! directory are refused. A backslash is a separator on every OS, so a model path is accepted or
+//! refused the same way on Linux and Windows.
 //! Missing parents are created one component at a time, and only after the byte cap has been
 //! checked by the caller. `create_dir_all` is not used: it would follow a symlink out of the
 //! workspace.
@@ -36,30 +38,60 @@ pub(crate) fn resolve(files: &Path, rel: &str) -> Result<PathBuf, WorkspaceError
 /// Create missing directories under `files` for `dest`'s parent. A symlink component is refused
 /// rather than followed.
 pub(crate) fn ensure_parents(files: &Path, dest: &Path) -> Result<(), WorkspaceError> {
+    let Some(rel) = parent_components(files, dest)? else {
+        return Ok(());
+    };
+    create_dirs(files, &rel)
+}
+
+/// Relative parent of `dest`, or `Ok(None)` when `dest` sits directly in `files`.
+fn parent_components(files: &Path, dest: &Path) -> Result<Option<PathBuf>, WorkspaceError> {
     let Some(parent) = dest.parent() else {
         return Err(WorkspaceError::PathEscape);
     };
     if parent == files {
-        return Ok(());
+        return Ok(None);
     }
-    let rel = parent
-        .strip_prefix(files)
-        .map_err(|_| WorkspaceError::PathEscape)?;
+    match parent.strip_prefix(files) {
+        Ok(rel) => Ok(Some(rel.to_path_buf())),
+        Err(_) => Err(WorkspaceError::PathEscape),
+    }
+}
+
+fn create_dirs(files: &Path, rel: &Path) -> Result<(), WorkspaceError> {
     let mut acc = files.to_path_buf();
     for component in rel.components() {
-        let Component::Normal(name) = component else {
-            return Err(WorkspaceError::PathEscape);
-        };
-        acc.push(name);
-        match fs::symlink_metadata(&acc) {
-            Ok(meta) if meta.file_type().is_symlink() => return Err(WorkspaceError::PathEscape),
-            Ok(meta) if meta.is_dir() => {}
-            Ok(_) => return Err(WorkspaceError::NotADirectory),
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-                fs::create_dir(&acc).map_err(WorkspaceError::io)?;
-            }
-            Err(err) => return Err(WorkspaceError::io(err)),
+        acc.push(normal_name(component)?);
+        prepare_dir(&acc)?;
+    }
+    Ok(())
+}
+
+fn normal_name(component: Component<'_>) -> Result<&std::ffi::OsStr, WorkspaceError> {
+    match component {
+        Component::Normal(name) => Ok(name),
+        Component::CurDir | Component::ParentDir | Component::RootDir | Component::Prefix(_) => {
+            Err(WorkspaceError::PathEscape)
         }
+    }
+}
+
+fn prepare_dir(path: &Path) -> Result<(), WorkspaceError> {
+    match fs::symlink_metadata(path) {
+        Ok(meta) => accept_directory(&meta),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            fs::create_dir(path).map_err(WorkspaceError::io)
+        }
+        Err(err) => Err(WorkspaceError::io(err)),
+    }
+}
+
+fn accept_directory(meta: &fs::Metadata) -> Result<(), WorkspaceError> {
+    if meta.file_type().is_symlink() {
+        return Err(WorkspaceError::PathEscape);
+    }
+    if !meta.is_dir() {
+        return Err(WorkspaceError::NotADirectory);
     }
     Ok(())
 }
@@ -71,7 +103,11 @@ fn relative_path(rel: &str) -> Result<PathBuf, WorkspaceError> {
     if rel.contains(':') {
         return Err(WorkspaceError::PathEscape);
     }
-    let trimmed = rel.trim();
+    // Tool arguments come from a model. On Unix `\` is a filename character, so
+    // `..\outside.txt` would be created inside the workspace instead of refused.
+    // Treat it as a separator everywhere, matching Windows.
+    let normalized = rel.replace('\\', "/");
+    let trimmed = normalized.trim();
     if trimmed.is_empty() || trimmed == "." {
         return Ok(PathBuf::new());
     }

@@ -7,10 +7,13 @@ use std::time::Duration;
 
 use fs4::fs_std::FileExt;
 
+use crate::entries;
 use crate::error::WorkspaceError;
 use crate::id::directory_name;
 use crate::quota::{self, admit};
 use crate::sandbox;
+
+pub use crate::entries::{DirEntry, EntryKind};
 
 /// Directory name under the data dir when no root override is set.
 pub const DEFAULT_DIR_NAME: &str = "agent-workspaces";
@@ -127,34 +130,7 @@ impl AgentWorkspace {
     pub fn list(&self, rel: &str) -> Result<Vec<DirEntry>, WorkspaceError> {
         let _guard = self.lock()?;
         let path = sandbox::resolve(&self.files, rel)?;
-        let meta = fs::symlink_metadata(&path).map_err(map_missing)?;
-        if !meta.is_dir() {
-            return Err(WorkspaceError::NotADirectory);
-        }
-        let mut entries = Vec::new();
-        for entry in fs::read_dir(&path).map_err(WorkspaceError::io)? {
-            let entry = entry.map_err(WorkspaceError::io)?;
-            let meta = fs::symlink_metadata(entry.path()).map_err(WorkspaceError::io)?;
-            let kind = if meta.file_type().is_symlink() {
-                EntryKind::Symlink
-            } else if meta.is_dir() {
-                EntryKind::Dir
-            } else {
-                EntryKind::File
-            };
-            let bytes = if kind == EntryKind::File {
-                meta.len()
-            } else {
-                0
-            };
-            entries.push(DirEntry {
-                name: entry.file_name().to_string_lossy().into_owned(),
-                kind,
-                bytes,
-            });
-        }
-        entries.sort_by(|left, right| left.name.cmp(&right.name));
-        Ok(entries)
+        entries::list_directory(&path)
     }
 
     pub fn read_text(&self, rel: &str) -> Result<String, WorkspaceError> {
@@ -193,7 +169,7 @@ impl AgentWorkspace {
         if !path.exists() {
             return Err(WorkspaceError::NotFound);
         }
-        remove_contained(&path)
+        entries::remove_contained(&path)
     }
 
     /// Download `url` into `rel`. The byte cap applies to the bytes actually stored.
@@ -268,7 +244,7 @@ impl AgentWorkspace {
         match fs::symlink_metadata(&path) {
             Ok(meta) if meta.is_file() => Ok(path),
             Ok(_) => Err(WorkspaceError::NotAFile),
-            Err(err) => Err(map_missing(err)),
+            Err(err) => Err(WorkspaceError::missing(err)),
         }
     }
 
@@ -294,20 +270,6 @@ impl AgentWorkspace {
         FileExt::lock_exclusive(&file).map_err(WorkspaceError::io)?;
         Ok(LockGuard(file))
     }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum EntryKind {
-    File,
-    Dir,
-    Symlink,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DirEntry {
-    pub name: String,
-    pub kind: EntryKind,
-    pub bytes: u64,
 }
 
 struct LockGuard(File);
@@ -397,29 +359,4 @@ fn replace_file(from: &Path, to: &Path) -> Result<(), WorkspaceError> {
         fs::remove_file(to).map_err(WorkspaceError::io)?;
     }
     fs::rename(from, to).map_err(WorkspaceError::io)
-}
-
-fn remove_contained(path: &Path) -> Result<(), WorkspaceError> {
-    let meta = fs::symlink_metadata(path).map_err(map_missing)?;
-    if meta.file_type().is_symlink() || meta.is_file() {
-        fs::remove_file(path).map_err(WorkspaceError::io)?;
-        return Ok(());
-    }
-    if meta.is_dir() {
-        for entry in fs::read_dir(path).map_err(WorkspaceError::io)? {
-            let entry = entry.map_err(WorkspaceError::io)?;
-            remove_contained(&entry.path())?;
-        }
-        fs::remove_dir(path).map_err(WorkspaceError::io)?;
-        return Ok(());
-    }
-    Err(WorkspaceError::io("unsupported file type"))
-}
-
-fn map_missing(err: std::io::Error) -> WorkspaceError {
-    if err.kind() == std::io::ErrorKind::NotFound {
-        WorkspaceError::NotFound
-    } else {
-        WorkspaceError::io(err)
-    }
 }

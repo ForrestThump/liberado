@@ -12,6 +12,7 @@
 //! This is not a shared scratch directory. There is no path that every agent can write. Agents
 //! share through a channel or a local git repository.
 
+mod entries;
 mod error;
 mod id;
 mod quota;

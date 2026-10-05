@@ -47,4 +47,13 @@ impl WorkspaceError {
     pub(crate) fn io(err: impl std::fmt::Display) -> Self {
         Self::Io(err.to_string())
     }
+
+    /// A missing path is [`NotFound`](Self::NotFound). Any other IO error stays an [`Io`](Self::Io).
+    pub(crate) fn missing(err: std::io::Error) -> Self {
+        if err.kind() == std::io::ErrorKind::NotFound {
+            Self::NotFound
+        } else {
+            Self::io(err)
+        }
+    }
 }
