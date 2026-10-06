@@ -236,12 +236,13 @@ async fn turn_stream_frames_the_user_message_when_a_timezone_is_attached() {
 /// representation stay raw.
 #[tokio::test]
 async fn prior_user_messages_carry_their_local_date_in_the_model_view() {
+    // UTC, not Chicago: an `America/Chicago` test would assert `CDT`, and the same test
+    // would have to switch to `CST` from November through March — a real CI failure on
+    // 2026-11-01 the first time DST ends. UTC has no DST and a stable abbreviation, so the
+    // assertion can be exact instead of conditional.
     let dir = tempfile::tempdir().unwrap();
-    let (sessions, provider) = chat_sessions_with_timezone(
-        dir.path(),
-        Some(UserTimezone::parse("America/Chicago").unwrap()),
-    )
-    .await;
+    let (sessions, provider) =
+        chat_sessions_with_timezone(dir.path(), Some(UserTimezone::parse("UTC").unwrap())).await;
     let id = sessions.create(None).await.unwrap();
     // First turn — the seeding turn. The model receives only the raw text + local-time line.
     sessions.turn(id, "first question").await.unwrap();
@@ -262,18 +263,19 @@ async fn prior_user_messages_carry_their_local_date_in_the_model_view() {
         .strip_suffix("first question")
         .expect("the user message's body must be the raw text with a prefix in front")
         .trim_end();
-    // The raw content was `[Tue 2026-10-06 08:39 CDT] first question`; `strip_suffix` strips
-    // the body, leaving `[Tue 2026-10-06 08:39 CDT] ` (trailing space). `trim_end` eats that
-    // space, so the test inspects the bracketed prefix alone.
+    // The bracketed prefix is the prior-message shape: `[Ddd YYYY-MM-DD HH:MM TZ] <body>`.
+    // Example shape (wall-clock dependent): `[Tue 2026-10-06 12:34 UTC] first question`,
+    // but the test must not depend on the example's date or weekday.
     assert!(
         prefix.starts_with("[") && prefix.contains(" 20") && prefix.ends_with("]"),
         "the prior user message must be prefixed with [Ddd YYYY-MM-DD HH:MM TZ]: {prefix:?}"
     );
-    // The prefix uses `%Z` (CDT / MDT / etc) — the abbreviated zone, the same the time line
-    // uses. Chicago in October is on CDT (UTC-5).
+    // The prefix uses the same `%Z` abbreviated zone as the time line. UTC's abbreviation
+    // is the stable string "UTC" (no DST), which lets the assertion be exact instead of
+    // conditional on the date.
     assert!(
-        prefix.contains("CDT"),
-        "the prior user message's prefix must be in the configured zone (CDT for America/Chicago in October): {prefix:?}"
+        prefix.ends_with(" UTC]"),
+        "the prior user message's prefix must end with ` UTC]` (the configured zone): {prefix:?}"
     );
     // The leading three-letter weekday is the part that lets the model reason about relative
     // dates without computing them. The exact day depends on the wall-clock at test time, so

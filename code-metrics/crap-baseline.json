@@ -18914,7 +18914,7 @@
     {
       "file": "crates/common/src/local_time.rs",
       "function": "UserTimezone::at",
-      "line": 66,
+      "line": 72,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -18923,7 +18923,7 @@
     {
       "file": "crates/common/src/local_time.rs",
       "function": "UserTimezone::context_line",
-      "line": 73,
+      "line": 81,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -18932,7 +18932,7 @@
     {
       "file": "crates/common/src/local_time.rs",
       "function": "UserTimezone::context_line_at",
-      "line": 78,
+      "line": 86,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -18941,7 +18941,7 @@
     {
       "file": "crates/common/src/local_time.rs",
       "function": "UserTimezone::default",
-      "line": 109,
+      "line": 119,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -18950,7 +18950,7 @@
     {
       "file": "crates/common/src/local_time.rs",
       "function": "UserTimezone::default_zone",
-      "line": 51,
+      "line": 57,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -18959,7 +18959,7 @@
     {
       "file": "crates/common/src/local_time.rs",
       "function": "UserTimezone::from_str",
-      "line": 117,
+      "line": 127,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -18968,7 +18968,7 @@
     {
       "file": "crates/common/src/local_time.rs",
       "function": "UserTimezone::iana_name",
-      "line": 56,
+      "line": 62,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -18977,7 +18977,7 @@
     {
       "file": "crates/common/src/local_time.rs",
       "function": "UserTimezone::now",
-      "line": 61,
+      "line": 67,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -18986,7 +18986,7 @@
     {
       "file": "crates/common/src/local_time.rs",
       "function": "UserTimezone::parse",
-      "line": 39,
+      "line": 45,
       "cyclomatic": 3.0,
       "coverage": 100.0,
       "crap": 3.0,
@@ -18995,7 +18995,7 @@
     {
       "file": "crates/common/src/local_time.rs",
       "function": "UserTimezone::with_context",
-      "line": 92,
+      "line": 102,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -19004,7 +19004,7 @@
     {
       "file": "crates/common/src/local_time.rs",
       "function": "UserTimezone::with_context_at",
-      "line": 97,
+      "line": 107,
       "cyclomatic": 2.0,
       "coverage": 100.0,
       "crap": 2.0,
@@ -19013,7 +19013,7 @@
     {
       "file": "crates/common/src/local_time.rs",
       "function": "context_line",
-      "line": 123,
+      "line": 133,
       "cyclomatic": 2.0,
       "coverage": 100.0,
       "crap": 2.0,
@@ -19022,7 +19022,7 @@
     {
       "file": "crates/common/src/local_time.rs",
       "function": "with_context",
-      "line": 128,
+      "line": 138,
       "cyclomatic": 2.0,
       "coverage": 100.0,
       "crap": 2.0,
@@ -30524,7 +30524,7 @@
     {
       "file": "crates/main-agent/src/compaction.rs",
       "function": "marker_message",
-      "line": 303,
+      "line": 305,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -30551,7 +30551,7 @@
     {
       "file": "crates/main-agent/src/compaction.rs",
       "function": "summary_request",
-      "line": 288,
+      "line": 290,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -32801,7 +32801,7 @@
     {
       "file": "crates/main-agent/src/sessions/turn_clock.rs",
       "function": "ChatSessions::frame_user_message",
-      "line": 251,
+      "line": 286,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -32810,7 +32810,7 @@
     {
       "file": "crates/main-agent/src/sessions/turn_clock.rs",
       "function": "ChatSessions::model_view_messages",
-      "line": 270,
+      "line": 305,
       "cyclomatic": 3.0,
       "coverage": 100.0,
       "crap": 3.0,
@@ -32819,7 +32819,7 @@
     {
       "file": "crates/main-agent/src/sessions/turn_clock.rs",
       "function": "ChatSessions::user_timezone",
-      "line": 240,
+      "line": 275,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -32828,7 +32828,7 @@
     {
       "file": "crates/main-agent/src/sessions/turn_clock.rs",
       "function": "ChatSessions::with_user_timezone",
-      "line": 232,
+      "line": 267,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -32837,7 +32837,7 @@
     {
       "file": "crates/main-agent/src/sessions/turn_clock.rs",
       "function": "compute_gap_line",
-      "line": 142,
+      "line": 177,
       "cyclomatic": 3.0,
       "coverage": 100.0,
       "crap": 3.0,
@@ -32854,8 +32854,26 @@
     },
     {
       "file": "crates/main-agent/src/sessions/turn_clock.rs",
+      "function": "format_long_date",
+      "line": 96,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "liberado-main-agent"
+    },
+    {
+      "file": "crates/main-agent/src/sessions/turn_clock.rs",
+      "function": "format_short_date",
+      "line": 83,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "liberado-main-agent"
+    },
+    {
+      "file": "crates/main-agent/src/sessions/turn_clock.rs",
       "function": "format_user_date_prefix",
-      "line": 69,
+      "line": 78,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -32864,7 +32882,7 @@
     {
       "file": "crates/main-agent/src/sessions/turn_clock.rs",
       "function": "frame_user_message",
-      "line": 166,
+      "line": 201,
       "cyclomatic": 2.0,
       "coverage": 100.0,
       "crap": 2.0,
@@ -32873,7 +32891,7 @@
     {
       "file": "crates/main-agent/src/sessions/turn_clock.rs",
       "function": "humanize_gap",
-      "line": 93,
+      "line": 121,
       "cyclomatic": 6.0,
       "coverage": 100.0,
       "crap": 6.0,
@@ -32882,7 +32900,7 @@
     {
       "file": "crates/main-agent/src/sessions/turn_clock.rs",
       "function": "plural_unit",
-      "line": 121,
+      "line": 149,
       "cyclomatic": 2.0,
       "coverage": 100.0,
       "crap": 2.0,
@@ -32891,7 +32909,7 @@
     {
       "file": "crates/main-agent/src/sessions/turn_clock.rs",
       "function": "prefix_user_message_dates",
-      "line": 199,
+      "line": 234,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,

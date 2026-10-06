@@ -14,7 +14,7 @@
 //! reasoning about a relative phrasing like "tomorrow" should not have to compute which date a
 //! weekday name refers to. The bug this avoids: on Monday 2026-10-05 a user wrote "due
 //! tomorrow at noon" after a two-day gap and the model, reading "today" from a stale tool
-//! result, set the due date to 2026-10-03 — a Friday.
+//! result, set the due date to 2026-10-03 — a Saturday.
 //!
 //! **Not** injected into every system prompt by default — callers opt in (cron/webhook firings
 //! do this automatically in the daemon). Use [`UserTimezone::context_line`] / [`with_context`]
