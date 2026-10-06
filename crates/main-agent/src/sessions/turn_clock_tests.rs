@@ -123,6 +123,27 @@ fn gap_line_is_omitted_just_under_threshold() {
 }
 
 #[test]
+fn gap_line_is_omitted_at_exactly_the_threshold() {
+    // The threshold is *strict* — a gap of exactly 12h does not trigger the line. A `> delta`
+    // check would still be correct for the 11h 59m case above; the boundary test pins the
+    // exact inequality, which a `<` mutation would silently flip.
+    let now = utc();
+    let prev = now - chrono::Duration::hours(12);
+    let framed = frame_user_message(
+        Some(&chicago()),
+        now,
+        Some(prev),
+        default_gap_threshold(),
+        "hi",
+    );
+    assert!(
+        !framed.contains("Last user message"),
+        "a gap of exactly the threshold must not produce a gap line: {framed}"
+    );
+    assert!(framed.starts_with("Local time:"));
+}
+
+#[test]
 fn gap_line_appears_just_over_threshold() {
     // 12h 1m → "12 hours 1 minute" gap line (the minutes are part of what makes it strictly
     // over the 12h threshold, so they show).

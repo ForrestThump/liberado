@@ -4,8 +4,7 @@
 //! other end: a turn that started on Monday and resumed Thursday would see the *old* tool result's
 //! relative dates and guess "today" from those, writing "2026-10-03" for something the user said was
 //! due "tomorrow at noon" on 2026-10-05. Cron and webhook firings already stamped
-//! [`UserTimezone`] on their goal text; the chat path never did, because the chat path persisted
-//! every message verbatim and was wary of an injection that would have to be undone at write time.
+//! [`UserTimezone`] on their goal text; the chat path never did.
 //!
 //! The fix is deliberately **ephemeral**: the framed text reaches the model and nothing else.
 //! `persist_user_message` still writes the raw text, `history()` / `history_nodes()` still return
@@ -40,32 +39,22 @@ use super::ChatSessions;
 ///
 /// 12 hours is the deliberate line: it covers a full afternoon/evening gap (when real-world
 /// assumptions do not drift) without leaking into multi-day spans where they do.
-pub const DEFAULT_GAP_THRESHOLD_HOURS: i64 = 12;
+pub(super) const DEFAULT_GAP_THRESHOLD_HOURS: i64 = 12;
 
 /// How long the model remembers as "still close in time" — see [`DEFAULT_GAP_THRESHOLD_HOURS`].
-pub fn default_gap_threshold() -> Duration {
+pub(super) fn default_gap_threshold() -> Duration {
     Duration::hours(DEFAULT_GAP_THRESHOLD_HOURS)
 }
 
-/// The most recent non-tail-copy user node's `created_at`, or `None` when there is no prior user
+/// The most recent `Author::User` node's `created_at`, or `None` when there is no prior user
 /// message in the loaded history.
 ///
-/// Skips:
-///
-/// * `Author::Named(COMPACTION_TAIL_AUTHOR)` — compaction re-appends the kept tail verbatim with
-///   fresh ids and `created_at = now`, so the tail copy's timestamp is the *compaction* time, not
-///   the time the user originally wrote it. Using that would mark every long chat "2 minutes ago"
-///   forever.
-/// * `Author::System` (the persisted root prompt is `System`, not a user message — but listing the
-///   explicit skip is the part a future reader will reach for when the question is "why is this
-///   not just the last user message I see in `history()`?").
-/// * Any other `Author::Named` (a profile switch note, a subagent handoff, a `goal-session`
-///   annotation) — none of them are user-typed text.
-///
-/// `Author::Assistant`, `Author::Tool`, and `Author::User` are not skipped: only the model
-/// replies, the tool results the model consumed, and the user's own questions carry a wall-clock
-/// the model can ground a "when" against.
-pub fn previous_user_created_at(nodes: &[MessageNode]) -> Option<DateTime<Utc>> {
+/// Only `Author::User` counts. Every other author is ignored: a compaction tail copy
+/// ([`Author::Named`] with name `compaction-tail`) was re-appended with `created_at = now` and
+/// would lie about the gap; a profile switch note, a subagent handoff, or any other
+/// [`Author::Named`] is not user-typed text; and `Author::System` / `Author::Assistant` /
+/// `Author::Tool` were not written by the human.
+pub(super) fn previous_user_created_at(nodes: &[MessageNode]) -> Option<DateTime<Utc>> {
     nodes
         .iter()
         .rev()
@@ -76,7 +65,7 @@ pub fn previous_user_created_at(nodes: &[MessageNode]) -> Option<DateTime<Utc>> 
 /// Format a UTC instant as the same `[YYYY-MM-DD HH:MM TZ]` prefix the model will see stamped on
 /// prior user messages. Kept in sync with [`UserTimezone::context_line_at`]'s body so the prefix
 /// reads as "the same clock" wherever it appears in context.
-pub fn format_user_date_prefix(tz: &UserTimezone, utc: DateTime<Utc>) -> String {
+pub(super) fn format_user_date_prefix(tz: &UserTimezone, utc: DateTime<Utc>) -> String {
     let local = tz.at(utc);
     format!(
         "[{} {}] ",
@@ -100,7 +89,7 @@ pub fn format_user_date_prefix(tz: &UserTimezone, utc: DateTime<Utc>) -> String 
 /// Pure: no I/O, no allocation outside the returned `String`. The exact thresholds and unit names
 /// are part of the contract — the gap line is a string the model has to read, and reordering the
 /// units or rounding the day boundary would change what the model believes about the gap.
-pub fn humanize_gap(delta: Duration) -> String {
+pub(super) fn humanize_gap(delta: Duration) -> String {
     let secs = delta.num_seconds().max(0);
     if secs < 60 {
         return "less than a minute".to_string();
@@ -137,14 +126,19 @@ fn plural_unit(n: i64, unit: &str) -> String {
 }
 
 /// The gap line — `Last user message was 2 days 6 hours ago (2026-10-03 13:36 CDT).` — or `None`
-/// when no previous user message exists, or when the gap is within `threshold`.
+/// when no previous user message exists, or when the gap is at or below `threshold`.
+///
+/// A gap of exactly `threshold` is **not** enough to trigger the line: the line is a "this is
+/// stale enough to be worth telling the model about" hint, and a gap that has just crossed the
+/// line is the borderline case the model can read off the time line alone. Strict `>` keeps the
+/// threshold from being a coin-flip on the wire.
 ///
 /// `previous` must be the timestamp of the *original* user node (see
 /// [`previous_user_created_at`]); a compaction-tail copy's `created_at` is the compaction time,
 /// not the typing time, and would lie about the gap forever.
 ///
 /// `now` is an injected instant so tests can pin the output without sleeping.
-pub fn compute_gap_line(
+pub(super) fn compute_gap_line(
     tz: &UserTimezone,
     now: DateTime<Utc>,
     previous: Option<DateTime<Utc>>,
@@ -152,7 +146,7 @@ pub fn compute_gap_line(
 ) -> Option<String> {
     let prev = previous?;
     let delta = now.signed_duration_since(prev);
-    if delta < threshold {
+    if delta <= threshold {
         return None;
     }
     let humanized = humanize_gap(delta);
@@ -168,7 +162,7 @@ pub fn compute_gap_line(
 /// existing test surface expects. The behavior is then byte-identical to today, which is the
 /// property the pre-existing tests assert on and the reason this whole feature is a no-op when
 /// no `UserTimezone` has been wired.
-pub fn frame_user_message(
+pub(super) fn frame_user_message(
     tz: Option<&UserTimezone>,
     now: DateTime<Utc>,
     previous_user: Option<DateTime<Utc>>,
@@ -188,8 +182,8 @@ pub fn frame_user_message(
     parts.join("\n\n")
 }
 
-/// Date-prefix every `Author::User` message in `nodes` whose content is not already prefixed.
-/// Returns a new `Vec`; the input is not mutated.
+/// Date-prefix every `Author::User` message in `nodes`. Returns a new `Vec`; the input is not
+/// mutated.
 ///
 /// Compaction-tail copies are **not** prefixed: their `created_at` is the compaction time, and
 /// stamping that on the (otherwise verbatim) tail copy would tell the model the conversation
@@ -201,7 +195,10 @@ pub fn frame_user_message(
 ///
 /// `Author::System`, `Author::Assistant`, `Author::Tool`, and any other `Author::Named` are left
 /// alone — only the human's own text is dated.
-pub fn prefix_user_message_dates(nodes: Vec<MessageNode>, tz: &UserTimezone) -> Vec<MessageNode> {
+pub(super) fn prefix_user_message_dates(
+    nodes: Vec<MessageNode>,
+    tz: &UserTimezone,
+) -> Vec<MessageNode> {
     nodes
         .into_iter()
         .map(|mut node| {
@@ -238,7 +235,8 @@ impl ChatSessions {
 
     /// The currently-attached operator timezone, or `None` when this `ChatSessions` was built
     /// without one. Tests assert on this to prove framing is / is not in effect.
-    pub fn user_timezone(&self) -> Option<UserTimezone> {
+    #[cfg(test)]
+    pub(crate) fn user_timezone(&self) -> Option<UserTimezone> {
         self.user_timezone
     }
 
@@ -246,10 +244,10 @@ impl ChatSessions {
     /// `previous_user` is far enough back, the gap line) plus the raw text. When no timezone is
     /// attached, the raw text passes through unchanged.
     ///
-    /// `previous_user` is the `created_at` of the most recent non-tail-copy `Author::User`
-    /// node from the *pre-compaction* load — [`previous_user_created_at`] returns the right
-    /// value, and the framing must happen before `maybe_compact` consumes the loaded nodes.
-    pub fn frame_user_message(
+    /// `previous_user` is the `created_at` of the most recent `Author::User` node from the
+    /// *pre-compaction* load — [`previous_user_created_at`] returns the right value, and the
+    /// framing must happen before `maybe_compact` consumes the loaded nodes.
+    pub(super) fn frame_user_message(
         &self,
         now: DateTime<Utc>,
         previous_user: Option<DateTime<Utc>>,

@@ -260,7 +260,7 @@ still need.
 operator's local wall-clock when each was written. Honour those dates: the model needs to know \
 how old an instruction is, and rolling summaries that lose the dates silently re-age everything \
 to \"just now\". When a user message is not prefixed (an older transcript, or a tool that does \
-not yet stamp) still record its date if it can be inferred from context, but never invent a date.
+not yet stamp) do not guess a date for it.
 
 Output EXACTLY this Markdown structure (omit a section only when it is genuinely empty):
 
