@@ -1782,8 +1782,8 @@
     "cyclomatic": 1
   },
   "crates/common/src/local_time.rs": {
-    "ploc": 181,
-    "lloc": 35,
+    "ploc": 180,
+    "lloc": 33,
     "functions": 21,
     "cyclomatic": 33
   },
@@ -3032,8 +3032,8 @@
   "crates/main-agent/src/sessions.rs": {
     "ploc": 1235,
     "lloc": 283,
-    "functions": 113,
-    "cyclomatic": 234
+    "functions": 112,
+    "cyclomatic": 233
   },
   "crates/main-agent/src/sessions/agent_profiles.rs": {
     "ploc": 8,
@@ -3142,6 +3142,24 @@
     "lloc": 32,
     "functions": 8,
     "cyclomatic": 9
+  },
+  "crates/main-agent/src/sessions/turn_clock.rs": {
+    "ploc": 147,
+    "lloc": 42,
+    "functions": 17,
+    "cyclomatic": 31
+  },
+  "crates/main-agent/src/sessions/turn_clock_integration_tests.rs": {
+    "ploc": 291,
+    "lloc": 105,
+    "functions": 27,
+    "cyclomatic": 34
+  },
+  "crates/main-agent/src/sessions/turn_clock_tests.rs": {
+    "ploc": 335,
+    "lloc": 99,
+    "functions": 22,
+    "cyclomatic": 28
   },
   "crates/main-agent/src/sessions/workspace.rs": {
     "ploc": 31,

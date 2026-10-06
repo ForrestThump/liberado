@@ -4,7 +4,7 @@
     "proven_invariant": 65,
     "local_failure": 0,
     "process_fatal": 46,
-    "files_scanned": 541,
+    "files_scanned": 542,
     "files_with_unwraps": 49
   },
   "files": {
@@ -482,7 +482,7 @@
       "occurrences": [
         {
           "file": "crates/common/src/local_time.rs",
-          "line": 52,
+          "line": 58,
           "column": 9,
           "method": "expect",
           "snippet": "Self::parse(DEFAULT_TIMEZONE).expect(\"DEFAULT_TIMEZONE must be a valid IANA name\")",

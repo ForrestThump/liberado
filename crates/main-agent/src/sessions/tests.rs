@@ -36,3 +36,6 @@ mod model;
 
 #[path = "metering.rs"]
 mod metering;
+
+#[path = "turn_clock_integration_tests.rs"]
+mod turn_clock_integration_tests;

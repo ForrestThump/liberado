@@ -7,8 +7,14 @@
 //! ```ignore
 //! let tz = UserTimezone::parse("America/Chicago")?;
 //! let goal = tz.with_context("Summarize today's calendar.");
-//! // → "Local time: 2026-07-19 21:32 CDT (America/Chicago).\n\nSummarize today's calendar."
+//! // → "Local time: Sunday 2026-07-19 21:32 CDT (America/Chicago).\n\nSummarize today's calendar."
 //! ```
+//!
+//! The leading weekday is part of the line by design: a model asked "what day is it?" or
+//! reasoning about a relative phrasing like "tomorrow" should not have to compute which date a
+//! weekday name refers to. The bug this avoids: on Monday 2026-10-05 a user wrote "due
+//! tomorrow at noon" after a two-day gap and the model, reading "today" from a stale tool
+//! result, set the due date to 2026-10-03 — a Saturday.
 //!
 //! **Not** injected into every system prompt by default — callers opt in (cron/webhook firings
 //! do this automatically in the daemon). Use [`UserTimezone::context_line`] / [`with_context`]
@@ -69,7 +75,9 @@ impl UserTimezone {
 
     /// One short line for agent context, stamped **now**.
     ///
-    /// Example: `Local time: 2026-07-19 21:32 CDT (America/Chicago).`
+    /// Example: `Local time: Sunday 2026-07-19 21:32 CDT (America/Chicago).`
+    /// The leading weekday is part of the contract: see the module docs for the bug that made
+    /// it part of the line.
     pub fn context_line(&self) -> String {
         self.context_line_at(Utc::now())
     }
@@ -77,9 +85,11 @@ impl UserTimezone {
     /// Same as [`context_line`](Self::context_line) for a specific UTC instant (tests / event time).
     pub fn context_line_at(&self, utc: DateTime<Utc>) -> String {
         let local = self.at(utc);
-        // `%Z` is the abbreviated zone (CDT/CST); IANA name in parens is unambiguous year-round.
+        // `%A` is the full weekday (Sunday), `%Z` the abbreviated zone (CDT/CST); the IANA name
+        // in parens is unambiguous year-round and is the human-readable anchor for ops staff.
         format!(
-            "Local time: {} {} ({}).",
+            "Local time: {} {} {} ({}).",
+            local.format("%A"),
             local.format("%Y-%m-%d %H:%M"),
             local.format("%Z"),
             self.iana_name()
@@ -150,15 +160,15 @@ mod tests {
     #[test]
     fn context_line_includes_iana_and_local_wall_clock() {
         // Fixed UTC: 2026-07-20 02:32 UTC = 2026-07-19 21:32 CDT (America/Chicago, UTC-5 in July).
+        // 2026-07-19 is a Sunday — assert the full weekday on the front of the line, not just
+        // the date, so a mutation that drops the weekday gets caught here.
         let utc = Utc.with_ymd_and_hms(2026, 7, 20, 2, 32, 0).unwrap();
         let tz = UserTimezone::parse("America/Chicago").unwrap();
         let line = tz.context_line_at(utc);
-        assert!(
-            line.contains("2026-07-19 21:32"),
-            "expected CDT wall clock in line, got {line}"
+        assert_eq!(
+            line, "Local time: Sunday 2026-07-19 21:32 CDT (America/Chicago).",
+            "the full line shape (weekday + date + time + zone + IANA) is part of the contract"
         );
-        assert!(line.contains("America/Chicago"), "got {line}");
-        assert!(line.starts_with("Local time:"), "got {line}");
     }
 
     #[test]
@@ -166,7 +176,7 @@ mod tests {
         let utc = Utc.with_ymd_and_hms(2026, 7, 20, 2, 32, 0).unwrap();
         let tz = UserTimezone::parse("America/Chicago").unwrap();
         let out = tz.with_context_at(utc, "Summarize today's calendar.");
-        assert!(out.starts_with("Local time:"));
+        assert!(out.starts_with("Local time: Sunday 2026-07-19 21:32 CDT (America/Chicago)."));
         assert!(out.contains("\n\nSummarize today's calendar."));
     }
 

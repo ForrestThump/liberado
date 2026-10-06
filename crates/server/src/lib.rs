@@ -901,6 +901,8 @@ async fn build_chat(
     .with_dispatcher_capabilities(dispatcher_caps)
     .with_delegation_mode(main_agent_cfg.delegation_mode);
 
+    sessions = chat_agent_spawn::apply_user_timezone(sessions, config);
+
     // CH3 context compaction: config-tier knobs → kernel runtime type (per-model absolute
     // triggers + daemon default). See `state::compaction_config_for_face`. Summaries use the face
     // provider (see crates/main-agent/src/compaction.rs).

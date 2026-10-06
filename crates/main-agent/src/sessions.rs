@@ -58,7 +58,7 @@ use std::sync::{Arc, Mutex};
 use liberado_agent_workspace::WorkspaceSettings;
 use liberado_common::{
     Capability, CapabilityCatalog, CapabilitySet, Consequence, DEFAULT_POOL, DispatchAction,
-    McpDescriptor, ProposalSigner, RiskWaiverSet, WriteClass, mcp_of,
+    McpDescriptor, ProposalSigner, RiskWaiverSet, UserTimezone, WriteClass, mcp_of,
 };
 use liberado_conversation_store::{
     AgentProfiles, Author, ConversationHeader, ConversationStore, MessageNode, NewNode, StoreError,
@@ -80,6 +80,8 @@ mod agent_spawn;
 mod reasoning_stamp;
 #[path = "sessions/surface_mode.rs"]
 mod surface_mode;
+#[path = "sessions/turn_clock.rs"]
+mod turn_clock;
 #[path = "sessions_waivers.rs"]
 mod waivers;
 #[path = "sessions/workspace.rs"]
@@ -310,6 +312,10 @@ pub struct ChatSessions {
     agent_profiles: AgentProfiles,
     /// Private file workspace. Absent in tests, so they do not grow a shared directory.
     agent_workspace: Option<WorkspaceSettings>,
+    /// Operator timezone used to stamp wall-clock context onto the model-visible copy of every
+    /// turn. `None` = the raw user message reaches the model unchanged — the path every existing
+    /// test asserts on. See `sessions/turn_clock.rs` for the framing details.
+    user_timezone: Option<UserTimezone>,
 }
 
 /// The moving parts of automatic compaction: the tunables, plus the provider used for the one
@@ -371,6 +377,7 @@ impl ChatSessions {
             compaction: None,
             agent_profiles: AgentProfiles::default(),
             agent_workspace: None,
+            user_timezone: None,
         }
     }
 
@@ -716,6 +723,12 @@ impl ChatSessions {
             // compaction and the user node: the compact threshold tracks this conversation's model,
             // and the user node is stamped with the same id.
             let settings = self.turn_settings(session).await;
+            // Capture the previous user message's wall-clock *before* `maybe_compact` consumes
+            // `nodes` — the gap line is part of the framed current message and must be assembled
+            // before any of the nodes are moved. The post-compaction view would have *fresh*
+            // `created_at` on tail copies and would lie about the gap; the pre-compaction view
+            // is the one whose user timestamps are real.
+            let prev_user = turn_clock::previous_user_created_at(&nodes);
             let (mut convo, parent_leaf) = self
                 .maybe_compact(session, nodes, parent_leaf, user, settings.model.as_deref())
                 .await;
@@ -742,6 +755,15 @@ impl ChatSessions {
             }
             convo.apply_prompt_append(settings.prompt_append.as_deref());
 
+            // Frame the model-visible copy of the user's message with the operator's local time
+            // (and, when applicable, the gap since their last message). The raw text is what we
+            // persisted, titled, dispatched, and stamped above — the framing is a render-time
+            // transform, not a new piece of context. `None` `user_timezone` is the explicit no-op
+            // path: every existing test asserts on the raw text reaching the model and that path
+            // must keep working.
+            let now = chrono::Utc::now();
+            let framed_user = self.frame_user_message(now, prev_user, user);
+
             let reply = if face_agent {
                 let turn_deferral = Arc::new(AtomicBool::new(false));
                 let turn_runtime = self.build_face_runtime(
@@ -754,7 +776,9 @@ impl ChatSessions {
                 // Derived from the runtime the executor is about to be handed, never from a list built
                 // beside it — see `Conversation::apply_available_tools`.
                 self.state_tool_surface(&mut convo, session, &settings, turn_runtime.as_ref());
-                let reply = convo.turn(&executor, turn_runtime.as_ref(), user).await?;
+                let reply = convo
+                    .turn(&executor, turn_runtime.as_ref(), &framed_user)
+                    .await?;
                 // Gap 2: if a `delegate` this turn deferred to the human out-of-band (an interactive
                 // proposal/permission notification already landed on this surface), collapse the face
                 // agent's now-redundant reply to a tiny pointer at that notification.
@@ -778,7 +802,9 @@ impl ChatSessions {
                             &settings,
                             turn_runtime.as_ref(),
                         );
-                        convo.turn(&executor, turn_runtime.as_ref(), user).await?
+                        convo
+                            .turn(&executor, turn_runtime.as_ref(), &framed_user)
+                            .await?
                     }
                 }
             };
@@ -826,6 +852,9 @@ impl ChatSessions {
             // Resolved once per turn (pending model is consumed here): compaction and the user-node
             // stamp must agree on the same model.
             let settings = self.turn_settings(session).await;
+            // Capture the previous user message's wall-clock *before* `maybe_compact` consumes
+            // `nodes`; see `turn` for the same call and the same rationale.
+            let prev_user = turn_clock::previous_user_created_at(&nodes);
             let (mut convo, parent_leaf) = self
                 .maybe_compact(session, nodes, parent_leaf, user, settings.model.as_deref())
                 .await;
@@ -846,6 +875,12 @@ impl ChatSessions {
             }
             convo.apply_prompt_append(settings.prompt_append.as_deref());
 
+            // Render-time framing for the model-visible copy of the user's message. The raw text
+            // is what was persisted, titled, dispatched, and stamped; the framing is ephemeral and
+            // only reaches the model. See `turn` for the matching call and the same reasoning.
+            let now = chrono::Utc::now();
+            let framed_user = self.frame_user_message(now, prev_user, user);
+
             if face_agent {
                 // Streaming path (web-UI SSE): tokens are emitted live, so a post-turn deferral flag
                 // can't retract an already-streamed reply — Gap 2 suppression is a buffered-`turn`
@@ -863,7 +898,7 @@ impl ChatSessions {
                 );
                 self.state_tool_surface(&mut convo, session, &settings, turn_runtime.as_ref());
                 convo
-                    .turn_stream(&executor, turn_runtime.as_ref(), user, events)
+                    .turn_stream(&executor, turn_runtime.as_ref(), &framed_user, events)
                     .await?;
             } else {
                 match self.dispatch_turn(user, settings.delegation).await {
@@ -887,7 +922,7 @@ impl ChatSessions {
                             turn_runtime.as_ref(),
                         );
                         convo
-                            .turn_stream(&executor, turn_runtime.as_ref(), user, events)
+                            .turn_stream(&executor, turn_runtime.as_ref(), &framed_user, events)
                             .await?;
                     }
                 }
@@ -1809,7 +1844,10 @@ impl ChatSessions {
         // per-conversation threshold — never a second independent lookup that could disagree.
         turn_model: Option<&str>,
     ) -> (Conversation, Option<Ulid>) {
-        let messages: Vec<Message> = nodes.iter().map(|n| n.message.clone()).collect();
+        // Model-visible view: the persisted form, optionally date-prefixed on prior user
+        // messages (see `model_view_messages`). Persisted nodes and `history()` /
+        // `history_nodes()` are untouched.
+        let messages: Vec<Message> = self.model_view_messages(&nodes);
         let pass_through = || (Conversation::from_history(messages.clone()), parent_leaf);
 
         let Some(engine) = &self.compaction else {
