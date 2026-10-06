@@ -79,7 +79,10 @@ fn frame_user_message_with_timezone_includes_the_local_time_line() {
         default_gap_threshold(),
         "due tomorrow at noon",
     );
-    assert!(framed.starts_with("Local time: 2026-10-05 14:42 CDT (America/Chicago)."));
+    // 2026-10-05 14:42 CDT is a Monday in Chicago (the 19:42 UTC instant is the test fixture).
+    // The full weekday on the front of the line is part of the contract: a model reasoning
+    // about a relative date like "yesterday" should not have to compute it from the date.
+    assert!(framed.starts_with("Local time: Monday 2026-10-05 14:42 CDT (America/Chicago)."));
     assert!(framed.contains("(America/Chicago)"));
     // Raw text is preserved, verbatim and last (the model reads from the most recent
     // instruction downward).
@@ -99,8 +102,8 @@ fn frame_user_message_uses_the_configured_zone_not_chicago() {
         default_gap_threshold(),
         "due tomorrow at noon",
     );
-    // Denver is UTC-6 in October (MDT), 13:42 local.
-    assert!(framed.starts_with("Local time: 2026-10-05 13:42 MDT (America/Denver)."));
+    // Denver is UTC-6 in October (MDT), 13:42 local. Same instant, same weekday.
+    assert!(framed.starts_with("Local time: Monday 2026-10-05 13:42 MDT (America/Denver)."));
     assert!(!framed.contains("America/Chicago"));
     assert!(!framed.contains("CDT"));
 }
@@ -159,16 +162,23 @@ fn gap_line_appears_just_over_threshold() {
     assert!(framed.contains("Last user message was 12 hours 1 minute ago"));
     // The previous message's local time is part of the line (the model can ground a "when" in
     // the absolute date, not just the relative gap). 19:42 UTC − 12h01 = 07:41 UTC = 02:41 CDT
-    // (Chicago is UTC-5 in October).
+    // (Chicago is UTC-5 in October), and 2026-10-05 is a Monday. Full weekday, no brackets —
+    // the line is read in a sentence, not as a list item.
     assert!(
-        framed.contains("[2026-10-05 02:41 CDT]"),
-        "the previous message's local timestamp must appear in the gap line: {framed}"
+        framed.contains("(Monday 2026-10-05 02:41 CDT)"),
+        "the previous message's local timestamp must appear in the gap line in full-weekday, no-bracket form: {framed}"
+    );
+    assert!(
+        !framed.contains("[2026-10-05 02:41 CDT]"),
+        "the gap line must not use the bracketed prior-message prefix shape: {framed}"
     );
 }
 
 #[test]
 fn gap_line_humanizes_multi_day_gaps() {
     // 2026-10-03 13:36 CDT = 2026-10-03 18:36 UTC. 2026-10-05 19:42 UTC is 2d 1h 6m later.
+    // 2026-10-03 is a Saturday. Pin the exact gap line: weekday, no brackets, the humanized
+    // gap, and the raw text at the end.
     let now = utc();
     let prev = Utc.with_ymd_and_hms(2026, 10, 3, 18, 36, 0).unwrap();
     let framed = frame_user_message(
@@ -178,8 +188,18 @@ fn gap_line_humanizes_multi_day_gaps() {
         default_gap_threshold(),
         "due tomorrow at noon",
     );
-    assert!(framed.contains("2 days 1 hour ago"));
-    assert!(framed.contains("[2026-10-03 13:36 CDT]"));
+    assert!(
+        framed.contains("Last user message was 2 days 1 hour ago (Saturday 2026-10-03 13:36 CDT)."),
+        "the multi-day gap line must use the full-weekday, no-bracket shape: {framed}"
+    );
+    assert!(
+        framed.ends_with("due tomorrow at noon"),
+        "the raw user text is still the last block of the framed message: {framed}"
+    );
+    assert!(
+        !framed.contains("[2026-10-03"),
+        "the gap line must not use the bracketed prior-message prefix shape: {framed}"
+    );
 }
 
 #[test]
@@ -345,23 +365,30 @@ fn prefix_user_message_dates_only_prefixes_user_messages() {
     assert_eq!(out[2].message.content, "ok");
     assert_eq!(out[3].message.content, "tool result");
     assert_eq!(out[4].message.content, "switched");
-    // User messages get the prefix.
+    // User messages get the prefix. The "yesterday" node is 2026-10-04 14:42 CDT (a Sunday)
+    // and the "second question" node is "now" (2026-10-05 14:42 CDT, a Monday). The leading
+    // `Ddd` is the abbreviated weekday so the model can ground relative dates without
+    // computing the weekday from the date.
     assert!(
         out[1]
             .message
             .content
-            .starts_with("[2026-10-04 14:42 CDT] ")
+            .starts_with("[Sun 2026-10-04 14:42 CDT] "),
+        "yesterday prefix must include the abbreviated weekday: {:?}",
+        out[1].message.content
     );
     assert!(out[1].message.content.ends_with("yesterday"));
     assert!(
         out[5]
             .message
             .content
-            .starts_with("[2026-10-05 14:42 CDT] ")
+            .starts_with("[Mon 2026-10-05 14:42 CDT] "),
+        "current-turn prefix must include the abbreviated weekday: {:?}",
+        out[5].message.content
     );
     assert!(out[5].message.content.ends_with("second question"));
-    // The prefix is exactly `[YYYY-MM-DD HH:MM TZ] <body>` — no IANA in parens (that lives on
-    // the time line of the current message, where there is room for it).
+    // The prefix is exactly `[Ddd YYYY-MM-DD HH:MM TZ] <body>` — no IANA in parens (that lives
+    // on the time line of the current message, where there is room for it).
     assert!(!out[1].message.content.contains("(America/Chicago)"));
 }
 
@@ -393,7 +420,7 @@ fn prefix_user_message_dates_skips_compaction_tail_copies() {
 #[test]
 fn prefix_user_message_dates_uses_the_configured_zone() {
     // Same UTC, different IANA → different prefix. Pins that the helper does not bake in
-    // Chicago.
+    // Chicago. The instant is 2026-10-04 19:42 UTC, which is a Sunday in both zones.
     let now = utc();
     let user_at = now - chrono::Duration::days(1);
     let nodes = vec![node(1, Author::User, "hi", user_at)];
@@ -403,7 +430,7 @@ fn prefix_user_message_dates_uses_the_configured_zone() {
         chicago_prefix[0]
             .message
             .content
-            .starts_with("[2026-10-04 14:42 CDT]")
+            .starts_with("[Sun 2026-10-04 14:42 CDT]")
     );
 
     let denver_prefix = prefix_user_message_dates(nodes, &denver());
@@ -411,6 +438,6 @@ fn prefix_user_message_dates_uses_the_configured_zone() {
         denver_prefix[0]
             .message
             .content
-            .starts_with("[2026-10-04 13:42 MDT]")
+            .starts_with("[Sun 2026-10-04 13:42 MDT]")
     );
 }

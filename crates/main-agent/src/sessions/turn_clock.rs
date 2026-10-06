@@ -63,13 +63,49 @@ pub(super) fn previous_user_created_at(nodes: &[MessageNode]) -> Option<DateTime
         .map(|n| n.created_at)
 }
 
-/// Format a UTC instant as the same `[YYYY-MM-DD HH:MM TZ]` prefix the model will see stamped on
-/// prior user messages. Kept in sync with [`UserTimezone::context_line_at`]'s body so the prefix
-/// reads as "the same clock" wherever it appears in context.
+/// Format a UTC instant as the abbreviated-weekday prior-message prefix the model will see
+/// stamped on prior user messages.
+///
+/// Shape: `[Sat 2026-10-03 13:36 CDT] ` — bracketed, `%a` weekday (Sat), the same
+/// `YYYY-MM-DD HH:MM` shape the chat turn's `Local time` line uses, and the same `%Z`
+/// abbreviated zone (`%Z` is the same in both, so the model can match a prior-message
+/// prefix against a `Local time` line without parsing the abbreviations differently).
+///
+/// Kept separate from the gap-line formatter ([`gap_line_previous_timestamp`]) because the
+/// shapes are different on purpose: the gap line is read once, has full weekday for clarity,
+/// and has no brackets (the brackets belong to the model-history list of messages, not to the
+/// parenthetical date inside a sentence).
 pub(super) fn format_user_date_prefix(tz: &UserTimezone, utc: DateTime<Utc>) -> String {
+    format!("[{}] ", format_short_date(tz, utc))
+}
+
+/// Format a UTC instant the way it appears inside the gap line's parens.
+///
+/// Shape: `Saturday 2026-10-03 13:36 CDT` — full weekday (`%A`), same date/time/zone as
+/// [`format_user_date_prefix`], and **no** surrounding brackets. Used by
+/// [`compute_gap_line`] to render `(Saturday 2026-10-03 13:36 CDT)` at the end of
+/// `Last user message was 2 days 6 hours ago (...)`.
+fn gap_line_previous_timestamp(tz: &UserTimezone, utc: DateTime<Utc>) -> String {
+    format_long_date(tz, utc)
+}
+
+/// `Sat 2026-10-03 13:36 CDT` — abbreviated weekday, the prior-message prefix's body.
+fn format_short_date(tz: &UserTimezone, utc: DateTime<Utc>) -> String {
     let local = tz.at(utc);
     format!(
-        "[{} {}] ",
+        "{} {} {}",
+        local.format("%a"),
+        local.format("%Y-%m-%d %H:%M"),
+        local.format("%Z"),
+    )
+}
+
+/// `Saturday 2026-10-03 13:36 CDT` — full weekday, the gap line's date body.
+fn format_long_date(tz: &UserTimezone, utc: DateTime<Utc>) -> String {
+    let local = tz.at(utc);
+    format!(
+        "{} {} {}",
+        local.format("%A"),
         local.format("%Y-%m-%d %H:%M"),
         local.format("%Z"),
     )
@@ -126,13 +162,20 @@ fn plural_unit(n: i64, unit: &str) -> String {
     }
 }
 
-/// The gap line — `Last user message was 2 days 6 hours ago (2026-10-03 13:36 CDT).` — or `None`
-/// when no previous user message exists, or when the gap is at or below `threshold`.
+/// The gap line — `Last user message was 2 days 6 hours ago (Saturday 2026-10-03 13:36 CDT).` —
+/// or `None` when no previous user message exists, or when the gap is at or below `threshold`.
 ///
 /// A gap of exactly `threshold` is **not** enough to trigger the line: the line is a "this is
 /// stale enough to be worth telling the model about" hint, and a gap that has just crossed the
 /// line is the borderline case the model can read off the time line alone. Strict `>` keeps the
 /// threshold from being a coin-flip on the wire.
+///
+/// The date inside the parens uses the **full** weekday (`Saturday`, `%A`) rather than the
+/// abbreviated form the prior-message prefix uses (`Sat`, `%a`) — the gap line is read in a
+/// sentence, where a 3-letter weekday is easy to misread, and the model has no second chance
+/// to ask "what day was Saturday 2026-10-03?". The brackets around the prior-message prefix
+/// are also dropped here, because the parens already do the framing job and an extra pair
+/// would just be noise the model has to parse around.
 ///
 /// `previous` must be the timestamp of the *original* user node (see
 /// [`previous_user_created_at`]); a compaction-tail copy's `created_at` is the compaction time,
@@ -151,9 +194,9 @@ pub(super) fn compute_gap_line(
         return None;
     }
     let humanized = humanize_gap(delta);
-    let prev_local = format_user_date_prefix(tz, prev).trim_end().to_string();
     Some(format!(
-        "Last user message was {humanized} ago ({prev_local})."
+        "Last user message was {humanized} ago ({}).",
+        gap_line_previous_timestamp(tz, prev)
     ))
 }
 

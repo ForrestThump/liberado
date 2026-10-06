@@ -262,20 +262,31 @@ async fn prior_user_messages_carry_their_local_date_in_the_model_view() {
         .strip_suffix("first question")
         .expect("the user message's body must be the raw text with a prefix in front")
         .trim_end();
+    // The raw content was `[Tue 2026-10-06 08:39 CDT] first question`; `strip_suffix` strips
+    // the body, leaving `[Tue 2026-10-06 08:39 CDT] ` (trailing space). `trim_end` eats that
+    // space, so the test inspects the bracketed prefix alone.
     assert!(
-        prefix.starts_with("[20") && prefix.contains("]"),
-        "the prior user message must be prefixed with [YYYY-MM-DD HH:MM TZ]: {prefix:?}"
-    );
-    // Body is separated from the prefix by a single space.
-    assert!(
-        prefix.ends_with("]"),
-        "the prior user message's prefix must close with a bracket: {prefix:?}"
+        prefix.starts_with("[") && prefix.contains(" 20") && prefix.ends_with("]"),
+        "the prior user message must be prefixed with [Ddd YYYY-MM-DD HH:MM TZ]: {prefix:?}"
     );
     // The prefix uses `%Z` (CDT / MDT / etc) — the abbreviated zone, the same the time line
     // uses. Chicago in October is on CDT (UTC-5).
     assert!(
         prefix.contains("CDT"),
         "the prior user message's prefix must be in the configured zone (CDT for America/Chicago in October): {prefix:?}"
+    );
+    // The leading three-letter weekday is the part that lets the model reason about relative
+    // dates without computing them. The exact day depends on the wall-clock at test time, so
+    // we only assert the *shape* — a 3-letter alpha prefix inside the brackets.
+    let inside = prefix
+        .strip_prefix('[')
+        .and_then(|s| s.split(']').next())
+        .unwrap_or("");
+    assert!(
+        inside.len() >= 4
+            && inside[..3].chars().all(|c| c.is_ascii_alphabetic())
+            && inside.as_bytes()[3] == b' ',
+        "the prior user message's prefix must start with a 3-letter weekday: {prefix:?}"
     );
 
     // The current turn's user message is the framed one (Local time + raw text), NOT the
