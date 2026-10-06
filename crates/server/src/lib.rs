@@ -901,6 +901,21 @@ async fn build_chat(
     .with_dispatcher_capabilities(dispatcher_caps)
     .with_delegation_mode(main_agent_cfg.delegation_mode);
 
+    // Operator timezone: a missing or invalid IANA name is logged and the chat runs without
+    // wall-clock context. Production never reaches the log line because `Config::validate`
+    // already refused the unknown zone at load, but we still mirror `apply_timezone`'s fail-soft
+    // shape so an operator with a misconfigured `topology.timezone` does not get a chat that
+    // refuses to start.
+    match config.topology.user_timezone() {
+        Ok(tz) => {
+            sessions = sessions.with_user_timezone(tz);
+            info!(timezone = %tz.iana_name(), "chat: operator timezone configured");
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "chat: topology.timezone invalid — turns will not get Local time stamps");
+        }
+    }
+
     // CH3 context compaction: config-tier knobs → kernel runtime type (per-model absolute
     // triggers + daemon default). See `state::compaction_config_for_face`. Summaries use the face
     // provider (see crates/main-agent/src/compaction.rs).

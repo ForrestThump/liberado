@@ -256,6 +256,11 @@ conversation so far, not a fresh summary of only the new part.
 - Drop chit-chat, dead ends, superseded plans, and stale tool output. Keep what upcoming turns \
 still need.
 - Write in the same language the conversation is in.
+- User messages in the transcript may be prefixed with `[YYYY-MM-DD HH:MM TZ]` showing the \
+operator's local wall-clock when each was written. Honour those dates: the model needs to know \
+how old an instruction is, and rolling summaries that lose the dates silently re-age everything \
+to \"just now\". When a user message is not prefixed (an older transcript, or a tool that does \
+not yet stamp) still record its date if it can be inferred from context, but never invent a date.
 
 Output EXACTLY this Markdown structure (omit a section only when it is genuinely empty):
 
@@ -270,7 +275,13 @@ Concrete facts, names, values, and choices made (with the why, when stated).
 ## Pending asks & next steps
 Open questions to the user, promised follow-ups, the immediate next action.
 ## Relevant files, tools & artifacts
-Paths, ids, tool names, and resources referenced that still matter.";
+Paths, ids, tool names, and resources referenced that still matter.
+## Timeline
+First and last user message dates (from the `[YYYY-MM-DD HH:MM TZ]` prefixes that appear on \
+user messages in the transcript) and any multi-day gaps in between. Example: `First user \
+message 2026-09-21 09:15 CDT. Last user message 2026-10-05 19:42 CDT. Gap of 2 days 6 hours \
+between 2026-09-23 and 2026-09-25.` Update these on every rolling summary — the next model \
+turn will use them to judge how stale earlier instructions are.";
 
 /// Build the one plain completion that produces the rolling summary. Temperature 0 (deterministic,
 /// like the dispatcher) and a hard output cap from [`CompactionConfig::summary_max_tokens`].
@@ -414,6 +425,34 @@ mod tests {
         assert!(matches!(m.role, Role::System));
         assert!(m.content.starts_with(SUMMARY_HEADER));
         assert!(m.content.contains("## Goal"));
+    }
+
+    /// The summarizer must always emit a `## Timeline` section so rolling summaries do not lose
+    /// the dates that the model needs to judge how stale an earlier instruction is. The header
+    /// mentions the `[YYYY-MM-DD HH:MM TZ]` prefixes the chat path stamps on user messages, and
+    /// the example line shows the first/last/gap shape we want. A change that drops the section
+    /// would silently re-age every older instruction to "just now" on the next turn, which is the
+    /// bug this whole section exists to prevent.
+    #[test]
+    fn summarizer_prompt_requires_a_timeline_section() {
+        assert!(
+            SUMMARIZER_SYSTEM_PROMPT.contains("## Timeline"),
+            "the prompt must require a ## Timeline section so rolling summaries keep the dates"
+        );
+        // The Timeline must explicitly use the prefix shape the chat path stamps. A change that
+        // asks for a date but ignores the prefix would still re-age older transcripts.
+        assert!(
+            SUMMARIZER_SYSTEM_PROMPT.contains("[YYYY-MM-DD HH:MM TZ]"),
+            "the prompt must reference the [YYYY-MM-DD HH:MM TZ] prefix shape the chat path stamps"
+        );
+        // First/last user message dates and any multi-day gap are the three things the model
+        // needs to know; they are the three things the prompt asks for.
+        assert!(SUMMARIZER_SYSTEM_PROMPT.contains("First"));
+        assert!(SUMMARIZER_SYSTEM_PROMPT.contains("Last"));
+        assert!(
+            SUMMARIZER_SYSTEM_PROMPT.contains("multi-day"),
+            "multi-day gaps must be carried forward, not rounded"
+        );
     }
 
     #[test]
