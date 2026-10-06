@@ -824,6 +824,29 @@ struct SessionEngine {
     goals: Arc<liberado_session::GoalSessionHub>,
 }
 
+/// Wire the operator IANA timezone onto the chat session. A missing or invalid name is logged
+/// and the chat runs without wall-clock context — `Config::validate` already refused unknown
+/// zones at load, but mirroring `apply_timezone`'s fail-soft shape means a misconfigured
+/// `topology.timezone` does not refuse to start the chat.
+fn apply_user_timezone(
+    sessions: ChatSessions,
+    config: &liberado_bootstrap::Config,
+) -> ChatSessions {
+    match config.topology.user_timezone() {
+        Ok(tz) => {
+            info!(timezone = %tz.iana_name(), "chat: operator timezone configured");
+            sessions.with_user_timezone(tz)
+        }
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                "chat: topology.timezone invalid — turns will not get Local time stamps"
+            );
+            sessions
+        }
+    }
+}
+
 async fn build_chat(
     providers: &liberado_bootstrap::RoleProviders,
     mcp: McpRegistry,
@@ -901,20 +924,7 @@ async fn build_chat(
     .with_dispatcher_capabilities(dispatcher_caps)
     .with_delegation_mode(main_agent_cfg.delegation_mode);
 
-    // Operator timezone: a missing or invalid IANA name is logged and the chat runs without
-    // wall-clock context. Production never reaches the log line because `Config::validate`
-    // already refused the unknown zone at load, but we still mirror `apply_timezone`'s fail-soft
-    // shape so an operator with a misconfigured `topology.timezone` does not get a chat that
-    // refuses to start.
-    match config.topology.user_timezone() {
-        Ok(tz) => {
-            sessions = sessions.with_user_timezone(tz);
-            info!(timezone = %tz.iana_name(), "chat: operator timezone configured");
-        }
-        Err(e) => {
-            tracing::warn!(error = %e, "chat: topology.timezone invalid — turns will not get Local time stamps");
-        }
-    }
+    sessions = apply_user_timezone(sessions, config);
 
     // CH3 context compaction: config-tier knobs → kernel runtime type (per-model absolute
     // triggers + daemon default). See `state::compaction_config_for_face`. Summaries use the face

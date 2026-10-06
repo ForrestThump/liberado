@@ -30,6 +30,7 @@
 use chrono::{DateTime, Duration, Utc};
 use liberado_common::UserTimezone;
 use liberado_conversation_store::{Author, MessageNode};
+use liberado_provider::Message;
 
 use super::ChatSessions;
 
@@ -260,5 +261,19 @@ impl ChatSessions {
             default_gap_threshold(),
             raw_user,
         )
+    }
+
+    /// Map loaded `nodes` to the model-visible `Vec<Message>` the model will read for a turn.
+    /// When a `UserTimezone` is attached, prior `Author::User` messages are date-prefixed (the
+    /// summarizer's elided slice carries the same prefixes, so rolling summaries can keep the
+    /// timeline). The persisted nodes and `history()` / `history_nodes()` are unchanged.
+    pub(super) fn model_view_messages(&self, nodes: &[MessageNode]) -> Vec<Message> {
+        match self.user_timezone.as_ref() {
+            Some(tz) => prefix_user_message_dates(nodes.to_vec(), tz)
+                .into_iter()
+                .map(|n| n.message)
+                .collect(),
+            None => nodes.iter().map(|n| n.message.clone()).collect(),
+        }
     }
 }

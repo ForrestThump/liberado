@@ -1844,18 +1844,10 @@ impl ChatSessions {
         // per-conversation threshold — never a second independent lookup that could disagree.
         turn_model: Option<&str>,
     ) -> (Conversation, Option<Ulid>) {
-        // Model-visible view: a transform of the persisted nodes that the model reads, not
-        // the persisted form. A `UserTimezone` stamps the user's own messages with their local
-        // wall-clock date so the model can ground "yesterday" / "next week" — the summarizer
-        // sees the same prefixed slice via `elided` below, so a rolling summary can carry the
-        // timeline. The persisted nodes (and `history()` / `history_nodes()`) are untouched.
-        let messages: Vec<Message> = match self.user_timezone {
-            Some(tz) => turn_clock::prefix_user_message_dates(nodes.clone(), &tz)
-                .into_iter()
-                .map(|n| n.message)
-                .collect(),
-            None => nodes.iter().map(|n| n.message.clone()).collect(),
-        };
+        // Model-visible view: the persisted form, optionally date-prefixed on prior user
+        // messages (see `model_view_messages`). Persisted nodes and `history()` /
+        // `history_nodes()` are untouched.
+        let messages: Vec<Message> = self.model_view_messages(&nodes);
         let pass_through = || (Conversation::from_history(messages.clone()), parent_leaf);
 
         let Some(engine) = &self.compaction else {
