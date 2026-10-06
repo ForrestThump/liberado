@@ -71,22 +71,12 @@ pub(super) fn previous_user_created_at(nodes: &[MessageNode]) -> Option<DateTime
 /// abbreviated zone (`%Z` is the same in both, so the model can match a prior-message
 /// prefix against a `Local time` line without parsing the abbreviations differently).
 ///
-/// Kept separate from the gap-line formatter ([`gap_line_previous_timestamp`]) because the
-/// shapes are different on purpose: the gap line is read once, has full weekday for clarity,
-/// and has no brackets (the brackets belong to the model-history list of messages, not to the
-/// parenthetical date inside a sentence).
+/// Kept separate from [`format_long_date`] because the shapes are different on purpose: the
+/// gap line uses the full weekday for clarity and drops the brackets, the prior-message
+/// prefix uses the abbreviated weekday and the brackets (which belong to the model-history
+/// list of messages, not to the parenthetical date inside a sentence).
 pub(super) fn format_user_date_prefix(tz: &UserTimezone, utc: DateTime<Utc>) -> String {
     format!("[{}] ", format_short_date(tz, utc))
-}
-
-/// Format a UTC instant the way it appears inside the gap line's parens.
-///
-/// Shape: `Saturday 2026-10-03 13:36 CDT` — full weekday (`%A`), same date/time/zone as
-/// [`format_user_date_prefix`], and **no** surrounding brackets. Used by
-/// [`compute_gap_line`] to render `(Saturday 2026-10-03 13:36 CDT)` at the end of
-/// `Last user message was 2 days 6 hours ago (...)`.
-fn gap_line_previous_timestamp(tz: &UserTimezone, utc: DateTime<Utc>) -> String {
-    format_long_date(tz, utc)
 }
 
 /// `Sat 2026-10-03 13:36 CDT` — abbreviated weekday, the prior-message prefix's body.
@@ -100,7 +90,9 @@ fn format_short_date(tz: &UserTimezone, utc: DateTime<Utc>) -> String {
     )
 }
 
-/// `Saturday 2026-10-03 13:36 CDT` — full weekday, the gap line's date body.
+/// `Saturday 2026-10-03 13:36 CDT` — full weekday, the gap line's date body. No brackets:
+/// the parens the gap line wraps the date in are the framing, and an extra pair would just
+/// be noise the model has to parse around.
 fn format_long_date(tz: &UserTimezone, utc: DateTime<Utc>) -> String {
     let local = tz.at(utc);
     format!(
@@ -196,7 +188,7 @@ pub(super) fn compute_gap_line(
     let humanized = humanize_gap(delta);
     Some(format!(
         "Last user message was {humanized} ago ({}).",
-        gap_line_previous_timestamp(tz, prev)
+        format_long_date(tz, prev)
     ))
 }
 
