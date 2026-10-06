@@ -1782,8 +1782,8 @@
     "cyclomatic": 1
   },
   "crates/common/src/local_time.rs": {
-    "ploc": 181,
-    "lloc": 35,
+    "ploc": 180,
+    "lloc": 33,
     "functions": 21,
     "cyclomatic": 33
   },
