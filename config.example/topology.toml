@@ -340,6 +340,19 @@ writes_vault = false             # writes code workspaces, not the Obsidian vaul
 # consequence = "read_only"
 # transport = { kind = "stdio", command = "target/debug/liberado-chat-search-mcp", args = [] }
 
+# Operator dogfood MCP (external agent, not the face catalogue). Build with
+# `cargo build --release --bin liberado-operator-dogfood-mcp`. Point the operator
+# agent's stdio MCP config at that binary. `LIBERADO_SERVER` is the daemon origin
+# the WebUI already uses (default http://127.0.0.1:4201, no credentials). Do not
+# grant this MCP to `main-agent`: `send_human_message` is the human-turn tool, and
+# the face must not file human replies. The block stays commented so a deploy does
+# not spawn it inside the daemon or grow the face catalogue.
+# [[mcps]]
+# name = "operator-dogfood"
+# description = "Operator dogfood client for the Liberado HTTP API. External agent only."
+# consequence = "reversible"
+# transport = { kind = "stdio", command = "target/release/liberado-operator-dogfood-mcp", args = [] }
+
 # An external-effect MCP (leaves the system / can't be taken back) is rated `external`, the
 # highest risk — the consequence guard will gate direct action toward it. A remote server is reached
 # over http instead of a spawned process:
