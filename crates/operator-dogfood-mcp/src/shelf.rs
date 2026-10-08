@@ -56,17 +56,25 @@ pub fn blank_to_none(value: Option<&str>) -> Option<&str> {
 }
 
 /// Session id safe to place in one path segment.
+///
+/// Daemon conversation ids are 26-character Crockford-base32 ULIDs. The store
+/// mints them with `ulid::Generator`; `GET /api/conversations/{id}` extracts
+/// `Path<Ulid>` and `POST /api/chat` takes `session: Option<Ulid>`. Requiring
+/// that alphabet rejects `.`, `..`, and percent-encoded dot segments (`%2e%2e`)
+/// that reqwest's URL parser would otherwise normalize out of
+/// `/api/conversations/{id}` onto `/api/` or `/api/conversations/`.
 pub fn session_id(raw: &str) -> Result<&str, DogfoodError> {
     let id = raw.trim();
     if id.is_empty() {
         return Err(DogfoodError::Invalid("session id is required".into()));
     }
-    if id.contains(['/', '?', '#', ' ']) {
-        return Err(DogfoodError::Invalid(
-            "session id must be the conversation id, with no spaces or path characters".into(),
-        ));
+    if is_conversation_ulid(id) {
+        Ok(id)
+    } else {
+        Err(DogfoodError::Invalid(
+            "session id must be the 26-character conversation ULID".into(),
+        ))
     }
-    Ok(id)
 }
 
 /// The human line the caller typed. Blank is refused so a tool cannot post an
@@ -187,6 +195,16 @@ pub fn header_id(header: &Value) -> Result<&str, DogfoodError> {
         .and_then(Value::as_str)
         .filter(|id| !id.is_empty())
         .ok_or_else(|| DogfoodError::Daemon("conversation header had no id".into()))
+}
+
+const ULID_LEN: usize = 26;
+
+fn is_conversation_ulid(id: &str) -> bool {
+    id.len() == ULID_LEN && id.bytes().all(is_crockford_base32)
+}
+
+fn is_crockford_base32(b: u8) -> bool {
+    b"0123456789ABCDEFGHJKMNPQRSTVWXYZ".contains(&b.to_ascii_uppercase())
 }
 
 fn is_named_agent(header: &Value, profile: &str, title: &str) -> bool {

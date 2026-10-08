@@ -7,6 +7,8 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 use crate::DogfoodServer;
 use crate::client::DaemonClient;
 
+const SESSION: &str = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
+
 fn server_for(uri: &str) -> DogfoodServer {
     DogfoodServer::from_client(DaemonClient::new(uri.to_owned(), Duration::from_secs(5)).unwrap())
 }
@@ -65,7 +67,7 @@ async fn create_agent_one_turn_read_reply_then_continue() {
         "/api/conversations",
         201,
         json!({
-            "id": "01AGENT",
+            "id": SESSION,
             "title": "Budget",
             "created_at": "2026-10-06T00:00:00Z",
             "surface_mode": "agent",
@@ -75,28 +77,28 @@ async fn create_agent_one_turn_read_reply_then_continue() {
     .await;
     Mock::given(method("POST"))
         .and(path("/api/chat"))
-        .and(body_json(json!({"session": "01AGENT", "message": "hello"})))
+        .and(body_json(json!({"session": SESSION, "message": "hello"})))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "reply": "first reply",
-            "session": "01AGENT"
+            "session": SESSION
         })))
         .mount(&mock)
         .await;
     Mock::given(method("POST"))
         .and(path("/api/chat"))
         .and(body_json(
-            json!({"session": "01AGENT", "message": "and then"}),
+            json!({"session": SESSION, "message": "and then"}),
         ))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "reply": "second reply",
-            "session": "01AGENT"
+            "session": SESSION
         })))
         .mount(&mock)
         .await;
     mount_json(
         &mock,
         "GET",
-        "/api/conversations/01AGENT",
+        &format!("/api/conversations/{SESSION}"),
         200,
         json!({
             "messages": [
@@ -119,31 +121,31 @@ async fn create_agent_one_turn_read_reply_then_continue() {
             .create_agent("coding".into(), Some("Budget".into()))
             .await,
     );
-    assert_eq!(created["conversation_id"], "01AGENT");
+    assert_eq!(created["conversation_id"], SESSION);
     assert_eq!(created["reused"], false);
     assert_eq!(created["surface_mode"], "agent");
     assert_eq!(created["profile"], "coding");
 
     let first = parse(
         server
-            .send_human_message("01AGENT".into(), "hello".into())
+            .send_human_message(SESSION.into(), "hello".into())
             .await,
     );
     assert_eq!(first["reply"], "first reply");
-    assert_eq!(first["session"], "01AGENT");
+    assert_eq!(first["session"], SESSION);
 
-    let history = parse(server.read_replies("01AGENT".into()).await);
+    let history = parse(server.read_replies(SESSION.into()).await);
     assert_eq!(history["reply"], "newer reply");
     assert_eq!(history["turn_running"], false);
     assert_eq!(history["surface_mode"], "agent");
 
     let second = parse(
         server
-            .continue_session("01AGENT".into(), "and then".into())
+            .continue_session(SESSION.into(), "and then".into())
             .await,
     );
     assert_eq!(second["reply"], "second reply");
-    assert_eq!(second["session"], "01AGENT");
+    assert_eq!(second["session"], SESSION);
 
     let reqs = recorded(&mock).await;
     assert!(
@@ -167,8 +169,8 @@ async fn create_agent_one_turn_read_reply_then_continue() {
     assert_eq!(
         turns,
         vec![
-            json!({"session": "01AGENT", "message": "hello"}),
-            json!({"session": "01AGENT", "message": "and then"}),
+            json!({"session": SESSION, "message": "hello"}),
+            json!({"session": SESSION, "message": "and then"}),
         ]
     );
     assert!(
@@ -374,13 +376,35 @@ async fn blank_title_is_sent_as_the_profile_name() {
 }
 
 #[tokio::test]
+async fn dot_segment_session_ids_do_not_call_the_daemon() {
+    let mock = MockServer::start().await;
+    let server = server_for(&mock.uri());
+    for id in [".", "..", "%2e%2e", "%2E%2E", ".%2e", "bad/id"] {
+        let err = server.get_history(id.into()).await.unwrap_err();
+        assert!(
+            err.to_string().contains("ULID"),
+            "expected local ULID error for {id:?}: {err}"
+        );
+        let err = server
+            .continue_session(id.into(), "hello".into())
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("ULID"),
+            "expected local ULID error for {id:?}: {err}"
+        );
+    }
+    assert!(recorded(&mock).await.is_empty());
+}
+
+#[tokio::test]
 async fn empty_profile_and_empty_human_message_do_not_call_the_daemon() {
     let mock = MockServer::start().await;
     let server = server_for(&mock.uri());
     let err = server.create_agent("  ".into(), None).await.unwrap_err();
     assert!(err.to_string().contains("non-empty"), "{err}");
     let err = server
-        .send_human_message("01AGENT".into(), "  ".into())
+        .send_human_message(SESSION.into(), "  ".into())
         .await
         .unwrap_err();
     assert!(err.to_string().contains("does not invent"), "{err}");
@@ -458,7 +482,7 @@ async fn daemon_error_json_is_surfaced_and_redirects_are_not_followed() {
         .mount(&mock)
         .await;
     let err = server_for(&mock.uri())
-        .continue_session("01AGENT".into(), "hello".into())
+        .continue_session(SESSION.into(), "hello".into())
         .await
         .unwrap_err();
     assert!(err.to_string().contains("chat disabled"), "{err}");

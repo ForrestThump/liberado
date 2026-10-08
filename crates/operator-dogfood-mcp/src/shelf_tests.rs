@@ -225,8 +225,51 @@ fn latest_assistant_is_the_last_one_and_blank_human_text_is_refused() {
     assert!(latest_assistant(&json!({"messages": []})).is_none());
     let err = human_message("   ").unwrap_err();
     assert!(err.to_string().contains("does not invent"), "{err}");
-    let err = session_id("bad/id").unwrap_err();
-    assert!(err.to_string().contains("path"), "{err}");
+}
+
+#[test]
+fn session_id_accepts_a_conversation_ulid_and_rejects_dot_segments() {
+    const ID: &str = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
+    assert_eq!(session_id(ID).unwrap(), ID);
+    assert_eq!(session_id(&format!("  {ID}  ")).unwrap(), ID);
+    assert_eq!(
+        session_id("01arz3ndektsv4rrffq69g5fav").unwrap(),
+        "01arz3ndektsv4rrffq69g5fav"
+    );
+    let err = session_id("   ").unwrap_err();
+    assert!(err.to_string().contains("required"), "{err}");
+    for bad in [
+        ".",
+        "..",
+        "%2e%2e",
+        "%2E%2E",
+        ".%2e",
+        "bad/id",
+        "id?x",
+        "id#x",
+        "id with space",
+        "01ARZ3NDEKTSV4RRFFQ69G5FA",
+        "01ARZ3NDEKTSV4RRFFQ69G5FAVX",
+        "01ARZ3NDEKTSV4RRFFQ69G5FAU",
+    ] {
+        let err = session_id(bad).unwrap_err();
+        assert!(
+            err.to_string().contains("ULID"),
+            "expected ULID error for {bad:?}: {err}"
+        );
+    }
+}
+
+#[test]
+fn reqwest_normalizes_dot_segments_out_of_the_conversation_path() {
+    let join = |id: &str| {
+        reqwest::Url::parse(&format!("http://127.0.0.1:4201/api/conversations/{id}")).unwrap()
+    };
+    assert_eq!(join("..").path(), "/api/");
+    assert_eq!(join(".").path(), "/api/conversations/");
+    assert_eq!(join("%2e%2e").path(), "/api/");
+    assert_eq!(join("%2E%2E").path(), "/api/");
+    assert_eq!(join(".%2e").path(), "/api/");
 }
 
 #[test]
