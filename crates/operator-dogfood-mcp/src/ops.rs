@@ -6,7 +6,9 @@
 //! with that profile and title. The POST stamps `surface_mode: agent` when
 //! the profile is agent-eligible. This client does not hold the in-process
 //! shelf lock, so two overlapping creates can mint two rows. A later call
-//! reuses the oldest, which is the same tie-break the daemon uses.
+//! reuses the oldest matching row: parsed RFC3339 `created_at`, then `id`,
+//! the same key `pick_oldest` uses on `ConversationHeader` (`DateTime`, then
+//! `Ulid`). Wire-text `created_at` order is not used.
 //!
 //! No function in this module reads an assistant reply and posts it.
 

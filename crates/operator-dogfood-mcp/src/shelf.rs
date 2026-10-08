@@ -2,10 +2,20 @@
 //!
 //! The rules match `ChatSessions::create_agent_chat`: one agent per trimmed
 //! `(profile, title)`, a blank title uses the profile name, the Agent Creator
-//! singleton is not a match, and the oldest row wins. Comparison here is on
-//! the wire strings (`created_at`, then `id`) because this client does not
-//! open the session store.
+//! singleton is not a match, and the oldest row wins.
+//!
+//! Oldest matches the daemon's `pick_oldest` (`crates/main-agent/src/sessions/agent_spawn.rs`):
+//! parsed RFC3339 `created_at` as `DateTime<Utc>`, then `id`. `GET /api/conversations`
+//! serializes `ConversationHeader.created_at` with chrono `SecondsFormat::AutoSi`
+//! (0, 3, 6, or 9 fractional digits), so the raw wire strings are not chronological:
+//! `2026-02-01T00:00:00.100001Z` sorts before `2026-02-01T00:00:00.100Z`.
+//!
+//! A missing or unparseable `created_at` is treated as `DateTime::<Utc>::MAX_UTC`,
+//! so it never wins against a parseable timestamp. Among those rows, `id` still
+//! breaks the tie. Issued ids are uppercase 26-character ULIDs; Crockford base32
+//! is ASCII-monotonic, so wire-string `id` order equals `Ulid` Ord.
 
+use chrono::{DateTime, Utc};
 use serde_json::{Value, json};
 
 use crate::error::DogfoodError;
@@ -208,8 +218,18 @@ fn grant_profile_str(header: &Value) -> Option<&str> {
         .and_then(Value::as_str)
 }
 
-fn row_key(header: &Value) -> (String, String) {
-    (text_field(header, "created_at"), text_field(header, "id"))
+fn row_key(header: &Value) -> (DateTime<Utc>, String) {
+    (
+        parsed_created_at(header).unwrap_or(DateTime::<Utc>::MAX_UTC),
+        text_field(header, "id"),
+    )
+}
+
+fn parsed_created_at(header: &Value) -> Option<DateTime<Utc>> {
+    let raw = header.get("created_at").and_then(Value::as_str)?;
+    DateTime::parse_from_rfc3339(raw)
+        .ok()
+        .map(|ts| ts.with_timezone(&Utc))
 }
 
 fn text_field(header: &Value, name: &str) -> String {

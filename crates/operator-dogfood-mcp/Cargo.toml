@@ -13,6 +13,7 @@ name = "liberado-operator-dogfood-mcp"
 path = "src/main.rs"
 
 [dependencies]
+chrono = { workspace = true }
 reqwest = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }

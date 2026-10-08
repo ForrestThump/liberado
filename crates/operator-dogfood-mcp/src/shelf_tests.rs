@@ -101,6 +101,99 @@ fn same_timestamp_breaks_ties_by_id() {
 }
 
 #[test]
+fn auto_si_fractional_digits_are_not_chronological_as_wire_text() {
+    let older = chrono::DateTime::parse_from_rfc3339("2026-02-01T00:00:00.100Z")
+        .unwrap()
+        .with_timezone(&chrono::Utc);
+    let newer = chrono::DateTime::parse_from_rfc3339("2026-02-01T00:00:00.100001Z")
+        .unwrap()
+        .with_timezone(&chrono::Utc);
+    let older_text = serde_json::to_value(older).unwrap();
+    let newer_text = serde_json::to_value(newer).unwrap();
+    assert_eq!(older_text, json!("2026-02-01T00:00:00.100Z"));
+    assert_eq!(newer_text, json!("2026-02-01T00:00:00.100001Z"));
+    assert!(
+        newer_text.as_str().unwrap() < older_text.as_str().unwrap(),
+        "AutoSi wire text must be the case that string-min would pick the later row"
+    );
+    assert!(older < newer);
+}
+
+#[test]
+fn oldest_match_uses_parsed_created_at_not_auto_si_wire_text() {
+    let headers = vec![
+        row(
+            "newer",
+            "Budget",
+            "2026-02-01T00:00:00.100001Z",
+            "agent",
+            "coding",
+            false,
+        ),
+        row(
+            "older",
+            "Budget",
+            "2026-02-01T00:00:00.100Z",
+            "agent",
+            "coding",
+            false,
+        ),
+    ];
+    let found = oldest_match(&headers, "coding", "Budget").unwrap();
+    assert_eq!(found["id"], "older");
+}
+
+#[test]
+fn unparseable_created_at_loses_to_a_parseable_timestamp() {
+    let headers = vec![
+        json!({
+            "id": "aaa",
+            "title": "Budget",
+            "created_at": "not-a-timestamp",
+            "surface_mode": "agent",
+            "grant": {"profile": "coding"},
+        }),
+        row(
+            "zzz",
+            "Budget",
+            "2026-02-01T00:00:00Z",
+            "agent",
+            "coding",
+            false,
+        ),
+        json!({
+            "id": "bbb",
+            "title": "Budget",
+            "surface_mode": "agent",
+            "grant": {"profile": "coding"},
+        }),
+    ];
+    let found = oldest_match(&headers, "coding", "Budget").unwrap();
+    assert_eq!(found["id"], "zzz");
+}
+
+#[test]
+fn unparseable_created_at_rows_break_ties_by_id() {
+    let headers = vec![
+        json!({
+            "id": "m",
+            "title": "Budget",
+            "created_at": "nope",
+            "surface_mode": "agent",
+            "grant": {"profile": "coding"},
+        }),
+        json!({
+            "id": "a",
+            "title": "Budget",
+            "surface_mode": "agent",
+            "grant": {"profile": "coding"},
+        }),
+    ];
+    let found = oldest_match(&headers, "coding", "Budget").unwrap();
+    assert_eq!(found["id"], "a");
+}
+
+#[test]
 fn eligibility_is_true_only_for_an_explicit_flag() {
     let body = json!({
         "profiles": [
