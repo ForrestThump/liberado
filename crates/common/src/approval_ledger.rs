@@ -65,7 +65,7 @@ pub struct ApprovalRecord {
     pub proposal_id: String,
     pub decision: ApprovalDecision,
     pub at: DateTime<Utc>,
-    /// Which authenticated surface recorded it — `"telegram"`, `"tui"`. Audit only; the ledger's
+    /// Which authenticated surface recorded it — `"telegram"`, `"webui"`, `"tui"`. Audit only; the ledger's
     /// security comes from *where it lives*, not from this string, which a caller chooses freely.
     pub by: String,
 }

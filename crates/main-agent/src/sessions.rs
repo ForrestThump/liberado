@@ -76,6 +76,8 @@ use liberado_session::{DomainHint, GoalSessionHub, GoalSpec, SessionGrant, Sessi
 mod agent_profiles;
 #[path = "sessions/agent_spawn.rs"]
 mod agent_spawn;
+#[path = "sessions/approval.rs"]
+mod approval;
 #[path = "sessions/reasoning_stamp.rs"]
 mod reasoning_stamp;
 #[path = "sessions/surface_mode.rs"]
@@ -316,6 +318,8 @@ pub struct ChatSessions {
     /// turn. `None` = the raw user message reaches the model unchanged — the path every existing
     /// test asserts on. See `sessions/turn_clock.rs` for the framing details.
     user_timezone: Option<UserTimezone>,
+    /// Sticky Telegram id and the scope-button sender. Filled after this value is inside an `Arc`.
+    approval_hooks: approval::ApprovalHooks,
 }
 
 /// The moving parts of automatic compaction: the tunables, plus the provider used for the one
@@ -378,6 +382,7 @@ impl ChatSessions {
             agent_profiles: AgentProfiles::default(),
             agent_workspace: None,
             user_timezone: None,
+            approval_hooks: approval::ApprovalHooks::new(),
         }
     }
 
@@ -1331,16 +1336,6 @@ impl ChatSessions {
         }
     }
 
-    /// Whether runtime risk/zone/consequence gates must wrap tool calls.
-    ///
-    /// A boot-time empty consequence snapshot is **not** enough to skip gating when a live
-    /// catalog is attached — empty→add hot-reload can register write peers after construction.
-    fn risk_gate_enabled(&self) -> bool {
-        self.live_catalog.is_some()
-            || !self.consequences.is_empty()
-            || !self.zone_catalog.is_empty()
-    }
-
     /// The MCP tools this **session** may call directly.
     ///
     /// `capabilities` is the session's own grant — its profile — not the process-wide
@@ -1385,7 +1380,7 @@ impl ChatSessions {
         if let Some(cat) = &self.live_catalog {
             gated = gated.with_live_catalog(cat.clone());
         }
-        Arc::new(gated)
+        Arc::new(self.stamp_approval(session, gated))
     }
 
     /// Every conversation header, newest first — the sidebar listing.
@@ -1712,7 +1707,7 @@ impl ChatSessions {
         if let Some(cat) = &self.live_catalog {
             gated = gated.with_live_catalog(cat.clone());
         }
-        self.attach_workspace(session, Box::new(gated))
+        self.attach_workspace(session, Box::new(self.stamp_approval(session, gated)))
     }
 
     /// Get-or-insert the per-session turn lock, so two turns on the same conversation serialize

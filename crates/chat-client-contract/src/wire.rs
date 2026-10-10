@@ -412,6 +412,67 @@ pub struct ConversationHistoryResponse {
     /// which keeps the chip visible — the safe direction.
     #[serde(default)]
     pub surface_mode: SurfaceMode,
+    /// Permission cards that belong to this conversation. Pending and already decided.
+    ///
+    /// On the history response so opening a chat paints the card with the transcript.
+    /// `#[serde(default)]` so a client built before this field still decodes a newer daemon,
+    /// and an older daemon (no field) still decodes as an empty list.
+    #[serde(default)]
+    pub approvals: Vec<ApprovalCard>,
+}
+
+/// One tappable choice on an [`ApprovalCard`]. The label comes from the server. A surface
+/// renders it and does not keep its own copy of Deny / Once / Session / Everywhere.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ApprovalOption {
+    pub action: String,
+    pub label: String,
+}
+
+/// A vault-zone permission request rendered in the owning chat.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ApprovalCard {
+    /// Proposal id. Also the path segment of `POST /api/approvals/{id}/resolve`.
+    pub id: String,
+    pub title: String,
+    pub summary: String,
+    pub options: Vec<ApprovalOption>,
+    /// `true` while the human can still choose.
+    pub pending: bool,
+    /// Action id already stored (`once`, `session`, `everywhere`, `deny`, `expired`, `approved`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decision: Option<String>,
+    /// Decided-state phrase from the shared template (`Approved once`, `Denied`, …).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decision_label: Option<String>,
+    pub created_at: String,
+}
+
+/// Body of `POST /api/approvals/{id}/resolve`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ApprovalResolveRequest {
+    pub decision: String,
+}
+
+/// Reply from `POST /api/approvals/{id}/resolve`.
+///
+/// `status` is `decided` (200) or `already_decided` (409). `error` on a 409 is
+/// `already decided: <label>`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ApprovalResolveResponse {
+    pub status: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decision: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+/// Reply from `GET /api/conversations/{id}/approvals`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ApprovalListResponse {
+    pub approvals: Vec<ApprovalCard>,
 }
 
 // ──────────────────────────────────────────────────────────────
@@ -970,6 +1031,7 @@ mod tests {
             turn_running: true,
             turn_unanswered: false,
             surface_mode: SurfaceMode::Agent,
+            approvals: vec![],
         };
         let json = serde_json::to_value(&resp).unwrap();
         assert_eq!(json["surface_mode"], "agent");

@@ -138,6 +138,29 @@ not an accident of history; it is a layer rule doing its job. See [`sessions.md`
   `dyn Notifier`); concrete channels appear only in composition roots and `#[ignore]`d live tests.
 - **Blast radius**: small; add channels freely.
 
+## Vault-zone permission approvals
+
+- **Defined**: the choice table in `liberado-messaging` (`permission_choices`). The decision
+  function is `liberado_common::apply_permission_decision`. The one writer is
+  `PermissionResolver::resolve` in `liberado-telegram-approvals`.
+- **Surfaces**: a request raised in the sticky Telegram chat sends the Telegram keyboard and
+  a card in that same chat. Any other human chat shows the card only. A background run keeps
+  the Telegram push it already had, and the card also appears in the sticky chat, because
+  Telegram was the only path. The scope buttons stay Deny / Once / Session / Everywhere.
+- **Store**: the proposal note under `proposals/` (and `proposals/archive/` once the daemon
+  files it). `session_id`, `origin`, `decided_at`, and `decided_via` are unsigned workflow
+  fields. The approval ledger still records the decision once, `by` `telegram` or `webui`.
+  The first decision wins. A later tap answers `already decided: …` and does not append
+  another ledger line.
+- **HTTP**: `POST /api/approvals/{id}/resolve` and `GET /api/conversations/{id}/approvals`.
+  The POST is human-only in the same sense as the profile switch: it is not a `GET`, and it
+  is not an agent tool or an operator-dogfood tool. The Telegram callback and the POST call
+  the same resolver.
+- **Not this table**: ACP command permission (`Deny` / `Once` / `Workspace` / `Everywhere`)
+  stays on its own option set. Workspace is not Session.
+- **Background with no Telegram configured**: the orchestrator has no notifier, so a missing
+  `Write` stays a hard refusal. There is no human to ask.
+
 ## The HTTP/SSE wire contract
 
 - **Defined**: `chat-client-contract` (wire DTOs + `SseDecoder`) and `docs/spec/reference/api.md`

@@ -2,6 +2,7 @@ use dioxus::prelude::*;
 
 use chat_client_contract::ChatMessage;
 
+use super::approval_card::ApprovalCards;
 use super::message_row::MessageList;
 #[cfg(target_arch = "wasm32")]
 use crate::components::chat_submission::unanswered_turn_note;
@@ -113,6 +114,7 @@ struct LoadedConversation {
     /// a note rather than left as silence, which reads as "the model said nothing".
     turn_unanswered: bool,
     surface_mode: chat_client_contract::SurfaceMode,
+    approvals: Vec<chat_client_contract::ApprovalCard>,
 }
 
 async fn fetch_conversation(api_base: &str, conv_id: &str) -> Result<LoadedConversation, String> {
@@ -142,6 +144,7 @@ async fn fetch_conversation(api_base: &str, conv_id: &str) -> Result<LoadedConve
         turn_running: history.turn_running,
         turn_unanswered: history.turn_unanswered,
         surface_mode: history.surface_mode,
+        approvals: history.approvals,
     })
 }
 
@@ -215,6 +218,7 @@ pub fn Chat(
     #[cfg_attr(not(target_arch = "wasm32"), allow(unused_mut))]
     let mut ghost_session = use_signal(|| None::<String>);
     let mut messages = use_signal(Vec::new);
+    let mut approvals = use_signal(Vec::<chat_client_contract::ApprovalCard>::new);
     let mut input = use_signal(String::new);
     let mut sending = use_signal(|| false);
     // `mut` is required by the wasm-only slash-command block below, which reassigns this. On a
@@ -232,6 +236,8 @@ pub fn Chat(
     let base_for_slash = api_base.clone();
     let base_for_models = api_base.clone();
     let base_for_profiles = api_base.clone();
+    // Cloned before `stop_stream`. That closure is `move` and, on wasm, takes `api_base`.
+    let base_for_cards = api_base.clone();
 
     // `[webui] enter_key` from the daemon, read once. `true` until it answers — that is the
     // historical behaviour, so a slow or unreachable status endpoint degrades to what this composer
@@ -276,6 +282,7 @@ pub fn Chat(
                             loaded_messages.push(unanswered_turn_note());
                         }
                         messages.set(loaded_messages);
+                        approvals.set(loaded.approvals);
                         set_surface(active_surface, Some(loaded.surface_mode));
                         // From the conversation, not remembered client-side: opening a chat in a
                         // second tab or after a restart must show the authority it actually runs
@@ -309,6 +316,7 @@ pub fn Chat(
                 ghost_session.read().is_some(),
             ) {
                 messages.set(Vec::new());
+                approvals.set(Vec::new());
                 session.set(None);
                 // A new chat starts on the default grant; leaving a stale chip up would claim
                 // otherwise.
@@ -370,6 +378,7 @@ pub fn Chat(
             // would quietly continue that durable conversation with the banner promising privacy,
             // which is the worst failure this feature could have.
             messages.set(Vec::new());
+            approvals.set(Vec::new());
             session.set(None);
             if active_conv_id.read().is_some() {
                 active_conv_id.set(None);
@@ -468,11 +477,13 @@ pub fn Chat(
                     match result {
                         CommandResult::NewConversation { .. } => {
                             messages.set(Vec::new());
+                            approvals.set(Vec::new());
                             session.set(None);
                             active_conv_id.set(None);
                         }
                         CommandResult::ChatCleared => {
                             messages.set(Vec::new());
+                            approvals.set(Vec::new());
                         }
                         CommandResult::SessionSwitched { id } => {
                             session.set(Some(id.clone()));
@@ -620,6 +631,7 @@ pub fn Chat(
                         }
                     }
                     MessageList { messages }
+                    ApprovalCards { api_base: base_for_cards.clone(), cards: approvals, session: session }
                     if sending() {
                         div { class: "bubble-row assistant",
                             div { class: "bubble-thinking", "\u{2026}" }

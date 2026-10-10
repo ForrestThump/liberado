@@ -1,5 +1,6 @@
 //! HTTP/SSE surface handlers, partitioned by route group (see `docs/spec/reference/api.md`).
 
+mod approvals;
 mod chat;
 mod chat_create;
 mod goals;
@@ -7,6 +8,7 @@ mod search;
 mod sessions;
 mod status;
 
+pub use approvals::{list_approvals, resolve_approval};
 pub use chat::{
     attach_conversation, cancel_conversation_turn, chat, chat_stream_get, chat_stream_post,
     delete_conversation, get_conversation, list_conversations, list_profiles,

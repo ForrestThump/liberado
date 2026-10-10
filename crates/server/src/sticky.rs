@@ -15,12 +15,20 @@ use std::sync::Arc;
 use liberado_conversation_store::Ulid;
 use tokio::sync::Mutex;
 
+/// Synchronous slot a chat reads while it builds a risk gate.
+type StickySlot = Arc<std::sync::Mutex<Option<Ulid>>>;
+/// Where that slot is published once chat exists.
+type StickyMirror = Arc<std::sync::Mutex<Option<StickySlot>>>;
+
 /// The sticky Telegram conversation id, shared (cheap `Clone`) and persisted. `path` is `None` for an
 /// in-memory-only handle (no data dir, and tests); otherwise every change writes through to it.
 #[derive(Clone)]
 pub struct StickySession {
     inner: Arc<Mutex<Option<Ulid>>>,
     path: Option<Arc<PathBuf>>,
+    /// Chat sessions read this synchronously when they build a risk gate. Published on every
+    /// change, and filled by [`publish_to`](Self::publish_to) once chat exists.
+    mirror: StickyMirror,
 }
 
 impl StickySession {
@@ -29,6 +37,7 @@ impl StickySession {
         Self {
             inner: Arc::new(Mutex::new(None)),
             path: None,
+            mirror: Arc::new(std::sync::Mutex::new(None)),
         }
     }
 
@@ -48,6 +57,7 @@ impl StickySession {
         Self {
             inner: Arc::new(Mutex::new(initial)),
             path: Some(Arc::new(path)),
+            mirror: Arc::new(std::sync::Mutex::new(None)),
         }
     }
 
@@ -94,6 +104,8 @@ impl StickySession {
         }
         *guard = id;
         self.persist(id).await;
+        drop(guard);
+        self.publish(id);
     }
 
     /// Return the current id, or run `create` to make one — storing and persisting it. The lock is
@@ -111,7 +123,38 @@ impl StickySession {
         let id = create().await?;
         *guard = Some(id);
         self.persist(Some(id)).await;
+        drop(guard);
+        self.publish(Some(id));
         Ok(id)
+    }
+
+    /// Point chat's synchronous slot at this sticky id, and copy the current value into it.
+    pub async fn publish_to(&self, slot: Arc<std::sync::Mutex<Option<Ulid>>>) {
+        let current = self.get().await;
+        {
+            let mut guard = self
+                .mirror
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            *guard = Some(Arc::clone(&slot));
+        }
+        if let Ok(mut dest) = slot.lock() {
+            *dest = current;
+        }
+    }
+
+    fn publish(&self, id: Option<Ulid>) {
+        let dest = self
+            .mirror
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone();
+        let Some(dest) = dest else {
+            return;
+        };
+        if let Ok(mut guard) = dest.lock() {
+            *guard = id;
+        }
     }
 
     /// Write-through, called while the in-memory lock is held so disk can't disagree with memory.

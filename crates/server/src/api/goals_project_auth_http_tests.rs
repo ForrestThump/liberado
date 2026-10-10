@@ -123,6 +123,7 @@ fn coding_goals_app_with(
         hook_idempotency: crate::hooks::IdempotencyCache::default(),
         live_mcp: liberado_bootstrap::LiveMcpController::empty(),
         drain: crate::shutdown::DrainGate::default(),
+        approval_hub: None,
     });
     Router::new()
         .route("/api/goals", axum::routing::post(goals_start))

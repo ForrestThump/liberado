@@ -187,6 +187,7 @@ fn rewind_app() -> (Router, Arc<GoalSessionHub>, Arc<GoalSessionStore>) {
         hook_idempotency: crate::hooks::IdempotencyCache::default(),
         live_mcp: liberado_bootstrap::LiveMcpController::empty(),
         drain: crate::shutdown::DrainGate::default(),
+        approval_hub: None,
     });
 
     let app = Router::new()

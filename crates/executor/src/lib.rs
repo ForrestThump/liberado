@@ -22,6 +22,7 @@
 //! threading write-provenance through it are deliberately *out* of this crate — the engine only
 //! depends on the trait, so it is testable with a mock runtime and a `MockProvider`.
 
+mod approval;
 mod budget;
 mod conversation_reserve;
 mod loop_guard;
@@ -31,6 +32,7 @@ mod risk_gated;
 
 pub use reasoning_log::take as take_turn_reasoning;
 
+pub use approval::{ApprovalStamp, PermissionSink};
 pub use budget::{Budget, ResourceLimit, ResourceUsage, TokenLimit, WallClockLimit};
 pub use loop_guard::{ArgMatch, LoopProfile};
 pub use mvl::MvlSession;

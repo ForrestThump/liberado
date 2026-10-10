@@ -1799,6 +1799,12 @@
     "functions": 4,
     "cyclomatic": 8
   },
+  "crates/common/src/permission.rs": {
+    "ploc": 313,
+    "lloc": 138,
+    "functions": 19,
+    "cyclomatic": 54
+  },
   "crates/common/src/process.rs": {
     "ploc": 148,
     "lloc": 41,
@@ -2453,6 +2459,12 @@
     "functions": 11,
     "cyclomatic": 14
   },
+  "crates/executor/src/approval.rs": {
+    "ploc": 11,
+    "lloc": 0,
+    "functions": 0,
+    "cyclomatic": 2
+  },
   "crates/executor/src/budget.rs": {
     "ploc": 140,
     "lloc": 4,
@@ -2530,6 +2542,12 @@
     "lloc": 102,
     "functions": 31,
     "cyclomatic": 73
+  },
+  "crates/executor/src/risk_gated_approval_tests.rs": {
+    "ploc": 113,
+    "lloc": 24,
+    "functions": 4,
+    "cyclomatic": 7
   },
   "crates/executor/src/risk_gated_skip.rs": {
     "ploc": 110,
@@ -3032,8 +3050,8 @@
   "crates/main-agent/src/sessions.rs": {
     "ploc": 1235,
     "lloc": 283,
-    "functions": 112,
-    "cyclomatic": 233
+    "functions": 111,
+    "cyclomatic": 230
   },
   "crates/main-agent/src/sessions/agent_profiles.rs": {
     "ploc": 8,
@@ -3052,6 +3070,12 @@
     "lloc": 144,
     "functions": 22,
     "cyclomatic": 24
+  },
+  "crates/main-agent/src/sessions/approval.rs": {
+    "ploc": 73,
+    "lloc": 9,
+    "functions": 12,
+    "cyclomatic": 22
   },
   "crates/main-agent/src/sessions/compaction.rs": {
     "ploc": 660,
@@ -3300,16 +3324,22 @@
     "cyclomatic": 120
   },
   "crates/messaging/src/lib.rs": {
-    "ploc": 93,
+    "ploc": 86,
     "lloc": 0,
-    "functions": 7,
-    "cyclomatic": 12
+    "functions": 6,
+    "cyclomatic": 11
   },
   "crates/messaging/src/lib_tests.rs": {
     "ploc": 17,
     "lloc": 10,
     "functions": 3,
     "cyclomatic": 4
+  },
+  "crates/messaging/src/permission.rs": {
+    "ploc": 81,
+    "lloc": 6,
+    "functions": 8,
+    "cyclomatic": 14
   },
   "crates/notify/src/lib.rs": {
     "ploc": 674,
@@ -3659,6 +3689,18 @@
     "functions": 14,
     "cyclomatic": 19
   },
+  "crates/server/src/api/approvals.rs": {
+    "ploc": 98,
+    "lloc": 5,
+    "functions": 3,
+    "cyclomatic": 9
+  },
+  "crates/server/src/api/approvals_http_tests.rs": {
+    "ploc": 199,
+    "lloc": 59,
+    "functions": 9,
+    "cyclomatic": 13
+  },
   "crates/server/src/api/chat.rs": {
     "ploc": 626,
     "lloc": 82,
@@ -3760,6 +3802,18 @@
     "lloc": 34,
     "functions": 2,
     "cyclomatic": 3
+  },
+  "crates/server/src/approvals.rs": {
+    "ploc": 101,
+    "lloc": 11,
+    "functions": 13,
+    "cyclomatic": 23
+  },
+  "crates/server/src/approvals_wire_tests.rs": {
+    "ploc": 122,
+    "lloc": 37,
+    "functions": 10,
+    "cyclomatic": 14
   },
   "crates/server/src/chat_agent_spawn.rs": {
     "ploc": 27,
@@ -4194,10 +4248,22 @@
     "cyclomatic": 66
   },
   "crates/telegram-approvals/src/lib.rs": {
-    "ploc": 1515,
-    "lloc": 511,
+    "ploc": 1477,
+    "lloc": 492,
     "functions": 104,
-    "cyclomatic": 215
+    "cyclomatic": 202
+  },
+  "crates/telegram-approvals/src/resolve.rs": {
+    "ploc": 488,
+    "lloc": 129,
+    "functions": 30,
+    "cyclomatic": 76
+  },
+  "crates/telegram-approvals/src/resolve_share_tests.rs": {
+    "ploc": 89,
+    "lloc": 18,
+    "functions": 7,
+    "cyclomatic": 10
   },
   "crates/telegram-approvals/src/telegram_approvals_survivor_tests.rs": {
     "ploc": 301,
@@ -4522,6 +4588,12 @@
     "lloc": 34,
     "functions": 7,
     "cyclomatic": 15
+  },
+  "crates/webui/src/components/approval_card.rs": {
+    "ploc": 251,
+    "lloc": 65,
+    "functions": 28,
+    "cyclomatic": 44
   },
   "crates/webui/src/components/chat.rs": {
     "ploc": 963,

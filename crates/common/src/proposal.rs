@@ -54,9 +54,9 @@ impl ProposalStatus {
 }
 
 /// How long a granted permission lasts, chosen by the human at approval time. Set on a permission
-/// request's note (alongside `status: approved`) by the Telegram button; the daemon reads it when
-/// applying the grant. Like `status`, it's a human-workflow field — not part of the integrity
-/// signature (the *what* — `requested_grant` — is signed; this is the *how long*).
+/// request's note (alongside `status: approved`) by a Telegram button or a WebUI card; the daemon
+/// reads it when applying the grant. Like `status`, it's a human-workflow field — not part of the
+/// integrity signature (the *what* — `requested_grant` — is signed; this is the *how long*).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum GrantScope {
@@ -172,10 +172,24 @@ pub struct Proposal {
     /// signed — see [`GrantScope`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub approved_scope: Option<GrantScope>,
+    /// Chat that raised a permission request. Unsigned routing metadata. `None` on a background
+    /// request and on every note written before sessions were stamped.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    /// Which kind of run raised it. Unsigned. See [`crate::permission::ApprovalOrigin`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<crate::permission::ApprovalOrigin>,
+    /// When a human decided. Unsigned workflow field, like `status`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decided_at: Option<DateTime<Utc>>,
+    /// Which surface recorded the decision (`telegram` or `webui`). Unsigned audit field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decided_via: Option<crate::permission::DecisionVia>,
     /// HMAC-SHA256 (hex-encoded) over `id`/`correlation_id`/`source`/`proposed_action`/`pool`/
     /// `requested_grant`/`created`, computed by a [`ProposalSigner`] at creation and checked before
     /// an approval executes.
-    /// Deliberately excludes `status`/`expires`, which are meant to change as part of the normal
+    /// Deliberately excludes `status`/`expires`/`approved_scope`/`session_id`/`origin`/
+    /// `decided_at`/`decided_via`, which are meant to change as part of the normal
     /// human-approval workflow. Raises the bar against *careless* tampering with the proposed
     /// action between propose and approve (a bug, an accidental overwrite, an opportunistic script
     /// that doesn't go looking for the signing key) — it is **not** a defense against a co-resident
@@ -214,6 +228,10 @@ impl Proposal {
             // Ordinary proposal by default; `with_requested_grant` marks it a permission request.
             requested_grant: None,
             approved_scope: None,
+            session_id: None,
+            origin: None,
+            decided_at: None,
+            decided_via: None,
             // Unsigned until a `ProposalSigner::sign` call sets it — every real production
             // proposal-creation site signs before writing the note; tests that don't care about
             // integrity checking simply never call `execute_approved`/`handle_proposal_change` on
@@ -268,9 +286,9 @@ impl Proposal {
 /// Deliberately exposes only immutable access ([`Deref`](std::ops::Deref)) plus a narrow
 /// [`set_status`](Self::set_status) — not a general `DerefMut`, which would let a caller mutate a
 /// signed field after the fact and silently invalidate the signature (exactly the bug class this
-/// type exists to prevent). `status`/`expires` are the two fields `ProposalSigner::compute`
-/// deliberately excludes (see [`Proposal::integrity`]'s doc comment), so changing them never
-/// invalidates the signature and needs no re-sign.
+/// type exists to prevent). `ProposalSigner::compute` excludes the workflow fields
+/// (`status`, `expires`, `approved_scope`, `session_id`, `origin`, `decided_at`, `decided_via`;
+/// see [`Proposal::integrity`]), so changing them never invalidates the signature.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SignedProposal(Proposal);
 
@@ -339,7 +357,7 @@ impl ProposalSigner {
     }
 
     /// HMAC-SHA256 over the proposal's immutable fields, hex-encoded. Deliberately excludes
-    /// `status`/`expires` — see `Proposal::integrity`'s doc comment.
+    /// `status`/`expires` and the other unsigned workflow fields — see `Proposal::integrity`.
     fn compute(&self, proposal: &Proposal) -> String {
         let mut mac = <Hmac<Sha256> as Mac>::new_from_slice(&self.key)
             .expect("HMAC accepts a key of any length");
@@ -813,6 +831,10 @@ mod proptest_tests {
                     pool,
                     requested_grant: grant,
                     approved_scope: scope,
+                    session_id: None,
+                    origin: None,
+                    decided_at: None,
+                    decided_via: None,
                     expires,
                 },
             )
