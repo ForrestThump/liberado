@@ -11,6 +11,14 @@
 //! `Ulid`). Wire-text `created_at` order is not used.
 //!
 //! No function in this module reads an assistant reply and posts it.
+//!
+//! `list_sessions` defaults to `GET /api/conversations` (foreground chats).
+//! That lens already drops background dispatch sessions, so the body stays
+//! small. `include_background` reads `GET /api/sessions` instead: every row,
+//! including background goal sessions with full goal/grant/result. That
+//! transfer is multi-megabyte on a busy daemon. Both paths keep the daemon's
+//! order, cap the slim rows they return, and add `total` and `truncated`.
+//! `list_agents` is unchanged.
 
 use serde_json::{Value, json};
 
@@ -18,9 +26,12 @@ use crate::client::DaemonClient;
 use crate::error::DogfoodError;
 use crate::shelf::{
     agent_identity, blank_to_none, header_id, human_message, is_shelf_agent, latest_assistant,
-    oldest_match, profile_eligibility, session_id, slim_agent, slim_session, string_list,
-    workspace_report,
+    oldest_match, profile_eligibility, session_id, slim_agent, slim_conversation, slim_session,
+    string_list, workspace_report,
 };
+
+const DEFAULT_SESSION_LIMIT: u32 = 50;
+const MAX_SESSION_LIMIT: u32 = 500;
 
 /// Find or create one Agents-shelf session. Does not send a chat turn.
 pub async fn create_agent(
@@ -109,11 +120,20 @@ pub async fn list_agents(client: &DaemonClient) -> Result<Value, DogfoodError> {
     Ok(json!({ "agents": agents }))
 }
 
-/// Every session from `GET /api/sessions`, chats and goal sessions together.
-pub async fn list_sessions(client: &DaemonClient) -> Result<Value, DogfoodError> {
-    let rows = object_rows(client, "/api/sessions").await?;
-    let sessions: Vec<Value> = rows.iter().map(slim_session).collect();
-    Ok(json!({ "sessions": sessions }))
+/// Slim session rows, capped, with `total` and `truncated`.
+///
+/// Default is the conversations lens (no `status`/`goal` on those rows).
+/// `include_background` switches to `/api/sessions`.
+pub async fn list_sessions(
+    client: &DaemonClient,
+    include_background: bool,
+    limit: Option<u32>,
+) -> Result<Value, DogfoodError> {
+    if include_background {
+        listed_sessions(client, "/api/sessions", slim_session, limit).await
+    } else {
+        listed_sessions(client, "/api/conversations", slim_conversation, limit).await
+    }
 }
 
 /// `GET /api/status`, unchanged.
@@ -197,6 +217,30 @@ async fn post_agent(
         )));
     }
     Ok(header)
+}
+
+async fn listed_sessions(
+    client: &DaemonClient,
+    path: &str,
+    slim: fn(&Value) -> Value,
+    limit: Option<u32>,
+) -> Result<Value, DogfoodError> {
+    let rows = object_rows(client, path).await?;
+    Ok(capped_session_list(rows.iter().map(slim).collect(), limit))
+}
+
+fn capped_session_list(mut sessions: Vec<Value>, limit: Option<u32>) -> Value {
+    let total = sessions.len();
+    let cap = limit
+        .unwrap_or(DEFAULT_SESSION_LIMIT)
+        .min(MAX_SESSION_LIMIT) as usize;
+    let truncated = total > cap;
+    sessions.truncate(cap);
+    json!({
+        "sessions": sessions,
+        "total": total,
+        "truncated": truncated,
+    })
 }
 
 async fn object_rows(client: &DaemonClient, path: &str) -> Result<Vec<Value>, DogfoodError> {

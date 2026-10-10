@@ -95,6 +95,20 @@ fn stdio_lists_the_dogfood_tools() {
             "workspace_smoke",
         ]
     );
+    let list_sessions = responses[1]["result"]["tools"]
+        .as_array()
+        .expect("tools array")
+        .iter()
+        .find(|tool| tool["name"] == "list_sessions")
+        .expect("list_sessions is listed");
+    let properties = list_sessions["inputSchema"]["properties"]
+        .as_object()
+        .unwrap_or_else(|| panic!("list_sessions inputSchema.properties: {list_sessions}"));
+    assert!(
+        properties.contains_key("include_background"),
+        "{list_sessions}"
+    );
+    assert!(properties.contains_key("limit"), "{list_sessions}");
 }
 
 #[test]

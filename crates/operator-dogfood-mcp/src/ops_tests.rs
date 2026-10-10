@@ -56,6 +56,36 @@ async fn mount_json(
         .await;
 }
 
+async fn reject_get(mock: &MockServer, http_path: &str) {
+    Mock::given(method("GET"))
+        .and(path(http_path))
+        .respond_with(ResponseTemplate::new(500).set_body_json(json!({"error": "unexpected path"})))
+        .expect(0)
+        .mount(mock)
+        .await;
+}
+
+fn path_count(reqs: &[wiremock::Request], http_path: &str) -> usize {
+    let mut n = 0;
+    for req in reqs {
+        if req.url.path() == http_path {
+            n += 1;
+        }
+    }
+    n
+}
+
+fn numbered_rows(n: usize, extra: Value) -> Value {
+    let mut rows = Vec::with_capacity(n);
+    for i in 0..n {
+        let mut row = extra.clone();
+        row["id"] = json!(format!("row-{i:03}"));
+        row["title"] = json!(format!("t{i}"));
+        rows.push(row);
+    }
+    Value::Array(rows)
+}
+
 #[tokio::test]
 async fn create_agent_one_turn_read_reply_then_continue() {
     let mock = MockServer::start().await;
@@ -534,24 +564,6 @@ async fn lists_and_workspace_smoke_are_read_only() {
     mount_json(
         &mock,
         "GET",
-        "/api/sessions",
-        200,
-        json!([
-            {"id": "CHAT", "title": "Hi", "surface_mode": "chat", "status": "running"},
-            {
-                "id": "GOAL",
-                "title": "Ship",
-                "surface_mode": "chat",
-                "status": "running",
-                "goal": {"description": "ship"},
-                "grant": {"profile": "coding"}
-            }
-        ]),
-    )
-    .await;
-    mount_json(
-        &mock,
-        "GET",
         "/api/status",
         200,
         json!({
@@ -564,9 +576,6 @@ async fn lists_and_workspace_smoke_are_read_only() {
     let agents = parse(server.list_agents().await);
     assert_eq!(agents["agents"].as_array().unwrap().len(), 1);
     assert_eq!(agents["agents"][0]["id"], "AGENT");
-    let sessions = parse(server.list_sessions().await);
-    assert_eq!(sessions["sessions"][1]["has_goal"], true);
-    assert_eq!(sessions["sessions"][1]["profile"], "coding");
     let smoke = parse(server.workspace_smoke().await);
     assert_eq!(
         smoke["present"],
@@ -579,4 +588,196 @@ async fn lists_and_workspace_smoke_are_read_only() {
             .iter()
             .all(|req| req.method.as_str() == "GET")
     );
+}
+
+fn conversation_list_body() -> Value {
+    json!([
+        {
+            "id": "NEW",
+            "title": "Hi",
+            "created_at": "2026-03-01T00:00:00Z",
+            "surface_mode": "chat",
+            "parent_conversation": "PARENT",
+            "spawned_by": "NODE",
+            "grant": {"profile": "chat-default"}
+        },
+        {
+            "id": "OLD",
+            "title": "Budget",
+            "created_at": "2026-01-01T00:00:00Z",
+            "surface_mode": "agent",
+            "grant": {"profile": "coding"}
+        },
+        {
+            "id": "MID",
+            "title": "Notes",
+            "created_at": "2026-02-01T00:00:00Z",
+            "surface_mode": "chat"
+        }
+    ])
+}
+
+fn session_list_body() -> Value {
+    json!([
+        {"id": "CHAT", "title": "Hi", "surface_mode": "chat", "status": "running"},
+        {
+            "id": "GOAL",
+            "title": "Ship",
+            "surface_mode": "chat",
+            "status": "running",
+            "goal": {"description": "ship"},
+            "grant": {"profile": "coding"}
+        },
+        {"id": "OLDER", "title": "Done", "status": "succeeded"}
+    ])
+}
+
+#[tokio::test]
+async fn list_sessions_default_reads_conversations_only() {
+    let mock = MockServer::start().await;
+    mount_json(
+        &mock,
+        "GET",
+        "/api/conversations",
+        200,
+        conversation_list_body(),
+    )
+    .await;
+    reject_get(&mock, "/api/sessions").await;
+    let server = server_for(&mock.uri());
+    let omitted = parse(server.list_sessions(None, None).await);
+    let explicit = parse(server.list_sessions(Some(false), None).await);
+    assert_eq!(omitted, explicit);
+    assert_eq!(omitted["total"], 3);
+    assert_eq!(omitted["truncated"], false);
+    let rows = omitted["sessions"].as_array().unwrap();
+    assert_eq!(rows.len(), 3);
+    assert_eq!(rows[0]["id"], "NEW");
+    assert_eq!(rows[0]["created_at"], "2026-03-01T00:00:00Z");
+    assert_eq!(rows[0]["parent_conversation"], "PARENT");
+    assert_eq!(rows[0]["spawned_by"], "NODE");
+    assert_eq!(rows[0]["profile"], "chat-default");
+    assert!(rows[0].get("status").is_none(), "{rows:?}");
+    assert!(rows[0].get("has_goal").is_none(), "{rows:?}");
+    let reqs = recorded(&mock).await;
+    assert_eq!(path_count(&reqs, "/api/conversations"), 2);
+    assert_eq!(path_count(&reqs, "/api/sessions"), 0);
+}
+
+#[tokio::test]
+async fn list_sessions_background_reads_sessions_only() {
+    let mock = MockServer::start().await;
+    mount_json(&mock, "GET", "/api/sessions", 200, session_list_body()).await;
+    reject_get(&mock, "/api/conversations").await;
+    let listed = parse(
+        server_for(&mock.uri())
+            .list_sessions(Some(true), None)
+            .await,
+    );
+    assert_eq!(listed["total"], 3);
+    assert_eq!(listed["truncated"], false);
+    assert_eq!(listed["sessions"][1]["has_goal"], true);
+    assert_eq!(listed["sessions"][1]["profile"], "coding");
+    assert_eq!(listed["sessions"][1]["status"], "running");
+    assert!(
+        listed["sessions"][1].get("created_at").is_none(),
+        "{}",
+        listed["sessions"][1]
+    );
+    let reqs = recorded(&mock).await;
+    assert_eq!(path_count(&reqs, "/api/sessions"), 1);
+    assert_eq!(path_count(&reqs, "/api/conversations"), 0);
+}
+
+#[tokio::test]
+async fn list_sessions_limit_truncates_on_both_paths() {
+    let mock = MockServer::start().await;
+    mount_json(
+        &mock,
+        "GET",
+        "/api/conversations",
+        200,
+        conversation_list_body(),
+    )
+    .await;
+    mount_json(&mock, "GET", "/api/sessions", 200, session_list_body()).await;
+    let server = server_for(&mock.uri());
+    let foreground = parse(server.list_sessions(None, Some(2)).await);
+    assert_eq!(foreground["total"], 3);
+    assert_eq!(foreground["truncated"], true);
+    let mut front_ids = Vec::new();
+    for row in foreground["sessions"].as_array().unwrap() {
+        front_ids.push(row["id"].as_str().unwrap());
+    }
+    assert_eq!(front_ids, vec!["NEW", "OLD"]);
+    let empty = parse(server.list_sessions(None, Some(0)).await);
+    assert_eq!(empty["sessions"].as_array().unwrap().len(), 0);
+    assert_eq!(empty["total"], 3);
+    assert_eq!(empty["truncated"], true);
+    let background = parse(server.list_sessions(Some(true), Some(1)).await);
+    assert_eq!(background["total"], 3);
+    assert_eq!(background["truncated"], true);
+    assert_eq!(background["sessions"][0]["id"], "CHAT");
+}
+
+#[tokio::test]
+async fn list_sessions_default_limit_is_fifty() {
+    let mock = MockServer::start().await;
+    mount_json(
+        &mock,
+        "GET",
+        "/api/conversations",
+        200,
+        numbered_rows(51, json!({"surface_mode": "chat"})),
+    )
+    .await;
+    reject_get(&mock, "/api/sessions").await;
+    let listed = parse(server_for(&mock.uri()).list_sessions(None, None).await);
+    assert_eq!(listed["sessions"].as_array().unwrap().len(), 50);
+    assert_eq!(listed["total"], 51);
+    assert_eq!(listed["truncated"], true);
+    assert_eq!(listed["sessions"][0]["id"], "row-000");
+    assert_eq!(listed["sessions"][49]["id"], "row-049");
+}
+
+#[tokio::test]
+async fn list_sessions_clamps_limit_to_five_hundred() {
+    let mock = MockServer::start().await;
+    mount_json(
+        &mock,
+        "GET",
+        "/api/conversations",
+        200,
+        numbered_rows(501, json!({"surface_mode": "chat"})),
+    )
+    .await;
+    reject_get(&mock, "/api/sessions").await;
+    let listed = parse(
+        server_for(&mock.uri())
+            .list_sessions(None, Some(10_000))
+            .await,
+    );
+    assert_eq!(listed["sessions"].as_array().unwrap().len(), 500);
+    assert_eq!(listed["total"], 501);
+    assert_eq!(listed["truncated"], true);
+    assert_eq!(listed["sessions"][499]["id"], "row-499");
+}
+
+#[test]
+fn capped_session_list_clamps_and_defaults() {
+    let mut rows = Vec::new();
+    for i in 0..501 {
+        rows.push(json!({"id": i}));
+    }
+    let clamped = super::capped_session_list(rows.clone(), Some(10_000));
+    assert_eq!(clamped["sessions"].as_array().unwrap().len(), 500);
+    assert_eq!(clamped["total"], 501);
+    assert_eq!(clamped["truncated"], true);
+    let defaulted = super::capped_session_list(rows, None);
+    assert_eq!(defaulted["sessions"].as_array().unwrap().len(), 50);
+    assert_eq!(defaulted["total"], 501);
+    assert_eq!(defaulted["truncated"], true);
+    let exact = super::capped_session_list(vec![json!(1), json!(2)], Some(2));
+    assert_eq!(exact["truncated"], false);
+    assert_eq!(exact["total"], 2);
 }

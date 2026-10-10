@@ -125,22 +125,38 @@ pub fn is_shelf_agent(header: &Value) -> bool {
 /// Wire row for one shelf agent. Keeps the list order the daemon sent.
 pub fn slim_agent(header: &Value) -> Value {
     json!({
-        "id": header.get("id").cloned().unwrap_or(Value::Null),
-        "title": header.get("title").cloned().unwrap_or(Value::Null),
+        "id": json_field(header, "id"),
+        "title": json_field(header, "title"),
         "profile": grant_profile(header),
-        "created_at": header.get("created_at").cloned().unwrap_or(Value::Null),
+        "created_at": json_field(header, "created_at"),
         "surface_mode": "agent",
+    })
+}
+
+/// Short row for `GET /api/conversations` (foreground chats).
+///
+/// `ConversationHeader` has no `status` or `goal`. Lineage uses
+/// `parent_conversation`, not `parent_session`.
+pub fn slim_conversation(header: &Value) -> Value {
+    json!({
+        "id": json_field(header, "id"),
+        "title": json_field(header, "title"),
+        "surface_mode": header.get("surface_mode").cloned().unwrap_or(json!("chat")),
+        "profile": grant_profile(header),
+        "created_at": json_field(header, "created_at"),
+        "parent_conversation": json_field(header, "parent_conversation"),
+        "spawned_by": json_field(header, "spawned_by"),
     })
 }
 
 /// Short row for `GET /api/sessions`.
 pub fn slim_session(header: &Value) -> Value {
     json!({
-        "id": header.get("id").cloned().unwrap_or(Value::Null),
-        "title": header.get("title").cloned().unwrap_or(Value::Null),
+        "id": json_field(header, "id"),
+        "title": json_field(header, "title"),
         "surface_mode": header.get("surface_mode").cloned().unwrap_or(json!("chat")),
         "profile": grant_profile(header),
-        "status": header.get("status").cloned().unwrap_or(Value::Null),
+        "status": json_field(header, "status"),
         "has_goal": header.get("goal").is_some_and(|goal| !goal.is_null()),
         "agent_creator": flag_true(header, "agent_creator"),
     })
@@ -220,6 +236,10 @@ fn surface_is_agent(header: &Value) -> bool {
 
 fn flag_true(header: &Value, name: &str) -> bool {
     header.get(name).and_then(Value::as_bool) == Some(true)
+}
+
+fn json_field(header: &Value, name: &str) -> Value {
+    header.get(name).cloned().unwrap_or(Value::Null)
 }
 
 fn grant_profile(header: &Value) -> Value {

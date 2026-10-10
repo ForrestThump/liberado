@@ -27,6 +27,19 @@
 //! title. `create_agent` reuses it. Continuing posts to that same `session`.
 //! It does not open a new conversation.
 //!
+//! # Listing
+//!
+//! `list_sessions` defaults to `GET /api/conversations` (foreground chats).
+//! That lens already drops background dispatch sessions, so the body stays
+//! small. Those rows are ConversationHeader-slim: they have no `status` or
+//! `goal`. Pass `include_background` to read `GET /api/sessions` instead;
+//! that route returns every session with full goal/grant/result and is
+//! multi-megabyte on a busy daemon. Both paths return at most `limit` slim
+//! rows (default 50, max 500) plus `total` and `truncated`.
+//!
+//! `list_agents` is unchanged: Agents-shelf rows from
+//! `GET /api/conversations`.
+//!
 //! # Human turns
 //!
 //! `send_human_message` and `continue_session` are the only tools that post a
@@ -135,10 +148,16 @@ impl DogfoodServer {
     }
 
     #[tool(
-        description = "GET /api/sessions and return a short row for every session, chats and goal sessions: id, title, surface_mode, profile, status, has_goal, agent_creator."
+        description = "List sessions as slim rows plus total and truncated. Default (include_background false) is the fast path: GET /api/conversations (foreground chats only; ConversationHeader has no status or goal). Rows: id, title, surface_mode, profile, created_at, parent_conversation, spawned_by. include_background true reads GET /api/sessions (every session including background dispatch goals, newest first). That body is the full session list with goal/grant/result and is multi-megabyte on a busy daemon. Those rows add status, has_goal, and agent_creator. limit defaults to 50 and is clamped at 500."
     )]
-    async fn list_sessions(&self) -> McpResult<String> {
-        let value = ops::list_sessions(&self.client).await.map_err(mcp_err)?;
+    async fn list_sessions(
+        &self,
+        include_background: Option<bool>,
+        limit: Option<u32>,
+    ) -> McpResult<String> {
+        let value = ops::list_sessions(&self.client, include_background.unwrap_or(false), limit)
+            .await
+            .map_err(mcp_err)?;
         to_json(&value)
     }
 

@@ -23461,8 +23461,8 @@
       "function": "prefer",
       "line": 163,
       "cyclomatic": 4.0,
-      "coverage": 87.5,
-      "crap": 4.03125,
+      "coverage": 93.75,
+      "crap": 4.00390625,
       "crate": "liberado-daemon"
     },
     {
@@ -34673,7 +34673,7 @@
     {
       "file": "crates/operator-dogfood-mcp/src/main.rs",
       "function": "DogfoodServer::catalog",
-      "line": 152,
+      "line": 171,
       "cyclomatic": 2.0,
       "coverage": 0.0,
       "crap": 6.0,
@@ -34682,7 +34682,7 @@
     {
       "file": "crates/operator-dogfood-mcp/src/main.rs",
       "function": "DogfoodServer::continue_session",
-      "line": 105,
+      "line": 118,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -34691,7 +34691,7 @@
     {
       "file": "crates/operator-dogfood-mcp/src/main.rs",
       "function": "DogfoodServer::create_agent",
-      "line": 74,
+      "line": 87,
       "cyclomatic": 2.0,
       "coverage": 100.0,
       "crap": 2.0,
@@ -34700,7 +34700,7 @@
     {
       "file": "crates/operator-dogfood-mcp/src/main.rs",
       "function": "DogfoodServer::from_client",
-      "line": 52,
+      "line": 65,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -34709,7 +34709,7 @@
     {
       "file": "crates/operator-dogfood-mcp/src/main.rs",
       "function": "DogfoodServer::get_history",
-      "line": 122,
+      "line": 135,
       "cyclomatic": 2.0,
       "coverage": 83.33333333333334,
       "crap": 2.0185185185185186,
@@ -34718,7 +34718,7 @@
     {
       "file": "crates/operator-dogfood-mcp/src/main.rs",
       "function": "DogfoodServer::human_turn",
-      "line": 57,
+      "line": 70,
       "cyclomatic": 2.0,
       "coverage": 100.0,
       "crap": 2.0,
@@ -34727,7 +34727,7 @@
     {
       "file": "crates/operator-dogfood-mcp/src/main.rs",
       "function": "DogfoodServer::list_agents",
-      "line": 132,
+      "line": 145,
       "cyclomatic": 2.0,
       "coverage": 100.0,
       "crap": 2.0,
@@ -34736,7 +34736,7 @@
     {
       "file": "crates/operator-dogfood-mcp/src/main.rs",
       "function": "DogfoodServer::list_sessions",
-      "line": 140,
+      "line": 153,
       "cyclomatic": 2.0,
       "coverage": 100.0,
       "crap": 2.0,
@@ -34745,7 +34745,7 @@
     {
       "file": "crates/operator-dogfood-mcp/src/main.rs",
       "function": "DogfoodServer::read_replies",
-      "line": 112,
+      "line": 125,
       "cyclomatic": 2.0,
       "coverage": 100.0,
       "crap": 2.0,
@@ -34754,7 +34754,7 @@
     {
       "file": "crates/operator-dogfood-mcp/src/main.rs",
       "function": "DogfoodServer::send_human_message",
-      "line": 98,
+      "line": 111,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -34763,7 +34763,7 @@
     {
       "file": "crates/operator-dogfood-mcp/src/main.rs",
       "function": "DogfoodServer::start_chat",
-      "line": 84,
+      "line": 97,
       "cyclomatic": 2.0,
       "coverage": 100.0,
       "crap": 2.0,
@@ -34772,7 +34772,7 @@
     {
       "file": "crates/operator-dogfood-mcp/src/main.rs",
       "function": "DogfoodServer::status",
-      "line": 146,
+      "line": 165,
       "cyclomatic": 2.0,
       "coverage": 75.0,
       "crap": 2.0625,
@@ -34781,7 +34781,7 @@
     {
       "file": "crates/operator-dogfood-mcp/src/main.rs",
       "function": "DogfoodServer::workspace_smoke",
-      "line": 160,
+      "line": 179,
       "cyclomatic": 2.0,
       "coverage": 100.0,
       "crap": 2.0,
@@ -34790,7 +34790,7 @@
     {
       "file": "crates/operator-dogfood-mcp/src/main.rs",
       "function": "init_tracing",
-      "line": 177,
+      "line": 196,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -34799,7 +34799,7 @@
     {
       "file": "crates/operator-dogfood-mcp/src/main.rs",
       "function": "main",
-      "line": 189,
+      "line": 208,
       "cyclomatic": 3.0,
       "coverage": 100.0,
       "crap": 3.0,
@@ -34808,7 +34808,7 @@
     {
       "file": "crates/operator-dogfood-mcp/src/main.rs",
       "function": "mcp_err",
-      "line": 166,
+      "line": 185,
       "cyclomatic": 3.0,
       "coverage": 100.0,
       "crap": 3.0,
@@ -34817,7 +34817,7 @@
     {
       "file": "crates/operator-dogfood-mcp/src/main.rs",
       "function": "to_json",
-      "line": 173,
+      "line": 192,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -34826,7 +34826,7 @@
     {
       "file": "crates/operator-dogfood-mcp/src/ops.rs",
       "function": "agent_body",
-      "line": 210,
+      "line": 254,
       "cyclomatic": 2.0,
       "coverage": 100.0,
       "crap": 2.0,
@@ -34835,7 +34835,16 @@
     {
       "file": "crates/operator-dogfood-mcp/src/ops.rs",
       "function": "bool_field",
-      "line": 250,
+      "line": 294,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "liberado-operator-dogfood-mcp"
+    },
+    {
+      "file": "crates/operator-dogfood-mcp/src/ops.rs",
+      "function": "capped_session_list",
+      "line": 232,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -34844,7 +34853,7 @@
     {
       "file": "crates/operator-dogfood-mcp/src/ops.rs",
       "function": "catalog",
-      "line": 125,
+      "line": 145,
       "cyclomatic": 1.0,
       "coverage": 0.0,
       "crap": 2.0,
@@ -34853,7 +34862,7 @@
     {
       "file": "crates/operator-dogfood-mcp/src/ops.rs",
       "function": "chat_body",
-      "line": 225,
+      "line": 269,
       "cyclomatic": 2.0,
       "coverage": 100.0,
       "crap": 2.0,
@@ -34862,7 +34871,7 @@
     {
       "file": "crates/operator-dogfood-mcp/src/ops.rs",
       "function": "chat_create_body",
-      "line": 239,
+      "line": 283,
       "cyclomatic": 3.0,
       "coverage": 100.0,
       "crap": 3.0,
@@ -34871,7 +34880,7 @@
     {
       "file": "crates/operator-dogfood-mcp/src/ops.rs",
       "function": "create_agent",
-      "line": 26,
+      "line": 37,
       "cyclomatic": 6.0,
       "coverage": 100.0,
       "crap": 6.0,
@@ -34880,7 +34889,7 @@
     {
       "file": "crates/operator-dogfood-mcp/src/ops.rs",
       "function": "find_existing",
-      "line": 160,
+      "line": 180,
       "cyclomatic": 2.0,
       "coverage": 100.0,
       "crap": 2.0,
@@ -34889,7 +34898,7 @@
     {
       "file": "crates/operator-dogfood-mcp/src/ops.rs",
       "function": "get_history",
-      "line": 94,
+      "line": 105,
       "cyclomatic": 2.0,
       "coverage": 100.0,
       "crap": 2.0,
@@ -34898,15 +34907,6 @@
     {
       "file": "crates/operator-dogfood-mcp/src/ops.rs",
       "function": "list_agents",
-      "line": 102,
-      "cyclomatic": 2.0,
-      "coverage": 100.0,
-      "crap": 2.0,
-      "crate": "liberado-operator-dogfood-mcp"
-    },
-    {
-      "file": "crates/operator-dogfood-mcp/src/ops.rs",
-      "function": "list_sessions",
       "line": 113,
       "cyclomatic": 2.0,
       "coverage": 100.0,
@@ -34915,8 +34915,26 @@
     },
     {
       "file": "crates/operator-dogfood-mcp/src/ops.rs",
+      "function": "list_sessions",
+      "line": 127,
+      "cyclomatic": 2.0,
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "liberado-operator-dogfood-mcp"
+    },
+    {
+      "file": "crates/operator-dogfood-mcp/src/ops.rs",
+      "function": "listed_sessions",
+      "line": 222,
+      "cyclomatic": 2.0,
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "liberado-operator-dogfood-mcp"
+    },
+    {
+      "file": "crates/operator-dogfood-mcp/src/ops.rs",
       "function": "object_rows",
-      "line": 202,
+      "line": 246,
       "cyclomatic": 3.0,
       "coverage": 100.0,
       "crap": 3.0,
@@ -34925,7 +34943,7 @@
     {
       "file": "crates/operator-dogfood-mcp/src/ops.rs",
       "function": "post_agent",
-      "line": 169,
+      "line": 189,
       "cyclomatic": 3.0,
       "coverage": 100.0,
       "crap": 3.0,
@@ -34934,7 +34952,7 @@
     {
       "file": "crates/operator-dogfood-mcp/src/ops.rs",
       "function": "post_human_turn",
-      "line": 60,
+      "line": 71,
       "cyclomatic": 3.0,
       "coverage": 100.0,
       "crap": 3.0,
@@ -34943,7 +34961,7 @@
     {
       "file": "crates/operator-dogfood-mcp/src/ops.rs",
       "function": "read_replies",
-      "line": 79,
+      "line": 90,
       "cyclomatic": 3.0,
       "coverage": 100.0,
       "crap": 3.0,
@@ -34952,7 +34970,7 @@
     {
       "file": "crates/operator-dogfood-mcp/src/ops.rs",
       "function": "reject_agent_profile",
-      "line": 148,
+      "line": 168,
       "cyclomatic": 4.0,
       "coverage": 100.0,
       "crap": 4.0,
@@ -34961,7 +34979,7 @@
     {
       "file": "crates/operator-dogfood-mcp/src/ops.rs",
       "function": "require_agent_profile",
-      "line": 136,
+      "line": 156,
       "cyclomatic": 4.0,
       "coverage": 100.0,
       "crap": 4.0,
@@ -34970,7 +34988,7 @@
     {
       "file": "crates/operator-dogfood-mcp/src/ops.rs",
       "function": "start_chat",
-      "line": 41,
+      "line": 52,
       "cyclomatic": 4.0,
       "coverage": 100.0,
       "crap": 4.0,
@@ -34979,7 +34997,7 @@
     {
       "file": "crates/operator-dogfood-mcp/src/ops.rs",
       "function": "status",
-      "line": 120,
+      "line": 140,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -34988,7 +35006,7 @@
     {
       "file": "crates/operator-dogfood-mcp/src/ops.rs",
       "function": "workspace_smoke",
-      "line": 130,
+      "line": 150,
       "cyclomatic": 2.0,
       "coverage": 100.0,
       "crap": 2.0,
@@ -35015,7 +35033,7 @@
     {
       "file": "crates/operator-dogfood-mcp/src/shelf.rs",
       "function": "flag_true",
-      "line": 221,
+      "line": 237,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -35024,7 +35042,7 @@
     {
       "file": "crates/operator-dogfood-mcp/src/shelf.rs",
       "function": "grant_profile",
-      "line": 225,
+      "line": 245,
       "cyclomatic": 3.0,
       "coverage": 100.0,
       "crap": 3.0,
@@ -35033,7 +35051,7 @@
     {
       "file": "crates/operator-dogfood-mcp/src/shelf.rs",
       "function": "grant_profile_str",
-      "line": 232,
+      "line": 252,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -35042,7 +35060,7 @@
     {
       "file": "crates/operator-dogfood-mcp/src/shelf.rs",
       "function": "header_id",
-      "line": 192,
+      "line": 208,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -35060,7 +35078,7 @@
     {
       "file": "crates/operator-dogfood-mcp/src/shelf.rs",
       "function": "is_conversation_ulid",
-      "line": 202,
+      "line": 218,
       "cyclomatic": 2.0,
       "coverage": 100.0,
       "crap": 2.0,
@@ -35069,7 +35087,7 @@
     {
       "file": "crates/operator-dogfood-mcp/src/shelf.rs",
       "function": "is_crockford_base32",
-      "line": 206,
+      "line": 222,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -35078,7 +35096,7 @@
     {
       "file": "crates/operator-dogfood-mcp/src/shelf.rs",
       "function": "is_named_agent",
-      "line": 210,
+      "line": 226,
       "cyclomatic": 4.0,
       "coverage": 100.0,
       "crap": 4.0,
@@ -35095,8 +35113,17 @@
     },
     {
       "file": "crates/operator-dogfood-mcp/src/shelf.rs",
+      "function": "json_field",
+      "line": 241,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "liberado-operator-dogfood-mcp"
+    },
+    {
+      "file": "crates/operator-dogfood-mcp/src/shelf.rs",
       "function": "latest_assistant",
-      "line": 150,
+      "line": 166,
       "cyclomatic": 3.0,
       "coverage": 100.0,
       "crap": 3.0,
@@ -35114,7 +35141,7 @@
     {
       "file": "crates/operator-dogfood-mcp/src/shelf.rs",
       "function": "parsed_created_at",
-      "line": 246,
+      "line": 266,
       "cyclomatic": 2.0,
       "coverage": 100.0,
       "crap": 2.0,
@@ -35132,7 +35159,7 @@
     {
       "file": "crates/operator-dogfood-mcp/src/shelf.rs",
       "function": "row_key",
-      "line": 239,
+      "line": 259,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -35158,8 +35185,17 @@
     },
     {
       "file": "crates/operator-dogfood-mcp/src/shelf.rs",
+      "function": "slim_conversation",
+      "line": 140,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "liberado-operator-dogfood-mcp"
+    },
+    {
+      "file": "crates/operator-dogfood-mcp/src/shelf.rs",
       "function": "slim_session",
-      "line": 137,
+      "line": 153,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -35168,7 +35204,7 @@
     {
       "file": "crates/operator-dogfood-mcp/src/shelf.rs",
       "function": "string_list",
-      "line": 180,
+      "line": 196,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -35177,7 +35213,7 @@
     {
       "file": "crates/operator-dogfood-mcp/src/shelf.rs",
       "function": "surface_is_agent",
-      "line": 217,
+      "line": 233,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -35186,7 +35222,7 @@
     {
       "file": "crates/operator-dogfood-mcp/src/shelf.rs",
       "function": "text_field",
-      "line": 253,
+      "line": 273,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -35195,7 +35231,7 @@
     {
       "file": "crates/operator-dogfood-mcp/src/shelf.rs",
       "function": "tool_is",
-      "line": 261,
+      "line": 281,
       "cyclomatic": 2.0,
       "coverage": 100.0,
       "crap": 2.0,
@@ -35204,7 +35240,7 @@
     {
       "file": "crates/operator-dogfood-mcp/src/shelf.rs",
       "function": "workspace_report",
-      "line": 161,
+      "line": 177,
       "cyclomatic": 3.0,
       "coverage": 100.0,
       "crap": 3.0,

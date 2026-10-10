@@ -291,6 +291,32 @@ fn workspace_report_accepts_a_prefixed_tool_name() {
 }
 
 #[test]
+fn conversation_rows_keep_lineage_and_omit_goal_fields() {
+    let chat = slim_conversation(&json!({
+        "id": "c",
+        "title": "Hi",
+        "created_at": "2026-03-01T00:00:00Z",
+        "surface_mode": "chat",
+        "parent_conversation": "PARENT",
+        "spawned_by": "NODE",
+        "grant": {"profile": "coding"},
+        "status": "running",
+        "goal": {"description": "ignored"}
+    }));
+    assert_eq!(chat["id"], "c");
+    assert_eq!(chat["created_at"], "2026-03-01T00:00:00Z");
+    assert_eq!(chat["parent_conversation"], "PARENT");
+    assert_eq!(chat["spawned_by"], "NODE");
+    assert_eq!(chat["profile"], "coding");
+    assert!(chat.get("status").is_none(), "{chat}");
+    assert!(chat.get("has_goal").is_none(), "{chat}");
+    let bare = slim_conversation(&json!({"id": "b"}));
+    assert_eq!(bare["surface_mode"], "chat");
+    assert_eq!(bare["parent_conversation"], Value::Null);
+    assert_eq!(bare["profile"], Value::Null);
+}
+
+#[test]
 fn session_rows_keep_goal_and_profile() {
     let chat = slim_session(&json!({
         "id": "c",
