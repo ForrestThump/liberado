@@ -10,6 +10,7 @@ share everything.
               │  /api/status   /api/models (+ POST select)   /api/catalog   │
               │  /api/reactions   /api/vault   /api/chat (+ stream)         │
               │  /api/conversations   /api/conversations/{id} (GET/PATCH)   │
+              │  /api/conversations/{id}/approvals   POST /api/approvals/{id}/resolve │
               │  /api/goals  /api/goals/{id}/stream  (goal sessions)        │
               └───────────────┬───────────────────────────┬────────────────┘
                               │                            │
@@ -292,7 +293,11 @@ about reachability. Two rules follow:
 
 1. **Mutating authority endpoints must not be `GET`.** A `POST`/`PATCH`/`DELETE` is out of reach of a
    fetcher that only issues `GET`s, which is an incidental defence but a real one. The session-profile
-   switch is a `POST` for exactly this reason.
+   switch is a `POST` for exactly this reason. `POST /api/approvals/{id}/resolve` is too: it records
+   a vault-zone permission decision (Deny / Once / Session / Everywhere) and it is not registered as
+   an agent tool or on the operator dogfood MCP. `GET /api/conversations/{id}/approvals` only lists
+   the cards, the same disclosure class as reading a transcript. Opening a conversation
+   (`GET /api/conversations/{id}`) includes the same list on `approvals`.
 2. **A real fix has to distinguish surface traffic from agent traffic** — a shared secret the MCPs are
    not given, a separate bind address for mutating routes, or an egress filter that refuses
    loopback/private targets in the fetching MCPs themselves. The last is the most general: it fixes
