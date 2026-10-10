@@ -37,6 +37,7 @@ pub mod approval_ledger;
 pub mod capability;
 pub mod catalog;
 pub mod clock;
+pub mod permission;
 
 pub use approval_ledger::{ApprovalDecision, ApprovalLedger, ApprovalRecord};
 pub mod dispatch;
@@ -79,6 +80,10 @@ pub use local_time::{
 };
 pub use model::{
     ModelChoice, ModelProfile, ModelRole, ModelTier, ModelTokenPrices, ReasoningLevel, RequiredCaps,
+};
+pub use permission::{
+    ApprovalOrigin, DecisionVia, PermissionDecide, PermissionDecideError, PermissionRoute,
+    apply_permission_decision, card_belongs_to_session, recorded_action, route_permission,
 };
 pub use proposal::{
     ApprovedGuard, GrantScope, PROPOSALS_DIR, Proposal, ProposalNoteError, ProposalSigner,
