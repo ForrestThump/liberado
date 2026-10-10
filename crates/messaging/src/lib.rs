@@ -18,6 +18,12 @@
 
 use async_trait::async_trait;
 
+mod permission;
+pub use permission::{
+    PermissionCardOption, PermissionChoice, already_decided_phrase, decided_phrase,
+    permission_action_rows, permission_card_options, permission_choice, permission_choices,
+};
+
 /// Free-form chat handler: a channel-agnostic turn into Liberado's face agent.
 ///
 /// Implemented by the server (sticky session + slash commands). Attached to the approval/chat bot
@@ -166,20 +172,6 @@ pub fn approval_action_rows(proposal_id: &str) -> Vec<Vec<ActionButton>> {
         ActionButton::new("📝 Revise", "revise", proposal_id),
         ActionButton::new("❌ Reject", "reject", proposal_id),
     ]]
-}
-
-/// Permission-request scope buttons (Deny / Once / Session / Everywhere), two rows.
-pub fn permission_action_rows(proposal_id: &str) -> Vec<Vec<ActionButton>> {
-    vec![
-        vec![
-            ActionButton::new("✅ Once", "once", proposal_id),
-            ActionButton::new("🔁 This session", "session", proposal_id),
-        ],
-        vec![
-            ActionButton::new("♾️ Everywhere", "everywhere", proposal_id),
-            ActionButton::new("❌ Deny", "deny", proposal_id),
-        ],
-    ]
 }
 
 #[cfg(test)]
