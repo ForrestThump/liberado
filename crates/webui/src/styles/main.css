@@ -796,6 +796,49 @@ body {
     border-radius: 0.5rem;
 }
 
+.approval-card {
+    margin: 0.75rem 0;
+    padding: 0.75rem 1rem;
+    background: var(--lib-surface);
+    border: 1px solid var(--lib-border);
+    border-radius: 0.75rem;
+}
+
+.approval-title {
+    margin: 0;
+    font-weight: 600;
+}
+
+.approval-summary,
+.approval-decided {
+    margin: 0.35rem 0 0;
+}
+
+.approval-decided {
+    color: var(--lib-chat-system-text);
+}
+
+.approval-options {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    margin-top: 0.75rem;
+}
+
+.approval-option {
+    border: 1px solid var(--lib-border);
+    background: var(--lib-surface-2);
+    color: inherit;
+    border-radius: 999px;
+    padding: 0.35rem 0.75rem;
+    cursor: pointer;
+}
+
+.approval-option:disabled {
+    cursor: default;
+    opacity: 0.55;
+}
+
 .bubble-thinking {
     background: var(--lib-surface);
     color: var(--lib-status-bar-text);

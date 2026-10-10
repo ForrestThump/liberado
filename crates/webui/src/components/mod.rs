@@ -1,3 +1,4 @@
+mod approval_card;
 pub mod chat;
 mod chat_submission;
 mod conversation_row;
