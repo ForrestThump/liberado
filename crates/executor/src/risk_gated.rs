@@ -722,14 +722,20 @@ impl RiskGatedToolRuntime {
         zone: &str,
     ) {
         let message = permission_ask_message(&call.name, zone);
+        self.notify_on_surface(proposal_id, &message).await;
+    }
+
+    /// Web shows only the card. Telegram uses the sink, then the notifier. Background, and a
+    /// request with no stamp, use the notifier.
+    async fn notify_on_surface(&self, proposal_id: &str, message: &str) {
         match self.approval.as_ref().map(|stamp| stamp.origin) {
             Some(ApprovalOrigin::Web) => {
                 // The card in this chat is the surface. There is no Telegram message.
                 self.notified_deferral.store(true, Ordering::Relaxed);
             }
-            Some(ApprovalOrigin::Telegram) => self.notify_telegram(proposal_id, &message).await,
+            Some(ApprovalOrigin::Telegram) => self.notify_telegram(proposal_id, message).await,
             Some(ApprovalOrigin::Background) | None => {
-                self.notify_via_notifier(proposal_id, &message).await
+                self.notify_via_notifier(proposal_id, message).await
             }
         }
     }

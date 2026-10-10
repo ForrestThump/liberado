@@ -26167,11 +26167,20 @@
     },
     {
       "file": "crates/executor/src/risk_gated.rs",
+      "function": "RiskGatedToolRuntime::notify_on_surface",
+      "line": 730,
+      "cyclomatic": 4.0,
+      "coverage": 100.0,
+      "crap": 4.0,
+      "crate": "liberado-executor"
+    },
+    {
+      "file": "crates/executor/src/risk_gated.rs",
       "function": "RiskGatedToolRuntime::notify_permission_request",
-      "line": 677,
-      "cyclomatic": 3.0,
-      "coverage": 81.25,
-      "crap": 3.059326171875,
+      "line": 718,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
       "crate": "liberado-executor"
     },
     {
@@ -26186,7 +26195,7 @@
     {
       "file": "crates/executor/src/risk_gated.rs",
       "function": "RiskGatedToolRuntime::notify_telegram",
-      "line": 737,
+      "line": 743,
       "cyclomatic": 4.0,
       "coverage": 60.0,
       "crap": 5.024,
@@ -26195,7 +26204,7 @@
     {
       "file": "crates/executor/src/risk_gated.rs",
       "function": "RiskGatedToolRuntime::notify_via_notifier",
-      "line": 750,
+      "line": 756,
       "cyclomatic": 3.0,
       "coverage": 70.0,
       "crap": 3.2430000000000003,
@@ -26339,7 +26348,7 @@
     {
       "file": "crates/executor/src/risk_gated.rs",
       "function": "held_summary",
-      "line": 829,
+      "line": 835,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -26348,7 +26357,7 @@
     {
       "file": "crates/executor/src/risk_gated.rs",
       "function": "permission_ask_message",
-      "line": 766,
+      "line": 772,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -26357,7 +26366,7 @@
     {
       "file": "crates/executor/src/risk_gated.rs",
       "function": "permission_request_id",
-      "line": 777,
+      "line": 783,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -26366,7 +26375,7 @@
     {
       "file": "crates/executor/src/risk_gated.rs",
       "function": "permission_request_message",
-      "line": 789,
+      "line": 795,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -26375,7 +26384,7 @@
     {
       "file": "crates/executor/src/risk_gated.rs",
       "function": "proposal_message",
-      "line": 812,
+      "line": 818,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
