@@ -19,8 +19,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use liberado_common::{
-    GrantScope, PROPOSALS_DIR, Proposal, ProposalSigner, ProposalStatus, ProposedAction,
-    WriteProvenance,
+    DecisionVia, GrantScope, PROPOSALS_DIR, Proposal, ProposalSigner, ProposalStatus,
+    ProposedAction, WriteProvenance,
 };
 use liberado_config_loader::TelegramApprovalsTuning;
 use liberado_messaging::approval_action_rows;
@@ -29,11 +29,18 @@ use liberado_provider::{CompletionRequest, Message, Provider, complete_json};
 use liberado_vault::Vault;
 use tokio::sync::Mutex;
 
+mod resolve;
+
+#[cfg(test)]
+#[path = "resolve_share_tests.rs"]
+mod resolve_share_tests;
+
 // Re-export so composition roots and the chat bridge can depend on one crate for the bot surface.
 // `TelegramChatSurface` is the historical name — prefer `ChatSurface` for new code.
 pub use liberado_messaging::{
     ActionButton, ChatSurface, ChatSurface as TelegramChatSurface, InboundEvent, MessagingChannel,
 };
+pub use resolve::{PermissionResolver, ResolveOutcome};
 
 /// Refresh typing indicators this often while a long turn runs. Telegram's indicator lasts ~5s;
 /// other channels no-op `set_typing` so the pulse is harmless.
@@ -50,7 +57,10 @@ pub struct ApprovalBot {
     provider: Arc<dyn Provider>,
     tuning: TelegramApprovalsTuning,
     /// Where a tap is recorded. The vault note is a view; this is the decision.
+    /// Ordinary Approve/Reject still records here. Permission taps go through [`resolver`].
     approvals: Option<liberado_common::ApprovalLedger>,
+    /// Shared with the WebUI `POST`. One lock, so a double tap cannot apply twice.
+    resolver: Arc<PermissionResolver>,
     /// Prompt id (from [`MessagingChannel::request_reply`]) → proposal stem being revised.
     /// Lost on restart — acceptable; a human can tap Revise again.
     pending_revisions: Mutex<HashMap<String, String>>,
@@ -88,6 +98,7 @@ impl ApprovalBot {
         provider: Arc<dyn Provider>,
         tuning: TelegramApprovalsTuning,
     ) -> Self {
+        let resolver = Arc::new(PermissionResolver::new(vault.clone(), None));
         Self {
             channel,
             vault,
@@ -95,6 +106,7 @@ impl ApprovalBot {
             provider,
             tuning,
             approvals: None,
+            resolver,
             pending_revisions: Mutex::new(HashMap::new()),
             in_flight: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             latest_seq: Arc::new(std::sync::atomic::AtomicU64::new(0)),
@@ -220,7 +232,7 @@ impl ApprovalBot {
         }
     }
 
-    async fn handle_action(
+    pub async fn handle_action(
         &self,
         action: &str,
         stem: &str,
@@ -258,9 +270,21 @@ impl ApprovalBot {
     }
 
     /// Record approvals to `ledger` — the daemon will not execute without a matching entry.
+    ///
+    /// Rebuilds this bot's resolver around the same ledger. Prefer [`with_resolver`] when the
+    /// HTTP handler must share the lock.
     #[must_use]
     pub fn with_approval_ledger(mut self, ledger: liberado_common::ApprovalLedger) -> Self {
-        self.approvals = Some(ledger);
+        self.approvals = Some(ledger.clone());
+        self.resolver = Arc::new(PermissionResolver::new(self.vault.clone(), Some(ledger)));
+        self
+    }
+
+    /// Use the process-wide resolver. The WebUI `POST` holds the same `Arc`.
+    #[must_use]
+    pub fn with_resolver(mut self, resolver: Arc<PermissionResolver>) -> Self {
+        self.approvals = resolver.ledger();
+        self.resolver = resolver;
         self
     }
 
@@ -317,9 +341,10 @@ impl ApprovalBot {
         })
     }
 
-    /// Handle a permission-request scope tap. `scope = None` denies (Rejected); otherwise stamp the
-    /// chosen [`GrantScope`] and approve. Same pending/expired guards as `set_status`; the daemon's
-    /// proposal reactor does the privileged work (apply the grant, execute the carried call).
+    /// Handle a permission-request scope tap. `scope = None` denies. The daemon's proposal
+    /// reactor does the privileged work (apply the grant, execute the carried call).
+    ///
+    /// The decision itself is [`PermissionResolver::resolve`], the same function the WebUI calls.
     async fn set_permission_scope(
         &self,
         event_id: &str,
@@ -327,84 +352,44 @@ impl ApprovalBot {
         stem: &str,
         scope: Option<GrantScope>,
     ) {
-        let Some(mut proposal) = self.load_pending_proposal(event_id, stem).await else {
-            return;
+        let action = match scope {
+            None => "deny",
+            Some(GrantScope::Once) => "once",
+            Some(GrantScope::Session) => "session",
+            Some(GrantScope::Everywhere) => "everywhere",
         };
-
-        match scope {
-            None => proposal.status = ProposalStatus::Rejected,
-            Some(s) => {
-                proposal.approved_scope = Some(s);
-                proposal.status = ProposalStatus::Approved;
-            }
-        }
-
-        // A permission request is a proposal, and `handle_proposal_change` is what runs the blocked
-        // call — so it passes the same ledger gate as any other. Recording here too is not optional:
-        // without it a tapped permission would flip the note, then be refused by the daemon, and the
-        // tap would appear to do nothing. Recorded before the note, for the same reason as
-        // `set_status` — the ledger is the decision, the note is its view.
-        if !self.record_decision(event_id, stem, &proposal).await {
-            return;
-        }
-
-        let path = proposal_path(stem);
-        if let Err(e) = self
-            .vault
-            .write(&path, &proposal.to_note(), None, &WriteProvenance::human())
+        match self
+            .resolver
+            .resolve(stem, action, DecisionVia::Telegram)
             .await
         {
-            tracing::error!(stem, error = %e, "approval-bot: failed to write permission decision");
-            self.ack(event_id, "Failed to save — try again.").await;
-            return;
-        }
-
-        let (icon, verb) = match scope {
-            None => ("❌", "Denied"),
-            Some(GrantScope::Once) => ("✅", "Approved once"),
-            Some(GrantScope::Session) => ("🔁", "Approved for this session"),
-            Some(GrantScope::Everywhere) => ("♾️", "Approved everywhere"),
-        };
-        self.ack(event_id, verb).await;
-        self.receipt(
-            message_ref,
-            &format!("{icon} {verb} — {}", proposal.rationale),
-        )
-        .await;
-    }
-
-    /// Read `proposals/{stem}.md`, parse it, and confirm it is a `Pending`, unexpired permission
-    /// request. On any mismatch the human is told and `None` is returned — the note is never
-    /// touched unless it was genuinely awaiting this exact decision.
-    async fn load_pending_proposal(&self, event_id: &str, stem: &str) -> Option<Proposal> {
-        let path = proposal_path(stem);
-        let content = match self.vault.read(&path).await {
-            Ok(c) => c,
-            Err(e) => {
-                tracing::warn!(stem, error = %e, "approval-bot: permission request not found");
-                self.ack(event_id, "Request not found.").await;
-                return None;
+            ResolveOutcome::Decided {
+                label,
+                emoji,
+                rationale,
+                ..
+            } => {
+                self.ack(event_id, &label).await;
+                self.receipt(message_ref, &format!("{emoji} {label} — {rationale}"))
+                    .await;
             }
-        };
-        let proposal = match Proposal::from_note(&content) {
-            Ok(p) => p,
-            Err(e) => {
-                tracing::warn!(stem, error = %e, "approval-bot: permission note did not parse");
-                self.ack(event_id, "Could not parse that request.").await;
-                return None;
-            }
-        };
-        if proposal.requested_grant.is_none() {
-            self.ack(event_id, "Not a permission request.").await;
-            return None;
-        }
-        if proposal.status != ProposalStatus::Pending || proposal.is_expired_at(chrono::Utc::now())
-        {
-            self.ack(event_id, "Already decided — no action taken.")
+            ResolveOutcome::AlreadyDecided { action, .. } => {
+                self.ack(
+                    event_id,
+                    &liberado_messaging::already_decided_phrase(action),
+                )
                 .await;
-            return None;
+            }
+            ResolveOutcome::NotFound => self.ack(event_id, "Request not found.").await,
+            ResolveOutcome::NotAPermissionRequest => {
+                self.ack(event_id, "Not a permission request.").await
+            }
+            ResolveOutcome::Unreadable => self.ack(event_id, "Could not parse that request.").await,
+            ResolveOutcome::UnknownAction => {
+                tracing::warn!(action, "unknown permission action");
+            }
+            ResolveOutcome::SaveFailed => self.ack(event_id, "Failed to save — try again.").await,
         }
-        Some(proposal)
     }
 
     /// Record a decided permission proposal in the approvals ledger (when one is attached).
@@ -845,7 +830,7 @@ struct ProposalRevision {
 }
 
 /// Pure — the vault-relative path for a proposal's filename stem.
-fn proposal_path(stem: &str) -> String {
+pub(crate) fn proposal_path(stem: &str) -> String {
     format!("{PROPOSALS_DIR}/{stem}.md")
 }
 
@@ -1718,7 +1703,7 @@ id: prop-1
         let acks = channel.acks.lock().unwrap();
         assert!(
             acks.iter()
-                .any(|(_, text)| text.contains("Already decided")),
+                .any(|(_, text)| text.contains("already decided")),
             "expected already-decided ack, got {:?}",
             *acks
         );
