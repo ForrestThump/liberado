@@ -42,15 +42,16 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use async_trait::async_trait;
 use liberado_common::{
-    ApprovedGuard, Capability, CapabilityCatalog, CapabilitySet, Consequence, McpDescriptor,
-    Proposal, ProposalSigner, ProposedAction, RiskWaiverSet, SignedProposal, WriteClass,
-    WriteTarget, Zone, bare_tool_name, mcp_of, write_target,
+    ApprovalOrigin, ApprovedGuard, Capability, CapabilityCatalog, CapabilitySet, Consequence,
+    McpDescriptor, Proposal, ProposalSigner, ProposedAction, RiskWaiverSet, SignedProposal,
+    WriteClass, WriteTarget, Zone, bare_tool_name, mcp_of, write_target,
 };
 use liberado_notify::Notifier;
 use liberado_provider::{ToolDef, ToolInvocation};
 use tracing::Instrument;
 
 use crate::ToolRuntime;
+use crate::approval::{ApprovalStamp, PermissionSink};
 
 #[path = "risk_gated_skip.rs"]
 mod skip;
@@ -99,6 +100,11 @@ pub struct RiskGatedToolRuntime {
     /// parameter so existing call sites don't need to change). Best-effort: a notification
     /// failure never blocks or fails the write it's reporting on.
     notifier: Option<Arc<dyn Notifier>>,
+    /// Set on a human chat. A stamp is enough to raise a permission request: the WebUI card
+    /// is the surface, so a chat with no Telegram notifier still asks instead of hard-refusing.
+    approval: Option<ApprovalStamp>,
+    /// Telegram buttons for a request raised in the sticky chat. `None` on every other origin.
+    permission_sink: Option<Arc<dyn PermissionSink>>,
     /// Set to `true` the moment this runtime raises a proposal / permission-request **and**
     /// successfully surfaces it to the human out-of-band (an interactive notification went out). A
     /// shared handle so the owning `Orchestrator` can read it back after the run and stamp it onto
@@ -156,6 +162,8 @@ impl RiskGatedToolRuntime {
             signer,
             pool_name: pool_name.into(),
             notifier: None,
+            approval: None,
+            permission_sink: None,
             notified_deferral: Arc::new(AtomicBool::new(false)),
             fail_next_create_dir: Arc::new(AtomicBool::new(false)),
             fail_next_write: Arc::new(AtomicBool::new(false)),
@@ -189,6 +197,23 @@ impl RiskGatedToolRuntime {
     pub fn with_notifier(mut self, notifier: Arc<dyn Notifier>) -> Self {
         self.notifier = Some(notifier);
         self
+    }
+
+    /// Stamp the chat this gate serves. See [`ApprovalStamp`].
+    pub fn with_approval(mut self, stamp: ApprovalStamp) -> Self {
+        self.approval = Some(stamp);
+        self
+    }
+
+    /// Where a Telegram-bound chat sends scope buttons. Ignored for every other origin.
+    pub fn with_permission_sink(mut self, sink: Arc<dyn PermissionSink>) -> Self {
+        self.permission_sink = Some(sink);
+        self
+    }
+
+    /// A human can answer when a notifier is wired, or when a chat surface stamped this gate.
+    fn can_ask_human(&self) -> bool {
+        self.notifier.is_some() || self.approval.is_some()
     }
 
     /// Emit the one line that says **which guard decided, and what would change its mind**.
@@ -369,15 +394,19 @@ impl ToolRuntime for RiskGatedToolRuntime {
                 if !self.capabilities.contains(&Capability::Write(Zone::vault(zone))) {
                     self.authority_decision(
                         "write_capability",
-                        if self.notifier.is_some() { "permission_request" } else { "refused" },
+                        if self.can_ask_human() {
+                            "permission_request"
+                        } else {
+                            "refused"
+                        },
                         call,
                         Some(zone),
                         &format!("Write(Vault(\"{zone}\"))"),
                     );
-                    // If a notifier is wired, don't dead-end: raise a permission request the human can
-                    // expand (Deny/Once/Session/Everywhere via Telegram). Without a notifier there's no
-                    // one to ask, so keep the hard refusal.
-                    if self.notifier.is_some() {
+                    // A chat surface or a notifier means there is someone to ask. Raise a
+                    // permission request (Deny / Once / Session / Everywhere). With neither,
+                    // keep the hard refusal — a background run with no Telegram has no human.
+                    if self.can_ask_human() {
                         let path = self.write_permission_request(call, zone).await?;
                         return Ok(permission_request_message(&path, zone));
                     }
@@ -667,7 +696,19 @@ impl RiskGatedToolRuntime {
         )
         .with_requested_grant(Capability::Write(Zone::vault(zone)));
         proposal.pool = Some(self.pool_name.clone());
+        self.stamp_permission_origin(&mut proposal);
         self.signer.sign(proposal)
+    }
+
+    /// Routing metadata. Unsigned, so it is safe to set before the signature is computed.
+    fn stamp_permission_origin(&self, proposal: &mut Proposal) {
+        match &self.approval {
+            Some(stamp) => {
+                proposal.session_id = Some(stamp.session_id.clone());
+                proposal.origin = Some(stamp.origin);
+            }
+            None => proposal.origin = Some(ApprovalOrigin::Background),
+        }
     }
 
     /// Notify the human (when a notifier is attached) that a permission request awaits their
@@ -680,24 +721,53 @@ impl RiskGatedToolRuntime {
         call: &ToolInvocation,
         zone: &str,
     ) {
-        let Some(notifier) = &self.notifier else {
-            return;
-        };
-        let message = format!(
-            "Liberado needs permission.\n'{}' wants to write zone '{zone}', which its grant \
-             doesn't include.\nApprove once, for this session, or everywhere?",
-            call.name,
-        );
-        match notifier
-            .notify_permission_request(proposal_id, &message)
-            .await
-        {
-            Ok(()) => self.notified_deferral.store(true, Ordering::Relaxed),
-            Err(e) => {
-                tracing::warn!(error = %e, "failed to send permission-request notification");
+        let message = permission_ask_message(&call.name, zone);
+        match self.approval.as_ref().map(|stamp| stamp.origin) {
+            Some(ApprovalOrigin::Web) => {
+                // The card in this chat is the surface. There is no Telegram message.
+                self.notified_deferral.store(true, Ordering::Relaxed);
+            }
+            Some(ApprovalOrigin::Telegram) => self.notify_telegram(proposal_id, &message).await,
+            Some(ApprovalOrigin::Background) | None => {
+                self.notify_via_notifier(proposal_id, &message).await
             }
         }
     }
+
+    async fn notify_telegram(&self, proposal_id: &str, message: &str) {
+        if let Some(sink) = &self.permission_sink {
+            match sink.notify_permission(proposal_id, message).await {
+                Ok(()) => self.notified_deferral.store(true, Ordering::Relaxed),
+                Err(error) => {
+                    tracing::warn!(%error, "failed to send permission-request notification");
+                }
+            }
+            return;
+        }
+        self.notify_via_notifier(proposal_id, message).await;
+    }
+
+    async fn notify_via_notifier(&self, proposal_id: &str, message: &str) {
+        let Some(notifier) = &self.notifier else {
+            return;
+        };
+        match notifier
+            .notify_permission_request(proposal_id, message)
+            .await
+        {
+            Ok(()) => self.notified_deferral.store(true, Ordering::Relaxed),
+            Err(error) => {
+                tracing::warn!(%error, "failed to send permission-request notification");
+            }
+        }
+    }
+}
+
+fn permission_ask_message(tool: &str, zone: &str) -> String {
+    format!(
+        "Liberado needs permission.\n'{tool}' wants to write zone '{zone}', which its grant \
+         doesn't include.\nApprove once, for this session, or everywhere?"
+    )
 }
 
 /// Compact permission-request id: it must fit Telegram's callback_data budget (the full
@@ -772,6 +842,10 @@ fn held_summary(caps: &CapabilitySet) -> String {
         writes.join(",")
     )
 }
+
+#[cfg(test)]
+#[path = "risk_gated_approval_tests.rs"]
+mod approval_tests;
 
 #[cfg(test)]
 #[path = "risk_gated_tests.rs"]
