@@ -4,16 +4,19 @@
 //! proposals into the wire card the WebUI renders, and sends Telegram buttons for a
 //! request raised in the sticky chat.
 
+use std::path::Path;
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use chat_client_contract::{ApprovalCard, ApprovalOption};
 use chrono::Utc;
-use liberado_common::{Proposal, recorded_action};
+use liberado_common::{ApprovalLedger, Proposal, recorded_action};
 use liberado_executor::PermissionSink;
+use liberado_main_agent::ChatSessions;
 use liberado_messaging::{decided_phrase, permission_card_options};
 use liberado_notify::Notifier;
 use liberado_telegram_approvals::PermissionResolver;
+use liberado_vault::Vault;
 
 use crate::sticky::StickySession;
 
@@ -69,6 +72,38 @@ fn card_from_proposal(proposal: &Proposal) -> ApprovalCard {
     }
 }
 
+/// Build the shared resolver and hub, and point chat at the sticky slot.
+///
+/// The hub always exists. Background cards join the sticky chat through it, and HTTP serves
+/// cards from it. The sink is attached only when chat and a notifier both exist. `publish_to`
+/// still runs for a chat with no notifier, so the risk gate can see the sticky id.
+pub(crate) async fn wire_approvals(
+    chat: Option<&Arc<ChatSessions>>,
+    sticky: &StickySession,
+    vault: Vault,
+    ledger_dir: &Path,
+    notifier: Option<Arc<dyn Notifier>>,
+) -> (Arc<PermissionResolver>, Arc<ApprovalHub>) {
+    if let Some(sessions) = chat {
+        if let Some(notifier) = notifier {
+            sessions.set_permission_sink(Arc::new(ChannelPermissionSink::new(notifier)));
+        }
+        sticky.publish_to(sessions.sticky_slot()).await;
+    }
+    let resolver = Arc::new(PermissionResolver::new(
+        vault,
+        Some(ApprovalLedger::new(ledger_dir)),
+    ));
+    let hub = Arc::new(ApprovalHub::new(Arc::clone(&resolver), sticky.clone()));
+    (resolver, hub)
+}
+
+/// The Telegram notifier from the process environment, when both bot variables are set.
+pub(crate) fn env_permission_notifier() -> Option<Arc<dyn Notifier>> {
+    let notifier = liberado_notify::TelegramNotifier::from_env()?;
+    Some(Arc::new(notifier) as Arc<dyn Notifier>)
+}
+
 /// Telegram scope buttons for a chat that is the sticky session.
 ///
 /// `liberado-main-agent` cannot depend on `liberado-notify`. The server, which already
@@ -92,3 +127,7 @@ impl PermissionSink for ChannelPermissionSink {
             .map_err(|error| error.to_string())
     }
 }
+
+#[cfg(test)]
+#[path = "approvals_wire_tests.rs"]
+mod wire_tests;

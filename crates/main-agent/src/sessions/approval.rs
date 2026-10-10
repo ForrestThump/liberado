@@ -40,6 +40,15 @@ impl ChatSessions {
             .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(sink);
     }
 
+    /// Whether a Telegram button sender is attached.
+    pub fn has_permission_sink(&self) -> bool {
+        self.approval_hooks
+            .permission_sink
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .is_some()
+    }
+
     fn sticky_label(&self) -> Option<String> {
         self.approval_hooks
             .sticky_slot

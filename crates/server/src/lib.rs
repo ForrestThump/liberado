@@ -181,24 +181,16 @@ pub async fn run(vault_path: String) -> Result<(), Box<dyn std::error::Error>> {
         &telegram_sticky,
         &telegram_activity,
     );
-    if let Some(sessions) = chat.as_ref() {
-        if let Some(notifier) = liberado_notify::TelegramNotifier::from_env() {
-            sessions.set_permission_sink(Arc::new(approvals::ChannelPermissionSink::new(
-                Arc::new(notifier),
-            )));
-        }
-        telegram_sticky.publish_to(sessions.sticky_slot()).await;
-    }
-    let approval_resolver = Arc::new(liberado_telegram_approvals::PermissionResolver::new(
+    let ledger_dir = liberado_config::data_dir();
+    let (approval_resolver, approval_hub) = approvals::wire_approvals(
+        chat.as_ref(),
+        &telegram_sticky,
         daemon.vault().clone(),
-        Some(liberado_common::ApprovalLedger::new(
-            liberado_config::data_dir(),
-        )),
-    ));
-    let approval_hub = Some(Arc::new(approvals::ApprovalHub::new(
-        Arc::clone(&approval_resolver),
-        telegram_sticky.clone(),
-    )));
+        &ledger_dir,
+        approvals::env_permission_notifier(),
+    )
+    .await;
+    let approval_hub = Some(approval_hub);
 
     // The webhook hooks endpoint's seam into the daemon's reactive pipeline — a clone of the same
     // channel every `EventSource` (vault-watch, cron) pushes onto. Grabbed before `daemon` moves
