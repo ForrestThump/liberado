@@ -212,3 +212,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     server.run_stdio().await?;
     Ok(())
 }
+
+#[cfg(test)]
+mod no_approve_tool {
+    /// The operator dogfood MCP must not gain an approve or resolve tool. The check scans
+    /// only the tool declarations above `mcp_err`, and builds the needle so this test does
+    /// not itself contain the forbidden declaration.
+    #[test]
+    fn dogfood_mcp_has_no_approve_or_resolve_tool() {
+        let source = include_str!("main.rs");
+        let head = source.split("fn mcp_err").next().expect("mcp_err");
+        for name in ["approve", "resolve"] {
+            let needle = format!("async fn {name}");
+            assert!(
+                !head.contains(&needle),
+                "operator dogfood must not grow a {name} tool"
+            );
+        }
+    }
+}

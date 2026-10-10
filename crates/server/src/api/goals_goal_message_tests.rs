@@ -92,6 +92,7 @@ fn goals_app() -> (Router, Arc<GoalSessionHub>) {
         hook_idempotency: crate::hooks::IdempotencyCache::default(),
         live_mcp: liberado_bootstrap::LiveMcpController::empty(),
         drain: crate::shutdown::DrainGate::default(),
+        approval_hub: None,
     });
 
     let app = Router::new()
@@ -162,6 +163,7 @@ async fn goals_app_with_chat() -> (
         hook_idempotency: crate::hooks::IdempotencyCache::default(),
         live_mcp: liberado_bootstrap::LiveMcpController::empty(),
         drain: crate::shutdown::DrainGate::default(),
+        approval_hub: None,
     });
 
     let app = Router::new()
@@ -639,6 +641,7 @@ async fn fork_app(
         hook_idempotency: crate::hooks::IdempotencyCache::default(),
         live_mcp: liberado_bootstrap::LiveMcpController::empty(),
         drain: crate::shutdown::DrainGate::default(),
+        approval_hub: None,
     });
 
     let app = Router::new()

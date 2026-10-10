@@ -142,6 +142,7 @@ impl T1Harness {
             hook_idempotency: crate::hooks::IdempotencyCache::default(),
             live_mcp: liberado_bootstrap::LiveMcpController::empty(),
             drain: crate::shutdown::DrainGate::default(),
+            approval_hub: None,
         });
 
         let app = Router::new()

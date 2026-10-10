@@ -879,6 +879,8 @@ pub async fn get_conversation(
                     (header.grant.profile, mode)
                 })
                 .unwrap_or((None, chat_client_contract::SurfaceMode::default()));
+            let approvals =
+                crate::approvals::conversation_cards(&state.approval_hub, &id.to_string()).await;
             Json(ConversationHistoryResponse {
                 messages,
                 profile,
@@ -889,6 +891,7 @@ pub async fn get_conversation(
                 // human's message, and calling that dead would mark every in-flight turn as failed.
                 turn_unanswered: sessions.last_turn_unanswered(id).await,
                 surface_mode,
+                approvals,
             })
             .into_response()
         }

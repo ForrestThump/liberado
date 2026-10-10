@@ -7,6 +7,7 @@
 //! us doesn't fight over it).
 
 mod api;
+mod approvals;
 mod chat_agent_spawn;
 mod coding_pack;
 mod cron_delivery;
@@ -180,6 +181,24 @@ pub async fn run(vault_path: String) -> Result<(), Box<dyn std::error::Error>> {
         &telegram_sticky,
         &telegram_activity,
     );
+    if let Some(sessions) = chat.as_ref() {
+        if let Some(notifier) = liberado_notify::TelegramNotifier::from_env() {
+            sessions.set_permission_sink(Arc::new(approvals::ChannelPermissionSink::new(
+                Arc::new(notifier),
+            )));
+        }
+        telegram_sticky.publish_to(sessions.sticky_slot()).await;
+    }
+    let approval_resolver = Arc::new(liberado_telegram_approvals::PermissionResolver::new(
+        daemon.vault().clone(),
+        Some(liberado_common::ApprovalLedger::new(
+            liberado_config::data_dir(),
+        )),
+    ));
+    let approval_hub = Some(Arc::new(approvals::ApprovalHub::new(
+        Arc::clone(&approval_resolver),
+        telegram_sticky.clone(),
+    )));
 
     // The webhook hooks endpoint's seam into the daemon's reactive pipeline — a clone of the same
     // channel every `EventSource` (vault-watch, cron) pushes onto. Grabbed before `daemon` moves
@@ -225,6 +244,7 @@ pub async fn run(vault_path: String) -> Result<(), Box<dyn std::error::Error>> {
         hook_idempotency: Default::default(),
         live_mcp: live_mcp.clone(),
         drain: crate::shutdown::DrainGate::default(),
+        approval_hub,
     });
 
     spawn_telegram_bot(
@@ -234,6 +254,7 @@ pub async fn run(vault_path: String) -> Result<(), Box<dyn std::error::Error>> {
         &config,
         &telegram_sticky,
         telegram_activity,
+        approval_resolver,
     );
 
     let reaction_tx = state.reaction_tx();
@@ -385,6 +406,7 @@ fn spawn_telegram_bot(
     config: &liberado_bootstrap::Config,
     telegram_sticky: &sticky::StickySession,
     telegram_activity: Arc<Mutex<Option<Instant>>>,
+    resolver: Arc<liberado_telegram_approvals::PermissionResolver>,
 ) {
     let Some(p) = provider else {
         return;
@@ -397,11 +419,7 @@ fn spawn_telegram_bot(
     )
     // The same ledger the daemon reads. A tap is the authenticated act; the vault note it also
     // updates is only the human-readable view of a decision recorded here.
-    .map(|b| {
-        b.with_approval_ledger(liberado_common::ApprovalLedger::new(
-            liberado_config::data_dir(),
-        ))
-    }) else {
+    .map(|b| b.with_resolver(resolver)) else {
         return;
     };
     if state.chat.is_some() {
@@ -475,6 +493,16 @@ fn build_app_router(state: &Arc<AppState>) -> Router {
         .route(
             "/api/conversations/{id}/profile",
             axum::routing::post(api::set_conversation_profile),
+        )
+        // Human-only. POST so a web-fetching MCP (GET only) cannot decide. Not registered
+        // as an agent tool or on the operator dogfood MCP.
+        .route(
+            "/api/approvals/{id}/resolve",
+            axum::routing::post(api::resolve_approval),
+        )
+        .route(
+            "/api/conversations/{id}/approvals",
+            axum::routing::get(api::list_approvals),
         )
         // Rejoin a turn after a reload, and stop one on purpose. Both exist because a turn no
         // longer belongs to the connection that started it. Not gated by drain.
