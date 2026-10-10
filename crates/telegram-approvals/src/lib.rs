@@ -57,7 +57,7 @@ pub struct ApprovalBot {
     provider: Arc<dyn Provider>,
     tuning: TelegramApprovalsTuning,
     /// Where a tap is recorded. The vault note is a view; this is the decision.
-    /// Ordinary Approve/Reject still records here. Permission taps go through [`resolver`].
+    /// Ordinary Approve/Reject still records here. Permission taps go through [`Self::resolver`].
     approvals: Option<liberado_common::ApprovalLedger>,
     /// Shared with the WebUI `POST`. One lock, so a double tap cannot apply twice.
     resolver: Arc<PermissionResolver>,
@@ -271,7 +271,7 @@ impl ApprovalBot {
 
     /// Record approvals to `ledger` — the daemon will not execute without a matching entry.
     ///
-    /// Rebuilds this bot's resolver around the same ledger. Prefer [`with_resolver`] when the
+    /// Rebuilds this bot's resolver around the same ledger. Prefer [`Self::with_resolver`] when the
     /// HTTP handler must share the lock.
     #[must_use]
     pub fn with_approval_ledger(mut self, ledger: liberado_common::ApprovalLedger) -> Self {

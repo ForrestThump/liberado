@@ -1,6 +1,6 @@
 //! Channel-neutral permission decisions.
 //!
-//! A vault-zone permission request is still a [`Proposal`](crate::Proposal) on disk. This module
+//! A vault-zone permission request is still a [`Proposal`] on disk. This module
 //! is the decision half that every human surface shares: which chat the request belongs to, and
 //! how a tap becomes a status. It does no I/O. The Telegram callback and the WebUI `POST` both
 //! call one resolver that applies [`apply_permission_decision`] and then writes the note.
