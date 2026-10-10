@@ -334,4 +334,49 @@ mod tests {
         let ordinary = Proposal::pending("p", "c", "s", ProposedAction::ToolCalls(vec![]), "r");
         assert!(!card_belongs_to_session(&ordinary, "tg", Some("tg")));
     }
+
+    #[test]
+    fn recorded_action_names_every_stored_state() {
+        let now = Utc::now();
+        let open = open_request();
+        assert_eq!(recorded_action(&open, now), "pending");
+
+        let mut later = open_request();
+        later.expires = Some(now + chrono::Duration::seconds(60));
+        assert_eq!(recorded_action(&later, now), "pending");
+
+        let mut elapsed = open_request();
+        elapsed.expires = Some(now - chrono::Duration::seconds(1));
+        assert_eq!(recorded_action(&elapsed, now), "expired");
+
+        let mut expired = open_request();
+        expired.status = ProposalStatus::Expired;
+        assert_eq!(recorded_action(&expired, now), "expired");
+
+        let mut denied = open_request();
+        denied.status = ProposalStatus::Rejected;
+        assert_eq!(recorded_action(&denied, now), "deny");
+
+        for status in [ProposalStatus::Approved, ProposalStatus::Done] {
+            let mut once = open_request();
+            once.status = status;
+            once.approved_scope = Some(GrantScope::Once);
+            assert_eq!(recorded_action(&once, now), "once");
+
+            let mut session = open_request();
+            session.status = status;
+            session.approved_scope = Some(GrantScope::Session);
+            assert_eq!(recorded_action(&session, now), "session");
+
+            let mut everywhere = open_request();
+            everywhere.status = status;
+            everywhere.approved_scope = Some(GrantScope::Everywhere);
+            assert_eq!(recorded_action(&everywhere, now), "everywhere");
+
+            let mut bare = open_request();
+            bare.status = status;
+            bare.approved_scope = None;
+            assert_eq!(recorded_action(&bare, now), "approved");
+        }
+    }
 }
