@@ -5,7 +5,7 @@
 > Layer semantics and dependency rules: [contracts.md](../architecture/contracts.md) and
 > `crates/test-support/tests/layer_rules.rs` (the same role tags, mechanically enforced).
 
-55 workspace crates.
+56 workspace crates.
 
 ## foundation
 
@@ -84,6 +84,7 @@ Out-of-process adapters: MCP servers, bots, the forge.
 | [`liberado-chat-search-mcp`](../../../crates/chat-search-mcp/) | `liberado-chat-search`, `liberado-config` | MCP server exposing conversation history search as a tool, so the dispatcher can search chat history mid-reasoning (not just the human, via the webui). Registered in topology.toml as a stdio MCP; built in-workspace, not a managed (cargo-installed-from-git) MCP. |
 | [`liberado-mcp-forge`](../../../crates/mcp-forge/) | `liberado-common`, `liberado-config` | Builds and installs Liberado MCP servers from git URLs via `cargo install --git`, wiring them to `McpTransport::Managed` entries in topology.toml by convention. |
 | [`liberado-memory-mcp`](../../../crates/memory-mcp/) | `liberado-common`, `liberado-config`, `liberado-memory-store`, `liberado-vault` | MCP server exposing general memory (user facts/preferences) and procedural memory (tool-selection guidance) as agent-callable tools, backed by liberado-memory-store. Registered in topology.toml as a stdio MCP; built in-workspace, not a managed (cargo-installed-from-git) MCP. Replaces the old liberado-tool-helper-mcp, which proxied every call over HTTP to an external mem0 service. |
+| [`liberado-operator-dogfood-mcp`](../../../crates/operator-dogfood-mcp/) | *none* | Stdio MCP for an external operator agent to dogfood Liberado through the existing HTTP API: find or create an Agents-shelf session, open a chat, post an explicit human turn, continue that session, and read history. |
 | [`liberado-telegram-approvals`](../../../crates/telegram-approvals/) | `liberado-common`, `liberado-config-loader`, `liberado-messaging`, `liberado-notify`, `liberado-provider`, `liberado-vault` | Channel-agnostic approval/chat bot: Approve/Reject/Revise button taps become pure-code proposal frontmatter edits (Approve/Reject never touch an LLM; Revise redrafts content only). Telegram is the default MessagingChannel; Matrix/Discord/Signal plug in via the same trait. |
 
 ## surface

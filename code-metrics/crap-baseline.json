@@ -23461,8 +23461,8 @@
       "function": "prefer",
       "line": 163,
       "cyclomatic": 4.0,
-      "coverage": 87.5,
-      "crap": 4.03125,
+      "coverage": 93.75,
+      "crap": 4.00390625,
       "crate": "liberado-daemon"
     },
     {
@@ -34516,6 +34516,735 @@
       "coverage": 100.0,
       "crap": 5.0,
       "crate": "liberado-notify"
+    },
+    {
+      "file": "crates/operator-dogfood-mcp/src/base_url.rs",
+      "function": "check_origin",
+      "line": 69,
+      "cyclomatic": 10.0,
+      "coverage": 90.0,
+      "crap": 10.1,
+      "crate": "liberado-operator-dogfood-mcp"
+    },
+    {
+      "file": "crates/operator-dogfood-mcp/src/base_url.rs",
+      "function": "connect_timeout",
+      "line": 51,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "liberado-operator-dogfood-mcp"
+    },
+    {
+      "file": "crates/operator-dogfood-mcp/src/base_url.rs",
+      "function": "origin_string",
+      "line": 102,
+      "cyclomatic": 2.0,
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "liberado-operator-dogfood-mcp"
+    },
+    {
+      "file": "crates/operator-dogfood-mcp/src/base_url.rs",
+      "function": "parse_timeout",
+      "line": 55,
+      "cyclomatic": 3.0,
+      "coverage": 100.0,
+      "crap": 3.0,
+      "crate": "liberado-operator-dogfood-mcp"
+    },
+    {
+      "file": "crates/operator-dogfood-mcp/src/base_url.rs",
+      "function": "resolve_api_base",
+      "line": 28,
+      "cyclomatic": 5.0,
+      "coverage": 80.0,
+      "crap": 5.2,
+      "crate": "liberado-operator-dogfood-mcp"
+    },
+    {
+      "file": "crates/operator-dogfood-mcp/src/base_url.rs",
+      "function": "timeout_secs",
+      "line": 42,
+      "cyclomatic": 3.0,
+      "coverage": 100.0,
+      "crap": 3.0,
+      "crate": "liberado-operator-dogfood-mcp"
+    },
+    {
+      "file": "crates/operator-dogfood-mcp/src/client.rs",
+      "function": "DaemonClient::base",
+      "line": 42,
+      "cyclomatic": 1.0,
+      "coverage": 0.0,
+      "crap": 2.0,
+      "crate": "liberado-operator-dogfood-mcp"
+    },
+    {
+      "file": "crates/operator-dogfood-mcp/src/client.rs",
+      "function": "DaemonClient::exchange",
+      "line": 54,
+      "cyclomatic": 5.0,
+      "coverage": 91.66666666666666,
+      "crap": 5.014467592592593,
+      "crate": "liberado-operator-dogfood-mcp"
+    },
+    {
+      "file": "crates/operator-dogfood-mcp/src/client.rs",
+      "function": "DaemonClient::from_process_env",
+      "line": 36,
+      "cyclomatic": 3.0,
+      "coverage": 100.0,
+      "crap": 3.0,
+      "crate": "liberado-operator-dogfood-mcp"
+    },
+    {
+      "file": "crates/operator-dogfood-mcp/src/client.rs",
+      "function": "DaemonClient::get_json",
+      "line": 46,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "liberado-operator-dogfood-mcp"
+    },
+    {
+      "file": "crates/operator-dogfood-mcp/src/client.rs",
+      "function": "DaemonClient::new",
+      "line": 24,
+      "cyclomatic": 2.0,
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "liberado-operator-dogfood-mcp"
+    },
+    {
+      "file": "crates/operator-dogfood-mcp/src/client.rs",
+      "function": "DaemonClient::post_json",
+      "line": 50,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "liberado-operator-dogfood-mcp"
+    },
+    {
+      "file": "crates/operator-dogfood-mcp/src/client.rs",
+      "function": "error_detail",
+      "line": 101,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "liberado-operator-dogfood-mcp"
+    },
+    {
+      "file": "crates/operator-dogfood-mcp/src/client.rs",
+      "function": "failure",
+      "line": 94,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "liberado-operator-dogfood-mcp"
+    },
+    {
+      "file": "crates/operator-dogfood-mcp/src/client.rs",
+      "function": "parse_json",
+      "line": 80,
+      "cyclomatic": 2.0,
+      "coverage": 38.46153846153847,
+      "crap": 2.932180245789713,
+      "crate": "liberado-operator-dogfood-mcp"
+    },
+    {
+      "file": "crates/operator-dogfood-mcp/src/client.rs",
+      "function": "snippet",
+      "line": 113,
+      "cyclomatic": 3.0,
+      "coverage": 83.33333333333334,
+      "crap": 3.0416666666666665,
+      "crate": "liberado-operator-dogfood-mcp"
+    },
+    {
+      "file": "crates/operator-dogfood-mcp/src/error.rs",
+      "function": "DogfoodError::fmt",
+      "line": 18,
+      "cyclomatic": 2.0,
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "liberado-operator-dogfood-mcp"
+    },
+    {
+      "file": "crates/operator-dogfood-mcp/src/main.rs",
+      "function": "DogfoodServer::catalog",
+      "line": 171,
+      "cyclomatic": 2.0,
+      "coverage": 0.0,
+      "crap": 6.0,
+      "crate": "liberado-operator-dogfood-mcp"
+    },
+    {
+      "file": "crates/operator-dogfood-mcp/src/main.rs",
+      "function": "DogfoodServer::continue_session",
+      "line": 118,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "liberado-operator-dogfood-mcp"
+    },
+    {
+      "file": "crates/operator-dogfood-mcp/src/main.rs",
+      "function": "DogfoodServer::create_agent",
+      "line": 87,
+      "cyclomatic": 2.0,
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "liberado-operator-dogfood-mcp"
+    },
+    {
+      "file": "crates/operator-dogfood-mcp/src/main.rs",
+      "function": "DogfoodServer::from_client",
+      "line": 65,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "liberado-operator-dogfood-mcp"
+    },
+    {
+      "file": "crates/operator-dogfood-mcp/src/main.rs",
+      "function": "DogfoodServer::get_history",
+      "line": 135,
+      "cyclomatic": 2.0,
+      "coverage": 83.33333333333334,
+      "crap": 2.0185185185185186,
+      "crate": "liberado-operator-dogfood-mcp"
+    },
+    {
+      "file": "crates/operator-dogfood-mcp/src/main.rs",
+      "function": "DogfoodServer::human_turn",
+      "line": 70,
+      "cyclomatic": 2.0,
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "liberado-operator-dogfood-mcp"
+    },
+    {
+      "file": "crates/operator-dogfood-mcp/src/main.rs",
+      "function": "DogfoodServer::list_agents",
+      "line": 145,
+      "cyclomatic": 2.0,
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "liberado-operator-dogfood-mcp"
+    },
+    {
+      "file": "crates/operator-dogfood-mcp/src/main.rs",
+      "function": "DogfoodServer::list_sessions",
+      "line": 153,
+      "cyclomatic": 2.0,
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "liberado-operator-dogfood-mcp"
+    },
+    {
+      "file": "crates/operator-dogfood-mcp/src/main.rs",
+      "function": "DogfoodServer::read_replies",
+      "line": 125,
+      "cyclomatic": 2.0,
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "liberado-operator-dogfood-mcp"
+    },
+    {
+      "file": "crates/operator-dogfood-mcp/src/main.rs",
+      "function": "DogfoodServer::send_human_message",
+      "line": 111,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "liberado-operator-dogfood-mcp"
+    },
+    {
+      "file": "crates/operator-dogfood-mcp/src/main.rs",
+      "function": "DogfoodServer::start_chat",
+      "line": 97,
+      "cyclomatic": 2.0,
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "liberado-operator-dogfood-mcp"
+    },
+    {
+      "file": "crates/operator-dogfood-mcp/src/main.rs",
+      "function": "DogfoodServer::status",
+      "line": 165,
+      "cyclomatic": 2.0,
+      "coverage": 75.0,
+      "crap": 2.0625,
+      "crate": "liberado-operator-dogfood-mcp"
+    },
+    {
+      "file": "crates/operator-dogfood-mcp/src/main.rs",
+      "function": "DogfoodServer::workspace_smoke",
+      "line": 179,
+      "cyclomatic": 2.0,
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "liberado-operator-dogfood-mcp"
+    },
+    {
+      "file": "crates/operator-dogfood-mcp/src/main.rs",
+      "function": "init_tracing",
+      "line": 196,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "liberado-operator-dogfood-mcp"
+    },
+    {
+      "file": "crates/operator-dogfood-mcp/src/main.rs",
+      "function": "main",
+      "line": 208,
+      "cyclomatic": 3.0,
+      "coverage": 100.0,
+      "crap": 3.0,
+      "crate": "liberado-operator-dogfood-mcp"
+    },
+    {
+      "file": "crates/operator-dogfood-mcp/src/main.rs",
+      "function": "mcp_err",
+      "line": 185,
+      "cyclomatic": 3.0,
+      "coverage": 100.0,
+      "crap": 3.0,
+      "crate": "liberado-operator-dogfood-mcp"
+    },
+    {
+      "file": "crates/operator-dogfood-mcp/src/main.rs",
+      "function": "to_json",
+      "line": 192,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "liberado-operator-dogfood-mcp"
+    },
+    {
+      "file": "crates/operator-dogfood-mcp/src/ops.rs",
+      "function": "agent_body",
+      "line": 254,
+      "cyclomatic": 2.0,
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "liberado-operator-dogfood-mcp"
+    },
+    {
+      "file": "crates/operator-dogfood-mcp/src/ops.rs",
+      "function": "bool_field",
+      "line": 294,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "liberado-operator-dogfood-mcp"
+    },
+    {
+      "file": "crates/operator-dogfood-mcp/src/ops.rs",
+      "function": "capped_session_list",
+      "line": 232,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "liberado-operator-dogfood-mcp"
+    },
+    {
+      "file": "crates/operator-dogfood-mcp/src/ops.rs",
+      "function": "catalog",
+      "line": 145,
+      "cyclomatic": 1.0,
+      "coverage": 0.0,
+      "crap": 2.0,
+      "crate": "liberado-operator-dogfood-mcp"
+    },
+    {
+      "file": "crates/operator-dogfood-mcp/src/ops.rs",
+      "function": "chat_body",
+      "line": 269,
+      "cyclomatic": 2.0,
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "liberado-operator-dogfood-mcp"
+    },
+    {
+      "file": "crates/operator-dogfood-mcp/src/ops.rs",
+      "function": "chat_create_body",
+      "line": 283,
+      "cyclomatic": 3.0,
+      "coverage": 100.0,
+      "crap": 3.0,
+      "crate": "liberado-operator-dogfood-mcp"
+    },
+    {
+      "file": "crates/operator-dogfood-mcp/src/ops.rs",
+      "function": "create_agent",
+      "line": 37,
+      "cyclomatic": 6.0,
+      "coverage": 100.0,
+      "crap": 6.0,
+      "crate": "liberado-operator-dogfood-mcp"
+    },
+    {
+      "file": "crates/operator-dogfood-mcp/src/ops.rs",
+      "function": "find_existing",
+      "line": 180,
+      "cyclomatic": 2.0,
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "liberado-operator-dogfood-mcp"
+    },
+    {
+      "file": "crates/operator-dogfood-mcp/src/ops.rs",
+      "function": "get_history",
+      "line": 105,
+      "cyclomatic": 2.0,
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "liberado-operator-dogfood-mcp"
+    },
+    {
+      "file": "crates/operator-dogfood-mcp/src/ops.rs",
+      "function": "list_agents",
+      "line": 113,
+      "cyclomatic": 2.0,
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "liberado-operator-dogfood-mcp"
+    },
+    {
+      "file": "crates/operator-dogfood-mcp/src/ops.rs",
+      "function": "list_sessions",
+      "line": 127,
+      "cyclomatic": 2.0,
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "liberado-operator-dogfood-mcp"
+    },
+    {
+      "file": "crates/operator-dogfood-mcp/src/ops.rs",
+      "function": "listed_sessions",
+      "line": 222,
+      "cyclomatic": 2.0,
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "liberado-operator-dogfood-mcp"
+    },
+    {
+      "file": "crates/operator-dogfood-mcp/src/ops.rs",
+      "function": "object_rows",
+      "line": 246,
+      "cyclomatic": 3.0,
+      "coverage": 100.0,
+      "crap": 3.0,
+      "crate": "liberado-operator-dogfood-mcp"
+    },
+    {
+      "file": "crates/operator-dogfood-mcp/src/ops.rs",
+      "function": "post_agent",
+      "line": 189,
+      "cyclomatic": 3.0,
+      "coverage": 100.0,
+      "crap": 3.0,
+      "crate": "liberado-operator-dogfood-mcp"
+    },
+    {
+      "file": "crates/operator-dogfood-mcp/src/ops.rs",
+      "function": "post_human_turn",
+      "line": 71,
+      "cyclomatic": 3.0,
+      "coverage": 100.0,
+      "crap": 3.0,
+      "crate": "liberado-operator-dogfood-mcp"
+    },
+    {
+      "file": "crates/operator-dogfood-mcp/src/ops.rs",
+      "function": "read_replies",
+      "line": 90,
+      "cyclomatic": 3.0,
+      "coverage": 100.0,
+      "crap": 3.0,
+      "crate": "liberado-operator-dogfood-mcp"
+    },
+    {
+      "file": "crates/operator-dogfood-mcp/src/ops.rs",
+      "function": "reject_agent_profile",
+      "line": 168,
+      "cyclomatic": 4.0,
+      "coverage": 100.0,
+      "crap": 4.0,
+      "crate": "liberado-operator-dogfood-mcp"
+    },
+    {
+      "file": "crates/operator-dogfood-mcp/src/ops.rs",
+      "function": "require_agent_profile",
+      "line": 156,
+      "cyclomatic": 4.0,
+      "coverage": 100.0,
+      "crap": 4.0,
+      "crate": "liberado-operator-dogfood-mcp"
+    },
+    {
+      "file": "crates/operator-dogfood-mcp/src/ops.rs",
+      "function": "start_chat",
+      "line": 52,
+      "cyclomatic": 4.0,
+      "coverage": 100.0,
+      "crap": 4.0,
+      "crate": "liberado-operator-dogfood-mcp"
+    },
+    {
+      "file": "crates/operator-dogfood-mcp/src/ops.rs",
+      "function": "status",
+      "line": 140,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "liberado-operator-dogfood-mcp"
+    },
+    {
+      "file": "crates/operator-dogfood-mcp/src/ops.rs",
+      "function": "workspace_smoke",
+      "line": 150,
+      "cyclomatic": 2.0,
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "liberado-operator-dogfood-mcp"
+    },
+    {
+      "file": "crates/operator-dogfood-mcp/src/shelf.rs",
+      "function": "agent_identity",
+      "line": 39,
+      "cyclomatic": 2.0,
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "liberado-operator-dogfood-mcp"
+    },
+    {
+      "file": "crates/operator-dogfood-mcp/src/shelf.rs",
+      "function": "blank_to_none",
+      "line": 54,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "liberado-operator-dogfood-mcp"
+    },
+    {
+      "file": "crates/operator-dogfood-mcp/src/shelf.rs",
+      "function": "flag_true",
+      "line": 237,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "liberado-operator-dogfood-mcp"
+    },
+    {
+      "file": "crates/operator-dogfood-mcp/src/shelf.rs",
+      "function": "grant_profile",
+      "line": 245,
+      "cyclomatic": 3.0,
+      "coverage": 100.0,
+      "crap": 3.0,
+      "crate": "liberado-operator-dogfood-mcp"
+    },
+    {
+      "file": "crates/operator-dogfood-mcp/src/shelf.rs",
+      "function": "grant_profile_str",
+      "line": 252,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "liberado-operator-dogfood-mcp"
+    },
+    {
+      "file": "crates/operator-dogfood-mcp/src/shelf.rs",
+      "function": "header_id",
+      "line": 208,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "liberado-operator-dogfood-mcp"
+    },
+    {
+      "file": "crates/operator-dogfood-mcp/src/shelf.rs",
+      "function": "human_message",
+      "line": 82,
+      "cyclomatic": 2.0,
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "liberado-operator-dogfood-mcp"
+    },
+    {
+      "file": "crates/operator-dogfood-mcp/src/shelf.rs",
+      "function": "is_conversation_ulid",
+      "line": 218,
+      "cyclomatic": 2.0,
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "liberado-operator-dogfood-mcp"
+    },
+    {
+      "file": "crates/operator-dogfood-mcp/src/shelf.rs",
+      "function": "is_crockford_base32",
+      "line": 222,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "liberado-operator-dogfood-mcp"
+    },
+    {
+      "file": "crates/operator-dogfood-mcp/src/shelf.rs",
+      "function": "is_named_agent",
+      "line": 226,
+      "cyclomatic": 4.0,
+      "coverage": 100.0,
+      "crap": 4.0,
+      "crate": "liberado-operator-dogfood-mcp"
+    },
+    {
+      "file": "crates/operator-dogfood-mcp/src/shelf.rs",
+      "function": "is_shelf_agent",
+      "line": 121,
+      "cyclomatic": 2.0,
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "liberado-operator-dogfood-mcp"
+    },
+    {
+      "file": "crates/operator-dogfood-mcp/src/shelf.rs",
+      "function": "json_field",
+      "line": 241,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "liberado-operator-dogfood-mcp"
+    },
+    {
+      "file": "crates/operator-dogfood-mcp/src/shelf.rs",
+      "function": "latest_assistant",
+      "line": 166,
+      "cyclomatic": 3.0,
+      "coverage": 100.0,
+      "crap": 3.0,
+      "crate": "liberado-operator-dogfood-mcp"
+    },
+    {
+      "file": "crates/operator-dogfood-mcp/src/shelf.rs",
+      "function": "oldest_match",
+      "line": 113,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "liberado-operator-dogfood-mcp"
+    },
+    {
+      "file": "crates/operator-dogfood-mcp/src/shelf.rs",
+      "function": "parsed_created_at",
+      "line": 266,
+      "cyclomatic": 2.0,
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "liberado-operator-dogfood-mcp"
+    },
+    {
+      "file": "crates/operator-dogfood-mcp/src/shelf.rs",
+      "function": "profile_eligibility",
+      "line": 94,
+      "cyclomatic": 2.0,
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "liberado-operator-dogfood-mcp"
+    },
+    {
+      "file": "crates/operator-dogfood-mcp/src/shelf.rs",
+      "function": "row_key",
+      "line": 259,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "liberado-operator-dogfood-mcp"
+    },
+    {
+      "file": "crates/operator-dogfood-mcp/src/shelf.rs",
+      "function": "session_id",
+      "line": 66,
+      "cyclomatic": 3.0,
+      "coverage": 100.0,
+      "crap": 3.0,
+      "crate": "liberado-operator-dogfood-mcp"
+    },
+    {
+      "file": "crates/operator-dogfood-mcp/src/shelf.rs",
+      "function": "slim_agent",
+      "line": 126,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "liberado-operator-dogfood-mcp"
+    },
+    {
+      "file": "crates/operator-dogfood-mcp/src/shelf.rs",
+      "function": "slim_conversation",
+      "line": 140,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "liberado-operator-dogfood-mcp"
+    },
+    {
+      "file": "crates/operator-dogfood-mcp/src/shelf.rs",
+      "function": "slim_session",
+      "line": 153,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "liberado-operator-dogfood-mcp"
+    },
+    {
+      "file": "crates/operator-dogfood-mcp/src/shelf.rs",
+      "function": "string_list",
+      "line": 196,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "liberado-operator-dogfood-mcp"
+    },
+    {
+      "file": "crates/operator-dogfood-mcp/src/shelf.rs",
+      "function": "surface_is_agent",
+      "line": 233,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "liberado-operator-dogfood-mcp"
+    },
+    {
+      "file": "crates/operator-dogfood-mcp/src/shelf.rs",
+      "function": "text_field",
+      "line": 273,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "liberado-operator-dogfood-mcp"
+    },
+    {
+      "file": "crates/operator-dogfood-mcp/src/shelf.rs",
+      "function": "tool_is",
+      "line": 281,
+      "cyclomatic": 2.0,
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "liberado-operator-dogfood-mcp"
+    },
+    {
+      "file": "crates/operator-dogfood-mcp/src/shelf.rs",
+      "function": "workspace_report",
+      "line": 177,
+      "cyclomatic": 3.0,
+      "coverage": 100.0,
+      "crap": 3.0,
+      "crate": "liberado-operator-dogfood-mcp"
     },
     {
       "file": "crates/ops/src/archive.rs",
@@ -47254,11 +47983,11 @@
     }
   ],
   "diagnostics": {
-    "analyzed_files": 676,
-    "lcov_files": 473,
-    "matched_files": 471,
+    "analyzed_files": 684,
+    "lcov_files": 479,
+    "matched_files": 477,
     "source_only": {
-      "count": 205,
+      "count": 207,
       "examples": [
         "crates/acp-bridge/src/coding_run_tests.rs",
         "crates/acp-bridge/src/grant_tests.rs",

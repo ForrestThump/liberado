@@ -3317,6 +3317,60 @@
     "functions": 85,
     "cyclomatic": 139
   },
+  "crates/operator-dogfood-mcp/src/base_url.rs": {
+    "ploc": 85,
+    "lloc": 25,
+    "functions": 10,
+    "cyclomatic": 29
+  },
+  "crates/operator-dogfood-mcp/src/base_url_tests.rs": {
+    "ploc": 56,
+    "lloc": 22,
+    "functions": 5,
+    "cyclomatic": 6
+  },
+  "crates/operator-dogfood-mcp/src/client.rs": {
+    "ploc": 97,
+    "lloc": 17,
+    "functions": 16,
+    "cyclomatic": 28
+  },
+  "crates/operator-dogfood-mcp/src/error.rs": {
+    "ploc": 14,
+    "lloc": 1,
+    "functions": 1,
+    "cyclomatic": 7
+  },
+  "crates/operator-dogfood-mcp/src/main.rs": {
+    "ploc": 139,
+    "lloc": 16,
+    "functions": 19,
+    "cyclomatic": 36
+  },
+  "crates/operator-dogfood-mcp/src/ops.rs": {
+    "ploc": 207,
+    "lloc": 44,
+    "functions": 22,
+    "cyclomatic": 54
+  },
+  "crates/operator-dogfood-mcp/src/ops_tests.rs": {
+    "ploc": 552,
+    "lloc": 136,
+    "functions": 26,
+    "cyclomatic": 30
+  },
+  "crates/operator-dogfood-mcp/src/shelf.rs": {
+    "ploc": 200,
+    "lloc": 23,
+    "functions": 38,
+    "cyclomatic": 57
+  },
+  "crates/operator-dogfood-mcp/src/shelf_tests.rs": {
+    "ploc": 314,
+    "lloc": 75,
+    "functions": 15,
+    "cyclomatic": 18
+  },
   "crates/ops/src/archive.rs": {
     "ploc": 178,
     "lloc": 85,
