@@ -4,7 +4,7 @@
     "proven_invariant": 65,
     "local_failure": 0,
     "process_fatal": 46,
-    "files_scanned": 548,
+    "files_scanned": 556,
     "files_with_unwraps": 49
   },
   "files": {
@@ -501,7 +501,7 @@
       "occurrences": [
         {
           "file": "crates/common/src/proposal.rs",
-          "line": 344,
+          "line": 362,
           "column": 23,
           "method": "expect",
           "snippet": "<Hmac<Sha256> as Mac>::new_from_slice(&self.key)\n            .expect(\"HMAC accepts a key of any length\")",
@@ -512,7 +512,7 @@
         },
         {
           "file": "crates/common/src/proposal.rs",
-          "line": 352,
+          "line": 370,
           "column": 27,
           "method": "expect",
           "snippet": "serde_json::to_vec(&proposal.proposed_action)\n            .expect(\"ProposedAction serializes to JSON\")",
@@ -523,7 +523,7 @@
         },
         {
           "file": "crates/common/src/proposal.rs",
-          "line": 360,
+          "line": 378,
           "column": 28,
           "method": "expect",
           "snippet": "serde_json::to_vec(cap).expect(\"Capability serializes to JSON\")",
@@ -534,7 +534,7 @@
         },
         {
           "file": "crates/common/src/proposal.rs",
-          "line": 404,
+          "line": 422,
           "column": 9,
           "method": "expect",
           "snippet": "write!(s, \"{b:02x}\").expect(\"writing to a String cannot fail\")",
@@ -1284,7 +1284,7 @@
       "occurrences": [
         {
           "file": "crates/server/src/t1_conformance.rs",
-          "line": 171,
+          "line": 172,
           "column": 20,
           "method": "unwrap",
           "snippet": "self\n            .app\n            .clone()\n            .oneshot(\n                Request::builder()\n                    .method(\"POST\")\n                    .uri(uri)\n                    .header(\"content-type\", \"application/json\")\n                    .body(Body::from(body.to_string()))\n                    .unwrap(),\n            )\n            .await\n            .unwrap()",
@@ -1295,7 +1295,7 @@
         },
         {
           "file": "crates/server/src/t1_conformance.rs",
-          "line": 175,
+          "line": 176,
           "column": 17,
           "method": "unwrap",
           "snippet": "Request::builder()\n                    .method(\"POST\")\n                    .uri(uri)\n                    .header(\"content-type\", \"application/json\")\n                    .body(Body::from(body.to_string()))\n                    .unwrap()",
@@ -1306,7 +1306,7 @@
         },
         {
           "file": "crates/server/src/t1_conformance.rs",
-          "line": 185,
+          "line": 186,
           "column": 21,
           "method": "unwrap",
           "snippet": "axum::body::to_bytes(resp.into_body(), 64 * 1024)\n            .await\n            .unwrap()",
@@ -1317,7 +1317,7 @@
         },
         {
           "file": "crates/server/src/t1_conformance.rs",
-          "line": 195,
+          "line": 196,
           "column": 20,
           "method": "unwrap",
           "snippet": "self\n            .app\n            .clone()\n            .oneshot(\n                Request::builder()\n                    .method(\"GET\")\n                    .uri(uri)\n                    .body(Body::empty())\n                    .unwrap(),\n            )\n            .await\n            .unwrap()",
@@ -1328,7 +1328,7 @@
         },
         {
           "file": "crates/server/src/t1_conformance.rs",
-          "line": 199,
+          "line": 200,
           "column": 17,
           "method": "unwrap",
           "snippet": "Request::builder()\n                    .method(\"GET\")\n                    .uri(uri)\n                    .body(Body::empty())\n                    .unwrap()",
@@ -1339,7 +1339,7 @@
         },
         {
           "file": "crates/server/src/t1_conformance.rs",
-          "line": 208,
+          "line": 209,
           "column": 21,
           "method": "unwrap",
           "snippet": "axum::body::to_bytes(resp.into_body(), 64 * 1024)\n            .await\n            .unwrap()",
@@ -1350,7 +1350,7 @@
         },
         {
           "file": "crates/server/src/t1_conformance.rs",
-          "line": 273,
+          "line": 274,
           "column": 9,
           "method": "unwrap",
           "snippet": "self.calls\n            .lock()\n            .unwrap()",
@@ -1361,7 +1361,7 @@
         },
         {
           "file": "crates/server/src/t1_conformance.rs",
-          "line": 572,
+          "line": 573,
           "column": 10,
           "method": "unwrap",
           "snippet": "self.saw.lock().unwrap()",
@@ -1372,7 +1372,7 @@
         },
         {
           "file": "crates/server/src/t1_conformance.rs",
-          "line": 1157,
+          "line": 1158,
           "column": 9,
           "method": "unwrap",
           "snippet": "self.ran.lock().unwrap()",
@@ -1383,7 +1383,7 @@
         },
         {
           "file": "crates/server/src/t1_conformance.rs",
-          "line": 1298,
+          "line": 1299,
           "column": 5,
           "method": "unwrap",
           "snippet": "serde_json::from_str::<serde_json::Value>(&body).unwrap()[\"session_id\"]\n        .as_str()\n        .unwrap()",
@@ -1394,7 +1394,7 @@
         },
         {
           "file": "crates/server/src/t1_conformance.rs",
-          "line": 1298,
+          "line": 1299,
           "column": 5,
           "method": "unwrap",
           "snippet": "serde_json::from_str::<serde_json::Value>(&body).unwrap()",
