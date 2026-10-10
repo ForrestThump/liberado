@@ -9,8 +9,8 @@ use std::path::Path;
 
 use chrono::Utc;
 use liberado_common::{
-    ApprovalDecision, ApprovalLedger, DecisionVia, PROPOSALS_DIR, Proposal, ProposalStatus,
-    WriteProvenance, apply_permission_decision,
+    ApprovalDecision, ApprovalLedger, DecisionVia, GrantScope, PROPOSALS_DIR, Proposal,
+    ProposalStatus, WriteProvenance, apply_permission_decision,
 };
 use liberado_messaging::{already_decided_phrase, decided_phrase, permission_choice};
 use liberado_vault::Vault;
@@ -49,6 +49,67 @@ impl ResolveOutcome {
             Self::AlreadyDecided { action, .. } => Some(already_decided_phrase(action)),
             _ => None,
         }
+    }
+}
+
+/// Telegram callback action id for a scope tap. `None` denies.
+pub(crate) fn permission_scope_action(scope: Option<GrantScope>) -> &'static str {
+    match scope {
+        None => "deny",
+        Some(GrantScope::Once) => "once",
+        Some(GrantScope::Session) => "session",
+        Some(GrantScope::Everywhere) => "everywhere",
+    }
+}
+
+/// Ack text, and the edited-message receipt when this tap recorded the decision.
+pub(crate) struct PermissionScopeReply {
+    pub ack: Option<String>,
+    pub receipt: Option<String>,
+}
+
+/// Map a resolve outcome onto the Telegram ack and receipt. Unknown actions warn and send nothing.
+pub(crate) fn permission_scope_reply(
+    action: &str,
+    outcome: &ResolveOutcome,
+) -> PermissionScopeReply {
+    match outcome {
+        ResolveOutcome::Decided {
+            label,
+            emoji,
+            rationale,
+            ..
+        } => PermissionScopeReply {
+            ack: Some(label.clone()),
+            receipt: Some(format!("{emoji} {label} — {rationale}")),
+        },
+        ResolveOutcome::AlreadyDecided { action: stored, .. } => PermissionScopeReply {
+            ack: Some(already_decided_phrase(stored)),
+            receipt: None,
+        },
+        ResolveOutcome::NotFound => PermissionScopeReply {
+            ack: Some("Request not found.".into()),
+            receipt: None,
+        },
+        ResolveOutcome::NotAPermissionRequest => PermissionScopeReply {
+            ack: Some("Not a permission request.".into()),
+            receipt: None,
+        },
+        ResolveOutcome::Unreadable => PermissionScopeReply {
+            ack: Some("Could not parse that request.".into()),
+            receipt: None,
+        },
+        ResolveOutcome::UnknownAction => {
+            tracing::warn!(action, "unknown permission action");
+            PermissionScopeReply {
+                ack: None,
+                receipt: None,
+            }
+        }
+        ResolveOutcome::SaveFailed => PermissionScopeReply {
+            ack: Some("Failed to save — try again.".into()),
+            receipt: None,
+        },
     }
 }
 
@@ -434,5 +495,64 @@ mod tests {
                 label: "Denied".into(),
             }
         );
+    }
+
+    #[test]
+    fn permission_scope_reply_names_every_outcome_and_scope() {
+        assert_eq!(permission_scope_action(None), "deny");
+        assert_eq!(permission_scope_action(Some(GrantScope::Once)), "once");
+        assert_eq!(
+            permission_scope_action(Some(GrantScope::Session)),
+            "session"
+        );
+        assert_eq!(
+            permission_scope_action(Some(GrantScope::Everywhere)),
+            "everywhere"
+        );
+
+        let decided = permission_scope_reply(
+            "once",
+            &ResolveOutcome::Decided {
+                action: "once",
+                label: "✅ Once".into(),
+                emoji: "✅",
+                rationale: "needs write".into(),
+            },
+        );
+        assert_eq!(decided.ack.as_deref(), Some("✅ Once"));
+        assert_eq!(decided.receipt.as_deref(), Some("✅ ✅ Once — needs write"));
+
+        let cases = [
+            (
+                ResolveOutcome::AlreadyDecided {
+                    action: "session",
+                    label: "Approved for this session".into(),
+                },
+                Some("already decided: Approved for this session"),
+                None,
+            ),
+            (ResolveOutcome::NotFound, Some("Request not found."), None),
+            (
+                ResolveOutcome::NotAPermissionRequest,
+                Some("Not a permission request."),
+                None,
+            ),
+            (
+                ResolveOutcome::Unreadable,
+                Some("Could not parse that request."),
+                None,
+            ),
+            (ResolveOutcome::UnknownAction, None, None),
+            (
+                ResolveOutcome::SaveFailed,
+                Some("Failed to save — try again."),
+                None,
+            ),
+        ];
+        for (outcome, ack, receipt) in cases {
+            let reply = permission_scope_reply("nope", &outcome);
+            assert_eq!(reply.ack.as_deref(), ack);
+            assert_eq!(reply.receipt.as_deref(), receipt);
+        }
     }
 }

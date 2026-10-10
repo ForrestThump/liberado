@@ -352,43 +352,17 @@ impl ApprovalBot {
         stem: &str,
         scope: Option<GrantScope>,
     ) {
-        let action = match scope {
-            None => "deny",
-            Some(GrantScope::Once) => "once",
-            Some(GrantScope::Session) => "session",
-            Some(GrantScope::Everywhere) => "everywhere",
-        };
-        match self
+        let action = resolve::permission_scope_action(scope);
+        let outcome = self
             .resolver
             .resolve(stem, action, DecisionVia::Telegram)
-            .await
-        {
-            ResolveOutcome::Decided {
-                label,
-                emoji,
-                rationale,
-                ..
-            } => {
-                self.ack(event_id, &label).await;
-                self.receipt(message_ref, &format!("{emoji} {label} — {rationale}"))
-                    .await;
-            }
-            ResolveOutcome::AlreadyDecided { action, .. } => {
-                self.ack(
-                    event_id,
-                    &liberado_messaging::already_decided_phrase(action),
-                )
-                .await;
-            }
-            ResolveOutcome::NotFound => self.ack(event_id, "Request not found.").await,
-            ResolveOutcome::NotAPermissionRequest => {
-                self.ack(event_id, "Not a permission request.").await
-            }
-            ResolveOutcome::Unreadable => self.ack(event_id, "Could not parse that request.").await,
-            ResolveOutcome::UnknownAction => {
-                tracing::warn!(action, "unknown permission action");
-            }
-            ResolveOutcome::SaveFailed => self.ack(event_id, "Failed to save — try again.").await,
+            .await;
+        let reply = resolve::permission_scope_reply(action, &outcome);
+        if let Some(text) = reply.ack {
+            self.ack(event_id, &text).await;
+        }
+        if let Some(body) = reply.receipt {
+            self.receipt(message_ref, &body).await;
         }
     }
 
