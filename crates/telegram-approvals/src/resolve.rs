@@ -6,13 +6,17 @@
 //! notes stay readable after the daemon archives them.
 
 use std::path::Path;
+use std::sync::Arc;
 
 use chrono::Utc;
 use liberado_common::{
     ApprovalDecision, ApprovalLedger, DecisionVia, GrantScope, PROPOSALS_DIR, Proposal,
     ProposalStatus, WriteProvenance, apply_permission_decision,
 };
-use liberado_messaging::{already_decided_phrase, decided_phrase, permission_choice};
+use liberado_messaging::{
+    ResolvedElsewhere, already_decided_phrase, decided_phrase, permission_choice,
+    permission_receipt, resolved_elsewhere_target,
+};
 use liberado_vault::Vault;
 use tokio::sync::Mutex;
 
@@ -81,7 +85,7 @@ pub(crate) fn permission_scope_reply(
             ..
         } => PermissionScopeReply {
             ack: Some(label.clone()),
-            receipt: Some(format!("{emoji} {label} — {rationale}")),
+            receipt: Some(permission_receipt(emoji, label, rationale)),
         },
         ResolveOutcome::AlreadyDecided { action: stored, .. } => PermissionScopeReply {
             ack: Some(already_decided_phrase(stored)),
@@ -121,7 +125,17 @@ pub struct PermissionResolver {
     vault: Vault,
     ledger: Option<ApprovalLedger>,
     lock: Mutex<()>,
+    listeners: std::sync::Mutex<Vec<Arc<dyn ResolvedElsewhere>>>,
+    push_surface: std::sync::Mutex<Option<String>>,
 }
+
+struct ElsewhereNotice {
+    surface: String,
+    proposal_id: String,
+    receipt: String,
+}
+
+type Resolved = (ResolveOutcome, Option<ElsewhereNotice>);
 
 impl PermissionResolver {
     pub fn new(vault: Vault, ledger: Option<ApprovalLedger>) -> Self {
@@ -129,7 +143,25 @@ impl PermissionResolver {
             vault,
             ledger,
             lock: Mutex::new(()),
+            listeners: std::sync::Mutex::new(Vec::new()),
+            push_surface: std::sync::Mutex::new(None),
         }
+    }
+
+    /// Register a surface that can edit a card it already showed.
+    pub fn add_resolved_elsewhere(&self, listener: Arc<dyn ResolvedElsewhere>) {
+        self.listeners
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .push(listener);
+    }
+
+    /// Channel that receives background cards, when one is configured (`telegram`).
+    pub fn set_push_surface(&self, surface: impl Into<String>) {
+        *self
+            .push_surface
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(surface.into());
     }
 
     /// The ledger this resolver records into, if any. The approval bot uses the same one for
@@ -139,9 +171,18 @@ impl PermissionResolver {
     }
 
     /// First decision wins. Later calls with a known action return [`ResolveOutcome::AlreadyDecided`].
+    ///
+    /// After a new decision is stored, the surface that showed the card — when that surface is
+    /// not the one that decided — is told to edit it.
     pub async fn resolve(&self, stem: &str, action: &str, via: DecisionVia) -> ResolveOutcome {
-        let _guard = self.lock.lock().await;
-        self.resolve_locked(stem, action, via).await
+        let (outcome, notice) = {
+            let _guard = self.lock.lock().await;
+            self.resolve_locked(stem, action, via).await
+        };
+        if let Some(notice) = notice {
+            fan_out(&self.listeners, notice).await;
+        }
+        outcome
     }
 
     /// Permission proposals that belong in `session_id`'s transcript, oldest first.
@@ -157,21 +198,21 @@ impl PermissionResolver {
         found
     }
 
-    async fn resolve_locked(&self, stem: &str, action: &str, via: DecisionVia) -> ResolveOutcome {
+    async fn resolve_locked(&self, stem: &str, action: &str, via: DecisionVia) -> Resolved {
         let mut proposal = match self.load(stem).await {
-            Loaded::Missing => return ResolveOutcome::NotFound,
-            Loaded::Bad => return ResolveOutcome::Unreadable,
+            Loaded::Missing => return kept(ResolveOutcome::NotFound),
+            Loaded::Bad => return kept(ResolveOutcome::Unreadable),
             Loaded::Found(proposal) => *proposal,
         };
         let now = Utc::now();
         match apply_permission_decision(&mut proposal, action, via, now) {
             Err(liberado_common::PermissionDecideError::UnknownAction) => {
-                ResolveOutcome::UnknownAction
+                kept(ResolveOutcome::UnknownAction)
             }
             Err(liberado_common::PermissionDecideError::NotAPermissionRequest) => {
-                ResolveOutcome::NotAPermissionRequest
+                kept(ResolveOutcome::NotAPermissionRequest)
             }
-            Ok(liberado_common::PermissionDecide::Already { action }) => already(action),
+            Ok(liberado_common::PermissionDecide::Already { action }) => kept(already(action)),
             Ok(liberado_common::PermissionDecide::Applied { action }) => {
                 self.persist(stem, &proposal, via, action).await
             }
@@ -184,9 +225,9 @@ impl PermissionResolver {
         proposal: &Proposal,
         via: DecisionVia,
         action: &'static str,
-    ) -> ResolveOutcome {
+    ) -> Resolved {
         if !self.record(proposal, via).await {
-            return ResolveOutcome::SaveFailed;
+            return kept(ResolveOutcome::SaveFailed);
         }
         let path = proposal_path(stem);
         if let Err(error) = self
@@ -195,9 +236,18 @@ impl PermissionResolver {
             .await
         {
             tracing::error!(stem, %error, "permission resolver: failed to write the decision");
-            return ResolveOutcome::SaveFailed;
+            return kept(ResolveOutcome::SaveFailed);
         }
-        decided(action, &proposal.rationale)
+        let outcome = decided(action, &proposal.rationale);
+        let notice = elsewhere_notice(proposal, via, &outcome, self.push_surface_name().as_deref());
+        (outcome, notice)
+    }
+
+    fn push_surface_name(&self) -> Option<String> {
+        self.push_surface
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
     }
 
     async fn record(&self, proposal: &Proposal, via: DecisionVia) -> bool {
@@ -258,6 +308,53 @@ fn ledger_decision(status: ProposalStatus) -> Option<ApprovalDecision> {
     }
 }
 
+fn kept(outcome: ResolveOutcome) -> Resolved {
+    (outcome, None)
+}
+
+fn elsewhere_notice(
+    proposal: &Proposal,
+    via: DecisionVia,
+    outcome: &ResolveOutcome,
+    push_surface: Option<&str>,
+) -> Option<ElsewhereNotice> {
+    let ResolveOutcome::Decided {
+        emoji,
+        label,
+        rationale,
+        ..
+    } = outcome
+    else {
+        return None;
+    };
+    let surface = resolved_elsewhere_target(
+        proposal.origin.map(|origin| origin.as_str()),
+        via.as_str(),
+        push_surface,
+    )?;
+    Some(ElsewhereNotice {
+        surface,
+        proposal_id: proposal.id.clone(),
+        receipt: permission_receipt(emoji, label, rationale),
+    })
+}
+
+async fn fan_out(
+    listeners: &std::sync::Mutex<Vec<Arc<dyn ResolvedElsewhere>>>,
+    notice: ElsewhereNotice,
+) {
+    let hooks = listeners
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clone();
+    for hook in hooks {
+        if hook.surface_id() == notice.surface {
+            hook.on_resolved_elsewhere(&notice.proposal_id, &notice.receipt)
+                .await;
+        }
+    }
+}
+
 fn already(action: &'static str) -> ResolveOutcome {
     ResolveOutcome::AlreadyDecided {
         label: decided_phrase(action).to_string(),
@@ -314,6 +411,10 @@ async fn collect_dir(
 }
 
 #[cfg(test)]
+#[path = "resolve_elsewhere_tests.rs"]
+mod elsewhere_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use liberado_common::{
@@ -355,7 +456,11 @@ mod tests {
 
         let first = resolver.resolve("perm-1", "once", DecisionVia::Webui).await;
         let second = resolver
-            .resolve("perm-1", "everywhere", DecisionVia::Telegram)
+            .resolve(
+                "perm-1",
+                "everywhere",
+                DecisionVia::Channel(liberado_common::ChannelKind::Telegram),
+            )
             .await;
 
         assert!(matches!(
@@ -391,7 +496,11 @@ mod tests {
         let resolver =
             PermissionResolver::new(vault.clone(), Some(ApprovalLedger::new(dir.path())));
         resolver
-            .resolve("perm-2", "session", DecisionVia::Telegram)
+            .resolve(
+                "perm-2",
+                "session",
+                DecisionVia::Channel(liberado_common::ChannelKind::Telegram),
+            )
             .await;
 
         let again = PermissionResolver::new(vault, None);
@@ -449,7 +558,9 @@ mod tests {
         web.origin = Some(liberado_common::ApprovalOrigin::Web);
         let mut telegram = open_request("perm-tg");
         telegram.session_id = Some("tg".into());
-        telegram.origin = Some(liberado_common::ApprovalOrigin::Telegram);
+        telegram.origin = Some(liberado_common::ApprovalOrigin::Channel(
+            liberado_common::ChannelKind::Telegram,
+        ));
         let mut background = open_request("perm-bg");
         background.origin = Some(liberado_common::ApprovalOrigin::Background);
         for proposal in [web, telegram, background] {
@@ -472,8 +583,13 @@ mod tests {
         let (vault, _dir) = vault().await;
         let mut proposal = open_request("perm-arch");
         let signer = ProposalSigner::random();
-        apply_permission_decision(&mut proposal, "deny", DecisionVia::Telegram, Utc::now())
-            .unwrap();
+        apply_permission_decision(
+            &mut proposal,
+            "deny",
+            DecisionVia::Channel(liberado_common::ChannelKind::Telegram),
+            Utc::now(),
+        )
+        .unwrap();
         let proposal = signer.sign(proposal);
         vault
             .write(

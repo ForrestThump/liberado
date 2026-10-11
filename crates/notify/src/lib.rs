@@ -16,13 +16,14 @@
 //! approval/chat bot). Future clients (Matrix, Signal, Discord) implement that trait; wrap any
 //! channel as a [`Notifier`] with [`ChannelNotifier`].
 
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use async_trait::async_trait;
 use liberado_messaging::{
-    ActionButton, InboundEvent, MessagingChannel, MessagingError, approval_action_rows,
-    permission_action_rows,
+    ActionButton, InboundEvent, MessagingChannel, MessagingError, ResolvedElsewhere,
+    approval_action_rows, permission_action_rows,
 };
 
 /// Something that can be told about an event worth a human's attention.
@@ -147,6 +148,78 @@ pub struct TelegramNotifier {
     getupdate_timeout_secs: u64,
     /// Sleep after a failed `getUpdates` before retrying.
     poll_retry_backoff_secs: u64,
+    /// Message ids of permission cards this process sent. `None` for unit tests and the
+    /// reminder bot. Every [`TelegramNotifier::from_env`] notifier shares one book.
+    cards: Option<Arc<OutboundCards>>,
+}
+
+/// Proposal id → Telegram `message_id` for a card this process sent.
+///
+/// The main bot's notifiers share one book so a card sent by the daemon and a card sent
+/// for the bound chat can both be edited when another surface decides.
+pub struct OutboundCards {
+    ids: Mutex<HashMap<String, String>>,
+}
+
+impl OutboundCards {
+    pub fn new() -> Self {
+        Self {
+            ids: Mutex::new(HashMap::new()),
+        }
+    }
+
+    pub fn remember(&self, proposal_id: &str, message_id: &str) {
+        if let Ok(mut ids) = self.ids.lock() {
+            ids.insert(proposal_id.to_string(), message_id.to_string());
+        }
+    }
+
+    pub fn take(&self, proposal_id: &str) -> Option<String> {
+        self.ids.lock().ok()?.remove(proposal_id)
+    }
+}
+
+impl Default for OutboundCards {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+fn shared_outbound_cards() -> Arc<OutboundCards> {
+    static CARDS: OnceLock<Arc<OutboundCards>> = OnceLock::new();
+    Arc::clone(CARDS.get_or_init(|| Arc::new(OutboundCards::new())))
+}
+
+/// Edits a Telegram permission card when another surface records the decision.
+pub struct TelegramCardUpdater {
+    notifier: TelegramNotifier,
+}
+
+impl TelegramCardUpdater {
+    pub fn new(notifier: TelegramNotifier) -> Self {
+        Self { notifier }
+    }
+
+    /// Same card book as [`TelegramNotifier::from_env`]. `None` when Telegram is unset.
+    pub fn from_env() -> Option<Self> {
+        Some(Self::new(TelegramNotifier::from_env()?))
+    }
+}
+
+#[async_trait]
+impl ResolvedElsewhere for TelegramCardUpdater {
+    fn surface_id(&self) -> &'static str {
+        "telegram"
+    }
+
+    async fn on_resolved_elsewhere(&self, proposal_id: &str, receipt: &str) {
+        let Some(message_id) = self.notifier.take_recorded_card(proposal_id) else {
+            return;
+        };
+        if let Err(error) = self.notifier.edit_message(&message_id, receipt).await {
+            tracing::warn!(%error, proposal_id, "telegram card update failed");
+        }
+    }
 }
 
 /// Prefer this name when treating Telegram as a [`MessagingChannel`]. Same type as
@@ -162,7 +235,19 @@ impl TelegramNotifier {
             api_base: TELEGRAM_API_BASE.to_string(),
             getupdate_timeout_secs: 25,
             poll_retry_backoff_secs: 10,
+            cards: None,
         }
+    }
+
+    /// Remember permission-card message ids in `cards`.
+    pub fn with_cards(mut self, cards: Arc<OutboundCards>) -> Self {
+        self.cards = Some(cards);
+        self
+    }
+
+    /// Message id recorded for `proposal_id`, if this notifier has a card book.
+    pub fn take_recorded_card(&self, proposal_id: &str) -> Option<String> {
+        self.cards.as_ref()?.take(proposal_id)
     }
 
     /// Override the API base URL — used only by tests to point at a local mock server.
@@ -188,7 +273,7 @@ impl TelegramNotifier {
     pub fn from_env() -> Option<Self> {
         let token = std::env::var("LIBERADO_TELEGRAM_BOT_TOKEN").ok()?;
         let chat_id = std::env::var("LIBERADO_TELEGRAM_CHAT_ID").ok()?;
-        Some(Self::new(token, chat_id))
+        Some(Self::new(token, chat_id).with_cards(shared_outbound_cards()))
     }
 
     /// Second bot for mechanical reminders. Unset means those jobs log and do not write
@@ -203,8 +288,12 @@ impl TelegramNotifier {
         format!("{}{}/{}", self.api_base, self.token, method)
     }
 
-    /// POST `payload` to `sendMessage` and translate a non-2xx response into a [`MessagingError`].
-    async fn send_message_payload(&self, payload: serde_json::Value) -> Result<(), MessagingError> {
+    /// POST `payload` to `sendMessage`. A success body that is not a Telegram message is still
+    /// success: the id is only needed when a card must be edited later.
+    async fn send_message_payload(
+        &self,
+        payload: serde_json::Value,
+    ) -> Result<Option<i64>, MessagingError> {
         let response = self
             .client
             .post(self.api_url("sendMessage"))
@@ -217,7 +306,23 @@ impl TelegramNotifier {
             let body = response.text().await.unwrap_or_default();
             return Err(MessagingError(format!("Telegram API error: {body}")));
         }
-        Ok(())
+        let body = response.text().await.unwrap_or_default();
+        Ok(message_id_from_body(&body))
+    }
+
+    fn remember_card(&self, rows: &[Vec<ActionButton>], message_id: Option<i64>) {
+        let (Some(cards), Some(message_id)) = (&self.cards, message_id) else {
+            return;
+        };
+        let Some(proposal_id) = rows
+            .iter()
+            .flatten()
+            .next()
+            .map(|button| button.correlation_id.as_str())
+        else {
+            return;
+        };
+        cards.remember(proposal_id, &message_id.to_string());
     }
 
     fn message_is_from_allowed_chat(&self, msg: &serde_json::Value) -> bool {
@@ -267,6 +372,11 @@ impl TelegramNotifier {
     }
 }
 
+fn message_id_from_body(body: &str) -> Option<i64> {
+    let value: serde_json::Value = serde_json::from_str(body).ok()?;
+    value.get("result")?.get("message_id")?.as_i64()
+}
+
 /// Split on char boundaries into chunks that fit Telegram's message size limit.
 fn split_telegram_chunks(text: &str) -> Vec<String> {
     if text.chars().count() <= TELEGRAM_MAX_MESSAGE_CHARS {
@@ -297,11 +407,12 @@ impl MessagingChannel for TelegramNotifier {
 
     async fn send_text(&self, text: &str) -> Result<(), MessagingError> {
         for chunk in split_telegram_chunks(text) {
-            self.send_message_payload(serde_json::json!({
-                "chat_id": self.chat_id,
-                "text": chunk,
-            }))
-            .await?;
+            let _id = self
+                .send_message_payload(serde_json::json!({
+                    "chat_id": self.chat_id,
+                    "text": chunk,
+                }))
+                .await?;
         }
         Ok(())
     }
@@ -322,18 +433,21 @@ impl MessagingChannel for TelegramNotifier {
         let Some(first) = chunks.next() else {
             return Ok(());
         };
-        self.send_message_payload(serde_json::json!({
-            "chat_id": self.chat_id,
-            "text": first,
-            "reply_markup": Self::actions_to_inline_keyboard(rows),
-        }))
-        .await?;
-        for chunk in chunks {
-            self.send_message_payload(serde_json::json!({
+        let message_id = self
+            .send_message_payload(serde_json::json!({
                 "chat_id": self.chat_id,
-                "text": chunk,
+                "text": first,
+                "reply_markup": Self::actions_to_inline_keyboard(rows),
             }))
             .await?;
+        self.remember_card(rows, message_id);
+        for chunk in chunks {
+            let _id = self
+                .send_message_payload(serde_json::json!({
+                    "chat_id": self.chat_id,
+                    "text": chunk,
+                }))
+                .await?;
         }
         Ok(())
     }
@@ -573,6 +687,20 @@ impl Notifier for TelegramNotifier {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn outbound_cards_remember_and_take_one_message_id() {
+        let cards = OutboundCards::new();
+        cards.remember("perm-1", "77");
+        assert_eq!(cards.take("perm-1").as_deref(), Some("77"));
+        assert_eq!(cards.take("perm-1"), None);
+    }
+
+    #[test]
+    fn a_notifier_without_a_card_book_records_nothing() {
+        let notifier = TelegramNotifier::new("tok", "1");
+        assert_eq!(notifier.take_recorded_card("perm-1"), None);
+    }
 
     #[test]
     fn api_url_embeds_the_token_and_method() {

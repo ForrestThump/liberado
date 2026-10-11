@@ -1,5 +1,9 @@
-//! Telegram free-form chat surface: sticky session + shared slash commands
+//! Text chat surface: one channel binding + shared slash commands
 //! ([`liberado_commands`]) rendered as text (no TUI/WebUI widgets).
+//!
+//! Telegram is one binding. A later channel uses the same bridge with its own
+//! [`BindingKey`](crate::bindings::BindingKey). Command text is shared; the channel label
+//! (`Telegram`) is the only word that changes.
 
 use std::sync::Arc;
 
@@ -11,21 +15,22 @@ use liberado_main_agent::ChatSessions;
 use liberado_session::{DomainHint, GoalSpec, SessionGrant, SessionOrigin};
 use tokio::sync::broadcast::error::RecvError;
 
+use crate::bindings::{BindingKey, ChannelBindings};
 use crate::state::AppState;
-use crate::sticky::StickySession;
 
-/// Sticky Telegram conversation + slash-command adapter over the same face agent as HTTP chat.
+/// Bound conversation + slash-command adapter over the same face agent as HTTP chat.
 ///
-/// `session_id` is shared (`Arc`) with the chat-delivering notifier so a cron brief appends into the
-/// *same* conversation a reply continues — that shared sticky id is the whole mechanism behind
-/// "replying to a brief has the brief in context" (see `docs/future-work/ideas/cron-delivery-timing-idea.md`).
-pub struct TelegramChatBridge {
+/// `bindings` is shared with the chat-delivering notifier so a cron brief appends into the
+/// *same* conversation a reply continues (see `docs/future-work/ideas/cron-delivery-timing-idea.md`).
+#[derive(Clone)]
+pub struct TextChatBridge {
     pub state: Arc<AppState>,
-    pub session_id: StickySession,
+    pub bindings: ChannelBindings,
+    pub key: BindingKey,
 }
 
 #[async_trait]
-impl liberado_messaging::ChatSurface for TelegramChatBridge {
+impl liberado_messaging::ChatSurface for TextChatBridge {
     async fn reply(&self, user_text: &str) -> Result<String, String> {
         let text = user_text.trim();
         if text.starts_with('/') {
@@ -35,7 +40,36 @@ impl liberado_messaging::ChatSurface for TelegramChatBridge {
     }
 }
 
-impl TelegramChatBridge {
+impl TextChatBridge {
+    /// In-memory binding tests use. The label is still `Telegram`, so replies match production.
+    #[cfg(test)]
+    pub fn for_test(state: Arc<AppState>) -> Self {
+        Self {
+            state,
+            bindings: ChannelBindings::ephemeral(),
+            key: BindingKey::telegram("test-chat", "test-bot"),
+        }
+    }
+
+    fn label(&self) -> &'static str {
+        self.key.channel.label()
+    }
+
+    async fn bound_session(&self) -> Option<Ulid> {
+        self.bindings.get(&self.key).await
+    }
+
+    async fn store_session(&self, id: Option<Ulid>) {
+        self.bindings.set(&self.key, id).await;
+    }
+
+    async fn session_or_create<F, Fut>(&self, create: F) -> Result<Ulid, String>
+    where
+        F: FnOnce() -> Fut,
+        Fut: std::future::Future<Output = Result<Ulid, String>>,
+    {
+        self.bindings.get_or_create(&self.key, create).await
+    }
     async fn chat_turn(&self, user_text: &str) -> Result<String, String> {
         // Telegram reaches the chat capability directly, so the HTTP middleware that refuses new
         // turns during shutdown never sees it. Without this check a message arriving mid-drain
@@ -46,11 +80,11 @@ impl TelegramChatBridge {
         }
         let sessions = self.chat_sessions()?;
         let creator = sessions.clone();
+        let label = self.label();
         let id = self
-            .session_id
-            .get_or_create(move || async move {
+            .session_or_create(move || async move {
                 creator
-                    .create(Some("Telegram".into()))
+                    .create(Some(label.into()))
                     .await
                     .map_err(|e| e.to_string())
             })
@@ -121,7 +155,7 @@ impl TelegramChatBridge {
         })?;
 
         let sessions = self.chat_sessions()?;
-        let active = self.session_id.get().await.map(|id| id.to_string());
+        let active = self.bound_session().await.map(|id| id.to_string());
 
         let conversations = match &cmd {
             SlashCommand::Session(_) | SlashCommand::Sessions | SlashCommand::Fork { .. } => {
@@ -154,6 +188,7 @@ impl TelegramChatBridge {
         });
 
         let mut ctx = TelegramCommandContext {
+            label: self.label(),
             session_id: active,
             messages: Vec::new(),
             conversations,
@@ -181,7 +216,7 @@ impl TelegramChatBridge {
             None => None,
             Some(s) => s.parse::<Ulid>().ok(),
         };
-        self.session_id.set(next).await;
+        self.store_session(next).await;
 
         if out.is_empty() {
             Ok("(done)".into())
@@ -190,12 +225,12 @@ impl TelegramChatBridge {
         }
     }
 
-    /// Scope a model pick to the sticky Telegram conversation — the same
+    /// Scope a model pick to the bound conversation — the same
     /// [`ChatSessions::select_model`] path WebUI/TUI use. Does **not** call
-    /// `provider.set_model` when a sticky chat exists (that was the bug: reply claimed a switch
+    /// `provider.set_model` when a bound chat exists (that was the bug: reply claimed a switch
     /// while history kept resolving via `model_last_used`).
     ///
-    /// Sticky id creation/storage is unchanged: we only read/create through [`StickySession`].
+    /// The session id is read and stored only through the binding registry.
     async fn select_model(&self, model: &str) -> Result<String, String> {
         let model = model.trim();
         if model.is_empty() {
@@ -203,29 +238,29 @@ impl TelegramChatBridge {
         }
         let sessions = self.chat_sessions()?;
 
-        if let Some(id) = self.session_id.get().await {
+        let label = self.label();
+        if let Some(id) = self.bound_session().await {
             sessions.select_model(id, model.to_string());
             return Ok(format!(
-                "Model set for this Telegram chat ({id}): {model}\n\
+                "Model set for this {label} chat ({id}): {model}\n\
                  Next turn of this conversation only — not the daemon-wide default."
             ));
         }
 
-        // No sticky yet: create one (same get_or_create path free-form messages use) and scope
-        // there. Stated in the reply — not the old silent process-wide set_model.
+        // No binding yet: create one (same path free-form messages use) and scope there.
+        // Stated in the reply — not the old silent process-wide set_model.
         let creator = sessions.clone();
         let id = self
-            .session_id
-            .get_or_create(move || async move {
+            .session_or_create(move || async move {
                 creator
-                    .create(Some("Telegram".into()))
+                    .create(Some(label.into()))
                     .await
                     .map_err(|e| e.to_string())
             })
             .await?;
         sessions.select_model(id, model.to_string());
         Ok(format!(
-            "No chat was open yet — started Telegram session {id}.\n\
+            "No chat was open yet — started {label} session {id}.\n\
              Model set for that conversation: {model}\n\
              (Not daemon-wide; the next message uses this model.)"
         ))
@@ -237,10 +272,11 @@ impl TelegramChatBridge {
     /// no assistant reply (same honesty the TUI help text was forced to adopt).
     async fn stop_turn(&self) -> Result<String, String> {
         let sessions = self.chat_sessions()?;
-        let Some(id) = self.session_id.get().await else {
-            return Ok(
-                "No active Telegram conversation — nothing to stop. Send a message first.".into(),
-            );
+        let Some(id) = self.bound_session().await else {
+            let label = self.label();
+            return Ok(format!(
+                "No active {label} conversation — nothing to stop. Send a message first."
+            ));
         };
         if sessions.cancel_turn(id) {
             Ok(
@@ -299,10 +335,10 @@ impl TelegramChatBridge {
             } => match self.fork_session(&parent_id, after_turn).await {
                 Ok(msg) => {
                     // `fork_session` moved the sticky onto the fork; carry that into `ctx` so
-                    // `handle_slash`'s trailing `session_id.set` keeps the fork instead of
+                    // `handle_slash`'s trailing `store_session` keeps the fork instead of
                     // clobbering it back to the parent (the reply promises "You are now on the
                     // fork" — the sticky must land there too).
-                    if let Some(fork_id) = self.session_id.get().await {
+                    if let Some(fork_id) = self.bound_session().await {
                         ctx.session_id = Some(fork_id.to_string());
                     }
                     Some(msg)
@@ -401,9 +437,10 @@ impl TelegramChatBridge {
     async fn on_join_goal(&self, id: &str) -> Option<String> {
         if let Some(snap) = self.state.goals.snapshot(id).await {
             let desc = &snap.session.goal.description;
+            let label = self.label();
             Some(format!(
                 "Goal session {}\nstatus: {:?}\n{}\n\n\
-                 (Live event stream isn't on Telegram yet — use the API/WebUI. \
+                 (Live event stream isn't on {label} yet — use the API/WebUI. \
                  /spawn still works from here.)",
                 snap.session.id, snap.session.status, desc
             ))
@@ -424,8 +461,7 @@ impl TelegramChatBridge {
     /// and start the goal session. The same refusals as `POST /api/goals`.
     async fn on_spawn_goal_session(&self, domain: &str, goal: &str) -> Option<String> {
         let origin = self
-            .session_id
-            .get()
+            .bound_session()
             .await
             .map(|id| SessionOrigin::from_conversation(id.to_string()));
 
@@ -553,7 +589,7 @@ impl TelegramChatBridge {
             .await
             .map_err(|e| e.to_string())?;
 
-        self.session_id.set(Some(header.id)).await;
+        self.store_session(Some(header.id)).await;
 
         Ok(format!(
             "Forked → {}\nkept_turns={kept_turns}/{total_turns} from {parent_id}\n\
@@ -588,10 +624,10 @@ fn static_reply(result: CommandResult, ctx: &mut TelegramCommandContext) -> Opti
             Some("Started a new conversation. Next message begins a fresh session.".into())
         }
 
-        CommandResult::ChatCleared => Some(
-            "Telegram has no local transcript buffer to clear. Use /new for a fresh session."
-                .into(),
-        ),
+        CommandResult::ChatCleared => Some(format!(
+            "{label} has no local transcript buffer to clear. Use /new for a fresh session.",
+            label = ctx.label
+        )),
 
         CommandResult::SessionClosed { id } => {
             ctx.session_id = None;
@@ -601,9 +637,10 @@ fn static_reply(result: CommandResult, ctx: &mut TelegramCommandContext) -> Opti
             })
         }
 
-        CommandResult::BackToPrimary => {
-            Some("Back on primary chat (Telegram only has one input focus).".into())
-        }
+        CommandResult::BackToPrimary => Some(format!(
+            "Back on primary chat ({label} only has one input focus).",
+            label = ctx.label
+        )),
 
         // The coding-goal surface is a TUI view (role timeline, gate ballots, diffs). Telegram
         // has no place to render it, and a half-rendered gate is worse than an honest pointer:
@@ -632,10 +669,11 @@ fn static_reply(result: CommandResult, ctx: &mut TelegramCommandContext) -> Opti
         }
 
         CommandResult::ThemeChanged { name } => Some(format!(
-            "Theme '{name}' is UI-only — Telegram has no theme surface."
+            "Theme '{name}' is UI-only — {label} has no theme surface.",
+            label = ctx.label
         )),
         CommandResult::ThemesReloaded { .. } | CommandResult::ThemeListed { .. } => {
-            Some("Themes are UI-only on Telegram.".into())
+            Some(format!("Themes are UI-only on {}.", ctx.label))
         }
         // Telegram has no picker to open, and the `ShowOptions` emitted alongside this already
         // renders the list here — so saying anything would just duplicate it.
@@ -671,6 +709,7 @@ async fn collect_turn_reply(
 }
 
 struct TelegramCommandContext {
+    label: &'static str,
     session_id: Option<String>,
     messages: Vec<String>,
     conversations: Vec<ConversationHeader>,
@@ -758,7 +797,7 @@ impl CommandContext for TelegramCommandContext {
         false
     }
     fn reload_themes(&mut self) -> Result<usize, Vec<String>> {
-        Err(vec!["Themes are UI-only on Telegram.".into()])
+        Err(vec![format!("Themes are UI-only on {}.", self.label)])
     }
 }
 

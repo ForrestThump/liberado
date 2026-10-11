@@ -82,8 +82,9 @@ pub use model::{
     ModelChoice, ModelProfile, ModelRole, ModelTier, ModelTokenPrices, ReasoningLevel, RequiredCaps,
 };
 pub use permission::{
-    ApprovalOrigin, DecisionVia, PermissionDecide, PermissionDecideError, PermissionRoute,
-    apply_permission_decision, card_belongs_to_session, recorded_action, route_permission,
+    ApprovalOrigin, ChannelKind, DecisionVia, PermissionDecide, PermissionDecideError,
+    PermissionRoute, SessionChannel, apply_permission_decision, card_belongs_to_session,
+    channel_for_session, recorded_action, route_permission,
 };
 pub use proposal::{
     ApprovedGuard, GrantScope, PROPOSALS_DIR, Proposal, ProposalNoteError, ProposalSigner,

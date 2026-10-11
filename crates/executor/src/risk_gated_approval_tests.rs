@@ -98,7 +98,7 @@ async fn a_telegram_chat_sends_scope_buttons_through_the_sink() {
     )
     .with_approval(crate::ApprovalStamp {
         session_id: "sess-tg".into(),
-        origin: liberado_common::ApprovalOrigin::Telegram,
+        origin: liberado_common::ApprovalOrigin::Channel(liberado_common::ChannelKind::Telegram),
     })
     .with_permission_sink(sink.clone());
 
@@ -119,7 +119,9 @@ async fn a_telegram_chat_sends_scope_buttons_through_the_sink() {
     .unwrap();
     assert_eq!(
         proposal.origin,
-        Some(liberado_common::ApprovalOrigin::Telegram)
+        Some(liberado_common::ApprovalOrigin::Channel(
+            liberado_common::ChannelKind::Telegram
+        ))
     );
     assert_eq!(proposal.session_id.as_deref(), Some("sess-tg"));
 }

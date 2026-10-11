@@ -355,7 +355,11 @@ impl ApprovalBot {
         let action = resolve::permission_scope_action(scope);
         let outcome = self
             .resolver
-            .resolve(stem, action, DecisionVia::Telegram)
+            .resolve(
+                stem,
+                action,
+                DecisionVia::Channel(liberado_common::ChannelKind::Telegram),
+            )
             .await;
         let reply = resolve::permission_scope_reply(action, &outcome);
         if let Some(text) = reply.ack {

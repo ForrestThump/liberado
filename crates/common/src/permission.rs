@@ -10,88 +10,206 @@ use serde::{Deserialize, Serialize};
 
 use crate::proposal::{GrantScope, Proposal, ProposalStatus};
 
+/// A chat channel a Liberado session can be bound to.
+///
+/// `Matrix` is reserved and unused. Stored names stay the snake-case strings already on disk.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ChannelKind {
+    Telegram,
+    Matrix,
+}
+
+impl ChannelKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Telegram => "telegram",
+            Self::Matrix => "matrix",
+        }
+    }
+
+    /// Human label for replies and session titles (`Telegram`).
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Telegram => "Telegram",
+            Self::Matrix => "Matrix",
+        }
+    }
+}
+
 /// Where the request was raised. Drives which surfaces show it.
 ///
 /// Unsigned, like [`GrantScope`]: it is routing metadata, not part of the proposal signature.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+/// Stored as a string. A channel origin writes [`ChannelKind::as_str`], so Telegram still
+/// writes `telegram`. `web` and `background` are unchanged.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ApprovalOrigin {
-    /// The sticky Telegram conversation. Show a Telegram message and a WebUI card there.
-    Telegram,
+    /// A channel-bound chat. Show that channel's message and a WebUI card in the same session.
+    Channel(ChannelKind),
     /// Any other human chat (WebUI, an agent opened in the WebUI). Card only.
     Web,
-    /// Cron, a goal, or another run with no human chat. Telegram stays the push channel.
+    /// Cron, a goal, or another run with no human chat. The configured channel stays the push.
     Background,
 }
 
+impl ApprovalOrigin {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Channel(kind) => kind.as_str(),
+            Self::Web => "web",
+            Self::Background => "background",
+        }
+    }
+
+    pub fn channel(self) -> Option<ChannelKind> {
+        match self {
+            Self::Channel(kind) => Some(kind),
+            _ => None,
+        }
+    }
+}
+
+impl Serialize for ApprovalOrigin {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for ApprovalOrigin {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let raw = String::deserialize(deserializer)?;
+        parse_origin(&raw).ok_or_else(|| {
+            serde::de::Error::unknown_variant(&raw, &["telegram", "matrix", "web", "background"])
+        })
+    }
+}
+
+fn parse_origin(raw: &str) -> Option<ApprovalOrigin> {
+    match raw {
+        "web" => Some(ApprovalOrigin::Web),
+        "background" => Some(ApprovalOrigin::Background),
+        other => parse_channel(other).map(ApprovalOrigin::Channel),
+    }
+}
+
+fn parse_channel(raw: &str) -> Option<ChannelKind> {
+    match raw {
+        "telegram" => Some(ChannelKind::Telegram),
+        "matrix" => Some(ChannelKind::Matrix),
+        _ => None,
+    }
+}
+
 /// Which human surface recorded the decision. Audit only.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+///
+/// Stored as a string. A channel decision writes [`ChannelKind::as_str`], so Telegram still
+/// writes `telegram`. `webui` is unchanged.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DecisionVia {
-    Telegram,
+    Channel(ChannelKind),
     Webui,
 }
 
 impl DecisionVia {
     pub fn as_str(self) -> &'static str {
         match self {
-            Self::Telegram => "telegram",
+            Self::Channel(kind) => kind.as_str(),
             Self::Webui => "webui",
         }
+    }
+}
+
+impl Serialize for DecisionVia {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for DecisionVia {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let raw = String::deserialize(deserializer)?;
+        parse_via(&raw).ok_or_else(|| {
+            serde::de::Error::unknown_variant(&raw, &["telegram", "matrix", "webui"])
+        })
+    }
+}
+
+fn parse_via(raw: &str) -> Option<DecisionVia> {
+    match raw {
+        "webui" => Some(DecisionVia::Webui),
+        other => parse_channel(other).map(DecisionVia::Channel),
     }
 }
 
 /// Where a newly raised request is shown.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PermissionRoute {
-    /// Telegram message and a card in `session_id` (the sticky Telegram chat).
-    TelegramAndWeb { session_id: String },
-    /// Card in `session_id` only. No Telegram message.
+    /// Channel message and a card in `session_id`.
+    ChannelAndWeb {
+        channel: ChannelKind,
+        session_id: String,
+    },
+    /// Card in `session_id` only. No channel message.
     WebOnly { session_id: String },
-    /// No human chat of its own. Keep the Telegram push. `sticky_session` is the WebUI
-    /// conversation that also shows the card, because Telegram was the only path.
-    Background { sticky_session: Option<String> },
+    /// No human chat of its own. Keep the channel push. `bound_session` is the WebUI
+    /// conversation that also shows the card.
+    Background { bound_session: Option<String> },
+}
+
+/// One session bound to a channel, as the risk gate reads it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionChannel {
+    pub session_id: String,
+    pub channel: ChannelKind,
+}
+
+/// Channel of `session_id`, if that session is bound.
+pub fn channel_for_session(bindings: &[SessionChannel], session_id: &str) -> Option<ChannelKind> {
+    bindings
+        .iter()
+        .find(|binding| binding.session_id == session_id)
+        .map(|binding| binding.channel)
 }
 
 /// `background` is the unattended path (cron, dispatcher, goal) even when it carries an id.
-/// A chat id that equals the sticky Telegram session is the Telegram-bound chat.
+///
+/// `bound_channel` is set when `session_id` itself is a channel-bound chat. `background_session`
+/// is the chat that also shows a background card (the bound channel session).
 pub fn route_permission(
     session_id: Option<&str>,
-    sticky_session: Option<&str>,
+    bound_channel: Option<ChannelKind>,
+    background_session: Option<&str>,
     background: bool,
 ) -> PermissionRoute {
-    if background {
-        return background_route(sticky_session);
-    }
-    let Some(session_id) = session_id else {
-        return background_route(sticky_session);
+    let Some(session_id) = session_id.filter(|_| !background) else {
+        return background_route(background_session);
     };
-    if sticky_session == Some(session_id) {
-        PermissionRoute::TelegramAndWeb {
+    match bound_channel {
+        Some(channel) => PermissionRoute::ChannelAndWeb {
+            channel,
             session_id: session_id.to_string(),
-        }
-    } else {
-        PermissionRoute::WebOnly {
+        },
+        None => PermissionRoute::WebOnly {
             session_id: session_id.to_string(),
-        }
+        },
     }
 }
 
-fn background_route(sticky_session: Option<&str>) -> PermissionRoute {
+fn background_route(background_session: Option<&str>) -> PermissionRoute {
     PermissionRoute::Background {
-        sticky_session: sticky_session.map(str::to_string),
+        bound_session: background_session.map(str::to_string),
     }
 }
 
 /// Whether this permission proposal renders in `session_id`'s transcript.
 ///
 /// A request with a session id belongs to that session only. A request with no session
-/// (background, or a note written before sessions were stamped) shows in the sticky
-/// Telegram conversation, which is the WebUI view of the chat that already got the message.
+/// (background, or a note written before sessions were stamped) shows in the bound channel
+/// conversation, which is the WebUI view of the chat that already got the message.
 pub fn card_belongs_to_session(
     proposal: &Proposal,
     session_id: &str,
-    sticky: Option<&str>,
+    bound_session: Option<&str>,
 ) -> bool {
     if proposal.requested_grant.is_none() {
         return false;
@@ -102,7 +220,7 @@ pub fn card_belongs_to_session(
     if proposal.session_id.is_some() {
         return false;
     }
-    sticky == Some(session_id) && proposal.origin != Some(ApprovalOrigin::Web)
+    bound_session == Some(session_id) && proposal.origin != Some(ApprovalOrigin::Web)
 }
 
 /// What applying `action` did. `action` is a template id (`deny`, `once`, `session`, `everywhere`).
@@ -227,9 +345,13 @@ mod tests {
         assert_eq!(proposal.approved_scope, Some(GrantScope::Once));
         assert_eq!(proposal.decided_via, Some(DecisionVia::Webui));
 
-        let second =
-            apply_permission_decision(&mut proposal, "everywhere", DecisionVia::Telegram, now)
-                .unwrap();
+        let second = apply_permission_decision(
+            &mut proposal,
+            "everywhere",
+            DecisionVia::Channel(ChannelKind::Telegram),
+            now,
+        )
+        .unwrap();
         assert_eq!(second, PermissionDecide::Already { action: "once" });
         assert_eq!(proposal.approved_scope, Some(GrantScope::Once));
         assert_eq!(proposal.decided_via, Some(DecisionVia::Webui));
@@ -238,8 +360,13 @@ mod tests {
     #[test]
     fn deny_rejects_without_a_scope() {
         let mut proposal = open_request();
-        apply_permission_decision(&mut proposal, "deny", DecisionVia::Telegram, Utc::now())
-            .unwrap();
+        apply_permission_decision(
+            &mut proposal,
+            "deny",
+            DecisionVia::Channel(ChannelKind::Telegram),
+            Utc::now(),
+        )
+        .unwrap();
         assert_eq!(proposal.status, ProposalStatus::Rejected);
         assert_eq!(proposal.approved_scope, None);
         assert_eq!(recorded_action(&proposal, Utc::now()), "deny");
@@ -273,7 +400,7 @@ mod tests {
         let again = apply_permission_decision(
             &mut { reloaded.clone() },
             "deny",
-            DecisionVia::Telegram,
+            DecisionVia::Channel(ChannelKind::Telegram),
             Utc::now(),
         )
         .unwrap();
@@ -283,35 +410,98 @@ mod tests {
     #[test]
     fn routing_table_matches_the_owning_session() {
         assert_eq!(
-            route_permission(Some("tg"), Some("tg"), false),
-            PermissionRoute::TelegramAndWeb {
+            route_permission(Some("tg"), Some(ChannelKind::Telegram), Some("tg"), false),
+            PermissionRoute::ChannelAndWeb {
+                channel: ChannelKind::Telegram,
                 session_id: "tg".into()
             }
         );
         assert_eq!(
-            route_permission(Some("web"), Some("tg"), false),
+            route_permission(Some("mx"), Some(ChannelKind::Matrix), None, false),
+            PermissionRoute::ChannelAndWeb {
+                channel: ChannelKind::Matrix,
+                session_id: "mx".into()
+            }
+        );
+        assert_eq!(
+            route_permission(Some("web"), None, Some("tg"), false),
             PermissionRoute::WebOnly {
                 session_id: "web".into()
             }
         );
         assert_eq!(
-            route_permission(Some("web"), None, false),
+            route_permission(Some("web"), None, None, false),
             PermissionRoute::WebOnly {
                 session_id: "web".into()
             }
         );
         assert_eq!(
-            route_permission(None, Some("tg"), false),
+            route_permission(None, None, Some("tg"), false),
             PermissionRoute::Background {
-                sticky_session: Some("tg".into())
+                bound_session: Some("tg".into())
             }
         );
         assert_eq!(
-            route_permission(Some("goal"), Some("tg"), true),
+            route_permission(Some("goal"), Some(ChannelKind::Telegram), Some("tg"), true),
             PermissionRoute::Background {
-                sticky_session: Some("tg".into())
+                bound_session: Some("tg".into())
             }
         );
+    }
+
+    #[test]
+    fn stored_channel_strings_round_trip() {
+        let origin = ApprovalOrigin::Channel(ChannelKind::Telegram);
+        let via = DecisionVia::Channel(ChannelKind::Telegram);
+        assert_eq!(serde_json::to_string(&origin).unwrap(), "\"telegram\"");
+        assert_eq!(serde_json::to_string(&via).unwrap(), "\"telegram\"");
+        assert_eq!(
+            serde_json::from_str::<ApprovalOrigin>("\"telegram\"").unwrap(),
+            origin
+        );
+        assert_eq!(
+            serde_json::from_str::<DecisionVia>("\"telegram\"").unwrap(),
+            via
+        );
+        assert_eq!(
+            serde_yaml::from_str::<ApprovalOrigin>("telegram").unwrap(),
+            origin
+        );
+        assert_eq!(
+            serde_yaml::from_str::<DecisionVia>("telegram").unwrap(),
+            via
+        );
+        assert_eq!(
+            serde_yaml::from_str::<ApprovalOrigin>("web").unwrap(),
+            ApprovalOrigin::Web
+        );
+        assert_eq!(
+            serde_yaml::from_str::<ApprovalOrigin>("background").unwrap(),
+            ApprovalOrigin::Background
+        );
+        assert_eq!(
+            serde_yaml::from_str::<DecisionVia>("webui").unwrap(),
+            DecisionVia::Webui
+        );
+        assert_eq!(
+            serde_yaml::from_str::<ApprovalOrigin>("matrix").unwrap(),
+            ApprovalOrigin::Channel(ChannelKind::Matrix)
+        );
+        assert_eq!(
+            serde_yaml::from_str::<DecisionVia>("matrix").unwrap(),
+            DecisionVia::Channel(ChannelKind::Matrix)
+        );
+
+        let mut proposal = open_request();
+        proposal.origin = Some(origin);
+        proposal.decided_via = Some(via);
+        let note = proposal.to_note();
+        assert!(note.contains("origin: telegram"), "{note}");
+        assert!(note.contains("decided_via: telegram"), "{note}");
+        assert!(!note.contains("channel:"), "{note}");
+        let reloaded = Proposal::from_note(&note).unwrap();
+        assert_eq!(reloaded.origin, Some(origin));
+        assert_eq!(reloaded.decided_via, Some(via));
     }
 
     #[test]
