@@ -84,19 +84,24 @@ pub(crate) fn router(state: Arc<ListenerState>) -> Router {
 }
 
 /// Bind `addr` and serve on a background task. A bind failure is returned to the caller.
+///
+/// The returned address is the one the socket actually bound. Port `0` becomes that port.
 pub async fn bind_and_serve(
     addr: SocketAddr,
     state: Arc<ListenerState>,
-) -> Result<JoinHandle<()>, String> {
+) -> Result<(SocketAddr, JoinHandle<()>), String> {
     let listener = TcpListener::bind(addr)
         .await
         .map_err(|error| format!("matrix listen {addr}: {error}"))?;
+    let bound = listener.local_addr().unwrap_or(addr);
     let app = router(state);
-    Ok(tokio::spawn(async move {
-        if let Err(error) = axum::serve(listener, app).await {
-            tracing::warn!(%error, "matrix listener stopped");
-        }
-    }))
+    Ok((bound, tokio::spawn(serve(listener, app))))
+}
+
+async fn serve(listener: TcpListener, app: Router) {
+    if let Err(error) = axum::serve(listener, app).await {
+        tracing::warn!(%error, "matrix listener stopped");
+    }
 }
 
 async fn put_transaction(

@@ -82,7 +82,9 @@ fn bridge_mxid(policy: &AcceptPolicy) -> String {
 
 /// `@liberado:server` and `@liberado_<suffix>:server`, case-insensitive.
 ///
-/// The suffix matches the registration regex `_[a-z0-9._=-]+`.
+/// The whole user id must match, the same shape as the anchored registration regex
+/// `^@liberado(_[a-z0-9._=-]+)?:<server>$`. A longer string that only contains that id
+/// does not match. The suffix is `_[a-z0-9._=-]+`.
 pub fn in_user_namespace(mxid: &str, server_name: &str) -> bool {
     let Some((localpart, host)) = split_mxid(mxid) else {
         return false;
@@ -94,7 +96,7 @@ pub fn in_user_namespace(mxid: &str, server_name: &str) -> bool {
 }
 
 fn split_mxid(mxid: &str) -> Option<(&str, &str)> {
-    let rest = mxid.trim().strip_prefix('@')?;
+    let rest = mxid.strip_prefix('@')?;
     let (localpart, host) = rest.rsplit_once(':')?;
     (!localpart.is_empty() && !host.is_empty()).then_some((localpart, host))
 }
@@ -173,6 +175,17 @@ mod tests {
         assert!(in_user_namespace("@Liberado:Example", "example"));
         assert!(!in_user_namespace("@liberado_:example", "example"));
         assert!(!in_user_namespace("@liberado_bad space:example", "example"));
+    }
+
+    #[test]
+    fn the_namespace_match_is_the_whole_user_id() {
+        assert!(in_user_namespace("@liberado:example", "example"));
+        assert!(in_user_namespace("@liberado_coder:example", "example"));
+        assert!(!in_user_namespace("prefix@liberado:example", "example"));
+        assert!(!in_user_namespace("@liberado:example.suffix", "example"));
+        assert!(!in_user_namespace(" @liberado:example", "example"));
+        assert!(!in_user_namespace("@liberado:example ", "example"));
+        assert!(!in_user_namespace("@liberado:example:extra", "example"));
     }
 
     #[test]

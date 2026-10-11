@@ -299,3 +299,34 @@ async fn a_persist_failure_returns_500_and_does_not_queue_the_message() {
     assert!(body.contains("M_UNKNOWN"));
     assert!(next_text(&mut live.incoming).is_none());
 }
+
+#[tokio::test]
+async fn bind_and_serve_answers_ping_and_reports_a_busy_port() {
+    let dir = tempfile::tempdir().unwrap();
+    let queues = Arc::new(RoomQueues::new());
+    let txns = Arc::new(TxnLog::load(dir.path().join("matrix-txns.json")));
+    let client = MatrixClient::new("http://127.0.0.1:9", "as-token", MAIN).unwrap();
+    let listener_state = state(txns, queues, client);
+    let (addr, handle) =
+        super::bind_and_serve("127.0.0.1:0".parse().unwrap(), Arc::clone(&listener_state))
+            .await
+            .expect("bind");
+    let base = format!("http://{addr}");
+    let (status, body) = exchange(&base, "POST", "/_matrix/app/v1/ping", Some(HS), None).await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body, "{}");
+    let (status, body) = exchange(&base, "POST", "/_matrix/app/v1/ping", None, None).await;
+    assert_eq!(status, 401, "{body}");
+    assert!(body.contains("M_UNKNOWN_TOKEN"));
+    handle.abort();
+
+    let held = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let busy = held.local_addr().unwrap();
+    let error = super::bind_and_serve(busy, listener_state)
+        .await
+        .expect_err("busy port");
+    assert!(
+        error.starts_with(&format!("matrix listen {busy}:")),
+        "{error}"
+    );
+}

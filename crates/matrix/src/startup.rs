@@ -44,7 +44,7 @@ pub async fn connect(settings: &MatrixSettings, data_dir: &Path) -> Result<Runni
         &queues,
     ));
     let state = listener_state(settings, &client, &queues, &room_id, data_dir);
-    let listener = bind_and_serve(settings.listen, Arc::new(state)).await?;
+    let (_bound, listener) = bind_and_serve(settings.listen, Arc::new(state)).await?;
     Ok(RunningMatrix {
         updater: MatrixCardUpdater::new(Arc::clone(&channel)),
         channel,

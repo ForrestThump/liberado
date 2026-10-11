@@ -177,8 +177,47 @@ fn command_menu() -> Vec<(String, String)> {
 mod tests {
     use liberado_common::ChannelKind;
     use liberado_conversation_store::Ulid;
+    use liberado_matrix::{Activation, MatrixSettings};
 
     use crate::bindings::ChannelBindings;
+
+    fn settings() -> MatrixSettings {
+        MatrixSettings {
+            homeserver: "http://tuwunel:8008".into(),
+            server_name: "matrix.homelab.local".into(),
+            as_token: "as-token".into(),
+            hs_token: "hs-token".into(),
+            owner: "@shiloh:matrix.homelab.local".into(),
+            main_user: "@liberado:matrix.homelab.local".into(),
+            main_room: "!room:matrix.homelab.local".into(),
+            listen: "0.0.0.0:4202".parse().unwrap(),
+            as_id: "liberado".into(),
+            sender_localpart: "liberado_bridge".into(),
+        }
+    }
+
+    #[test]
+    fn accept_returns_settings_only_for_a_complete_environment() {
+        assert!(super::accept(Activation::Off).is_none());
+        assert!(
+            super::accept(Activation::Partial {
+                missing: vec!["LIBERADO_MATRIX_HS_TOKEN"],
+            })
+            .is_none()
+        );
+        assert!(
+            super::accept(Activation::Invalid {
+                reason: "LIBERADO_MATRIX_AS_LISTEN is not host:port".into(),
+            })
+            .is_none()
+        );
+        let accepted = super::accept(Activation::On(Box::new(settings()))).expect("on");
+        assert_eq!(accepted.homeserver, "http://tuwunel:8008");
+        assert_eq!(accepted.owner, "@shiloh:matrix.homelab.local");
+        assert_eq!(accepted.main_user, "@liberado:matrix.homelab.local");
+        assert_eq!(accepted.main_room, "!room:matrix.homelab.local");
+        assert_eq!(accepted.listen.to_string(), "0.0.0.0:4202");
+    }
 
     #[tokio::test]
     async fn the_main_room_gets_its_own_binding() {
