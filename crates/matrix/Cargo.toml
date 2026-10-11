@@ -1,0 +1,30 @@
+[package]
+name = "liberado-matrix"
+version = "0.1.0"
+description = "Matrix application-service transport: one homeserver client and one transaction listener for the main Liberado room."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+async-trait = { workspace = true }
+axum = { version = "0.8", features = ["json"] }
+liberado-commands = { workspace = true }
+liberado-markdown = { workspace = true }
+liberado-messaging = { workspace = true }
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+ulid = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+wiremock = "0.6"
+
+[package.metadata.liberado]
+# Layer role for the layer-rules test + crate-map generator (docs/architecture/contracts.md)
+role = "service"
