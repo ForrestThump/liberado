@@ -63,6 +63,7 @@ fn descriptor(name: &str) -> McpDescriptor {
         tool_zones: Default::default(),
         zone_from_arg: None,
         write_tools: Default::default(),
+        ..Default::default()
     }
 }
 

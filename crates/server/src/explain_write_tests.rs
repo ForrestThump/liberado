@@ -24,6 +24,8 @@ fn vault_mcp(consequence: Consequence) -> McpConfig {
         }],
         zone_from_arg: Some("path".into()),
         write_tools: vec!["write_note".into()],
+        read_tools: Vec::new(),
+        vault_wide_writes: Vec::new(),
         writes_vault: None,
     }
 }

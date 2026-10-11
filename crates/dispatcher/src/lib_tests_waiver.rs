@@ -14,6 +14,7 @@ async fn high_consequence_without_seed_calls_proposes_the_exact_adaptive_goal() 
             tool_zones: Vec::new(),
             zone_from_arg: None,
             write_tools: Vec::new(),
+        ..Default::default()
         }],
         capabilities: caps("vault"),
         reaction_depth: 0,

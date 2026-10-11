@@ -17,6 +17,7 @@ fn req(capabilities: CapabilitySet, reaction_depth: u32) -> DispatchRequest {
             tool_zones: Vec::new(),
             zone_from_arg: None,
             write_tools: Vec::new(),
+        ..Default::default()
         }],
         capabilities,
         reaction_depth,
@@ -188,6 +189,7 @@ fn external_action_is_gated_by_consequence() {
             tool_zones: Vec::new(),
             zone_from_arg: None,
             write_tools: Vec::new(),
+        ..Default::default()
         }],
         capabilities: granted("email"),
         reaction_depth: 0,
@@ -217,6 +219,7 @@ fn reversible_git_tracked_write_is_not_gated() {
             tool_zones: Vec::new(),
             zone_from_arg: None,
             write_tools: Vec::new(),
+        ..Default::default()
         }],
         capabilities: granted("vault"),
         reaction_depth: 0,
@@ -243,6 +246,7 @@ fn sweeping_destructive_goal_is_gated_by_magnitude() {
             tool_zones: Vec::new(),
             zone_from_arg: None,
             write_tools: Vec::new(),
+        ..Default::default()
         }],
         capabilities: granted("vault"),
         reaction_depth: 0,
@@ -416,6 +420,7 @@ fn vault_request(zone_write_classes: Vec<(&str, liberado_common::WriteClass)>) -
             tool_zones: vec![("write_review".into(), Some("reviews".into()))],
             zone_from_arg: None,
             write_tools: Vec::new(),
+        ..Default::default()
         }],
         capabilities: granted("vault"),
         reaction_depth: 0,
@@ -538,6 +543,7 @@ fn waiver_suppresses_magnitude_for_targeted_read_then_write() {
         tool_zones: Vec::new(),
         zone_from_arg: None,
         write_tools: Vec::new(),
+    ..Default::default()
     }];
     let d = DispatchDecision {
         action: DispatchAction::ExecuteDirect {
@@ -686,6 +692,7 @@ fn waiver_does_not_grant_authority() {
             tool_zones: Vec::new(),
             zone_from_arg: None,
             write_tools: Vec::new(),
+        ..Default::default()
         },
         McpDescriptor {
             name: "forbidden-mcp".into(),
@@ -696,6 +703,7 @@ fn waiver_does_not_grant_authority() {
             tool_zones: Vec::new(),
             zone_from_arg: None,
             write_tools: Vec::new(),
+        ..Default::default()
         },
     ];
     let d = DispatchDecision {

@@ -391,6 +391,8 @@ mod tests {
             tools: Vec::new(),
             zone_from_arg: None,
             write_tools: Vec::new(),
+            read_tools: Vec::new(),
+            vault_wide_writes: Vec::new(),
             writes_vault: None,
         };
         assert!(!mcp_writes_vault(&read_only));
@@ -405,6 +407,8 @@ mod tests {
             tools: Vec::new(),
             zone_from_arg: None,
             write_tools: Vec::new(),
+            read_tools: Vec::new(),
+            vault_wide_writes: Vec::new(),
             writes_vault: None,
         };
         assert!(mcp_writes_vault(&fixed_zone));
@@ -419,6 +423,8 @@ mod tests {
             tools: Vec::new(),
             zone_from_arg: None,
             write_tools: Vec::new(),
+            read_tools: Vec::new(),
+            vault_wide_writes: Vec::new(),
             writes_vault: Some(false),
         };
         assert!(!mcp_writes_vault(&opted_out));

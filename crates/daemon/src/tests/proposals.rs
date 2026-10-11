@@ -147,6 +147,7 @@ async fn daemon_downgrades_a_zone_restricted_seed_call_to_a_proposal() {
         tool_zones: Vec::new(),
         zone_from_arg: None,
         write_tools: Vec::new(),
+    ..Default::default()
     });
     let capabilities = CapabilitySet::from_iter([Capability::ExecuteMcp("vault-mcp".into())]);
     let zone_write_classes = vec![("reviews".to_string(), WriteClass::ProposalOnly)];

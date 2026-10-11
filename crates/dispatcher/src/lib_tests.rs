@@ -63,6 +63,7 @@ fn request(capabilities: CapabilitySet, reaction_depth: u32) -> DispatchRequest 
             tool_zones: Vec::new(),
             zone_from_arg: None,
             write_tools: Vec::new(),
+        ..Default::default()
         }],
         capabilities,
         reaction_depth,
@@ -173,6 +174,7 @@ async fn ungranted_mcp_is_downgraded_to_capability_gap() {
         tool_zones: Vec::new(),
         zone_from_arg: None,
         write_tools: Vec::new(),
+    ..Default::default()
     });
 
     let out = dispatcher.dispatch(&req).await.unwrap();
@@ -272,6 +274,7 @@ async fn high_consequence_concrete_action_is_downgraded_to_propose() {
             tool_zones: Vec::new(),
             zone_from_arg: None,
             write_tools: Vec::new(),
+        ..Default::default()
         }],
         capabilities: caps("email"),
         reaction_depth: 0,
@@ -311,6 +314,7 @@ async fn zone_restricted_concrete_action_is_downgraded_to_propose() {
             tool_zones: vec![("write_review".into(), Some("reviews".into()))],
             zone_from_arg: None,
             write_tools: Vec::new(),
+        ..Default::default()
         }],
         capabilities: caps("vault"),
         reaction_depth: 0,
@@ -349,6 +353,7 @@ async fn high_consequence_subagent_is_downgraded_to_propose() {
             tool_zones: Vec::new(),
             zone_from_arg: None,
             write_tools: Vec::new(),
+        ..Default::default()
         }],
         capabilities: caps("email"),
         reaction_depth: 0,
@@ -769,6 +774,7 @@ async fn guidance_short_circuit_still_passes_through_the_guard_pipeline() {
         tool_zones: Vec::new(),
         zone_from_arg: None,
         write_tools: Vec::new(),
+    ..Default::default()
     });
     let out = dispatcher.dispatch(&req).await.unwrap();
     match out.action {
@@ -789,6 +795,7 @@ fn sanitize_rewrites_tool_shaped_relevant_mcps_and_drops_bare_unknowns() {
         tool_zones: Vec::new(),
         zone_from_arg: None,
         write_tools: Vec::new(),
+    ..Default::default()
     }];
     let mut d = DispatchDecision {
         action: DispatchAction::ExecuteDirect {
@@ -839,6 +846,7 @@ fn sanitize_empty_relevant_mcps_means_full_grant_not_capability_gap() {
         tool_zones: Vec::new(),
         zone_from_arg: None,
         write_tools: Vec::new(),
+    ..Default::default()
     }];
     let mut d = DispatchDecision {
         action: DispatchAction::ExecuteDirect {

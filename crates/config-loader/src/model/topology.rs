@@ -1231,6 +1231,28 @@ pub struct McpConfig {
     /// tell `read_note` from `write_note` — both have one.
     #[serde(default)]
     pub write_tools: Vec<String>,
+    /// **Path-addressed MCPs only**: tools that are explicitly **read-only** — the
+    /// complement of `write_tools`. Most path-addressed MCPs grow new tools over time (e.g.
+    /// turbovault upgrades add `edit_note`), and `write_tools` is a *deny* list ("only these
+    /// names write"). Without an explicit read list, the runtime previously collapsed an
+    /// undeclared tool to `NotAWrite` (the `write_tools`-as-deny-list semantics), which is the
+    /// 2026-10-11 bug: a tool the operator forgot to add wrote silently. The new shape is
+    /// *every* tool on a path-addressed MCP must appear in exactly one of `write_tools`,
+    /// `read_tools`, or `vault_wide_writes`; tools in **none** of the three are refused at the
+    /// runtime gate with an actionable error message. The change shifts the operator's mental
+    /// model from "list what writes" to "classify every tool"; the failing case is now refused,
+    /// not silently passed.
+    #[serde(default)]
+    pub read_tools: Vec<String>,
+    /// **Path-addressed MCPs only**: tools that mutate vault-wide state without a single
+    /// target zone — `begin_fanout` / `commit_fanout` / `abandon_fanout`,
+    /// `set_active_vault`, `vector_reindex`, and similar. The runtime treats a vault-wide tool
+    /// as needing ANY zone-write authority in the grant (so a read-only session cannot start a
+    /// fanout) and surfaces a permission request of the same Deny/Once/Session/Everywhere
+    /// shape as a per-zone write. Listed here so the operator can name vault-wide mutators
+    /// explicitly rather than having them look like reads.
+    #[serde(default)]
+    pub vault_wide_writes: Vec<String>,
     /// Set `false` to declare "this MCP has effects, but none of them are **vault zone** writes" —
     /// a PDF tool that writes files, a memory MCP that writes its own store.
     ///
@@ -1296,6 +1318,8 @@ mod zone_resolution_tests {
             tools,
             zone_from_arg: None,
             write_tools: Vec::new(),
+            read_tools: Vec::new(),
+            vault_wide_writes: Vec::new(),
             writes_vault: None,
         }
     }
@@ -1684,6 +1708,7 @@ mod proptest_tests {
                         tool_zones: declaration.tool_zones.clone(),
                         zone_from_arg: declaration.zone_from_arg.clone(),
                         write_tools: declaration.write_tools.clone(),
+                        ..Default::default()
                     };
                     let config = McpConfig {
                         name: name.clone(),
@@ -1702,6 +1727,8 @@ mod proptest_tests {
                             .collect(),
                         zone_from_arg: declaration.zone_from_arg.clone(),
                         write_tools: declaration.write_tools.clone(),
+                        read_tools: Vec::new(),
+                        vault_wide_writes: Vec::new(),
                         writes_vault: None,
                     };
                     (descriptor, config, tool)
