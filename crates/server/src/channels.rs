@@ -2,8 +2,8 @@
 //!
 //! Telegram starts only when `LIBERADO_TELEGRAM_BOT_TOKEN` and `LIBERADO_TELEGRAM_CHAT_ID`
 //! are both set. A later channel starts only when its own env is set. Cron delivery, the
-//! text bridge, and approval routing share one [`ChannelBindings`](crate::bindings::ChannelBindings)
-//! and, for Telegram, one [`BindingKey`](crate::bindings::BindingKey).
+//! text bridge, and approval routing share one [`ChannelBindings`]
+//! and, for Telegram, one [`BindingKey`].
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};

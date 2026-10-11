@@ -15,8 +15,10 @@ use liberado_common::{
 };
 use liberado_messaging::{
     ResolvedElsewhere, already_decided_phrase, decided_phrase, permission_choice,
-    permission_receipt, resolved_elsewhere_target,
+    permission_receipt,
 };
+
+mod elsewhere;
 use liberado_vault::Vault;
 use tokio::sync::Mutex;
 
@@ -148,22 +150,6 @@ impl PermissionResolver {
         }
     }
 
-    /// Register a surface that can edit a card it already showed.
-    pub fn add_resolved_elsewhere(&self, listener: Arc<dyn ResolvedElsewhere>) {
-        self.listeners
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .push(listener);
-    }
-
-    /// Channel that receives background cards, when one is configured (`telegram`).
-    pub fn set_push_surface(&self, surface: impl Into<String>) {
-        *self
-            .push_surface
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(surface.into());
-    }
-
     /// The ledger this resolver records into, if any. The approval bot uses the same one for
     /// ordinary Approve/Reject taps.
     pub fn ledger(&self) -> Option<ApprovalLedger> {
@@ -180,7 +166,7 @@ impl PermissionResolver {
             self.resolve_locked(stem, action, via).await
         };
         if let Some(notice) = notice {
-            fan_out(&self.listeners, notice).await;
+            elsewhere::fan_out(&self.listeners, notice).await;
         }
         outcome
     }
@@ -200,19 +186,21 @@ impl PermissionResolver {
 
     async fn resolve_locked(&self, stem: &str, action: &str, via: DecisionVia) -> Resolved {
         let mut proposal = match self.load(stem).await {
-            Loaded::Missing => return kept(ResolveOutcome::NotFound),
-            Loaded::Bad => return kept(ResolveOutcome::Unreadable),
+            Loaded::Missing => return elsewhere::kept(ResolveOutcome::NotFound),
+            Loaded::Bad => return elsewhere::kept(ResolveOutcome::Unreadable),
             Loaded::Found(proposal) => *proposal,
         };
         let now = Utc::now();
         match apply_permission_decision(&mut proposal, action, via, now) {
             Err(liberado_common::PermissionDecideError::UnknownAction) => {
-                kept(ResolveOutcome::UnknownAction)
+                elsewhere::kept(ResolveOutcome::UnknownAction)
             }
             Err(liberado_common::PermissionDecideError::NotAPermissionRequest) => {
-                kept(ResolveOutcome::NotAPermissionRequest)
+                elsewhere::kept(ResolveOutcome::NotAPermissionRequest)
             }
-            Ok(liberado_common::PermissionDecide::Already { action }) => kept(already(action)),
+            Ok(liberado_common::PermissionDecide::Already { action }) => {
+                elsewhere::kept(already(action))
+            }
             Ok(liberado_common::PermissionDecide::Applied { action }) => {
                 self.persist(stem, &proposal, via, action).await
             }
@@ -227,7 +215,7 @@ impl PermissionResolver {
         action: &'static str,
     ) -> Resolved {
         if !self.record(proposal, via).await {
-            return kept(ResolveOutcome::SaveFailed);
+            return elsewhere::kept(ResolveOutcome::SaveFailed);
         }
         let path = proposal_path(stem);
         if let Err(error) = self
@@ -236,18 +224,16 @@ impl PermissionResolver {
             .await
         {
             tracing::error!(stem, %error, "permission resolver: failed to write the decision");
-            return kept(ResolveOutcome::SaveFailed);
+            return elsewhere::kept(ResolveOutcome::SaveFailed);
         }
         let outcome = decided(action, &proposal.rationale);
-        let notice = elsewhere_notice(proposal, via, &outcome, self.push_surface_name().as_deref());
+        let notice = elsewhere::elsewhere_notice(
+            proposal,
+            via,
+            &outcome,
+            self.push_surface_name().as_deref(),
+        );
         (outcome, notice)
-    }
-
-    fn push_surface_name(&self) -> Option<String> {
-        self.push_surface
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .clone()
     }
 
     async fn record(&self, proposal: &Proposal, via: DecisionVia) -> bool {
@@ -305,53 +291,6 @@ fn ledger_decision(status: ProposalStatus) -> Option<ApprovalDecision> {
         ProposalStatus::Approved | ProposalStatus::Done => Some(ApprovalDecision::Approved),
         ProposalStatus::Rejected => Some(ApprovalDecision::Rejected),
         _ => None,
-    }
-}
-
-fn kept(outcome: ResolveOutcome) -> Resolved {
-    (outcome, None)
-}
-
-fn elsewhere_notice(
-    proposal: &Proposal,
-    via: DecisionVia,
-    outcome: &ResolveOutcome,
-    push_surface: Option<&str>,
-) -> Option<ElsewhereNotice> {
-    let ResolveOutcome::Decided {
-        emoji,
-        label,
-        rationale,
-        ..
-    } = outcome
-    else {
-        return None;
-    };
-    let surface = resolved_elsewhere_target(
-        proposal.origin.map(|origin| origin.as_str()),
-        via.as_str(),
-        push_surface,
-    )?;
-    Some(ElsewhereNotice {
-        surface,
-        proposal_id: proposal.id.clone(),
-        receipt: permission_receipt(emoji, label, rationale),
-    })
-}
-
-async fn fan_out(
-    listeners: &std::sync::Mutex<Vec<Arc<dyn ResolvedElsewhere>>>,
-    notice: ElsewhereNotice,
-) {
-    let hooks = listeners
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .clone();
-    for hook in hooks {
-        if hook.surface_id() == notice.surface {
-            hook.on_resolved_elsewhere(&notice.proposal_id, &notice.receipt)
-                .await;
-        }
     }
 }
 

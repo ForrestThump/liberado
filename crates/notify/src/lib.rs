@@ -16,15 +16,17 @@
 //! approval/chat bot). Future clients (Matrix, Signal, Discord) implement that trait; wrap any
 //! channel as a [`Notifier`] with [`ChannelNotifier`].
 
-use std::collections::HashMap;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
 use liberado_messaging::{
-    ActionButton, InboundEvent, MessagingChannel, MessagingError, ResolvedElsewhere,
-    approval_action_rows, permission_action_rows,
+    ActionButton, InboundEvent, MessagingChannel, MessagingError, approval_action_rows,
+    permission_action_rows,
 };
+
+mod outbound_cards;
+pub use outbound_cards::{OutboundCards, TelegramCardUpdater};
 
 /// Something that can be told about an event worth a human's attention.
 #[async_trait]
@@ -153,75 +155,6 @@ pub struct TelegramNotifier {
     cards: Option<Arc<OutboundCards>>,
 }
 
-/// Proposal id → Telegram `message_id` for a card this process sent.
-///
-/// The main bot's notifiers share one book so a card sent by the daemon and a card sent
-/// for the bound chat can both be edited when another surface decides.
-pub struct OutboundCards {
-    ids: Mutex<HashMap<String, String>>,
-}
-
-impl OutboundCards {
-    pub fn new() -> Self {
-        Self {
-            ids: Mutex::new(HashMap::new()),
-        }
-    }
-
-    pub fn remember(&self, proposal_id: &str, message_id: &str) {
-        if let Ok(mut ids) = self.ids.lock() {
-            ids.insert(proposal_id.to_string(), message_id.to_string());
-        }
-    }
-
-    pub fn take(&self, proposal_id: &str) -> Option<String> {
-        self.ids.lock().ok()?.remove(proposal_id)
-    }
-}
-
-impl Default for OutboundCards {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-fn shared_outbound_cards() -> Arc<OutboundCards> {
-    static CARDS: OnceLock<Arc<OutboundCards>> = OnceLock::new();
-    Arc::clone(CARDS.get_or_init(|| Arc::new(OutboundCards::new())))
-}
-
-/// Edits a Telegram permission card when another surface records the decision.
-pub struct TelegramCardUpdater {
-    notifier: TelegramNotifier,
-}
-
-impl TelegramCardUpdater {
-    pub fn new(notifier: TelegramNotifier) -> Self {
-        Self { notifier }
-    }
-
-    /// Same card book as [`TelegramNotifier::from_env`]. `None` when Telegram is unset.
-    pub fn from_env() -> Option<Self> {
-        Some(Self::new(TelegramNotifier::from_env()?))
-    }
-}
-
-#[async_trait]
-impl ResolvedElsewhere for TelegramCardUpdater {
-    fn surface_id(&self) -> &'static str {
-        "telegram"
-    }
-
-    async fn on_resolved_elsewhere(&self, proposal_id: &str, receipt: &str) {
-        let Some(message_id) = self.notifier.take_recorded_card(proposal_id) else {
-            return;
-        };
-        if let Err(error) = self.notifier.edit_message(&message_id, receipt).await {
-            tracing::warn!(%error, proposal_id, "telegram card update failed");
-        }
-    }
-}
-
 /// Prefer this name when treating Telegram as a [`MessagingChannel`]. Same type as
 /// [`TelegramNotifier`] — kept as an alias so composition roots can speak either vocabulary.
 pub type TelegramChannel = TelegramNotifier;
@@ -237,17 +170,6 @@ impl TelegramNotifier {
             poll_retry_backoff_secs: 10,
             cards: None,
         }
-    }
-
-    /// Remember permission-card message ids in `cards`.
-    pub fn with_cards(mut self, cards: Arc<OutboundCards>) -> Self {
-        self.cards = Some(cards);
-        self
-    }
-
-    /// Message id recorded for `proposal_id`, if this notifier has a card book.
-    pub fn take_recorded_card(&self, proposal_id: &str) -> Option<String> {
-        self.cards.as_ref()?.take(proposal_id)
     }
 
     /// Override the API base URL — used only by tests to point at a local mock server.
@@ -273,7 +195,7 @@ impl TelegramNotifier {
     pub fn from_env() -> Option<Self> {
         let token = std::env::var("LIBERADO_TELEGRAM_BOT_TOKEN").ok()?;
         let chat_id = std::env::var("LIBERADO_TELEGRAM_CHAT_ID").ok()?;
-        Some(Self::new(token, chat_id).with_cards(shared_outbound_cards()))
+        Some(Self::new(token, chat_id).with_cards(outbound_cards::shared_outbound_cards()))
     }
 
     /// Second bot for mechanical reminders. Unset means those jobs log and do not write
@@ -307,22 +229,7 @@ impl TelegramNotifier {
             return Err(MessagingError(format!("Telegram API error: {body}")));
         }
         let body = response.text().await.unwrap_or_default();
-        Ok(message_id_from_body(&body))
-    }
-
-    fn remember_card(&self, rows: &[Vec<ActionButton>], message_id: Option<i64>) {
-        let (Some(cards), Some(message_id)) = (&self.cards, message_id) else {
-            return;
-        };
-        let Some(proposal_id) = rows
-            .iter()
-            .flatten()
-            .next()
-            .map(|button| button.correlation_id.as_str())
-        else {
-            return;
-        };
-        cards.remember(proposal_id, &message_id.to_string());
+        Ok(outbound_cards::message_id_from_body(&body))
     }
 
     fn message_is_from_allowed_chat(&self, msg: &serde_json::Value) -> bool {
@@ -370,11 +277,6 @@ impl TelegramNotifier {
                 && Self::encode_callback_data(&b.action, &b.correlation_id).len() <= 64
         })
     }
-}
-
-fn message_id_from_body(body: &str) -> Option<i64> {
-    let value: serde_json::Value = serde_json::from_str(body).ok()?;
-    value.get("result")?.get("message_id")?.as_i64()
 }
 
 /// Split on char boundaries into chunks that fit Telegram's message size limit.
@@ -687,20 +589,6 @@ impl Notifier for TelegramNotifier {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn outbound_cards_remember_and_take_one_message_id() {
-        let cards = OutboundCards::new();
-        cards.remember("perm-1", "77");
-        assert_eq!(cards.take("perm-1").as_deref(), Some("77"));
-        assert_eq!(cards.take("perm-1"), None);
-    }
-
-    #[test]
-    fn a_notifier_without_a_card_book_records_nothing() {
-        let notifier = TelegramNotifier::new("tok", "1");
-        assert_eq!(notifier.take_recorded_card("perm-1"), None);
-    }
 
     #[test]
     fn api_url_embeds_the_token_and_method() {

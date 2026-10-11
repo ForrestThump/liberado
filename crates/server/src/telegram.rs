@@ -2,7 +2,7 @@
 //! ([`liberado_commands`]) rendered as text (no TUI/WebUI widgets).
 //!
 //! Telegram is one binding. A later channel uses the same bridge with its own
-//! [`BindingKey`](crate::bindings::BindingKey). Command text is shared; the channel label
+//! [`BindingKey`]. Command text is shared; the channel label
 //! (`Telegram`) is the only word that changes.
 
 use std::sync::Arc;
@@ -29,6 +29,8 @@ pub struct TextChatBridge {
     pub key: BindingKey,
 }
 
+mod bridge_session;
+
 #[async_trait]
 impl liberado_messaging::ChatSurface for TextChatBridge {
     async fn reply(&self, user_text: &str) -> Result<String, String> {
@@ -41,35 +43,6 @@ impl liberado_messaging::ChatSurface for TextChatBridge {
 }
 
 impl TextChatBridge {
-    /// In-memory binding tests use. The label is still `Telegram`, so replies match production.
-    #[cfg(test)]
-    pub fn for_test(state: Arc<AppState>) -> Self {
-        Self {
-            state,
-            bindings: ChannelBindings::ephemeral(),
-            key: BindingKey::telegram("test-chat", "test-bot"),
-        }
-    }
-
-    fn label(&self) -> &'static str {
-        self.key.channel.label()
-    }
-
-    async fn bound_session(&self) -> Option<Ulid> {
-        self.bindings.get(&self.key).await
-    }
-
-    async fn store_session(&self, id: Option<Ulid>) {
-        self.bindings.set(&self.key, id).await;
-    }
-
-    async fn session_or_create<F, Fut>(&self, create: F) -> Result<Ulid, String>
-    where
-        F: FnOnce() -> Fut,
-        Fut: std::future::Future<Output = Result<Ulid, String>>,
-    {
-        self.bindings.get_or_create(&self.key, create).await
-    }
     async fn chat_turn(&self, user_text: &str) -> Result<String, String> {
         // Telegram reaches the chat capability directly, so the HTTP middleware that refuses new
         // turns during shutdown never sees it. Without this check a message arriving mid-drain
