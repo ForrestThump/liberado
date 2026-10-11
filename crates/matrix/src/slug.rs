@@ -3,14 +3,51 @@
 //! A slug is lowercase `[a-z0-9_]` and is assigned once. The user id
 //! `@liberado_<slug>:<server>` has to match the application-service namespace
 //! `^@liberado(_[a-z0-9._=-]+)?:<server>$`. `pings` and `bridge` stay reserved.
+//! New slugs are at most 24 characters, cut on a word boundary when the title
+//! has one. A row that already has a slug keeps it.
 
 use std::collections::HashSet;
 
 const RESERVED: [&str; 2] = ["pings", "bridge"];
-const MAX_SLUG: usize = 64;
+/// Cap for a new slug, including a `_2` dedupe suffix.
+const MAX_SLUG: usize = 24;
+/// Tail of a session id used when the title does not yield a slug.
+const ID_SLUG: usize = 12;
 
 /// Lowercase `[a-z0-9_]` form of a title or session id. Empty input becomes `agent`.
 pub fn slug_base(source: &str) -> String {
+    let capped = cap_words(&slug_body(strip_ellipsis(source.trim())), MAX_SLUG);
+    if capped.is_empty() {
+        "agent".to_string()
+    } else {
+        capped
+    }
+}
+
+/// Cleaned title, or a short slug taken from the session id when the title is empty
+/// or has no letters or digits.
+pub fn slug_source(title: &str, session_id: &str) -> String {
+    let cleaned = strip_ellipsis(title.trim());
+    if slug_body(cleaned).is_empty() {
+        short_id(session_id)
+    } else {
+        cleaned.to_string()
+    }
+}
+
+fn strip_ellipsis(input: &str) -> &str {
+    let mut text = input.trim();
+    loop {
+        let next = text.trim_end_matches(['…', '⋯']).trim_end();
+        if let Some(stripped) = next.strip_suffix("...") {
+            text = stripped.trim_end();
+            continue;
+        }
+        return next;
+    }
+}
+
+fn slug_body(source: &str) -> String {
     let mut out = String::new();
     let mut underscore = false;
     for ch in source.chars() {
@@ -27,27 +64,37 @@ pub fn slug_base(source: &str) -> String {
     while out.ends_with('_') {
         out.pop();
     }
-    if out.len() > MAX_SLUG {
-        out.truncate(MAX_SLUG);
-        while out.ends_with('_') {
-            out.pop();
-        }
+    out
+}
+
+/// Keep at most `max` characters, ending on an underscore boundary when one fits.
+fn cap_words(slug: &str, max: usize) -> String {
+    if slug.len() <= max {
+        return slug.trim_end_matches('_').to_string();
     }
-    if out.is_empty() {
-        "agent".to_string()
+    let window = &slug[..max];
+    let cut = match window.rfind('_') {
+        Some(0) | None => window,
+        Some(idx) => &window[..idx],
+    };
+    let trimmed = cut.trim_end_matches('_');
+    if trimmed.is_empty() {
+        window.trim_end_matches('_').to_string()
     } else {
-        out
+        trimmed.to_string()
     }
 }
 
-/// Title when it has characters, otherwise the session id.
-pub fn slug_source(title: &str, session_id: &str) -> String {
-    let title = title.trim();
-    if title.is_empty() {
-        session_id.to_string()
-    } else {
-        title.to_string()
+fn short_id(session_id: &str) -> String {
+    let body = slug_body(session_id.trim());
+    if body.is_empty() {
+        return "agent".to_string();
     }
+    if body.len() <= ID_SLUG {
+        return body;
+    }
+    let start = body.len() - ID_SLUG;
+    body[start..].to_string()
 }
 
 /// `true` for the reserved localpart suffixes.
@@ -78,16 +125,8 @@ pub fn allocate_slug(base: &str, taken: &HashSet<String>) -> String {
 fn numbered(base: &str, n: u32) -> String {
     let suffix = format!("_{n}");
     let room = MAX_SLUG.saturating_sub(suffix.len()).max(1);
-    let mut stem = slug_base(base);
-    if stem.len() > room {
-        stem.truncate(room);
-        while stem.ends_with('_') {
-            stem.pop();
-        }
-    }
-    if stem.is_empty() {
-        stem = "agent".to_string();
-    }
+    let stem = cap_words(base, room);
+    let stem = if stem.is_empty() { "a" } else { &stem };
     format!("{stem}{suffix}")
 }
 

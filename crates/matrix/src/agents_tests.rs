@@ -181,6 +181,37 @@ async fn second_reconcile_creates_nothing_and_rename_keeps_the_slug() -> Result<
 }
 
 #[tokio::test]
+async fn a_saved_slug_is_not_rewritten_when_the_title_is_long() -> Result<(), String> {
+    let dir = tempfile::tempdir().map_err(|error| error.to_string())?;
+    let path = dir.path().join("matrix-agents.json");
+    let legacy = "create_a_vault_note_at_conformance_approval_test_md_conta";
+    let mxid = puppet_mxid(legacy, SERVER);
+    let file = format!(
+        r#"{{"version":1,"agents":[{{"session_id":"session-1","slug":"{legacy}","mxid":"{mxid}","room_id":"!old:{SERVER}","display_name":"Old","active":true}}]}}"#
+    );
+    std::fs::write(&path, file).map_err(|error| error.to_string())?;
+    let server = homeserver().await;
+    let mut directory = AgentDirectory::load(&path).await;
+    let report = reconcile_agents(
+        &client(&server),
+        SERVER,
+        OWNER,
+        &mut directory,
+        &[seat(
+            "session-1",
+            "Create a vault note at conformance/approval-test.md conta…",
+        )],
+    )
+    .await;
+    assert_clean("kept", &report.errors);
+    assert_eq!(report.ensured[0].slug, legacy);
+    assert_eq!(report.ensured[0].mxid, mxid);
+    let room = format!("!old:{SERVER}");
+    assert_eq!(report.ensured[0].room_id.as_deref(), Some(room.as_str()));
+    Ok(())
+}
+
+#[tokio::test]
 async fn colliding_titles_get_distinct_puppet_users() -> Result<(), String> {
     let server = homeserver().await;
     let mut directory = AgentDirectory::memory();
