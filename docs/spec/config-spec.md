@@ -254,7 +254,7 @@ the next 7 days, at most 10. There is no CalDAV read and no second event store.
 "Today" for both jobs is `topology.timezone`. The default is `America/Chicago`.
 `cron_expr` stays UTC. Set `deliver = false` on these schedules. The job sends on
 `LIBERADO_REMINDER_BOT_TOKEN` and `LIBERADO_REMINDER_CHAT_ID`. It does not append to the
-sticky chat, and it does not start a session. If the reminder variables are unset, the
+Telegram-bound chat, and it does not start a session. If the reminder variables are unset, the
 job still runs and the text is logged.
 
 ### Timed tick — `[vault_reminders]`

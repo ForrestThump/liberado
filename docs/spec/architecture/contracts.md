@@ -143,10 +143,14 @@ not an accident of history; it is a layer rule doing its job. See [`sessions.md`
 - **Defined**: the choice table in `liberado-messaging` (`permission_choices`). The decision
   function is `liberado_common::apply_permission_decision`. The one writer is
   `PermissionResolver::resolve` in `liberado-telegram-approvals`.
-- **Surfaces**: a request raised in the sticky Telegram chat sends the Telegram keyboard and
-  a card in that same chat. Any other human chat shows the card only. A background run keeps
-  the Telegram push it already had, and the card also appears in the sticky chat, because
-  Telegram was the only path. The scope buttons stay Deny / Once / Session / Everywhere.
+- **Surfaces**: a request raised in a channel-bound chat sends that channel's keyboard and
+  a card in that same chat. Telegram is one binding in `<data_dir>/channel-bindings.json`.
+  On first load, a legacy `<data_dir>/telegram-sticky-session` file is adopted when that
+  Telegram peer has no binding yet, so the chat keeps the same conversation. Any other human
+  chat shows the card only. A background run keeps the channel push it already had, and the
+  card also appears in the bound chat. The scope buttons stay Deny / Once / Session /
+  Everywhere. When another surface decides a request Telegram already showed, Telegram edits
+  that message to the decided receipt.
 - **Store**: the proposal note under `proposals/` (and `proposals/archive/` once the daemon
   files it). `session_id`, `origin`, `decided_at`, and `decided_via` are unsigned workflow
   fields. The approval ledger still records the decision once, `by` `telegram` or `webui`.
