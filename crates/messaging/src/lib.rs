@@ -137,6 +137,12 @@ pub trait MessagingChannel: Send + Sync {
     /// Human-readable channel name for logs and sticky session titles (`"Telegram"`, `"Discord"`, …).
     fn name(&self) -> &str;
 
+    /// When true, `/help` and `/start` are ordinary chat text so the shared command handler
+    /// can list commands. Telegram keeps the canned greeting.
+    fn defer_help_to_chat(&self) -> bool {
+        false
+    }
+
     /// Send a plain text message. Implementations may chunk long text to fit channel limits.
     async fn send_text(&self, text: &str) -> Result<(), MessagingError>;
 
