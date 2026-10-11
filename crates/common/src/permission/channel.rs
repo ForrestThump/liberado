@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 /// A chat channel a Liberado session can be bound to.
 ///
-/// `Matrix` is reserved and unused. Stored names stay the snake-case strings already on disk.
+/// Stored names stay the snake-case strings already on disk.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ChannelKind {

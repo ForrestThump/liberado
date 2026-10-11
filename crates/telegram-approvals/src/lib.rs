@@ -19,7 +19,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use liberado_common::{
-    DecisionVia, GrantScope, PROPOSALS_DIR, Proposal, ProposalSigner, ProposalStatus,
+    ChannelKind, DecisionVia, GrantScope, PROPOSALS_DIR, Proposal, ProposalSigner, ProposalStatus,
     ProposedAction, WriteProvenance,
 };
 use liberado_config_loader::TelegramApprovalsTuning;
@@ -29,6 +29,7 @@ use liberado_provider::{CompletionRequest, Message, Provider, complete_json};
 use liberado_vault::Vault;
 use tokio::sync::Mutex;
 
+mod bot_surface;
 mod resolve;
 
 #[cfg(test)]
@@ -87,6 +88,8 @@ pub struct ApprovalBot {
     /// reply whose sequence is no longer the latest gets an explicit "re: …" marker, because two
     /// unlabelled answers in the wrong order are worse than a slow one.
     latest_seq: Arc<std::sync::atomic::AtomicU64>,
+    /// Channel written on a decision. Telegram unless [`Self::with_decision_channel`] says otherwise.
+    decision_channel: ChannelKind,
 }
 
 impl ApprovalBot {
@@ -113,6 +116,7 @@ impl ApprovalBot {
             chat: None,
             last_activity: None,
             command_menu: Vec::new(),
+            decision_channel: ChannelKind::Telegram,
         }
     }
 
@@ -355,11 +359,7 @@ impl ApprovalBot {
         let action = resolve::permission_scope_action(scope);
         let outcome = self
             .resolver
-            .resolve(
-                stem,
-                action,
-                DecisionVia::Channel(liberado_common::ChannelKind::Telegram),
-            )
+            .resolve(stem, action, DecisionVia::Channel(self.decision_channel))
             .await;
         let reply = resolve::permission_scope_reply(action, &outcome);
         if let Some(text) = reply.ack {
@@ -383,11 +383,7 @@ impl ApprovalBot {
         };
         if let Some(decision) = decision
             && let Err(e) = ledger
-                .record(
-                    &proposal.id,
-                    decision,
-                    liberado_common::ChannelKind::Telegram.as_str(),
-                )
+                .record(&proposal.id, decision, self.decision_channel.as_str())
                 .await
         {
             tracing::error!(stem, error = %e, "approval-bot: failed to record the decision");
@@ -588,7 +584,7 @@ impl ApprovalBot {
             return;
         };
 
-        if text == "/start" || text == "/help" {
+        if self.show_canned_greeting(text) {
             self.send_text(
                 "Liberado is online. Send a normal message to chat. \
                  Proposal Approve/Revise/Reject buttons still work as before.",
@@ -1854,3 +1850,7 @@ id: prop-1
 #[cfg(test)]
 #[path = "telegram_approvals_survivor_tests.rs"]
 mod survivor_tests;
+
+#[cfg(test)]
+#[path = "matrix_decision_tests.rs"]
+mod matrix_decision_tests;

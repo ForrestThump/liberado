@@ -19,6 +19,7 @@ mod bindings;
 mod channels;
 mod hooks;
 mod latency;
+mod matrix_link;
 mod pr_review_diff;
 mod pr_review_dispatch;
 mod pr_review_observer;

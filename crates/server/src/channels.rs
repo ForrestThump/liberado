@@ -1,7 +1,7 @@
 //! Compose the chat channels that are configured.
 //!
 //! Telegram starts only when `LIBERADO_TELEGRAM_BOT_TOKEN` and `LIBERADO_TELEGRAM_CHAT_ID`
-//! are both set. A later channel starts only when its own env is set. Cron delivery, the
+//! are both set. Matrix starts only when its own environment is complete. Cron delivery, the
 //! text bridge, and approval routing share one [`ChannelBindings`]
 //! and, for Telegram, one [`BindingKey`].
 
@@ -129,7 +129,7 @@ pub fn wrap_cron_notifier(
     daemon.with_notifier(Arc::new(notifier))
 }
 
-/// Start every configured channel. Telegram starts only when its env is set.
+/// Start every configured channel. Each channel starts only when its own env is set.
 pub fn spawn_configured_channels(
     state: &Arc<AppState>,
     daemon: &Daemon,
@@ -138,6 +138,14 @@ pub fn spawn_configured_channels(
     channels: &ChannelRuntime,
     resolver: Arc<liberado_telegram_approvals::PermissionResolver>,
 ) {
+    crate::matrix_link::spawn_matrix(
+        state,
+        daemon,
+        provider,
+        config,
+        channels,
+        Arc::clone(&resolver),
+    );
     if let Some(link) = channels.telegram.as_ref() {
         // Register even when the bot itself does not start. Background cards are sent by the
         // daemon notifier, which shares this card book.
