@@ -382,7 +382,13 @@ impl ApprovalBot {
             _ => None,
         };
         if let Some(decision) = decision
-            && let Err(e) = ledger.record(&proposal.id, decision, "telegram").await
+            && let Err(e) = ledger
+                .record(
+                    &proposal.id,
+                    decision,
+                    liberado_common::ChannelKind::Telegram.as_str(),
+                )
+                .await
         {
             tracing::error!(stem, error = %e, "approval-bot: failed to record the decision");
             self.ack(event_id, "Failed to record your decision — try again.")
