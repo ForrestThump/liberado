@@ -807,7 +807,7 @@ async fn no_tools_runtime_refuses_invocation() {
 async fn disjoint_grant_sessions(
     dir: &std::path::Path,
     live_catalog: bool,
-) -> (ChatSessions, Ulid) {
+) -> Result<(ChatSessions, Ulid), String> {
     let store = Arc::new(SessionStore::open(dir).await);
     let executor = Executor::new(
         Arc::new(MockProvider::with_script(
@@ -842,14 +842,16 @@ async fn disjoint_grant_sessions(
             },
         )
         .await
-        .unwrap();
-    (sessions, id)
+        .map_err(|err| err.to_string())?;
+    Ok((sessions, id))
 }
 
 /// Visibility alone already followed the session grant. The invoke must too:
 /// `ScopedRuntime` would refuse a process-only tool with "not in scope" even when
 /// the gate still held the process grant. The refusal string is the gate's.
-async fn assert_session_tool_allowed_and_process_tool_refused(runtime: &dyn ToolRuntime) {
+async fn assert_session_tool_allowed_and_process_tool_refused(
+    runtime: &dyn ToolRuntime,
+) -> Result<(), String> {
     let mut saw_session = false;
     let mut saw_process = false;
     for tool in runtime.catalog() {
@@ -876,7 +878,9 @@ async fn assert_session_tool_allowed_and_process_tool_refused(runtime: &dyn Tool
             serde_json::json!({}),
         ))
         .await
-        .expect("a tool granted only to the session must pass the risk gate");
+        .map_err(|err| {
+            format!("a tool granted only to the session must pass the risk gate: {err}")
+        })?;
     assert_eq!(allowed, "ok");
 
     let refused = runtime
@@ -891,24 +895,26 @@ async fn assert_session_tool_allowed_and_process_tool_refused(runtime: &dyn Tool
         refused.contains("not in the granted capability set"),
         "the risk gate must refuse the process-only tool as ungranted: {refused}"
     );
+    Ok(())
 }
 
 #[tokio::test]
-async fn scoped_extras_gates_on_the_session_grant_not_the_process_grant() {
-    let dir = tempfile::tempdir().unwrap();
-    let (sessions, id) = disjoint_grant_sessions(dir.path(), false).await;
+async fn scoped_extras_gates_on_the_session_grant_not_the_process_grant() -> Result<(), String> {
+    let dir = tempfile::tempdir().map_err(|err| err.to_string())?;
+    let (sessions, id) = disjoint_grant_sessions(dir.path(), false).await?;
     let grant = sessions.turn_settings(id).await.capabilities;
     let runtime = sessions.scoped_extras_runtime("list mail", id, grant);
-    assert_session_tool_allowed_and_process_tool_refused(runtime.as_ref()).await;
+    assert_session_tool_allowed_and_process_tool_refused(runtime.as_ref()).await
 }
 
 #[tokio::test]
-async fn build_turn_runtime_gates_on_the_session_grant_not_the_process_grant() {
-    let dir = tempfile::tempdir().unwrap();
+async fn build_turn_runtime_gates_on_the_session_grant_not_the_process_grant() -> Result<(), String>
+{
+    let dir = tempfile::tempdir().map_err(|err| err.to_string())?;
     // Live catalog arms the same helper's other branch. An empty catalog does not
     // change the capability check; it only proves that branch still uses the session grant.
-    let (sessions, id) = disjoint_grant_sessions(dir.path(), true).await;
+    let (sessions, id) = disjoint_grant_sessions(dir.path(), true).await?;
     let grant = sessions.turn_settings(id).await.capabilities;
     let runtime = sessions.build_turn_runtime("list mail", id, &[], &grant);
-    assert_session_tool_allowed_and_process_tool_refused(runtime.as_ref()).await;
+    assert_session_tool_allowed_and_process_tool_refused(runtime.as_ref()).await
 }
