@@ -210,8 +210,11 @@ The slug is written to `<data_dir>/matrix-agents.json` before the homeserver cal
 rename does not change it. The display name and the room name do follow the title.
 
 The room is `private_chat`, `is_direct`, and invites the owner. `m.room.encryption` needs
-power level 100. The owner is 50. The puppet is 100 and does not turn encryption on. The
-puppet's `m.direct` account data points at the room.
+power level 100. The owner is 50. When the homeserver lists room version 12 in
+`m.room_versions.available`, the room is created at that version and the puppet is left
+out of `users`, because the creator's power is unbounded. Older servers list the puppet
+at 100. The puppet does not turn encryption on. The puppet's `m.direct` account data
+points at the room.
 
 The room is bound to that agent's existing session (`matrix`, room id, puppet user id) in
 `<data_dir>/channel-bindings.json`. The WebUI and the DM are the same conversation. Only

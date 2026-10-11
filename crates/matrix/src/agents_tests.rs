@@ -292,6 +292,250 @@ async fn each_room_speaks_and_hears_as_its_own_puppet() -> Result<(), String> {
     Ok(())
 }
 
+fn capabilities(room_version_12: bool) -> serde_json::Value {
+    let mut available = serde_json::Map::new();
+    available.insert("11".to_string(), json!("stable"));
+    if room_version_12 {
+        available.insert("12".to_string(), json!("stable"));
+    }
+    json!({
+        "capabilities": {
+            "m.room_versions": {
+                "default": if room_version_12 { "12" } else { "11" },
+                "available": available
+            }
+        }
+    })
+}
+
+fn creator_in_users(body: &serde_json::Value) -> bool {
+    let Some(users) = body["power_level_content_override"]["users"].as_object() else {
+        return false;
+    };
+    for user_id in users.keys() {
+        if user_id.contains("liberado_") {
+            return true;
+        }
+    }
+    false
+}
+
+const CREATOR_ERROR: &str =
+    "M_INVALID_PARAM: creator user IDs are not allowed in the `users` field";
+
+async fn mount_register_and_writes(server: &MockServer) {
+    Mock::given(method("POST"))
+        .and(path("/_matrix/client/v3/register"))
+        .respond_with(ResponseTemplate::new(400).set_body_json(json!({
+            "errcode": "M_USER_IN_USE",
+            "error": "User ID already taken."
+        })))
+        .mount(server)
+        .await;
+    Mock::given(method("PUT"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({})))
+        .mount(server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/_matrix/client/v3/joined_members"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "joined": {} })))
+        .mount(server)
+        .await;
+}
+
+#[tokio::test]
+async fn room_version_12_rejects_a_creator_in_users_and_reconcile_succeeds() -> Result<(), String> {
+    let server = MockServer::start().await;
+    mount_register_and_writes(&server).await;
+    Mock::given(method("GET"))
+        .and(path("/_matrix/client/v3/capabilities"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(capabilities(true)))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/_matrix/client/v3/createRoom"))
+        .respond_with(|request: &Request| {
+            let body: serde_json::Value =
+                serde_json::from_slice(&request.body).unwrap_or(json!({}));
+            if creator_in_users(&body) || body["room_version"] != "12" {
+                return ResponseTemplate::new(400).set_body_json(json!({
+                    "errcode": "M_INVALID_PARAM",
+                    "error": CREATOR_ERROR
+                }));
+            }
+            ResponseTemplate::new(200).set_body_json(json!({
+                "room_id": "!dm:matrix.homelab.local"
+            }))
+        })
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({})))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "joined": {} })))
+        .mount(&server)
+        .await;
+
+    let mut directory = AgentDirectory::memory();
+    let report = reconcile_agents(
+        &client(&server),
+        SERVER,
+        OWNER,
+        &mut directory,
+        &[seat("session-1", "Coder")],
+    )
+    .await;
+    assert_clean("v12", &report.errors);
+    assert!(report.ensured[0].room_id.is_some());
+    let create = room_body(&server).await;
+    assert_eq!(create["room_version"], "12");
+    assert!(
+        create["power_level_content_override"]["users"]
+            .get("@liberado_coder:matrix.homelab.local")
+            .is_none()
+    );
+    assert_eq!(create["power_level_content_override"]["users"][OWNER], 50);
+    assert_eq!(
+        create["power_level_content_override"]["events"]["m.room.encryption"],
+        100
+    );
+    assert_eq!(
+        create["power_level_content_override"]["events"]["m.room.power_levels"],
+        100
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn older_room_versions_keep_the_bot_at_100() -> Result<(), String> {
+    let server = MockServer::start().await;
+    mount_register_and_writes(&server).await;
+    Mock::given(method("GET"))
+        .and(path("/_matrix/client/v3/capabilities"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(capabilities(false)))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/_matrix/client/v3/createRoom"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "room_id": "!old:matrix.homelab.local"
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({})))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "joined": {} })))
+        .mount(&server)
+        .await;
+
+    let mut directory = AgentDirectory::memory();
+    let report = reconcile_agents(
+        &client(&server),
+        SERVER,
+        OWNER,
+        &mut directory,
+        &[seat("session-1", "Coder")],
+    )
+    .await;
+    assert_clean("v11", &report.errors);
+    let create = room_body(&server).await;
+    assert!(create.get("room_version").is_none());
+    assert_eq!(
+        create["power_level_content_override"]["users"]["@liberado_coder:matrix.homelab.local"],
+        100
+    );
+    assert_eq!(create["power_level_content_override"]["users"][OWNER], 50);
+    Ok(())
+}
+
+#[tokio::test]
+async fn display_name_is_set_before_a_failed_room_create_and_retried() -> Result<(), String> {
+    let server = MockServer::start().await;
+    mount_register_and_writes(&server).await;
+    Mock::given(method("GET"))
+        .and(path("/_matrix/client/v3/capabilities"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(capabilities(true)))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/_matrix/client/v3/createRoom"))
+        .respond_with(ResponseTemplate::new(400).set_body_json(json!({
+            "errcode": "M_INVALID_PARAM",
+            "error": CREATOR_ERROR
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "joined": {} })))
+        .mount(&server)
+        .await;
+
+    let matrix = client(&server);
+    let mut directory = AgentDirectory::memory();
+    let seat = seat("session-1", "Personal Task Manager");
+    let first = reconcile_agents(
+        &matrix,
+        SERVER,
+        OWNER,
+        &mut directory,
+        std::slice::from_ref(&seat),
+    )
+    .await;
+    assert!(!first.errors.is_empty(), "createRoom failure is reported");
+    assert!(
+        first.errors[0].contains("creator user IDs are not allowed"),
+        "error text is surfaced: {}",
+        first.errors[0]
+    );
+    assert_eq!(
+        display_names(&server).await,
+        vec!["Personal Task Manager".to_string()]
+    );
+    assert!(directory.get("session-1").expect("row").room_id.is_none());
+
+    let second = reconcile_agents(
+        &matrix,
+        SERVER,
+        OWNER,
+        &mut directory,
+        std::slice::from_ref(&seat),
+    )
+    .await;
+    assert!(!second.errors.is_empty());
+    assert_eq!(
+        display_names(&server).await.len(),
+        2,
+        "displayname is retried"
+    );
+    Ok(())
+}
+
+async fn room_body(server: &MockServer) -> serde_json::Value {
+    let requests = server.received_requests().await.expect("requests");
+    let create = requests
+        .iter()
+        .find(|request| request.url.path().ends_with("/createRoom"))
+        .expect("createRoom");
+    serde_json::from_slice(&create.body).expect("json")
+}
+
+async fn display_names(server: &MockServer) -> Vec<String> {
+    let requests = server.received_requests().await.expect("requests");
+    requests
+        .iter()
+        .filter(|request| request.url.path().contains("displayname"))
+        .map(|request| {
+            let body: serde_json::Value = serde_json::from_slice(&request.body).expect("json");
+            body["displayname"].as_str().unwrap_or("").to_string()
+        })
+        .collect()
+}
+
 fn message_text(events: &[InboundEvent]) -> &str {
     match &events[0] {
         InboundEvent::Message { text, .. } => text,

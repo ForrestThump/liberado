@@ -34,6 +34,9 @@ pub use client::MatrixClient;
 pub use config::{Activation, EnvSnapshot, MatrixSettings, activation, missing_names};
 pub use hub::RoomQueues;
 pub use puppet::user_in_use;
-pub use room::{direct_room_body, encryption_is_locked, encryption_locked_power_levels};
+pub use room::{
+    CreatorPower, advertises_room_version, direct_room_body, encryption_is_locked,
+    encryption_locked_power_levels,
+};
 pub use slug::slug_of_mxid;
 pub use startup::{RunningMatrix, connect, prepare_room};

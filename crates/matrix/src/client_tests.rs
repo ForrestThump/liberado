@@ -1,6 +1,6 @@
 use super::{MatrixClient, member_present};
 use crate::messages::{MsgKind, edit_content, message_content};
-use crate::room::direct_room_body;
+use crate::room::{CreatorPower, direct_room_body};
 use serde_json::json;
 use wiremock::matchers::{method, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -96,14 +96,19 @@ async fn create_room_sends_the_encryption_lock() {
         .unwrap();
     assert_eq!(room, "!dm:s");
     let got = requests(&server).await;
-    let body: serde_json::Value = serde_json::from_slice(&got[0].body).unwrap();
+    let create = got
+        .iter()
+        .find(|request| request.url.path().ends_with("/createRoom"))
+        .expect("createRoom");
+    let body: serde_json::Value = serde_json::from_slice(&create.body).unwrap();
     assert_eq!(
         body,
         direct_room_body(
             "Coder",
             "@shiloh:s",
             "@shiloh:s",
-            "@liberado:matrix.homelab.local"
+            "@liberado:matrix.homelab.local",
+            CreatorPower::Listed
         )
     );
 }
@@ -119,10 +124,36 @@ async fn errors_omit_the_token() {
     let error = client(&server).whoami().await.unwrap_err().to_string();
     assert!(error.contains("401"));
     assert!(!error.contains("as-token"));
+    assert_eq!(
+        super::error_detail("{\"errcode\":\"M_FORBIDDEN\"}").as_deref(),
+        Some("M_FORBIDDEN")
+    );
+    assert_eq!(
+        super::error_detail("{\"error\":\"nope as-token\"}").as_deref(),
+        Some("nope as-token")
+    );
+    assert_eq!(super::error_detail("{}"), None);
+    assert_eq!(super::error_detail("not json"), None);
     assert!(member_present(
         &["@Liberado:example".into()],
         "@liberado:example"
     ));
+}
+
+#[tokio::test]
+async fn errors_include_the_matrix_error_text() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(400).set_body_json(json!({
+            "errcode": "M_INVALID_PARAM",
+            "error": "M_INVALID_PARAM: creator user IDs are not allowed in the `users` field as-token"
+        })))
+        .mount(&server)
+        .await;
+    let error = client(&server).whoami().await.unwrap_err().to_string();
+    assert!(error.contains("matrix http 400"));
+    assert!(error.contains("creator user IDs are not allowed in the `users` field"));
+    assert!(!error.contains("as-token"));
 }
 
 #[tokio::test]

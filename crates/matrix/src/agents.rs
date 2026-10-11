@@ -206,6 +206,13 @@ async fn ensure_seat(
         .await
         .map_err(|error| format!("register {}: {error}", record.mxid))?;
     let name = display_name(&seat.title);
+    let renamed = record.display_name != name;
+    if renamed {
+        let updated = set_display_name(&puppet, &name).await;
+        if let Err(error) = updated {
+            return Err(format!("display name for {}: {error}", record.mxid));
+        }
+    }
     let created = open_room(&puppet, owner, &name, &mut record, directory).await?;
     if !record.active {
         rejoin(&puppet, owner, &record).await?;
@@ -213,7 +220,7 @@ async fn ensure_seat(
         record.departed = false;
         record.direct_set = false;
     }
-    refresh_names(&puppet, &name, created, &mut record).await?;
+    refresh_names(&puppet, &name, created, renamed, &mut record).await?;
     ensure_direct(&puppet, owner, &mut record).await?;
     directory.upsert(record.clone());
     directory.save().await?;
@@ -269,20 +276,23 @@ async fn refresh_names(
     puppet: &MatrixClient,
     name: &str,
     created: bool,
+    renamed: bool,
     record: &mut AgentRecord,
 ) -> Result<(), String> {
-    if record.display_name == name {
+    if !renamed {
         return Ok(());
     }
-    set_display_name(puppet, name)
-        .await
-        .map_err(|error| format!("display name for {}: {error}", record.mxid))?;
-    if !created && let Some(room) = &record.room_id {
-        set_room_name(puppet, room, name)
-            .await
-            .map_err(|error| format!("room name for {}: {error}", record.mxid))?;
-    }
     record.display_name = name.to_string();
+    if created {
+        return Ok(());
+    }
+    let Some(room) = &record.room_id else {
+        return Ok(());
+    };
+    let named = set_room_name(puppet, room, name).await;
+    if let Err(error) = named {
+        return Err(format!("room name for {}: {error}", record.mxid));
+    }
     Ok(())
 }
 

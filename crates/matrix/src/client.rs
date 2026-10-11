@@ -12,7 +12,7 @@ use reqwest::Method;
 use serde_json::{Value, json};
 
 use crate::encode::encode_segment;
-use crate::room::direct_room_body;
+use crate::room::{CreatorPower, advertises_room_version, direct_room_body};
 
 const TIMEOUT: Duration = Duration::from_secs(15);
 
@@ -129,13 +129,20 @@ impl MatrixClient {
     }
 
     /// Create a direct room with encryption locked off. Returns the room id.
+    ///
+    /// Room version 12 is requested only when `GET /capabilities` lists it. Otherwise the
+    /// puppet stays in `users` at 100 so older room versions keep a creator with power.
     pub async fn create_direct_room(
         &self,
         name: &str,
         invite_mxid: &str,
         owner_mxid: &str,
     ) -> Result<String, MessagingError> {
-        let body = direct_room_body(name, invite_mxid, owner_mxid, &self.user_id);
+        let creator = match self.get(&["capabilities"]).await {
+            Ok(body) if advertises_room_version(&body, "12") => CreatorPower::Implicit,
+            _ => CreatorPower::Listed,
+        };
+        let body = direct_room_body(name, invite_mxid, owner_mxid, &self.user_id, creator);
         let response = self.post(&["createRoom"], &body).await?;
         let room_id = string_field(&response, "room_id");
         if room_id.is_empty() {
@@ -234,12 +241,11 @@ impl MatrixClient {
     }
 
     fn failure(&self, status: u16, body: &str) -> String {
-        let redacted = self.redact(body);
-        let errcode = errcode_of(&redacted);
-        match errcode {
-            Some(code) => format!("matrix http {status} {code}"),
+        let message = match error_detail(body) {
+            Some(detail) => format!("matrix http {status} {detail}"),
             None => format!("matrix http {status}"),
-        }
+        };
+        self.redact(&message)
     }
 
     fn redact(&self, text: &str) -> String {
@@ -266,9 +272,26 @@ fn parse_body(text: &str, status: u16) -> Result<Value, MessagingError> {
         .map_err(|_| MessagingError::new(format!("matrix response was not json ({status})")))
 }
 
-fn errcode_of(body: &str) -> Option<String> {
+fn error_detail(body: &str) -> Option<String> {
     let value: Value = serde_json::from_str(body).ok()?;
-    value.get("errcode")?.as_str().map(str::to_string)
+    let errcode = match value.get("errcode") {
+        Some(Value::String(text)) => text.as_str(),
+        _ => "",
+    };
+    let error = match value.get("error") {
+        Some(Value::String(text)) => text.as_str(),
+        _ => "",
+    };
+    if errcode.is_empty() && error.is_empty() {
+        return None;
+    }
+    if error.is_empty() {
+        return Some(errcode.to_string());
+    }
+    if errcode.is_empty() {
+        return Some(error.to_string());
+    }
+    Some(format!("{errcode}: {error}"))
 }
 
 fn string_field(body: &Value, field: &str) -> String {
