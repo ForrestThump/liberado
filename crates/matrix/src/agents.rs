@@ -202,29 +202,55 @@ async fn ensure_seat(
 ) -> Result<AgentRecord, String> {
     let mut record = assigned(directory, server_name, seat).await?;
     let puppet = client.for_user(&record.mxid);
-    register_or_existing(client, &puppet_localpart(&record.slug))
-        .await
-        .map_err(|error| format!("register {}: {error}", record.mxid))?;
     let name = display_name(&seat.title);
-    let renamed = record.display_name != name;
-    if renamed {
-        let updated = set_display_name(&puppet, &name).await;
-        if let Err(error) = updated {
-            return Err(format!("display name for {}: {error}", record.mxid));
-        }
-    }
+    let renamed = prepare_puppet(client, &puppet, &name, &record).await?;
     let created = open_room(&puppet, owner, &name, &mut record, directory).await?;
-    if !record.active {
-        rejoin(&puppet, owner, &record).await?;
-        record.active = true;
-        record.departed = false;
-        record.direct_set = false;
-    }
+    restore_if_inactive(&puppet, owner, &mut record).await?;
     refresh_names(&puppet, &name, created, renamed, &mut record).await?;
     ensure_direct(&puppet, owner, &mut record).await?;
     directory.upsert(record.clone());
     directory.save().await?;
     Ok(record)
+}
+
+/// Register the puppet, then publish a new display name before the room exists.
+///
+/// The stored name stays unchanged until the room step succeeds, so a failed
+/// `createRoom` retries the profile write on the next reconcile.
+async fn prepare_puppet(
+    client: &MatrixClient,
+    puppet: &MatrixClient,
+    name: &str,
+    record: &AgentRecord,
+) -> Result<bool, String> {
+    let registered = register_or_existing(client, &puppet_localpart(&record.slug)).await;
+    if let Err(error) = registered {
+        return Err(format!("register {}: {error}", record.mxid));
+    }
+    if record.display_name == name {
+        return Ok(false);
+    }
+    let updated = set_display_name(puppet, name).await;
+    if let Err(error) = updated {
+        return Err(format!("display name for {}: {error}", record.mxid));
+    }
+    Ok(true)
+}
+
+/// A deleted seat keeps its room. Bringing that session back rejoins it.
+async fn restore_if_inactive(
+    puppet: &MatrixClient,
+    owner: &str,
+    record: &mut AgentRecord,
+) -> Result<(), String> {
+    if record.active {
+        return Ok(());
+    }
+    rejoin(puppet, owner, record).await?;
+    record.active = true;
+    record.departed = false;
+    record.direct_set = false;
+    Ok(())
 }
 
 async fn assigned(

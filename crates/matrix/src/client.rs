@@ -274,24 +274,19 @@ fn parse_body(text: &str, status: u16) -> Result<Value, MessagingError> {
 
 fn error_detail(body: &str) -> Option<String> {
     let value: Value = serde_json::from_str(body).ok()?;
-    let errcode = match value.get("errcode") {
-        Some(Value::String(text)) => text.as_str(),
-        _ => "",
-    };
-    let error = match value.get("error") {
-        Some(Value::String(text)) => text.as_str(),
-        _ => "",
-    };
-    if errcode.is_empty() && error.is_empty() {
-        return None;
+    let detail = [
+        string_field(&value, "errcode"),
+        string_field(&value, "error"),
+    ]
+    .into_iter()
+    .filter(|part| !part.is_empty())
+    .collect::<Vec<_>>()
+    .join(": ");
+    if detail.is_empty() {
+        None
+    } else {
+        Some(detail)
     }
-    if error.is_empty() {
-        return Some(errcode.to_string());
-    }
-    if errcode.is_empty() {
-        return Some(error.to_string());
-    }
-    Some(format!("{errcode}: {error}"))
 }
 
 fn string_field(body: &Value, field: &str) -> String {
