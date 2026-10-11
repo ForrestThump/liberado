@@ -4,7 +4,7 @@
     "proven_invariant": 65,
     "local_failure": 0,
     "process_fatal": 46,
-    "files_scanned": 561,
+    "files_scanned": 579,
     "files_with_unwraps": 49
   },
   "files": {
@@ -765,7 +765,7 @@
       "occurrences": [
         {
           "file": "crates/markdown/src/lib.rs",
-          "line": 137,
+          "line": 140,
           "column": 17,
           "method": "unwrap",
           "snippet": "trimmed.strip_prefix(\"### \").unwrap()",
@@ -776,7 +776,7 @@
         },
         {
           "file": "crates/markdown/src/lib.rs",
-          "line": 144,
+          "line": 147,
           "column": 17,
           "method": "unwrap",
           "snippet": "trimmed.strip_prefix(\"## \").unwrap()",
@@ -787,7 +787,7 @@
         },
         {
           "file": "crates/markdown/src/lib.rs",
-          "line": 151,
+          "line": 154,
           "column": 17,
           "method": "unwrap",
           "snippet": "trimmed.strip_prefix(\"# \").unwrap()",

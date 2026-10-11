@@ -3203,6 +3203,18 @@
     "functions": 4,
     "cyclomatic": 8
   },
+  "crates/markdown/src/html.rs": {
+    "ploc": 98,
+    "lloc": 44,
+    "functions": 11,
+    "cyclomatic": 32
+  },
+  "crates/markdown/src/html_tests.rs": {
+    "ploc": 26,
+    "lloc": 13,
+    "functions": 4,
+    "cyclomatic": 5
+  },
   "crates/markdown/src/lib.rs": {
     "ploc": 288,
     "lloc": 95,
@@ -3214,6 +3226,126 @@
     "lloc": 109,
     "functions": 34,
     "cyclomatic": 62
+  },
+  "crates/matrix/src/cards.rs": {
+    "ploc": 126,
+    "lloc": 41,
+    "functions": 14,
+    "cyclomatic": 27
+  },
+  "crates/matrix/src/channel.rs": {
+    "ploc": 171,
+    "lloc": 41,
+    "functions": 22,
+    "cyclomatic": 45
+  },
+  "crates/matrix/src/channel_tests.rs": {
+    "ploc": 164,
+    "lloc": 62,
+    "functions": 8,
+    "cyclomatic": 15
+  },
+  "crates/matrix/src/client.rs": {
+    "ploc": 223,
+    "lloc": 49,
+    "functions": 34,
+    "cyclomatic": 62
+  },
+  "crates/matrix/src/client_tests.rs": {
+    "ploc": 135,
+    "lloc": 47,
+    "functions": 7,
+    "cyclomatic": 8
+  },
+  "crates/matrix/src/commands.rs": {
+    "ploc": 92,
+    "lloc": 35,
+    "functions": 10,
+    "cyclomatic": 21
+  },
+  "crates/matrix/src/config.rs": {
+    "ploc": 191,
+    "lloc": 24,
+    "functions": 27,
+    "cyclomatic": 47
+  },
+  "crates/matrix/src/config_tests.rs": {
+    "ploc": 92,
+    "lloc": 42,
+    "functions": 7,
+    "cyclomatic": 16
+  },
+  "crates/matrix/src/encode.rs": {
+    "ploc": 40,
+    "lloc": 12,
+    "functions": 5,
+    "cyclomatic": 8
+  },
+  "crates/matrix/src/filter.rs": {
+    "ploc": 162,
+    "lloc": 37,
+    "functions": 15,
+    "cyclomatic": 35
+  },
+  "crates/matrix/src/hub.rs": {
+    "ploc": 31,
+    "lloc": 10,
+    "functions": 3,
+    "cyclomatic": 7
+  },
+  "crates/matrix/src/lib.rs": {
+    "ploc": 20,
+    "lloc": 0,
+    "functions": 0,
+    "cyclomatic": 1
+  },
+  "crates/matrix/src/listener.rs": {
+    "ploc": 245,
+    "lloc": 41,
+    "functions": 24,
+    "cyclomatic": 53
+  },
+  "crates/matrix/src/listener_tests.rs": {
+    "ploc": 310,
+    "lloc": 138,
+    "functions": 15,
+    "cyclomatic": 26
+  },
+  "crates/matrix/src/messages.rs": {
+    "ploc": 98,
+    "lloc": 38,
+    "functions": 8,
+    "cyclomatic": 18
+  },
+  "crates/matrix/src/room.rs": {
+    "ploc": 72,
+    "lloc": 14,
+    "functions": 7,
+    "cyclomatic": 8
+  },
+  "crates/matrix/src/startup.rs": {
+    "ploc": 120,
+    "lloc": 22,
+    "functions": 11,
+    "cyclomatic": 27
+  },
+  "crates/matrix/src/startup_tests.rs": {
+    "ploc": 117,
+    "lloc": 31,
+    "functions": 9,
+    "cyclomatic": 11
+  },
+  "crates/matrix/src/token.rs": {
+    "ploc": 79,
+    "lloc": 30,
+    "functions": 9,
+    "cyclomatic": 15
+  },
+  "crates/matrix/src/txn_log.rs": {
+    "ploc": 110,
+    "lloc": 45,
+    "functions": 13,
+    "cyclomatic": 25
   },
   "crates/mcp-forge/src/build.rs": {
     "ploc": 314,
@@ -3941,6 +4073,12 @@
     "functions": 1,
     "cyclomatic": 2
   },
+  "crates/server/src/matrix_link.rs": {
+    "ploc": 222,
+    "lloc": 51,
+    "functions": 15,
+    "cyclomatic": 25
+  },
   "crates/server/src/pr_review_diff.rs": {
     "ploc": 138,
     "lloc": 48,
@@ -4277,11 +4415,23 @@
     "functions": 18,
     "cyclomatic": 66
   },
+  "crates/telegram-approvals/src/bot_surface.rs": {
+    "ploc": 15,
+    "lloc": 4,
+    "functions": 2,
+    "cyclomatic": 6
+  },
   "crates/telegram-approvals/src/lib.rs": {
     "ploc": 1477,
     "lloc": 492,
     "functions": 104,
-    "cyclomatic": 202
+    "cyclomatic": 201
+  },
+  "crates/telegram-approvals/src/matrix_decision_tests.rs": {
+    "ploc": 122,
+    "lloc": 28,
+    "functions": 12,
+    "cyclomatic": 18
   },
   "crates/telegram-approvals/src/resolve.rs": {
     "ploc": 488,
