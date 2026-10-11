@@ -151,7 +151,7 @@ Put the first in `as_token` and `LIBERADO_MATRIX_AS_TOKEN`. Put the second in `h
 [`matrix/liberado-appservice.yaml.example`](matrix/liberado-appservice.yaml.example).
 `id` is `liberado`. Set it. Do not rely on the file name.
 
-Register it in the Tuwunel admin room. Send:
+Register it in the Tuwunel admin room. That is the default. Send:
 
 ```text
 !admin appservices register
@@ -159,10 +159,19 @@ Register it in the Tuwunel admin room. Send:
 
 Then send the YAML in a code block. The same fields can live in `tuwunel.toml` under
 `[global.appservice.liberado]`. Set `id` there too. Restart Tuwunel after a file edit.
+
+Tuwunel matches an unanchored expression. The example anchors both patterns:
+
+```text
+^@liberado(_[a-z0-9._=-]+)?:matrix\.homelab\.local$
+^#liberado_.*:matrix\.homelab\.local$
+```
+
 The registration `url` is `http://liberado:4202`. Both containers are on the external `homelab`
-network, so that name resolves. Do not publish port 4202 on the host. The sample Compose file
-uses `expose: ["4202"]` only. Do not add `ports:` for 4202, and do not add `EXPOSE 4202` to
-the Dockerfile.
+network, so that name resolves. If Tuwunel still cannot resolve `liberado`, set
+`dns_passthru_appservices = true` in the Tuwunel config. Do not publish port 4202 on the host.
+The sample Compose file uses `expose: ["4202"]` only. Do not add `ports:` for 4202, and do not
+add `EXPOSE 4202` to the Dockerfile.
 
 ### Variables
 
@@ -191,9 +200,11 @@ replay them.
 ### Check
 
 1. Recreate the liberado container after the variables and the `expose` line are in place.
-2. Tuwunel pings `http://liberado:4202/_matrix/app/v1/ping` with the homeserver token.
+2. In the Tuwunel admin room, `!admin appservices list` shows `liberado`.
+   `!admin appservices show-config liberado` shows the registration, including the anchored patterns.
+3. Tuwunel pings `http://liberado:4202/_matrix/app/v1/ping` with the homeserver token.
    A live registration answers `{}`.
-3. In Element X, open `#liberado` and send `status`. Liberado replies with the status text.
+4. In Element X, open `#liberado` and send `status`. Liberado replies with the status text.
    `status`, `/status`, and `!status` are the same command. `status of the build` is a normal
    message. `help` lists the commands.
 

@@ -9,6 +9,7 @@
 #
 # The user regex is case-insensitive on Tuwunel. It covers `@liberado` and
 # `@liberado_<suffix>` on `matrix.homelab.local`.
+# Tuwunel matches an unanchored expression, so both patterns start with ^ and end with $.
 
 id: liberado
 url: http://liberado:4202
@@ -20,7 +21,7 @@ receive_ephemeral: false
 namespaces:
   users:
     - exclusive: true
-      regex: "@liberado(_[a-z0-9._=-]+)?:matrix\\.homelab\\.local"
+      regex: "^@liberado(_[a-z0-9._=-]+)?:matrix\\.homelab\\.local$"
   aliases:
     - exclusive: true
-      regex: "#liberado_.*:matrix\\.homelab\\.local"
+      regex: "^#liberado_.*:matrix\\.homelab\\.local$"
