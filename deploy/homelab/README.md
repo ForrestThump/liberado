@@ -197,6 +197,58 @@ the daemon keeps running.
 Processed transaction ids are stored in `<data_dir>/matrix-txns.json`. A restart does not
 replay them.
 
+### Agent direct chats
+
+Each Agents-shelf agent gets its own Matrix user and a private room with the owner. The
+Agent Creator session does not: that chat only makes agents. The main room stays
+`@liberado` in `#liberado`.
+
+The user id is `@liberado_<slug>:<server>`. The slug comes from the agent's title, then from
+the session id when the title is blank. It is lowercase, and every other character becomes
+`_`. `pings` and `bridge` are reserved, so those titles become `pings_2` and `bridge_2`.
+The slug is written to `<data_dir>/matrix-agents.json` before the homeserver calls, and a
+rename does not change it. The display name and the room name do follow the title.
+
+The room is `private_chat`, `is_direct`, and invites the owner. `m.room.encryption` needs
+power level 100. The owner is 50. The puppet is 100 and does not turn encryption on. The
+puppet's `m.direct` account data points at the room.
+
+The room is bound to that agent's existing session (`matrix`, room id, puppet user id) in
+`<data_dir>/channel-bindings.json`. The WebUI and the DM are the same conversation. Only
+the configured owner is acted on. The daemon ignores its own puppets, unbound rooms, and
+invites from anyone else.
+
+In that DM, `status`, `model`, `stop`, `cancel`, and `help` act on this agent. `help` lists
+only those. These are refused, because they would leave the agent or they have no meaning
+in a DM:
+
+- `new`, `session`, `sessions` — the DM stays on this agent.
+- `fork` — that would move the binding off the agent.
+- `join`, `spawn`, `back`, `goal`, `plan`, `explore` — those are goal surfaces.
+- `quit`, `exit`, `clear`, `theme` — those need a local client.
+- `profile` — the shelf profile is changed in the WebUI.
+
+Provisioning runs at startup and again when an agent is created, renamed, or deleted. The
+HTTP response does not wait on the homeserver. A second reconcile reuses the user and the
+room. `M_USER_IN_USE` on register means the account is already there. A failed call is
+logged and retried on the next reconcile. It is not fatal. With Matrix off, none of this
+runs.
+
+There is no archive API. `DELETE /api/conversations/{id}` removes the session. The puppet
+then leaves the DM. The binding is kept with `"active": false`, and the directory keeps
+the slug and the room id, so they stay reserved. If that same session id is an Agents-shelf
+seat again, the puppet rejoins and re-invites the owner.
+
+No appservice re-register is required. The user namespace already matches
+`@liberado_<slug>`:
+
+```text
+^@liberado(_[a-z0-9._=-]+)?:matrix\.homelab\.local$
+```
+
+`@liberado_pings` is not created. The slug `pings` is reserved so a later notification DM
+does not collide with an agent. Reminders stay on the reminder bot until that follow-up.
+
 ### Check
 
 1. Recreate the liberado container after the variables and the `expose` line are in place.

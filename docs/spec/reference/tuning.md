@@ -209,6 +209,8 @@ The Matrix room is separate. It starts only when `LIBERADO_MATRIX_HOMESERVER`,
 `LIBERADO_MATRIX_MAIN_ROOM` are all set. None of them set leaves the daemon as it is.
 The values are environment variables, not `config.toml`. The hookup is in
 [`deploy/homelab/README.md`](../../../deploy/homelab/README.md).
+Agent DMs are not the reminder path. `@liberado_pings` is not provisioned. The slug
+`pings` is reserved for a later notification room. Reminders stay on the reminder bot.
 
 `[vault_reminders] enabled` defaults to false. The minute tick does nothing until that
 switch is on. `tasks` and `events` default to true and apply only while the switch is on.

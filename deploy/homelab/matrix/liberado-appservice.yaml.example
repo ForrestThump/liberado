@@ -8,7 +8,8 @@
 # (`user_id` on each Client-Server call). That user is already inside the namespace below.
 #
 # The user regex is case-insensitive on Tuwunel. It covers `@liberado` and
-# `@liberado_<suffix>` on `matrix.homelab.local`.
+# `@liberado_<suffix>` on `matrix.homelab.local`, including each agent puppet
+# `@liberado_<slug>`. No re-register is required for agent direct chats.
 # Tuwunel matches an unanchored expression, so both patterns start with ^ and end with $.
 
 id: liberado

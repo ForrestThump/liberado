@@ -1,7 +1,7 @@
 [package]
 name = "liberado-matrix"
 version = "0.1.0"
-description = "Matrix application-service transport: one homeserver client and one transaction listener for the main Liberado room."
+description = "Matrix application-service transport: homeserver client, transaction listener, and one direct chat per agent."
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
