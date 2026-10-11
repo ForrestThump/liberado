@@ -45,6 +45,16 @@ impl MatrixClient {
         &self.user_id
     }
 
+    /// Same homeserver and token, acting as `user_id`. Sends use `?user_id=`.
+    pub fn for_user(&self, user_id: &str) -> Self {
+        Self {
+            http: self.http.clone(),
+            homeserver: self.homeserver.clone(),
+            as_token: self.as_token.clone(),
+            user_id: user_id.to_string(),
+        }
+    }
+
     /// `GET /_matrix/client/v3/account/whoami`.
     pub async fn whoami(&self) -> Result<String, MessagingError> {
         let body = self.get(&["account", "whoami"]).await?;
@@ -147,14 +157,32 @@ impl MatrixClient {
         self.exchange(Method::GET, &self.url(segments), None).await
     }
 
-    async fn post(&self, segments: &[&str], body: &Value) -> Result<Value, MessagingError> {
+    pub(crate) async fn post(
+        &self,
+        segments: &[&str],
+        body: &Value,
+    ) -> Result<Value, MessagingError> {
         self.exchange(Method::POST, &self.url(segments), Some(body))
             .await
     }
 
-    async fn put(&self, segments: &[&str], body: &Value) -> Result<Value, MessagingError> {
+    pub(crate) async fn put(
+        &self,
+        segments: &[&str],
+        body: &Value,
+    ) -> Result<Value, MessagingError> {
         self.exchange(Method::PUT, &self.url(segments), Some(body))
             .await
+    }
+
+    /// POST that does not masquerade. Registration uses the application-service token alone.
+    pub(crate) async fn post_service(
+        &self,
+        segments: &[&str],
+        body: &Value,
+    ) -> Result<Value, MessagingError> {
+        let url = self.endpoint(&client_prefix(segments));
+        self.exchange(Method::POST, &url, Some(body)).await
     }
 
     fn url(&self, segments: &[&str]) -> String {

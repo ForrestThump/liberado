@@ -1,7 +1,8 @@
 //! Startup check, then the listener. A failed check leaves the daemon running.
 
+use std::collections::HashSet;
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use tokio::task::JoinHandle;
 
@@ -19,6 +20,11 @@ pub struct RunningMatrix {
     pub updater: MatrixCardUpdater,
     pub room_id: String,
     pub user_id: String,
+    /// Masquerades as `@liberado`. Agent sends use [`MatrixClient::for_user`].
+    pub client: MatrixClient,
+    pub queues: Arc<RoomQueues>,
+    /// User ids `GET /users/{id}` should answer for, besides the main user.
+    pub known_users: Arc<Mutex<HashSet<String>>>,
     listener: JoinHandle<()>,
 }
 
@@ -38,18 +44,29 @@ pub async fn connect(settings: &MatrixSettings, data_dir: &Path) -> Result<Runni
     )?;
     let room_id = prepare_room(&client, settings).await?;
     let queues = Arc::new(RoomQueues::new());
+    let known_users = Arc::new(Mutex::new(HashSet::new()));
     let channel = Arc::new(MatrixChannel::open(
         client.clone(),
         room_id.clone(),
         &queues,
     ));
-    let state = listener_state(settings, &client, &queues, &room_id, data_dir);
+    let state = listener_state(
+        settings,
+        &client,
+        &queues,
+        &room_id,
+        data_dir,
+        Arc::clone(&known_users),
+    );
     let (_bound, listener) = bind_and_serve(settings.listen, Arc::new(state)).await?;
     Ok(RunningMatrix {
         updater: MatrixCardUpdater::new(Arc::clone(&channel)),
         channel,
         room_id,
         user_id: settings.main_user.clone(),
+        client,
+        queues,
+        known_users,
         listener,
     })
 }
@@ -112,6 +129,7 @@ fn listener_state(
     queues: &Arc<RoomQueues>,
     room_id: &str,
     data_dir: &Path,
+    known_users: Arc<Mutex<HashSet<String>>>,
 ) -> ListenerState {
     let mut known = vec![settings.main_room.clone(), room_id.to_string()];
     known.sort();
@@ -129,6 +147,7 @@ fn listener_state(
         client.clone(),
         settings.main_user.clone(),
         known,
+        known_users,
     )
 }
 

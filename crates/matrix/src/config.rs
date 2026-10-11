@@ -50,6 +50,7 @@ pub enum Activation {
 }
 
 /// Non-secret view plus the two tokens. `Debug` omits the tokens.
+#[derive(Clone)]
 pub struct MatrixSettings {
     pub homeserver: String,
     pub server_name: String,
