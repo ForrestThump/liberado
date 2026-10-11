@@ -449,6 +449,17 @@ impl CapabilitySet {
         self.capabilities.contains(&Capability::AskHuman)
     }
 
+    /// Whether this set holds **any** `Write(Zone)` capability — the question a vault-wide tool
+    /// (`begin_fanout`, `commit_fanout`, `abandon_fanout`, `set_active_vault`, `vector_reindex`,
+    /// …) asks the gate. A session holding only `Read(_)` is treated as read-only and refused,
+    /// because vault-wide mutators cannot be cleanly bound to one zone's read capability — they
+    /// affect git/fanout/index state that any read-only session should never touch.
+    pub fn holds_any_zone_write(&self) -> bool {
+        self.capabilities
+            .iter()
+            .any(|c| matches!(c, Capability::Write(_)))
+    }
+
     /// Shared helper for [`granted_tools`](Self::granted_tools) and
     /// [`granted_mcps`](Self::granted_mcps): collect the inner string from every variant that
     /// matches `predicate`. Panics on non-Execute variants (the predicate enforces correctness).

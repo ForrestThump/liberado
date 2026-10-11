@@ -112,12 +112,30 @@ pub(crate) fn write_explanation(
             guards.fixes = blockers;
             return guards;
         }
+        WriteTarget::VaultWide => {
+            guards.guard_lines.push(format!(
+                "  [BLOCK] write_target      '{bare}' is a vault-wide write (fanout, vault switch, \
+                 index rebuild) — it must be classified in `vault_wide_writes` on this MCP. Any \
+                 session calling it needs at least one `Write(Vault(\"…\"))` capability, since a \
+                 session holding only reads must not be able to start a fanout."
+            ));
+            blockers.push(
+                "verify the tool is listed in this MCP's `vault_wide_writes` in topology.toml; the \
+                 component grant must hold at least one `Write(Vault(\"…\"))`"
+                    .to_string(),
+            );
+            guards.verdict = "verdict: BLOCKED".into();
+            guards.fixes = blockers;
+            return guards;
+        }
         WriteTarget::Undeterminable(why) => {
             guards.guard_lines.push(format!(
                 "  [BLOCK] write_target      cannot place this write: {why}"
             ));
             blockers.push(
-                "give the path a leading zone segment, or declare zone_from_arg/write_tools"
+                "give the path a leading zone segment, or declare this tool in write_tools / \
+                 read_tools / vault_wide_writes (the tool is on a path-addressed MCP and is not \
+                 classified — this is the F1 fail-closed behavior)"
                     .to_string(),
             );
             guards.verdict = "verdict: BLOCKED".into();

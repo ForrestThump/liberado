@@ -365,6 +365,14 @@ impl ToolRuntime for RiskGatedToolRuntime {
             // zone, so nothing resolved), and resolving in one place means they cannot drift back
             // apart. For a path-addressed MCP the zone depends on the call's *arguments*, so this
             // is the only place it can be known.
+            //
+            // 2026-10-11 follow-up: the resolution itself was *fail-open*. A path-addressed MCP's
+            // `write_tools` is a deny-list, so a tool the operator forgot to add to it returned
+            // `NotAWrite` and the gate silently waved the call through (live session
+            // `01M3ZB89WK54HGNG6ATJ9FPJMX`, `edit_note` on `conformance/approval-test.md`). The new
+            // contract is fail-closed: undeclared tools on path-addressed MCPs return
+            // `Undeterminable` here, refused below, and the error names the three lists the
+            // operator must classify the tool under.
             let write_target = self.write_target_of(&mcp_name, call);
 
             let write_zone = match &write_target {
@@ -381,6 +389,44 @@ impl ToolRuntime for RiskGatedToolRuntime {
                     );
                     tracing::warn!(mcp = %mcp_name, %why, "tool call refused: undeterminable write zone");
                     return Err(format!("not authorized: {why}"));
+                }
+                // Vault-wide mutator (fanout, vault switch, index rebuild). It writes to git/state
+                // outside a single zone, so the per-zone check below does not apply. Authority
+                // instead is "the grant holds at least one Write(Zone) capability", which models
+                // "this session is not strictly read-only" — fanouts and index rebuilds are
+                // written to a vault whose contents the session can already change, so letting
+                // them through is consistent with the granted authority. A read-only session
+                // (the `research` profile, an `ExecuteMcp("…")` + `Read` grant with no Write)
+                // cannot start a fanout. If the session holds no zone write authority, we raise
+                // a permission request asking for one — same shape as the per-zone guard below,
+                // so an operator sees one consistent deny/once/session/everywhere flow.
+                WriteTarget::VaultWide => {
+                    if !self.capabilities.holds_any_zone_write() {
+                        self.authority_decision(
+                            "vault_wide_write_capability",
+                            if self.can_ask_human() {
+                                "permission_request"
+                            } else {
+                                "refused"
+                            },
+                            call,
+                            None,
+                            "any Write(Vault(\"<zone>\")) in the grant (a vault-wide mutation \
+                             needs at least minimal write authority somewhere)",
+                        );
+                        if self.can_ask_human() {
+                            let path = self.write_vault_wide_permission_request(call).await?;
+                            return Ok(vault_wide_permission_request_message(&path));
+                        }
+                        return Err(format!(
+                            "not authorized: '{}' mutates vault-wide state (fanout / index / \
+                             vault switch), and this session's grant holds no Write(Vault(\"…\")) \
+                             capability. Add at least one `Write(Vault(\"<zone>\"))` to the \
+                             grant, or narrow the tool list to a per-tool ExecuteTool grant.",
+                            call.name
+                        ));
+                    }
+                    None
                 }
                 WriteTarget::Zone(zone) => Some(zone.clone()),
                 WriteTarget::NotAWrite => None,
@@ -672,6 +718,79 @@ impl RiskGatedToolRuntime {
         Ok(proposal_path)
     }
 
+    /// Permission-request variant for **vault-wide** mutators (`begin_fanout`,
+    /// `commit_fanout`, `set_active_vault`, `vector_reindex`, …). The required capability is
+    /// "any `Write(Vault(\"<zone>\"))` in the grant" — encoded here as the special vault zone
+    /// name `"*"`, which the ledger/grant applier recognises as the wildcard marker. Every other
+    /// shape (signing, notification routing, persistence) is identical to the per-zone flow so
+    /// the chat surface sees one consistent four-button permission card.
+    async fn write_vault_wide_permission_request(
+        &self,
+        call: &ToolInvocation,
+    ) -> Result<PathBuf, String> {
+        let proposal_id = permission_request_id();
+        let proposals_subdir = self.proposals_dir.join(liberado_common::PROPOSALS_DIR);
+        let proposal_path = proposals_subdir.join(format!("{proposal_id}.md"));
+
+        let proposal = self.sign_vault_wide_permission_proposal(&proposal_id, call);
+
+        if let Err(e) = tokio::fs::create_dir_all(&proposals_subdir).await {
+            tracing::error!(path = %proposals_subdir.display(), error = %e, "failed to create proposals directory");
+            return Err(format!(
+                "could not create the proposals directory at {}: {e} — no permission request was saved",
+                proposals_subdir.display()
+            ));
+        }
+        if let Err(e) = tokio::fs::write(&proposal_path, proposal.to_note()).await {
+            tracing::error!(path = %proposal_path.display(), error = %e, "failed to write permission request");
+            return Err(format!(
+                "could not save the permission request at {}: {e} — the action was NOT executed",
+                proposal_path.display()
+            ));
+        }
+        tracing::info!(path = %proposal_path.display(), tool = %call.name, "vault-wide permission request written");
+
+        self.notify_vault_wide_permission_request(&proposal_id, call)
+            .await;
+
+        Ok(proposal_path)
+    }
+
+    fn sign_vault_wide_permission_proposal(
+        &self,
+        proposal_id: &str,
+        call: &ToolInvocation,
+    ) -> SignedProposal {
+        let mut proposal = Proposal::pending(
+            proposal_id,
+            &self.correlation_base,
+            "liberado-chat",
+            ProposedAction::ToolCalls(vec![liberado_common::ToolCall {
+                tool: call.name.clone(),
+                args: call.arguments.clone(),
+            }]),
+            format!(
+                "Permission request: '{}' mutates vault-wide state (fanout / index / vault \
+                 switch). It needs ANY Write(Vault(\"<zone>\")) in the grant to authorize that \
+                 the session already has minimal write authority somewhere.",
+                call.name
+            ),
+        )
+        .with_requested_grant(Capability::Write(Zone::vault(VAULT_WIDE_ZONE_MARKER)));
+        proposal.pool = Some(self.pool_name.clone());
+        self.stamp_permission_origin(&mut proposal);
+        self.signer.sign(proposal)
+    }
+
+    async fn notify_vault_wide_permission_request(
+        &self,
+        proposal_id: &str,
+        call: &ToolInvocation,
+    ) {
+        let message = vault_wide_permission_ask_message(&call.name);
+        self.notify_on_surface(proposal_id, &message).await;
+    }
+
     /// Build the signed permission-request proposal: the blocked call as a `ProposedAction`, the
     /// requested capability stamped on before signing (so the signature covers it, tamper-evident),
     /// and the pool keyed so the daemon's grant lands on the right pool.
@@ -776,6 +895,22 @@ fn permission_ask_message(tool: &str, zone: &str) -> String {
     )
 }
 
+/// Marker zone name used inside a vault-wide permission request's `requested_grant`. The ledger
+/// applier writes this verbatim to the overlay, which the runtime then sees via
+/// [`CapabilitySet::holds_any_zone_write`]. The actual zone name is never matched against a
+/// real vault directory — it is purely a label for the operator reading the proposal note, so
+/// `vault-wide-any` makes the intent obvious. Picked rather than `"*"` so a literal read of the
+/// overlay shows clearly what the approved grant was for.
+const VAULT_WIDE_ZONE_MARKER: &str = "vault-wide-any";
+
+fn vault_wide_permission_ask_message(tool: &str) -> String {
+    format!(
+        "Liberado needs permission.\n'{tool}' mutates vault-wide state (fanout, vault switch, \
+         index rebuild). It needs at least minimal write authority somewhere.\nApprove once, for \
+         this session, or everywhere?"
+    )
+}
+
 /// Compact permission-request id: it must fit Telegram's callback_data budget (the full
 /// correlation lives in the proposal's `correlation_id` field, not the stem). The old
 /// `perm-{correlation_base}-{nanos}` was 65 bytes for a `chat-delegate-<ulid>` correlation — over
@@ -796,6 +931,19 @@ fn permission_request_message(path: &std::path::Path, zone: &str) -> String {
     format!(
         "PERMISSION REQUESTED — the action was NOT executed. It needs Write access to zone '{zone}', \
          which this session's grant doesn't include. A request was sent for approval \
+         (once / this session / everywhere). Saved at: {}. Do not retry or invent a result; the \
+         action runs automatically once the human approves.",
+        path.display()
+    )
+}
+
+/// Vault-wide analog of [`permission_request_message`]. Same shape so a model reading either has
+/// the same expectation: do not retry, do not edit the proposal, hand off to the human.
+fn vault_wide_permission_request_message(path: &std::path::Path) -> String {
+    format!(
+        "PERMISSION REQUESTED — the action was NOT executed. It mutates vault-wide state \
+         (fanout / index / vault switch), and this session's grant currently holds no \
+         `Write(Vault(\"<zone>\"))` capability to authorise that. A request was sent for approval \
          (once / this session / everywhere). Saved at: {}. Do not retry or invent a result; the \
          action runs automatically once the human approves.",
         path.display()

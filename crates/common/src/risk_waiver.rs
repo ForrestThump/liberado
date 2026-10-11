@@ -156,12 +156,16 @@ pub struct WaiverTarget<'a> {
 impl<'a> WaiverTarget<'a> {
     /// Build a target from a `"<mcp>:<tool>"` name and its `WriteTarget`.
     ///
-    /// Only `WriteTarget::Zone(name)` produces a non-`None` zone; `NotAWrite` and
-    /// `Undeterminable` both map to `None` so a zone-restricted waiver does not match.
+    /// Only `WriteTarget::Zone(name)` produces a non-`None` zone; every other variant maps
+    /// to `None` so a zone-restricted waiver does not match. `VaultWide` has no single zone,
+    /// so a zone-restricted waiver explicitly cannot waive vault-wide mutations — they are
+    /// evaluated against their own capability gate at the runtime boundary.
     pub fn from_write_target(qualified_tool: &'a str, target: &'a WriteTarget) -> Self {
         let zone = match target {
             WriteTarget::Zone(name) => Some(name.as_str()),
-            WriteTarget::NotAWrite | WriteTarget::Undeterminable(_) => None,
+            WriteTarget::NotAWrite
+            | WriteTarget::VaultWide
+            | WriteTarget::Undeterminable(_) => None,
         };
         Self {
             qualified_tool,
