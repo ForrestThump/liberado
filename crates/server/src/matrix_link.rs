@@ -14,14 +14,14 @@ use liberado_matrix::{
     Activation, EnvSnapshot, MatrixSettings, RunningMatrix, activation, connect,
 };
 use liberado_messaging::MessagingChannel;
-use liberado_notify::ChannelNotifier;
 use liberado_provider::Provider;
 use liberado_telegram_approvals::{ApprovalBot, PermissionResolver};
 use liberado_vault::Vault;
 
-use crate::approvals::ChannelPermissionSink;
 use crate::bindings::{BindingKey, ChannelBindings};
 use crate::channels::ChannelRuntime;
+use crate::matrix_agents::{AgentLinks, MatrixAgents};
+use crate::matrix_cards::MatrixCards;
 use crate::state::AppState;
 use crate::telegram::TextChatBridge;
 
@@ -48,7 +48,7 @@ pub fn spawn_matrix(
     };
     tokio::spawn(async move {
         match connect(&settings, &boot.state.data_dir).await {
-            Ok(running) => run_matrix(running, boot).await,
+            Ok(running) => run_matrix(running, boot, settings).await,
             Err(error) => {
                 tracing::warn!(%error, "matrix: startup check failed; matrix stays off");
             }
@@ -87,7 +87,7 @@ struct MatrixBoot {
     resolver: Arc<PermissionResolver>,
 }
 
-async fn run_matrix(running: RunningMatrix, boot: MatrixBoot) {
+async fn run_matrix(running: RunningMatrix, boot: MatrixBoot, settings: MatrixSettings) {
     let MatrixBoot {
         state,
         vault,
@@ -104,14 +104,41 @@ async fn run_matrix(running: RunningMatrix, boot: MatrixBoot) {
     };
     let room_id = running.room_id.clone();
     let user_id = running.user_id.clone();
-    let transport: Arc<dyn MessagingChannel> = running.channel.clone();
+    let client = running.client.clone();
+    let queues = Arc::clone(&running.queues);
+    let known_users = Arc::clone(&running.known_users);
+    let channel = Arc::clone(&running.channel);
     resolver.add_resolved_elsewhere(Arc::new(running.updater));
     let key = matrix_key(&room_id, &user_id);
-    let mut bot = ApprovalBot::new(Arc::clone(&transport), vault, signer, provider, tuning)
-        .with_resolver(resolver)
-        .with_decision_channel(ChannelKind::Matrix);
-    if let Some(chat) = state.chat.clone() {
-        bot = attach_chat(bot, &state, &bindings, &chat, &key, transport).await;
+    let cards = Arc::new(MatrixCards::new(Arc::clone(&channel)));
+    let transport: Arc<dyn MessagingChannel> = channel;
+    let mut bot = ApprovalBot::new(
+        Arc::clone(&transport),
+        vault.clone(),
+        signer.clone(),
+        Arc::clone(&provider),
+        tuning.clone(),
+    )
+    .with_resolver(Arc::clone(&resolver))
+    .with_decision_channel(ChannelKind::Matrix);
+    if state.chat.is_some() {
+        bot = attach_chat(bot, &state, &bindings, &key, Arc::clone(&cards)).await;
+        start_agent_dms(AgentLinks {
+            state: Arc::downgrade(&state),
+            client,
+            queues,
+            known_users,
+            server_name: settings.server_name.clone(),
+            owner: settings.owner.clone(),
+            directory_path: state.data_dir.join("matrix-agents.json"),
+            bindings: bindings.clone(),
+            cards: Arc::clone(&cards),
+            resolver,
+            vault,
+            signer,
+            provider,
+            tuning,
+        });
     } else {
         tracing::warn!("matrix: chat is off; the room is not bound");
     }
@@ -119,20 +146,28 @@ async fn run_matrix(running: RunningMatrix, boot: MatrixBoot) {
     tokio::spawn(bot.run());
 }
 
+fn start_agent_dms(links: AgentLinks) {
+    let Some(chat) = links.state.upgrade().and_then(|state| state.chat.clone()) else {
+        return;
+    };
+    let agents = Arc::new(MatrixAgents::new(links));
+    let hooked = Arc::clone(&agents);
+    chat.on_matrix_reconcile(Arc::new(move || hooked.schedule()));
+    agents.schedule();
+}
+
 async fn attach_chat(
     bot: ApprovalBot,
     state: &Arc<AppState>,
     bindings: &ChannelBindings,
-    chat: &Arc<ChatSessions>,
     key: &BindingKey,
-    transport: Arc<dyn MessagingChannel>,
+    cards: Arc<MatrixCards>,
 ) -> ApprovalBot {
-    let notifier = Arc::new(ChannelNotifier::new(transport));
-    chat.set_permission_sink(
-        ChannelKind::Matrix,
-        Arc::new(ChannelPermissionSink::new(notifier)),
-    );
-    if let Err(error) = open_session(bindings, key, chat).await {
+    let Some(chat) = state.chat.clone() else {
+        return bot;
+    };
+    chat.set_permission_sink(ChannelKind::Matrix, cards);
+    if let Err(error) = open_session(bindings, key, &chat).await {
         tracing::warn!(%error, "matrix: session was not created");
     }
     bot.with_chat(Arc::new(TextChatBridge {
