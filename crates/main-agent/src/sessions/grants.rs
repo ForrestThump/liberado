@@ -161,7 +161,7 @@ async fn live_catalog_without_grants_does_not_pass_through_all_registry_tools() 
         tool_zones: Vec::new(),
         zone_from_arg: None,
         write_tools: Vec::new(),
-    ..Default::default()
+        ..Default::default()
     });
 
     let provider = Arc::new(MockProvider::with_script(

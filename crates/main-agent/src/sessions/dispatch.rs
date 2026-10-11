@@ -323,7 +323,7 @@ async fn face_extras_with_empty_boot_consequences_still_gate_via_live_catalog_af
         tool_zones: Vec::new(),
         zone_from_arg: Some("path".into()),
         write_tools: vec!["write_note".into()],
-    ..Default::default()
+        ..Default::default()
     });
 
     let provider = Arc::new(MockProvider::with_script(

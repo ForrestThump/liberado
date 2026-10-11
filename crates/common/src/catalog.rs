@@ -169,20 +169,12 @@ pub fn write_target(
         // Explicit read: not a write. `read_tools` is opt-in — most deployments use the
         // fixed-zone `tool_zones` for reads, and on a path-addressed MCP the deny-by-default rule
         // means an operator who doesn't list a tool is alerted rather than waved through.
-        if descriptor
-            .read_tools
-            .iter()
-            .any(|t| t == bare_tool_name)
-        {
+        if descriptor.read_tools.iter().any(|t| t == bare_tool_name) {
             return WriteTarget::NotAWrite;
         }
         // Declared writer: resolve the zone from the path arg, fail closed if the arg is missing
         // or doesn't name a zone.
-        if descriptor
-            .write_tools
-            .iter()
-            .any(|t| t == bare_tool_name)
-        {
+        if descriptor.write_tools.iter().any(|t| t == bare_tool_name) {
             let Some(path) = arguments.get(arg).and_then(|v| v.as_str()) else {
                 return WriteTarget::Undeterminable(format!(
                     "'{bare_tool_name}' writes, and its zone comes from the '{arg}' argument, \
@@ -913,7 +905,11 @@ mod tests {
             );
         }
         // A tool in NONE of the three: Undeterminable (fail closed).
-        let r = write_target(&d, "brand_new_tool_added_in_a_future_release", &serde_json::json!({}));
+        let r = write_target(
+            &d,
+            "brand_new_tool_added_in_a_future_release",
+            &serde_json::json!({}),
+        );
         assert!(
             matches!(r, WriteTarget::Undeterminable(_)),
             "an undeclared tool must be Undeterminable: {r:?}"

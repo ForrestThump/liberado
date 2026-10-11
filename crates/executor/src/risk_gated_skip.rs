@@ -16,7 +16,9 @@ impl RiskGatedToolRuntime {
             // Vault-wide mutations have no single zone, so a zone-restricted waiver should not
             // match — letting one through would be a way to bypass the runtime "any Write zone"
             // gate that authorises fanouts and similar vault-wide ops.
-            WriteTarget::NotAWrite | WriteTarget::VaultWide | WriteTarget::Undeterminable(_) => None,
+            WriteTarget::NotAWrite | WriteTarget::VaultWide | WriteTarget::Undeterminable(_) => {
+                None
+            }
         };
         self.risk_waivers
             .covers(liberado_common::Guard::Magnitude, &call.name, zone)

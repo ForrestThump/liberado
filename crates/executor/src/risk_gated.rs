@@ -782,11 +782,7 @@ impl RiskGatedToolRuntime {
         self.signer.sign(proposal)
     }
 
-    async fn notify_vault_wide_permission_request(
-        &self,
-        proposal_id: &str,
-        call: &ToolInvocation,
-    ) {
+    async fn notify_vault_wide_permission_request(&self, proposal_id: &str, call: &ToolInvocation) {
         let message = vault_wide_permission_ask_message(&call.name);
         self.notify_on_surface(proposal_id, &message).await;
     }

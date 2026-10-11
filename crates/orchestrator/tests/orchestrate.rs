@@ -855,7 +855,7 @@ async fn execute_approved_adaptive_goal_skips_only_its_approved_magnitude_guard(
         tool_zones: Vec::new(),
         zone_from_arg: None,
         write_tools: Vec::new(),
-    ..Default::default()
+        ..Default::default()
     };
     let orch = Orchestrator::new(
         provider,

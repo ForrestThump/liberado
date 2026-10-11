@@ -8,7 +8,7 @@
 use super::*;
 
 use liberado_common::{Capability, Consequence, WriteClass, Zone};
-use liberado_config::{Grant, McpConfig, McpTransport, ToolImpact, ZonePolicy};
+use liberado_config::{Grant, McpConfig, McpTransport, ZonePolicy};
 
 fn vault_mcp(consequence: Consequence) -> McpConfig {
     McpConfig {

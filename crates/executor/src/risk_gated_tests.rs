@@ -555,7 +555,7 @@ async fn a_path_addressed_write_is_checked_against_the_zone_the_path_names() {
         tool_zones: Vec::new(),
         zone_from_arg: Some("path".into()),
         write_tools: vec!["write_note".into()],
-    ..Default::default()
+        ..Default::default()
     };
     let caps = CapabilitySet::from_iter([
         Capability::ExecuteMcp("turbovault".into()),
@@ -630,7 +630,7 @@ async fn a_granted_write_to_an_undeclared_zone_is_direct_not_downgraded() {
         tool_zones: Vec::new(),
         zone_from_arg: Some("path".into()),
         write_tools: vec!["write_note".into()],
-    ..Default::default()
+        ..Default::default()
     };
     // Holds Write(sandbox) - as an in-memory "Approve session" grant would - but `sandbox` is
     // NOT declared in zone_write_classes (empty), exactly the live homelab shape.
@@ -718,7 +718,7 @@ mod magnitude_reads_structure_first {
             tool_zones: Vec::new(),
             zone_from_arg: Some("path".into()),
             write_tools: vec!["write_note".into()],
-        ..Default::default()
+            ..Default::default()
         }
     }
 
@@ -771,7 +771,7 @@ mod magnitude_reads_structure_first {
             "turbovault:write_note",
             serde_json::json!({
                 "path": "Learning/Nash Equilibrium - Research.md",
-                "content": "Olson showed that distributional coalitions are destroyed by war, 
+                "content": "Olson showed that distributional coalitions are destroyed by war,
                             and that every entrenched group blocks all reform. Moloch destroys 
                             every attempt to remove the entire coordination failure.",
             }),
@@ -834,7 +834,7 @@ mod magnitude_reads_structure_first {
             tool_zones: Vec::new(),
             zone_from_arg: None,
             write_tools: Vec::new(),
-        ..Default::default()
+            ..Default::default()
         };
         let inner = Arc::new(InvocationRecordingRuntime::new(
             &["turbovault:write_note"],
@@ -1099,7 +1099,7 @@ mod magnitude_respects_risk_waivers {
             tool_zones: Vec::new(),
             zone_from_arg: None,
             write_tools: Vec::new(),
-        ..Default::default()
+            ..Default::default()
         };
         let rt = gate_with_waivers(
             dir.path(),
@@ -1433,7 +1433,10 @@ mod vault_write_gate_regression {
         let proposal =
             liberado_common::Proposal::from_note(&std::fs::read_to_string(note.path()).unwrap())
                 .unwrap();
-        assert_eq!(proposal.session_id.as_deref(), Some("01M3ZB89WK54HGNG6ATJ9FPJMX"));
+        assert_eq!(
+            proposal.session_id.as_deref(),
+            Some("01M3ZB89WK54HGNG6ATJ9FPJMX")
+        );
     }
 
     /// The same call with the `Write(Vault("conformance"))` grant in place - the positive
@@ -1470,11 +1473,8 @@ mod vault_write_gate_regression {
         ));
         let rt = gate_with_grant(dir.path(), inner.clone(), &["Tasks"]);
         for tool in ["turbovault:read_note", "turbovault:search"] {
-            let call = ToolInvocation::new(
-                "c1",
-                tool,
-                serde_json::json!({"path": "Tasks/Main.md"}),
-            );
+            let call =
+                ToolInvocation::new("c1", tool, serde_json::json!({"path": "Tasks/Main.md"}));
             let result = rt.invoke(&call).await.expect("a read must not ask");
             assert_eq!(&result, "read", "tool={tool}");
         }
@@ -1522,7 +1522,10 @@ mod vault_write_gate_regression {
             ("turbovault:tasks_delete", "conformance/tasks.md"),
         ] {
             let call = ToolInvocation::new("c", tool, serde_json::json!({"path": path}));
-            let msg = rt.invoke(&call).await.expect("a write without a grant must ask");
+            let msg = rt
+                .invoke(&call)
+                .await
+                .expect("a write without a grant must ask");
             assert!(
                 msg.contains("PERMISSION REQUESTED"),
                 "{tool} must now raise a permission request: {msg}"
@@ -1579,7 +1582,10 @@ mod vault_write_gate_regression {
             origin: liberado_common::ApprovalOrigin::Web,
         });
         let call = ToolInvocation::new("c1", "turbovault:begin_fanout", serde_json::json!({}));
-        let msg = rt.invoke(&call).await.expect("a chat surface must ask, not error");
+        let msg = rt
+            .invoke(&call)
+            .await
+            .expect("a chat surface must ask, not error");
         assert!(
             msg.contains("PERMISSION REQUESTED"),
             "the vault-wide gate must raise a permission request: {msg}"
@@ -1650,7 +1656,10 @@ mod vault_write_gate_regression {
             .expect_err("an undeclared tool must be REFUSED, not waved through");
         // The error names both the tool and the three classification lists, so an operator
         // reading it can fix the topology without running the daemon.
-        assert!(err.contains("brand_new_tool_added_in_a_future_release"), "{err}");
+        assert!(
+            err.contains("brand_new_tool_added_in_a_future_release"),
+            "{err}"
+        );
         assert!(err.contains("write_tools"), "{err}");
         assert!(err.contains("read_tools"), "{err}");
         assert!(err.contains("vault_wide_writes"), "{err}");
@@ -1696,10 +1705,8 @@ mod vault_write_gate_regression {
         // And no proposal file is written.
         let prop_dir = dir.path().join("proposals");
         assert!(
-            !prop_dir.exists()
-                || std::fs::read_dir(&prop_dir).unwrap().next().is_none(),
+            !prop_dir.exists() || std::fs::read_dir(&prop_dir).unwrap().next().is_none(),
             "no permission request must be created in a background run"
         );
     }
 }
-

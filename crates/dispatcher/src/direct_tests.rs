@@ -26,7 +26,7 @@ fn req(capabilities: CapabilitySet, reaction_depth: u32, direct: bool) -> Dispat
             tool_zones: Vec::new(),
             zone_from_arg: None,
             write_tools: Vec::new(),
-        ..Default::default()
+            ..Default::default()
         }],
         capabilities,
         reaction_depth,

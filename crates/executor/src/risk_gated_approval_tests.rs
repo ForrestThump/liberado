@@ -17,7 +17,7 @@ fn vault_descriptor() -> McpDescriptor {
         tool_zones: vec![("write_review".into(), Some("reviews".into()))],
         zone_from_arg: None,
         write_tools: Vec::new(),
-    ..Default::default()
+        ..Default::default()
     }
 }
 

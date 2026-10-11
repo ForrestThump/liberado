@@ -163,9 +163,9 @@ impl<'a> WaiverTarget<'a> {
     pub fn from_write_target(qualified_tool: &'a str, target: &'a WriteTarget) -> Self {
         let zone = match target {
             WriteTarget::Zone(name) => Some(name.as_str()),
-            WriteTarget::NotAWrite
-            | WriteTarget::VaultWide
-            | WriteTarget::Undeterminable(_) => None,
+            WriteTarget::NotAWrite | WriteTarget::VaultWide | WriteTarget::Undeterminable(_) => {
+                None
+            }
         };
         Self {
             qualified_tool,
