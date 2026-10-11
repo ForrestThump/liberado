@@ -22,4 +22,15 @@ pub struct ApprovalStamp {
 #[async_trait]
 pub trait PermissionSink: Send + Sync {
     async fn notify_permission(&self, proposal_id: &str, message: &str) -> Result<(), String>;
+
+    /// `session_id` is the chat that raised the request, when the stamp has one.
+    /// The default ignores it and calls [`Self::notify_permission`].
+    async fn notify_permission_in(
+        &self,
+        proposal_id: &str,
+        message: &str,
+        _session_id: Option<&str>,
+    ) -> Result<(), String> {
+        self.notify_permission(proposal_id, message).await
+    }
 }
