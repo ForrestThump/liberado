@@ -644,3 +644,7 @@ mod tests {
         assert_eq!(bindings.key_for_session(b).await.unwrap().peer, "chat-2");
     }
 }
+
+#[cfg(test)]
+#[path = "bindings_replace_tests.rs"]
+mod replace_tests;

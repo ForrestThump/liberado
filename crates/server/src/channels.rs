@@ -43,8 +43,16 @@ pub async fn resolve_channels(chat: Option<&Arc<ChatSessions>>) -> ChannelRuntim
 }
 
 fn telegram_link_from_env() -> Option<TelegramLink> {
-    let token = std::env::var("LIBERADO_TELEGRAM_BOT_TOKEN").ok()?;
-    let chat_id = std::env::var("LIBERADO_TELEGRAM_CHAT_ID").ok()?;
+    telegram_link(
+        std::env::var("LIBERADO_TELEGRAM_BOT_TOKEN").ok(),
+        std::env::var("LIBERADO_TELEGRAM_CHAT_ID").ok(),
+    )
+}
+
+/// `None` when either value is missing. An empty string still binds.
+fn telegram_link(token: Option<String>, chat_id: Option<String>) -> Option<TelegramLink> {
+    let token = token?;
+    let chat_id = chat_id?;
     Some(TelegramLink {
         key: BindingKey::telegram(chat_id, telegram_bot_id(&token)),
     })
@@ -228,7 +236,7 @@ impl liberado_session::SessionAlert for NotifySessionAlert {
 
 #[cfg(test)]
 mod tests {
-    use super::telegram_bot_id;
+    use super::{telegram_bot_id, telegram_link, telegram_link_from_env};
 
     #[test]
     fn bot_id_is_the_numeric_token_prefix() {
@@ -236,5 +244,45 @@ mod tests {
         assert_eq!(telegram_bot_id("not-a-number:secret"), "telegram");
         assert_eq!(telegram_bot_id("telegram"), "telegram");
         assert_eq!(telegram_bot_id(":secret"), "telegram");
+    }
+
+    #[test]
+    fn telegram_link_keeps_a_chat_when_both_values_are_set() -> Result<(), &'static str> {
+        let link = telegram_link(Some("12345:secret".into()), Some("chat-9".into()))
+            .ok_or("both values make a link")?;
+        assert_eq!(link.key.peer, "chat-9");
+        assert_eq!(link.key.bot, "12345");
+        assert_eq!(link.key.channel.as_str(), "telegram");
+
+        let plain = telegram_link(Some("not-a-number".into()), Some("chat-9".into()))
+            .ok_or("a non-numeric token still binds")?;
+        assert_eq!(plain.key.bot, "telegram");
+
+        let empty = telegram_link(Some(String::new()), Some(String::new()))
+            .ok_or("an empty string still binds")?;
+        assert_eq!(empty.key.peer, "");
+        assert_eq!(empty.key.bot, "telegram");
+        Ok(())
+    }
+
+    #[test]
+    fn telegram_link_needs_both_values() {
+        assert!(telegram_link(None, Some("chat-9".into())).is_none());
+        assert!(telegram_link(Some("12345:secret".into()), None).is_none());
+        assert!(telegram_link(None, None).is_none());
+    }
+
+    #[test]
+    fn telegram_link_from_env_reads_both_variables() -> Result<(), &'static str> {
+        let parsed = telegram_link_from_env();
+        let direct = telegram_link(
+            std::env::var("LIBERADO_TELEGRAM_BOT_TOKEN").ok(),
+            std::env::var("LIBERADO_TELEGRAM_CHAT_ID").ok(),
+        );
+        match (parsed, direct) {
+            (Some(parsed), Some(direct)) if parsed.key == direct.key => Ok(()),
+            (None, None) => Ok(()),
+            _ => Err("env reader and telegram_link disagree"),
+        }
     }
 }
