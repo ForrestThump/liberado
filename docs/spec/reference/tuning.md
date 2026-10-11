@@ -416,10 +416,27 @@ out**, and there are two declaration styles:
 ```toml
 # Path-addressed — the zone is the leading path segment of an argument. Use when one tool can
 # land in different zones depending on the call. This is TurboVault.
+#
+# Every tool on a path-addressed MCP must be classified in ONE of three lists. Undeclared
+# tools fail closed at the runtime (RiskGatedToolRuntime) — the runtime refuses the call and
+# names the lists the operator must add the tool to, rather than silently waving it through
+# like the 2026-10-11 F1 hole (`01M3ZB89WK54HGNG6ATJ9FPJMX`) did for undeclared `edit_note`.
 [[mcps]]
 name = "turbovault"
 zone_from_arg = "path"           # write_note(path="tasks/x.md") -> zone `tasks`
-write_tools = ["write_note", "delete_note"]
+write_tools = [
+    "write_note", "edit_note", "delete_note", "move_note", "move_file",
+    "update_frontmatter", "manage_tags", "create_from_template",
+    "tasks_complete", "tasks_update", "tasks_delete",
+    "generate_index", "append_log_entry", "visualize",
+]
+read_tools = [
+    "read_note", "search", "advanced_search", "get_backlinks", ...
+]
+vault_wide_writes = [
+    "begin_fanout", "commit_fanout", "abandon_fanout",
+    "set_active_vault", "vector_reindex",
+]
 
 # Fixed-zone — the zone follows from the tool name alone. No paths involved. Use this for any
 # other CRUD surface: a billing API, a database, a device.
@@ -441,6 +458,14 @@ Both styles feed the same guards — capability check, write class, proposal dow
 surface inherits the whole model by declaring one of them. Zones you never list in `policy.toml`
 default to `proposal_only`, so a surface added before its policy is written asks before it acts.
 
+**Path-addressed MCPs: classification is exhaustive.** The three lists (`write_tools`,
+`read_tools`, `vault_wide_writes`) are mutually exclusive — config validation refuses to
+boot if a tool is named in two of them, because the runtime dispatches in the fixed order
+vault_wide > read > write and the operator's intent is otherwise silently demoted. A
+tool in **none** of the three is `Undeterminable("undeclared tool 'X' on 'MCP' ...")`
+at the runtime and is refused with a hint naming the lists — this is the F1 fix; the
+worst case is a refused call with an actionable message rather than a silent write.
+
 **A write whose zone cannot be determined is refused, not ignored.** A path-addressed tool called
 with no path is `Undeterminable` and fails closed; that is deliberate, and it is the property that
 keeps a new surface from quietly escaping the model.
@@ -449,6 +474,16 @@ keeps a new surface from quietly escaping the model.
 its **name** — `Zone::vault("finance")` and `Zone::named("finance")` are the same zone, because
 `policy.toml` has only ever keyed on the name. If a vault folder `finance/` and an external billing
 system must be different authorities, give them different names.
+
+**Vault-wide mutators need *any* zone write authority.** A vault-wide tool
+(`begin_fanout`, `commit_fanout`, `set_active_vault`, `vector_reindex`, ...) doesn't
+target a single zone, so the per-zone `Write(Vault("<zone>"))` check doesn't apply.
+Instead the runtime gate requires the grant to hold at least one `Write(Zone)` capability
+(`CapabilitySet::holds_any_zone_write`); a strictly read-only session cannot start a
+fanout or rebuild the index. A grant of `ExecuteMcp("turbovault")` alone — without any
+write zone — gets the same deny/once/session/everywhere permission-request flow as a
+per-zone write, asking for "any `Write(Vault("<zone>"))`" so the human can confirm the
+session may mutate vault-wide state.
 
 ### Behaviour thresholds — `tuning.toml`
 
