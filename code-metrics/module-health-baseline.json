@@ -3236,7 +3236,7 @@
   "crates/matrix/src/agents.rs": {
     "ploc": 324,
     "lloc": 94,
-    "functions": 39,
+    "functions": 38,
     "cyclomatic": 89
   },
   "crates/matrix/src/agents_tests.rs": {
