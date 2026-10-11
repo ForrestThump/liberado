@@ -355,7 +355,11 @@ impl ApprovalBot {
         let action = resolve::permission_scope_action(scope);
         let outcome = self
             .resolver
-            .resolve(stem, action, DecisionVia::Telegram)
+            .resolve(
+                stem,
+                action,
+                DecisionVia::Channel(liberado_common::ChannelKind::Telegram),
+            )
             .await;
         let reply = resolve::permission_scope_reply(action, &outcome);
         if let Some(text) = reply.ack {
@@ -378,7 +382,13 @@ impl ApprovalBot {
             _ => None,
         };
         if let Some(decision) = decision
-            && let Err(e) = ledger.record(&proposal.id, decision, "telegram").await
+            && let Err(e) = ledger
+                .record(
+                    &proposal.id,
+                    decision,
+                    liberado_common::ChannelKind::Telegram.as_str(),
+                )
+                .await
         {
             tracing::error!(stem, error = %e, "approval-bot: failed to record the decision");
             self.ack(event_id, "Failed to record your decision — try again.")

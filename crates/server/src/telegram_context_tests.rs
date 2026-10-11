@@ -25,6 +25,7 @@ fn header(
 
 fn ctx_with(conversations: Vec<ConversationHeader>) -> TelegramCommandContext {
     TelegramCommandContext {
+        label: "Telegram",
         session_id: Some("active-1".into()),
         messages: vec!["m1".into(), "m2".into()],
         conversations,

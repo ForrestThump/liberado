@@ -31,10 +31,13 @@ async fn deliver_cron_appends_to_the_sticky_session_and_sends() {
     ));
 
     let counter = Arc::new(AtomicUsize::new(0));
+    let key = crate::bindings::BindingKey::telegram("cron-chat", "cron-bot");
+    let bindings = crate::bindings::ChannelBindings::ephemeral();
     let notifier = ChatDeliveringNotifier::new(
         Arc::new(CountingNotifier(counter.clone())),
         chat,
-        StickySession::ephemeral(),
+        bindings,
+        key,
         Arc::new(Mutex::new(None)), // never active → no quiet wait
         Duration::from_secs(300),
         Duration::from_secs(2700),
@@ -45,7 +48,11 @@ async fn deliver_cron_appends_to_the_sticky_session_and_sends() {
         .expect("delivery succeeds");
 
     use liberado_conversation_store::ConversationStore;
-    let sticky_id = notifier.sticky.get().await.expect("sticky session created");
+    let sticky_id = notifier
+        .bindings
+        .get(&notifier.key)
+        .await
+        .expect("bound session created");
     let leaf = store.leaf_path(sticky_id, None).await.expect("readable");
     let last = leaf.last().expect("at least one node");
     assert!(
@@ -85,7 +92,8 @@ async fn plain_notifications_bypass_the_quiet_wait() {
     let notifier = ChatDeliveringNotifier::new(
         Arc::new(Counting),
         chat,
-        StickySession::ephemeral(),
+        crate::bindings::ChannelBindings::ephemeral(),
+        crate::bindings::BindingKey::telegram("cron-chat", "cron-bot"),
         Arc::new(Mutex::new(Some(std::time::Instant::now()))), // ACTIVE chat
         Duration::from_secs(3600),
         Duration::from_secs(7200),
@@ -118,7 +126,8 @@ async fn an_active_chat_holds_the_brief_until_quiet() {
     let notifier = ChatDeliveringNotifier::new(
         Arc::new(Passthrough),
         chat,
-        StickySession::ephemeral(),
+        crate::bindings::ChannelBindings::ephemeral(),
+        crate::bindings::BindingKey::telegram("cron-chat", "cron-bot"),
         Arc::new(Mutex::new(Some(std::time::Instant::now()))),
         Duration::from_millis(150),
         Duration::from_secs(3600),
