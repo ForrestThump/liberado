@@ -133,6 +133,45 @@ fn validate_mcp_zones(config: &Config) -> Result<(), ConfigLoadError> {
                 mcp.name
             )));
         }
+        // A path-addressed MCP must classify every known writer / reader / vault-wide mutator
+        // under one of three mutually-exclusive lists. The runtime rejects an undeclared tool as
+        // `Undeterminable` (it fails closed on undeclared tools), so a config that lists a tool
+        // in MORE than one list is just confusion: the runtime dispatches on the first match in
+        // a fixed order (vault-wide -> read -> write), so an overlap silently demotes the tool to
+        // a less-strict classification than the operator probably intended.
+        //
+        // Catching overlaps at boot means the operator notices immediately rather than reading a
+        // permission request and wondering why a "writes_vault = false" tool is being treated as
+        // a vault-wide mutator.
+        if path_addressed {
+            for tool in &mcp.write_tools {
+                if mcp.read_tools.iter().any(|t| t == tool) {
+                    return Err(validation_error(format!(
+                        "MCP '{}' classifies '{}' as BOTH a write and a read (write_tools and \
+                         read_tools both list it). Pick one classification — the runtime resolves \
+                         in the order vault_wide_writes, read_tools, write_tools, and an \
+                         unintended overlap will silently put the tool in the wrong class.",
+                        mcp.name, tool
+                    )));
+                }
+                if mcp.vault_wide_writes.iter().any(|t| t == tool) {
+                    return Err(validation_error(format!(
+                        "MCP '{}' classifies '{}' as BOTH a write and a vault-wide write (in \
+                         write_tools and vault_wide_writes). Pick one.",
+                        mcp.name, tool
+                    )));
+                }
+            }
+            for tool in &mcp.read_tools {
+                if mcp.vault_wide_writes.iter().any(|t| t == tool) {
+                    return Err(validation_error(format!(
+                        "MCP '{}' classifies '{}' as BOTH a read and a vault-wide write (in \
+                         read_tools and vault_wide_writes). Pick one.",
+                        mcp.name, tool
+                    )));
+                }
+            }
+        }
         if !fixed_zone && !path_addressed {
             return Err(validation_error(format!(
                 "MCP '{}' is '{:?}' (not read_only) but declares no write zone, so the capability \
