@@ -1,3 +1,5 @@
+use std::sync::atomic::{AtomicUsize, Ordering};
+
 use super::*;
 use liberado_conversation_store::{AgentProfiles, Author, ConversationStore, NewNode, Ulid};
 use liberado_executor::{Budget, Executor};
@@ -103,6 +105,45 @@ fn pick_oldest_breaks_ties_on_id_after_created_at() {
         pick_oldest([&third, &first].into_iter()).unwrap().id,
         first.id
     );
+}
+
+#[tokio::test]
+async fn matrix_reconcile_runs_for_a_new_agent_rename_and_delete() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Arc::new(SessionStore::open(dir.path()).await);
+    let sessions = sessions(store);
+    let hits = Arc::new(AtomicUsize::new(0));
+    let counter = Arc::clone(&hits);
+    sessions.on_matrix_reconcile(Arc::new(move || {
+        counter.fetch_add(1, Ordering::SeqCst);
+    }));
+
+    let created = sessions
+        .create_agent_chat("coding", Some("Coder".into()))
+        .await
+        .unwrap();
+    assert!(!created.reused);
+    assert_eq!(hits.load(Ordering::SeqCst), 1);
+
+    let again = sessions
+        .create_agent_chat("coding", Some("Coder".into()))
+        .await
+        .unwrap();
+    assert!(again.reused);
+    assert_eq!(hits.load(Ordering::SeqCst), 1);
+
+    let (_creator, created_creator) = sessions.open_agent_creator().await.unwrap();
+    assert!(created_creator);
+    assert_eq!(hits.load(Ordering::SeqCst), 1);
+
+    sessions
+        .set_title(id_of(&created), "Coder Prime".into())
+        .await
+        .unwrap();
+    assert_eq!(hits.load(Ordering::SeqCst), 2);
+
+    sessions.delete(id_of(&created)).await.unwrap();
+    assert_eq!(hits.load(Ordering::SeqCst), 3);
 }
 
 #[tokio::test]
