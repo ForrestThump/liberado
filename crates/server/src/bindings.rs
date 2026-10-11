@@ -19,6 +19,9 @@ use tokio::sync::Mutex;
 
 const FILE_VERSION: u32 = 1;
 
+#[path = "bindings_rows.rs"]
+mod rows;
+
 /// `(channel, external room or chat id, bot identity)`.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct BindingKey {
@@ -43,6 +46,9 @@ struct StoredBinding {
     peer: String,
     bot: String,
     session_id: String,
+    /// False when the peer was archived. The row stays so the slug and room stay reserved.
+    #[serde(default = "rows::active_by_default")]
+    active: bool,
 }
 
 impl StoredBinding {
@@ -74,7 +80,10 @@ struct BindingFile {
 }
 
 struct BindingState {
+    /// Rows that still route.
     bindings: Vec<StoredBinding>,
+    /// Archived agent DMs. The slug and room stay reserved. Routing does not see them.
+    reserved: Vec<StoredBinding>,
     /// Legacy sticky id kept in the snapshot when Telegram env is unset, so that session still
     /// routes as the channel chat. Not written into the bindings file.
     restored_legacy: Option<Ulid>,
@@ -121,9 +130,10 @@ impl ChannelBindings {
         Fut: Future<Output = bool>,
     {
         let mut state = read_state(&load.path).await;
-        let read_count = state.bindings.len();
-        state.bindings = retain_valid(state.bindings, &is_valid).await;
-        let dropped = state.bindings.len() != read_count;
+        let retained = rows::retain_valid(std::mem::take(&mut state.bindings), &is_valid).await;
+        let changed = retained.changed;
+        state.bindings = retained.bindings;
+        state.reserved = retained.reserved;
         let legacy = load.adopt_key.clone().map(|key| {
             Arc::new(LegacySticky {
                 path: load.legacy_path.clone(),
@@ -132,7 +142,7 @@ impl ChannelBindings {
         });
         let adopted = adopt_legacy(&mut state, &load, &is_valid).await;
         let bindings = Self::from_parts(state, Some(load.path), legacy);
-        if adopted || dropped {
+        if adopted || changed {
             bindings.persist_current().await;
         }
         bindings
@@ -171,14 +181,7 @@ impl ChannelBindings {
     /// tests and by a later channel that needs the peer for a session id.
     #[allow(dead_code)]
     pub async fn key_for_session(&self, session: Ulid) -> Option<BindingKey> {
-        let label = session.to_string();
-        self.inner
-            .lock()
-            .await
-            .bindings
-            .iter()
-            .find(|binding| binding.session_id == label)
-            .map(StoredBinding::key)
+        self.inner.lock().await.key_for(session)
     }
 
     /// Channel that owns `session`, including a legacy id published without a peer key.
@@ -236,12 +239,7 @@ impl ChannelBindings {
         Fut: Future<Output = Result<Ulid, E>>,
     {
         let mut state = self.inner.lock().await;
-        if let Some(id) = state
-            .bindings
-            .iter()
-            .find(|binding| binding.matches(key))
-            .and_then(StoredBinding::session)
-        {
+        if let Some(id) = state.stored_session(key) {
             return Ok(id);
         }
         let id = create().await?;
@@ -294,7 +292,7 @@ impl ChannelBindings {
         };
         let file = BindingFile {
             version: FILE_VERSION,
-            bindings: state.bindings.clone(),
+            bindings: state.all_rows(),
         };
         let body = match serde_json::to_string_pretty(&file) {
             Ok(body) => body,
@@ -336,6 +334,7 @@ impl BindingState {
     fn empty() -> Self {
         Self {
             bindings: Vec::new(),
+            reserved: Vec::new(),
             restored_legacy: None,
         }
     }
@@ -360,35 +359,6 @@ impl BindingState {
         }
         rows
     }
-
-    /// Returns whether the map changed.
-    fn assign(&mut self, key: &BindingKey, id: Option<Ulid>) -> bool {
-        let position = self
-            .bindings
-            .iter()
-            .position(|binding| binding.matches(key));
-        match (position, id) {
-            (Some(index), Some(id)) if self.bindings[index].session_id == id.to_string() => false,
-            (None, None) => false,
-            (Some(index), None) => {
-                self.bindings.remove(index);
-                true
-            }
-            (Some(index), Some(id)) => {
-                self.bindings[index].session_id = id.to_string();
-                true
-            }
-            (None, Some(id)) => {
-                self.bindings.push(StoredBinding {
-                    channel: key.channel,
-                    peer: key.peer.clone(),
-                    bot: key.bot.clone(),
-                    session_id: id.to_string(),
-                });
-                true
-            }
-        }
-    }
 }
 
 async fn read_state(path: &Path) -> BindingState {
@@ -398,6 +368,7 @@ async fn read_state(path: &Path) -> BindingState {
     match serde_json::from_str::<BindingFile>(&text) {
         Ok(file) => BindingState {
             bindings: file.bindings,
+            reserved: Vec::new(),
             restored_legacy: None,
         },
         Err(error) => {
@@ -405,28 +376,6 @@ async fn read_state(path: &Path) -> BindingState {
             BindingState::empty()
         }
     }
-}
-
-async fn retain_valid<F, Fut>(bindings: Vec<StoredBinding>, is_valid: &F) -> Vec<StoredBinding>
-where
-    F: Fn(Ulid) -> Fut,
-    Fut: Future<Output = bool>,
-{
-    let mut kept = Vec::new();
-    for binding in bindings {
-        if let Some(id) = binding.session()
-            && is_valid(id).await
-        {
-            kept.push(binding);
-        } else {
-            tracing::info!(
-                session = %binding.session_id,
-                channel = binding.channel.as_str(),
-                "dropping channel binding whose session is gone"
-            );
-        }
-    }
-    kept
 }
 
 async fn adopt_legacy<F, Fut>(state: &mut BindingState, load: &BindingLoad, is_valid: &F) -> bool
@@ -648,3 +597,7 @@ mod tests {
 #[cfg(test)]
 #[path = "bindings_replace_tests.rs"]
 mod replace_tests;
+
+#[cfg(test)]
+#[path = "bindings_agent_tests.rs"]
+mod agent_tests;
