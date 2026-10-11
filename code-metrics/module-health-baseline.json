@@ -3051,7 +3051,7 @@
     "ploc": 1235,
     "lloc": 283,
     "functions": 111,
-    "cyclomatic": 230
+    "cyclomatic": 228
   },
   "crates/main-agent/src/sessions/agent_profiles.rs": {
     "ploc": 8,
@@ -3106,6 +3106,12 @@
     "lloc": 151,
     "functions": 17,
     "cyclomatic": 29
+  },
+  "crates/main-agent/src/sessions/grant_gate_tests.rs": {
+    "ploc": 113,
+    "lloc": 32,
+    "functions": 8,
+    "cyclomatic": 21
   },
   "crates/main-agent/src/sessions/grants.rs": {
     "ploc": 600,
