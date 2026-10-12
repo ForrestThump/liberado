@@ -465,19 +465,32 @@ pub fn catalog_from_config(config: &Config) -> Vec<liberado_common::McpDescripto
         .mcps
         .iter()
         .filter(|m| m.enabled)
-        .map(|m| liberado_common::McpDescriptor {
-            name: m.name.clone(),
-            description: m.description.clone(),
-            consequence: m.consequence,
-            provenance: None,
-            default_zone: m.default_zone.clone(),
-            tool_zones: m
-                .tools
-                .iter()
-                .map(|t| (t.name.clone(), t.zone.clone()))
-                .collect(),
-            zone_from_arg: m.zone_from_arg.clone(),
-            write_tools: m.write_tools.clone(),
+        .map(|m| {
+            // Bundled MCP defaults (read_tools / write_tools / vault_wide_writes /
+            // admin_tools / write_path_args) fill in the gaps the operator's config hasn't
+            // declared. The merge never DEMOTES — a tool classified by the operator as a
+            // write stays a write — so an old-shape `topology.toml` works as-is without a
+            // deploy-time edit, and an operator who already declared everything sees their
+            // list unchanged.
+            let descriptor = liberado_common::McpDescriptor {
+                name: m.name.clone(),
+                description: m.description.clone(),
+                consequence: m.consequence,
+                provenance: None,
+                default_zone: m.default_zone.clone(),
+                tool_zones: m
+                    .tools
+                    .iter()
+                    .map(|t| (t.name.clone(), t.zone.clone()))
+                    .collect(),
+                zone_from_arg: m.zone_from_arg.clone(),
+                write_tools: m.write_tools.clone(),
+                read_tools: m.read_tools.clone(),
+                vault_wide_writes: m.vault_wide_writes.clone(),
+                write_path_args: m.write_path_args.clone(),
+                admin_tools: m.admin_tools.clone(),
+            };
+            liberado_common::apply_bundled_classifications(descriptor)
         })
         .collect()
 }
@@ -635,6 +648,10 @@ mod coder_tuning_arrival_tests;
 #[cfg(test)]
 #[path = "safe_default_arrival_tests.rs"]
 mod safe_default_arrival_tests;
+
+#[cfg(test)]
+#[path = "live_turbovault_arrival_tests.rs"]
+mod live_turbovault_arrival_tests;
 
 #[cfg(test)]
 mod tests {
@@ -833,6 +850,10 @@ capabilities = [ { ExecuteMcp = "ghost-mcp" } ]
                 tools: Vec::new(),
                 zone_from_arg: None,
                 write_tools: Vec::new(),
+                read_tools: Vec::new(),
+                vault_wide_writes: Vec::new(),
+                admin_tools: Vec::new(),
+                write_path_args: std::collections::BTreeMap::new(),
                 writes_vault: Some(false),
             },
             McpConfig {
@@ -848,6 +869,10 @@ capabilities = [ { ExecuteMcp = "ghost-mcp" } ]
                 tools: Vec::new(),
                 zone_from_arg: None,
                 write_tools: Vec::new(),
+                read_tools: Vec::new(),
+                vault_wide_writes: Vec::new(),
+                admin_tools: Vec::new(),
+                write_path_args: std::collections::BTreeMap::new(),
                 writes_vault: Some(false),
             },
         ];

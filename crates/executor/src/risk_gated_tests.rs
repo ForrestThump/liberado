@@ -46,7 +46,7 @@ async fn a_per_tool_grant_gates_the_rest_of_that_mcp() {
     assert!(err.contains("not authorized"), "got: {err}");
 }
 
-/// And a server-wide grant must keep working — the coarse form is still the common case.
+/// And a server-wide grant must keep working - the coarse form is still the common case.
 #[tokio::test]
 async fn a_server_grant_still_authorizes_every_tool_on_it() {
     let inner = InvocationRecordingRuntime::new(
@@ -97,7 +97,7 @@ async fn high_consequence_call_is_downgraded_to_proposal() {
 
     let call = ToolInvocation::new("c1", "email-mcp:send", serde_json::json!({"to": "boss"}));
     let result = rt.invoke(&call).await;
-    // A downgrade is a tool *result* (Ok), not an error — so the model relays it cleanly.
+    // A downgrade is a tool *result* (Ok), not an error - so the model relays it cleanly.
     let msg = result.expect("downgrade should be an Ok tool result, not an Err");
     assert!(
         msg.contains("PROPOSAL CREATED") && msg.contains("did not run"),
@@ -170,7 +170,7 @@ async fn downgrade_with_a_confirmed_notify_records_out_of_band_deferral() {
 
 #[tokio::test]
 async fn downgrade_without_a_notifier_records_no_deferral() {
-    // No out-of-band channel → the chat reply is the only signal and must NOT be suppressed.
+    // No out-of-band channel -> the chat reply is the only signal and must NOT be suppressed.
     let dir = tempfile::TempDir::new().unwrap();
     let rt = downgrade_runtime(dir.path(), None);
     let call = ToolInvocation::new("c1", "email-mcp:send", serde_json::json!({"to": "boss"}));
@@ -183,7 +183,7 @@ async fn downgrade_without_a_notifier_records_no_deferral() {
 
 #[tokio::test]
 async fn downgrade_whose_notify_failed_records_no_deferral() {
-    // The human got no ping — suppressing the chat reply would leave them with nothing, so the
+    // The human got no ping - suppressing the chat reply would leave them with nothing, so the
     // flag must stay clear even though a proposal note was written.
     let dir = tempfile::TempDir::new().unwrap();
     let rt = downgrade_runtime(dir.path(), Some(MockNotifier { ok: false }));
@@ -200,7 +200,7 @@ async fn downgrade_whose_notify_failed_records_no_deferral() {
 #[tokio::test]
 async fn permission_request_with_a_confirmed_notify_records_out_of_band_deferral() {
     // The primary Gap 2 scenario: a Write with no Write capability raises a permission request
-    // (four scope buttons) instead of a hard refusal when a notifier is wired — and records the
+    // (four scope buttons) instead of a hard refusal when a notifier is wired - and records the
     // out-of-band surfacing so the face agent drops the duplicate "grant permission" reply.
     let dir = tempfile::TempDir::new().unwrap();
     let inner = Arc::new(InvocationRecordingRuntime::new(
@@ -265,7 +265,7 @@ async fn catalog_delegates_to_inner() {
 #[tokio::test]
 async fn a_proposal_write_failure_is_a_real_error_not_a_silent_ok() {
     // proposals_dir points at a path whose parent component is an existing *file*, so
-    // create_dir_all(proposals_dir/"proposals") cannot succeed — this must surface as a real
+    // create_dir_all(proposals_dir/"proposals") cannot succeed - this must surface as a real
     // Err, not a fabricated "PROPOSAL CREATED" success with nothing actually written.
     let dir = tempfile::TempDir::new().unwrap();
     let occupied_by_a_file = dir.path().join("occupied");
@@ -345,11 +345,9 @@ fn vault_descriptor() -> McpDescriptor {
         name: "vault".into(),
         description: "git-tracked vault".into(),
         consequence: Consequence::Reversible, // low, so this isolates the zone check
-        provenance: None,
         default_zone: Some("tasks".into()),
         tool_zones: vec![("write_review".into(), Some("reviews".into()))],
-        zone_from_arg: None,
-        write_tools: Vec::new(),
+        ..Default::default()
     }
 }
 
@@ -360,7 +358,7 @@ async fn zone_restricted_call_is_downgraded_to_proposal() {
         &["vault:write_review"],
         Ok("wrote".into()),
     ));
-    // Holds the authority to write `reviews` — this test is about whether the write is SAFE to
+    // Holds the authority to write `reviews` - this test is about whether the write is SAFE to
     // do directly (write-class), which is a question that only arises once it is PERMITTED.
     let caps = CapabilitySet::from_iter([
         Capability::ExecuteMcp("vault".into()),
@@ -464,7 +462,7 @@ async fn call_to_an_mcp_not_in_the_zone_catalog_is_unaffected() {
 async fn live_high_consequence_downgrade_sends_a_real_telegram_notification() {
     // Full-integration live check: a real proposal write through the actual production guard
     // path, with a real Notifier attached, not just liberado-notify's own bare TelegramNotifier
-    // in isolation — proves `with_notifier`/the `invoke`-path notify call are wired correctly,
+    // in isolation - proves `with_notifier`/the `invoke`-path notify call are wired correctly,
     // not just that the underlying HTTP call works.
     let notifier = liberado_notify::TelegramNotifier::from_env()
         .expect("set LIBERADO_TELEGRAM_BOT_TOKEN and LIBERADO_TELEGRAM_CHAT_ID to run this test");
@@ -498,7 +496,7 @@ async fn live_high_consequence_downgrade_sends_a_real_telegram_notification() {
 }
 
 /// F1, the live failure, pinned: a grant that may CALL an MCP but holds no Write for the zone it
-/// targets must be refused. Before 2026-07-14 this call succeeded — `Capability::Write` was never
+/// targets must be refused. Before 2026-07-14 this call succeeded - `Capability::Write` was never
 /// consulted here, so `ExecuteMcp("turbovault")` was in effect "write the whole vault".
 #[tokio::test]
 async fn calling_an_mcp_is_not_permission_to_write_with_it() {
@@ -507,7 +505,7 @@ async fn calling_an_mcp_is_not_permission_to_write_with_it() {
         &["vault:write_review"],
         Ok("wrote".into()),
     ));
-    // ExecuteMcp but NO Write — exactly the dispatch-readonly profile from the live control.
+    // ExecuteMcp but NO Write - exactly the dispatch-readonly profile from the live control.
     let caps = CapabilitySet::from_iter([Capability::ExecuteMcp("vault".into())]);
     let rt = RiskGatedToolRuntime::new(
         inner.clone(),
@@ -549,11 +547,9 @@ async fn a_path_addressed_write_is_checked_against_the_zone_the_path_names() {
         name: "turbovault".into(),
         description: "path-addressed vault".into(),
         consequence: Consequence::Reversible,
-        provenance: None,
-        default_zone: None,
-        tool_zones: Vec::new(),
         zone_from_arg: Some("path".into()),
         write_tools: vec!["write_note".into()],
+        ..Default::default()
     };
     let caps = CapabilitySet::from_iter([
         Capability::ExecuteMcp("turbovault".into()),
@@ -592,7 +588,7 @@ async fn a_path_addressed_write_is_checked_against_the_zone_the_path_names() {
         .await;
     assert_eq!(ok, Ok("wrote".into()));
 
-    // Out of zone: the SAME tool, the SAME grant — refused, because the path names a zone this
+    // Out of zone: the SAME tool, the SAME grant - refused, because the path names a zone this
     // grant cannot write. A fixed `default_zone` could never have caught this.
     let bad_inner = Arc::new(InvocationRecordingRuntime::new(
         &["turbovault:write_note"],
@@ -612,7 +608,7 @@ async fn a_path_addressed_write_is_checked_against_the_zone_the_path_names() {
 
 /// The "Approve session" consistency fix: a write to an **undeclared** zone (not in
 /// `zone_write_classes`, so it would normally fail safe to `ProposalOnly` and downgrade) must
-/// write *directly* when the grant already holds `Write(zone)` for it — because that authority
+/// write *directly* when the grant already holds `Write(zone)` for it - because that authority
 /// can only have come from a human session/everywhere approval (policy validation forbids
 /// granting an undeclared zone). Without this, tapping "Approve session" would pass the authority
 /// check only to have the very next write re-gated behind a fresh proposal.
@@ -623,13 +619,11 @@ async fn a_granted_write_to_an_undeclared_zone_is_direct_not_downgraded() {
         name: "turbovault".into(),
         description: "path-addressed vault".into(),
         consequence: Consequence::Reversible,
-        provenance: None,
-        default_zone: None,
-        tool_zones: Vec::new(),
         zone_from_arg: Some("path".into()),
         write_tools: vec!["write_note".into()],
+        ..Default::default()
     };
-    // Holds Write(sandbox) — as an in-memory "Approve session" grant would — but `sandbox` is
+    // Holds Write(sandbox) - as an in-memory "Approve session" grant would - but `sandbox` is
     // NOT declared in zone_write_classes (empty), exactly the live homelab shape.
     let caps = CapabilitySet::from_iter([
         Capability::ExecuteMcp("turbovault".into()),
@@ -669,7 +663,7 @@ async fn a_granted_write_to_an_undeclared_zone_is_direct_not_downgraded() {
         "the inner tool must actually run (no proposal downgrade)"
     );
 
-    // Control: the SAME undeclared zone WITHOUT a Write grant still fails — at the authority
+    // Control: the SAME undeclared zone WITHOUT a Write grant still fails - at the authority
     // check (:227), before the write-class question is even asked.
     let ungranted_inner = Arc::new(InvocationRecordingRuntime::new(
         &["turbovault:write_note"],
@@ -710,11 +704,9 @@ mod magnitude_reads_structure_first {
             name: "turbovault".into(),
             description: "path-addressed vault".into(),
             consequence: Consequence::Reversible,
-            provenance: None,
-            default_zone: None,
-            tool_zones: Vec::new(),
             zone_from_arg: Some("path".into()),
             write_tools: vec!["write_note".into()],
+            ..Default::default()
         }
     }
 
@@ -746,7 +738,7 @@ mod magnitude_reads_structure_first {
     /// data being saved, not an action being ordered.
     ///
     /// `prop-1785557626819756862` (2026-08-01) gated a requested write-up on `destroyed` ×2,
-    /// `destroys`, `remove`, `every` ×12 and `all` ×6 — every one of them prose *about*
+    /// `destroys`, `remove`, `every` ×12 and `all` ×6 - every one of them prose *about*
     /// organizations, in a report the operator had asked for.
     #[tokio::test]
     async fn a_report_that_discusses_destruction_is_not_a_destructive_action() {
@@ -767,8 +759,8 @@ mod magnitude_reads_structure_first {
             "turbovault:write_note",
             serde_json::json!({
                 "path": "Learning/Nash Equilibrium - Research.md",
-                "content": "Olson showed that distributional coalitions are destroyed by war, \
-                            and that every entrenched group blocks all reform. Moloch destroys \
+                "content": "Olson showed that distributional coalitions are destroyed by war,
+                            and that every entrenched group blocks all reform. Moloch destroys 
                             every attempt to remove the entire coordination failure.",
             }),
         );
@@ -816,7 +808,7 @@ mod magnitude_reads_structure_first {
     }
 
     /// Reach is only known for the **path-addressed** style. A fixed-zone tool's zone comes from its
-    /// *name*, so a resolved zone says which zone is touched and nothing about how much of it —
+    /// *name*, so a resolved zone says which zone is touched and nothing about how much of it -
     /// prose remains the only signal, and the payload is still scanned.
     #[tokio::test]
     async fn a_fixed_zone_tool_still_has_its_payload_scanned() {
@@ -825,11 +817,8 @@ mod magnitude_reads_structure_first {
             name: "turbovault".into(),
             description: "fixed-zone vault".into(),
             consequence: Consequence::Reversible,
-            provenance: None,
             default_zone: Some("Learning".into()),
-            tool_zones: Vec::new(),
-            zone_from_arg: None,
-            write_tools: Vec::new(),
+            ..Default::default()
         };
         let inner = Arc::new(InvocationRecordingRuntime::new(
             &["turbovault:write_note"],
@@ -851,7 +840,7 @@ mod magnitude_reads_structure_first {
         assert!(inner.invoked.lock().unwrap().is_empty());
     }
 
-    /// A write whose path argument is missing is `Undeterminable`, not bounded — it must not buy the
+    /// A write whose path argument is missing is `Undeterminable`, not bounded - it must not buy the
     /// payload exemption. (It is refused earlier by the zone guard; this pins that the magnitude
     /// side does not treat it as safe either.)
     #[tokio::test]
@@ -880,7 +869,7 @@ mod magnitude_reads_structure_first {
 ///
 /// These mirror the dispatcher's pre-flight waivers but operate on a single live call, not the
 /// goal text in aggregate. The waivers must match the call's resolved (mcp, tool, zone), and
-/// they must NOT affect capability / consequence / zone-write-class guards — only magnitude.
+/// they must NOT affect capability / consequence / zone-write-class guards - only magnitude.
 #[cfg(test)]
 mod magnitude_respects_risk_waivers {
     use super::*;
@@ -896,6 +885,10 @@ mod magnitude_respects_risk_waivers {
             tool_zones: Vec::new(),
             zone_from_arg: Some("path".into()),
             write_tools: vec!["write_note".into(), "delete_note".into()],
+            read_tools: vec!["read_note".into()],
+            vault_wide_writes: Vec::new(),
+            admin_tools: Vec::new(),
+            write_path_args: std::collections::BTreeMap::new(),
         }
     }
 
@@ -935,7 +928,7 @@ mod magnitude_respects_risk_waivers {
         }
     }
 
-    /// The live false positive — the goal text contains both sweeping (`everything`) and
+    /// The live false positive - the goal text contains both sweeping (`everything`) and
     /// destructive (`Remove`) words, but every actual call is a path-addressed, scoped
     /// operation. Without a waiver, the magnitude guard downgrades to a proposal.
     #[tokio::test]
@@ -945,7 +938,7 @@ mod magnitude_respects_risk_waivers {
             &["turbovault:read_note", "turbovault:write_note"],
             Ok("wrote".into()),
         ));
-        let goal = "Read Tasks/Main.md. Then write it back, removing two specific lines. \
+        let goal = "Read Tasks/Main.md. Then write it back, removing two specific lines. 
                     Keep everything else in the file exactly as-is.";
 
         // No waiver: the gate fires.
@@ -982,7 +975,7 @@ mod magnitude_respects_risk_waivers {
                 waivers: [waiver(
                     "turbovault",
                     Some(vec!["read_note"]),
-                    None, // no zone restriction — reads don't resolve a zone here
+                    None, // no zone restriction - reads don't resolve a zone here
                 )]
                 .into_iter()
                 .collect(),
@@ -1087,11 +1080,7 @@ mod magnitude_respects_risk_waivers {
             name: "email".into(),
             description: "send email".into(),
             consequence: Consequence::External,
-            provenance: None,
-            default_zone: None,
-            tool_zones: Vec::new(),
-            zone_from_arg: None,
-            write_tools: Vec::new(),
+            ..Default::default()
         };
         let rt = gate_with_waivers(
             dir.path(),
@@ -1159,7 +1148,7 @@ mod one_intent_one_prompt {
         );
 
         let first = rt.invoke(&call).await.expect("downgrade is an Ok result");
-        // The same action again, as a fresh attempt with a different call id — which is exactly what
+        // The same action again, as a fresh attempt with a different call id - which is exactly what
         // a retrying model sends.
         let retry = ToolInvocation::new(
             "c2",
@@ -1179,7 +1168,7 @@ mod one_intent_one_prompt {
         assert!(inner.invoked.lock().unwrap().is_empty());
     }
 
-    /// Dedup keys on the action, so a *different* action still gets its own proposal — otherwise the
+    /// Dedup keys on the action, so a *different* action still gets its own proposal - otherwise the
     /// first gated call would silently swallow every later one.
     #[tokio::test]
     async fn a_different_action_still_gets_its_own_proposal() {

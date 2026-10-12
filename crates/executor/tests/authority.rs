@@ -50,6 +50,10 @@ fn vault_descriptor() -> McpDescriptor {
         tool_zones: Vec::new(),
         zone_from_arg: Some("path".into()),
         write_tools: vec!["write_note".into()],
+        read_tools: vec!["read_note".into()],
+        vault_wide_writes: Vec::new(),
+        admin_tools: Vec::new(),
+        write_path_args: std::collections::BTreeMap::new(),
     }
 }
 

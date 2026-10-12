@@ -11,6 +11,10 @@ use serde::{Deserialize, Serialize};
 use crate::dispatch::mcp_of;
 use crate::error::{Error, Result};
 
+#[path = "vault_grant.rs"]
+mod vault_grant;
+pub use vault_grant::VaultWideGrant;
+
 /// A logical scope of data or system access.
 ///
 /// Zones are declared in policy config (Decision 14); the values here are how a capability

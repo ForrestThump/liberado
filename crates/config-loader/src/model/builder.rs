@@ -911,6 +911,10 @@ transport = { kind = "docker", image = "liberado-tasks-mcp:latest", command = "n
             tools: Vec::new(),
             zone_from_arg: None,
             write_tools: Vec::new(),
+            read_tools: Vec::new(),
+            vault_wide_writes: Vec::new(),
+            write_path_args: std::collections::BTreeMap::new(),
+            admin_tools: Vec::new(),
             writes_vault: Some(false),
         }];
         let err = cfg
@@ -1089,6 +1093,10 @@ clarify_threshold_read = 0.8
                 tools: Vec::new(),
                 zone_from_arg: None,
                 write_tools: Vec::new(),
+                read_tools: Vec::new(),
+                vault_wide_writes: Vec::new(),
+                write_path_args: std::collections::BTreeMap::new(),
+                admin_tools: Vec::new(),
                 writes_vault: Some(false),
             })
             .hook(HookConfig {
@@ -1188,6 +1196,10 @@ clarify_threshold_read = 0.8
             tools: Vec::new(),
             zone_from_arg: None,
             write_tools: Vec::new(),
+            read_tools: Vec::new(),
+            vault_wide_writes: Vec::new(),
+            write_path_args: std::collections::BTreeMap::new(),
+            admin_tools: Vec::new(),
             writes_vault: Some(false),
         }
     }

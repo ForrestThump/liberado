@@ -8,7 +8,7 @@
 use super::*;
 
 use liberado_common::{Capability, Consequence, WriteClass, Zone};
-use liberado_config::{Grant, McpConfig, McpTransport, ToolImpact, ZonePolicy};
+use liberado_config::{Grant, McpConfig, McpTransport, ZonePolicy};
 
 fn vault_mcp(consequence: Consequence) -> McpConfig {
     McpConfig {
@@ -18,12 +18,13 @@ fn vault_mcp(consequence: Consequence) -> McpConfig {
         consequence,
         transport: McpTransport::Managed,
         default_zone: None,
-        tools: vec![ToolImpact {
-            name: "read_note".into(),
-            zone: None,
-        }],
+        tools: Vec::new(),
         zone_from_arg: Some("path".into()),
         write_tools: vec!["write_note".into()],
+        read_tools: vec!["read_note".into()],
+        vault_wide_writes: Vec::new(),
+        admin_tools: Vec::new(),
+        write_path_args: std::collections::BTreeMap::new(),
         writes_vault: None,
     }
 }
@@ -162,7 +163,15 @@ fn a_path_addressed_write_without_a_path_cannot_place_its_target() {
         "expected a blocked write_target, got {:?}",
         e.guard_lines[1]
     );
-    assert!(e.fixes.iter().any(|f| f.contains("zone_from_arg")));
+    // After the path-addressed exhaustive-classification rule, the hint names the three
+    // classification lists rather than just zone_from_arg.
+    assert!(
+        e.fixes.iter().any(|f| f.contains("write_tools")
+            && f.contains("read_tools")
+            && f.contains("vault_wide_writes")),
+        "the fix must point at the three classification lists: {:?}",
+        e.fixes
+    );
     assert_eq!(e.verdict, "verdict: BLOCKED");
 }
 
@@ -211,7 +220,7 @@ fn a_write_into_an_agent_writable_zone_with_every_grant_is_allowed() {
     assert!(
         e.guard_lines
             .iter()
-            .any(|l| l.contains("[PASS] write_target      resolves to zone 'decisions'"))
+            .any(|l| l.contains("[PASS] write_target      resolves to zone(s) [decisions]"))
     );
 }
 
