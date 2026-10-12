@@ -6118,6 +6118,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "liberado-policy"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "thiserror 2.0.18",
+ "toml 0.8.23",
+]
+
+[[package]]
 name = "liberado-provider"
 version = "0.1.0"
 dependencies = [

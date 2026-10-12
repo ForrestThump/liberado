@@ -80,6 +80,7 @@ liberado-notify = { path = "crates/notify" }
 liberado-messaging = { path = "crates/messaging" }
 liberado-mcp = { path = "crates/mcp" }
 liberado-orchestrator = { path = "crates/orchestrator" }
+liberado-policy = { path = "crates/policy" }
 liberado-main-agent = { path = "crates/main-agent" }
 liberado-daemon = { path = "crates/daemon" }
 liberado-server = { path = "crates/server" }

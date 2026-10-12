@@ -37137,6 +37137,897 @@
       "crate": "liberado-orchestrator"
     },
     {
+      "file": "crates/policy/src/compat.rs",
+      "function": "declaration",
+      "line": 255,
+      "cyclomatic": 2.0,
+      "coverage": 94.44444444444444,
+      "crap": 2.0006858710562416,
+      "crate": "liberado-policy"
+    },
+    {
+      "file": "crates/policy/src/compat.rs",
+      "function": "declarations_from_legacy",
+      "line": 74,
+      "cyclomatic": 3.0,
+      "coverage": 88.88888888888889,
+      "crap": 3.0123456790123457,
+      "crate": "liberado-policy"
+    },
+    {
+      "file": "crates/policy/src/compat.rs",
+      "function": "fixed_write_scope",
+      "line": 212,
+      "cyclomatic": 3.0,
+      "coverage": 100.0,
+      "crap": 3.0,
+      "crate": "liberado-policy"
+    },
+    {
+      "file": "crates/policy/src/compat.rs",
+      "function": "from_fixed",
+      "line": 124,
+      "cyclomatic": 8.0,
+      "coverage": 89.47368421052632,
+      "crap": 8.074646449919813,
+      "crate": "liberado-policy"
+    },
+    {
+      "file": "crates/policy/src/compat.rs",
+      "function": "from_path_addressed",
+      "line": 84,
+      "cyclomatic": 7.0,
+      "coverage": 91.42857142857144,
+      "crap": 7.030857142857143,
+      "crate": "liberado-policy"
+    },
+    {
+      "file": "crates/policy/src/compat.rs",
+      "function": "has_zone_source",
+      "line": 167,
+      "cyclomatic": 3.0,
+      "coverage": 100.0,
+      "crap": 3.0,
+      "crate": "liberado-policy"
+    },
+    {
+      "file": "crates/policy/src/compat.rs",
+      "function": "is_delete_name",
+      "line": 282,
+      "cyclomatic": 4.0,
+      "coverage": 100.0,
+      "crap": 4.0,
+      "crate": "liberado-policy"
+    },
+    {
+      "file": "crates/policy/src/compat.rs",
+      "function": "mixed_with_path_addressing",
+      "line": 120,
+      "cyclomatic": 3.0,
+      "coverage": 100.0,
+      "crap": 3.0,
+      "crate": "liberado-policy"
+    },
+    {
+      "file": "crates/policy/src/compat.rs",
+      "function": "one",
+      "line": 290,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "liberado-policy"
+    },
+    {
+      "file": "crates/policy/src/compat.rs",
+      "function": "policy_from_legacy",
+      "line": 69,
+      "cyclomatic": 2.0,
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "liberado-policy"
+    },
+    {
+      "file": "crates/policy/src/compat.rs",
+      "function": "push_fixed_writes",
+      "line": 204,
+      "cyclomatic": 4.0,
+      "coverage": 100.0,
+      "crap": 4.0,
+      "crate": "liberado-policy"
+    },
+    {
+      "file": "crates/policy/src/compat.rs",
+      "function": "push_named",
+      "line": 242,
+      "cyclomatic": 3.0,
+      "coverage": 100.0,
+      "crap": 3.0,
+      "crate": "liberado-policy"
+    },
+    {
+      "file": "crates/policy/src/compat.rs",
+      "function": "push_tool_zones",
+      "line": 224,
+      "cyclomatic": 3.0,
+      "coverage": 100.0,
+      "crap": 3.0,
+      "crate": "liberado-policy"
+    },
+    {
+      "file": "crates/policy/src/compat.rs",
+      "function": "push_writers",
+      "line": 192,
+      "cyclomatic": 3.0,
+      "coverage": 100.0,
+      "crap": 3.0,
+      "crate": "liberado-policy"
+    },
+    {
+      "file": "crates/policy/src/compat.rs",
+      "function": "refuse_overlap",
+      "line": 180,
+      "cyclomatic": 4.0,
+      "coverage": 100.0,
+      "crap": 4.0,
+      "crate": "liberado-policy"
+    },
+    {
+      "file": "crates/policy/src/compat.rs",
+      "function": "tool_zone_effects",
+      "line": 232,
+      "cyclomatic": 3.0,
+      "coverage": 50.0,
+      "crap": 4.125,
+      "crate": "liberado-policy"
+    },
+    {
+      "file": "crates/policy/src/compat.rs",
+      "function": "tool_zone_names",
+      "line": 173,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "liberado-policy"
+    },
+    {
+      "file": "crates/policy/src/compat.rs",
+      "function": "writer_effects",
+      "line": 274,
+      "cyclomatic": 2.0,
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "liberado-policy"
+    },
+    {
+      "file": "crates/policy/src/compat.rs",
+      "function": "writes_vault_disagrees",
+      "line": 163,
+      "cyclomatic": 2.0,
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "liberado-policy"
+    },
+    {
+      "file": "crates/policy/src/decide.rs",
+      "function": "ToolPolicy::authorize",
+      "line": 84,
+      "cyclomatic": 6.0,
+      "coverage": 100.0,
+      "crap": 6.0,
+      "crate": "liberado-policy"
+    },
+    {
+      "file": "crates/policy/src/decide.rs",
+      "function": "check_services",
+      "line": 192,
+      "cyclomatic": 3.0,
+      "coverage": 100.0,
+      "crap": 3.0,
+      "crate": "liberado-policy"
+    },
+    {
+      "file": "crates/policy/src/decide.rs",
+      "function": "check_urls",
+      "line": 175,
+      "cyclomatic": 4.0,
+      "coverage": 100.0,
+      "crap": 4.0,
+      "crate": "liberado-policy"
+    },
+    {
+      "file": "crates/policy/src/decide.rs",
+      "function": "check_vault",
+      "line": 136,
+      "cyclomatic": 3.0,
+      "coverage": 100.0,
+      "crap": 3.0,
+      "crate": "liberado-policy"
+    },
+    {
+      "file": "crates/policy/src/decide.rs",
+      "function": "empty_effects",
+      "line": 129,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "liberado-policy"
+    },
+    {
+      "file": "crates/policy/src/decide.rs",
+      "function": "lookup",
+      "line": 101,
+      "cyclomatic": 2.0,
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "liberado-policy"
+    },
+    {
+      "file": "crates/policy/src/decide.rs",
+      "function": "missing_tool",
+      "line": 108,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "liberado-policy"
+    },
+    {
+      "file": "crates/policy/src/decide.rs",
+      "function": "normalize_zones",
+      "line": 156,
+      "cyclomatic": 5.0,
+      "coverage": 100.0,
+      "crap": 5.0,
+      "crate": "liberado-policy"
+    },
+    {
+      "file": "crates/policy/src/decide.rs",
+      "function": "refuse_paths",
+      "line": 145,
+      "cyclomatic": 2.0,
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "liberado-policy"
+    },
+    {
+      "file": "crates/policy/src/decide.rs",
+      "function": "require_effect",
+      "line": 115,
+      "cyclomatic": 3.0,
+      "coverage": 100.0,
+      "crap": 3.0,
+      "crate": "liberado-policy"
+    },
+    {
+      "file": "crates/policy/src/decide.rs",
+      "function": "service_is_declared",
+      "line": 205,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "liberado-policy"
+    },
+    {
+      "file": "crates/policy/src/decide.rs",
+      "function": "url_is_allowed",
+      "line": 188,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "liberado-policy"
+    },
+    {
+      "file": "crates/policy/src/descriptor.rs",
+      "function": "ToolDescriptor::effects",
+      "line": 99,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "liberado-policy"
+    },
+    {
+      "file": "crates/policy/src/descriptor.rs",
+      "function": "ToolDescriptor::external_services",
+      "line": 114,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "liberado-policy"
+    },
+    {
+      "file": "crates/policy/src/descriptor.rs",
+      "function": "ToolDescriptor::name",
+      "line": 94,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "liberado-policy"
+    },
+    {
+      "file": "crates/policy/src/descriptor.rs",
+      "function": "ToolDescriptor::server",
+      "line": 89,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "liberado-policy"
+    },
+    {
+      "file": "crates/policy/src/descriptor.rs",
+      "function": "ToolDescriptor::urls",
+      "line": 109,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "liberado-policy"
+    },
+    {
+      "file": "crates/policy/src/descriptor.rs",
+      "function": "ToolDescriptor::vault",
+      "line": 104,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "liberado-policy"
+    },
+    {
+      "file": "crates/policy/src/descriptor.rs",
+      "function": "ToolPolicy::from_declarations",
+      "line": 127,
+      "cyclomatic": 4.0,
+      "coverage": 100.0,
+      "crap": 4.0,
+      "crate": "liberado-policy"
+    },
+    {
+      "file": "crates/policy/src/descriptor.rs",
+      "function": "ToolPolicy::get",
+      "line": 143,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "liberado-policy"
+    },
+    {
+      "file": "crates/policy/src/descriptor.rs",
+      "function": "ToolPolicy::is_empty",
+      "line": 153,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "liberado-policy"
+    },
+    {
+      "file": "crates/policy/src/descriptor.rs",
+      "function": "ToolPolicy::len",
+      "line": 148,
+      "cyclomatic": 1.0,
+      "coverage": 0.0,
+      "crap": 2.0,
+      "crate": "liberado-policy"
+    },
+    {
+      "file": "crates/policy/src/descriptor.rs",
+      "function": "VaultScope::from_arg",
+      "line": 44,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "liberado-policy"
+    },
+    {
+      "file": "crates/policy/src/descriptor.rs",
+      "function": "VaultScope::zone_list",
+      "line": 51,
+      "cyclomatic": 3.0,
+      "coverage": 100.0,
+      "crap": 3.0,
+      "crate": "liberado-policy"
+    },
+    {
+      "file": "crates/policy/src/descriptor.rs",
+      "function": "VaultScope::zones",
+      "line": 36,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "liberado-policy"
+    },
+    {
+      "file": "crates/policy/src/descriptor.rs",
+      "function": "arg_has_separator",
+      "line": 284,
+      "cyclomatic": 4.0,
+      "coverage": 100.0,
+      "crap": 4.0,
+      "crate": "liberado-policy"
+    },
+    {
+      "file": "crates/policy/src/descriptor.rs",
+      "function": "case_collision",
+      "line": 264,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "liberado-policy"
+    },
+    {
+      "file": "crates/policy/src/descriptor.rs",
+      "function": "compile_one",
+      "line": 205,
+      "cyclomatic": 6.0,
+      "coverage": 100.0,
+      "crap": 6.0,
+      "crate": "liberado-policy"
+    },
+    {
+      "file": "crates/policy/src/descriptor.rs",
+      "function": "normalize_declared_urls",
+      "line": 300,
+      "cyclomatic": 3.0,
+      "coverage": 100.0,
+      "crap": 3.0,
+      "crate": "liberado-policy"
+    },
+    {
+      "file": "crates/policy/src/descriptor.rs",
+      "function": "refuse_duplicate_zones",
+      "line": 242,
+      "cyclomatic": 3.0,
+      "coverage": 87.5,
+      "crap": 3.017578125,
+      "crate": "liberado-policy"
+    },
+    {
+      "file": "crates/policy/src/descriptor.rs",
+      "function": "refuse_zone_case_collision",
+      "line": 252,
+      "cyclomatic": 3.0,
+      "coverage": 100.0,
+      "crap": 3.0,
+      "crate": "liberado-policy"
+    },
+    {
+      "file": "crates/policy/src/descriptor.rs",
+      "function": "validate_from_arg",
+      "line": 270,
+      "cyclomatic": 4.0,
+      "coverage": 88.88888888888889,
+      "crap": 4.021947873799726,
+      "crate": "liberado-policy"
+    },
+    {
+      "file": "crates/policy/src/descriptor.rs",
+      "function": "validate_identity",
+      "line": 221,
+      "cyclomatic": 5.0,
+      "coverage": 75.0,
+      "crap": 5.390625,
+      "crate": "liberado-policy"
+    },
+    {
+      "file": "crates/policy/src/descriptor.rs",
+      "function": "validate_services",
+      "line": 288,
+      "cyclomatic": 4.0,
+      "coverage": 80.0,
+      "crap": 4.128,
+      "crate": "liberado-policy"
+    },
+    {
+      "file": "crates/policy/src/descriptor.rs",
+      "function": "validate_zones",
+      "line": 234,
+      "cyclomatic": 4.0,
+      "coverage": 100.0,
+      "crap": 4.0,
+      "crate": "liberado-policy"
+    },
+    {
+      "file": "crates/policy/src/load.rs",
+      "function": "fixed_zones",
+      "line": 69,
+      "cyclomatic": 3.0,
+      "coverage": 83.33333333333334,
+      "crap": 3.0416666666666665,
+      "crate": "liberado-policy"
+    },
+    {
+      "file": "crates/policy/src/load.rs",
+      "function": "from_arg_scope",
+      "line": 76,
+      "cyclomatic": 1.0,
+      "coverage": 87.5,
+      "crap": 1.001953125,
+      "crate": "liberado-policy"
+    },
+    {
+      "file": "crates/policy/src/load.rs",
+      "function": "load_toml",
+      "line": 14,
+      "cyclomatic": 4.0,
+      "coverage": 100.0,
+      "crap": 4.0,
+      "crate": "liberado-policy"
+    },
+    {
+      "file": "crates/policy/src/load.rs",
+      "function": "no_zone_fields",
+      "line": 61,
+      "cyclomatic": 3.0,
+      "coverage": 80.0,
+      "crap": 3.072,
+      "crate": "liberado-policy"
+    },
+    {
+      "file": "crates/policy/src/load.rs",
+      "function": "refuse_empty_effects",
+      "line": 22,
+      "cyclomatic": 2.0,
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "liberado-policy"
+    },
+    {
+      "file": "crates/policy/src/load.rs",
+      "function": "row_to_declaration",
+      "line": 40,
+      "cyclomatic": 2.0,
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "liberado-policy"
+    },
+    {
+      "file": "crates/policy/src/load.rs",
+      "function": "rows_to_declarations",
+      "line": 32,
+      "cyclomatic": 3.0,
+      "coverage": 100.0,
+      "crap": 3.0,
+      "crate": "liberado-policy"
+    },
+    {
+      "file": "crates/policy/src/load.rs",
+      "function": "scope_from_row",
+      "line": 52,
+      "cyclomatic": 5.0,
+      "coverage": 85.71428571428571,
+      "crap": 5.072886297376093,
+      "crate": "liberado-policy"
+    },
+    {
+      "file": "crates/policy/src/path.rs",
+      "function": "VaultPath::as_relative",
+      "line": 31,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "liberado-policy"
+    },
+    {
+      "file": "crates/policy/src/path.rs",
+      "function": "VaultPath::rest",
+      "line": 26,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "liberado-policy"
+    },
+    {
+      "file": "crates/policy/src/path.rs",
+      "function": "VaultPath::zone",
+      "line": 21,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "liberado-policy"
+    },
+    {
+      "file": "crates/policy/src/path.rs",
+      "function": "assemble",
+      "line": 122,
+      "cyclomatic": 3.0,
+      "coverage": 91.66666666666666,
+      "crap": 3.0052083333333335,
+      "crate": "liberado-policy"
+    },
+    {
+      "file": "crates/policy/src/path.rs",
+      "function": "collect_segments",
+      "line": 108,
+      "cyclomatic": 5.0,
+      "coverage": 100.0,
+      "crap": 5.0,
+      "crate": "liberado-policy"
+    },
+    {
+      "file": "crates/policy/src/path.rs",
+      "function": "confirm_zone",
+      "line": 136,
+      "cyclomatic": 4.0,
+      "coverage": 100.0,
+      "crap": 4.0,
+      "crate": "liberado-policy"
+    },
+    {
+      "file": "crates/policy/src/path.rs",
+      "function": "name_is_bad_segment",
+      "line": 99,
+      "cyclomatic": 6.0,
+      "coverage": 100.0,
+      "crap": 6.0,
+      "crate": "liberado-policy"
+    },
+    {
+      "file": "crates/policy/src/path.rs",
+      "function": "normalize_vault_path",
+      "line": 71,
+      "cyclomatic": 6.0,
+      "coverage": 100.0,
+      "crap": 6.0,
+      "crate": "liberado-policy"
+    },
+    {
+      "file": "crates/policy/src/path.rs",
+      "function": "validate_zone_name",
+      "line": 89,
+      "cyclomatic": 4.0,
+      "coverage": 88.88888888888889,
+      "crap": 4.021947873799726,
+      "crate": "liberado-policy"
+    },
+    {
+      "file": "crates/policy/src/segment.rs",
+      "function": "classify_zone",
+      "line": 57,
+      "cyclomatic": 4.0,
+      "coverage": 100.0,
+      "crap": 4.0,
+      "crate": "liberado-policy"
+    },
+    {
+      "file": "crates/policy/src/segment.rs",
+      "function": "has_ascii_control",
+      "line": 7,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "liberado-policy"
+    },
+    {
+      "file": "crates/policy/src/segment.rs",
+      "function": "is_parent_segment",
+      "line": 12,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "liberado-policy"
+    },
+    {
+      "file": "crates/policy/src/segment.rs",
+      "function": "looks_like_drive_prefix",
+      "line": 32,
+      "cyclomatic": 2.0,
+      "coverage": 75.0,
+      "crap": 2.0625,
+      "crate": "liberado-policy"
+    },
+    {
+      "file": "crates/policy/src/segment.rs",
+      "function": "path_has_drive",
+      "line": 27,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "liberado-policy"
+    },
+    {
+      "file": "crates/policy/src/segment.rs",
+      "function": "path_is_absolute",
+      "line": 17,
+      "cyclomatic": 2.0,
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "liberado-policy"
+    },
+    {
+      "file": "crates/policy/src/segment.rs",
+      "function": "segment_has_drive",
+      "line": 22,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "liberado-policy"
+    },
+    {
+      "file": "crates/policy/src/url.rs",
+      "function": "ToolUrl::covers",
+      "line": 44,
+      "cyclomatic": 4.0,
+      "coverage": 100.0,
+      "crap": 4.0,
+      "crate": "liberado-policy"
+    },
+    {
+      "file": "crates/policy/src/url.rs",
+      "function": "ToolUrl::host",
+      "line": 29,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "liberado-policy"
+    },
+    {
+      "file": "crates/policy/src/url.rs",
+      "function": "ToolUrl::path",
+      "line": 39,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "liberado-policy"
+    },
+    {
+      "file": "crates/policy/src/url.rs",
+      "function": "ToolUrl::port",
+      "line": 34,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "liberado-policy"
+    },
+    {
+      "file": "crates/policy/src/url.rs",
+      "function": "ToolUrl::scheme",
+      "line": 24,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "liberado-policy"
+    },
+    {
+      "file": "crates/policy/src/url.rs",
+      "function": "confirm_absent_zone",
+      "line": 228,
+      "cyclomatic": 2.0,
+      "coverage": 0.0,
+      "crap": 6.0,
+      "crate": "liberado-policy"
+    },
+    {
+      "file": "crates/policy/src/url.rs",
+      "function": "confirm_url_zone",
+      "line": 215,
+      "cyclomatic": 4.0,
+      "coverage": 72.72727272727273,
+      "crap": 4.324567993989482,
+      "crate": "liberado-policy"
+    },
+    {
+      "file": "crates/policy/src/url.rs",
+      "function": "decode_segment",
+      "line": 243,
+      "cyclomatic": 3.0,
+      "coverage": 100.0,
+      "crap": 3.0,
+      "crate": "liberado-policy"
+    },
+    {
+      "file": "crates/policy/src/url.rs",
+      "function": "filesystem_reason",
+      "line": 117,
+      "cyclomatic": 5.0,
+      "coverage": 100.0,
+      "crap": 5.0,
+      "crate": "liberado-policy"
+    },
+    {
+      "file": "crates/policy/src/url.rs",
+      "function": "hex_byte",
+      "line": 266,
+      "cyclomatic": 2.0,
+      "coverage": 83.33333333333334,
+      "crap": 2.0185185185185186,
+      "crate": "liberado-policy"
+    },
+    {
+      "file": "crates/policy/src/url.rs",
+      "function": "normalize_url",
+      "line": 94,
+      "cyclomatic": 9.0,
+      "coverage": 95.45454545454544,
+      "crap": 9.007607062359128,
+      "crate": "liberado-policy"
+    },
+    {
+      "file": "crates/policy/src/url.rs",
+      "function": "normalize_url_path",
+      "line": 184,
+      "cyclomatic": 10.0,
+      "coverage": 94.73684210526316,
+      "crap": 10.014579384749965,
+      "crate": "liberado-policy"
+    },
+    {
+      "file": "crates/policy/src/url.rs",
+      "function": "path_before_query",
+      "line": 168,
+      "cyclomatic": 2.0,
+      "coverage": 92.3076923076923,
+      "crap": 2.0018206645425582,
+      "crate": "liberado-policy"
+    },
+    {
+      "file": "crates/policy/src/url.rs",
+      "function": "path_covers",
+      "line": 274,
+      "cyclomatic": 4.0,
+      "coverage": 85.71428571428571,
+      "crap": 4.0466472303206995,
+      "crate": "liberado-policy"
+    },
+    {
+      "file": "crates/policy/src/url.rs",
+      "function": "push_one",
+      "line": 253,
+      "cyclomatic": 4.0,
+      "coverage": 91.66666666666666,
+      "crap": 4.0092592592592595,
+      "crate": "liberado-policy"
+    },
+    {
+      "file": "crates/policy/src/url.rs",
+      "function": "push_segment",
+      "line": 236,
+      "cyclomatic": 2.0,
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "liberado-policy"
+    },
+    {
+      "file": "crates/policy/src/url.rs",
+      "function": "refuse_userinfo",
+      "line": 145,
+      "cyclomatic": 2.0,
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "liberado-policy"
+    },
+    {
+      "file": "crates/policy/src/url.rs",
+      "function": "reject_decoded",
+      "line": 205,
+      "cyclomatic": 5.0,
+      "coverage": 100.0,
+      "crap": 5.0,
+      "crate": "liberado-policy"
+    },
+    {
+      "file": "crates/policy/src/url.rs",
+      "function": "split_authority",
+      "line": 138,
+      "cyclomatic": 3.0,
+      "coverage": 80.0,
+      "crap": 3.072,
+      "crate": "liberado-policy"
+    },
+    {
+      "file": "crates/policy/src/url.rs",
+      "function": "split_host_port",
+      "line": 152,
+      "cyclomatic": 7.0,
+      "coverage": 85.71428571428571,
+      "crap": 7.142857142857143,
+      "crate": "liberado-policy"
+    },
+    {
+      "file": "crates/policy/src/url.rs",
+      "function": "split_scheme",
+      "line": 127,
+      "cyclomatic": 3.0,
+      "coverage": 88.88888888888889,
+      "crap": 3.0123456790123457,
+      "crate": "liberado-policy"
+    },
+    {
       "file": "crates/provider-free-proxy/src/bench_api.rs",
       "function": "finite",
       "line": 90,
@@ -49036,11 +49927,11 @@
     }
   ],
   "diagnostics": {
-    "analyzed_files": 704,
-    "lcov_files": 490,
-    "matched_files": 488,
+    "analyzed_files": 715,
+    "lcov_files": 497,
+    "matched_files": 495,
     "source_only": {
-      "count": 216,
+      "count": 220,
       "examples": [
         "crates/acp-bridge/src/coding_run_tests.rs",
         "crates/acp-bridge/src/grant_tests.rs",

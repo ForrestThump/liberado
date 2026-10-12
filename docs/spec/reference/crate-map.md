@@ -5,7 +5,7 @@
 > Layer semantics and dependency rules: [contracts.md](../architecture/contracts.md) and
 > `crates/test-support/tests/layer_rules.rs` (the same role tags, mechanically enforced).
 
-56 workspace crates.
+57 workspace crates.
 
 ## foundation
 
@@ -17,6 +17,7 @@ The bottom layer: vocabulary and narrow-waist traits. Depends on nothing above i
 | [`liberado-config-loader`](../../../crates/config-loader/) | `liberado-common` | ConfigSource trait + ChainLoader for layered Liberado configuration loading. |
 | [`liberado-messaging`](../../../crates/messaging/) | *none* | Channel-agnostic messaging traits for Liberado chat clients (Telegram today; Matrix, Signal, Discord later). Transport only — no network deps. |
 | [`liberado-notify`](../../../crates/notify/) | `liberado-messaging` | A minimal, pluggable notification sink for events a human should know about even when nothing else in the daemon's own surfaces is open in front of them right now — the motivating case is an unattended (cron-triggered, Phase 3) proposal nobody's watching for. Telegram is the first implementation (free, mature); the Notifier trait exists so it isn't the only one. Also hosts Telegram's MessagingChannel impl so Matrix/Discord/Signal can plug in via the same trait. |
+| [`liberado-policy`](../../../crates/policy/) | *none* | Tool policy model: declared effects, vault-path and URL normalizers, a TOML loader, and a shim from zone_from_arg and write_tools. |
 | [`liberado-provider`](../../../crates/provider/) | *none* | The provider-agnostic inference interface for Liberado: a narrow async `Provider` trait (tool-calling + structured output) plus a scriptable mock for deterministic tests. |
 | [`liberado-tool-runtime`](../../../crates/tool-runtime/) | `liberado-common`, `liberado-provider` | The tool-runtime contract: ToolRuntime (catalog + invoke), RuntimeFactory (how an orchestrator obtains one), RuntimeSetupError, and the RebindableRuntime provenance-rebind extension. Sunk below executor and mcp so the engine, the MCP adapter, and the shared test doubles all implement the same trait instances. |
 
