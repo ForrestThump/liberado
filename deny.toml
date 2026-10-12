@@ -16,6 +16,11 @@ ignore = [
     # eframe's Linux window integration through winit/sctk-adwaita. Revisit
     # when that upstream GUI stack replaces it.
     "RUSTSEC-2026-0192",
+    # `unsafe-libyaml` (RUSTSEC-2024-0449) is unmaintained with no known
+    # vulnerability. It is pulled in transitively by the deprecated
+    # `serde_yaml` 0.9 (liberado-common and liberado-cli). Revisit when
+    # migrating off serde_yaml.
+    "RUSTSEC-2024-0449",
 ]
 
 [licenses]
