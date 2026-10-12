@@ -41263,8 +41263,8 @@
       "function": "set_fetch_auth",
       "line": 223,
       "cyclomatic": 3.0,
-      "coverage": 91.66666666666666,
-      "crap": 3.0052083333333335,
+      "coverage": 100.0,
+      "crap": 3.0,
       "crate": "liberado-server"
     },
     {
