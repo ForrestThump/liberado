@@ -19933,8 +19933,8 @@
       "function": "write_target_never_notawrite",
       "line": 167,
       "cyclomatic": 2.0,
-      "coverage": 80.0,
-      "crap": 2.032,
+      "coverage": 100.0,
+      "crap": 2.0,
       "crate": "liberado-common"
     },
     {
