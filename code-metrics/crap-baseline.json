@@ -26537,7 +26537,7 @@
     {
       "file": "crates/executor/src/risk_gated.rs",
       "function": "RiskGatedToolRuntime::notify_on_surface",
-      "line": 741,
+      "line": 727,
       "cyclomatic": 4.0,
       "coverage": 100.0,
       "crap": 4.0,
@@ -26546,7 +26546,7 @@
     {
       "file": "crates/executor/src/risk_gated.rs",
       "function": "RiskGatedToolRuntime::notify_permission_request",
-      "line": 729,
+      "line": 715,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -26564,7 +26564,7 @@
     {
       "file": "crates/executor/src/risk_gated.rs",
       "function": "RiskGatedToolRuntime::notify_telegram",
-      "line": 754,
+      "line": 740,
       "cyclomatic": 4.0,
       "coverage": 60.0,
       "crap": 5.024,
@@ -26573,7 +26573,7 @@
     {
       "file": "crates/executor/src/risk_gated.rs",
       "function": "RiskGatedToolRuntime::notify_via_notifier",
-      "line": 767,
+      "line": 753,
       "cyclomatic": 3.0,
       "coverage": 70.0,
       "crap": 3.2430000000000003,
@@ -26600,7 +26600,7 @@
     {
       "file": "crates/executor/src/risk_gated.rs",
       "function": "RiskGatedToolRuntime::sign_permission_proposal",
-      "line": 678,
+      "line": 673,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -26609,7 +26609,7 @@
     {
       "file": "crates/executor/src/risk_gated.rs",
       "function": "RiskGatedToolRuntime::stamp_permission_origin",
-      "line": 713,
+      "line": 699,
       "cyclomatic": 3.0,
       "coverage": 100.0,
       "crap": 3.0,
@@ -26717,7 +26717,7 @@
     {
       "file": "crates/executor/src/risk_gated.rs",
       "function": "held_summary",
-      "line": 827,
+      "line": 813,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -26726,7 +26726,7 @@
     {
       "file": "crates/executor/src/risk_gated.rs",
       "function": "permission_request_id",
-      "line": 787,
+      "line": 773,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -26735,7 +26735,7 @@
     {
       "file": "crates/executor/src/risk_gated.rs",
       "function": "proposal_message",
-      "line": 810,
+      "line": 796,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -26824,6 +26824,15 @@
     },
     {
       "file": "crates/executor/src/risk_gated_vault.rs",
+      "function": "first_missing_zone",
+      "line": 279,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "liberado-executor"
+    },
+    {
+      "file": "crates/executor/src/risk_gated_vault.rs",
       "function": "missing_zone_requirement",
       "line": 190,
       "cyclomatic": 2.0,
@@ -26834,7 +26843,16 @@
     {
       "file": "crates/executor/src/risk_gated_vault.rs",
       "function": "permission_ask_message",
-      "line": 279,
+      "line": 301,
+      "cyclomatic": 2.0,
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "liberado-executor"
+    },
+    {
+      "file": "crates/executor/src/risk_gated_vault.rs",
+      "function": "permission_rationale",
+      "line": 284,
       "cyclomatic": 2.0,
       "coverage": 100.0,
       "crap": 2.0,
@@ -26843,7 +26861,7 @@
     {
       "file": "crates/executor/src/risk_gated_vault.rs",
       "function": "permission_request_message",
-      "line": 297,
+      "line": 319,
       "cyclomatic": 2.0,
       "coverage": 100.0,
       "crap": 2.0,
@@ -26888,7 +26906,7 @@
     {
       "file": "crates/executor/src/risk_gated_vault.rs",
       "function": "vault_wide_permission_ask_message",
-      "line": 320,
+      "line": 342,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -26897,7 +26915,7 @@
     {
       "file": "crates/executor/src/risk_gated_vault.rs",
       "function": "vault_wide_permission_request_message",
-      "line": 329,
+      "line": 351,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -29545,8 +29563,8 @@
       "function": "init_failure_trial",
       "line": 199,
       "cyclomatic": 1.0,
-      "coverage": 0.0,
-      "crap": 2.0,
+      "coverage": 100.0,
+      "crap": 1.0,
       "crate": "liberado-heuristics-tuner"
     },
     {
@@ -29590,8 +29608,8 @@
       "function": "run",
       "line": 448,
       "cyclomatic": 3.0,
-      "coverage": 90.0,
-      "crap": 3.009,
+      "coverage": 100.0,
+      "crap": 3.0,
       "crate": "liberado-heuristics-tuner"
     },
     {
@@ -29608,8 +29626,8 @@
       "function": "score_one",
       "line": 294,
       "cyclomatic": 11.0,
-      "coverage": 90.3846153846154,
-      "crap": 11.10756855939918,
+      "coverage": 92.3076923076923,
+      "crap": 11.05507510241238,
       "crate": "liberado-heuristics-tuner"
     },
     {

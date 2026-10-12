@@ -276,6 +276,28 @@ impl RiskGatedToolRuntime {
     }
 }
 
+pub(super) fn first_missing_zone(missing_zones: &[String]) -> &str {
+    // The gate only calls this with the zones it already found missing.
+    missing_zones[0].as_str()
+}
+
+pub(super) fn permission_rationale(
+    tool: &str,
+    first_zone: &str,
+    missing_zones: &[String],
+) -> String {
+    if missing_zones.len() == 1 {
+        format!("Permission request: '{tool}' needs Write access to zone '{first_zone}'.")
+    } else {
+        format!(
+            "Permission request: '{tool}' needs Write access for each of these zones: [{}]. \
+             (Granting the first will raise another request for the next; the daemon applies \
+             grants per-zone.)",
+            missing_zones.join(", "),
+        )
+    }
+}
+
 pub(super) fn permission_ask_message(tool: &str, missing_zones: &[String]) -> String {
     if missing_zones.len() == 1 {
         format!(

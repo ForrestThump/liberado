@@ -631,9 +631,7 @@ impl RiskGatedToolRuntime {
         // `requested_grant` carries one capability at a time. For multi-zone requests the
         // remaining zones are listed in the rationale so an operator reading either the file or
         // the chat card sees the full picture.
-        let first_zone = missing_zones
-            .first()
-            .ok_or_else(|| "missing_zones is empty in write_permission_request".to_string())?;
+        let first_zone = risk_gated_vault::first_missing_zone(missing_zones);
 
         let proposal_id = permission_request_id();
         let proposals_subdir = self.proposals_dir.join(liberado_common::PROPOSALS_DIR);
@@ -679,20 +677,8 @@ impl RiskGatedToolRuntime {
         first_zone: &str,
         missing_zones: &[String],
     ) -> SignedProposal {
-        let rationale = if missing_zones.len() == 1 {
-            format!(
-                "Permission request: '{}' needs Write access to zone '{first_zone}'.",
-                call.name
-            )
-        } else {
-            format!(
-                "Permission request: '{}' needs Write access for each of these zones: [{}]. \
-                 (Granting the first will raise another request for the next; the daemon applies \
-                 grants per-zone.)",
-                call.name,
-                missing_zones.join(", "),
-            )
-        };
+        let rationale =
+            risk_gated_vault::permission_rationale(&call.name, first_zone, missing_zones);
         let mut proposal = Proposal::pending(
             proposal_id,
             &self.correlation_base,
