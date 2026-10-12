@@ -496,6 +496,11 @@ fn build_app_router(state: &Arc<AppState>) -> Router {
             "/api/conversations/{id}/approvals",
             axum::routing::get(api::list_approvals),
         )
+        // Read-only. The next turn's tool, MCP, and zone grants. No revoke on this route.
+        .route(
+            "/api/conversations/{id}/grants",
+            axum::routing::get(api::conversation_grants),
+        )
         // Rejoin a turn after a reload, and stop one on purpose. Both exist because a turn no
         // longer belongs to the connection that started it. Not gated by drain.
         .route(
