@@ -46,6 +46,14 @@ crate and the upstream that should drop it.
 
 - `RUSTSEC-2024-0436` (`paste`) is transitive through fastembed/tokenizers and ratatui.
 - `RUSTSEC-2026-0192` (`ttf-parser`) is transitive through eframe's Linux window stack.
-- `RUSTSEC-2024-0449` (`unsafe-libyaml`) is transitive through deprecated
-  `serde_yaml` 0.9, used by liberado-common and liberado-cli. Revisit when
-  migrating off `serde_yaml`.
+
+## YAML
+
+Proposal notes, memory notes, and docs frontmatter use `serde_norway` 0.9.
+`serde_yaml` 0.9 is deprecated and depends on unmaintained `unsafe-libyaml`
+(`RUSTSEC-2024-0449`). `serde_yml` is unsound and unmaintained
+(`RUSTSEC-2025-0068`), so cargo-deny rejects it. `serde_norway` is the
+maintained hard fork of the `serde_yaml` 0.9 API. It depends on
+`unsafe-libyaml-norway` instead of `unsafe-libyaml`, so that advisory is not
+in the graph. The callers are `liberado-common`, `liberado-cli`, and
+`liberado-memory-store`.

@@ -63,7 +63,7 @@ impl MemoryNote {
     /// Parse a memory note back from its rendered text (frontmatter + body).
     pub fn from_note_text(text: &str) -> Result<Self, MemoryError> {
         let frontmatter = extract_frontmatter(text).ok_or(MemoryError::MissingFrontmatter)?;
-        let mut note: MemoryNote = serde_yaml::from_str(frontmatter)?;
+        let mut note: MemoryNote = serde_norway::from_str(frontmatter)?;
         note.content = body_after_frontmatter(text).trim().to_string();
         Ok(note)
     }
@@ -72,6 +72,64 @@ impl MemoryNote {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parses_hand_written_general_note() {
+        let text = "\
+---
+id: mem-9
+created: 2026-03-04T05:06:07Z
+tags:
+- ui
+- prefs
+---
+
+Remember the dark theme.
+";
+        let note = MemoryNote::from_note_text(text).unwrap();
+        assert_eq!(note.id, "mem-9");
+        assert_eq!(note.tags, vec!["ui".to_string(), "prefs".to_string()]);
+        assert_eq!(note.content, "Remember the dark theme.");
+        assert_eq!(note.task_type, None);
+        assert_eq!(note.tools_used, None);
+        assert_eq!(note.success, None);
+        assert_eq!(
+            note.created,
+            DateTime::parse_from_rfc3339("2026-03-04T05:06:07Z")
+                .unwrap()
+                .with_timezone(&Utc)
+        );
+    }
+
+    #[test]
+    fn parses_hand_written_procedural_note() {
+        let text = "\
+---
+id: mem-2
+created: 2026-03-04T05:06:07Z
+tags:
+- dispatch
+task_type: lookup
+tools_used:
+- weather-mcp
+success: true
+---
+
+Use weather-mcp.
+";
+        let note = MemoryNote::from_note_text(text).unwrap();
+        assert_eq!(note.task_type.as_deref(), Some("lookup"));
+        assert_eq!(note.tools_used, Some(vec!["weather-mcp".to_string()]));
+        assert_eq!(note.success, Some(true));
+        assert_eq!(note.tags, vec!["dispatch".to_string()]);
+        assert_eq!(note.content, "Use weather-mcp.");
+    }
+
+    #[test]
+    fn malformed_memory_frontmatter_is_a_yaml_error() {
+        let err = MemoryNote::from_note_text("---\nid: [\n---\n\nbody\n").unwrap_err();
+        assert!(matches!(err, MemoryError::Yaml(_)), "{err}");
+    }
 
     #[test]
     fn general_note_round_trips() {

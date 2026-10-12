@@ -466,8 +466,8 @@
           "line": 19,
           "column": 16,
           "method": "expect",
-          "snippet": "serde_yaml::to_string(frontmatter).expect(\"frontmatter serializes to YAML\")",
-          "receiver": "serde_yaml::to_string(frontmatter)",
+          "snippet": "serde_norway::to_string(frontmatter).expect(\"frontmatter serializes to YAML\")",
+          "receiver": "serde_norway::to_string(frontmatter)",
           "context": "render_noteString",
           "classification": "process_fatal",
           "reason": "production path unwrap requiring conversion to Result or waiver"
