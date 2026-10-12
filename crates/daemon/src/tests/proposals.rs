@@ -53,7 +53,6 @@ async fn daemon_emits_a_proposal_for_a_high_consequence_action() {
         name: "email".into(),
         description: "send email".into(),
         consequence: Consequence::External,
-        provenance: None,
         ..Default::default()
     });
     let capabilities = CapabilitySet::from_iter([Capability::ExecuteMcp("email".into())]);
@@ -142,11 +141,7 @@ async fn daemon_downgrades_a_zone_restricted_seed_call_to_a_proposal() {
         name: "vault-mcp".into(),
         description: "vault note writer".into(),
         consequence: Consequence::Reversible,
-        provenance: None,
         default_zone: Some("reviews".into()),
-        tool_zones: Vec::new(),
-        zone_from_arg: None,
-        write_tools: Vec::new(),
         ..Default::default()
     });
     let capabilities = CapabilitySet::from_iter([Capability::ExecuteMcp("vault-mcp".into())]);

@@ -58,11 +58,6 @@ fn request(capabilities: CapabilitySet, reaction_depth: u32) -> DispatchRequest 
             name: "tasks-mcp".into(),
             description: "task ops".into(),
             consequence: Consequence::Reversible,
-            provenance: None,
-            default_zone: None,
-            tool_zones: Vec::new(),
-            zone_from_arg: None,
-            write_tools: Vec::new(),
             ..Default::default()
         }],
         capabilities,
@@ -169,11 +164,6 @@ async fn ungranted_mcp_is_downgraded_to_capability_gap() {
         name: "email-mcp".into(),
         description: "mail".into(),
         consequence: Consequence::External,
-        provenance: None,
-        default_zone: None,
-        tool_zones: Vec::new(),
-        zone_from_arg: None,
-        write_tools: Vec::new(),
         ..Default::default()
     });
 
@@ -269,11 +259,6 @@ async fn high_consequence_concrete_action_is_downgraded_to_propose() {
             name: "email".into(),
             description: "send email".into(),
             consequence: Consequence::External,
-            provenance: None,
-            default_zone: None,
-            tool_zones: Vec::new(),
-            zone_from_arg: None,
-            write_tools: Vec::new(),
             ..Default::default()
         }],
         capabilities: caps("email"),
@@ -309,11 +294,7 @@ async fn zone_restricted_concrete_action_is_downgraded_to_propose() {
             name: "vault".into(),
             description: "git-tracked vault".into(),
             consequence: Consequence::Reversible,
-            provenance: None,
-            default_zone: None,
             tool_zones: vec![("write_review".into(), Some("reviews".into()))],
-            zone_from_arg: None,
-            write_tools: Vec::new(),
             ..Default::default()
         }],
         capabilities: caps("vault"),
@@ -348,11 +329,6 @@ async fn high_consequence_subagent_is_downgraded_to_propose() {
             name: "email".into(),
             description: "send email".into(),
             consequence: Consequence::External,
-            provenance: None,
-            default_zone: None,
-            tool_zones: Vec::new(),
-            zone_from_arg: None,
-            write_tools: Vec::new(),
             ..Default::default()
         }],
         capabilities: caps("email"),
@@ -769,11 +745,6 @@ async fn guidance_short_circuit_still_passes_through_the_guard_pipeline() {
         name: "email-mcp".into(),
         description: "send mail".into(),
         consequence: Consequence::External,
-        provenance: None,
-        default_zone: None,
-        tool_zones: Vec::new(),
-        zone_from_arg: None,
-        write_tools: Vec::new(),
         ..Default::default()
     });
     let out = dispatcher.dispatch(&req).await.unwrap();
@@ -790,11 +761,6 @@ fn sanitize_rewrites_tool_shaped_relevant_mcps_and_drops_bare_unknowns() {
         name: "turbovault".into(),
         description: "vault".into(),
         consequence: Consequence::Reversible,
-        provenance: None,
-        default_zone: None,
-        tool_zones: Vec::new(),
-        zone_from_arg: None,
-        write_tools: Vec::new(),
         ..Default::default()
     }];
     let mut d = DispatchDecision {
@@ -841,11 +807,6 @@ fn sanitize_empty_relevant_mcps_means_full_grant_not_capability_gap() {
         name: "turbovault".into(),
         description: "vault".into(),
         consequence: Consequence::Reversible,
-        provenance: None,
-        default_zone: None,
-        tool_zones: Vec::new(),
-        zone_from_arg: None,
-        write_tools: Vec::new(),
         ..Default::default()
     }];
     let mut d = DispatchDecision {

@@ -21,12 +21,9 @@
 use super::load_config;
 use liberado_common::{
     Capability, CapabilitySet, Consequence, McpDescriptor, VAULT_WIDE_ZONE_MARKER, Zone,
-    apply_bundled_classifications,
 };
-use liberado_executor::{
-    ApprovalStamp, Budget, RiskGatedToolRuntime, ToolRuntime,
-};
-use liberado_provider::{CompletionResponse, MockProvider, Provider, ToolInvocation};
+use liberado_executor::{ApprovalStamp, RiskGatedToolRuntime, ToolRuntime};
+use liberado_provider::ToolInvocation;
 use liberado_test_support::InvocationRecordingRuntime;
 use std::sync::Arc;
 use tempfile::TempDir;
@@ -75,38 +72,34 @@ capabilities = [
 /// Build a `RiskGatedToolRuntime` from the exact legacy shape — verifying the runtime can be
 /// constructed against the live config's descriptor (the merged defaults fill the gaps that
 /// used to leave every turboVault call in `Undeterminable`).
-fn live_loaded_descriptor() -> (McpDescriptor, McpDescriptor) {
+fn load_live() -> (crate::Config, McpDescriptor) {
     let _guard = match crate::survivor_tests::env_lock().lock() {
         Ok(g) => g,
         Err(poisoned) => poisoned.into_inner(),
     };
     let data = TempDir::new().unwrap();
-    let env = crate::survivor_tests::EnvGuard::set("LIBERADO_DATA_DIR", data.path());
+    let _env = crate::survivor_tests::EnvGuard::set("LIBERADO_DATA_DIR", data.path());
 
     let config_dir = TempDir::new().unwrap();
     let vault = config_dir.path().join("vault");
     std::fs::create_dir_all(&vault).unwrap();
 
-    let topology = format!(
-        r#"
-vault_path = "{}"
-"#
-    ) + LIVE_TURBOVAULT_BLOCK;
+    let topology = format!("vault_path = \"{}\"\n", vault.display()) + LIVE_TURBOVAULT_BLOCK;
     std::fs::write(config_dir.path().join(super::TOPOLOGY_FILE), topology).unwrap();
     std::fs::write(config_dir.path().join(super::POLICY_FILE), POLICY_BLOCK).unwrap();
 
     let (config, _) = load_config(Some(config_dir.path())).expect("legacy block must load");
-
-    // The catalog is produced through `liberado_config::catalog_from_config`, which
-    // applies the bundled-default merge.
-    let descriptors = super::catalog_from_config(&config);
-    let pre_merge = descriptors
-        .iter()
-        .find(|d| d.name == "turbovault")
-        .cloned()
+    // `catalog_from_config` is the production path: toml -> McpConfig -> McpDescriptor,
+    // with bundled defaults applied so the legacy block still classifies every tool.
+    let merged = super::catalog_from_config(&config)
+        .into_iter()
+        .find(|descriptor| descriptor.name == "turbovault")
         .expect("turbovault must be in the catalog");
-    let merged = apply_bundled_classifications(pre_merge.clone());
-    (pre_merge, merged)
+    (config, merged)
+}
+
+fn live_loaded_descriptor() -> McpDescriptor {
+    load_live().1
 }
 
 fn runtime_for_grant(
@@ -114,14 +107,17 @@ fn runtime_for_grant(
     proposals_dir: &std::path::Path,
     approval: bool,
 ) -> RiskGatedToolRuntime {
-    let (_, merged) = live_loaded_descriptor();
-    let consequence = vec![(
-        merged.name.clone(),
-        merged.consequence,
-    )];
+    let merged = live_loaded_descriptor();
+    let consequence = vec![(merged.name.clone(), merged.consequence)];
     let classes = vec![
-        ("Tasks".to_string(), liberado_common::WriteClass::AgentWritable),
-        ("Work".to_string(), liberado_common::WriteClass::AgentWritable),
+        (
+            "Tasks".to_string(),
+            liberado_common::WriteClass::AgentWritable,
+        ),
+        (
+            "Work".to_string(),
+            liberado_common::WriteClass::AgentWritable,
+        ),
         (
             "conformance".to_string(),
             liberado_common::WriteClass::AgentWritable,
@@ -173,13 +169,18 @@ fn runtime_for_grant(
 /// `tasks_update` / `manage_tags` set.
 #[test]
 fn the_live_legacy_block_loads_with_every_tool_classified() {
-    let (pre_merge, merged) = live_loaded_descriptor();
-    // Pre-merge, the legacy file has only the 8-tool write_tools and nothing else. Without
-    // the merge, calls to `edit_note` / `tasks_update` / `vector_search` would all be
-    // `Undeterminable` — the bug class the fix closes.
-    assert!(pre_merge.read_tools.is_empty(), "pre-merge has no read_tools");
-    assert_eq!(pre_merge.write_tools.len(), 8);
-    assert_eq!(pre_merge.admin_tools, Vec::<String>::new());
+    let (config, merged) = load_live();
+    let raw = config
+        .topology
+        .mcps
+        .iter()
+        .find(|mcp| mcp.name == "turbovault")
+        .expect("the legacy block parsed");
+    // The file on disk still has only the 8-tool write_tools. The catalog merge, not the
+    // file, is what classifies `edit_note` / `tasks_update` / `vector_search`.
+    assert!(raw.read_tools.is_empty(), "the live file has no read_tools");
+    assert_eq!(raw.write_tools.len(), 8);
+    assert!(raw.admin_tools.is_empty());
 
     // Post-merge, every tool the live server exposes is in one of the four lists.
     for tool in [
@@ -203,13 +204,18 @@ fn the_live_legacy_block_loads_with_every_tool_classified() {
         "vector_reindex",
         "set_active_vault",
     ] {
-        let in_write = merged.write_tools.contains(&tool.to_string());
-        let in_read = merged.read_tools.contains(&tool.to_string());
-        let in_vault_wide = merged.vault_wide_writes.contains(&tool.to_string());
-        let in_admin = merged.admin_tools.contains(&tool.to_string());
-        assert!(
-            in_write ^ in_read ^ in_vault_wide ^ in_admin,
-            "tool '{tool}' must be in EXACTLY one of the four classification lists, got write={in_write} read={in_read} vault_wide={in_vault_wide} admin={in_admin}"
+        let hits = [
+            merged.write_tools.iter().any(|name| name == tool),
+            merged.read_tools.iter().any(|name| name == tool),
+            merged.vault_wide_writes.iter().any(|name| name == tool),
+            merged.admin_tools.iter().any(|name| name == tool),
+        ]
+        .into_iter()
+        .filter(|hit| *hit)
+        .count();
+        assert_eq!(
+            hits, 1,
+            "tool '{tool}' must be in exactly one classification list"
         );
     }
     // Stale names from the legacy 8-tool list (update_task / delete_task) are harmless —
@@ -223,7 +229,12 @@ fn the_live_legacy_block_loads_with_every_tool_classified() {
 async fn a_read_does_not_raise_a_permission_card() {
     let proposals = TempDir::new().unwrap();
     let inner = Arc::new(InvocationRecordingRuntime::new(
-        &["turbovault:read_note", "turbovault:vector_search"],
+        &[
+            "turbovault:read_note",
+            "turbovault:search",
+            "turbovault:tasks_list",
+            "turbovault:vector_search",
+        ],
         Ok("read-ok".into()),
     ));
     let caps = CapabilitySet::from_iter([Capability::ExecuteMcp("turbovault".into())]);
@@ -231,10 +242,16 @@ async fn a_read_does_not_raise_a_permission_card() {
         inner.clone(),
         caps,
         vec![("turbovault".into(), Consequence::Reversible)],
-        vec![live_loaded_descriptor().1],
+        vec![live_loaded_descriptor()],
         vec![
-            ("Tasks".to_string(), liberado_common::WriteClass::AgentWritable),
-            ("Work".to_string(), liberado_common::WriteClass::AgentWritable),
+            (
+                "Tasks".to_string(),
+                liberado_common::WriteClass::AgentWritable,
+            ),
+            (
+                "Work".to_string(),
+                liberado_common::WriteClass::AgentWritable,
+            ),
         ],
         proposals.path().to_path_buf(),
         "test".into(),
@@ -246,18 +263,18 @@ async fn a_read_does_not_raise_a_permission_card() {
         session_id: "live-tv".into(),
         origin: liberado_common::ApprovalOrigin::Web,
     });
-    for tool in ["turbovault:read_note", "turbovault:vector_search"] {
-        let call = ToolInvocation::new(
-            "c",
-            tool,
-            serde_json::json!({"path": "Tasks/Main.md"}),
-        );
-        let result = rt.invoke(&call).await.expect("a read must not raise a card");
-        let s: &str = match &result {
-            Ok(v) => v.as_str(),
-            Err(e) => panic!("read tool '{tool}' must not raise an error: {e}"),
-        };
-        assert_eq!(s, "read-ok", "tool={tool}");
+    for tool in [
+        "turbovault:read_note",
+        "turbovault:search",
+        "turbovault:tasks_list",
+        "turbovault:vector_search",
+    ] {
+        let call = ToolInvocation::new("c", tool, serde_json::json!({"path": "Tasks/Main.md"}));
+        let result = rt
+            .invoke(&call)
+            .await
+            .expect("a read must not raise a card");
+        assert_eq!(result, "read-ok", "tool={tool}");
     }
     // No proposal files written.
     let proposals_dir = proposals.path().join("proposals");
@@ -316,6 +333,21 @@ async fn tasks_update_raises_a_permission_request_on_the_live_legacy_grant() {
         result.contains("Tasks"),
         "the request must name Tasks as the missing zone: {result}"
     );
+}
+
+#[tokio::test]
+async fn manage_tags_on_an_ungranted_zone_raises_a_permission_request() {
+    let proposals = TempDir::new().unwrap();
+    let caps = CapabilitySet::from_iter([Capability::ExecuteMcp("turbovault".into())]);
+    let rt = runtime_for_grant(caps, proposals.path(), true);
+    let call = ToolInvocation::new(
+        "c",
+        "turbovault:manage_tags",
+        serde_json::json!({"path": "Work/note.md"}),
+    );
+    let result = rt.invoke(&call).await.expect("must ask");
+    assert!(result.contains("PERMISSION REQUESTED"), "{result}");
+    assert!(result.contains("Work"), "{result}");
 }
 
 /// `move_file` carries TWO path args. The bundled `write_path_args` configures it with
@@ -385,9 +417,10 @@ async fn set_active_vault_is_admin_and_hard_denied() {
     ]);
     let rt = runtime_for_grant(caps, proposals.path(), true);
     let call = ToolInvocation::new("c", "turbovault:set_active_vault", serde_json::json!({}));
-    let err = rt.invoke(&call).await.expect_err(
-        "set_active_vault is admin; the runtime hard-denies — no permission card",
-    );
+    let err = rt
+        .invoke(&call)
+        .await
+        .expect_err("set_active_vault is admin; the runtime hard-denies — no permission card");
     assert!(err.contains("not authorized"), "{err}");
     assert!(
         err.contains("admin-only") || err.contains("admin tool"),
@@ -422,8 +455,11 @@ async fn vector_reads_run_for_a_read_only_session() {
         inner.clone(),
         caps,
         vec![("turbovault".into(), Consequence::Reversible)],
-        vec![live_loaded_descriptor().1],
-        vec![("Tasks".to_string(), liberado_common::WriteClass::AgentWritable)],
+        vec![live_loaded_descriptor()],
+        vec![(
+            "Tasks".to_string(),
+            liberado_common::WriteClass::AgentWritable,
+        )],
         proposals.path().to_path_buf(),
         "test".into(),
         "test".into(),
@@ -435,12 +471,11 @@ async fn vector_reads_run_for_a_read_only_session() {
         "turbovault:vector_search",
         serde_json::json!({"query": "anything"}),
     );
-    let result = rt.invoke(&call).await;
-    let s: &str = match &result {
-        Ok(v) => v.as_str(),
-        Err(e) => panic!("vector_search must run for a Read-only session: {e}"),
-    };
-    assert_eq!(s, "vec-ok");
+    let result = rt
+        .invoke(&call)
+        .await
+        .expect("vector_search must run for a Read-only session");
+    assert_eq!(result, "vec-ok");
 }
 
 /// Vault-wide writes (`vector_reindex`, fanouts) require the **explicit** marker grant —
@@ -454,11 +489,7 @@ async fn vector_reindex_with_only_write_tasks_is_refused() {
         Capability::Write(Zone::vault("Tasks")), // no marker
     ]);
     let rt = runtime_for_grant(caps, proposals.path(), true);
-    let call = ToolInvocation::new(
-        "c",
-        "turbovault:vector_reindex",
-        serde_json::json!({}),
-    );
+    let call = ToolInvocation::new("c", "turbovault:vector_reindex", serde_json::json!({}));
     let result = rt.invoke(&call).await.expect("a chat surface must ask");
     assert!(
         result.contains("PERMISSION REQUESTED"),
@@ -478,17 +509,12 @@ async fn vector_reindex_with_the_marker_runs() {
         Capability::Write(Zone::vault(VAULT_WIDE_ZONE_MARKER)),
     ]);
     let rt = runtime_for_grant(caps, proposals.path(), true);
-    let call = ToolInvocation::new(
-        "c",
-        "turbovault:vector_reindex",
-        serde_json::json!({}),
-    );
-    let result = rt.invoke(&call).await;
-    let s: &str = match &result {
-        Ok(v) => v.as_str(),
-        Err(e) => panic!("the marker grant authorises the rebuild: {e}"),
-    };
-    assert_eq!(s, "ok");
+    let call = ToolInvocation::new("c", "turbovault:vector_reindex", serde_json::json!({}));
+    let result = rt
+        .invoke(&call)
+        .await
+        .expect("the marker grant authorises the rebuild");
+    assert_eq!(result, "ok");
 }
 
 /// Path hardening in the resolver: `..` segments refuse, even in a `from` arg.

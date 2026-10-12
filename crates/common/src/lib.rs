@@ -34,10 +34,12 @@
 //! vocabulary every crate compiles against regardless of whether it touches config.
 
 pub mod approval_ledger;
+mod bundled_vault;
 pub mod capability;
 pub mod catalog;
 pub mod clock;
 pub mod permission;
+mod write_target;
 
 pub use approval_ledger::{ApprovalDecision, ApprovalLedger, ApprovalRecord};
 pub mod dispatch;
@@ -57,14 +59,14 @@ mod sweeping;
 
 pub use capability::CONSEQUENCE_GATE;
 pub use capability::{
-    Capability, CapabilitySet, Consequence, Magnitude, WriteClass, Zone, assess_magnitude,
-    instruction_scope, is_sweeping_destructive, mentions_destructive,
+    Capability, CapabilitySet, Consequence, Magnitude, VaultWideGrant, WriteClass, Zone,
+    assess_magnitude, instruction_scope, is_sweeping_destructive, mentions_destructive,
 };
 pub use catalog::{
     BUNDLED_VAULT_MCP_NAMES, BundledClassification, CapabilityCatalog, McpDescriptor,
     VAULT_WIDE_ZONE_MARKER, WriteTarget, apply_bundled_classifications,
-    default_bundled_classification, is_bundled_mcp, names_single_write_target,
-    resolve_zone, write_target, zone_write_restriction,
+    default_bundled_classification, is_bundled_mcp, names_single_write_target, resolve_zone,
+    write_target, zone_write_restriction,
 };
 pub use dispatch::{
     BlockReason, Delivery, Depth, DispatchAction, DispatchDecision, ExecMode, JobHandle, JobStatus,
