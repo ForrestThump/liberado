@@ -84,7 +84,7 @@ fn load_live() -> (crate::Config, McpDescriptor) {
     let vault = config_dir.path().join("vault");
     std::fs::create_dir_all(&vault).unwrap();
 
-    let topology = format!("vault_path = \"{}\"\n", vault.display()) + LIVE_TURBOVAULT_BLOCK;
+    let topology = topology_with_vault(&vault);
     std::fs::write(config_dir.path().join(super::TOPOLOGY_FILE), topology).unwrap();
     std::fs::write(config_dir.path().join(super::POLICY_FILE), POLICY_BLOCK).unwrap();
 
@@ -100,6 +100,31 @@ fn load_live() -> (crate::Config, McpDescriptor) {
 
 fn live_loaded_descriptor() -> McpDescriptor {
     load_live().1
+}
+
+/// Quote `vault` as a TOML basic string.
+///
+/// A Windows temp path is `C:\Users\...`. In a TOML basic string `\U` starts an
+/// 8-digit Unicode escape, so the unescaped path fails to parse on the runner.
+fn topology_with_vault(vault: &std::path::Path) -> String {
+    let vault_literal = vault
+        .display()
+        .to_string()
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"");
+    format!("vault_path = \"{vault_literal}\"\n") + LIVE_TURBOVAULT_BLOCK
+}
+
+#[test]
+fn windows_vault_path_is_a_valid_toml_basic_string() {
+    let topology = topology_with_vault(std::path::Path::new(
+        r"C:\Users\RUNNER~1\AppData\Local\Temp\.tmpNXjJCV\vault",
+    ));
+    let parsed: toml::Value = topology.parse().expect("escaped windows path must parse");
+    assert_eq!(
+        parsed.get("vault_path").and_then(toml::Value::as_str),
+        Some(r"C:\Users\RUNNER~1\AppData\Local\Temp\.tmpNXjJCV\vault")
+    );
 }
 
 fn runtime_for_grant(
