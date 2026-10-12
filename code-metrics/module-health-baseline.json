@@ -335,6 +335,12 @@
     "functions": 1,
     "cyclomatic": 5
   },
+  "crates/chat-client-contract/src/grants.rs": {
+    "ploc": 109,
+    "lloc": 15,
+    "functions": 6,
+    "cyclomatic": 11
+  },
   "crates/chat-client-contract/src/lib.rs": {
     "ploc": 8,
     "lloc": 0,
@@ -3821,6 +3827,18 @@
     "functions": 4,
     "cyclomatic": 6
   },
+  "crates/server/src/api/grants.rs": {
+    "ploc": 138,
+    "lloc": 17,
+    "functions": 10,
+    "cyclomatic": 28
+  },
+  "crates/server/src/api/grants_tests.rs": {
+    "ploc": 232,
+    "lloc": 88,
+    "functions": 11,
+    "cyclomatic": 13
+  },
   "crates/server/src/api/mod.rs": {
     "ploc": 17,
     "lloc": 0,
@@ -4702,6 +4720,12 @@
     "lloc": 32,
     "functions": 17,
     "cyclomatic": 27
+  },
+  "crates/webui/src/components/grants_popover.rs": {
+    "ploc": 333,
+    "lloc": 75,
+    "functions": 22,
+    "cyclomatic": 49
   },
   "crates/webui/src/components/incognito.rs": {
     "ploc": 107,
