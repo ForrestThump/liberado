@@ -45,6 +45,15 @@
 //! `send_human_message` and `continue_session` are the only tools that post a
 //! user message. Both require the caller to pass `message`. No tool reads an
 //! assistant reply and posts it back.
+//!
+//! # Read-only operator views
+//!
+//! `list_pending_approvals` is `GET /api/approvals/pending`: open permission
+//! requests, each with id, conversation, tool, zone, and created time.
+//! `get_agent_grants` is `GET /api/conversations/{id}/grant`: the grant stored
+//! on the current session header for a conversation or an Agents-shelf agent.
+//! Neither tool decides a request. There is no approve tool and no resolve tool.
+//! Spec: `docs/spec/reference/operator-dogfood-mcp.md`.
 
 mod base_url;
 mod client;
@@ -180,6 +189,26 @@ impl DogfoodServer {
         let value = ops::workspace_smoke(&self.client).await.map_err(mcp_err)?;
         to_json(&value)
     }
+
+    #[tool(
+        description = "GET /api/approvals/pending. Pending permission requests only. Each row has id, conversation, tool, zone, and created_at. conversation is null when the request has no session. Does not decide a request and does not post."
+    )]
+    async fn list_pending_approvals(&self) -> McpResult<String> {
+        let value = ops::list_pending_approvals(&self.client)
+            .await
+            .map_err(mcp_err)?;
+        to_json(&value)
+    }
+
+    #[tool(
+        description = "GET /api/conversations/{id}/grant. The grant stored on the current session header for a conversation or an Agents-shelf agent. Pass the session id. Does not re-resolve policy and does not change the grant. An absent profile means the header names no hat; capabilities are still the stored header value."
+    )]
+    async fn get_agent_grants(&self, session: String) -> McpResult<String> {
+        let value = ops::get_agent_grants(&self.client, &session)
+            .await
+            .map_err(mcp_err)?;
+        to_json(&value)
+    }
 }
 
 fn mcp_err(err: DogfoodError) -> McpError {
@@ -229,5 +258,57 @@ mod no_approve_tool {
                 "operator dogfood must not grow a {name} tool"
             );
         }
+    }
+
+    /// Both new operator views read with GET. The check looks at the operation
+    /// bodies, which are the only place these tools call the daemon.
+    #[test]
+    fn pending_approvals_and_agent_grants_are_read_only() {
+        let main = include_str!("main.rs");
+        let head = main.split("fn mcp_err").next().expect("mcp_err");
+        assert!(head.contains("async fn list_pending_approvals"));
+        assert!(head.contains("async fn get_agent_grants"));
+        let ops = include_str!("ops.rs");
+        assert_get_only(ops, "list_pending_approvals");
+        assert_get_only(ops, "get_agent_grants");
+        assert_get_only_tool(head, "list_pending_approvals");
+        assert_get_only_tool(head, "get_agent_grants");
+    }
+
+    fn assert_get_only(source: &str, name: &str) {
+        let body = function_body(source, &format!("pub async fn {name}"));
+        assert!(body.contains("get_json("), "{name} must read with get_json");
+        assert!(!body.contains("post_json"), "{name} must not post");
+        for forbidden in [
+            "Method::POST",
+            "Method::PUT",
+            "Method::PATCH",
+            "Method::DELETE",
+            "/resolve",
+        ] {
+            assert!(!body.contains(forbidden), "{name} contains {forbidden}");
+        }
+    }
+
+    fn assert_get_only_tool(head: &str, name: &str) {
+        let body = function_body(head, &format!("async fn {name}"));
+        assert!(body.contains(&format!("ops::{name}")));
+        assert!(!body.contains("post_json"), "{name} tool must not post");
+        assert!(!body.contains("/resolve"), "{name} tool must not resolve");
+    }
+
+    fn function_body<'a>(source: &'a str, signature: &str) -> &'a str {
+        let start = source
+            .find(signature)
+            .unwrap_or_else(|| panic!("missing {signature}"));
+        let rest = &source[start..];
+        let after = signature.len();
+        let rel = rest[after..]
+            .find("\n    #[tool(")
+            .or_else(|| rest[after..].find("\npub async fn "))
+            .or_else(|| rest[after..].find("\nasync fn "))
+            .or_else(|| rest[after..].find("\nfn "))
+            .unwrap_or(rest.len() - after);
+        &rest[..after + rel]
     }
 }

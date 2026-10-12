@@ -75,6 +75,72 @@ fn path_count(reqs: &[wiremock::Request], http_path: &str) -> usize {
     n
 }
 
+#[tokio::test]
+async fn pending_approvals_and_grants_issue_get_only() {
+    let mock = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(500).set_body_json(json!({"error": "write"})))
+        .expect(0)
+        .mount(&mock)
+        .await;
+    let pending = json!({
+        "approvals": [{
+            "id": "perm-1",
+            "conversation": SESSION,
+            "tool": "turbovault:edit_note",
+            "zone": "tasks",
+            "created_at": "2026-10-01T00:00:00Z"
+        }]
+    });
+    let grant = json!({
+        "id": SESSION,
+        "surface_mode": "agent",
+        "grant": {
+            "profile": "coding",
+            "delegation": false,
+            "capabilities": {"capabilities": [{"Write": {"Vault": "tasks"}}]}
+        }
+    });
+    mount_json(&mock, "GET", "/api/approvals/pending", 200, pending).await;
+    mount_json(
+        &mock,
+        "GET",
+        &format!("/api/conversations/{SESSION}/grant"),
+        200,
+        grant,
+    )
+    .await;
+    let server = server_for(&mock.uri());
+    let bad = server.get_agent_grants("not-a-session".into()).await;
+    assert!(bad.is_err(), "{bad:?}");
+    assert!(recorded(&mock).await.is_empty());
+
+    let listed = parse(server.list_pending_approvals().await);
+    assert_eq!(listed["approvals"][0]["id"], "perm-1");
+    assert_eq!(listed["approvals"][0]["tool"], "turbovault:edit_note");
+    assert_eq!(listed["approvals"][0]["zone"], "tasks");
+    assert_eq!(listed["approvals"][0]["conversation"], SESSION);
+    let grants = parse(server.get_agent_grants(SESSION.to_owned()).await);
+    assert_eq!(grants["id"], SESSION);
+    assert_eq!(grants["surface_mode"], "agent");
+    assert_eq!(grants["grant"]["profile"], "coding");
+    assert_eq!(
+        grants["grant"]["capabilities"]["capabilities"][0]["Write"]["Vault"],
+        "tasks"
+    );
+
+    let reqs = recorded(&mock).await;
+    assert_eq!(reqs.len(), 2);
+    for req in &reqs {
+        assert_eq!(req.method.as_str(), "GET");
+    }
+    assert_eq!(reqs[0].url.path(), "/api/approvals/pending");
+    assert_eq!(
+        reqs[1].url.path(),
+        format!("/api/conversations/{SESSION}/grant")
+    );
+}
+
 fn numbered_rows(n: usize, extra: Value) -> Value {
     let mut rows = Vec::with_capacity(n);
     for i in 0..n {

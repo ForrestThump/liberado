@@ -155,7 +155,9 @@ not an accident of history; it is a layer rule doing its job. See [`sessions.md`
 - **HTTP**: `POST /api/approvals/{id}/resolve` and `GET /api/conversations/{id}/approvals`.
   The POST is human-only in the same sense as the profile switch: it is not a `GET`, and it
   is not an agent tool or an operator-dogfood tool. The Telegram callback and the POST call
-  the same resolver.
+  the same resolver. `GET /api/approvals/pending` lists open permission requests. The operator
+  dogfood MCP reads that list and `GET /api/conversations/{id}/grant` (the current header
+  grant). Those two GETs do not decide a request.
 - **Not this table**: ACP command permission (`Deny` / `Once` / `Workspace` / `Everywhere`)
   stays on its own option set. Workspace is not Session.
 - **Background with no Telegram configured**: the orchestrator has no notifier, so a missing
