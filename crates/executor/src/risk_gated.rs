@@ -328,6 +328,42 @@ impl ToolRuntime for RiskGatedToolRuntime {
         async {
             let mcp_name = mcp_of(&call.name).to_string();
 
+            // 0. Admin tool pre-check: an admin tool (`set_active_vault` on the bundled
+            // turboVault, for example) is one the operator invokes directly through the
+            // daemon config or a hand-shell, never through an LLM-issued tool call. The
+            // runtime gate hard-denies the call BEFORE capability checks — even a session
+            // with `ExecuteMcp("turbovault")` is refused if it asks for an admin tool,
+            // because there is no single human to ask (an admin operation's "approval" is
+            // the operator, not the chat). No permission card surfaces.
+            if let Some(descriptor) = self.descriptor_of(&mcp_name)
+                && descriptor
+                    .admin_tools
+                    .iter()
+                    .any(|t| t == bare_tool_name(&call.name))
+            {
+                self.authority_decision(
+                    "admin_tool",
+                    "refused",
+                    call,
+                    None,
+                    "admin tools (e.g. set_active_vault) are not callable from a chat/agent \
+                     session; the operator must invoke them directly via the daemon config or \
+                     a hand-shell",
+                );
+                let err = format!(
+                    "not authorized: '{}' is an admin-only operation; the runtime does not \
+                     route admin tools through chat/agent sessions, and there is no human to \
+                     ask on this surface. The operator can invoke it directly through the \
+                     daemon config or a hand-shell.",
+                    call.name
+                );
+                tracing::warn!(
+                    tool = %call.name,
+                    "tool call refused: admin tool invoked through chat/agent"
+                );
+                return Err(err);
+            }
+
             // 1. Capability check: is **this tool** granted?
             //
             // `grants_tool`, not `grants_mcp`: a grant may name the whole server

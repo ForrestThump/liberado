@@ -131,7 +131,257 @@ pub struct McpDescriptor {
     /// behaviour). Keys MUST be a subset of `write_tools`; config validation refuses to boot
     /// otherwise.
     pub write_path_args: std::collections::BTreeMap<String, Vec<String>>,
+    /// Tools the runtime **always refuses** for chat/agent sessions, regardless of grants.
+    /// Used for admin-only operations like `set_active_vault` that affect every concurrent
+    /// session, not just the caller's. The runtime returns `Err` (hard deny) — no permission
+    /// card surfaces — because there is no single human to ask: an admin operation's
+    /// "approval" is the operator, not the chat. Operators invoke these directly through the
+    /// daemon config or a hand-shell, never through an LLM-issued tool call.
+    pub admin_tools: Vec<String>,
 }
+
+/// Built-in classification for the bundled TurboVault MCP, applied when the operator's
+/// `topology.toml` carries an "old-shape" entry (the `zone_from_arg = "path"` block that
+/// predates the F1 fix — name = `"turbovault"`, `write_tools` set, `read_tools` / `vault_wide_writes`
+/// / `write_path_args` absent, or empty).
+///
+/// The defaults apply UNLESS the operator's config explicitly classifies the tool. The merge
+/// rule is **never demote**: if the operator's config says a tool is a write, the runtime
+/// treats it as a write — even when the live server has a tool by that name today and the
+/// defaults would have classified it as a read (e.g. a future `vector_search` rename to
+/// something the operator already lists in `write_tools`). A stale name like `update_task`
+/// in the operator's `write_tools` is harmless: the live server has no such tool, so the
+/// operator-side writer classification simply has no effect. A new tool the live server
+/// exposes but the operator hasn't classified is classified by the defaults.
+///
+/// **Detection rule.** The defaults apply when the MCP descriptor satisfies:
+///   * `name == "turbovault"`, OR
+///   * (currently no other MCP matches — explicit list keeps it simple and auditable)
+///
+/// Add to the list carefully: every well-known bundled MCP ships one. The shape is documented
+/// in `default_turbovault_*` below; the merge logic lives in
+/// [`apply_bundled_classifications`]. Mirrors `liberado_config_loader::McpConfig::admin_tools`
+/// in the loader.
+pub const BUNDLED_VAULT_MCP_NAMES: &[&str] = &["turbovault"];
+
+/// Default `write_path_args` for the bundled turboVault — extracted to a `const`
+/// because Rust requires a `&[&str]` literal in static position (the schema's `&'a [&'a str]`
+/// form). The runtime unions these with the operator's own `write_path_args` on a per-tool
+/// basis, with the operator's value winning on key conflict.
+const TURBOVAULT_DEFAULT_WRITE_PATH_ARGS: &[(&str, &[&str])] = &[
+    ("move_note", &["from", "to"]),
+    ("move_file", &["from", "to"]),
+    ("create_from_template", &["file_path"]),
+    ("generate_index", &["directory"]),
+    ("append_log_entry", &["directory"]),
+    ("visualize", &["output"]),
+];
+
+/// Built-in defaults — frozen at compile time so the live node doesn't need a config
+/// update for tools already classified by the upstream turbovault schema. Keeping these as
+/// `const` data (not a config file) means the daemon's bin-and-config set can ship
+/// separately from the build that knows about specific bundled-MCP classifications.
+pub fn default_bundled_classification(name: &str) -> Option<BundledClassification<'_>> {
+    match name {
+        "turbovault" => Some(BundledClassification {
+            write_tools: &[
+                // Single-path writes (zone = leading path segment of `path`):
+                "write_note",
+                "edit_note",
+                "delete_note",
+                "move_note",
+                "move_file",
+                "update_frontmatter",
+                "manage_tags",
+                "create_from_template",
+                // Tasks (the previous deploy's `update_task` / `delete_task` are stale names
+                // the live server has not had since 1.6 — listed harmlessly in the operator's
+                // `write_tools` does NOT cause errors, because the live server just has no
+                // such tool today; a future server version that re-introduces them stays
+                // classified by the operator's write_tools):
+                "tasks_complete",
+                "tasks_update",
+                "tasks_delete",
+                // OKF / directory / output tools. Multi-path; declared in
+                // `default_bundled_write_path_args`:
+                "generate_index",
+                "append_log_entry",
+                "visualize",
+            ],
+            read_tools: &[
+                // Discovery / context
+                "get_vault_context",
+                "list_vaults",
+                "get_active_vault",
+                "get_vault_config",
+                // Reads
+                "read_note",
+                "get_notes_info",
+                "diff_notes",
+                // Search / query
+                "search",
+                "advanced_search",
+                "recommend_related",
+                "semantic_search",
+                "find_duplicates",
+                "find_stale_notes",
+                "query_frontmatter_sql",
+                "query_metadata",
+                "get_metadata_value",
+                // Graph / link analysis
+                "get_backlinks",
+                "get_forward_links",
+                "get_related_notes",
+                "get_hub_notes",
+                "get_dead_end_notes",
+                "get_isolated_clusters",
+                "get_centrality_ranking",
+                "detect_cycles",
+                "suggest_links",
+                // Health / quality
+                "quick_health_check",
+                "full_health_analysis",
+                "get_broken_links",
+                "evaluate_note_quality",
+                "vault_quality_report",
+                "analyze_note_grounding",
+                "find_ungrounded_notes",
+                "audit_stats",
+                // Templates
+                "list_templates",
+                "get_template",
+                // Reports / exports
+                "export_health_report",
+                "export_broken_links",
+                "export_vault_stats",
+                "export_analysis_report",
+                // OKF / frontmatter validation
+                "okf_validate",
+                // Tasks (read-side)
+                "tasks_list",
+                "tasks_overdue",
+                "tasks_tags",
+                "tasks_config",
+                // Fanout reads
+                "list_orphan_fanouts",
+                // Vector reads — only `vector_reindex` rebuilds state.
+                "vector_search",
+                "vector_status",
+                "vector_config",
+            ],
+            vault_wide_writes: &[
+                // Vault-wide mutations that require the explicit marker grant. `vector_reindex`
+                // rebuilds the search index; the other two listed (begin/commit/abandon fanout)
+                // affect git / fanout state across all sessions.
+                "begin_fanout",
+                "commit_fanout",
+                "abandon_fanout",
+                "vector_reindex",
+            ],
+            admin_tools: &[
+                // `set_active_vault` switches the active vault for EVERY concurrent session —
+                // not something a chat/agent session should ever invoke (it would also
+                // command an admin operation the runtime has no human to confirm). The
+                // runtime hard-denies this regardless of grants.
+                "set_active_vault",
+            ],
+            write_path_args: &TURBOVAULT_DEFAULT_WRITE_PATH_ARGS,
+        }),
+        _ => None,
+    }
+}
+
+/// The shape of a bundled MCP's classification. Each list is the **default**; the operator's
+/// config can only **add** tools (a tool classified by the operator as a write stays a
+/// write — we never demote). Empty / missing operator entries leave the defaults in place.
+#[derive(Debug, Clone, Copy)]
+pub struct BundledClassification<'a> {
+    pub write_tools: &'a [&'a str],
+    pub read_tools: &'a [&'a str],
+    pub vault_wide_writes: &'a [&'a str],
+    pub admin_tools: &'a [&'a str],
+    /// `[(tool, [arg, arg, …])]` — multi-arg tools whose path args differ from the
+    /// descriptor's single `zone_from_arg`. Order matters for `from`/`to` so the runtime
+    /// can distinguish source from destination in a move.
+    pub write_path_args: &'a [(&'a str, &'a [&'a str])],
+}
+
+/// Apply bundled-MCP defaults to a config-side `McpDescriptor`, **without** demoting any
+/// tool the operator's config has already classified. Specifically:
+///
+///   * `write_tools`   = (defaults ∪ operator's write_tools)
+///   * `read_tools`    = (defaults ∪ operator's read_tools) \ (write_tools so far)
+///   * `vault_wide_writes` = (defaults ∪ operator's vault_wide_writes) \ (write ∪ read)
+///   * `admin_tools`   = (defaults ∪ operator's admin_tools)
+///   * `write_path_args` = (defaults ∪ operator's write_path_args) — keys disjoint-merged
+///     with operator values, with the operator's value taking precedence on conflict (a
+///     future deploy added a different arg? operator's view wins).
+///
+/// The MCP name + zone_from_arg trigger is `BUNDLED_VAULT_MCP_NAMES`. `None` returned when
+/// the MCP is not bundled — descriptor is unchanged.
+///
+/// **Why **union, never demote**: the operator's config is the source of truth for "I want
+/// this tool to be a write"; their declaration wins. The defaults only fill in gaps the
+/// operator hasn't declared (because the legacy `topology.toml` didn't know about this
+/// tool). A stale operator entry (a name the live server has never had) is harmless
+/// because the live server never invokes it; the runtime classifies the call against the
+/// defaults' understanding when the operator's classification is silent.
+pub fn apply_bundled_classifications(mut descriptor: McpDescriptor) -> McpDescriptor {
+    let Some(bundled) = default_bundled_classification(&descriptor.name) else {
+        return descriptor;
+    };
+
+    // The operator's existing entries. We compute union by deduplication, then subtract
+    // any entries the operator already declared in a more permissive class (write > read,
+    // admin > everything).
+    let mut write: Vec<String> = descriptor.write_tools.clone();
+    let mut read: Vec<String> = descriptor.read_tools.clone();
+    let mut vault_wide: Vec<String> = descriptor.vault_wide_writes.clone();
+    let mut admin: Vec<String> = descriptor.admin_tools.clone();
+    let mut path_args = descriptor.write_path_args.clone();
+
+    let push_unique = |dst: &mut Vec<String>, src: &[&str]| {
+        for tool in src {
+            let t = (*tool).to_string();
+            if !dst.iter().any(|existing| existing == &t) {
+                dst.push(t);
+            }
+        }
+    };
+
+    push_unique(&mut write, bundled.write_tools);
+    push_unique(&mut read, bundled.read_tools);
+    push_unique(&mut vault_wide, bundled.vault_wide_writes);
+    push_unique(&mut admin, bundled.admin_tools);
+
+    // Move reads out of write (operator says write: never demote) but reads in the
+    // operator's write_tools that the defaults say are reads stay writes.
+    read.retain(|tool| !write.contains(tool));
+    vault_wide.retain(|tool| !write.contains(tool) && !read.contains(tool));
+
+    // Path args: defaults + operator, operator wins on key conflict.
+    for (tool, args) in bundled.write_path_args {
+        path_args
+            .entry((*tool).to_string())
+            .or_insert_with(|| args.iter().map(|s| s.to_string()).collect());
+    }
+
+    descriptor.write_tools = write;
+    descriptor.read_tools = read;
+    descriptor.vault_wide_writes = vault_wide;
+    descriptor.admin_tools = admin;
+    descriptor.write_path_args = path_args;
+    descriptor
+}
+
+/// Returns `true` when an MCP is bundled (so the runtime knows to apply the defaults).
+/// Mirrors `BUNDLED_VAULT_MCP_NAMES` for use at config-load time, where a higher-level
+/// crate (`liberado-bootstrap`, `liberado-config`) might want to surface this as a
+/// diagnostic. Kept public so tests can identify which MCPs the runtime ships with.
+pub fn is_bundled_mcp(name: &str) -> bool {
+    BUNDLED_VAULT_MCP_NAMES.contains(&name)
+}
+
 
 /// What a tool call writes to, resolved against its MCP's declaration *and its arguments*.
 ///
@@ -174,6 +424,131 @@ pub enum WriteTarget {
     /// tool with a path arg that names no zone. **Fail closed** — refuse, with `0`
     /// explaining the gap and how to close it.
     Undeterminable(String),
+}
+
+/// The outcome of [`hard_path_zone`] — either a successfully-resolved zone, or an
+/// `Undeterminable`-shaped refusal with the actionable explanation an operator reads.
+#[derive(Debug, PartialEq, Eq)]
+enum PathZone {
+    Ok(String),
+    /// The path string is structurally unsafe (absolute / drive / `..`); or empty / unparseable.
+    /// The runtime returns `Undeterminable` from this and stamps the message on the refusal.
+    Unauthorised(String),
+}
+
+/// Hardened path-to-zone resolution — see the call site for the rationale (`write_target`
+/// step 2b). The hardening rules are:
+///
+/// 1. **Absolute paths reject.** A leading `/`, `\`, OR a `:`-bearing first segment
+///    (Windows drive letters `C:` / `C:\…`) means the path is outside the vault
+///    regardless of the operator's grant shape — the runtime refuses without
+///    resolving the leading segment.
+/// 2. **Parent-directory segments reject.** `..` is a path-escape. `Tasks/../Legal/x.md`
+///    LOOKS like Tasks when read casually but resolves to Legal; the runtime
+///    authorises by leading segment, so a `..` in segment 1 is `Undeterminable`
+///    ("not Tasks"), a `..` later in the path would slip through silently and is
+///    also refused.
+/// 3. **Empty / bare-filename paths reject with the existing message** ("names no
+///    zone"): `loose.md` and `""` would otherwise look like they have an empty
+///    "first segment", which is meaningless.
+/// 4. **`.` segments normalise.** `a/./b.md` collapses to `a/b.md`. The leading
+///    `.` of a relative path (`./x.md`) is also treated as an empty segment
+///    (refused — the gate requires a real zone name).
+/// 5. **Case-sensitive zone comparison.** Zones are real vault folders
+///    (`Tasks`, `Work`, `conformance`); a path whose first segment differs in case
+///    ("tasks/x.md" with `Write(Tasks)` in the grant) is **not** authorised by
+///    that grant — the operator must classify the case-insensitive variant
+///    explicitly. Same-segment identical-case is the only match.
+/// 6. **UTF-8 / control chars / NUL** — a path with a NUL byte or an internal
+///    control character (e.g. `\x01`) refuses; the runtime does not pass arbitrary
+///    bytes through to the filesystem layer for `write_target`'s grant decision.
+fn hard_path_zone(path: &str, arg_name: &str, bare_tool_name: &str) -> PathZone {
+    if path.is_empty() {
+        return PathZone::Unauthorised(format!(
+            "'{bare_tool_name}' writes through arg '{arg_name}' which is an empty string"
+        ));
+    }
+    // 1. Absolute / drive-letter — leading separator or first segment contains `:` (Windows
+    // drive). Note: a Windows drive has TWO `:` characters in some forms ("C:\\\\foo"), so
+    // we check the first segment rather than just the first character.
+    let first_segment = path
+        .split(['/', '\\'])
+        .next()
+        .unwrap_or("");
+    let looks_absolute = path.starts_with('/')
+        || path.starts_with('\\')
+        || first_segment.contains(':');
+    if looks_absolute {
+        return PathZone::Unauthorised(format!(
+            "'{bare_tool_name}' writes through arg '{arg_name}' with absolute path \
+             '{path}' — refuse; vault writes must be relative paths under the vault"
+        ));
+    }
+    // 6. NUL bytes / other control chars — refuse.
+    if path.chars().any(|c| c.is_ascii_control()) {
+        return PathZone::Unauthorised(format!(
+            "'{bare_tool_name}' writes through arg '{arg_name}' with control characters in \
+             path '{path}' — refuse"
+        ));
+    }
+    // 2. `..` segment — anywhere, not just first.
+    if path
+        .split(['/', '\\'])
+        .any(|seg| seg == ".." || seg == ".")
+        && path.split(['/', '\\']).any(|seg| seg == "..")
+    {
+        // The above splits; we want a single check that distinguishes `.` (legitimate
+        // normalisation — `a/./b.md` collapses) from `..` (refused). Splitting manually:
+    }
+    let segments: Vec<&str> = path.split(['/', '\\']).collect();
+    if segments.iter().any(|s| *s == "..") {
+        return PathZone::Unauthorised(format!(
+            "'{bare_tool_name}' writes through arg '{arg_name}' with a parent-directory \
+             segment in '{path}' — refuse; vault writes must not traverse outside the vault"
+        ));
+    }
+    // Normalise: collapse `.` segments. `a/./b.md` -> `a/b.md`. An ALL-`.` path becomes empty.
+    let normalised: String = {
+        let mut out = String::with_capacity(path.len());
+        let mut first = true;
+        for seg in &segments {
+            if *seg == "." || seg.is_empty() {
+                continue;
+            }
+            if !first {
+                out.push('/');
+            }
+            out.push_str(seg);
+            first = false;
+        }
+        out
+    };
+    if normalised.is_empty() {
+        // `.` only, or empty-after-normalisation, which means a leading `.` was the only
+        // segment. The runtime wants a real zone name; this is structurally empty.
+        return PathZone::Unauthorised(format!(
+            "'{bare_tool_name}' writes through arg '{arg_name}' which normalises to nothing"
+        ));
+    }
+    // 5. Case-sensitive — first segment of the normalised path is the zone. Require a
+    // separator in the path; bare filenames ("loose.md") have no leading zone and were
+    // previously refused by the "names no zone" branch of the old writer.
+    if !normalised.contains('/') && !normalised.contains('\\') {
+        return PathZone::Unauthorised(format!(
+            "'{bare_tool_name}' writes to '{path}' which names no zone (expected \
+             '<zone>/...'); vault writes must include a leading zone name and a separator"
+        ));
+    }
+    let zone = match normalised.split('/').next() {
+        Some(z) => z,
+        None => {
+            return PathZone::Unauthorised(format!(
+                "'{bare_tool_name}' writes through arg '{arg_name}' with no leading \
+                 segment after normalisation"
+            ));
+        }
+    };
+    PathZone::Ok(zone.to_string())
 }
 
 /// Resolve what `bare_tool_name` on `descriptor` writes to, given the call's `arguments`.
@@ -254,19 +629,21 @@ pub fn write_target(
                     ));
                 }
             };
-            // The zone is the leading path segment: `tasks/foo.md` -> `tasks`. A bare filename
-            // has no zone, and a write with no zone is a write we cannot authorize.
-            let segment = path.split(['/', '\\']).find(|s| !s.is_empty() && *s != ".");
-            match segment {
-                Some(zone) if path.contains('/') || path.contains('\\') => {
-                    zones.push(zone.to_string());
-                }
-                _ => {
-                    return WriteTarget::Undeterminable(format!(
-                        "'{bare_tool_name}' writes to '{path}', which names no zone (expected \
-                         '<zone>/...')"
-                    ));
-                }
+            // The zone is the leading path segment under [hard_path_zone]. Hardening:
+            //   * absolute paths (leading /, \\, or drive-letter like "C:") refuse — the gate
+            //     never authorises an out-of-vault write regardless of grant shape,
+            //   * parent segments ("..") refuse silently — `Tasks/../Legal/x.md` is a path
+            //     that LOOKS like Tasks but resolves elsewhere; the runtime authorises by
+            //     leading segment, so it must be the leading segment,
+            //   * case-sensitive — zone names are real vault folders ("Tasks", "Work",
+            //     "conformance"); a near-miss variant ("tasks") is a different name the
+            //     operator must classify explicitly,
+            //   * `.` segments are normalised to nothing — `/./x.md` and `a/./b.md` collapse.
+            //   * Empty path / no leading zone ("loose.md") still falls through the existing
+            //     fail-closed branch (returns Undeterminable naming the issue).
+            match hard_path_zone(&path, arg, bare_tool_name) {
+                PathZone::Ok(zone) => zones.push(zone),
+                PathZone::Unauthorised(why) => return WriteTarget::Undeterminable(why),
             }
         }
         // Single-arg writers keep the original `Zone(z)` shape so the rest of the pipeline
@@ -848,7 +1225,7 @@ mod tests {
                 write_target(&d, "write_note", &serde_json::json!({"path": "loose.md"})),
                 WriteTarget::Undeterminable(_)
             ),
-            "a bare filename names no zone"
+            "a bare filename names no zone (path hardening must keep this refusal)"
         );
     }
 
@@ -1080,18 +1457,20 @@ mod tests {
     #[test]
     fn write_target_empty_segment_is_not_a_zone() {
         let d = path_addressed_descriptor();
-        // path starting with `//` → first split segments are empty.
-        // The correct `&&` skips empties to find "foo". A `||` mutation would match the
+        // In the MIDDLE of a path, empty segments must be skipped. `a//b.md` should resolve
+        // to zone `a`. (Leading `//` is rejected as absolute — see the path-hardening tests
+        // below — but middle empty segments are a normal-but-quirky input we tolerate.)
+        // The correct `&&` skips empties to find "a". A `||` mutation would match the
         // empty string first and return `Zone("")` — a zone we cannot authorize.
         let result = write_target(
             &d,
             "write_note",
-            &serde_json::json!({"path": "//foo/bar.md"}),
+            &serde_json::json!({"path": "a//b.md"}),
         );
         assert_eq!(
             result,
-            WriteTarget::Zone("foo".into()),
-            "empty segments must be skipped to find the real zone: got {result:?}"
+            WriteTarget::Zone("a".into()),
+            "interior empty segments must be skipped to find the real zone: got {result:?}"
         );
     }
 
@@ -1136,6 +1515,342 @@ mod tests {
             !catalog.is_degraded("weather"),
             "must be purged at exact TTL boundary"
         );
+    }
+
+    // ── Path hardening tests (2026-10-12 follow-up) ───────────────────────────────────
+    //
+    // `write_target` must REJECT a path that escapes the vault (`..`, leading `/`, drive
+    // letters, NUL bytes) rather than resolving it. The runtime authorises by leading path
+    // segment, so a `..` in segment 1 would slip `Tasks/../Legal/x.md` into a `Legal` write
+    // while LOOKING like `Tasks`. Zone comparison is case-sensitive (`tasks/x.md` must NOT
+    // match `Write(Tasks)`), and `.` segments normalise to nothing.
+
+    fn hub_descriptor() -> McpDescriptor {
+        McpDescriptor {
+            name: "turbovault".into(),
+            description: "test".into(),
+            consequence: Consequence::Reversible,
+            provenance: None,
+            default_zone: None,
+            tool_zones: Vec::new(),
+            zone_from_arg: Some("path".into()),
+            write_tools: vec!["write_note".into(), "edit_note".into()],
+            read_tools: Vec::new(),
+            vault_wide_writes: Vec::new(),
+            write_path_args: std::collections::BTreeMap::new(),
+            admin_tools: Vec::new(),
+        }
+    }
+
+    /// An absolute path is `Undeterminable` ("refuse; vault writes must be relative paths").
+    #[test]
+    fn write_target_refuses_absolute_paths() {
+        let d = hub_descriptor();
+        for bad in [
+            "/etc/passwd",
+            "\\Windows\\System32",
+            "C:/Windows/System32",
+            "C:\\Users\\Admin",
+            "/Tasks/x.md",
+            "\\Tasks/x.md",
+        ] {
+            let result = write_target(&d, "write_note", &serde_json::json!({"path": bad}));
+            assert!(
+                matches!(result, WriteTarget::Undeterminable(_)),
+                "absolute path '{bad}' must refuse, got {result:?}"
+            );
+        }
+    }
+
+    /// `..` segments refuse — `Tasks/../Legal/x.md` LOOKS like Tasks but resolves elsewhere.
+    #[test]
+    fn write_target_refuses_parent_directory_segments() {
+        let d = hub_descriptor();
+        let result = write_target(
+            &d,
+            "write_note",
+            &serde_json::json!({"path": "Tasks/../Legal/x.md"}),
+        );
+        assert!(
+            matches!(result, WriteTarget::Undeterminable(_)),
+            "`..` segment must refuse (would silently resolve to a different zone): {result:?}"
+        );
+        // First-segment `..` is the most dangerous — `../etc/passwd` must also refuse, not
+        // resolve to "etc".
+        let result = write_target(
+            &d,
+            "write_note",
+            &serde_json::json!({"path": "../../etc/passwd"}),
+        );
+        assert!(
+            matches!(result, WriteTarget::Undeterminable(_)),
+            "leading `..` must refuse: {result:?}"
+        );
+    }
+
+    /// `.` segments normalise silently — `a/./b.md` collapses to `a/b.md`, `a//b.md`
+    /// collapses to `a/b.md`.
+    #[test]
+    fn write_target_normalises_dot_segments() {
+        let d = hub_descriptor();
+        assert_eq!(
+            write_target(&d, "write_note", &serde_json::json!({"path": "Tasks/./Main.md"})),
+            WriteTarget::Zone("Tasks".into()),
+        );
+        assert_eq!(
+            write_target(&d, "write_note", &serde_json::json!({"path": "Tasks//Main.md"})),
+            WriteTarget::Zone("Tasks".into()),
+        );
+    }
+
+    /// Empty paths and bare filenames refuse — a write with no leading zone cannot be
+    /// authorised ("names no zone" branch already covers the unclassifiable case).
+    #[test]
+    fn write_target_refuses_empty_paths_and_bare_filenames() {
+        let d = hub_descriptor();
+        for bad in ["", "loose.md", "/", ".", "./"] {
+            let result = write_target(&d, "write_note", &serde_json::json!({"path": bad}));
+            // `.` and `./` normalise to empty; `loose.md` is just one segment without a zone;
+            // `""` is empty; `/` has leading separator (absolute). All refuse.
+            assert!(
+                matches!(result, WriteTarget::Undeterminable(_)),
+                "shape '{bad}' must refuse, got {result:?}"
+            );
+        }
+    }
+
+    /// NUL bytes and other control characters refuse — they are not legal in a vault path
+    /// and must not propagate to the filesystem layer.
+    #[test]
+    fn write_target_refuses_control_characters() {
+        let d = hub_descriptor();
+        for bad in ["Tasks/\u{0}foo.md", "Tasks/\nMain.md", "Tasks/\r\nMain.md"] {
+            let result = write_target(&d, "write_note", &serde_json::json!({"path": bad}));
+            assert!(
+                matches!(result, WriteTarget::Undeterminable(_)),
+                "control chars in '{bad:?}' must refuse, got {result:?}"
+            );
+        }
+    }
+
+    /// Zone names are **case-sensitive**. A path whose leading segment matches a granted zone
+    /// only case-insensitively ("tasks/x.md" with the grant holding `Write(Tasks)`) must NOT
+    /// be authorised; the operator must classify the case-insensitive variant explicitly.
+    #[test]
+    fn write_target_zone_match_is_case_sensitive() {
+        let d = hub_descriptor();
+        for bad in ["tasks/x.md", "TASKS/x.md", "TaSkS/x.md"] {
+            let result = write_target(&d, "write_note", &serde_json::json!({"path": bad}));
+            // The path-zone resolution is case-preserving — `tasks` is the zone the gate sees.
+            // The grant/zone comparison that follows in `risk_gated.rs` is then exact-match,
+            // so `Write(Tasks)` does NOT satisfy a write targeting `tasks`. This test pins the
+            // resolution shape; the grant-comparison side is exercised in `risk_gated_tests`.
+            assert_eq!(
+                result,
+                WriteTarget::Zone(bad.split('/').next().unwrap().to_string()),
+                "the resolver preserves case for the zone segment ('{bad}' → the literal case)"
+            );
+        }
+    }
+
+    /// `..` in NON-leading segments still refuses. `a/b/../c.md` LOOKS like `a/b/`'s zone
+    /// (`a`) but resolves to `a/c.md`.
+    #[test]
+    fn write_target_refuses_trailing_parent_segments() {
+        let d = hub_descriptor();
+        let result = write_target(
+            &d,
+            "write_note",
+            &serde_json::json!({"path": "Tasks/inner/../escape.md"}),
+        );
+        assert!(
+            matches!(result, WriteTarget::Undeterminable(_)),
+            "`..` anywhere in the path must refuse: {result:?}"
+        );
+    }
+
+    /// Backslash variants of separators are normalised alongside `/`. `Tasks\\Main.md` is a
+    /// Linux→Windows port; the resolver should treat it identically to `Tasks/Main.md`.
+    #[test]
+    fn write_target_treats_backslash_and_forward_separators_identically() {
+        let d = hub_descriptor();
+        assert_eq!(
+            write_target(&d, "write_note", &serde_json::json!({"path": "Tasks\\Main.md"})),
+            WriteTarget::Zone("Tasks".into()),
+        );
+    }
+
+    /// Multi-arg writer (`move_note(from, to)`) — both segments are hardened, `..` in
+    /// either is a refusal.
+    #[test]
+    fn write_target_refuses_parent_in_secondary_path_arg() {
+        let mut d = hub_descriptor();
+        d.write_tools = vec!["move_note".into()];
+        d.write_path_args
+            .insert("move_note".into(), vec!["from".into(), "to".into()]);
+
+        // Source is fine, destination has `..` — refuse.
+        let result = write_target(
+            &d,
+            "move_note",
+            &serde_json::json!({"from": "Tasks/Main.md", "to": "../escape.md"}),
+        );
+        assert!(
+            matches!(result, WriteTarget::Undeterminable(_)),
+            "`..` in the destination must refuse: {result:?}"
+        );
+
+        // Source has `..` — refuse.
+        let result = write_target(
+            &d,
+            "move_note",
+            &serde_json::json!({"from": "../escape.md", "to": "sandbox/x.md"}),
+        );
+        assert!(
+            matches!(result, WriteTarget::Undeterminable(_)),
+            "`..` in the source must refuse: {result:?}"
+        );
+    }
+
+    /// Bundled-defaults merge — the live node's old-shape `topology.toml` (legacy 8-tool
+    /// `write_tools`, no `read_tools` / `vault_wide_writes` / `write_path_args` /
+    /// `admin_tools`) works as-is, applying the build-time defaults so `read_note` /
+    /// `vector_search` are reads, `edit_note` / `tasks_update` / `manage_tags` are writes,
+    /// `move_file` gets multi-arg resolution, `vector_reindex` is vault-wide, and
+    /// `set_active_vault` lands in `admin_tools`.
+    #[test]
+    fn livetv_with_bundled_defaults_returns_a_fully_classified_descriptor() {
+        let minimal = McpDescriptor {
+            name: "turbovault".into(),
+            description: "live turbovault".into(),
+            consequence: Consequence::Reversible,
+            provenance: None,
+            default_zone: None,
+            tool_zones: Vec::new(),
+            zone_from_arg: Some("path".into()),
+            // The legacy 8-tool list as the live node has shipped it since 2026-10-11.
+            write_tools: vec![
+                "write_note".into(),
+                "delete_note".into(),
+                "move_note".into(),
+                "move_file".into(),
+                "update_frontmatter".into(),
+                "create_from_template".into(),
+                "update_task".into(),
+                "delete_task".into(),
+            ],
+            read_tools: Vec::new(),
+            vault_wide_writes: Vec::new(),
+            write_path_args: std::collections::BTreeMap::new(),
+            admin_tools: Vec::new(),
+        };
+        let merged = apply_bundled_classifications(minimal);
+
+        // The defaults filled the gaps:
+        for tool in [
+            "edit_note",
+            "manage_tags",
+            "tasks_complete",
+            "tasks_update",
+            "tasks_delete",
+            "generate_index",
+            "append_log_entry",
+            "visualize",
+        ] {
+            assert!(
+                merged.write_tools.contains(&tool.to_string()),
+                "operator's legacy config is silently extended with defaults: '{tool}' must be in write_tools, got {merged:?}"
+            );
+        }
+        for tool in [
+            "read_note",
+            "search",
+            "tasks_list",
+            "vector_search",
+            "vector_status",
+            "vector_config",
+        ] {
+            assert!(
+                merged.read_tools.contains(&tool.to_string()),
+                "defaults must classify '{tool}' as a read, got {merged:?}"
+            );
+        }
+        // The legacy operator list still gets UNIONED, never demoted.
+        assert!(merged.write_tools.contains(&"write_note".to_string()));
+        // Stale names (update_task, delete_task) are harmless — the live server has no such
+        // tool today, so they sit in the operator's write_tools without runtime effect.
+        assert!(merged.write_tools.contains(&"update_task".to_string()));
+
+        // Multi-arg writer's path args are filled by the defaults.
+        for tool in ["move_note", "move_file"] {
+            assert!(
+                merged.write_path_args.contains_key(tool),
+                "multi-arg writer '{tool}' missing from defaults' write_path_args: {merged:?}"
+            );
+        }
+        assert_eq!(merged.write_path_args.get("move_note").unwrap(), &vec!["from".to_string(), "to".to_string()]);
+
+        // `set_active_vault` becomes admin, never a vault-wide write.
+        assert!(merged.admin_tools.contains(&"set_active_vault".to_string()));
+        assert!(!merged.vault_wide_writes.contains(&"set_active_vault".to_string()));
+    }
+
+    /// Bundled merge — the operator's config can EXTEND but never DEMOTE. Adding `edit_note`
+    /// again (it's already in the defaults) is a no-op; declaring it explicitly as a read while
+    /// the defaults say write keeps it a write.
+    #[test]
+    fn bundled_merge_operator_declared_write_is_never_demoted_to_read() {
+        let minimal = McpDescriptor {
+            name: "turbovault".into(),
+            description: "live turbovault".into(),
+            consequence: Consequence::Reversible,
+            provenance: None,
+            default_zone: None,
+            tool_zones: Vec::new(),
+            zone_from_arg: Some("path".into()),
+            // Operator's explicit — might be wrong but the runtime respects it.
+            write_tools: vec!["write_note".into(), "edit_note".into()],
+            read_tools: vec!["edit_note".into()], // Operator says edit_note is a read
+            vault_wide_writes: Vec::new(),
+            write_path_args: std::collections::BTreeMap::new(),
+            admin_tools: Vec::new(),
+        };
+        let merged = apply_bundled_classifications(minimal);
+        // The defaults would have set edit_note as a write; the operator says it's a read, but
+        // union-never-demote means `edit_note` STAYS in write_tools. The `read_tools` entry is
+        // dropped because the run classifies it as a write.
+        assert!(
+            merged.write_tools.contains(&"edit_note".to_string()),
+            "operator's write classification must take precedence over the defaults' read: {merged:?}"
+        );
+        assert!(
+            !merged.read_tools.contains(&"edit_note".to_string()),
+            "the merged descriptor must not list edit_note as both read and write: {merged:?}"
+        );
+    }
+
+    /// Bundled merge — non-bundled MCP names pass through unchanged.
+    #[test]
+    fn bundled_merge_is_a_noop_for_non_bundled_mcps() {
+        let minimal = McpDescriptor {
+            name: "liberado-pdf-mcp".into(),
+            description: "pdf".into(),
+            consequence: Consequence::Reversible,
+            provenance: None,
+            default_zone: None,
+            tool_zones: Vec::new(),
+            zone_from_arg: None,
+            write_tools: Vec::new(),
+            read_tools: Vec::new(),
+            vault_wide_writes: Vec::new(),
+            write_path_args: std::collections::BTreeMap::new(),
+            admin_tools: Vec::new(),
+        };
+        let merged = apply_bundled_classifications(minimal.clone());
+        // No change — bundled defaults don't apply.
+        assert_eq!(merged.write_tools, minimal.write_tools);
+        assert_eq!(merged.read_tools, minimal.read_tools);
+        assert_eq!(merged.admin_tools, minimal.admin_tools);
     }
 }
 
@@ -1257,6 +1972,7 @@ mod proptest_tests {
                                     read_tools,
                                     vault_wide_writes,
                                     write_path_args: std::collections::BTreeMap::new(),
+                                    admin_tools: Vec::new(),
                                 }
                             },
                         )

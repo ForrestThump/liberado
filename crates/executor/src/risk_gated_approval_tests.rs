@@ -18,6 +18,7 @@ fn vault_descriptor() -> McpDescriptor {
         zone_from_arg: None,
         write_tools: Vec::new(),
         write_path_args: std::collections::BTreeMap::new(),
+        admin_tools: Vec::new(),
         ..Default::default()
     }
 }

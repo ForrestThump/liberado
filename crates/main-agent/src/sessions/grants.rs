@@ -850,6 +850,7 @@ async fn live_bug_chat_sessions(dir: &std::path::Path) -> ChatSessions {
         ],
         read_tools: vec!["read_note".into()],
         vault_wide_writes: vec!["begin_fanout".into(), "set_active_vault".into()],
+        admin_tools: Vec::new(),
         write_path_args: std::collections::BTreeMap::new(),
     });
     let capabilities = CapabilitySet::from_iter([

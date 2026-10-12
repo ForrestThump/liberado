@@ -930,7 +930,8 @@ mod tests {
             write_tools: Vec::new(),
             read_tools: Vec::new(),
             vault_wide_writes: Vec::new(),
-            write_path_args: std::collections::BTreeMap::new(),
+                        write_path_args: std::collections::BTreeMap::new(),
+            admin_tools: Vec::new(),
             writes_vault: Some(false),
         }
     }

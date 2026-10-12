@@ -1255,6 +1255,16 @@ pub struct McpConfig {
     /// the human picks Once / Session / Everywhere.
     #[serde(default)]
     pub vault_wide_writes: Vec<String>,
+    /// **Path-addressed MCPs only**: tools the runtime ALWAYS refuses for chat/agent
+    /// sessions, regardless of grants. Reserved for admin-only operations like
+    /// `set_active_vault` that affect every concurrent session, not just the caller's — the
+    /// runtime returns `Err` (hard deny, no permission card) because there is no single human
+    /// to ask. The operator invokes admin tools directly via the daemon config or hand-shell,
+    /// never through an LLM-issued tool call. Bundled-default classifications for known MCPs
+    /// (`turbovault`'s `set_active_vault`) populate this list automatically when the operator's
+    /// config is silent — see `liberado_common::apply_bundled_classifications`.
+    #[serde(default)]
+    pub admin_tools: Vec<String>,
     /// **Path-addressed MCPs only**: per-tool override of the path-argument name. Most
     /// path-addressed tools carry a single `path` arg (the MCP's `zone_from_arg`); a handful
     /// name their path arg differently, and `move_note` / `move_file` carry two paths
@@ -1336,6 +1346,7 @@ mod zone_resolution_tests {
             write_tools: Vec::new(),
             read_tools: Vec::new(),
             vault_wide_writes: Vec::new(),
+            admin_tools: Vec::new(),
             write_path_args: std::collections::BTreeMap::new(),
             writes_vault: None,
         }
@@ -1746,6 +1757,7 @@ mod proptest_tests {
                         write_tools: declaration.write_tools.clone(),
                         read_tools: Vec::new(),
                         vault_wide_writes: Vec::new(),
+                        admin_tools: Vec::new(),
                         write_path_args: std::collections::BTreeMap::new(),
                         writes_vault: None,
                     };

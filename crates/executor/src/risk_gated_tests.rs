@@ -903,6 +903,7 @@ mod magnitude_respects_risk_waivers {
             write_tools: vec!["write_note".into(), "delete_note".into()],
             read_tools: vec!["read_note".into()],
             vault_wide_writes: Vec::new(),
+            admin_tools: Vec::new(),
             write_path_args: std::collections::BTreeMap::new(),
         }
     }
@@ -1254,118 +1255,39 @@ mod one_intent_one_prompt {
 mod vault_write_gate_regression {
     use super::*;
 
-    /// Live TurboVault tool surface (2026-10-11): every tool classified into exactly one of
-    /// `write_tools` / `read_tools` / `vault_wide_writes`. Approximates the deployed topology:
-    /// `write_tools` covers path-addressed mutations, `read_tools` covers the lookup/graph
-    /// surface, `vault_wide_writes` covers fanout / vault switch / index rebuild.
+    /// Live TurboVault tool surface (2026-10-11): every tool classified via the
+    /// build-time bundled defaults (see `liberado_common::default_bundled_classification("turbovault")`).
+    /// The fixture here mirrors what `liberado_config::catalog_from_config` produces for the
+    /// live node when the operator's `topology.toml` carries the legacy 8-tool `write_tools` and
+    /// nothing else: the build-time defaults fill the gap so `read_note`/`vector_search` are
+    /// reads, `edit_note`/`tasks_update`/`manage_tags` are writes, `move_file`/`generate_index`/...
+    /// carry multi-arg path resolution, `vector_reindex` is vault-wide, `set_active_vault` is
+    /// admin. See `livetv_with_bundled_defaults_returns_a_fully_classified_descriptor` in
+    /// `liberado-common`'s catalog tests for the merge that produces this shape.
+    #[allow(clippy::vec_init_then_push)]
     fn livetv_descriptor() -> McpDescriptor {
-        McpDescriptor {
+        // Build by starting from a minimal `McpDescriptor` and applying the bundled-default
+        // merge — that's what `liberado_config::catalog_from_config` does in production for
+        // any MCP named `turbovault` (or whatever else lands in `BUNDLED_VAULT_MCP_NAMES`).
+        // The merge is what makes the live node's old-shape `topology.toml` work without a
+        // config change. See `liberado_common::default_bundled_classification("turbovault")`
+        // for the build-time source of truth. The merge test lives in `catalog_tests`.
+        let minimal = McpDescriptor {
             name: "turbovault".into(),
-            description: "live turbovault - every tool classified".into(),
+            description: "live turbovault".into(),
             consequence: Consequence::Reversible,
             provenance: None,
             default_zone: None,
             tool_zones: Vec::new(),
             zone_from_arg: Some("path".into()),
-            write_tools: vec![
-                "write_note".into(),
-                "edit_note".into(),
-                "delete_note".into(),
-                "move_note".into(),
-                "move_file".into(),
-                "update_frontmatter".into(),
-                "manage_tags".into(),
-                "create_from_template".into(),
-                "tasks_complete".into(),
-                "tasks_update".into(),
-                "tasks_delete".into(),
-                "generate_index".into(),
-                "append_log_entry".into(),
-                "visualize".into(),
-            ],
-            read_tools: vec![
-                "get_vault_context".into(),
-                "read_note".into(),
-                "get_backlinks".into(),
-                "get_forward_links".into(),
-                "get_related_notes".into(),
-                "get_hub_notes".into(),
-                "get_dead_end_notes".into(),
-                "get_isolated_clusters".into(),
-                "quick_health_check".into(),
-                "full_health_analysis".into(),
-                "get_broken_links".into(),
-                "detect_cycles".into(),
-                "search".into(),
-                "advanced_search".into(),
-                "recommend_related".into(),
-                "query_frontmatter_sql".into(),
-                "list_templates".into(),
-                "get_template".into(),
-                "list_vaults".into(),
-                "get_vault_config".into(),
-                "get_active_vault".into(),
-                "list_orphan_fanouts".into(),
-                "export_health_report".into(),
-                "export_broken_links".into(),
-                "export_vault_stats".into(),
-                "export_analysis_report".into(),
-                "query_metadata".into(),
-                "get_metadata_value".into(),
-                "get_notes_info".into(),
-                "suggest_links".into(),
-                "get_centrality_ranking".into(),
-                "diff_notes".into(),
-                "evaluate_note_quality".into(),
-                "vault_quality_report".into(),
-                "analyze_note_grounding".into(),
-                "find_ungrounded_notes".into(),
-                "okf_validate".into(),
-                "find_stale_notes".into(),
-                "semantic_search".into(),
-                "find_duplicates".into(),
-                "audit_stats".into(),
-                "tasks_list".into(),
-                "tasks_overdue".into(),
-                "tasks_tags".into(),
-                "tasks_config".into(),
-                "vector_search".into(),
-                "vector_status".into(),
-                "vector_config".into(),
-            ],
-            vault_wide_writes: vec![
-                "begin_fanout".into(),
-                "commit_fanout".into(),
-                "abandon_fanout".into(),
-                "set_active_vault".into(),
-                "vector_reindex".into(),
-            ],
-            // vector_search / vector_status / vector_config are reads (query the index; only
-            // vector_reindex rebuilds state). Classify them in `read_tools` so a Read-only
-            // session can use them without a permission card.
-            write_path_args: std::collections::BTreeMap::from([
-                (
-                    "move_note".to_string(),
-                    vec!["from".to_string(), "to".to_string()],
-                ),
-                (
-                    "move_file".to_string(),
-                    vec!["from".to_string(), "to".to_string()],
-                ),
-                (
-                    "create_from_template".to_string(),
-                    vec!["file_path".to_string()],
-                ),
-                ("generate_index".to_string(), vec!["directory".to_string()]),
-                (
-                    "append_log_entry".to_string(),
-                    vec!["directory".to_string()],
-                ),
-                ("visualize".to_string(), vec!["output".to_string()]),
-            ]),
-        }
+            write_tools: Vec::new(),
+            read_tools: Vec::new(),
+            vault_wide_writes: Vec::new(),
+            write_path_args: std::collections::BTreeMap::new(),
+            admin_tools: Vec::new(),
+        };
+        liberado_common::apply_bundled_classifications(minimal)
     }
-
     fn gate_with_grant(
         dir: &std::path::Path,
         inner: Arc<InvocationRecordingRuntime>,
@@ -1640,6 +1562,7 @@ mod vault_write_gate_regression {
             write_tools: vec!["move_file".into()],
             read_tools: Vec::new(),
             vault_wide_writes: Vec::new(),
+            admin_tools: Vec::new(),
             write_path_args: std::collections::BTreeMap::new(), // move_file NOT declared
         };
         let dir = tempfile::TempDir::new().unwrap();

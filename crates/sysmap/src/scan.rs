@@ -394,6 +394,7 @@ mod tests {
             read_tools: Vec::new(),
             vault_wide_writes: Vec::new(),
             write_path_args: std::collections::BTreeMap::new(),
+            admin_tools: Vec::new(),
             writes_vault: None,
         };
         assert!(!mcp_writes_vault(&read_only));
@@ -411,6 +412,7 @@ mod tests {
             read_tools: Vec::new(),
             vault_wide_writes: Vec::new(),
             write_path_args: std::collections::BTreeMap::new(),
+            admin_tools: Vec::new(),
             writes_vault: None,
         };
         assert!(mcp_writes_vault(&fixed_zone));
@@ -428,6 +430,7 @@ mod tests {
             read_tools: Vec::new(),
             vault_wide_writes: Vec::new(),
             write_path_args: std::collections::BTreeMap::new(),
+            admin_tools: Vec::new(),
             writes_vault: Some(false),
         };
         assert!(!mcp_writes_vault(&opted_out));

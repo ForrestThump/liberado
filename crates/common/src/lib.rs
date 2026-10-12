@@ -61,8 +61,10 @@ pub use capability::{
     instruction_scope, is_sweeping_destructive, mentions_destructive,
 };
 pub use catalog::{
-    CapabilityCatalog, McpDescriptor, VAULT_WIDE_ZONE_MARKER, WriteTarget,
-    names_single_write_target, resolve_zone, write_target, zone_write_restriction,
+    BUNDLED_VAULT_MCP_NAMES, BundledClassification, CapabilityCatalog, McpDescriptor,
+    VAULT_WIDE_ZONE_MARKER, WriteTarget, apply_bundled_classifications,
+    default_bundled_classification, is_bundled_mcp, names_single_write_target,
+    resolve_zone, write_target, zone_write_restriction,
 };
 pub use dispatch::{
     BlockReason, Delivery, Depth, DispatchAction, DispatchDecision, ExecMode, JobHandle, JobStatus,

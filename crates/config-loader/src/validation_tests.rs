@@ -24,6 +24,7 @@ fn topology_with_mcp(name: &str) -> Topology {
             write_path_args: std::collections::BTreeMap::new(),
             read_tools: Vec::new(),
             vault_wide_writes: Vec::new(),
+            admin_tools: Vec::new(),
             // These tests are about grants/zones/secrets, not about F1's zone rule. Declaring
             // "no vault writes" keeps them focused — and the fact that this line is *required*
             // for them to pass at all is the rule doing its job.

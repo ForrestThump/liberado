@@ -22,6 +22,7 @@ fn mcp(name: &str, enabled: bool, transport: McpTransport) -> McpConfig {
         write_tools: Vec::new(),
         read_tools: Vec::new(),
         vault_wide_writes: Vec::new(),
+        admin_tools: Vec::new(),
         write_path_args: std::collections::BTreeMap::new(),
         writes_vault: Some(false),
     }
