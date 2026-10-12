@@ -37,3 +37,15 @@ can be yanked upstream at any moment after it enters the lockfile, and when
 no newer version exists (as happened to `bisync 0.3.0` under
 `gix-protocol`) there is no code fix — only a policy change unblocks CI.
 Yanked warnings are still surfaced so the drift stays visible.
+
+## Unmaintained advisories
+
+`deny.toml` `[advisories].ignore` lists advisories that mark a crate unmaintained
+when there is no known vulnerability and no safe upgrade. Each entry names the
+crate and the upstream that should drop it.
+
+- `RUSTSEC-2024-0436` (`paste`) is transitive through fastembed/tokenizers and ratatui.
+- `RUSTSEC-2026-0192` (`ttf-parser`) is transitive through eframe's Linux window stack.
+- `RUSTSEC-2024-0449` (`unsafe-libyaml`) is transitive through deprecated
+  `serde_yaml` 0.9, used by liberado-common and liberado-cli. Revisit when
+  migrating off `serde_yaml`.

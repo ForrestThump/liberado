@@ -21,6 +21,10 @@ fn topology_with_mcp(name: &str) -> Topology {
             tools: Vec::new(),
             zone_from_arg: None,
             write_tools: Vec::new(),
+            write_path_args: std::collections::BTreeMap::new(),
+            read_tools: Vec::new(),
+            vault_wide_writes: Vec::new(),
+            admin_tools: Vec::new(),
             // These tests are about grants/zones/secrets, not about F1's zone rule. Declaring
             // "no vault writes" keeps them focused — and the fact that this line is *required*
             // for them to pass at all is the rule doing its job.
@@ -341,6 +345,77 @@ fn default_zone_alone_satisfies_zone_requirement() {
     let mut topology = topology_with_mcp("turbovault");
     topology.mcps[0].writes_vault = None;
     topology.mcps[0].default_zone = Some("tasks".into());
+    assert!(validate_merged_config(&config(topology, Policy::default())).is_ok());
+}
+
+/// Report sink validation is already covered above; the new tool-classification overlap check
+/// is exercised here. The 2026-10-11 fix made classification exhaustive on path-addressed MCPs:
+/// each tool appears in one (and only one) of `write_tools`, `read_tools`, `vault_wide_writes`.
+/// A tool declared in two lists resolves to whichever class the runtime sees first — silent
+/// demotion. Catch it at boot.
+#[test]
+fn rejects_a_tool_classified_as_both_read_and_write() {
+    let mut topology = topology_with_mcp("turbovault");
+    topology.mcps[0].writes_vault = None;
+    topology.mcps[0].zone_from_arg = Some("path".into());
+    topology.mcps[0].write_tools = vec!["edit_note".into(), "write_note".into()];
+    topology.mcps[0].read_tools = vec!["read_note".into(), "edit_note".into()];
+
+    let err = validate_merged_config(&config(topology, Policy::default()))
+        .expect_err("a tool in both write_tools and read_tools must fail at boot");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("BOTH a write and a read"),
+        "the error must explain the overlap: {msg}"
+    );
+    assert!(msg.contains("edit_note"), "must name the tool: {msg}");
+}
+
+#[test]
+fn rejects_a_tool_classified_as_both_vault_wide_and_write() {
+    let mut topology = topology_with_mcp("turbovault");
+    topology.mcps[0].writes_vault = None;
+    topology.mcps[0].zone_from_arg = Some("path".into());
+    topology.mcps[0].write_tools = vec!["edit_note".into()];
+    topology.mcps[0].vault_wide_writes = vec!["begin_fanout".into(), "edit_note".into()];
+
+    let err = validate_merged_config(&config(topology, Policy::default()))
+        .expect_err("a tool in both write_tools and vault_wide_writes must fail at boot");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("BOTH a write and a vault-wide write"),
+        "must explain the overlap: {msg}"
+    );
+    assert!(msg.contains("edit_note"), "must name the tool: {msg}");
+}
+
+#[test]
+fn rejects_a_tool_classified_as_both_read_and_vault_wide() {
+    let mut topology = topology_with_mcp("turbovault");
+    topology.mcps[0].writes_vault = None;
+    topology.mcps[0].zone_from_arg = Some("path".into());
+    topology.mcps[0].write_tools = vec!["write_note".into()];
+    topology.mcps[0].read_tools = vec!["read_note".into(), "begin_fanout".into()];
+    topology.mcps[0].vault_wide_writes = vec!["begin_fanout".into()];
+
+    let err = validate_merged_config(&config(topology, Policy::default()))
+        .expect_err("a tool in both read_tools and vault_wide_writes must fail at boot");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("BOTH a read and a vault-wide write"),
+        "must explain the overlap: {msg}"
+    );
+    assert!(msg.contains("begin_fanout"), "must name the tool: {msg}");
+}
+
+#[test]
+fn accepts_well_classified_path_addressed_mcp() {
+    let mut topology = topology_with_mcp("turbovault");
+    topology.mcps[0].writes_vault = None;
+    topology.mcps[0].zone_from_arg = Some("path".into());
+    topology.mcps[0].write_tools = vec!["write_note".into(), "edit_note".into()];
+    topology.mcps[0].read_tools = vec!["read_note".into()];
+    topology.mcps[0].vault_wide_writes = vec!["begin_fanout".into()];
     assert!(validate_merged_config(&config(topology, Policy::default())).is_ok());
 }
 

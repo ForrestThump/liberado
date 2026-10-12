@@ -23,6 +23,7 @@ async fn guard_conformance_capability_gap_agrees_both_sides() {
         tool_zones: Vec::new(),
         zone_from_arg: None,
         write_tools: Vec::new(),
+        ..Default::default()
     }];
 
     let decision = DispatchDecision {
@@ -89,6 +90,7 @@ async fn guard_conformance_consequence_agrees_on_external_mcp() {
         tool_zones: Vec::new(),
         zone_from_arg: None,
         write_tools: Vec::new(),
+        ..Default::default()
     }];
 
     let decision = DispatchDecision {
@@ -155,6 +157,7 @@ async fn guard_conformance_magnitude_agrees_on_sweeping_destructive() {
         tool_zones: Vec::new(),
         zone_from_arg: None,
         write_tools: Vec::new(),
+        ..Default::default()
     }];
     let goal = "delete all of my notes and erase everything";
 

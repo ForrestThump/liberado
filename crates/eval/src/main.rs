@@ -64,6 +64,7 @@ fn build_request(s: &liberado_eval::Scenario) -> DispatchRequest {
                 tool_zones: Vec::new(),
                 zone_from_arg: None,
                 write_tools: Vec::new(),
+                ..Default::default()
             })
             .collect(),
         capabilities: CapabilitySet::from_iter(

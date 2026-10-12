@@ -56,6 +56,9 @@ use crate::approval::{ApprovalStamp, PermissionSink};
 #[path = "risk_gated_skip.rs"]
 mod skip;
 
+#[path = "risk_gated_vault.rs"]
+mod risk_gated_vault;
+
 /// A runtime guard that wraps an inner [`ToolRuntime`] and applies capability, consequence,
 /// zone-write-class, and magnitude checks before delegating to the inner runtime.
 pub struct RiskGatedToolRuntime {
@@ -328,6 +331,12 @@ impl ToolRuntime for RiskGatedToolRuntime {
         async {
             let mcp_name = mcp_of(&call.name).to_string();
 
+            // Admin tools (`set_active_vault`) are hard-denied before the capability check.
+            // There is no chat card: the operator invokes them through daemon config or a shell.
+            if let Some(err) = risk_gated_vault::refuse_admin_tool(self, call, &mcp_name) {
+                return Err(err);
+            }
+
             // 1. Capability check: is **this tool** granted?
             //
             // `grants_tool`, not `grants_mcp`: a grant may name the whole server
@@ -365,66 +374,38 @@ impl ToolRuntime for RiskGatedToolRuntime {
             // zone, so nothing resolved), and resolving in one place means they cannot drift back
             // apart. For a path-addressed MCP the zone depends on the call's *arguments*, so this
             // is the only place it can be known.
+            //
+            // 2026-10-11 follow-up: the resolution itself was *fail-open*. A path-addressed MCP's
+            // `write_tools` is a deny-list, so a tool the operator forgot to add to it returned
+            // `NotAWrite` and the gate silently waved the call through (live session
+            // `01M3ZB89WK54HGNG6ATJ9FPJMX`, `edit_note` on `conformance/approval-test.md`). The new
+            // contract is fail-closed: undeclared tools on path-addressed MCPs return
+            // `Undeterminable` here, refused below, and the error names the three lists the
+            // operator must classify the tool under.
             let write_target = self.write_target_of(&mcp_name, call);
-
-            let write_zone = match &write_target {
-                // A write we cannot place. Fail closed — refusing a write whose target is unknown
-                // is the only safe answer, and it is a config bug worth surfacing loudly.
-                WriteTarget::Undeterminable(why) => {
-                    self.authority_decision(
-                        "write_zone_resolution",
-                        "refused",
-                        call,
-                        None,
-                        "a resolvable target zone (declare zone_from_arg/write_tools, or pass a \
-                         zone-qualified path)",
-                    );
-                    tracing::warn!(mcp = %mcp_name, %why, "tool call refused: undeterminable write zone");
-                    return Err(format!("not authorized: {why}"));
-                }
-                WriteTarget::Zone(zone) => Some(zone.clone()),
-                WriteTarget::NotAWrite => None,
-            };
-
-            if let Some(zone) = &write_zone {
-                // Deliberately a **refusal**, not a proposal downgrade. The guards below ask "this
-                // is permitted, but is it risky enough to need a human?" — a question that only
-                // makes sense once "is this permitted at all?" is yes. A missing capability is an
-                // authority failure, and reads like one: same shape as the `grants_mcp` refusal.
-                if !self.capabilities.contains(&Capability::Write(Zone::vault(zone))) {
-                    self.authority_decision(
-                        "write_capability",
-                        if self.can_ask_human() {
-                            "permission_request"
-                        } else {
-                            "refused"
-                        },
-                        call,
-                        Some(zone),
-                        &format!("Write(Vault(\"{zone}\"))"),
-                    );
-                    // A chat surface or a notifier means there is someone to ask. Raise a
-                    // permission request (Deny / Once / Session / Everywhere). With neither,
-                    // keep the hard refusal — a background run with no Telegram has no human.
-                    if self.can_ask_human() {
-                        let path = self.write_permission_request(call, zone).await?;
-                        return Ok(permission_request_message(&path, zone));
-                    }
-                    return Err(format!(
-                        "not authorized: '{}' writes to zone '{zone}', and this session's grant \
-                         does not include Write({zone}). Calling an MCP is not permission to write \
-                         with it.",
-                        call.name
-                    ));
-                }
-            }
+            // Zone checks, vault-wide marker, and permission cards live in `risk_gated_vault`
+            // so this function stays under the module-health ceilings.
+            let write_zones =
+                match risk_gated_vault::authorize_vault_write(self, call, &mcp_name, &write_target)
+                    .await?
+                {
+                    risk_gated_vault::VaultAuth::Message(message) => return Ok(message),
+                    risk_gated_vault::VaultAuth::Proceed(zones) => zones,
+                };
 
             if let Some(message) = self
                 .proposal_if_risky(
                     call,
                     &mcp_name,
                     consequence,
-                    write_zone.as_deref(),
+                    // Multi-zone calls surface every zone to the magnitude heuristic so a tool
+                    // whose arguments mention a single zone but are configured for many is judged
+                    // against the broader reach.
+                    if write_zones.is_empty() {
+                        None
+                    } else {
+                        Some(write_zones[0].as_str())
+                    },
                     &write_target,
                 )
                 .await?
@@ -635,20 +616,28 @@ impl RiskGatedToolRuntime {
     }
 
     /// Like [`write_proposal`](Self::write_proposal), but for a **permission request**: the call is
-    /// refused for a missing `Write(zone)` and we ask the human to expand the grant. Stamps the
-    /// requested capability onto the proposal (signed, tamper-evident) and notifies with the four
-    /// scope buttons. On approval the daemon applies the grant per the chosen scope and executes the
-    /// carried call.
+    /// refused because one or more zones are missing from the grant, and we ask the human to
+    /// expand the grant. Stamps the requested capability (the **first** missing zone) onto the
+    /// signed proposal and writes the rest of the missing-zone list into the rationale, so the
+    /// chat surface can name them all. On approval the daemon applies the granted
+    /// `requested_grant` per the chosen scope and executes the carried call; if more zones are
+    /// still missing after that grant (multi-zone move scenarios), the model retries and the
+    /// runtime raises the next permission request for the next missing zone in turn.
     async fn write_permission_request(
         &self,
         call: &ToolInvocation,
-        zone: &str,
+        missing_zones: &[String],
     ) -> Result<PathBuf, String> {
+        // `requested_grant` carries one capability at a time. For multi-zone requests the
+        // remaining zones are listed in the rationale so an operator reading either the file or
+        // the chat card sees the full picture.
+        let first_zone = risk_gated_vault::first_missing_zone(missing_zones);
+
         let proposal_id = permission_request_id();
         let proposals_subdir = self.proposals_dir.join(liberado_common::PROPOSALS_DIR);
         let proposal_path = proposals_subdir.join(format!("{proposal_id}.md"));
 
-        let proposal = self.sign_permission_proposal(&proposal_id, call, zone);
+        let proposal = self.sign_permission_proposal(&proposal_id, call, first_zone, missing_zones);
 
         if let Err(e) = tokio::fs::create_dir_all(&proposals_subdir).await {
             tracing::error!(path = %proposals_subdir.display(), error = %e, "failed to create proposals directory");
@@ -664,23 +653,32 @@ impl RiskGatedToolRuntime {
                 proposal_path.display()
             ));
         }
-        tracing::info!(path = %proposal_path.display(), tool = %call.name, %zone, "permission request written");
+        tracing::info!(
+            path = %proposal_path.display(),
+            tool = %call.name,
+            missing_zones = ?missing_zones,
+            "permission request written"
+        );
 
-        self.notify_permission_request(&proposal_id, call, zone)
+        self.notify_permission_request(&proposal_id, call, missing_zones)
             .await;
 
         Ok(proposal_path)
     }
 
     /// Build the signed permission-request proposal: the blocked call as a `ProposedAction`, the
-    /// requested capability stamped on before signing (so the signature covers it, tamper-evident),
-    /// and the pool keyed so the daemon's grant lands on the right pool.
+    /// requested capability (the first missing zone) stamped on before signing (so the signature
+    /// covers it, tamper-evident), the full missing-zones list in the rationale, and the pool
+    /// keyed so the daemon's grant lands on the right pool.
     fn sign_permission_proposal(
         &self,
         proposal_id: &str,
         call: &ToolInvocation,
-        zone: &str,
+        first_zone: &str,
+        missing_zones: &[String],
     ) -> SignedProposal {
+        let rationale =
+            risk_gated_vault::permission_rationale(&call.name, first_zone, missing_zones);
         let mut proposal = Proposal::pending(
             proposal_id,
             &self.correlation_base,
@@ -689,12 +687,9 @@ impl RiskGatedToolRuntime {
                 tool: call.name.clone(),
                 args: call.arguments.clone(),
             }]),
-            format!(
-                "Permission request: '{}' needs Write access to zone '{zone}'.",
-                call.name
-            ),
+            rationale,
         )
-        .with_requested_grant(Capability::Write(Zone::vault(zone)));
+        .with_requested_grant(Capability::Write(Zone::vault(first_zone)));
         proposal.pool = Some(self.pool_name.clone());
         self.stamp_permission_origin(&mut proposal);
         self.signer.sign(proposal)
@@ -714,14 +709,16 @@ impl RiskGatedToolRuntime {
     /// Notify the human (when a notifier is attached) that a permission request awaits their
     /// decision, with the four scope buttons. A confirmed send records the out-of-band surfacing
     /// so the chat surface can drop the duplicate "grant permission" reply (Gap 2); a failed
-    /// notify leaves the chat reply as the sole signal.
+    /// notify leaves the chat reply as the sole signal. The `missing_zones` slice carries every
+    /// zone this call writes to (single-zone for path-addressed `path` tools, multi-zone for
+    /// `move_*` / `generate_index` / etc.) so the chat card names the full set.
     async fn notify_permission_request(
         &self,
         proposal_id: &str,
         call: &ToolInvocation,
-        zone: &str,
+        missing_zones: &[String],
     ) {
-        let message = permission_ask_message(&call.name, zone);
+        let message = risk_gated_vault::permission_ask_message(&call.name, missing_zones);
         self.notify_on_surface(proposal_id, &message).await;
     }
 
@@ -777,13 +774,6 @@ impl RiskGatedToolRuntime {
     }
 }
 
-fn permission_ask_message(tool: &str, zone: &str) -> String {
-    format!(
-        "Liberado needs permission.\n'{tool}' wants to write zone '{zone}', which its grant \
-         doesn't include.\nApprove once, for this session, or everywhere?"
-    )
-}
-
 /// Compact permission-request id: it must fit Telegram's callback_data budget (the full
 /// correlation lives in the proposal's `correlation_id` field, not the stem). The old
 /// `perm-{correlation_base}-{nanos}` was 65 bytes for a `chat-delegate-<ulid>` correlation — over
@@ -795,18 +785,6 @@ fn permission_request_id() -> String {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_nanos(),
-    )
-}
-
-/// The tool *result* returned for a raised permission request. Tells the model plainly that the
-/// action is paused pending the human's grant decision — not a failure it should route around.
-fn permission_request_message(path: &std::path::Path, zone: &str) -> String {
-    format!(
-        "PERMISSION REQUESTED — the action was NOT executed. It needs Write access to zone '{zone}', \
-         which this session's grant doesn't include. A request was sent for approval \
-         (once / this session / everywhere). Saved at: {}. Do not retry or invent a result; the \
-         action runs automatically once the human approves.",
-        path.display()
     )
 }
 
@@ -864,6 +842,10 @@ mod approval_tests;
 #[cfg(test)]
 #[path = "risk_gated_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "risk_gated_vault_gate_tests.rs"]
+mod vault_gate_tests;
 
 #[cfg(test)]
 #[path = "risk_gated_survivor_tests.rs"]
