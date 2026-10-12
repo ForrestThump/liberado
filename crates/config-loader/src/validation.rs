@@ -122,19 +122,10 @@ fn validate_mcp_zones(config: &Config) -> Result<(), ConfigLoadError> {
         if mcp.writes_vault == Some(false) {
             continue;
         }
-        let fixed_zone = mcp.default_zone.is_some() || mcp.tools.iter().any(|t| t.zone.is_some());
+        let fixed_zone = declares_fixed_zone(mcp);
         let path_addressed = mcp.zone_from_arg.is_some();
-        if path_addressed && mcp.write_tools.is_empty() {
-            return Err(validation_error(format!(
-                "MCP '{}' sets `zone_from_arg` but lists no `write_tools`. A path argument alone \
-                 cannot tell a read from a write (`read_note` and `write_note` both have one), so \
-                 without this list either every read would demand a Write capability, or no write \
-                 would be checked at all. Name the tools that write.",
-                mcp.name
-            )));
-        }
-        // Overlap and stray path-arg checks live in a helper so this function keeps the
-        // complexity it had before those lists existed. The helper no-ops for fixed-zone MCPs.
+        // Empty-list, overlap, and stray path-arg checks live in the helper. Calling it
+        // with `?` is the only new branch this function can afford.
         validate_path_addressed_lists(mcp)?;
         if !fixed_zone && !path_addressed {
             return Err(validation_error(format!(
@@ -159,9 +150,22 @@ fn validate_mcp_zones(config: &Config) -> Result<(), ConfigLoadError> {
 ///
 /// The runtime picks the first matching list, so an overlap silently demotes a tool. A stray
 /// path-arg key names a tool the runtime will refuse as undeclared. Fixed-zone MCPs skip this.
+fn declares_fixed_zone(mcp: &crate::model::McpConfig) -> bool {
+    mcp.default_zone.is_some() || mcp.tools.iter().any(|tool| tool.zone.is_some())
+}
+
 fn validate_path_addressed_lists(mcp: &crate::model::McpConfig) -> Result<(), ConfigLoadError> {
     if mcp.zone_from_arg.is_none() {
         return Ok(());
+    }
+    if mcp.write_tools.is_empty() {
+        return Err(validation_error(format!(
+            "MCP '{}' sets `zone_from_arg` but lists no `write_tools`. A path argument alone \
+             cannot tell a read from a write (`read_note` and `write_note` both have one), so \
+             without this list either every read would demand a Write capability, or no write \
+             would be checked at all. Name the tools that write.",
+            mcp.name
+        )));
     }
     for tool in &mcp.write_tools {
         if mcp.read_tools.iter().any(|name| name == tool) {
