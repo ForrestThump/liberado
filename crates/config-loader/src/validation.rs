@@ -133,61 +133,9 @@ fn validate_mcp_zones(config: &Config) -> Result<(), ConfigLoadError> {
                 mcp.name
             )));
         }
-        // A path-addressed MCP must classify every known writer / reader / vault-wide mutator
-        // under one of three mutually-exclusive lists. The runtime rejects an undeclared tool as
-        // `Undeterminable` (it fails closed on undeclared tools), so a config that lists a tool
-        // in MORE than one list is just confusion: the runtime dispatches on the first match in
-        // a fixed order (vault-wide -> read -> write), so an overlap silently demotes the tool to
-        // a less-strict classification than the operator probably intended.
-        //
-        // Catching overlaps at boot means the operator notices immediately rather than reading a
-        // permission request and wondering why a "writes_vault = false" tool is being treated as
-        // a vault-wide mutator.
-        if path_addressed {
-            for tool in &mcp.write_tools {
-                if mcp.read_tools.iter().any(|t| t == tool) {
-                    return Err(validation_error(format!(
-                        "MCP '{}' classifies '{}' as BOTH a write and a read (write_tools and \
-                         read_tools both list it). Pick one classification — the runtime resolves \
-                         in the order vault_wide_writes, read_tools, write_tools, and an \
-                         unintended overlap will silently put the tool in the wrong class.",
-                        mcp.name, tool
-                    )));
-                }
-                if mcp.vault_wide_writes.iter().any(|t| t == tool) {
-                    return Err(validation_error(format!(
-                        "MCP '{}' classifies '{}' as BOTH a write and a vault-wide write (in \
-                         write_tools and vault_wide_writes). Pick one.",
-                        mcp.name, tool
-                    )));
-                }
-            }
-            for tool in &mcp.read_tools {
-                if mcp.vault_wide_writes.iter().any(|t| t == tool) {
-                    return Err(validation_error(format!(
-                        "MCP '{}' classifies '{}' as BOTH a read and a vault-wide write (in \
-                         read_tools and vault_wide_writes). Pick one.",
-                        mcp.name, tool
-                    )));
-                }
-            }
-            // `write_path_args` keys must be a subset of `write_tools`. A stray key (e.g. a
-            // leftover entry from a tool renamed in turbovault) means the runtime will resolve
-            // an undeclared tool against an arg name that no longer exists, and the call will
-            // fail closed with Undeterminable. Catch it at boot so the operator sees the
-            // gap with a clean error.
-            for tool in mcp.write_path_args.keys() {
-                if !mcp.write_tools.iter().any(|t| t == tool) {
-                    return Err(validation_error(format!(
-                        "MCP '{}' lists '{}' in `write_path_args` but it is NOT in `write_tools`. \
-                         Either add the tool to `write_tools` (and pick the right arg list) or \
-                         drop the `write_path_args` entry — tools outside `write_tools` will not \
-                         be classified, and the runtime will refuse them as undeclared.",
-                        mcp.name, tool
-                    )));
-                }
-            }
-        }
+        // Overlap and stray path-arg checks live in a helper so this function keeps the
+        // complexity it had before those lists existed. The helper no-ops for fixed-zone MCPs.
+        validate_path_addressed_lists(mcp)?;
         if !fixed_zone && !path_addressed {
             return Err(validation_error(format!(
                 "MCP '{}' is '{:?}' (not read_only) but declares no write zone, so the capability \
@@ -205,6 +153,55 @@ fn validate_mcp_zones(config: &Config) -> Result<(), ConfigLoadError> {
         }
     }
     validate_risk_waivers(config)
+}
+
+/// Path-addressed lists must not overlap, and every `write_path_args` key must be a writer.
+///
+/// The runtime picks the first matching list, so an overlap silently demotes a tool. A stray
+/// path-arg key names a tool the runtime will refuse as undeclared. Fixed-zone MCPs skip this.
+fn validate_path_addressed_lists(mcp: &crate::model::McpConfig) -> Result<(), ConfigLoadError> {
+    if mcp.zone_from_arg.is_none() {
+        return Ok(());
+    }
+    for tool in &mcp.write_tools {
+        if mcp.read_tools.iter().any(|name| name == tool) {
+            return Err(validation_error(format!(
+                "MCP '{}' classifies '{}' as BOTH a write and a read (write_tools and \
+                 read_tools both list it). Pick one classification — the runtime resolves \
+                 in the order vault_wide_writes, read_tools, write_tools, and an \
+                 unintended overlap will silently put the tool in the wrong class.",
+                mcp.name, tool
+            )));
+        }
+        if mcp.vault_wide_writes.iter().any(|name| name == tool) {
+            return Err(validation_error(format!(
+                "MCP '{}' classifies '{}' as BOTH a write and a vault-wide write (in \
+                 write_tools and vault_wide_writes). Pick one.",
+                mcp.name, tool
+            )));
+        }
+    }
+    for tool in &mcp.read_tools {
+        if mcp.vault_wide_writes.iter().any(|name| name == tool) {
+            return Err(validation_error(format!(
+                "MCP '{}' classifies '{}' as BOTH a read and a vault-wide write (in \
+                 read_tools and vault_wide_writes). Pick one.",
+                mcp.name, tool
+            )));
+        }
+    }
+    for tool in mcp.write_path_args.keys() {
+        if !mcp.write_tools.iter().any(|name| name == tool) {
+            return Err(validation_error(format!(
+                "MCP '{}' lists '{}' in `write_path_args` but it is NOT in `write_tools`. \
+                 Either add the tool to `write_tools` (and pick the right arg list) or \
+                 drop the `write_path_args` entry — tools outside `write_tools` will not \
+                 be classified, and the runtime will refuse them as undeclared.",
+                mcp.name, tool
+            )));
+        }
+    }
+    Ok(())
 }
 
 /// 6. A declared report sink must actually be able to write (Decision 14).

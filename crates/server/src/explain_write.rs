@@ -47,7 +47,7 @@ pub(crate) fn write_explanation(
     qualified_tool: &str,
     path: &str,
 ) -> WriteExplanation {
-    use liberado_common::{Capability, WriteTarget, bare_tool_name, mcp_of};
+    use liberado_common::{Capability, bare_tool_name, mcp_of};
 
     let header =
         format!("would `{component}` be allowed to call `{qualified_tool}` on `{path}`?\n");
@@ -99,57 +99,8 @@ pub(crate) fn write_explanation(
     // 2. What does this call write, per the MCP's own declaration + these arguments?
     let args = serde_json::json!({ "path": path });
     let target = liberado_common::write_target(&descriptor, bare, &args);
-    let zones: Vec<String> = match &target {
-        WriteTarget::NotAWrite => {
-            guards.guard_lines.push(format!(
-                "  [PASS] write_target      '{bare}' is a read on this MCP — no write guards apply"
-            ));
-            guards.verdict = if blockers.is_empty() {
-                "verdict: ALLOWED".into()
-            } else {
-                "verdict: BLOCKED".into()
-            };
-            guards.fixes = blockers;
-            return guards;
-        }
-        WriteTarget::VaultWide => {
-            guards.guard_lines.push(format!(
-                "  [BLOCK] write_target      '{bare}' is a vault-wide write (fanout, vault switch, \
-                 index rebuild) — it must be classified in `vault_wide_writes` on this MCP. The \
-                 runtime refuses unless the grant carries the **explicit** vault-wide marker \
-                 `Write(Vault(\"vault-wide-any\"))` — `Write(Vault(\"Tasks\"))` alone does not \
-                 authorise switching the active vault for the whole process."
-            ));
-            blockers.push(
-                "verify the tool is listed in this MCP's `vault_wide_writes` in topology.toml; the \
-                 component grant must hold the explicit vault-wide marker \
-                 `Write(Vault(\"vault-wide-any\"))`"
-                    .to_string(),
-            );
-            guards.verdict = "verdict: BLOCKED".into();
-            guards.fixes = blockers;
-            return guards;
-        }
-        WriteTarget::Undeterminable(why) => {
-            guards.guard_lines.push(format!(
-                "  [BLOCK] write_target      cannot place this write: {why}"
-            ));
-            blockers.push(
-                "give the path a leading zone segment, or declare this tool in write_tools / \
-                 read_tools / vault_wide_writes (the tool is on a path-addressed MCP and is not \
-                 classified — this is the F1 fail-closed behavior)"
-                    .to_string(),
-            );
-            guards.verdict = "verdict: BLOCKED".into();
-            guards.fixes = blockers;
-            return guards;
-        }
-        WriteTarget::Zone(z) => vec![z.clone()],
-        // Multi-path tools (`move_note(from, to)`, `generate_index(directory)`, …) resolve to
-        // every zone the call touches. The explanation walks the full list — the operator can
-        // see at a glance which zones the call depends on, and the runtime will require Write
-        // for every one.
-        WriteTarget::Zones(zones) => zones.clone(),
+    let Some(zones) = explain_resolved_zones(&target, bare, &mut guards, &mut blockers) else {
+        return guards;
     };
     guards.guard_lines.push(format!(
         "  [PASS] write_target      resolves to zone(s) [{}]",
@@ -169,11 +120,7 @@ pub(crate) fn write_explanation(
         zones.join(", ")
     ));
     if !holds_write {
-        for missing in &missing_zones {
-            blockers.push(format!(
-                "add {{ Write = {{ Vault = \"{missing}\" }} }} to the '{component}' grant"
-            ));
-        }
+        note_missing_zones(component, &missing_zones, &mut blockers);
     }
 
     // 4. Are the resolved zones themselves directly agent-writable?
@@ -244,6 +191,72 @@ pub fn explain_write(
         println!("  fix: {fix}");
     }
     Ok(())
+}
+
+/// `None` means the explanation already finished (read, vault-wide, or unplaceable).
+fn explain_resolved_zones(
+    target: &liberado_common::WriteTarget,
+    bare: &str,
+    guards: &mut WriteExplanation,
+    blockers: &mut Vec<String>,
+) -> Option<Vec<String>> {
+    use liberado_common::WriteTarget;
+    match target {
+        WriteTarget::NotAWrite => {
+            guards.guard_lines.push(format!(
+                "  [PASS] write_target      '{bare}' is a read on this MCP — no write guards apply"
+            ));
+            guards.verdict = if blockers.is_empty() {
+                "verdict: ALLOWED".into()
+            } else {
+                "verdict: BLOCKED".into()
+            };
+            guards.fixes = std::mem::take(blockers);
+            None
+        }
+        WriteTarget::VaultWide => {
+            guards.guard_lines.push(format!(
+                "  [BLOCK] write_target      '{bare}' is a vault-wide write (fanout, vault switch, \
+                 index rebuild) — it must be classified in `vault_wide_writes` on this MCP. The \
+                 runtime refuses unless the grant carries the **explicit** vault-wide marker \
+                 `Write(Vault(\"vault-wide-any\"))` — `Write(Vault(\"Tasks\"))` alone does not \
+                 authorise switching the active vault for the whole process."
+            ));
+            blockers.push(
+                "verify the tool is listed in this MCP's `vault_wide_writes` in topology.toml; the \
+                 component grant must hold the explicit vault-wide marker \
+                 `Write(Vault(\"vault-wide-any\"))`"
+                    .to_string(),
+            );
+            guards.verdict = "verdict: BLOCKED".into();
+            guards.fixes = std::mem::take(blockers);
+            None
+        }
+        WriteTarget::Undeterminable(why) => {
+            guards.guard_lines.push(format!(
+                "  [BLOCK] write_target      cannot place this write: {why}"
+            ));
+            blockers.push(
+                "give the path a leading zone segment, or declare this tool in write_tools / \
+                 read_tools / vault_wide_writes (the tool is on a path-addressed MCP and is not \
+                 classified — this is the F1 fail-closed behavior)"
+                    .to_string(),
+            );
+            guards.verdict = "verdict: BLOCKED".into();
+            guards.fixes = std::mem::take(blockers);
+            None
+        }
+        WriteTarget::Zone(zone) => Some(vec![zone.clone()]),
+        WriteTarget::Zones(zones) => Some(zones.clone()),
+    }
+}
+
+fn note_missing_zones(component: &str, missing: &[&str], blockers: &mut Vec<String>) {
+    for zone in missing {
+        blockers.push(format!(
+            "add {{ Write = {{ Vault = \"{zone}\" }} }} to the '{component}' grant"
+        ));
+    }
 }
 
 #[cfg(test)]
