@@ -1,3 +1,10 @@
+---
+kind: runbook
+status: draft
+authority: advisory
+domain: security
+---
+
 # Deploy notes — `fix/vault-write-gate` (2026-10-11)
 
 **Status:** Changes ready to ship. The runtime fix and config wiring are
@@ -22,12 +29,10 @@ listed here so the box update is mechanical.
   zone in grant, one not) raises a permission request naming the missing
   zone(s).
 - Vault-wide mutators (`begin_fanout`, `commit_fanout`, `abandon_fanout`,
-  `set_active_vault`, `vector_reindex`, ...) require the **explicit**
-  vault-wide marker grant `Capability::Write(Zone::vault("vault-wide-any"))`,
-  the same capability the four-button permission card applies when the
-  human picks Once / Session / Everywhere. `Write(<zone>)` for some
-  specific zone is **not** enough — switching the active vault affects
-  every concurrent session.
+  `vector_reindex`) require the explicit marker grant
+  `Capability::Write(Zone::vault("vault-wide-any"))`. A write to one zone
+  is not enough. `set_active_vault` is admin: a session is hard-denied,
+  and there is no approval card.
 - Vector reads (`vector_search` / `vector_status` / `vector_config` —
   only `vector_reindex` rebuilds state) move to `read_tools` so a
   Read-only session can use them without a permission card.
@@ -36,12 +41,10 @@ listed here so the box update is mechanical.
 
 ## Operator action — update topology files
 
-The runtime change is fail-closed, which means a deployed topology
-file that does not classify every tool will REFUSE calls rather than
-silently allow them. The deployed turbovault has 70+ tools today;
-rebooting the daemon without an updated topology.toml will start
-failing safe (refusals), but the operator will see them as broken
-calls.
+Bundled TurboVault defaults classify every live tool when the MCP
+config omits the lists. The old 8-tool `write_tools` block still boots.
+Config may only extend or tighten those defaults. A tool the bundle
+does not know is refused. Overlapping lists still refuse to boot.
 
 The required topology file change is:
 
@@ -53,8 +56,10 @@ The required topology file change is:
    task tools (renamed from `update_task` / `delete_task`).
 
 2. **`services/liberado/config/topology.toml`** — the live node's
-   deployed topology. NOT in this repo (it's on the box). Must carry
-   the SAME lists. The deploy step:
+   deployed topology. NOT in this repo (it's on the box). The old
+   8-tool block still works, because bundled defaults fill the lists.
+   Copy the homelab lists when the classification should live in the
+   file. The deploy step:
 
    ```sh
    # On the box, after pulling this branch:

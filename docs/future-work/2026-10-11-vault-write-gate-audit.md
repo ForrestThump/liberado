@@ -1,3 +1,12 @@
+---
+kind: finding
+status: active
+authority: evidence
+domain: security
+canonical_for: vault-write-gate-audit
+open_items: true
+---
+
 **Status:** Shipped in PR (post #295). Update 2026-10-12: the multi-path destination-zone check
 (`move_note`/`move_file` `from`+`to`) is now in, and the VaultWide gate requires the explicit
 marker. The Open items at the bottom reflect the new state.
