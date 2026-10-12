@@ -19292,7 +19292,7 @@
     {
       "file": "crates/common/src/proposal.rs",
       "function": "Proposal::from_note",
-      "line": 271,
+      "line": 272,
       "cyclomatic": 3.0,
       "coverage": 100.0,
       "crap": 3.0,
@@ -19301,7 +19301,7 @@
     {
       "file": "crates/common/src/proposal.rs",
       "function": "Proposal::is_expired_at",
-      "line": 251,
+      "line": 252,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -19310,7 +19310,7 @@
     {
       "file": "crates/common/src/proposal.rs",
       "function": "Proposal::pending",
-      "line": 207,
+      "line": 208,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -19319,7 +19319,7 @@
     {
       "file": "crates/common/src/proposal.rs",
       "function": "Proposal::to_note",
-      "line": 258,
+      "line": 259,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -19328,7 +19328,7 @@
     {
       "file": "crates/common/src/proposal.rs",
       "function": "Proposal::with_requested_grant",
-      "line": 245,
+      "line": 246,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -19337,7 +19337,7 @@
     {
       "file": "crates/common/src/proposal.rs",
       "function": "ProposalSigner::compute",
-      "line": 361,
+      "line": 362,
       "cyclomatic": 2.0,
       "coverage": 100.0,
       "crap": 2.0,
@@ -19346,7 +19346,7 @@
     {
       "file": "crates/common/src/proposal.rs",
       "function": "ProposalSigner::new",
-      "line": 331,
+      "line": 332,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -19355,7 +19355,7 @@
     {
       "file": "crates/common/src/proposal.rs",
       "function": "ProposalSigner::random",
-      "line": 339,
+      "line": 340,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -19364,7 +19364,7 @@
     {
       "file": "crates/common/src/proposal.rs",
       "function": "ProposalSigner::sign",
-      "line": 348,
+      "line": 349,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -19373,7 +19373,7 @@
     {
       "file": "crates/common/src/proposal.rs",
       "function": "ProposalSigner::verify",
-      "line": 355,
+      "line": 356,
       "cyclomatic": 2.0,
       "coverage": 100.0,
       "crap": 2.0,
@@ -19400,7 +19400,7 @@
     {
       "file": "crates/common/src/proposal.rs",
       "function": "ProposedAction::summary",
-      "line": 430,
+      "line": 431,
       "cyclomatic": 6.0,
       "coverage": 94.11764705882352,
       "crap": 6.007327498473438,
@@ -19409,7 +19409,7 @@
     {
       "file": "crates/common/src/proposal.rs",
       "function": "SignedProposal::as_proposal",
-      "line": 297,
+      "line": 298,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -19418,7 +19418,7 @@
     {
       "file": "crates/common/src/proposal.rs",
       "function": "SignedProposal::deref",
-      "line": 315,
+      "line": 316,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -19427,7 +19427,7 @@
     {
       "file": "crates/common/src/proposal.rs",
       "function": "SignedProposal::into_proposal",
-      "line": 303,
+      "line": 304,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -19436,7 +19436,7 @@
     {
       "file": "crates/common/src/proposal.rs",
       "function": "SignedProposal::set_status",
-      "line": 308,
+      "line": 309,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -19445,7 +19445,7 @@
     {
       "file": "crates/common/src/proposal.rs",
       "function": "deserialize",
-      "line": 406,
+      "line": 407,
       "cyclomatic": 4.0,
       "coverage": 88.88888888888889,
       "crap": 4.021947873799726,
@@ -19454,7 +19454,7 @@
     {
       "file": "crates/common/src/proposal.rs",
       "function": "hex_encode",
-      "line": 419,
+      "line": 420,
       "cyclomatic": 2.0,
       "coverage": 100.0,
       "crap": 2.0,
@@ -19463,7 +19463,7 @@
     {
       "file": "crates/common/src/proposal.rs",
       "function": "sample_proposal",
-      "line": 466,
+      "line": 467,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -19472,7 +19472,7 @@
     {
       "file": "crates/common/src/proposal.rs",
       "function": "serialize",
-      "line": 393,
+      "line": 394,
       "cyclomatic": 4.0,
       "coverage": 90.0,
       "crap": 4.016,
@@ -49037,7 +49037,7 @@
   ],
   "diagnostics": {
     "analyzed_files": 704,
-    "lcov_files": 490,
+    "lcov_files": 493,
     "matched_files": 488,
     "source_only": {
       "count": 216,
@@ -49055,8 +49055,11 @@
       ]
     },
     "lcov_only": {
-      "count": 2,
+      "count": 5,
       "examples": [
+        "crates/cli/src/docs_audit_cmd/yaml_inputs.rs",
+        "crates/cli/src/docs_meta_cmd/yaml_inputs.rs",
+        "crates/common/src/proposal_yaml_inputs.rs",
         "crates/session/src/record_store.rs",
         "crates/tool-runtime/src/lib.rs"
       ]

@@ -341,6 +341,10 @@ fn read_text(path: &Path) -> std::io::Result<String> {
 mod regression_tests;
 
 #[cfg(test)]
+#[path = "docs_audit_cmd/yaml_inputs.rs"]
+mod yaml_inputs;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -348,21 +352,6 @@ mod tests {
     fn checked_examples_are_opt_in_and_language_specific() {
         let fences = checked_fences("```toml check\na = 1\n```\n```rust\nnope\n```\n");
         assert_eq!(fences, vec![("toml", "a = 1\n".to_owned())]);
-    }
-
-    #[test]
-    fn yaml_check_fence_parses_a_document_and_rejects_broken_yaml() {
-        let document = "\
-kind: plan
-status: active
-open_items: true
-supersedes:
-  - old-plan.md
-";
-        parse_example("yaml", document).unwrap();
-        parse_example("yaml", "- a\n- b\n").unwrap();
-        let err = parse_example("yaml", "kind: [\n").unwrap_err();
-        assert!(!err.to_string().is_empty());
     }
 
     #[test]
