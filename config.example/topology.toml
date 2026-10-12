@@ -290,6 +290,18 @@ default_zone = "tasks"
 # # write_tools = ["write_note", "edit_note", "delete_note", "move_note", "move_file", ...]
 # # read_tools = ["read_note", "search", "advanced_search", "get_backlinks", ...]
 # # vault_wide_writes = ["begin_fanout", "commit_fanout", "abandon_fanout", "set_active_vault", "vector_reindex"]
+# #
+# # Multi-path tools (`move_note`/`move_file` carry `from`+`to`, others have differently-named
+# # path args) declare per-tool path-argument maps so `write_target` resolves every zone the
+# # call touches; the runtime then requires Write for **each** zone and names the missing ones
+# # in the permission card.
+# # [write_path_args]
+# # move_note            = ["from",     "to"]
+# # move_file           = ["from",     "to"]
+# # create_from_template = ["file_path"]
+# # generate_index      = ["directory"]
+# # append_log_entry    = ["directory"]
+# # visualize           = ["output"]
 
 # A managed MCP: `liberado-mcp-forge sync` (with a matching entry in mcp-sources.toml) installs
 # the binary; `name` here is the join key it resolves against. No `command`/`args` to keep in sync

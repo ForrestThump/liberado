@@ -158,14 +158,16 @@ impl<'a> WaiverTarget<'a> {
     ///
     /// Only `WriteTarget::Zone(name)` produces a non-`None` zone; every other variant maps
     /// to `None` so a zone-restricted waiver does not match. `VaultWide` has no single zone,
-    /// so a zone-restricted waiver explicitly cannot waive vault-wide mutations — they are
-    /// evaluated against their own capability gate at the runtime boundary.
+    /// and `Zones(Vec<_>)` covers **multiple** zones — either way, a zone-restricted waiver
+    /// cannot match a single zone of a write that touches more than one. Their reach is
+    /// evaluated against the broader capability gate at the runtime boundary.
     pub fn from_write_target(qualified_tool: &'a str, target: &'a WriteTarget) -> Self {
         let zone = match target {
             WriteTarget::Zone(name) => Some(name.as_str()),
-            WriteTarget::NotAWrite | WriteTarget::VaultWide | WriteTarget::Undeterminable(_) => {
-                None
-            }
+            WriteTarget::NotAWrite
+            | WriteTarget::VaultWide
+            | WriteTarget::Zones(_)
+            | WriteTarget::Undeterminable(_) => None,
         };
         Self {
             qualified_tool,

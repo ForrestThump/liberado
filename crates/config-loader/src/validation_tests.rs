@@ -21,6 +21,7 @@ fn topology_with_mcp(name: &str) -> Topology {
             tools: Vec::new(),
             zone_from_arg: None,
             write_tools: Vec::new(),
+            write_path_args: std::collections::BTreeMap::new(),
             read_tools: Vec::new(),
             vault_wide_writes: Vec::new(),
             // These tests are about grants/zones/secrets, not about F1's zone rule. Declaring

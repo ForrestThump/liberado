@@ -26,6 +26,7 @@ fn build_test_config() -> Config {
         write_tools: Vec::new(),
         read_tools: Vec::new(),
         vault_wide_writes: Vec::new(),
+        write_path_args: std::collections::BTreeMap::new(),
         writes_vault: Some(false),
     });
 
@@ -43,6 +44,7 @@ fn build_test_config() -> Config {
         write_tools: vec!["write_note".into()],
         read_tools: Vec::new(),
         vault_wide_writes: Vec::new(),
+        write_path_args: std::collections::BTreeMap::new(),
         writes_vault: None,
     });
 

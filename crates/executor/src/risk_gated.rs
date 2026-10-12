@@ -375,7 +375,7 @@ impl ToolRuntime for RiskGatedToolRuntime {
             // operator must classify the tool under.
             let write_target = self.write_target_of(&mcp_name, call);
 
-            let write_zone = match &write_target {
+            let write_zones: Vec<String> = match &write_target {
                 // A write we cannot place. Fail closed — refusing a write whose target is unknown
                 // is the only safe answer, and it is a config bug worth surfacing loudly.
                 WriteTarget::Undeterminable(why) => {
@@ -384,24 +384,26 @@ impl ToolRuntime for RiskGatedToolRuntime {
                         "refused",
                         call,
                         None,
-                        "a resolvable target zone (declare zone_from_arg/write_tools, or pass a \
-                         zone-qualified path)",
+                        "a resolvable target zone (declare zone_from_arg/write_tools / \
+                         write_path_args, or pass a zone-qualified path)",
                     );
                     tracing::warn!(mcp = %mcp_name, %why, "tool call refused: undeterminable write zone");
                     return Err(format!("not authorized: {why}"));
                 }
                 // Vault-wide mutator (fanout, vault switch, index rebuild). It writes to git/state
                 // outside a single zone, so the per-zone check below does not apply. Authority
-                // instead is "the grant holds at least one Write(Zone) capability", which models
-                // "this session is not strictly read-only" — fanouts and index rebuilds are
-                // written to a vault whose contents the session can already change, so letting
-                // them through is consistent with the granted authority. A read-only session
-                // (the `research` profile, an `ExecuteMcp("…")` + `Read` grant with no Write)
-                // cannot start a fanout. If the session holds no zone write authority, we raise
-                // a permission request asking for one — same shape as the per-zone guard below,
-                // so an operator sees one consistent deny/once/session/everywhere flow.
+                // requires the **explicit** vault-wide marker grant —
+                // `Capability::Write(Zone::vault(VAULT_WIDE_ZONE_MARKER))`, applied when the human
+                // picks Once / Session / Everywhere on the permission card. A session that only
+                // carries `Write(Tasks)` is **not** enough: switching the active vault affects
+                // every concurrent session, and rearranging Tasks has nothing to do with that.
+                // Earlier behaviour (`holds_any_zone_write` — "any Write authorises") was too
+                // weak and is replaced here.
                 WriteTarget::VaultWide => {
-                    if !self.capabilities.holds_any_zone_write() {
+                    if !self
+                        .capabilities
+                        .holds_vault_wide_grant(liberado_common::VAULT_WIDE_ZONE_MARKER)
+                    {
                         self.authority_decision(
                             "vault_wide_write_capability",
                             if self.can_ask_human() {
@@ -411,8 +413,10 @@ impl ToolRuntime for RiskGatedToolRuntime {
                             },
                             call,
                             None,
-                            "any Write(Vault(\"<zone>\")) in the grant (a vault-wide mutation \
-                             needs at least minimal write authority somewhere)",
+                            "the explicit vault-wide marker grant \
+                             Write(Vault(\"vault-wide-any\")) — a fanout / vault switch \
+                             / index rebuild is a step-change in authority, so it is \
+                             gated by an opt-in grant, NOT by Write(<zone>) for some specific zone",
                         );
                         if self.can_ask_human() {
                             let path = self.write_vault_wide_permission_request(call).await?;
@@ -420,49 +424,82 @@ impl ToolRuntime for RiskGatedToolRuntime {
                         }
                         return Err(format!(
                             "not authorized: '{}' mutates vault-wide state (fanout / index / \
-                             vault switch), and this session's grant holds no Write(Vault(\"…\")) \
-                             capability. Add at least one `Write(Vault(\"<zone>\"))` to the \
-                             grant, or narrow the tool list to a per-tool ExecuteTool grant.",
+                             vault switch), and this session's grant does not hold the explicit \
+                             vault-wide marker `Write(Vault(\"vault-wide-any\"))`. Holding \
+                             `Write(Tasks)` alone authorises rearranging Tasks, not switching \
+                             the active vault for the whole process — add the marker to the \
+                             grant, narrow the tool list to a per-tool ExecuteTool grant, or \
+                             scrap the operation.",
                             call.name
                         ));
                     }
-                    None
+                    Vec::new()
                 }
-                WriteTarget::Zone(zone) => Some(zone.clone()),
-                WriteTarget::NotAWrite => None,
+                WriteTarget::Zone(zone) => vec![zone.clone()],
+                // Multi-path call (move_note(from, to), generate_index(directory), …). Every
+                // resolved zone must be authorised; the operator sees a permission request that
+                // names the missing zones individually, in argument order.
+                WriteTarget::Zones(zones) => zones.clone(),
+                WriteTarget::NotAWrite => Vec::new(),
             };
 
-            if let Some(zone) = &write_zone {
-                // Deliberately a **refusal**, not a proposal downgrade. The guards below ask "this
-                // is permitted, but is it risky enough to need a human?" — a question that only
-                // makes sense once "is this permitted at all?" is yes. A missing capability is an
-                // authority failure, and reads like one: same shape as the `grants_mcp` refusal.
+            // The boundary: every resolved zone must have a `Write(Vault("<zone>"))` in the
+            // grant, otherwise it's a permission-request-shaped refusal naming the missing zones.
+            // Authority is intentional — writing into Tasks is a different authority than writing
+            // into sandbox, even when both are held by the same agent. This loops to the same
+            // permission path the per-zone guard used to take; the multi-zone answer is what
+            // changes shape (one card naming all missing zones, not many cards).
+            let mut missing_zones: Vec<String> = Vec::new();
+            for zone in &write_zones {
                 if !self.capabilities.contains(&Capability::Write(Zone::vault(zone))) {
-                    self.authority_decision(
-                        "write_capability",
-                        if self.can_ask_human() {
-                            "permission_request"
-                        } else {
-                            "refused"
-                        },
-                        call,
-                        Some(zone),
-                        &format!("Write(Vault(\"{zone}\"))"),
-                    );
-                    // A chat surface or a notifier means there is someone to ask. Raise a
-                    // permission request (Deny / Once / Session / Everywhere). With neither,
-                    // keep the hard refusal — a background run with no Telegram has no human.
+                    missing_zones.push(zone.clone());
+                }
+            }
+            if !missing_zones.is_empty() {
+                self.authority_decision(
+                    "write_capability",
                     if self.can_ask_human() {
-                        let path = self.write_permission_request(call, zone).await?;
-                        return Ok(permission_request_message(&path, zone));
-                    }
-                    return Err(format!(
-                        "not authorized: '{}' writes to zone '{zone}', and this session's grant \
-                         does not include Write({zone}). Calling an MCP is not permission to write \
-                         with it.",
-                        call.name
+                        "permission_request"
+                    } else {
+                        "refused"
+                    },
+                    call,
+                    Some(missing_zones.first().map(String::as_str).unwrap_or("")),
+                    &if missing_zones.len() == 1 {
+                        format!("Write(Vault(\"{}\"))", missing_zones[0])
+                    } else {
+                        format!(
+                            "Write(Vault(\"<zone>\")) for each of [{}]",
+                            missing_zones.join(", ")
+                        )
+                    },
+                );
+                if self.can_ask_human() {
+                    let first_zone = missing_zones
+                        .first()
+                        .map(String::as_str)
+                        .unwrap_or("");
+                    let path = self
+                        .write_permission_request(call, &missing_zones)
+                        .await?;
+                    return Ok(permission_request_message(
+                        &path,
+                        first_zone,
+                        &missing_zones,
                     ));
                 }
+                return Err(format!(
+                    "not authorized: '{}' writes to zone(s) [{}], and this session's \
+                     grant does not include Write for {}. Calling an MCP is not permission \
+                     to write with it.",
+                    call.name,
+                    missing_zones.join(", "),
+                    if missing_zones.len() == 1 {
+                        "the zone '{}'".replace("{}", &missing_zones[0])
+                    } else {
+                        "those zones (each independently)".to_string()
+                    },
+                ));
             }
 
             if let Some(message) = self
@@ -470,7 +507,14 @@ impl ToolRuntime for RiskGatedToolRuntime {
                     call,
                     &mcp_name,
                     consequence,
-                    write_zone.as_deref(),
+                    // Multi-zone calls surface every zone to the magnitude heuristic so a tool
+                    // whose arguments mention a single zone but are configured for many is judged
+                    // against the broader reach.
+                    if write_zones.is_empty() {
+                        None
+                    } else {
+                        Some(write_zones[0].as_str())
+                    },
                     &write_target,
                 )
                 .await?
@@ -681,20 +725,30 @@ impl RiskGatedToolRuntime {
     }
 
     /// Like [`write_proposal`](Self::write_proposal), but for a **permission request**: the call is
-    /// refused for a missing `Write(zone)` and we ask the human to expand the grant. Stamps the
-    /// requested capability onto the proposal (signed, tamper-evident) and notifies with the four
-    /// scope buttons. On approval the daemon applies the grant per the chosen scope and executes the
-    /// carried call.
+    /// refused because one or more zones are missing from the grant, and we ask the human to
+    /// expand the grant. Stamps the requested capability (the **first** missing zone) onto the
+    /// signed proposal and writes the rest of the missing-zone list into the rationale, so the
+    /// chat surface can name them all. On approval the daemon applies the granted
+    /// `requested_grant` per the chosen scope and executes the carried call; if more zones are
+    /// still missing after that grant (multi-zone move scenarios), the model retries and the
+    /// runtime raises the next permission request for the next missing zone in turn.
     async fn write_permission_request(
         &self,
         call: &ToolInvocation,
-        zone: &str,
+        missing_zones: &[String],
     ) -> Result<PathBuf, String> {
+        // `requested_grant` carries one capability at a time. For multi-zone requests the
+        // remaining zones are listed in the rationale so an operator reading either the file or
+        // the chat card sees the full picture.
+        let first_zone = missing_zones
+            .first()
+            .ok_or_else(|| "missing_zones is empty in write_permission_request".to_string())?;
+
         let proposal_id = permission_request_id();
         let proposals_subdir = self.proposals_dir.join(liberado_common::PROPOSALS_DIR);
         let proposal_path = proposals_subdir.join(format!("{proposal_id}.md"));
 
-        let proposal = self.sign_permission_proposal(&proposal_id, call, zone);
+        let proposal = self.sign_permission_proposal(&proposal_id, call, first_zone, missing_zones);
 
         if let Err(e) = tokio::fs::create_dir_all(&proposals_subdir).await {
             tracing::error!(path = %proposals_subdir.display(), error = %e, "failed to create proposals directory");
@@ -710,9 +764,14 @@ impl RiskGatedToolRuntime {
                 proposal_path.display()
             ));
         }
-        tracing::info!(path = %proposal_path.display(), tool = %call.name, %zone, "permission request written");
+        tracing::info!(
+            path = %proposal_path.display(),
+            tool = %call.name,
+            missing_zones = ?missing_zones,
+            "permission request written"
+        );
 
-        self.notify_permission_request(&proposal_id, call, zone)
+        self.notify_permission_request(&proposal_id, call, missing_zones)
             .await;
 
         Ok(proposal_path)
@@ -720,8 +779,8 @@ impl RiskGatedToolRuntime {
 
     /// Permission-request variant for **vault-wide** mutators (`begin_fanout`,
     /// `commit_fanout`, `set_active_vault`, `vector_reindex`, …). The required capability is
-    /// "any `Write(Vault(\"<zone>\"))` in the grant" — encoded here as the special vault zone
-    /// name `"*"`, which the ledger/grant applier recognises as the wildcard marker. Every other
+    /// `Write(Vault(VAULT_WIDE_ZONE_MARKER))` — encoded as the explicit vault zone marker name
+    /// `vault-wide-any`, which the ledger/grant applier recognises as the marker. Every other
     /// shape (signing, notification routing, persistence) is identical to the per-zone flow so
     /// the chat surface sees one consistent four-button permission card.
     async fn write_vault_wide_permission_request(
@@ -771,12 +830,17 @@ impl RiskGatedToolRuntime {
             }]),
             format!(
                 "Permission request: '{}' mutates vault-wide state (fanout / index / vault \
-                 switch). It needs ANY Write(Vault(\"<zone>\")) in the grant to authorize that \
-                 the session already has minimal write authority somewhere.",
-                call.name
+                 switch). It needs the explicit vault-wide marker grant \
+                 Write(Vault(\"{}\")) — a `Write(<zone>)` for some specific zone is not \
+                 enough, because vault-wide mutators affect every concurrent session, not just the \
+                 one the grant covers.",
+                call.name,
+                liberado_common::VAULT_WIDE_ZONE_MARKER,
             ),
         )
-        .with_requested_grant(Capability::Write(Zone::vault(VAULT_WIDE_ZONE_MARKER)));
+        .with_requested_grant(Capability::Write(Zone::vault(
+            liberado_common::VAULT_WIDE_ZONE_MARKER,
+        )));
         proposal.pool = Some(self.pool_name.clone());
         self.stamp_permission_origin(&mut proposal);
         self.signer.sign(proposal)
@@ -788,14 +852,30 @@ impl RiskGatedToolRuntime {
     }
 
     /// Build the signed permission-request proposal: the blocked call as a `ProposedAction`, the
-    /// requested capability stamped on before signing (so the signature covers it, tamper-evident),
-    /// and the pool keyed so the daemon's grant lands on the right pool.
+    /// requested capability (the first missing zone) stamped on before signing (so the signature
+    /// covers it, tamper-evident), the full missing-zones list in the rationale, and the pool
+    /// keyed so the daemon's grant lands on the right pool.
     fn sign_permission_proposal(
         &self,
         proposal_id: &str,
         call: &ToolInvocation,
-        zone: &str,
+        first_zone: &str,
+        missing_zones: &[String],
     ) -> SignedProposal {
+        let rationale = if missing_zones.len() == 1 {
+            format!(
+                "Permission request: '{}' needs Write access to zone '{first_zone}'.",
+                call.name
+            )
+        } else {
+            format!(
+                "Permission request: '{}' needs Write access for each of these zones: [{}]. \
+                 (Granting the first will raise another request for the next; the daemon applies \
+                 grants per-zone.)",
+                call.name,
+                missing_zones.join(", "),
+            )
+        };
         let mut proposal = Proposal::pending(
             proposal_id,
             &self.correlation_base,
@@ -804,12 +884,9 @@ impl RiskGatedToolRuntime {
                 tool: call.name.clone(),
                 args: call.arguments.clone(),
             }]),
-            format!(
-                "Permission request: '{}' needs Write access to zone '{zone}'.",
-                call.name
-            ),
+            rationale,
         )
-        .with_requested_grant(Capability::Write(Zone::vault(zone)));
+        .with_requested_grant(Capability::Write(Zone::vault(first_zone)));
         proposal.pool = Some(self.pool_name.clone());
         self.stamp_permission_origin(&mut proposal);
         self.signer.sign(proposal)
@@ -829,14 +906,16 @@ impl RiskGatedToolRuntime {
     /// Notify the human (when a notifier is attached) that a permission request awaits their
     /// decision, with the four scope buttons. A confirmed send records the out-of-band surfacing
     /// so the chat surface can drop the duplicate "grant permission" reply (Gap 2); a failed
-    /// notify leaves the chat reply as the sole signal.
+    /// notify leaves the chat reply as the sole signal. The `missing_zones` slice carries every
+    /// zone this call writes to (single-zone for path-addressed `path` tools, multi-zone for
+    /// `move_*` / `generate_index` / etc.) so the chat card names the full set.
     async fn notify_permission_request(
         &self,
         proposal_id: &str,
         call: &ToolInvocation,
-        zone: &str,
+        missing_zones: &[String],
     ) {
-        let message = permission_ask_message(&call.name, zone);
+        let message = permission_ask_message(&call.name, missing_zones);
         self.notify_on_surface(proposal_id, &message).await;
     }
 
@@ -884,26 +963,36 @@ impl RiskGatedToolRuntime {
     }
 }
 
-fn permission_ask_message(tool: &str, zone: &str) -> String {
-    format!(
-        "Liberado needs permission.\n'{tool}' wants to write zone '{zone}', which its grant \
-         doesn't include.\nApprove once, for this session, or everywhere?"
-    )
+fn permission_ask_message(tool: &str, missing_zones: &[String]) -> String {
+    if missing_zones.len() == 1 {
+        format!(
+            "Liberado needs permission.\n'{tool}' wants to write zone '{zone}', which its grant \
+             doesn't include.\nApprove once, for this session, or everywhere?",
+            tool = tool,
+            zone = missing_zones[0],
+        )
+    } else {
+        let list = format!("[{}]", missing_zones.join(", "));
+        format!(
+            "Liberado needs permission.\n'{tool}' wants to write to multiple zones {list}, none \
+             of which its grant currently covers.\nApproving will raise another request for the \
+             next zone in turn (a multi-zone write takes one card per zone).\nApprove once, for \
+             this session, or everywhere?",
+            tool = tool,
+        )
+    }
 }
 
-/// Marker zone name used inside a vault-wide permission request's `requested_grant`. The ledger
-/// applier writes this verbatim to the overlay, which the runtime then sees via
-/// [`CapabilitySet::holds_any_zone_write`]. The actual zone name is never matched against a
-/// real vault directory — it is purely a label for the operator reading the proposal note, so
-/// `vault-wide-any` makes the intent obvious. Picked rather than `"*"` so a literal read of the
-/// overlay shows clearly what the approved grant was for.
-const VAULT_WIDE_ZONE_MARKER: &str = "vault-wide-any";
-
+/// Ask-message for vault-wide permission requests. Re-exported via the common crate
+/// constant — see `liberado_common::VAULT_WIDE_ZONE_MARKER`. The runtime now reads it from there.
 fn vault_wide_permission_ask_message(tool: &str) -> String {
     format!(
         "Liberado needs permission.\n'{tool}' mutates vault-wide state (fanout, vault switch, \
-         index rebuild). It needs at least minimal write authority somewhere.\nApprove once, for \
-         this session, or everywhere?"
+         index rebuild). It needs the explicit vault-wide grant \
+         Write(Vault(\"{marker}\")) to authorise that — a Write(<zone>) for some specific zone is not \
+         enough. Approve once, for this session, or everywhere?",
+        tool = tool,
+        marker = liberado_common::VAULT_WIDE_ZONE_MARKER,
     )
 }
 
@@ -923,9 +1012,27 @@ fn permission_request_id() -> String {
 
 /// The tool *result* returned for a raised permission request. Tells the model plainly that the
 /// action is paused pending the human's grant decision — not a failure it should route around.
-fn permission_request_message(path: &std::path::Path, zone: &str) -> String {
+/// For multi-zone calls the message names every missing zone (so the model retries the same call
+/// and the runtime raises the next card rather than guessing).
+fn permission_request_message(
+    path: &std::path::Path,
+    first_zone: &str,
+    missing_zones: &[String],
+) -> String {
+    let zone_summary = if missing_zones.len() == 1 {
+        format!("zone '{first_zone}'")
+    } else {
+        // Multi-zone case (move_note(from, to) etc.): list every missing zone so the model
+        // and operator see the full set the call depends on, and make it clear the daemon
+        // grants them one card at a time.
+        format!(
+            "every zone in [{}] (the daemon grants '{}' first; the next call will request the rest)",
+            missing_zones.join(", "),
+            first_zone
+        )
+    };
     format!(
-        "PERMISSION REQUESTED — the action was NOT executed. It needs Write access to zone '{zone}', \
+        "PERMISSION REQUESTED — the action was NOT executed. It needs Write access to {zone_summary}, \
          which this session's grant doesn't include. A request was sent for approval \
          (once / this session / everywhere). Saved at: {}. Do not retry or invent a result; the \
          action runs automatically once the human approves.",
@@ -938,11 +1045,12 @@ fn permission_request_message(path: &std::path::Path, zone: &str) -> String {
 fn vault_wide_permission_request_message(path: &std::path::Path) -> String {
     format!(
         "PERMISSION REQUESTED — the action was NOT executed. It mutates vault-wide state \
-         (fanout / index / vault switch), and this session's grant currently holds no \
-         `Write(Vault(\"<zone>\"))` capability to authorise that. A request was sent for approval \
-         (once / this session / everywhere). Saved at: {}. Do not retry or invent a result; the \
-         action runs automatically once the human approves.",
-        path.display()
+         (fanout / index / vault switch), and this session's grant currently does not hold the \
+         explicit vault-wide marker `Write(Vault(\"{marker}\"))` to authorise that. A request was \
+         sent for approval (once / this session / everywhere). Saved at: {}. Do not retry or \
+         invent a result; the action runs automatically once the human approves.",
+        path.display(),
+        marker = liberado_common::VAULT_WIDE_ZONE_MARKER,
     )
 }
 

@@ -7,21 +7,32 @@ listed here so the box update is mechanical.
 ## What ships in the runtime
 
 - `RiskGatedToolRuntime::invoke` resolves every tool on a path-addressed
-  MCP through `WriteTarget` (`NotAWrite` / `Zone` / `VaultWide` /
-  `Undeterminable`).
+  MCP through `WriteTarget` (`NotAWrite` / `Zone` / `Zones(Vec<String>)` /
+  `VaultWide` / `Undeterminable`).
 - A tool NOT in any of `write_tools` / `read_tools` / `vault_wide_writes`
   on a path-addressed MCP fails CLOSED: the call is refused with a
   refusal that names the three lists the operator must classify it
   under. The live bug (`01M3ZB89WK54HGNG6ATJ9FPJMX` — `edit_note` on
   `conformance/...`) is fixed at the type level.
+- Multi-path tools (`move_note(from, to)`, `move_file(from, to)`,
+  `create_from_template(file_path)`, `generate_index(directory)`,
+  `append_log_entry(directory)`, `visualize(output)`) now declare
+  per-tool `write_path_args`, so every path-arg resolves to a zone and
+  the runtime requires Write for **each** one. A mixed-zones move (one
+  zone in grant, one not) raises a permission request naming the missing
+  zone(s).
 - Vault-wide mutators (`begin_fanout`, `commit_fanout`, `abandon_fanout`,
-  `set_active_vault`, `vector_reindex`, ...) require the grant to hold at
-  least one `Write(Vault(\"<zone>\"))` capability, and surface the same
-  Deny/Once/Session/Everywhere permission-request flow as a per-zone
-  write.
+  `set_active_vault`, `vector_reindex`, ...) require the **explicit**
+  vault-wide marker grant `Capability::Write(Zone::vault("vault-wide-any"))`,
+  the same capability the four-button permission card applies when the
+  human picks Once / Session / Everywhere. `Write(<zone>)` for some
+  specific zone is **not** enough — switching the active vault affects
+  every concurrent session.
+- Vector reads (`vector_search` / `vector_status` / `vector_config` —
+  only `vector_reindex` rebuilds state) move to `read_tools` so a
+  Read-only session can use them without a permission card.
 - Config validation refuses to boot if any tool is listed in two of the
-  three lists (the runtime resolves in a fixed order, so an overlap
-  silently demotes the tool to a less-strict class).
+  three lists, or if a `write_path_args` key is missing from `write_tools`.
 
 ## Operator action — update topology files
 

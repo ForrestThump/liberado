@@ -449,15 +449,36 @@ impl CapabilitySet {
         self.capabilities.contains(&Capability::AskHuman)
     }
 
-    /// Whether this set holds **any** `Write(Zone)` capability — the question a vault-wide tool
-    /// (`begin_fanout`, `commit_fanout`, `abandon_fanout`, `set_active_vault`, `vector_reindex`,
-    /// …) asks the gate. A session holding only `Read(_)` is treated as read-only and refused,
-    /// because vault-wide mutators cannot be cleanly bound to one zone's read capability — they
-    /// affect git/fanout/index state that any read-only session should never touch.
+    /// Whether this set holds **any** `Write(Zone)` capability. Kept for callers that want the
+    /// coarse question (e.g. reports / dashboards). **Not** used by the vault-wide gate —
+    /// `Write(Vault("Tasks"))` authorises rearranging Tasks, but not picking the active vault
+    /// for the whole process. See [`holds_vault_wide_grant`] for the strict gate.
     pub fn holds_any_zone_write(&self) -> bool {
         self.capabilities
             .iter()
             .any(|c| matches!(c, Capability::Write(_)))
+    }
+
+    /// Whether this set holds the **explicit** vault-wide marker grant — the question a
+    /// vault-wide tool (`begin_fanout` / `commit_fanout` / `abandon_fanout` / `set_active_vault` /
+    /// `vector_reindex` / …) asks the gate.
+    ///
+    /// **Why an explicit marker, not "any Write":** `Capability::Write(Zone::vault("Tasks"))` says
+    /// this session may mutate Tasks. It does **not** say this session may switch the active
+    /// vault or rebuild the search index — those affect every concurrent session, not just
+    /// Tasks. The earlier "any zone write authorises vault-wide" model let a session with only
+    /// `Write(Tasks)` call `set_active_vault`, which is a step-change in authority it never asked
+    /// for. The session grant is now expected to opt in explicitly with
+    /// `Capability::Write(Zone::vault(VAULT_WIDE_ZONE_MARKER))`; the runtime applies the same
+    /// capability when the human picks Once / Session / Everywhere on the permission card.
+    ///
+    /// A `Write(*)` for some other zone is a deliberate grant, not a stand-in.
+    pub fn holds_vault_wide_grant(&self, marker: &str) -> bool {
+        self.capabilities.iter().any(|c| match c {
+            Capability::Write(Zone::Vault(name)) => name == marker,
+            Capability::Write(Zone::Named(name)) => name == marker,
+            _ => false,
+        })
     }
 
     /// Shared helper for [`granted_tools`](Self::granted_tools) and

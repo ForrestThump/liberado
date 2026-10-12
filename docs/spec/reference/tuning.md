@@ -475,15 +475,28 @@ its **name** — `Zone::vault("finance")` and `Zone::named("finance")` are the s
 `policy.toml` has only ever keyed on the name. If a vault folder `finance/` and an external billing
 system must be different authorities, give them different names.
 
-**Vault-wide mutators need *any* zone write authority.** A vault-wide tool
-(`begin_fanout`, `commit_fanout`, `set_active_vault`, `vector_reindex`, ...) doesn't
-target a single zone, so the per-zone `Write(Vault("<zone>"))` check doesn't apply.
-Instead the runtime gate requires the grant to hold at least one `Write(Zone)` capability
-(`CapabilitySet::holds_any_zone_write`); a strictly read-only session cannot start a
-fanout or rebuild the index. A grant of `ExecuteMcp("turbovault")` alone — without any
-write zone — gets the same deny/once/session/everywhere permission-request flow as a
-per-zone write, asking for "any `Write(Vault("<zone>"))`" so the human can confirm the
-session may mutate vault-wide state.
+**Vault-wide mutators need the explicit marker grant, not *any* Write.** A
+vault-wide tool (`begin_fanout`, `commit_fanout`, `abandon_fanout`, `set_active_vault`,
+`vector_reindex`, ...) doesn't target a single zone, so the per-zone
+`Write(Vault("<zone>"))` check doesn't apply. Instead the runtime gate requires the
+**explicit** vault-wide marker grant `Capability::Write(Zone::vault("vault-wide-any"))`,
+checked via `CapabilitySet::holds_vault_wide_grant`. The same capability is what the
+four-button permission card applies when the human picks Once / Session / Everywhere.
+`Write(<zone>)` for some specific zone is **not** enough: a session that holds
+`Write(Tasks)` can rearrange Tasks, but cannot pick the active vault for the whole
+process or rebuild the index, because those affect every concurrent session. The
+explicit marker is a deliberate opt-in.
+
+**Multi-path writers declare per-tool path-arg maps.** Tools whose path args differ
+from the descriptor's `zone_from_arg` (or that carry more than one) declare a
+`write_path_args` map keyed by tool name, value the list of arg names whose leading
+path segments name zones. For example, `move_note(from, to)` declares
+`move_note = ["from", "to"]` — the runtime resolves each arg to its zone and requires
+`Write(Vault(<zone>))` for **every** one. A mixed-zones move (source in grant,
+destination out) raises a permission request naming the missing destination; both
+zones in grant, the call runs. The optional `directory` arg of `append_log_entry` is
+treated as `Undeterminable` when absent — operators must classify the no-path case
+explicitly rather than silently defaulting it to one zone.
 
 ### Behaviour thresholds — `tuning.toml`
 

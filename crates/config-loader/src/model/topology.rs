@@ -1247,12 +1247,28 @@ pub struct McpConfig {
     /// **Path-addressed MCPs only**: tools that mutate vault-wide state without a single
     /// target zone — `begin_fanout` / `commit_fanout` / `abandon_fanout`,
     /// `set_active_vault`, `vector_reindex`, and similar. The runtime treats a vault-wide tool
-    /// as needing ANY zone-write authority in the grant (so a read-only session cannot start a
-    /// fanout) and surfaces a permission request of the same Deny/Once/Session/Everywhere
-    /// shape as a per-zone write. Listed here so the operator can name vault-wide mutators
-    /// explicitly rather than having them look like reads.
+    /// as needing the **explicit** vault-wide marker grant
+    /// `Write(Vault("vault-wide-any"))` — `Write(Vault("Tasks"))` authorises rearranging Tasks,
+    /// not switching the active vault for every concurrent session. A read-only session cannot
+    /// start a fanout; a session that has any `Write(Zone)` *but not the marker* also cannot.
+    /// The marker is exactly what the four-button permission request writes to the grant when
+    /// the human picks Once / Session / Everywhere.
     #[serde(default)]
     pub vault_wide_writes: Vec<String>,
+    /// **Path-addressed MCPs only**: per-tool override of the path-argument name. Most
+    /// path-addressed tools carry a single `path` arg (the MCP's `zone_from_arg`); a handful
+    /// name their path arg differently, and `move_note` / `move_file` carry two paths
+    /// (`from`, `to`) that BOTH must be resolved to zones (the runtime authorises the write
+    /// only when EVERY listed zone is in the grant). A tool NOT in this map uses
+    /// `zone_from_arg` for its single path arg. Keys MUST be a subset of `write_tools`;
+    /// config validation refuses to boot otherwise. Values are the **ordered** list of arg
+    /// names the runtime should resolve — `["from", "to"]` matches the source/destination
+    /// shape of `move_*`; `["directory"]` matches `generate_index` / `append_log_entry`;
+    /// `["file_path"]` matches `create_from_template`; `["output"]` matches `visualize`.
+    /// An optional path arg (e.g. `append_log_entry(directory)`) returns `Undeterminable`
+    /// at runtime when absent — the operator must classify the no-path case explicitly.
+    #[serde(default)]
+    pub write_path_args: std::collections::BTreeMap<String, Vec<String>>,
     /// Set `false` to declare "this MCP has effects, but none of them are **vault zone** writes" —
     /// a PDF tool that writes files, a memory MCP that writes its own store.
     ///
@@ -1320,6 +1336,7 @@ mod zone_resolution_tests {
             write_tools: Vec::new(),
             read_tools: Vec::new(),
             vault_wide_writes: Vec::new(),
+            write_path_args: std::collections::BTreeMap::new(),
             writes_vault: None,
         }
     }
@@ -1729,6 +1746,7 @@ mod proptest_tests {
                         write_tools: declaration.write_tools.clone(),
                         read_tools: Vec::new(),
                         vault_wide_writes: Vec::new(),
+                        write_path_args: std::collections::BTreeMap::new(),
                         writes_vault: None,
                     };
                     (descriptor, config, tool)

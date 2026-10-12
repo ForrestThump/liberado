@@ -99,7 +99,7 @@ pub(crate) fn write_explanation(
     // 2. What does this call write, per the MCP's own declaration + these arguments?
     let args = serde_json::json!({ "path": path });
     let target = liberado_common::write_target(&descriptor, bare, &args);
-    let zone = match &target {
+    let zones: Vec<String> = match &target {
         WriteTarget::NotAWrite => {
             guards.guard_lines.push(format!(
                 "  [PASS] write_target      '{bare}' is a read on this MCP — no write guards apply"
@@ -115,13 +115,15 @@ pub(crate) fn write_explanation(
         WriteTarget::VaultWide => {
             guards.guard_lines.push(format!(
                 "  [BLOCK] write_target      '{bare}' is a vault-wide write (fanout, vault switch, \
-                 index rebuild) — it must be classified in `vault_wide_writes` on this MCP. Any \
-                 session calling it needs at least one `Write(Vault(\"…\"))` capability, since a \
-                 session holding only reads must not be able to start a fanout."
+                 index rebuild) — it must be classified in `vault_wide_writes` on this MCP. The \
+                 runtime refuses unless the grant carries the **explicit** vault-wide marker \
+                 `Write(Vault(\"vault-wide-any\"))` — `Write(Vault(\"Tasks\"))` alone does not \
+                 authorise switching the active vault for the whole process."
             ));
             blockers.push(
                 "verify the tool is listed in this MCP's `vault_wide_writes` in topology.toml; the \
-                 component grant must hold at least one `Write(Vault(\"…\"))`"
+                 component grant must hold the explicit vault-wide marker \
+                 `Write(Vault(\"vault-wide-any\"))`"
                     .to_string(),
             );
             guards.verdict = "verdict: BLOCKED".into();
@@ -142,31 +144,50 @@ pub(crate) fn write_explanation(
             guards.fixes = blockers;
             return guards;
         }
-        WriteTarget::Zone(z) => z.clone(),
+        WriteTarget::Zone(z) => vec![z.clone()],
+        // Multi-path tools (`move_note(from, to)`, `generate_index(directory)`, …) resolve to
+        // every zone the call touches. The explanation walks the full list — the operator can
+        // see at a glance which zones the call depends on, and the runtime will require Write
+        // for every one.
+        WriteTarget::Zones(zones) => zones.clone(),
     };
     guards.guard_lines.push(format!(
-        "  [PASS] write_target      resolves to zone '{zone}'"
+        "  [PASS] write_target      resolves to zone(s) [{}]",
+        zones.join(", ")
     ));
 
-    // 3. Does the component hold Write on that zone?
-    let holds_write = caps.contains(&Capability::Write(liberado_common::Zone::vault(&zone)));
+    // 3. Does the component hold Write on every resolved zone?
+    let missing_zones: Vec<&str> = zones
+        .iter()
+        .filter(|z| !caps.contains(&Capability::Write(liberado_common::Zone::vault(*z))))
+        .map(String::as_str)
+        .collect();
+    let holds_write = missing_zones.is_empty();
     guards.guard_lines.push(format!(
-        "  [{}] write_capability  needed Write(Vault(\"{zone}\"))",
-        say(holds_write)
+        "  [{}] write_capability  needed Write(Vault(\"…\")) for each of [{}]",
+        say(holds_write),
+        zones.join(", ")
     ));
     if !holds_write {
-        blockers.push(format!(
-            "add {{ Write = {{ Vault = \"{zone}\" }} }} to the '{component}' grant"
-        ));
+        for missing in &missing_zones {
+            blockers.push(format!(
+                "add {{ Write = {{ Vault = \"{missing}\" }} }} to the '{component}' grant"
+            ));
+        }
     }
 
-    // 4. Is the zone itself directly agent-writable?
-    let class = config.policy.write_class(&zone);
+    // 4. Are the resolved zones themselves directly agent-writable?
+    //
+    // For multi-zone calls we report the class of the **first** zone (the most likely to be
+    // misconfigured) and ask whether every one of them is allowed. The runtime requires Write
+    // for every zone before the call runs, regardless of class.
+    let first_zone = &zones[0];
+    let class = config.policy.write_class(first_zone);
     let class_ok = class.allows_direct_agent_write();
     guards.guard_lines.push(format!(
-        "  [{}] zone_write_class  zone '{zone}' is {class:?}{}",
+        "  [{}] zone_write_class  zone '{first_zone}' is {class:?}{}",
         say(class_ok),
-        if config.policy.zones.iter().any(|z| z.zone == zone) {
+        if config.policy.zones.iter().any(|z| z.zone == *first_zone) {
             ""
         } else {
             " (UNDECLARED — fail-safe default)"
@@ -174,7 +195,7 @@ pub(crate) fn write_explanation(
     ));
     if !class_ok {
         blockers.push(format!(
-            "declare zone '{zone}' with write_class = \"agent_writable\" in policy.toml \
+            "declare zone '{first_zone}' with write_class = \"agent_writable\" in policy.toml \
              (undeclared zones default to proposal_only)"
         ));
     }

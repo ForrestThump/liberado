@@ -211,6 +211,11 @@ read_tools = [
     "tasks_config",
     # Fanout reads
     "list_orphan_fanouts",
+    # Vector store reads (only vector_reindex rebuilds state — vector_search/status/config
+    # query the index and must NOT require the vault-wide marker grant).
+    "vector_search",
+    "vector_status",
+    "vector_config",
 ]
 
 # Tools that mutate vault-wide state without a single target zone. The runtime gate
@@ -222,10 +227,33 @@ vault_wide_writes = [
     "commit_fanout",
     "abandon_fanout",
     "vector_reindex",
-    "vector_search",
-    "vector_status",
-    "vector_config",
 ]
+
+# Per-tool path-argument declarations on write_tools. By default, every path-addressed writer
+# uses the descriptor's `zone_from_arg` ("path") for its single path arg. Tools whose path arg
+# has a different name, or that carry more than one path arg, must be declared here:
+#
+#   * move_note (from, to)        - source + destination; both must be authorised.
+#   * move_file (from, to)        - same. The runtime raises a permission request naming the
+#                                   destination zone if the source is in the grant but the
+#                                   destination is not.
+#   * create_from_template (file_path)
+#   * generate_index (directory)
+#   * append_log_entry (directory) - directory is OPTIONAL in the live schema. The runtime
+#                                     refuses Undeterminable("missing 'directory'") when
+#                                     absent, surfacing the gap rather than picking a zone.
+#   * visualize (output)
+#
+# Config validation refuses to boot if any of these keys is NOT in `write_tools`. Missing
+# entries here were the silent hole pre-fix: the tool returned "missing 'path'" and was
+# always refused, so callers couldn't use them at all.
+[write_path_args]
+move_note            = ["from",     "to"]
+move_file           = ["from",     "to"]
+create_from_template = ["file_path"]
+generate_index      = ["directory"]
+append_log_entry    = ["directory"]
+visualize           = ["output"]
 
 # --- Search ------------------------------------------------------------------
 # turbomcp: multi-provider routing + failover + AI reranking. searxng-mcp was dropped once this was

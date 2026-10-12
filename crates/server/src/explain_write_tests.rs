@@ -23,6 +23,7 @@ fn vault_mcp(consequence: Consequence) -> McpConfig {
         write_tools: vec!["write_note".into()],
         read_tools: vec!["read_note".into()],
         vault_wide_writes: Vec::new(),
+        write_path_args: std::collections::BTreeMap::new(),
         writes_vault: None,
     }
 }
@@ -218,7 +219,7 @@ fn a_write_into_an_agent_writable_zone_with_every_grant_is_allowed() {
     assert!(
         e.guard_lines
             .iter()
-            .any(|l| l.contains("[PASS] write_target      resolves to zone 'decisions'"))
+            .any(|l| l.contains("[PASS] write_target      resolves to zone(s) [decisions]"))
     );
 }
 

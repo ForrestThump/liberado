@@ -39,6 +39,14 @@ use crate::{Consequence, WriteClass};
 /// [`mark_degraded`](CapabilityCatalog::mark_degraded) before half-open re-inclusion.
 pub const DEFAULT_DEGRADED_HALF_OPEN: Duration = Duration::from_secs(60);
 
+/// The sentinel zone name the runtime carries on a vault-wide permission request's
+/// `requested_grant`. The grant applier (`append_grant_to_overlay`) writes it verbatim, and
+/// [`CapabilitySet::holds_vault_wide_grant`] is the matching predicate on the gate. The literal
+/// name appears verbatim in the proposal note and the overlay file, so an operator reading
+/// either sees what was approved. Picked over `"*"` so the file is unmistakable; the leading
+/// `vault-wide-` prefix also keeps a real vault folder from accidentally matching.
+pub const VAULT_WIDE_ZONE_MARKER: &str = "vault-wide-any";
+
 /// A catalog entry: describes one MCP server that the system can route to.
 ///
 /// This is the common crate's own descriptor type (mirroring
@@ -94,9 +102,35 @@ pub struct McpDescriptor {
     pub read_tools: Vec<String>,
     /// Path-addressed MCPs: tools that mutate vault-wide state without a single target zone
     /// (`begin_fanout` / `commit_fanout` / `abandon_fanout`, `set_active_vault`,
-    /// `vector_reindex`, …). The gate treats these as writes that need any zone write authority
-    /// (a per-tool grant or `Write(*)`); a session holding only reads cannot start a fanout.
+    /// `vector_reindex`, …). The gate treats these as writes that need an **explicit** vault-wide
+    /// grant (`Capability::Write(Zone::vault(<marker>))`), checked by `holds_vault_wide_grant`;
+    /// a session holding only `Write(Vault("Tasks"))` does NOT also authorise a fanout that
+    /// switches the active vault for every other session. (Earlier behaviour — `holds_any_zone_write`
+    /// passing for any single zone — was too weak: `Write(Tasks)` authorises rearranging Tasks,
+    /// not picking the active vault for the whole process.)
     pub vault_wide_writes: Vec<String>,
+    /// Per-tool path-argument overrides for the `write_tools` of a path-addressed MCP.
+    ///
+    /// Most path-addressed MCPs have a single path arg (`path` on turbovault's note writers).
+    /// A handful touch multiple vault paths: `move_note(from, to)`, `move_file(from, to)`,
+    /// `create_from_template(file_path)`, `generate_index(directory)`,
+    /// `append_log_entry(directory)`, `visualize(output)`. Declaring the args matters because:
+    ///
+    /// 1. `write_target` only resolves the **first** declared arg by default — so the
+    ///    six tools above returned `Undeterminable("missing 'path'")` and were always refused.
+    ///    They are now declared writers; this map tells the resolver which args carry paths.
+    /// 2. Multi-path tools (`move_note`, `move_file`) require authorisation for **every**
+    ///    resolved zone — a `Tasks → sandbox` move with `Write(Tasks)` only still fails closed
+    ///    when `sandbox` is not in the grant, because the destination check is structural.
+    /// 3. `append_log_entry`'s `directory` is optional in the live schema; absence falls back
+    ///    to `Undeterminable` so the operator must classify the no-path call explicitly
+    ///    (deliberate — silently defaulting a "no directory" append to one zone is exactly the
+    ///    kind of "I made something up" the gate refuses).
+    ///
+    /// A tool NOT in this map uses the descriptor's `zone_from_arg` (single-arg path-addressed
+    /// behaviour). Keys MUST be a subset of `write_tools`; config validation refuses to boot
+    /// otherwise.
+    pub write_path_args: std::collections::BTreeMap<String, Vec<String>>,
 }
 
 /// What a tool call writes to, resolved against its MCP's declaration *and its arguments*.
@@ -106,25 +140,39 @@ pub struct McpDescriptor {
 /// must **not** collapse into "not a write". That collapse is exactly the class of bug F1 was — a
 /// guard that says nothing when it does not know, and is therefore silently absent.
 ///
-/// The four- (now five-) state split separates **read vs unknown vs write** so each one can be
-/// handled distinctly:
+/// The states separate **read vs unknown vs write** so each one can be handled distinctly:
 /// - `NotAWrite` — confirmed read, no authority check needed.
 /// - `Zone(z)` — write to one zone, check `Write(z)`.
-/// - `VaultWide` — write to the vault as a whole, check any zone write.
-/// - `Undeterminable(why)` — could not classify (no path arg, undeclared tool); fail closed.
+/// - `Zones(Vec<String>)` — write to **every** of the named zones. Multi-path tools
+///   (`move_note(from, to)`) and batch/multi-path operations return this; the runtime
+///   rejects unless the grant holds a `Write(*)` for **each** named zone. The vector
+///   preserves the operator's argument order (source, destination, …) so the #295 permission
+///   request can name the missing zones in the same order the model called them.
+/// - `VaultWide` — write to the vault as a whole. Authorised by the explicit vault-wide
+///   marker grant (`Capability::Write(Zone::vault(VAULT_WIDE_ZONE_MARKER))`), NOT by any
+///   arbitrary zone write — see [`WriteTarget::VaultWide`] for the rationale.
+/// - `Undeterminable(why)` — could not classify (no path arg, undeclared tool, optional
+///   path arg with no value); fail closed, with `why` explaining the gap.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WriteTarget {
     /// Not a zone write: a declared read, or an MCP that writes nothing.
     NotAWrite,
     /// Writes to this zone. The caller must hold `Capability::Write(Zone::vault(zone))`.
     Zone(String),
+    /// Writes to **all** the named zones (multi-path call). The caller must hold
+    /// `Capability::Write(Zone::vault(z))` for **each** zone in `0`. Any missing zone
+    /// raises the channel-agnostic permission request naming it.
+    Zones(Vec<String>),
     /// Writes to vault-wide state with no single target zone (fanout, vault switch,
-    /// index rebuild). The caller must hold a `Capability::Write(Zone)` for **some** zone, or
-    /// a per-tool grant for this exact tool.
+    /// index rebuild). Authorised by the explicit vault-wide marker grant, NOT by any
+    /// arbitrary zone write — `Write(Vault("Tasks"))` authorises rearranging Tasks, not
+    /// picking the active vault for the whole process. Marked with a sentinel zone name
+    /// in `requested_grant`; the runtime checks [`CapabilitySet::holds_vault_wide_grant`].
     VaultWide,
     /// It *is* a write, but the target zone could not be determined — an undeclared tool on a
-    /// path-addressed MCP, a missing/empty path arg on a declared writer. **Fail closed** —
-    /// refuse, with `0` explaining the gap and how to close it.
+    /// path-addressed MCP, a missing/empty path arg on a declared writer, or a multi-path
+    /// tool with a path arg that names no zone. **Fail closed** — refuse, with `0`
+    /// explaining the gap and how to close it.
     Undeterminable(String),
 }
 
@@ -155,63 +203,86 @@ pub fn write_target(
     // of `write_tools`, `read_tools`, `vault_wide_writes`. The fixed-zone branch below still
     // resolves tools not listed in `tool_zones` through `default_zone` / `None` — that is the
     // long-standing behavior for fixed-zone MCPs and is preserved here.
-    if let Some(arg) = &descriptor.zone_from_arg {
-        // Vault-wide writes are not path-addressed: the tool mutates vault state without naming
-        // a single zone. Check this first so a tool that happens to carry a path arg AND mutate
-        // vault state is treated correctly.
-        if descriptor
-            .vault_wide_writes
-            .iter()
-            .any(|t| t == bare_tool_name)
-        {
-            return WriteTarget::VaultWide;
-        }
-        // Explicit read: not a write. `read_tools` is opt-in — most deployments use the
-        // fixed-zone `tool_zones` for reads, and on a path-addressed MCP the deny-by-default rule
-        // means an operator who doesn't list a tool is alerted rather than waved through.
-        if descriptor.read_tools.iter().any(|t| t == bare_tool_name) {
-            return WriteTarget::NotAWrite;
-        }
-        // Declared writer: resolve the zone from the path arg, fail closed if the arg is missing
-        // or doesn't name a zone.
-        if descriptor.write_tools.iter().any(|t| t == bare_tool_name) {
-            let Some(path) = arguments.get(arg).and_then(|v| v.as_str()) else {
-                return WriteTarget::Undeterminable(format!(
-                    "'{bare_tool_name}' writes, and its zone comes from the '{arg}' argument, \
-                     which is missing or not a string"
-                ));
+    let Some(default_arg) = descriptor.zone_from_arg.as_ref() else {
+        // Fixed-zone MCP (or no zone tracking at all). Existing behavior preserved: a tool
+        // resolves through `resolve_zone`, which returns `None` for tools the MCP has not opted
+        // into zone tracking for — and `None` here means "not a zone-write concern", not
+        // "unknown write", so `NotAWrite` is the correct answer.
+        return match resolve_zone(descriptor, bare_tool_name) {
+            Some(zone) => WriteTarget::Zone(zone),
+            None => WriteTarget::NotAWrite,
+        };
+    };
+
+    // Vault-wide writes are not path-addressed: the tool mutates vault state without naming a
+    // single zone. Check this first so a tool that happens to carry a path arg AND mutate vault
+    // state is treated correctly.
+    if descriptor
+        .vault_wide_writes
+        .iter()
+        .any(|t| t == bare_tool_name)
+    {
+        return WriteTarget::VaultWide;
+    }
+    // Explicit read: not a write.
+    if descriptor.read_tools.iter().any(|t| t == bare_tool_name) {
+        return WriteTarget::NotAWrite;
+    }
+    // Declared writer: resolve the zone(s) from the declared path args. Per-tool override via
+    // `write_path_args`; default = single `zone_from_arg` arg for backwards compatibility with
+    // tools that name their path arg `path`. Multi-path tools (`move_note(from, to)`,
+    // `generate_index(directory)`, …) map to `WriteTarget::Zones(Vec<String>)` so the runtime
+    // can require authorisation for **every** resolved zone. A tool whose declared path arg is
+    // missing in the call is `Undeterminable` — not "default to the MCP's default_zone",
+    // because silently picking one for an absent arg is exactly the "I made something up" the
+    // gate refuses.
+    if descriptor.write_tools.iter().any(|t| t == bare_tool_name) {
+        let path_args: Vec<String> = descriptor
+            .write_path_args
+            .get(bare_tool_name)
+            .cloned()
+            .unwrap_or_else(|| vec![default_arg.clone()]);
+
+        let mut zones: Vec<String> = Vec::with_capacity(path_args.len());
+        for arg in &path_args {
+            let path = match arguments.get(arg).and_then(|v| v.as_str()) {
+                Some(s) => s,
+                None => {
+                    return WriteTarget::Undeterminable(format!(
+                        "'{bare_tool_name}' writes, and its zone comes from the '{arg}' argument, \
+                         which is missing or not a string"
+                    ));
+                }
             };
             // The zone is the leading path segment: `tasks/foo.md` -> `tasks`. A bare filename
             // has no zone, and a write with no zone is a write we cannot authorize.
             let segment = path.split(['/', '\\']).find(|s| !s.is_empty() && *s != ".");
-            return match segment {
+            match segment {
                 Some(zone) if path.contains('/') || path.contains('\\') => {
-                    WriteTarget::Zone(zone.to_string())
+                    zones.push(zone.to_string());
                 }
-                _ => WriteTarget::Undeterminable(format!(
-                    "'{bare_tool_name}' writes to '{path}', which names no zone (expected \
-                     '<zone>/...')"
-                )),
-            };
+                _ => {
+                    return WriteTarget::Undeterminable(format!(
+                        "'{bare_tool_name}' writes to '{path}', which names no zone (expected \
+                         '<zone>/...')"
+                    ));
+                }
+            }
         }
-        // Undeclared tool on a path-addressed MCP — fail closed. The denial text names the three
-        // lists so the operator knows exactly where to add the tool.
-        return WriteTarget::Undeterminable(format!(
-            "'{bare_tool_name}' on '{}' is undeclared — name it in one of `write_tools`, \
-             `read_tools`, or `vault_wide_writes` (in topology.toml) before this MCP can be \
-             called; silently treating it as a read is the F1 bug",
-            descriptor.name
-        ));
+        // Single-arg writers keep the original `Zone(z)` shape so the rest of the pipeline
+        // (and tests reading it) doesn't need a second match arm.
+        if zones.len() == 1 {
+            return WriteTarget::Zone(zones.remove(0));
+        }
+        return WriteTarget::Zones(zones);
     }
-
-    // Fixed-zone MCP (or no zone tracking at all). Existing behavior preserved: a tool resolves
-    // through `resolve_zone`, which returns `None` for tools the MCP has not opted into zone
-    // tracking for — and `None` here means "not a zone-write concern", not "unknown write", so
-    // `NotAWrite` is the correct answer.
-    match resolve_zone(descriptor, bare_tool_name) {
-        Some(zone) => WriteTarget::Zone(zone),
-        None => WriteTarget::NotAWrite,
-    }
+    // Undeclared tool on a path-addressed MCP — fail closed.
+    WriteTarget::Undeterminable(format!(
+        "'{bare_tool_name}' on '{}' is undeclared — name it in one of `write_tools`, \
+         `read_tools`, or `vault_wide_writes` (in topology.toml) before this MCP can be \
+         called; silently treating it as a read is the F1 bug",
+        descriptor.name
+    ))
 }
 
 /// Whether this call names **exactly one** write target, known from the declaration rather than
@@ -1185,6 +1256,7 @@ mod proptest_tests {
                                     write_tools,
                                     read_tools,
                                     vault_wide_writes,
+                                    write_path_args: std::collections::BTreeMap::new(),
                                 }
                             },
                         )
@@ -1313,7 +1385,10 @@ mod proptest_tests {
                 desc.read_tools.contains(&tool)
             }
             WriteTarget::VaultWide => desc.vault_wide_writes.contains(&tool),
-            WriteTarget::Zone(_) | WriteTarget::Undeterminable(_) => true,
+            // Multi-zone writes are writes regardless of whether the call resolves one zone or
+            // many — only Undeterminable is the fail-closed shape that's neither read, write,
+            // nor vault-wide.
+            WriteTarget::Zone(_) | WriteTarget::Zones(_) | WriteTarget::Undeterminable(_) => true,
         }
     }
 

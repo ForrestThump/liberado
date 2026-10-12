@@ -480,6 +480,7 @@ pub fn catalog_from_config(config: &Config) -> Vec<liberado_common::McpDescripto
             write_tools: m.write_tools.clone(),
             read_tools: m.read_tools.clone(),
             vault_wide_writes: m.vault_wide_writes.clone(),
+            write_path_args: m.write_path_args.clone(),
         })
         .collect()
 }
@@ -837,6 +838,7 @@ capabilities = [ { ExecuteMcp = "ghost-mcp" } ]
                 write_tools: Vec::new(),
                 read_tools: Vec::new(),
                 vault_wide_writes: Vec::new(),
+                write_path_args: std::collections::BTreeMap::new(),
                 writes_vault: Some(false),
             },
             McpConfig {
@@ -854,6 +856,7 @@ capabilities = [ { ExecuteMcp = "ghost-mcp" } ]
                 write_tools: Vec::new(),
                 read_tools: Vec::new(),
                 vault_wide_writes: Vec::new(),
+                write_path_args: std::collections::BTreeMap::new(),
                 writes_vault: Some(false),
             },
         ];

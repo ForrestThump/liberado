@@ -171,6 +171,22 @@ fn validate_mcp_zones(config: &Config) -> Result<(), ConfigLoadError> {
                     )));
                 }
             }
+            // `write_path_args` keys must be a subset of `write_tools`. A stray key (e.g. a
+            // leftover entry from a tool renamed in turbovault) means the runtime will resolve
+            // an undeclared tool against an arg name that no longer exists, and the call will
+            // fail closed with Undeterminable. Catch it at boot so the operator sees the
+            // gap with a clean error.
+            for tool in mcp.write_path_args.keys() {
+                if !mcp.write_tools.iter().any(|t| t == tool) {
+                    return Err(validation_error(format!(
+                        "MCP '{}' lists '{}' in `write_path_args` but it is NOT in `write_tools`. \
+                         Either add the tool to `write_tools` (and pick the right arg list) or \
+                         drop the `write_path_args` entry — tools outside `write_tools` will not \
+                         be classified, and the runtime will refuse them as undeclared.",
+                        mcp.name, tool
+                    )));
+                }
+            }
         }
         if !fixed_zone && !path_addressed {
             return Err(validation_error(format!(

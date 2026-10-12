@@ -903,6 +903,7 @@ mod magnitude_respects_risk_waivers {
             write_tools: vec!["write_note".into(), "delete_note".into()],
             read_tools: vec!["read_note".into()],
             vault_wide_writes: Vec::new(),
+            write_path_args: std::collections::BTreeMap::new(),
         }
     }
 
@@ -1328,6 +1329,9 @@ mod vault_write_gate_regression {
                 "tasks_overdue".into(),
                 "tasks_tags".into(),
                 "tasks_config".into(),
+                "vector_search".into(),
+                "vector_status".into(),
+                "vector_config".into(),
             ],
             vault_wide_writes: vec![
                 "begin_fanout".into(),
@@ -1335,10 +1339,30 @@ mod vault_write_gate_regression {
                 "abandon_fanout".into(),
                 "set_active_vault".into(),
                 "vector_reindex".into(),
-                "vector_search".into(),
-                "vector_status".into(),
-                "vector_config".into(),
             ],
+            // vector_search / vector_status / vector_config are reads (query the index; only
+            // vector_reindex rebuilds state). Classify them in `read_tools` so a Read-only
+            // session can use them without a permission card.
+            write_path_args: std::collections::BTreeMap::from([
+                (
+                    "move_note".to_string(),
+                    vec!["from".to_string(), "to".to_string()],
+                ),
+                (
+                    "move_file".to_string(),
+                    vec!["from".to_string(), "to".to_string()],
+                ),
+                (
+                    "create_from_template".to_string(),
+                    vec!["file_path".to_string()],
+                ),
+                ("generate_index".to_string(), vec!["directory".to_string()]),
+                (
+                    "append_log_entry".to_string(),
+                    vec!["directory".to_string()],
+                ),
+                ("visualize".to_string(), vec!["output".to_string()]),
+            ]),
         }
     }
 
@@ -1457,7 +1481,203 @@ mod vault_write_gate_regression {
             serde_json::json!({"path": "conformance/approval-test.md"}),
         );
         let result = rt.invoke(&call).await;
-        assert_eq!(result, Ok("edited".into()), "granted zone must run");
+        let result_str: &str = match &result {
+            Ok(value) => value.as_str(),
+            Err(e) => panic!("granted zone must run, got error: {e}"),
+        };
+        assert_eq!(result_str, "edited");
+        assert_eq!(inner.invoked.lock().unwrap().len(), 1);
+    }
+
+    // ── Multi-path writers (brief gap A) ────────────────────────────────────────────
+    //
+    // Pre-fix: tools with non-`path` args (move_note(from, to), create_from_template(file_path),
+    // generate_index(directory), append_log_entry(directory), visualize(output)) returned
+    // `Undeterminable("missing 'path'")` and were always refused. With `write_path_args` set,
+    // every declared arg resolves to a zone and the runtime requires Write for **each**.
+
+    /// Multi-path tool with both zones in the grant — runs.
+    #[tokio::test]
+    async fn move_file_with_both_zones_in_grant_runs() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let inner = Arc::new(InvocationRecordingRuntime::new(
+            &["turbovault:move_file"],
+            Ok("moved".into()),
+        ));
+        let rt = gate_with_grant(dir.path(), inner.clone(), &["Tasks", "sandbox"]);
+        let call = ToolInvocation::new(
+            "c-both",
+            "turbovault:move_file",
+            serde_json::json!({"from": "Tasks/Main.md", "to": "sandbox/Main.md"}),
+        );
+        let result = rt.invoke(&call).await;
+        let result_str: &str = match &result {
+            Ok(value) => value.as_str(),
+            Err(e) => panic!("both zones granted must run, got error: {e}"),
+        };
+        assert_eq!(result_str, "moved");
+        assert_eq!(inner.invoked.lock().unwrap().len(), 1);
+    }
+
+    /// Multi-path tool with source in grant but destination NOT — the runtime raises a permission
+    /// request naming the missing destination zone. The source-side zone gate passes, the
+    /// destination-side check fails closed.
+    #[tokio::test]
+    async fn move_file_with_destination_out_of_grant_requests_the_destination_zone() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let inner = Arc::new(InvocationRecordingRuntime::new(
+            &["turbovault:move_file"],
+            Ok("moved".into()),
+        ));
+        let rt = gate_with_grant(dir.path(), inner.clone(), &["Tasks"]).with_approval(
+            crate::ApprovalStamp {
+                session_id: "sess".into(),
+                origin: liberado_common::ApprovalOrigin::Web,
+            },
+        ); // no sandbox
+        let call = ToolInvocation::new(
+            "c-mixed",
+            "turbovault:move_file",
+            serde_json::json!({"from": "Tasks/Main.md", "to": "sandbox/Main.md"}),
+        );
+        let result = rt.invoke(&call).await.expect("a chat surface must ask");
+        assert!(
+            result.contains("PERMISSION REQUESTED"),
+            "missing destination must card: {result}"
+        );
+        assert!(
+            result.contains("sandbox"),
+            "the request must name the missing destination: {result}"
+        );
+        assert!(
+            !result.contains("Tasks"),
+            "the source zone IS in the grant and must not be listed as missing: {result}"
+        );
+        assert!(
+            inner.invoked.lock().unwrap().is_empty(),
+            "and the tool must not have run"
+        );
+    }
+
+    /// Multi-path tool with source out of grant, destination in — also requests the source.
+    /// (Symmetric to the above; pins that the source-side check still works for the
+    /// destination-known case.)
+    #[tokio::test]
+    async fn move_file_with_source_out_of_grant_requests_the_source_zone() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let inner = Arc::new(InvocationRecordingRuntime::new(
+            &["turbovault:move_file"],
+            Ok("moved".into()),
+        ));
+        let rt = gate_with_grant(dir.path(), inner.clone(), &["sandbox"]).with_approval(
+            crate::ApprovalStamp {
+                session_id: "sess".into(),
+                origin: liberado_common::ApprovalOrigin::Web,
+            },
+        ); // no Tasks
+        let call = ToolInvocation::new(
+            "c-src-out",
+            "turbovault:move_file",
+            serde_json::json!({"from": "Tasks/Main.md", "to": "sandbox/Main.md"}),
+        );
+        let result = rt.invoke(&call).await.expect("a chat surface must ask");
+        assert!(
+            result.contains("PERMISSION REQUESTED"),
+            "missing source must card: {result}"
+        );
+        assert!(
+            result.contains("Tasks"),
+            "must name the missing source zone: {result}"
+        );
+    }
+
+    /// Multi-path tool with both zones out of grant — both must be listed in the message.
+    #[tokio::test]
+    async fn move_file_with_both_zones_out_of_grant_lists_both_missing_zones() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let inner = Arc::new(InvocationRecordingRuntime::new(
+            &["turbovault:move_file"],
+            Ok("moved".into()),
+        ));
+        let rt =
+            gate_with_grant(dir.path(), inner.clone(), &[]).with_approval(crate::ApprovalStamp {
+                session_id: "sess".into(),
+                origin: liberado_common::ApprovalOrigin::Web,
+            }); // no zones at all
+        let call = ToolInvocation::new(
+            "c-no-zones",
+            "turbovault:move_file",
+            serde_json::json!({"from": "Tasks/Main.md", "to": "sandbox/Main.md"}),
+        );
+        let result = rt.invoke(&call).await.expect("a chat surface must ask");
+        assert!(result.contains("PERMISSION REQUESTED"));
+        assert!(
+            result.contains("Tasks") && result.contains("sandbox"),
+            "must name every missing zone: {result}"
+        );
+        assert!(
+            inner.invoked.lock().unwrap().is_empty(),
+            "and the tool must not have run"
+        );
+    }
+
+    /// Multi-path tool without `write_path_args` declared (operator forgot) — falls back to
+    /// `zone_from_arg` (path). The runtime uses just the source arg and resolves only one
+    /// zone, even when other path args are present. This documents the fallback so future
+    /// operators know what happens.
+    #[tokio::test]
+    async fn move_file_without_write_path_args_uses_only_the_first_arg() {
+        // Set up a descriptor where move_file is in write_tools and zone_from_arg is "from", but
+        // no entry in write_path_args. The runtime uses "from" only — destination is invisible.
+        let descriptor = McpDescriptor {
+            name: "turbovault".into(),
+            description: "fallback test".into(),
+            consequence: Consequence::Reversible,
+            provenance: None,
+            default_zone: None,
+            tool_zones: Vec::new(),
+            zone_from_arg: Some("from".into()),
+            write_tools: vec!["move_file".into()],
+            read_tools: Vec::new(),
+            vault_wide_writes: Vec::new(),
+            write_path_args: std::collections::BTreeMap::new(), // move_file NOT declared
+        };
+        let dir = tempfile::TempDir::new().unwrap();
+        let inner = Arc::new(InvocationRecordingRuntime::new(
+            &["turbovault:move_file"],
+            Ok("moved".into()),
+        ));
+        // Only Tasks granted — with the fallback the destination is silent, so the call
+        // runs without ever consulting the sandbox grant. (We pin the behaviour, even though
+        // it's undesirable — operators should ALWAYS declare write_path_args.)
+        let rt = RiskGatedToolRuntime::new(
+            inner.clone(),
+            CapabilitySet::from_iter([
+                Capability::ExecuteMcp("turbovault".into()),
+                Capability::Write(Zone::vault("Tasks")),
+            ]),
+            vec![("turbovault".into(), Consequence::Reversible)],
+            vec![descriptor],
+            vec![
+                ("Tasks".to_string(), WriteClass::AgentWritable),
+                ("sandbox".to_string(), WriteClass::AgentWritable),
+            ],
+            dir.path().to_path_buf(),
+            "move file".into(),
+            "test-fallback".into(),
+            ProposalSigner::random(),
+            "default",
+        );
+        let call = ToolInvocation::new(
+            "c-fallback",
+            "turbovault:move_file",
+            serde_json::json!({"from": "Tasks/Main.md", "to": "sandbox/Main.md"}),
+        );
+        let result = rt
+            .invoke(&call)
+            .await
+            .expect("with fallback, the call runs");
+        assert_eq!(result, "moved", "with fallback the call runs");
         assert_eq!(inner.invoked.lock().unwrap().len(), 1);
     }
 
@@ -1468,17 +1688,64 @@ mod vault_write_gate_regression {
     async fn read_tools_are_unaffected_by_the_fix() {
         let dir = tempfile::TempDir::new().unwrap();
         let inner = Arc::new(InvocationRecordingRuntime::new(
-            &["turbovault:read_note", "turbovault:search"],
+            &[
+                "turbovault:read_note",
+                "turbovault:search",
+                "turbovault:vector_search",
+            ],
             Ok("read".into()),
         ));
         let rt = gate_with_grant(dir.path(), inner.clone(), &["Tasks"]);
-        for tool in ["turbovault:read_note", "turbovault:search"] {
+        for tool in [
+            "turbovault:read_note",
+            "turbovault:search",
+            // vector_search is a read (it queries the vector index; only vector_reindex
+            // rebuilds state). With vector_search in the now-correct `read_tools`, a Read-only
+            // session can use it without a permission card.
+            "turbovault:vector_search",
+        ] {
             let call =
                 ToolInvocation::new("c1", tool, serde_json::json!({"path": "Tasks/Main.md"}));
             let result = rt.invoke(&call).await.expect("a read must not ask");
             assert_eq!(&result, "read", "tool={tool}");
         }
-        assert_eq!(inner.invoked.lock().unwrap().len(), 2);
+        assert_eq!(inner.invoked.lock().unwrap().len(), 3);
+    }
+
+    /// `vector_search` is a read; previously it was classed as `vault_wide_writes` and a
+    /// Read-only session (no Write(*)) got refused on a vector search. After reclassifying
+    /// to `read_tools`, a Read-only session can use vector_search without a card.
+    #[tokio::test]
+    async fn vector_search_runs_for_a_read_only_session() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let inner = Arc::new(InvocationRecordingRuntime::new(
+            &["turbovault:vector_search"],
+            Ok("vector-read".into()),
+        ));
+        // Read-only: ExecuteMcp + Read, no Write at all.
+        let caps = CapabilitySet::from_iter([
+            Capability::ExecuteMcp("turbovault".into()),
+            Capability::Read(Zone::vault("Tasks")),
+        ]);
+        let rt = RiskGatedToolRuntime::new(
+            inner.clone(),
+            caps,
+            vec![("turbovault".into(), Consequence::Reversible)],
+            vec![livetv_descriptor()],
+            vec![("Tasks".to_string(), WriteClass::AgentWritable)],
+            dir.path().to_path_buf(),
+            "search the vector index".into(),
+            "test-vector-search-read".into(),
+            ProposalSigner::random(),
+            "default",
+        );
+        let call = ToolInvocation::new(
+            "c-vec",
+            "turbovault:vector_search",
+            serde_json::json!({"query": "anything"}),
+        );
+        let result = rt.invoke(&call).await;
+        assert_eq!(result.as_ref().map(String::as_str), Ok("vector-read"));
     }
 
     /// `manage_tags` and `tasks_update` / `tasks_complete` / `tasks_delete` were missing from
@@ -1599,22 +1866,84 @@ mod vault_write_gate_regression {
     /// Vault-wide mutators with at least ONE zone write authority in the grant - a
     /// session that's not strictly read-only - may execute, since the guard asks "this
     /// session is not strictly read-only" and the runtime capability check on the actual
-    /// call still applies for any concrete zone the call names.
+    /// `Write(Tasks)` alone is **not** enough for a vault-wide mutator like `begin_fanout` —
+    /// the new strict vault-wide gate requires the explicit `Write(Vault("vault-wide-any"))`
+    /// marker, the same capability the four-button permission card applies. The original
+    /// `holds_any_zone_write` semantics was too weak (`Write(Tasks)` was waved through a
+    /// fanout, which switches the active vault for every concurrent session).
     #[tokio::test]
-    async fn a_vault_wide_write_runs_when_the_grant_holds_any_zone_write() {
+    async fn a_vault_wide_write_only_zone_grant_raises_a_permission_request() {
         let dir = tempfile::TempDir::new().unwrap();
         let inner = Arc::new(InvocationRecordingRuntime::new(
             &["turbovault:begin_fanout"],
             Ok("started".into()),
         ));
-        let rt = gate_with_grant(dir.path(), inner.clone(), &["Tasks"]);
+        let mcp = "turbovault".to_string();
+        let caps = CapabilitySet::from_iter([
+            Capability::ExecuteMcp(mcp.clone()),
+            Capability::Write(Zone::vault("Tasks")),
+        ]);
+        let rt = RiskGatedToolRuntime::new(
+            inner.clone(),
+            caps,
+            vec![("turbovault".into(), Consequence::Reversible)],
+            vec![livetv_descriptor()],
+            vec![("Tasks".to_string(), WriteClass::AgentWritable)],
+            dir.path().to_path_buf(),
+            "start a fanout".into(),
+            "test-vault-wide-only-zone".into(),
+            ProposalSigner::random(),
+            "default",
+        )
+        .with_approval(crate::ApprovalStamp {
+            session_id: "sess".into(),
+            origin: liberado_common::ApprovalOrigin::Web,
+        });
+        let call = ToolInvocation::new("c1", "turbovault:begin_fanout", serde_json::json!({}));
+        let result = rt.invoke(&call).await.expect("a chat surface must ask");
+        assert!(
+            result.contains("PERMISSION REQUESTED"),
+            "Write(Tasks) alone must NOT authorise a fanout: {result}"
+        );
+        assert!(
+            inner.invoked.lock().unwrap().is_empty(),
+            "and the tool must not have run"
+        );
+    }
+
+    /// The **explicit** vault-wide marker grants the operation. Same shape as the marker the
+    /// four-button permission request writes — the chat approval applies via Session/Everywhere
+    /// and is observable here as a directly-held capability on the gate's capability set.
+    #[tokio::test]
+    async fn a_vault_wide_write_with_the_marker_grant_runs() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let inner = Arc::new(InvocationRecordingRuntime::new(
+            &["turbovault:begin_fanout"],
+            Ok("started".into()),
+        ));
+        let caps = CapabilitySet::from_iter([
+            Capability::ExecuteMcp("turbovault".into()),
+            Capability::Write(Zone::vault(liberado_common::VAULT_WIDE_ZONE_MARKER)),
+        ]);
+        let rt = RiskGatedToolRuntime::new(
+            inner.clone(),
+            caps,
+            vec![("turbovault".into(), Consequence::Reversible)],
+            vec![livetv_descriptor()],
+            Vec::new(),
+            dir.path().to_path_buf(),
+            "start a fanout".into(),
+            "test-vault-wide-marker".into(),
+            ProposalSigner::random(),
+            "default",
+        );
         let call = ToolInvocation::new("c1", "turbovault:begin_fanout", serde_json::json!({}));
         let result = rt.invoke(&call).await;
-        assert_eq!(
-            result,
-            Ok("started".into()),
-            "a grant with at least one zone write must let vault-wide through"
-        );
+        let result_str: &str = match &result {
+            Ok(value) => value.as_str(),
+            Err(e) => panic!("the explicit marker grant authorises the fanout, got: {e}"),
+        };
+        assert_eq!(result_str, "started");
         assert_eq!(inner.invoked.lock().unwrap().len(), 1);
     }
 
