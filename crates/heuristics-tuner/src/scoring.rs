@@ -216,6 +216,7 @@ async fn score_one(
                 tool_zones: Vec::new(),
                 zone_from_arg: None,
                 write_tools: Vec::new(),
+                ..Default::default()
             })
             .collect(),
         capabilities: CapabilitySet::from_iter(

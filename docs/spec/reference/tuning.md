@@ -416,10 +416,27 @@ out**, and there are two declaration styles:
 ```toml
 # Path-addressed — the zone is the leading path segment of an argument. Use when one tool can
 # land in different zones depending on the call. This is TurboVault.
+#
+# Every tool on a path-addressed MCP must be classified in ONE of three lists. Undeclared
+# tools fail closed at the runtime (RiskGatedToolRuntime) — the runtime refuses the call and
+# names the lists the operator must add the tool to, rather than silently waving it through
+# like the 2026-10-11 F1 hole (`01M3ZB89WK54HGNG6ATJ9FPJMX`) did for undeclared `edit_note`.
 [[mcps]]
 name = "turbovault"
 zone_from_arg = "path"           # write_note(path="tasks/x.md") -> zone `tasks`
-write_tools = ["write_note", "delete_note"]
+write_tools = [
+    "write_note", "edit_note", "delete_note", "move_note", "move_file",
+    "update_frontmatter", "manage_tags", "create_from_template",
+    "tasks_complete", "tasks_update", "tasks_delete",
+    "generate_index", "append_log_entry", "visualize",
+]
+read_tools = [
+    "read_note", "search", "advanced_search", "get_backlinks", ...
+]
+vault_wide_writes = [
+    "begin_fanout", "commit_fanout", "abandon_fanout",
+    "set_active_vault", "vector_reindex",
+]
 
 # Fixed-zone — the zone follows from the tool name alone. No paths involved. Use this for any
 # other CRUD surface: a billing API, a database, a device.
@@ -441,6 +458,14 @@ Both styles feed the same guards — capability check, write class, proposal dow
 surface inherits the whole model by declaring one of them. Zones you never list in `policy.toml`
 default to `proposal_only`, so a surface added before its policy is written asks before it acts.
 
+**Path-addressed MCPs: classification is exhaustive.** The three lists (`write_tools`,
+`read_tools`, `vault_wide_writes`) are mutually exclusive — config validation refuses to
+boot if a tool is named in two of them, because the runtime dispatches in the fixed order
+vault_wide > read > write and the operator's intent is otherwise silently demoted. A
+tool in **none** of the three is `Undeterminable("undeclared tool 'X' on 'MCP' ...")`
+at the runtime and is refused with a hint naming the lists — this is the F1 fix; the
+worst case is a refused call with an actionable message rather than a silent write.
+
 **A write whose zone cannot be determined is refused, not ignored.** A path-addressed tool called
 with no path is `Undeterminable` and fails closed; that is deliberate, and it is the property that
 keeps a new surface from quietly escaping the model.
@@ -449,6 +474,29 @@ keeps a new surface from quietly escaping the model.
 its **name** — `Zone::vault("finance")` and `Zone::named("finance")` are the same zone, because
 `policy.toml` has only ever keyed on the name. If a vault folder `finance/` and an external billing
 system must be different authorities, give them different names.
+
+**Vault-wide mutators need the explicit marker grant, not *any* Write.** A
+vault-wide tool (`begin_fanout`, `commit_fanout`, `abandon_fanout`, `set_active_vault`,
+`vector_reindex`, ...) doesn't target a single zone, so the per-zone
+`Write(Vault("<zone>"))` check doesn't apply. Instead the runtime gate requires the
+**explicit** vault-wide marker grant `Capability::Write(Zone::vault("vault-wide-any"))`,
+checked via `CapabilitySet::holds_vault_wide_grant`. The same capability is what the
+four-button permission card applies when the human picks Once / Session / Everywhere.
+`Write(<zone>)` for some specific zone is **not** enough: a session that holds
+`Write(Tasks)` can rearrange Tasks, but cannot pick the active vault for the whole
+process or rebuild the index, because those affect every concurrent session. The
+explicit marker is a deliberate opt-in.
+
+**Multi-path writers declare per-tool path-arg maps.** Tools whose path args differ
+from the descriptor's `zone_from_arg` (or that carry more than one) declare a
+`write_path_args` map keyed by tool name, value the list of arg names whose leading
+path segments name zones. For example, `move_note(from, to)` declares
+`move_note = ["from", "to"]` — the runtime resolves each arg to its zone and requires
+`Write(Vault(<zone>))` for **every** one. A mixed-zones move (source in grant,
+destination out) raises a permission request naming the missing destination; both
+zones in grant, the call runs. The optional `directory` arg of `append_log_entry` is
+treated as `Undeterminable` when absent — operators must classify the no-path case
+explicitly rather than silently defaulting it to one zone.
 
 ### Behaviour thresholds — `tuning.toml`
 

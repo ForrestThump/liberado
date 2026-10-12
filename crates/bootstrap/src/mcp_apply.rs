@@ -233,7 +233,7 @@ fn build_connectors(
 }
 
 fn descriptor_from_mcp(m: &McpConfig) -> McpDescriptor {
-    McpDescriptor {
+    let descriptor = McpDescriptor {
         name: m.name.clone(),
         description: m.description.clone(),
         consequence: m.consequence,
@@ -246,7 +246,12 @@ fn descriptor_from_mcp(m: &McpConfig) -> McpDescriptor {
             .collect(),
         zone_from_arg: m.zone_from_arg.clone(),
         write_tools: m.write_tools.clone(),
-    }
+        read_tools: m.read_tools.clone(),
+        vault_wide_writes: m.vault_wide_writes.clone(),
+        write_path_args: m.write_path_args.clone(),
+        admin_tools: m.admin_tools.clone(),
+    };
+    liberado_common::apply_bundled_classifications(descriptor)
 }
 
 fn sync_catalog_to_desired(catalog: &CapabilityCatalog, desired: &[&McpConfig]) {
@@ -277,6 +282,10 @@ mod tests {
             tools: vec![],
             zone_from_arg: None,
             write_tools: vec![],
+            read_tools: Vec::new(),
+            vault_wide_writes: Vec::new(),
+            write_path_args: std::collections::BTreeMap::new(),
+            admin_tools: Vec::new(),
             writes_vault: Some(false),
         }
     }
@@ -491,6 +500,10 @@ mod tests {
             tools: vec![],
             zone_from_arg: Some("path".into()),
             write_tools: vec!["write_note".into()],
+            read_tools: Vec::new(),
+            vault_wide_writes: Vec::new(),
+            write_path_args: std::collections::BTreeMap::new(),
+            admin_tools: Vec::new(),
             writes_vault: None,
         };
         apply_mcp_peer_set(&catalog, &registry, &[vault_peer]).unwrap();

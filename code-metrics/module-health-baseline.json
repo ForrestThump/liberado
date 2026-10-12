@@ -1721,6 +1721,18 @@
     "functions": 13,
     "cyclomatic": 21
   },
+  "crates/common/src/bundled_vault.rs": {
+    "ploc": 222,
+    "lloc": 33,
+    "functions": 15,
+    "cyclomatic": 30
+  },
+  "crates/common/src/bundled_vault_tests.rs": {
+    "ploc": 257,
+    "lloc": 38,
+    "functions": 5,
+    "cyclomatic": 11
+  },
   "crates/common/src/capability.rs": {
     "ploc": 874,
     "lloc": 207,
@@ -1728,10 +1740,10 @@
     "cyclomatic": 151
   },
   "crates/common/src/catalog.rs": {
-    "ploc": 729,
-    "lloc": 181,
-    "functions": 82,
-    "cyclomatic": 117
+    "ploc": 376,
+    "lloc": 140,
+    "functions": 50,
+    "cyclomatic": 58
   },
   "crates/common/src/clock.rs": {
     "ploc": 49,
@@ -1846,6 +1858,30 @@
     "lloc": 6,
     "functions": 9,
     "cyclomatic": 13
+  },
+  "crates/common/src/vault_grant.rs": {
+    "ploc": 23,
+    "lloc": 1,
+    "functions": 5,
+    "cyclomatic": 11
+  },
+  "crates/common/src/write_target.rs": {
+    "ploc": 292,
+    "lloc": 79,
+    "functions": 30,
+    "cyclomatic": 81
+  },
+  "crates/common/src/write_target_proptest.rs": {
+    "ploc": 200,
+    "lloc": 12,
+    "functions": 11,
+    "cyclomatic": 33
+  },
+  "crates/common/src/write_target_tests.rs": {
+    "ploc": 443,
+    "lloc": 100,
+    "functions": 28,
+    "cyclomatic": 38
   },
   "crates/config-loader/src/chain.rs": {
     "ploc": 279,
@@ -1990,6 +2026,12 @@
     "lloc": 276,
     "functions": 80,
     "cyclomatic": 135
+  },
+  "crates/config/src/live_turbovault_arrival_tests.rs": {
+    "ploc": 429,
+    "lloc": 116,
+    "functions": 24,
+    "cyclomatic": 30
   },
   "crates/config/src/safe_default_arrival_tests.rs": {
     "ploc": 117,
@@ -2250,7 +2292,7 @@
     "cyclomatic": 12
   },
   "crates/daemon/src/tests/proposals.rs": {
-    "ploc": 1376,
+    "ploc": 1372,
     "lloc": 476,
     "functions": 29,
     "cyclomatic": 44
@@ -2418,7 +2460,7 @@
     "cyclomatic": 89
   },
   "crates/dispatcher/src/lib_tests.rs": {
-    "ploc": 1059,
+    "ploc": 1033,
     "lloc": 262,
     "functions": 53,
     "cyclomatic": 99
@@ -2562,10 +2604,22 @@
     "cyclomatic": 7
   },
   "crates/executor/src/risk_gated_tests.rs": {
-    "ploc": 1059,
+    "ploc": 1047,
     "lloc": 250,
     "functions": 44,
     "cyclomatic": 47
+  },
+  "crates/executor/src/risk_gated_vault.rs": {
+    "ploc": 309,
+    "lloc": 49,
+    "functions": 16,
+    "cyclomatic": 44
+  },
+  "crates/executor/src/risk_gated_vault_gate_tests.rs": {
+    "ploc": 582,
+    "lloc": 137,
+    "functions": 18,
+    "cyclomatic": 28
   },
   "crates/harness-eval/src/adapter.rs": {
     "ploc": 49,
@@ -3112,6 +3166,12 @@
     "lloc": 158,
     "functions": 34,
     "cyclomatic": 37
+  },
+  "crates/main-agent/src/sessions/grants_live_bug_tests.rs": {
+    "ploc": 170,
+    "lloc": 37,
+    "functions": 5,
+    "cyclomatic": 6
   },
   "crates/main-agent/src/sessions/lifecycle.rs": {
     "ploc": 144,

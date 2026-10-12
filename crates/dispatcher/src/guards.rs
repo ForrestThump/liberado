@@ -323,8 +323,11 @@ fn magnitude_targets(
                 let mcp = mcp_of(&call.tool);
                 let bare = bare_tool_name(&call.tool);
                 // Resolve the call's target zone against the catalog. `WriteTarget::Zone(name)`
-                // is the only branch that produces a Some(zone); reads and undeterminable writes
-                // both yield None so a zone-restricted waiver does not accidentally match.
+                // is the only branch that produces a Some(zone); reads, vault-wide writes, and
+                // undeterminable writes all yield None so a zone-restricted waiver does not
+                // accidentally match. Vault-wide mutations have no single zone and are checked
+                // against their own gate (`WriteTarget::VaultWide`) at the runtime boundary —
+                // a magnitude waiver should not silently bless them.
                 let zone = catalog
                     .iter()
                     .find(|d| d.name == mcp)
