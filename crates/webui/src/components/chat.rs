@@ -33,6 +33,11 @@ pub(super) mod chat_fold;
 #[path = "chat_reasoning.rs"]
 mod chat_reasoning;
 
+#[path = "chat_scroll.rs"]
+mod chat_scroll;
+
+use self::chat_scroll::TranscriptScroll;
+
 // ── Data types ──────────────────────────────────────────────────────────────
 
 /// A tool call + its result, grouped as a thinking step under an assistant message.
@@ -213,6 +218,8 @@ pub fn Chat(
     #[cfg_attr(not(target_arch = "wasm32"), allow(unused_mut))]
     let mut ghost_session = use_signal(|| None::<String>);
     let mut messages = use_signal(Vec::new);
+    // Pinned until the reader scrolls up. Opening and sending set it again.
+    let mut transcript_follow = use_signal(chat_scroll::TranscriptStick::pinned);
     let mut approvals = use_signal(Vec::<chat_client_contract::ApprovalCard>::new);
     let mut input = use_signal(String::new);
     let mut sending = use_signal(|| false);
@@ -265,6 +272,7 @@ pub fn Chat(
             if let Some(ref conv_id) = id {
                 session.set(Some(conv_id.clone()));
                 let conv_id = conv_id.clone();
+                let mut opened = transcript_follow;
                 wasm_bindgen_futures::spawn_local(async move {
                     if let Ok(loaded) = fetch_conversation(&base, &conv_id).await {
                         let running = loaded.turn_running;
@@ -276,6 +284,9 @@ pub fn Chat(
                         if unanswered {
                             loaded_messages.push(unanswered_turn_note());
                         }
+                        // History arrived. Pin before the rows paint so the pane lands on the
+                        // latest message, including when the reader had scrolled up before.
+                        opened.write().opened_conversation();
                         messages.set(loaded_messages);
                         approvals.set(loaded.approvals);
                         set_surface(active_surface, Some(loaded.surface_mode));
@@ -439,6 +450,8 @@ pub fn Chat(
         if text.is_empty() || sending() {
             return;
         }
+        // A send owns the bottom of the thread, even if the reader had scrolled up.
+        transcript_follow.write().user_sent();
         slash_index.set(0);
         palette_dismissed.set(false);
 
@@ -618,6 +631,7 @@ pub fn Chat(
                     class: "messages",
                     // `MessageList` scrolls `#response-copy-{index}` into this node.
                     id: "chat-messages",
+                    TranscriptScroll { follow: transcript_follow, messages, sending }
                     if messages.read().is_empty() && conv_id.is_none() && !sending() && ghost_session.read().is_none() {
                         div {
                             class: "empty-state",

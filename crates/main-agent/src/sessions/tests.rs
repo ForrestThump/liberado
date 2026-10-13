@@ -19,6 +19,9 @@ mod turn_failure_tests;
 #[path = "grants.rs"]
 mod grants;
 
+#[path = "grant_gate_tests.rs"]
+mod grant_gate_tests;
+
 #[path = "dispatch.rs"]
 mod dispatch;
 
