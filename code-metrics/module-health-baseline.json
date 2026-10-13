@@ -4721,6 +4721,18 @@
     "functions": 8,
     "cyclomatic": 18
   },
+  "crates/webui/src/components/chat_scroll.rs": {
+    "ploc": 259,
+    "lloc": 82,
+    "functions": 32,
+    "cyclomatic": 52
+  },
+  "crates/webui/src/components/chat_scroll_tests.rs": {
+    "ploc": 90,
+    "lloc": 38,
+    "functions": 8,
+    "cyclomatic": 9
+  },
   "crates/webui/src/components/chat_submission.rs": {
     "ploc": 14,
     "lloc": 3,
