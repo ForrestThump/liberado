@@ -232,7 +232,13 @@ fn live_chat_smoke(config: &HomelabConfig) -> Result<(), String> {
         .post(&url)
         .json(&serde_json::json!({"message":"Reply with exactly: liberado is live"}))
         .send()
-        .map_err(|error| format!("live chat smoke {url}: {error}"))?;
+        .map_err(|error| {
+            format!(
+                "live chat smoke {}: {}",
+                liberado_common::redact_secrets(&url),
+                liberado_common::redact_secrets(&error.without_url().to_string())
+            )
+        })?;
     if !response.status().is_success() {
         return Err(format!("live chat smoke {url}: HTTP {}", response.status()));
     }

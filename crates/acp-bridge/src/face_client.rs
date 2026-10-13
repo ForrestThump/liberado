@@ -37,8 +37,10 @@ pub async fn run_face_turn(
         .await
         .map_err(|e| {
             format!(
-                "face mode: cannot reach daemon at {base} ({e}). \
-                 Start it with: liberado serve <vault>  (or set LIBERADO_SERVER)"
+                "face mode: cannot reach daemon at {} ({}). \
+                 Start it with: liberado serve <vault>  (or set LIBERADO_SERVER)",
+                liberado_common::redact_secrets(&base),
+                liberado_common::redact_secrets(&e.without_url().to_string())
             )
         })?;
 
@@ -51,7 +53,12 @@ pub async fn run_face_turn(
     let mut decoder = SseDecoder::default();
     let mut stream = response.bytes_stream();
     while let Some(chunk) = stream.next().await {
-        let chunk = chunk.map_err(|e| format!("face mode: stream error: {e}"))?;
+        let chunk = chunk.map_err(|e| {
+            format!(
+                "face mode: stream error: {}",
+                liberado_common::redact_secrets(&e.without_url().to_string())
+            )
+        })?;
         let text = String::from_utf8_lossy(&chunk);
         for event in decoder.push(&text) {
             if dispatch_sse(&event, daemon_session, acp_session_id, emit)? {

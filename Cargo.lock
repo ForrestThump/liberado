@@ -5466,6 +5466,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "fs4",
+ "liberado-common",
  "liberado-provider",
  "liberado-tool-runtime",
  "reqwest 0.12.28",
@@ -6056,6 +6057,7 @@ name = "liberado-notify"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "liberado-common",
  "liberado-messaging",
  "reqwest 0.12.28",
  "serde_json",
@@ -6124,6 +6126,7 @@ dependencies = [
  "async-stream",
  "async-trait",
  "futures",
+ "liberado-common",
  "reqwest 0.12.28",
  "serde",
  "serde_json",
@@ -6138,6 +6141,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "axum",
+ "liberado-common",
  "regex",
  "reqwest 0.12.28",
  "serde",
@@ -6156,6 +6160,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "futures",
+ "liberado-common",
  "liberado-provider",
  "reqwest 0.12.28",
  "serde_json",

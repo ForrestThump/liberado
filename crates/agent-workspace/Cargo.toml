@@ -11,6 +11,7 @@ repository.workspace = true
 [dependencies]
 async-trait = { workspace = true }
 fs4 = { workspace = true }
+liberado-common = { workspace = true }
 liberado-provider = { workspace = true }
 liberado-tool-runtime = { workspace = true }
 reqwest = { workspace = true, features = ["blocking"] }

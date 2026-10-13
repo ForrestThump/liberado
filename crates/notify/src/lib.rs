@@ -25,6 +25,8 @@ use liberado_messaging::{
     permission_action_rows,
 };
 
+mod http_error;
+
 /// Something that can be told about an event worth a human's attention.
 #[async_trait]
 pub trait Notifier: Send + Sync {
@@ -211,11 +213,11 @@ impl TelegramNotifier {
             .json(&payload)
             .send()
             .await
-            .map_err(|e| MessagingError(format!("Telegram request failed: {e}")))?;
+            .map_err(|e| http_error::transport("Telegram request failed", e))?;
 
         if !response.status().is_success() {
             let body = response.text().await.unwrap_or_default();
-            return Err(MessagingError(format!("Telegram API error: {body}")));
+            return Err(http_error::api_body(&body));
         }
         Ok(())
     }
@@ -352,17 +354,17 @@ impl MessagingChannel for TelegramNotifier {
             }))
             .send()
             .await
-            .map_err(|e| MessagingError(format!("Telegram request_reply failed: {e}")))?;
+            .map_err(|e| http_error::transport("Telegram request_reply failed", e))?;
 
         if !response.status().is_success() {
             let body = response.text().await.unwrap_or_default();
-            return Err(MessagingError(format!("Telegram API error: {body}")));
+            return Err(http_error::api_body(&body));
         }
 
         let body: serde_json::Value = response
             .json()
             .await
-            .map_err(|e| MessagingError(format!("Telegram request_reply decode: {e}")))?;
+            .map_err(|e| http_error::transport("Telegram request_reply decode", e))?;
         let message_id = body
             .get("result")
             .and_then(|r| r.get("message_id"))
@@ -381,10 +383,10 @@ impl MessagingChannel for TelegramNotifier {
             }))
             .send()
             .await
-            .map_err(|e| MessagingError(format!("Telegram acknowledge failed: {e}")))?;
+            .map_err(|e| http_error::transport("Telegram acknowledge failed", e))?;
         if !response.status().is_success() {
             let body = response.text().await.unwrap_or_default();
-            return Err(MessagingError(format!("Telegram API error: {body}")));
+            return Err(http_error::api_body(&body));
         }
         Ok(())
     }
@@ -405,10 +407,10 @@ impl MessagingChannel for TelegramNotifier {
             }))
             .send()
             .await
-            .map_err(|e| MessagingError(format!("Telegram editMessageText failed: {e}")))?;
+            .map_err(|e| http_error::transport("Telegram editMessageText failed", e))?;
         if !response.status().is_success() {
             let body = response.text().await.unwrap_or_default();
-            return Err(MessagingError(format!("Telegram API error: {body}")));
+            return Err(http_error::api_body(&body));
         }
         Ok(())
     }
@@ -447,7 +449,7 @@ impl MessagingChannel for TelegramNotifier {
             .json(&body)
             .send()
             .await
-            .map_err(|e| MessagingError(format!("Telegram setMyCommands failed: {e}")))?;
+            .map_err(|e| http_error::transport("Telegram setMyCommands failed", e))?;
         if !response.status().is_success() {
             let status = response.status();
             return Err(MessagingError(format!(
@@ -478,7 +480,8 @@ impl MessagingChannel for TelegramNotifier {
                 return Ok(vec![]);
             }
             Err(e) => {
-                tracing::warn!("Telegram getUpdates error: {e}");
+                let error = http_error::line("Telegram getUpdates error", e);
+                tracing::warn!(%error, "Telegram getUpdates error");
                 tokio::time::sleep(Duration::from_secs(self.poll_retry_backoff_secs)).await;
                 return Ok(vec![]);
             }
@@ -487,7 +490,7 @@ impl MessagingChannel for TelegramNotifier {
         let body: serde_json::Value = response
             .json()
             .await
-            .map_err(|e| MessagingError(format!("Telegram getUpdates decode: {e}")))?;
+            .map_err(|e| http_error::transport("Telegram getUpdates decode", e))?;
         let updates = body["result"].as_array().cloned().unwrap_or_default();
 
         let mut events = Vec::new();
