@@ -265,6 +265,44 @@ transport = { kind = "stdio", command = "npx", args = ["-y", "@liberado/tasks-mc
 default_zone = "tasks"
 # enabled = true
 
+# A **path-addressed** MCP (TurboVault-shape): one tool can write into any zone depending on its
+# `path` argument. There are THREE classification lists for the tools on such an MCP:
+#
+#   * `write_tools`     — mutators whose target zone is the leading path segment of the call's
+#                         `path`/`from`/`file_path` argument.
+#   * `read_tools`      — explicitly read-only tools. Listed explicitly so the runtime cannot
+#                         confuse them with writers (a tool with a path arg is otherwise
+#                         ambiguous).
+#   * `vault_wide_writes` — tools that mutate vault-wide state with no single target zone
+#                           (fanout, vault switch, index rebuild). The runtime requires any
+#                           `Write(Vault(\"<zone>\"))` in the grant for these.
+#
+# A tool in **none** of the three is refused at the runtime boundary with a message naming
+# the lists an operator must classify it under — fail-CLOSED on undeclared tools. Config
+# validation refuses to boot if a tool is listed in more than one of the three lists.
+#
+# # [[mcps]]
+# # name = "liberado-turbovault"
+# # description = "Obsidian vault ops via TurboVault (path-addressed — see deploy/homelab)"
+# # consequence = "reversible"
+# # transport = { kind = "http", url = "http://turbovault:3001" }
+# # zone_from_arg = "path"
+# # write_tools = ["write_note", "edit_note", "delete_note", "move_note", "move_file", ...]
+# # read_tools = ["read_note", "search", "advanced_search", "get_backlinks", ...]
+# # vault_wide_writes = ["begin_fanout", "commit_fanout", "abandon_fanout", "set_active_vault", "vector_reindex"]
+# #
+# # Multi-path tools (`move_note`/`move_file` carry `from`+`to`, others have differently-named
+# # path args) declare per-tool path-argument maps so `write_target` resolves every zone the
+# # call touches; the runtime then requires Write for **each** zone and names the missing ones
+# # in the permission card.
+# # [write_path_args]
+# # move_note            = ["from",     "to"]
+# # move_file           = ["from",     "to"]
+# # create_from_template = ["file_path"]
+# # generate_index      = ["directory"]
+# # append_log_entry    = ["directory"]
+# # visualize           = ["output"]
+
 # A managed MCP: `liberado-mcp-forge sync` (with a matching entry in mcp-sources.toml) installs
 # the binary; `name` here is the join key it resolves against. No `command`/`args` to keep in sync
 # with wherever the binary was last built to — see mcp-sources.toml and

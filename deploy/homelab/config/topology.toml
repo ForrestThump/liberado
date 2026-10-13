@@ -94,22 +94,166 @@ cached_input = 0.0028
 
 # --- Vault (develop image via homelab rebuild-turbovault.sh) -----------------
 # Speak to the nginx front (`turbovault`), not turbovault-backend (needs Origin rewrite).
+#
+# Every tool on turbovault is classified into exactly one of `write_tools`/`read_tools`/
+# `vault_wide_writes` — the runtime (RiskGatedToolRuntime) fails CLOSED on tools it cannot
+# classify (write_target returns Undeterminable for any tool not listed anywhere), so a tool
+# that the deployed topology forgot to list will be refused with a hint naming the three lists
+# rather than silently waved through. The 2026-10-11 live bug
+# (`01M3ZB89WK54HGNG6ATJ9FPJMX`) was caused by `edit_note` being added to turbovault and
+# silently waved through; this classification must be kept complete when turbovault upgrades
+# add tools. Config validation refuses to boot if a tool is listed in more than one of the
+# three lists.
+#
+# Notes for the live node:
+#   * `services/liberado/config/topology.toml` MUST carry the same lists (this file is for
+#     the homelab Compose deployment; the unit tests run with the config.example copy).
+#   * When turbovault adds a tool, add it here AND deploy to the live node before upgrading
+#     the image, or unclassified calls will start raising permission requests for absent
+#     owners.
+#   * `update_task` / `delete_task` are the OLD task tool names and no longer exist in
+#     turbovault; they have been replaced by `tasks_update` / `tasks_delete` (which are
+#     classified in write_tools here).
+#
+# Path-addressed (zone_from_arg = "path"): the zone of a write lands in the leading path
+# segment. Multi-path tools like `move_note`/`move_file` (from + to) currently resolve
+# only the source via `from`; see the audit follow-up for the destination-zone wire.
 [[mcps]]
 name = "turbovault"
 description = "Obsidian vault ops via TurboVault: notes, search, links, templates, batch edits"
 consequence = "reversible"
 transport = { kind = "http", url = "http://turbovault:3001" }
 zone_from_arg = "path"
+
+# Tools that mutate a single note / frontmatter / task by name. Zone resolved from the
+# leading path segment of `path` (or `file_path` for create_from_template). Updated
+# 2026-10-11 to include edit_note / manage_tags / tasks_complete / tasks_update /
+# tasks_delete, which were missing from the previous list (the live bug).
 write_tools = [
+    # Single-note writes
     "write_note",
+    "edit_note",
     "delete_note",
+    # File / note moves (path-addressed; see audit for the destination-zone wire)
     "move_note",
     "move_file",
+    # Frontmatter / template
     "update_frontmatter",
+    "manage_tags",
     "create_from_template",
-    "update_task",
-    "delete_task",
+    # Tasks (renamed from update_task / delete_task after the previous deploy)
+    "tasks_complete",
+    "tasks_update",
+    "tasks_delete",
+    # OKF / index generation (directory-addressed, zone resolved from the directory's
+    # leading path segment)
+    "generate_index",
+    "append_log_entry",
+    "visualize",
 ]
+
+# Explicitly read-only tools. New categories on this list return NotAWrite without
+# consulting the grant; categorising them here is the operational equivalent of the old
+# `tool not in write_tools` deny-list but in the safe direction (refuse on omission).
+read_tools = [
+    # Discovery / context
+    "get_vault_context",
+    "list_vaults",
+    "get_active_vault",
+    "get_vault_config",
+    # Reads
+    "read_note",
+    "get_notes_info",
+    "diff_notes",
+    # Search / query
+    "search",
+    "advanced_search",
+    "recommend_related",
+    "semantic_search",
+    "find_duplicates",
+    "find_stale_notes",
+    "query_frontmatter_sql",
+    "query_metadata",
+    "get_metadata_value",
+    # Graph / link analysis
+    "get_backlinks",
+    "get_forward_links",
+    "get_related_notes",
+    "get_hub_notes",
+    "get_dead_end_notes",
+    "get_isolated_clusters",
+    "get_centrality_ranking",
+    "detect_cycles",
+    "suggest_links",
+    # Health / quality
+    "quick_health_check",
+    "full_health_analysis",
+    "get_broken_links",
+    "evaluate_note_quality",
+    "vault_quality_report",
+    "analyze_note_grounding",
+    "find_ungrounded_notes",
+    "audit_stats",
+    # Templates
+    "list_templates",
+    "get_template",
+    # Reports / exports
+    "export_health_report",
+    "export_broken_links",
+    "export_vault_stats",
+    "export_analysis_report",
+    # OKF / frontmatter validation
+    "okf_validate",
+    # Tasks (read-side)
+    "tasks_list",
+    "tasks_overdue",
+    "tasks_tags",
+    "tasks_config",
+    # Fanout reads
+    "list_orphan_fanouts",
+    # Vector store reads (only vector_reindex rebuilds state — vector_search/status/config
+    # query the index and must NOT require the vault-wide marker grant).
+    "vector_search",
+    "vector_status",
+    "vector_config",
+]
+
+# Tools that mutate vault-wide state without a single target zone. The runtime gate
+# requires the grant to hold at least one `Write(Vault('<zone>'))` capability to authorise
+# these — a strictly read-only session cannot start a fanout or rebuild the index.
+vault_wide_writes = [
+    "set_active_vault",
+    "begin_fanout",
+    "commit_fanout",
+    "abandon_fanout",
+    "vector_reindex",
+]
+
+# Per-tool path-argument declarations on write_tools. By default, every path-addressed writer
+# uses the descriptor's `zone_from_arg` ("path") for its single path arg. Tools whose path arg
+# has a different name, or that carry more than one path arg, must be declared here:
+#
+#   * move_note (from, to)        - source + destination; both must be authorised.
+#   * move_file (from, to)        - same. The runtime raises a permission request naming the
+#                                   destination zone if the source is in the grant but the
+#                                   destination is not.
+#   * create_from_template (file_path)
+#   * generate_index (directory)
+#   * append_log_entry (directory) - directory is OPTIONAL in the live schema. The runtime
+#                                     refuses Undeterminable("missing 'directory'") when
+#                                     absent, surfacing the gap rather than picking a zone.
+#   * visualize (output)
+#
+# Config validation refuses to boot if any of these keys is NOT in `write_tools`. Missing
+# entries here were the silent hole pre-fix: the tool returned "missing 'path'" and was
+# always refused, so callers couldn't use them at all.
+[write_path_args]
+move_note            = ["from",     "to"]
+move_file           = ["from",     "to"]
+create_from_template = ["file_path"]
+generate_index      = ["directory"]
+append_log_entry    = ["directory"]
+visualize           = ["output"]
 
 # --- Search ------------------------------------------------------------------
 # turbomcp: multi-provider routing + failover + AI reranking. searxng-mcp was dropped once this was

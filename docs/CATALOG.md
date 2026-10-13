@@ -37,6 +37,8 @@ Authority model: [doc-authority.md](spec/reference/doc-authority.md).
 | [docs/decisions/ADR-0019-turbovault-as-privileged-plugin.md](decisions/ADR-0019-turbovault-as-privileged-plugin.md) | decision | accepted | normative | architecture | adr-0019 |
 | [docs/decisions/ADR-0020-mechanical-schedules.md](decisions/ADR-0020-mechanical-schedules.md) | decision | accepted | normative | architecture | adr-0020 |
 | [docs/decisions/README.md](decisions/README.md) | index | active | advisory | architecture | — |
+| [docs/future-work/2026-10-11-vault-write-gate-audit.md](future-work/2026-10-11-vault-write-gate-audit.md) | finding | active | evidence | security | vault-write-gate-audit |
+| [docs/future-work/2026-10-11-vault-write-gate-deploy.md](future-work/2026-10-11-vault-write-gate-deploy.md) | runbook | draft | advisory | security | — |
 | [docs/future-work/README.md](future-work/README.md) | index | active | advisory | — | — |
 | [docs/future-work/archive/acp-bridge-completion-roadmap.md](future-work/archive/acp-bridge-completion-roadmap.md) | plan | superseded | advisory | acp | acp-bridge-completion |
 | [docs/future-work/archive/chat-search-plan.md](future-work/archive/chat-search-plan.md) | plan | implemented | advisory | chat | chat-search |

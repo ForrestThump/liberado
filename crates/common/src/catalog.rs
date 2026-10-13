@@ -33,7 +33,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
-use crate::{Consequence, WriteClass};
+use crate::Consequence;
 
 /// Default time a peer stays out of [`CapabilityCatalog::routing_descriptors`] after
 /// [`mark_degraded`](CapabilityCatalog::mark_degraded) before half-open re-inclusion.
@@ -78,149 +78,68 @@ pub struct McpDescriptor {
     /// Needed because `zone_from_arg` alone cannot distinguish `read_note` from `write_note` —
     /// both carry a path. Without this list, reads would be made to require a `Write` capability.
     pub write_tools: Vec<String>,
+    /// Path-addressed MCPs: tools that are **explicitly read-only** by declaration.
+    ///
+    /// Why this exists alongside `write_tools` and `vault_wide_writes`: a path-addressed MCP like
+    /// TurboVault often grows new tools in upgrades, and `write_tools` is a **deny** list ("only
+    /// these names write"). Unlisted tools were treated as `NotAWrite` — fine when the server
+    /// itself is the source of truth, **unsafe** when the operator's config is the source of truth
+    /// and the live upgrade outpaces a `write_tools` refresh: an undeclared writer gets a free
+    /// pass. The live bug `01M3ZB89WK54HGNG6ATJ9FPJMX` (2026-10-11) was exactly that: `edit_note`
+    /// was added to TurboVault, the deployed `topology.toml` did not include it in `write_tools`,
+    /// and the agent's `Write(Vault("conformance"))`-less grant sailed through with no approval
+    /// card. Therefore: every tool on a path-addressed MCP must now appear in **one** of
+    /// `write_tools`, `read_tools`, or `vault_wide_writes`; tools in **none** are `Undeterminable`
+    /// and fail closed at the runtime gate.
+    pub read_tools: Vec<String>,
+    /// Path-addressed MCPs: tools that mutate vault-wide state without a single target zone
+    /// (`begin_fanout` / `commit_fanout` / `abandon_fanout`, `set_active_vault`,
+    /// `vector_reindex`, …). The gate treats these as writes that need an **explicit** vault-wide
+    /// grant (`Capability::Write(Zone::vault(<marker>))`), checked by `holds_vault_wide_grant`;
+    /// a session holding only `Write(Vault("Tasks"))` does NOT also authorise a fanout that
+    /// switches the active vault for every other session. (Earlier behaviour — `holds_any_zone_write`
+    /// passing for any single zone — was too weak: `Write(Tasks)` authorises rearranging Tasks,
+    /// not picking the active vault for the whole process.)
+    pub vault_wide_writes: Vec<String>,
+    /// Per-tool path-argument overrides for the `write_tools` of a path-addressed MCP.
+    ///
+    /// Most path-addressed MCPs have a single path arg (`path` on turbovault's note writers).
+    /// A handful touch multiple vault paths: `move_note(from, to)`, `move_file(from, to)`,
+    /// `create_from_template(file_path)`, `generate_index(directory)`,
+    /// `append_log_entry(directory)`, `visualize(output)`. Declaring the args matters because:
+    ///
+    /// 1. `write_target` only resolves the **first** declared arg by default — so the
+    ///    six tools above returned `Undeterminable("missing 'path'")` and were always refused.
+    ///    They are now declared writers; this map tells the resolver which args carry paths.
+    /// 2. Multi-path tools (`move_note`, `move_file`) require authorisation for **every**
+    ///    resolved zone — a `Tasks → sandbox` move with `Write(Tasks)` only still fails closed
+    ///    when `sandbox` is not in the grant, because the destination check is structural.
+    /// 3. `append_log_entry`'s `directory` is optional in the live schema; absence falls back
+    ///    to `Undeterminable` so the operator must classify the no-path call explicitly
+    ///    (deliberate — silently defaulting a "no directory" append to one zone is exactly the
+    ///    kind of "I made something up" the gate refuses).
+    ///
+    /// A tool NOT in this map uses the descriptor's `zone_from_arg` (single-arg path-addressed
+    /// behaviour). Keys MUST be a subset of `write_tools`; config validation refuses to boot
+    /// otherwise.
+    pub write_path_args: std::collections::BTreeMap<String, Vec<String>>,
+    /// Tools the runtime **always refuses** for chat/agent sessions, regardless of grants.
+    /// Used for admin-only operations like `set_active_vault` that affect every concurrent
+    /// session, not just the caller's. The runtime returns `Err` (hard deny) — no permission
+    /// card surfaces — because there is no single human to ask: an admin operation's
+    /// "approval" is the operator, not the chat. Operators invoke these directly through the
+    /// daemon config or a hand-shell, never through an LLM-issued tool call.
+    pub admin_tools: Vec<String>,
 }
 
-/// What a tool call writes to, resolved against its MCP's declaration *and its arguments*.
-///
-/// Deliberately a three-state answer, not `Option<String>`: "this is a write whose zone I cannot
-/// determine" is a real, distinct outcome (a path-addressed write tool called with no path), and it
-/// must **not** collapse into "not a write". That collapse is exactly the class of bug F1 was — a
-/// guard that says nothing when it does not know, and is therefore silently absent.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum WriteTarget {
-    /// Not a zone write: a declared read, or an MCP that writes nothing.
-    NotAWrite,
-    /// Writes to this zone. The caller must hold `Capability::Write(Zone::vault(zone))`.
-    Zone(String),
-    /// It *is* a write, but the target zone could not be determined. **Fail closed** — refuse.
-    Undeterminable(String),
-}
-
-/// Resolve what `bare_tool_name` on `descriptor` writes to, given the call's `arguments`.
-///
-/// Two declaration styles, because two kinds of MCP exist:
-///
-/// * **Fixed-zone** (a tasks MCP whose every tool touches `tasks/`): `default_zone` + per-tool
-///   `tool_zones` overrides. Zone depends only on the tool name.
-/// * **Path-addressed** (TurboVault): `zone_from_arg` + `write_tools`. Zone depends on the call's
-///   arguments, so it can only be known here, at the boundary, with the call in hand.
-pub fn write_target(
-    descriptor: &McpDescriptor,
-    bare_tool_name: &str,
-    arguments: &serde_json::Value,
-) -> WriteTarget {
-    if let Some(arg) = &descriptor.zone_from_arg {
-        if !descriptor.write_tools.iter().any(|t| t == bare_tool_name) {
-            return WriteTarget::NotAWrite;
-        }
-        let Some(path) = arguments.get(arg).and_then(|v| v.as_str()) else {
-            return WriteTarget::Undeterminable(format!(
-                "'{bare_tool_name}' writes, and its zone comes from the '{arg}' argument, which is \
-                 missing or not a string"
-            ));
-        };
-        // The zone is the leading path segment: `tasks/foo.md` -> `tasks`. A bare filename has no
-        // zone, and a write with no zone is a write we cannot authorize.
-        let segment = path.split(['/', '\\']).find(|s| !s.is_empty() && *s != ".");
-        return match segment {
-            Some(zone) if path.contains('/') || path.contains('\\') => {
-                WriteTarget::Zone(zone.to_string())
-            }
-            _ => WriteTarget::Undeterminable(format!(
-                "'{bare_tool_name}' writes to '{path}', which names no zone (expected \
-                 '<zone>/...')"
-            )),
-        };
-    }
-
-    match resolve_zone(descriptor, bare_tool_name) {
-        Some(zone) => WriteTarget::Zone(zone),
-        None => WriteTarget::NotAWrite,
-    }
-}
-
-/// Whether this call names **exactly one** write target, known from the declaration rather than
-/// guessed from text.
-///
-/// True only for the **path-addressed** style (`zone_from_arg` + `write_tools`) with the path
-/// argument actually present and naming a zone. There, the call carries its own target: one path,
-/// one note, bounded reach — and no amount of prose in the payload changes that.
-///
-/// False for the **fixed-zone** style, deliberately. There the zone comes from the *tool name*, so
-/// a resolved [`WriteTarget::Zone`] says which zone is touched but nothing about how much of it —
-/// "delete everything in tasks/" resolves the same as "write one task". Reach genuinely is unknown,
-/// and the text heuristic remains the only signal available.
-///
-/// # Why this exists
-///
-/// [`Magnitude`](crate::Magnitude) measures *reach*, and reach is usually structural. The risk gate
-/// was estimating it by scanning the whole arguments blob for destructive words, which for a write
-/// tool means scanning **the content being saved** — so a research report discussing organizations
-/// being "destroyed" and coalitions blocking "every" reform read as an order to delete everything,
-/// and a requested write-up became a permission prompt (homelab, `prop-1785557626819756862`,
-/// 2026-08-01). The payload is data, not an instruction; this is how the gate tells them apart.
-pub fn names_single_write_target(
-    descriptor: &McpDescriptor,
-    bare_tool_name: &str,
-    arguments: &serde_json::Value,
-) -> bool {
-    descriptor.zone_from_arg.is_some()
-        && matches!(
-            write_target(descriptor, bare_tool_name, arguments),
-            WriteTarget::Zone(_)
-        )
-}
-
-/// Resolve the target zone for `bare_tool_name` given `descriptor`'s zone declarations. `None`
-/// means "not a zone-write concern" — a declared read, or an MCP that hasn't opted into zone
-/// tracking at all — distinct from "a write whose zone is unknown," which callers (the zone-
-/// write-class guard) should treat conservatively rather than silently skip. Mirrors
-/// `liberado_config_loader::resolve_declared_zone` exactly; kept separate because it operates on
-/// this crate's lighter `McpDescriptor` (what the dispatcher/runtime actually see), not the config
-/// crate's richer `McpConfig`.
-pub fn resolve_zone(descriptor: &McpDescriptor, bare_tool_name: &str) -> Option<String> {
-    match descriptor
-        .tool_zones
-        .iter()
-        .find(|(name, _)| name == bare_tool_name)
-    {
-        Some((_, zone)) => zone.clone(),
-        None => descriptor.default_zone.clone(),
-    }
-}
-
-/// The zone-write-class guard (dispatch-logic-spec §6 #2): whether a call to `bare_tool_name` on
-/// `mcp_name` targets a vault zone whose declared write class doesn't allow a direct agent write
-/// (`ProposalOnly`/`HumanOnly`). Returns the restricted zone's name if so, `None` if the call is
-/// unrestricted.
-///
-/// Shared between the dispatcher's pre-flight guard (`liberado-dispatcher/src/guards.rs`, checked
-/// against a decision's *seed calls* before anything runs) and the runtime guard
-/// (`liberado-executor`'s `RiskGatedToolRuntime`, checked against every adaptive call as it
-/// happens) — this is the actual authority boundary; the pre-flight check is a best-effort early
-/// warning. Both call sites used to implement this lookup independently; unifying it here is what
-/// keeps them from silently drifting apart if the resolution rules ever change.
-///
-/// An MCP not in `zone_catalog` returns `None` (not a zone-write concern here — the capability
-/// guard, checked separately by each caller, already rejects an MCP that isn't granted at all). A
-/// tool that hasn't opted into zone tracking (`resolve_zone` returns `None`) is not restricted. A
-/// resolved zone absent from `zone_write_classes` fails safe to `WriteClass::default()`
-/// (`ProposalOnly`) rather than silently passing.
-pub fn zone_write_restriction(
-    mcp_name: &str,
-    bare_tool_name: &str,
-    zone_catalog: &[McpDescriptor],
-    zone_write_classes: &[(String, WriteClass)],
-) -> Option<String> {
-    let descriptor = zone_catalog.iter().find(|d| d.name == mcp_name)?;
-    let zone = resolve_zone(descriptor, bare_tool_name)?;
-    let write_class = zone_write_classes
-        .iter()
-        .find(|(z, _)| *z == zone)
-        .map(|(_, wc)| *wc)
-        .unwrap_or_default();
-    (!write_class.allows_direct_agent_write()).then_some(zone)
-}
+pub use crate::bundled_vault::{
+    BUNDLED_VAULT_MCP_NAMES, BundledClassification, apply_bundled_classifications,
+    default_bundled_classification, is_bundled_mcp,
+};
+pub use crate::write_target::{
+    VAULT_WIDE_ZONE_MARKER, WriteTarget, names_single_write_target, resolve_zone, write_target,
+    zone_write_restriction,
+};
 
 /// A live, queryable capability catalog. Multiple consumers can independently query
 /// it. Updates are propagated via a watch channel.
@@ -613,159 +532,6 @@ mod tests {
         );
     }
 
-    // ── zone_write_restriction ────────────────────────────────────────────
-    // Shared between the dispatcher's pre-flight guard and RiskGatedToolRuntime — see the
-    // function's own doc comment. Each individual case here used to live duplicated (in spirit)
-    // across both call sites' own test suites; it's tested once, here, now.
-
-    fn vault_descriptor() -> McpDescriptor {
-        McpDescriptor {
-            name: "vault".into(),
-            description: "git-tracked vault".into(),
-            consequence: Consequence::Reversible,
-            provenance: None,
-            default_zone: Some("tasks".into()),
-            tool_zones: vec![("write_review".into(), Some("reviews".into()))],
-            zone_from_arg: None,
-            write_tools: Vec::new(),
-        }
-    }
-
-    /// A path-addressed MCP: one write tool that can land in any zone, plus a read that must NOT be
-    /// made to look like a write just because it also carries a path.
-    fn path_addressed_descriptor() -> McpDescriptor {
-        McpDescriptor {
-            name: "turbovault".into(),
-            description: "path-addressed vault".into(),
-            consequence: Consequence::Reversible,
-            provenance: None,
-            default_zone: None,
-            tool_zones: Vec::new(),
-            zone_from_arg: Some("path".into()),
-            write_tools: vec!["write_note".into(), "delete_note".into()],
-        }
-    }
-
-    #[test]
-    fn a_path_addressed_write_takes_its_zone_from_the_argument() {
-        // The whole reason `write_target` exists: `default_zone` cannot describe this MCP. The SAME
-        // tool writes to a different zone on every call, so a fixed declaration would authorize a
-        // write to `decisions/` under a `Write(tasks)` capability.
-        let d = path_addressed_descriptor();
-        assert_eq!(
-            write_target(
-                &d,
-                "write_note",
-                &serde_json::json!({"path": "decisions/x.md"})
-            ),
-            WriteTarget::Zone("decisions".into())
-        );
-        assert_eq!(
-            write_target(&d, "write_note", &serde_json::json!({"path": "tasks/y.md"})),
-            WriteTarget::Zone("tasks".into())
-        );
-    }
-
-    #[test]
-    fn a_read_on_a_path_addressed_mcp_is_not_a_write() {
-        // `read_note` also carries a path. Without `write_tools`, it would demand a Write capability.
-        let d = path_addressed_descriptor();
-        assert_eq!(
-            write_target(
-                &d,
-                "read_note",
-                &serde_json::json!({"path": "finance/secret.md"})
-            ),
-            WriteTarget::NotAWrite
-        );
-    }
-
-    #[test]
-    fn a_write_whose_zone_cannot_be_determined_fails_closed() {
-        // A write we cannot place is a write we cannot authorize. Collapsing this into "not a write"
-        // is exactly the bug F1 was — a guard that says nothing when it does not know.
-        let d = path_addressed_descriptor();
-        assert!(matches!(
-            write_target(&d, "write_note", &serde_json::json!({})),
-            WriteTarget::Undeterminable(_)
-        ));
-        assert!(
-            matches!(
-                write_target(&d, "write_note", &serde_json::json!({"path": "loose.md"})),
-                WriteTarget::Undeterminable(_)
-            ),
-            "a bare filename names no zone"
-        );
-    }
-
-    #[test]
-    fn restricted_zone_is_flagged() {
-        let restriction = zone_write_restriction(
-            "vault",
-            "write_review",
-            &[vault_descriptor()],
-            &[("reviews".to_string(), WriteClass::ProposalOnly)],
-        );
-        assert_eq!(restriction, Some("reviews".to_string()));
-    }
-
-    #[test]
-    fn agent_writable_zone_is_not_restricted() {
-        let restriction = zone_write_restriction(
-            "vault",
-            "write_review",
-            &[vault_descriptor()],
-            &[("reviews".to_string(), WriteClass::AgentWritable)],
-        );
-        assert_eq!(restriction, None);
-    }
-
-    #[test]
-    fn unlisted_zone_fails_safe_to_restricted() {
-        // "reviews" isn't in zone_write_classes at all — must fail safe (ProposalOnly default),
-        // not silently pass just because nothing was configured for it.
-        let restriction = zone_write_restriction(
-            "vault",
-            "write_review",
-            &[vault_descriptor()],
-            &[("tasks".to_string(), WriteClass::AgentWritable)],
-        );
-        assert_eq!(restriction, Some("reviews".to_string()));
-    }
-
-    #[test]
-    fn mcp_not_in_catalog_is_not_restricted() {
-        // The capability guard (checked separately by each caller) already rejects an ungranted
-        // MCP — this function isn't the place that catches that.
-        let restriction = zone_write_restriction(
-            "some-other-mcp",
-            "anything",
-            &[vault_descriptor()],
-            &[("reviews".to_string(), WriteClass::ProposalOnly)],
-        );
-        assert_eq!(restriction, None);
-    }
-
-    #[test]
-    fn tool_not_opted_into_zone_tracking_is_not_restricted() {
-        // "tasks-mcp" has no default_zone/tool_zones at all, so resolve_zone returns None
-        // regardless of what's restricted elsewhere.
-        let untracked = McpDescriptor {
-            name: "tasks-mcp".into(),
-            description: "task ops".into(),
-            consequence: Consequence::Reversible,
-            provenance: None,
-            ..Default::default()
-        };
-        let restriction = zone_write_restriction(
-            "tasks-mcp",
-            "add",
-            &[untracked],
-            &[("reviews".to_string(), WriteClass::ProposalOnly)],
-        );
-        assert_eq!(restriction, None);
-    }
-
     #[test]
     fn consequence_catalog_returns_all_consequences() {
         let catalog = CapabilityCatalog::new();
@@ -788,26 +554,6 @@ mod tests {
         assert!(catalog_result.contains(&("email".into(), Consequence::External)));
     }
 
-    #[test]
-    fn write_target_empty_segment_is_not_a_zone() {
-        let d = path_addressed_descriptor();
-        // path starting with `//` → first split segments are empty.
-        // The correct `&&` skips empties to find "foo". A `||` mutation would match the
-        // empty string first and return `Zone("")` — a zone we cannot authorize.
-        let result = write_target(
-            &d,
-            "write_note",
-            &serde_json::json!({"path": "//foo/bar.md"}),
-        );
-        assert_eq!(
-            result,
-            WriteTarget::Zone("foo".into()),
-            "empty segments must be skipped to find the real zone: got {result:?}"
-        );
-    }
-
-    /// When purge_expired_degraded removes entries, it should send a notification. The
-    /// `!=` → `==` mutation on line 300 inverts this check.
     #[test]
     fn degraded_purge_sends_notification_on_expiry() {
         let catalog = CapabilityCatalog::new();
@@ -847,208 +593,5 @@ mod tests {
             !catalog.is_degraded("weather"),
             "must be purged at exact TTL boundary"
         );
-    }
-}
-
-#[cfg(test)]
-mod proptest_tests {
-    use std::slice;
-
-    use proptest::prelude::*;
-    use serde_json::Value;
-
-    use super::*;
-
-    // ── Generation primitives ─────────────────────────────────────────────
-
-    /// A tool name as it appears in `write_tools` / `tool_zones` keys.
-    const TOOL_NAME: &str = "[a-zA-Z0-9_/-]{1,20}";
-
-    /// A vault zone name: a plain 1–20 char alphanumeric string.
-    const ZONE_NAME: &str = "[a-zA-Z0-9]{1,20}";
-
-    /// A zone-name wrapper so generation carries intent. `McpDescriptor` stores zones as plain
-    /// `String`; this newtype only exists to give the strategy a name.
-    #[derive(Debug, Clone, PartialEq, Eq)]
-    struct Zone(String);
-
-    impl Arbitrary for Zone {
-        type Parameters = ();
-        type Strategy = BoxedStrategy<Zone>;
-
-        fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
-            ZONE_NAME.prop_map(Zone).boxed()
-        }
-    }
-
-    impl Arbitrary for WriteClass {
-        type Parameters = ();
-        type Strategy = BoxedStrategy<WriteClass>;
-
-        fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
-            prop_oneof![
-                Just(WriteClass::HumanOnly),
-                Just(WriteClass::AgentWritable),
-                Just(WriteClass::ProposalOnly),
-                Just(WriteClass::Shared),
-            ]
-            .boxed()
-        }
-    }
-
-    impl Arbitrary for McpDescriptor {
-        type Parameters = ();
-        type Strategy = BoxedStrategy<McpDescriptor>;
-
-        fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
-            // `write_tools` is only consulted by `write_target` inside the `zone_from_arg`
-            // (path-addressed) branch. A fixed-zone descriptor (`zone_from_arg: None`) ignores
-            // `write_tools` and resolves through `resolve_zone`, which reports `NotAWrite` for a
-            // tool with no default/tool zone. Correlating the two keeps "a declared write tool
-            // is never `NotAWrite`" a genuine invariant rather than a vacuous one.
-            let zone_from_arg_strategy = prop_oneof![
-                2 => Just(None::<String>),
-                3 => "[a-zA-Z0-9_-]{1,20}".prop_map(Some),
-            ];
-
-            zone_from_arg_strategy
-                .prop_flat_map(|zone_from_arg| {
-                    let write_tools: BoxedStrategy<Vec<String>> = match &zone_from_arg {
-                        Some(_) => proptest::collection::vec(TOOL_NAME, 0..5).boxed(),
-                        None => Just(Vec::<String>::new()).boxed(),
-                    };
-                    (
-                        "[a-zA-Z0-9_-]{1,20}",  // name
-                        "[a-zA-Z0-9_ -]{0,40}", // description
-                        prop_oneof![
-                            1 => Just(None::<String>),
-                            2 => any::<Zone>().prop_map(|z| Some(z.0)),
-                        ],
-                        proptest::collection::vec(
-                            (
-                                TOOL_NAME,
-                                prop_oneof![
-                                    1 => Just(None::<String>),
-                                    2 => any::<Zone>().prop_map(|z| Some(z.0)),
-                                ],
-                            ),
-                            0..3,
-                        ),
-                        write_tools,
-                    )
-                        .prop_map(
-                            move |(name, description, default_zone, tool_zones, write_tools)| {
-                                McpDescriptor {
-                                    name,
-                                    description,
-                                    consequence: Consequence::Reversible,
-                                    provenance: None,
-                                    default_zone,
-                                    tool_zones,
-                                    zone_from_arg: zone_from_arg.clone(),
-                                    write_tools,
-                                }
-                            },
-                        )
-                        .boxed()
-                })
-                .boxed()
-        }
-    }
-
-    /// A `serde_json::Value` strategy. `any::<serde_json::Value>()` requires proptest's optional
-    /// `serde_json` feature (not enabled here), so build one by hand: scalar leaves plus
-    /// recursive arrays/objects. String leaves deliberately allow `/` and `.` so `write_target`'s
-    /// path-segment logic is exercised.
-    fn arb_json_value() -> impl Strategy<Value = Value> {
-        let leaf = prop_oneof![
-            Just(Value::Null),
-            any::<bool>().prop_map(Value::Bool),
-            any::<i64>().prop_map(Value::from),
-            any::<f64>()
-                .prop_filter("finite", |f| f.is_finite())
-                .prop_map(Value::from),
-            "[a-zA-Z0-9_/.-]{0,30}".prop_map(Value::String),
-        ];
-        leaf.prop_recursive(4, 16, 8, |inner| {
-            prop_oneof![
-                proptest::collection::vec(inner.clone(), 0..5).prop_map(Value::Array),
-                proptest::collection::hash_map("[a-zA-Z0-9_-]{0,12}", inner, 0..5).prop_map(|m| {
-                    let mut map = serde_json::Map::new();
-                    for (k, v) in m {
-                        map.insert(k, v);
-                    }
-                    Value::Object(map)
-                },),
-            ]
-        })
-    }
-
-    /// A write class that does **not** allow direct agent writes. Test 2's guard-equivalence
-    /// property asserts `(Some(zone), Some(zone))` for every resolved zone — the fail-closed
-    /// behavior this guard is specified to have. The "agent may write, so no restriction"
-    /// outcome is a separate behavior already pinned by the unit tests in `tests`.
-    fn restricted_write_class() -> impl Strategy<Value = WriteClass> {
-        prop_oneof![Just(WriteClass::HumanOnly), Just(WriteClass::ProposalOnly)]
-    }
-
-    // ── Test 1: write_target never collapses a declared write tool to NotAWrite ──
-
-    fn write_target_never_notawrite(desc: McpDescriptor, tool: String, args: Value) -> bool {
-        if desc.write_tools.contains(&tool) {
-            !matches!(write_target(&desc, &tool, &args), WriteTarget::NotAWrite)
-        } else {
-            true
-        }
-    }
-
-    proptest! {
-        #[test]
-        fn proptest_write_target_never_notawrite(
-            desc in any::<McpDescriptor>(),
-            tool in TOOL_NAME,
-            args in arb_json_value(),
-        ) {
-            prop_assert!(write_target_never_notawrite(desc, tool, args));
-        }
-    }
-
-    // ── Test 2: zone_write_restriction agrees with resolve_zone ──────────
-
-    /// `zone_write_restriction` looks its descriptor up by name in a *slice* catalog; the spec
-    /// check passes the single generated descriptor as that one-entry catalog
-    /// (`std::slice::from_ref`, adapting the real `&[McpDescriptor]` signature).
-    fn zone_write_restriction_agrees(
-        mcp: String,
-        tool: String,
-        desc: McpDescriptor,
-        zone_classes: Vec<(String, WriteClass)>,
-    ) -> bool {
-        let zone = resolve_zone(&desc, &tool);
-        let r = zone_write_restriction(&mcp, &tool, slice::from_ref(&desc), &zone_classes);
-        match (zone, r) {
-            (None, None) => true,
-            (Some(z), Some(rz)) => z == rz,
-            _ => false,
-        }
-    }
-
-    proptest! {
-        #[test]
-        fn proptest_zone_write_restriction_agrees_with_resolve_zone(
-            // `mcp` must name the descriptor actually in the catalog, or the lookup is a
-            // no-op and the equivalence degenerates to "always `None`".
-            (mcp, desc) in any::<McpDescriptor>()
-                .prop_map(|desc| (desc.name.clone(), desc)),
-            tool in TOOL_NAME,
-            // Restricted classes only, so a resolved zone always yields `Some(zone)` — exactly
-            // the `(Some(z), Some(rz))` arm.
-            zone_classes in proptest::collection::vec(
-                (TOOL_NAME, restricted_write_class()),
-                0..4,
-            ),
-        ) {
-            prop_assert!(zone_write_restriction_agrees(mcp, tool, desc, zone_classes));
-        }
     }
 }
