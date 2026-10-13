@@ -35,14 +35,7 @@ pub async fn run_face_turn(
         .json(&body)
         .send()
         .await
-        .map_err(|e| {
-            format!(
-                "face mode: cannot reach daemon at {} ({}). \
-                 Start it with: liberado serve <vault>  (or set LIBERADO_SERVER)",
-                liberado_common::redact_secrets(&base),
-                liberado_common::redact_secrets(&e.without_url().to_string())
-            )
-        })?;
+        .map_err(|e| daemon_unreachable_error(&base, &e.without_url().to_string()))?;
 
     if !response.status().is_success() {
         let status = response.status();
@@ -53,12 +46,7 @@ pub async fn run_face_turn(
     let mut decoder = SseDecoder::default();
     let mut stream = response.bytes_stream();
     while let Some(chunk) = stream.next().await {
-        let chunk = chunk.map_err(|e| {
-            format!(
-                "face mode: stream error: {}",
-                liberado_common::redact_secrets(&e.without_url().to_string())
-            )
-        })?;
+        let chunk = chunk.map_err(|e| stream_error(&e.without_url().to_string()))?;
         let text = String::from_utf8_lossy(&chunk);
         for event in decoder.push(&text) {
             if dispatch_sse(&event, daemon_session, acp_session_id, emit)? {
@@ -67,6 +55,29 @@ pub async fn run_face_turn(
         }
     }
     Ok(())
+}
+
+/// Face-client text when the daemon cannot be reached.
+///
+/// `detail` is the transport error after its URL has been removed. A bot token
+/// in `base` or `detail` is replaced before the string is returned.
+fn daemon_unreachable_error(base: &str, detail: &str) -> String {
+    format!(
+        "face mode: cannot reach daemon at {} ({}). \
+         Start it with: liberado serve <vault>  (or set LIBERADO_SERVER)",
+        liberado_common::redact_secrets(base),
+        liberado_common::redact_secrets(detail)
+    )
+}
+
+/// Face-client text when the chat stream fails.
+///
+/// `detail` is the transport error after its URL has been removed.
+fn stream_error(detail: &str) -> String {
+    format!(
+        "face mode: stream error: {}",
+        liberado_common::redact_secrets(detail)
+    )
 }
 
 /// Returns true when the turn is finished.
@@ -294,6 +305,48 @@ mod tests {
         );
         assert!(!finished);
         assert!(calls.is_empty());
+    }
+
+    #[test]
+    fn daemon_unreachable_error_hides_a_bot_token() {
+        let token = "123456789:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw";
+        let text = daemon_unreachable_error(
+            &format!("https://api.telegram.org/bot{token}"),
+            &format!(
+                "error sending request for url (https://api.telegram.org/bot{token}/sendMessage)"
+            ),
+        );
+        assert!(!text.contains("123456789"), "{text}");
+        assert!(
+            !text.contains("AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw"),
+            "{text}"
+        );
+        assert!(text.contains("cannot reach daemon"), "{text}");
+        assert!(text.contains("bot<redacted>"), "{text}");
+        assert!(text.contains("liberado serve"), "{text}");
+    }
+
+    #[test]
+    fn stream_error_hides_a_bot_token() {
+        let token = "123456789:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw";
+        let text = stream_error(&format!(
+            "error sending request for url (https://api.telegram.org/bot{token}/getUpdates)"
+        ));
+        assert!(!text.contains("123456789"), "{text}");
+        assert!(
+            !text.contains("AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw"),
+            "{text}"
+        );
+        assert!(text.contains("face mode: stream error:"), "{text}");
+        assert!(text.contains("bot<redacted>"), "{text}");
+    }
+
+    #[test]
+    fn stream_error_keeps_a_plain_transport_message() {
+        assert_eq!(
+            stream_error("connection refused"),
+            "face mode: stream error: connection refused"
+        );
     }
 
     #[test]
