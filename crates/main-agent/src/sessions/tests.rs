@@ -13,6 +13,9 @@ mod titles;
 #[path = "durability.rs"]
 mod durability;
 
+#[path = "turn_failure_tests.rs"]
+mod turn_failure_tests;
+
 #[path = "grants.rs"]
 mod grants;
 
