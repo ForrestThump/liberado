@@ -40021,8 +40021,8 @@
       "function": "chat",
       "line": 486,
       "cyclomatic": 8.0,
-      "coverage": 56.666666666666664,
-      "crap": 13.207703703703704,
+      "coverage": 66.66666666666666,
+      "crap": 10.370370370370374,
       "crate": "liberado-server"
     },
     {
@@ -40111,8 +40111,8 @@
       "function": "get_conversation",
       "line": 848,
       "cyclomatic": 4.0,
-      "coverage": 67.3913043478261,
-      "crap": 4.55477932111449,
+      "coverage": 82.6086956521739,
+      "crap": 4.084162077751294,
       "crate": "liberado-server"
     },
     {
@@ -49036,11 +49036,11 @@
     }
   ],
   "diagnostics": {
-    "analyzed_files": 704,
+    "analyzed_files": 706,
     "lcov_files": 490,
     "matched_files": 488,
     "source_only": {
-      "count": 216,
+      "count": 218,
       "examples": [
         "crates/acp-bridge/src/coding_run_tests.rs",
         "crates/acp-bridge/src/grant_tests.rs",

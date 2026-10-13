@@ -951,3 +951,7 @@ mod tests;
 #[cfg(test)]
 #[path = "chat_endpoint_tests.rs"]
 mod endpoint_tests;
+
+#[cfg(test)]
+#[path = "chat_history_http_tests.rs"]
+mod history_http_tests;
