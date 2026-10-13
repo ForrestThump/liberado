@@ -106,6 +106,11 @@ the `config.rs` `functions` ceiling (88 → 90) absorbs the module-scope `valida
 helper that was split out to keep `validate_schedules` at its cyclomatic baseline. All five
 carry hard ceilings and review dates; any further growth in these files must be split, not waived.
 
+Profile provider routing raises the `crates/config-loader/src/model/topology.rs` `ploc` ceiling
+from 1150 to 1151 (reviewed 2026-10-13). `SessionProfile.provider` is a serde attribute, the
+field, and the `empty()` initializer. Those lines belong on the schema, and rustfmt will not
+fold them onto a neighbor. Further growth in that file is still split, not waived.
+
 The cron `direct`-bypass feature (the `[[schedules]] direct = true` opt-in) adds a
 `crates/dispatcher/src/lib_tests.rs` `ploc` (1000 → 1070) waiver: the new `direct: bool` field
 on `DispatchRequest` requires one `direct: false,` line in every inline
