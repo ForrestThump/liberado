@@ -9,6 +9,7 @@ use liberado_executor::{Budget, Executor};
 #[test]
 fn static_reply_maps_local_results() {
     let mut ctx = TelegramCommandContext {
+        label: "Telegram",
         session_id: None,
         messages: Vec::new(),
         conversations: Vec::new(),
@@ -111,9 +112,9 @@ impl Provider for HangOnceProvider {
 }
 
 /// Spin until the sticky conversation has a turn registered, or give up.
-async fn wait_for_running(bridge: &TelegramChatBridge, chat: &Arc<ChatSessions>) -> Ulid {
+async fn wait_for_running(bridge: &TextChatBridge, chat: &Arc<ChatSessions>) -> Ulid {
     for _ in 0..200 {
-        if let Some(s) = bridge.session_id.get().await
+        if let Some(s) = bridge.bound_session().await
             && chat.turn_running(s)
         {
             return s;
@@ -126,7 +127,7 @@ async fn wait_for_running(bridge: &TelegramChatBridge, chat: &Arc<ChatSessions>)
 async fn bridge_with_provider(
     root: &std::path::Path,
     provider: Arc<dyn Provider>,
-) -> (TelegramChatBridge, Arc<ChatSessions>, Arc<dyn Provider>) {
+) -> (TextChatBridge, Arc<ChatSessions>, Arc<dyn Provider>) {
     let store = Arc::new(SessionStore::open(root).await);
     let executor = Executor::new(Arc::clone(&provider), Budget::default());
     let chat = Arc::new(ChatSessions::new(
@@ -136,10 +137,7 @@ async fn bridge_with_provider(
     ));
     let mut state = crate::state::AppState::for_test(store, Some(Arc::clone(&chat)), root.into());
     state.provider = Some(Arc::clone(&provider));
-    let bridge = TelegramChatBridge {
-        state: Arc::new(state),
-        session_id: StickySession::ephemeral(),
-    };
+    let bridge = TextChatBridge::for_test(Arc::new(state));
     (bridge, chat, provider)
 }
 
@@ -149,7 +147,7 @@ async fn bridge_with_config(
     root: &std::path::Path,
     provider: Arc<dyn Provider>,
     config: Arc<liberado_bootstrap::Config>,
-) -> (TelegramChatBridge, Arc<ChatSessions>, Arc<dyn Provider>) {
+) -> (TextChatBridge, Arc<ChatSessions>, Arc<dyn Provider>) {
     let store = Arc::new(SessionStore::open(root).await);
     let executor = Executor::new(Arc::clone(&provider), Budget::default());
     let chat = Arc::new(ChatSessions::new(
@@ -160,10 +158,7 @@ async fn bridge_with_config(
     let mut state = crate::state::AppState::for_test(store, Some(Arc::clone(&chat)), root.into());
     state.provider = Some(Arc::clone(&provider));
     state.config = config;
-    let bridge = TelegramChatBridge {
-        state: Arc::new(state),
-        session_id: StickySession::ephemeral(),
-    };
+    let bridge = TextChatBridge::for_test(Arc::new(state));
     (bridge, chat, provider)
 }
 
@@ -172,7 +167,7 @@ async fn bridge_with_config(
 async fn bridge_with_goal_pack(
     root: &std::path::Path,
     provider: Arc<dyn Provider>,
-) -> (TelegramChatBridge, Arc<ChatSessions>, Arc<GoalSessionHub>) {
+) -> (TextChatBridge, Arc<ChatSessions>, Arc<GoalSessionHub>) {
     let store = Arc::new(SessionStore::open(root).await);
     let executor = Executor::new(Arc::clone(&provider), Budget::default());
     let chat = Arc::new(ChatSessions::new(
@@ -186,10 +181,7 @@ async fn bridge_with_goal_pack(
     let mut state = crate::state::AppState::for_test(store, Some(Arc::clone(&chat)), root.into());
     state.provider = Some(provider);
     state.goals = goals.clone();
-    let bridge = TelegramChatBridge {
-        state: Arc::new(state),
-        session_id: StickySession::ephemeral(),
-    };
+    let bridge = TextChatBridge::for_test(Arc::new(state));
     (bridge, chat, goals)
 }
 
@@ -214,8 +206,7 @@ async fn model_command_scopes_to_sticky_and_stamps_the_next_turn() {
     let first = bridge.reply("hello").await.unwrap();
     assert_eq!(first, "ok");
     let sticky = bridge
-        .session_id
-        .get()
+        .bound_session()
         .await
         .expect("sticky after first turn");
     let global_before = provider.model();
@@ -261,7 +252,7 @@ async fn model_without_sticky_creates_conversation_and_scopes() {
         [CompletionResponse::text("after-model")],
     ));
     let (bridge, chat, provider) = bridge_with_provider(dir.path(), mock).await;
-    assert!(bridge.session_id.get().await.is_none());
+    assert!(bridge.bound_session().await.is_none());
 
     let reply = bridge.reply("/model fresh/pick").await.unwrap();
     assert!(
@@ -274,8 +265,7 @@ async fn model_without_sticky_creates_conversation_and_scopes() {
         "must not fall back to silent process-wide set_model"
     );
     let sticky = bridge
-        .session_id
-        .get()
+        .bound_session()
         .await
         .expect("sticky created by /model");
     bridge.reply("go").await.unwrap();
@@ -296,17 +286,14 @@ async fn freeform_while_turn_running_is_refused_with_feedback() {
     let (bridge, chat, _) = bridge_with_provider(dir.path(), pending.clone()).await;
 
     // Start a hang turn in the background via the real bridge path.
-    let b = TelegramChatBridge {
-        state: Arc::clone(&bridge.state),
-        session_id: bridge.session_id.clone(),
-    };
+    let b = bridge.clone();
     let hang = tokio::spawn(async move { b.reply("long running").await });
 
     // Wait until the turn is registered (provider entered or turn_running).
     let sticky = {
         let mut id = None;
         for _ in 0..100 {
-            if let Some(s) = bridge.session_id.get().await
+            if let Some(s) = bridge.bound_session().await
                 && chat.turn_running(s)
             {
                 id = Some(s);
@@ -336,16 +323,13 @@ async fn stop_cancels_inflight_turn_without_promising_partial() {
     let pending = Arc::new(PendingProvider::new("pending"));
     let (bridge, chat, _) = bridge_with_provider(dir.path(), pending).await;
 
-    let b = TelegramChatBridge {
-        state: Arc::clone(&bridge.state),
-        session_id: bridge.session_id.clone(),
-    };
+    let b = bridge.clone();
     let hang = tokio::spawn(async move { b.reply("hang").await });
 
     let sticky = {
         let mut id = None;
         for _ in 0..100 {
-            if let Some(s) = bridge.session_id.get().await
+            if let Some(s) = bridge.bound_session().await
                 && chat.turn_running(s)
             {
                 id = Some(s);
@@ -407,10 +391,7 @@ async fn message_after_a_cancelled_turn_reports_the_unanswered_turn() {
     });
     let (bridge, chat, _) = bridge_with_provider(dir.path(), provider).await;
 
-    let b = TelegramChatBridge {
-        state: Arc::clone(&bridge.state),
-        session_id: bridge.session_id.clone(),
-    };
+    let b = bridge.clone();
     let hang = tokio::spawn(async move { b.reply("first").await });
     let sticky = wait_for_running(&bridge, &chat).await;
 
@@ -581,11 +562,11 @@ async fn fork_branches_the_sticky_conversation_and_switches_to_it() {
     ));
     let (bridge, chat, _) = bridge_with_provider(dir.path(), mock).await;
     assert_eq!(bridge.reply("hello").await.unwrap(), "ok");
-    let sticky = bridge.session_id.get().await.expect("sticky after turn");
+    let sticky = bridge.bound_session().await.expect("sticky after turn");
 
     let reply = bridge.reply("/fork").await.unwrap();
     assert!(reply.contains("Forked"), "{reply}");
-    let fork_id = bridge.session_id.get().await.expect("switched to the fork");
+    let fork_id = bridge.bound_session().await.expect("switched to the fork");
     assert_ne!(fork_id, sticky, "the fork must be a new conversation");
 
     // The fork copied the transcript — one user turn, its reply, and the original untouched.
@@ -604,10 +585,10 @@ async fn fork_branches_the_sticky_conversation_and_switches_to_it() {
     );
 
     // /fork 1 keeps through the first turn — same single-turn transcript, fresh id.
-    let before = bridge.session_id.get().await.unwrap();
+    let before = bridge.bound_session().await.unwrap();
     let reply = bridge.reply("/fork 1").await.unwrap();
     assert!(reply.contains("kept_turns=1/1"), "{reply}");
-    assert_ne!(bridge.session_id.get().await.unwrap(), before);
+    assert_ne!(bridge.bound_session().await.unwrap(), before);
 }
 
 #[tokio::test]
@@ -694,7 +675,7 @@ async fn session_switch_by_exact_ulid_moves_the_sticky_chat() {
         reply.contains(&format!("Switched to session {conv}")),
         "{reply}"
     );
-    assert_eq!(bridge.session_id.get().await.unwrap(), conv);
+    assert_eq!(bridge.bound_session().await.unwrap(), conv);
 }
 
 #[tokio::test]
@@ -710,7 +691,7 @@ async fn session_switch_resolves_by_prefix_and_reports_no_match() {
         .await
         .unwrap();
     assert!(reply.contains("Switched to session"), "{reply}");
-    assert_eq!(bridge.session_id.get().await.unwrap(), conv);
+    assert_eq!(bridge.bound_session().await.unwrap(), conv);
 
     let reply = bridge.reply("/session switch zzzzz").await.unwrap();
     assert!(reply.contains("No session matching 'zzzzz'"), "{reply}");
@@ -747,10 +728,7 @@ async fn chat_turn_refuses_when_chat_is_disabled() {
     let dir = tempfile::tempdir().unwrap();
     let store = Arc::new(SessionStore::open(dir.path()).await);
     let state = crate::state::AppState::for_test(store, None, dir.path().into());
-    let bridge = TelegramChatBridge {
-        state: Arc::new(state),
-        session_id: StickySession::ephemeral(),
-    };
+    let bridge = TextChatBridge::for_test(Arc::new(state));
     let reply = bridge.reply("hello").await;
     assert!(
         matches!(reply, Err(ref e) if e == "chat is disabled"),
@@ -783,10 +761,7 @@ async fn model_browser_with_no_provider_says_so() {
     ));
     let mut state = crate::state::AppState::for_test(store, Some(chat), dir.path().into());
     state.provider = None;
-    let bridge = TelegramChatBridge {
-        state: Arc::new(state),
-        session_id: StickySession::ephemeral(),
-    };
+    let bridge = TextChatBridge::for_test(Arc::new(state));
     let reply = bridge.reply("/model").await.unwrap();
     assert!(reply.contains("No provider configured"), "{reply}");
 }
@@ -881,6 +856,7 @@ async fn collect_turn_reply_ignores_non_token_events() {
 #[test]
 fn static_reply_covers_surface_local_arms() {
     let ctx = || TelegramCommandContext {
+        label: "Telegram",
         session_id: Some("sess-1".into()),
         messages: Vec::new(),
         conversations: Vec::new(),

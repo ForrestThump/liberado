@@ -15,6 +15,8 @@ mod dispatcher_guidance;
 mod main_agent_budget;
 use coding_pack::{build_coding_pack, load_server_config};
 use main_agent_budget::main_agent_budget;
+mod bindings;
+mod channels;
 mod hooks;
 mod latency;
 mod pr_review_diff;
@@ -25,7 +27,6 @@ mod pr_review_publish;
 mod pr_review_publish_flow;
 mod shutdown;
 mod state;
-mod sticky;
 mod telegram;
 mod workspace_surface;
 
@@ -33,7 +34,7 @@ mod workspace_surface;
 mod t1_conformance;
 
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use std::path::Path;
 
@@ -164,27 +165,15 @@ pub async fn run(vault_path: String) -> Result<(), Box<dyn std::error::Error>> {
     // Every reaction is a hosted background session on the hub (E3) — joinable, cancellable.
     .with_goal_hub(goals.clone());
 
-    // Shared state for chat-aware cron delivery (`docs/future-work/ideas/cron-delivery-timing-idea.md`): the
-    // sticky Telegram session id (also owned by the chat bridge) and the "last human message" clock
-    // (also stamped by the approval bot). Built here so the daemon's delivery notifier and the
-    // bot/bridge below all point at the same instances.
-    //
-    // The sticky id is now **persisted** across restarts (`<data_dir>/telegram-sticky-session`, on the
-    // same volume as the session store): on boot we restore the last conversation so a container
-    // restart no longer forces an implicit `/new`. A restored id is adopted only if the conversation
-    // still exists (validated against the chat store) — a stale pointer is dropped, not resurrected.
-    let (telegram_sticky, telegram_activity) = resolve_telegram_state(chat.as_ref()).await;
-    let daemon = wrap_cron_notifier(
-        daemon,
-        chat.as_ref(),
-        &config,
-        &telegram_sticky,
-        &telegram_activity,
-    );
+    // One binding map for cron delivery, the text bridge, and approval routing. Telegram is
+    // one peer. A legacy `<data_dir>/telegram-sticky-session` file is adopted on first load
+    // so that chat keeps the same conversation.
+    let channels = channels::resolve_channels(chat.as_ref()).await;
+    let daemon = channels::wrap_cron_notifier(daemon, chat.as_ref(), &config, &channels);
     let ledger_dir = liberado_config::data_dir();
     let (approval_resolver, approval_hub) = approvals::wire_approvals(
         chat.as_ref(),
-        &telegram_sticky,
+        &channels.bindings,
         daemon.vault().clone(),
         &ledger_dir,
         approvals::env_permission_notifier(),
@@ -239,13 +228,12 @@ pub async fn run(vault_path: String) -> Result<(), Box<dyn std::error::Error>> {
         approval_hub,
     });
 
-    spawn_telegram_bot(
+    channels::spawn_configured_channels(
         &state,
         &daemon,
         provider.as_ref(),
         &config,
-        &telegram_sticky,
-        telegram_activity,
+        &channels,
         approval_resolver,
     );
 
@@ -323,116 +311,6 @@ async fn open_session_store(
         });
     }
     (sessions_root, sessions)
-}
-
-/// Shared state for chat-aware cron delivery
-/// (`docs/future-work/ideas/cron-delivery-timing-idea.md`): the sticky Telegram session id (also
-/// owned by the chat bridge) and the "last human message" clock (also stamped by the approval
-/// bot). Built here so the daemon's delivery notifier and the bot/bridge below all point at the
-/// same instances.
-///
-/// The sticky id is now **persisted** across restarts (`<data_dir>/telegram-sticky-session`, on
-/// the same volume as the session store): on boot we restore the last conversation so a container
-/// restart no longer forces an implicit `/new`. A restored id is adopted only if the conversation
-/// still exists (validated against the chat store) — a stale pointer is dropped, not resurrected.
-async fn resolve_telegram_state(
-    chat: Option<&Arc<ChatSessions>>,
-) -> (sticky::StickySession, Arc<Mutex<Option<Instant>>>) {
-    let telegram_sticky = if let Some(chat_sessions) = chat {
-        let cs = chat_sessions.clone();
-        sticky::StickySession::load(
-            liberado_bootstrap::data_dir().join("telegram-sticky-session"),
-            move |id| async move {
-                cs.list()
-                    .await
-                    .map(|headers| headers.iter().any(|h| h.id == id))
-                    .unwrap_or(false)
-            },
-        )
-        .await
-    } else {
-        sticky::StickySession::ephemeral()
-    };
-    let telegram_activity: Arc<Mutex<Option<Instant>>> = Arc::new(Mutex::new(None));
-    (telegram_sticky, telegram_activity)
-}
-
-/// When both Telegram and a chat surface exist, route the daemon's cron delivery through the
-/// chat-delivering notifier: it folds each brief into the sticky conversation and defers the send
-/// around active chat. Proposals still go out immediately (its inner notifier). Without chat or
-/// Telegram, the daemon keeps whatever `configure_daemon` set (plain immediate notify).
-fn wrap_cron_notifier(
-    daemon: Daemon,
-    chat: Option<&Arc<ChatSessions>>,
-    config: &liberado_bootstrap::Config,
-    telegram_sticky: &sticky::StickySession,
-    telegram_activity: &Arc<Mutex<Option<Instant>>>,
-) -> Daemon {
-    match (chat, liberado_notify::TelegramNotifier::from_env()) {
-        (Some(chat_sessions), Some(inner)) => {
-            let cdn = cron_delivery::ChatDeliveringNotifier::new(
-                Arc::new(inner),
-                chat_sessions.clone(),
-                telegram_sticky.clone(),
-                telegram_activity.clone(),
-                Duration::from_secs(config.tuning.cron_delivery.quiet_delay_secs),
-                Duration::from_secs(config.tuning.cron_delivery.deliver_by_secs),
-            );
-            info!(
-                "cron delivery: folding briefs into the sticky Telegram chat (quiet-delay defer)"
-            );
-            daemon.with_notifier(Arc::new(cdn))
-        }
-        _ => daemon,
-    }
-}
-
-/// Optional — Telegram bot: proposal Approve/Reject/Revise buttons + free-form chat when a
-/// ChatSessions surface exists. Only when a provider is attached and LIBERADO_TELEGRAM_* env vars
-/// are set. Cloning the vault/signer here, before `daemon` moves into its own spawn, gives the
-/// bot its own handle onto the same vault (`Vault` is cheap to clone).
-fn spawn_telegram_bot(
-    state: &Arc<AppState>,
-    daemon: &Daemon,
-    provider: Option<&Arc<dyn Provider>>,
-    config: &liberado_bootstrap::Config,
-    telegram_sticky: &sticky::StickySession,
-    telegram_activity: Arc<Mutex<Option<Instant>>>,
-    resolver: Arc<liberado_telegram_approvals::PermissionResolver>,
-) {
-    let Some(p) = provider else {
-        return;
-    };
-    let Some(mut bot) = liberado_telegram_approvals::ApprovalBot::from_env(
-        daemon.vault().clone(),
-        daemon.signer().clone(),
-        p.clone(),
-        config.tuning.telegram_approvals.clone(),
-    )
-    // The same ledger the daemon reads. A tap is the authenticated act; the vault note it also
-    // updates is only the human-readable view of a decision recorded here.
-    .map(|b| b.with_resolver(resolver)) else {
-        return;
-    };
-    if state.chat.is_some() {
-        // The shared slash-command catalog (also used by the TUI/WebUI), curated to the
-        // top-level commands Telegram can advertise, so typing `/` shows an autocomplete menu.
-        let command_menu = liberado_commands::telegram_commands()
-            .into_iter()
-            .map(|(c, d)| (c.to_string(), d.to_string()))
-            .collect();
-        bot = bot
-            .with_chat(Arc::new(crate::telegram::TelegramChatBridge {
-                state: state.clone(),
-                session_id: telegram_sticky.clone(),
-            }))
-            .with_activity_tracker(telegram_activity)
-            .with_command_menu(command_menu);
-        info!(
-            "Telegram free-form chat surface attached (slash commands enabled + menu registered)"
-        );
-    }
-    tokio::spawn(bot.run());
 }
 
 /// The full HTTP/SSE API router plus the static frontend fallback. Work-starting routes are
@@ -692,15 +570,12 @@ fn register_goal_packs(
 /// Tail of goal-hub assembly: attach the out-of-band alert (E5), reconcile orphaned parked
 /// sessions at startup (F7), and attach the hub to the coding pack for subagent fan-out (S6).
 async fn finalize_goal_hub(
-    mut goals_hub: liberado_session::GoalSessionHub,
+    goals_hub: liberado_session::GoalSessionHub,
     config: &liberado_bootstrap::Config,
     coding_pack: Option<Arc<liberado_coder_agent::CodingSessionPack>>,
 ) -> Arc<liberado_session::GoalSessionHub> {
     // E5: when a session awaits input and nobody has the stream open, ping out-of-band.
-    if let Some(n) = liberado_notify::TelegramNotifier::from_env() {
-        goals_hub = goals_hub.with_alert(Arc::new(NotifySessionAlert(Arc::new(n))));
-        info!("session alerts: telegram notifier attached");
-    }
+    let goals_hub = channels::attach_session_alert(goals_hub);
     // F7: parked rows survive restart; the hub does not. Finish orphans that cannot be resumed
     // (no AskHuman, no pack, or pack refuses) so they do not sit forever. Human-resumable parks
     // stay for the stuck panel / answer path.
@@ -1071,29 +946,6 @@ fn connect_chat_runtime(mcp: McpRegistry) -> Arc<dyn ToolRuntime> {
         mcp,
         WriteProvenance::agent("liberado-chat", "chat-session"),
     ))
-}
-
-/// Bridges `liberado_notify::Notifier` into the hub's [`SessionAlert`](liberado_session::SessionAlert)
-/// port so an unwatched awaiting session pings Telegram (E5).
-struct NotifySessionAlert(Arc<dyn liberado_notify::Notifier>);
-
-#[async_trait::async_trait]
-impl liberado_session::SessionAlert for NotifySessionAlert {
-    async fn session_needs_you(&self, session_id: &str, prompt: &str) {
-        let message = format!(
-            "Liberado: a session needs your input.\n\
-             session: {session_id}\n\
-             {prompt}\n\
-             Answer in the TUI or via POST /api/goals/{session_id}/message"
-        );
-        match self.0.notify(&message).await {
-            // Logged on *success*, not only on failure. Whether a ping fired is a real behavioural
-            // claim — the hub suppresses it when someone is already watching the session — and until
-            // this line existed the only way to check it was to look at a human's phone.
-            Ok(()) => tracing::info!(%session_id, "session alert sent — nobody was watching"),
-            Err(e) => tracing::warn!(error = %e, %session_id, "session alert notification failed"),
-        }
-    }
 }
 
 /// `liberado prompt [profile]` — print the system prompt a chat under `profile` would actually be

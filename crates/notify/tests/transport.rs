@@ -5,8 +5,10 @@
 //! on CI. This covers the request-shaping, response-precondition, chunking, and `receive` parser
 //! logic that the in-crate unit tests (pure helpers) cannot reach.
 
-use liberado_messaging::{ActionButton, InboundEvent, MessagingChannel};
-use liberado_notify::{Notifier, TelegramNotifier};
+use std::sync::Arc;
+
+use liberado_messaging::{ActionButton, InboundEvent, MessagingChannel, ResolvedElsewhere};
+use liberado_notify::{Notifier, OutboundCards, TelegramCardUpdater, TelegramNotifier};
 use serde_json::json;
 use wiremock::matchers::{body_json, method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -550,4 +552,62 @@ async fn receive_transport_failure_backs_off_and_returns_empty() {
     let mut cursor = String::new();
     let events = unreachable_notifier().receive(&mut cursor).await.unwrap();
     assert!(events.is_empty());
+}
+
+#[tokio::test]
+async fn send_with_actions_records_the_message_id_and_a_later_edit_uses_it() {
+    let server = MockServer::start().await;
+    let rows = liberado_messaging::permission_action_rows("perm-9");
+    Mock::given(method("POST"))
+        .and(path("/botabc123/sendMessage"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "ok": true,
+            "result": {"message_id": 77}
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/botabc123/editMessageText"))
+        .and(body_json(json!({
+            "chat_id": "42",
+            "message_id": 77,
+            "text": "Approved once — needs write"
+        })))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let book = Arc::new(OutboundCards::new());
+    let notifier = notifier_at(&server).with_cards(Arc::clone(&book));
+    notifier
+        .send_with_actions("needs access", &rows)
+        .await
+        .unwrap();
+    TelegramCardUpdater::new(notifier)
+        .on_resolved_elsewhere("perm-9", "Approved once — needs write")
+        .await;
+    assert_eq!(book.take("perm-9"), None);
+    server.verify().await;
+}
+
+#[tokio::test]
+async fn send_with_actions_succeeds_when_the_body_is_not_json() {
+    let server = MockServer::start().await;
+    let rows = liberado_messaging::permission_action_rows("perm-9");
+    Mock::given(method("POST"))
+        .and(path("/botabc123/sendMessage"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("not-json"))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let book = Arc::new(OutboundCards::new());
+    let notifier = notifier_at(&server).with_cards(Arc::clone(&book));
+    notifier
+        .send_with_actions("needs access", &rows)
+        .await
+        .unwrap();
+    assert_eq!(book.take("perm-9"), None);
+    server.verify().await;
 }

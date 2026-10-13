@@ -104,7 +104,7 @@ async fn post_chat(app: Router, message: &str) -> (StatusCode, serde_json::Value
 
 /// Telegram is a turn-starting surface that never touches the HTTP router.
 ///
-/// `TelegramChatBridge::chat_turn` calls `ChatSessions::turn` directly, so
+/// `TextChatBridge::chat_turn` calls `ChatSessions::turn` directly, so
 /// `refuse_new_turns_if_draining` cannot see it. A message arriving mid-drain would start a
 /// turn the grace timeout aborts moments later — and it would count toward `in_flight_count`
 /// first, so the drain would wait on work it is about to discard. "New turns are refused"
@@ -123,10 +123,7 @@ async fn telegram_bridge_refuses_new_turns_during_drain() {
     )
     .await;
     let state = state_with(chat, store, dir.path().to_path_buf());
-    let bridge = crate::telegram::TelegramChatBridge {
-        state: state.clone(),
-        session_id: crate::sticky::StickySession::ephemeral(),
-    };
+    let bridge = crate::telegram::TextChatBridge::for_test(state.clone());
 
     // Precondition: the same call succeeds while accepting, so the refusal below is the gate
     // and not a bridge that never worked.

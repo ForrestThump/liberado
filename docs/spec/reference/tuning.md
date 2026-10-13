@@ -197,12 +197,12 @@ string stamped onto the goal. Re-check the offset when DST flips.
 To test a schedule without waiting: set `cron_expr` a few minutes out, `up -d --force-recreate`,
 watch, then restore. Verify the restore.
 
-### Mechanical reminders — vault notes, not the sticky chat
+### Mechanical reminders — vault notes, not the Telegram-bound chat
 
 `task-ping`, `event-ping`, `habit-ping`, and `vault-reminder-tick` do not call a model. They send through
-`LIBERADO_REMINDER_BOT_TOKEN` and `LIBERADO_REMINDER_CHAT_ID`. That is a second bot. The sticky
+`LIBERADO_REMINDER_BOT_TOKEN` and `LIBERADO_REMINDER_CHAT_ID`. That is a second bot. The Telegram-bound
 chat uses `LIBERADO_TELEGRAM_*`. Set `deliver = false` so the schedule does not also push a
-session summary into the sticky chat.
+session summary into the Telegram-bound chat.
 
 `[vault_reminders] enabled` defaults to false. The minute tick does nothing until that
 switch is on. `tasks` and `events` default to true and apply only while the switch is on.

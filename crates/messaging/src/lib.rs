@@ -22,15 +22,45 @@ mod permission;
 pub use permission::{
     PermissionCardOption, PermissionChoice, already_decided_phrase, decided_phrase,
     permission_action_rows, permission_card_options, permission_choice, permission_choices,
+    permission_receipt,
 };
 
 /// Free-form chat handler: a channel-agnostic turn into Liberado's face agent.
 ///
-/// Implemented by the server (sticky session + slash commands). Attached to the approval/chat bot
-/// so ordinary messages become Liberado turns. Without it, free-form text is ignored.
+/// Implemented by the server (one channel binding + slash commands). Attached to the approval/chat
+/// bot so ordinary messages become Liberado turns. Without it, free-form text is ignored.
 #[async_trait]
 pub trait ChatSurface: Send + Sync {
     async fn reply(&self, user_text: &str) -> Result<String, String>;
+}
+
+/// A surface that showed a permission card and can update it when another surface decides.
+///
+/// `surface_id` is the stored channel name (`telegram`, `matrix`). The resolver calls the
+/// surface that originated the card, and only when a different surface recorded the decision.
+#[async_trait]
+pub trait ResolvedElsewhere: Send + Sync {
+    fn surface_id(&self) -> &'static str;
+
+    async fn on_resolved_elsewhere(&self, proposal_id: &str, receipt: &str);
+}
+
+/// Surface that should edit its card, if any.
+///
+/// `origin` is the stored origin string (`telegram`, `web`, `background`, …). `via` is the
+/// stored decision surface (`telegram`, `webui`). `push_surface` is the channel that receives
+/// background cards, when one is configured.
+pub fn resolved_elsewhere_target(
+    origin: Option<&str>,
+    via: &str,
+    push_surface: Option<&str>,
+) -> Option<String> {
+    let surface = match origin {
+        Some("web") | None => return None,
+        Some("background") => push_surface?,
+        Some(other) => other,
+    };
+    (surface != via).then(|| surface.to_string())
 }
 
 /// One interactive button on an outbound message (Approve, Deny, Once, …).
