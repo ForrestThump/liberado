@@ -604,6 +604,16 @@ component = "main-agent"
 description = "Privileged face that may create_agent other Agents-shelf chats"
 enabled = true
 
+# Optional inference routing on any profile. `model` pins the slug sent each turn.
+# `provider` names a [[providers]] entry and sends that slug there. Omit `provider`
+# to keep topology.provider (today's behavior). Unknown ids and entries with an
+# empty base_url or api_key_env fail config load. A missing API-key env var does
+# not: the turn fails and names the variable, instead of calling the default backend.
+# The provider is re-read every turn, so an existing session keeps its pinned model
+# and picks up a provider edit without being recreated.
+# model = "deepseek/deepseek-v4-flash"
+# provider = "openrouter"
+
 # Pack profile example (has domain — NOT in New Agent picker):
 # [[session_profiles]]
 # name = "research"

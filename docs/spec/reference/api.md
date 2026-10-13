@@ -95,6 +95,15 @@ the profile picks the pack, `domain` in the request body is advisory — a profi
 `domain` field is a plain pack-name string; an unrecognized one is accepted at the JSON boundary (it
 may be a profile name) and only fails at start if no such pack is registered.
 
+A profile may also pin `model` (the slug sent on each turn) and `provider` (a `[[providers]]` name,
+for example `openrouter`). The slug is then sent to **that** backend. Omit `provider` and the slug
+goes to `topology.provider`, which is the daemon default. An unknown provider id, or a provider
+entry whose `base_url` or `api_key_env` is empty, fails config load. An unset API-key environment
+variable does not fail load — a missing key on the default provider already boots the daemon
+watch-only — but a turn on that profile fails and names the missing variable. It does not send the
+slug to the default backend. The provider is read from the profile on every turn, so changing it
+applies to sessions that already pinned a model. The choice is not stored on the session grant.
+
 ## The chat stream contract (the spine)
 
 `POST /api/chat/stream` with `{"message": "..."}` returns `Content-Type: text/event-stream`. The body

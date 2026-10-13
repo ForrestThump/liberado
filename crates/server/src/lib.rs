@@ -23,6 +23,7 @@ mod pr_review_observer;
 mod pr_review_poll;
 mod pr_review_publish;
 mod pr_review_publish_flow;
+mod profile_providers;
 mod shutdown;
 mod state;
 mod sticky;
@@ -952,6 +953,7 @@ async fn build_chat(
     );
 
     sessions = sessions.with_agent_workspace(workspace);
+    sessions = crate::profile_providers::attach(sessions, config);
 
     if compact_enabled {
         info!(

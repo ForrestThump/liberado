@@ -78,6 +78,7 @@ mod agent_profiles;
 mod agent_spawn;
 #[path = "sessions/approval.rs"]
 mod approval;
+mod provider_route;
 #[path = "sessions/reasoning_stamp.rs"]
 mod reasoning_stamp;
 #[path = "sessions/surface_mode.rs"]
@@ -312,6 +313,8 @@ pub struct ChatSessions {
     compaction: Option<CompactionEngine>,
     /// CAS1: chat-surface agent_profiles (default set; tunable via `with_agent_profiles`).
     agent_profiles: AgentProfiles,
+    /// Live profile name → provider. Empty means every turn uses `executor`'s provider.
+    profile_providers: provider_route::ProfileProviderTable,
     /// Private file workspace. Absent in tests, so they do not grow a shared directory.
     agent_workspace: Option<WorkspaceSettings>,
     /// Operator timezone used to stamp wall-clock context onto the model-visible copy of every
@@ -380,6 +383,7 @@ impl ChatSessions {
             self_handle: std::sync::OnceLock::new(),
             compaction: None,
             agent_profiles: AgentProfiles::default(),
+            profile_providers: provider_route::ProfileProviderTable::default(),
             agent_workspace: None,
             user_timezone: None,
             approval_hooks: approval::ApprovalHooks::new(),
@@ -739,9 +743,8 @@ impl ChatSessions {
                 .await;
             let before = convo.len();
 
-            // A profile's model applies to this turn only. Specialised per turn rather than set on the
-            // shared provider, so one chat choosing a model cannot change it for every other session.
-            let executor = self.executor.with_model(settings.model.clone());
+            // Per turn, so one profile's model or provider cannot retune every other session.
+            let executor = self.executor_for_turn(&settings);
             // The concrete id, never `None`: a stamp of "the provider's default" would mean something
             // different on the next read if the default has since changed, which is the drift this
             // whole record exists to remove.
@@ -865,7 +868,8 @@ impl ChatSessions {
                 .await;
             let before = convo.len();
 
-            let executor = self.executor.with_model(settings.model.clone());
+            // Per turn, so one profile's model or provider cannot retune every other session.
+            let executor = self.executor_for_turn(&settings);
             let turn_model = executor.active_model();
 
             // Durable before the first token is streamed — a turn the client abandons still leaves the

@@ -753,6 +753,13 @@ pub struct SessionProfile {
     /// Model to pin for sessions under this profile. `None` = the daemon's current face model.
     #[serde(default)]
     pub model: Option<String>,
+    /// `[[providers]]` entry this profile's model is sent to. `None` keeps
+    /// `topology.provider` (the daemon default). Read again on every turn from the
+    /// live profile, not stored on the session, so a pinned model picks up a
+    /// provider change without recreating the session. An unknown id, or an entry
+    /// with an empty `base_url` or `api_key_env`, fails config load.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
     /// Extra system-prompt text for this profile, appended to the base prompt.
     #[serde(default)]
     pub prompt_append: Option<String>,
@@ -820,6 +827,7 @@ impl SessionProfile {
             mcps: Vec::new(),
             delegation: None,
             model: None,
+            provider: None,
             prompt_append: None,
             max_idle_secs: None,
             overrides: empty_table(),
