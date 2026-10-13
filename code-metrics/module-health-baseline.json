@@ -3110,14 +3110,8 @@
   "crates/main-agent/src/sessions.rs": {
     "ploc": 1235,
     "lloc": 283,
-    "functions": 109,
-    "cyclomatic": 226
-  },
-  "crates/main-agent/src/sessions/agent_hooks.rs": {
-    "ploc": 54,
-    "lloc": 20,
-    "functions": 8,
-    "cyclomatic": 14
+    "functions": 111,
+    "cyclomatic": 228
   },
   "crates/main-agent/src/sessions/agent_profiles.rs": {
     "ploc": 8,
@@ -3172,6 +3166,12 @@
     "lloc": 151,
     "functions": 17,
     "cyclomatic": 29
+  },
+  "crates/main-agent/src/sessions/grant_gate_tests.rs": {
+    "ploc": 113,
+    "lloc": 32,
+    "functions": 8,
+    "cyclomatic": 21
   },
   "crates/main-agent/src/sessions/grants.rs": {
     "ploc": 600,
@@ -3293,18 +3293,6 @@
     "functions": 34,
     "cyclomatic": 62
   },
-  "crates/matrix/src/agents.rs": {
-    "ploc": 324,
-    "lloc": 94,
-    "functions": 38,
-    "cyclomatic": 89
-  },
-  "crates/matrix/src/agents_tests.rs": {
-    "ploc": 281,
-    "lloc": 99,
-    "functions": 21,
-    "cyclomatic": 33
-  },
   "crates/matrix/src/cards.rs": {
     "ploc": 126,
     "lloc": 41,
@@ -3395,35 +3383,11 @@
     "functions": 8,
     "cyclomatic": 18
   },
-  "crates/matrix/src/puppet.rs": {
-    "ploc": 91,
-    "lloc": 9,
-    "functions": 10,
-    "cyclomatic": 23
-  },
-  "crates/matrix/src/puppet_tests.rs": {
-    "ploc": 128,
-    "lloc": 42,
-    "functions": 11,
-    "cyclomatic": 17
-  },
   "crates/matrix/src/room.rs": {
     "ploc": 72,
     "lloc": 14,
     "functions": 7,
     "cyclomatic": 8
-  },
-  "crates/matrix/src/slug.rs": {
-    "ploc": 97,
-    "lloc": 48,
-    "functions": 8,
-    "cyclomatic": 32
-  },
-  "crates/matrix/src/slug_tests.rs": {
-    "ploc": 68,
-    "lloc": 34,
-    "functions": 7,
-    "cyclomatic": 12
   },
   "crates/matrix/src/startup.rs": {
     "ploc": 120,
@@ -4062,28 +4026,16 @@
     "cyclomatic": 14
   },
   "crates/server/src/bindings.rs": {
-    "ploc": 511,
-    "lloc": 189,
-    "functions": 52,
-    "cyclomatic": 93
-  },
-  "crates/server/src/bindings_agent_tests.rs": {
-    "ploc": 94,
-    "lloc": 50,
-    "functions": 11,
-    "cyclomatic": 13
+    "ploc": 560,
+    "lloc": 199,
+    "functions": 57,
+    "cyclomatic": 107
   },
   "crates/server/src/bindings_replace_tests.rs": {
     "ploc": 88,
     "lloc": 42,
     "functions": 4,
     "cyclomatic": 33
-  },
-  "crates/server/src/bindings_rows.rs": {
-    "ploc": 217,
-    "lloc": 66,
-    "functions": 29,
-    "cyclomatic": 52
   },
   "crates/server/src/channels.rs": {
     "ploc": 243,
@@ -4186,24 +4138,6 @@
     "lloc": 0,
     "functions": 1,
     "cyclomatic": 2
-  },
-  "crates/server/src/matrix_agent_chat.rs": {
-    "ploc": 115,
-    "lloc": 32,
-    "functions": 10,
-    "cyclomatic": 27
-  },
-  "crates/server/src/matrix_agents.rs": {
-    "ploc": 260,
-    "lloc": 55,
-    "functions": 29,
-    "cyclomatic": 46
-  },
-  "crates/server/src/matrix_cards.rs": {
-    "ploc": 87,
-    "lloc": 18,
-    "functions": 12,
-    "cyclomatic": 16
   },
   "crates/server/src/matrix_link.rs": {
     "ploc": 222,
