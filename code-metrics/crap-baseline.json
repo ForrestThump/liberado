@@ -49045,11 +49045,11 @@
     }
   ],
   "diagnostics": {
-    "analyzed_files": 705,
+    "analyzed_files": 707,
     "lcov_files": 490,
     "matched_files": 488,
     "source_only": {
-      "count": 217,
+      "count": 219,
       "examples": [
         "crates/acp-bridge/src/coding_run_tests.rs",
         "crates/acp-bridge/src/grant_tests.rs",
