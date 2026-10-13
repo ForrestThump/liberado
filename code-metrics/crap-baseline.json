@@ -47642,7 +47642,7 @@
     {
       "file": "crates/telegram-approvals/src/lib.rs",
       "function": "ApprovalBot::spawn_typing_pulse",
-      "line": 334,
+      "line": 338,
       "cyclomatic": 2.0,
       "coverage": 100.0,
       "crap": 2.0,
