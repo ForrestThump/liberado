@@ -22,6 +22,15 @@ rand = { workspace = true }
 tempfile = { workspace = true }
 proptest = "1"
 liberado-coder-core = { workspace = true }
+# Live-arrival test pulls the runtime gate and the provider stub through
+# `live_turbovault_arrival_tests`. Both crate dependencies are dev-only because
+# `liberado-config` is otherwise dependency-light by design (Decision 14), and only this
+# arrival test pulls them in.
+liberado-executor = { workspace = true }
+liberado-provider = { workspace = true }
+liberado-test-support = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
 
 [package.metadata.liberado]
 # Layer role for the layer-rules test + crate-map generator (docs/architecture/contracts.md)

@@ -24,6 +24,7 @@ the backlog, plus evidence later work has to read. Draft plans are not selectabl
 
 | Document | Kind | Domain | Authority |
 |------|------|--------|-----------|
+| [2026-10-11-vault-write-gate-audit.md](2026-10-11-vault-write-gate-audit.md) | finding | security | evidence |
 | [backlog.md](backlog.md) | plan | product | implementation |
 | [coder-harness-reliability-2026-08.md](coder-harness-reliability-2026-08.md) | finding | coding-harness | evidence |
 | [token-economics-findings-2026-08.md](token-economics-findings-2026-08.md) | finding | token-economics | evidence |
@@ -35,6 +36,7 @@ archive/ only after its useful facts live in spec, Rustdoc, or an ADR.
 
 | Doc | Status | Kind |
 |-----|--------|------|
+| [2026-10-11-vault-write-gate-deploy.md](2026-10-11-vault-write-gate-deploy.md) | draft | runbook |
 | [cadence-triggered-maintenance-agents.md](cadence-triggered-maintenance-agents.md) | draft | plan |
 | [coder-eval-curriculum.md](coder-eval-curriculum.md) | draft | plan |
 | [coding-tui-plan.md](coding-tui-plan.md) | draft | plan |

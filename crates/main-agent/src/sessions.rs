@@ -57,17 +57,17 @@ use std::sync::{Arc, Mutex};
 
 use liberado_agent_workspace::WorkspaceSettings;
 use liberado_common::{
-    Capability, CapabilityCatalog, CapabilitySet, Consequence, DEFAULT_POOL, DispatchAction,
-    McpDescriptor, ProposalSigner, RiskWaiverSet, UserTimezone, WriteClass, mcp_of,
+    Capability, CapabilityCatalog, CapabilitySet, Consequence, DispatchAction, McpDescriptor,
+    ProposalSigner, RiskWaiverSet, UserTimezone, WriteClass, mcp_of,
 };
 use liberado_conversation_store::{
     AgentProfiles, Author, ConversationHeader, ConversationStore, MessageNode, NewNode, StoreError,
     Ulid,
 };
 use liberado_dispatcher::{DispatchRequest, Dispatcher};
-use liberado_executor::{
-    AgentEvent, DecoratingRuntime, ExecError, Executor, RiskGatedToolRuntime, ToolRuntime,
-};
+#[cfg(doc)]
+use liberado_executor::RiskGatedToolRuntime;
+use liberado_executor::{AgentEvent, DecoratingRuntime, ExecError, Executor, ToolRuntime};
 use liberado_mcp::ScopedRuntime;
 use liberado_provider::{Message, Provider, Role};
 use liberado_session::{DomainHint, GoalSessionHub, GoalSpec, SessionGrant, SessionOrigin};
@@ -276,7 +276,9 @@ pub struct ChatSessions {
     /// Declarative risk waivers from `policy.toml`. Passed through to the dispatcher pre-flight
     /// magnitude guard and every runtime gate built here.
     risk_waivers: RiskWaiverSet,
-    /// Capability grants for RiskGatedToolRuntime capability checking.
+    /// Process-wide capability grant. An unprofiled session inherits it
+    /// ([`Self::default_turn_settings`]). A profiled session's risk gate uses that
+    /// session's grant ([`Self::gate_with_session_grant`]), not this field.
     capabilities: CapabilitySet,
     /// The vault's `proposals/` directory — a `proposals/` subdirectory under this holds proposal
     /// files (matches the daemon's own `PROPOSALS_DIR` convention, see `RiskGatedToolRuntime`'s
@@ -1346,6 +1348,9 @@ impl ChatSessions {
     /// Built with `from_capabilities`, which enforces per **tool** and fails closed. The MCP-name
     /// constructor could not express a partial grant, and its empty-list-means-everything default
     /// would turn a restrictive profile into an unrestricted one.
+    ///
+    /// The risk gate uses this same set. Gating on the process grant would show a session-only
+    /// tool and then refuse the call.
     fn scoped_extras_runtime(
         &self,
         user: &str,
@@ -1364,23 +1369,7 @@ impl ChatSessions {
         if !self.risk_gate_enabled() {
             return scoped;
         }
-        let mut gated = RiskGatedToolRuntime::new(
-            scoped,
-            self.capabilities.clone(),
-            self.consequences.clone(),
-            self.zone_catalog.clone(),
-            self.zone_write_classes.clone(),
-            self.proposals_dir.clone(),
-            user.to_string(),
-            session.to_string(),
-            self.signer.clone(),
-            DEFAULT_POOL,
-        )
-        .with_risk_waivers(self.risk_waivers.clone());
-        if let Some(cat) = &self.live_catalog {
-            gated = gated.with_live_catalog(cat.clone());
-        }
-        Arc::new(self.stamp_approval(session, gated))
+        Arc::new(self.gate_with_session_grant(scoped, capabilities, user, session))
     }
 
     /// Every conversation header, newest first — the sidebar listing.
@@ -1684,30 +1673,13 @@ impl ChatSessions {
             scope,
         ));
 
-        // Wrap in RiskGatedToolRuntime for safety guards (capability / consequence / magnitude).
-        // Chat isn't one of the daemon's named pools (it has its own separate "main-agent"
-        // capability scope) — tagged "default" so an approved chat-originated proposal executes
-        // via the daemon's "default" pool orchestrator on approval, exactly matching today's
-        // pre-pool behavior (one orchestrator handled every approval, regardless of origin).
-        let mut gated = RiskGatedToolRuntime::new(
-            inner,
-            // The same set that scoped the surface above. Gating on the process grant while scoping
-            // on the session's would surface a profile's tool and then refuse the call.
-            capabilities.clone(),
-            self.consequences.clone(),
-            self.zone_catalog.clone(),
-            self.zone_write_classes.clone(),
-            self.proposals_dir.clone(),
-            user.to_string(),
-            session.to_string(),
-            self.signer.clone(),
-            DEFAULT_POOL,
+        // Gate on the session grant, not the narrowed `scope` and not the process grant.
+        // Narrowing only hides tools. Dropping Write and the other non-execute capabilities
+        // here would shrink the gate. See the filter above.
+        self.attach_workspace(
+            session,
+            Box::new(self.gate_with_session_grant(inner, capabilities.clone(), user, session)),
         )
-        .with_risk_waivers(self.risk_waivers.clone());
-        if let Some(cat) = &self.live_catalog {
-            gated = gated.with_live_catalog(cat.clone());
-        }
-        self.attach_workspace(session, Box::new(self.stamp_approval(session, gated)))
     }
 
     /// Get-or-insert the per-session turn lock, so two turns on the same conversation serialize
