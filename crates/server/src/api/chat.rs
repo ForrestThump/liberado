@@ -524,7 +524,7 @@ pub async fn chat(
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(ApiError {
-                    error: liberado_main_agent::public_turn_failure(&e).to_string(),
+                    error: chat_wire::client_turn_error(&e),
                 }),
             )
                 .into_response()
