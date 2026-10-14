@@ -3953,6 +3953,12 @@
     "functions": 9,
     "cyclomatic": 13
   },
+  "crates/server/src/api/approvals_resolve_http_tests.rs": {
+    "ploc": 228,
+    "lloc": 105,
+    "functions": 16,
+    "cyclomatic": 18
+  },
   "crates/server/src/api/chat.rs": {
     "ploc": 626,
     "lloc": 82,
@@ -3970,6 +3976,12 @@
     "lloc": 67,
     "functions": 16,
     "cyclomatic": 31
+  },
+  "crates/server/src/api/chat_history_http_tests.rs": {
+    "ploc": 208,
+    "lloc": 72,
+    "functions": 16,
+    "cyclomatic": 18
   },
   "crates/server/src/api/chat_tests.rs": {
     "ploc": 402,
