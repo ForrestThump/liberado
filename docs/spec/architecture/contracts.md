@@ -132,8 +132,10 @@ not an accident of history; it is a layer rule doing its job. See [`sessions.md`
 ## Notifier
 
 - **Defined**: `liberado-notify` (trait + proposal notification with Approve/Revise/Reject).
-- **Implemented by**: `TelegramNotifier`; `telegram-approvals` answers the buttons (approve/reject
-  pure code; revise redrafts content only, never grants).
+- **Implemented by**: `TelegramNotifier`, and `ChannelNotifier` over `MatrixChannel` when the
+  Matrix environment is complete. `telegram-approvals` answers the buttons (approve/reject
+  pure code; revise redrafts content only, never grants). Matrix has no buttons yet: the same
+  choice words are a text list, and the owner replies with one word.
 - **Promise**: trait-only coupling from the engine side (`executor`'s risk gate holds a
   `dyn Notifier`); concrete channels appear only in composition roots and `#[ignore]`d live tests.
 - **Blast radius**: small; add channels freely.
@@ -143,13 +145,25 @@ not an accident of history; it is a layer rule doing its job. See [`sessions.md`
 - **Defined**: the choice table in `liberado-messaging` (`permission_choices`). The decision
   function is `liberado_common::apply_permission_decision`. The one writer is
   `PermissionResolver::resolve` in `liberado-telegram-approvals`.
-- **Surfaces**: a request raised in the sticky Telegram chat sends the Telegram keyboard and
-  a card in that same chat. Any other human chat shows the card only. A background run keeps
-  the Telegram push it already had, and the card also appears in the sticky chat, because
-  Telegram was the only path. The scope buttons stay Deny / Once / Session / Everywhere.
+- **Surfaces**: a request raised in a channel-bound chat sends that channel's keyboard and
+  a card in that same chat. Each peer is one binding in `<data_dir>/channel-bindings.json`:
+  Telegram is `(telegram, chat id, bot id)`. The Matrix main room is
+  `(matrix, room id, @liberado)` and gets its own session. Each agent DM is
+  `(matrix, room id, @liberado_<slug>)` bound to that agent's existing session. The slug
+  map is `<data_dir>/matrix-agents.json`. Deleting the session makes the puppet leave;
+  the binding stays with `active: false`, so the slug and the room stay reserved. The
+  same session id becoming a seat again rejoins and re-invites the owner. On first load,
+  a legacy `<data_dir>/telegram-sticky-session` file is
+  adopted when that Telegram peer has no binding yet, so the chat keeps the same conversation.
+  Any other human chat shows the card only. A background run keeps the Telegram push it already
+  had, and the card also appears in the bound Telegram chat. Matrix does not take that push.
+  The scope buttons stay Deny / Once / Session / Everywhere. On Matrix the card is text, and
+  the owner replies with `once`, `session`, `everywhere`, or `deny`. When another surface
+  decides a request a channel already showed, that channel edits the message to the decided
+  receipt. Telegram and Matrix both do this.
 - **Store**: the proposal note under `proposals/` (and `proposals/archive/` once the daemon
   files it). `session_id`, `origin`, `decided_at`, and `decided_via` are unsigned workflow
-  fields. The approval ledger still records the decision once, `by` `telegram` or `webui`.
+  fields. The approval ledger still records the decision once, `by` `telegram`, `matrix`, or `webui`.
   The first decision wins. A later tap answers `already decided: …` and does not append
   another ledger line.
 - **HTTP**: `POST /api/approvals/{id}/resolve` and `GET /api/conversations/{id}/approvals`.

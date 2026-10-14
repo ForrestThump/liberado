@@ -72,8 +72,11 @@ use liberado_mcp::ScopedRuntime;
 use liberado_provider::{Message, Provider, Role};
 use liberado_session::{DomainHint, GoalSessionHub, GoalSpec, SessionGrant, SessionOrigin};
 
+#[path = "sessions/agent_hooks.rs"]
+mod agent_hooks;
 #[path = "sessions/agent_profiles.rs"]
 mod agent_profiles;
+pub use agent_hooks::is_agent_dm_session;
 #[path = "sessions/agent_spawn.rs"]
 mod agent_spawn;
 #[path = "sessions/approval.rs"]
@@ -322,6 +325,8 @@ pub struct ChatSessions {
     user_timezone: Option<UserTimezone>,
     /// Sticky Telegram id and the scope-button sender. Filled after this value is inside an `Arc`.
     approval_hooks: approval::ApprovalHooks,
+    /// Runs after an agent is created, renamed, or deleted. Empty unless Matrix is on.
+    matrix_hook: Mutex<Option<agent_hooks::MatrixHook>>,
 }
 
 /// The moving parts of automatic compaction: the tunables, plus the provider used for the one
@@ -385,6 +390,7 @@ impl ChatSessions {
             agent_workspace: None,
             user_timezone: None,
             approval_hooks: approval::ApprovalHooks::new(),
+            matrix_hook: Mutex::new(None),
         }
     }
 
@@ -1376,14 +1382,6 @@ impl ChatSessions {
     ///
     /// Lazy backfill: if a header still has no title but history has a user message, persist the
     /// first-line default once so the sidebar is scannable without waiting for another turn.
-    /// Permanently delete a conversation. Thin passthrough: the store owns the semantics (see
-    /// [`ConversationStore::delete`]) and there is no cached conversation state here to invalidate —
-    /// every turn rehydrates from the store.
-    pub async fn delete(&self, id: Ulid) -> SessionResult<()> {
-        self.store.delete(id).await?;
-        Ok(())
-    }
-
     pub async fn list(&self) -> SessionResult<Vec<ConversationHeader>> {
         let mut headers = self.store.list().await?;
         for h in &mut headers {
@@ -1459,15 +1457,6 @@ impl ChatSessions {
             // decorate a conversation we could not read.
             Err(_) => false,
         }
-    }
-
-    /// Set the title of a conversation. Idempotent — subsequent calls overwrite the same field.
-    ///
-    /// Intended writers: first-line default seed, future flash-title agent, HTTP `PATCH`,
-    /// future `/title` slash command. Always overwrites; never blocked by the default seed
-    /// (seed only runs when the current title is `None`).
-    pub async fn set_title(&self, session: Ulid, title: String) -> SessionResult<()> {
-        Ok(self.store.set_title(session, title).await?)
     }
 
     // ── private helpers ──────────────────────────────────────────────────────
