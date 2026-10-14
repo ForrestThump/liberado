@@ -20041,8 +20041,8 @@
       "function": "write_target_never_notawrite",
       "line": 167,
       "cyclomatic": 2.0,
-      "coverage": 80.0,
-      "crap": 2.032,
+      "coverage": 100.0,
+      "crap": 2.0,
       "crate": "liberado-common"
     },
     {
@@ -26681,7 +26681,7 @@
     {
       "file": "crates/executor/src/risk_gated.rs",
       "function": "RiskGatedToolRuntime::notify_via_notifier",
-      "line": 753,
+      "line": 761,
       "cyclomatic": 3.0,
       "coverage": 70.0,
       "crap": 3.2430000000000003,
@@ -26825,7 +26825,7 @@
     {
       "file": "crates/executor/src/risk_gated.rs",
       "function": "held_summary",
-      "line": 813,
+      "line": 821,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -26834,7 +26834,7 @@
     {
       "file": "crates/executor/src/risk_gated.rs",
       "function": "permission_request_id",
-      "line": 773,
+      "line": 781,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -26843,7 +26843,7 @@
     {
       "file": "crates/executor/src/risk_gated.rs",
       "function": "proposal_message",
-      "line": 796,
+      "line": 804,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -31541,7 +31541,7 @@
     {
       "file": "crates/main-agent/src/lib.rs",
       "function": "Conversation::answer",
-      "line": 354,
+      "line": 355,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -31550,7 +31550,7 @@
     {
       "file": "crates/main-agent/src/lib.rs",
       "function": "Conversation::apply_available_tools",
-      "line": 340,
+      "line": 341,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -31559,7 +31559,7 @@
     {
       "file": "crates/main-agent/src/lib.rs",
       "function": "Conversation::apply_direct_agent_prompt",
-      "line": 305,
+      "line": 306,
       "cyclomatic": 3.0,
       "coverage": 100.0,
       "crap": 3.0,
@@ -31568,7 +31568,7 @@
     {
       "file": "crates/main-agent/src/lib.rs",
       "function": "Conversation::apply_prompt_append",
-      "line": 264,
+      "line": 265,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -31577,7 +31577,7 @@
     {
       "file": "crates/main-agent/src/lib.rs",
       "function": "Conversation::default",
-      "line": 374,
+      "line": 375,
       "cyclomatic": 1.0,
       "coverage": 0.0,
       "crap": 2.0,
@@ -31586,7 +31586,7 @@
     {
       "file": "crates/main-agent/src/lib.rs",
       "function": "Conversation::from_history",
-      "line": 166,
+      "line": 167,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -31595,7 +31595,7 @@
     {
       "file": "crates/main-agent/src/lib.rs",
       "function": "Conversation::history",
-      "line": 360,
+      "line": 361,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -31604,7 +31604,7 @@
     {
       "file": "crates/main-agent/src/lib.rs",
       "function": "Conversation::is_empty",
-      "line": 368,
+      "line": 369,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -31613,7 +31613,7 @@
     {
       "file": "crates/main-agent/src/lib.rs",
       "function": "Conversation::len",
-      "line": 364,
+      "line": 365,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -31622,7 +31622,7 @@
     {
       "file": "crates/main-agent/src/lib.rs",
       "function": "Conversation::messages",
-      "line": 243,
+      "line": 244,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -31631,7 +31631,7 @@
     {
       "file": "crates/main-agent/src/lib.rs",
       "function": "Conversation::messages_for_test",
-      "line": 249,
+      "line": 250,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -31640,7 +31640,7 @@
     {
       "file": "crates/main-agent/src/lib.rs",
       "function": "Conversation::new",
-      "line": 156,
+      "line": 157,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -31649,7 +31649,7 @@
     {
       "file": "crates/main-agent/src/lib.rs",
       "function": "Conversation::resume_stream",
-      "line": 224,
+      "line": 225,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -31658,7 +31658,7 @@
     {
       "file": "crates/main-agent/src/lib.rs",
       "function": "Conversation::turn",
-      "line": 191,
+      "line": 192,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -31667,7 +31667,7 @@
     {
       "file": "crates/main-agent/src/lib.rs",
       "function": "Conversation::turn_stream",
-      "line": 204,
+      "line": 205,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -31676,7 +31676,7 @@
     {
       "file": "crates/main-agent/src/lib.rs",
       "function": "Conversation::turn_tail",
-      "line": 183,
+      "line": 184,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -31685,7 +31685,7 @@
     {
       "file": "crates/main-agent/src/lib.rs",
       "function": "Rollback::arm",
-      "line": 387,
+      "line": 388,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -31694,7 +31694,7 @@
     {
       "file": "crates/main-agent/src/lib.rs",
       "function": "Rollback::disarm",
-      "line": 399,
+      "line": 400,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -31703,7 +31703,7 @@
     {
       "file": "crates/main-agent/src/lib.rs",
       "function": "Rollback::drop",
-      "line": 405,
+      "line": 406,
       "cyclomatic": 2.0,
       "coverage": 100.0,
       "crap": 2.0,
@@ -31712,7 +31712,7 @@
     {
       "file": "crates/main-agent/src/lib.rs",
       "function": "Rollback::messages",
-      "line": 395,
+      "line": 396,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -31721,7 +31721,7 @@
     {
       "file": "crates/main-agent/src/lib.rs",
       "function": "tool_manifest",
-      "line": 124,
+      "line": 125,
       "cyclomatic": 2.0,
       "coverage": 100.0,
       "crap": 2.0,
@@ -31730,7 +31730,7 @@
     {
       "file": "crates/main-agent/src/sessions.rs",
       "function": "ChatSessions::append_note",
-      "line": 680,
+      "line": 686,
       "cyclomatic": 3.0,
       "coverage": 100.0,
       "crap": 3.0,
@@ -31739,7 +31739,7 @@
     {
       "file": "crates/main-agent/src/sessions.rs",
       "function": "ChatSessions::attach",
-      "line": 1152,
+      "line": 1158,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -31748,7 +31748,7 @@
     {
       "file": "crates/main-agent/src/sessions.rs",
       "function": "ChatSessions::build_turn_runtime",
-      "line": 1607,
+      "line": 1596,
       "cyclomatic": 5.0,
       "coverage": 97.36842105263158,
       "crap": 5.000455605773436,
@@ -31757,7 +31757,7 @@
     {
       "file": "crates/main-agent/src/sessions.rs",
       "function": "ChatSessions::cancel_turn",
-      "line": 1191,
+      "line": 1197,
       "cyclomatic": 2.0,
       "coverage": 100.0,
       "crap": 2.0,
@@ -31766,7 +31766,7 @@
     {
       "file": "crates/main-agent/src/sessions.rs",
       "function": "ChatSessions::compaction_trigger_for_session",
-      "line": 452,
+      "line": 458,
       "cyclomatic": 2.0,
       "coverage": 100.0,
       "crap": 2.0,
@@ -31775,7 +31775,7 @@
     {
       "file": "crates/main-agent/src/sessions.rs",
       "function": "ChatSessions::compaction_trigger_tokens",
-      "line": 436,
+      "line": 442,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -31784,7 +31784,7 @@
     {
       "file": "crates/main-agent/src/sessions.rs",
       "function": "ChatSessions::create",
-      "line": 560,
+      "line": 566,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -31793,7 +31793,7 @@
     {
       "file": "crates/main-agent/src/sessions.rs",
       "function": "ChatSessions::create_background",
-      "line": 592,
+      "line": 598,
       "cyclomatic": 1.0,
       "coverage": 0.0,
       "crap": 2.0,
@@ -31802,7 +31802,7 @@
     {
       "file": "crates/main-agent/src/sessions.rs",
       "function": "ChatSessions::create_incognito",
-      "line": 616,
+      "line": 622,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -31811,7 +31811,7 @@
     {
       "file": "crates/main-agent/src/sessions.rs",
       "function": "ChatSessions::create_with_grant",
-      "line": 575,
+      "line": 581,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -31820,7 +31820,7 @@
     {
       "file": "crates/main-agent/src/sessions.rs",
       "function": "ChatSessions::default_turn_settings",
-      "line": 1331,
+      "line": 1337,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -31829,7 +31829,7 @@
     {
       "file": "crates/main-agent/src/sessions.rs",
       "function": "ChatSessions::delegation_mode_for_test",
-      "line": 1327,
+      "line": 1333,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -31837,17 +31837,8 @@
     },
     {
       "file": "crates/main-agent/src/sessions.rs",
-      "function": "ChatSessions::delete",
-      "line": 1382,
-      "cyclomatic": 2.0,
-      "coverage": 100.0,
-      "crap": 2.0,
-      "crate": "liberado-main-agent"
-    },
-    {
-      "file": "crates/main-agent/src/sessions.rs",
       "function": "ChatSessions::derive_default_title_from_history",
-      "line": 1491,
+      "line": 1480,
       "cyclomatic": 3.0,
       "coverage": 91.66666666666666,
       "crap": 3.0052083333333335,
@@ -31856,7 +31847,7 @@
     {
       "file": "crates/main-agent/src/sessions.rs",
       "function": "ChatSessions::dispatch_turn",
-      "line": 1509,
+      "line": 1498,
       "cyclomatic": 9.0,
       "coverage": 82.1917808219178,
       "crap": 9.457453016192094,
@@ -31865,7 +31856,7 @@
     {
       "file": "crates/main-agent/src/sessions.rs",
       "function": "ChatSessions::history",
-      "line": 1410,
+      "line": 1408,
       "cyclomatic": 2.0,
       "coverage": 100.0,
       "crap": 2.0,
@@ -31874,7 +31865,7 @@
     {
       "file": "crates/main-agent/src/sessions.rs",
       "function": "ChatSessions::history_nodes",
-      "line": 1423,
+      "line": 1421,
       "cyclomatic": 2.0,
       "coverage": 100.0,
       "crap": 2.0,
@@ -31883,7 +31874,7 @@
     {
       "file": "crates/main-agent/src/sessions.rs",
       "function": "ChatSessions::in_flight_count",
-      "line": 1172,
+      "line": 1178,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -31892,7 +31883,7 @@
     {
       "file": "crates/main-agent/src/sessions.rs",
       "function": "ChatSessions::in_flight_sessions",
-      "line": 1177,
+      "line": 1183,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -31901,7 +31892,7 @@
     {
       "file": "crates/main-agent/src/sessions.rs",
       "function": "ChatSessions::last_turn_unanswered",
-      "line": 1448,
+      "line": 1446,
       "cyclomatic": 4.0,
       "coverage": 91.66666666666666,
       "crap": 4.0092592592592595,
@@ -31910,7 +31901,7 @@
     {
       "file": "crates/main-agent/src/sessions.rs",
       "function": "ChatSessions::list",
-      "line": 1387,
+      "line": 1385,
       "cyclomatic": 6.0,
       "coverage": 100.0,
       "crap": 6.0,
@@ -31919,7 +31910,7 @@
     {
       "file": "crates/main-agent/src/sessions.rs",
       "function": "ChatSessions::load",
-      "line": 1705,
+      "line": 1694,
       "cyclomatic": 2.0,
       "coverage": 100.0,
       "crap": 2.0,
@@ -31928,7 +31919,7 @@
     {
       "file": "crates/main-agent/src/sessions.rs",
       "function": "ChatSessions::maybe_compact",
-      "line": 1804,
+      "line": 1793,
       "cyclomatic": 4.0,
       "coverage": 88.88888888888889,
       "crap": 4.021947873799726,
@@ -31937,7 +31928,7 @@
     {
       "file": "crates/main-agent/src/sessions.rs",
       "function": "ChatSessions::maybe_seed_default_title",
-      "line": 1477,
+      "line": 1466,
       "cyclomatic": 5.0,
       "coverage": 91.66666666666666,
       "crap": 5.014467592592593,
@@ -31946,7 +31937,7 @@
     {
       "file": "crates/main-agent/src/sessions.rs",
       "function": "ChatSessions::model_last_used",
-      "line": 1106,
+      "line": 1112,
       "cyclomatic": 2.0,
       "coverage": 100.0,
       "crap": 2.0,
@@ -31955,7 +31946,7 @@
     {
       "file": "crates/main-agent/src/sessions.rs",
       "function": "ChatSessions::model_precedence",
-      "line": 1054,
+      "line": 1060,
       "cyclomatic": 5.0,
       "coverage": 94.11764705882352,
       "crap": 5.005088540606554,
@@ -31964,7 +31955,7 @@
     {
       "file": "crates/main-agent/src/sessions.rs",
       "function": "ChatSessions::new",
-      "line": 354,
+      "line": 359,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -31973,7 +31964,7 @@
     {
       "file": "crates/main-agent/src/sessions.rs",
       "function": "ChatSessions::peek_pending_model",
-      "line": 1286,
+      "line": 1292,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -31982,7 +31973,7 @@
     {
       "file": "crates/main-agent/src/sessions.rs",
       "function": "ChatSessions::peek_turn_model",
-      "line": 1078,
+      "line": 1084,
       "cyclomatic": 3.0,
       "coverage": 85.71428571428571,
       "crap": 3.0262390670553936,
@@ -31991,7 +31982,7 @@
     {
       "file": "crates/main-agent/src/sessions.rs",
       "function": "ChatSessions::pending_model",
-      "line": 1278,
+      "line": 1284,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -32000,7 +31991,7 @@
     {
       "file": "crates/main-agent/src/sessions.rs",
       "function": "ChatSessions::persist_compacted_view",
-      "line": 1739,
+      "line": 1728,
       "cyclomatic": 6.0,
       "coverage": 93.47826086956522,
       "crap": 6.0099860277800605,
@@ -32009,7 +32000,7 @@
     {
       "file": "crates/main-agent/src/sessions.rs",
       "function": "ChatSessions::persist_tail",
-      "line": 1936,
+      "line": 1925,
       "cyclomatic": 3.0,
       "coverage": 100.0,
       "crap": 3.0,
@@ -32018,7 +32009,7 @@
     {
       "file": "crates/main-agent/src/sessions.rs",
       "function": "ChatSessions::persist_user_message",
-      "line": 1909,
+      "line": 1898,
       "cyclomatic": 2.0,
       "coverage": 100.0,
       "crap": 2.0,
@@ -32027,7 +32018,7 @@
     {
       "file": "crates/main-agent/src/sessions.rs",
       "function": "ChatSessions::profile_model",
-      "line": 1090,
+      "line": 1096,
       "cyclomatic": 2.0,
       "coverage": 100.0,
       "crap": 2.0,
@@ -32036,7 +32027,7 @@
     {
       "file": "crates/main-agent/src/sessions.rs",
       "function": "ChatSessions::rebuild_face_bridge",
-      "line": 537,
+      "line": 543,
       "cyclomatic": 3.0,
       "coverage": 93.75,
       "crap": 3.002197265625,
@@ -32045,7 +32036,7 @@
     {
       "file": "crates/main-agent/src/sessions.rs",
       "function": "ChatSessions::resolve_turn_model",
-      "line": 1039,
+      "line": 1045,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -32054,7 +32045,7 @@
     {
       "file": "crates/main-agent/src/sessions.rs",
       "function": "ChatSessions::scoped_extras_runtime",
-      "line": 1354,
+      "line": 1360,
       "cyclomatic": 4.0,
       "coverage": 100.0,
       "crap": 4.0,
@@ -32063,7 +32054,7 @@
     {
       "file": "crates/main-agent/src/sessions.rs",
       "function": "ChatSessions::select_model",
-      "line": 1269,
+      "line": 1275,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -32072,7 +32063,7 @@
     {
       "file": "crates/main-agent/src/sessions.rs",
       "function": "ChatSessions::session_capabilities",
-      "line": 982,
+      "line": 988,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -32081,7 +32072,7 @@
     {
       "file": "crates/main-agent/src/sessions.rs",
       "function": "ChatSessions::session_lock",
-      "line": 1687,
+      "line": 1676,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -32090,7 +32081,7 @@
     {
       "file": "crates/main-agent/src/sessions.rs",
       "function": "ChatSessions::set_compaction_trigger_tokens",
-      "line": 417,
+      "line": 423,
       "cyclomatic": 2.0,
       "coverage": 90.0,
       "crap": 2.004,
@@ -32099,7 +32090,7 @@
     {
       "file": "crates/main-agent/src/sessions.rs",
       "function": "ChatSessions::set_profile",
-      "line": 642,
+      "line": 648,
       "cyclomatic": 6.0,
       "coverage": 96.15384615384616,
       "crap": 6.002048247610378,
@@ -32107,17 +32098,8 @@
     },
     {
       "file": "crates/main-agent/src/sessions.rs",
-      "function": "ChatSessions::set_title",
-      "line": 1469,
-      "cyclomatic": 2.0,
-      "coverage": 100.0,
-      "crap": 2.0,
-      "crate": "liberado-main-agent"
-    },
-    {
-      "file": "crates/main-agent/src/sessions.rs",
       "function": "ChatSessions::spawn_turn",
-      "line": 1209,
+      "line": 1215,
       "cyclomatic": 4.0,
       "coverage": 91.17647058823528,
       "crap": 4.010991247710157,
@@ -32126,7 +32108,7 @@
     {
       "file": "crates/main-agent/src/sessions.rs",
       "function": "ChatSessions::start_or_attach",
-      "line": 1123,
+      "line": 1129,
       "cyclomatic": 4.0,
       "coverage": 100.0,
       "crap": 4.0,
@@ -32135,7 +32117,7 @@
     {
       "file": "crates/main-agent/src/sessions.rs",
       "function": "ChatSessions::state_tool_surface",
-      "line": 1304,
+      "line": 1310,
       "cyclomatic": 1.0,
       "coverage": 85.71428571428571,
       "crap": 1.0029154518950438,
@@ -32144,7 +32126,7 @@
     {
       "file": "crates/main-agent/src/sessions.rs",
       "function": "ChatSessions::summarize_elided",
-      "line": 1716,
+      "line": 1705,
       "cyclomatic": 5.0,
       "coverage": 81.81818181818183,
       "crap": 5.150262960180315,
@@ -32153,7 +32135,7 @@
     {
       "file": "crates/main-agent/src/sessions.rs",
       "function": "ChatSessions::turn",
-      "line": 719,
+      "line": 725,
       "cyclomatic": 11.0,
       "coverage": 100.0,
       "crap": 11.0,
@@ -32162,7 +32144,7 @@
     {
       "file": "crates/main-agent/src/sessions.rs",
       "function": "ChatSessions::turn_running",
-      "line": 1161,
+      "line": 1167,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -32171,7 +32153,7 @@
     {
       "file": "crates/main-agent/src/sessions.rs",
       "function": "ChatSessions::turn_settings",
-      "line": 991,
+      "line": 997,
       "cyclomatic": 4.0,
       "coverage": 100.0,
       "crap": 4.0,
@@ -32180,7 +32162,7 @@
     {
       "file": "crates/main-agent/src/sessions.rs",
       "function": "ChatSessions::turn_stream",
-      "line": 848,
+      "line": 854,
       "cyclomatic": 11.0,
       "coverage": 95.77464788732394,
       "crap": 11.009127967567355,
@@ -32189,7 +32171,7 @@
     {
       "file": "crates/main-agent/src/sessions.rs",
       "function": "ChatSessions::uses_face_agent",
-      "line": 960,
+      "line": 966,
       "cyclomatic": 2.0,
       "coverage": 100.0,
       "crap": 2.0,
@@ -32198,7 +32180,7 @@
     {
       "file": "crates/main-agent/src/sessions.rs",
       "function": "ChatSessions::with_compaction",
-      "line": 397,
+      "line": 403,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -32207,7 +32189,7 @@
     {
       "file": "crates/main-agent/src/sessions.rs",
       "function": "ChatSessions::with_dispatch",
-      "line": 526,
+      "line": 532,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -32216,7 +32198,7 @@
     {
       "file": "crates/main-agent/src/sessions.rs",
       "function": "ChatSessions::with_dispatcher_capabilities",
-      "line": 461,
+      "line": 467,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -32225,7 +32207,7 @@
     {
       "file": "crates/main-agent/src/sessions.rs",
       "function": "ChatSessions::with_guards",
-      "line": 481,
+      "line": 487,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -32234,7 +32216,7 @@
     {
       "file": "crates/main-agent/src/sessions.rs",
       "function": "ChatSessions::with_live_catalog",
-      "line": 514,
+      "line": 520,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -32243,7 +32225,7 @@
     {
       "file": "crates/main-agent/src/sessions.rs",
       "function": "ChatSessions::with_zone_guards",
-      "line": 503,
+      "line": 509,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -32252,7 +32234,7 @@
     {
       "file": "crates/main-agent/src/sessions.rs",
       "function": "NoToolsRuntime::catalog",
-      "line": 2025,
+      "line": 2014,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -32261,7 +32243,7 @@
     {
       "file": "crates/main-agent/src/sessions.rs",
       "function": "NoToolsRuntime::invoke",
-      "line": 2029,
+      "line": 2018,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -32270,7 +32252,7 @@
     {
       "file": "crates/main-agent/src/sessions.rs",
       "function": "RunningTurn::attach",
-      "line": 242,
+      "line": 245,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -32279,7 +32261,7 @@
     {
       "file": "crates/main-agent/src/sessions.rs",
       "function": "RunningTurn::new",
-      "line": 216,
+      "line": 219,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -32288,7 +32270,7 @@
     {
       "file": "crates/main-agent/src/sessions.rs",
       "function": "RunningTurn::publish",
-      "line": 230,
+      "line": 233,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -32297,7 +32279,7 @@
     {
       "file": "crates/main-agent/src/sessions.rs",
       "function": "collapse_if_deferred",
-      "line": 119,
+      "line": 122,
       "cyclomatic": 2.0,
       "coverage": 100.0,
       "crap": 2.0,
@@ -32306,7 +32288,7 @@
     {
       "file": "crates/main-agent/src/sessions.rs",
       "function": "default_conversation_title",
-      "line": 132,
+      "line": 135,
       "cyclomatic": 3.0,
       "coverage": 100.0,
       "crap": 3.0,
@@ -32315,7 +32297,7 @@
     {
       "file": "crates/main-agent/src/sessions.rs",
       "function": "elide_before_latest_marker",
-      "line": 1992,
+      "line": 1981,
       "cyclomatic": 3.0,
       "coverage": 100.0,
       "crap": 3.0,
@@ -32324,10 +32306,55 @@
     {
       "file": "crates/main-agent/src/sessions.rs",
       "function": "tail_after_user",
-      "line": 1977,
+      "line": 1966,
       "cyclomatic": 3.0,
       "coverage": 100.0,
       "crap": 3.0,
+      "crate": "liberado-main-agent"
+    },
+    {
+      "file": "crates/main-agent/src/sessions/agent_hooks.rs",
+      "function": "ChatSessions::delete",
+      "line": 49,
+      "cyclomatic": 2.0,
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "liberado-main-agent"
+    },
+    {
+      "file": "crates/main-agent/src/sessions/agent_hooks.rs",
+      "function": "ChatSessions::on_matrix_reconcile",
+      "line": 25,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "liberado-main-agent"
+    },
+    {
+      "file": "crates/main-agent/src/sessions/agent_hooks.rs",
+      "function": "ChatSessions::schedule_matrix_reconcile",
+      "line": 34,
+      "cyclomatic": 2.0,
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "liberado-main-agent"
+    },
+    {
+      "file": "crates/main-agent/src/sessions/agent_hooks.rs",
+      "function": "ChatSessions::set_title",
+      "line": 61,
+      "cyclomatic": 2.0,
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "liberado-main-agent"
+    },
+    {
+      "file": "crates/main-agent/src/sessions/agent_hooks.rs",
+      "function": "is_agent_dm_session",
+      "line": 17,
+      "cyclomatic": 2.0,
+      "coverage": 100.0,
+      "crap": 2.0,
       "crate": "liberado-main-agent"
     },
     {
@@ -32351,7 +32378,7 @@
     {
       "file": "crates/main-agent/src/sessions/agent_spawn.rs",
       "function": "ChatSessions::build_face_runtime",
-      "line": 275,
+      "line": 276,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -32371,14 +32398,14 @@
       "function": "ChatSessions::create_agent_chat_locked",
       "line": 161,
       "cyclomatic": 8.0,
-      "coverage": 94.28571428571428,
-      "crap": 8.011941690962098,
+      "coverage": 94.44444444444444,
+      "crap": 8.010973936899862,
       "crate": "liberado-main-agent"
     },
     {
       "file": "crates/main-agent/src/sessions/agent_spawn.rs",
       "function": "ChatSessions::find_agent_creator",
-      "line": 222,
+      "line": 223,
       "cyclomatic": 2.0,
       "coverage": 100.0,
       "crap": 2.0,
@@ -32387,7 +32414,7 @@
     {
       "file": "crates/main-agent/src/sessions/agent_spawn.rs",
       "function": "ChatSessions::find_agent_session",
-      "line": 227,
+      "line": 228,
       "cyclomatic": 2.0,
       "coverage": 100.0,
       "crap": 2.0,
@@ -32414,7 +32441,7 @@
     {
       "file": "crates/main-agent/src/sessions/agent_spawn.rs",
       "function": "ChatSessions::open_agent_creator_locked",
-      "line": 197,
+      "line": 198,
       "cyclomatic": 8.0,
       "coverage": 91.66666666666666,
       "crap": 8.037037037037038,
@@ -32423,7 +32450,7 @@
     {
       "file": "crates/main-agent/src/sessions/agent_spawn.rs",
       "function": "ChatSessions::seed_opener_if_blank",
-      "line": 241,
+      "line": 242,
       "cyclomatic": 4.0,
       "coverage": 100.0,
       "crap": 4.0,
@@ -32432,7 +32459,7 @@
     {
       "file": "crates/main-agent/src/sessions/agent_spawn.rs",
       "function": "ChatSessions::spawn_agent",
-      "line": 300,
+      "line": 301,
       "cyclomatic": 1.0,
       "coverage": 0.0,
       "crap": 2.0,
@@ -34023,6 +34050,213 @@
       "crate": "liberado-markdown"
     },
     {
+      "file": "crates/matrix/src/agents.rs",
+      "function": "AgentDirectory::get",
+      "line": 94,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "liberado-matrix"
+    },
+    {
+      "file": "crates/matrix/src/agents.rs",
+      "function": "AgentDirectory::load",
+      "line": 80,
+      "cyclomatic": 3.0,
+      "coverage": 75.0,
+      "crap": 3.140625,
+      "crate": "liberado-matrix"
+    },
+    {
+      "file": "crates/matrix/src/agents.rs",
+      "function": "AgentDirectory::memory",
+      "line": 72,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "liberado-matrix"
+    },
+    {
+      "file": "crates/matrix/src/agents.rs",
+      "function": "AgentDirectory::records",
+      "line": 100,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "liberado-matrix"
+    },
+    {
+      "file": "crates/matrix/src/agents.rs",
+      "function": "AgentDirectory::save",
+      "line": 104,
+      "cyclomatic": 2.0,
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "liberado-matrix"
+    },
+    {
+      "file": "crates/matrix/src/agents.rs",
+      "function": "AgentDirectory::taken_slugs",
+      "line": 128,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "liberado-matrix"
+    },
+    {
+      "file": "crates/matrix/src/agents.rs",
+      "function": "AgentDirectory::upsert",
+      "line": 116,
+      "cyclomatic": 2.0,
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "liberado-matrix"
+    },
+    {
+      "file": "crates/matrix/src/agents.rs",
+      "function": "active_by_default",
+      "line": 47,
+      "cyclomatic": 1.0,
+      "coverage": 0.0,
+      "crap": 2.0,
+      "crate": "liberado-matrix"
+    },
+    {
+      "file": "crates/matrix/src/agents.rs",
+      "function": "assigned",
+      "line": 256,
+      "cyclomatic": 3.0,
+      "coverage": 100.0,
+      "crap": 3.0,
+      "crate": "liberado-matrix"
+    },
+    {
+      "file": "crates/matrix/src/agents.rs",
+      "function": "deactivate_absent",
+      "line": 368,
+      "cyclomatic": 5.0,
+      "coverage": 91.66666666666666,
+      "crap": 5.014467592592593,
+      "crate": "liberado-matrix"
+    },
+    {
+      "file": "crates/matrix/src/agents.rs",
+      "function": "depart",
+      "line": 395,
+      "cyclomatic": 4.0,
+      "coverage": 66.66666666666666,
+      "crap": 4.5925925925925934,
+      "crate": "liberado-matrix"
+    },
+    {
+      "file": "crates/matrix/src/agents.rs",
+      "function": "display_name",
+      "line": 163,
+      "cyclomatic": 2.0,
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "liberado-matrix"
+    },
+    {
+      "file": "crates/matrix/src/agents.rs",
+      "function": "ensure_direct",
+      "line": 325,
+      "cyclomatic": 3.0,
+      "coverage": 93.75,
+      "crap": 3.002197265625,
+      "crate": "liberado-matrix"
+    },
+    {
+      "file": "crates/matrix/src/agents.rs",
+      "function": "ensure_seat",
+      "line": 196,
+      "cyclomatic": 8.0,
+      "coverage": 100.0,
+      "crap": 8.0,
+      "crate": "liberado-matrix"
+    },
+    {
+      "file": "crates/matrix/src/agents.rs",
+      "function": "open_room",
+      "line": 281,
+      "cyclomatic": 4.0,
+      "coverage": 100.0,
+      "crap": 4.0,
+      "crate": "liberado-matrix"
+    },
+    {
+      "file": "crates/matrix/src/agents.rs",
+      "function": "parse_agents",
+      "line": 133,
+      "cyclomatic": 3.0,
+      "coverage": 85.71428571428571,
+      "crap": 3.0262390670553936,
+      "crate": "liberado-matrix"
+    },
+    {
+      "file": "crates/matrix/src/agents.rs",
+      "function": "prepare_puppet",
+      "line": 220,
+      "cyclomatic": 4.0,
+      "coverage": 89.47368421052632,
+      "crap": 4.018661612479954,
+      "crate": "liberado-matrix"
+    },
+    {
+      "file": "crates/matrix/src/agents.rs",
+      "function": "reconcile_agents",
+      "line": 176,
+      "cyclomatic": 4.0,
+      "coverage": 100.0,
+      "crap": 4.0,
+      "crate": "liberado-matrix"
+    },
+    {
+      "file": "crates/matrix/src/agents.rs",
+      "function": "refresh_names",
+      "line": 301,
+      "cyclomatic": 4.0,
+      "coverage": 90.9090909090909,
+      "crap": 4.012021036814425,
+      "crate": "liberado-matrix"
+    },
+    {
+      "file": "crates/matrix/src/agents.rs",
+      "function": "rejoin",
+      "line": 343,
+      "cyclomatic": 7.0,
+      "coverage": 77.27272727272727,
+      "crap": 7.57522539444027,
+      "crate": "liberado-matrix"
+    },
+    {
+      "file": "crates/matrix/src/agents.rs",
+      "function": "restore_if_inactive",
+      "line": 241,
+      "cyclomatic": 3.0,
+      "coverage": 100.0,
+      "crap": 3.0,
+      "crate": "liberado-matrix"
+    },
+    {
+      "file": "crates/matrix/src/agents.rs",
+      "function": "tmp_path",
+      "line": 156,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "liberado-matrix"
+    },
+    {
+      "file": "crates/matrix/src/agents.rs",
+      "function": "write_file",
+      "line": 141,
+      "cyclomatic": 4.0,
+      "coverage": 92.85714285714286,
+      "crap": 4.005830903790088,
+      "crate": "liberado-matrix"
+    },
+    {
       "file": "crates/matrix/src/cards.rs",
       "function": "CardBook::new",
       "line": 23,
@@ -34198,8 +34432,8 @@
       "function": "MatrixChannel::room_id",
       "line": 41,
       "cyclomatic": 1.0,
-      "coverage": 0.0,
-      "crap": 2.0,
+      "coverage": 100.0,
+      "crap": 1.0,
       "crate": "liberado-matrix"
     },
     {
@@ -34277,7 +34511,7 @@
     {
       "file": "crates/matrix/src/client.rs",
       "function": "MatrixClient::endpoint",
-      "line": 170,
+      "line": 205,
       "cyclomatic": 2.0,
       "coverage": 100.0,
       "crap": 2.0,
@@ -34286,7 +34520,7 @@
     {
       "file": "crates/matrix/src/client.rs",
       "function": "MatrixClient::exchange",
-      "line": 183,
+      "line": 218,
       "cyclomatic": 5.0,
       "coverage": 100.0,
       "crap": 5.0,
@@ -34295,16 +34529,25 @@
     {
       "file": "crates/matrix/src/client.rs",
       "function": "MatrixClient::failure",
-      "line": 208,
+      "line": 243,
       "cyclomatic": 3.0,
-      "coverage": 85.71428571428571,
-      "crap": 3.0262390670553936,
+      "coverage": 100.0,
+      "crap": 3.0,
+      "crate": "liberado-matrix"
+    },
+    {
+      "file": "crates/matrix/src/client.rs",
+      "function": "MatrixClient::for_user",
+      "line": 49,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
       "crate": "liberado-matrix"
     },
     {
       "file": "crates/matrix/src/client.rs",
       "function": "MatrixClient::get",
-      "line": 146,
+      "line": 163,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -34313,7 +34556,7 @@
     {
       "file": "crates/matrix/src/client.rs",
       "function": "MatrixClient::join_room",
-      "line": 76,
+      "line": 86,
       "cyclomatic": 2.0,
       "coverage": 100.0,
       "crap": 2.0,
@@ -34322,7 +34565,7 @@
     {
       "file": "crates/matrix/src/client.rs",
       "function": "MatrixClient::joined_members",
-      "line": 70,
+      "line": 80,
       "cyclomatic": 2.0,
       "coverage": 100.0,
       "crap": 2.0,
@@ -34340,7 +34583,7 @@
     {
       "file": "crates/matrix/src/client.rs",
       "function": "MatrixClient::ping_appservice",
-      "line": 140,
+      "line": 157,
       "cyclomatic": 2.0,
       "coverage": 0.0,
       "crap": 6.0,
@@ -34349,7 +34592,16 @@
     {
       "file": "crates/matrix/src/client.rs",
       "function": "MatrixClient::post",
-      "line": 150,
+      "line": 167,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "liberado-matrix"
+    },
+    {
+      "file": "crates/matrix/src/client.rs",
+      "function": "MatrixClient::post_service",
+      "line": 186,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -34358,7 +34610,7 @@
     {
       "file": "crates/matrix/src/client.rs",
       "function": "MatrixClient::put",
-      "line": 155,
+      "line": 176,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -34367,16 +34619,16 @@
     {
       "file": "crates/matrix/src/client.rs",
       "function": "MatrixClient::put_state",
-      "line": 104,
+      "line": 114,
       "cyclomatic": 4.0,
-      "coverage": 0.0,
-      "crap": 20.0,
+      "coverage": 85.71428571428571,
+      "crap": 4.0466472303206995,
       "crate": "liberado-matrix"
     },
     {
       "file": "crates/matrix/src/client.rs",
       "function": "MatrixClient::redact",
-      "line": 217,
+      "line": 251,
       "cyclomatic": 2.0,
       "coverage": 83.33333333333334,
       "crap": 2.0185185185185186,
@@ -34385,7 +34637,7 @@
     {
       "file": "crates/matrix/src/client.rs",
       "function": "MatrixClient::resolve_alias",
-      "line": 55,
+      "line": 65,
       "cyclomatic": 3.0,
       "coverage": 92.3076923076923,
       "crap": 3.0040964952207556,
@@ -34394,7 +34646,7 @@
     {
       "file": "crates/matrix/src/client.rs",
       "function": "MatrixClient::send_message",
-      "line": 82,
+      "line": 92,
       "cyclomatic": 2.0,
       "coverage": 100.0,
       "crap": 2.0,
@@ -34403,7 +34655,7 @@
     {
       "file": "crates/matrix/src/client.rs",
       "function": "MatrixClient::set_typing",
-      "line": 95,
+      "line": 105,
       "cyclomatic": 2.0,
       "coverage": 100.0,
       "crap": 2.0,
@@ -34412,7 +34664,7 @@
     {
       "file": "crates/matrix/src/client.rs",
       "function": "MatrixClient::url",
-      "line": 160,
+      "line": 195,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -34421,7 +34673,7 @@
     {
       "file": "crates/matrix/src/client.rs",
       "function": "MatrixClient::url_v1",
-      "line": 164,
+      "line": 199,
       "cyclomatic": 1.0,
       "coverage": 0.0,
       "crap": 2.0,
@@ -34432,14 +34684,14 @@
       "function": "MatrixClient::user_id",
       "line": 44,
       "cyclomatic": 1.0,
-      "coverage": 0.0,
-      "crap": 2.0,
+      "coverage": 100.0,
+      "crap": 1.0,
       "crate": "liberado-matrix"
     },
     {
       "file": "crates/matrix/src/client.rs",
       "function": "MatrixClient::whoami",
-      "line": 49,
+      "line": 59,
       "cyclomatic": 2.0,
       "coverage": 100.0,
       "crap": 2.0,
@@ -34448,7 +34700,7 @@
     {
       "file": "crates/matrix/src/client.rs",
       "function": "MatrixClient::with_user",
-      "line": 179,
+      "line": 214,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -34457,33 +34709,6 @@
     {
       "file": "crates/matrix/src/client.rs",
       "function": "client_prefix",
-      "line": 227,
-      "cyclomatic": 1.0,
-      "coverage": 100.0,
-      "crap": 1.0,
-      "crate": "liberado-matrix"
-    },
-    {
-      "file": "crates/matrix/src/client.rs",
-      "function": "errcode_of",
-      "line": 241,
-      "cyclomatic": 3.0,
-      "coverage": 75.0,
-      "crap": 3.140625,
-      "crate": "liberado-matrix"
-    },
-    {
-      "file": "crates/matrix/src/client.rs",
-      "function": "event_id",
-      "line": 253,
-      "cyclomatic": 2.0,
-      "coverage": 85.71428571428571,
-      "crap": 2.011661807580175,
-      "crate": "liberado-matrix"
-    },
-    {
-      "file": "crates/matrix/src/client.rs",
-      "function": "member_ids",
       "line": 261,
       "cyclomatic": 1.0,
       "coverage": 100.0,
@@ -34492,8 +34717,35 @@
     },
     {
       "file": "crates/matrix/src/client.rs",
+      "function": "error_detail",
+      "line": 275,
+      "cyclomatic": 3.0,
+      "coverage": 100.0,
+      "crap": 3.0,
+      "crate": "liberado-matrix"
+    },
+    {
+      "file": "crates/matrix/src/client.rs",
+      "function": "event_id",
+      "line": 299,
+      "cyclomatic": 2.0,
+      "coverage": 85.71428571428571,
+      "crap": 2.011661807580175,
+      "crate": "liberado-matrix"
+    },
+    {
+      "file": "crates/matrix/src/client.rs",
+      "function": "member_ids",
+      "line": 307,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "liberado-matrix"
+    },
+    {
+      "file": "crates/matrix/src/client.rs",
       "function": "member_present",
-      "line": 269,
+      "line": 315,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -34502,7 +34754,7 @@
     {
       "file": "crates/matrix/src/client.rs",
       "function": "parse_body",
-      "line": 233,
+      "line": 267,
       "cyclomatic": 2.0,
       "coverage": 85.71428571428571,
       "crap": 2.011661807580175,
@@ -34511,7 +34763,7 @@
     {
       "file": "crates/matrix/src/client.rs",
       "function": "string_field",
-      "line": 246,
+      "line": 292,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -34583,7 +34835,7 @@
     {
       "file": "crates/matrix/src/config.rs",
       "function": "EnvSnapshot::from_env",
-      "line": 84,
+      "line": 85,
       "cyclomatic": 1.0,
       "coverage": 0.0,
       "crap": 2.0,
@@ -34592,7 +34844,7 @@
     {
       "file": "crates/matrix/src/config.rs",
       "function": "MatrixSettings::fmt",
-      "line": 67,
+      "line": 68,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -34601,7 +34853,7 @@
     {
       "file": "crates/matrix/src/config.rs",
       "function": "MatrixSettings::from_snapshot",
-      "line": 148,
+      "line": 149,
       "cyclomatic": 8.0,
       "coverage": 95.65217391304348,
       "crap": 8.005260129859456,
@@ -34610,7 +34862,7 @@
     {
       "file": "crates/matrix/src/config.rs",
       "function": "activation",
-      "line": 108,
+      "line": 109,
       "cyclomatic": 5.0,
       "coverage": 100.0,
       "crap": 5.0,
@@ -34619,7 +34871,7 @@
     {
       "file": "crates/matrix/src/config.rs",
       "function": "main_mxid",
-      "line": 219,
+      "line": 220,
       "cyclomatic": 3.0,
       "coverage": 100.0,
       "crap": 3.0,
@@ -34628,7 +34880,7 @@
     {
       "file": "crates/matrix/src/config.rs",
       "function": "missing_names",
-      "line": 123,
+      "line": 124,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -34637,7 +34889,7 @@
     {
       "file": "crates/matrix/src/config.rs",
       "function": "missing_required",
-      "line": 127,
+      "line": 128,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -34646,7 +34898,7 @@
     {
       "file": "crates/matrix/src/config.rs",
       "function": "or_default",
-      "line": 183,
+      "line": 184,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -34655,7 +34907,7 @@
     {
       "file": "crates/matrix/src/config.rs",
       "function": "push_if_blank",
-      "line": 137,
+      "line": 138,
       "cyclomatic": 2.0,
       "coverage": 100.0,
       "crap": 2.0,
@@ -34664,7 +34916,7 @@
     {
       "file": "crates/matrix/src/config.rs",
       "function": "required_text",
-      "line": 175,
+      "line": 176,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -34673,7 +34925,7 @@
     {
       "file": "crates/matrix/src/config.rs",
       "function": "resolve_listen",
-      "line": 209,
+      "line": 210,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -34682,7 +34934,7 @@
     {
       "file": "crates/matrix/src/config.rs",
       "function": "resolve_server_name",
-      "line": 195,
+      "line": 196,
       "cyclomatic": 2.0,
       "coverage": 76.92307692307693,
       "crap": 2.049157942649067,
@@ -34691,7 +34943,7 @@
     {
       "file": "crates/matrix/src/config.rs",
       "function": "trim_slash",
-      "line": 191,
+      "line": 192,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -34700,7 +34952,7 @@
     {
       "file": "crates/matrix/src/config.rs",
       "function": "var",
-      "line": 100,
+      "line": 101,
       "cyclomatic": 1.0,
       "coverage": 0.0,
       "crap": 2.0,
@@ -34819,8 +35071,8 @@
       "function": "RoomQueues::push",
       "line": 29,
       "cyclomatic": 2.0,
-      "coverage": 60.0,
-      "crap": 2.256,
+      "coverage": 80.0,
+      "crap": 2.032,
       "crate": "liberado-matrix"
     },
     {
@@ -34835,7 +35087,7 @@
     {
       "file": "crates/matrix/src/listener.rs",
       "function": "ListenerState::new",
-      "line": 42,
+      "line": 46,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -34844,7 +35096,7 @@
     {
       "file": "crates/matrix/src/listener.rs",
       "function": "accept_txn",
-      "line": 194,
+      "line": 211,
       "cyclomatic": 4.0,
       "coverage": 100.0,
       "crap": 4.0,
@@ -34853,7 +35105,7 @@
     {
       "file": "crates/matrix/src/listener.rs",
       "function": "bad_json",
-      "line": 272,
+      "line": 289,
       "cyclomatic": 1.0,
       "coverage": 0.0,
       "crap": 2.0,
@@ -34862,7 +35114,7 @@
     {
       "file": "crates/matrix/src/listener.rs",
       "function": "bind_and_serve",
-      "line": 89,
+      "line": 95,
       "cyclomatic": 2.0,
       "coverage": 100.0,
       "crap": 2.0,
@@ -34871,7 +35123,7 @@
     {
       "file": "crates/matrix/src/listener.rs",
       "function": "claim_notice",
-      "line": 253,
+      "line": 270,
       "cyclomatic": 1.0,
       "coverage": 80.0,
       "crap": 1.008,
@@ -34880,7 +35132,7 @@
     {
       "file": "crates/matrix/src/listener.rs",
       "function": "dispatch_events",
-      "line": 207,
+      "line": 224,
       "cyclomatic": 2.0,
       "coverage": 83.33333333333334,
       "crap": 2.0185185185185186,
@@ -34889,7 +35141,7 @@
     {
       "file": "crates/matrix/src/listener.rs",
       "function": "dispatch_one",
-      "line": 216,
+      "line": 233,
       "cyclomatic": 6.0,
       "coverage": 87.5,
       "crap": 6.0703125,
@@ -34898,7 +35150,7 @@
     {
       "file": "crates/matrix/src/listener.rs",
       "function": "empty_ok",
-      "line": 264,
+      "line": 281,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -34907,7 +35159,7 @@
     {
       "file": "crates/matrix/src/listener.rs",
       "function": "errcode",
-      "line": 260,
+      "line": 277,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -34916,7 +35168,7 @@
     {
       "file": "crates/matrix/src/listener.rs",
       "function": "get_room",
-      "line": 140,
+      "line": 157,
       "cyclomatic": 3.0,
       "coverage": 100.0,
       "crap": 3.0,
@@ -34925,7 +35177,7 @@
     {
       "file": "crates/matrix/src/listener.rs",
       "function": "get_user",
-      "line": 124,
+      "line": 130,
       "cyclomatic": 3.0,
       "coverage": 100.0,
       "crap": 3.0,
@@ -34934,7 +35186,7 @@
     {
       "file": "crates/matrix/src/listener.rs",
       "function": "not_found",
-      "line": 268,
+      "line": 285,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -34943,7 +35195,7 @@
     {
       "file": "crates/matrix/src/listener.rs",
       "function": "notify_encrypted",
-      "line": 242,
+      "line": 259,
       "cyclomatic": 3.0,
       "coverage": 90.0,
       "crap": 3.009,
@@ -34952,7 +35204,7 @@
     {
       "file": "crates/matrix/src/listener.rs",
       "function": "parse_txn",
-      "line": 182,
+      "line": 199,
       "cyclomatic": 3.0,
       "coverage": 90.9090909090909,
       "crap": 3.006761833208114,
@@ -34961,7 +35213,7 @@
     {
       "file": "crates/matrix/src/listener.rs",
       "function": "post_ping",
-      "line": 160,
+      "line": 177,
       "cyclomatic": 2.0,
       "coverage": 100.0,
       "crap": 2.0,
@@ -34970,7 +35222,7 @@
     {
       "file": "crates/matrix/src/listener.rs",
       "function": "push_message",
-      "line": 228,
+      "line": 245,
       "cyclomatic": 2.0,
       "coverage": 92.3076923076923,
       "crap": 2.0018206645425582,
@@ -34979,7 +35231,7 @@
     {
       "file": "crates/matrix/src/listener.rs",
       "function": "put_transaction",
-      "line": 107,
+      "line": 113,
       "cyclomatic": 4.0,
       "coverage": 93.33333333333331,
       "crap": 4.004740740740741,
@@ -34988,7 +35240,7 @@
     {
       "file": "crates/matrix/src/listener.rs",
       "function": "reject",
-      "line": 171,
+      "line": 188,
       "cyclomatic": 4.0,
       "coverage": 100.0,
       "crap": 4.0,
@@ -34997,7 +35249,7 @@
     {
       "file": "crates/matrix/src/listener.rs",
       "function": "router",
-      "line": 70,
+      "line": 76,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -35006,10 +35258,19 @@
     {
       "file": "crates/matrix/src/listener.rs",
       "function": "serve",
-      "line": 101,
+      "line": 107,
       "cyclomatic": 2.0,
       "coverage": 40.0,
       "crap": 2.864,
+      "crate": "liberado-matrix"
+    },
+    {
+      "file": "crates/matrix/src/listener.rs",
+      "function": "user_is_known",
+      "line": 146,
+      "cyclomatic": 2.0,
+      "coverage": 100.0,
+      "crap": 2.0,
       "crate": "liberado-matrix"
     },
     {
@@ -35058,6 +35319,105 @@
       "crate": "liberado-matrix"
     },
     {
+      "file": "crates/matrix/src/puppet.rs",
+      "function": "already_invited",
+      "line": 112,
+      "cyclomatic": 2.0,
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "liberado-matrix"
+    },
+    {
+      "file": "crates/matrix/src/puppet.rs",
+      "function": "already_left",
+      "line": 106,
+      "cyclomatic": 3.0,
+      "coverage": 100.0,
+      "crap": 3.0,
+      "crate": "liberado-matrix"
+    },
+    {
+      "file": "crates/matrix/src/puppet.rs",
+      "function": "invite_user",
+      "line": 91,
+      "cyclomatic": 2.0,
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "liberado-matrix"
+    },
+    {
+      "file": "crates/matrix/src/puppet.rs",
+      "function": "leave_room",
+      "line": 83,
+      "cyclomatic": 2.0,
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "liberado-matrix"
+    },
+    {
+      "file": "crates/matrix/src/puppet.rs",
+      "function": "register_localpart",
+      "line": 13,
+      "cyclomatic": 2.0,
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "liberado-matrix"
+    },
+    {
+      "file": "crates/matrix/src/puppet.rs",
+      "function": "register_or_existing",
+      "line": 31,
+      "cyclomatic": 4.0,
+      "coverage": 88.88888888888889,
+      "crap": 4.021947873799726,
+      "crate": "liberado-matrix"
+    },
+    {
+      "file": "crates/matrix/src/puppet.rs",
+      "function": "set_direct_room",
+      "line": 57,
+      "cyclomatic": 2.0,
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "liberado-matrix"
+    },
+    {
+      "file": "crates/matrix/src/puppet.rs",
+      "function": "set_display_name",
+      "line": 43,
+      "cyclomatic": 2.0,
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "liberado-matrix"
+    },
+    {
+      "file": "crates/matrix/src/puppet.rs",
+      "function": "set_room_name",
+      "line": 72,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "liberado-matrix"
+    },
+    {
+      "file": "crates/matrix/src/puppet.rs",
+      "function": "user_in_use",
+      "line": 26,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "liberado-matrix"
+    },
+    {
+      "file": "crates/matrix/src/room.rs",
+      "function": "advertises_room_version",
+      "line": 91,
+      "cyclomatic": 1.0,
+      "coverage": 77.77777777777779,
+      "crap": 1.0109739368998627,
+      "crate": "liberado-matrix"
+    },
+    {
       "file": "crates/matrix/src/room.rs",
       "function": "direct_room_body",
       "line": 31,
@@ -35085,9 +35445,135 @@
       "crate": "liberado-matrix"
     },
     {
+      "file": "crates/matrix/src/room.rs",
+      "function": "event_level",
+      "line": 114,
+      "cyclomatic": 1.0,
+      "coverage": 85.71428571428571,
+      "crap": 1.0029154518950438,
+      "crate": "liberado-matrix"
+    },
+    {
+      "file": "crates/matrix/src/room.rs",
+      "function": "user_level",
+      "line": 104,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "liberado-matrix"
+    },
+    {
+      "file": "crates/matrix/src/slug.rs",
+      "function": "allocate_slug",
+      "line": 106,
+      "cyclomatic": 6.0,
+      "coverage": 92.85714285714286,
+      "crap": 6.013119533527696,
+      "crate": "liberado-matrix"
+    },
+    {
+      "file": "crates/matrix/src/slug.rs",
+      "function": "cap_words",
+      "line": 71,
+      "cyclomatic": 5.0,
+      "coverage": 92.3076923076923,
+      "crap": 5.011379153390988,
+      "crate": "liberado-matrix"
+    },
+    {
+      "file": "crates/matrix/src/slug.rs",
+      "function": "numbered",
+      "line": 125,
+      "cyclomatic": 2.0,
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "liberado-matrix"
+    },
+    {
+      "file": "crates/matrix/src/slug.rs",
+      "function": "puppet_localpart",
+      "line": 139,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "liberado-matrix"
+    },
+    {
+      "file": "crates/matrix/src/slug.rs",
+      "function": "puppet_mxid",
+      "line": 134,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "liberado-matrix"
+    },
+    {
+      "file": "crates/matrix/src/slug.rs",
+      "function": "short_id",
+      "line": 88,
+      "cyclomatic": 3.0,
+      "coverage": 90.9090909090909,
+      "crap": 3.006761833208114,
+      "crate": "liberado-matrix"
+    },
+    {
+      "file": "crates/matrix/src/slug.rs",
+      "function": "slug_base",
+      "line": 18,
+      "cyclomatic": 2.0,
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "liberado-matrix"
+    },
+    {
+      "file": "crates/matrix/src/slug.rs",
+      "function": "slug_body",
+      "line": 50,
+      "cyclomatic": 6.0,
+      "coverage": 100.0,
+      "crap": 6.0,
+      "crate": "liberado-matrix"
+    },
+    {
+      "file": "crates/matrix/src/slug.rs",
+      "function": "slug_of_mxid",
+      "line": 144,
+      "cyclomatic": 7.0,
+      "coverage": 91.66666666666666,
+      "crap": 7.028356481481482,
+      "crate": "liberado-matrix"
+    },
+    {
+      "file": "crates/matrix/src/slug.rs",
+      "function": "slug_reserved",
+      "line": 101,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "liberado-matrix"
+    },
+    {
+      "file": "crates/matrix/src/slug.rs",
+      "function": "slug_source",
+      "line": 29,
+      "cyclomatic": 2.0,
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "liberado-matrix"
+    },
+    {
+      "file": "crates/matrix/src/slug.rs",
+      "function": "strip_ellipsis",
+      "line": 38,
+      "cyclomatic": 3.0,
+      "coverage": 100.0,
+      "crap": 3.0,
+      "crate": "liberado-matrix"
+    },
+    {
       "file": "crates/matrix/src/startup.rs",
       "function": "RunningMatrix::stop",
-      "line": 27,
+      "line": 33,
       "cyclomatic": 1.0,
       "coverage": 0.0,
       "crap": 2.0,
@@ -35096,7 +35582,7 @@
     {
       "file": "crates/matrix/src/startup.rs",
       "function": "connect",
-      "line": 33,
+      "line": 39,
       "cyclomatic": 4.0,
       "coverage": 0.0,
       "crap": 20.0,
@@ -35105,7 +35591,7 @@
     {
       "file": "crates/matrix/src/startup.rs",
       "function": "ensure_member",
-      "line": 94,
+      "line": 111,
       "cyclomatic": 4.0,
       "coverage": 100.0,
       "crap": 4.0,
@@ -35114,7 +35600,7 @@
     {
       "file": "crates/matrix/src/startup.rs",
       "function": "listener_state",
-      "line": 109,
+      "line": 126,
       "cyclomatic": 1.0,
       "coverage": 0.0,
       "crap": 2.0,
@@ -35123,7 +35609,7 @@
     {
       "file": "crates/matrix/src/startup.rs",
       "function": "prepare_room",
-      "line": 58,
+      "line": 75,
       "cyclomatic": 5.0,
       "coverage": 100.0,
       "crap": 5.0,
@@ -35132,7 +35618,7 @@
     {
       "file": "crates/matrix/src/startup.rs",
       "function": "resolve_room",
-      "line": 84,
+      "line": 101,
       "cyclomatic": 2.0,
       "coverage": 100.0,
       "crap": 2.0,
@@ -35141,7 +35627,7 @@
     {
       "file": "crates/matrix/src/startup.rs",
       "function": "whoami_ok",
-      "line": 72,
+      "line": 89,
       "cyclomatic": 4.0,
       "coverage": 100.0,
       "crap": 4.0,
@@ -41803,8 +42289,8 @@
       "function": "create_standard_conversation",
       "line": 95,
       "cyclomatic": 12.0,
-      "coverage": 65.0,
-      "crap": 18.174,
+      "coverage": 66.66666666666666,
+      "crap": 17.333333333333343,
       "crate": "liberado-server"
     },
     {
@@ -41823,6 +42309,15 @@
       "cyclomatic": 5.0,
       "coverage": 41.17647058823529,
       "crap": 10.08854060655404,
+      "crate": "liberado-server"
+    },
+    {
+      "file": "crates/server/src/api/chat_create.rs",
+      "function": "schedule_agent_dm",
+      "line": 161,
+      "cyclomatic": 2.0,
+      "coverage": 83.33333333333334,
+      "crap": 2.0185185185185186,
       "crate": "liberado-server"
     },
     {
@@ -42188,7 +42683,7 @@
     {
       "file": "crates/server/src/bindings.rs",
       "function": "BindingKey::telegram",
-      "line": 31,
+      "line": 34,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -42196,17 +42691,8 @@
     },
     {
       "file": "crates/server/src/bindings.rs",
-      "function": "BindingState::assign",
-      "line": 365,
-      "cyclomatic": 6.0,
-      "coverage": 100.0,
-      "crap": 6.0,
-      "crate": "liberado-server"
-    },
-    {
-      "file": "crates/server/src/bindings.rs",
       "function": "BindingState::empty",
-      "line": 336,
+      "line": 334,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -42215,7 +42701,7 @@
     {
       "file": "crates/server/src/bindings.rs",
       "function": "BindingState::snapshot",
-      "line": 343,
+      "line": 342,
       "cyclomatic": 3.0,
       "coverage": 100.0,
       "crap": 3.0,
@@ -42224,7 +42710,7 @@
     {
       "file": "crates/server/src/bindings.rs",
       "function": "ChannelBindings::background_session",
-      "line": 206,
+      "line": 209,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -42233,7 +42719,7 @@
     {
       "file": "crates/server/src/bindings.rs",
       "function": "ChannelBindings::channel_of",
-      "line": 188,
+      "line": 191,
       "cyclomatic": 2.0,
       "coverage": 100.0,
       "crap": 2.0,
@@ -42242,7 +42728,7 @@
     {
       "file": "crates/server/src/bindings.rs",
       "function": "ChannelBindings::ephemeral",
-      "line": 109,
+      "line": 118,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -42251,7 +42737,7 @@
     {
       "file": "crates/server/src/bindings.rs",
       "function": "ChannelBindings::from_parts",
-      "line": 141,
+      "line": 151,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -42260,7 +42746,7 @@
     {
       "file": "crates/server/src/bindings.rs",
       "function": "ChannelBindings::get",
-      "line": 158,
+      "line": 168,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -42269,7 +42755,7 @@
     {
       "file": "crates/server/src/bindings.rs",
       "function": "ChannelBindings::get_or_create",
-      "line": 233,
+      "line": 236,
       "cyclomatic": 3.0,
       "coverage": 100.0,
       "crap": 3.0,
@@ -42278,7 +42764,7 @@
     {
       "file": "crates/server/src/bindings.rs",
       "function": "ChannelBindings::key_for_session",
-      "line": 173,
+      "line": 183,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -42287,7 +42773,7 @@
     {
       "file": "crates/server/src/bindings.rs",
       "function": "ChannelBindings::load",
-      "line": 118,
+      "line": 127,
       "cyclomatic": 3.0,
       "coverage": 100.0,
       "crap": 3.0,
@@ -42296,7 +42782,7 @@
     {
       "file": "crates/server/src/bindings.rs",
       "function": "ChannelBindings::mirror_legacy",
-      "line": 311,
+      "line": 309,
       "cyclomatic": 7.0,
       "coverage": 75.0,
       "crap": 7.765625,
@@ -42305,7 +42791,7 @@
     {
       "file": "crates/server/src/bindings.rs",
       "function": "ChannelBindings::persist",
-      "line": 291,
+      "line": 289,
       "cyclomatic": 4.0,
       "coverage": 75.0,
       "crap": 4.25,
@@ -42314,7 +42800,7 @@
     {
       "file": "crates/server/src/bindings.rs",
       "function": "ChannelBindings::persist_current",
-      "line": 286,
+      "line": 284,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -42323,7 +42809,7 @@
     {
       "file": "crates/server/src/bindings.rs",
       "function": "ChannelBindings::publish",
-      "line": 272,
+      "line": 270,
       "cyclomatic": 2.0,
       "coverage": 75.0,
       "crap": 2.0625,
@@ -42332,7 +42818,7 @@
     {
       "file": "crates/server/src/bindings.rs",
       "function": "ChannelBindings::publish_to",
-      "line": 258,
+      "line": 256,
       "cyclomatic": 2.0,
       "coverage": 100.0,
       "crap": 2.0,
@@ -42341,7 +42827,7 @@
     {
       "file": "crates/server/src/bindings.rs",
       "function": "ChannelBindings::set",
-      "line": 217,
+      "line": 220,
       "cyclomatic": 2.0,
       "coverage": 100.0,
       "crap": 2.0,
@@ -42350,7 +42836,7 @@
     {
       "file": "crates/server/src/bindings.rs",
       "function": "StoredBinding::key",
-      "line": 51,
+      "line": 57,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -42359,7 +42845,7 @@
     {
       "file": "crates/server/src/bindings.rs",
       "function": "StoredBinding::matches",
-      "line": 59,
+      "line": 65,
       "cyclomatic": 3.0,
       "coverage": 100.0,
       "crap": 3.0,
@@ -42368,7 +42854,7 @@
     {
       "file": "crates/server/src/bindings.rs",
       "function": "StoredBinding::session",
-      "line": 63,
+      "line": 69,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -42377,7 +42863,7 @@
     {
       "file": "crates/server/src/bindings.rs",
       "function": "adopt_legacy",
-      "line": 432,
+      "line": 381,
       "cyclomatic": 3.0,
       "coverage": 100.0,
       "crap": 3.0,
@@ -42386,7 +42872,7 @@
     {
       "file": "crates/server/src/bindings.rs",
       "function": "atomic_write",
-      "line": 463,
+      "line": 412,
       "cyclomatic": 6.0,
       "coverage": 80.0,
       "crap": 6.288,
@@ -42395,7 +42881,7 @@
     {
       "file": "crates/server/src/bindings.rs",
       "function": "read_legacy_id",
-      "line": 453,
+      "line": 402,
       "cyclomatic": 4.0,
       "coverage": 100.0,
       "crap": 4.0,
@@ -42404,16 +42890,16 @@
     {
       "file": "crates/server/src/bindings.rs",
       "function": "read_state",
-      "line": 394,
+      "line": 364,
       "cyclomatic": 3.0,
-      "coverage": 75.0,
-      "crap": 3.140625,
+      "coverage": 76.92307692307693,
+      "crap": 3.1106053709604,
       "crate": "liberado-server"
     },
     {
       "file": "crates/server/src/bindings.rs",
       "function": "replace_existing",
-      "line": 481,
+      "line": 430,
       "cyclomatic": 3.0,
       "coverage": 100.0,
       "crap": 3.0,
@@ -42421,20 +42907,191 @@
     },
     {
       "file": "crates/server/src/bindings.rs",
-      "function": "retain_valid",
-      "line": 410,
-      "cyclomatic": 4.0,
-      "coverage": 93.75,
-      "crap": 4.00390625,
-      "crate": "liberado-server"
-    },
-    {
-      "file": "crates/server/src/bindings.rs",
       "function": "tmp_path",
-      "line": 475,
+      "line": 424,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
+      "crate": "liberado-server"
+    },
+    {
+      "file": "crates/server/src/bindings_rows.rs",
+      "function": "BindingState::activate_key",
+      "line": 90,
+      "cyclomatic": 1.0,
+      "coverage": 0.0,
+      "crap": 2.0,
+      "crate": "liberado-server"
+    },
+    {
+      "file": "crates/server/src/bindings_rows.rs",
+      "function": "BindingState::all_rows",
+      "line": 51,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "liberado-server"
+    },
+    {
+      "file": "crates/server/src/bindings_rows.rs",
+      "function": "BindingState::assign",
+      "line": 75,
+      "cyclomatic": 3.0,
+      "coverage": 100.0,
+      "crap": 3.0,
+      "crate": "liberado-server"
+    },
+    {
+      "file": "crates/server/src/bindings_rows.rs",
+      "function": "BindingState::clear_key",
+      "line": 138,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "liberado-server"
+    },
+    {
+      "file": "crates/server/src/bindings_rows.rs",
+      "function": "BindingState::deactivate_key",
+      "line": 104,
+      "cyclomatic": 1.0,
+      "coverage": 90.9090909090909,
+      "crap": 1.0007513148009015,
+      "crate": "liberado-server"
+    },
+    {
+      "file": "crates/server/src/bindings_rows.rs",
+      "function": "BindingState::key_for",
+      "line": 65,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "liberado-server"
+    },
+    {
+      "file": "crates/server/src/bindings_rows.rs",
+      "function": "BindingState::set_flag",
+      "line": 82,
+      "cyclomatic": 2.0,
+      "coverage": 80.0,
+      "crap": 2.032,
+      "crate": "liberado-server"
+    },
+    {
+      "file": "crates/server/src/bindings_rows.rs",
+      "function": "BindingState::store_reserved_or_insert",
+      "line": 127,
+      "cyclomatic": 4.0,
+      "coverage": 71.42857142857143,
+      "crap": 4.373177842565598,
+      "crate": "liberado-server"
+    },
+    {
+      "file": "crates/server/src/bindings_rows.rs",
+      "function": "BindingState::store_session",
+      "line": 118,
+      "cyclomatic": 4.0,
+      "coverage": 100.0,
+      "crap": 4.0,
+      "crate": "liberado-server"
+    },
+    {
+      "file": "crates/server/src/bindings_rows.rs",
+      "function": "BindingState::stored_session",
+      "line": 57,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "liberado-server"
+    },
+    {
+      "file": "crates/server/src/bindings_rows.rs",
+      "function": "ChannelBindings::is_active",
+      "line": 23,
+      "cyclomatic": 2.0,
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "liberado-server"
+    },
+    {
+      "file": "crates/server/src/bindings_rows.rs",
+      "function": "ChannelBindings::set_active",
+      "line": 36,
+      "cyclomatic": 2.0,
+      "coverage": 90.9090909090909,
+      "crap": 2.0030052592036065,
+      "crate": "liberado-server"
+    },
+    {
+      "file": "crates/server/src/bindings_rows.rs",
+      "function": "Retained::keep",
+      "line": 196,
+      "cyclomatic": 4.0,
+      "coverage": 95.23809523809524,
+      "crap": 4.001727675197063,
+      "crate": "liberado-server"
+    },
+    {
+      "file": "crates/server/src/bindings_rows.rs",
+      "function": "Retained::park",
+      "line": 221,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "liberado-server"
+    },
+    {
+      "file": "crates/server/src/bindings_rows.rs",
+      "function": "active_by_default",
+      "line": 13,
+      "cyclomatic": 1.0,
+      "coverage": 0.0,
+      "crap": 2.0,
+      "crate": "liberado-server"
+    },
+    {
+      "file": "crates/server/src/bindings_rows.rs",
+      "function": "new_row",
+      "line": 163,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "liberado-server"
+    },
+    {
+      "file": "crates/server/src/bindings_rows.rs",
+      "function": "reserves_puppet",
+      "line": 244,
+      "cyclomatic": 2.0,
+      "coverage": 87.5,
+      "crap": 2.0078125,
+      "crate": "liberado-server"
+    },
+    {
+      "file": "crates/server/src/bindings_rows.rs",
+      "function": "retain_valid",
+      "line": 179,
+      "cyclomatic": 2.0,
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "liberado-server"
+    },
+    {
+      "file": "crates/server/src/bindings_rows.rs",
+      "function": "session_still_valid",
+      "line": 233,
+      "cyclomatic": 3.0,
+      "coverage": 88.88888888888889,
+      "crap": 3.0123456790123457,
+      "crate": "liberado-server"
+    },
+    {
+      "file": "crates/server/src/bindings_rows.rs",
+      "function": "write_session",
+      "line": 152,
+      "cyclomatic": 2.0,
+      "coverage": 100.0,
+      "crap": 2.0,
       "crate": "liberado-server"
     },
     {
@@ -42827,7 +43484,7 @@
     {
       "file": "crates/server/src/lib.rs",
       "function": "ChatPromptPreview::render",
-      "line": 1008,
+      "line": 1011,
       "cyclomatic": 3.0,
       "coverage": 0.0,
       "crap": 12.0,
@@ -42836,7 +43493,7 @@
     {
       "file": "crates/server/src/lib.rs",
       "function": "attach_coding_pack_hub",
-      "line": 597,
+      "line": 600,
       "cyclomatic": 2.0,
       "coverage": 0.0,
       "crap": 6.0,
@@ -42845,7 +43502,7 @@
     {
       "file": "crates/server/src/lib.rs",
       "function": "build_app_router",
-      "line": 322,
+      "line": 325,
       "cyclomatic": 1.0,
       "coverage": 0.0,
       "crap": 2.0,
@@ -42854,7 +43511,7 @@
     {
       "file": "crates/server/src/lib.rs",
       "function": "build_chat",
-      "line": 723,
+      "line": 726,
       "cyclomatic": 3.0,
       "coverage": 0.0,
       "crap": 12.0,
@@ -42863,7 +43520,7 @@
     {
       "file": "crates/server/src/lib.rs",
       "function": "build_goal_hub",
-      "line": 505,
+      "line": 508,
       "cyclomatic": 1.0,
       "coverage": 0.0,
       "crap": 2.0,
@@ -42872,7 +43529,7 @@
     {
       "file": "crates/server/src/lib.rs",
       "function": "chat_dispatcher",
-      "line": 910,
+      "line": 913,
       "cyclomatic": 3.0,
       "coverage": 0.0,
       "crap": 12.0,
@@ -42881,7 +43538,7 @@
     {
       "file": "crates/server/src/lib.rs",
       "function": "compose_chat_prompt",
-      "line": 1051,
+      "line": 1054,
       "cyclomatic": 8.0,
       "coverage": 97.5,
       "crap": 8.001,
@@ -42890,7 +43547,7 @@
     {
       "file": "crates/server/src/lib.rs",
       "function": "config_check",
-      "line": 632,
+      "line": 635,
       "cyclomatic": 5.0,
       "coverage": 24.324324324324326,
       "crap": 15.834501411564965,
@@ -42899,7 +43556,7 @@
     {
       "file": "crates/server/src/lib.rs",
       "function": "connect_chat_runtime",
-      "line": 941,
+      "line": 944,
       "cyclomatic": 1.0,
       "coverage": 0.0,
       "crap": 2.0,
@@ -42908,7 +43565,7 @@
     {
       "file": "crates/server/src/lib.rs",
       "function": "dispatcher_guidance_source",
-      "line": 933,
+      "line": 936,
       "cyclomatic": 1.0,
       "coverage": 0.0,
       "crap": 2.0,
@@ -42917,7 +43574,7 @@
     {
       "file": "crates/server/src/lib.rs",
       "function": "dist_dir",
-      "line": 68,
+      "line": 71,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -42926,7 +43583,7 @@
     {
       "file": "crates/server/src/lib.rs",
       "function": "face_tool_surface",
-      "line": 868,
+      "line": 871,
       "cyclomatic": 4.0,
       "coverage": 96.42857142857144,
       "crap": 4.0007288629737605,
@@ -42935,7 +43592,7 @@
     {
       "file": "crates/server/src/lib.rs",
       "function": "finalize_goal_hub",
-      "line": 573,
+      "line": 576,
       "cyclomatic": 2.0,
       "coverage": 0.0,
       "crap": 6.0,
@@ -42944,7 +43601,7 @@
     {
       "file": "crates/server/src/lib.rs",
       "function": "log_endpoint_summary",
-      "line": 614,
+      "line": 617,
       "cyclomatic": 1.0,
       "coverage": 0.0,
       "crap": 2.0,
@@ -42953,7 +43610,7 @@
     {
       "file": "crates/server/src/lib.rs",
       "function": "open_session_store",
-      "line": 277,
+      "line": 280,
       "cyclomatic": 2.0,
       "coverage": 75.0,
       "crap": 2.0625,
@@ -42962,7 +43619,7 @@
     {
       "file": "crates/server/src/lib.rs",
       "function": "register_goal_packs",
-      "line": 536,
+      "line": 539,
       "cyclomatic": 4.0,
       "coverage": 0.0,
       "crap": 20.0,
@@ -42971,7 +43628,7 @@
     {
       "file": "crates/server/src/lib.rs",
       "function": "resolve_port",
-      "line": 474,
+      "line": 477,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -42980,7 +43637,7 @@
     {
       "file": "crates/server/src/lib.rs",
       "function": "resolve_vault_path",
-      "line": 484,
+      "line": 487,
       "cyclomatic": 3.0,
       "coverage": 100.0,
       "crap": 3.0,
@@ -42998,7 +43655,7 @@
     {
       "file": "crates/server/src/lib.rs",
       "function": "serve_with_drain",
-      "line": 441,
+      "line": 444,
       "cyclomatic": 3.0,
       "coverage": 0.0,
       "crap": 12.0,
@@ -43007,7 +43664,7 @@
     {
       "file": "crates/server/src/lib.rs",
       "function": "show_prompt",
-      "line": 977,
+      "line": 980,
       "cyclomatic": 2.0,
       "coverage": 0.0,
       "crap": 6.0,
@@ -43017,6 +43674,294 @@
       "file": "crates/server/src/main_agent_budget.rs",
       "function": "main_agent_budget",
       "line": 5,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "liberado-server"
+    },
+    {
+      "file": "crates/server/src/matrix_agent_chat.rs",
+      "function": "PinnedAgentChat::new",
+      "line": 18,
+      "cyclomatic": 1.0,
+      "coverage": 0.0,
+      "crap": 2.0,
+      "crate": "liberado-server"
+    },
+    {
+      "file": "crates/server/src/matrix_agent_chat.rs",
+      "function": "PinnedAgentChat::reply",
+      "line": 25,
+      "cyclomatic": 2.0,
+      "coverage": 0.0,
+      "crap": 6.0,
+      "crate": "liberado-server"
+    },
+    {
+      "file": "crates/server/src/matrix_agent_chat.rs",
+      "function": "command_word",
+      "line": 55,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "liberado-server"
+    },
+    {
+      "file": "crates/server/src/matrix_agent_chat.rs",
+      "function": "dm_command_answer",
+      "line": 44,
+      "cyclomatic": 3.0,
+      "coverage": 100.0,
+      "crap": 3.0,
+      "crate": "liberado-server"
+    },
+    {
+      "file": "crates/server/src/matrix_agent_chat.rs",
+      "function": "dm_command_menu",
+      "line": 35,
+      "cyclomatic": 1.0,
+      "coverage": 0.0,
+      "crap": 2.0,
+      "crate": "liberado-server"
+    },
+    {
+      "file": "crates/server/src/matrix_agent_chat.rs",
+      "function": "dm_help",
+      "line": 80,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "liberado-server"
+    },
+    {
+      "file": "crates/server/src/matrix_agent_chat.rs",
+      "function": "skipped_reason",
+      "line": 63,
+      "cyclomatic": 7.0,
+      "coverage": 100.0,
+      "crap": 7.0,
+      "crate": "liberado-server"
+    },
+    {
+      "file": "crates/server/src/matrix_agents.rs",
+      "function": "MatrixAgents::activate",
+      "line": 146,
+      "cyclomatic": 3.0,
+      "coverage": 0.0,
+      "crap": 12.0,
+      "crate": "liberado-server"
+    },
+    {
+      "file": "crates/server/src/matrix_agents.rs",
+      "function": "MatrixAgents::apply_deactivated",
+      "line": 140,
+      "cyclomatic": 2.0,
+      "coverage": 0.0,
+      "crap": 6.0,
+      "crate": "liberado-server"
+    },
+    {
+      "file": "crates/server/src/matrix_agents.rs",
+      "function": "MatrixAgents::apply_ensured",
+      "line": 134,
+      "cyclomatic": 2.0,
+      "coverage": 0.0,
+      "crap": 6.0,
+      "crate": "liberado-server"
+    },
+    {
+      "file": "crates/server/src/matrix_agents.rs",
+      "function": "MatrixAgents::bot_is_live",
+      "line": 202,
+      "cyclomatic": 1.0,
+      "coverage": 0.0,
+      "crap": 2.0,
+      "crate": "liberado-server"
+    },
+    {
+      "file": "crates/server/src/matrix_agents.rs",
+      "function": "MatrixAgents::chat",
+      "line": 115,
+      "cyclomatic": 1.0,
+      "coverage": 0.0,
+      "crap": 2.0,
+      "crate": "liberado-server"
+    },
+    {
+      "file": "crates/server/src/matrix_agents.rs",
+      "function": "MatrixAgents::deactivate",
+      "line": 157,
+      "cyclomatic": 2.0,
+      "coverage": 0.0,
+      "crap": 6.0,
+      "crate": "liberado-server"
+    },
+    {
+      "file": "crates/server/src/matrix_agents.rs",
+      "function": "MatrixAgents::ensure_bot",
+      "line": 191,
+      "cyclomatic": 2.0,
+      "coverage": 0.0,
+      "crap": 6.0,
+      "crate": "liberado-server"
+    },
+    {
+      "file": "crates/server/src/matrix_agents.rs",
+      "function": "MatrixAgents::new",
+      "line": 75,
+      "cyclomatic": 1.0,
+      "coverage": 0.0,
+      "crap": 2.0,
+      "crate": "liberado-server"
+    },
+    {
+      "file": "crates/server/src/matrix_agents.rs",
+      "function": "MatrixAgents::reconcile",
+      "line": 104,
+      "cyclomatic": 3.0,
+      "coverage": 0.0,
+      "crap": 12.0,
+      "crate": "liberado-server"
+    },
+    {
+      "file": "crates/server/src/matrix_agents.rs",
+      "function": "MatrixAgents::reconcile_seats",
+      "line": 119,
+      "cyclomatic": 1.0,
+      "coverage": 0.0,
+      "crap": 2.0,
+      "crate": "liberado-server"
+    },
+    {
+      "file": "crates/server/src/matrix_agents.rs",
+      "function": "MatrixAgents::remember_user",
+      "line": 183,
+      "cyclomatic": 1.0,
+      "coverage": 0.0,
+      "crap": 2.0,
+      "crate": "liberado-server"
+    },
+    {
+      "file": "crates/server/src/matrix_agents.rs",
+      "function": "MatrixAgents::schedule",
+      "line": 97,
+      "cyclomatic": 1.0,
+      "coverage": 0.0,
+      "crap": 2.0,
+      "crate": "liberado-server"
+    },
+    {
+      "file": "crates/server/src/matrix_agents.rs",
+      "function": "MatrixAgents::spawn_bot",
+      "line": 222,
+      "cyclomatic": 2.0,
+      "coverage": 0.0,
+      "crap": 6.0,
+      "crate": "liberado-server"
+    },
+    {
+      "file": "crates/server/src/matrix_agents.rs",
+      "function": "MatrixAgents::stop_bot",
+      "line": 211,
+      "cyclomatic": 2.0,
+      "coverage": 0.0,
+      "crap": 6.0,
+      "crate": "liberado-server"
+    },
+    {
+      "file": "crates/server/src/matrix_agents.rs",
+      "function": "MatrixAgents::store_bot",
+      "line": 260,
+      "cyclomatic": 1.0,
+      "coverage": 0.0,
+      "crap": 2.0,
+      "crate": "liberado-server"
+    },
+    {
+      "file": "crates/server/src/matrix_agents.rs",
+      "function": "MatrixAgents::sync_binding",
+      "line": 164,
+      "cyclomatic": 3.0,
+      "coverage": 0.0,
+      "crap": 12.0,
+      "crate": "liberado-server"
+    },
+    {
+      "file": "crates/server/src/matrix_agents.rs",
+      "function": "agent_seats",
+      "line": 281,
+      "cyclomatic": 2.0,
+      "coverage": 0.0,
+      "crap": 6.0,
+      "crate": "liberado-server"
+    },
+    {
+      "file": "crates/server/src/matrix_agents.rs",
+      "function": "note_errors",
+      "line": 275,
+      "cyclomatic": 2.0,
+      "coverage": 0.0,
+      "crap": 6.0,
+      "crate": "liberado-server"
+    },
+    {
+      "file": "crates/server/src/matrix_agents.rs",
+      "function": "seat_from_header",
+      "line": 290,
+      "cyclomatic": 1.0,
+      "coverage": 0.0,
+      "crap": 2.0,
+      "crate": "liberado-server"
+    },
+    {
+      "file": "crates/server/src/matrix_cards.rs",
+      "function": "MatrixCards::channel_for",
+      "line": 42,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "liberado-server"
+    },
+    {
+      "file": "crates/server/src/matrix_cards.rs",
+      "function": "MatrixCards::insert",
+      "line": 26,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "liberado-server"
+    },
+    {
+      "file": "crates/server/src/matrix_cards.rs",
+      "function": "MatrixCards::new",
+      "line": 19,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "liberado-server"
+    },
+    {
+      "file": "crates/server/src/matrix_cards.rs",
+      "function": "MatrixCards::notify_permission",
+      "line": 59,
+      "cyclomatic": 1.0,
+      "coverage": 0.0,
+      "crap": 2.0,
+      "crate": "liberado-server"
+    },
+    {
+      "file": "crates/server/src/matrix_cards.rs",
+      "function": "MatrixCards::notify_permission_in",
+      "line": 63,
+      "cyclomatic": 1.0,
+      "coverage": 0.0,
+      "crap": 2.0,
+      "crate": "liberado-server"
+    },
+    {
+      "file": "crates/server/src/matrix_cards.rs",
+      "function": "MatrixCards::remove",
+      "line": 34,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -43034,7 +43979,7 @@
     {
       "file": "crates/server/src/matrix_link.rs",
       "function": "attach_chat",
-      "line": 122,
+      "line": 159,
       "cyclomatic": 2.0,
       "coverage": 0.0,
       "crap": 6.0,
@@ -43043,7 +43988,7 @@
     {
       "file": "crates/server/src/matrix_link.rs",
       "function": "command_menu",
-      "line": 169,
+      "line": 204,
       "cyclomatic": 1.0,
       "coverage": 0.0,
       "crap": 2.0,
@@ -43052,7 +43997,7 @@
     {
       "file": "crates/server/src/matrix_link.rs",
       "function": "matrix_key",
-      "line": 161,
+      "line": 196,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -43061,7 +44006,7 @@
     {
       "file": "crates/server/src/matrix_link.rs",
       "function": "open_session",
-      "line": 146,
+      "line": 181,
       "cyclomatic": 2.0,
       "coverage": 0.0,
       "crap": 6.0,
@@ -43083,6 +44028,15 @@
       "cyclomatic": 3.0,
       "coverage": 0.0,
       "crap": 12.0,
+      "crate": "liberado-server"
+    },
+    {
+      "file": "crates/server/src/matrix_link.rs",
+      "function": "start_agent_dms",
+      "line": 149,
+      "cyclomatic": 1.0,
+      "coverage": 0.0,
+      "crap": 2.0,
       "crate": "liberado-server"
     },
     {
@@ -51043,11 +51997,11 @@
     }
   ],
   "diagnostics": {
-    "analyzed_files": 737,
-    "lcov_files": 512,
-    "matched_files": 510,
+    "analyzed_files": 749,
+    "lcov_files": 521,
+    "matched_files": 518,
     "source_only": {
-      "count": 227,
+      "count": 231,
       "examples": [
         "crates/acp-bridge/src/coding_run_tests.rs",
         "crates/acp-bridge/src/grant_tests.rs",
@@ -51062,8 +52016,9 @@
       ]
     },
     "lcov_only": {
-      "count": 2,
+      "count": 3,
       "examples": [
+        "crates/executor/src/approval.rs",
         "crates/session/src/record_store.rs",
         "crates/tool-runtime/src/lib.rs"
       ]

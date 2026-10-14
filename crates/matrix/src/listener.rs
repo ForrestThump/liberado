@@ -36,9 +36,13 @@ pub struct ListenerState {
     notified: Mutex<HashSet<String>>,
     main_user: String,
     known_rooms: Vec<String>,
+    /// Puppet user ids the homeserver may ask about. The main user is separate.
+    known_users: Arc<Mutex<HashSet<String>>>,
 }
 
 impl ListenerState {
+    /// Every field of the listener. The argument count is the state itself.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         hs_token: String,
         txns: Arc<TxnLog>,
@@ -47,6 +51,7 @@ impl ListenerState {
         client: MatrixClient,
         main_user: String,
         known_rooms: Vec<String>,
+        known_users: Arc<Mutex<HashSet<String>>>,
     ) -> Self {
         Self {
             hs_token,
@@ -57,6 +62,7 @@ impl ListenerState {
             notified: Mutex::new(HashSet::new()),
             main_user,
             known_rooms,
+            known_users,
         }
     }
 }
@@ -130,11 +136,22 @@ async fn get_user(
     if let Some(response) = reject(&state, &headers, &query) {
         return response;
     }
-    if user_id.eq_ignore_ascii_case(&state.main_user) {
+    if user_is_known(&state, &user_id) {
         empty_ok()
     } else {
         not_found()
     }
+}
+
+fn user_is_known(state: &ListenerState, user_id: &str) -> bool {
+    if user_id.eq_ignore_ascii_case(&state.main_user) {
+        return true;
+    }
+    let known = state
+        .known_users
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    known.iter().any(|id| id.eq_ignore_ascii_case(user_id))
 }
 
 async fn get_room(

@@ -147,8 +147,13 @@ not an accident of history; it is a layer rule doing its job. See [`sessions.md`
   `PermissionResolver::resolve` in `liberado-telegram-approvals`.
 - **Surfaces**: a request raised in a channel-bound chat sends that channel's keyboard and
   a card in that same chat. Each peer is one binding in `<data_dir>/channel-bindings.json`:
-  Telegram is `(telegram, chat id, bot id)`. Matrix is `(matrix, room id, main user id)` and
-  gets its own session. On first load, a legacy `<data_dir>/telegram-sticky-session` file is
+  Telegram is `(telegram, chat id, bot id)`. The Matrix main room is
+  `(matrix, room id, @liberado)` and gets its own session. Each agent DM is
+  `(matrix, room id, @liberado_<slug>)` bound to that agent's existing session. The slug
+  map is `<data_dir>/matrix-agents.json`. Deleting the session makes the puppet leave;
+  the binding stays with `active: false`, so the slug and the room stay reserved. The
+  same session id becoming a seat again rejoins and re-invites the owner. On first load,
+  a legacy `<data_dir>/telegram-sticky-session` file is
   adopted when that Telegram peer has no binding yet, so the chat keeps the same conversation.
   Any other human chat shows the card only. A background run keeps the Telegram push it already
   had, and the card also appears in the bound Telegram chat. Matrix does not take that push.

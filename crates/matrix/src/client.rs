@@ -12,7 +12,7 @@ use reqwest::Method;
 use serde_json::{Value, json};
 
 use crate::encode::encode_segment;
-use crate::room::direct_room_body;
+use crate::room::{CreatorPower, advertises_room_version, direct_room_body};
 
 const TIMEOUT: Duration = Duration::from_secs(15);
 
@@ -43,6 +43,16 @@ impl MatrixClient {
 
     pub fn user_id(&self) -> &str {
         &self.user_id
+    }
+
+    /// Same homeserver and token, acting as `user_id`. Sends use `?user_id=`.
+    pub fn for_user(&self, user_id: &str) -> Self {
+        Self {
+            http: self.http.clone(),
+            homeserver: self.homeserver.clone(),
+            as_token: self.as_token.clone(),
+            user_id: user_id.to_string(),
+        }
     }
 
     /// `GET /_matrix/client/v3/account/whoami`.
@@ -119,13 +129,20 @@ impl MatrixClient {
     }
 
     /// Create a direct room with encryption locked off. Returns the room id.
+    ///
+    /// Room version 12 is requested only when `GET /capabilities` lists it. Otherwise the
+    /// puppet stays in `users` at 100 so older room versions keep a creator with power.
     pub async fn create_direct_room(
         &self,
         name: &str,
         invite_mxid: &str,
         owner_mxid: &str,
     ) -> Result<String, MessagingError> {
-        let body = direct_room_body(name, invite_mxid, owner_mxid, &self.user_id);
+        let creator = match self.get(&["capabilities"]).await {
+            Ok(body) if advertises_room_version(&body, "12") => CreatorPower::Implicit,
+            _ => CreatorPower::Listed,
+        };
+        let body = direct_room_body(name, invite_mxid, owner_mxid, &self.user_id, creator);
         let response = self.post(&["createRoom"], &body).await?;
         let room_id = string_field(&response, "room_id");
         if room_id.is_empty() {
@@ -147,14 +164,32 @@ impl MatrixClient {
         self.exchange(Method::GET, &self.url(segments), None).await
     }
 
-    async fn post(&self, segments: &[&str], body: &Value) -> Result<Value, MessagingError> {
+    pub(crate) async fn post(
+        &self,
+        segments: &[&str],
+        body: &Value,
+    ) -> Result<Value, MessagingError> {
         self.exchange(Method::POST, &self.url(segments), Some(body))
             .await
     }
 
-    async fn put(&self, segments: &[&str], body: &Value) -> Result<Value, MessagingError> {
+    pub(crate) async fn put(
+        &self,
+        segments: &[&str],
+        body: &Value,
+    ) -> Result<Value, MessagingError> {
         self.exchange(Method::PUT, &self.url(segments), Some(body))
             .await
+    }
+
+    /// POST that does not masquerade. Registration uses the application-service token alone.
+    pub(crate) async fn post_service(
+        &self,
+        segments: &[&str],
+        body: &Value,
+    ) -> Result<Value, MessagingError> {
+        let url = self.endpoint(&client_prefix(segments));
+        self.exchange(Method::POST, &url, Some(body)).await
     }
 
     fn url(&self, segments: &[&str]) -> String {
@@ -206,12 +241,11 @@ impl MatrixClient {
     }
 
     fn failure(&self, status: u16, body: &str) -> String {
-        let redacted = self.redact(body);
-        let errcode = errcode_of(&redacted);
-        match errcode {
-            Some(code) => format!("matrix http {status} {code}"),
+        let message = match error_detail(body) {
+            Some(detail) => format!("matrix http {status} {detail}"),
             None => format!("matrix http {status}"),
-        }
+        };
+        self.redact(&message)
     }
 
     fn redact(&self, text: &str) -> String {
@@ -238,9 +272,21 @@ fn parse_body(text: &str, status: u16) -> Result<Value, MessagingError> {
         .map_err(|_| MessagingError::new(format!("matrix response was not json ({status})")))
 }
 
-fn errcode_of(body: &str) -> Option<String> {
+fn error_detail(body: &str) -> Option<String> {
     let value: Value = serde_json::from_str(body).ok()?;
-    value.get("errcode")?.as_str().map(str::to_string)
+    let detail = [
+        string_field(&value, "errcode"),
+        string_field(&value, "error"),
+    ]
+    .into_iter()
+    .filter(|part| !part.is_empty())
+    .collect::<Vec<_>>()
+    .join(": ");
+    if detail.is_empty() {
+        None
+    } else {
+        Some(detail)
+    }
 }
 
 fn string_field(body: &Value, field: &str) -> String {

@@ -739,7 +739,15 @@ impl RiskGatedToolRuntime {
 
     async fn notify_channel(&self, proposal_id: &str, message: &str) {
         if let Some(sink) = &self.permission_sink {
-            match sink.notify_permission(proposal_id, message).await {
+            // A closure would count as another function, and this file is at that boundary.
+            let mut session = None;
+            if let Some(stamp) = &self.approval {
+                session = Some(stamp.session_id.as_str());
+            }
+            match sink
+                .notify_permission_in(proposal_id, message, session)
+                .await
+            {
                 Ok(()) => self.notified_deferral.store(true, Ordering::Relaxed),
                 Err(error) => {
                     tracing::warn!(%error, "failed to send permission-request notification");

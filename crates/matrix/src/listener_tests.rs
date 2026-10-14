@@ -46,6 +46,7 @@ fn state(txns: Arc<TxnLog>, queues: Arc<RoomQueues>, client: MatrixClient) -> Ar
         client,
         MAIN.into(),
         vec![ROOM.into(), "#liberado:matrix.homelab.local".into()],
+        Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
     ))
 }
 

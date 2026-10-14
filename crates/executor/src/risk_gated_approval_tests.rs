@@ -23,12 +23,24 @@ fn vault_descriptor() -> McpDescriptor {
     }
 }
 
-struct RecordingSink(std::sync::Mutex<Vec<String>>);
+struct RecordingSink(std::sync::Mutex<Vec<(String, Option<String>)>>);
 
 #[async_trait::async_trait]
 impl crate::PermissionSink for RecordingSink {
-    async fn notify_permission(&self, proposal_id: &str, _message: &str) -> Result<(), String> {
-        self.0.lock().unwrap().push(proposal_id.to_string());
+    async fn notify_permission(&self, proposal_id: &str, message: &str) -> Result<(), String> {
+        self.notify_permission_in(proposal_id, message, None).await
+    }
+
+    async fn notify_permission_in(
+        &self,
+        proposal_id: &str,
+        _message: &str,
+        session_id: Option<&str>,
+    ) -> Result<(), String> {
+        self.0
+            .lock()
+            .unwrap()
+            .push((proposal_id.to_string(), session_id.map(str::to_string)));
         Ok(())
     }
 }
@@ -107,7 +119,9 @@ async fn a_telegram_chat_sends_scope_buttons_through_the_sink() {
 
     let call = ToolInvocation::new("c1", "vault:write_review", serde_json::json!({"c": "..."}));
     rt.invoke(&call).await.expect("telegram chat asks");
-    assert_eq!(sink.0.lock().unwrap().len(), 1);
+    let recorded = sink.0.lock().unwrap().clone();
+    assert_eq!(recorded.len(), 1);
+    assert_eq!(recorded[0].1.as_deref(), Some("sess-tg"));
     let proposal = liberado_common::Proposal::from_note(
         &std::fs::read_to_string(
             std::fs::read_dir(dir.path().join("proposals"))
